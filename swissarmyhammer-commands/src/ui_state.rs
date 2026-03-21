@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::RwLock;
 
@@ -55,6 +56,12 @@ struct UIStateInner {
     /// Current focus scope chain (innermost first). Transient — not persisted.
     #[serde(skip)]
     scope_chain: Vec<String>,
+    /// Canonical paths of boards that are open.
+    open_boards: Vec<String>,
+    /// The globally active board path.
+    active_board_path: Option<String>,
+    /// Per-window board assignments (window label → board path).
+    window_boards: HashMap<String, String>,
 }
 
 impl Default for UIStateInner {
@@ -66,6 +73,9 @@ impl Default for UIStateInner {
             palette_open: false,
             keymap_mode: "cua".to_string(),
             scope_chain: Vec::new(),
+            open_boards: Vec::new(),
+            active_board_path: None,
+            window_boards: HashMap::new(),
         }
     }
 }
@@ -266,6 +276,107 @@ impl UIState {
         // No try_save — scope_chain is transient (#[serde(skip)])
     }
 
+    /// Add a board path to the open boards list, setting it as the active board.
+    ///
+    /// If the path is already in the list, updates active without duplicating.
+    /// Auto-saves if a config path is configured.
+    pub fn add_open_board(&self, path: &str) {
+        {
+            let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+            if !inner.open_boards.contains(&path.to_string()) {
+                inner.open_boards.push(path.to_string());
+            }
+            inner.active_board_path = Some(path.to_string());
+        }
+        self.try_save();
+    }
+
+    /// Remove a board path from the open boards list.
+    ///
+    /// If the removed board was active, switches active to another open board
+    /// (the last remaining one) or sets active to None.
+    /// Auto-saves if a config path is configured.
+    pub fn remove_open_board(&self, path: &str) {
+        {
+            let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+            inner.open_boards.retain(|p| p != path);
+            // Clear per-window entries pointing to this board
+            inner.window_boards.retain(|_, p| p != path);
+            // Update active if needed
+            if inner.active_board_path.as_deref() == Some(path) {
+                inner.active_board_path = inner.open_boards.last().cloned();
+            }
+        }
+        self.try_save();
+    }
+
+    /// Set the globally active board path.
+    ///
+    /// Auto-saves if a config path is configured.
+    pub fn set_active_board_path(&self, path: &str) {
+        {
+            let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+            inner.active_board_path = Some(path.to_string());
+        }
+        self.try_save();
+    }
+
+    /// Get the globally active board path.
+    pub fn active_board_path(&self) -> Option<String> {
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .active_board_path
+            .clone()
+    }
+
+    /// Get the list of open board paths.
+    pub fn open_boards(&self) -> Vec<String> {
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .open_boards
+            .clone()
+    }
+
+    /// Set the per-window board assignment.
+    ///
+    /// Auto-saves if a config path is configured.
+    pub fn set_window_board(&self, label: &str, path: &str) {
+        {
+            let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+            inner
+                .window_boards
+                .insert(label.to_string(), path.to_string());
+        }
+        self.try_save();
+    }
+
+    /// Get the board path assigned to a specific window.
+    pub fn window_board(&self, label: &str) -> Option<String> {
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .window_boards
+            .get(label)
+            .cloned()
+    }
+
+    /// Restore the open boards list and active board path from persisted data.
+    ///
+    /// Used at startup to populate UIState from legacy AppConfig data when
+    /// UIState has no boards yet (first migration).
+    pub fn restore_boards(&self, open_boards: Vec<String>, active_board_path: Option<String>) {
+        {
+            let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+            if inner.open_boards.is_empty() {
+                inner.open_boards = open_boards;
+                inner.active_board_path = active_board_path;
+            }
+        }
+        // No try_save here — this is called at startup with already-persisted data.
+    }
+
     /// Set the inspector stack directly (used for startup restoration from config).
     ///
     /// Auto-saves if a config path is configured.
@@ -335,6 +446,9 @@ impl UIState {
             "palette_open": inner.palette_open,
             "keymap_mode": inner.keymap_mode,
             "scope_chain": inner.scope_chain,
+            "open_boards": inner.open_boards,
+            "active_board_path": inner.active_board_path,
+            "window_boards": inner.window_boards,
         })
     }
 }

@@ -1,8 +1,9 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { useState } from "react";
 import type { ViewDef } from "@/types/kanban";
+import { useUIState } from "./ui-state-context";
 
 interface ViewsContextValue {
   views: ViewDef[];
@@ -13,51 +14,34 @@ interface ViewsContextValue {
 
 const ViewsContext = createContext<ViewsContextValue | null>(null);
 
-/** Window label for per-window view persistence. */
-const WINDOW_LABEL = getCurrentWindow().label;
-
 export function ViewsProvider({ children }: { children: ReactNode }) {
   const [views, setViews] = useState<ViewDef[]>([]);
-  const [activeViewId, setActiveViewIdState] = useState<string | null>(null);
 
-  // Persist active view to backend per-window on change
+  // active_view_id comes from UIState — it is the single source of truth.
+  // UIStateProvider keeps it in sync via the "ui-state-changed" event.
+  const { active_view_id } = useUIState();
+
+  /** Dispatch a view switch through the command system so UIState owns the change. */
   const setActiveViewId = useCallback((id: string) => {
-    setActiveViewIdState(id);
-    invoke("set_active_view", { viewId: id, windowLabel: WINDOW_LABEL }).catch(() => {});
+    invoke("dispatch_command", {
+      cmd: "ui.view.set",
+      args: { view_id: id },
+    }).catch(console.error);
   }, []);
 
   const refresh = useCallback(async () => {
     try {
       const result = await invoke<ViewDef[]>("list_views");
       setViews(result);
-
-      // Keep current selection if still valid, else fall back to first view
-      setActiveViewIdState((prev) => {
-        if (prev && result.some((v) => v.id === prev)) return prev;
-        return result.length > 0 ? result[0].id : null;
-      });
     } catch (error) {
       console.error("Failed to load views:", error);
     }
   }, []);
 
-  // On mount: restore persisted view from backend, then load views
+  // On mount: load views. UIState already provides active_view_id.
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      // Restore the persisted active view ID for this window
-      try {
-        const ctx = await invoke<{ active_view_id: string | null }>(
-          "get_ui_context",
-          { windowLabel: WINDOW_LABEL },
-        );
-        if (cancelled) return;
-        if (ctx.active_view_id) {
-          setActiveViewIdState(ctx.active_view_id);
-        }
-      } catch {
-        // No saved state — refresh will pick the first view
-      }
       if (cancelled) return;
       await refresh();
     })();
@@ -83,9 +67,11 @@ export function ViewsProvider({ children }: { children: ReactNode }) {
     };
   }, [refresh]);
 
+  // Derive the active view object from UIState's active_view_id.
+  // Falls back to the first view if the ID is empty or not found.
   const activeView = useMemo(
-    () => views.find((v) => v.id === activeViewId) ?? null,
-    [views, activeViewId],
+    () => views.find((v) => v.id === active_view_id) ?? views[0] ?? null,
+    [views, active_view_id],
   );
 
   const value = useMemo<ViewsContextValue>(

@@ -7,6 +7,7 @@
 pub mod app_commands;
 pub mod column_commands;
 pub mod entity_commands;
+pub mod file_commands;
 pub mod task_commands;
 pub mod ui_commands;
 
@@ -102,6 +103,16 @@ pub fn register_commands() -> HashMap<String, Arc<dyn Command>> {
         Arc::new(ui_commands::SetActiveViewCmd),
     );
 
+    // File / board management commands
+    map.insert(
+        "file.switchBoard".into(),
+        Arc::new(file_commands::SwitchBoardCmd),
+    );
+    map.insert(
+        "file.closeBoard".into(),
+        Arc::new(file_commands::CloseBoardCmd),
+    );
+
     // App commands
     map.insert("app.quit".into(), Arc::new(app_commands::QuitCmd));
     map.insert("app.undo".into(), Arc::new(app_commands::UndoCmd));
@@ -154,8 +165,8 @@ mod tests {
     #[test]
     fn register_commands_returns_expected_count() {
         let cmds = register_commands();
-        // 5 task + 4 entity + 1 tag + 1 attachment + 1 column + 6 UI + 6 app = 24
-        assert_eq!(cmds.len(), 24);
+        // 5 task + 4 entity + 1 tag + 1 attachment + 1 column + 6 UI + 6 app + 2 file = 26
+        assert_eq!(cmds.len(), 26);
     }
 
     // =========================================================================

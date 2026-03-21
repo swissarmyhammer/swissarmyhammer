@@ -221,10 +221,16 @@ pub(crate) struct AppConfig {
 }
 
 /// Persisted state for a window (main or secondary).
+///
+/// Note: active_view_id is no longer stored here. It is persisted in UIState
+/// via the `ui.view.set` command and restored from there on startup.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct WindowState {
     pub(crate) board_path: PathBuf,
-    #[serde(default)]
+    /// Legacy field — kept for deserialization compatibility with older config
+    /// files. Ignored at runtime; UIState is the source of truth for active view.
+    #[serde(default, skip_serializing)]
+    #[allow(dead_code)]
     pub(crate) active_view_id: Option<String>,
     #[serde(default)]
     pub(crate) inspector_stack: Vec<String>,
@@ -344,8 +350,6 @@ pub(crate) struct AppState {
     pub(crate) commands_registry: RwLock<CommandsRegistry>,
     /// Trait object map from `register_commands()`.
     pub(crate) command_impls: HashMap<String, Arc<dyn Command>>,
-    /// Current focus scope chain stored by `set_focus`.
-    pub(crate) focus_scope_chain: RwLock<Vec<String>>,
     /// Active cross-window drag session, if any.
     pub(crate) drag_session: RwLock<Option<DragSession>>,
     /// Set to `true` when the app is shutting down (RunEvent::ExitRequested).
@@ -359,10 +363,25 @@ impl AppState {
     /// Restores the inspector stack from the persisted config into UIState
     /// so the backend is the single source of truth from startup.
     pub fn new() -> Self {
+        Self::with_ui_state_path(ui_state_file_path())
+    }
+
+    /// Create AppState with a specific UIState persistence path.
+    ///
+    /// Used by tests to avoid polluting the real config file.
+    #[cfg(test)]
+    pub fn new_for_test() -> Self {
+        Self::with_ui_state_path(
+            std::env::temp_dir().join(format!("kanban-test-{}.yaml", ulid::Ulid::new())),
+        )
+    }
+
+    /// Internal constructor with an explicit UIState persistence path.
+    fn with_ui_state_path(ui_state_path: PathBuf) -> Self {
         let sources = builtin_yaml_sources();
         let source_refs: Vec<(&str, &str)> = sources.iter().map(|(n, c)| (*n, *c)).collect();
         let config = AppConfig::load();
-        let ui_state = Arc::new(UIState::load(ui_state_file_path()));
+        let ui_state = Arc::new(UIState::load(ui_state_path));
 
         // Restore inspector stack from persisted config
         if let Some(ws) = config.windows.get("main") {
@@ -379,7 +398,6 @@ impl AppState {
             ui_state,
             commands_registry: RwLock::new(CommandsRegistry::from_yaml_sources(&source_refs)),
             command_impls: swissarmyhammer_kanban::commands::register_commands(),
-            focus_scope_chain: RwLock::new(Vec::new()),
             drag_session: RwLock::new(None),
             shutting_down: AtomicBool::new(false),
         }
@@ -460,6 +478,10 @@ impl AppState {
         }
 
         *self.active_board.write().await = Some(canonical.clone());
+
+        // Update UIState board tracking so it stays in sync.
+        self.ui_state
+            .add_open_board(&canonical.display().to_string());
 
         // Load user command overrides from .kanban/commands/
         self.reload_command_overrides(&canonical).await;
@@ -680,6 +702,10 @@ impl AppState {
             config.open_boards = remaining_paths;
             let _ = config.save();
         }
+
+        // Update UIState board tracking so it stays in sync.
+        self.ui_state
+            .remove_open_board(&canonical.display().to_string());
 
         tracing::info!(path = %canonical.display(), "closed board");
         Ok(())
@@ -1038,7 +1064,7 @@ mod tests {
         let subdir = tmp.path().join("src").join("components");
         std::fs::create_dir_all(&subdir).unwrap();
 
-        let state = AppState::new();
+        let state = AppState::new_for_test();
         // Manually run discovery from the subdir (can't change real CWD in tests)
         let board_dir = discover_board(&subdir);
         assert_eq!(board_dir, Some(tmp.path().to_path_buf()));
@@ -1060,7 +1086,7 @@ mod tests {
         let result = discover_board(tmp.path());
         assert_eq!(result, None);
 
-        let state = AppState::new();
+        let state = AppState::new_for_test();
         // No board opened — active_handle should be None
         let handle = state.active_handle().await;
         assert!(handle.is_none());
@@ -1071,7 +1097,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         create_board_at(tmp.path(), "My Board");
 
-        let state = AppState::new();
+        let state = AppState::new_for_test();
         let result = state.open_board(tmp.path(), None).await;
         assert!(result.is_ok());
 
@@ -1093,7 +1119,7 @@ mod tests {
         create_board_at(tmp_a.path(), "Board A");
         create_board_at(tmp_b.path(), "Board B");
 
-        let state = AppState::new();
+        let state = AppState::new_for_test();
 
         // Open board A
         let path_a = state.open_board(tmp_a.path(), None).await.unwrap();
@@ -1152,7 +1178,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_drag_session_start_and_cancel() {
-        let state = AppState::new();
+        let state = AppState::new_for_test();
         assert!(state.drag_session.read().await.is_none());
 
         // Start session
@@ -1169,7 +1195,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_drag_session_double_take_returns_none() {
-        let state = AppState::new();
+        let state = AppState::new_for_test();
         *state.drag_session.write().await = Some(make_drag_session("task-1", "/board/a"));
 
         // First take succeeds
@@ -1183,7 +1209,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_drag_session_replaced_by_new_start() {
-        let state = AppState::new();
+        let state = AppState::new_for_test();
         let session1 = make_drag_session("task-1", "/board/a");
         let id1 = session1.session_id.clone();
         *state.drag_session.write().await = Some(session1);
@@ -1539,6 +1565,10 @@ mod tests {
     }
 
     /// Roundtrip test with all WindowState fields populated.
+    ///
+    /// Note: active_view_id is no longer serialized to YAML (skip_serializing),
+    /// so it defaults to None after deserialization. UIState is now the
+    /// source of truth for active_view_id.
     #[test]
     fn test_window_state_full_roundtrip() {
         let mut config = AppConfig::default();
@@ -1576,12 +1606,14 @@ mod tests {
 
         let main = restored.windows.get("main").unwrap();
         assert_eq!(main.board_path, PathBuf::from("/boards/main/.kanban"));
-        assert_eq!(main.active_view_id.as_deref(), Some("board-view"));
+        // active_view_id is skip_serializing — not written to YAML, defaults to None after roundtrip.
+        // UIState (ui-state.yaml) is the source of truth for the active view.
+        assert_eq!(main.active_view_id, None);
         assert_eq!(main.inspector_stack, vec!["task:01ABC", "tag:01DEF"]);
         assert_eq!(main.maximized, true);
 
         let secondary = restored.windows.get("board-secondary").unwrap();
-        assert_eq!(secondary.active_view_id.as_deref(), Some("grid-view"));
+        assert_eq!(secondary.active_view_id, None);
         assert!(secondary.inspector_stack.is_empty());
         assert_eq!(secondary.maximized, false);
     }

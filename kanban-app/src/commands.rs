@@ -6,11 +6,7 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use swissarmyhammer_kanban::{
-    board::GetBoard,
-    task_helpers::{enrich_all_task_entities, enrich_task_entity},
-    OperationProcessor,
-};
+use swissarmyhammer_kanban::task_helpers::{enrich_all_task_entities, enrich_task_entity};
 use tauri::menu::{ContextMenu, MenuBuilder};
 use tauri::webview::WebviewWindowBuilder;
 use tauri::{AppHandle, Emitter, Manager, State, Window};
@@ -63,48 +59,18 @@ pub struct MenuItemEntry {
     pub checked: Option<bool>,
 }
 
-/// Open a board at the given path, resolving to its .kanban directory.
-#[tauri::command]
-pub async fn open_board(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    path: String,
-) -> Result<Value, String> {
-    let canonical = state
-        .open_board(&PathBuf::from(&path), Some(app.clone()))
-        .await?;
-
-    // Notify all windows to refresh their open boards list.
-    // The calling window switches itself using the returned path —
-    // no board-opened event needed for the command path.
-    let _ = app.emit("board-changed", ());
-
-    // Return the board data
-    let handle = state
-        .active_handle()
-        .await
-        .ok_or("Failed to get board after open")?;
-    let board = handle
-        .processor
-        .process(&GetBoard::default(), &handle.ctx)
-        .await
-        .map_err(|e| e.to_string())?;
-
-    Ok(json!({
-        "path": canonical.display().to_string(),
-        "board": board,
-    }))
-}
-
 /// List all currently open boards.
 #[tauri::command]
 pub async fn list_open_boards(state: State<'_, AppState>) -> Result<Value, String> {
     let boards = state.boards.read().await;
-    let active = state.active_board.read().await;
+    let active_path = state.ui_state.active_board_path();
 
     let mut list: Vec<Value> = Vec::new();
     for (path, handle) in boards.iter() {
-        let is_active = active.as_ref() == Some(path);
+        let path_str = path.display().to_string();
+        let is_active = active_path.as_deref() == Some(path_str.as_str())
+            || active_path.is_none()
+                && state.active_board.try_read().ok().and_then(|a| a.clone()) == Some(path.clone());
         // Read the board entity name if available
         let name = match handle.ctx.entity_context().await {
             Ok(ectx) => match ectx.read("board", "board").await {
@@ -128,99 +94,6 @@ pub async fn list_open_boards(state: State<'_, AppState>) -> Result<Value, Strin
     Ok(json!(list))
 }
 
-/// Close a board, removing it from the open set.
-///
-/// If `path` is omitted, closes the currently active board.
-/// If the closed board was active, switches to another open board (or none).
-/// Emits `board-changed` so the frontend refreshes.
-#[tauri::command]
-pub async fn close_board(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    path: Option<String>,
-) -> Result<Value, String> {
-    let target = match path {
-        Some(p) => PathBuf::from(&p),
-        None => {
-            let active = state.active_board.read().await;
-            active
-                .clone()
-                .ok_or_else(|| "No active board to close".to_string())?
-        }
-    };
-
-    state.close_board(&target).await?;
-
-    // Window entries are NOT removed here — they belong to the window, not
-    // the board. The frontend will call switch_board to update board_path
-    // when it falls back to another board. Secondary windows clean up their
-    // entries via the on_window_event Destroyed handler when actually closed.
-
-    let _ = app.emit("board-changed", ());
-
-    Ok(json!({ "closed": target.display().to_string() }))
-}
-
-/// Set the active board to the specified path.
-#[tauri::command]
-pub async fn set_active_board(state: State<'_, AppState>, path: String) -> Result<Value, String> {
-    let canonical = PathBuf::from(&path)
-        .canonicalize()
-        .unwrap_or_else(|_| PathBuf::from(&path));
-
-    let boards = state.boards.read().await;
-    if !boards.contains_key(&canonical) {
-        return Err(format!("Board not open: {}", path));
-    }
-    drop(boards);
-
-    *state.active_board.write().await = Some(canonical.clone());
-
-    Ok(json!({
-        "path": canonical.display().to_string(),
-        "active": true,
-    }))
-}
-
-/// Switch a window to a different board.
-///
-/// Opens the board idempotently (no-op if already open), updates the
-/// backend active_board, and persists the window→board mapping in config.
-/// The frontend should call this instead of `set_active_board` for
-/// per-window board switching.
-#[tauri::command]
-pub async fn switch_board(
-    state: State<'_, AppState>,
-    window_label: Option<String>,
-    path: String,
-) -> Result<Value, String> {
-    let board_path = PathBuf::from(&path);
-
-    // Open the board idempotently (sets active_board on the backend)
-    state
-        .open_board(&board_path, None)
-        .await
-        .map_err(|e| e.to_string())?;
-
-    // Persist the window→board mapping
-    let label = window_label.as_deref().unwrap_or("main");
-    let canonical = board_path
-        .canonicalize()
-        .unwrap_or_else(|_| board_path.clone());
-    let mut config = state.config.write().await;
-    let ws = config
-        .windows
-        .entry(label.to_string())
-        .or_insert_with(|| crate::state::WindowState::new(canonical.clone()));
-    ws.board_path = canonical.clone();
-    config.save().map_err(|e| e.to_string())?;
-
-    Ok(json!({
-        "path": canonical.display().to_string(),
-        "window_label": label,
-    }))
-}
-
 /// Get the MRU list of recently opened boards.
 #[tauri::command]
 pub async fn get_recent_boards(state: State<'_, AppState>) -> Result<Value, String> {
@@ -238,9 +111,12 @@ pub async fn get_ui_state(state: State<'_, AppState>) -> Result<Value, String> {
     Ok(state.ui_state.to_json())
 }
 
-/// Get the persisted window state (board path, active view, inspector stack).
+/// Get the persisted window state (board path, inspector stack).
 ///
 /// The frontend calls this on mount to restore state across hot reloads.
+/// Note: active_view_id is now read from UIState (via get_ui_state) and
+/// is not stored in AppConfig. It is included here for compatibility only,
+/// reading from UIState as the authoritative source.
 #[tauri::command]
 pub async fn get_ui_context(
     state: State<'_, AppState>,
@@ -251,37 +127,16 @@ pub async fn get_ui_context(
     if let Some(ws) = config.windows.get(label) {
         Ok(json!({
             "board_path": ws.board_path.display().to_string(),
-            "active_view_id": ws.active_view_id,
+            "active_view_id": state.ui_state.active_view_id(),
             "inspector_stack": ws.inspector_stack,
         }))
     } else {
         Ok(json!({
             "board_path": null,
-            "active_view_id": null,
+            "active_view_id": state.ui_state.active_view_id(),
             "inspector_stack": [],
         }))
     }
-}
-
-/// Persist the active view ID to the window's config entry.
-///
-/// Creates the window entry on demand if it doesn't exist yet.
-#[tauri::command]
-pub async fn set_active_view(
-    state: State<'_, AppState>,
-    view_id: String,
-    window_label: Option<String>,
-) -> Result<Value, String> {
-    let mut config = state.config.write().await;
-    let label = window_label.as_deref().unwrap_or("main");
-    let active_board = state.active_board.read().await;
-    let ws = config.windows.entry(label.to_string()).or_insert_with(|| {
-        crate::state::WindowState::new(active_board.clone().unwrap_or_default())
-    });
-    ws.active_view_id = Some(view_id.clone());
-    drop(active_board);
-    config.save().map_err(|e| e.to_string())?;
-    Ok(json!({ "active_view_id": view_id }))
 }
 
 /// Get the field+entity schema for a given entity type.
@@ -769,15 +624,13 @@ pub async fn create_window(
     let label = new_window_label();
     tracing::info!(board_path = ?board_path, label = %label, "create_window called");
 
-    // Resolve board path: explicit > active board
+    // Resolve board path: explicit > UIState active board > AppState active board
     let resolved_path = match board_path {
         Some(bp) => Some(bp),
-        None => state
-            .active_board
-            .read()
-            .await
-            .as_ref()
-            .map(|p| p.display().to_string()),
+        None => state.ui_state.active_board_path().or_else(|| {
+            let boards = state.boards.try_read().ok();
+            boards.and_then(|b| b.keys().next().map(|p| p.display().to_string()))
+        }),
     };
 
     let mut url = String::from("index.html?window=board");
@@ -964,7 +817,7 @@ pub async fn rebuild_menu_from_manifest(
 #[tauri::command]
 pub async fn set_focus(state: State<'_, AppState>, scope_chain: Vec<String>) -> Result<(), String> {
     tracing::debug!(scope_chain = ?scope_chain, "set_focus");
-    *state.focus_scope_chain.write().await = scope_chain;
+    state.ui_state.set_scope_chain(scope_chain);
     Ok(())
 }
 
@@ -1019,7 +872,7 @@ pub async fn dispatch_command(
     // Resolve scope chain: explicit > stored focus
     let scope = match scope_chain {
         Some(sc) => sc,
-        None => state.focus_scope_chain.read().await.clone(),
+        None => state.ui_state.scope_chain(),
     };
     tracing::debug!(scope = ?scope, "resolved scope chain");
 
@@ -1076,20 +929,69 @@ pub async fn dispatch_command(
         serde_json::from_value::<swissarmyhammer_commands::UIStateChange>(result.clone())
     {
         let mut config = state.config.write().await;
-        let active_board = state.active_board.read().await;
         let label = window_label.as_deref().unwrap_or("main");
-        let ws = config.windows.entry(label.to_string()).or_insert_with(|| {
-            crate::state::WindowState::new(active_board.clone().unwrap_or_default())
-        });
+        // Use UIState for active board path; fall back to empty PathBuf for new entries.
+        let active_board_path = state
+            .ui_state
+            .active_board_path()
+            .map(std::path::PathBuf::from)
+            .unwrap_or_default();
+        let ws = config
+            .windows
+            .entry(label.to_string())
+            .or_insert_with(|| crate::state::WindowState::new(active_board_path));
         ws.inspector_stack = stack.clone();
-        drop(active_board);
         let _ = config.save();
+    }
+
+    // Handle board management side effects from file.switchBoard and file.closeBoard.
+    // These commands update UIState, but the Tauri layer must also manage BoardHandles.
+    if let Some(board_switch) = result.get("BoardSwitch") {
+        if let Some(path_str) = board_switch.get("path").and_then(|v| v.as_str()) {
+            let board_path = std::path::PathBuf::from(path_str);
+            let label = board_switch
+                .get("window_label")
+                .and_then(|v| v.as_str())
+                .unwrap_or("main");
+
+            // Open the board idempotently (also starts file watcher)
+            match state.open_board(&board_path, Some(app.clone())).await {
+                Ok(canonical) => {
+                    // Persist window→board mapping in config
+                    let mut config = state.config.write().await;
+                    let ws = config
+                        .windows
+                        .entry(label.to_string())
+                        .or_insert_with(|| crate::state::WindowState::new(canonical.clone()));
+                    ws.board_path = canonical.clone();
+                    let _ = config.save();
+                }
+                Err(e) => {
+                    tracing::error!(cmd = %cmd, path = %path_str, error = %e, "BoardSwitch: failed to open board");
+                }
+            }
+            let _ = app.emit("board-changed", ());
+        }
+    }
+
+    if let Some(board_close) = result.get("BoardClose") {
+        if let Some(path_str) = board_close.get("path").and_then(|v| v.as_str()) {
+            let target = std::path::PathBuf::from(path_str);
+            if let Err(e) = state.close_board(&target).await {
+                tracing::error!(cmd = %cmd, path = %path_str, error = %e, "BoardClose: failed to close board");
+            }
+            let _ = app.emit("board-changed", ());
+        }
     }
 
     // After any UIStateChange, push the full state snapshot to the frontend.
     // This broad approach ensures the React UIStateProvider stays in sync
     // without needing per-field event types. Optimise per-field later if needed.
     if serde_json::from_value::<swissarmyhammer_commands::UIStateChange>(result.clone()).is_ok() {
+        let _ = app.emit("ui-state-changed", state.ui_state.to_json());
+    }
+    // Board switch/close results are not UIStateChanges but still update ui-state.
+    if result.get("BoardSwitch").is_some() || result.get("BoardClose").is_some() {
         let _ = app.emit("ui-state-changed", state.ui_state.to_json());
     }
 
@@ -1122,7 +1024,7 @@ pub async fn list_available_commands(
     state: State<'_, AppState>,
     context_menu: Option<bool>,
 ) -> Result<Value, String> {
-    let scope = state.focus_scope_chain.read().await.clone();
+    let scope = state.ui_state.scope_chain();
 
     // Clone filtered defs so we can drop the registry read guard before
     // awaiting active_handle (avoids holding RwLock across an await point).

@@ -56,15 +56,10 @@ fn main() {
             commands::set_focus,
             commands::list_available_commands,
             commands::show_context_menu,
-            commands::open_board,
-            commands::close_board,
             commands::list_open_boards,
-            commands::set_active_board,
-            commands::switch_board,
             commands::get_recent_boards,
             commands::get_ui_state,
             commands::get_ui_context,
-            commands::set_active_view,
             commands::get_entity_schema,
             commands::list_entities,
             commands::get_entity,
@@ -206,11 +201,14 @@ fn main() {
                         tauri::async_runtime::spawn(async move {
                             let state = app_handle.state::<AppState>();
                             let mut config = state.config.write().await;
-                            let active_board = state.active_board.read().await;
+                            let active_board_path = state
+                                .ui_state
+                                .active_board_path()
+                                .map(std::path::PathBuf::from)
+                                .unwrap_or_default();
                             let entry = config.windows.entry(label.clone()).or_insert_with(|| {
-                                crate::state::WindowState::new(active_board.clone().unwrap_or_default())
+                                crate::state::WindowState::new(active_board_path)
                             });
-                            drop(active_board);
                             entry.x = Some(pos.x);
                             entry.y = Some(pos.y);
                             entry.width = Some(size.width);

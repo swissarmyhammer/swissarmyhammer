@@ -216,9 +216,9 @@ function App() {
       setActiveBoardPath(active.path);
       activeBoardPathRef.current = active.path;
       // Persist the fallback selection so it survives hot reload
-      invoke("switch_board", {
-        windowLabel: WINDOW_LABEL,
-        path: active.path,
+      invoke("dispatch_command", {
+        cmd: "file.switchBoard",
+        args: { windowLabel: WINDOW_LABEL, path: active.path },
       }).catch(() => {});
     }
 
@@ -252,9 +252,9 @@ function App() {
           if (cancelled) return;
           if (ctx.board_path) {
             // Open board idempotently and persist window→board mapping
-            await invoke("switch_board", {
-              windowLabel: WINDOW_LABEL,
-              path: ctx.board_path,
+            await invoke("dispatch_command", {
+              cmd: "file.switchBoard",
+              args: { windowLabel: WINDOW_LABEL, path: ctx.board_path },
             });
             if (cancelled) return;
             setActiveBoardPath(ctx.board_path);
@@ -408,9 +408,9 @@ function App() {
         async (event: { payload: { path: string } }) => {
           const newPath = event.payload.path;
           // Persist window→board mapping so it survives hot reload / restart
-          invoke("switch_board", {
-            windowLabel: WINDOW_LABEL,
-            path: newPath,
+          invoke("dispatch_command", {
+            cmd: "file.switchBoard",
+            args: { windowLabel: WINDOW_LABEL, path: newPath },
           }).catch(() => {});
           setActiveBoardPath(newPath);
           activeBoardPathRef.current = newPath;
@@ -454,9 +454,9 @@ function App() {
         const fallback = boards.find((b) => b.is_active) ?? boards[0];
         setActiveBoardPath(fallback.path);
         activeBoardPathRef.current = fallback.path;
-        invoke("switch_board", {
-          windowLabel: WINDOW_LABEL,
-          path: fallback.path,
+        invoke("dispatch_command", {
+          cmd: "file.switchBoard",
+          args: { windowLabel: WINDOW_LABEL, path: fallback.path },
         }).catch(() => {});
         const result = await refreshBoards(fallback.path);
         setBoard(result.boardData);
@@ -470,13 +470,16 @@ function App() {
     };
   }, [refresh]);
 
-  /** Switch this window's active board. Persists via backend switch_board command. */
+  /** Switch this window's active board. Persists via backend file.switchBoard command. */
   const handleSwitchBoard = useCallback(
     async (path: string) => {
       setActiveBoardPath(path);
       activeBoardPathRef.current = path;
       try {
-        await invoke("switch_board", { windowLabel: WINDOW_LABEL, path });
+        await invoke("dispatch_command", {
+          cmd: "file.switchBoard",
+          args: { windowLabel: WINDOW_LABEL, path },
+        });
       } catch {
         /* ignore */
       }
@@ -612,15 +615,20 @@ function App() {
  * plus a generic `nav.view` command that takes args.
  */
 function ViewCommandScope({ children }: { children: React.ReactNode }) {
-  const { views, setActiveViewId } = useViews();
+  const { views } = useViews();
 
   const viewCommands: CommandDef[] = useMemo(() => {
     return views.map((view) => ({
       id: `nav.view.${view.id}`,
       name: `View: ${view.name}`,
-      execute: () => setActiveViewId(view.id),
+      execute: () => {
+        invoke("dispatch_command", {
+          cmd: "ui.view.set",
+          args: { view_id: view.id },
+        }).catch(console.error);
+      },
     }));
-  }, [views, setActiveViewId]);
+  }, [views]);
 
   return (
     <CommandScopeProvider commands={viewCommands}>

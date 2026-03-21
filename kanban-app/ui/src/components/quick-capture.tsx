@@ -106,7 +106,10 @@ export function QuickCapture() {
   // Window-level Escape fallback for when CM6 doesn't have focus
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !(e.target as HTMLElement)?.closest?.(".cm-editor")) {
+      if (
+        e.key === "Escape" &&
+        !(e.target as HTMLElement)?.closest?.(".cm-editor")
+      ) {
         getCurrentWindow().hide();
       }
     };
@@ -124,11 +127,10 @@ export function QuickCapture() {
 
       try {
         const active = boards.find((b) => b.is_active);
-        if (active?.path !== selectedPath) {
-          await invoke("set_active_board", { path: selectedPath });
-        }
 
-        const boardData = await invoke<BoardDataResponse>("get_board_data");
+        const boardData = await invoke<BoardDataResponse>("get_board_data", {
+          boardPath: selectedPath,
+        });
         const columns = [...boardData.columns].sort((a, b) => {
           const orderA = typeof a.order === "number" ? a.order : 0;
           const orderB = typeof b.order === "number" ? b.order : 0;
@@ -145,8 +147,12 @@ export function QuickCapture() {
 
         localStorage.setItem(STORAGE_KEY, selectedPath);
 
+        // If we switched to a different board for the add, restore the previous active
         if (active && active.path !== selectedPath) {
-          await invoke("set_active_board", { path: active.path }).catch(() => {});
+          await invoke("dispatch_command", {
+            cmd: "file.switchBoard",
+            args: { path: active.path },
+          }).catch(() => {});
         }
       } catch (err) {
         console.error("Quick capture failed:", err);
@@ -178,12 +184,23 @@ export function QuickCapture() {
   if (!ready) return null;
 
   return (
-    <div className="h-screen w-screen flex items-start justify-center p-2" style={{ background: "transparent" }}>
-      <div ref={cardRef} className="w-full rounded-xl bg-background border border-border shadow-xl animate-in fade-in zoom-in-95 duration-150">
+    <div
+      className="h-screen w-screen flex items-start justify-center p-2"
+      style={{ background: "transparent" }}
+    >
+      <div
+        ref={cardRef}
+        className="w-full rounded-xl bg-background border border-border shadow-xl animate-in fade-in zoom-in-95 duration-150"
+      >
         {/* Header — draggable, shows icon and keyboard hints */}
-        <div className="flex items-center gap-2 px-3 py-1.5 bg-muted/30 rounded-t-xl" data-tauri-drag-region>
+        <div
+          className="flex items-center gap-2 px-3 py-1.5 bg-muted/30 rounded-t-xl"
+          data-tauri-drag-region
+        >
           <img src={appIcon} alt="" className="h-4 w-4 shrink-0" />
-          <span className="text-xs font-medium text-muted-foreground/70">Quick Capture</span>
+          <span className="text-xs font-medium text-muted-foreground/70">
+            Quick Capture
+          </span>
           <span className="ml-auto text-[10px] text-muted-foreground/40">
             enter to add &middot; esc to dismiss
           </span>
@@ -205,7 +222,9 @@ export function QuickCapture() {
           <Button
             size="icon"
             className="h-7 w-7 shrink-0"
-            onClick={() => { if (draft.trim()) handleSubmit(draft); }}
+            onClick={() => {
+              if (draft.trim()) handleSubmit(draft);
+            }}
             disabled={!draft.trim()}
           >
             <Plus className="h-4 w-4" />
@@ -214,7 +233,10 @@ export function QuickCapture() {
 
         {/* Divider + Board selector — always shown */}
         <div className="border-t border-border/50 px-3 py-1.5 flex items-center gap-2 bg-muted/20">
-          <EntityIcon entityType="board" className="h-3 w-3 shrink-0 text-muted-foreground/50" />
+          <EntityIcon
+            entityType="board"
+            className="h-3 w-3 shrink-0 text-muted-foreground/50"
+          />
           <BoardSelector
             boards={boards}
             selectedPath={selectedPath}

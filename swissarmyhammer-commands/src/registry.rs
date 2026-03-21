@@ -184,6 +184,7 @@ pub fn builtin_yaml_sources() -> Vec<(&'static str, &'static str)> {
             "settings",
             include_str!("../builtin/commands/settings.yaml"),
         ),
+        ("file", include_str!("../builtin/commands/file.yaml")),
     ]
 }
 
@@ -409,11 +410,12 @@ mod tests {
 
         // app: quit, undo, redo = 3
         // entity: task.add, task.move, task.delete, task.untag, entity.update_field,
-        //         entity.delete, tag.update, column.reorder, attachment.delete = 9
+        //         entity.delete, entity.archive, entity.unarchive, tag.update,
+        //         column.reorder, attachment.delete = 11
         // ui: inspect, inspector.close, inspector.close_all, palette.open,
         //     palette.close, view.set = 6
         // settings: keymap.vim, keymap.cua, keymap.emacs = 3
-        assert_eq!(registry.all_commands().len(), 21);
+        assert_eq!(registry.all_commands().len(), 23);
 
         // Spot checks
         assert!(registry.get("app.quit").is_some());
