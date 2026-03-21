@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: '8280'
+position_column: done
+position_ordinal: ffffffffffe980
 title: Route new_board_dialog and open_board_dialog through command system
 ---
 ## What
