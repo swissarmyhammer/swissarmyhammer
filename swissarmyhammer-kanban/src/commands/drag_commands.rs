@@ -101,3 +101,39 @@ impl Command for DragStartCmd {
         }))
     }
 }
+
+/// Cancel the active drag session.
+///
+/// Takes the session from UIState and returns a `DragCancel` result.
+/// The Tauri dispatch handler emits `drag-session-cancelled`.
+/// Gracefully returns `null` if no session is active.
+pub struct DragCancelCmd;
+
+#[async_trait]
+impl Command for DragCancelCmd {
+    /// Always available — cancel can be called at any time (even with no active session).
+    fn available(&self, _ctx: &CommandContext) -> bool {
+        true
+    }
+
+    /// Execute the drag.cancel command.
+    ///
+    /// Takes the active drag session from UIState.  If a session was active,
+    /// returns a `DragCancel` result payload so the Tauri layer can emit
+    /// `drag-session-cancelled`.  Returns `null` when no session is active.
+    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+        let ui = ctx
+            .ui_state
+            .as_ref()
+            .ok_or_else(|| CommandError::ExecutionFailed("UIState not available".into()))?;
+
+        match ui.take_drag() {
+            Some(session) => Ok(json!({
+                "DragCancel": {
+                    "session_id": session.session_id,
+                }
+            })),
+            None => Ok(Value::Null),
+        }
+    }
+}

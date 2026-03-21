@@ -140,15 +140,17 @@ describe("DragSessionProvider", () => {
     });
   });
 
-  it("cancelSession invokes cancel_drag_session", async () => {
-    mockInvoke.mockResolvedValue({ cancelled: true });
+  it("cancelSession invokes dispatch_command with drag.cancel", async () => {
+    mockInvoke.mockResolvedValue({ result: null, undoable: false });
     const { result } = renderHook(() => useDragSession(), { wrapper });
 
     await act(async () => {
       await result.current.cancelSession();
     });
 
-    expect(mockInvoke).toHaveBeenCalledWith("cancel_drag_session");
+    expect(mockInvoke).toHaveBeenCalledWith("dispatch_command", {
+      cmd: "drag.cancel",
+    });
   });
 
   it("completeSession invokes complete_drag_session with options", async () => {

@@ -132,7 +132,7 @@ export function DragSessionProvider({ children }: { children: ReactNode }) {
 
   const cancelSession = useCallback(async () => {
     try {
-      await invoke("cancel_drag_session");
+      await invoke("dispatch_command", { cmd: "drag.cancel" });
     } catch (e) {
       console.error("Failed to cancel drag session:", e);
     }

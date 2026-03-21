@@ -107,6 +107,7 @@ pub fn register_commands() -> HashMap<String, Arc<dyn Command>> {
 
     // Drag session commands
     map.insert("drag.start".into(), Arc::new(drag_commands::DragStartCmd));
+    map.insert("drag.cancel".into(), Arc::new(drag_commands::DragCancelCmd));
 
     // File / board management commands
     map.insert(
@@ -170,8 +171,8 @@ mod tests {
     #[test]
     fn register_commands_returns_expected_count() {
         let cmds = register_commands();
-        // 5 task + 4 entity + 1 tag + 1 attachment + 1 column + 7 UI + 6 app + 2 file + 1 drag = 28
-        assert_eq!(cmds.len(), 28);
+        // 5 task + 4 entity + 1 tag + 1 attachment + 1 column + 7 UI + 6 app + 2 file + 2 drag = 29
+        assert_eq!(cmds.len(), 29);
     }
 
     // =========================================================================
@@ -675,6 +676,70 @@ mod tests {
         cmd.execute(&ctx).await.unwrap();
         let session = ui.drag_session().unwrap();
         assert!(!session.copy_mode);
+    }
+
+    // =========================================================================
+    // Drag cancel command tests
+    // =========================================================================
+
+    #[tokio::test]
+    async fn drag_cancel_cmd_clears_session() {
+        let cmds = register_commands();
+        let cmd = cmds.get("drag.cancel").unwrap();
+        let ui = Arc::new(UIState::new());
+
+        // Start a session first via drag.start
+        let start_cmd = cmds.get("drag.start").unwrap();
+        let mut start_args = std::collections::HashMap::new();
+        start_args.insert("boardPath".into(), serde_json::json!("/boards/a/.kanban"));
+        start_args.insert("taskId".into(), serde_json::json!("task-999"));
+        let mut start_ctx = CommandContext::new("drag.start", vec![], None, start_args);
+        start_ctx.ui_state = Some(Arc::clone(&ui));
+        start_cmd.execute(&start_ctx).await.unwrap();
+        assert!(ui.drag_session().is_some(), "session should be active");
+
+        // Now cancel it
+        let mut ctx = CommandContext::new(
+            "drag.cancel",
+            vec![],
+            None,
+            std::collections::HashMap::new(),
+        );
+        ctx.ui_state = Some(Arc::clone(&ui));
+        let result = cmd.execute(&ctx).await.unwrap();
+
+        assert!(ui.drag_session().is_none(), "session should be cleared");
+        assert!(
+            result.get("DragCancel").is_some(),
+            "result must have DragCancel key"
+        );
+        let drag_cancel = result.get("DragCancel").unwrap();
+        assert!(
+            drag_cancel.get("session_id").is_some(),
+            "DragCancel must contain session_id"
+        );
+    }
+
+    #[tokio::test]
+    async fn drag_cancel_cmd_no_session_returns_null() {
+        let cmds = register_commands();
+        let cmd = cmds.get("drag.cancel").unwrap();
+        let ui = Arc::new(UIState::new());
+        assert!(ui.drag_session().is_none(), "no session should be active");
+
+        let mut ctx = CommandContext::new(
+            "drag.cancel",
+            vec![],
+            None,
+            std::collections::HashMap::new(),
+        );
+        ctx.ui_state = Some(Arc::clone(&ui));
+        let result = cmd.execute(&ctx).await.unwrap();
+
+        assert!(
+            result.is_null(),
+            "should return null when no session active"
+        );
     }
 
     #[tokio::test]

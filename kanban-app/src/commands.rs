@@ -957,6 +957,11 @@ pub(crate) async fn dispatch_command_internal(
         let _ = app.emit("drag-session-active", &payload);
     }
 
+    // Emit drag-session-cancelled event when drag.cancel completes successfully.
+    if let Some(drag_cancel) = result.get("DragCancel") {
+        let _ = app.emit("drag-session-cancelled", &drag_cancel);
+    }
+
     // After any UIStateChange, push the full state snapshot to the frontend.
     // This broad approach ensures the React UIStateProvider stays in sync
     // without needing per-field event types. Optimise per-field later if needed.
@@ -1047,28 +1052,6 @@ pub async fn list_available_commands(
 // ---------------------------------------------------------------------------
 // Drag session commands — cross-window drag coordination
 // ---------------------------------------------------------------------------
-
-/// Cancel the active drag session.
-///
-/// Called when a drag is cancelled (Escape, pointer released outside windows).
-/// Clears the session and broadcasts `drag-session-cancelled`.
-#[tauri::command]
-pub async fn cancel_drag_session(
-    app: AppHandle,
-    state: State<'_, AppState>,
-) -> Result<Value, String> {
-    let session = state.ui_state.take_drag();
-    match session {
-        Some(s) => {
-            let _ = app.emit(
-                "drag-session-cancelled",
-                json!({ "session_id": s.session_id }),
-            );
-            Ok(json!({ "cancelled": true, "session_id": s.session_id }))
-        }
-        None => Ok(json!({ "cancelled": false })),
-    }
-}
 
 /// Complete the active drag session by dropping in a target window.
 ///
