@@ -1,6 +1,5 @@
 //! Application state management with multi-board support and MRU persistence.
 
-use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
@@ -19,8 +18,6 @@ use swissarmyhammer_kanban::Execute;
 use crate::watcher::{self, BoardWatcher, EntityCache};
 
 const CONFIG_APP_SUBDIR: &str = "kanban-app";
-const CONFIG_FILE_NAME: &str = "config.yaml";
-const CONFIG_FILE_NAME_LEGACY: &str = "config.json";
 const UI_STATE_FILE_NAME: &str = "ui-state.yaml";
 
 /// A handle to a single open kanban board.
@@ -196,49 +193,6 @@ impl BoardHandle {
     }
 }
 
-/// Persisted app configuration.
-///
-/// Minimal: only stores which board paths were open.
-/// Window geometry, inspector stacks, and per-window board assignments
-/// are stored in UIState (ui-state.yaml).
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub(crate) struct AppConfig {
-    /// Paths of boards that were open when the app last ran.
-    /// Restored on startup so multi-board sessions survive reloads.
-    #[serde(default)]
-    pub(crate) open_boards: Vec<PathBuf>,
-}
-
-impl AppConfig {
-    /// Load config from disk, returning default if not found.
-    ///
-    /// Tries `config.yaml` first. If it doesn't exist, falls back to
-    /// `config.json` (legacy format) for migration — the next `save()`
-    /// will write YAML.
-    pub fn load() -> Self {
-        let yaml_path = config_file_path();
-        if let Ok(content) = std::fs::read_to_string(&yaml_path) {
-            return serde_yaml_ng::from_str(&content).unwrap_or_default();
-        }
-        // Fall back to legacy JSON for migration
-        let json_path = legacy_config_file_path();
-        if let Ok(content) = std::fs::read_to_string(&json_path) {
-            return serde_json::from_str(&content).unwrap_or_default();
-        }
-        Self::default()
-    }
-
-    /// Save config to disk as YAML.
-    pub fn save(&self) -> std::io::Result<()> {
-        let path = config_file_path();
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        let content = serde_yaml_ng::to_string(self).map_err(std::io::Error::other)?;
-        std::fs::write(&path, content)
-    }
-}
-
 /// Maximum age of a drag session before it is considered stale (30 seconds).
 pub(crate) const DRAG_SESSION_MAX_AGE_MS: u64 = 30_000;
 
@@ -246,7 +200,6 @@ pub(crate) const DRAG_SESSION_MAX_AGE_MS: u64 = 30_000;
 pub(crate) struct AppState {
     pub(crate) boards: RwLock<HashMap<PathBuf, Arc<BoardHandle>>>,
     pub(crate) active_board: RwLock<Option<PathBuf>>,
-    pub(crate) config: RwLock<AppConfig>,
     /// Shared UI state (inspector stack, palette, keymap, drag session, etc.).
     pub(crate) ui_state: Arc<UIState>,
     /// YAML-loaded command definitions. Behind RwLock because user overrides
@@ -282,13 +235,11 @@ impl AppState {
     fn with_ui_state_path(ui_state_path: PathBuf) -> Self {
         let sources = builtin_yaml_sources();
         let source_refs: Vec<(&str, &str)> = sources.iter().map(|(n, c)| (*n, *c)).collect();
-        let config = AppConfig::load();
         let ui_state = Arc::new(UIState::load(ui_state_path));
 
         Self {
             boards: RwLock::new(HashMap::new()),
             active_board: RwLock::new(None),
-            config: RwLock::new(config),
             ui_state,
             commands_registry: RwLock::new(CommandsRegistry::from_yaml_sources(&source_refs)),
             command_impls: swissarmyhammer_kanban::commands::register_commands(),
@@ -352,24 +303,14 @@ impl AppState {
         // Insert into the boards map and set active. The watcher may
         // already be emitting events, but the frontend won't see them
         // until list_open_boards returns this board.
-        //
-        // Collect open board paths inside the write lock, then drop it
-        // before touching config to avoid lock-ordering hazards.
-        let open_paths: Vec<PathBuf>;
         {
             let mut boards = self.boards.write().await;
             boards.insert(canonical.clone(), Arc::new(handle));
-            open_paths = boards.keys().cloned().collect();
         }
 
-        // Update MRU via UIState + persist open boards list (no boards lock held)
+        // Update MRU via UIState (no boards lock held)
         self.ui_state
             .touch_recent(&canonical.display().to_string(), &board_name);
-        {
-            let mut config = self.config.write().await;
-            config.open_boards = open_paths;
-            let _ = config.save();
-        }
 
         *self.active_board.write().await = Some(canonical.clone());
 
@@ -388,11 +329,14 @@ impl AppState {
     /// If no `.kanban` directory is found in any ancestor, the app starts without
     /// a board (the frontend shows the "No board loaded" prompt).
     pub async fn auto_open_board(&self) {
-        // Restore previously-open boards from persisted config.
+        // Restore previously-open boards from UIState.
         {
-            let config = self.config.read().await;
-            let paths = config.open_boards.clone();
-            drop(config);
+            let paths: Vec<PathBuf> = self
+                .ui_state
+                .open_boards()
+                .into_iter()
+                .map(PathBuf::from)
+                .collect();
             for path in paths {
                 if path.is_dir() {
                     tracing::info!(path = %path.display(), "auto_open_board: restoring persisted board");
@@ -571,10 +515,6 @@ impl AppState {
     pub async fn close_board(&self, path: &Path) -> Result<(), String> {
         let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
 
-        // Collect remaining board paths inside the write lock, then drop it
-        // before touching config. This avoids the lock-ordering hazard where
-        // sync_open_boards_to_config would re-acquire a boards read lock.
-        let remaining_paths: Vec<PathBuf>;
         {
             let mut boards = self.boards.write().await;
             if boards.remove(&canonical).is_none() {
@@ -586,15 +526,6 @@ impl AppState {
             if active.as_ref() == Some(&canonical) {
                 *active = boards.keys().next().cloned();
             }
-
-            remaining_paths = boards.keys().cloned().collect();
-        }
-
-        // Persist updated open boards list (no boards lock held)
-        {
-            let mut config = self.config.write().await;
-            config.open_boards = remaining_paths;
-            let _ = config.save();
         }
 
         // Update UIState board tracking so it stays in sync.
@@ -757,22 +688,6 @@ fn macos_profile_picture(_username: &str) -> Option<String> {
     None
 }
 
-/// Get the path to the app config file.
-///
-/// Uses XDG config directory: `$XDG_CONFIG_HOME/sah/kanban-app/config.yaml`
-/// Falls back to `~/.config/sah/kanban-app/config.yaml` if XDG_CONFIG_HOME is not set.
-fn config_file_path() -> PathBuf {
-    use swissarmyhammer_directory::{ManagedDirectory, SwissarmyhammerConfig};
-
-    ManagedDirectory::<SwissarmyhammerConfig>::xdg_config()
-        .map(|dir| dir.root().join(CONFIG_APP_SUBDIR).join(CONFIG_FILE_NAME))
-        .unwrap_or_else(|_| {
-            PathBuf::from(".")
-                .join(CONFIG_APP_SUBDIR)
-                .join(CONFIG_FILE_NAME)
-        })
-}
-
 /// Get the path to the UIState persistence file.
 ///
 /// Uses XDG config directory: `$XDG_CONFIG_HOME/sah/kanban-app/ui-state.yaml`
@@ -785,23 +700,6 @@ fn ui_state_file_path() -> PathBuf {
             PathBuf::from(".")
                 .join(CONFIG_APP_SUBDIR)
                 .join(UI_STATE_FILE_NAME)
-        })
-}
-
-/// Get the path to the legacy JSON config file (for migration).
-fn legacy_config_file_path() -> PathBuf {
-    use swissarmyhammer_directory::{ManagedDirectory, SwissarmyhammerConfig};
-
-    ManagedDirectory::<SwissarmyhammerConfig>::xdg_config()
-        .map(|dir| {
-            dir.root()
-                .join(CONFIG_APP_SUBDIR)
-                .join(CONFIG_FILE_NAME_LEGACY)
-        })
-        .unwrap_or_else(|_| {
-            PathBuf::from(".")
-                .join(CONFIG_APP_SUBDIR)
-                .join(CONFIG_FILE_NAME_LEGACY)
         })
 }
 
