@@ -851,7 +851,7 @@ pub async fn dispatch_command(
 /// - `board_path` - Optional board path for multi-window targeting
 /// - `window_label` - Optional window label for UIState context
 #[allow(clippy::too_many_arguments)]
-async fn dispatch_command_internal(
+pub(crate) async fn dispatch_command_internal(
     app: &AppHandle,
     state: &AppState,
     cmd: &str,

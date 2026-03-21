@@ -299,24 +299,46 @@ fn focused_window_label(app: &AppHandle) -> Option<String> {
 
 /// Open a board and emit frontend events.
 ///
+/// Routes board opening through `dispatch_command_internal` so that all
+/// UIState tracking and BoardHandle lifecycle are handled consistently.
+///
 /// Emits `board-opened` to the source window (the one that initiated
-/// the open) so only that window switches. Broadcasts `board-changed`
-/// to all windows so they refresh their open boards list.
+/// the open) so only that window switches. The `board-changed` broadcast
+/// is handled by `dispatch_command_internal` via the `BoardSwitch` side effect.
 async fn open_and_notify(handle: &AppHandle, path: &Path, source_window_label: Option<&str>) {
     use serde_json::json;
     use tauri::Emitter;
 
     let state = handle.state::<AppState>();
-    match state.open_board(path, Some(handle.clone())).await {
-        Ok(canonical) => {
-            let payload = json!({ "path": canonical.display().to_string() });
+    let path_str = path.display().to_string();
+    let window_label = source_window_label.unwrap_or("main").to_string();
 
-            // Emit board-opened to the source window only (emit_to scopes to one window)
+    match crate::commands::dispatch_command_internal(
+        handle,
+        &state,
+        "file.switchBoard",
+        None,
+        None,
+        Some(json!({ "path": path_str, "windowLabel": window_label })),
+        None,
+        Some(window_label.clone()),
+    )
+    .await
+    {
+        Ok(_) => {
+            // Resolve the canonical path so the frontend gets the same path
+            // that the board was registered under in UIState.
+            let canonical = resolve_kanban_path(path)
+                .ok()
+                .and_then(|p| p.canonicalize().ok().or(Some(p)))
+                .unwrap_or_else(|| path.to_path_buf());
+
+            // Emit board-opened to the source window only so it switches its active board.
+            // dispatch_command_internal already emits board-changed to all windows.
+            let payload = json!({ "path": canonical.display().to_string() });
             if let Some(label) = source_window_label {
                 let _ = handle.emit_to(label, "board-opened", &payload);
             }
-
-            let _ = handle.emit("board-changed", ());
         }
         Err(e) => {
             tracing::error!("Failed to open board at {}: {}", path.display(), e);
