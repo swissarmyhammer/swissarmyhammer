@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KM8XR7PVGC4KYHGS05PSFZME
-position_column: todo
-position_ordinal: '8480'
+position_column: done
+position_ordinal: ffffffffffee80
 title: Route complete_drag_session through dispatch_command with cross-board transfer in command engine
 ---
 ## What
