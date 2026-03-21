@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KM85VAEJM77M03VP1P444AS1
-position_column: todo
-position_ordinal: '8680'
+position_column: done
+position_ordinal: ffffffffffda80
 title: Migrate recent_boards into UIState
 ---
 ## What
