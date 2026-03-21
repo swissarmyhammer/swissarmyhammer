@@ -1,4 +1,11 @@
-import { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useActiveBoardPath } from "@/lib/command-scope";
 import { useGrid } from "@/hooks/use-grid";
@@ -10,7 +17,16 @@ import { useEntityStore } from "@/lib/entity-store-context";
 import { useEntityFocus } from "@/lib/entity-focus-context";
 import { useInspect } from "@/lib/inspect-context";
 import { moniker, fieldMoniker } from "@/lib/moniker";
-import { CommandScopeProvider, CommandScopeContext, type CommandDef, type CommandScope } from "@/lib/command-scope";
+import {
+  useEntityCommands,
+  buildEntityCommandDefs,
+} from "@/lib/entity-commands";
+import {
+  CommandScopeProvider,
+  CommandScopeContext,
+  type CommandDef,
+  type CommandScope,
+} from "@/lib/command-scope";
 import { DataTable, type DataTableColumn } from "@/components/data-table";
 import { CellEditor } from "@/components/cells/cell-editor";
 import type { ViewDef, Entity, FieldDef } from "@/types/kanban";
@@ -26,9 +42,11 @@ export function GridView({ view }: GridViewProps) {
   const { getEntities } = useEntityStore();
   const entityType = view.entity_type ?? "task";
   const entities = getEntities(entityType);
-  const { getSchema } = useSchema();
+  const { getSchema, getEntityCommands } = useSchema();
   const schema = getSchema(entityType);
   const fields = schema?.fields ?? [];
+  // Schema-driven entity commands for per-row context menus
+  const schemaCommands = getEntityCommands(entityType);
 
   // Build columns from view's card_fields (or all visible fields)
   const columns = useMemo<DataTableColumn[]>(() => {
@@ -48,7 +66,9 @@ export function GridView({ view }: GridViewProps) {
 
   // Visible row count may differ from entities.length when groups are collapsed
   const [visibleRowCount, setVisibleRowCount] = useState(entities.length);
-  useEffect(() => { setVisibleRowCount(entities.length); }, [entities.length]);
+  useEffect(() => {
+    setVisibleRowCount(entities.length);
+  }, [entities.length]);
 
   const grid = useGrid({ rowCount: visibleRowCount, colCount: columns.length });
   const gridRef = useRef(grid);
@@ -60,13 +80,21 @@ export function GridView({ view }: GridViewProps) {
   const inspectEntity = useInspect();
 
   // Current entity and field from cursor position
-  const currentEntity = grid.cursor.row >= 0 && grid.cursor.row < entities.length
-    ? entities[grid.cursor.row] : null;
-  const currentField = grid.cursor.col >= 0 && grid.cursor.col < columns.length
-    ? columns[grid.cursor.col].field : null;
-  const currentEntityMoniker = currentEntity ? moniker(entityType, currentEntity.id) : null;
-  const currentFieldMoniker = currentEntity && currentField
-    ? fieldMoniker(entityType, currentEntity.id, currentField.name) : null;
+  const currentEntity =
+    grid.cursor.row >= 0 && grid.cursor.row < entities.length
+      ? entities[grid.cursor.row]
+      : null;
+  const currentField =
+    grid.cursor.col >= 0 && grid.cursor.col < columns.length
+      ? columns[grid.cursor.col].field
+      : null;
+  const currentEntityMoniker = currentEntity
+    ? moniker(entityType, currentEntity.id)
+    : null;
+  const currentFieldMoniker =
+    currentEntity && currentField
+      ? fieldMoniker(entityType, currentEntity.id, currentField.name)
+      : null;
 
   // Keyboard handler
   useEffect(() => {
@@ -155,117 +183,117 @@ export function GridView({ view }: GridViewProps) {
   }, [keymapMode, appMode]);
 
   // Grid-level commands (navigation, row creation — not entity-specific)
-  const gridCommands = useMemo<CommandDef[]>(() => [
-    {
-      id: "grid.moveUp",
-      name: "Move Up",
-      keys: { vim: "k", cua: "ArrowUp" },
-      execute: () => gridRef.current.moveUp(),
-    },
-    {
-      id: "grid.moveDown",
-      name: "Move Down",
-      keys: { vim: "j", cua: "ArrowDown" },
-      execute: () => gridRef.current.moveDown(),
-    },
-    {
-      id: "grid.moveLeft",
-      name: "Move Left",
-      keys: { vim: "h", cua: "ArrowLeft" },
-      execute: () => gridRef.current.moveLeft(),
-    },
-    {
-      id: "grid.moveRight",
-      name: "Move Right",
-      keys: { vim: "l", cua: "ArrowRight" },
-      execute: () => gridRef.current.moveRight(),
-    },
-    {
-      id: "grid.edit",
-      name: "Edit Cell",
-      keys: { vim: "i", cua: "Enter" },
-      execute: () => gridRef.current.enterEdit(),
-    },
-    {
-      id: "grid.escape",
-      name: "Exit Edit",
-      keys: { vim: "Escape", cua: "Escape" },
-      execute: () => {
-        if (gridRef.current.mode === "edit") gridRef.current.exitEdit();
-        else if (gridRef.current.mode === "visual") gridRef.current.exitVisual();
-      },
-    },
-    {
-      id: "grid.deleteRow",
-      name: "Delete Row",
-      execute: () => {
-        const row = gridRef.current.cursor.row;
-        if (row >= 0 && row < entities.length) {
-          const entity = entities[row];
-          invoke("dispatch_command", {
-            cmd: `${entityType}.archive`,
-            args: { id: entity.id },
-            ...(boardPathRef.current ? { boardPath: boardPathRef.current } : {}),
-          }).catch((err) => console.error("Failed to delete row:", err));
-        }
-      },
-    },
-    {
-      id: "grid.newBelow",
-      name: "New Row Below",
-      keys: { vim: "o", cua: "Mod+Enter" },
-      execute: () => {
-        invoke("dispatch_command", {
-          cmd: `${entityType}.add`,
-          args: { title: `New ${entityType}` },
-          ...(boardPathRef.current ? { boardPath: boardPathRef.current } : {}),
-        }).catch((err) => console.error("Failed to add row:", err));
-      },
-    },
-    {
-      id: "grid.newAbove",
-      name: "New Row Above",
-      keys: { vim: "O", cua: "Mod+Shift+Enter" },
-      execute: () => {
-        invoke("dispatch_command", {
-          cmd: `${entityType}.add`,
-          args: { title: `New ${entityType}` },
-          ...(boardPathRef.current ? { boardPath: boardPathRef.current } : {}),
-        }).catch((err) => console.error("Failed to add row:", err));
-      },
-    },
-  ], [entities, entityType]);
-
-  // Entity-level commands (depend on cursor row — registered via focus bridge)
-  const entityCommands = useMemo<CommandDef[]>(() => {
-    if (!currentEntity || !currentEntityMoniker) return [];
-    return [
+  const gridCommands = useMemo<CommandDef[]>(
+    () => [
       {
-        id: "entity.inspect",
-        name: `Inspect ${entityType}`,
-        target: currentEntityMoniker,
-        contextMenu: true,
-        execute: () => inspectEntity(currentEntityMoniker),
+        id: "grid.moveUp",
+        name: "Move Up",
+        keys: { vim: "k", cua: "ArrowUp" },
+        execute: () => gridRef.current.moveUp(),
       },
       {
-        id: "entity.archive",
-        name: "Archive",
-        target: currentEntityMoniker,
-        contextMenu: true,
+        id: "grid.moveDown",
+        name: "Move Down",
+        keys: { vim: "j", cua: "ArrowDown" },
+        execute: () => gridRef.current.moveDown(),
+      },
+      {
+        id: "grid.moveLeft",
+        name: "Move Left",
+        keys: { vim: "h", cua: "ArrowLeft" },
+        execute: () => gridRef.current.moveLeft(),
+      },
+      {
+        id: "grid.moveRight",
+        name: "Move Right",
+        keys: { vim: "l", cua: "ArrowRight" },
+        execute: () => gridRef.current.moveRight(),
+      },
+      {
+        id: "grid.edit",
+        name: "Edit Cell",
+        keys: { vim: "i", cua: "Enter" },
+        execute: () => gridRef.current.enterEdit(),
+      },
+      {
+        id: "grid.escape",
+        name: "Exit Edit",
+        keys: { vim: "Escape", cua: "Escape" },
         execute: () => {
-          invoke("dispatch_command", {
-            cmd: "entity.archive",
-            target: currentEntityMoniker,
-            ...(boardPathRef.current ? { boardPath: boardPathRef.current } : {}),
-          }).catch((err) => console.error("Failed to archive:", err));
+          if (gridRef.current.mode === "edit") gridRef.current.exitEdit();
+          else if (gridRef.current.mode === "visual")
+            gridRef.current.exitVisual();
         },
       },
-    ];
-  }, [currentEntity, currentEntityMoniker, entityType, inspectEntity]);
+      {
+        id: "grid.deleteRow",
+        name: "Delete Row",
+        execute: () => {
+          const row = gridRef.current.cursor.row;
+          if (row >= 0 && row < entities.length) {
+            const entity = entities[row];
+            invoke("dispatch_command", {
+              cmd: `${entityType}.archive`,
+              args: { id: entity.id },
+              ...(boardPathRef.current
+                ? { boardPath: boardPathRef.current }
+                : {}),
+            }).catch((err) => console.error("Failed to delete row:", err));
+          }
+        },
+      },
+      {
+        id: "grid.newBelow",
+        name: "New Row Below",
+        keys: { vim: "o", cua: "Mod+Enter" },
+        execute: () => {
+          invoke("dispatch_command", {
+            cmd: `${entityType}.add`,
+            args: { title: `New ${entityType}` },
+            ...(boardPathRef.current
+              ? { boardPath: boardPathRef.current }
+              : {}),
+          }).catch((err) => console.error("Failed to add row:", err));
+        },
+      },
+      {
+        id: "grid.newAbove",
+        name: "New Row Above",
+        keys: { vim: "O", cua: "Mod+Shift+Enter" },
+        execute: () => {
+          invoke("dispatch_command", {
+            cmd: `${entityType}.add`,
+            args: { title: `New ${entityType}` },
+            ...(boardPathRef.current
+              ? { boardPath: boardPathRef.current }
+              : {}),
+          }).catch((err) => console.error("Failed to add row:", err));
+        },
+      },
+    ],
+    [entities, entityType],
+  );
 
-  const handleCellClick = useCallback((row: number, col: number) => {
-    grid.setCursor(row, col);
-  }, [grid]);
+  // Entity-level commands (depend on cursor row — registered via focus bridge)
+  // Schema-driven: reads entity commands from YAML schema via useEntityCommands.
+  const entityCommands = useEntityCommands(
+    entityType,
+    currentEntity?.id ?? "",
+    currentEntity
+      ? {
+          entity_type: entityType,
+          id: currentEntity.id,
+          fields: currentEntity.fields ?? {},
+        }
+      : undefined,
+  );
+
+  const handleCellClick = useCallback(
+    (row: number, col: number) => {
+      grid.setCursor(row, col);
+    },
+    [grid],
+  );
 
   /**
    * Factory that builds entity-specific context menu commands for a given row.
@@ -274,37 +302,35 @@ export function GridView({ view }: GridViewProps) {
    * CommandScopeProvider so right-clicking row N always resolves commands for
    * row N's entity — regardless of the grid cursor position at the time of
    * the right-click.
+   *
+   * Uses buildEntityCommandDefs (non-hook) because this factory is called
+   * inside a callback, not in the React render cycle.
    */
-  const buildRowEntityCommands = useCallback((entity: Entity): CommandDef[] => {
-    const entityMoniker = moniker(entityType, entity.id);
-    return [
-      {
-        id: "entity.inspect",
-        name: `Inspect ${entityType}`,
-        target: entityMoniker,
-        contextMenu: true,
-        execute: () => inspectEntity(entityMoniker),
-      },
-      {
-        id: "entity.archive",
-        name: "Archive",
-        target: entityMoniker,
-        contextMenu: true,
-        execute: () => {
-          invoke("dispatch_command", {
-            cmd: "entity.archive",
-            target: entityMoniker,
-            ...(boardPathRef.current ? { boardPath: boardPathRef.current } : {}),
-          }).catch((err) => console.error("Failed to archive:", err));
-        },
-      },
-    ];
-  }, [entityType, inspectEntity]);
+  const buildRowEntityCommands = useCallback(
+    (entity: Entity): CommandDef[] => {
+      return buildEntityCommandDefs(
+        schemaCommands,
+        entityType,
+        entity.id,
+        inspectEntity,
+        boardPathRef.current,
+        entity,
+      );
+    },
+    [schemaCommands, entityType, inspectEntity],
+  );
 
   const renderEditor = useCallback(
-    (entity: Entity, field: FieldDef, onCommit: (value: unknown) => void, onCancel: () => void) => {
+    (
+      entity: Entity,
+      field: FieldDef,
+      onCommit: (value: unknown) => void,
+      onCancel: () => void,
+    ) => {
       const handleCommit = (value: unknown) => {
-        updateField(entity.entity_type, entity.id, field.name, value).catch(() => {});
+        updateField(entity.entity_type, entity.id, field.name, value).catch(
+          () => {},
+        );
         onCommit(value);
       };
       return (
@@ -332,7 +358,11 @@ export function GridView({ view }: GridViewProps) {
           <span>{entities.length} rows</span>
           <span className="text-muted-foreground/50">|</span>
           <span>
-            {grid.mode === "edit" ? "EDIT" : grid.mode === "visual" ? "VISUAL" : "NORMAL"}
+            {grid.mode === "edit"
+              ? "EDIT"
+              : grid.mode === "visual"
+                ? "VISUAL"
+                : "NORMAL"}
           </span>
           {entities.length > 0 && (
             <>
@@ -422,7 +452,15 @@ function GridFocusBridge({
         prevMonikerRef.current = null;
       }
     };
-  }, [fieldScope, entityScope, fMoniker, entityMoniker, registerScope, unregisterScope, setFocus]);
+  }, [
+    fieldScope,
+    entityScope,
+    fMoniker,
+    entityMoniker,
+    registerScope,
+    unregisterScope,
+    setFocus,
+  ]);
 
   return null;
 }

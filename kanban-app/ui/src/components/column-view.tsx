@@ -1,11 +1,11 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { Inbox, Plus } from "lucide-react";
 import { EditableMarkdown } from "@/components/editable-markdown";
 import { DraggableTaskCard } from "@/components/sortable-task-card";
 import { FocusScope } from "@/components/focus-scope";
 import { Badge } from "@/components/ui/badge";
 import { moniker } from "@/lib/moniker";
-import { useInspect } from "@/lib/inspect-context";
+import { useEntityCommands } from "@/lib/entity-commands";
 import type { Entity } from "@/types/kanban";
 import { getStr } from "@/types/kanban";
 
@@ -36,10 +36,7 @@ interface ColumnViewProps {
 }
 
 /** Compute the insert index by comparing dragover Y to card midpoints. */
-function computeInsertIndex(
-  container: HTMLElement,
-  clientY: number,
-): number {
+function computeInsertIndex(container: HTMLElement, clientY: number): number {
   const cards = container.querySelectorAll<HTMLElement>("[data-entity-card]");
   for (let i = 0; i < cards.length; i++) {
     const rect = cards[i].getBoundingClientRect();
@@ -64,7 +61,6 @@ export function ColumnView({
   isDragTarget: isDragTargetProp,
   containerRef: containerRefProp,
 }: ColumnViewProps) {
-  const inspectEntity = useInspect();
   const columnMoniker = moniker("column", column.id);
   const containerRef = useRef<HTMLDivElement>(null);
   const [localInsert, setLocalInsert] = useState<number | null>(null);
@@ -90,18 +86,7 @@ export function ColumnView({
     [containerRefProp],
   );
 
-  const commands = useMemo(
-    () => [
-      {
-        id: "entity.inspect",
-        name: "Inspect column",
-        target: columnMoniker,
-        contextMenu: true,
-        execute: () => inspectEntity(columnMoniker),
-      },
-    ],
-    [columnMoniker, inspectEntity],
-  );
+  const commands = useEntityCommands("column", column.id, column);
 
   const clearDragState = useCallback(() => {
     setIsDragOver(false);
@@ -131,7 +116,14 @@ export function ColumnView({
         onDragOverProp?.(column.id, idx);
       }
     },
-    [column.id, isDragOver, onDragOverProp, onDragEnter, onDragLeave, clearDragState],
+    [
+      column.id,
+      isDragOver,
+      onDragOverProp,
+      onDragEnter,
+      onDragLeave,
+      clearDragState,
+    ],
   );
 
   const handleDrop = useCallback(

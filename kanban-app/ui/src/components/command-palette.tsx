@@ -5,13 +5,19 @@ import { keymap, EditorView } from "@codemirror/view";
 import { Compartment } from "@codemirror/state";
 import { getCM, Vim } from "@replit/codemirror-vim";
 import { invoke } from "@tauri-apps/api/core";
-import { useAvailableCommands, collectAvailableCommands, dispatchCommand, type CommandAtDepth } from "@/lib/command-scope";
+import {
+  useAvailableCommands,
+  collectAvailableCommands,
+  dispatchCommand,
+  type CommandAtDepth,
+} from "@/lib/command-scope";
 import { useFocusedScope } from "@/lib/entity-focus-context";
 import { useKeymap } from "@/lib/keymap-context";
 import { shadcnTheme, keymapExtension } from "@/lib/cm-keymap";
 import { fuzzyMatch } from "@/lib/fuzzy-filter";
 import { useInspectOptional } from "@/lib/inspect-context";
 import { moniker } from "@/lib/moniker";
+import { useEntityCommands } from "@/lib/entity-commands";
 import { FocusScope } from "@/components/focus-scope";
 import { EntityIcon } from "@/components/entity-icon";
 
@@ -51,7 +57,12 @@ interface CommandPaletteProps {
  * the debounced query. Each result is wrapped in a FocusScope so entity.inspect
  * commands are available. Selecting a result opens the entity inspector.
  */
-export function CommandPalette({ open, onClose, mode: paletteMode = "command", onSwitchBoard }: CommandPaletteProps) {
+export function CommandPalette({
+  open,
+  onClose,
+  mode: paletteMode = "command",
+  onSwitchBoard,
+}: CommandPaletteProps) {
   const [filter, setFilter] = useState("");
   const [debouncedFilter, setDebouncedFilter] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -65,7 +76,8 @@ export function CommandPalette({ open, onClose, mode: paletteMode = "command", o
   // When a scope is focused, collect commands from it (which includes its ancestor chain).
   // Otherwise fall back to commands from the root scope context.
   const allCommands = useMemo(
-    () => focusedScope ? collectAvailableCommands(focusedScope) : rootCommands,
+    () =>
+      focusedScope ? collectAvailableCommands(focusedScope) : rootCommands,
     [focusedScope, rootCommands],
   );
 
@@ -102,7 +114,10 @@ export function CommandPalette({ open, onClose, mode: paletteMode = "command", o
       return;
     }
     let cancelled = false;
-    invoke<SearchResult[]>("search_entities", { query: debouncedFilter, limit: 50 })
+    invoke<SearchResult[]>("search_entities", {
+      query: debouncedFilter,
+      limit: 50,
+    })
       .then((results) => {
         if (!cancelled) {
           setSearchResults(results);
@@ -114,7 +129,9 @@ export function CommandPalette({ open, onClose, mode: paletteMode = "command", o
           setSearchResults([]);
         }
       });
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [paletteMode, debouncedFilter]);
 
   // Auto-enter insert mode in vim when the palette opens.
@@ -140,7 +157,9 @@ export function CommandPalette({ open, onClose, mode: paletteMode = "command", o
       Vim.handleKey(cm as any, "i", "mapping");
     };
     requestAnimationFrame(tryEnterInsert);
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [open, mode]);
 
   // Filter and sort commands by fuzzy match score (command mode)
@@ -161,7 +180,8 @@ export function CommandPalette({ open, onClose, mode: paletteMode = "command", o
   }, [filter, allCommands, paletteMode]);
 
   // Combined length for selection clamping
-  const filteredLength = paletteMode === "search" ? searchResults.length : filteredCommands.length;
+  const filteredLength =
+    paletteMode === "search" ? searchResults.length : filteredCommands.length;
 
   // Clamp selection when filtered list changes
   useEffect(() => {
@@ -192,7 +212,8 @@ export function CommandPalette({ open, onClose, mode: paletteMode = "command", o
     }
   }, [searchResults, selectedIndex, onClose, inspectEntity, onSwitchBoard]);
 
-  const executeSelected = paletteMode === "search" ? executeSelectedResult : executeSelectedCommand;
+  const executeSelected =
+    paletteMode === "search" ? executeSelectedResult : executeSelectedCommand;
 
   // Ref so CM6 extensions always see the latest closures
   const executeSelectedRef = useRef(executeSelected);
@@ -204,10 +225,10 @@ export function CommandPalette({ open, onClose, mode: paletteMode = "command", o
   const moveSelection = useCallback(
     (delta: number) => {
       setSelectedIndex((prev) =>
-        Math.max(0, Math.min(filteredLength - 1, prev + delta))
+        Math.max(0, Math.min(filteredLength - 1, prev + delta)),
       );
     },
-    [filteredLength]
+    [filteredLength],
   );
   const moveSelectionRef = useRef(moveSelection);
   moveSelectionRef.current = moveSelection;
@@ -291,7 +312,7 @@ export function CommandPalette({ open, onClose, mode: paletteMode = "command", o
         },
       }),
     ],
-    [mode]
+    [mode],
   );
 
   // Get the keybinding hint for the current keymap mode
@@ -301,7 +322,7 @@ export function CommandPalette({ open, onClose, mode: paletteMode = "command", o
       if (!keys) return undefined;
       return keys[mode as keyof typeof keys];
     },
-    [mode]
+    [mode],
   );
 
   if (!open) return null;
@@ -334,7 +355,11 @@ export function CommandPalette({ open, onClose, mode: paletteMode = "command", o
             extensions={extensions}
             theme={shadcnTheme}
             basicSetup={false}
-            placeholder={paletteMode === "search" ? "Type to search..." : "Type a command..."}
+            placeholder={
+              paletteMode === "search"
+                ? "Type to search..."
+                : "Type a command..."
+            }
             className="text-sm"
           />
         </div>
@@ -355,43 +380,41 @@ export function CommandPalette({ open, onClose, mode: paletteMode = "command", o
               onHoverIndex={setSelectedIndex}
               inspectEntity={inspectEntity}
             />
+          ) : filteredCommands.length === 0 ? (
+            <div className="px-3 py-2 text-sm text-muted-foreground">
+              No matching commands
+            </div>
           ) : (
-            filteredCommands.length === 0 ? (
-              <div className="px-3 py-2 text-sm text-muted-foreground">
-                No matching commands
-              </div>
-            ) : (
-              filteredCommands.map((entry, index) => {
-                const hint = keyHint(entry);
-                return (
-                  <div
-                    key={entry.command.id + ":" + (entry.command.target ?? "")}
-                    role="option"
-                    aria-selected={index === selectedIndex}
-                    data-testid={`command-item-${entry.command.id}`}
-                    className={`flex cursor-pointer items-center justify-between px-3 py-1.5 text-sm
+            filteredCommands.map((entry, index) => {
+              const hint = keyHint(entry);
+              return (
+                <div
+                  key={entry.command.id + ":" + (entry.command.target ?? "")}
+                  role="option"
+                  aria-selected={index === selectedIndex}
+                  data-testid={`command-item-${entry.command.id}`}
+                  className={`flex cursor-pointer items-center justify-between px-3 py-1.5 text-sm
                       ${index === selectedIndex ? "bg-accent text-accent-foreground" : "hover:bg-accent/50"}`}
-                    onClick={() => {
-                      onClose();
-                      dispatchCommand(entry.command);
-                    }}
-                    onMouseEnter={() => setSelectedIndex(index)}
-                  >
-                    <span>{entry.command.name}</span>
-                    {hint && (
-                      <kbd className="ml-4 shrink-0 rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-xs text-muted-foreground">
-                        {hint}
-                      </kbd>
-                    )}
-                  </div>
-                );
-              })
-            )
+                  onClick={() => {
+                    onClose();
+                    dispatchCommand(entry.command);
+                  }}
+                  onMouseEnter={() => setSelectedIndex(index)}
+                >
+                  <span>{entry.command.name}</span>
+                  {hint && (
+                    <kbd className="ml-4 shrink-0 rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-xs text-muted-foreground">
+                      {hint}
+                    </kbd>
+                  )}
+                </div>
+              );
+            })
           )}
         </div>
       </div>
     </div>,
-    document.body
+    document.body,
   );
 }
 
@@ -429,50 +452,67 @@ function SearchResults({
 
   return (
     <>
-      {results.map((result, index) => {
-        const entityMoniker = moniker(result.entity_type, result.entity_id);
-
-        const commands = [
-          {
-            id: "entity.inspect",
-            name: `Inspect ${result.entity_type}`,
-            target: entityMoniker,
-            contextMenu: true,
-            execute: () => {
-              if (inspectEntity) {
-                onClose();
-                inspectEntity(entityMoniker);
-              }
-            },
-          },
-        ];
-
-        return (
-          <FocusScope
-            key={entityMoniker}
-            moniker={entityMoniker}
-            commands={commands}
-          >
-            <div
-              role="option"
-              aria-selected={index === selectedIndex}
-              data-testid={`search-result-${entityMoniker}`}
-              className={`flex cursor-pointer items-center gap-2 px-3 py-1.5 text-sm
-                ${index === selectedIndex ? "bg-accent text-accent-foreground" : "hover:bg-accent/50"}`}
-              onClick={() => {
-                if (inspectEntity) {
-                  onClose();
-                  inspectEntity(entityMoniker);
-                }
-              }}
-              onMouseEnter={() => onHoverIndex(index)}
-            >
-              <EntityIcon entityType={result.entity_type} className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-              <span className="min-w-0 truncate">{result.display_name}</span>
-            </div>
-          </FocusScope>
-        );
-      })}
+      {results.map((result, index) => (
+        <SearchResultItem
+          key={moniker(result.entity_type, result.entity_id)}
+          result={result}
+          index={index}
+          selectedIndex={selectedIndex}
+          onClose={onClose}
+          onHoverIndex={onHoverIndex}
+          inspectEntity={inspectEntity}
+        />
+      ))}
     </>
+  );
+}
+
+/**
+ * Single search result row wrapped in a FocusScope.
+ *
+ * Extracted as a component so the `useEntityCommands` hook can be called
+ * at the top level of a component (hooks cannot be called inside `.map()`).
+ */
+function SearchResultItem({
+  result,
+  index,
+  selectedIndex,
+  onClose,
+  onHoverIndex,
+  inspectEntity,
+}: {
+  result: SearchResult;
+  index: number;
+  selectedIndex: number;
+  onClose: () => void;
+  onHoverIndex: (index: number) => void;
+  inspectEntity: ((moniker: string) => void) | null;
+}) {
+  const entityMoniker = moniker(result.entity_type, result.entity_id);
+  const commands = useEntityCommands(result.entity_type, result.entity_id);
+
+  return (
+    <FocusScope moniker={entityMoniker} commands={commands}>
+      <div
+        role="option"
+        aria-selected={index === selectedIndex}
+        data-testid={`search-result-${entityMoniker}`}
+        className={`flex cursor-pointer items-center gap-2 px-3 py-1.5 text-sm
+          ${index === selectedIndex ? "bg-accent text-accent-foreground" : "hover:bg-accent/50"}`}
+        onClick={() => {
+          if (inspectEntity) {
+            onClose();
+            inspectEntity(entityMoniker);
+          }
+        }}
+        onMouseEnter={() => onHoverIndex(index)}
+      >
+        <EntityIcon
+          entityType={result.entity_type}
+          className="h-3.5 w-3.5 shrink-0 text-muted-foreground"
+        />
+        <span className="min-w-0 truncate">{result.display_name}</span>
+      </div>
+    </FocusScope>
   );
 }

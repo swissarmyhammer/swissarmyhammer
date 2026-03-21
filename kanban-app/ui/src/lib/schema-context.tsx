@@ -1,6 +1,14 @@
-import { createContext, useContext, useEffect, useState, useCallback, useMemo, type ReactNode } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useState,
+  useCallback,
+  useMemo,
+  type ReactNode,
+} from "react";
 import { invoke } from "@tauri-apps/api/core";
-import type { EntitySchema, FieldDef } from "@/types/kanban";
+import type { EntityCommand, EntitySchema, FieldDef } from "@/types/kanban";
 
 /** Describes an entity type that supports prefix-based mentions (e.g. #tag, @actor). */
 export interface MentionableType {
@@ -12,6 +20,8 @@ export interface MentionableType {
 interface SchemaContextValue {
   getSchema: (entityType: string) => EntitySchema | undefined;
   getFieldDef: (entityType: string, fieldName: string) => FieldDef | undefined;
+  /** Return the commands array for an entity type, or [] if schema not loaded yet. */
+  getEntityCommands: (entityType: string) => readonly EntityCommand[];
   /** Entity types that have mention_prefix defined — for CM6 decorations/autocomplete. */
   mentionableTypes: MentionableType[];
   loading: boolean;
@@ -40,9 +50,11 @@ export function SchemaProvider({ children }: { children: ReactNode }) {
     async function loadSchemas() {
       const results = await Promise.allSettled(
         PRELOAD_TYPES.map(async (type) => {
-          const schema = await invoke<EntitySchema>("get_entity_schema", { entityType: type });
+          const schema = await invoke<EntitySchema>("get_entity_schema", {
+            entityType: type,
+          });
           return [type, schema] as const;
-        })
+        }),
       );
 
       if (cancelled) return;
@@ -59,13 +71,15 @@ export function SchemaProvider({ children }: { children: ReactNode }) {
     }
 
     loadSchemas();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   /** Return the cached schema for the given entity type, or undefined. */
   const getSchema = useCallback(
     (entityType: string) => schemas.get(entityType),
-    [schemas]
+    [schemas],
   );
 
   /** Return a single field definition by entity type and field name. */
@@ -75,7 +89,16 @@ export function SchemaProvider({ children }: { children: ReactNode }) {
       if (!schema) return undefined;
       return schema.fields.find((f) => f.name === fieldName);
     },
-    [schemas]
+    [schemas],
+  );
+
+  /** Return the commands for the given entity type, or [] if schema not loaded. */
+  const getEntityCommands = useCallback(
+    (entityType: string): readonly EntityCommand[] => {
+      const schema = schemas.get(entityType);
+      return schema?.entity.commands ?? [];
+    },
+    [schemas],
   );
 
   const mentionableTypes = useMemo(() => {
@@ -94,7 +117,15 @@ export function SchemaProvider({ children }: { children: ReactNode }) {
   }, [schemas]);
 
   return (
-    <SchemaContext.Provider value={{ getSchema, getFieldDef, mentionableTypes, loading }}>
+    <SchemaContext.Provider
+      value={{
+        getSchema,
+        getFieldDef,
+        getEntityCommands,
+        mentionableTypes,
+        loading,
+      }}
+    >
       {children}
     </SchemaContext.Provider>
   );
@@ -113,14 +144,18 @@ export function useSchema() {
 }
 
 /**
- * Returns schema context if available, or a stub that always returns undefined.
+ * Returns schema context if available, or a stub that always returns undefined/[].
  * Use in components optionally rendered outside a SchemaProvider.
  */
-export function useSchemaOptional(): Pick<SchemaContextValue, "getSchema" | "getFieldDef"> {
+export function useSchemaOptional(): Pick<
+  SchemaContextValue,
+  "getSchema" | "getFieldDef" | "getEntityCommands"
+> {
   const ctx = useContext(SchemaContext);
   if (ctx) return ctx;
   return {
     getSchema: () => undefined,
     getFieldDef: () => undefined,
+    getEntityCommands: () => [],
   };
 }

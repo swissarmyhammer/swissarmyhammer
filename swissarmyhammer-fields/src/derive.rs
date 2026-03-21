@@ -164,6 +164,7 @@ mod tests {
             mention_prefix: None,
             mention_display_field: None,
             search_display_field: None,
+            commands: vec![],
         }
     }
 

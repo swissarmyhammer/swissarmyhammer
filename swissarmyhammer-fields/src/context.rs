@@ -672,6 +672,7 @@ type:
             mention_prefix: None,
             mention_display_field: None,
             search_display_field: None,
+            commands: vec![],
         };
         ctx.write_entity(&entity).await.unwrap();
 
@@ -700,6 +701,7 @@ type:
             mention_prefix: None,
             mention_display_field: None,
             search_display_field: None,
+            commands: vec![],
         };
         ctx.write_entity(&entity).await.unwrap();
 
@@ -726,6 +728,7 @@ type:
                 mention_prefix: None,
                 mention_display_field: None,
                 search_display_field: None,
+                commands: vec![],
             })
             .await
             .unwrap();

@@ -1602,18 +1602,25 @@ pub async fn show_context_menu(
         return Ok(());
     }
 
-    // Store IDs so handle_menu_event can route selections correctly
+    // Store IDs so handle_menu_event can route selections correctly.
+    // Separators are not selectable items — exclude them from the id set.
     {
         let mut ids = state.context_menu_ids.write().await;
         ids.clear();
         for item in &items {
-            ids.insert(item.id.clone());
+            if item.id != "__separator__" {
+                ids.insert(item.id.clone());
+            }
         }
     }
 
     let mut builder = MenuBuilder::new(&app);
     for item in &items {
-        builder = builder.text(&item.id, &item.name);
+        if item.id == "__separator__" {
+            builder = builder.separator();
+        } else {
+            builder = builder.text(&item.id, &item.name);
+        }
     }
     let menu = builder.build().map_err(|e| e.to_string())?;
     menu.popup(window)

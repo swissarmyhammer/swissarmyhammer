@@ -181,6 +181,33 @@ impl FieldDef {
     }
 }
 
+/// Keybindings for an entity command, per keymap mode.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct EntityCommandKeys {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vim: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cua: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub emacs: Option<String>,
+}
+
+/// A command declared in an entity definition.
+///
+/// Commands are metadata only -- the frontend attaches `execute` implementations
+/// at mount time by matching on `id`. The `name` field is a template string
+/// that may reference `{{entity.type}}` or `{{entity.<field>}}`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct EntityCommand {
+    pub id: String,
+    pub name: String,
+    /// Whether this command appears in context menus. Defaults to false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub context_menu: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keys: Option<EntityCommandKeys>,
+}
+
 /// An entity definition -- a template declaring which fields belong to an entity type.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct EntityDef {
@@ -200,6 +227,9 @@ pub struct EntityDef {
     /// Which field to display in search results (e.g. "title", "name").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub search_display_field: Option<FieldName>,
+    /// Commands that can be invoked on instances of this entity type.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub commands: Vec<EntityCommand>,
 }
 
 #[cfg(test)]
@@ -365,6 +395,7 @@ mod tests {
             mention_prefix: None,
             mention_display_field: None,
             search_display_field: None,
+            commands: vec![],
         };
         let yaml = serde_yaml_ng::to_string(&entity).unwrap();
         let parsed: EntityDef = serde_yaml_ng::from_str(&yaml).unwrap();
@@ -381,6 +412,7 @@ mod tests {
             mention_prefix: None,
             mention_display_field: None,
             search_display_field: None,
+            commands: vec![],
         };
         let yaml = serde_yaml_ng::to_string(&entity).unwrap();
         assert!(!yaml.contains("body_field"));
@@ -831,5 +863,93 @@ fields:
             validate: None,
         };
         assert_eq!(field.effective_sort(), SortKind::Lexical);
+    }
+
+    #[test]
+    fn entity_def_with_commands_yaml_round_trip() {
+        let entity = EntityDef {
+            name: "task".into(),
+            body_field: Some("body".into()),
+            fields: vec!["title".into(), "tags".into()],
+            validate: None,
+            mention_prefix: None,
+            mention_display_field: None,
+            search_display_field: None,
+            commands: vec![
+                EntityCommand {
+                    id: "entity.inspect".into(),
+                    name: "Inspect {{entity.type}}".into(),
+                    context_menu: true,
+                    keys: None,
+                },
+                EntityCommand {
+                    id: "entity.archive".into(),
+                    name: "Archive {{entity.type}}".into(),
+                    context_menu: true,
+                    keys: Some(EntityCommandKeys {
+                        vim: Some("da".into()),
+                        cua: None,
+                        emacs: None,
+                    }),
+                },
+            ],
+        };
+        let yaml = serde_yaml_ng::to_string(&entity).unwrap();
+        let parsed: EntityDef = serde_yaml_ng::from_str(&yaml).unwrap();
+        assert_eq!(entity, parsed);
+        // verify commands survive round-trip
+        assert_eq!(parsed.commands.len(), 2);
+        assert_eq!(parsed.commands[0].id, "entity.inspect");
+        assert!(parsed.commands[0].context_menu);
+        assert_eq!(parsed.commands[1].id, "entity.archive");
+        assert!(parsed.commands[1].keys.is_some());
+    }
+
+    #[test]
+    fn task_entity_def_from_yaml_with_commands() {
+        let yaml_input = r#"
+name: task
+body_field: body
+commands:
+  - id: entity.inspect
+    name: "Inspect {{entity.type}}"
+    context_menu: true
+  - id: entity.archive
+    name: "Archive {{entity.type}}"
+    context_menu: true
+fields:
+  - title
+  - status
+  - priority
+  - tags
+  - assignees
+  - due
+  - depends_on
+  - body
+"#;
+        let entity: EntityDef = serde_yaml_ng::from_str(yaml_input).unwrap();
+        assert_eq!(entity.name, "task");
+        assert_eq!(entity.body_field, Some("body".into()));
+        assert_eq!(entity.fields.len(), 8);
+        assert_eq!(entity.commands.len(), 2);
+        assert_eq!(entity.commands[0].id, "entity.inspect");
+        assert!(entity.commands[0].context_menu);
+        assert_eq!(entity.commands[1].id, "entity.archive");
+        assert!(entity.commands[1].context_menu);
+    }
+
+    #[test]
+    fn entity_def_without_commands_still_deserializes() {
+        // Backwards compat: existing YAML without a commands field should
+        // deserialize fine and produce an empty commands vec.
+        let yaml_input = r#"
+name: tag
+fields:
+  - tag_name
+  - color
+"#;
+        let entity: EntityDef = serde_yaml_ng::from_str(yaml_input).unwrap();
+        assert_eq!(entity.name, "tag");
+        assert!(entity.commands.is_empty());
     }
 }

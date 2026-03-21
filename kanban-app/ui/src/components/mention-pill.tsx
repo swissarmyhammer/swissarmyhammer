@@ -9,7 +9,7 @@
  * - Slugified matching for entities whose display field contains spaces (e.g. task titles)
  */
 
-import { useCallback, useMemo, useRef } from "react";
+import { useCallback, useMemo } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
@@ -21,7 +21,7 @@ import { FocusScope } from "@/components/focus-scope";
 import { useContextMenu } from "@/lib/context-menu";
 import { useEntityFocus } from "@/lib/entity-focus-context";
 import { useEntityStore } from "@/lib/entity-store-context";
-import { useInspect } from "@/lib/inspect-context";
+import { useEntityCommands } from "@/lib/entity-commands";
 import { moniker } from "@/lib/moniker";
 import { slugify } from "@/lib/slugify";
 import type { CommandDef } from "@/lib/command-scope";
@@ -47,7 +47,6 @@ export function MentionPill({
   className,
 }: MentionPillProps) {
   const { getEntities } = useEntityStore();
-  const inspectEntity = useInspect();
   const entities = getEntities(entityType);
 
   // Find entity by matching slug against common display fields,
@@ -82,33 +81,27 @@ export function MentionPill({
   const entityId = entity?.id ?? slug;
   const scopeMoniker = moniker(entityType, entityId);
 
-  // Keep a ref so execute always uses the latest resolved moniker
-  const monikerRef = useRef(scopeMoniker);
-  monikerRef.current = scopeMoniker;
-
-  const commands = useMemo<CommandDef[]>(() => {
-    const cmds: CommandDef[] = [];
-
-    cmds.push({
-      id: "entity.inspect",
-      name: `Inspect ${entityType}`,
-      target: scopeMoniker,
-      contextMenu: true,
-      execute: () => inspectEntity(monikerRef.current),
-    });
-
-    // Remove command — only for tags on a specific task
+  // Build the local task.untag extra command — only for tags on a specific task
+  const extraCommands = useMemo<CommandDef[] | undefined>(() => {
     if (entityType === "tag" && taskId) {
-      cmds.push({
-        id: "task.untag",
-        name: "Remove Tag",
-        contextMenu: true,
-        args: { id: taskId, tag: slug },
-      });
+      return [
+        {
+          id: "task.untag",
+          name: "Remove Tag",
+          contextMenu: true,
+          args: { id: taskId, tag: slug },
+        },
+      ];
     }
+    return undefined;
+  }, [entityType, taskId, slug]);
 
-    return cmds;
-  }, [entityType, scopeMoniker, taskId, slug, inspectEntity]);
+  const commands = useEntityCommands(
+    entityType,
+    entityId,
+    entity ?? undefined,
+    extraCommands,
+  );
 
   return (
     <FocusScope moniker={scopeMoniker} commands={commands} className="inline">
@@ -188,10 +181,14 @@ function MentionPillInner({
       <TooltipTrigger asChild>{pill}</TooltipTrigger>
       <TooltipContent
         side="bottom"
-        className={richTooltip ? "prose prose-sm dark:prose-invert max-w-xs" : "max-w-xs"}
+        className={
+          richTooltip ? "prose prose-sm dark:prose-invert max-w-xs" : "max-w-xs"
+        }
       >
         {richTooltip ? (
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{tooltipText}</ReactMarkdown>
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>
+            {tooltipText}
+          </ReactMarkdown>
         ) : (
           tooltipText
         )}

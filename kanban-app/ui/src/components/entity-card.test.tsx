@@ -3,12 +3,45 @@ import { render, screen, fireEvent, act } from "@testing-library/react";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const TASK_SCHEMA = {
-  entity: { name: "task", body_field: "body", fields: ["title", "tags", "progress", "body"] },
+  entity: {
+    name: "task",
+    body_field: "body",
+    fields: ["title", "tags", "progress", "body"],
+    commands: [
+      {
+        id: "entity.inspect",
+        name: "Inspect {{entity.type}}",
+        context_menu: true,
+      },
+    ],
+  },
   fields: [
-    { id: "f1", name: "title", type: { kind: "markdown", single_line: true }, section: "header" },
-    { id: "f3", name: "tags", type: { kind: "computed", derive: "parse-body-tags" }, section: "header", display: "badge-list" },
-    { id: "f4", name: "progress", type: { kind: "computed", derive: "parse-body-progress" }, section: "header", display: "number" },
-    { id: "f2", name: "body", type: { kind: "markdown", single_line: false }, section: "body" },
+    {
+      id: "f1",
+      name: "title",
+      type: { kind: "markdown", single_line: true },
+      section: "header",
+    },
+    {
+      id: "f3",
+      name: "tags",
+      type: { kind: "computed", derive: "parse-body-tags" },
+      section: "header",
+      display: "badge-list",
+    },
+    {
+      id: "f4",
+      name: "progress",
+      type: { kind: "computed", derive: "parse-body-progress" },
+      section: "header",
+      display: "number",
+    },
+    {
+      id: "f2",
+      name: "body",
+      type: { kind: "markdown", single_line: false },
+      section: "body",
+    },
   ],
 };
 
@@ -16,7 +49,8 @@ const TASK_SCHEMA = {
 const mockInvoke = vi.fn((...args: any[]) => {
   if (args[0] === "get_entity_schema") return Promise.resolve(TASK_SCHEMA);
   if (args[0] === "get_keymap_mode") return Promise.resolve("cua");
-  if (args[0] === "update_entity_field") return Promise.resolve({ id: "task-1" });
+  if (args[0] === "update_entity_field")
+    return Promise.resolve({ id: "task-1" });
   return Promise.resolve("ok");
 });
 
@@ -80,14 +114,16 @@ function renderCard(ui: React.ReactElement) {
           </EntityFocusProvider>
         </EntityStoreProvider>
       </SchemaProvider>
-    </TooltipProvider>
+    </TooltipProvider>,
   );
 }
 
 /** Render and wait for schema to load */
 async function renderWithProvider(ui: React.ReactElement) {
   const result = renderCard(ui);
-  await act(async () => { await new Promise((r) => setTimeout(r, 100)); });
+  await act(async () => {
+    await new Promise((r) => setTimeout(r, 100));
+  });
   return result;
 }
 
@@ -105,7 +141,7 @@ describe("EntityCard", () => {
 
   it("(i) button calls inspectEntity with correct moniker", async () => {
     const { container } = await renderWithProvider(
-      <EntityCard entity={makeEntity()} />
+      <EntityCard entity={makeEntity()} />,
     );
     const inspectBtn = container.querySelector("button[title='Inspect']")!;
     fireEvent.click(inspectBtn);
@@ -114,14 +150,14 @@ describe("EntityCard", () => {
 
   it("(i) button always renders", async () => {
     const { container } = await renderWithProvider(
-      <EntityCard entity={makeEntity()} />
+      <EntityCard entity={makeEntity()} />,
     );
     expect(container.querySelector("button[title='Inspect']")).not.toBeNull();
   });
 
   it("enters edit mode when title is clicked", async () => {
     const { container } = await renderWithProvider(
-      <EntityCard entity={makeEntity()} />
+      <EntityCard entity={makeEntity()} />,
     );
     const titleEl = screen.getByText("world");
     fireEvent.click(titleEl);
@@ -133,7 +169,7 @@ describe("EntityCard", () => {
     // Use a simple title so CM6 doc content is predictable
     const entity = makeEntity({ title: "bug" });
     const { container } = await renderWithProvider(
-      <EntityCard entity={entity} />
+      <EntityCard entity={entity} />,
     );
 
     // Click to enter edit mode
@@ -160,33 +196,42 @@ describe("EntityCard", () => {
 
     // Verify invoke was called via dispatch_command for the title save
     const updateCall = mockInvoke.mock.calls.find(
-      (call) => call[0] === "dispatch_command" && (call[1] as Record<string, unknown>)?.cmd === "entity.update_field"
+      (call) =>
+        call[0] === "dispatch_command" &&
+        (call[1] as Record<string, unknown>)?.cmd === "entity.update_field",
     );
     expect(updateCall).toBeTruthy();
     expect(updateCall![1]).toEqual({
       cmd: "entity.update_field",
-      args: { entity_type: "task", id: "task-1", field_name: "title", value: "defect" },
+      args: {
+        entity_type: "task",
+        id: "task-1",
+        field_name: "title",
+        value: "defect",
+      },
     });
   });
 
   it("entity.inspect command includes target moniker in context menu", async () => {
     const { container } = await renderWithProvider(
-      <EntityCard entity={makeEntity()} />
+      <EntityCard entity={makeEntity()} />,
     );
     const card = container.querySelector("[data-moniker='task:task-1']")!;
     fireEvent.contextMenu(card);
     // Context menu item id should include the target: "entity.inspect:task:task-1"
     const ctxCall = mockInvoke.mock.calls.find(
-      (c) => c[0] === "show_context_menu"
+      (c) => c[0] === "show_context_menu",
     );
     expect(ctxCall).toBeTruthy();
     const items = ctxCall![1].items as { id: string; name: string }[];
-    expect(items.find((i) => i.id === "entity.inspect:task:task-1")).toBeTruthy();
+    expect(
+      items.find((i) => i.id === "entity.inspect:task:task-1"),
+    ).toBeTruthy();
   });
 
   it("clicking card body does not trigger inspect", async () => {
     const { container } = await renderWithProvider(
-      <EntityCard entity={makeEntity()} />
+      <EntityCard entity={makeEntity()} />,
     );
     const card = container.querySelector(".rounded-md")!;
     fireEvent.click(card);
@@ -201,7 +246,7 @@ describe("EntityCard", () => {
           entity={makeEntity({
             body: "- [x] done\n- [ ] pending\n- [ ] also pending",
           })}
-        />
+        />,
       );
       const progressBar = container.querySelector('[role="progressbar"]');
       expect(progressBar).toBeTruthy();
@@ -214,7 +259,7 @@ describe("EntityCard", () => {
           entity={makeEntity({
             body: "- [ ] first\n- [ ] second",
           })}
-        />
+        />,
       );
       const progressBar = container.querySelector('[role="progressbar"]');
       expect(progressBar).toBeTruthy();
@@ -228,7 +273,7 @@ describe("EntityCard", () => {
           entity={makeEntity({
             body: "- [x] done\n- [x] also done",
           })}
-        />
+        />,
       );
       const progressBar = container.querySelector('[role="progressbar"]');
       expect(progressBar).toBeTruthy();
@@ -241,7 +286,7 @@ describe("EntityCard", () => {
           entity={makeEntity({
             body: "Just some plain text",
           })}
-        />
+        />,
       );
       const progressBar = container.querySelector('[role="progressbar"]');
       expect(progressBar).toBeNull();
@@ -249,7 +294,7 @@ describe("EntityCard", () => {
 
     it("does not show progress bar when description is empty", async () => {
       const { container } = await renderWithProvider(
-        <EntityCard entity={makeEntity()} />
+        <EntityCard entity={makeEntity()} />,
       );
       const progressBar = container.querySelector('[role="progressbar"]');
       expect(progressBar).toBeNull();

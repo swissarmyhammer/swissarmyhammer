@@ -7,6 +7,7 @@ import { FocusScope } from "@/components/focus-scope";
 import { useFieldUpdate } from "@/lib/field-update-context";
 import { useSchema } from "@/lib/schema-context";
 import { useInspect } from "@/lib/inspect-context";
+import { useEntityCommands } from "@/lib/entity-commands";
 import { moniker } from "@/lib/moniker";
 import type { Entity, FieldDef } from "@/types/kanban";
 import { getStr } from "@/types/kanban";
@@ -61,18 +62,7 @@ export const EntityCard = forwardRef<HTMLDivElement, EntityCardProps>(
       [updateField, entity.entity_type, entity.id],
     );
 
-    const commands = useMemo(
-      () => [
-        {
-          id: "entity.inspect",
-          name: `Inspect ${entity.entity_type}`,
-          target: entityMoniker,
-          contextMenu: true,
-          execute: () => inspectEntity(entityMoniker),
-        },
-      ],
-      [entity.entity_type, entityMoniker, inspectEntity],
-    );
+    const commands = useEntityCommands(entity.entity_type, entity.id, entity);
 
     return (
       <FocusScope moniker={entityMoniker} commands={commands}>

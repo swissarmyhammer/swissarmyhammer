@@ -1,10 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, fireEvent } from "@testing-library/react";
 import { invoke } from "@tauri-apps/api/core";
-import { EntityFocusProvider, useEntityFocus, useIsFocused } from "@/lib/entity-focus-context";
+import {
+  EntityFocusProvider,
+  useEntityFocus,
+  useIsFocused,
+} from "@/lib/entity-focus-context";
 import { FocusScope } from "./focus-scope";
 
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => Promise.resolve()) }));
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: vi.fn(() => Promise.resolve()),
+}));
 
 /** Helper to read focus state from inside the provider. */
 function FocusReader() {
@@ -42,7 +48,9 @@ describe("FocusScope", () => {
     const { getByTestId, getByText } = renderWithFocus(
       <FocusScope
         moniker="task:abc"
-        commands={[{ id: "entity.inspect", name: "Inspect", contextMenu: true, execute }]}
+        commands={[
+          { id: "entity.inspect", name: "Inspect", contextMenu: true, execute },
+        ]}
       >
         <span>card</span>
       </FocusScope>,
@@ -83,12 +91,26 @@ describe("FocusScope", () => {
     const { getByText } = renderWithFocus(
       <FocusScope
         moniker="task:abc"
-        commands={[{ id: "outer.cmd", name: "Outer", contextMenu: true, execute: outerExec }]}
+        commands={[
+          {
+            id: "outer.cmd",
+            name: "Outer",
+            contextMenu: true,
+            execute: outerExec,
+          },
+        ]}
       >
         <span>card</span>
         <FocusScope
           moniker="tag:xyz"
-          commands={[{ id: "inner.cmd", name: "Inner", contextMenu: true, execute: innerExec }]}
+          commands={[
+            {
+              id: "inner.cmd",
+              name: "Inner",
+              contextMenu: true,
+              execute: innerExec,
+            },
+          ]}
         >
           <span>tag</span>
         </FocusScope>
@@ -103,8 +125,12 @@ describe("FocusScope", () => {
     const call = ctxCalls[0];
     // Inner scope should show both inner and outer commands (scope chain walks up)
     const items = call[1].items;
-    expect(items.find((i: { id: string }) => i.id === "inner.cmd")).toBeTruthy();
-    expect(items.find((i: { id: string }) => i.id === "outer.cmd")).toBeTruthy();
+    expect(
+      items.find((i: { id: string }) => i.id === "inner.cmd"),
+    ).toBeTruthy();
+    expect(
+      items.find((i: { id: string }) => i.id === "outer.cmd"),
+    ).toBeTruthy();
   });
 
   it("nested FocusScope: same command ID without target shadows — inner wins", () => {
@@ -113,12 +139,26 @@ describe("FocusScope", () => {
     const { getByText } = renderWithFocus(
       <FocusScope
         moniker="task:abc"
-        commands={[{ id: "entity.inspect", name: "Inspect task", contextMenu: true, execute: outerExec }]}
+        commands={[
+          {
+            id: "entity.inspect",
+            name: "Inspect task",
+            contextMenu: true,
+            execute: outerExec,
+          },
+        ]}
       >
         <span>card</span>
         <FocusScope
           moniker="tag:xyz"
-          commands={[{ id: "entity.inspect", name: "Inspect tag", contextMenu: true, execute: innerExec }]}
+          commands={[
+            {
+              id: "entity.inspect",
+              name: "Inspect tag",
+              contextMenu: true,
+              execute: innerExec,
+            },
+          ]}
         >
           <span>tag</span>
         </FocusScope>
@@ -142,12 +182,28 @@ describe("FocusScope", () => {
     const { getByText } = renderWithFocus(
       <FocusScope
         moniker="task:abc"
-        commands={[{ id: "entity.inspect", name: "Inspect task", target: "task:abc", contextMenu: true, execute: outerExec }]}
+        commands={[
+          {
+            id: "entity.inspect",
+            name: "Inspect task",
+            target: "task:abc",
+            contextMenu: true,
+            execute: outerExec,
+          },
+        ]}
       >
         <span>card</span>
         <FocusScope
           moniker="tag:xyz"
-          commands={[{ id: "entity.inspect", name: "Inspect tag", target: "tag:xyz", contextMenu: true, execute: innerExec }]}
+          commands={[
+            {
+              id: "entity.inspect",
+              name: "Inspect tag",
+              target: "tag:xyz",
+              contextMenu: true,
+              execute: innerExec,
+            },
+          ]}
         >
           <span>tag</span>
         </FocusScope>
@@ -160,10 +216,17 @@ describe("FocusScope", () => {
     expect(ctxCalls).toHaveLength(1);
     const call = ctxCalls[0];
     const items = call[1].items;
-    // Different targets → both accumulate
-    expect(items).toHaveLength(2);
-    expect(items.find((i: { name: string }) => i.name === "Inspect tag")).toBeTruthy();
-    expect(items.find((i: { name: string }) => i.name === "Inspect task")).toBeTruthy();
+    // Different targets → both accumulate (separator inserted between depth groups)
+    const commandItems = items.filter(
+      (i: { id: string }) => i.id !== "__separator__",
+    );
+    expect(commandItems).toHaveLength(2);
+    expect(
+      commandItems.find((i: { name: string }) => i.name === "Inspect tag"),
+    ).toBeTruthy();
+    expect(
+      commandItems.find((i: { name: string }) => i.name === "Inspect task"),
+    ).toBeTruthy();
   });
 
   it("nested FocusScope: same command ID with same target shadows — inner wins", () => {
@@ -172,12 +235,28 @@ describe("FocusScope", () => {
     const { getByText } = renderWithFocus(
       <FocusScope
         moniker="task:abc"
-        commands={[{ id: "entity.inspect", name: "Inspect task outer", target: "task:abc", contextMenu: true, execute: outerExec }]}
+        commands={[
+          {
+            id: "entity.inspect",
+            name: "Inspect task outer",
+            target: "task:abc",
+            contextMenu: true,
+            execute: outerExec,
+          },
+        ]}
       >
         <span>card</span>
         <FocusScope
           moniker="tag:xyz"
-          commands={[{ id: "entity.inspect", name: "Inspect task inner", target: "task:abc", contextMenu: true, execute: innerExec }]}
+          commands={[
+            {
+              id: "entity.inspect",
+              name: "Inspect task inner",
+              target: "task:abc",
+              contextMenu: true,
+              execute: innerExec,
+            },
+          ]}
         >
           <span>tag</span>
         </FocusScope>
@@ -200,12 +279,26 @@ describe("FocusScope", () => {
     const { getByText } = renderWithFocus(
       <FocusScope
         moniker="task:abc"
-        commands={[{ id: "entity.inspect", name: "Inspect task", contextMenu: true, execute: outerExec }]}
+        commands={[
+          {
+            id: "entity.inspect",
+            name: "Inspect task",
+            contextMenu: true,
+            execute: outerExec,
+          },
+        ]}
       >
         <span>card</span>
         <FocusScope
           moniker="tag:xyz"
-          commands={[{ id: "entity.inspect", name: "Inspect tag", contextMenu: true, available: false }]}
+          commands={[
+            {
+              id: "entity.inspect",
+              name: "Inspect tag",
+              contextMenu: true,
+              available: false,
+            },
+          ]}
         >
           <span>tag</span>
         </FocusScope>
@@ -213,7 +306,10 @@ describe("FocusScope", () => {
     );
     fireEvent.contextMenu(getByText("tag"));
     // Both have no target → same shadow key. Unavailable inner blocks outer.
-    expect(invoke).not.toHaveBeenCalledWith("show_context_menu", expect.anything());
+    expect(invoke).not.toHaveBeenCalledWith(
+      "show_context_menu",
+      expect.anything(),
+    );
   });
 
   it("double-click executes entity.inspect command", () => {
@@ -221,7 +317,9 @@ describe("FocusScope", () => {
     const { getByText } = renderWithFocus(
       <FocusScope
         moniker="task:abc"
-        commands={[{ id: "entity.inspect", name: "Inspect", contextMenu: true, execute }]}
+        commands={[
+          { id: "entity.inspect", name: "Inspect", contextMenu: true, execute },
+        ]}
       >
         <span>card</span>
       </FocusScope>,
@@ -235,7 +333,9 @@ describe("FocusScope", () => {
     const { getByRole } = renderWithFocus(
       <FocusScope
         moniker="task:abc"
-        commands={[{ id: "entity.inspect", name: "Inspect", contextMenu: true, execute }]}
+        commands={[
+          { id: "entity.inspect", name: "Inspect", contextMenu: true, execute },
+        ]}
       >
         <input type="text" />
       </FocusScope>,
@@ -250,12 +350,26 @@ describe("FocusScope", () => {
     const { getByText } = renderWithFocus(
       <FocusScope
         moniker="task:abc"
-        commands={[{ id: "entity.inspect", name: "Inspect task", contextMenu: true, execute: outerExec }]}
+        commands={[
+          {
+            id: "entity.inspect",
+            name: "Inspect task",
+            contextMenu: true,
+            execute: outerExec,
+          },
+        ]}
       >
         <span>card</span>
         <FocusScope
           moniker="tag:xyz"
-          commands={[{ id: "entity.inspect", name: "Inspect tag", contextMenu: true, execute: innerExec }]}
+          commands={[
+            {
+              id: "entity.inspect",
+              name: "Inspect tag",
+              contextMenu: true,
+              execute: innerExec,
+            },
+          ]}
         >
           <span>tag</span>
         </FocusScope>
@@ -273,7 +387,9 @@ describe("FocusScope", () => {
     const { getByText } = renderWithFocus(
       <FocusScope
         moniker="task:abc"
-        commands={[{ id: "other.command", name: "Other", contextMenu: true, execute }]}
+        commands={[
+          { id: "other.command", name: "Other", contextMenu: true, execute },
+        ]}
       >
         <span>card</span>
       </FocusScope>,
@@ -320,7 +436,9 @@ describe("FocusScope", () => {
     const { getByText } = renderWithFocus(
       <FocusScope
         moniker="task:abc"
-        commands={[{ id: "entity.inspect", name: "Inspect", contextMenu: true, execute }]}
+        commands={[
+          { id: "entity.inspect", name: "Inspect", contextMenu: true, execute },
+        ]}
       >
         <span>card</span>
       </FocusScope>,
@@ -358,9 +476,19 @@ describe("FocusScope", () => {
 
   it("useIsFocused ancestor: column gets data-focused when card inside is focused", () => {
     /** Column component that reads useIsFocused. */
-    function ColumnWithFocus({ moniker, children }: { moniker: string; children: React.ReactNode }) {
+    function ColumnWithFocus({
+      moniker,
+      children,
+    }: {
+      moniker: string;
+      children: React.ReactNode;
+    }) {
       const focused = useIsFocused(moniker);
-      return <div data-testid={`col-${moniker}`} data-focused={focused || undefined}>{children}</div>;
+      return (
+        <div data-testid={`col-${moniker}`} data-focused={focused || undefined}>
+          {children}
+        </div>
+      );
     }
 
     const { getByTestId, getByText } = render(
@@ -379,6 +507,8 @@ describe("FocusScope", () => {
     fireEvent.click(getByText("card"));
 
     // The column should also show as focused via ancestor walk
-    expect(getByTestId("col-column:col1").hasAttribute("data-focused")).toBe(true);
+    expect(getByTestId("col-column:col1").hasAttribute("data-focused")).toBe(
+      true,
+    );
   });
 });

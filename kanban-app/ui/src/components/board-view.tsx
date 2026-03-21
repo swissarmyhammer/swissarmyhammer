@@ -27,7 +27,7 @@ function defaultTaskTitle(_columnName: string): string {
 }
 import { useFieldUpdate } from "@/lib/field-update-context";
 import { moniker } from "@/lib/moniker";
-import { useInspect } from "@/lib/inspect-context";
+import { useEntityCommands } from "@/lib/entity-commands";
 import { useDragSession } from "@/lib/drag-session-context";
 import type { BoardData, Entity } from "@/types/kanban";
 import { getStr, getNum } from "@/types/kanban";
@@ -51,21 +51,9 @@ export function BoardView({ board, tasks }: BoardViewProps) {
   const boardPathRef = useRef(boardPath);
   boardPathRef.current = boardPath;
   const { setFocus } = useEntityFocus();
-  const inspectEntity = useInspect();
   const { startSession, cancelSession, completeSession } = useDragSession();
   const boardMoniker = moniker("board", "board");
-  const boardCommands = useMemo(
-    () => [
-      {
-        id: "entity.inspect",
-        name: "Inspect board",
-        target: boardMoniker,
-        contextMenu: true,
-        execute: () => inspectEntity(boardMoniker),
-      },
-    ],
-    [boardMoniker, inspectEntity],
-  );
+  const boardCommands = useEntityCommands("board", "board");
 
   const columns = useMemo(
     () =>
@@ -190,9 +178,7 @@ export function BoardView({ board, tasks }: BoardViewProps) {
         await invoke("dispatch_command", {
           cmd: "column.reorder",
           args: { id: activeId, target_index: newIndex },
-          ...(boardPathRef.current
-            ? { boardPath: boardPathRef.current }
-            : {}),
+          ...(boardPathRef.current ? { boardPath: boardPathRef.current } : {}),
         });
       } catch (e) {
         console.error("Failed to reorder columns:", e);
@@ -222,9 +208,7 @@ export function BoardView({ board, tasks }: BoardViewProps) {
         await invoke("dispatch_command", {
           cmd: "task.move",
           args,
-          ...(boardPathRef.current
-            ? { boardPath: boardPathRef.current }
-            : {}),
+          ...(boardPathRef.current ? { boardPath: boardPathRef.current } : {}),
         });
       } catch (e) {
         console.error("Failed to move task:", e);
@@ -313,7 +297,12 @@ export function BoardView({ board, tasks }: BoardViewProps) {
         if (colTasks.length === 0 || insertIndex >= colTasks.length) {
           const lastId =
             colTasks.length > 0 ? colTasks[colTasks.length - 1] : undefined;
-          persistMove(taskId, columnId, entity, lastId ? { after: lastId } : {});
+          persistMove(
+            taskId,
+            columnId,
+            entity,
+            lastId ? { after: lastId } : {},
+          );
         } else {
           const beforeId = colTasks[insertIndex];
           const sourceColumn = getStr(entity, "position_column");
@@ -330,8 +319,12 @@ export function BoardView({ board, tasks }: BoardViewProps) {
         // Cross-board drop — task doesn't exist here yet, complete via session
         // The backend handles creating/moving the task to this board
         const colTasks = baseLayout.get(columnId) ?? [];
-        const beforeId = insertIndex < colTasks.length ? colTasks[insertIndex] : undefined;
-        const afterId = !beforeId && colTasks.length > 0 ? colTasks[colTasks.length - 1] : undefined;
+        const beforeId =
+          insertIndex < colTasks.length ? colTasks[insertIndex] : undefined;
+        const afterId =
+          !beforeId && colTasks.length > 0
+            ? colTasks[colTasks.length - 1]
+            : undefined;
         completeSession(columnId, {
           dropIndex: insertIndex,
           beforeId,
@@ -363,9 +356,7 @@ export function BoardView({ board, tasks }: BoardViewProps) {
         await invoke("dispatch_command", {
           cmd: "task.add",
           args: { title, column: columnId },
-          ...(boardPathRef.current
-            ? { boardPath: boardPathRef.current }
-            : {}),
+          ...(boardPathRef.current ? { boardPath: boardPathRef.current } : {}),
         });
       } catch (e) {
         console.error("Failed to add task:", e);
@@ -403,11 +394,7 @@ export function BoardView({ board, tasks }: BoardViewProps) {
                 .map((id) => taskMap.get(id))
                 .filter((t): t is Entity => t !== undefined);
               return (
-                <SortableColumn
-                  key={col.id}
-                  id={col.id}
-                  showSeparator={i > 0}
-                >
+                <SortableColumn key={col.id} id={col.id} showSeparator={i > 0}>
                   <ColumnView
                     column={col}
                     tasks={colTasks}

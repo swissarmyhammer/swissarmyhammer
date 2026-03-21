@@ -19,6 +19,23 @@ function wrapper(commands: CommandDef[]) {
   );
 }
 
+/**
+ * Wraps children in a two-level CommandScopeProvider:
+ * outer (depth=1) wraps inner (depth=0), so commands in each set appear at different depths.
+ */
+function nestedWrapper(
+  innerCommands: CommandDef[],
+  outerCommands: CommandDef[],
+) {
+  return ({ children }: { children: React.ReactNode }) => (
+    <CommandScopeProvider commands={outerCommands}>
+      <CommandScopeProvider commands={innerCommands}>
+        {children}
+      </CommandScopeProvider>
+    </CommandScopeProvider>
+  );
+}
+
 /** Helper to create a synthetic MouseEvent with preventDefault/stopPropagation spies. */
 function fakeMouseEvent() {
   return {
@@ -152,6 +169,16 @@ describe("dispatchContextMenuCommand", () => {
     expect(result).toBe(false);
   });
 
+  it("does not invoke show_context_menu when command list is empty", () => {
+    const { result } = renderHook(() => useContextMenu(), {
+      wrapper: wrapper([]),
+    });
+
+    result.current(fakeMouseEvent());
+
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
   it("handlers are cleared on each context menu open", async () => {
     const exec1 = vi.fn();
     const exec2 = vi.fn();
@@ -175,6 +202,102 @@ describe("dispatchContextMenuCommand", () => {
 
     // Old handler should be gone
     const dispatched = await dispatchContextMenuCommand("a");
+    expect(dispatched).toBe(false);
+  });
+});
+
+describe("separator support", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    (invoke as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+  });
+
+  it("inserts a separator between commands at different depths", () => {
+    const innerCommands: CommandDef[] = [
+      {
+        id: "entity.inspect",
+        name: "Inspect Task",
+        contextMenu: true,
+        execute: vi.fn(),
+      },
+    ];
+    const outerCommands: CommandDef[] = [
+      {
+        id: "entity.archive",
+        name: "Archive Task",
+        contextMenu: true,
+        execute: vi.fn(),
+      },
+    ];
+
+    const { result } = renderHook(() => useContextMenu(), {
+      wrapper: nestedWrapper(innerCommands, outerCommands),
+    });
+
+    result.current(fakeMouseEvent());
+
+    expect(invoke).toHaveBeenCalledWith("show_context_menu", {
+      items: [
+        { id: "entity.inspect", name: "Inspect Task" },
+        { id: "__separator__", name: "" },
+        { id: "entity.archive", name: "Archive Task" },
+      ],
+    });
+  });
+
+  it("does not insert a separator when all commands are at the same depth", () => {
+    const commands: CommandDef[] = [
+      {
+        id: "entity.inspect",
+        name: "Inspect Task",
+        contextMenu: true,
+        execute: vi.fn(),
+      },
+      {
+        id: "entity.archive",
+        name: "Archive Task",
+        contextMenu: true,
+        execute: vi.fn(),
+      },
+    ];
+
+    const { result } = renderHook(() => useContextMenu(), {
+      wrapper: wrapper(commands),
+    });
+
+    result.current(fakeMouseEvent());
+
+    const call = (invoke as ReturnType<typeof vi.fn>).mock.calls[0];
+    const items: Array<{ id: string; name: string }> = call[1].items;
+    expect(items.some((item) => item.id === "__separator__")).toBe(false);
+  });
+
+  it("does not add separator IDs to pending handlers", async () => {
+    const innerCommands: CommandDef[] = [
+      {
+        id: "entity.inspect",
+        name: "Inspect Task",
+        contextMenu: true,
+        execute: vi.fn(),
+      },
+    ];
+    const outerCommands: CommandDef[] = [
+      {
+        id: "entity.archive",
+        name: "Archive Task",
+        contextMenu: true,
+        execute: vi.fn(),
+      },
+    ];
+
+    const { result } = renderHook(() => useContextMenu(), {
+      wrapper: nestedWrapper(innerCommands, outerCommands),
+    });
+
+    result.current(fakeMouseEvent());
+
+    // Separator is not a dispatchable command
+    const dispatched = await dispatchContextMenuCommand("__separator__");
     expect(dispatched).toBe(false);
   });
 });

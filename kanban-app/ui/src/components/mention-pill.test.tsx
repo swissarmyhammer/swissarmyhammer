@@ -1,8 +1,26 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, fireEvent } from "@testing-library/react";
+import { render, fireEvent, act } from "@testing-library/react";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-const mockInvoke = vi.fn((..._args: any[]) => Promise.resolve("ok"));
+const TAG_SCHEMA = {
+  entity: {
+    name: "tag",
+    commands: [
+      {
+        id: "entity.inspect",
+        name: "Inspect {{entity.type}}",
+        context_menu: true,
+      },
+    ],
+  },
+  fields: [],
+};
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const mockInvoke = vi.fn((...args: any[]) => {
+  if (args[0] === "get_entity_schema") return Promise.resolve(TAG_SCHEMA);
+  return Promise.resolve("ok");
+});
 
 vi.mock("@tauri-apps/api/core", () => ({
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -21,6 +39,7 @@ vi.mock("@/lib/entity-store-context", () => ({
 import { MentionPill } from "./mention-pill";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
 import { InspectProvider } from "@/lib/inspect-context";
+import { SchemaProvider } from "@/lib/schema-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { FocusScope } from "@/components/focus-scope";
 import type { Entity } from "@/types/kanban";
@@ -48,11 +67,13 @@ function renderPill(props: {
     onInspect,
     ...render(
       <TooltipProvider>
-        <EntityFocusProvider>
-          <InspectProvider onInspect={onInspect} onDismiss={() => false}>
-            <MentionPill {...props} />
-          </InspectProvider>
-        </EntityFocusProvider>
+        <SchemaProvider>
+          <EntityFocusProvider>
+            <InspectProvider onInspect={onInspect} onDismiss={() => false}>
+              <MentionPill {...props} />
+            </InspectProvider>
+          </EntityFocusProvider>
+        </SchemaProvider>
       </TooltipProvider>,
     ),
   };
@@ -64,12 +85,16 @@ describe("MentionPill", () => {
     mockGetEntities.mockReturnValue(mockTags);
   });
 
-  it("right-click shows context menu with entity.inspect and task.untag for tags", () => {
+  it("right-click shows context menu with entity.inspect and task.untag for tags", async () => {
     const { container } = renderPill({
       entityType: "tag",
       slug: "bugfix",
       prefix: "#",
       taskId: "task-1",
+    });
+    // Wait for schema to load
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 50));
     });
     const pill = container.querySelector("[data-moniker]")!;
     fireEvent.contextMenu(pill);
@@ -78,24 +103,33 @@ describe("MentionPill", () => {
       items: expect.arrayContaining([
         expect.objectContaining({
           id: "entity.inspect:tag:tag-1",
-          name: "Inspect tag",
+          name: "Inspect Tag",
         }),
         expect.objectContaining({ id: "task.untag", name: "Remove Tag" }),
       ]),
     });
   });
 
-  it("task.untag not available when taskId is undefined", () => {
+  it("task.untag not available when taskId is undefined", async () => {
     const { container } = renderPill({
       entityType: "tag",
       slug: "bugfix",
       prefix: "#",
     });
+    // Wait for schema to load
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 50));
+    });
     const pill = container.querySelector("[data-moniker]")!;
     fireEvent.contextMenu(pill);
 
     expect(mockInvoke).toHaveBeenCalledWith("show_context_menu", {
-      items: [{ id: "entity.inspect:tag:tag-1", name: "Inspect tag" }],
+      items: expect.arrayContaining([
+        expect.objectContaining({
+          id: "entity.inspect:tag:tag-1",
+          name: "Inspect Tag",
+        }),
+      ]),
     });
   });
 
@@ -156,31 +190,37 @@ describe("MentionPill", () => {
     expect(pill).not.toBeNull();
   });
 
-  it("unresolved entity + parent: both inspect commands accumulate", () => {
+  it("unresolved entity + parent: both inspect commands accumulate", async () => {
     mockGetEntities.mockReturnValue([]);
     const onInspect = vi.fn();
     const { container } = render(
       <TooltipProvider>
-        <EntityFocusProvider>
-          <InspectProvider onInspect={onInspect} onDismiss={() => false}>
-            <FocusScope
-              moniker="task:parent"
-              commands={[
-                {
-                  id: "entity.inspect",
-                  name: "Inspect task",
-                  target: "task:parent",
-                  contextMenu: true,
-                  execute: vi.fn(),
-                },
-              ]}
-            >
-              <MentionPill entityType="tag" slug="unknown-tag" prefix="#" />
-            </FocusScope>
-          </InspectProvider>
-        </EntityFocusProvider>
+        <SchemaProvider>
+          <EntityFocusProvider>
+            <InspectProvider onInspect={onInspect} onDismiss={() => false}>
+              <FocusScope
+                moniker="task:parent"
+                commands={[
+                  {
+                    id: "entity.inspect",
+                    name: "Inspect task",
+                    target: "task:parent",
+                    contextMenu: true,
+                    execute: vi.fn(),
+                  },
+                ]}
+              >
+                <MentionPill entityType="tag" slug="unknown-tag" prefix="#" />
+              </FocusScope>
+            </InspectProvider>
+          </EntityFocusProvider>
+        </SchemaProvider>
       </TooltipProvider>,
     );
+    // Wait for schema to load
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 50));
+    });
     const pill = container.querySelector("[data-moniker='tag:unknown-tag']")!;
     fireEvent.contextMenu(pill);
 
@@ -190,7 +230,7 @@ describe("MentionPill", () => {
     expect(ctxCall).toBeTruthy();
     const items = (ctxCall![1] as { items: { id: string; name: string }[] })
       .items;
-    expect(items.find((i) => i.name === "Inspect tag")).toBeTruthy();
+    expect(items.find((i) => i.name === "Inspect Tag")).toBeTruthy();
     expect(items.find((i) => i.name === "Inspect task")).toBeTruthy();
   });
 
