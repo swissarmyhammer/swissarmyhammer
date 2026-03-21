@@ -16,7 +16,7 @@
 // │  Acceptable Tauri commands:                                            │
 // │    • Read-only queries (get_board_data, list_entities, etc.)           │
 // │    • OS-level operations (create_window, restore_windows, quit_app)    │
-// │    • High-frequency non-undoable ops (save_window_geometry)            │
+// │    • Transient UI plumbing (drag session start/cancel, context menus)  │
 // │                                                                        │
 // │  If in doubt, ask. Don't just add a quick invoke().                    │
 // └──────────────────────────────────────────────────────────────────────────┘
@@ -730,25 +730,6 @@ pub async fn restore_windows(app: AppHandle, state: State<'_, AppState>) -> Resu
     }
 
     Ok(json!({ "restored": restored }))
-}
-
-/// Save a window's position and size to UIState.
-///
-/// Called by windows on move/resize so their geometry persists across restarts
-/// and hot reloads. Routes through UIState which auto-persists.
-#[tauri::command]
-pub async fn save_window_geometry(
-    state: State<'_, AppState>,
-    window_label: String,
-    x: i32,
-    y: i32,
-    width: u32,
-    height: u32,
-) -> Result<(), String> {
-    state
-        .ui_state
-        .save_window_geometry(&window_label, x, y, width, height, false);
-    Ok(())
 }
 
 /// List all view definitions, returning a JSON array.

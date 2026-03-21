@@ -75,7 +75,6 @@ fn main() {
             commands::cancel_drag_session,
             commands::complete_drag_session,
             commands::restore_windows,
-            commands::save_window_geometry,
         ])
         .setup(|app| {
             // Build initial menu with OS chrome only — the frontend will
