@@ -4,7 +4,12 @@ import { render, screen, fireEvent, act } from "@testing-library/react";
 // Schema responses keyed by entity type
 const SCHEMAS: Record<string, unknown> = {
   tag: {
-    entity: { name: "tag", fields: ["tag_name", "color", "description"], mention_prefix: "#", mention_display_field: "tag_name" },
+    entity: {
+      name: "tag",
+      fields: ["tag_name", "color", "description"],
+      mention_prefix: "#",
+      mention_display_field: "tag_name",
+    },
     fields: [
       { name: "tag_name", type: { kind: "text" } },
       { name: "color", type: { kind: "color" } },
@@ -12,7 +17,12 @@ const SCHEMAS: Record<string, unknown> = {
     ],
   },
   actor: {
-    entity: { name: "actor", fields: ["name", "color", "avatar"], mention_prefix: "@", mention_display_field: "name" },
+    entity: {
+      name: "actor",
+      fields: ["name", "color", "avatar"],
+      mention_prefix: "@",
+      mention_display_field: "name",
+    },
     fields: [
       { name: "name", type: { kind: "text" } },
       { name: "color", type: { kind: "color" } },
@@ -25,7 +35,16 @@ const DEFAULT_SCHEMA = { entity: { name: "unknown", fields: [] }, fields: [] };
 // Mock Tauri APIs before importing components that use them
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn((cmd: string, args?: Record<string, unknown>) => {
-    if (cmd === "get_ui_state") return Promise.resolve({ inspector_stack: [], active_view_id: "", palette_open: false, keymap_mode: "cua", scope_chain: [] });
+    if (cmd === "get_ui_state")
+      return Promise.resolve({
+        palette_open: false,
+        keymap_mode: "cua",
+        scope_chain: [],
+        open_boards: [],
+        window_boards: {},
+        windows: {},
+        recent_boards: [],
+      });
     if (cmd === "get_entity_schema") {
       const entityType = args?.entityType as string;
       return Promise.resolve(SCHEMAS[entityType] ?? DEFAULT_SCHEMA);
@@ -49,14 +68,29 @@ import type { Entity } from "@/types/kanban";
 
 /** Entities with mention-supporting fields populated. */
 const TAG_ENTITIES: Entity[] = [
-  { entity_type: "tag", id: "01TAG1", fields: { tag_name: "bug", color: "ff0000", description: "Bug fixes" } },
-  { entity_type: "tag", id: "01TAG2", fields: { tag_name: "feature", color: "00ff00" } },
+  {
+    entity_type: "tag",
+    id: "01TAG1",
+    fields: { tag_name: "bug", color: "ff0000", description: "Bug fixes" },
+  },
+  {
+    entity_type: "tag",
+    id: "01TAG2",
+    fields: { tag_name: "feature", color: "00ff00" },
+  },
 ];
 const ACTOR_ENTITIES: Entity[] = [
-  { entity_type: "actor", id: "wballard", fields: { name: "wballard", color: "3366cc" } },
+  {
+    entity_type: "actor",
+    id: "wballard",
+    fields: { name: "wballard", color: "3366cc" },
+  },
 ];
 
-function renderWithProvider(ui: React.ReactElement, entities?: Record<string, Entity[]>) {
+function renderWithProvider(
+  ui: React.ReactElement,
+  entities?: Record<string, Entity[]>,
+) {
   return render(
     <TooltipProvider>
       <SchemaProvider>
@@ -68,7 +102,7 @@ function renderWithProvider(ui: React.ReactElement, entities?: Record<string, En
           </EntityFocusProvider>
         </EntityStoreProvider>
       </SchemaProvider>
-    </TooltipProvider>
+    </TooltipProvider>,
   );
 }
 
@@ -76,7 +110,10 @@ function renderWithProvider(ui: React.ReactElement, entities?: Record<string, En
 async function renderWithMentions(ui: React.ReactElement) {
   let result: ReturnType<typeof render>;
   await act(async () => {
-    result = renderWithProvider(ui, { tag: TAG_ENTITIES, actor: ACTOR_ENTITIES });
+    result = renderWithProvider(ui, {
+      tag: TAG_ENTITIES,
+      actor: ACTOR_ENTITIES,
+    });
   });
   return result!;
 }
@@ -85,7 +122,7 @@ describe("EditableMarkdown", () => {
   describe("display mode", () => {
     it("renders markdown content", () => {
       renderWithProvider(
-        <EditableMarkdown value="Hello **world**" onCommit={() => {}} />
+        <EditableMarkdown value="Hello **world**" onCommit={() => {}} />,
       );
       expect(screen.getByText("world")).toBeTruthy();
       // "world" should be inside a <strong> tag
@@ -99,7 +136,7 @@ describe("EditableMarkdown", () => {
           value={"# Heading\n\n- item 1\n- item 2"}
           onCommit={() => {}}
           multiline
-        />
+        />,
       );
       expect(screen.getByText("Heading")).toBeTruthy();
       expect(screen.getByText("item 1")).toBeTruthy();
@@ -112,7 +149,7 @@ describe("EditableMarkdown", () => {
           value=""
           onCommit={() => {}}
           placeholder="Add description..."
-        />
+        />,
       );
       expect(screen.getByText("Add description...")).toBeTruthy();
     });
@@ -123,7 +160,7 @@ describe("EditableMarkdown", () => {
           value="test"
           onCommit={() => {}}
           className="custom-class"
-        />
+        />,
       );
       const el = container.querySelector(".custom-class");
       expect(el).toBeTruthy();
@@ -133,7 +170,7 @@ describe("EditableMarkdown", () => {
   describe("edit mode", () => {
     it("switches to editor on click", () => {
       const { container } = renderWithProvider(
-        <EditableMarkdown value="Hello" onCommit={() => {}} />
+        <EditableMarkdown value="Hello" onCommit={() => {}} />,
       );
       // Click the display div
       const display = container.querySelector(".cursor-text");
@@ -146,7 +183,7 @@ describe("EditableMarkdown", () => {
 
     it("switches to editor on click for multiline", () => {
       const { container } = renderWithProvider(
-        <EditableMarkdown value="Some text" onCommit={() => {}} multiline />
+        <EditableMarkdown value="Some text" onCommit={() => {}} multiline />,
       );
       fireEvent.click(container.querySelector(".cursor-text")!);
       expect(container.querySelector(".cm-editor")).toBeTruthy();
@@ -158,7 +195,7 @@ describe("EditableMarkdown", () => {
           value=""
           onCommit={() => {}}
           placeholder="Add description..."
-        />
+        />,
       );
       fireEvent.click(screen.getByText("Add description..."));
       expect(container.querySelector(".cm-editor")).toBeTruthy();
@@ -169,7 +206,7 @@ describe("EditableMarkdown", () => {
     it("calls onCommit with changed text when editor loses focus", async () => {
       const onCommit = vi.fn();
       const { container } = renderWithProvider(
-        <EditableMarkdown value="bug" onCommit={onCommit} />
+        <EditableMarkdown value="bug" onCommit={onCommit} />,
       );
 
       // Click to enter edit mode
@@ -202,7 +239,7 @@ describe("EditableMarkdown", () => {
     it("does NOT call onCommit when text is unchanged", async () => {
       const onCommit = vi.fn();
       const { container } = renderWithProvider(
-        <EditableMarkdown value="bug" onCommit={onCommit} />
+        <EditableMarkdown value="bug" onCommit={onCommit} />,
       );
 
       // Click to enter edit mode
@@ -226,7 +263,7 @@ describe("EditableMarkdown", () => {
           value={"- [ ] todo item\n- [x] done item"}
           onCommit={onCommit}
           multiline
-        />
+        />,
       );
       // Find the first checkbox (unchecked)
       const checkboxes = screen.getAllByRole("checkbox");
@@ -246,7 +283,7 @@ describe("EditableMarkdown", () => {
           value={"- [ ] todo item\n- [x] done item"}
           onCommit={onCommit}
           multiline
-        />
+        />,
       );
       const checkboxes = screen.getAllByRole("checkbox");
       fireEvent.click(checkboxes[1]);
@@ -256,11 +293,7 @@ describe("EditableMarkdown", () => {
     it("does not enter edit mode when clicking checkbox", () => {
       const onCommit = vi.fn();
       const { container } = renderWithProvider(
-        <EditableMarkdown
-          value={"- [ ] todo"}
-          onCommit={onCommit}
-          multiline
-        />
+        <EditableMarkdown value={"- [ ] todo"} onCommit={onCommit} multiline />,
       );
       const checkbox = screen.getByRole("checkbox");
       fireEvent.click(checkbox);
@@ -273,7 +306,7 @@ describe("EditableMarkdown", () => {
       const value =
         "- [ ] first\n- [ ] second\n- [ ] third\n- [ ] fourth\n- [ ] fifth";
       renderWithProvider(
-        <EditableMarkdown value={value} onCommit={onCommit} multiline />
+        <EditableMarkdown value={value} onCommit={onCommit} multiline />,
       );
       const checkboxes = screen.getAllByRole("checkbox");
       expect(checkboxes).toHaveLength(5);
@@ -281,7 +314,7 @@ describe("EditableMarkdown", () => {
       // Toggle the third checkbox (index 2)
       fireEvent.click(checkboxes[2]);
       expect(onCommit).toHaveBeenCalledWith(
-        "- [ ] first\n- [ ] second\n- [x] third\n- [ ] fourth\n- [ ] fifth"
+        "- [ ] first\n- [ ] second\n- [x] third\n- [ ] fourth\n- [ ] fifth",
       );
     });
 
@@ -290,7 +323,7 @@ describe("EditableMarkdown", () => {
       const value =
         "- [x] first\n- [ ] second\n- [x] third\n- [ ] fourth\n- [ ] fifth";
       renderWithProvider(
-        <EditableMarkdown value={value} onCommit={onCommit} multiline />
+        <EditableMarkdown value={value} onCommit={onCommit} multiline />,
       );
       const checkboxes = screen.getAllByRole("checkbox");
       expect(checkboxes).toHaveLength(5);
@@ -298,7 +331,7 @@ describe("EditableMarkdown", () => {
       // Toggle the fifth checkbox (index 4)
       fireEvent.click(checkboxes[4]);
       expect(onCommit).toHaveBeenCalledWith(
-        "- [x] first\n- [ ] second\n- [x] third\n- [ ] fourth\n- [x] fifth"
+        "- [x] first\n- [ ] second\n- [x] third\n- [ ] fourth\n- [x] fifth",
       );
     });
 
@@ -307,7 +340,7 @@ describe("EditableMarkdown", () => {
       const value =
         "## Subtasks\n\n- [ ] alpha\n- [x] bravo\n- [ ] charlie\n\nSome notes here.";
       renderWithProvider(
-        <EditableMarkdown value={value} onCommit={onCommit} multiline />
+        <EditableMarkdown value={value} onCommit={onCommit} multiline />,
       );
       const checkboxes = screen.getAllByRole("checkbox");
       expect(checkboxes).toHaveLength(3);
@@ -315,7 +348,7 @@ describe("EditableMarkdown", () => {
       // Toggle the middle checkbox (bravo, index 1) — uncheck it
       fireEvent.click(checkboxes[1]);
       expect(onCommit).toHaveBeenCalledWith(
-        "## Subtasks\n\n- [ ] alpha\n- [ ] bravo\n- [ ] charlie\n\nSome notes here."
+        "## Subtasks\n\n- [ ] alpha\n- [ ] bravo\n- [ ] charlie\n\nSome notes here.",
       );
     });
   });
@@ -328,7 +361,7 @@ describe("EditableMarkdown", () => {
           onCommit={() => {}}
           multiline
           placeholder="Add description..."
-        />
+        />,
       );
 
       // Display mode should render the text
@@ -351,7 +384,7 @@ describe("EditableMarkdown", () => {
           onCommit={() => {}}
           multiline
           placeholder="Add description..."
-        />
+        />,
       );
 
       // Should show placeholder
@@ -373,7 +406,7 @@ describe("EditableMarkdown", () => {
           value="Fix the #bug in login"
           onCommit={() => {}}
           multiline
-        />
+        />,
       );
 
       // Tag pill should be rendered

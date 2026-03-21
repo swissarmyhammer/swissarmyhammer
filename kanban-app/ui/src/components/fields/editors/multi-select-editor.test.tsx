@@ -7,7 +7,16 @@ const mockInvoke = vi.fn((...args: any[]) => {
     const entityType = args[1]?.entityType as string;
     return Promise.resolve(SCHEMAS[entityType] ?? DEFAULT_SCHEMA);
   }
-  if (args[0] === "get_ui_state") return Promise.resolve({ inspector_stack: [], active_view_id: "", palette_open: false, keymap_mode: "cua", scope_chain: [] });
+  if (args[0] === "get_ui_state")
+    return Promise.resolve({
+      palette_open: false,
+      keymap_mode: "cua",
+      scope_chain: [],
+      open_boards: [],
+      window_boards: {},
+      windows: {},
+      recent_boards: [],
+    });
   if (args[0] === "search_mentions") return Promise.resolve([]);
   if (args[0] === "dispatch_command") return Promise.resolve("ok");
   return Promise.resolve(null);
@@ -21,7 +30,11 @@ vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(() => Promise.resolve(() => {})),
 }));
 vi.mock("@tauri-apps/plugin-log", () => ({
-  error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn(), trace: vi.fn(),
+  error: vi.fn(),
+  warn: vi.fn(),
+  info: vi.fn(),
+  debug: vi.fn(),
+  trace: vi.fn(),
   attachConsole: vi.fn(() => Promise.resolve()),
 }));
 
@@ -36,7 +49,12 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import type { Entity, FieldDef } from "@/types/kanban";
 
 const TAG_SCHEMA = {
-  entity: { name: "tag", fields: ["tag_name", "color"], mention_prefix: "#", mention_display_field: "tag_name" },
+  entity: {
+    name: "tag",
+    fields: ["tag_name", "color"],
+    mention_prefix: "#",
+    mention_display_field: "tag_name",
+  },
   fields: [
     { id: "t1", name: "tag_name", type: { kind: "text" }, section: "header" },
     { id: "t2", name: "color", type: { kind: "color" }, section: "body" },
@@ -44,7 +62,12 @@ const TAG_SCHEMA = {
 };
 
 const ACTOR_SCHEMA = {
-  entity: { name: "actor", fields: ["name", "color"], mention_prefix: "@", mention_display_field: "name" },
+  entity: {
+    name: "actor",
+    fields: ["name", "color"],
+    mention_prefix: "@",
+    mention_display_field: "name",
+  },
   fields: [
     { id: "a1", name: "name", type: { kind: "text" }, section: "header" },
     { id: "a2", name: "color", type: { kind: "color" }, section: "body" },
@@ -52,26 +75,60 @@ const ACTOR_SCHEMA = {
 };
 
 const TASK_SCHEMA = {
-  entity: { name: "task", body_field: "body", fields: ["title", "body", "assignees", "tags"] },
+  entity: {
+    name: "task",
+    body_field: "body",
+    fields: ["title", "body", "assignees", "tags"],
+  },
   fields: [
     { id: "f1", name: "title", type: { kind: "text" }, section: "header" },
     { id: "f2", name: "body", type: { kind: "markdown" }, section: "body" },
-    { id: "f5", name: "assignees", type: { kind: "reference", entity: "actor", multiple: true }, section: "body" },
-    { id: "f3", name: "tags", type: { kind: "computed", derive: "parse-body-tags" }, section: "header" },
+    {
+      id: "f5",
+      name: "assignees",
+      type: { kind: "reference", entity: "actor", multiple: true },
+      section: "body",
+    },
+    {
+      id: "f3",
+      name: "tags",
+      type: { kind: "computed", derive: "parse-body-tags" },
+      section: "header",
+    },
   ],
 };
 
-const SCHEMAS: Record<string, unknown> = { tag: TAG_SCHEMA, actor: ACTOR_SCHEMA, task: TASK_SCHEMA };
+const SCHEMAS: Record<string, unknown> = {
+  tag: TAG_SCHEMA,
+  actor: ACTOR_SCHEMA,
+  task: TASK_SCHEMA,
+};
 const DEFAULT_SCHEMA = { entity: { name: "unknown", fields: [] }, fields: [] };
 
 const ACTOR_ENTITIES: Entity[] = [
-  { entity_type: "actor", id: "alice-id", fields: { name: "alice", color: "3366cc" } },
-  { entity_type: "actor", id: "bob-id", fields: { name: "bob", color: "cc3366" } },
+  {
+    entity_type: "actor",
+    id: "alice-id",
+    fields: { name: "alice", color: "3366cc" },
+  },
+  {
+    entity_type: "actor",
+    id: "bob-id",
+    fields: { name: "bob", color: "cc3366" },
+  },
 ];
 
 const TAG_ENTITIES: Entity[] = [
-  { entity_type: "tag", id: "tag-bug", fields: { tag_name: "bug", color: "ff0000" } },
-  { entity_type: "tag", id: "tag-feat", fields: { tag_name: "feature", color: "00ff00" } },
+  {
+    entity_type: "tag",
+    id: "tag-bug",
+    fields: { tag_name: "bug", color: "ff0000" },
+  },
+  {
+    entity_type: "tag",
+    id: "tag-feat",
+    fields: { tag_name: "feature", color: "00ff00" },
+  },
 ];
 
 const ASSIGNEES_FIELD: FieldDef = {
@@ -277,7 +334,12 @@ describe("MultiSelectEditor", () => {
       const onCommit = vi.fn();
       const onCancel = vi.fn();
       const { container } = renderMultiSelect(
-        { field: ASSIGNEES_FIELD, value: ["alice-id", "bob-id"], onCommit, onCancel },
+        {
+          field: ASSIGNEES_FIELD,
+          value: ["alice-id", "bob-id"],
+          onCommit,
+          onCancel,
+        },
         { actor: ACTOR_ENTITIES },
       );
       await settle();
@@ -289,7 +351,9 @@ describe("MultiSelectEditor", () => {
       // Find the first × remove button (sibling of the AvatarDisplay wrapper)
       const removeButtons = container.querySelectorAll("button");
       // Filter to × buttons (not CM6 internal buttons)
-      const removeBtns = Array.from(removeButtons).filter((b: Element) => b.textContent?.includes("×"));
+      const removeBtns = Array.from(removeButtons).filter((b: Element) =>
+        b.textContent?.includes("×"),
+      );
       expect(removeBtns.length).toBe(2);
 
       await act(async () => {
@@ -313,7 +377,13 @@ describe("MultiSelectEditor", () => {
       const onCommit = vi.fn();
       const onCancel = vi.fn();
       const { container } = renderMultiSelect(
-        { field: TAGS_FIELD, value: ["tag-bug"], onCommit, onCancel, entity: taskEntity },
+        {
+          field: TAGS_FIELD,
+          value: ["tag-bug"],
+          onCommit,
+          onCancel,
+          entity: taskEntity,
+        },
         { tag: TAG_ENTITIES },
       );
       await settle();
@@ -325,7 +395,13 @@ describe("MultiSelectEditor", () => {
       const onCommit = vi.fn();
       const onCancel = vi.fn();
       const { container } = renderMultiSelect(
-        { field: TAGS_FIELD, value: ["tag-bug"], onCommit, onCancel, entity: taskEntity },
+        {
+          field: TAGS_FIELD,
+          value: ["tag-bug"],
+          onCommit,
+          onCancel,
+          entity: taskEntity,
+        },
         { tag: TAG_ENTITIES },
       );
       await settle();
@@ -338,7 +414,13 @@ describe("MultiSelectEditor", () => {
       const onCommit = vi.fn();
       const onCancel = vi.fn();
       const { container } = renderMultiSelect(
-        { field: TAGS_FIELD, value: ["tag-bug"], onCommit, onCancel, entity: taskEntity },
+        {
+          field: TAGS_FIELD,
+          value: ["tag-bug"],
+          onCommit,
+          onCancel,
+          entity: taskEntity,
+        },
         { tag: TAG_ENTITIES },
       );
       await settle();
@@ -357,7 +439,13 @@ describe("MultiSelectEditor", () => {
       const onCommit = vi.fn();
       const onCancel = vi.fn();
       const { container } = renderMultiSelect(
-        { field: TAGS_FIELD, value: ["tag-bug"], onCommit, onCancel, entity: taskEntity },
+        {
+          field: TAGS_FIELD,
+          value: ["tag-bug"],
+          onCommit,
+          onCancel,
+          entity: taskEntity,
+        },
         { tag: TAG_ENTITIES },
       );
       await settle();
@@ -375,7 +463,13 @@ describe("MultiSelectEditor", () => {
       const onCommit = vi.fn();
       const onCancel = vi.fn();
       const { container } = renderMultiSelect(
-        { field: TAGS_FIELD, value: ["tag-bug", "tag-feat"], onCommit, onCancel, entity: taskEntity },
+        {
+          field: TAGS_FIELD,
+          value: ["tag-bug", "tag-feat"],
+          onCommit,
+          onCancel,
+          entity: taskEntity,
+        },
         { tag: TAG_ENTITIES },
       );
       await settle();
@@ -385,9 +479,9 @@ describe("MultiSelectEditor", () => {
       expect(container.textContent).toContain("feature");
 
       // Find and click the first remove button (×)
-      const removeButtons = Array.from(container.querySelectorAll("button")).filter(
-        (b: Element) => b.textContent?.includes("×"),
-      );
+      const removeButtons = Array.from(
+        container.querySelectorAll("button"),
+      ).filter((b: Element) => b.textContent?.includes("×"));
       expect(removeButtons.length).toBe(2);
 
       await act(async () => {
@@ -395,9 +489,9 @@ describe("MultiSelectEditor", () => {
       });
 
       // After removing first tag, only one should remain
-      const remainingBtns = Array.from(container.querySelectorAll("button")).filter(
-        (b: Element) => b.textContent?.includes("×"),
-      );
+      const remainingBtns = Array.from(
+        container.querySelectorAll("button"),
+      ).filter((b: Element) => b.textContent?.includes("×"));
       expect(remainingBtns.length).toBe(1);
     });
   });

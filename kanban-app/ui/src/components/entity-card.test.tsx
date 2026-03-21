@@ -48,7 +48,16 @@ const TASK_SCHEMA = {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const mockInvoke = vi.fn((...args: any[]) => {
   if (args[0] === "get_entity_schema") return Promise.resolve(TASK_SCHEMA);
-  if (args[0] === "get_ui_state") return Promise.resolve({ inspector_stack: [], active_view_id: "", palette_open: false, keymap_mode: "cua", scope_chain: [] });
+  if (args[0] === "get_ui_state")
+    return Promise.resolve({
+      palette_open: false,
+      keymap_mode: "cua",
+      scope_chain: [],
+      open_boards: [],
+      window_boards: {},
+      windows: {},
+      recent_boards: [],
+    });
   if (args[0] === "update_entity_field")
     return Promise.resolve({ id: "task-1" });
   return Promise.resolve("ok");

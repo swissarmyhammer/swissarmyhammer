@@ -422,7 +422,8 @@ mod tests {
 
         let result = cmd.execute(&ctx).await;
         assert!(result.is_ok());
-        assert_eq!(ui.active_view_id(), "my-view");
+        // No window_label in ctx — defaults to "main"
+        assert_eq!(ui.active_view_id("main"), "my-view");
     }
 
     // =========================================================================

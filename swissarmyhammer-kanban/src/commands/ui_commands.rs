@@ -157,7 +157,8 @@ impl Command for SetActiveViewCmd {
             .ok_or_else(|| CommandError::ExecutionFailed("UIState not available".into()))?;
 
         let view_id = ctx.require_arg_str("view_id")?;
-        let change = ui.set_active_view(view_id);
+        let window_label = ctx.window_label.as_deref().unwrap_or("main");
+        let change = ui.set_active_view(window_label, view_id);
         Ok(serde_json::to_value(change).unwrap_or(Value::Null))
     }
 }

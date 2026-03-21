@@ -1,9 +1,20 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, type ReactNode } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  type ReactNode,
+} from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useState } from "react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { ViewDef } from "@/types/kanban";
 import { useUIState } from "./ui-state-context";
+
+/** This window's label — stable for the lifetime of the window. */
+const WINDOW_LABEL = getCurrentWindow().label;
 
 interface ViewsContextValue {
   views: ViewDef[];
@@ -17,15 +28,17 @@ const ViewsContext = createContext<ViewsContextValue | null>(null);
 export function ViewsProvider({ children }: { children: ReactNode }) {
   const [views, setViews] = useState<ViewDef[]>([]);
 
-  // active_view_id comes from UIState — it is the single source of truth.
+  // active_view_id comes from UIState per-window data — it is the single source of truth.
   // UIStateProvider keeps it in sync via the "ui-state-changed" event.
-  const { active_view_id } = useUIState();
+  const uiState = useUIState();
+  const active_view_id = uiState.windows?.[WINDOW_LABEL]?.active_view_id ?? "";
 
   /** Dispatch a view switch through the command system so UIState owns the change. */
   const setActiveViewId = useCallback((id: string) => {
     invoke("dispatch_command", {
       cmd: "ui.view.set",
       args: { view_id: id },
+      windowLabel: WINDOW_LABEL,
     }).catch(console.error);
   }, []);
 
@@ -45,7 +58,9 @@ export function ViewsProvider({ children }: { children: ReactNode }) {
       if (cancelled) return;
       await refresh();
     })();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [refresh]);
 
   // Re-fetch views when view entities change (file watcher or commands)
@@ -80,9 +95,7 @@ export function ViewsProvider({ children }: { children: ReactNode }) {
   );
 
   return (
-    <ViewsContext.Provider value={value}>
-      {children}
-    </ViewsContext.Provider>
+    <ViewsContext.Provider value={value}>{children}</ViewsContext.Provider>
   );
 }
 

@@ -119,7 +119,7 @@ pub async fn get_ui_context(
     let inspector_stack = state.ui_state.inspector_stack(label);
     Ok(json!({
         "board_path": board_path,
-        "active_view_id": state.ui_state.active_view_id(),
+        "active_view_id": state.ui_state.active_view_id(label),
         "inspector_stack": inspector_stack,
     }))
 }
@@ -1054,25 +1054,21 @@ pub async fn start_drag_session(
         .as_millis() as u64;
 
     // Auto-cancel stale sessions (>30s old)
-    {
-        let mut guard = state.drag_session.write().await;
-        if let Some(ref existing) = *guard {
-            if now_ms.saturating_sub(existing.started_at_ms) > crate::state::DRAG_SESSION_MAX_AGE_MS
-            {
-                tracing::info!(
-                    session_id = %existing.session_id,
-                    "auto-cancelling stale drag session"
-                );
-                let _ = app.emit(
-                    "drag-session-cancelled",
-                    json!({ "session_id": existing.session_id }),
-                );
-                *guard = None;
-            }
+    if let Some(ref existing) = state.ui_state.drag_session() {
+        if now_ms.saturating_sub(existing.started_at_ms) > crate::state::DRAG_SESSION_MAX_AGE_MS {
+            tracing::info!(
+                session_id = %existing.session_id,
+                "auto-cancelling stale drag session"
+            );
+            let _ = app.emit(
+                "drag-session-cancelled",
+                json!({ "session_id": existing.session_id }),
+            );
+            state.ui_state.cancel_drag();
         }
     }
 
-    let session = crate::state::DragSession {
+    let session = swissarmyhammer_commands::DragSession {
         session_id: ulid::Ulid::new().to_string(),
         source_board_path: board_path,
         source_window_label,
@@ -1083,7 +1079,7 @@ pub async fn start_drag_session(
     };
     let session_id = session.session_id.clone();
     let payload = serde_json::to_value(&session).map_err(|e| e.to_string())?;
-    *state.drag_session.write().await = Some(session);
+    state.ui_state.start_drag(session);
     let _ = app.emit("drag-session-active", &payload);
     Ok(json!({ "session_id": session_id }))
 }
@@ -1097,7 +1093,7 @@ pub async fn cancel_drag_session(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<Value, String> {
-    let session = state.drag_session.write().await.take();
+    let session = state.ui_state.take_drag();
     match session {
         Some(s) => {
             let _ = app.emit(
@@ -1127,10 +1123,8 @@ pub async fn complete_drag_session(
     copy_mode: bool,
 ) -> Result<Value, String> {
     let session = state
-        .drag_session
-        .write()
-        .await
-        .take()
+        .ui_state
+        .take_drag()
         .ok_or_else(|| "No active drag session".to_string())?;
 
     let result = if session.source_board_path == target_board_path {
@@ -1460,13 +1454,12 @@ pub async fn show_context_menu(
     // Store IDs so handle_menu_event can route selections correctly.
     // Separators are not selectable items — exclude them from the id set.
     {
-        let mut ids = state.context_menu_ids.write().await;
-        ids.clear();
-        for item in &items {
-            if item.id != "__separator__" {
-                ids.insert(item.id.clone());
-            }
-        }
+        let ids: std::collections::HashSet<String> = items
+            .iter()
+            .filter(|item| item.id != "__separator__")
+            .map(|item| item.id.clone())
+            .collect();
+        state.ui_state.set_context_menu_ids(ids);
     }
 
     let mut builder = MenuBuilder::new(&app);

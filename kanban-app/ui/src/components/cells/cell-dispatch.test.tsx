@@ -11,7 +11,16 @@ vi.mock("@tauri-apps/api/core", () => ({
       const t = args?.entityType as string;
       return Promise.resolve(SCHEMAS[t] ?? DEFAULT_SCHEMA);
     }
-    if (cmd === "get_ui_state") return Promise.resolve({ inspector_stack: [], active_view_id: "", palette_open: false, keymap_mode: "cua", scope_chain: [] });
+    if (cmd === "get_ui_state")
+      return Promise.resolve({
+        palette_open: false,
+        keymap_mode: "cua",
+        scope_chain: [],
+        open_boards: [],
+        window_boards: {},
+        windows: {},
+        recent_boards: [],
+      });
     return Promise.resolve(null);
   }),
 }));

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::RwLock;
 
@@ -7,7 +7,29 @@ use serde::{Deserialize, Serialize};
 /// Maximum number of entries to keep in the MRU recent boards list.
 const MAX_RECENT_BOARDS: usize = 20;
 
-/// Persisted per-window state: inspector stack and window geometry.
+/// Active drag session for cross-window drag coordination.
+///
+/// Transient — carried in UIState but never persisted to the YAML config.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DragSession {
+    /// Unique session ID (ULID).
+    pub session_id: String,
+    /// Board path the task originates from.
+    pub source_board_path: String,
+    /// Tauri window label of the source window.
+    pub source_window_label: String,
+    /// The task ID being dragged.
+    pub task_id: String,
+    /// Serialized task fields for ghost preview in target windows.
+    pub task_fields: serde_json::Value,
+    /// Whether Alt/Option was held (copy mode).
+    pub copy_mode: bool,
+    /// When the session was started (epoch millis).
+    #[serde(default)]
+    pub started_at_ms: u64,
+}
+
+/// Persisted per-window state: inspector stack, active view, and window geometry.
 ///
 /// Note: board_path is NOT stored here — it lives in `window_boards` (a separate map)
 /// to keep board assignment and window geometry lifecycles separate.
@@ -16,6 +38,8 @@ const MAX_RECENT_BOARDS: usize = 20;
 pub struct WindowState {
     /// Per-window inspector stack (list of `type:id` monikers).
     pub inspector_stack: Vec<String>,
+    /// The active view ID for this window (e.g. "board-view", "grid-view").
+    pub active_view_id: String,
     /// Window x position (physical pixels).
     pub x: Option<i32>,
     /// Window y position (physical pixels).
@@ -82,8 +106,6 @@ pub struct UIState {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(default)]
 struct UIStateInner {
-    /// ID of the currently active view.
-    active_view_id: String,
     /// Whether the command palette is open. Transient — not persisted.
     #[serde(skip)]
     palette_open: bool,
@@ -92,6 +114,12 @@ struct UIStateInner {
     /// Current focus scope chain (innermost first). Transient — not persisted.
     #[serde(skip)]
     scope_chain: Vec<String>,
+    /// Active cross-window drag session. Transient — not persisted.
+    #[serde(skip)]
+    drag_session: Option<DragSession>,
+    /// IDs of items in the most recently shown context menu. Transient — not persisted.
+    #[serde(skip)]
+    context_menu_ids: HashSet<String>,
     /// Canonical paths of boards that are open.
     open_boards: Vec<String>,
     /// The globally active board path.
@@ -110,10 +138,11 @@ impl Default for UIStateInner {
     /// Returns the default UI state values.
     fn default() -> Self {
         Self {
-            active_view_id: String::new(),
             palette_open: false,
             keymap_mode: "cua".to_string(),
             scope_chain: Vec::new(),
+            drag_session: None,
+            context_menu_ids: HashSet::new(),
             open_boards: Vec::new(),
             active_board_path: None,
             window_boards: HashMap::new(),
@@ -276,18 +305,19 @@ impl UIState {
         change
     }
 
-    /// Set the active view ID.
+    /// Set the active view ID for a specific window.
     ///
     /// Returns `None` if the view ID is unchanged.
     /// Auto-saves if a config path is configured.
-    pub fn set_active_view(&self, id: &str) -> Option<UIStateChange> {
+    pub fn set_active_view(&self, window_label: &str, id: &str) -> Option<UIStateChange> {
         let change = {
             let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
-            if inner.active_view_id == id {
+            let ws = inner.windows.entry(window_label.to_string()).or_default();
+            if ws.active_view_id == id {
                 return None;
             }
-            inner.active_view_id = id.to_string();
-            Some(UIStateChange::ActiveView(inner.active_view_id.clone()))
+            ws.active_view_id = id.to_string();
+            Some(UIStateChange::ActiveView(id.to_string()))
         };
         self.try_save();
         change
@@ -332,6 +362,60 @@ impl UIState {
         inner.scope_chain = chain;
         UIStateChange::ScopeChain(inner.scope_chain.clone())
         // No try_save — scope_chain is transient (#[serde(skip)])
+    }
+
+    /// Start a drag session, replacing any existing one.
+    ///
+    /// Transient — not persisted to the config file.
+    pub fn start_drag(&self, session: DragSession) {
+        let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+        inner.drag_session = Some(session);
+        // No try_save() — transient state
+    }
+
+    /// Take the current drag session (returns and clears it).
+    ///
+    /// Returns `None` if no session is active.
+    pub fn take_drag(&self) -> Option<DragSession> {
+        let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+        inner.drag_session.take()
+        // No try_save() — transient state
+    }
+
+    /// Cancel the current drag session (clears it without returning).
+    ///
+    /// Transient — not persisted to the config file.
+    pub fn cancel_drag(&self) {
+        let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+        inner.drag_session = None;
+        // No try_save() — transient state
+    }
+
+    /// Get a clone of the current drag session, if any.
+    pub fn drag_session(&self) -> Option<DragSession> {
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .drag_session
+            .clone()
+    }
+
+    /// Set the context menu IDs for the current menu.
+    ///
+    /// Replaces any previous set. Transient — not persisted to the config file.
+    pub fn set_context_menu_ids(&self, ids: HashSet<String>) {
+        let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+        inner.context_menu_ids = ids;
+        // No try_save() — transient state
+    }
+
+    /// Check if a menu ID belongs to the current context menu.
+    pub fn is_context_menu_id(&self, id: &str) -> bool {
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .context_menu_ids
+            .contains(id)
     }
 
     /// Add a board path to the open boards list, setting it as the active board.
@@ -584,13 +668,17 @@ impl UIState {
             .clone()
     }
 
-    /// Get the current active view ID.
-    pub fn active_view_id(&self) -> String {
+    /// Get the active view ID for a specific window.
+    ///
+    /// Returns an empty string if the window has no active view set.
+    pub fn active_view_id(&self, window_label: &str) -> String {
         self.inner
             .read()
             .unwrap_or_else(|e| e.into_inner())
-            .active_view_id
-            .clone()
+            .windows
+            .get(window_label)
+            .map(|ws| ws.active_view_id.clone())
+            .unwrap_or_default()
     }
 
     /// Get whether the palette is open.
@@ -628,7 +716,6 @@ impl UIState {
     pub fn to_json(&self) -> serde_json::Value {
         let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
         serde_json::json!({
-            "active_view_id": inner.active_view_id,
             "palette_open": inner.palette_open,
             "keymap_mode": inner.keymap_mode,
             "scope_chain": inner.scope_chain,
@@ -645,7 +732,6 @@ impl std::fmt::Debug for UIState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
         f.debug_struct("UIState")
-            .field("active_view_id", &inner.active_view_id)
             .field("palette_open", &inner.palette_open)
             .field("keymap_mode", &inner.keymap_mode)
             .field("scope_chain", &inner.scope_chain)
@@ -759,17 +845,32 @@ mod tests {
     #[test]
     fn set_active_view_changes() {
         let state = UIState::new();
-        let change = state.set_active_view("board-view");
+        let change = state.set_active_view("main", "board-view");
         assert!(change.is_some());
-        assert_eq!(state.active_view_id(), "board-view");
+        assert_eq!(state.active_view_id("main"), "board-view");
     }
 
     #[test]
     fn set_active_view_same_returns_none() {
         let state = UIState::new();
-        state.set_active_view("board-view");
-        let change = state.set_active_view("board-view");
+        state.set_active_view("main", "board-view");
+        let change = state.set_active_view("main", "board-view");
         assert!(change.is_none());
+    }
+
+    #[test]
+    fn set_active_view_per_window() {
+        let state = UIState::new();
+        state.set_active_view("main", "board-view");
+        state.set_active_view("board-2", "grid-view");
+        assert_eq!(state.active_view_id("main"), "board-view");
+        assert_eq!(state.active_view_id("board-2"), "grid-view");
+    }
+
+    #[test]
+    fn active_view_id_empty_for_unknown_window() {
+        let state = UIState::new();
+        assert_eq!(state.active_view_id("unknown-window"), "");
     }
 
     #[test]
@@ -843,7 +944,7 @@ mod tests {
         let state = UIState::load(&path);
         assert_eq!(state.keymap_mode(), "cua");
         assert!(state.inspector_stack("main").is_empty());
-        assert_eq!(state.active_view_id(), "");
+        assert_eq!(state.active_view_id("main"), "");
     }
 
     #[test]
@@ -863,14 +964,14 @@ mod tests {
             let state = UIState::load(&path);
             state.set_keymap_mode("vim");
             state.inspect("main", "task:01XYZ");
-            state.set_active_view("board-view");
+            state.set_active_view("main", "board-view");
             state.save().unwrap();
         }
         // Load again and verify
         let state2 = UIState::load(&path);
         assert_eq!(state2.keymap_mode(), "vim");
         assert_eq!(state2.inspector_stack("main"), vec!["task:01XYZ"]);
-        assert_eq!(state2.active_view_id(), "board-view");
+        assert_eq!(state2.active_view_id("main"), "board-view");
         let _ = fs::remove_file(&path);
     }
 
@@ -929,7 +1030,7 @@ mod tests {
         }
 
         // set_active_view returns ActiveView
-        let change = state.set_active_view("my-view").unwrap();
+        let change = state.set_active_view("main", "my-view").unwrap();
         match change {
             UIStateChange::ActiveView(id) => assert_eq!(id, "my-view"),
             other => panic!("Expected ActiveView, got {:?}", other),

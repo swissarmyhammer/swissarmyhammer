@@ -1,22 +1,46 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useState,
+  type ReactNode,
+} from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
+/** Shape of per-window state inside UIState. */
+export interface WindowStateSnapshot {
+  inspector_stack: string[];
+  /** The active view ID for this window. */
+  active_view_id: string;
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
+  maximized?: boolean;
+}
+
 /** Shape of the UIState from the Rust backend. */
 export interface UIStateSnapshot {
-  inspector_stack: string[];
-  active_view_id: string;
   palette_open: boolean;
   keymap_mode: string;
   scope_chain: string[];
+  open_boards: string[];
+  active_board_path?: string;
+  window_boards: Record<string, string>;
+  /** Per-window state map: window label → WindowStateSnapshot. */
+  windows: Record<string, WindowStateSnapshot>;
+  recent_boards: Array<{ path: string; name: string; last_opened: string }>;
 }
 
 const DEFAULT_STATE: UIStateSnapshot = {
-  inspector_stack: [],
-  active_view_id: "",
   palette_open: false,
   keymap_mode: "cua",
   scope_chain: [],
+  open_boards: [],
+  window_boards: {},
+  windows: {},
+  recent_boards: [],
 };
 
 interface UIStateContextValue {

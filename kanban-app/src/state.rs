@@ -239,26 +239,6 @@ impl AppConfig {
     }
 }
 
-/// Active drag session for cross-window drag coordination.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct DragSession {
-    /// Unique session ID (ULID)
-    pub(crate) session_id: String,
-    /// Board path the task originates from
-    pub(crate) source_board_path: String,
-    /// Tauri window label of the source window
-    pub(crate) source_window_label: String,
-    /// The task ID being dragged
-    pub(crate) task_id: String,
-    /// Serialized task fields for ghost preview in target windows
-    pub(crate) task_fields: serde_json::Value,
-    /// Whether Alt/Option was held (copy mode)
-    pub(crate) copy_mode: bool,
-    /// When the session was started (epoch millis for serialization)
-    #[serde(default)]
-    pub(crate) started_at_ms: u64,
-}
-
 /// Maximum age of a drag session before it is considered stale (30 seconds).
 pub(crate) const DRAG_SESSION_MAX_AGE_MS: u64 = 30_000;
 
@@ -267,19 +247,13 @@ pub(crate) struct AppState {
     pub(crate) boards: RwLock<HashMap<PathBuf, Arc<BoardHandle>>>,
     pub(crate) active_board: RwLock<Option<PathBuf>>,
     pub(crate) config: RwLock<AppConfig>,
-    /// IDs of items in the most recently shown generic context menu.
-    /// Used by `handle_menu_event` to distinguish context menu selections
-    /// from regular menu commands.
-    pub(crate) context_menu_ids: RwLock<HashSet<String>>,
-    /// Shared UI state (inspector stack, palette, keymap, etc.).
+    /// Shared UI state (inspector stack, palette, keymap, drag session, etc.).
     pub(crate) ui_state: Arc<UIState>,
     /// YAML-loaded command definitions. Behind RwLock because user overrides
     /// are merged when switching boards.
     pub(crate) commands_registry: RwLock<CommandsRegistry>,
     /// Trait object map from `register_commands()`.
     pub(crate) command_impls: HashMap<String, Arc<dyn Command>>,
-    /// Active cross-window drag session, if any.
-    pub(crate) drag_session: RwLock<Option<DragSession>>,
     /// Set to `true` when the app is shutting down (RunEvent::ExitRequested).
     /// The Destroyed handler uses this to distinguish mid-session close from app quit.
     pub(crate) shutting_down: AtomicBool,
@@ -315,11 +289,9 @@ impl AppState {
             boards: RwLock::new(HashMap::new()),
             active_board: RwLock::new(None),
             config: RwLock::new(config),
-            context_menu_ids: RwLock::new(HashSet::new()),
             ui_state,
             commands_registry: RwLock::new(CommandsRegistry::from_yaml_sources(&source_refs)),
             command_impls: swissarmyhammer_kanban::commands::register_commands(),
-            drag_session: RwLock::new(None),
             shutting_down: AtomicBool::new(false),
         }
     }
@@ -1081,8 +1053,8 @@ mod tests {
     // Drag session tests
     // =========================================================================
 
-    fn make_drag_session(task_id: &str, board_path: &str) -> DragSession {
-        DragSession {
+    fn make_drag_session(task_id: &str, board_path: &str) -> swissarmyhammer_commands::DragSession {
+        swissarmyhammer_commands::DragSession {
             session_id: ulid::Ulid::new().to_string(),
             source_board_path: board_path.to_string(),
             source_window_label: "main".to_string(),
@@ -1096,50 +1068,52 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn test_drag_session_start_and_cancel() {
+    #[test]
+    fn test_drag_session_start_and_cancel() {
         let state = AppState::new_for_test();
-        assert!(state.drag_session.read().await.is_none());
+        assert!(state.ui_state.drag_session().is_none());
 
         // Start session
         let session = make_drag_session("task-1", "/board/a");
-        *state.drag_session.write().await = Some(session);
-        assert!(state.drag_session.read().await.is_some());
+        state.ui_state.start_drag(session);
+        assert!(state.ui_state.drag_session().is_some());
 
         // Cancel session
-        let taken = state.drag_session.write().await.take();
+        let taken = state.ui_state.take_drag();
         assert!(taken.is_some());
         assert_eq!(taken.unwrap().task_id, "task-1");
-        assert!(state.drag_session.read().await.is_none());
+        assert!(state.ui_state.drag_session().is_none());
     }
 
-    #[tokio::test]
-    async fn test_drag_session_double_take_returns_none() {
+    #[test]
+    fn test_drag_session_double_take_returns_none() {
         let state = AppState::new_for_test();
-        *state.drag_session.write().await = Some(make_drag_session("task-1", "/board/a"));
+        state
+            .ui_state
+            .start_drag(make_drag_session("task-1", "/board/a"));
 
         // First take succeeds
-        let first = state.drag_session.write().await.take();
+        let first = state.ui_state.take_drag();
         assert!(first.is_some());
 
         // Second take returns None (session already consumed)
-        let second = state.drag_session.write().await.take();
+        let second = state.ui_state.take_drag();
         assert!(second.is_none());
     }
 
-    #[tokio::test]
-    async fn test_drag_session_replaced_by_new_start() {
+    #[test]
+    fn test_drag_session_replaced_by_new_start() {
         let state = AppState::new_for_test();
         let session1 = make_drag_session("task-1", "/board/a");
         let id1 = session1.session_id.clone();
-        *state.drag_session.write().await = Some(session1);
+        state.ui_state.start_drag(session1);
 
         // Replace with new session
         let session2 = make_drag_session("task-2", "/board/b");
         let id2 = session2.session_id.clone();
-        *state.drag_session.write().await = Some(session2);
+        state.ui_state.start_drag(session2);
 
-        let current = state.drag_session.read().await;
+        let current = state.ui_state.drag_session();
         assert_eq!(current.as_ref().unwrap().session_id, id2);
         assert_ne!(id1, id2);
         assert_eq!(current.as_ref().unwrap().task_id, "task-2");

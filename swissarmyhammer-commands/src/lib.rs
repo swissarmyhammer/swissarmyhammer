@@ -22,4 +22,4 @@ pub use context::{parse_moniker, CommandContext};
 pub use error::{CommandError, Result};
 pub use registry::{builtin_yaml_sources, load_yaml_dir, CommandsRegistry};
 pub use types::{CommandDef, CommandInvocation, KeysDef, ParamDef, ParamSource};
-pub use ui_state::{RecentBoard, UIState, UIStateChange, WindowState};
+pub use ui_state::{DragSession, RecentBoard, UIState, UIStateChange, WindowState};

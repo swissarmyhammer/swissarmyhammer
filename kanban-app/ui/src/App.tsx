@@ -636,6 +636,7 @@ function ViewCommandScope({ children }: { children: React.ReactNode }) {
         invoke("dispatch_command", {
           cmd: "ui.view.set",
           args: { view_id: view.id },
+          windowLabel: WINDOW_LABEL,
         }).catch(console.error);
       },
     }));

@@ -4,7 +4,16 @@ import { render, screen, fireEvent, act } from "@testing-library/react";
 // Mock Tauri APIs before importing components that use them
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn((cmd: string) => {
-    if (cmd === "get_ui_state") return Promise.resolve({ inspector_stack: [], active_view_id: "", palette_open: false, keymap_mode: "cua", scope_chain: [] });
+    if (cmd === "get_ui_state")
+      return Promise.resolve({
+        palette_open: false,
+        keymap_mode: "cua",
+        scope_chain: [],
+        open_boards: [],
+        window_boards: {},
+        windows: {},
+        recent_boards: [],
+      });
     return Promise.resolve(null);
   }),
 }));
@@ -17,7 +26,10 @@ import { FocusScope } from "./focus-scope";
 import { UIStateProvider } from "@/lib/ui-state-context";
 import { AppModeProvider } from "@/lib/app-mode-context";
 import { UndoStackProvider } from "@/lib/undo-context";
-import { EntityFocusProvider, useEntityFocus } from "@/lib/entity-focus-context";
+import {
+  EntityFocusProvider,
+  useEntityFocus,
+} from "@/lib/entity-focus-context";
 import { useAvailableCommands } from "@/lib/command-scope";
 import { InspectProvider } from "@/lib/inspect-context";
 
@@ -46,9 +58,7 @@ function renderShell(children?: React.ReactNode) {
         <AppModeProvider>
           <UndoStackProvider>
             <InspectProvider onInspect={() => {}} onDismiss={() => false}>
-              <AppShell>
-                {children ?? <CommandInspector />}
-              </AppShell>
+              <AppShell>{children ?? <CommandInspector />}</AppShell>
             </InspectProvider>
           </UndoStackProvider>
         </AppModeProvider>

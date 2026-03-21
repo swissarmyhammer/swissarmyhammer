@@ -332,7 +332,8 @@ async fn inspect_updates_ui_state() {
         .await
         .expect("ui.inspect should succeed");
 
-    assert_eq!(engine.ui_state.inspector_stack(), vec!["task:01XYZ"]);
+    // dispatch_simple doesn't set window_label, so falls back to "main"
+    assert_eq!(engine.ui_state.inspector_stack("main"), vec!["task:01XYZ"]);
 }
 
 #[tokio::test]
@@ -352,7 +353,7 @@ async fn inspect_secondary_pushes() {
         .unwrap();
 
     assert_eq!(
-        engine.ui_state.inspector_stack(),
+        engine.ui_state.inspector_stack("main"),
         vec!["task:01XYZ", "tag:01ABC"]
     );
 }
@@ -377,7 +378,7 @@ async fn inspector_close_pops() {
         .await
         .expect("ui.inspector.close should succeed");
 
-    assert_eq!(engine.ui_state.inspector_stack(), vec!["task:01XYZ"]);
+    assert_eq!(engine.ui_state.inspector_stack("main"), vec!["task:01XYZ"]);
 }
 
 #[tokio::test]
@@ -400,7 +401,7 @@ async fn inspector_close_all() {
         .await
         .expect("ui.inspector.close_all should succeed");
 
-    assert!(engine.ui_state.inspector_stack().is_empty());
+    assert!(engine.ui_state.inspector_stack("main").is_empty());
 }
 
 #[tokio::test]

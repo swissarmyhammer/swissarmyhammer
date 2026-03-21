@@ -200,10 +200,11 @@ pub fn handle_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
 
     // Generic context menu items — emit as context-menu-command so the
     // frontend can distinguish them from menu bar commands.
+    // UIState uses std::sync::RwLock (not tokio), so read access works in
+    // sync contexts like this menu event handler.
     {
         let state = app.state::<AppState>();
-        let ids = state.context_menu_ids.blocking_read();
-        if ids.contains(&id) {
+        if state.ui_state.is_context_menu_id(&id) {
             let _ = app.emit("context-menu-command", &id);
             return;
         }
