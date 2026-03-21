@@ -7,6 +7,27 @@ use serde::{Deserialize, Serialize};
 /// Maximum number of entries to keep in the MRU recent boards list.
 const MAX_RECENT_BOARDS: usize = 20;
 
+/// Persisted per-window state: inspector stack and window geometry.
+///
+/// Note: board_path is NOT stored here — it lives in `window_boards` (a separate map)
+/// to keep board assignment and window geometry lifecycles separate.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct WindowState {
+    /// Per-window inspector stack (list of `type:id` monikers).
+    pub inspector_stack: Vec<String>,
+    /// Window x position (physical pixels).
+    pub x: Option<i32>,
+    /// Window y position (physical pixels).
+    pub y: Option<i32>,
+    /// Window width (physical pixels).
+    pub width: Option<u32>,
+    /// Window height (physical pixels).
+    pub height: Option<u32>,
+    /// Whether the window is maximized.
+    pub maximized: bool,
+}
+
 /// A recently opened board entry for MRU persistence.
 ///
 /// Uses an ISO 8601 string for `last_opened` to avoid adding a chrono
@@ -61,8 +82,6 @@ pub struct UIState {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(default)]
 struct UIStateInner {
-    /// Stack of open inspector monikers (e.g. `["task:01XYZ", "tag:01TAG"]`).
-    inspector_stack: Vec<String>,
     /// ID of the currently active view.
     active_view_id: String,
     /// Whether the command palette is open. Transient — not persisted.
@@ -79,6 +98,9 @@ struct UIStateInner {
     active_board_path: Option<String>,
     /// Per-window board assignments (window label → board path).
     window_boards: HashMap<String, String>,
+    /// Per-window state: inspector stack and geometry.
+    #[serde(default)]
+    windows: HashMap<String, WindowState>,
     /// Most-recently-used board list, most recent first.
     #[serde(default)]
     recent_boards: Vec<RecentBoard>,
@@ -88,7 +110,6 @@ impl Default for UIStateInner {
     /// Returns the default UI state values.
     fn default() -> Self {
         Self {
-            inspector_stack: Vec::new(),
             active_view_id: String::new(),
             palette_open: false,
             keymap_mode: "cua".to_string(),
@@ -96,6 +117,7 @@ impl Default for UIStateInner {
             open_boards: Vec::new(),
             active_board_path: None,
             window_boards: HashMap::new(),
+            windows: HashMap::new(),
             recent_boards: Vec::new(),
         }
     }
@@ -181,59 +203,74 @@ impl UIState {
         }
     }
 
-    /// Open the inspector for the given moniker.
+    /// Open the inspector for the given moniker in the specified window.
     ///
     /// True stack: always pushes. If the moniker is already on top, no-op.
     /// If the moniker exists deeper in the stack, removes it and pushes to top.
     /// Auto-saves if a config path is configured.
-    pub fn inspect(&self, moniker: &str) -> UIStateChange {
+    pub fn inspect(&self, window_label: &str, moniker: &str) -> UIStateChange {
         let change = {
             let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+            let stack = &mut inner
+                .windows
+                .entry(window_label.to_string())
+                .or_default()
+                .inspector_stack;
 
             // Already on top — no-op
-            if inner.inspector_stack.last().map(|s| s.as_str()) == Some(moniker) {
-                return UIStateChange::InspectorStack(inner.inspector_stack.clone());
+            if stack.last().map(|s| s.as_str()) == Some(moniker) {
+                return UIStateChange::InspectorStack(stack.clone());
             }
 
             // Remove if already in stack (moves to top)
-            inner.inspector_stack.retain(|m| m != moniker);
-            inner.inspector_stack.push(moniker.to_string());
+            stack.retain(|m| m != moniker);
+            stack.push(moniker.to_string());
 
-            UIStateChange::InspectorStack(inner.inspector_stack.clone())
+            UIStateChange::InspectorStack(stack.clone())
         };
         self.try_save();
         change
     }
 
-    /// Close the topmost inspector entry.
+    /// Close the topmost inspector entry for the given window.
     ///
     /// Returns `None` if the stack was already empty.
     /// Auto-saves if a config path is configured.
-    pub fn inspector_close(&self) -> Option<UIStateChange> {
+    pub fn inspector_close(&self, window_label: &str) -> Option<UIStateChange> {
         let change = {
             let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
-            if inner.inspector_stack.is_empty() {
+            let stack = &mut inner
+                .windows
+                .entry(window_label.to_string())
+                .or_default()
+                .inspector_stack;
+            if stack.is_empty() {
                 return None;
             }
-            inner.inspector_stack.pop();
-            Some(UIStateChange::InspectorStack(inner.inspector_stack.clone()))
+            stack.pop();
+            Some(UIStateChange::InspectorStack(stack.clone()))
         };
         self.try_save();
         change
     }
 
-    /// Close all inspector entries.
+    /// Close all inspector entries for the given window.
     ///
     /// Returns `None` if the stack was already empty.
     /// Auto-saves if a config path is configured.
-    pub fn inspector_close_all(&self) -> Option<UIStateChange> {
+    pub fn inspector_close_all(&self, window_label: &str) -> Option<UIStateChange> {
         let change = {
             let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
-            if inner.inspector_stack.is_empty() {
+            let stack = &mut inner
+                .windows
+                .entry(window_label.to_string())
+                .or_default()
+                .inspector_stack;
+            if stack.is_empty() {
                 return None;
             }
-            inner.inspector_stack.clear();
-            Some(UIStateChange::InspectorStack(inner.inspector_stack.clone()))
+            stack.clear();
+            Some(UIStateChange::InspectorStack(stack.clone()))
         };
         self.try_save();
         change
@@ -383,6 +420,15 @@ impl UIState {
             .cloned()
     }
 
+    /// Get all window-to-board assignments.
+    pub fn all_window_boards(&self) -> HashMap<String, String> {
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .window_boards
+            .clone()
+    }
+
     /// Add or update a board in the MRU list. Most recent first.
     ///
     /// Removes any existing entry for `path`, inserts a new entry at the
@@ -429,6 +475,31 @@ impl UIState {
             .clone()
     }
 
+    /// Clear all per-window state (geometry and inspector stacks).
+    ///
+    /// Used by reset_windows to wipe geometry before restarting.
+    /// Auto-saves if a config path is configured.
+    pub fn clear_windows(&self) {
+        {
+            let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+            inner.windows.clear();
+        }
+        self.try_save();
+    }
+
+    /// Remove a window's state and board assignment.
+    ///
+    /// Called when a secondary window is closed mid-session so it doesn't
+    /// resurrect on restart. Auto-saves if a config path is configured.
+    pub fn remove_window(&self, label: &str) {
+        {
+            let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+            inner.windows.remove(label);
+            inner.window_boards.remove(label);
+        }
+        self.try_save();
+    }
+
     /// Restore the open boards list and active board path from persisted data.
     ///
     /// Used at startup to populate UIState from legacy AppConfig data when
@@ -444,23 +515,72 @@ impl UIState {
         // No try_save here — this is called at startup with already-persisted data.
     }
 
-    /// Set the inspector stack directly (used for startup restoration from config).
+    /// Set the inspector stack for a specific window (used for startup restoration).
     ///
     /// Auto-saves if a config path is configured.
-    pub fn set_inspector_stack(&self, stack: Vec<String>) {
+    pub fn set_inspector_stack(&self, window_label: &str, stack: Vec<String>) {
         {
             let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
-            inner.inspector_stack = stack;
+            inner
+                .windows
+                .entry(window_label.to_string())
+                .or_default()
+                .inspector_stack = stack;
         }
         self.try_save();
     }
 
-    /// Get a clone of the current inspector stack.
-    pub fn inspector_stack(&self) -> Vec<String> {
+    /// Get a clone of the current inspector stack for the given window.
+    pub fn inspector_stack(&self, window_label: &str) -> Vec<String> {
         self.inner
             .read()
             .unwrap_or_else(|e| e.into_inner())
-            .inspector_stack
+            .windows
+            .get(window_label)
+            .map(|ws| ws.inspector_stack.clone())
+            .unwrap_or_default()
+    }
+
+    /// Save window geometry for a specific window.
+    ///
+    /// Auto-saves if a config path is configured.
+    pub fn save_window_geometry(
+        &self,
+        label: &str,
+        x: i32,
+        y: i32,
+        width: u32,
+        height: u32,
+        maximized: bool,
+    ) {
+        {
+            let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+            let ws = inner.windows.entry(label.to_string()).or_default();
+            ws.x = Some(x);
+            ws.y = Some(y);
+            ws.width = Some(width);
+            ws.height = Some(height);
+            ws.maximized = maximized;
+        }
+        self.try_save();
+    }
+
+    /// Get the window state for a specific window label.
+    pub fn get_window_state(&self, label: &str) -> Option<WindowState> {
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .windows
+            .get(label)
+            .cloned()
+    }
+
+    /// Get all window states (for restore_windows).
+    pub fn all_windows(&self) -> HashMap<String, WindowState> {
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .windows
             .clone()
     }
 
@@ -508,7 +628,6 @@ impl UIState {
     pub fn to_json(&self) -> serde_json::Value {
         let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
         serde_json::json!({
-            "inspector_stack": inner.inspector_stack,
             "active_view_id": inner.active_view_id,
             "palette_open": inner.palette_open,
             "keymap_mode": inner.keymap_mode,
@@ -516,6 +635,7 @@ impl UIState {
             "open_boards": inner.open_boards,
             "active_board_path": inner.active_board_path,
             "window_boards": inner.window_boards,
+            "windows": inner.windows,
             "recent_boards": inner.recent_boards,
         })
     }
@@ -525,11 +645,11 @@ impl std::fmt::Debug for UIState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
         f.debug_struct("UIState")
-            .field("inspector_stack", &inner.inspector_stack)
             .field("active_view_id", &inner.active_view_id)
             .field("palette_open", &inner.palette_open)
             .field("keymap_mode", &inner.keymap_mode)
             .field("scope_chain", &inner.scope_chain)
+            .field("windows", &inner.windows)
             .field("config_path", &self.config_path)
             .finish()
     }
@@ -550,26 +670,39 @@ mod tests {
     #[test]
     fn inspect_pushes_onto_stack() {
         let state = UIState::new();
-        state.inspect("task:01XYZ");
-        assert_eq!(state.inspector_stack(), vec!["task:01XYZ"]);
+        state.inspect("main", "task:01XYZ");
+        assert_eq!(state.inspector_stack("main"), vec!["task:01XYZ"]);
+    }
+
+    #[test]
+    fn inspect_pushes_per_window() {
+        let state = UIState::new();
+        state.inspect("main", "task:01XYZ");
+        state.inspect("board-2", "task:01ABC");
+        // Each window has its own stack
+        assert_eq!(state.inspector_stack("main"), vec!["task:01XYZ"]);
+        assert_eq!(state.inspector_stack("board-2"), vec!["task:01ABC"]);
     }
 
     #[test]
     fn inspect_stacks_any_types() {
         let state = UIState::new();
-        state.inspect("task:01XYZ");
-        state.inspect("tag:01TAG");
-        assert_eq!(state.inspector_stack(), vec!["task:01XYZ", "tag:01TAG"]);
+        state.inspect("main", "task:01XYZ");
+        state.inspect("main", "tag:01TAG");
+        assert_eq!(
+            state.inspector_stack("main"),
+            vec!["task:01XYZ", "tag:01TAG"]
+        );
     }
 
     #[test]
     fn inspect_stacks_same_type() {
         let state = UIState::new();
-        state.inspect("task:01XYZ");
-        state.inspect("tag:01TAG");
-        state.inspect("task:01ABC");
+        state.inspect("main", "task:01XYZ");
+        state.inspect("main", "tag:01TAG");
+        state.inspect("main", "task:01ABC");
         assert_eq!(
-            state.inspector_stack(),
+            state.inspector_stack("main"),
             vec!["task:01XYZ", "tag:01TAG", "task:01ABC"]
         );
     }
@@ -577,50 +710,50 @@ mod tests {
     #[test]
     fn inspect_same_moniker_on_top_is_noop() {
         let state = UIState::new();
-        state.inspect("task:01XYZ");
-        state.inspect("task:01XYZ");
-        assert_eq!(state.inspector_stack(), vec!["task:01XYZ"]);
+        state.inspect("main", "task:01XYZ");
+        state.inspect("main", "task:01XYZ");
+        assert_eq!(state.inspector_stack("main"), vec!["task:01XYZ"]);
     }
 
     #[test]
     fn inspect_existing_moniker_moves_to_top() {
         let state = UIState::new();
-        state.inspect("task:01XYZ");
-        state.inspect("tag:01A");
-        state.inspect("task:01XYZ");
-        assert_eq!(state.inspector_stack(), vec!["tag:01A", "task:01XYZ"]);
+        state.inspect("main", "task:01XYZ");
+        state.inspect("main", "tag:01A");
+        state.inspect("main", "task:01XYZ");
+        assert_eq!(state.inspector_stack("main"), vec!["tag:01A", "task:01XYZ"]);
     }
 
     #[test]
     fn inspector_close_pops() {
         let state = UIState::new();
-        state.inspect("task:01XYZ");
-        state.inspect("tag:01TAG");
-        let change = state.inspector_close();
+        state.inspect("main", "task:01XYZ");
+        state.inspect("main", "tag:01TAG");
+        let change = state.inspector_close("main");
         assert!(change.is_some());
-        assert_eq!(state.inspector_stack(), vec!["task:01XYZ"]);
+        assert_eq!(state.inspector_stack("main"), vec!["task:01XYZ"]);
     }
 
     #[test]
     fn inspector_close_empty_returns_none() {
         let state = UIState::new();
-        assert!(state.inspector_close().is_none());
+        assert!(state.inspector_close("main").is_none());
     }
 
     #[test]
     fn inspector_close_all_clears() {
         let state = UIState::new();
-        state.inspect("task:01XYZ");
-        state.inspect("tag:01TAG");
-        let change = state.inspector_close_all();
+        state.inspect("main", "task:01XYZ");
+        state.inspect("main", "tag:01TAG");
+        let change = state.inspector_close_all("main");
         assert!(change.is_some());
-        assert!(state.inspector_stack().is_empty());
+        assert!(state.inspector_stack("main").is_empty());
     }
 
     #[test]
     fn inspector_close_all_empty_returns_none() {
         let state = UIState::new();
-        assert!(state.inspector_close_all().is_none());
+        assert!(state.inspector_close_all("main").is_none());
     }
 
     #[test]
@@ -676,8 +809,18 @@ mod tests {
     #[test]
     fn set_inspector_stack_restores() {
         let state = UIState::new();
-        state.set_inspector_stack(vec!["task:01XYZ".into(), "tag:01TAG".into()]);
-        assert_eq!(state.inspector_stack(), vec!["task:01XYZ", "tag:01TAG"]);
+        state.set_inspector_stack("main", vec!["task:01XYZ".into(), "tag:01TAG".into()]);
+        assert_eq!(
+            state.inspector_stack("main"),
+            vec!["task:01XYZ", "tag:01TAG"]
+        );
+    }
+
+    #[test]
+    fn inspector_stack_empty_for_unknown_window() {
+        let state = UIState::new();
+        // A window with no entries returns an empty stack
+        assert!(state.inspector_stack("unknown-window").is_empty());
     }
 
     // --- Persistence tests ---
@@ -699,7 +842,7 @@ mod tests {
         let _ = fs::remove_file(&path);
         let state = UIState::load(&path);
         assert_eq!(state.keymap_mode(), "cua");
-        assert!(state.inspector_stack().is_empty());
+        assert!(state.inspector_stack("main").is_empty());
         assert_eq!(state.active_view_id(), "");
     }
 
@@ -709,7 +852,7 @@ mod tests {
         fs::write(&path, b":::not valid yaml:::").unwrap();
         let state = UIState::load(&path);
         assert_eq!(state.keymap_mode(), "cua");
-        assert!(state.inspector_stack().is_empty());
+        assert!(state.inspector_stack("main").is_empty());
         let _ = fs::remove_file(&path);
     }
 
@@ -719,14 +862,14 @@ mod tests {
         {
             let state = UIState::load(&path);
             state.set_keymap_mode("vim");
-            state.inspect("task:01XYZ");
+            state.inspect("main", "task:01XYZ");
             state.set_active_view("board-view");
             state.save().unwrap();
         }
         // Load again and verify
         let state2 = UIState::load(&path);
         assert_eq!(state2.keymap_mode(), "vim");
-        assert_eq!(state2.inspector_stack(), vec!["task:01XYZ"]);
+        assert_eq!(state2.inspector_stack("main"), vec!["task:01XYZ"]);
         assert_eq!(state2.active_view_id(), "board-view");
         let _ = fs::remove_file(&path);
     }
@@ -779,7 +922,7 @@ mod tests {
         let state = UIState::new();
 
         // inspect returns InspectorStack
-        let change = state.inspect("task:01XYZ");
+        let change = state.inspect("main", "task:01XYZ");
         match change {
             UIStateChange::InspectorStack(stack) => assert_eq!(stack, vec!["task:01XYZ"]),
             other => panic!("Expected InspectorStack, got {:?}", other),

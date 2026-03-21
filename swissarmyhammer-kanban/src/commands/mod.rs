@@ -338,7 +338,8 @@ mod tests {
 
         let result = cmd.execute(&ctx).await;
         assert!(result.is_ok());
-        assert_eq!(ui.inspector_stack(), vec!["task:01XYZ"]);
+        // ctx has no window_label set, so falls back to "main"
+        assert_eq!(ui.inspector_stack("main"), vec!["task:01XYZ"]);
     }
 
     #[tokio::test]
@@ -346,13 +347,13 @@ mod tests {
         let cmds = register_commands();
         let cmd = cmds.get("ui.inspector.close").unwrap();
         let ui = Arc::new(UIState::new());
-        ui.inspect("task:01XYZ");
-        ui.inspect("tag:01TAG");
+        ui.inspect("main", "task:01XYZ");
+        ui.inspect("main", "tag:01TAG");
 
         let ctx = ctx_with(&[], None, Some(Arc::clone(&ui)));
         let result = cmd.execute(&ctx).await;
         assert!(result.is_ok());
-        assert_eq!(ui.inspector_stack(), vec!["task:01XYZ"]);
+        assert_eq!(ui.inspector_stack("main"), vec!["task:01XYZ"]);
     }
 
     #[tokio::test]
@@ -360,13 +361,13 @@ mod tests {
         let cmds = register_commands();
         let cmd = cmds.get("ui.inspector.close_all").unwrap();
         let ui = Arc::new(UIState::new());
-        ui.inspect("task:01XYZ");
-        ui.inspect("tag:01TAG");
+        ui.inspect("main", "task:01XYZ");
+        ui.inspect("main", "tag:01TAG");
 
         let ctx = ctx_with(&[], None, Some(Arc::clone(&ui)));
         let result = cmd.execute(&ctx).await;
         assert!(result.is_ok());
-        assert!(ui.inspector_stack().is_empty());
+        assert!(ui.inspector_stack("main").is_empty());
     }
 
     #[tokio::test]
@@ -484,14 +485,15 @@ mod tests {
         assert!(cmd.available(&ctx), "inspect should be available");
         let result = cmd.execute(&ctx).await;
         assert!(result.is_ok(), "inspect should succeed");
-        assert_eq!(ui.inspector_stack(), vec!["task:01ABC"]);
+        // ctx has no window_label set, so falls back to "main"
+        assert_eq!(ui.inspector_stack("main"), vec!["task:01ABC"]);
 
         // Dispatch ui.inspector.close
         let cmd = cmds.get("ui.inspector.close").unwrap();
         let ctx = ctx_with(&[], None, Some(Arc::clone(&ui)));
         assert!(cmd.available(&ctx));
         cmd.execute(&ctx).await.unwrap();
-        assert!(ui.inspector_stack().is_empty());
+        assert!(ui.inspector_stack("main").is_empty());
 
         // Dispatch settings.keymap.vim
         let cmd = cmds.get("settings.keymap.vim").unwrap();

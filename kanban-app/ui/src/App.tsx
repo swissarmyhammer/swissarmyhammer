@@ -260,22 +260,33 @@ function App() {
             setActiveBoardPath(ctx.board_path);
             activeBoardPathRef.current = ctx.board_path;
           }
-          // Restore inspector stack
-          if (ctx.inspector_stack?.length > 0) {
-            const validated: PanelEntry[] = [];
-            for (const moniker of ctx.inspector_stack) {
-              const sep = moniker.indexOf(":");
-              if (sep < 0) continue;
-              validated.push({
-                entityType: moniker.slice(0, sep),
-                entityId: moniker.slice(sep + 1),
-              });
-            }
-            if (validated.length > 0) setPanelStack(validated);
-          }
         } catch {
           // No saved state — will fall through to refresh below
         }
+      }
+
+      // Restore inspector stack for ALL windows (main + secondary).
+      // Secondary windows skip the block above (board comes from URL),
+      // but they still need their inspector stack restored.
+      try {
+        const ctx = await invoke<{
+          inspector_stack: string[];
+        }>("get_ui_context", { windowLabel: WINDOW_LABEL });
+        if (cancelled) return;
+        if (ctx.inspector_stack?.length > 0) {
+          const validated: PanelEntry[] = [];
+          for (const moniker of ctx.inspector_stack) {
+            const sep = moniker.indexOf(":");
+            if (sep < 0) continue;
+            validated.push({
+              entityType: moniker.slice(0, sep),
+              entityId: moniker.slice(sep + 1),
+            });
+          }
+          if (validated.length > 0) setPanelStack(validated);
+        }
+      } catch {
+        // No saved inspector state
       }
       if (cancelled) return;
       await refresh();

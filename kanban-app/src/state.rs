@@ -197,58 +197,16 @@ impl BoardHandle {
 }
 
 /// Persisted app configuration.
+///
+/// Minimal: only stores which board paths were open.
+/// Window geometry, inspector stacks, and per-window board assignments
+/// are stored in UIState (ui-state.yaml).
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub(crate) struct AppConfig {
     /// Paths of boards that were open when the app last ran.
     /// Restored on startup so multi-board sessions survive reloads.
     #[serde(default)]
     pub(crate) open_boards: Vec<PathBuf>,
-    /// Per-window state: board path, active view, inspector stack, geometry.
-    /// Keyed by window label ("main" for the primary window).
-    #[serde(default, alias = "window_boards")]
-    pub(crate) windows: HashMap<String, WindowState>,
-}
-
-/// Persisted state for a window (main or secondary).
-///
-/// Note: active_view_id is no longer stored here. It is persisted in UIState
-/// via the `ui.view.set` command and restored from there on startup.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct WindowState {
-    pub(crate) board_path: PathBuf,
-    /// Legacy field — kept for deserialization compatibility with older config
-    /// files. Ignored at runtime; UIState is the source of truth for active view.
-    #[serde(default, skip_serializing)]
-    #[allow(dead_code)]
-    pub(crate) active_view_id: Option<String>,
-    #[serde(default)]
-    pub(crate) inspector_stack: Vec<String>,
-    #[serde(default)]
-    pub(crate) x: Option<i32>,
-    #[serde(default)]
-    pub(crate) y: Option<i32>,
-    #[serde(default)]
-    pub(crate) width: Option<u32>,
-    #[serde(default)]
-    pub(crate) height: Option<u32>,
-    #[serde(default)]
-    pub(crate) maximized: bool,
-}
-
-impl WindowState {
-    /// Create a new WindowState with the given board path and default values.
-    pub(crate) fn new(board_path: PathBuf) -> Self {
-        Self {
-            board_path,
-            active_view_id: None,
-            inspector_stack: Vec::new(),
-            x: None,
-            y: None,
-            width: None,
-            height: None,
-            maximized: false,
-        }
-    }
 }
 
 impl AppConfig {
@@ -352,13 +310,6 @@ impl AppState {
         let source_refs: Vec<(&str, &str)> = sources.iter().map(|(n, c)| (*n, *c)).collect();
         let config = AppConfig::load();
         let ui_state = Arc::new(UIState::load(ui_state_path));
-
-        // Restore inspector stack from persisted config
-        if let Some(ws) = config.windows.get("main") {
-            if !ws.inspector_stack.is_empty() {
-                ui_state.set_inspector_stack(ws.inspector_stack.clone());
-            }
-        }
 
         Self {
             boards: RwLock::new(HashMap::new()),
@@ -482,17 +433,17 @@ impl AppState {
             }
         }
 
-        // Also open any boards referenced in windows that aren't already open.
+        // Also open any boards referenced in UIState window_boards that aren't already open.
         // This handles the case where a secondary window shows a different board
         // than the ones in open_boards.
         {
-            let config = self.config.read().await;
-            let wb_paths: Vec<PathBuf> = config
-                .windows
-                .values()
-                .map(|e| e.board_path.clone())
+            // Collect all board paths from UIState window_boards
+            let wb_paths: Vec<PathBuf> = self
+                .ui_state
+                .all_window_boards()
+                .into_values()
+                .map(PathBuf::from)
                 .collect();
-            drop(config);
 
             let boards = self.boards.read().await;
             let already_open: HashSet<PathBuf> = boards.keys().cloned().collect();
@@ -504,7 +455,7 @@ impl AppState {
                     continue;
                 }
                 if path.is_dir() {
-                    tracing::info!(path = %path.display(), "auto_open_board: restoring board from windows");
+                    tracing::info!(path = %path.display(), "auto_open_board: restoring board from UIState window_boards");
                     if let Err(e) = self.open_board(&path, None).await {
                         tracing::warn!(path = %path.display(), error = %e, "auto_open_board: failed to restore windows board");
                     }
@@ -1223,128 +1174,8 @@ mod tests {
     }
 
     // =========================================================================
-    // Window-board mapping tests
+    // Window label tests
     // =========================================================================
-
-    fn make_window_entry(board_path: &str) -> WindowState {
-        WindowState {
-            board_path: PathBuf::from(board_path),
-            active_view_id: None,
-            inspector_stack: Vec::new(),
-            x: None,
-            y: None,
-            width: None,
-            height: None,
-            maximized: false,
-        }
-    }
-
-    fn make_window_entry_with_pos(board_path: &str, x: i32, y: i32, w: u32, h: u32) -> WindowState {
-        WindowState {
-            board_path: PathBuf::from(board_path),
-            active_view_id: None,
-            inspector_stack: Vec::new(),
-            x: Some(x),
-            y: Some(y),
-            width: Some(w),
-            height: Some(h),
-            maximized: false,
-        }
-    }
-
-    #[test]
-    fn test_windows_persists_through_serialization() {
-        let mut config = AppConfig::default();
-        config.windows.insert(
-            "board-01abc".to_string(),
-            make_window_entry("/boards/project-a/.kanban"),
-        );
-        config.windows.insert(
-            "board-02def".to_string(),
-            make_window_entry("/boards/project-b/.kanban"),
-        );
-
-        let yaml = serde_yaml_ng::to_string(&config).unwrap();
-        let restored: AppConfig = serde_yaml_ng::from_str(&yaml).unwrap();
-
-        assert_eq!(restored.windows.len(), 2);
-        assert_eq!(
-            restored.windows.get("board-01abc").unwrap().board_path,
-            PathBuf::from("/boards/project-a/.kanban")
-        );
-        assert_eq!(
-            restored.windows.get("board-02def").unwrap().board_path,
-            PathBuf::from("/boards/project-b/.kanban")
-        );
-    }
-
-    #[test]
-    fn test_windows_persists_geometry() {
-        let mut config = AppConfig::default();
-        config.windows.insert(
-            "board-01abc".to_string(),
-            make_window_entry_with_pos("/boards/a/.kanban", 100, 200, 1200, 800),
-        );
-
-        let yaml = serde_yaml_ng::to_string(&config).unwrap();
-        let restored: AppConfig = serde_yaml_ng::from_str(&yaml).unwrap();
-
-        let entry = restored.windows.get("board-01abc").unwrap();
-        assert_eq!(entry.x, Some(100));
-        assert_eq!(entry.y, Some(200));
-        assert_eq!(entry.width, Some(1200));
-        assert_eq!(entry.height, Some(800));
-    }
-
-    #[test]
-    fn test_windows_geometry_defaults_to_none() {
-        let mut config = AppConfig::default();
-        config.windows.insert(
-            "board-01abc".to_string(),
-            make_window_entry("/boards/a/.kanban"),
-        );
-
-        let yaml = serde_yaml_ng::to_string(&config).unwrap();
-        let restored: AppConfig = serde_yaml_ng::from_str(&yaml).unwrap();
-
-        let entry = restored.windows.get("board-01abc").unwrap();
-        assert_eq!(entry.x, None);
-        assert_eq!(entry.y, None);
-        assert_eq!(entry.width, None);
-        assert_eq!(entry.height, None);
-    }
-
-    #[test]
-    fn test_windows_defaults_to_empty() {
-        // Simulate loading config that predates windows field
-        let yaml = "recent_boards: []\n";
-        let config: AppConfig = serde_yaml_ng::from_str(yaml).unwrap();
-        assert!(config.windows.is_empty());
-    }
-
-    #[test]
-    fn test_windows_remove_by_board_path() {
-        let mut config = AppConfig::default();
-        let board_a = PathBuf::from("/boards/a/.kanban");
-
-        config
-            .windows
-            .insert("win-1".to_string(), make_window_entry("/boards/a/.kanban"));
-        config
-            .windows
-            .insert("win-2".to_string(), make_window_entry("/boards/b/.kanban"));
-        config
-            .windows
-            .insert("win-3".to_string(), make_window_entry("/boards/a/.kanban"));
-
-        // Remove all windows pointing to board A
-        config
-            .windows
-            .retain(|_, entry| entry.board_path != board_a);
-
-        assert_eq!(config.windows.len(), 1);
-        assert!(config.windows.contains_key("win-2"));
-    }
 
     #[test]
     fn test_window_label_is_ulid_based() {
@@ -1353,237 +1184,5 @@ mod tests {
         assert!(label.starts_with("board-"));
         // ULID is 26 chars, so label is "board-" (6) + 26 = 32
         assert_eq!(label.len(), 32);
-    }
-
-    #[test]
-    fn test_windows_save_and_load_roundtrip() {
-        let tmp = TempDir::new().unwrap();
-        let config_path = tmp.path().join("config.yaml");
-
-        // Create config with windows including geometry
-        let mut config = AppConfig::default();
-        config.windows.insert(
-            "board-01abc".to_string(),
-            make_window_entry_with_pos("/test/.kanban", 50, 100, 1400, 900),
-        );
-
-        // Save
-        let content = serde_yaml_ng::to_string(&config).unwrap();
-        std::fs::write(&config_path, &content).unwrap();
-
-        // Load
-        let loaded_content = std::fs::read_to_string(&config_path).unwrap();
-        let loaded: AppConfig = serde_yaml_ng::from_str(&loaded_content).unwrap();
-
-        assert_eq!(loaded.windows.len(), 1);
-        let entry = loaded.windows.get("board-01abc").unwrap();
-        assert_eq!(entry.board_path, PathBuf::from("/test/.kanban"));
-        assert_eq!(entry.x, Some(50));
-        assert_eq!(entry.y, Some(100));
-        assert_eq!(entry.width, Some(1400));
-        assert_eq!(entry.height, Some(900));
-    }
-
-    /// Full lifecycle test: create window entry → update geometry → save →
-    /// reload → verify position restores. This is the exact sequence that
-    /// create_window + on_window_event + restore_windows must execute.
-    #[test]
-    fn test_window_lifecycle_create_move_restart_restore() {
-        let tmp = TempDir::new().unwrap();
-        let config_path = tmp.path().join("config.yaml");
-
-        // Step 1: Simulate create_window — save entry with no geometry
-        let label = format!("board-{}", ulid::Ulid::new().to_string().to_lowercase());
-        let board_path = PathBuf::from("/projects/my-board/.kanban");
-        {
-            let mut config = AppConfig::default();
-            config.open_boards = vec![board_path.clone()];
-            config.windows.insert(
-                label.clone(),
-                WindowState {
-                    board_path: board_path.clone(),
-                    active_view_id: None,
-                    inspector_stack: Vec::new(),
-                    x: None,
-                    y: None,
-                    width: None,
-                    height: None,
-                    maximized: false,
-                },
-            );
-            let content = serde_yaml_ng::to_string(&config).unwrap();
-            std::fs::write(&config_path, &content).unwrap();
-        }
-
-        // Step 2: Simulate on_window_event Moved/Resized — update geometry
-        {
-            let content = std::fs::read_to_string(&config_path).unwrap();
-            let mut config: AppConfig = serde_yaml_ng::from_str(&content).unwrap();
-            let entry = config.windows.get_mut(&label).unwrap();
-            entry.x = Some(300);
-            entry.y = Some(150);
-            entry.width = Some(1400);
-            entry.height = Some(900);
-            let content = serde_yaml_ng::to_string(&config).unwrap();
-            std::fs::write(&config_path, &content).unwrap();
-        }
-
-        // Step 3: Simulate app restart — load config, verify entry survives
-        {
-            let content = std::fs::read_to_string(&config_path).unwrap();
-            let config: AppConfig = serde_yaml_ng::from_str(&content).unwrap();
-
-            // open_boards must survive
-            assert_eq!(config.open_boards.len(), 1);
-            assert_eq!(config.open_boards[0], board_path);
-
-            // windows must survive with geometry
-            assert_eq!(config.windows.len(), 1);
-            let entry = config.windows.get(&label).unwrap();
-            assert_eq!(entry.board_path, board_path);
-            assert_eq!(entry.x, Some(300));
-            assert_eq!(entry.y, Some(150));
-            assert_eq!(entry.width, Some(1400));
-            assert_eq!(entry.height, Some(900));
-        }
-
-        // Step 4: Simulate open_board updating open_boards (must NOT clobber windows)
-        {
-            let content = std::fs::read_to_string(&config_path).unwrap();
-            let mut config: AppConfig = serde_yaml_ng::from_str(&content).unwrap();
-            // open_board writes open_boards but should preserve windows
-            config.open_boards = vec![board_path.clone()];
-            let content = serde_yaml_ng::to_string(&config).unwrap();
-            std::fs::write(&config_path, &content).unwrap();
-        }
-
-        // Step 5: Verify windows still intact after open_board save
-        {
-            let content = std::fs::read_to_string(&config_path).unwrap();
-            let config: AppConfig = serde_yaml_ng::from_str(&content).unwrap();
-            assert_eq!(config.windows.len(), 1, "windows was clobbered!");
-            let entry = config.windows.get(&label).unwrap();
-            assert_eq!(entry.x, Some(300), "geometry was lost!");
-        }
-    }
-
-    /// Window entries survive board close — windows are about windows, not boards.
-    /// close_board no longer touches config.windows. The frontend updates
-    /// board_path via switch_board when falling back to another board.
-    #[test]
-    fn test_window_entries_survive_board_close() {
-        let mut config = AppConfig::default();
-
-        config.windows.insert(
-            "main".to_string(),
-            make_window_entry_with_pos("/boards/a/.kanban", 100, 200, 1200, 800),
-        );
-        config.windows.insert(
-            "win-2".to_string(),
-            make_window_entry_with_pos("/boards/a/.kanban", 500, 300, 1200, 800),
-        );
-
-        // Closing board A does NOT remove window entries — both windows still exist
-        // (the frontend will update their board_path via switch_board)
-        assert_eq!(config.windows.len(), 2);
-        assert!(config.windows.contains_key("main"));
-        assert!(config.windows.contains_key("win-2"));
-
-        // Geometry is preserved
-        assert_eq!(config.windows.get("main").unwrap().x, Some(100));
-        assert_eq!(config.windows.get("win-2").unwrap().x, Some(500));
-    }
-
-    /// Verify that legacy JSON config with `window_boards` key migrates to `windows`.
-    #[test]
-    fn test_config_json_migration() {
-        // Legacy JSON uses "window_boards" (old field name) — the serde alias
-        // maps it to the new "windows" field. Also tests that old "keymap_mode"
-        // fields are silently ignored (keymap_mode was removed from AppConfig).
-        let json_content = serde_json::json!({
-            "recent_boards": [],
-            "keymap_mode": "vim",
-            "open_boards": ["/boards/test/.kanban"],
-            "window_boards": {
-                "board-01abc": {
-                    "board_path": "/boards/test/.kanban",
-                    "x": 100,
-                    "y": 200,
-                    "width": 1200,
-                    "height": 800
-                }
-            }
-        });
-        let config: AppConfig =
-            serde_json::from_str(&serde_json::to_string(&json_content).unwrap()).unwrap();
-
-        assert_eq!(config.open_boards.len(), 1);
-        assert_eq!(config.windows.len(), 1);
-        let entry = config.windows.get("board-01abc").unwrap();
-        assert_eq!(entry.board_path, PathBuf::from("/boards/test/.kanban"));
-        assert_eq!(entry.x, Some(100));
-        // New fields default correctly
-        assert_eq!(entry.active_view_id, None);
-        assert!(entry.inspector_stack.is_empty());
-
-        // Verify roundtrip through YAML
-        let yaml_content = serde_yaml_ng::to_string(&config).unwrap();
-        let restored: AppConfig = serde_yaml_ng::from_str(&yaml_content).unwrap();
-        assert_eq!(restored.windows.len(), 1);
-        assert_eq!(restored.windows.get("board-01abc").unwrap().x, Some(100));
-    }
-
-    /// Roundtrip test with all WindowState fields populated.
-    ///
-    /// Note: active_view_id is no longer serialized to YAML (skip_serializing),
-    /// so it defaults to None after deserialization. UIState is now the
-    /// source of truth for active_view_id.
-    #[test]
-    fn test_window_state_full_roundtrip() {
-        let mut config = AppConfig::default();
-        config.windows.insert(
-            "main".to_string(),
-            WindowState {
-                board_path: PathBuf::from("/boards/main/.kanban"),
-                active_view_id: Some("board-view".to_string()),
-                inspector_stack: vec!["task:01ABC".to_string(), "tag:01DEF".to_string()],
-                x: Some(100),
-                y: Some(200),
-                width: Some(1400),
-                height: Some(900),
-                maximized: true,
-            },
-        );
-        config.windows.insert(
-            "board-secondary".to_string(),
-            WindowState {
-                board_path: PathBuf::from("/boards/other/.kanban"),
-                active_view_id: Some("grid-view".to_string()),
-                inspector_stack: Vec::new(),
-                x: Some(500),
-                y: Some(100),
-                width: Some(1200),
-                height: Some(800),
-                maximized: false,
-            },
-        );
-
-        let yaml = serde_yaml_ng::to_string(&config).unwrap();
-        let restored: AppConfig = serde_yaml_ng::from_str(&yaml).unwrap();
-
-        assert_eq!(restored.windows.len(), 2);
-
-        let main = restored.windows.get("main").unwrap();
-        assert_eq!(main.board_path, PathBuf::from("/boards/main/.kanban"));
-        // active_view_id is skip_serializing — not written to YAML, defaults to None after roundtrip.
-        // UIState (ui-state.yaml) is the source of truth for the active view.
-        assert_eq!(main.active_view_id, None);
-        assert_eq!(main.inspector_stack, vec!["task:01ABC", "tag:01DEF"]);
-        assert_eq!(main.maximized, true);
-
-        let secondary = restored.windows.get("board-secondary").unwrap();
-        assert_eq!(secondary.active_view_id, None);
-        assert!(secondary.inspector_stack.is_empty());
-        assert_eq!(secondary.maximized, false);
     }
 }

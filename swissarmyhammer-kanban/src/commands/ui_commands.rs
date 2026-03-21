@@ -43,7 +43,8 @@ impl Command for InspectCmd {
             .or_else(|| first_inspectable(&ctx.scope_chain))
             .ok_or_else(|| CommandError::MissingArg("target".into()))?;
 
-        let change = ui.inspect(moniker);
+        let window_label = ctx.window_label.as_deref().unwrap_or("main");
+        let change = ui.inspect(window_label, moniker);
         Ok(serde_json::to_value(change).unwrap_or(Value::Null))
     }
 }
@@ -65,7 +66,8 @@ impl Command for InspectorCloseCmd {
             .as_ref()
             .ok_or_else(|| CommandError::ExecutionFailed("UIState not available".into()))?;
 
-        let change = ui.inspector_close();
+        let window_label = ctx.window_label.as_deref().unwrap_or("main");
+        let change = ui.inspector_close(window_label);
         Ok(serde_json::to_value(change).unwrap_or(Value::Null))
     }
 }
@@ -87,7 +89,8 @@ impl Command for InspectorCloseAllCmd {
             .as_ref()
             .ok_or_else(|| CommandError::ExecutionFailed("UIState not available".into()))?;
 
-        let change = ui.inspector_close_all();
+        let window_label = ctx.window_label.as_deref().unwrap_or("main");
+        let change = ui.inspector_close_all(window_label);
         Ok(serde_json::to_value(change).unwrap_or(Value::Null))
     }
 }

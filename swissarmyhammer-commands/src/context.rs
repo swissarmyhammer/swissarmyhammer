@@ -19,6 +19,8 @@ pub struct CommandContext {
     pub scope_chain: Vec<String>,
     pub target: Option<String>,
     pub args: HashMap<String, Value>,
+    /// The window label this command originated from (e.g. "main", "board-01abc...").
+    pub window_label: Option<String>,
     /// Shared UI state (inspector stack, palette, keymap, etc.).
     pub ui_state: Option<Arc<UIState>>,
     /// Extension point for domain-specific services (e.g., KanbanContext).
@@ -33,6 +35,7 @@ impl std::fmt::Debug for CommandContext {
             .field("scope_chain", &self.scope_chain)
             .field("target", &self.target)
             .field("args", &self.args)
+            .field("window_label", &self.window_label)
             .field("extensions_count", &self.extensions.len())
             .finish()
     }
@@ -51,9 +54,16 @@ impl CommandContext {
             scope_chain,
             target,
             args,
+            window_label: None,
             ui_state: None,
             extensions: HashMap::new(),
         }
+    }
+
+    /// Builder method to set the window label.
+    pub fn with_window_label(mut self, label: impl Into<String>) -> Self {
+        self.window_label = Some(label.into());
+        self
     }
 
     /// Builder method to set the UI state.

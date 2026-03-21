@@ -107,29 +107,21 @@ pub async fn get_ui_state(state: State<'_, AppState>) -> Result<Value, String> {
 /// Get the persisted window state (board path, inspector stack).
 ///
 /// The frontend calls this on mount to restore state across hot reloads.
-/// Note: active_view_id is now read from UIState (via get_ui_state) and
-/// is not stored in AppConfig. It is included here for compatibility only,
-/// reading from UIState as the authoritative source.
+/// Reads from UIState as the authoritative source for both board assignment
+/// and per-window inspector stack.
 #[tauri::command]
 pub async fn get_ui_context(
     state: State<'_, AppState>,
     window_label: Option<String>,
 ) -> Result<Value, String> {
-    let config = state.config.read().await;
     let label = window_label.as_deref().unwrap_or("main");
-    if let Some(ws) = config.windows.get(label) {
-        Ok(json!({
-            "board_path": ws.board_path.display().to_string(),
-            "active_view_id": state.ui_state.active_view_id(),
-            "inspector_stack": ws.inspector_stack,
-        }))
-    } else {
-        Ok(json!({
-            "board_path": null,
-            "active_view_id": state.ui_state.active_view_id(),
-            "inspector_stack": [],
-        }))
-    }
+    let board_path = state.ui_state.window_board(label);
+    let inspector_stack = state.ui_state.inspector_stack(label);
+    Ok(json!({
+        "board_path": board_path,
+        "active_view_id": state.ui_state.active_view_id(),
+        "inspector_stack": inspector_stack,
+    }))
 }
 
 /// Get the field+entity schema for a given entity type.
@@ -579,12 +571,9 @@ pub async fn quit_app(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 #[allow(unreachable_code)]
 pub async fn reset_windows(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
-    {
-        let mut config = state.config.write().await;
-        config.windows.clear();
-        let _ = config.save();
-        tracing::info!("Cleared all window state");
-    }
+    // Clear window state from UIState (geometry + inspector stacks)
+    state.ui_state.clear_windows();
+    tracing::info!("Cleared all window state");
     app.restart();
     Ok(())
 }
@@ -642,17 +631,14 @@ pub async fn create_window(
 
     let _ = window.set_focus();
 
-    // Persist window→board mapping so we can restore with the same label and position
+    // Persist window→board mapping in UIState so we can restore with the same label and position
     if let Some(ref bp) = resolved_path {
-        let mut config = state.config.write().await;
-        let entry = crate::state::WindowState::new(PathBuf::from(bp));
         tracing::info!(
             label = %label,
             board_path = %bp,
-            "persisting window state"
+            "persisting window state to UIState"
         );
-        config.windows.insert(label.clone(), entry);
-        let _ = config.save();
+        state.ui_state.set_window_board(&label, bp);
     }
 
     Ok(json!({
@@ -665,14 +651,12 @@ pub async fn create_window(
 ///
 /// Called by the main window on mount. For each saved window label that
 /// doesn't already exist, creates a new window with the same label and
-/// applies saved position/size from `config.windows`.
+/// applies saved position/size from UIState windows.
 ///
 /// Returns the list of restored window labels.
 #[tauri::command]
 pub async fn restore_windows(app: AppHandle, state: State<'_, AppState>) -> Result<Value, String> {
-    let config = state.config.read().await;
-    let saved_windows = config.windows.clone();
-    drop(config);
+    let saved_windows = state.ui_state.all_windows();
 
     tracing::info!(
         count = saved_windows.len(),
@@ -694,17 +678,25 @@ pub async fn restore_windows(app: AppHandle, state: State<'_, AppState>) -> Resu
             continue;
         }
 
+        // Look up board path from UIState window_boards
+        let board_path = match state.ui_state.window_board(label) {
+            Some(bp) => bp,
+            None => continue,
+        };
+
         // Verify the board is actually open
         {
             let boards = state.boards.read().await;
-            if !boards.contains_key(&entry.board_path) {
+            let canonical = std::path::PathBuf::from(&board_path)
+                .canonicalize()
+                .unwrap_or_else(|_| std::path::PathBuf::from(&board_path));
+            if !boards.contains_key(&canonical) {
                 continue;
             }
         }
 
-        let bp = entry.board_path.display().to_string();
         let mut url = String::from("index.html?window=board&board=");
-        url.push_str(&urlencoding::encode(&bp));
+        url.push_str(&urlencoding::encode(&board_path));
 
         // Build at default size first — we apply saved physical geometry after
         // creation because the builder takes logical coordinates while we store
@@ -726,7 +718,7 @@ pub async fn restore_windows(app: AppHandle, state: State<'_, AppState>) -> Resu
                 }
                 let _ = window.set_focus();
                 restored.push(label.clone());
-                tracing::info!(label = %label, board = %bp, x = ?entry.x, y = ?entry.y, "restored secondary window");
+                tracing::info!(label = %label, board = %board_path, x = ?entry.x, y = ?entry.y, "restored secondary window");
             }
             Err(e) => {
                 tracing::warn!(label = %label, error = %e, "failed to restore secondary window");
@@ -737,10 +729,10 @@ pub async fn restore_windows(app: AppHandle, state: State<'_, AppState>) -> Resu
     Ok(json!({ "restored": restored }))
 }
 
-/// Save a secondary window's position and size to config.
+/// Save a window's position and size to UIState.
 ///
-/// Called by secondary windows on move/resize so their geometry
-/// persists across restarts and hot reloads.
+/// Called by windows on move/resize so their geometry persists across restarts
+/// and hot reloads. Routes through UIState which auto-persists.
 #[tauri::command]
 pub async fn save_window_geometry(
     state: State<'_, AppState>,
@@ -750,14 +742,9 @@ pub async fn save_window_geometry(
     width: u32,
     height: u32,
 ) -> Result<(), String> {
-    let mut config = state.config.write().await;
-    if let Some(entry) = config.windows.get_mut(&window_label) {
-        entry.x = Some(x);
-        entry.y = Some(y);
-        entry.width = Some(width);
-        entry.height = Some(height);
-        let _ = config.save();
-    }
+    state
+        .ui_state
+        .save_window_geometry(&window_label, x, y, width, height, false);
     Ok(())
 }
 
@@ -892,6 +879,9 @@ pub async fn dispatch_command(
     let mut ctx =
         swissarmyhammer_commands::CommandContext::new(cmd.clone(), scope, target, args_map);
     ctx = ctx.with_ui_state(Arc::clone(&state.ui_state));
+    if let Some(ref label) = window_label {
+        ctx = ctx.with_window_label(label.clone());
+    }
 
     // Set KanbanContext extension if board is open.
     // Uses board_path when provided (multi-window) to avoid targeting the wrong board.
@@ -915,27 +905,6 @@ pub async fn dispatch_command(
 
     tracing::info!(cmd = %cmd, undoable = undoable, result = %result, "command completed");
 
-    // Persist inspector stack changes to config as a side-effect of command
-    // execution. This replaces the separate set_inspector_stack Tauri command.
-    if let Ok(swissarmyhammer_commands::UIStateChange::InspectorStack(ref stack)) =
-        serde_json::from_value::<swissarmyhammer_commands::UIStateChange>(result.clone())
-    {
-        let mut config = state.config.write().await;
-        let label = window_label.as_deref().unwrap_or("main");
-        // Use UIState for active board path; fall back to empty PathBuf for new entries.
-        let active_board_path = state
-            .ui_state
-            .active_board_path()
-            .map(std::path::PathBuf::from)
-            .unwrap_or_default();
-        let ws = config
-            .windows
-            .entry(label.to_string())
-            .or_insert_with(|| crate::state::WindowState::new(active_board_path));
-        ws.inspector_stack = stack.clone();
-        let _ = config.save();
-    }
-
     // Handle board management side effects from file.switchBoard and file.closeBoard.
     // These commands update UIState, but the Tauri layer must also manage BoardHandles.
     if let Some(board_switch) = result.get("BoardSwitch") {
@@ -949,14 +918,10 @@ pub async fn dispatch_command(
             // Open the board idempotently (also starts file watcher)
             match state.open_board(&board_path, Some(app.clone())).await {
                 Ok(canonical) => {
-                    // Persist window→board mapping in config
-                    let mut config = state.config.write().await;
-                    let ws = config
-                        .windows
-                        .entry(label.to_string())
-                        .or_insert_with(|| crate::state::WindowState::new(canonical.clone()));
-                    ws.board_path = canonical.clone();
-                    let _ = config.save();
+                    // Persist window→board mapping in UIState
+                    state
+                        .ui_state
+                        .set_window_board(label, &canonical.display().to_string());
                 }
                 Err(e) => {
                     tracing::error!(cmd = %cmd, path = %path_str, error = %e, "BoardSwitch: failed to open board");

@@ -81,7 +81,6 @@ fn main() {
         .setup(|app| {
             // Build initial menu with OS chrome only — the frontend will
             // send the full manifest via rebuild_menu_from_manifest once loaded.
-            let config = crate::state::AppConfig::load();
             let state = app.state::<AppState>();
             let recent = state.ui_state.recent_boards();
             let _ = menu::build_menu_from_manifest(app.handle(), &[], &recent);
@@ -110,9 +109,9 @@ fn main() {
             tauri::async_runtime::block_on(state.start_watchers(app_handle));
 
             // The window starts hidden (visible: false in tauri.conf.json).
-            // Restore saved geometry from our own config, then show.
+            // Restore saved geometry from UIState, then show.
             if let Some(win) = app.get_webview_window("main") {
-                if let Some(main_state) = config.windows.get("main") {
+                if let Some(main_state) = state.ui_state.get_window_state("main") {
                     if let (Some(x), Some(y)) = (main_state.x, main_state.y) {
                         let _ = win.set_position(tauri::PhysicalPosition::new(x, y));
                     }
@@ -201,25 +200,18 @@ fn main() {
                         let app_handle = window.app_handle().clone();
                         tauri::async_runtime::spawn(async move {
                             let state = app_handle.state::<AppState>();
-                            let mut config = state.config.write().await;
-                            let active_board_path = state
-                                .ui_state
-                                .active_board_path()
-                                .map(std::path::PathBuf::from)
-                                .unwrap_or_default();
-                            let entry = config.windows.entry(label.clone()).or_insert_with(|| {
-                                crate::state::WindowState::new(active_board_path)
-                            });
-                            entry.x = Some(pos.x);
-                            entry.y = Some(pos.y);
-                            entry.width = Some(size.width);
-                            entry.height = Some(size.height);
-                            entry.maximized = maximized;
-                            let _ = config.save();
+                            state.ui_state.save_window_geometry(
+                                &label,
+                                pos.x,
+                                pos.y,
+                                size.width,
+                                size.height,
+                                maximized,
+                            );
                         });
                     }
                 }
-                // Mid-session close: remove windows entry so it doesn't resurrect.
+                // Mid-session close: remove the UIState window entry so it doesn't resurrect.
                 // On app quit (shutting_down=true) we preserve entries for restore.
                 WindowEvent::Destroyed => {
                     if label == "main" || label == "quick-capture" {
@@ -231,11 +223,10 @@ fn main() {
                         if state.shutting_down.load(Ordering::SeqCst) {
                             return;
                         }
-                        let mut config = state.config.write().await;
-                        if config.windows.remove(&label).is_some() {
-                            tracing::info!(label = %label, "removed windows entry on mid-session close");
-                            let _ = config.save();
-                        }
+                        // Remove from UIState windows and window_boards on mid-session close
+                        // so the window doesn't resurrect on next startup.
+                        state.ui_state.remove_window(&label);
+                        tracing::info!(label = %label, "removed window entry on mid-session close");
                     });
                 }
                 _ => {}
