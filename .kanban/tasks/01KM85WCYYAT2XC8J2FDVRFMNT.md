@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KM85W10KVXQ4F4JVJCXXPN3A
-position_column: todo
-position_ordinal: '8880'
+position_column: done
+position_ordinal: ffffffffffdf80
 title: Migrate drag_session and context_menu_ids into UIState
 ---
 ## What

@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: '8e80'
+position_column: done
+position_ordinal: ffffffffffde80
 title: Fix view switching affecting all windows instead of just the active one
 ---
 ## What
