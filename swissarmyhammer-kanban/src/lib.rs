@@ -63,6 +63,7 @@
 
 pub mod auto_color;
 mod context;
+pub mod cross_board;
 pub mod defaults;
 pub mod derive_handlers;
 pub mod dispatch;

@@ -792,8 +792,7 @@ pub async fn log_command(cmd: String, target: Option<String>) {
 /// Looks up the command definition in the registry, resolves the scope
 /// chain, checks availability, and executes via the trait implementation.
 ///
-/// This is the Tauri entry point — it delegates to `dispatch_command_internal`
-/// which can also be called from non-Tauri paths (e.g. `complete_drag_session`).
+/// This is the Tauri entry point — it delegates to `dispatch_command_internal`.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn dispatch_command(
@@ -819,7 +818,7 @@ pub async fn dispatch_command(
     .await
 }
 
-/// Internal dispatch — shared by the Tauri `dispatch_command` and `complete_drag_session`.
+/// Internal dispatch — single path for all state-mutating command execution.
 ///
 /// This is the single path for all state-mutating command execution.
 /// It handles: command lookup, context building, execution, undo tracking,
@@ -962,6 +961,100 @@ pub(crate) async fn dispatch_command_internal(
         let _ = app.emit("drag-session-cancelled", &drag_cancel);
     }
 
+    // Handle drag.complete result.
+    //
+    // Same-board: the task.move was already performed inside DragCompleteCmd;
+    // the active_handle flush below (undoable=false for drag.complete) won't
+    // run, so we flush the board here explicitly then emit drag-session-completed.
+    //
+    // Cross-board: call the standalone transfer_task() function with both board
+    // handles, flush both, then emit drag-session-completed.
+    if let Some(drag_complete) = result.get("DragComplete") {
+        let session_id = drag_complete
+            .get("session_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        let transfer_ok = if drag_complete
+            .get("cross_board")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
+            // Cross-board transfer: call transfer_task with both board handles
+            let source_path = drag_complete
+                .get("source_board_path")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let target_path = drag_complete
+                .get("target_board_path")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let task_id = drag_complete
+                .get("task_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let target_column = drag_complete
+                .get("target_column")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let drop_index = drag_complete.get("drop_index").and_then(|v| v.as_u64());
+            let copy_mode = drag_complete
+                .get("copy_mode")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+
+            let source_handle = resolve_handle(state, Some(source_path)).await;
+            let target_handle = resolve_handle(state, Some(target_path)).await;
+
+            match (source_handle, target_handle) {
+                (Ok(src), Ok(tgt)) => {
+                    let transfer_result = swissarmyhammer_kanban::cross_board::transfer_task(
+                        &src.ctx,
+                        &tgt.ctx,
+                        &task_id,
+                        &target_column,
+                        drop_index,
+                        copy_mode,
+                    )
+                    .await;
+
+                    let ok = transfer_result.is_ok();
+                    // Flush both boards after transfer
+                    flush_and_emit_for_handle(app, &tgt).await;
+                    if !copy_mode {
+                        flush_and_emit_for_handle(app, &src).await;
+                    }
+                    ok
+                }
+                _ => {
+                    tracing::error!(
+                        "drag.complete: failed to resolve board handles for cross-board transfer"
+                    );
+                    false
+                }
+            }
+        } else {
+            // Same-board: flush the board so entity-changed events go out
+            if let Some(ref handle) = active_handle {
+                flush_and_emit_for_handle(app, handle).await;
+            }
+            true
+        };
+
+        let _ = app.emit(
+            "drag-session-completed",
+            json!({
+                "session_id": session_id,
+                "success": transfer_ok,
+            }),
+        );
+    }
+
     // After any UIStateChange, push the full state snapshot to the frontend.
     // This broad approach ensures the React UIStateProvider stays in sync
     // without needing per-field event types. Optimise per-field later if needed.
@@ -1048,241 +1141,6 @@ pub async fn list_available_commands(
 // ---------------------------------------------------------------------------
 // show_context_menu — generic native context menu
 // ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// Drag session commands — cross-window drag coordination
-// ---------------------------------------------------------------------------
-
-/// Complete the active drag session by dropping in a target window.
-///
-/// Resolves whether this is a same-board move or cross-board transfer/copy,
-/// then executes the appropriate backend operation. Emits `drag-session-completed`.
-#[tauri::command]
-#[allow(clippy::too_many_arguments)]
-pub async fn complete_drag_session(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    target_board_path: String,
-    target_column: String,
-    drop_index: Option<u64>,
-    before_id: Option<String>,
-    after_id: Option<String>,
-    copy_mode: bool,
-) -> Result<Value, String> {
-    let session = state
-        .ui_state
-        .take_drag()
-        .ok_or_else(|| "No active drag session".to_string())?;
-
-    let result = if session.source_board_path == target_board_path {
-        // Same board — route through the full dispatch pipeline so we get
-        // undo tracking, UIStateChange emission, and post-execution hooks.
-        let mut args = serde_json::Map::new();
-        args.insert("id".into(), json!(session.task_id));
-        args.insert("column".into(), json!(target_column));
-        if let Some(idx) = drop_index {
-            args.insert("drop_index".into(), json!(idx));
-        }
-        if let Some(ref bid) = before_id {
-            args.insert("before_id".into(), json!(bid));
-        }
-        if let Some(ref aid) = after_id {
-            args.insert("after_id".into(), json!(aid));
-        }
-        dispatch_command_internal(
-            &app,
-            &state,
-            "task.move",
-            None,
-            None,
-            Some(Value::Object(args)),
-            Some(session.source_board_path.clone()),
-            None,
-        )
-        .await
-    } else {
-        // Cross-board: transfer or copy
-        cross_board_transfer(
-            &app,
-            &state,
-            &session.source_board_path,
-            &session.task_id,
-            &target_board_path,
-            &target_column,
-            drop_index,
-            copy_mode || session.copy_mode,
-        )
-        .await
-    };
-
-    let _ = app.emit(
-        "drag-session-completed",
-        json!({
-            "session_id": session.session_id,
-            "success": result.is_ok(),
-        }),
-    );
-
-    result
-}
-
-/// Transfer or copy a task between boards.
-///
-/// 1. Reads the source task from the source board
-/// 2. Creates a new task on the target board with copied fields
-/// 3. If not copy mode, deletes the source task
-///
-/// TODO: Route cross-board transfers through the command system by implementing
-/// a `task.transfer` command. For now, this does direct entity manipulation
-/// because cross-board moves span two separate board contexts that the existing
-/// command impls don't support. Same-board moves already go through
-/// `dispatch_command_internal` and get undo tracking, UIState events, and the
-/// full post-execution hook chain.
-#[allow(clippy::too_many_arguments)]
-async fn cross_board_transfer(
-    app: &AppHandle,
-    state: &AppState,
-    source_board_path: &str,
-    task_id: &str,
-    target_board_path: &str,
-    target_column: &str,
-    drop_index: Option<u64>,
-    copy_mode: bool,
-) -> Result<Value, String> {
-    use swissarmyhammer_kanban::types::Ordinal;
-
-    let source_handle = resolve_handle(state, Some(source_board_path.to_string())).await?;
-    let target_handle = resolve_handle(state, Some(target_board_path.to_string())).await?;
-
-    // Read source task
-    let source_ectx = source_handle
-        .ctx
-        .entity_context()
-        .await
-        .map_err(|e| e.to_string())?;
-    let source_task = source_ectx
-        .read("task", task_id)
-        .await
-        .map_err(|e| format!("Failed to read source task: {}", e))?;
-
-    // Compute ordinal in target column
-    let target_ectx = target_handle
-        .ctx
-        .entity_context()
-        .await
-        .map_err(|e| e.to_string())?;
-    let ordinal = {
-        let all_tasks = target_ectx.list("task").await.map_err(|e| e.to_string())?;
-        if let Some(idx) = drop_index {
-            let mut col_tasks: Vec<_> = all_tasks
-                .into_iter()
-                .filter(|t| t.get_str("position_column") == Some(target_column))
-                .collect();
-            col_tasks.sort_by(|a, b| {
-                let oa = a.get_str("position_ordinal").unwrap_or("a0");
-                let ob = b.get_str("position_ordinal").unwrap_or("a0");
-                oa.cmp(ob)
-            });
-            swissarmyhammer_kanban::task_helpers::compute_ordinal_for_drop(&col_tasks, idx as usize)
-        } else {
-            let mut last_ord: Option<Ordinal> = None;
-            for t in &all_tasks {
-                if t.get_str("position_column") == Some(target_column) {
-                    let ord = Ordinal::from_string(t.get_str("position_ordinal").unwrap_or("a0"));
-                    last_ord = Some(match last_ord {
-                        None => ord,
-                        Some(ref o) if ord > *o => ord,
-                        Some(o) => o,
-                    });
-                }
-            }
-            match last_ord {
-                Some(last) => Ordinal::after(&last),
-                None => Ordinal::first(),
-            }
-        }
-    };
-
-    // Create new task entity on target board
-    let new_id = ulid::Ulid::new().to_string();
-    let mut new_task = swissarmyhammer_entity::Entity::new("task", new_id.as_str());
-
-    // Copy fields from source
-    let copy_fields = [
-        "title",
-        "body",
-        "assignees",
-        "depends_on",
-        "priority",
-        "estimate",
-        "due_date",
-        "color",
-    ];
-    for field in copy_fields {
-        if let Some(val) = source_task.get(field) {
-            new_task.set(field, val.clone());
-        }
-    }
-
-    // Strip tags that don't exist in the target board
-    if let Some(tags_val) = source_task.get("tags") {
-        if let Some(tags_arr) = tags_val.as_array() {
-            let target_tags = target_ectx.list("tag").await.unwrap_or_default();
-            let target_tag_names: std::collections::HashSet<String> = target_tags
-                .iter()
-                .filter_map(|t| t.get_str("tag_name").map(|s| s.to_string()))
-                .collect();
-            let filtered: Vec<Value> = tags_arr
-                .iter()
-                .filter(|t| {
-                    t.as_str()
-                        .map(|s| target_tag_names.contains(s))
-                        .unwrap_or(false)
-                })
-                .cloned()
-                .collect();
-            if !filtered.is_empty() {
-                new_task.set("tags", json!(filtered));
-            }
-        }
-    }
-
-    // Set position on target board
-    new_task.set("position_column", json!(target_column));
-    new_task.set("position_ordinal", json!(ordinal.as_str()));
-
-    // Write to target board
-    target_ectx
-        .write(&new_task)
-        .await
-        .map_err(|e| format!("Failed to write target task: {}", e))?;
-
-    // If transfer (not copy), delete source task before flushing either board.
-    // This ensures both writes succeed before any events are emitted, avoiding
-    // a state where the task appears duplicated if the delete fails.
-    if !copy_mode {
-        source_ectx
-            .delete("task", task_id)
-            .await
-            .map_err(|e| format!("Failed to delete source task: {}", e))?;
-    }
-
-    // Flush both boards after all writes succeed
-    flush_and_emit_for_handle(app, &target_handle).await;
-    if !copy_mode {
-        flush_and_emit_for_handle(app, &source_handle).await;
-    }
-
-    Ok(json!({
-        "result": {
-            "id": new_id,
-            "source_id": task_id,
-            "transferred": !copy_mode,
-            "copied": copy_mode,
-        },
-        "undoable": true,
-    }))
-}
 
 /// Flush entity changes for a board handle and emit events.
 async fn flush_and_emit_for_handle(app: &AppHandle, handle: &BoardHandle) {

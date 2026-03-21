@@ -151,13 +151,16 @@ export function DragSessionProvider({ children }: { children: ReactNode }) {
       const bp = boardPathRef.current;
       if (!bp) return;
       try {
-        await invoke("complete_drag_session", {
-          targetBoardPath: bp,
-          targetColumn,
-          dropIndex: options?.dropIndex ?? null,
-          beforeId: options?.beforeId ?? null,
-          afterId: options?.afterId ?? null,
-          copyMode: options?.copyMode ?? false,
+        await invoke("dispatch_command", {
+          cmd: "drag.complete",
+          args: {
+            targetBoardPath: bp,
+            targetColumn,
+            dropIndex: options?.dropIndex ?? null,
+            beforeId: options?.beforeId ?? null,
+            afterId: options?.afterId ?? null,
+            copyMode: options?.copyMode ?? false,
+          },
         });
       } catch (e) {
         console.error("Failed to complete drag session:", e);

@@ -153,7 +153,7 @@ describe("DragSessionProvider", () => {
     });
   });
 
-  it("completeSession invokes complete_drag_session with options", async () => {
+  it("completeSession invokes dispatch_command drag.complete with options", async () => {
     mockInvoke.mockResolvedValue({ result: {} });
     const { result } = renderHook(() => useDragSession(), { wrapper });
 
@@ -165,13 +165,16 @@ describe("DragSessionProvider", () => {
       });
     });
 
-    expect(mockInvoke).toHaveBeenCalledWith("complete_drag_session", {
-      targetBoardPath: "/board/a/.kanban",
-      targetColumn: "done",
-      dropIndex: 3,
-      beforeId: "task-5",
-      afterId: null,
-      copyMode: true,
+    expect(mockInvoke).toHaveBeenCalledWith("dispatch_command", {
+      cmd: "drag.complete",
+      args: {
+        targetBoardPath: "/board/a/.kanban",
+        targetColumn: "done",
+        dropIndex: 3,
+        beforeId: "task-5",
+        afterId: null,
+        copyMode: true,
+      },
     });
   });
 
@@ -183,13 +186,16 @@ describe("DragSessionProvider", () => {
       await result.current.completeSession("todo");
     });
 
-    expect(mockInvoke).toHaveBeenCalledWith("complete_drag_session", {
-      targetBoardPath: "/board/a/.kanban",
-      targetColumn: "todo",
-      dropIndex: null,
-      beforeId: null,
-      afterId: null,
-      copyMode: false,
+    expect(mockInvoke).toHaveBeenCalledWith("dispatch_command", {
+      cmd: "drag.complete",
+      args: {
+        targetBoardPath: "/board/a/.kanban",
+        targetColumn: "todo",
+        dropIndex: null,
+        beforeId: null,
+        afterId: null,
+        copyMode: false,
+      },
     });
   });
 

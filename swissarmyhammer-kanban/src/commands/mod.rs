@@ -108,6 +108,10 @@ pub fn register_commands() -> HashMap<String, Arc<dyn Command>> {
     // Drag session commands
     map.insert("drag.start".into(), Arc::new(drag_commands::DragStartCmd));
     map.insert("drag.cancel".into(), Arc::new(drag_commands::DragCancelCmd));
+    map.insert(
+        "drag.complete".into(),
+        Arc::new(drag_commands::DragCompleteCmd),
+    );
 
     // File / board management commands
     map.insert(
@@ -171,8 +175,8 @@ mod tests {
     #[test]
     fn register_commands_returns_expected_count() {
         let cmds = register_commands();
-        // 5 task + 4 entity + 1 tag + 1 attachment + 1 column + 7 UI + 6 app + 2 file + 2 drag = 29
-        assert_eq!(cmds.len(), 29);
+        // 5 task + 4 entity + 1 tag + 1 attachment + 1 column + 7 UI + 6 app + 2 file + 3 drag = 30
+        assert_eq!(cmds.len(), 30);
     }
 
     // =========================================================================

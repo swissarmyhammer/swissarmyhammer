@@ -70,7 +70,6 @@ fn main() {
             commands::rebuild_menu_from_manifest,
             commands::list_views,
             commands::create_window,
-            commands::complete_drag_session,
             commands::restore_windows,
         ])
         .setup(|app| {

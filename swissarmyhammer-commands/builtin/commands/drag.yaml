@@ -7,3 +7,8 @@
   name: Cancel Drag
   undoable: false
   visible: false
+
+- id: drag.complete
+  name: Complete Drag
+  undoable: false
+  visible: false
