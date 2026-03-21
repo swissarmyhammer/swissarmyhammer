@@ -807,12 +807,54 @@ pub async fn log_command(cmd: String, target: Option<String>) {
 ///
 /// Looks up the command definition in the registry, resolves the scope
 /// chain, checks availability, and executes via the trait implementation.
+///
+/// This is the Tauri entry point — it delegates to `dispatch_command_internal`
+/// which can also be called from non-Tauri paths (e.g. `complete_drag_session`).
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn dispatch_command(
     app: AppHandle,
     state: State<'_, AppState>,
     cmd: String,
+    scope_chain: Option<Vec<String>>,
+    target: Option<String>,
+    args: Option<Value>,
+    board_path: Option<String>,
+    window_label: Option<String>,
+) -> Result<Value, String> {
+    dispatch_command_internal(
+        &app,
+        &state,
+        &cmd,
+        scope_chain,
+        target,
+        args,
+        board_path,
+        window_label,
+    )
+    .await
+}
+
+/// Internal dispatch — shared by the Tauri `dispatch_command` and `complete_drag_session`.
+///
+/// This is the single path for all state-mutating command execution.
+/// It handles: command lookup, context building, execution, undo tracking,
+/// entity flush, event emission, and UIState change broadcasting.
+///
+/// # Parameters
+/// - `app` - Tauri application handle for event emission
+/// - `state` - Application state with command registry, impls, and board handles
+/// - `cmd` - Command ID string (e.g. "task.move")
+/// - `scope_chain` - Optional explicit scope; falls back to stored UIState focus
+/// - `target` - Optional target entity ID
+/// - `args` - Optional JSON object of command arguments
+/// - `board_path` - Optional board path for multi-window targeting
+/// - `window_label` - Optional window label for UIState context
+#[allow(clippy::too_many_arguments)]
+async fn dispatch_command_internal(
+    app: &AppHandle,
+    state: &AppState,
+    cmd: &str,
     scope_chain: Option<Vec<String>>,
     target: Option<String>,
     args: Option<Value>,
@@ -844,7 +886,7 @@ pub async fn dispatch_command(
     let undoable = {
         let registry = state.commands_registry.read().await;
         let cmd_def = registry
-            .get(&cmd)
+            .get(cmd)
             .ok_or_else(|| format!("Unknown command: {}", cmd))?;
         cmd_def.undoable
     };
@@ -852,7 +894,7 @@ pub async fn dispatch_command(
     // Look up command implementation
     let cmd_impl = state
         .command_impls
-        .get(&cmd)
+        .get(cmd)
         .ok_or_else(|| format!("No implementation for command: {}", cmd))?;
 
     // Build CommandContext
@@ -861,7 +903,7 @@ pub async fn dispatch_command(
         _ => HashMap::new(),
     };
     let mut ctx =
-        swissarmyhammer_commands::CommandContext::new(cmd.clone(), scope, target, args_map);
+        swissarmyhammer_commands::CommandContext::new(cmd.to_string(), scope, target, args_map);
     ctx = ctx.with_ui_state(Arc::clone(&state.ui_state));
     if let Some(ref label) = window_label {
         ctx = ctx.with_window_label(label.clone());
@@ -869,7 +911,7 @@ pub async fn dispatch_command(
 
     // Set KanbanContext extension if board is open.
     // Uses board_path when provided (multi-window) to avoid targeting the wrong board.
-    let active_handle = resolve_handle(&state, board_path).await.ok();
+    let active_handle = resolve_handle(state, board_path).await.ok();
     if let Some(ref handle) = active_handle {
         ctx.set_extension(Arc::clone(&handle.ctx));
     }
@@ -941,7 +983,7 @@ pub async fn dispatch_command(
     // cache so the file watcher won't double-fire for our own writes.
     if undoable {
         if let Some(ref handle) = active_handle {
-            flush_and_emit_for_handle(&app, handle).await;
+            flush_and_emit_for_handle(app, handle).await;
         }
     }
 
@@ -1112,7 +1154,8 @@ pub async fn complete_drag_session(
         .ok_or_else(|| "No active drag session".to_string())?;
 
     let result = if session.source_board_path == target_board_path {
-        // Same board — use existing task.move via internal dispatch
+        // Same board — route through the full dispatch pipeline so we get
+        // undo tracking, UIStateChange emission, and post-execution hooks.
         let mut args = serde_json::Map::new();
         args.insert("id".into(), json!(session.task_id));
         args.insert("column".into(), json!(target_column));
@@ -1125,12 +1168,15 @@ pub async fn complete_drag_session(
         if let Some(ref aid) = after_id {
             args.insert("after_id".into(), json!(aid));
         }
-        invoke_dispatch(
+        dispatch_command_internal(
             &app,
             &state,
             "task.move",
-            Value::Object(args),
+            None,
+            None,
+            Some(Value::Object(args)),
             Some(session.source_board_path.clone()),
+            None,
         )
         .await
     } else {
@@ -1159,54 +1205,18 @@ pub async fn complete_drag_session(
     result
 }
 
-/// Helper: invoke a command internally, reusing the dispatch logic.
-async fn invoke_dispatch(
-    app: &AppHandle,
-    state: &AppState,
-    cmd: &str,
-    args: Value,
-    board_path: Option<String>,
-) -> Result<Value, String> {
-    let cmd_impl = state
-        .command_impls
-        .get(cmd)
-        .ok_or_else(|| format!("No implementation for command: {}", cmd))?;
-
-    let args_map: HashMap<String, Value> = match args {
-        Value::Object(map) => map.into_iter().collect(),
-        _ => HashMap::new(),
-    };
-    let mut ctx =
-        swissarmyhammer_commands::CommandContext::new(cmd.to_string(), vec![], None, args_map);
-    ctx = ctx.with_ui_state(Arc::clone(&state.ui_state));
-
-    let active_handle = resolve_handle(state, board_path).await.ok();
-    if let Some(ref handle) = active_handle {
-        ctx.set_extension(Arc::clone(&handle.ctx));
-    }
-
-    if !cmd_impl.available(&ctx) {
-        return Err(format!("Command not available: {}", cmd));
-    }
-
-    let result = cmd_impl
-        .execute(&ctx)
-        .await
-        .map_err(|e| format!("Command failed: {}", e))?;
-
-    // Flush entity changes and emit events
-    if let Some(ref handle) = active_handle {
-        flush_and_emit_for_handle(app, handle).await;
-    }
-
-    Ok(json!({ "result": result, "undoable": true }))
-}
-
 /// Transfer or copy a task between boards.
 ///
 /// 1. Reads the source task from the source board
 /// 2. Creates a new task on the target board with copied fields
 /// 3. If not copy mode, deletes the source task
+///
+/// TODO: Route cross-board transfers through the command system by implementing
+/// a `task.transfer` command. For now, this does direct entity manipulation
+/// because cross-board moves span two separate board contexts that the existing
+/// command impls don't support. Same-board moves already go through
+/// `dispatch_command_internal` and get undo tracking, UIState events, and the
+/// full post-execution hook chain.
 #[allow(clippy::too_many_arguments)]
 async fn cross_board_transfer(
     app: &AppHandle,
