@@ -210,6 +210,17 @@ fn main() {
                         });
                     }
                 }
+                // When a board window gains focus, update most_recent_board_path so quick
+                // capture and commands without an explicit board_path target the right board.
+                WindowEvent::Focused(true) => {
+                    if label == "quick-capture" {
+                        return;
+                    }
+                    let state = window.app_handle().state::<AppState>();
+                    if let Some(board_path) = state.ui_state.window_board(&label) {
+                        state.ui_state.set_most_recent_board(&board_path);
+                    }
+                }
                 // Mid-session close: remove the UIState window entry so it doesn't resurrect.
                 // On app quit (shutting_down=true) we preserve entries for restore.
                 WindowEvent::Destroyed => {

@@ -197,7 +197,6 @@ pub(crate) const DRAG_SESSION_MAX_AGE_MS: u64 = 30_000;
 /// The shared application state, managed by Tauri.
 pub(crate) struct AppState {
     pub(crate) boards: RwLock<HashMap<PathBuf, Arc<BoardHandle>>>,
-    pub(crate) active_board: RwLock<Option<PathBuf>>,
     /// Shared UI state (inspector stack, palette, keymap, drag session, etc.).
     pub(crate) ui_state: Arc<UIState>,
     /// YAML-loaded command definitions. Behind RwLock because user overrides
@@ -237,7 +236,6 @@ impl AppState {
 
         Self {
             boards: RwLock::new(HashMap::new()),
-            active_board: RwLock::new(None),
             ui_state,
             commands_registry: RwLock::new(CommandsRegistry::from_yaml_sources(&source_refs)),
             command_impls: swissarmyhammer_kanban::commands::register_commands(),
@@ -266,8 +264,9 @@ impl AppState {
         {
             let boards = self.boards.read().await;
             if boards.contains_key(&canonical) {
-                // Already open — just update active
-                *self.active_board.write().await = Some(canonical.clone());
+                // Already open — just update most recent
+                self.ui_state
+                    .set_most_recent_board(&canonical.display().to_string());
                 return Ok(canonical);
             }
         }
@@ -310,7 +309,10 @@ impl AppState {
         self.ui_state
             .touch_recent(&canonical.display().to_string(), &board_name);
 
-        *self.active_board.write().await = Some(canonical.clone());
+        // Track as most recently used board so quick capture and commands
+        // without an explicit board_path default to this board.
+        self.ui_state
+            .set_most_recent_board(&canonical.display().to_string());
 
         // Update UIState board tracking so it stays in sync.
         self.ui_state
@@ -519,10 +521,14 @@ impl AppState {
                 return Err(format!("Board not open: {}", canonical.display()));
             }
 
-            // If we just closed the active board, switch to another one.
-            let mut active = self.active_board.write().await;
-            if active.as_ref() == Some(&canonical) {
-                *active = boards.keys().next().cloned();
+            // If we just closed the most recent board, switch to another one.
+            if self.ui_state.most_recent_board().as_deref()
+                == Some(&canonical.display().to_string())
+            {
+                if let Some(next) = boards.keys().next() {
+                    self.ui_state
+                        .set_most_recent_board(&next.display().to_string());
+                }
             }
         }
 
@@ -534,12 +540,14 @@ impl AppState {
         Ok(())
     }
 
-    /// Get the handle for the active board.
+    /// Get the handle for the most recently focused board.
     pub async fn active_handle(&self) -> Option<Arc<BoardHandle>> {
-        let active = self.active_board.read().await;
-        let path = active.as_ref()?;
+        let path_str = self.ui_state.most_recent_board()?;
+        let path = PathBuf::from(&path_str)
+            .canonicalize()
+            .unwrap_or_else(|_| PathBuf::from(&path_str));
         let boards = self.boards.read().await;
-        boards.get(path).cloned()
+        boards.get(&path).cloned()
     }
 }
 
@@ -891,9 +899,11 @@ mod tests {
 
         let canonical = result.unwrap();
 
-        // active_board should be set
-        let active = state.active_board.read().await;
-        assert_eq!(*active, Some(canonical.clone()));
+        // most_recent_board should be set
+        assert_eq!(
+            state.ui_state.most_recent_board(),
+            Some(canonical.display().to_string())
+        );
 
         // boards map should contain the handle
         let boards = state.boards.read().await;
@@ -921,9 +931,11 @@ mod tests {
         assert!(boards.contains_key(&path_a), "Board A missing from map");
         assert!(boards.contains_key(&path_b), "Board B missing from map");
 
-        // Active board should be B (most recently opened)
-        let active = state.active_board.read().await;
-        assert_eq!(*active, Some(path_b));
+        // Most recent board should be B (most recently opened)
+        assert_eq!(
+            state.ui_state.most_recent_board(),
+            Some(path_b.display().to_string())
+        );
     }
 
     #[test]

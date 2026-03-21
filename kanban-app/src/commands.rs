@@ -1,3 +1,26 @@
+// ┌──────────────────────────────────────────────────────────────────────────┐
+// │ 🛑🛑🛑  STOP — READ THIS BEFORE ADDING A NEW #[tauri::command]  🛑🛑🛑 │
+// │                                                                        │
+// │  ALL state mutations MUST go through `dispatch_command` so they flow    │
+// │  through the swissarmyhammer-commands system. This is REQUIRED for:     │
+// │                                                                        │
+// │    ✅  Undo / Redo support                                             │
+// │    ✅  UIState persistence                                             │
+// │    ✅  Event emission (ui-state-changed)                               │
+// │    ✅  Command logging and observability                               │
+// │                                                                        │
+// │  Adding a new #[tauri::command] that mutates state BYPASSES all of     │
+// │  this. If you think you need one, you almost certainly need a new      │
+// │  command impl in swissarmyhammer-commands instead.                     │
+// │                                                                        │
+// │  Acceptable Tauri commands:                                            │
+// │    • Read-only queries (get_board_data, list_entities, etc.)           │
+// │    • OS-level operations (create_window, restore_windows, quit_app)    │
+// │    • High-frequency non-undoable ops (save_window_geometry)            │
+// │                                                                        │
+// │  If in doubt, ask. Don't just add a quick invoke().                    │
+// └──────────────────────────────────────────────────────────────────────────┘
+
 //! Tauri commands for board operations.
 
 use crate::menu;
@@ -63,12 +86,11 @@ pub struct MenuItemEntry {
 #[tauri::command]
 pub async fn list_open_boards(state: State<'_, AppState>) -> Result<Value, String> {
     let boards = state.boards.read().await;
-    // Determine active board from the runtime active_board handle
-    let active_path = state.active_board.try_read().ok().and_then(|a| a.clone());
+    let most_recent = state.ui_state.most_recent_board().map(PathBuf::from);
 
     let mut list: Vec<Value> = Vec::new();
     for (path, handle) in boards.iter() {
-        let is_active = active_path.as_ref() == Some(path);
+        let is_active = most_recent.as_ref() == Some(path);
         // Read the board entity name if available
         let name = match handle.ctx.entity_context().await {
             Ok(ectx) => match ectx.read("board", "board").await {
@@ -588,17 +610,11 @@ pub async fn create_window(
     let resolved_path = match board_path {
         Some(bp) => Some(bp),
         None => {
-            // Fall back to the runtime active board handle
-            state
-                .active_board
-                .try_read()
-                .ok()
-                .and_then(|a| a.clone())
-                .map(|p| p.display().to_string())
-                .or_else(|| {
-                    let boards = state.boards.try_read().ok();
-                    boards.and_then(|b| b.keys().next().map(|p| p.display().to_string()))
-                })
+            // Fall back to the most recently focused board
+            state.ui_state.most_recent_board().or_else(|| {
+                let boards = state.boards.try_read().ok();
+                boards.and_then(|b| b.keys().next().map(|p| p.display().to_string()))
+            })
         }
     };
 

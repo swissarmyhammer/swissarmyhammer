@@ -47,6 +47,9 @@ impl Command for SwitchBoardCmd {
         // Update per-window board assignment (stored in windows[label].board_path).
         ui.set_window_board(window_label, path);
 
+        // Track the most recently active board for quick capture and default commands.
+        ui.set_most_recent_board(path);
+
         Ok(json!({
             "BoardSwitch": {
                 "path": path,

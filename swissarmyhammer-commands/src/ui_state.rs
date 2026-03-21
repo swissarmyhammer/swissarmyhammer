@@ -131,6 +131,13 @@ struct UIStateInner {
     /// Most-recently-used board list, most recent first.
     #[serde(default)]
     recent_boards: Vec<RecentBoard>,
+    /// Path of the most recently focused board window. Persisted — survives restarts.
+    ///
+    /// Updated when a window gains focus (WindowEvent::Focused) or when
+    /// `file.switchBoard` runs. Used by quick capture and as the default
+    /// board for commands that don't specify an explicit board_path.
+    #[serde(default)]
+    most_recent_board_path: Option<String>,
 }
 
 impl Default for UIStateInner {
@@ -145,6 +152,7 @@ impl Default for UIStateInner {
             open_boards: Vec::new(),
             windows: HashMap::new(),
             recent_boards: Vec::new(),
+            most_recent_board_path: None,
         }
     }
 }
@@ -542,6 +550,29 @@ impl UIState {
             .clone()
     }
 
+    /// Set the most recently focused board path.
+    ///
+    /// Persisted to the YAML config file so the last focused board
+    /// survives restarts. Called on window focus change and on board switch.
+    pub fn set_most_recent_board(&self, path: &str) {
+        {
+            let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+            inner.most_recent_board_path = Some(path.to_string());
+        }
+        self.try_save();
+    }
+
+    /// Get the most recently focused board path.
+    ///
+    /// Returns `None` if no board has been focused yet.
+    pub fn most_recent_board(&self) -> Option<String> {
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .most_recent_board_path
+            .clone()
+    }
+
     /// Clear all per-window state (geometry and inspector stacks).
     ///
     /// Used by reset_windows to wipe geometry before restarting.
@@ -703,6 +734,7 @@ impl UIState {
             "open_boards": inner.open_boards,
             "windows": inner.windows,
             "recent_boards": inner.recent_boards,
+            "most_recent_board_path": inner.most_recent_board_path,
         })
     }
 }
@@ -1036,5 +1068,68 @@ mod tests {
             UIStateChange::ScopeChain(sc) => assert_eq!(sc, chain),
             other => panic!("Expected ScopeChain, got {:?}", other),
         }
+    }
+
+    // --- most_recent_board_path tests ---
+
+    #[test]
+    fn most_recent_board_defaults_to_none() {
+        let state = UIState::new();
+        assert!(state.most_recent_board().is_none());
+    }
+
+    #[test]
+    fn set_most_recent_board_stores_path() {
+        let state = UIState::new();
+        state.set_most_recent_board("/boards/my-project/.kanban");
+        assert_eq!(
+            state.most_recent_board(),
+            Some("/boards/my-project/.kanban".to_string())
+        );
+    }
+
+    #[test]
+    fn set_most_recent_board_overwrites() {
+        let state = UIState::new();
+        state.set_most_recent_board("/boards/first/.kanban");
+        state.set_most_recent_board("/boards/second/.kanban");
+        assert_eq!(
+            state.most_recent_board(),
+            Some("/boards/second/.kanban".to_string())
+        );
+    }
+
+    #[test]
+    fn most_recent_board_persists_round_trip() {
+        let path = temp_yaml_path("most_recent_board");
+        {
+            let state = UIState::load(&path);
+            state.set_most_recent_board("/boards/project/.kanban");
+            state.save().unwrap();
+        }
+        let state2 = UIState::load(&path);
+        assert_eq!(
+            state2.most_recent_board(),
+            Some("/boards/project/.kanban".to_string())
+        );
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn most_recent_board_in_to_json() {
+        let state = UIState::new();
+        state.set_most_recent_board("/boards/foo/.kanban");
+        let json = state.to_json();
+        assert_eq!(
+            json["most_recent_board_path"].as_str(),
+            Some("/boards/foo/.kanban")
+        );
+    }
+
+    #[test]
+    fn most_recent_board_null_in_to_json_when_unset() {
+        let state = UIState::new();
+        let json = state.to_json();
+        assert!(json["most_recent_board_path"].is_null());
     }
 }
