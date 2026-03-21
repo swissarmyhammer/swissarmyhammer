@@ -10,7 +10,6 @@ vi.mock("@tauri-apps/api/core", () => ({
         keymap_mode: "cua",
         scope_chain: [],
         open_boards: [],
-        window_boards: {},
         windows: {},
         recent_boards: [],
       });
@@ -194,7 +193,6 @@ describe("CommandPalette vim insert mode", () => {
           keymap_mode: "vim",
           scope_chain: [],
           open_boards: [],
-          window_boards: {},
           windows: {},
           recent_boards: [],
         });
@@ -227,7 +225,6 @@ describe("CommandPalette vim insert mode", () => {
           keymap_mode: "cua",
           scope_chain: [],
           open_boards: [],
-          window_boards: {},
           windows: {},
           recent_boards: [],
         });
@@ -254,7 +251,6 @@ describe("CommandPalette vim insert mode", () => {
           keymap_mode: "vim",
           scope_chain: [],
           open_boards: [],
-          window_boards: {},
           windows: {},
           recent_boards: [],
         });
@@ -294,7 +290,6 @@ describe("CommandPalette vim insert mode", () => {
           keymap_mode: "vim",
           scope_chain: [],
           open_boards: [],
-          window_boards: {},
           windows: {},
           recent_boards: [],
         });

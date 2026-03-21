@@ -63,14 +63,12 @@ pub struct MenuItemEntry {
 #[tauri::command]
 pub async fn list_open_boards(state: State<'_, AppState>) -> Result<Value, String> {
     let boards = state.boards.read().await;
-    let active_path = state.ui_state.active_board_path();
+    // Determine active board from the runtime active_board handle
+    let active_path = state.active_board.try_read().ok().and_then(|a| a.clone());
 
     let mut list: Vec<Value> = Vec::new();
     for (path, handle) in boards.iter() {
-        let path_str = path.display().to_string();
-        let is_active = active_path.as_deref() == Some(path_str.as_str())
-            || active_path.is_none()
-                && state.active_board.try_read().ok().and_then(|a| a.clone()) == Some(path.clone());
+        let is_active = active_path.as_ref() == Some(path);
         // Read the board entity name if available
         let name = match handle.ctx.entity_context().await {
             Ok(ectx) => match ectx.read("board", "board").await {
@@ -606,13 +604,22 @@ pub async fn create_window(
     let label = new_window_label();
     tracing::info!(board_path = ?board_path, label = %label, "create_window called");
 
-    // Resolve board path: explicit > UIState active board > AppState active board
+    // Resolve board path: explicit > AppState active board > first open board
     let resolved_path = match board_path {
         Some(bp) => Some(bp),
-        None => state.ui_state.active_board_path().or_else(|| {
-            let boards = state.boards.try_read().ok();
-            boards.and_then(|b| b.keys().next().map(|p| p.display().to_string()))
-        }),
+        None => {
+            // Fall back to the runtime active board handle
+            state
+                .active_board
+                .try_read()
+                .ok()
+                .and_then(|a| a.clone())
+                .map(|p| p.display().to_string())
+                .or_else(|| {
+                    let boards = state.boards.try_read().ok();
+                    boards.and_then(|b| b.keys().next().map(|p| p.display().to_string()))
+                })
+        }
     };
 
     let mut url = String::from("index.html?window=board");

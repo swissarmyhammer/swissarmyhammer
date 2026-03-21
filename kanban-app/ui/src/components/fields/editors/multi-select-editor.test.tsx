@@ -13,7 +13,6 @@ const mockInvoke = vi.fn((...args: any[]) => {
       keymap_mode: "cua",
       scope_chain: [],
       open_boards: [],
-      window_boards: {},
       windows: {},
       recent_boards: [],
     });

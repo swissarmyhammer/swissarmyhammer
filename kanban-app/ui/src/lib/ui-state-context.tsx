@@ -10,6 +10,8 @@ import { listen } from "@tauri-apps/api/event";
 
 /** Shape of per-window state inside UIState. */
 export interface WindowStateSnapshot {
+  /** The board path assigned to this window. Empty string means no board. */
+  board_path: string;
   inspector_stack: string[];
   /** The active view ID for this window. */
   active_view_id: string;
@@ -26,8 +28,6 @@ export interface UIStateSnapshot {
   keymap_mode: string;
   scope_chain: string[];
   open_boards: string[];
-  active_board_path?: string;
-  window_boards: Record<string, string>;
   /** Per-window state map: window label → WindowStateSnapshot. */
   windows: Record<string, WindowStateSnapshot>;
   recent_boards: Array<{ path: string; name: string; last_opened: string }>;
@@ -38,7 +38,6 @@ const DEFAULT_STATE: UIStateSnapshot = {
   keymap_mode: "cua",
   scope_chain: [],
   open_boards: [],
-  window_boards: {},
   windows: {},
   recent_boards: [],
 };

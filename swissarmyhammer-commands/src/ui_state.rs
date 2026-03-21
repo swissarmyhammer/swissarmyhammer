@@ -29,13 +29,16 @@ pub struct DragSession {
     pub started_at_ms: u64,
 }
 
-/// Persisted per-window state: inspector stack, active view, and window geometry.
+/// Persisted per-window state: board path, inspector stack, active view, and window geometry.
 ///
-/// Note: board_path is NOT stored here — it lives in `window_boards` (a separate map)
-/// to keep board assignment and window geometry lifecycles separate.
+/// `board_path` is the canonical path to the `.kanban` directory this window shows.
+/// An empty string means no board is assigned to this window.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct WindowState {
+    /// The board path assigned to this window (canonical `.kanban` dir path).
+    /// Empty string means no board assigned.
+    pub board_path: String,
     /// Per-window inspector stack (list of `type:id` monikers).
     pub inspector_stack: Vec<String>,
     /// The active view ID for this window (e.g. "board-view", "grid-view").
@@ -122,11 +125,7 @@ struct UIStateInner {
     context_menu_ids: HashSet<String>,
     /// Canonical paths of boards that are open.
     open_boards: Vec<String>,
-    /// The globally active board path.
-    active_board_path: Option<String>,
-    /// Per-window board assignments (window label → board path).
-    window_boards: HashMap<String, String>,
-    /// Per-window state: inspector stack and geometry.
+    /// Per-window state: inspector stack, board assignment, and geometry.
     #[serde(default)]
     windows: HashMap<String, WindowState>,
     /// Most-recently-used board list, most recent first.
@@ -144,8 +143,6 @@ impl Default for UIStateInner {
             drag_session: None,
             context_menu_ids: HashSet::new(),
             open_boards: Vec::new(),
-            active_board_path: None,
-            window_boards: HashMap::new(),
             windows: HashMap::new(),
             recent_boards: Vec::new(),
         }
@@ -418,9 +415,9 @@ impl UIState {
             .contains(id)
     }
 
-    /// Add a board path to the open boards list, setting it as the active board.
+    /// Add a board path to the open boards list.
     ///
-    /// If the path is already in the list, updates active without duplicating.
+    /// If the path is already in the list, this is a no-op.
     /// Auto-saves if a config path is configured.
     pub fn add_open_board(&self, path: &str) {
         {
@@ -428,48 +425,26 @@ impl UIState {
             if !inner.open_boards.contains(&path.to_string()) {
                 inner.open_boards.push(path.to_string());
             }
-            inner.active_board_path = Some(path.to_string());
         }
         self.try_save();
     }
 
     /// Remove a board path from the open boards list.
     ///
-    /// If the removed board was active, switches active to another open board
-    /// (the last remaining one) or sets active to None.
-    /// Auto-saves if a config path is configured.
+    /// Also clears the `board_path` field from any windows that were showing
+    /// this board. Auto-saves if a config path is configured.
     pub fn remove_open_board(&self, path: &str) {
         {
             let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
             inner.open_boards.retain(|p| p != path);
-            // Clear per-window entries pointing to this board
-            inner.window_boards.retain(|_, p| p != path);
-            // Update active if needed
-            if inner.active_board_path.as_deref() == Some(path) {
-                inner.active_board_path = inner.open_boards.last().cloned();
+            // Clear board_path from any windows pointing to this board
+            for ws in inner.windows.values_mut() {
+                if ws.board_path == path {
+                    ws.board_path = String::new();
+                }
             }
         }
         self.try_save();
-    }
-
-    /// Set the globally active board path.
-    ///
-    /// Auto-saves if a config path is configured.
-    pub fn set_active_board_path(&self, path: &str) {
-        {
-            let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
-            inner.active_board_path = Some(path.to_string());
-        }
-        self.try_save();
-    }
-
-    /// Get the globally active board path.
-    pub fn active_board_path(&self) -> Option<String> {
-        self.inner
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .active_board_path
-            .clone()
     }
 
     /// Get the list of open board paths.
@@ -483,34 +458,42 @@ impl UIState {
 
     /// Set the per-window board assignment.
     ///
+    /// Writes to `windows[label].board_path`.
     /// Auto-saves if a config path is configured.
     pub fn set_window_board(&self, label: &str, path: &str) {
         {
             let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
-            inner
-                .window_boards
-                .insert(label.to_string(), path.to_string());
+            let ws = inner.windows.entry(label.to_string()).or_default();
+            ws.board_path = path.to_string();
         }
         self.try_save();
     }
 
     /// Get the board path assigned to a specific window.
+    ///
+    /// Returns `None` if the window has no board assigned or if the board_path is empty.
     pub fn window_board(&self, label: &str) -> Option<String> {
         self.inner
             .read()
             .unwrap_or_else(|e| e.into_inner())
-            .window_boards
+            .windows
             .get(label)
-            .cloned()
+            .map(|ws| ws.board_path.clone())
+            .filter(|p| !p.is_empty())
     }
 
-    /// Get all window-to-board assignments.
+    /// Get all window-to-board assignments by iterating over windows.
+    ///
+    /// Returns only windows that have a non-empty board_path.
     pub fn all_window_boards(&self) -> HashMap<String, String> {
         self.inner
             .read()
             .unwrap_or_else(|e| e.into_inner())
-            .window_boards
-            .clone()
+            .windows
+            .iter()
+            .filter(|(_, ws)| !ws.board_path.is_empty())
+            .map(|(label, ws)| (label.clone(), ws.board_path.clone()))
+            .collect()
     }
 
     /// Add or update a board in the MRU list. Most recent first.
@@ -579,21 +562,19 @@ impl UIState {
         {
             let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
             inner.windows.remove(label);
-            inner.window_boards.remove(label);
         }
         self.try_save();
     }
 
-    /// Restore the open boards list and active board path from persisted data.
+    /// Restore the open boards list from persisted data.
     ///
     /// Used at startup to populate UIState from legacy AppConfig data when
     /// UIState has no boards yet (first migration).
-    pub fn restore_boards(&self, open_boards: Vec<String>, active_board_path: Option<String>) {
+    pub fn restore_boards(&self, open_boards: Vec<String>) {
         {
             let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
             if inner.open_boards.is_empty() {
                 inner.open_boards = open_boards;
-                inner.active_board_path = active_board_path;
             }
         }
         // No try_save here — this is called at startup with already-persisted data.
@@ -720,8 +701,6 @@ impl UIState {
             "keymap_mode": inner.keymap_mode,
             "scope_chain": inner.scope_chain,
             "open_boards": inner.open_boards,
-            "active_board_path": inner.active_board_path,
-            "window_boards": inner.window_boards,
             "windows": inner.windows,
             "recent_boards": inner.recent_boards,
         })

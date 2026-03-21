@@ -11,7 +11,7 @@ use swissarmyhammer_commands::{Command, CommandContext, CommandError};
 
 /// Switch the current window to a different board.
 ///
-/// Updates UIState: sets the per-window board assignment and active board path.
+/// Updates UIState: sets the per-window board assignment via `windows[label].board_path`.
 /// Required arg: `path` (canonical path to the .kanban directory).
 /// Optional arg: `window_label` (defaults to "main").
 ///
@@ -44,9 +44,8 @@ impl Command for SwitchBoardCmd {
             .and_then(|v| v.as_str())
             .unwrap_or("main");
 
-        // Update per-window board assignment and global active board.
+        // Update per-window board assignment (stored in windows[label].board_path).
         ui.set_window_board(window_label, path);
-        ui.set_active_board_path(path);
 
         Ok(json!({
             "BoardSwitch": {
@@ -77,12 +76,14 @@ impl Command for CloseBoardCmd {
             .as_ref()
             .ok_or_else(|| CommandError::ExecutionFailed("UIState not available".into()))?;
 
-        let path = if let Some(p) = ctx.args.get("path").and_then(|v| v.as_str()) {
-            p.to_string()
-        } else {
-            ui.active_board_path()
-                .ok_or_else(|| CommandError::ExecutionFailed("No active board to close".into()))?
-        };
+        // `path` must be explicitly provided — the concept of a global "active board"
+        // no longer exists. Each window owns its board via WindowState.board_path.
+        let path = ctx
+            .args
+            .get("path")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| CommandError::MissingArg("path".into()))?
+            .to_string();
 
         ui.remove_open_board(&path);
 
