@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KM8XQH7MV5YCP8QF93K1MQR0
-position_column: todo
-position_ordinal: '8280'
+position_column: done
+position_ordinal: ffffffffffeb80
 title: Route start_drag_session through dispatch_command
 ---
 ## What
