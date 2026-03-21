@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: '8180'
+position_column: done
+position_ordinal: ffffffffffe780
 title: Route complete_drag_session entity moves through dispatch_command
 ---
 ## What
