@@ -11,7 +11,7 @@ vi.mock("@tauri-apps/api/core", () => ({
       const t = args?.entityType as string;
       return Promise.resolve(SCHEMAS[t] ?? DEFAULT_SCHEMA);
     }
-    if (cmd === "get_keymap_mode") return Promise.resolve("cua");
+    if (cmd === "get_ui_state") return Promise.resolve({ inspector_stack: [], active_view_id: "", palette_open: false, keymap_mode: "cua", scope_chain: [] });
     return Promise.resolve(null);
   }),
 }));
@@ -33,7 +33,7 @@ import { EntityStoreProvider } from "@/lib/entity-store-context";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
 import { InspectProvider } from "@/lib/inspect-context";
 import { FieldUpdateProvider } from "@/lib/field-update-context";
-import { KeymapProvider } from "@/lib/keymap-context";
+import { UIStateProvider } from "@/lib/ui-state-context";
 import { SchemaProvider } from "@/lib/schema-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { Entity, FieldDef } from "@/types/kanban";
@@ -305,9 +305,9 @@ describe("CellDispatch", () => {
               <EntityFocusProvider>
                 <InspectProvider onInspect={() => {}} onDismiss={() => false}>
                   <FieldUpdateProvider>
-                    <KeymapProvider>
+                    <UIStateProvider>
                       <EntityInspector entity={entity} />
-                    </KeymapProvider>
+                    </UIStateProvider>
                   </FieldUpdateProvider>
                 </InspectProvider>
               </EntityFocusProvider>

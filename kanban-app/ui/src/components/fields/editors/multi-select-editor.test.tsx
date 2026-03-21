@@ -7,7 +7,7 @@ const mockInvoke = vi.fn((...args: any[]) => {
     const entityType = args[1]?.entityType as string;
     return Promise.resolve(SCHEMAS[entityType] ?? DEFAULT_SCHEMA);
   }
-  if (args[0] === "get_keymap_mode") return Promise.resolve("cua");
+  if (args[0] === "get_ui_state") return Promise.resolve({ inspector_stack: [], active_view_id: "", palette_open: false, keymap_mode: "cua", scope_chain: [] });
   if (args[0] === "search_mentions") return Promise.resolve([]);
   if (args[0] === "dispatch_command") return Promise.resolve("ok");
   return Promise.resolve(null);
@@ -27,7 +27,7 @@ vi.mock("@tauri-apps/plugin-log", () => ({
 
 import { EditorView } from "@codemirror/view";
 import { MultiSelectEditor } from "./multi-select-editor";
-import { KeymapProvider } from "@/lib/keymap-context";
+import { UIStateProvider } from "@/lib/ui-state-context";
 import { SchemaProvider } from "@/lib/schema-context";
 import { EntityStoreProvider } from "@/lib/entity-store-context";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
@@ -104,7 +104,7 @@ function renderMultiSelect(
         <EntityStoreProvider entities={entities}>
           <EntityFocusProvider>
             <InspectProvider onInspect={() => {}} onDismiss={() => false}>
-              <KeymapProvider>
+              <UIStateProvider>
                 <MultiSelectEditor
                   field={props.field}
                   value={props.value}
@@ -113,7 +113,7 @@ function renderMultiSelect(
                   entity={props.entity}
                   mode="compact"
                 />
-              </KeymapProvider>
+              </UIStateProvider>
             </InspectProvider>
           </EntityFocusProvider>
         </EntityStoreProvider>

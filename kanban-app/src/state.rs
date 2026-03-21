@@ -23,6 +23,7 @@ const MAX_RECENT_BOARDS: usize = 20;
 const CONFIG_APP_SUBDIR: &str = "kanban-app";
 const CONFIG_FILE_NAME: &str = "config.yaml";
 const CONFIG_FILE_NAME_LEGACY: &str = "config.json";
+const UI_STATE_FILE_NAME: &str = "ui-state.yaml";
 
 /// A handle to a single open kanban board.
 pub(crate) struct BoardHandle {
@@ -209,8 +210,6 @@ pub(crate) struct RecentBoard {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub(crate) struct AppConfig {
     pub(crate) recent_boards: Vec<RecentBoard>,
-    #[serde(default = "default_keymap_mode")]
-    pub(crate) keymap_mode: String,
     /// Paths of boards that were open when the app last ran.
     /// Restored on startup so multi-board sessions survive reloads.
     #[serde(default)]
@@ -255,10 +254,6 @@ impl WindowState {
             maximized: false,
         }
     }
-}
-
-fn default_keymap_mode() -> String {
-    "cua".to_string()
 }
 
 impl AppConfig {
@@ -367,7 +362,7 @@ impl AppState {
         let sources = builtin_yaml_sources();
         let source_refs: Vec<(&str, &str)> = sources.iter().map(|(n, c)| (*n, *c)).collect();
         let config = AppConfig::load();
-        let ui_state = Arc::new(UIState::new());
+        let ui_state = Arc::new(UIState::load(ui_state_file_path()));
 
         // Restore inspector stack from persisted config
         if let Some(ws) = config.windows.get("main") {
@@ -858,6 +853,21 @@ fn config_file_path() -> PathBuf {
         })
 }
 
+/// Get the path to the UIState persistence file.
+///
+/// Uses XDG config directory: `$XDG_CONFIG_HOME/sah/kanban-app/ui-state.yaml`
+fn ui_state_file_path() -> PathBuf {
+    use swissarmyhammer_directory::{ManagedDirectory, SwissarmyhammerConfig};
+
+    ManagedDirectory::<SwissarmyhammerConfig>::xdg_config()
+        .map(|dir| dir.root().join(CONFIG_APP_SUBDIR).join(UI_STATE_FILE_NAME))
+        .unwrap_or_else(|_| {
+            PathBuf::from(".")
+                .join(CONFIG_APP_SUBDIR)
+                .join(UI_STATE_FILE_NAME)
+        })
+}
+
 /// Get the path to the legacy JSON config file (for migration).
 fn legacy_config_file_path() -> PathBuf {
     use swissarmyhammer_directory::{ManagedDirectory, SwissarmyhammerConfig};
@@ -1312,7 +1322,7 @@ mod tests {
     #[test]
     fn test_windows_defaults_to_empty() {
         // Simulate loading config that predates windows field
-        let yaml = "recent_boards: []\nkeymap_mode: cua\n";
+        let yaml = "recent_boards: []\n";
         let config: AppConfig = serde_yaml_ng::from_str(yaml).unwrap();
         assert!(config.windows.is_empty());
     }
@@ -1493,7 +1503,8 @@ mod tests {
     #[test]
     fn test_config_json_migration() {
         // Legacy JSON uses "window_boards" (old field name) — the serde alias
-        // maps it to the new "windows" field.
+        // maps it to the new "windows" field. Also tests that old "keymap_mode"
+        // fields are silently ignored (keymap_mode was removed from AppConfig).
         let json_content = serde_json::json!({
             "recent_boards": [],
             "keymap_mode": "vim",
@@ -1511,7 +1522,6 @@ mod tests {
         let config: AppConfig =
             serde_json::from_str(&serde_json::to_string(&json_content).unwrap()).unwrap();
 
-        assert_eq!(config.keymap_mode, "vim");
         assert_eq!(config.open_boards.len(), 1);
         assert_eq!(config.windows.len(), 1);
         let entry = config.windows.get("board-01abc").unwrap();

@@ -228,25 +228,14 @@ pub async fn get_recent_boards(state: State<'_, AppState>) -> Result<Value, Stri
     serde_json::to_value(&config.recent_boards).map_err(|e| e.to_string())
 }
 
-/// Get the current editor keymap mode.
-#[tauri::command]
-pub async fn get_keymap_mode(state: State<'_, AppState>) -> Result<String, String> {
-    let config = state.config.read().await;
-    Ok(config.keymap_mode.clone())
-}
-
-/// Set the editor keymap mode and persist to config.
+/// Return the full UIState as JSON for the frontend.
 ///
-/// The frontend handles menu sync via `syncMenuToNative` after keymap
-/// changes, so we no longer rebuild the native menu here.
+/// Returns a snapshot of all UIState fields including transient ones
+/// (`palette_open`, `scope_chain`). The frontend uses this on mount
+/// to initialise the UIStateProvider.
 #[tauri::command]
-pub async fn set_keymap_mode(state: State<'_, AppState>, mode: String) -> Result<Value, String> {
-    {
-        let mut config = state.config.write().await;
-        config.keymap_mode = mode.clone();
-        config.save().map_err(|e| e.to_string())?;
-    }
-    Ok(json!({ "keymap_mode": mode }))
+pub async fn get_ui_state(state: State<'_, AppState>) -> Result<Value, String> {
+    Ok(state.ui_state.to_json())
 }
 
 /// Get the persisted window state (board path, active view, inspector stack).
@@ -1095,6 +1084,13 @@ pub async fn dispatch_command(
         ws.inspector_stack = stack.clone();
         drop(active_board);
         let _ = config.save();
+    }
+
+    // After any UIStateChange, push the full state snapshot to the frontend.
+    // This broad approach ensures the React UIStateProvider stays in sync
+    // without needing per-field event types. Optimise per-field later if needed.
+    if serde_json::from_value::<swissarmyhammer_commands::UIStateChange>(result.clone()).is_ok() {
+        let _ = app.emit("ui-state-changed", state.ui_state.to_json());
     }
 
     // For undoable commands (data mutations), scan entity files for changes

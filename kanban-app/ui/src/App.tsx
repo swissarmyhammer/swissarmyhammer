@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { KeymapProvider } from "@/lib/keymap-context";
+import { UIStateProvider } from "@/lib/ui-state-context";
 import { AppModeProvider } from "@/lib/app-mode-context";
 import { UndoStackProvider } from "@/lib/undo-context";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
@@ -503,7 +503,7 @@ function App() {
           <EntityStoreProvider entities={entityStore}>
             <EntityFocusProvider>
               <FieldUpdateProvider>
-                <KeymapProvider>
+                <UIStateProvider>
                   <AppModeProvider>
                     <UndoStackProvider>
                       <InspectProvider
@@ -596,7 +596,7 @@ function App() {
                       </InspectProvider>
                     </UndoStackProvider>
                   </AppModeProvider>
-                </KeymapProvider>
+                </UIStateProvider>
               </FieldUpdateProvider>
             </EntityFocusProvider>
           </EntityStoreProvider>
@@ -742,8 +742,8 @@ function InspectorPanel({
 }
 
 /**
- * Quick-capture window renders a minimal provider tree — just keymap context
- * (for vim/CUA mode awareness) wrapping the capture form.
+ * Quick-capture window renders a minimal provider tree wrapping the capture
+ * form.
  *
  * Sets body/html to transparent so the borderless window shows only the
  * styled card with rounded corners and shadow.
@@ -758,9 +758,9 @@ function QuickCaptureApp() {
     <SchemaProvider>
       <EntityStoreProvider entities={{}}>
         <FieldUpdateProvider>
-          <KeymapProvider>
+          <UIStateProvider>
             <QuickCapture />
-          </KeymapProvider>
+          </UIStateProvider>
         </FieldUpdateProvider>
       </EntityStoreProvider>
     </SchemaProvider>

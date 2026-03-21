@@ -8,7 +8,7 @@ import { getCM, Vim } from "@replit/codemirror-vim";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { invoke } from "@tauri-apps/api/core";
-import { useKeymap } from "@/lib/keymap-context";
+import { useUIState } from "@/lib/ui-state-context";
 import { shadcnTheme, keymapExtension } from "@/lib/cm-keymap";
 import { buildSubmitCancelExtensions } from "@/lib/cm-submit-cancel";
 import { useSchema } from "@/lib/schema-context";
@@ -163,7 +163,7 @@ export function EditableMarkdown({
   const editorRef = useRef<ReactCodeMirrorRef>(null);
   const clickCoordsRef = useRef<{ x: number; y: number } | null>(null);
   const keymapCompartment = useRef(new Compartment());
-  const { mode } = useKeymap();
+  const { keymap_mode: mode } = useUIState();
   const { mentionableTypes } = useSchema();
   const { getEntities } = useEntityStore();
 

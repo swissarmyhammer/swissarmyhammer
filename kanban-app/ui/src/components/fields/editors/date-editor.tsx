@@ -6,7 +6,7 @@ import { Compartment } from "@codemirror/state";
 import { getCM } from "@replit/codemirror-vim";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import { Calendar } from "@/components/ui/calendar";
-import { useKeymap } from "@/lib/keymap-context";
+import { useUIState } from "@/lib/ui-state-context";
 import { shadcnTheme, keymapExtension } from "@/lib/cm-keymap";
 import type { EditorProps } from "./markdown-editor";
 
@@ -38,7 +38,7 @@ export function DateEditor({ value, onCommit, onCancel }: EditorProps) {
   const editorRef = useRef<ReactCodeMirrorRef>(null);
   const keymapCompartment = useRef(new Compartment());
   const committedRef = useRef(false);
-  const { mode } = useKeymap();
+  const { keymap_mode: mode } = useUIState();
 
   // Parse as user types
   useEffect(() => {

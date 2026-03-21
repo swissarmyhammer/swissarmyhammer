@@ -10,7 +10,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useActiveBoardPath } from "@/lib/command-scope";
 import { useGrid } from "@/hooks/use-grid";
 import { useSchema } from "@/lib/schema-context";
-import { useKeymap } from "@/lib/keymap-context";
+import { useUIState } from "@/lib/ui-state-context";
 import { useAppMode } from "@/lib/app-mode-context";
 import { useFieldUpdate } from "@/lib/field-update-context";
 import { useEntityStore } from "@/lib/entity-store-context";
@@ -74,7 +74,7 @@ export function GridView({ view }: GridViewProps) {
   const gridRef = useRef(grid);
   gridRef.current = grid;
 
-  const { mode: keymapMode } = useKeymap();
+  const { keymap_mode: keymapMode } = useUIState();
   const { mode: appMode } = useAppMode();
   const { updateField } = useFieldUpdate();
   const inspectEntity = useInspect();

@@ -12,7 +12,7 @@ import {
   type CommandAtDepth,
 } from "@/lib/command-scope";
 import { useFocusedScope } from "@/lib/entity-focus-context";
-import { useKeymap } from "@/lib/keymap-context";
+import { useUIState } from "@/lib/ui-state-context";
 import { shadcnTheme, keymapExtension } from "@/lib/cm-keymap";
 import { fuzzyMatch } from "@/lib/fuzzy-filter";
 import { useInspectOptional } from "@/lib/inspect-context";
@@ -70,7 +70,7 @@ export function CommandPalette({
   const editorRef = useRef<ReactCodeMirrorRef>(null);
   const keymapCompartment = useRef(new Compartment());
   const listRef = useRef<HTMLDivElement>(null);
-  const { mode } = useKeymap();
+  const { keymap_mode: mode } = useUIState();
   const focusedScope = useFocusedScope();
   const rootCommands = useAvailableCommands();
   // When a scope is focused, collect commands from it (which includes its ancestor chain).

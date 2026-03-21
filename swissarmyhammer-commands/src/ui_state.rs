@@ -320,6 +320,23 @@ impl UIState {
             .scope_chain
             .clone()
     }
+
+    /// Serialize the current state to a JSON Value for the frontend.
+    ///
+    /// Includes ALL fields (both persisted and transient) so the frontend has
+    /// a complete snapshot. The `palette_open` and `scope_chain` fields are
+    /// marked `#[serde(skip)]` on the inner struct to avoid persisting them
+    /// to YAML, so we build the JSON manually to include them.
+    pub fn to_json(&self) -> serde_json::Value {
+        let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
+        serde_json::json!({
+            "inspector_stack": inner.inspector_stack,
+            "active_view_id": inner.active_view_id,
+            "palette_open": inner.palette_open,
+            "keymap_mode": inner.keymap_mode,
+            "scope_chain": inner.scope_chain,
+        })
+    }
 }
 
 impl std::fmt::Debug for UIState {

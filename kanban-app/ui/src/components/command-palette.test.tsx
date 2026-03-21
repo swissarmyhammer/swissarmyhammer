@@ -4,7 +4,7 @@ import { render, screen, fireEvent, act } from "@testing-library/react";
 // Mock Tauri APIs before importing components that use them
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn((cmd: string, args?: any) => {
-    if (cmd === "get_keymap_mode") return Promise.resolve("cua");
+    if (cmd === "get_ui_state") return Promise.resolve({ inspector_stack: [], active_view_id: "", palette_open: false, keymap_mode: "cua", scope_chain: [] });
     if (cmd === "search_entities") {
       const query = args?.query ?? "";
       if (!query.trim()) return Promise.resolve([]);
@@ -40,7 +40,7 @@ import { getCM, Vim } from "@replit/codemirror-vim";
 import { CommandPalette } from "./command-palette";
 import { CommandScopeProvider, type CommandDef } from "@/lib/command-scope";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
-import { KeymapProvider } from "@/lib/keymap-context";
+import { UIStateProvider } from "@/lib/ui-state-context";
 import { InspectProvider } from "@/lib/inspect-context";
 
 const getCMMock = vi.mocked(getCM);
@@ -77,11 +77,11 @@ beforeEach(() => {
 function renderPalette(open: boolean, onClose = vi.fn()) {
   return render(
     <EntityFocusProvider>
-      <KeymapProvider>
+      <UIStateProvider>
         <CommandScopeProvider commands={TEST_COMMANDS}>
           <CommandPalette open={open} onClose={onClose} />
         </CommandScopeProvider>
-      </KeymapProvider>
+      </UIStateProvider>
     </EntityFocusProvider>
   );
 }
@@ -158,9 +158,9 @@ describe("CommandPalette vim insert mode", () => {
   });
 
   it("auto-enters insert mode when palette opens in vim mode", async () => {
-    // Mock invoke to return "vim" for get_keymap_mode
+    // Mock invoke to return "vim" for get_ui_state
     vi.mocked(invoke).mockImplementation((cmd: string) => {
-      if (cmd === "get_keymap_mode") return Promise.resolve("vim");
+      if (cmd === "get_ui_state") return Promise.resolve({ inspector_stack: [], active_view_id: "", palette_open: false, keymap_mode: "vim", scope_chain: [] });
       return Promise.resolve(null);
     });
 
@@ -180,7 +180,7 @@ describe("CommandPalette vim insert mode", () => {
   it("does NOT enter insert mode in CUA mode", async () => {
     // Default mock returns "cua"
     vi.mocked(invoke).mockImplementation((cmd: string) => {
-      if (cmd === "get_keymap_mode") return Promise.resolve("cua");
+      if (cmd === "get_ui_state") return Promise.resolve({ inspector_stack: [], active_view_id: "", palette_open: false, keymap_mode: "cua", scope_chain: [] });
       return Promise.resolve(null);
     });
 
@@ -198,7 +198,7 @@ describe("CommandPalette vim insert mode", () => {
 
   it("retries when getCM initially returns null", async () => {
     vi.mocked(invoke).mockImplementation((cmd: string) => {
-      if (cmd === "get_keymap_mode") return Promise.resolve("vim");
+      if (cmd === "get_ui_state") return Promise.resolve({ inspector_stack: [], active_view_id: "", palette_open: false, keymap_mode: "vim", scope_chain: [] });
       return Promise.resolve(null);
     });
 
@@ -226,7 +226,7 @@ describe("CommandPalette vim insert mode", () => {
   it("stops retrying after cancellation (palette closes)", async () => {
 
     vi.mocked(invoke).mockImplementation((cmd: string) => {
-      if (cmd === "get_keymap_mode") return Promise.resolve("vim");
+      if (cmd === "get_ui_state") return Promise.resolve({ inspector_stack: [], active_view_id: "", palette_open: false, keymap_mode: "vim", scope_chain: [] });
       return Promise.resolve(null);
     });
 
@@ -260,13 +260,13 @@ describe("CommandPalette vim insert mode", () => {
 function renderSearchPalette(open: boolean, onClose = vi.fn(), onInspect = vi.fn()) {
   return render(
     <EntityFocusProvider>
-      <KeymapProvider>
+      <UIStateProvider>
         <InspectProvider onInspect={onInspect} onDismiss={() => false}>
           <CommandScopeProvider commands={[]}>
             <CommandPalette open={open} onClose={onClose} mode="search" />
           </CommandScopeProvider>
         </InspectProvider>
-      </KeymapProvider>
+      </UIStateProvider>
     </EntityFocusProvider>
   );
 }

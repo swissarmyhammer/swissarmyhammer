@@ -7,10 +7,10 @@
  * CodeMirror 6 editors.
  */
 
-import type { KeymapMode } from "./keymap-context";
-export type { KeymapMode };
-
 /* ---------- types ---------- */
+
+/** The three supported editor keymap modes. */
+export type KeymapMode = "cua" | "vim" | "emacs";
 
 /** A flat mapping from canonical key strings to command IDs. */
 export type BindingTable = Record<string, string>;

@@ -7,7 +7,7 @@ import { languages } from "@codemirror/language-data";
 import { getCM, Vim } from "@replit/codemirror-vim";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { useKeymap } from "@/lib/keymap-context";
+import { useUIState } from "@/lib/ui-state-context";
 import { shadcnTheme, keymapExtension } from "@/lib/cm-keymap";
 import { buildSubmitCancelExtensions } from "@/lib/cm-submit-cancel";
 import type { FieldDef } from "@/types/kanban";
@@ -79,7 +79,7 @@ export function FieldPlaceholderEditor({ value, onCommit, onCancel, onSubmit, pl
   const [draft, setDraft] = useState(value);
   const editorRef = useRef<ReactCodeMirrorRef>(null);
   const keymapCompartment = useRef(new Compartment());
-  const { mode } = useKeymap();
+  const { keymap_mode: mode } = useUIState();
 
   // Guard against re-entrant commits (blur fires after Escape)
   const committedRef = useRef(false);

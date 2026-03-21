@@ -25,7 +25,7 @@ const DEFAULT_SCHEMA = { entity: { name: "unknown", fields: [] }, fields: [] };
 // Mock Tauri APIs before importing components that use them
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn((cmd: string, args?: Record<string, unknown>) => {
-    if (cmd === "get_keymap_mode") return Promise.resolve("cua");
+    if (cmd === "get_ui_state") return Promise.resolve({ inspector_stack: [], active_view_id: "", palette_open: false, keymap_mode: "cua", scope_chain: [] });
     if (cmd === "get_entity_schema") {
       const entityType = args?.entityType as string;
       return Promise.resolve(SCHEMAS[entityType] ?? DEFAULT_SCHEMA);
@@ -39,7 +39,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 }));
 
 import { EditableMarkdown } from "./editable-markdown";
-import { KeymapProvider } from "@/lib/keymap-context";
+import { UIStateProvider } from "@/lib/ui-state-context";
 import { SchemaProvider } from "@/lib/schema-context";
 import { EntityStoreProvider } from "@/lib/entity-store-context";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
@@ -63,7 +63,7 @@ function renderWithProvider(ui: React.ReactElement, entities?: Record<string, En
         <EntityStoreProvider entities={entities ?? { tag: [], actor: [] }}>
           <EntityFocusProvider>
             <InspectProvider onInspect={() => {}} onDismiss={() => false}>
-              <KeymapProvider>{ui}</KeymapProvider>
+              <UIStateProvider>{ui}</UIStateProvider>
             </InspectProvider>
           </EntityFocusProvider>
         </EntityStoreProvider>

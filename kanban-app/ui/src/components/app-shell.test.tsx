@@ -3,7 +3,10 @@ import { render, screen, fireEvent, act } from "@testing-library/react";
 
 // Mock Tauri APIs before importing components that use them
 vi.mock("@tauri-apps/api/core", () => ({
-  invoke: vi.fn(() => Promise.resolve("cua")),
+  invoke: vi.fn((cmd: string) => {
+    if (cmd === "get_ui_state") return Promise.resolve({ inspector_stack: [], active_view_id: "", palette_open: false, keymap_mode: "cua", scope_chain: [] });
+    return Promise.resolve(null);
+  }),
 }));
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(() => Promise.resolve(() => {})),
@@ -11,7 +14,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 
 import { AppShell } from "./app-shell";
 import { FocusScope } from "./focus-scope";
-import { KeymapProvider } from "@/lib/keymap-context";
+import { UIStateProvider } from "@/lib/ui-state-context";
 import { AppModeProvider } from "@/lib/app-mode-context";
 import { UndoStackProvider } from "@/lib/undo-context";
 import { EntityFocusProvider, useEntityFocus } from "@/lib/entity-focus-context";
@@ -39,7 +42,7 @@ function CommandInspector() {
 function renderShell(children?: React.ReactNode) {
   return render(
     <EntityFocusProvider>
-      <KeymapProvider>
+      <UIStateProvider>
         <AppModeProvider>
           <UndoStackProvider>
             <InspectProvider onInspect={() => {}} onDismiss={() => false}>
@@ -49,7 +52,7 @@ function renderShell(children?: React.ReactNode) {
             </InspectProvider>
           </UndoStackProvider>
         </AppModeProvider>
-      </KeymapProvider>
+      </UIStateProvider>
     </EntityFocusProvider>,
   );
 }
@@ -171,7 +174,7 @@ describe("AppShell", () => {
   it("shows mode indicator as COMMAND when palette opens", async () => {
     render(
       <EntityFocusProvider>
-        <KeymapProvider>
+        <UIStateProvider>
           <AppModeProvider>
             <UndoStackProvider>
               <InspectProvider onInspect={() => {}} onDismiss={() => false}>
@@ -181,7 +184,7 @@ describe("AppShell", () => {
               </InspectProvider>
             </UndoStackProvider>
           </AppModeProvider>
-        </KeymapProvider>
+        </UIStateProvider>
       </EntityFocusProvider>,
     );
 

@@ -3,9 +3,9 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { CommandScopeProvider, useExecuteCommand, resolveCommand, dispatchCommand, type CommandDef } from "@/lib/command-scope";
 import { useFocusedScope } from "@/lib/entity-focus-context";
-import { useKeymap, type KeymapMode } from "@/lib/keymap-context";
+import { useUIState } from "@/lib/ui-state-context";
 import { useAppMode } from "@/lib/app-mode-context";
-import { createKeyHandler } from "@/lib/keybindings";
+import { createKeyHandler, type KeymapMode } from "@/lib/keybindings";
 import { CommandPalette } from "@/components/command-palette";
 import { pathStem } from "@/components/board-selector";
 import { syncMenuToNative } from "@/lib/menu-sync";
@@ -90,12 +90,12 @@ function KeybindingHandler({ mode }: { mode: KeymapMode }) {
  * Top-level shell that wires global commands, keybindings, and the command
  * palette around the application content.
  *
- * Must be rendered inside KeymapProvider, AppModeProvider, and
+ * Must be rendered inside UIStateProvider, AppModeProvider, and
  * UndoStackProvider (it reads from all three). It provides a
  * CommandScopeProvider to its children.
  *
  * Provider nesting order:
- *   KeymapProvider > AppModeProvider > UndoStackProvider > AppShell > children
+ *   UIStateProvider > AppModeProvider > UndoStackProvider > AppShell > children
  */
 interface AppShellProps {
   children: ReactNode;
@@ -110,7 +110,10 @@ export function AppShell({ children, openBoards, onSwitchBoard }: AppShellProps)
   const [paletteMode, setPaletteMode] = useState<"command" | "search">("command");
   const paletteOpenRef = useRef(false);
   paletteOpenRef.current = paletteOpen;
-  const { mode: keymapMode, setMode: setKeymapMode } = useKeymap();
+  const { keymap_mode: keymapModeRaw } = useUIState();
+  // Normalize to a valid KeymapMode, defaulting to "cua" for unknown values
+  const keymapMode: KeymapMode =
+    keymapModeRaw === "vim" || keymapModeRaw === "emacs" ? keymapModeRaw : "cua";
   const { setMode } = useAppMode();
   const dismissInspector = useInspectDismiss();
 
@@ -198,19 +201,19 @@ export function AppShell({ children, openBoards, onSwitchBoard }: AppShellProps)
         id: "settings.keymap.vim",
         name: "Keymap Vim",
         menuPlacement: { menu: "settings", group: 0, order: 1, radioGroup: "keymap", checked: keymapMode === "vim" },
-        execute: () => setKeymapMode("vim"),
+        // No execute — dispatches to Rust via dispatch_command which mutates UIState
       },
       {
         id: "settings.keymap.cua",
         name: "Keymap CUA",
         menuPlacement: { menu: "settings", group: 0, order: 0, radioGroup: "keymap", checked: keymapMode === "cua" },
-        execute: () => setKeymapMode("cua"),
+        // No execute — dispatches to Rust via dispatch_command which mutates UIState
       },
       {
         id: "settings.keymap.emacs",
         name: "Keymap Emacs",
         menuPlacement: { menu: "settings", group: 0, order: 2, radioGroup: "keymap", checked: keymapMode === "emacs" },
-        execute: () => setKeymapMode("emacs"),
+        // No execute — dispatches to Rust via dispatch_command which mutates UIState
       },
       {
         id: "app.resetWindows",
@@ -272,7 +275,7 @@ export function AppShell({ children, openBoards, onSwitchBoard }: AppShellProps)
         execute: () => onSwitchBoard?.(b.path),
       })),
     ],
-    [setMode, setKeymapMode, keymapMode, dismissInspector, openBoards, onSwitchBoard],
+    [setMode, keymapMode, dismissInspector, openBoards, onSwitchBoard],
   );
 
   /** Close the command palette and return to normal mode. */

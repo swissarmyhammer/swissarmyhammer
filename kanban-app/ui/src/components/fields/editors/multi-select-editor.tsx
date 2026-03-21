@@ -16,7 +16,7 @@ import { keymap } from "@codemirror/view";
 import { Prec } from "@codemirror/state";
 import { invoke } from "@tauri-apps/api/core";
 import { shadcnTheme, keymapExtension } from "@/lib/cm-keymap";
-import { useKeymap } from "@/lib/keymap-context";
+import { useUIState } from "@/lib/ui-state-context";
 import { useSchema } from "@/lib/schema-context";
 import { useEntityStore } from "@/lib/entity-store-context";
 import {
@@ -42,7 +42,7 @@ export function MultiSelectEditor({
   value,
   onCommit,
 }: MultiSelectEditorProps) {
-  const { mode } = useKeymap();
+  const { keymap_mode: mode } = useUIState();
   const { mentionableTypes } = useSchema();
   const { getEntities } = useEntityStore();
   const editorRef = useRef<ReactCodeMirrorRef>(null);

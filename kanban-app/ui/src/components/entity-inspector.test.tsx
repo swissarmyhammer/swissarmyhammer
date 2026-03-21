@@ -40,7 +40,7 @@ const mockInvoke = vi.fn((...args: any[]) => {
     const entityType = args[1]?.entityType as string;
     return Promise.resolve(SCHEMAS[entityType] ?? TASK_SCHEMA);
   }
-  if (args[0] === "get_keymap_mode") return Promise.resolve("cua");
+  if (args[0] === "get_ui_state") return Promise.resolve({ inspector_stack: [], active_view_id: "", palette_open: false, keymap_mode: "cua", scope_chain: [] });
   if (args[0] === "update_entity_field") return Promise.resolve({ id: "test-id" });
   return Promise.resolve("ok");
 });
@@ -58,7 +58,7 @@ vi.mock("@tauri-apps/plugin-log", () => ({
 }));
 
 import { EntityInspector } from "./entity-inspector";
-import { KeymapProvider } from "@/lib/keymap-context";
+import { UIStateProvider } from "@/lib/ui-state-context";
 import { SchemaProvider } from "@/lib/schema-context";
 import { EntityStoreProvider } from "@/lib/entity-store-context";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
@@ -79,9 +79,9 @@ async function renderInspector(entity: Entity, tagEntities: Entity[] = []) {
           <EntityFocusProvider>
             <InspectProvider onInspect={() => {}} onDismiss={() => false}>
               <FieldUpdateProvider>
-                <KeymapProvider>
+                <UIStateProvider>
                   <EntityInspector entity={entity} />
-                </KeymapProvider>
+                </UIStateProvider>
               </FieldUpdateProvider>
             </InspectProvider>
           </EntityFocusProvider>
