@@ -27,7 +27,7 @@ import {
   type CommandScope,
 } from "@/lib/command-scope";
 import { DataTable, type DataTableColumn } from "@/components/data-table";
-import { CellEditor } from "@/components/cells/cell-editor";
+import { Field } from "@/components/fields/field";
 import type { ViewDef, Entity, FieldDef } from "@/types/kanban";
 
 interface GridViewProps {
@@ -326,14 +326,13 @@ export function GridView({ view }: GridViewProps) {
       onCancel: () => void,
     ) => {
       return (
-        <CellEditor
-          field={field}
-          entity={entity}
-          value={entity.fields[field.name]}
+        <Field
+          fieldDef={field}
           entityType={entity.entity_type}
           entityId={entity.id}
-          fieldName={field.name}
-          onCommit={onCommit}
+          mode="compact"
+          editing={true}
+          onDone={() => onCommit(undefined)}
           onCancel={onCancel}
         />
       );

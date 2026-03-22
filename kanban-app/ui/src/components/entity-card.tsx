@@ -1,16 +1,12 @@
-import { forwardRef, memo, useCallback, useMemo } from "react";
+import { forwardRef, memo, useMemo } from "react";
 import { GripVertical, Info } from "lucide-react";
-import { EditableMarkdown } from "@/components/editable-markdown";
-import { SubtaskProgress } from "@/components/subtask-progress";
-import { BadgeListDisplay } from "@/components/fields/displays/badge-list-display";
 import { FocusScope } from "@/components/focus-scope";
-import { useFieldUpdate } from "@/lib/field-update-context";
+import { Field } from "@/components/fields/field";
 import { useSchema } from "@/lib/schema-context";
 import { useInspect } from "@/lib/inspect-context";
 import { useEntityCommands } from "@/lib/entity-commands";
 import { moniker } from "@/lib/moniker";
-import type { Entity, FieldDef } from "@/types/kanban";
-import { getStr } from "@/types/kanban";
+import type { Entity } from "@/types/kanban";
 
 interface EntityCardProps {
   entity: Entity;
@@ -40,26 +36,15 @@ export const EntityCard = memo(
     },
     ref,
   ) {
-    const { updateField } = useFieldUpdate();
     const { getSchema } = useSchema();
     const inspectEntity = useInspect();
     const schema = getSchema(entity.entity_type);
-    const bodyFieldName = schema?.entity?.body_field;
 
     const entityMoniker = moniker(entity.entity_type, entity.id);
 
     const cardFields = useMemo(
       () => (schema?.fields ?? []).filter((f) => f.section === "header"),
       [schema],
-    );
-
-    const handleCommit = useCallback(
-      (fieldName: string, value: unknown) => {
-        updateField(entity.entity_type, entity.id, fieldName, value).catch(
-          () => {},
-        );
-      },
-      [updateField, entity.entity_type, entity.id],
     );
 
     const commands = useEntityCommands(entity.entity_type, entity.id, entity);
@@ -86,13 +71,13 @@ export const EntityCard = memo(
           </button>
           <div className="flex-1 min-w-0 break-words">
             {cardFields.map((field) => (
-              <CardFieldDispatch
+              <Field
                 key={field.name}
-                field={field}
-                value={entity.fields[field.name]}
-                entity={entity}
-                bodyFieldName={bodyFieldName}
-                onCommit={(value) => handleCommit(field.name, value)}
+                fieldDef={field}
+                entityType={entity.entity_type}
+                entityId={entity.id}
+                mode="compact"
+                editing={false}
               />
             ))}
           </div>
@@ -113,62 +98,3 @@ export const EntityCard = memo(
   }),
 );
 
-/**
- * Compact field renderer for card view — no labels, minimal spacing.
- * Same dispatch logic as EntityInspector's FieldDispatch.
- */
-function CardFieldDispatch({
-  field,
-  value,
-  entity,
-  bodyFieldName,
-  onCommit,
-}: {
-  field: FieldDef;
-  value: unknown;
-  entity: Entity;
-  bodyFieldName?: string;
-  onCommit: (value: unknown) => void;
-}) {
-  // Markdown fields — inline editable
-  if (field.type.kind === "markdown") {
-    const text = typeof value === "string" ? value : "";
-    return (
-      <EditableMarkdown
-        value={text}
-        onCommit={(v) => onCommit(v)}
-        className="leading-snug"
-        inputClassName="leading-snug bg-transparent border-b border-ring w-full"
-      />
-    );
-  }
-
-  // Badge-list fields (tags, references) — use shared display component
-  if (field.display === "badge-list") {
-    const vals = Array.isArray(value) ? value : [];
-    if (vals.length === 0) return null;
-    return (
-      <div className="mt-1.5">
-        <BadgeListDisplay
-          field={field}
-          value={value}
-          entity={entity}
-          mode="compact"
-        />
-      </div>
-    );
-  }
-
-  // Computed: progress — bar
-  if (
-    field.type.kind === "computed" &&
-    (field.type as Record<string, unknown>).derive === "parse-body-progress"
-  ) {
-    const bodyText = bodyFieldName
-      ? getStr(entity, bodyFieldName) || undefined
-      : undefined;
-    return <SubtaskProgress description={bodyText} className="mt-1.5" />;
-  }
-
-  return null;
-}

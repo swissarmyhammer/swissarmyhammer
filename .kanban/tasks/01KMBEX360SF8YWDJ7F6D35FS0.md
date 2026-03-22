@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KMBE4FGC1WWF29PV5SEJG4VY
-position_column: todo
-position_ordinal: b780
+position_column: done
+position_ordinal: fffffffffffe80
 title: Wire Field into board cards, inspector, and grid — all field rendering goes through Field
 ---
 ## What

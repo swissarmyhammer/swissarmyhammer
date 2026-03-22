@@ -1,15 +1,7 @@
 import { useState, useCallback, useMemo } from "react";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
-import { CellDispatch } from "@/components/cells";
-import {
-  resolveEditor,
-  MarkdownEditor,
-  SelectEditor,
-  NumberEditor,
-  DateEditor,
-  ColorPaletteEditor,
-  MultiSelectEditor,
-} from "@/components/fields/editors";
+import { resolveEditor } from "@/components/fields/editors";
+import { Field } from "@/components/fields/field";
 import { useSchema } from "@/lib/schema-context";
 import type { FieldDef, Entity } from "@/types/kanban";
 import { icons, HelpCircle } from "lucide-react";
@@ -112,7 +104,7 @@ interface FieldRowProps {
 
 /**
  * A single field row in the inspector. Manages editing state.
- * Editors save themselves via useFieldUpdate — FieldRow only handles lifecycle.
+ * Field handles data binding, save, and display/editor dispatch.
  */
 function FieldRow({
   field,
@@ -127,7 +119,7 @@ function FieldRow({
     if (editable) setEditing(true);
   }, [editable]);
 
-  const handleCommit = useCallback(() => {
+  const handleDone = useCallback(() => {
     setEditing(false);
   }, []);
 
@@ -136,13 +128,14 @@ function FieldRow({
   }, []);
 
   const content = (
-    <FieldDispatch
-      field={field}
-      value={entity.fields[field.name]}
-      entity={entity}
+    <Field
+      fieldDef={field}
+      entityType={entity.entity_type}
+      entityId={entity.id}
+      mode="full"
       editing={editing && editable}
       onEdit={handleEdit}
-      onCommit={handleCommit}
+      onDone={handleDone}
       onCancel={handleCancel}
     />
   );
@@ -178,86 +171,6 @@ function isEditable(field: FieldDef): boolean {
   return resolveEditor(field) !== "none";
 }
 
-/**
- * Dispatch to editor or display based on the field's configured `editor` and `display`
- * properties. No type-kind special cases — the YAML field definitions are the source of truth.
- */
-function FieldDispatch({
-  field,
-  value,
-  entity,
-  editing,
-  onEdit,
-  onCommit,
-  onCancel,
-}: {
-  field: FieldDef;
-  value: unknown;
-  entity: Entity;
-  editing: boolean;
-  onEdit: () => void;
-  onCommit: (value: unknown) => void;
-  onCancel: () => void;
-}) {
-  // Editing: dispatch to editor by field.editor
-  // Editors save themselves via useFieldUpdate — entity identity is passed through.
-  if (editing) {
-    const editor = resolveEditor(field);
-    const editorProps = {
-      value,
-      entityType: entity.entity_type,
-      entityId: entity.id,
-      fieldName: field.name,
-      onCommit,
-      onCancel,
-      mode: "full" as const,
-    };
-
-    switch (editor) {
-      case "select":
-        return <SelectEditor {...editorProps} field={field} />;
-      case "number":
-        return <NumberEditor {...editorProps} />;
-      case "date":
-        return <DateEditor {...editorProps} />;
-      case "color-palette":
-        return <ColorPaletteEditor {...editorProps} />;
-      case "multi-select":
-        return <MultiSelectEditor {...editorProps} field={field} entity={entity} />;
-      case "markdown":
-      default:
-        return (
-          <MarkdownEditor
-            {...editorProps}
-            initialEditing
-            placeholder={`Add ${field.name.replace(/_/g, " ")}...`}
-          />
-        );
-    }
-  }
-
-  // Read-only: dispatch to display by field.display via CellDispatch
-  if (isEmpty(value)) {
-    return (
-      <div className="text-sm cursor-text min-h-[1.25rem] text-muted-foreground/50 italic" onClick={onEdit}>
-        {fieldLabel(field)}
-      </div>
-    );
-  }
-  return (
-    <div className="text-sm cursor-text min-h-[1.25rem]" onClick={onEdit}>
-      <CellDispatch field={field} value={value} entity={entity} mode="full" />
-    </div>
-  );
-}
-
 function fieldLabel(field: FieldDef): string {
   return field.name.replace(/_/g, " ");
-}
-
-function isEmpty(value: unknown): boolean {
-  if (value == null) return true;
-  if (value === "") return true;
-  if (Array.isArray(value) && value.length === 0) return true;
-  return false;
 }

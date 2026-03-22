@@ -23,7 +23,7 @@ import {
 import { cn } from "@/lib/utils";
 import { useContextMenu } from "@/lib/context-menu";
 import { CommandScopeProvider, type CommandDef } from "@/lib/command-scope";
-import { CellDispatch } from "@/components/cells";
+import { Field } from "@/components/fields/field";
 import type { UseGridReturn } from "@/hooks/use-grid";
 import type { Entity, FieldDef } from "@/types/kanban";
 
@@ -82,10 +82,12 @@ export function DataTable({ columns, rows, grid, onCellClick, onRowContextMenu, 
         cell: ({ row: tanRow }) => {
           const entity = tanRow.original;
           return (
-            <CellDispatch
-              field={col.field}
-              value={entity.fields[col.field.name]}
-              entity={entity}
+            <Field
+              fieldDef={col.field}
+              entityType={entity.entity_type}
+              entityId={entity.id}
+              mode="compact"
+              editing={false}
             />
           );
         },
@@ -315,10 +317,12 @@ export function DataTable({ columns, rows, grid, onCellClick, onRowContextMenu, 
                           () => grid.exitEdit(),
                         )
                       ) : (
-                        <CellDispatch
-                          field={col.field}
-                          value={entity.fields[col.field.name]}
-                          entity={entity}
+                        <Field
+                          fieldDef={col.field}
+                          entityType={entity.entity_type}
+                          entityId={entity.id}
+                          mode="compact"
+                          editing={false}
                         />
                       )}
                     </TableCell>
