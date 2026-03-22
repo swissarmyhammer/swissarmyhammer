@@ -66,6 +66,17 @@ function editableFieldsFor(entityType: string): FieldDef[] {
     .filter((d): d is FieldDef => d !== undefined && d.editor !== "none" && d.editor !== undefined);
 }
 
+/** Get ALL FieldDefs for an entity type. */
+function allFieldsFor(entityType: string): FieldDef[] {
+  const entityDef = loadEntityDef(entityType);
+  const allDefs = loadAllFieldDefs();
+  const defMap = new Map(allDefs.map((d) => [d.name, d]));
+
+  return entityDef.fields
+    .map((name) => defMap.get(name))
+    .filter((d): d is FieldDef => d !== undefined);
+}
+
 // ---------------------------------------------------------------------------
 // Configurable keymap mode — swapped per test.
 // ---------------------------------------------------------------------------
@@ -225,6 +236,7 @@ function expectsSave(keymap: string, exit: string): boolean {
 // ---------------------------------------------------------------------------
 
 const editableFields = editableFieldsFor("task");
+const allFields = allFieldsFor("task");
 const keymapModes = ["cua", "vim", "emacs"] as const;
 const exitPaths = ["blur", "Enter", "Escape"] as const;
 const modes = ["compact", "full"] as const;
@@ -312,4 +324,106 @@ describe("Field save behavior", () => {
       });
     },
   );
+});
+
+// ---------------------------------------------------------------------------
+// Display tests — every field type renders something in both modes
+// ---------------------------------------------------------------------------
+
+describe("Field display behavior", () => {
+  beforeAll(() => {
+    const names = allFields.map((f) => `${f.name} (${f.display ?? "text"})`);
+    console.log(`Testing ${names.length} field displays: ${names.join(", ")}`);
+  });
+
+  describe.each(allFields.map((f) => ({ fieldDef: f, fieldName: f.name, display: f.display ?? "text" })))(
+    "field: $fieldName (display: $display)",
+    ({ fieldDef }) => {
+      describe.each(modes)("mode: %s", (mode) => {
+        it("renders display content", async () => {
+          KEYMAP_MODE = "cua";
+          const { container, unmount } = renderField(fieldDef, mode, false);
+          await settle();
+
+          // Field should render something — not be empty
+          expect(
+            container.innerHTML.length,
+            `${fieldDef.name} / ${mode}: Field display should render content`,
+          ).toBeGreaterThan(0);
+
+          // Field should have produced actual visible content, not just a wrapper
+          const inner = container.firstElementChild;
+          expect(
+            inner,
+            `${fieldDef.name} / ${mode}: Field should render a DOM element`,
+          ).toBeTruthy();
+
+          unmount();
+        });
+      });
+    },
+  );
+});
+
+// ---------------------------------------------------------------------------
+// Per-entity tests — all fields on an entity render and edit correctly
+// ---------------------------------------------------------------------------
+
+const entityTypes = ["task"] as const; // extend as we add entity support
+
+describe("Entity field coverage", () => {
+  describe.each(entityTypes)("entity: %s", (entityType) => {
+    const fields = allFieldsFor(entityType);
+    const editable = editableFieldsFor(entityType);
+
+    describe.each(modes)("mode: %s", (mode) => {
+      it("every field displays", async () => {
+        KEYMAP_MODE = "cua";
+        const missing: string[] = [];
+
+        for (const fieldDef of fields) {
+          const { container, unmount } = renderField(fieldDef, mode, false);
+          await settle();
+
+          if (!container.firstElementChild) {
+            missing.push(`${fieldDef.name} (${fieldDef.display ?? "text"})`);
+          }
+
+          unmount();
+        }
+
+        expect(
+          missing,
+          `${entityType} / ${mode}: fields missing display: ${missing.join(", ")}`,
+        ).toHaveLength(0);
+      });
+
+      it("every editable field enters edit mode", async () => {
+        KEYMAP_MODE = "cua";
+        const missing: string[] = [];
+
+        for (const fieldDef of editable) {
+          const { container, unmount } = renderField(fieldDef, mode, true);
+          await settle();
+
+          const hasEditor =
+            container.querySelector(".cm-editor") ??
+            container.querySelector("input") ??
+            container.querySelector("select") ??
+            container.querySelector("[data-radix-popper-content-wrapper]");
+
+          if (!hasEditor) {
+            missing.push(`${fieldDef.name} (${fieldDef.editor})`);
+          }
+
+          unmount();
+        }
+
+        expect(
+          missing,
+          `${entityType} / ${mode}: fields missing editor: ${missing.join(", ")}`,
+        ).toHaveLength(0);
+      });
+    });
+  });
 });
