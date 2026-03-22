@@ -132,6 +132,9 @@ vi.mock("@tauri-apps/plugin-log", () => ({
 // ---------------------------------------------------------------------------
 // Imports AFTER mocks — NO mock of useFieldUpdate, we use the real one
 // ---------------------------------------------------------------------------
+// Field type registrations — must be imported so editors/displays are registered
+import "@/components/fields/registrations";
+
 import { UIStateProvider } from "@/lib/ui-state-context";
 import { SchemaProvider } from "@/lib/schema-context";
 import { EntityStoreProvider } from "@/lib/entity-store-context";

@@ -1,3 +1,6 @@
+// Field type registrations — must be imported before any Field renders
+import "@/components/fields/registrations";
+
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
