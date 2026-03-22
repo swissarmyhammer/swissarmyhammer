@@ -1,6 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { useFieldUpdate } from "@/lib/field-update-context";
-import { useUIState } from "@/lib/ui-state-context";
+import { useCallback, useRef, useState } from "react";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import type { FieldDef } from "@/types/kanban";
 import type { EditorProps } from "./markdown-editor";
 
@@ -8,28 +13,22 @@ interface SelectEditorProps extends EditorProps {
   field: FieldDef;
 }
 
-/** Select dropdown editor. Saves directly via updateField on change/blur. */
-export function SelectEditor({ field, value, entityType, entityId, fieldName, onCommit, onCancel }: SelectEditorProps) {
-  const options = ((field.type as Record<string, unknown>).options as Array<{ value: string; label?: string }>) ?? [];
-  const [draft, setDraft] = useState(typeof value === "string" ? value : "");
-  const ref = useRef<HTMLSelectElement>(null);
+/** Select editor using shadcn/Radix Select. Commits on selection, Enter, or blur. */
+export function SelectEditor({ field, value, onCommit, onCancel }: SelectEditorProps) {
+  const options = ((field.type as Record<string, unknown>).options as Array<{ value: string; label?: string; color?: string }>) ?? [];
+  const initial = typeof value === "string" ? value : "";
+  const [draft, setDraft] = useState(initial);
+  const [open, setOpen] = useState(true);
   const committedRef = useRef(false);
-  const { updateField } = useFieldUpdate();
-  const { keymap_mode: mode } = useUIState();
 
-  useEffect(() => {
-    ref.current?.focus();
-  }, []);
-
-  /** Save to entity and call legacy onCommit. */
-  const commit = useCallback((val: string) => {
-    if (committedRef.current) return;
-    committedRef.current = true;
-    if (entityType && entityId && fieldName) {
-      updateField(entityType, entityId, fieldName, val).catch(() => {});
-    }
-    onCommit(val);
-  }, [onCommit, entityType, entityId, fieldName, updateField]);
+  const commit = useCallback(
+    (val: string) => {
+      if (committedRef.current) return;
+      committedRef.current = true;
+      onCommit(val);
+    },
+    [onCommit],
+  );
 
   const cancel = useCallback(() => {
     if (committedRef.current) return;
@@ -38,32 +37,55 @@ export function SelectEditor({ field, value, entityType, entityId, fieldName, on
   }, [onCancel]);
 
   return (
-    <select
-      ref={ref}
+    <Select
       value={draft}
-      onChange={(e) => {
-        setDraft(e.target.value);
-        commit(e.target.value);
-      }}
-      onKeyDown={(e) => {
-        if (e.key === "Escape") {
-          e.preventDefault();
-          if (mode === "vim") commit(draft);
-          else cancel();
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next);
+        // Closing the dropdown without a new selection = commit current value
+        if (!next && !committedRef.current) {
+          commit(draft);
         }
-        e.stopPropagation();
       }}
-      onBlur={() => {
-        if (!committedRef.current) commit(draft);
+      onValueChange={(val) => {
+        setDraft(val);
+        setOpen(false);
+        commit(val);
       }}
-      className="w-full px-3 py-1.5 text-sm bg-transparent border-none outline-none ring-0"
     >
-      <option value="">-</option>
-      {options.map((opt) => (
-        <option key={opt.value} value={opt.value}>
-          {opt.label ?? opt.value}
-        </option>
-      ))}
-    </select>
+      <SelectTrigger
+        size="sm"
+        className="w-full text-sm h-auto py-1 px-2"
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            e.stopPropagation();
+            setOpen(false);
+            commit(draft);
+          } else if (e.key === "Escape") {
+            e.preventDefault();
+            e.stopPropagation();
+            setOpen(false);
+            cancel();
+          }
+        }}
+      >
+        <SelectValue placeholder="-" />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem value="__empty__">-</SelectItem>
+        {options.map((opt) => (
+          <SelectItem key={opt.value} value={opt.value}>
+            {opt.color && (
+              <span
+                className="inline-block w-2 h-2 rounded-full mr-1.5"
+                style={{ backgroundColor: `#${opt.color}` }}
+              />
+            )}
+            {opt.label ?? opt.value}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
   );
 }

@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: c480
+position_column: done
+position_ordinal: ffffffffffff8380
 title: 'SelectEditor: replace HTML select with shadcn Select, handle Enter to commit'
 ---
 ## What
