@@ -143,16 +143,16 @@ export function EntityStoreProvider({
   children,
 }: EntityStoreProviderProps) {
   const entitiesRef = useRef(entities);
+  entitiesRef.current = entities; // always current during render
   const subsRef = useRef(new FieldSubscriptions());
 
-  // Diff and notify on every entities change
+  // Diff and notify field-level subscribers after render
   const prevRef = useRef(entities);
   useEffect(() => {
     if (prevRef.current !== entities) {
       subsRef.current.diff(prevRef.current, entities);
       prevRef.current = entities;
     }
-    entitiesRef.current = entities;
   }, [entities]);
 
   const getEntities = useCallback(
