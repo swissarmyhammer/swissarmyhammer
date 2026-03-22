@@ -2,21 +2,34 @@ import { useCallback, useRef, useState } from "react";
 import { HexColorPicker } from "react-colorful";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import { ColorSwatchDisplay } from "@/components/fields/displays/color-swatch-display";
+import { useFieldUpdate } from "@/lib/field-update-context";
 import type { EditorProps } from "./markdown-editor";
 
-/** Color editor — renders the same ColorSwatchDisplay as trigger, popover with HexColorPicker. */
-export function ColorPaletteEditor({ value, onCommit, onCancel }: EditorProps) {
+/** Color editor — renders ColorSwatchDisplay as trigger, popover with HexColorPicker. Saves directly via updateField. */
+export function ColorPaletteEditor({ value, entityType, entityId, fieldName, onCommit, onCancel }: EditorProps) {
   const initial = typeof value === "string" ? value : "888888";
   const [draft, setDraft] = useState(initial);
   const [open, setOpen] = useState(true);
   const timerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const { updateField } = useFieldUpdate();
+
+  /** Save to entity and call legacy onCommit. */
+  const save = useCallback(
+    (hex: string) => {
+      if (entityType && entityId && fieldName) {
+        updateField(entityType, entityId, fieldName, hex).catch(() => {});
+      }
+      onCommit(hex);
+    },
+    [onCommit, entityType, entityId, fieldName, updateField],
+  );
 
   const commitDebounced = useCallback(
     (hex: string) => {
       clearTimeout(timerRef.current);
-      timerRef.current = setTimeout(() => onCommit(hex), 150);
+      timerRef.current = setTimeout(() => save(hex), 150);
     },
-    [onCommit],
+    [save],
   );
 
   return (
@@ -26,7 +39,7 @@ export function ColorPaletteEditor({ value, onCommit, onCancel }: EditorProps) {
         setOpen(next);
         if (!next) {
           clearTimeout(timerRef.current);
-          onCommit(draft);
+          save(draft);
         }
       }}
     >

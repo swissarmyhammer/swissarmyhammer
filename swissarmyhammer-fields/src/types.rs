@@ -117,6 +117,9 @@ pub struct FieldDef {
     pub sort: Option<SortKind>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub width: Option<u32>,
+    /// Lucide icon name for display in the inspector (e.g. "file-text", "users", "tag").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
     /// Inspector layout section: "header", "body", "footer", or "hidden".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub section: Option<String>,
@@ -348,6 +351,7 @@ mod tests {
             display: Some(Display::Badge),
             sort: Some(SortKind::OptionOrder),
             width: Some(120),
+            icon: None,
             section: None,
             validate: None,
         };
@@ -368,6 +372,7 @@ mod tests {
             display: Some(Display::Markdown),
             sort: Some(SortKind::Alphanumeric),
             width: None,
+            icon: None,
             section: None,
             validate: None,
         };
@@ -432,6 +437,7 @@ mod tests {
             display: None,
             sort: None,
             width: None,
+            icon: None,
             section: None,
             validate: None,
         };
@@ -451,6 +457,7 @@ mod tests {
             display: Some(Display::Badge),
             sort: None,
             width: None,
+            icon: None,
             section: None,
             validate: None,
         };
@@ -472,6 +479,7 @@ mod tests {
             display: None,
             sort: None,
             width: None,
+            icon: None,
             section: None,
             validate: None,
         };
@@ -494,6 +502,7 @@ mod tests {
             display: None,
             sort: None,
             width: None,
+            icon: None,
             section: None,
             validate: None,
         };
@@ -513,6 +522,7 @@ mod tests {
             display: None,
             sort: None,
             width: None,
+            icon: None,
             section: None,
             validate: None,
         };
@@ -715,6 +725,7 @@ fields:
             display: None,
             sort: None,
             width: None,
+            icon: None,
             section: None,
             validate: None,
         };
@@ -733,6 +744,7 @@ fields:
             display: None,
             sort: Some(SortKind::Datetime),
             width: None,
+            icon: None,
             section: None,
             validate: None,
         };
@@ -751,6 +763,7 @@ fields:
             display: None,
             sort: None,
             width: None,
+            icon: None,
             section: None,
             validate: None,
         };
@@ -772,6 +785,7 @@ fields:
             display: None,
             sort: None,
             width: None,
+            icon: None,
             section: None,
             validate: None,
         };
@@ -798,6 +812,7 @@ fields:
             display: None,
             sort: None,
             width: None,
+            icon: None,
             section: None,
             validate: None,
         };
@@ -822,6 +837,7 @@ fields:
             display: None,
             sort: None,
             width: None,
+            icon: None,
             section: None,
             validate: None,
         };
@@ -840,6 +856,7 @@ fields:
             display: None,
             sort: None,
             width: None,
+            icon: None,
             section: None,
             validate: None,
         };
@@ -859,6 +876,7 @@ fields:
             display: None,
             sort: Some(SortKind::Lexical),
             width: None,
+            icon: None,
             section: None,
             validate: None,
         };

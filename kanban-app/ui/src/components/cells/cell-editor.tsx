@@ -19,6 +19,12 @@ interface CellEditorProps {
   field: FieldDef;
   value: unknown;
   entity: Entity;
+  /** Entity type for direct save by editors. */
+  entityType?: string;
+  /** Entity ID for direct save by editors. */
+  entityId?: string;
+  /** Field name for direct save by editors. */
+  fieldName?: string;
   onCommit: (value: unknown) => void;
   onCancel: () => void;
 }
@@ -26,10 +32,11 @@ interface CellEditorProps {
 /**
  * Inline cell editor for grid view.
  * Dispatches on `field.editor` (via resolveEditor) to shared editor components.
+ * Passes entity identity through so editors can save themselves.
  */
-export function CellEditor({ field, value, entity, onCommit, onCancel }: CellEditorProps) {
+export function CellEditor({ field, value, entity, entityType, entityId, fieldName, onCommit, onCancel }: CellEditorProps) {
   const editor = resolveEditor(field);
-  const props = { value, onCommit, onCancel, mode: "compact" as const };
+  const props = { value, entityType, entityId, fieldName, onCommit, onCancel, mode: "compact" as const };
 
   switch (editor) {
     case "none":
@@ -46,7 +53,7 @@ export function CellEditor({ field, value, entity, onCommit, onCancel }: CellEdi
       return <ColorPaletteEditor {...props} />;
     case "multi-select":
       return (
-        <MultiSelectPopover field={field} entity={entity} value={value} onCommit={onCommit} onCancel={onCancel} />
+        <MultiSelectPopover field={field} entity={entity} value={value} entityType={entityType} entityId={entityId} fieldName={fieldName} onCommit={onCommit} onCancel={onCancel} />
       );
     case "markdown":
     default:
@@ -60,7 +67,7 @@ export function CellEditor({ field, value, entity, onCommit, onCancel }: CellEdi
  * enters edit mode. Closing the popover (Escape or click-outside) commits
  * the current selection and exits edit mode.
  */
-function MultiSelectPopover({ field, entity, value, onCommit, onCancel }: CellEditorProps & { field: FieldDef }) {
+function MultiSelectPopover({ field, entity, value, entityType, entityId, fieldName, onCommit, onCancel }: CellEditorProps & { field: FieldDef }) {
   const [open, setOpen] = useState(true);
   const committedRef = useRef(false);
 
@@ -114,6 +121,9 @@ function MultiSelectPopover({ field, entity, value, onCommit, onCancel }: CellEd
           field={field}
           entity={entity}
           value={value}
+          entityType={entityType}
+          entityId={entityId}
+          fieldName={fieldName}
           onCommit={handleCommit}
           onCancel={handleCancel}
           mode="compact"

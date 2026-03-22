@@ -16,15 +16,15 @@ export interface CellDisplayProps {
   field: FieldDef;
   value: unknown;
   entity: Entity;
+  mode?: "compact" | "full";
 }
 
 /**
  * Dispatch to the correct read-only cell renderer based on field display type.
- * Uses shared display components in compact mode.
  */
-export function CellDispatch({ field, value, entity }: CellDisplayProps) {
+export function CellDispatch({ field, value, entity, mode = "compact" }: CellDisplayProps) {
   const display = resolveDisplay(field);
-  const props = { field, value, entity, mode: "compact" as const };
+  const props = { field, value, entity, mode };
 
   switch (display) {
     case "badge-list":

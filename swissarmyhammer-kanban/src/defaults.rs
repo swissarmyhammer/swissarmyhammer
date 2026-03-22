@@ -485,6 +485,7 @@ mod tests {
             display: None,
             sort: None,
             width: None,
+            icon: None,
             section: None,
             validate: None,
         };
@@ -516,6 +517,7 @@ mod tests {
             display: None,
             sort: None,
             width: None,
+            icon: None,
             section: None,
             validate: None,
         };
@@ -549,6 +551,7 @@ mod tests {
             display: None,
             sort: None,
             width: None,
+            icon: None,
             section: None,
             validate: None,
         };
@@ -599,6 +602,7 @@ mod tests {
             display: None,
             sort: None,
             width: None,
+            icon: None,
             section: None,
             validate: None,
         };

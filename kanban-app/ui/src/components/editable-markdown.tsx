@@ -39,6 +39,8 @@ interface EditableMarkdownProps {
   placeholder?: string;
   /** @deprecated Tag entities — now read from context automatically for multiline editors. */
   tags?: Entity[];
+  /** Start in editing mode immediately (skip display-to-edit click). */
+  initialEditing?: boolean;
 }
 
 /** Regex matching a GFM task list checkbox in markdown source */
@@ -157,8 +159,9 @@ export function EditableMarkdown({
   multiline,
   placeholder,
   tags: _legacyTags,
+  initialEditing = false,
 }: EditableMarkdownProps) {
-  const [editing, setEditing] = useState(false);
+  const [editing, setEditing] = useState(initialEditing);
   const [draft, setDraft] = useState(value);
   const editorRef = useRef<ReactCodeMirrorRef>(null);
   const clickCoordsRef = useRef<{ x: number; y: number } | null>(null);

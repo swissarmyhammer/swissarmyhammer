@@ -1,10 +1,5 @@
-import { useState, useCallback, useMemo, useRef } from "react";
-import { HexColorPicker } from "react-colorful";
-import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
+import { useState, useCallback, useMemo } from "react";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
-import { ACTOR_COLORS } from "@/lib/actor-colors";
-import { EditableMarkdown } from "@/components/editable-markdown";
-import { SubtaskProgress } from "@/components/subtask-progress";
 import { CellDispatch } from "@/components/cells";
 import {
   resolveEditor,
@@ -12,12 +7,28 @@ import {
   SelectEditor,
   NumberEditor,
   DateEditor,
+  ColorPaletteEditor,
   MultiSelectEditor,
 } from "@/components/fields/editors";
 import { useSchema } from "@/lib/schema-context";
-import { useFieldUpdate } from "@/lib/field-update-context";
 import type { FieldDef, Entity } from "@/types/kanban";
-import { getStr } from "@/types/kanban";
+import { icons, HelpCircle } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
+
+/** Convert kebab-case icon name (e.g. "file-text") to PascalCase key (e.g. "FileText"). */
+function kebabToPascal(s: string): string {
+  return s.replace(/(^|-)([a-z])/g, (_, _dash, c) => c.toUpperCase());
+}
+
+/** Resolve the lucide icon component from a field's `icon` property. */
+function fieldIcon(field: FieldDef): LucideIcon {
+  if (field.icon) {
+    const key = kebabToPascal(field.icon);
+    const Icon = icons[key as keyof typeof icons];
+    if (Icon) return Icon;
+  }
+  return HelpCircle;
+}
 
 interface EntityInspectorProps {
   entity: Entity;
@@ -32,13 +43,11 @@ interface EntityInspectorProps {
  *
  * Pulls everything from context:
  * - Field definitions and ordering from SchemaContext
- * - Tag entities from EntityStoreContext (for body_field markdown decorations)
  * - Save function from FieldUpdateContext (used internally by FieldRow)
  */
 export function EntityInspector({ entity }: EntityInspectorProps) {
   const { getSchema } = useSchema();
   const schema = getSchema(entity.entity_type);
-  const bodyFieldName = schema?.entity.body_field;
   const fields = schema?.fields ?? [];
 
   const sections = useMemo(() => {
@@ -64,7 +73,6 @@ export function EntityInspector({ entity }: EntityInspectorProps) {
       key={field.name}
       field={field}
       entity={entity}
-      bodyFieldName={bodyFieldName}
       showLabel={showLabel}
     />
   );
@@ -99,22 +107,19 @@ export function EntityInspector({ entity }: EntityInspectorProps) {
 interface FieldRowProps {
   field: FieldDef;
   entity: Entity;
-  bodyFieldName?: string;
   showLabel?: boolean;
 }
 
 /**
- * A single field row in the inspector. Manages its own editing state
- * and persists changes via useFieldUpdate — no onCommit prop needed.
+ * A single field row in the inspector. Manages editing state.
+ * Editors save themselves via useFieldUpdate — FieldRow only handles lifecycle.
  */
 function FieldRow({
   field,
   entity,
-  bodyFieldName,
   showLabel = true,
 }: FieldRowProps) {
   const [editing, setEditing] = useState(false);
-  const { updateField } = useFieldUpdate();
 
   const editable = isEditable(field);
 
@@ -122,13 +127,9 @@ function FieldRow({
     if (editable) setEditing(true);
   }, [editable]);
 
-  const handleCommit = useCallback(
-    (value: unknown) => {
-      setEditing(false);
-      updateField(entity.entity_type, entity.id, field.name, value).catch(() => {});
-    },
-    [updateField, entity.entity_type, entity.id, field.name],
-  );
+  const handleCommit = useCallback(() => {
+    setEditing(false);
+  }, []);
 
   const handleCancel = useCallback(() => {
     setEditing(false);
@@ -140,43 +141,52 @@ function FieldRow({
       value={entity.fields[field.name]}
       entity={entity}
       editing={editing && editable}
-      bodyFieldName={bodyFieldName}
       onEdit={handleEdit}
       onCommit={handleCommit}
       onCancel={handleCancel}
     />
   );
 
-  if (!showLabel) {
+  const Icon = field.icon ? fieldIcon(field) : null;
+  const tip = field.description || fieldLabel(field);
+
+  if (!showLabel && !Icon) {
     return <section data-testid={`field-row-${field.name}`}>{content}</section>;
   }
 
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <section data-testid={`field-row-${field.name}`}>{content}</section>
-      </TooltipTrigger>
-      <TooltipContent side="top" align="start">
-        {fieldLabel(field)}
-      </TooltipContent>
-    </Tooltip>
+    <section data-testid={`field-row-${field.name}`} className="flex items-start gap-2">
+      {Icon && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="mt-0.5 shrink-0 text-muted-foreground">
+              <Icon size={14} />
+            </span>
+          </TooltipTrigger>
+          <TooltipContent side="left" align="start">
+            {tip}
+          </TooltipContent>
+        </Tooltip>
+      )}
+      <div className="flex-1 min-w-0">{content}</div>
+    </section>
   );
 }
 
-/** Check if a field is editable in the inspector. */
+/** Check if a field is editable in the inspector — driven by the field's editor property. */
 function isEditable(field: FieldDef): boolean {
-  if (field.type.kind === "computed" && (field.type as Record<string, unknown>).derive === "parse-body-tags") {
-    return true;
-  }
-  return field.type.kind !== "computed";
+  return resolveEditor(field) !== "none";
 }
 
+/**
+ * Dispatch to editor or display based on the field's configured `editor` and `display`
+ * properties. No type-kind special cases — the YAML field definitions are the source of truth.
+ */
 function FieldDispatch({
   field,
   value,
   entity,
   editing,
-  bodyFieldName,
   onEdit,
   onCommit,
   onCancel,
@@ -185,44 +195,23 @@ function FieldDispatch({
   value: unknown;
   entity: Entity;
   editing: boolean;
-  bodyFieldName?: string;
   onEdit: () => void;
   onCommit: (value: unknown) => void;
   onCancel: () => void;
 }) {
-  // Markdown fields — EditableMarkdown handles its own display/edit toggle
-  // Mentions (tags, actors, etc.) are read from context automatically.
-  if (field.type.kind === "markdown") {
-    const text = typeof value === "string" ? value : "";
-    const multiline = !field.type.single_line;
-    return (
-      <EditableMarkdown
-        value={text}
-        onCommit={(v) => onCommit(v)}
-        multiline={multiline}
-        className="text-sm leading-relaxed cursor-text"
-        inputClassName="text-sm leading-relaxed bg-transparent w-full"
-        placeholder={`Add ${field.name.replace(/_/g, " ")}...`}
-      />
-    );
-  }
-
-  // Computed: progress — render as SubtaskProgress bar using the body field
-  if (field.type.kind === "computed" && (field.type as Record<string, unknown>).derive === "parse-body-progress") {
-    const bodyText = bodyFieldName ? getStr(entity, bodyFieldName) || undefined : undefined;
-    return <SubtaskProgress description={bodyText} />;
-  }
-
-  // Color fields — palette + picker (always interactive)
-  if (field.type.kind === "color") {
-    const hex = typeof value === "string" ? value : "888888";
-    return <ColorField value={hex} onCommit={(v) => onCommit(v)} />;
-  }
-
-  // Editing: dispatch to shared editor components
+  // Editing: dispatch to editor by field.editor
+  // Editors save themselves via useFieldUpdate — entity identity is passed through.
   if (editing) {
     const editor = resolveEditor(field);
-    const editorProps = { value, onCommit, onCancel, mode: "full" as const };
+    const editorProps = {
+      value,
+      entityType: entity.entity_type,
+      entityId: entity.id,
+      fieldName: field.name,
+      onCommit,
+      onCancel,
+      mode: "full" as const,
+    };
 
     switch (editor) {
       case "select":
@@ -231,6 +220,8 @@ function FieldDispatch({
         return <NumberEditor {...editorProps} />;
       case "date":
         return <DateEditor {...editorProps} />;
+      case "color-palette":
+        return <ColorPaletteEditor {...editorProps} />;
       case "multi-select":
         return <MultiSelectEditor {...editorProps} field={field} entity={entity} />;
       case "markdown":
@@ -238,13 +229,14 @@ function FieldDispatch({
         return (
           <MarkdownEditor
             {...editorProps}
+            initialEditing
             placeholder={`Add ${field.name.replace(/_/g, " ")}...`}
           />
         );
     }
   }
 
-  // Read-only: use the same CellDispatch as the grid — single rendering path
+  // Read-only: dispatch to display by field.display via CellDispatch
   if (isEmpty(value)) {
     return (
       <div className="text-sm cursor-text min-h-[1.25rem] text-muted-foreground/50 italic" onClick={onEdit}>
@@ -254,77 +246,7 @@ function FieldDispatch({
   }
   return (
     <div className="text-sm cursor-text min-h-[1.25rem]" onClick={onEdit}>
-      <CellDispatch field={field} value={value} entity={entity} />
-    </div>
-  );
-}
-
-/** Palette for the color-picker grid — uses the canonical actor palette. */
-const COLOR_PALETTE = ACTOR_COLORS;
-
-function ColorField({ value, onCommit }: { value: string; onCommit: (v: string) => void }) {
-  const [selected, setSelected] = useState(value);
-  const [pickerOpen, setPickerOpen] = useState(false);
-  const timerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
-
-  const saveDebounced = useCallback(
-    (color: string) => {
-      clearTimeout(timerRef.current);
-      timerRef.current = setTimeout(() => onCommit(color), 150);
-    },
-    [onCommit],
-  );
-
-  return (
-    <div className="flex items-start gap-2">
-      <div className="grid grid-cols-8 gap-1 flex-1">
-        {COLOR_PALETTE.map((color, i) => (
-          <button
-            key={`${color}-${i}`}
-            type="button"
-            className={`w-6 h-6 rounded-full border-2 transition-all ${
-              selected === color
-                ? "border-foreground scale-110"
-                : "border-transparent hover:border-muted-foreground/50"
-            }`}
-            style={{ backgroundColor: `#${color}` }}
-            onClick={() => { setSelected(color); onCommit(color); }}
-          />
-        ))}
-      </div>
-      <Popover open={pickerOpen} onOpenChange={setPickerOpen}>
-        <PopoverTrigger asChild>
-          <button
-            type="button"
-            className="shrink-0 w-8 h-8 rounded-md border border-input cursor-pointer"
-            style={{ backgroundColor: `#${selected}` }}
-          />
-        </PopoverTrigger>
-        <PopoverContent align="end" className="w-auto p-3">
-          <HexColorPicker
-            color={`#${selected}`}
-            onChange={(hex) => {
-              const c = hex.replace("#", "");
-              setSelected(c);
-              saveDebounced(c);
-            }}
-          />
-          <div className="mt-2 flex items-center gap-2">
-            <span className="text-xs text-muted-foreground">#</span>
-            <input
-              type="text"
-              value={selected}
-              onChange={(e) => {
-                const v = e.target.value.replace(/[^0-9a-fA-F]/g, "").slice(0, 6);
-                setSelected(v);
-                if (v.length === 6) saveDebounced(v);
-              }}
-              className="flex-1 text-xs font-mono bg-transparent border border-input rounded px-1.5 py-0.5"
-              maxLength={6}
-            />
-          </div>
-        </PopoverContent>
-      </Popover>
+      <CellDispatch field={field} value={value} entity={entity} mode="full" />
     </div>
   );
 }

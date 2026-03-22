@@ -17,6 +17,7 @@ import { Prec } from "@codemirror/state";
 import { invoke } from "@tauri-apps/api/core";
 import { shadcnTheme, keymapExtension } from "@/lib/cm-keymap";
 import { useUIState } from "@/lib/ui-state-context";
+import { useFieldUpdate } from "@/lib/field-update-context";
 import { useSchema } from "@/lib/schema-context";
 import { useEntityStore } from "@/lib/entity-store-context";
 import {
@@ -40,9 +41,13 @@ interface MultiSelectEditorProps extends EditorProps {
 export function MultiSelectEditor({
   field,
   value,
+  entityType,
+  entityId,
+  fieldName,
   onCommit,
 }: MultiSelectEditorProps) {
   const { keymap_mode: mode } = useUIState();
+  const { updateField } = useFieldUpdate();
   const { mentionableTypes } = useSchema();
   const { getEntities } = useEntityStore();
   const editorRef = useRef<ReactCodeMirrorRef>(null);
@@ -138,15 +143,15 @@ export function MultiSelectEditor({
       }
     }
     // For computed tags, commit display names (slugs) instead of entity IDs
-    if (commitDisplayNames) {
-      const slugs = selectedIdsRef.current.map(
-        (id) => idToDisplay.get(id) ?? id,
-      );
-      onCommit(slugs);
-    } else {
-      onCommit(selectedIdsRef.current);
+    const finalValue = commitDisplayNames
+      ? selectedIdsRef.current.map((id) => idToDisplay.get(id) ?? id)
+      : selectedIdsRef.current;
+
+    if (entityType && entityId && fieldName) {
+      updateField(entityType, entityId, fieldName, finalValue).catch(() => {});
     }
-  }, [onCommit, prefix, displayToId, commitDisplayNames, idToDisplay]);
+    onCommit(finalValue);
+  }, [onCommit, prefix, displayToId, commitDisplayNames, idToDisplay, entityType, entityId, fieldName, updateField]);
 
   const commitRef = useRef(commit);
   commitRef.current = commit;

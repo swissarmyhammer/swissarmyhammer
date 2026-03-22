@@ -4,6 +4,7 @@ description: Display name
 type:
   kind: text
   single_line: true
+icon: type
 editor: markdown
 display: text
 section: header

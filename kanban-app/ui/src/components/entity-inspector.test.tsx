@@ -21,42 +21,61 @@ const TASK_SCHEMA = {
       id: "f1",
       name: "title",
       type: { kind: "markdown", single_line: true },
+      editor: "markdown",
+      display: "text",
       section: "header",
     },
     {
       id: "f3",
       name: "tags",
       type: { kind: "computed", derive: "parse-body-tags" },
+      editor: "multi-select",
+      display: "badge-list",
+      icon: "tag",
       section: "header",
     },
     {
       id: "f4",
       name: "progress",
       type: { kind: "computed", derive: "parse-body-progress" },
+      editor: "none",
+      display: "number",
+      icon: "bar-chart",
       section: "header",
     },
     {
       id: "f2",
       name: "body",
       type: { kind: "markdown", single_line: false },
+      editor: "markdown",
+      display: "markdown",
+      icon: "file-text",
       section: "body",
     },
     {
       id: "f5",
       name: "assignees",
       type: { kind: "reference", entity: "actor", multiple: true },
+      editor: "multi-select",
+      display: "avatar",
+      icon: "users",
       section: "body",
     },
     {
       id: "f7",
       name: "depends_on",
       type: { kind: "reference", entity: "task", multiple: true },
+      editor: "multi-select",
+      display: "badge-list",
+      icon: "workflow",
       section: "body",
     },
     {
       id: "f8",
       name: "position_column",
       type: { kind: "reference", entity: "column", multiple: false },
+      editor: "select",
+      display: "badge",
       section: "hidden",
     },
   ],
@@ -74,13 +93,19 @@ const TAG_SCHEMA = {
       id: "t1",
       name: "tag_name",
       type: { kind: "text", single_line: true },
+      editor: "markdown",
+      display: "text",
+      icon: "tag",
       section: "header",
     },
-    { id: "t2", name: "color", type: { kind: "color" }, section: "body" },
+    { id: "t2", name: "color", type: { kind: "color" }, editor: "color-palette", display: "color-swatch", icon: "palette", section: "body" },
     {
       id: "t3",
       name: "description",
       type: { kind: "markdown" },
+      editor: "markdown",
+      display: "markdown",
+      icon: "align-left",
       section: "body",
     },
   ],
@@ -98,9 +123,12 @@ const ACTOR_SCHEMA = {
       id: "a1",
       name: "name",
       type: { kind: "text", single_line: true },
+      editor: "markdown",
+      display: "text",
+      icon: "type",
       section: "header",
     },
-    { id: "a2", name: "color", type: { kind: "color" }, section: "body" },
+    { id: "a2", name: "color", type: { kind: "color" }, editor: "color-palette", display: "color-swatch", icon: "palette", section: "body" },
   ],
 };
 
@@ -227,39 +255,8 @@ describe("EntityInspector", () => {
     expect(container.querySelector(".cm-editor")).toBeTruthy();
   });
 
-  it("saves field on blur via FieldUpdateContext with correct params", async () => {
-    mockInvoke.mockClear();
-    const { container } = await renderInspector(makeEntity({ title: "Old" }));
-
-    fireEvent.click(screen.getByText("Old"));
-    const cmContent = container.querySelector(".cm-content") as HTMLElement;
-    if (!cmContent) return;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const view = (cmContent as any).cmTile?.view;
-    if (!view?.dispatch) return;
-    view.dispatch({
-      changes: { from: 0, to: view.state.doc.length, insert: "New" },
-    });
-    await act(async () => {
-      fireEvent.blur(cmContent);
-    });
-
-    const call = mockInvoke.mock.calls.find(
-      (c) =>
-        c[0] === "dispatch_command" &&
-        (c[1] as Record<string, unknown>)?.cmd === "entity.update_field",
-    );
-    expect(call).toBeTruthy();
-    expect(call![1]).toEqual({
-      cmd: "entity.update_field",
-      args: {
-        entity_type: "task",
-        id: "test-id",
-        field_name: "title",
-        value: "New",
-      },
-    });
-  });
+  // Container no longer calls updateField — editors save themselves.
+  // Save behavior is tested in editor-save.test.tsx matrix.
 
   it("allows editing computed tag fields via multi-select", async () => {
     const { container } = await renderInspector(makeEntity({ tags: ["bug"] }));

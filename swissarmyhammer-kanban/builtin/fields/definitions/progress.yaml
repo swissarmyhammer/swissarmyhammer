@@ -4,6 +4,7 @@ description: Progress derived from GFM task lists in body
 type:
   kind: computed
   derive: parse-body-progress
+icon: bar-chart
 editor: none
 display: number
 width: 100

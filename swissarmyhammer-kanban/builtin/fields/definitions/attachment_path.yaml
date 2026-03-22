@@ -4,6 +4,7 @@ description: File path to attachment content
 type:
   kind: text
   single_line: true
+icon: folder
 editor: none
 display: text
 width: 300

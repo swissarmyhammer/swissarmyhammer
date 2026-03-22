@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: '9780'
+position_column: done
+position_ordinal: fffffffffff380
 title: Define EditorProps contract — editors own save, containers own lifecycle
 ---
 ## What

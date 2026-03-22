@@ -12,7 +12,6 @@ import { useGrid } from "@/hooks/use-grid";
 import { useSchema } from "@/lib/schema-context";
 import { useUIState } from "@/lib/ui-state-context";
 import { useAppMode } from "@/lib/app-mode-context";
-import { useFieldUpdate } from "@/lib/field-update-context";
 import { useEntityStore } from "@/lib/entity-store-context";
 import { useEntityFocus } from "@/lib/entity-focus-context";
 import { useInspect } from "@/lib/inspect-context";
@@ -76,7 +75,6 @@ export function GridView({ view }: GridViewProps) {
 
   const { keymap_mode: keymapMode } = useUIState();
   const { mode: appMode } = useAppMode();
-  const { updateField } = useFieldUpdate();
   const inspectEntity = useInspect();
 
   // Current entity and field from cursor position
@@ -327,23 +325,20 @@ export function GridView({ view }: GridViewProps) {
       onCommit: (value: unknown) => void,
       onCancel: () => void,
     ) => {
-      const handleCommit = (value: unknown) => {
-        updateField(entity.entity_type, entity.id, field.name, value).catch(
-          () => {},
-        );
-        onCommit(value);
-      };
       return (
         <CellEditor
           field={field}
           entity={entity}
           value={entity.fields[field.name]}
-          onCommit={handleCommit}
+          entityType={entity.entity_type}
+          entityId={entity.id}
+          fieldName={field.name}
+          onCommit={onCommit}
           onCancel={onCancel}
         />
       );
     },
-    [updateField],
+    [],
   );
 
   return (

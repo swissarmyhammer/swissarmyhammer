@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KMASVEQA7K7F1TKE3ACAWDXT
-position_column: todo
-position_ordinal: '9880'
+position_column: done
+position_ordinal: fffffffffff480
 title: FieldPlaceholderEditor — call updateField directly
 ---
 ## What

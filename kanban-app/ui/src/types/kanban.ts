@@ -89,6 +89,8 @@ export interface FieldDef {
   default?: string;
   editor?: string;
   display?: string;
+  /** Lucide icon name for display in the inspector (e.g. "file-text", "users", "tag"). */
+  icon?: string;
   /** Where to render in the inspector layout: "header" | "body" | "footer" | "hidden". Default: "body". */
   section?: string;
   sort?: string;

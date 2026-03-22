@@ -4,6 +4,7 @@ description: Short text description
 type:
   kind: markdown
   single_line: true
+icon: align-left
 editor: markdown
 display: markdown
 width: 300

@@ -5,6 +5,7 @@ type:
   kind: reference
   entity: attachment
   multiple: true
+icon: paperclip
 editor: multi-select
 display: badge-list
 width: 200
