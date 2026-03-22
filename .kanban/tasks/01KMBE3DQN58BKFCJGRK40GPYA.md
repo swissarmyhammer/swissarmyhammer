@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: ae80
+position_column: done
+position_ordinal: fffffffffffc80
 title: Update editor-save.test.tsx to test through Field component, not individual editors
 ---
 ## What

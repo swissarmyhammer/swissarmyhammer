@@ -46,8 +46,8 @@ function loadYaml<T>(filePath: string): T {
 
 /** Load all field definitions from the builtin YAML. */
 function loadAllFieldDefs(): FieldDef[] {
-  const files = fs.readdirSync(DEFINITIONS_DIR).filter((f) => f.endsWith(".yaml"));
-  return files.map((f) => loadYaml<FieldDef>(path.join(DEFINITIONS_DIR, f)));
+  const files = fs.readdirSync(DEFINITIONS_DIR).filter((f: string) => f.endsWith(".yaml"));
+  return files.map((f: string) => loadYaml<FieldDef>(path.join(DEFINITIONS_DIR, f)));
 }
 
 /** Load an entity definition to get its field list. */

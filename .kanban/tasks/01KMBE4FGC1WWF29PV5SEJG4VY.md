@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KMBE3DQN58BKFCJGRK40GPYA
-position_column: todo
-position_ordinal: af80
+position_column: done
+position_ordinal: fffffffffffd80
 title: Field component — data-bound control that owns read, write, and sync
 ---
 ## What
