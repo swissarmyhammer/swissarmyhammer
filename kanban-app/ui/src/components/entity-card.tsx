@@ -1,4 +1,4 @@
-import { forwardRef, useCallback, useMemo } from "react";
+import { forwardRef, memo, useCallback, useMemo } from "react";
 import { GripVertical, Info } from "lucide-react";
 import { EditableMarkdown } from "@/components/editable-markdown";
 import { SubtaskProgress } from "@/components/subtask-progress";
@@ -27,8 +27,8 @@ interface EntityCardProps {
  * Renders header-section fields from the schema using the same
  * dispatch logic as EntityInspector — no hardcoded field names.
  */
-export const EntityCard = forwardRef<HTMLDivElement, EntityCardProps>(
-  function EntityCard(
+export const EntityCard = memo(
+  forwardRef<HTMLDivElement, EntityCardProps>(function EntityCard(
     {
       entity,
       dragHandleProps,
@@ -110,7 +110,7 @@ export const EntityCard = forwardRef<HTMLDivElement, EntityCardProps>(
         </div>
       </FocusScope>
     );
-  },
+  }),
 );
 
 /**

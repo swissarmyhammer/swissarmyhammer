@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { memo, useCallback, useRef, useState } from "react";
 import { EntityCard } from "@/components/entity-card";
 import type { Entity } from "@/types/kanban";
 
@@ -14,8 +14,11 @@ interface DraggableTaskCardProps {
  * Uses a DOM clone as the OS drag ghost — visible in source window and
  * between windows. The target window's BoardView overlays a full-size
  * EntityCard on top so the shrunken OS ghost is covered.
+ *
+ * Wrapped in React.memo so cards whose entity reference hasn't changed
+ * skip re-rendering when the parent column re-renders.
  */
-export function DraggableTaskCard({
+export const DraggableTaskCard = memo(function DraggableTaskCard({
   entity,
   onDragStart,
   onDragEnd,
@@ -72,4 +75,4 @@ export function DraggableTaskCard({
       onDragEnd={handleDragEnd}
     />
   );
-}
+});

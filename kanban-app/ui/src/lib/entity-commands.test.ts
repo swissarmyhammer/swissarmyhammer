@@ -48,11 +48,11 @@ function makeWrapper(onInspect = vi.fn()) {
     return createElement(
       SchemaProvider,
       null,
-      createElement(
-        InspectProvider,
-        { onInspect, onDismiss: () => false },
+      createElement(InspectProvider, {
+        onInspect,
+        onDismiss: () => false,
         children,
-      ),
+      }),
     );
   };
 }

@@ -1,4 +1,11 @@
-import { createContext, useContext, useCallback, useMemo, type ReactNode } from "react";
+import {
+  createContext,
+  useContext,
+  useCallback,
+  useMemo,
+  useRef,
+  type ReactNode,
+} from "react";
 import type { Entity } from "@/types/kanban";
 
 interface EntityStoreContextValue {
@@ -25,17 +32,28 @@ interface EntityStoreProviderProps {
  * Components call `useEntityStore().getEntities("tag")` to get all tags,
  * or `getEntity("task", id)` to look up one task. No hardcoded knowledge
  * of which entity types exist.
+ *
+ * Uses a ref-based pattern so that `getEntities` and `getEntity` have
+ * stable function identities. This prevents every context consumer from
+ * re-rendering whenever any entity changes — components that receive
+ * entities as props still re-render through normal prop diffing.
  */
-export function EntityStoreProvider({ entities, children }: EntityStoreProviderProps) {
+export function EntityStoreProvider({
+  entities,
+  children,
+}: EntityStoreProviderProps) {
+  const entitiesRef = useRef(entities);
+  entitiesRef.current = entities;
+
   const getEntities = useCallback(
-    (entityType: string) => entities[entityType] ?? [],
-    [entities],
+    (entityType: string) => entitiesRef.current[entityType] ?? [],
+    [],
   );
 
   const getEntity = useCallback(
     (entityType: string, id: string) =>
-      entities[entityType]?.find((e) => e.id === id),
-    [entities],
+      entitiesRef.current[entityType]?.find((e) => e.id === id),
+    [],
   );
 
   const value = useMemo(
