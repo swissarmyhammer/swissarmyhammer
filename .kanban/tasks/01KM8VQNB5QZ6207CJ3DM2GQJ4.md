@@ -1,6 +1,6 @@
 ---
-position_column: todo
-position_ordinal: 7f80
+position_column: done
+position_ordinal: ffffffffffef80
 title: We need to verify that adding a task adds it to the todo column
 ---
 ## What
