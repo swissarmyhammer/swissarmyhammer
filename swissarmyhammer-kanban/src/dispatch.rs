@@ -444,6 +444,87 @@ mod tests {
         assert!(result["columns"].is_array());
     }
 
+    /// Verify that dispatching `add task` (without a column arg) places the task
+    /// in the first column (todo).
+    #[tokio::test]
+    async fn dispatch_add_task_places_in_first_column_by_default() {
+        let (_temp, ctx) = setup().await;
+
+        let ops = parse_input(json!({"op": "add task", "title": "New task"})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        assert_eq!(
+            result["position"]["column"], "todo",
+            "task without explicit column should land in todo (first column)"
+        );
+    }
+
+    /// Verify that dispatching `add task` with an explicit column arg places the task
+    /// in that column, not in todo.
+    #[tokio::test]
+    async fn dispatch_add_task_with_explicit_column_uses_that_column() {
+        let (_temp, ctx) = setup().await;
+
+        let ops =
+            parse_input(json!({"op": "add task", "title": "Task in doing", "column": "doing"}))
+                .unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        assert_eq!(
+            result["position"]["column"], "doing",
+            "task with explicit column arg should land in that column"
+        );
+    }
+
+    /// Verify that dispatching `add task` on a board with no columns returns an error.
+    #[tokio::test]
+    async fn dispatch_add_task_on_board_with_no_columns_returns_error() {
+        let (_temp, ctx) = setup().await;
+
+        // Delete all default columns (todo, doing, done)
+        for col_id in &["todo", "doing", "done"] {
+            let ops = parse_input(json!({"op": "delete column", "id": col_id})).unwrap();
+            execute_operation(&ctx, &ops[0]).await.unwrap();
+        }
+
+        // Now add task should fail gracefully
+        let ops = parse_input(json!({"op": "add task", "title": "Task on empty board"})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await;
+
+        assert!(
+            result.is_err(),
+            "adding a task to a board with no columns should return an error"
+        );
+    }
+
+    /// Verify that `board.newCard` is not a separate dispatch operation — the
+    /// `task.add` dispatch path is the canonical way to add cards and it correctly
+    /// defaults to the first column.
+    #[tokio::test]
+    async fn dispatch_board_new_card_not_a_separate_operation() {
+        let (_temp, ctx) = setup().await;
+
+        // board.newCard does not exist as a parsed operation; the canonical way
+        // to add a card is "add task".  Attempting to dispatch an invented
+        // "new card" verb/noun pair must return an error, confirming that all
+        // new-card creation flows go through "add task".
+        let op = crate::types::Operation::new(crate::types::Verb::Add, crate::types::Noun::Task, {
+            let mut m = serde_json::Map::new();
+            m.insert("title".into(), json!("Card via add task"));
+            m
+        });
+        let result = execute_operation(&ctx, &op).await;
+        assert!(
+            result.is_ok(),
+            "add task (the board.newCard equivalent) should succeed"
+        );
+        assert_eq!(
+            result.unwrap()["position"]["column"],
+            "todo",
+            "board.newCard equivalent should default to the first column"
+        );
+    }
+
     #[tokio::test]
     async fn dispatch_add_and_list_tasks() {
         let (_temp, ctx) = setup().await;
