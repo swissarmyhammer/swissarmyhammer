@@ -5,3 +5,4 @@
 
 import "./markdown";
 import "./number";
+import "./select";
