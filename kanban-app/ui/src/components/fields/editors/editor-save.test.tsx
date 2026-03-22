@@ -1,8 +1,12 @@
 /**
- * Data-driven test harness for field editor save behavior.
+ * Data-driven test harness for Field save behavior.
  *
- * Tests every editor × every keymap mode × every exit path.
- * Asserts that editors call `updateField` directly — not via container callbacks.
+ * Loads the REAL field definitions from YAML, renders <Field> through real
+ * providers (FieldUpdateProvider, EntityStoreProvider, SchemaProvider),
+ * and asserts that invoke("dispatch_command") is called on save-worthy
+ * exit paths.
+ *
+ * Matrix: editable fields × keymap modes × exit paths × modes
  *
  * Expected behavior:
  *   blur   → always saves
@@ -10,10 +14,12 @@
  *   Escape → vim saves, CUA/emacs discards
  */
 
-import { describe, it, expect, vi, beforeEach, type Mock } from "vitest";
-import { render, fireEvent, act, type RenderResult } from "@testing-library/react";
-import { EditorView } from "@codemirror/view";
-import type { ReactElement } from "react";
+import { describe, it, expect, vi, beforeEach, beforeAll } from "vitest";
+import { render, fireEvent, act } from "@testing-library/react";
+import fs from "node:fs";
+import path from "node:path";
+import yaml from "js-yaml";
+import type { FieldDef } from "@/types/kanban";
 
 // ---------------------------------------------------------------------------
 // jsdom stubs
@@ -21,29 +27,67 @@ import type { ReactElement } from "react";
 Element.prototype.scrollIntoView = vi.fn();
 
 // ---------------------------------------------------------------------------
+// Load REAL field definitions from YAML — the source of truth.
+// ---------------------------------------------------------------------------
+
+const DEFINITIONS_DIR = path.resolve(
+  __dirname,
+  "../../../../../../swissarmyhammer-kanban/builtin/fields/definitions",
+);
+const ENTITIES_DIR = path.resolve(
+  __dirname,
+  "../../../../../../swissarmyhammer-kanban/builtin/fields/entities",
+);
+
+/** Load a YAML file and return its parsed content. */
+function loadYaml<T>(filePath: string): T {
+  return yaml.load(fs.readFileSync(filePath, "utf8")) as T;
+}
+
+/** Load all field definitions from the builtin YAML. */
+function loadAllFieldDefs(): FieldDef[] {
+  const files = fs.readdirSync(DEFINITIONS_DIR).filter((f) => f.endsWith(".yaml"));
+  return files.map((f) => loadYaml<FieldDef>(path.join(DEFINITIONS_DIR, f)));
+}
+
+/** Load an entity definition to get its field list. */
+function loadEntityDef(entityType: string): { name: string; fields: string[]; body_field?: string } {
+  return loadYaml(path.join(ENTITIES_DIR, `${entityType}.yaml`));
+}
+
+/** Get the FieldDefs for an entity type, filtered to editable fields. */
+function editableFieldsFor(entityType: string): FieldDef[] {
+  const entityDef = loadEntityDef(entityType);
+  const allDefs = loadAllFieldDefs();
+  const defMap = new Map(allDefs.map((d) => [d.name, d]));
+
+  return entityDef.fields
+    .map((name) => defMap.get(name))
+    .filter((d): d is FieldDef => d !== undefined && d.editor !== "none" && d.editor !== undefined);
+}
+
+// ---------------------------------------------------------------------------
 // Configurable keymap mode — swapped per test.
 // ---------------------------------------------------------------------------
 let KEYMAP_MODE = "cua";
 
-// ---------------------------------------------------------------------------
-// Mock updateField — this is what we assert against.
-// ---------------------------------------------------------------------------
-const mockUpdateField = vi.fn(() => Promise.resolve());
-
-vi.mock("@/lib/field-update-context", () => ({
-  FieldUpdateProvider: ({ children }: { children: ReactElement }) => children,
-  useFieldUpdate: () => ({ updateField: mockUpdateField }),
-}));
-
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const mockInvoke = vi.fn((...args: any[]) => {
-  if (args[0] === "get_entity_schema")
-    return Promise.resolve({
-      entity: { name: "task", fields: ["title"], body_field: "body" },
-      fields: [
-        { id: "f1", name: "title", type: { kind: "markdown", single_line: true }, editor: "markdown", display: "text", section: "header" },
-      ],
-    });
+  if (args[0] === "get_entity_schema") {
+    // Return real schema data for the requested entity type
+    const entityType = args[1]?.entityType as string;
+    try {
+      const entityDef = loadEntityDef(entityType);
+      const allDefs = loadAllFieldDefs();
+      const defMap = new Map(allDefs.map((d) => [d.name, d]));
+      const fields = entityDef.fields
+        .map((name) => defMap.get(name))
+        .filter((d): d is FieldDef => d !== undefined);
+      return Promise.resolve({ entity: entityDef, fields });
+    } catch {
+      return Promise.resolve({ entity: { name: entityType, fields: [] }, fields: [] });
+    }
+  }
   if (args[0] === "get_ui_state")
     return Promise.resolve({
       palette_open: false,
@@ -53,6 +97,8 @@ const mockInvoke = vi.fn((...args: any[]) => {
       windows: {},
       recent_boards: [],
     });
+  if (args[0] === "dispatch_command")
+    return Promise.resolve({ result: "ok", undoable: true });
   return Promise.resolve(null);
 });
 
@@ -73,17 +119,44 @@ vi.mock("@tauri-apps/plugin-log", () => ({
 }));
 
 // ---------------------------------------------------------------------------
-// Imports AFTER mocks
+// Imports AFTER mocks — NO mock of useFieldUpdate, we use the real one
 // ---------------------------------------------------------------------------
 import { UIStateProvider } from "@/lib/ui-state-context";
 import { SchemaProvider } from "@/lib/schema-context";
 import { EntityStoreProvider } from "@/lib/entity-store-context";
-import { FieldPlaceholderEditor } from "@/components/fields/field-placeholder";
-import { NumberEditor } from "./number-editor";
-import { SelectEditor } from "./select-editor";
-import { DateEditor } from "./date-editor";
-import { ColorPaletteEditor } from "./color-palette-editor";
-import { MultiSelectEditor } from "./multi-select-editor";
+import { EntityFocusProvider } from "@/lib/entity-focus-context";
+import { InspectProvider } from "@/lib/inspect-context";
+import { FieldUpdateProvider } from "@/lib/field-update-context";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { Field } from "@/components/fields/field";
+import type { Entity } from "@/types/kanban";
+
+// ---------------------------------------------------------------------------
+// Test entity — has a value for every possible field
+// ---------------------------------------------------------------------------
+const TEST_ENTITY: Entity = {
+  entity_type: "task",
+  id: "test-task-1",
+  fields: {
+    title: "Test Title",
+    body: "Test body with #tag",
+    tags: ["bug"],
+    assignees: ["actor-1"],
+    depends_on: [],
+    progress: 0.5,
+    position_column: "todo",
+    position_swimlane: "default",
+    position_ordinal: "ffff8000",
+  },
+};
+
+const TEST_ENTITIES: Record<string, Entity[]> = {
+  task: [TEST_ENTITY],
+  tag: [{ entity_type: "tag", id: "tag-1", fields: { tag_name: "bug", color: "ff0000" } }],
+  actor: [{ entity_type: "actor", id: "actor-1", fields: { name: "Alice", color: "0000ff" } }],
+  column: [{ entity_type: "column", id: "todo", fields: { name: "Todo", order: 0 } }],
+  swimlane: [{ entity_type: "swimlane", id: "default", fields: { name: "Default", order: 0 } }],
+};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -95,275 +168,52 @@ async function settle(ms = 150) {
   });
 }
 
-function wrap(ui: ReactElement) {
-  return <UIStateProvider>{ui}</UIStateProvider>;
+/** Render a Field inside all required providers — real context, no mocked hooks. */
+function renderField(fieldDef: FieldDef, mode: "compact" | "full", editing: boolean) {
+  const onEdit = vi.fn();
+  const onDone = vi.fn();
+  const onCancel = vi.fn();
+
+  const result = render(
+    <TooltipProvider>
+      <SchemaProvider>
+        <EntityStoreProvider entities={TEST_ENTITIES}>
+          <EntityFocusProvider>
+            <InspectProvider onInspect={() => {}} onDismiss={() => false}>
+              <FieldUpdateProvider>
+                <UIStateProvider>
+                  <Field
+                    fieldDef={fieldDef}
+                    entityType="task"
+                    entityId="test-task-1"
+                    mode={mode}
+                    editing={editing}
+                    onEdit={onEdit}
+                    onDone={onDone}
+                    onCancel={onCancel}
+                  />
+                </UIStateProvider>
+              </FieldUpdateProvider>
+            </InspectProvider>
+          </EntityFocusProvider>
+        </EntityStoreProvider>
+      </SchemaProvider>
+    </TooltipProvider>,
+  );
+
+  return { ...result, onEdit, onDone, onCancel };
 }
 
-/** Wrapper with schema + entity store for multi-select. */
-function wrapWithStore(ui: ReactElement) {
-  return (
-    <SchemaProvider>
-      <EntityStoreProvider entities={{ tag: [{ entity_type: "tag", id: "t1", fields: { tag_name: "bug" } }], actor: [] }}>
-        <UIStateProvider>{ui}</UIStateProvider>
-      </EntityStoreProvider>
-    </SchemaProvider>
+/** Get dispatch_command calls for entity.update_field. */
+function getUpdateCalls() {
+  return mockInvoke.mock.calls.filter(
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (c: any[]) => c[0] === "dispatch_command" && c[1]?.cmd === "entity.update_field",
   );
 }
 
-// ---------------------------------------------------------------------------
-// Editor adapters
-//
-// Each adapter knows how to:
-//   render()    — mount the editor with standard props
-//   setValue()  — put a new value into the editor's input
-//   exitTarget() — return the DOM element to fire exit events on
-// ---------------------------------------------------------------------------
-
-interface EditorAdapter {
-  name: string;
-  /** If true, the editor saves on value change (e.g. select). Test asserts save during setValue, not during exit. */
-  savesOnChange?: boolean;
-  /** If true, the editor's inner content is inside a popover that jsdom can't render. Tests are skipped. */
-  popoverLimited?: boolean;
-  /** If true, every exit path saves (e.g. multi-select commits on Escape too). */
-  alwaysSaves?: boolean;
-  /** If true, skip blur tests (jsdom can't model focus tracking for delayed blur handlers). */
-  skipBlur?: boolean;
-  render: (onDone: () => void, onCancel: () => void) => RenderResult;
-  setValue: (result: RenderResult, value: string) => Promise<void>;
-  exitTarget: (result: RenderResult) => HTMLElement;
-}
-
-/** Helper: find CM6 EditorView from a container. */
-function findCmView(container: HTMLElement): EditorView {
-  const el = container.querySelector(".cm-editor") as HTMLElement;
-  if (!el) throw new Error("No .cm-editor found");
-  const view = EditorView.findFromDOM(el);
-  if (!view) throw new Error("EditorView.findFromDOM returned null");
-  return view;
-}
-
-const markdownAdapter: EditorAdapter = {
-  name: "markdown",
-  render: (onDone, onCancel) =>
-    render(
-      wrap(
-        <FieldPlaceholderEditor
-          value="original"
-          entityType="task"
-          entityId="t1"
-          fieldName="title"
-          onCommit={onDone}
-          onCancel={onCancel}
-        />,
-      ),
-    ),
-  setValue: async (result, value) => {
-    const view = findCmView(result.container);
-    await act(async () => {
-      view.dispatch({
-        changes: { from: 0, to: view.state.doc.length, insert: value },
-      });
-    });
-  },
-  exitTarget: (result) =>
-    result.container.querySelector(".cm-content") as HTMLElement,
-};
-
-const numberAdapter: EditorAdapter = {
-  name: "number",
-  render: (onDone, onCancel) =>
-    render(
-      wrap(
-        <NumberEditor
-          value={42}
-          entityType="task"
-          entityId="t1"
-          fieldName="priority"
-          onCommit={onDone}
-          onCancel={onCancel}
-          mode="compact"
-        />,
-      ),
-    ),
-  setValue: async (result, value) => {
-    const input = result.container.querySelector("input") as HTMLInputElement;
-    await act(async () => {
-      fireEvent.change(input, { target: { value } });
-    });
-  },
-  exitTarget: (result) =>
-    result.container.querySelector("input") as HTMLElement,
-};
-
-const selectAdapter: EditorAdapter = {
-  name: "select",
-  savesOnChange: true,
-  render: (onDone, onCancel) =>
-    render(
-      wrap(
-        <SelectEditor
-          value="a"
-          entityType="task"
-          entityId="t1"
-          fieldName="status"
-          field={{
-            id: "f-sel",
-            name: "status",
-            type: { kind: "select", options: [{ value: "a" }, { value: "b" }] },
-            editor: "select",
-            display: "text",
-          }}
-          onCommit={onDone}
-          onCancel={onCancel}
-          mode="compact"
-        />,
-      ),
-    ),
-  setValue: async (result, value) => {
-    const select = result.container.querySelector("select") as HTMLSelectElement;
-    await act(async () => {
-      fireEvent.change(select, { target: { value } });
-    });
-  },
-  exitTarget: (result) =>
-    result.container.querySelector("select") as HTMLElement,
-};
-
-// Date and color are popover-based. In jsdom, Radix popovers don't render
-// their inner content (CM6, color picker). updateField wiring is verified
-// by code inspection — the pattern is identical to other editors.
-const dateAdapter: EditorAdapter = {
-  name: "date",
-  popoverLimited: true,
-  render: (onDone, onCancel) =>
-    render(
-      wrap(
-        <DateEditor
-          value="2025-01-15"
-          entityType="task"
-          entityId="t1"
-          fieldName="due_date"
-          onCommit={onDone}
-          onCancel={onCancel}
-          mode="compact"
-        />,
-      ),
-    ),
-  setValue: async (result, value) => {
-    // Radix portals content to document.body, not the component container
-    const cmEditor = document.body.querySelector(".cm-editor") as HTMLElement;
-    if (cmEditor) {
-      const view = EditorView.findFromDOM(cmEditor);
-      if (view) {
-        await act(async () => {
-          view.dispatch({
-            changes: { from: 0, to: view.state.doc.length, insert: value },
-          });
-        });
-        return;
-      }
-    }
-  },
-  exitTarget: () => {
-    const cm = document.body.querySelector(".cm-content") as HTMLElement;
-    if (cm) return cm;
-    return document.body.firstElementChild as HTMLElement;
-  },
-};
-
-const colorAdapter: EditorAdapter = {
-  name: "color-palette",
-  popoverLimited: true,
-  render: (onDone, onCancel) =>
-    render(
-      wrap(
-        <ColorPaletteEditor
-          value="ff0000"
-          onCommit={onDone}
-          onCancel={onCancel}
-          mode="compact"
-        />,
-      ),
-    ),
-  setValue: async (result, _value) => {
-    // Color editor commits on every change — the hex input is inside a popover.
-    // In jsdom, the popover may not render. We test what we can.
-    const input = result.container.querySelector("input[type='text']") as HTMLInputElement;
-    if (input) {
-      await act(async () => {
-        fireEvent.change(input, { target: { value: "00ff00" } });
-      });
-    }
-  },
-  exitTarget: (result) => {
-    const input = result.container.querySelector("input[type='text']") as HTMLElement;
-    if (input) return input;
-    return result.container.firstElementChild as HTMLElement;
-  },
-};
-
-// Multi-select always commits on every exit path (Enter, Escape, blur).
-// It uses CM6 with a Prec.highest keymap, not the shared buildSubmitCancelExtensions.
-// Multi-select blur uses setTimeout + document.activeElement check that jsdom
-// can't model. Enter/Escape prove commit→updateField wiring works.
-const multiSelectAdapter: EditorAdapter = {
-  name: "multi-select",
-  alwaysSaves: true,
-  skipBlur: true,
-  render: (onDone, onCancel) =>
-    render(
-      wrapWithStore(
-        <MultiSelectEditor
-          value={["bug"]}
-          entityType="task"
-          entityId="t1"
-          fieldName="tags"
-          field={{
-            id: "f-tags",
-            name: "tags",
-            type: { kind: "computed", derive: "parse-body-tags" },
-            editor: "multi-select",
-            display: "badge-list",
-          }}
-          onCommit={onDone}
-          onCancel={onCancel}
-          mode="compact"
-        />,
-      ),
-    ),
-  setValue: async (_result, _value) => {
-    // Multi-select commits the current selection — no need to set a new value.
-    // The initial value=["bug"] is the selection.
-  },
-  exitTarget: (result) => {
-    const cm = result.container.querySelector(".cm-content") as HTMLElement;
-    if (cm) return cm;
-    return result.container.firstElementChild as HTMLElement;
-  },
-};
-
-// ---------------------------------------------------------------------------
-// Test matrix
-// ---------------------------------------------------------------------------
-
-const adapters: EditorAdapter[] = [
-  markdownAdapter,
-  numberAdapter,
-  selectAdapter,
-  dateAdapter,
-  colorAdapter,
-  multiSelectAdapter,
-];
-
-const keymapModes = ["cua", "vim", "emacs"] as const;
-
-type ExitPath = "blur" | "Enter" | "Escape";
-const exitPaths: ExitPath[] = ["blur", "Enter", "Escape"];
-
 /** Should updateField be called for this combination? */
-function expectsSave(adapter: EditorAdapter, keymap: string, exit: ExitPath): boolean {
-  if (adapter.alwaysSaves) return true;
+function expectsSave(keymap: string, exit: string): boolean {
   if (exit === "blur") return true;
   if (exit === "Enter") return true;
   if (exit === "Escape") return keymap === "vim";
@@ -371,78 +221,95 @@ function expectsSave(adapter: EditorAdapter, keymap: string, exit: ExitPath): bo
 }
 
 // ---------------------------------------------------------------------------
+// Load the test matrix from real YAML
+// ---------------------------------------------------------------------------
+
+const editableFields = editableFieldsFor("task");
+const keymapModes = ["cua", "vim", "emacs"] as const;
+const exitPaths = ["blur", "Enter", "Escape"] as const;
+const modes = ["compact", "full"] as const;
+
+// Sanity check — if no editable fields loaded, something is wrong
+if (editableFields.length === 0) {
+  throw new Error(
+    `No editable fields found for task entity. Check YAML at ${DEFINITIONS_DIR}`,
+  );
+}
+
+// ---------------------------------------------------------------------------
 // The matrix
 // ---------------------------------------------------------------------------
 
-describe.each(adapters)("$name editor", (adapter) => {
-  if (adapter.popoverLimited) {
-    it.skip("popover-based editor — jsdom cannot render inner content", () => {});
-    return;
-  }
-
-  describe.each(keymapModes)("keymap: %s", (keymap) => {
-    beforeEach(() => {
-      vi.clearAllMocks();
-      KEYMAP_MODE = keymap;
-    });
-
-    it.each(exitPaths)("exit: %s", async (exit) => {
-      if (exit === "blur" && adapter.skipBlur) return; // jsdom focus limitation
-
-      const onDone = vi.fn();
-      const onCancel = vi.fn();
-      const result = adapter.render(onDone, onCancel);
-      await settle();
-
-      // For savesOnChange editors (e.g. select), the save happens during
-      // setValue — clear mocks before setValue so we can assert it.
-      if (adapter.savesOnChange) {
-        mockUpdateField.mockClear();
-        await adapter.setValue(result, "99");
-        await settle();
-
-        // savesOnChange editors: updateField is called during setValue.
-        // Exit events are just lifecycle (close the editor).
-        const shouldSave = expectsSave(adapter, keymap, exit);
-        if (shouldSave) {
-          expect(
-            mockUpdateField,
-            `${adapter.name} / ${keymap} / ${exit}: expected updateField on change`,
-          ).toHaveBeenCalled();
-        }
-        // For discard exits (CUA/emacs Escape), the change already saved —
-        // that's correct for select (click = commit). We still pass.
-      } else {
-        // Standard editors: set value, clear mocks, then assert on exit.
-        await adapter.setValue(result, "99");
-        await settle();
-        mockUpdateField.mockClear();
-
-        const target = adapter.exitTarget(result);
-        if (target) {
-          if (exit === "blur") {
-            await act(async () => fireEvent.blur(target));
-          } else {
-            await act(async () => fireEvent.keyDown(target, { key: exit }));
-          }
-        }
-        await settle();
-
-        const shouldSave = expectsSave(adapter, keymap, exit);
-        if (shouldSave) {
-          expect(
-            mockUpdateField,
-            `${adapter.name} / ${keymap} / ${exit}: expected updateField to be called`,
-          ).toHaveBeenCalled();
-        } else {
-          expect(
-            mockUpdateField,
-            `${adapter.name} / ${keymap} / ${exit}: expected updateField NOT to be called`,
-          ).not.toHaveBeenCalled();
-        }
-      }
-
-      result.unmount();
-    });
+describe("Field save behavior", () => {
+  // Log what we're testing
+  beforeAll(() => {
+    const names = editableFields.map((f) => `${f.name} (${f.editor})`);
+    console.log(`Testing ${names.length} editable fields: ${names.join(", ")}`);
   });
+
+  describe.each(editableFields.map((f) => ({ fieldDef: f, fieldName: f.name, editor: f.editor })))(
+    "field: $fieldName (editor: $editor)",
+    ({ fieldDef }) => {
+      describe.each(modes)("mode: %s", (mode) => {
+        describe.each(keymapModes)("keymap: %s", (keymap) => {
+          beforeEach(() => {
+            vi.clearAllMocks();
+            KEYMAP_MODE = keymap;
+          });
+
+          it.each(exitPaths)("exit: %s", async (exit) => {
+            const { container, unmount } = renderField(fieldDef, mode, true);
+            await settle();
+
+            // Clear any calls from rendering / entering edit mode
+            mockInvoke.mockClear();
+
+            // TODO: each field type needs an interaction adapter to:
+            //   1. Set a new value in the editor
+            //   2. Find the right DOM target for exit events
+            // For now, try to find any interactive element and trigger the exit.
+            const target =
+              container.querySelector(".cm-content") ??
+              container.querySelector("input") ??
+              container.querySelector("select") ??
+              container.firstElementChild;
+
+            if (target) {
+              if (exit === "blur") {
+                await act(async () => fireEvent.blur(target));
+              } else {
+                await act(async () => fireEvent.keyDown(target, { key: exit }));
+              }
+            }
+            await settle();
+
+            const shouldSave = expectsSave(keymap, exit);
+            if (shouldSave) {
+              const calls = getUpdateCalls();
+              expect(
+                calls.length,
+                `${fieldDef.name} / ${mode} / ${keymap} / ${exit}: expected dispatch_command(entity.update_field) to be called`,
+              ).toBeGreaterThanOrEqual(1);
+
+              // Verify correct entity identity
+              if (calls.length > 0) {
+                const args = calls[0][1].args;
+                expect(args.entity_type).toBe("task");
+                expect(args.id).toBe("test-task-1");
+                expect(args.field_name).toBe(fieldDef.name);
+              }
+            } else {
+              const calls = getUpdateCalls();
+              expect(
+                calls.length,
+                `${fieldDef.name} / ${mode} / ${keymap} / ${exit}: expected NO dispatch_command(entity.update_field)`,
+              ).toBe(0);
+            }
+
+            unmount();
+          });
+        });
+      });
+    },
+  );
 });
