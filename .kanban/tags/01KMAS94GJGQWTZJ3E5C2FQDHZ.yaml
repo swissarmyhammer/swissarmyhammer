@@ -1,0 +1,3 @@
+color: ff6600
+description: Hardcoded type-kind checks in UI that bypass YAML field configuration
+tag_name: field-special-case
