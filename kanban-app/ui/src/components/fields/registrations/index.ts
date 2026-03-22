@@ -4,3 +4,4 @@
  */
 
 import "./markdown";
+import "./number";
