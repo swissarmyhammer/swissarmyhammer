@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import CodeMirror, { type ReactCodeMirrorRef } from "@uiw/react-codemirror";
-import { EditorView, placeholder as cmPlaceholder } from "@codemirror/view";
+import {
+  EditorView,
+  ViewPlugin,
+  placeholder as cmPlaceholder,
+} from "@codemirror/view";
 import { Compartment } from "@codemirror/state";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { languages } from "@codemirror/language-data";
@@ -73,6 +77,8 @@ interface EditorProps {
   placeholder?: string;
   /** Called on every content change with the current text. */
   onChange?: (text: string) => void;
+  /** Popup mode — vim normal mode is a useful state (e.g. quick-capture). When false (default), vim insert-Escape commits+closes immediately. */
+  popup?: boolean;
 }
 
 export function TextEditor({
@@ -82,6 +88,7 @@ export function TextEditor({
   onSubmit,
   placeholder,
   onChange,
+  popup,
 }: EditorProps) {
   const [draft, setDraft] = useState(value);
   const editorRef = useRef<ReactCodeMirrorRef>(null);
@@ -194,6 +201,26 @@ export function TextEditor({
         onCancelRef: semanticCancelRef,
         saveInPlaceRef,
       }),
+      // Inline fields (non-popup): detect vim insert→normal transition and commit+close.
+      // This fires after vim processes Escape, so the mode change is already done.
+      ...(!popup && mode === "vim"
+        ? [
+            ViewPlugin.define((view) => {
+              let wasInsert = !!getCM(view)?.state?.vim?.insertMode;
+              return {
+                update() {
+                  const cm = getCM(view);
+                  const isInsert = !!cm?.state?.vim?.insertMode;
+                  if (wasInsert && !isInsert) {
+                    wasInsert = isInsert;
+                    commitAndExitRef.current();
+                  }
+                  wasInsert = isInsert;
+                },
+              };
+            }),
+          ]
+        : []),
       ...(placeholder ? [cmPlaceholder(placeholder)] : []),
     ],
     [mode, placeholder],
