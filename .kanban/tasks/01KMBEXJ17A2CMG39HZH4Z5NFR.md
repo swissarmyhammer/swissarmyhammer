@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: b880
+position_column: done
+position_ordinal: ffffffffffff8780
 title: 'Audit: find all Field bypasses — places that render editors/displays directly'
 ---
 ## What
