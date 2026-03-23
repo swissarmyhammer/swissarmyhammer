@@ -345,4 +345,24 @@ describe("EntityInspector", () => {
     );
     expect(pill, "Title should NOT have tag pills").toBeFalsy();
   });
+
+  it("first visible field has data-focused attribute by default", async () => {
+    const { container } = await renderInspector(
+      makeEntity({ title: "T", body: "B", tags: [] }),
+    );
+    // First navigable field (title, in header) should be focused
+    const titleRow = container.querySelector('[data-testid="field-row-title"]');
+    expect(titleRow!.getAttribute("data-focused")).toBe("true");
+    // Second field should not be focused
+    const tagsRow = container.querySelector('[data-testid="field-row-tags"]');
+    expect(tagsRow!.getAttribute("data-focused")).toBeNull();
+  });
+
+  it("only one field has data-focused at a time", async () => {
+    const { container } = await renderInspector(
+      makeEntity({ title: "T", body: "B", tags: [], assignees: [] }),
+    );
+    const focused = container.querySelectorAll("[data-focused]");
+    expect(focused.length).toBe(1);
+  });
 });

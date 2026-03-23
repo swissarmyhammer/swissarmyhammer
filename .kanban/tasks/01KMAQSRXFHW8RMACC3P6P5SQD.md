@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KMAQS9WS28VTKJZ4TWDRJG89
-position_column: todo
-position_ordinal: '8180'
+position_column: done
+position_ordinal: ffffffffffff9a80
 title: EntityInspector visual focus ring and field indexing
 ---
 ## What

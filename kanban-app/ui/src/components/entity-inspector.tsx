@@ -1,9 +1,15 @@
-import { useState, useCallback, useMemo } from "react";
-import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
+import { useState, useCallback, useEffect, useMemo } from "react";
+import {
+  Tooltip,
+  TooltipTrigger,
+  TooltipContent,
+} from "@/components/ui/tooltip";
 import { resolveEditor } from "@/components/fields/editors";
 import { Field } from "@/components/fields/field";
 import { useSchema } from "@/lib/schema-context";
+import { useInspectorNav } from "@/hooks/use-inspector-nav";
 import type { FieldDef, Entity } from "@/types/kanban";
+import { FocusHighlight } from "@/components/ui/focus-highlight";
 import { icons, HelpCircle } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
@@ -56,18 +62,35 @@ export function EntityInspector({ entity }: EntityInspectorProps) {
     return { header, body, footer };
   }, [fields]);
 
+  /** Flat ordered list of all navigable fields (header → body → footer). */
+  const navigableFields = useMemo(
+    () => [...sections.header, ...sections.body, ...sections.footer],
+    [sections],
+  );
+
+  const nav = useInspectorNav({ fieldCount: navigableFields.length });
+
   if (fields.length === 0) {
     return <p className="text-sm text-muted-foreground">Loading schema...</p>;
   }
 
-  const renderField = (field: FieldDef, showLabel = true) => (
-    <FieldRow
-      key={field.name}
-      field={field}
-      entity={entity}
-      showLabel={showLabel}
-    />
-  );
+  /** Track the running index across sections so each FieldRow knows its flat position. */
+  let flatIndex = 0;
+
+  const renderField = (field: FieldDef, showLabel = true) => {
+    const index = flatIndex++;
+    return (
+      <FieldRow
+        key={field.name}
+        field={field}
+        entity={entity}
+        showLabel={showLabel}
+        focused={index === nav.focusedIndex}
+        inspectorEditing={index === nav.focusedIndex && nav.mode === "edit"}
+        onExitEdit={nav.exitEdit}
+      />
+    );
+  };
 
   return (
     <div data-testid="entity-inspector">
@@ -100,20 +123,37 @@ interface FieldRowProps {
   field: FieldDef;
   entity: Entity;
   showLabel?: boolean;
+  focused?: boolean;
+  inspectorEditing?: boolean;
+  onExitEdit?: () => void;
 }
 
 /**
  * A single field row in the inspector. Manages editing state.
  * Field handles data binding, save, and display/editor dispatch.
+ *
+ * @param focused - Whether this row is the inspector's focused field
+ * @param inspectorEditing - Whether the inspector nav has entered edit mode on this row
+ * @param onExitEdit - Callback to tell the inspector nav that editing is done
  */
 function FieldRow({
   field,
   entity,
   showLabel = true,
+  focused = false,
+  inspectorEditing = false,
+  onExitEdit,
 }: FieldRowProps) {
   const [editing, setEditing] = useState(false);
 
   const editable = isEditable(field);
+
+  /** Sync inspector-driven edit mode into local editing state. */
+  useEffect(() => {
+    if (inspectorEditing && editable) {
+      setEditing(true);
+    }
+  }, [inspectorEditing, editable]);
 
   const handleEdit = useCallback(() => {
     if (editable) setEditing(true);
@@ -121,11 +161,13 @@ function FieldRow({
 
   const handleDone = useCallback(() => {
     setEditing(false);
-  }, []);
+    onExitEdit?.();
+  }, [onExitEdit]);
 
   const handleCancel = useCallback(() => {
     setEditing(false);
-  }, []);
+    onExitEdit?.();
+  }, [onExitEdit]);
 
   const content = (
     <Field
@@ -144,11 +186,24 @@ function FieldRow({
   const tip = field.description || fieldLabel(field);
 
   if (!showLabel && !Icon) {
-    return <section data-testid={`field-row-${field.name}`}>{content}</section>;
+    return (
+      <FocusHighlight
+        as="section"
+        focused={focused}
+        data-testid={`field-row-${field.name}`}
+      >
+        {content}
+      </FocusHighlight>
+    );
   }
 
   return (
-    <section data-testid={`field-row-${field.name}`} className="flex items-start gap-2">
+    <FocusHighlight
+      as="section"
+      focused={focused}
+      data-testid={`field-row-${field.name}`}
+      className="flex items-start gap-2"
+    >
       {Icon && (
         <Tooltip>
           <TooltipTrigger asChild>
@@ -162,7 +217,7 @@ function FieldRow({
         </Tooltip>
       )}
       <div className="flex-1 min-w-0">{content}</div>
-    </section>
+    </FocusHighlight>
   );
 }
 

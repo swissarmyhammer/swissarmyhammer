@@ -1,7 +1,20 @@
-import { useCallback, useContext, useEffect, useMemo, type ReactNode } from "react";
-import { CommandScopeContext, resolveCommand, dispatchCommand, type CommandDef, type CommandScope } from "@/lib/command-scope";
+import {
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  type ReactNode,
+} from "react";
+import {
+  CommandScopeContext,
+  resolveCommand,
+  dispatchCommand,
+  type CommandDef,
+  type CommandScope,
+} from "@/lib/command-scope";
 import { useEntityFocus } from "@/lib/entity-focus-context";
 import { useContextMenu } from "@/lib/context-menu";
+import { FocusHighlight } from "@/components/ui/focus-highlight";
 
 interface FocusScopeProps {
   /** The moniker ("type:id") for the entity this scope represents. */
@@ -24,8 +37,15 @@ interface FocusScopeProps {
  * - Adds data-moniker and data-focused attributes for CSS targeting
  * - Registers/deregisters the scope in the EntityFocus scope registry
  */
-export function FocusScope({ moniker, commands, children, className, style }: FocusScopeProps) {
-  const { focusedMoniker, setFocus, registerScope, unregisterScope } = useEntityFocus();
+export function FocusScope({
+  moniker,
+  commands,
+  children,
+  className,
+  style,
+}: FocusScopeProps) {
+  const { focusedMoniker, setFocus, registerScope, unregisterScope } =
+    useEntityFocus();
   const isDirectFocus = focusedMoniker === moniker;
 
   // Build the scope ourselves so we can register it
@@ -125,9 +145,9 @@ function FocusScopeInner({
   );
 
   return (
-    <div
+    <FocusHighlight
+      focused={isDirectFocus}
       data-moniker={moniker}
-      data-focused={isDirectFocus || undefined}
       onClick={onClick}
       onDoubleClick={handleDoubleClick}
       onContextMenu={handleContextMenu}
@@ -135,6 +155,6 @@ function FocusScopeInner({
       style={style}
     >
       {children}
-    </div>
+    </FocusHighlight>
   );
 }

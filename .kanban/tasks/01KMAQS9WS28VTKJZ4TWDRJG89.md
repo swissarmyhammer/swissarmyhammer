@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: '80'
+position_column: done
+position_ordinal: ffffffffffff9980
 title: useInspectorNav hook — field cursor and mode management
 ---
 ## What
