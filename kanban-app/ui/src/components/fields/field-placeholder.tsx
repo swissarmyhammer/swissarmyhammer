@@ -8,7 +8,6 @@ import { getCM, Vim } from "@replit/codemirror-vim";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useUIState } from "@/lib/ui-state-context";
-import { useFieldUpdate } from "@/lib/field-update-context";
 import { shadcnTheme, keymapExtension } from "@/lib/cm-keymap";
 import { buildSubmitCancelExtensions } from "@/lib/cm-submit-cancel";
 import type { FieldDef } from "@/types/kanban";
@@ -49,16 +48,15 @@ export function FieldPlaceholder({
   }
 
   return (
-    <div
-      className="text-sm cursor-text min-h-[1.25rem]"
-      onClick={onEdit}
-    >
+    <div className="text-sm cursor-text min-h-[1.25rem]" onClick={onEdit}>
       {text ? (
         <div className="prose prose-sm dark:prose-invert max-w-none">
           <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
         </div>
       ) : (
-        <span className="text-muted-foreground/50 italic">{field.name.replace(/_/g, " ")}</span>
+        <span className="text-muted-foreground/50 italic">
+          {field.name.replace(/_/g, " ")}
+        </span>
       )}
     </div>
   );
@@ -66,13 +64,7 @@ export function FieldPlaceholder({
 
 interface EditorProps {
   value: string;
-  /** Entity type for direct save (e.g. "task"). */
-  entityType?: string;
-  /** Entity ID for direct save. */
-  entityId?: string;
-  /** Field name for direct save (e.g. "title"). */
-  fieldName?: string;
-  /** Legacy container save callback — still called during migration. */
+  /** Called with the final value when the editor commits. */
   onCommit: (value: string) => void;
   onCancel: () => void;
   /** Semantic submit — fires on Enter (CUA/emacs) or normal-mode Enter (vim). */
@@ -83,24 +75,18 @@ interface EditorProps {
   onChange?: (text: string) => void;
 }
 
-export function FieldPlaceholderEditor({ value, entityType, entityId, fieldName, onCommit, onCancel, onSubmit, placeholder, onChange }: EditorProps) {
+export function FieldPlaceholderEditor({
+  value,
+  onCommit,
+  onCancel,
+  onSubmit,
+  placeholder,
+  onChange,
+}: EditorProps) {
   const [draft, setDraft] = useState(value);
   const editorRef = useRef<ReactCodeMirrorRef>(null);
   const keymapCompartment = useRef(new Compartment());
   const { keymap_mode: mode } = useUIState();
-  const { updateField } = useFieldUpdate();
-
-  /** Save the current text to the entity if entity identity is provided. */
-  const saveToEntity = useCallback(
-    (text: string) => {
-      if (entityType && entityId && fieldName) {
-        updateField(entityType, entityId, fieldName, text).catch(() => {});
-      }
-    },
-    [entityType, entityId, fieldName, updateField],
-  );
-  const saveToEntityRef = useRef(saveToEntity);
-  saveToEntityRef.current = saveToEntity;
 
   // Guard against re-entrant commits (blur fires after Escape)
   const committedRef = useRef(false);
@@ -114,7 +100,6 @@ export function FieldPlaceholderEditor({ value, entityType, entityId, fieldName,
     const text = editorRef.current?.view
       ? editorRef.current.view.state.doc.toString()
       : draft;
-    saveToEntityRef.current(text);
     onCommit(text);
   }, [draft, onCommit]);
 
@@ -133,7 +118,6 @@ export function FieldPlaceholderEditor({ value, entityType, entityId, fieldName,
     if (!editorRef.current?.view) return;
     const text = editorRef.current.view.state.doc.toString();
     if (text !== value) {
-      saveToEntityRef.current(text);
       onCommit(text);
     }
   }, [value, onCommit]);
@@ -149,7 +133,6 @@ export function FieldPlaceholderEditor({ value, entityType, entityId, fieldName,
           ? editorRef.current.view.state.doc.toString()
           : draft;
         if (text.length > 0) {
-          saveToEntityRef.current(text);
           onSubmit(text);
         }
       }
@@ -159,9 +142,10 @@ export function FieldPlaceholderEditor({ value, entityType, entityId, fieldName,
   // CUA cancels (standard Escape = discard). The presence of onSubmit
   // does not change this — a container hint must never suppress saving.
   const semanticCancelRef = useRef<(() => void) | null>(null);
-  semanticCancelRef.current = mode === "vim"
-    ? () => commitAndExitRef.current()
-    : () => cancelAndExitRef.current();
+  semanticCancelRef.current =
+    mode === "vim"
+      ? () => commitAndExitRef.current()
+      : () => cancelAndExitRef.current();
 
   const handleCreateEditor = useCallback(
     (view: EditorView) => {
@@ -178,7 +162,10 @@ export function FieldPlaceholderEditor({ value, entityType, entityId, fieldName,
           if (cancelled || attempts > 20) return;
           attempts++;
           const c = getCM(view);
-          if (!c) { requestAnimationFrame(tryEnterInsert); return; }
+          if (!c) {
+            requestAnimationFrame(tryEnterInsert);
+            return;
+          }
           if (!c.state?.vim?.insertMode) {
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             Vim.handleKey(c as any, "i", "mapping");
@@ -217,7 +204,10 @@ export function FieldPlaceholderEditor({ value, entityType, entityId, fieldName,
       ref={editorRef}
       autoFocus
       value={draft}
-      onChange={(val) => { setDraft(val); onChange?.(val); }}
+      onChange={(val) => {
+        setDraft(val);
+        onChange?.(val);
+      }}
       onBlur={() => commitAndExitRef.current()}
       onCreateEditor={handleCreateEditor}
       extensions={extensions}

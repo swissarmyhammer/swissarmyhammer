@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: cc80
+position_column: done
+position_ordinal: ffffffffffff8880
 title: Remove self-save updateField calls from all editors — Field handles persistence
 ---
 ## What

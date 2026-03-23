@@ -5,30 +5,14 @@ import type { Entity } from "@/types/kanban";
 /**
  * Shared props for all field editors.
  *
- * Editors own their own persistence: when they have entity identity props
- * (entityType, entityId, fieldName), they call useFieldUpdate().updateField()
- * directly. Containers provide only lifecycle signals (onDone, onCancel).
- *
- * Migration: onCommit is the legacy callback where containers provided save
- * logic. Once all editors call updateField themselves, onCommit will be removed
- * and onDone (no value parameter) will replace it.
+ * Editors are pure UI: they manage draft state and call onCommit(value) when
+ * done. Field handles persistence via updateField — editors never call it.
  */
 export interface EditorProps {
   value: unknown;
 
-  // --- Entity identity (editors save themselves when these are provided) ---
-  /** Entity type to save to (e.g. "task", "tag"). */
-  entityType?: string;
-  /** Entity ID to save to. */
-  entityId?: string;
-  /** Field name to save to (e.g. "title", "body"). */
-  fieldName?: string;
-
   // --- Lifecycle callbacks ---
-  /**
-   * Legacy: container-provided save callback. Being replaced by editor-owned
-   * saves via useFieldUpdate(). Will be removed once all editors are migrated.
-   */
+  /** Called with the final value when the editor commits. */
   onCommit: (value: unknown) => void;
   /** Signal to container: editing is complete, close me. No value — editor already saved. */
   onDone?: () => void;
@@ -53,9 +37,6 @@ interface MarkdownEditorProps extends EditorProps {
  */
 export function MarkdownEditor({
   value,
-  entityType,
-  entityId,
-  fieldName,
   onCommit,
   onCancel,
   onSubmit,
@@ -65,15 +46,13 @@ export function MarkdownEditor({
   placeholder,
   initialEditing,
 }: MarkdownEditorProps) {
-  const text = typeof value === "string" ? value : value != null ? String(value) : "";
+  const text =
+    typeof value === "string" ? value : value != null ? String(value) : "";
 
   if (mode === "compact") {
     return (
       <FieldPlaceholderEditor
         value={text}
-        entityType={entityType}
-        entityId={entityId}
-        fieldName={fieldName}
         onCommit={(v) => onCommit(v)}
         onCancel={onCancel}
         onSubmit={onSubmit ? (v) => onSubmit(v) : undefined}

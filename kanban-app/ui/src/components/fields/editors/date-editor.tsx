@@ -4,10 +4,13 @@ import CodeMirror, { type ReactCodeMirrorRef } from "@uiw/react-codemirror";
 import { keymap, EditorView } from "@codemirror/view";
 import { Compartment } from "@codemirror/state";
 import { getCM } from "@replit/codemirror-vim";
-import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
+import {
+  Popover,
+  PopoverTrigger,
+  PopoverContent,
+} from "@/components/ui/popover";
 import { Calendar } from "@/components/ui/calendar";
 import { useUIState } from "@/lib/ui-state-context";
-import { useFieldUpdate } from "@/lib/field-update-context";
 import { shadcnTheme, keymapExtension } from "@/lib/cm-keymap";
 import type { EditorProps } from "./markdown-editor";
 
@@ -31,7 +34,7 @@ function parseNatural(text: string): string | null {
 }
 
 /** Date editor — CM6 natural language input + calendar picker in a popover. */
-export function DateEditor({ value, entityType, entityId, fieldName, onCommit, onCancel }: EditorProps) {
+export function DateEditor({ value, onCommit, onCancel }: EditorProps) {
   const initial = typeof value === "string" ? value : "";
   const [draft, setDraft] = useState(initial);
   const [open, setOpen] = useState(true);
@@ -40,7 +43,6 @@ export function DateEditor({ value, entityType, entityId, fieldName, onCommit, o
   const keymapCompartment = useRef(new Compartment());
   const committedRef = useRef(false);
   const { keymap_mode: mode } = useUIState();
-  const { updateField } = useFieldUpdate();
 
   // Parse as user types
   useEffect(() => {
@@ -51,12 +53,9 @@ export function DateEditor({ value, entityType, entityId, fieldName, onCommit, o
     (iso: string) => {
       if (committedRef.current) return;
       committedRef.current = true;
-      if (entityType && entityId && fieldName) {
-        updateField(entityType, entityId, fieldName, iso).catch(() => {});
-      }
       onCommit(iso);
     },
-    [onCommit, entityType, entityId, fieldName, updateField],
+    [onCommit],
   );
 
   const cancel = useCallback(() => {
@@ -127,7 +126,10 @@ export function DateEditor({ value, entityType, entityId, fieldName, onCommit, o
             keymap.of([
               {
                 key: "Escape",
-                run: () => { cancelRef.current(); return true; },
+                run: () => {
+                  cancelRef.current();
+                  return true;
+                },
               },
               {
                 key: "Enter",
@@ -197,13 +199,9 @@ export function DateEditor({ value, entityType, entityId, fieldName, onCommit, o
           {draft && (
             <div className="text-xs px-1">
               {resolved ? (
-                <span className="text-muted-foreground">
-                  &rarr; {resolved}
-                </span>
+                <span className="text-muted-foreground">&rarr; {resolved}</span>
               ) : (
-                <span className="text-destructive">
-                  Could not parse date
-                </span>
+                <span className="text-destructive">Could not parse date</span>
               )}
             </div>
           )}
