@@ -1,4 +1,4 @@
-import { forwardRef, memo, useMemo } from "react";
+import { forwardRef, memo, useCallback, useMemo, useState } from "react";
 import { GripVertical, Info } from "lucide-react";
 import { FocusScope } from "@/components/focus-scope";
 import { Field } from "@/components/fields/field";
@@ -48,6 +48,9 @@ export const EntityCard = memo(
     );
 
     const commands = useEntityCommands(entity.entity_type, entity.id, entity);
+    const [editingField, setEditingField] = useState<string | null>(null);
+
+    const clearEditing = useCallback(() => setEditingField(null), []);
 
     return (
       <FocusScope moniker={entityMoniker} commands={commands}>
@@ -77,7 +80,10 @@ export const EntityCard = memo(
                 entityType={entity.entity_type}
                 entityId={entity.id}
                 mode="compact"
-                editing={false}
+                editing={editingField === field.name}
+                onEdit={() => setEditingField(field.name)}
+                onDone={clearEditing}
+                onCancel={clearEditing}
               />
             ))}
           </div>
@@ -97,4 +103,3 @@ export const EntityCard = memo(
     );
   }),
 );
-
