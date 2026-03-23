@@ -148,7 +148,7 @@ export function ColumnView({
     <FocusScope
       moniker={columnMoniker}
       commands={commands}
-      className="flex flex-col min-h-0 min-w-0 flex-1"
+      className="flex flex-col min-h-0 min-w-[20em] max-w-[40em] flex-1"
     >
       <div className="flex flex-col min-h-0 min-w-0 flex-1">
         <div className="px-3 py-2 flex items-center gap-2">
