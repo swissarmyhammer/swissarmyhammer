@@ -243,7 +243,7 @@ describe("MultiSelectEditor", () => {
       expect(onCommit).toHaveBeenCalledWith(["alice-id"]);
     });
 
-    it("Escape key calls onCommit with selected IDs (commit, not discard)", async () => {
+    it("Escape in CUA mode calls onCancel (discard)", async () => {
       const onCommit = vi.fn();
       const onCancel = vi.fn();
       const { container } = renderMultiSelect(
@@ -257,8 +257,8 @@ describe("MultiSelectEditor", () => {
         fireEvent.keyDown(cmContent, { key: "Escape" });
       });
 
-      expect(onCommit).toHaveBeenCalledWith(["bob-id"]);
-      expect(onCancel).not.toHaveBeenCalled();
+      expect(onCancel).toHaveBeenCalled();
+      expect(onCommit).not.toHaveBeenCalled();
     });
 
     it("blur calls onCommit after timeout", async () => {
@@ -410,7 +410,7 @@ describe("MultiSelectEditor", () => {
       expect(container.textContent).toContain("bug");
     });
 
-    it("Escape commits tag slugs via onCommit", async () => {
+    it("Escape in CUA mode calls onCancel (discard)", async () => {
       const onCommit = vi.fn();
       const onCancel = vi.fn();
       const { container } = renderMultiSelect(
@@ -430,9 +430,8 @@ describe("MultiSelectEditor", () => {
         fireEvent.keyDown(cmContent, { key: "Escape" });
       });
 
-      // Tags now commit via onCommit with display names (slugs)
-      expect(onCommit).toHaveBeenCalledWith(["bug"]);
-      expect(onCancel).not.toHaveBeenCalled();
+      expect(onCancel).toHaveBeenCalled();
+      expect(onCommit).not.toHaveBeenCalled();
     });
 
     it("Enter commits tag slugs via onCommit", async () => {

@@ -46,16 +46,24 @@ function loadYaml<T>(filePath: string): T {
 
 /** Load all field definitions from the builtin YAML. */
 function loadAllFieldDefs(): FieldDef[] {
-  const files = fs.readdirSync(DEFINITIONS_DIR).filter((f: string) => f.endsWith(".yaml"));
-  return files.map((f: string) => loadYaml<FieldDef>(path.join(DEFINITIONS_DIR, f)));
+  const files = fs
+    .readdirSync(DEFINITIONS_DIR)
+    .filter((f: string) => f.endsWith(".yaml"));
+  return files.map((f: string) =>
+    loadYaml<FieldDef>(path.join(DEFINITIONS_DIR, f)),
+  );
 }
 
 /** Load an entity definition to get its field list. */
-function loadEntityDef(entityType: string): { name: string; fields: string[]; body_field?: string } {
+function loadEntityDef(entityType: string): {
+  name: string;
+  fields: string[];
+  body_field?: string;
+} {
   return loadYaml(path.join(ENTITIES_DIR, `${entityType}.yaml`));
 }
 
-/** Get the FieldDefs for an entity type, filtered to editable fields. */
+/** Get the FieldDefs for an entity type, filtered to editable, visible fields. */
 function editableFieldsFor(entityType: string): FieldDef[] {
   const entityDef = loadEntityDef(entityType);
   const allDefs = loadAllFieldDefs();
@@ -63,7 +71,13 @@ function editableFieldsFor(entityType: string): FieldDef[] {
 
   return entityDef.fields
     .map((name) => defMap.get(name))
-    .filter((d): d is FieldDef => d !== undefined && d.editor !== "none" && d.editor !== undefined);
+    .filter(
+      (d): d is FieldDef =>
+        d !== undefined &&
+        d.editor !== "none" &&
+        d.editor !== undefined &&
+        d.section !== "hidden",
+    );
 }
 
 /** Get ALL FieldDefs for an entity type. */
@@ -96,7 +110,10 @@ const mockInvoke = vi.fn((...args: any[]) => {
         .filter((d): d is FieldDef => d !== undefined);
       return Promise.resolve({ entity: entityDef, fields });
     } catch {
-      return Promise.resolve({ entity: { name: entityType, fields: [] }, fields: [] });
+      return Promise.resolve({
+        entity: { name: entityType, fields: [] },
+        fields: [],
+      });
     }
   }
   if (args[0] === "get_ui_state")
@@ -166,10 +183,30 @@ const TEST_ENTITY: Entity = {
 
 const TEST_ENTITIES: Record<string, Entity[]> = {
   task: [TEST_ENTITY],
-  tag: [{ entity_type: "tag", id: "tag-1", fields: { tag_name: "bug", color: "ff0000" } }],
-  actor: [{ entity_type: "actor", id: "actor-1", fields: { name: "Alice", color: "0000ff" } }],
-  column: [{ entity_type: "column", id: "todo", fields: { name: "Todo", order: 0 } }],
-  swimlane: [{ entity_type: "swimlane", id: "default", fields: { name: "Default", order: 0 } }],
+  tag: [
+    {
+      entity_type: "tag",
+      id: "tag-1",
+      fields: { tag_name: "bug", color: "ff0000" },
+    },
+  ],
+  actor: [
+    {
+      entity_type: "actor",
+      id: "actor-1",
+      fields: { name: "Alice", color: "0000ff" },
+    },
+  ],
+  column: [
+    { entity_type: "column", id: "todo", fields: { name: "Todo", order: 0 } },
+  ],
+  swimlane: [
+    {
+      entity_type: "swimlane",
+      id: "default",
+      fields: { name: "Default", order: 0 },
+    },
+  ],
 };
 
 // ---------------------------------------------------------------------------
@@ -183,7 +220,11 @@ async function settle(ms = 150) {
 }
 
 /** Render a Field inside all required providers — real context, no mocked hooks. */
-function renderField(fieldDef: FieldDef, mode: "compact" | "full", editing: boolean) {
+function renderField(
+  fieldDef: FieldDef,
+  mode: "compact" | "full",
+  editing: boolean,
+) {
   const onEdit = vi.fn();
   const onDone = vi.fn();
   const onCancel = vi.fn();
@@ -222,7 +263,8 @@ function renderField(fieldDef: FieldDef, mode: "compact" | "full", editing: bool
 function getUpdateCalls() {
   return mockInvoke.mock.calls.filter(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (c: any[]) => c[0] === "dispatch_command" && c[1]?.cmd === "entity.update_field",
+    (c: any[]) =>
+      c[0] === "dispatch_command" && c[1]?.cmd === "entity.update_field",
   );
 }
 
@@ -262,71 +304,74 @@ describe("Field save behavior", () => {
     console.log(`Testing ${names.length} editable fields: ${names.join(", ")}`);
   });
 
-  describe.each(editableFields.map((f) => ({ fieldDef: f, fieldName: f.name, editor: f.editor })))(
-    "field: $fieldName (editor: $editor)",
-    ({ fieldDef }) => {
-      describe.each(modes)("mode: %s", (mode) => {
-        describe.each(keymapModes)("keymap: %s", (keymap) => {
-          beforeEach(() => {
-            vi.clearAllMocks();
-            KEYMAP_MODE = keymap;
-          });
+  describe.each(
+    editableFields.map((f) => ({
+      fieldDef: f,
+      fieldName: f.name,
+      editor: f.editor,
+    })),
+  )("field: $fieldName (editor: $editor)", ({ fieldDef }) => {
+    describe.each(modes)("mode: %s", (mode) => {
+      describe.each(keymapModes)("keymap: %s", (keymap) => {
+        beforeEach(() => {
+          vi.clearAllMocks();
+          KEYMAP_MODE = keymap;
+        });
 
-          it.each(exitPaths)("exit: %s", async (exit) => {
-            const { container, unmount } = renderField(fieldDef, mode, true);
-            await settle();
+        it.each(exitPaths)("exit: %s", async (exit) => {
+          const { container, unmount } = renderField(fieldDef, mode, true);
+          await settle();
 
-            // Clear any calls from rendering / entering edit mode
-            mockInvoke.mockClear();
+          // Clear any calls from rendering / entering edit mode
+          mockInvoke.mockClear();
 
-            // TODO: each field type needs an interaction adapter to:
-            //   1. Set a new value in the editor
-            //   2. Find the right DOM target for exit events
-            // For now, try to find any interactive element and trigger the exit.
-            const target =
-              container.querySelector(".cm-content") ??
-              container.querySelector("input") ??
-              container.querySelector("select") ??
-              container.firstElementChild;
+          // TODO: each field type needs an interaction adapter to:
+          //   1. Set a new value in the editor
+          //   2. Find the right DOM target for exit events
+          // For now, try to find any interactive element and trigger the exit.
+          const target =
+            container.querySelector(".cm-content") ??
+            container.querySelector("input") ??
+            container.querySelector("select") ??
+            container.firstElementChild;
 
-            if (target) {
-              if (exit === "blur") {
-                await act(async () => fireEvent.blur(target));
-              } else {
-                await act(async () => fireEvent.keyDown(target, { key: exit }));
-              }
-            }
-            await settle();
-
-            const shouldSave = expectsSave(keymap, exit);
-            if (shouldSave) {
-              const calls = getUpdateCalls();
-              expect(
-                calls.length,
-                `${fieldDef.name} / ${mode} / ${keymap} / ${exit}: expected dispatch_command(entity.update_field) to be called`,
-              ).toBeGreaterThanOrEqual(1);
-
-              // Verify correct entity identity
-              if (calls.length > 0) {
-                const args = calls[0][1].args;
-                expect(args.entity_type).toBe("task");
-                expect(args.id).toBe("test-task-1");
-                expect(args.field_name).toBe(fieldDef.name);
-              }
+          if (target) {
+            if (exit === "blur") {
+              await act(async () => fireEvent.blur(target));
             } else {
-              const calls = getUpdateCalls();
-              expect(
-                calls.length,
-                `${fieldDef.name} / ${mode} / ${keymap} / ${exit}: expected NO dispatch_command(entity.update_field)`,
-              ).toBe(0);
+              await act(async () => fireEvent.keyDown(target, { key: exit }));
             }
+          }
+          await settle();
 
-            unmount();
-          });
+          const shouldSave = expectsSave(keymap, exit);
+          if (shouldSave) {
+            const calls = getUpdateCalls();
+            expect(
+              calls.length,
+              `${fieldDef.name} / ${mode} / ${keymap} / ${exit}: expected dispatch_command(entity.update_field) to be called`,
+            ).toBeGreaterThanOrEqual(1);
+
+            // Verify correct entity identity
+            if (calls.length > 0) {
+              const args = calls[0][1].args;
+              expect(args.entity_type).toBe("task");
+              expect(args.id).toBe("test-task-1");
+              expect(args.field_name).toBe(fieldDef.name);
+            }
+          } else {
+            const calls = getUpdateCalls();
+            expect(
+              calls.length,
+              `${fieldDef.name} / ${mode} / ${keymap} / ${exit}: expected NO dispatch_command(entity.update_field)`,
+            ).toBe(0);
+          }
+
+          unmount();
         });
       });
-    },
-  );
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -339,33 +384,36 @@ describe("Field display behavior", () => {
     console.log(`Testing ${names.length} field displays: ${names.join(", ")}`);
   });
 
-  describe.each(allFields.map((f) => ({ fieldDef: f, fieldName: f.name, display: f.display ?? "text" })))(
-    "field: $fieldName (display: $display)",
-    ({ fieldDef }) => {
-      describe.each(modes)("mode: %s", (mode) => {
-        it("renders display content", async () => {
-          KEYMAP_MODE = "cua";
-          const { container, unmount } = renderField(fieldDef, mode, false);
-          await settle();
+  describe.each(
+    allFields.map((f) => ({
+      fieldDef: f,
+      fieldName: f.name,
+      display: f.display ?? "text",
+    })),
+  )("field: $fieldName (display: $display)", ({ fieldDef }) => {
+    describe.each(modes)("mode: %s", (mode) => {
+      it("renders display content", async () => {
+        KEYMAP_MODE = "cua";
+        const { container, unmount } = renderField(fieldDef, mode, false);
+        await settle();
 
-          // Field should render something — not be empty
-          expect(
-            container.innerHTML.length,
-            `${fieldDef.name} / ${mode}: Field display should render content`,
-          ).toBeGreaterThan(0);
+        // Field should render something — not be empty
+        expect(
+          container.innerHTML.length,
+          `${fieldDef.name} / ${mode}: Field display should render content`,
+        ).toBeGreaterThan(0);
 
-          // Field should have produced actual visible content, not just a wrapper
-          const inner = container.firstElementChild;
-          expect(
-            inner,
-            `${fieldDef.name} / ${mode}: Field should render a DOM element`,
-          ).toBeTruthy();
+        // Field should have produced actual visible content, not just a wrapper
+        const inner = container.firstElementChild;
+        expect(
+          inner,
+          `${fieldDef.name} / ${mode}: Field should render a DOM element`,
+        ).toBeTruthy();
 
-          unmount();
-        });
+        unmount();
       });
-    },
-  );
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -69,6 +69,7 @@ export function MultiSelectEditor({
   field,
   value,
   onCommit,
+  onCancel,
 }: MultiSelectEditorProps) {
   const { keymap_mode: mode } = useUIState();
   const { mentionableTypes } = useSchema();
@@ -173,6 +174,8 @@ export function MultiSelectEditor({
 
   const commitRef = useRef(commit);
   commitRef.current = commit;
+  const cancelRef = useRef(onCancel);
+  cancelRef.current = onCancel;
 
   // Build async search for autocomplete
   const searchFn = useMemo(() => {
@@ -223,7 +226,7 @@ export function MultiSelectEditor({
       exts.push(createMentionAutocomplete([source]));
     }
 
-    // Enter/Escape commit
+    // Enter always commits. Escape: vim saves, CUA/emacs discards.
     exts.push(
       Prec.highest(
         keymap.of([
@@ -237,7 +240,11 @@ export function MultiSelectEditor({
           {
             key: "Escape",
             run: () => {
-              commitRef.current();
+              if (mode === "vim") {
+                commitRef.current();
+              } else {
+                cancelRef.current();
+              }
               return true;
             },
           },
