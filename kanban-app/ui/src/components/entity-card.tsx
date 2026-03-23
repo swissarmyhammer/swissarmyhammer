@@ -1,12 +1,28 @@
 import { forwardRef, memo, useCallback, useMemo, useState } from "react";
-import { GripVertical, Info } from "lucide-react";
+import { GripVertical, Info, icons } from "lucide-react";
 import { FocusScope } from "@/components/focus-scope";
 import { Field } from "@/components/fields/field";
 import { useSchema } from "@/lib/schema-context";
 import { useInspect } from "@/lib/inspect-context";
 import { useEntityCommands } from "@/lib/entity-commands";
 import { moniker } from "@/lib/moniker";
-import type { Entity } from "@/types/kanban";
+import type { Entity, FieldDef } from "@/types/kanban";
+
+/** Convert kebab-case icon name to PascalCase key for lucide-react lookup. */
+function kebabToPascal(s: string): string {
+  return s.replace(/(^|-)([a-z])/g, (_, _dash, c) => c.toUpperCase());
+}
+
+/** Resolve a lucide icon component from a field's `icon` property. */
+function resolveIcon(field: FieldDef) {
+  if (!field.icon) return null;
+  const key = kebabToPascal(field.icon);
+  return (
+    (icons[key as keyof typeof icons] as React.ComponentType<{
+      className?: string;
+    }>) ?? null
+  );
+}
 
 interface EntityCardProps {
   entity: Entity;
@@ -72,20 +88,34 @@ export const EntityCard = memo(
           >
             <GripVertical className="h-4 w-4" />
           </button>
-          <div className="flex-1 min-w-0 break-words">
-            {cardFields.map((field) => (
-              <Field
-                key={field.name}
-                fieldDef={field}
-                entityType={entity.entity_type}
-                entityId={entity.id}
-                mode="compact"
-                editing={editingField === field.name}
-                onEdit={() => setEditingField(field.name)}
-                onDone={clearEditing}
-                onCancel={clearEditing}
-              />
-            ))}
+          <div className="flex-1 min-w-0 break-words space-y-0.5">
+            {cardFields.map((field) => {
+              const Icon = resolveIcon(field);
+              return (
+                <div
+                  key={field.name}
+                  className={Icon ? "flex items-start gap-1.5" : ""}
+                >
+                  {Icon && (
+                    <span className="mt-0.5 shrink-0 text-muted-foreground/50">
+                      <Icon className="h-3 w-3" />
+                    </span>
+                  )}
+                  <div className="flex-1 min-w-0">
+                    <Field
+                      fieldDef={field}
+                      entityType={entity.entity_type}
+                      entityId={entity.id}
+                      mode="compact"
+                      editing={editingField === field.name}
+                      onEdit={() => setEditingField(field.name)}
+                      onDone={clearEditing}
+                      onCancel={clearEditing}
+                    />
+                  </div>
+                </div>
+              );
+            })}
           </div>
           <button
             type="button"
