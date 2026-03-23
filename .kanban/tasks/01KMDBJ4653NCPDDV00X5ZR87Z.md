@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: c780
+position_column: done
+position_ordinal: ffffffffffff8b80
 title: 'column-view: replace EditableMarkdown with Field for column name editing'
 ---
 ## What

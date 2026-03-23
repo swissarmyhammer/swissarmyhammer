@@ -25,7 +25,6 @@ import { useEntityFocus } from "@/lib/entity-focus-context";
 function defaultTaskTitle(_columnName: string): string {
   return "New task";
 }
-import { useFieldUpdate } from "@/lib/field-update-context";
 import { moniker } from "@/lib/moniker";
 import { useEntityCommands } from "@/lib/entity-commands";
 import { useDragSession } from "@/lib/drag-session-context";
@@ -335,19 +334,6 @@ export function BoardView({ board, tasks }: BoardViewProps) {
     [taskMap, baseLayout, persistMove, cancelSession, completeSession],
   );
 
-  const { updateField } = useFieldUpdate();
-
-  const handleRenameColumn = useCallback(
-    async (columnId: string, name: string) => {
-      try {
-        await updateField("column", columnId, "name", name);
-      } catch {
-        // updateField already logs errors
-      }
-    },
-    [updateField],
-  );
-
   const handleAddTask = useCallback(
     async (columnId: string) => {
       const col = columnMap.get(columnId);
@@ -399,7 +385,6 @@ export function BoardView({ board, tasks }: BoardViewProps) {
                     column={col}
                     tasks={colTasks}
                     onAddTask={i === 0 ? handleAddTask : undefined}
-                    onRenameColumn={handleRenameColumn}
                     onTaskDragStart={handleTaskDragStart}
                     onTaskDragEnd={handleTaskDragEnd}
                     onDragOver={handleColumnDragOverHTML5}

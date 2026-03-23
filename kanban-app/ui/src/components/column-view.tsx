@@ -1,11 +1,12 @@
 import { useCallback, useRef, useState } from "react";
 import { Inbox, Plus } from "lucide-react";
-import { EditableMarkdown } from "@/components/editable-markdown";
+import { Field } from "@/components/fields/field";
 import { DraggableTaskCard } from "@/components/sortable-task-card";
 import { FocusScope } from "@/components/focus-scope";
 import { Badge } from "@/components/ui/badge";
 import { moniker } from "@/lib/moniker";
 import { useEntityCommands } from "@/lib/entity-commands";
+import { useSchema } from "@/lib/schema-context";
 import type { Entity } from "@/types/kanban";
 import { getStr } from "@/types/kanban";
 
@@ -14,7 +15,6 @@ interface ColumnViewProps {
   /** Tasks for this column, pre-sorted by the backend. */
   tasks: Entity[];
   onAddTask?: (columnId: string) => void;
-  onRenameColumn?: (columnId: string, name: string) => void;
   /** Called when a task drag starts in this column. */
   onTaskDragStart?: (entity: Entity) => void;
   /** Called when a task drag ends (from this column's card). */
@@ -50,7 +50,6 @@ export function ColumnView({
   column,
   tasks,
   onAddTask,
-  onRenameColumn,
   onTaskDragStart,
   onTaskDragEnd,
   onDragOver: onDragOverProp,
@@ -62,6 +61,9 @@ export function ColumnView({
   containerRef: containerRefProp,
 }: ColumnViewProps) {
   const columnMoniker = moniker("column", column.id);
+  const { getFieldDef } = useSchema();
+  const nameFieldDef = getFieldDef("column", "name");
+  const [editingName, setEditingName] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const [localInsert, setLocalInsert] = useState<number | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
@@ -150,12 +152,20 @@ export function ColumnView({
     >
       <div className="flex flex-col min-h-0 min-w-0 flex-1">
         <div className="px-3 py-2 flex items-center gap-2">
-          <EditableMarkdown
-            value={getStr(column, "name")}
-            onCommit={(name) => onRenameColumn?.(column.id, name)}
-            className="text-sm font-semibold text-foreground cursor-text"
-            inputClassName="text-sm font-semibold text-foreground bg-transparent border-b border-ring w-full"
-          />
+          {nameFieldDef ? (
+            <Field
+              fieldDef={nameFieldDef}
+              entityType="column"
+              entityId={column.id}
+              mode="compact"
+              editing={editingName}
+              onEdit={() => setEditingName(true)}
+              onDone={() => setEditingName(false)}
+              onCancel={() => setEditingName(false)}
+            />
+          ) : (
+            <span className="text-sm font-semibold text-foreground">{getStr(column, "name")}</span>
+          )}
           <Badge variant="secondary">{tasks.length}</Badge>
           <div className="flex-1" />
           {onAddTask && (
