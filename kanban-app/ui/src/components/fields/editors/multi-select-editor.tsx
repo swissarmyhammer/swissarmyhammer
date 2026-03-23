@@ -125,12 +125,19 @@ export function MultiSelectEditor({
   const commit = useCallback(() => {
     const text = editorRef.current?.view?.state.doc.toString().trim();
     if (text) {
-      const clean = text.replace(new RegExp(`^\\${prefix}`), "").trim();
-      if (clean) {
-        const slug = slugify(clean);
+      // Split on the prefix character to handle multiple items (e.g. "#one #two")
+      const tokens = prefix
+        ? text
+            .split(prefix)
+            .map((t) => t.trim())
+            .filter(Boolean)
+        : [text.trim()];
+      for (const token of tokens) {
+        const slug = slugify(token);
+        if (!slug) continue;
         const id =
           displayToId.get(slug) ??
-          displayToId.get(clean.toLowerCase()) ??
+          displayToId.get(token.toLowerCase()) ??
           (commitDisplayNames ? slug : undefined);
         if (id && !selectedIdsRef.current.includes(id)) {
           selectedIdsRef.current = [...selectedIdsRef.current, id];

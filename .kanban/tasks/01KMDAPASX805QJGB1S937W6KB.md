@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: c480
+position_column: done
+position_ordinal: ffffffffffff9180
 title: 'MultiSelectEditor: space between tags creates one slugified tag instead of two'
 ---
 ## What
