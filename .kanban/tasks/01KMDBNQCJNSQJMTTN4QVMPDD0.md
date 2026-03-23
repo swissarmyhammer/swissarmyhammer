@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: cd80
+position_column: done
+position_ordinal: ffffffffffff8d80
 title: 'board-selector: replace EditableMarkdown with Field for board name editing'
 ---
 ## What

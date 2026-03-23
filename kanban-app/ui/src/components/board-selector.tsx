@@ -1,10 +1,11 @@
 /**
- * Board selector — EditableMarkdown name + path stem + dropdown chevron.
+ * Board selector — Field-driven name + path stem + dropdown chevron.
  *
- * The name is editable in place and persists via useFieldUpdate.
+ * The name is editable in place via the Field component (schema-driven).
  * The path stem + chevron open a Radix Select dropdown to switch boards.
  */
 
+import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -14,10 +15,10 @@ import {
   SelectItem,
   SelectTrigger,
 } from "@/components/ui/select";
-import { EditableMarkdown } from "@/components/editable-markdown";
-import { useFieldUpdate } from "@/lib/field-update-context";
+import { Field } from "@/components/fields/field";
+import { useSchema } from "@/lib/schema-context";
+import { useFieldValue } from "@/lib/entity-store-context";
 import type { Entity, OpenBoard } from "@/types/kanban";
-import { getStr } from "@/types/kanban";
 
 /** Extract the last meaningful path segment (parent of .kanban). */
 export function pathStem(path: string): string {
@@ -47,27 +48,36 @@ export function BoardSelector({
   showTearOff,
   className,
 }: BoardSelectorProps) {
+  const { getFieldDef } = useSchema();
+  const nameFieldDef = getFieldDef("board", "name");
+  const [editingName, setEditingName] = useState(false);
+  // Live board name from entity store — stays current across windows
+  const boardName = useFieldValue("board", boardEntity?.id ?? "", "name");
+
   if (boards.length === 0) return null;
 
-  const { updateField } = useFieldUpdate();
   const selected = boards.find((b) => b.path === selectedPath);
-  const displayName = boardEntity ? getStr(boardEntity, "name", "") : (selected?.name ?? "");
+  const displayName = (typeof boardName === "string" && boardName) || selected?.name || "";
   const stem = selectedPath ? pathStem(selectedPath) : "";
-
-  const handleRename = (name: string) => {
-    if (boardEntity) {
-      updateField(boardEntity.entity_type, boardEntity.id, "name", name).catch(() => {});
-    }
-  };
 
   return (
     <div className={`flex items-center gap-1.5 min-w-0 ${className ?? ""}`}>
-      <EditableMarkdown
-        value={displayName}
-        onCommit={handleRename}
-        className="text-sm font-semibold cursor-text truncate"
-        inputClassName="text-sm font-semibold bg-transparent border-b border-ring"
-      />
+      <div className="font-semibold truncate min-w-0 flex-1">
+        {boardEntity && nameFieldDef ? (
+          <Field
+            fieldDef={nameFieldDef}
+            entityType="board"
+            entityId={boardEntity.id}
+            mode="compact"
+            editing={editingName}
+            onEdit={() => setEditingName(true)}
+            onDone={() => setEditingName(false)}
+            onCancel={() => setEditingName(false)}
+          />
+        ) : (
+          <span className="text-sm cursor-text truncate">{displayName}</span>
+        )}
+      </div>
 
       <Select value={selectedPath ?? undefined} onValueChange={onSelect}>
         <SelectTrigger
