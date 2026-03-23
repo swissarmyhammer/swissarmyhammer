@@ -380,6 +380,10 @@ function App() {
           const replaceById = (entities: Entity[]) =>
             entities.map((e) => (e.id === id ? entity : e));
 
+          // Always update the entity store — all types live there now
+          setEntitiesFor(entity_type, replaceById);
+
+          // Also update board structural state for components that read it directly
           if (entity_type === "board") {
             setBoard((prev) => (prev ? { ...prev, board: entity } : prev));
           } else if (entity_type === "column") {
@@ -390,8 +394,6 @@ function App() {
             setBoard((prev) =>
               prev ? { ...prev, swimlanes: replaceById(prev.swimlanes) } : prev,
             );
-          } else {
-            setEntitiesFor(entity_type, replaceById);
           }
         };
 
@@ -502,12 +504,8 @@ function App() {
   );
 
   const entityStore = useMemo(
-    () => ({
-      ...entitiesByType,
-      column: board?.columns ?? [],
-      swimlane: board?.swimlanes ?? [],
-    }),
-    [entitiesByType, board],
+    () => entitiesByType,
+    [entitiesByType],
   );
 
   return (

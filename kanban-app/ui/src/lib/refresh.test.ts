@@ -69,6 +69,15 @@ describe("refreshBoards", () => {
 
     expect(result.openBoards).toHaveLength(1);
     expect(result.boardData).not.toBeNull();
+    // All entity types from board data should be in entitiesByType
+    expect(result.entitiesByType).not.toBeNull();
+    expect(result.entitiesByType!.board).toHaveLength(1);
+    expect(result.entitiesByType!.board[0].entity_type).toBe("board");
+    expect(result.entitiesByType!.column).toHaveLength(0);
+    expect(result.entitiesByType!.swimlane).toHaveLength(0);
+    expect(result.entitiesByType!.tag).toHaveLength(0);
+    expect(result.entitiesByType!.task).toHaveLength(0);
+    expect(result.entitiesByType!.actor).toHaveLength(0);
   });
 
   it("passes boardPath to get_board_data and list_entities when provided", async () => {

@@ -52,8 +52,11 @@ export async function refreshBoards(boardPath?: string): Promise<RefreshResult> 
     ]);
     boardData = parseBoardData(bd);
     entitiesByType = {
-      task: taskData.entities.map(entityFromBag),
+      board: [entityFromBag(bd.board)],
+      column: bd.columns.map(entityFromBag),
+      swimlane: bd.swimlanes.map(entityFromBag),
       tag: bd.tags.map(entityFromBag),
+      task: taskData.entities.map(entityFromBag),
       actor: actorData.entities.map(entityFromBag),
     };
   } catch (error) {
