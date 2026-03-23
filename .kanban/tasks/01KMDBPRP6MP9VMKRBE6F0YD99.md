@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: ca80
+position_column: done
+position_ordinal: ffffffffffff8980
 title: 'field-renderer: delete — replaced by Field'
 ---
 ## What
