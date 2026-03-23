@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KMBE4FGC1WWF29PV5SEJG4VY
-position_column: todo
-position_ordinal: b580
+position_column: done
+position_ordinal: ffffffffffff8680
 title: 'Field: multi-select field type'
 ---
 ## What

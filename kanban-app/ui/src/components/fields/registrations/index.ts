@@ -6,3 +6,6 @@
 import "./markdown";
 import "./number";
 import "./select";
+import "./date";
+import "./color-palette";
+import "./multi-select";

@@ -1,4 +1,5 @@
 import { useCallback, useRef, useState } from "react";
+import { useUIState } from "@/lib/ui-state-context";
 import {
   Select,
   SelectContent,
@@ -20,10 +21,12 @@ export function SelectEditor({ field, value, onCommit, onCancel }: SelectEditorP
   const [draft, setDraft] = useState(initial);
   const [open, setOpen] = useState(true);
   const committedRef = useRef(false);
+  const cancelledRef = useRef(false);
+  const { keymap_mode: mode } = useUIState();
 
   const commit = useCallback(
     (val: string) => {
-      if (committedRef.current) return;
+      if (committedRef.current || cancelledRef.current) return;
       committedRef.current = true;
       onCommit(val);
     },
@@ -32,6 +35,7 @@ export function SelectEditor({ field, value, onCommit, onCancel }: SelectEditorP
 
   const cancel = useCallback(() => {
     if (committedRef.current) return;
+    cancelledRef.current = true;
     committedRef.current = true;
     onCancel();
   }, [onCancel]);
@@ -42,20 +46,17 @@ export function SelectEditor({ field, value, onCommit, onCancel }: SelectEditorP
       open={open}
       onOpenChange={(next) => {
         setOpen(next);
-        // Closing the dropdown without a new selection = commit current value
-        if (!next && !committedRef.current) {
-          commit(draft);
-        }
       }}
       onValueChange={(val) => {
         setDraft(val);
-        setOpen(false);
-        commit(val);
       }}
     >
       <SelectTrigger
         size="sm"
         className="w-full text-sm h-auto py-1 px-2"
+        onBlur={() => {
+          if (!committedRef.current) commit(draft);
+        }}
         onKeyDown={(e) => {
           if (e.key === "Enter") {
             e.preventDefault();
@@ -65,8 +66,9 @@ export function SelectEditor({ field, value, onCommit, onCancel }: SelectEditorP
           } else if (e.key === "Escape") {
             e.preventDefault();
             e.stopPropagation();
+            if (mode === "vim") commit(draft);
+            else cancel();
             setOpen(false);
-            cancel();
           }
         }}
       >

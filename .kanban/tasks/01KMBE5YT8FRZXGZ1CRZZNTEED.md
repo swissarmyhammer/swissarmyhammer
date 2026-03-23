@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KMBE4FGC1WWF29PV5SEJG4VY
-position_column: todo
-position_ordinal: b480
+position_column: done
+position_ordinal: ffffffffffff8580
 title: 'Field: color-palette field type'
 ---
 ## What

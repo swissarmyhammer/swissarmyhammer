@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KMBE4FGC1WWF29PV5SEJG4VY
-position_column: todo
-position_ordinal: b380
+position_column: done
+position_ordinal: ffffffffffff8480
 title: 'Field: date field type'
 ---
 ## What
