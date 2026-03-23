@@ -22,7 +22,7 @@ import { LeftNav } from "@/components/left-nav";
 import { ModeIndicator } from "@/components/mode-indicator";
 import { BoardView } from "@/components/board-view";
 import { GridView } from "@/components/grid-view";
-import { EntityInspector } from "@/components/entity-inspector";
+import { InspectorFocusBridge } from "@/components/inspector-focus-bridge";
 import { SlidePanel } from "@/components/slide-panel";
 import { ViewsProvider, useViews } from "@/lib/views-context";
 import {
@@ -503,10 +503,7 @@ function App() {
     [refresh],
   );
 
-  const entityStore = useMemo(
-    () => entitiesByType,
-    [entitiesByType],
-  );
+  const entityStore = useMemo(() => entitiesByType, [entitiesByType]);
 
   return (
     <TooltipProvider delayDuration={400}>
@@ -756,7 +753,7 @@ function InspectorPanel({
 
   return (
     <SlidePanel open={true} onClose={onClose} style={style}>
-      <EntityInspector entity={resolved} />
+      <InspectorFocusBridge entity={resolved} />
     </SlidePanel>
   );
 }

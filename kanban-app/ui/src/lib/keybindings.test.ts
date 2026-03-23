@@ -3,6 +3,7 @@ import {
   normalizeKeyEvent,
   BINDING_TABLES,
   createKeyHandler,
+  extractScopeBindings,
 } from "./keybindings";
 
 /* ---------- helpers ---------- */
@@ -56,7 +57,10 @@ describe("normalizeKeyEvent", () => {
   it("normalizes Meta on Mac to Mod", () => {
     // Simulate Mac: navigator.platform starts with Mac
     const original = Object.getOwnPropertyDescriptor(navigator, "platform");
-    Object.defineProperty(navigator, "platform", { value: "MacIntel", configurable: true });
+    Object.defineProperty(navigator, "platform", {
+      value: "MacIntel",
+      configurable: true,
+    });
     try {
       const e = fakeKeyEvent("p", { metaKey: true, shiftKey: true });
       expect(normalizeKeyEvent(e)).toBe("Mod+Shift+P");
@@ -69,7 +73,10 @@ describe("normalizeKeyEvent", () => {
 
   it("normalizes Control on non-Mac to Mod", () => {
     const original = Object.getOwnPropertyDescriptor(navigator, "platform");
-    Object.defineProperty(navigator, "platform", { value: "Win32", configurable: true });
+    Object.defineProperty(navigator, "platform", {
+      value: "Win32",
+      configurable: true,
+    });
     try {
       const e = fakeKeyEvent("p", { ctrlKey: true, shiftKey: true });
       expect(normalizeKeyEvent(e)).toBe("Mod+Shift+P");
@@ -99,7 +106,10 @@ describe("normalizeKeyEvent", () => {
 
   it("combines Mod+key without Shift", () => {
     const original = Object.getOwnPropertyDescriptor(navigator, "platform");
-    Object.defineProperty(navigator, "platform", { value: "MacIntel", configurable: true });
+    Object.defineProperty(navigator, "platform", {
+      value: "MacIntel",
+      configurable: true,
+    });
     try {
       const e = fakeKeyEvent("z", { metaKey: true });
       expect(normalizeKeyEvent(e)).toBe("Mod+z");
@@ -112,7 +122,10 @@ describe("normalizeKeyEvent", () => {
 
   it("normalizes Mod+Shift+Z correctly", () => {
     const original = Object.getOwnPropertyDescriptor(navigator, "platform");
-    Object.defineProperty(navigator, "platform", { value: "MacIntel", configurable: true });
+    Object.defineProperty(navigator, "platform", {
+      value: "MacIntel",
+      configurable: true,
+    });
     try {
       const e = fakeKeyEvent("z", { metaKey: true, shiftKey: true });
       expect(normalizeKeyEvent(e)).toBe("Mod+Shift+Z");
@@ -163,7 +176,9 @@ describe("createKeyHandler", () => {
   let executeCommand: (id: string) => Promise<boolean>;
 
   beforeEach(() => {
-    executeCommand = vi.fn(async () => true) as (id: string) => Promise<boolean>;
+    executeCommand = vi.fn(async () => true) as (
+      id: string,
+    ) => Promise<boolean>;
     vi.useFakeTimers();
   });
 
@@ -180,7 +195,10 @@ describe("createKeyHandler", () => {
 
   it("executes a modifier binding from cua mode", () => {
     const original = Object.getOwnPropertyDescriptor(navigator, "platform");
-    Object.defineProperty(navigator, "platform", { value: "MacIntel", configurable: true });
+    Object.defineProperty(navigator, "platform", {
+      value: "MacIntel",
+      configurable: true,
+    });
     try {
       const handler = createKeyHandler("cua", executeCommand);
       const e = fakeKeyEvent("z", { metaKey: true });
@@ -236,7 +254,10 @@ describe("createKeyHandler", () => {
 
   it("allows modifier combos inside .cm-editor", () => {
     const original = Object.getOwnPropertyDescriptor(navigator, "platform");
-    Object.defineProperty(navigator, "platform", { value: "MacIntel", configurable: true });
+    Object.defineProperty(navigator, "platform", {
+      value: "MacIntel",
+      configurable: true,
+    });
     const cmEditor = document.createElement("div");
     cmEditor.className = "cm-editor";
     const inner = document.createElement("div");
@@ -373,5 +394,141 @@ describe("createKeyHandler", () => {
     const handler = createKeyHandler("vim", executeCommand);
     handler(fakeKeyEvent(":"));
     expect(executeCommand).toHaveBeenCalledWith("app.command");
+  });
+
+  /* ---------- scope bindings ---------- */
+
+  it("dispatches scope bindings when getScopeBindings is provided", () => {
+    const scopeBindings = () => ({ ArrowDown: "inspector.moveDown" });
+    const handler = createKeyHandler("cua", executeCommand, scopeBindings);
+    handler(fakeKeyEvent("ArrowDown"));
+    expect(executeCommand).toHaveBeenCalledWith("inspector.moveDown");
+  });
+
+  it("scope bindings shadow global bindings for the same key", () => {
+    // Escape is globally app.dismiss — scope can override it
+    const scopeBindings = () => ({ Escape: "inspector.escape" });
+    const handler = createKeyHandler("cua", executeCommand, scopeBindings);
+    handler(fakeKeyEvent("Escape"));
+    expect(executeCommand).toHaveBeenCalledWith("inspector.escape");
+  });
+
+  it("falls through to global bindings when scope has no match", () => {
+    const scopeBindings = () => ({ ArrowDown: "inspector.moveDown" });
+    const handler = createKeyHandler("cua", executeCommand, scopeBindings);
+    handler(fakeKeyEvent("Escape"));
+    expect(executeCommand).toHaveBeenCalledWith("app.dismiss");
+  });
+
+  it("scope bindings update dynamically (callback called per keydown)", () => {
+    let bindings: Record<string, string> = {};
+    const handler = createKeyHandler("cua", executeCommand, () => bindings);
+
+    // No scope binding yet — ArrowDown does nothing
+    handler(fakeKeyEvent("ArrowDown"));
+    expect(executeCommand).not.toHaveBeenCalled();
+
+    // Simulate inspector focus — now ArrowDown resolves
+    bindings = { ArrowDown: "inspector.moveDown" };
+    handler(fakeKeyEvent("ArrowDown"));
+    expect(executeCommand).toHaveBeenCalledWith("inspector.moveDown");
+  });
+
+  it("vim scope bindings (j/k) dispatch inspector commands", () => {
+    const scopeBindings = () => ({
+      j: "inspector.moveDown",
+      k: "inspector.moveUp",
+      i: "inspector.edit",
+    });
+    const handler = createKeyHandler("vim", executeCommand, scopeBindings);
+
+    handler(fakeKeyEvent("j"));
+    expect(executeCommand).toHaveBeenCalledWith("inspector.moveDown");
+
+    handler(fakeKeyEvent("k"));
+    expect(executeCommand).toHaveBeenCalledWith("inspector.moveUp");
+
+    handler(fakeKeyEvent("i"));
+    expect(executeCommand).toHaveBeenCalledWith("inspector.edit");
+  });
+});
+
+/* ---------- extractScopeBindings ---------- */
+
+/** Build a minimal scope for testing. */
+function makeScope(
+  commands: Array<{ id: string; keys?: Record<string, string> }>,
+  parent: ReturnType<typeof makeScope> | null = null,
+) {
+  const map = new Map<string, { id: string; keys?: Record<string, string> }>();
+  for (const cmd of commands) map.set(cmd.id, cmd);
+  return { commands: map, parent };
+}
+
+describe("extractScopeBindings", () => {
+  it("extracts keys for the given mode", () => {
+    const scope = makeScope([
+      { id: "inspector.moveUp", keys: { vim: "k", cua: "ArrowUp" } },
+      { id: "inspector.moveDown", keys: { vim: "j", cua: "ArrowDown" } },
+    ]);
+    const bindings = extractScopeBindings(scope, "cua");
+    expect(bindings).toEqual({
+      ArrowUp: "inspector.moveUp",
+      ArrowDown: "inspector.moveDown",
+    });
+  });
+
+  it("extracts vim keys", () => {
+    const scope = makeScope([
+      { id: "inspector.moveUp", keys: { vim: "k", cua: "ArrowUp" } },
+    ]);
+    const bindings = extractScopeBindings(scope, "vim");
+    expect(bindings).toEqual({ k: "inspector.moveUp" });
+  });
+
+  it("skips commands without keys", () => {
+    const scope = makeScope([
+      { id: "inspector.moveUp", keys: { vim: "k" } },
+      { id: "inspector.deleteRow" }, // no keys
+    ]);
+    const bindings = extractScopeBindings(scope, "vim");
+    expect(bindings).toEqual({ k: "inspector.moveUp" });
+  });
+
+  it("skips commands without keys for the requested mode", () => {
+    const scope = makeScope([
+      { id: "inspector.nextField", keys: { cua: "Tab" } }, // no vim key
+    ]);
+    const bindings = extractScopeBindings(scope, "vim");
+    expect(bindings).toEqual({});
+  });
+
+  it("inner scope shadows outer scope for same key", () => {
+    const outer = makeScope([
+      { id: "grid.moveDown", keys: { cua: "ArrowDown" } },
+    ]);
+    const inner = makeScope(
+      [{ id: "inspector.moveDown", keys: { cua: "ArrowDown" } }],
+      outer,
+    );
+    const bindings = extractScopeBindings(inner, "cua");
+    expect(bindings["ArrowDown"]).toBe("inspector.moveDown");
+  });
+
+  it("includes parent scope commands not shadowed by inner", () => {
+    const outer = makeScope([{ id: "app.dismiss", keys: { cua: "Escape" } }]);
+    const inner = makeScope(
+      [{ id: "inspector.moveDown", keys: { cua: "ArrowDown" } }],
+      outer,
+    );
+    const bindings = extractScopeBindings(inner, "cua");
+    expect(bindings).toEqual({
+      ArrowDown: "inspector.moveDown",
+      Escape: "app.dismiss",
+    });
+  });
+
+  it("returns empty for null scope", () => {
+    expect(extractScopeBindings(null, "cua")).toEqual({});
   });
 });

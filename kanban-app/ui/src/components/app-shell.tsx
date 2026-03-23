@@ -18,7 +18,11 @@ import {
 import { useFocusedScope } from "@/lib/entity-focus-context";
 import { useUIState } from "@/lib/ui-state-context";
 import { useAppMode } from "@/lib/app-mode-context";
-import { createKeyHandler, type KeymapMode } from "@/lib/keybindings";
+import {
+  createKeyHandler,
+  extractScopeBindings,
+  type KeymapMode,
+} from "@/lib/keybindings";
 import { CommandPalette } from "@/components/command-palette";
 import { pathStem } from "@/components/board-selector";
 import { syncMenuToNative } from "@/lib/menu-sync";
@@ -60,7 +64,11 @@ function KeybindingHandler({ mode }: { mode: KeymapMode }) {
   }, []);
 
   useEffect(() => {
-    const handler = createKeyHandler(mode, executeCommand);
+    // Pass scope bindings so command `keys` from the focused scope (inspector,
+    // grid, board nav) are resolved through the same single key handler.
+    const handler = createKeyHandler(mode, executeCommand, () =>
+      extractScopeBindings(focusedScopeRef.current, mode),
+    );
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
   }, [mode, executeCommand]);

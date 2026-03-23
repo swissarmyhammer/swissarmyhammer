@@ -30,21 +30,21 @@ export const BINDING_TABLES: Record<KeymapMode, BindingTable> = {
     "/": "app.search",
     "Mod+f": "app.search",
     "Mod+Shift+P": "app.palette",
-    "u": "app.undo",
+    u: "app.undo",
     "Mod+r": "app.redo",
-    "Escape": "app.dismiss",
+    Escape: "app.dismiss",
   },
   cua: {
     "Mod+Shift+P": "app.palette",
     "Mod+f": "app.search",
     "Mod+z": "app.undo",
     "Mod+Shift+Z": "app.redo",
-    "Escape": "app.dismiss",
+    Escape: "app.dismiss",
   },
   emacs: {
     "Mod+Shift+P": "app.palette",
     "Mod+f": "app.search",
-    "Escape": "app.dismiss",
+    Escape: "app.dismiss",
   },
 };
 
@@ -137,11 +137,24 @@ const SEQUENCE_TIMEOUT_MS = 500;
  *        `useExecuteCommand()` in the command scope.
  * @returns A function suitable for `addEventListener("keydown", ...)`.
  */
+/**
+ * Create a keydown event handler that resolves keybindings and executes commands.
+ *
+ * Bindings come from two sources, checked in order (scope wins over global):
+ * 1. **Scope bindings** — dynamic, from the focused scope's commands' `keys` property.
+ *    Provided via `getScopeBindings()` callback so the handler always sees the current scope.
+ * 2. **Global bindings** — static, from `BINDING_TABLES` for the active keymap mode.
+ *
+ * @param mode - The active keymap mode ("vim", "cua", or "emacs").
+ * @param executeCommand - Callback to run a command by ID.
+ * @param getScopeBindings - Returns key→commandId bindings from the focused scope.
+ */
 export function createKeyHandler(
   mode: KeymapMode,
   executeCommand: (id: string) => Promise<boolean>,
+  getScopeBindings?: () => BindingTable,
 ): (e: KeyboardEvent) => void {
-  const bindings = BINDING_TABLES[mode];
+  const globalBindings = BINDING_TABLES[mode];
   const sequences = SEQUENCE_TABLES[mode];
 
   /** Pending first key of a multi-key sequence, or null. */
@@ -163,14 +176,14 @@ export function createKeyHandler(
     const normalized = normalizeKeyEvent(e);
     if (normalized === null) return;
 
-    console.debug(`[keybindings] mode=${mode} key="${normalized}" target=${target?.tagName ?? "null"}`);
+    console.debug(
+      `[keybindings] mode=${mode} key="${normalized}" target=${target?.tagName ?? "null"}`,
+    );
 
     // Skip non-modifier single-character keys when focus is in any editable
     // context (CodeMirror editors, inputs, textareas, contenteditable).
-    // Modifier combos (Mod+Shift+P, Mod+Z, etc.) pass through because they
-    // don't interfere with text editing and are also handled by the native
-    // menu bar as a fallback.
-    const hasModifier = normalized.includes("Mod") || normalized.includes("Alt");
+    const hasModifier =
+      normalized.includes("Mod") || normalized.includes("Alt");
     if (!hasModifier && target) {
       const tag = target.tagName;
       if (
@@ -185,37 +198,38 @@ export function createKeyHandler(
       }
     }
 
+    // Build merged bindings: scope bindings overlay global bindings
+    const scopeBindings = getScopeBindings?.() ?? {};
+    const bindings = { ...globalBindings, ...scopeBindings };
+
     // --- Multi-key sequence handling ---
 
-    // If we have a pending first key, check for completion
     if (pending !== null) {
       const secondMap = sequences[pending];
       if (secondMap && normalized in secondMap) {
         const commandId = secondMap[normalized];
-        console.debug(`[keybindings] SEQUENCE MATCH: "${pending}" + "${normalized}" → ${commandId}`);
+        console.debug(
+          `[keybindings] SEQUENCE MATCH: "${pending}" + "${normalized}" → ${commandId}`,
+        );
         clearPending();
         e.preventDefault();
         e.stopPropagation();
         executeCommand(commandId);
         return;
       }
-      // No match for the second key; clear and fall through
-      console.debug(`[keybindings] SEQUENCE BROKEN: pending="${pending}" key="${normalized}"`);
+      console.debug(
+        `[keybindings] SEQUENCE BROKEN: pending="${pending}" key="${normalized}"`,
+      );
       clearPending();
     }
 
-    // Check if this key starts a multi-key sequence
     if (normalized in sequences) {
-      // Only start a sequence if this key is not also a single-key binding,
-      // OR if there are actual sequence completions for it.
-      // We prefer sequences over single-key bindings when ambiguous.
       pending = normalized;
       pendingTimer = setTimeout(clearPending, SEQUENCE_TIMEOUT_MS);
-      // Do not fire yet; wait for second key or timeout
       return;
     }
 
-    // --- Single-key binding lookup ---
+    // --- Single-key binding lookup (scope + global merged) ---
 
     if (normalized in bindings) {
       const cmdId = bindings[normalized];
@@ -226,6 +240,39 @@ export function createKeyHandler(
       return;
     }
 
-    console.debug(`[keybindings] NO MATCH for "${normalized}"`)
+    console.debug(`[keybindings] NO MATCH for "${normalized}"`);
   };
+}
+
+/**
+ * Extract key bindings from a command scope chain for a given keymap mode.
+ *
+ * Walks the scope chain and collects `keys[mode]` from every command,
+ * producing a flat key→commandId binding table. Inner (deeper) scopes
+ * shadow outer scopes for the same key.
+ *
+ * @param scope - The scope to start from (typically the focused scope).
+ * @param mode - The keymap mode to extract bindings for.
+ * @returns A flat BindingTable mapping canonical key strings to command IDs.
+ */
+export function extractScopeBindings(
+  scope: {
+    commands: Map<string, { id: string; keys?: Record<string, string> }>;
+    parent: unknown;
+  } | null,
+  mode: KeymapMode,
+): BindingTable {
+  const result: BindingTable = {};
+  let current = scope;
+  while (current !== null) {
+    for (const [, cmd] of current.commands) {
+      const key = cmd.keys?.[mode];
+      if (key && !(key in result)) {
+        // Inner scopes win — only set if not already claimed
+        result[key] = cmd.id;
+      }
+    }
+    current = current.parent as typeof scope;
+  }
+  return result;
 }

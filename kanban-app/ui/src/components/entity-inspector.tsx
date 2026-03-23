@@ -7,7 +7,10 @@ import {
 import { resolveEditor } from "@/components/fields/editors";
 import { Field } from "@/components/fields/field";
 import { useSchema } from "@/lib/schema-context";
-import { useInspectorNav } from "@/hooks/use-inspector-nav";
+import {
+  useInspectorNav,
+  type UseInspectorNavReturn,
+} from "@/hooks/use-inspector-nav";
 import type { FieldDef, Entity } from "@/types/kanban";
 import { FocusHighlight } from "@/components/ui/focus-highlight";
 import { icons, HelpCircle } from "lucide-react";
@@ -30,6 +33,8 @@ function fieldIcon(field: FieldDef): LucideIcon {
 
 interface EntityInspectorProps {
   entity: Entity;
+  /** Ref callback to expose the nav state to parent (InspectorFocusBridge). */
+  navRef?: React.RefObject<UseInspectorNavReturn | null>;
 }
 
 /**
@@ -43,7 +48,7 @@ interface EntityInspectorProps {
  * - Field definitions and ordering from SchemaContext
  * - Save function from FieldUpdateContext (used internally by FieldRow)
  */
-export function EntityInspector({ entity }: EntityInspectorProps) {
+export function EntityInspector({ entity, navRef }: EntityInspectorProps) {
   const { getSchema } = useSchema();
   const schema = getSchema(entity.entity_type);
   const fields = schema?.fields ?? [];
@@ -69,6 +74,9 @@ export function EntityInspector({ entity }: EntityInspectorProps) {
   );
 
   const nav = useInspectorNav({ fieldCount: navigableFields.length });
+
+  // Expose nav to parent (InspectorFocusBridge) via ref
+  if (navRef) navRef.current = nav;
 
   if (fields.length === 0) {
     return <p className="text-sm text-muted-foreground">Loading schema...</p>;

@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KMAQTDF4HJJE6Y532EKXM4JK
-position_column: todo
-position_ordinal: '8380'
+position_column: done
+position_ordinal: ffffffffffff9c80
 title: Inspector focus transfer — auto-focus on open, return focus on close
 ---
 ## What
