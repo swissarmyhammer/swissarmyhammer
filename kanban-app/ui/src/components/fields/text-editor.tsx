@@ -39,7 +39,7 @@ export function FieldPlaceholder({
 
   if (editing) {
     return (
-      <FieldPlaceholderEditor
+      <TextEditor
         value={text}
         onCommit={(v) => onCommit(v)}
         onCancel={onCancel}
@@ -75,7 +75,7 @@ interface EditorProps {
   onChange?: (text: string) => void;
 }
 
-export function FieldPlaceholderEditor({
+export function TextEditor({
   value,
   onCommit,
   onCancel,

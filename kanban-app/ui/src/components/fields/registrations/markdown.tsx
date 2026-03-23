@@ -1,20 +1,20 @@
 /**
  * Register markdown editor and displays with the Field registry.
  *
- * Editor: FieldPlaceholderEditor (compact CM6 inline editor)
+ * Editor: TextEditor (compact CM6 inline editor)
  * Displays: "text" (plain text), "markdown" (rendered GFM with mention pills)
  */
 
 import { registerEditor, registerDisplay, type FieldEditorProps, type FieldDisplayProps } from "@/components/fields/field";
-import { FieldPlaceholderEditor } from "@/components/fields/field-placeholder";
+import { TextEditor } from "@/components/fields/text-editor";
 import { TextDisplay } from "@/components/fields/displays/text-display";
 import { MarkdownDisplay } from "@/components/fields/displays/markdown-display";
 
-/** Markdown editor adapter — wraps FieldPlaceholderEditor to match FieldEditorProps. */
+/** Markdown editor adapter — wraps TextEditor to match FieldEditorProps. */
 function MarkdownEditorAdapter({ value, mode, onCommit, onCancel }: FieldEditorProps) {
   const text = typeof value === "string" ? value : value != null ? String(value) : "";
   return (
-    <FieldPlaceholderEditor
+    <TextEditor
       value={text}
       onCommit={(v) => onCommit(v)}
       onCancel={onCancel}

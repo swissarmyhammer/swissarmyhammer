@@ -16,7 +16,7 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import { Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { FieldPlaceholderEditor } from "@/components/fields/field-placeholder";
+import { TextEditor } from "@/components/fields/text-editor";
 import { BoardSelector } from "@/components/board-selector";
 import appIcon from "@/assets/app-icon-32.png";
 import type { OpenBoard, BoardDataResponse, Entity } from "@/types/kanban";
@@ -209,7 +209,7 @@ export function QuickCapture() {
         {/* Editor + Add button */}
         <div className="px-3 py-3 flex items-center gap-2">
           <div className="flex-1 min-w-0">
-            <FieldPlaceholderEditor
+            <TextEditor
               key={editorKey}
               value=""
               onCommit={() => {}}

@@ -1,5 +1,5 @@
 import { EditableMarkdown } from "@/components/editable-markdown";
-import { FieldPlaceholderEditor } from "@/components/fields/field-placeholder";
+import { TextEditor } from "@/components/fields/text-editor";
 import type { Entity } from "@/types/kanban";
 
 /**
@@ -32,7 +32,7 @@ interface MarkdownEditorProps extends EditorProps {
 }
 
 /**
- * Markdown editor — compact: FieldPlaceholderEditor (inline CM6),
+ * Markdown editor — compact: TextEditor (inline CM6),
  * full: EditableMarkdown (display/edit toggle with tag decorations).
  */
 export function MarkdownEditor({
@@ -51,7 +51,7 @@ export function MarkdownEditor({
 
   if (mode === "compact") {
     return (
-      <FieldPlaceholderEditor
+      <TextEditor
         value={text}
         onCommit={(v) => onCommit(v)}
         onCancel={onCancel}
