@@ -138,9 +138,9 @@ export function TextEditor({
       }
     : () => commitAndExitRef.current();
 
-  // Semantic cancel ref: vim always commits (edits must never be lost),
-  // CUA cancels (standard Escape = discard). The presence of onSubmit
-  // does not change this — a container hint must never suppress saving.
+  // Semantic cancel ref:
+  // - Vim inline editing: Escape commits — edits must never be lost.
+  // - CUA/emacs: Escape always cancels (standard discard behavior).
   const semanticCancelRef = useRef<(() => void) | null>(null);
   semanticCancelRef.current =
     mode === "vim"

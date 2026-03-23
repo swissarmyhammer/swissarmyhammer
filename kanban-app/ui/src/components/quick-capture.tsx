@@ -14,10 +14,13 @@ import { EntityIcon } from "@/components/entity-icon";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
+import { EditorView } from "@codemirror/view";
+import { getCM } from "@replit/codemirror-vim";
 import { Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { TextEditor } from "@/components/fields/text-editor";
 import { BoardSelector } from "@/components/board-selector";
+import { useUIState } from "@/lib/ui-state-context";
 import appIcon from "@/assets/app-icon-32.png";
 import type { OpenBoard, BoardDataResponse, Entity } from "@/types/kanban";
 
@@ -103,20 +106,6 @@ export function QuickCapture() {
     };
   }, [loadBoards]);
 
-  // Window-level Escape fallback for when CM6 doesn't have focus
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (
-        e.key === "Escape" &&
-        !(e.target as HTMLElement)?.closest?.(".cm-editor")
-      ) {
-        getCurrentWindow().hide();
-      }
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, []);
-
   const hideWindow = useCallback(() => {
     getCurrentWindow().hide();
   }, []);
@@ -166,6 +155,48 @@ export function QuickCapture() {
   const handleCancel = useCallback(() => {
     hideWindow();
   }, [hideWindow]);
+
+  // Window-level keyboard handler for Escape (dismiss) and Enter (submit).
+  // In vim mode, we distinguish insert vs normal:
+  //   insert Escape → let vim handle (exits to normal)
+  //   normal Escape → dismiss window
+  //   normal Enter  → submit task
+  const { keymap_mode: keymapMode } = useUIState();
+  const handleSubmitRef = useRef(handleSubmit);
+  handleSubmitRef.current = handleSubmit;
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const cmEl = (e.target as HTMLElement)?.closest?.(".cm-editor");
+
+      if (cmEl && keymapMode === "vim") {
+        const view = EditorView.findFromDOM(cmEl as HTMLElement);
+        if (view) {
+          const cm = getCM(view);
+          if (cm?.state?.vim?.insertMode) return;
+        }
+        if (e.key === "Escape") {
+          e.preventDefault();
+          e.stopPropagation();
+          getCurrentWindow().hide();
+        } else if (e.key === "Enter") {
+          e.preventDefault();
+          e.stopPropagation();
+          const text =
+            EditorView.findFromDOM(cmEl as HTMLElement)?.state.doc.toString() ??
+            "";
+          if (text.trim()) handleSubmitRef.current(text);
+        }
+        return;
+      }
+
+      if (e.key === "Escape") {
+        getCurrentWindow().hide();
+      }
+    };
+    window.addEventListener("keydown", handler, true);
+    return () => window.removeEventListener("keydown", handler, true);
+  }, [keymapMode]);
 
   // Auto-resize the Tauri window to match card content height (max 400px).
   // The outer wrapper has p-2 (8px each side), so window height = card + 16.
