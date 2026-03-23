@@ -12,7 +12,13 @@ export function ProgressDisplay({ value, mode }: DisplayProps) {
   if (mode === "compact") {
     return (
       <div className="flex items-center gap-1.5">
-        <div className="flex-1 h-1.5 rounded-full bg-muted overflow-hidden">
+        <div
+          role="progressbar"
+          aria-valuenow={percent}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          className="flex-1 h-1.5 rounded-full bg-muted overflow-hidden"
+        >
           <div
             className="h-full rounded-full bg-primary transition-all duration-200"
             style={{ width: `${percent}%` }}
@@ -27,7 +33,13 @@ export function ProgressDisplay({ value, mode }: DisplayProps) {
 
   return (
     <div className="flex items-center gap-2">
-      <div className="flex-1 h-1.5 rounded-full bg-muted overflow-hidden">
+      <div
+        role="progressbar"
+        aria-valuenow={percent}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        className="flex-1 h-1.5 rounded-full bg-muted overflow-hidden"
+      >
         <div
           className="h-full rounded-full bg-primary transition-all duration-200"
           style={{ width: `${percent}%` }}

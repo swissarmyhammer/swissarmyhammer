@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: c480
+position_column: done
+position_ordinal: ffffffffffff9680
 title: 'entity-card.test.tsx: update tests for Field-based card rendering'
 ---
 ## What

@@ -20,26 +20,32 @@ const TASK_SCHEMA = {
       id: "f1",
       name: "title",
       type: { kind: "markdown", single_line: true },
+      editor: "markdown",
+      display: "text",
       section: "header",
     },
     {
       id: "f3",
       name: "tags",
       type: { kind: "computed", derive: "parse-body-tags" },
-      section: "header",
+      editor: "multi-select",
       display: "badge-list",
+      section: "header",
     },
     {
       id: "f4",
       name: "progress",
       type: { kind: "computed", derive: "parse-body-progress" },
-      section: "header",
+      editor: "none",
       display: "number",
+      section: "header",
     },
     {
       id: "f2",
       name: "body",
       type: { kind: "markdown", single_line: false },
+      editor: "markdown",
+      display: "markdown",
       section: "body",
     },
   ],
@@ -78,6 +84,7 @@ vi.mock("@tauri-apps/plugin-log", () => ({
   attachConsole: vi.fn(() => Promise.resolve()),
 }));
 
+import "@/components/fields/registrations";
 import { EntityCard } from "./entity-card";
 import { UIStateProvider } from "@/lib/ui-state-context";
 import { SchemaProvider } from "@/lib/schema-context";
@@ -108,11 +115,14 @@ function makeEntity(fieldOverrides: Record<string, unknown> = {}): Entity {
 
 const mockOnInspect = vi.fn();
 
+/** Track the current entity so the store can find it via useFieldValue. */
+let currentEntity: Entity = makeEntity();
+
 function renderCard(ui: React.ReactElement) {
   return render(
     <TooltipProvider>
       <SchemaProvider>
-        <EntityStoreProvider entities={{ tag: [] }}>
+        <EntityStoreProvider entities={{ task: [currentEntity], tag: [] }}>
           <EntityFocusProvider>
             <InspectProvider onInspect={mockOnInspect} onDismiss={() => false}>
               <FieldUpdateProvider>
@@ -141,15 +151,17 @@ describe("EntityCard", () => {
     mockOnInspect.mockClear();
   });
 
-  it("renders title as markdown (bold text)", async () => {
-    await renderWithProvider(<EntityCard entity={makeEntity()} />);
-    const strong = screen.getByText("world");
-    expect(strong.tagName).toBe("STRONG");
+  it("renders title as text via Field display", async () => {
+    currentEntity = makeEntity();
+    await renderWithProvider(<EntityCard entity={currentEntity} />);
+    // TextDisplay renders plain text (display: "text"), not markdown
+    expect(screen.getByText("Hello **world**")).toBeTruthy();
   });
 
   it("(i) button calls inspectEntity with correct moniker", async () => {
+    currentEntity = makeEntity();
     const { container } = await renderWithProvider(
-      <EntityCard entity={makeEntity()} />,
+      <EntityCard entity={currentEntity} />,
     );
     const inspectBtn = container.querySelector("button[title='Inspect']")!;
     fireEvent.click(inspectBtn);
@@ -157,52 +169,53 @@ describe("EntityCard", () => {
   });
 
   it("(i) button always renders", async () => {
+    currentEntity = makeEntity();
     const { container } = await renderWithProvider(
-      <EntityCard entity={makeEntity()} />,
+      <EntityCard entity={currentEntity} />,
     );
     expect(container.querySelector("button[title='Inspect']")).not.toBeNull();
   });
 
   it("enters edit mode when title is clicked", async () => {
+    currentEntity = makeEntity();
     const { container } = await renderWithProvider(
-      <EntityCard entity={makeEntity()} />,
+      <EntityCard entity={currentEntity} />,
     );
-    const titleEl = screen.getByText("world");
+    const titleEl = screen.getByText("Hello **world**");
     fireEvent.click(titleEl);
     expect(container.querySelector(".cm-editor")).toBeTruthy();
   });
 
-  it("saving edited title calls invoke with correct camelCase params", async () => {
+  it("saving edited title calls dispatch_command with correct params", async () => {
     mockInvoke.mockClear();
-    // Use a simple title so CM6 doc content is predictable
-    const entity = makeEntity({ title: "bug" });
+    currentEntity = makeEntity({ title: "bug" });
     const { container } = await renderWithProvider(
-      <EntityCard entity={entity} />,
+      <EntityCard entity={currentEntity} />,
     );
 
     // Click to enter edit mode
     const titleEl = screen.getByText("bug");
     fireEvent.click(titleEl);
-    const cmContent = container.querySelector(".cm-content") as HTMLElement;
-    expect(cmContent).toBeTruthy();
+    const cmEditor = container.querySelector(".cm-editor") as HTMLElement;
+    expect(cmEditor).toBeTruthy();
 
-    // Get the CM6 EditorView and replace the document text
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const editorView = (cmContent as any).cmTile?.view;
-    if (!editorView?.dispatch) {
-      // CM6 internals not available in jsdom — skip gracefully
-      return;
-    }
-    editorView.dispatch({
-      changes: { from: 0, to: editorView.state.doc.length, insert: "defect" },
+    // Get CM6 EditorView and replace doc text
+    const { EditorView } = await import("@codemirror/view");
+    const view = EditorView.findFromDOM(cmEditor);
+    if (!view) return; // jsdom limitation — skip gracefully
+
+    await act(async () => {
+      view.dispatch({
+        changes: { from: 0, to: view.state.doc.length, insert: "defect" },
+      });
     });
 
     // Blur triggers commit
+    const cmContent = container.querySelector(".cm-content") as HTMLElement;
     await act(async () => {
       fireEvent.blur(cmContent);
     });
 
-    // Verify invoke was called via dispatch_command for the title save
     const updateCall = mockInvoke.mock.calls.find(
       (call) =>
         call[0] === "dispatch_command" &&
@@ -221,8 +234,9 @@ describe("EntityCard", () => {
   });
 
   it("entity.inspect command includes target moniker in context menu", async () => {
+    currentEntity = makeEntity();
     const { container } = await renderWithProvider(
-      <EntityCard entity={makeEntity()} />,
+      <EntityCard entity={currentEntity} />,
     );
     const card = container.querySelector("[data-moniker='task:task-1']")!;
     fireEvent.contextMenu(card);
@@ -238,8 +252,9 @@ describe("EntityCard", () => {
   });
 
   it("clicking card body does not trigger inspect", async () => {
+    currentEntity = makeEntity();
     const { container } = await renderWithProvider(
-      <EntityCard entity={makeEntity()} />,
+      <EntityCard entity={currentEntity} />,
     );
     const card = container.querySelector(".rounded-md")!;
     fireEvent.click(card);
@@ -247,27 +262,25 @@ describe("EntityCard", () => {
     expect(mockOnInspect).not.toHaveBeenCalled();
   });
 
-  describe("progress bar", async () => {
-    it("shows progress bar when description has checkboxes", async () => {
+  describe("progress bar", () => {
+    it("shows progress bar when progress field has items", async () => {
+      currentEntity = makeEntity({
+        progress: { total: 3, completed: 1, percent: 33 },
+      });
       const { container } = await renderWithProvider(
-        <EntityCard
-          entity={makeEntity({
-            body: "- [x] done\n- [ ] pending\n- [ ] also pending",
-          })}
-        />,
+        <EntityCard entity={currentEntity} />,
       );
       const progressBar = container.querySelector('[role="progressbar"]');
       expect(progressBar).toBeTruthy();
       expect(progressBar!.getAttribute("aria-valuenow")).toBe("33");
     });
 
-    it("shows 0% progress when no checkboxes are checked", async () => {
+    it("shows 0% progress when no items are completed", async () => {
+      currentEntity = makeEntity({
+        progress: { total: 2, completed: 0, percent: 0 },
+      });
       const { container } = await renderWithProvider(
-        <EntityCard
-          entity={makeEntity({
-            body: "- [ ] first\n- [ ] second",
-          })}
-        />,
+        <EntityCard entity={currentEntity} />,
       );
       const progressBar = container.querySelector('[role="progressbar"]');
       expect(progressBar).toBeTruthy();
@@ -275,34 +288,33 @@ describe("EntityCard", () => {
       expect(container.textContent).toContain("0%");
     });
 
-    it("shows 100% progress when all checkboxes are checked", async () => {
+    it("shows 100% progress when all items are completed", async () => {
+      currentEntity = makeEntity({
+        progress: { total: 2, completed: 2, percent: 100 },
+      });
       const { container } = await renderWithProvider(
-        <EntityCard
-          entity={makeEntity({
-            body: "- [x] done\n- [x] also done",
-          })}
-        />,
+        <EntityCard entity={currentEntity} />,
       );
       const progressBar = container.querySelector('[role="progressbar"]');
       expect(progressBar).toBeTruthy();
       expect(progressBar!.getAttribute("aria-valuenow")).toBe("100");
     });
 
-    it("does not show progress bar when description has no checkboxes", async () => {
+    it("does not show progress bar when total is zero", async () => {
+      currentEntity = makeEntity({
+        progress: { total: 0, completed: 0, percent: 0 },
+      });
       const { container } = await renderWithProvider(
-        <EntityCard
-          entity={makeEntity({
-            body: "Just some plain text",
-          })}
-        />,
+        <EntityCard entity={currentEntity} />,
       );
       const progressBar = container.querySelector('[role="progressbar"]');
       expect(progressBar).toBeNull();
     });
 
-    it("does not show progress bar when description is empty", async () => {
+    it("does not show progress bar when progress field is null", async () => {
+      currentEntity = makeEntity();
       const { container } = await renderWithProvider(
-        <EntityCard entity={makeEntity()} />,
+        <EntityCard entity={currentEntity} />,
       );
       const progressBar = container.querySelector('[role="progressbar"]');
       expect(progressBar).toBeNull();
