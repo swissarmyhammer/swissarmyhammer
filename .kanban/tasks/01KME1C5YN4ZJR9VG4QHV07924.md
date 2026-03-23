@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: c580
+position_column: done
+position_ordinal: ffffffffffff9780
 title: 'entity-inspector.test.tsx: update tests for Field-based inspector rendering'
 ---
 ## What

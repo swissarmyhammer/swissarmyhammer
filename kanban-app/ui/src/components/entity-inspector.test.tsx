@@ -98,7 +98,15 @@ const TAG_SCHEMA = {
       icon: "tag",
       section: "header",
     },
-    { id: "t2", name: "color", type: { kind: "color" }, editor: "color-palette", display: "color-swatch", icon: "palette", section: "body" },
+    {
+      id: "t2",
+      name: "color",
+      type: { kind: "color" },
+      editor: "color-palette",
+      display: "color-swatch",
+      icon: "palette",
+      section: "body",
+    },
     {
       id: "t3",
       name: "description",
@@ -128,7 +136,15 @@ const ACTOR_SCHEMA = {
       icon: "type",
       section: "header",
     },
-    { id: "a2", name: "color", type: { kind: "color" }, editor: "color-palette", display: "color-swatch", icon: "palette", section: "body" },
+    {
+      id: "a2",
+      name: "color",
+      type: { kind: "color" },
+      editor: "color-palette",
+      display: "color-swatch",
+      icon: "palette",
+      section: "body",
+    },
   ],
 };
 
@@ -174,6 +190,7 @@ vi.mock("@tauri-apps/plugin-log", () => ({
   attachConsole: vi.fn(() => Promise.resolve()),
 }));
 
+import "@/components/fields/registrations";
 import { EntityInspector } from "./entity-inspector";
 import { UIStateProvider } from "@/lib/ui-state-context";
 import { SchemaProvider } from "@/lib/schema-context";
@@ -192,7 +209,7 @@ async function renderInspector(entity: Entity, tagEntities: Entity[] = []) {
   const result = render(
     <TooltipProvider>
       <SchemaProvider>
-        <EntityStoreProvider entities={{ tag: tagEntities }}>
+        <EntityStoreProvider entities={{ task: [entity], tag: tagEntities }}>
           <EntityFocusProvider>
             <InspectProvider onInspect={() => {}} onDismiss={() => false}>
               <FieldUpdateProvider>
@@ -247,26 +264,41 @@ describe("EntityInspector", () => {
     expect(body!.querySelector('[data-testid="field-row-body"]')).toBeTruthy();
   });
 
-  it("renders markdown fields with EditableMarkdown (click enters edit mode)", async () => {
+  it("renders markdown fields via Field (click enters edit mode)", async () => {
     const { container } = await renderInspector(
       makeEntity({ title: "Click me" }),
     );
-    fireEvent.click(screen.getByText("Click me"));
-    expect(container.querySelector(".cm-editor")).toBeTruthy();
+    // TextDisplay renders plain text; click on it enters edit mode via Field
+    const titleText = screen.getByText("Click me");
+    fireEvent.click(titleText);
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 50));
+    });
+    const titleRow = container.querySelector('[data-testid="field-row-title"]');
+    expect(titleRow!.querySelector(".cm-editor")).toBeTruthy();
   });
 
   // Container no longer calls updateField — editors save themselves.
   // Save behavior is tested in editor-save.test.tsx matrix.
 
   it("allows editing computed tag fields via multi-select", async () => {
-    const { container } = await renderInspector(makeEntity({ tags: ["bug"] }));
+    const { container } = await renderInspector(makeEntity({ tags: ["bug"] }), [
+      {
+        entity_type: "tag",
+        id: "tag-bug",
+        fields: { tag_name: "bug", color: "ff0000" },
+      },
+    ]);
     const tagsRow = container.querySelector('[data-testid="field-row-tags"]');
     expect(tagsRow).toBeTruthy();
-    // Click should produce a CM6 editor (tags are editable via tag/untag commands)
+    // Click the display area to enter edit mode
+    const clickTarget =
+      tagsRow!.querySelector(".cursor-text") ??
+      tagsRow!.querySelector(".min-h-\\[1\\.25rem\\]");
+    expect(clickTarget).toBeTruthy();
     await act(async () => {
-      fireEvent.click(
-        tagsRow!.querySelector(".cursor-text, .min-h-\\[1\\.25rem\\]")!,
-      );
+      fireEvent.click(clickTarget!);
+      await new Promise((r) => setTimeout(r, 50));
     });
     expect(tagsRow!.querySelector(".cm-editor")).toBeTruthy();
   });
