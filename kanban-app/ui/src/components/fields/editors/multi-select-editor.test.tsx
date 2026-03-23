@@ -211,7 +211,7 @@ describe("MultiSelectEditor", () => {
       expect(container.querySelector(".cm-editor")).toBeTruthy();
     });
 
-    it("shows existing selections as pills", async () => {
+    it("shows existing selections as prefixed tokens in the doc", async () => {
       const onCommit = vi.fn();
       const onCancel = vi.fn();
       const { container } = renderMultiSelect(
@@ -220,9 +220,8 @@ describe("MultiSelectEditor", () => {
       );
       await settle();
 
-      // Should show alice's avatar (initials "A" via AvatarDisplay)
-      const avatars = container.querySelectorAll(".rounded-full");
-      expect(avatars.length).toBeGreaterThanOrEqual(1);
+      const view = getCmView(container);
+      expect(view.state.doc.toString()).toContain("@alice");
     });
 
     it("Enter key calls onCommit with selected IDs", async () => {
@@ -313,23 +312,7 @@ describe("MultiSelectEditor", () => {
       expect(onCommit).toHaveBeenCalledWith(["alice-id"]);
     });
 
-    it("actor selections render with Avatar component", async () => {
-      const onCommit = vi.fn();
-      const onCancel = vi.fn();
-      const { container } = renderMultiSelect(
-        { field: ASSIGNEES_FIELD, value: ["alice-id"], onCommit, onCancel },
-        { actor: ACTOR_ENTITIES },
-      );
-      await settle();
-
-      // Actor pills use AvatarDisplay (same as grid/inspector) — renders .rounded-full avatars
-      const avatars = container.querySelectorAll(".rounded-full");
-      expect(avatars.length).toBeGreaterThanOrEqual(1);
-      // Avatar shows initials "A" for "alice"
-      expect(avatars[0].textContent).toBe("A");
-    });
-
-    it("remove button removes item from selection", async () => {
+    it("multiple selections appear as separate tokens in the doc", async () => {
       const onCommit = vi.fn();
       const onCancel = vi.fn();
       const { container } = renderMultiSelect(
@@ -343,25 +326,43 @@ describe("MultiSelectEditor", () => {
       );
       await settle();
 
-      // Each actor has an avatar (.rounded-full) and a remove button (×)
-      const avatars = container.querySelectorAll(".rounded-full");
-      expect(avatars.length).toBe(2);
+      const view = getCmView(container);
+      const doc = view.state.doc.toString();
+      expect(doc).toContain("@alice");
+      expect(doc).toContain("@bob");
+    });
 
-      // Find the first × remove button (sibling of the AvatarDisplay wrapper)
-      const removeButtons = container.querySelectorAll("button");
-      // Filter to × buttons (not CM6 internal buttons)
-      const removeBtns = Array.from(removeButtons).filter((b: Element) =>
-        b.textContent?.includes("×"),
+    it("deleting a token from the doc removes it from committed value", async () => {
+      const onCommit = vi.fn();
+      const onCancel = vi.fn();
+      const { container } = renderMultiSelect(
+        {
+          field: ASSIGNEES_FIELD,
+          value: ["alice-id", "bob-id"],
+          onCommit,
+          onCancel,
+        },
+        { actor: ACTOR_ENTITIES },
       );
-      expect(removeBtns.length).toBe(2);
+      await settle();
 
+      // Remove @alice from the doc, keep @bob
+      const view = getCmView(container);
+      const doc = view.state.doc.toString();
+      const aliceStart = doc.indexOf("@alice");
+      expect(aliceStart).toBeGreaterThanOrEqual(0);
       await act(async () => {
-        fireEvent.click(removeBtns[0]);
+        view.dispatch({
+          changes: { from: aliceStart, to: aliceStart + "@alice ".length },
+        });
       });
 
-      // After removing alice, only bob's avatar should remain
-      const remainingAvatars = container.querySelectorAll(".rounded-full");
-      expect(remainingAvatars.length).toBe(1);
+      const cmContent = container.querySelector(".cm-content") as HTMLElement;
+      await act(async () => {
+        fireEvent.keyDown(cmContent, { key: "Enter" });
+      });
+
+      expect(onCommit).toHaveBeenCalledWith(["bob-id"]);
     });
   });
 
@@ -458,7 +459,7 @@ describe("MultiSelectEditor", () => {
       expect(onCancel).not.toHaveBeenCalled();
     });
 
-    it("remove button removes tag from selection", async () => {
+    it("deleting a tag token from the doc removes it from committed value", async () => {
       const onCommit = vi.fn();
       const onCancel = vi.fn();
       const { container } = renderMultiSelect(
@@ -473,25 +474,27 @@ describe("MultiSelectEditor", () => {
       );
       await settle();
 
-      // Should have two tag pills
-      expect(container.textContent).toContain("bug");
-      expect(container.textContent).toContain("feature");
+      // Doc should contain both tags
+      const view = getCmView(container);
+      const doc = view.state.doc.toString();
+      expect(doc).toContain("#bug");
+      expect(doc).toContain("#feature");
 
-      // Find and click the first remove button (×)
-      const removeButtons = Array.from(
-        container.querySelectorAll("button"),
-      ).filter((b: Element) => b.textContent?.includes("×"));
-      expect(removeButtons.length).toBe(2);
-
+      // Remove #bug from the doc
+      const bugStart = doc.indexOf("#bug");
       await act(async () => {
-        fireEvent.click(removeButtons[0]);
+        view.dispatch({
+          changes: { from: bugStart, to: bugStart + "#bug ".length },
+        });
       });
 
-      // After removing first tag, only one should remain
-      const remainingBtns = Array.from(
-        container.querySelectorAll("button"),
-      ).filter((b: Element) => b.textContent?.includes("×"));
-      expect(remainingBtns.length).toBe(1);
+      const cmContent = container.querySelector(".cm-content") as HTMLElement;
+      await act(async () => {
+        fireEvent.keyDown(cmContent, { key: "Enter" });
+      });
+
+      // Only feature should remain
+      expect(onCommit).toHaveBeenCalledWith(["feature"]);
     });
   });
 
