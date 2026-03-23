@@ -9,3 +9,4 @@ import "./select";
 import "./date";
 import "./color-palette";
 import "./multi-select";
+import "./progress";

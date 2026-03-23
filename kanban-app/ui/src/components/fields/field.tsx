@@ -46,12 +46,18 @@ const editorRegistry = new Map<string, ComponentType<FieldEditorProps>>();
 const displayRegistry = new Map<string, ComponentType<FieldDisplayProps>>();
 
 /** Register an editor component for a given editor type name. */
-export function registerEditor(name: string, component: ComponentType<FieldEditorProps>) {
+export function registerEditor(
+  name: string,
+  component: ComponentType<FieldEditorProps>,
+) {
   editorRegistry.set(name, component);
 }
 
 /** Register a display component for a given display type name. */
-export function registerDisplay(name: string, component: ComponentType<FieldDisplayProps>) {
+export function registerDisplay(
+  name: string,
+  component: ComponentType<FieldDisplayProps>,
+) {
   displayRegistry.set(name, component);
 }
 
@@ -84,7 +90,16 @@ export interface FieldProps {
  * Subscribes to its specific field value via useFieldValue — re-renders
  * only when this field changes. Resolves editor/display from registries.
  */
-export function Field({ fieldDef, entityType, entityId, mode, editing, onEdit, onDone, onCancel }: FieldProps) {
+export function Field({
+  fieldDef,
+  entityType,
+  entityId,
+  mode,
+  editing,
+  onEdit,
+  onDone,
+  onCancel,
+}: FieldProps) {
   const { getEntity } = useEntityStore();
   const { updateField } = useFieldUpdate();
 
@@ -97,7 +112,9 @@ export function Field({ fieldDef, entityType, entityId, mode, editing, onEdit, o
   /** Editor commits a value → Field persists and signals done. */
   const handleCommit = useCallback(
     (newValue: unknown) => {
-      updateField(entityType, entityId, fieldDef.name, newValue).catch(() => {});
+      updateField(entityType, entityId, fieldDef.name, newValue).catch(
+        () => {},
+      );
       onDone?.();
     },
     [updateField, entityType, entityId, fieldDef.name, onDone],
@@ -110,11 +127,28 @@ export function Field({ fieldDef, entityType, entityId, mode, editing, onEdit, o
   if (editing) {
     const Editor = editorRegistry.get(fieldDef.editor ?? "");
     if (!Editor) return null;
-    return <Editor field={fieldDef} value={value} entity={entity} mode={mode} onCommit={handleCommit} onCancel={handleCancel} />;
+    return (
+      <Editor
+        field={fieldDef}
+        value={value}
+        entity={entity}
+        mode={mode}
+        onCommit={handleCommit}
+        onCancel={handleCancel}
+      />
+    );
   }
 
   const Display = displayRegistry.get(fieldDef.display ?? "text");
   if (!Display) return null;
+
+  const editable = fieldDef.editor && fieldDef.editor !== "none";
+
+  if (!editable) {
+    return (
+      <Display field={fieldDef} value={value} entity={entity} mode={mode} />
+    );
+  }
 
   return (
     <div className="text-sm cursor-text min-h-[1.25rem]" onClick={onEdit}>
