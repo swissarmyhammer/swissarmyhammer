@@ -146,6 +146,11 @@
   box-shadow: 0 1px 2px 0 color-mix(in oklch, var(--primary) 50%, transparent);
 }
 
+/* Entity card focus — shift bar right to align with field icons, past the grip handle */
+.entity-card-focus[data-focused]::before {
+  left: 1.75rem;
+}
+
 /* CM6 autocomplete — prevent long completions from overflowing the viewport */
 .cm-tooltip.cm-tooltip-autocomplete > ul > li {
   overflow: hidden;

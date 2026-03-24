@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: todo
-position_ordinal: c680
+position_ordinal: '80'
 title: 'App.tsx: add loading indicator during board load/switch'
 ---
 ## What

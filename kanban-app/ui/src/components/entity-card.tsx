@@ -78,7 +78,11 @@ export const EntityCard = memo(
     const clearEditing = useCallback(() => setEditingField(null), []);
 
     return (
-      <FocusScope moniker={entityMoniker} commands={commands}>
+      <FocusScope
+        moniker={entityMoniker}
+        commands={commands}
+        className="entity-card-focus"
+      >
         <div
           ref={ref}
           style={style}
