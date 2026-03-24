@@ -46,9 +46,16 @@ export function InspectorFocusBridge({ entity }: InspectorFocusBridgeProps) {
         execute: () => navRef.current?.enterEdit(),
       },
       {
-        id: "inspector.escape",
+        id: "inspector.editEnter",
+        name: "Edit Field (Enter)",
+        keys: { vim: "Enter" },
+        execute: () => navRef.current?.enterEdit(),
+      },
+      {
+        id: "inspector.exitEdit",
         name: "Exit Edit",
-        keys: { vim: "Escape", cua: "Escape" },
+        // No keys — field editors handle Escape internally via onCancel.
+        // Escape falls through to app.dismiss which closes the panel.
         execute: () => {
           if (navRef.current?.mode === "edit") navRef.current.exitEdit();
         },
