@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: c480
+position_column: done
+position_ordinal: ffffffffffffa780
 title: 'Fix: board card fields start in vim insert mode instead of normal mode'
 ---
 ## What

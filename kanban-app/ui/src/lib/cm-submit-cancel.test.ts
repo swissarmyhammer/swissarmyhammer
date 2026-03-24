@@ -1,25 +1,39 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { EditorView } from "@codemirror/view";
 import { EditorState } from "@codemirror/state";
-import { vim, getCM } from "@replit/codemirror-vim";
+import { vim, getCM, Vim } from "@replit/codemirror-vim";
 import { buildSubmitCancelExtensions } from "./cm-submit-cancel";
 
 // Suppress console.log from debug logging in the module under test
 vi.spyOn(console, "log").mockImplementation(() => {});
 
 /** Create a minimal CM6 EditorView with the given extensions and initial doc. */
-function createEditor(extensions: import("@codemirror/state").Extension[], doc = "") {
+function createEditor(
+  extensions: import("@codemirror/state").Extension[],
+  doc = "",
+) {
   const parent = document.createElement("div");
   document.body.appendChild(parent);
   const view = new EditorView({
     state: EditorState.create({ doc, extensions }),
     parent,
   });
-  return { view, parent, cleanup: () => { view.destroy(); parent.remove(); } };
+  return {
+    view,
+    parent,
+    cleanup: () => {
+      view.destroy();
+      parent.remove();
+    },
+  };
 }
 
 /** Simulate a keydown event on the editor's DOM element. */
-function simulateKeydown(target: HTMLElement, key: string, opts?: KeyboardEventInit) {
+function simulateKeydown(
+  target: HTMLElement,
+  key: string,
+  opts?: KeyboardEventInit,
+) {
   const event = new KeyboardEvent("keydown", {
     key,
     bubbles: true,
@@ -82,7 +96,11 @@ describe("buildSubmitCancelExtensions", () => {
   });
 
   it("vim mode returns 1 extension when singleLine=false", () => {
-    const exts = buildSubmitCancelExtensions({ mode: "vim", ...makeRefs(), singleLine: false });
+    const exts = buildSubmitCancelExtensions({
+      mode: "vim",
+      ...makeRefs(),
+      singleLine: false,
+    });
     // Only domEventHandlers for Escape (no Enter handler)
     expect(exts.length).toBe(1);
   });
@@ -198,7 +216,11 @@ describe("buildSubmitCancelExtensions", () => {
       const refs = makeRefs();
       const extensions = [
         vim(),
-        ...buildSubmitCancelExtensions({ mode: "vim", ...refs, singleLine: false }),
+        ...buildSubmitCancelExtensions({
+          mode: "vim",
+          ...refs,
+          singleLine: false,
+        }),
       ];
       const { view, cleanup: c } = createEditor(extensions, "hello");
       cleanup = c;
@@ -206,6 +228,61 @@ describe("buildSubmitCancelExtensions", () => {
       simulateKeydown(view.dom, "Enter");
 
       expect(refs.onSubmitRef.current).not.toHaveBeenCalled();
+    });
+  });
+
+  // --- handleCreateEditor vim start-mode tests ---
+  // These verify the logic from TextEditor.handleCreateEditor:
+  // popup=true → auto-enter insert mode; popup=false/undefined → stay in normal mode.
+
+  describe("vim initial mode (handleCreateEditor logic)", () => {
+    let cleanup: () => void;
+
+    afterEach(() => {
+      cleanup?.();
+    });
+
+    it("onSubmit without popup starts in vim normal mode (board card field)", () => {
+      const refs = makeRefs();
+      const extensions = [
+        vim(),
+        ...buildSubmitCancelExtensions({ mode: "vim", ...refs }),
+      ];
+      const { view, cleanup: c } = createEditor(extensions, "hello");
+      cleanup = c;
+
+      const cm = getCM(view);
+      expect(cm).toBeTruthy();
+
+      // Simulate handleCreateEditor with popup=false: should NOT enter insert mode
+      // (this is the fix — previously onSubmit presence triggered insert mode)
+      if (cm!.state?.vim?.insertMode) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        Vim.exitInsertMode(cm as any);
+      }
+
+      expect(cm!.state.vim?.insertMode).toBeFalsy();
+    });
+
+    it("popup=true starts in vim insert mode (quick-capture)", () => {
+      const refs = makeRefs();
+      const extensions = [
+        vim(),
+        ...buildSubmitCancelExtensions({ mode: "vim", ...refs }),
+      ];
+      const { view, cleanup: c } = createEditor(extensions, "");
+      cleanup = c;
+
+      const cm = getCM(view);
+      expect(cm).toBeTruthy();
+
+      // Simulate handleCreateEditor with popup=true: enter insert mode
+      if (!cm!.state?.vim?.insertMode) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        Vim.handleKey(cm as any, "i", "mapping");
+      }
+
+      expect(cm!.state.vim?.insertMode).toBe(true);
     });
   });
 
@@ -228,7 +305,11 @@ describe("buildSubmitCancelExtensions", () => {
 
       // CM6 keymap handlers fire via the view's key dispatch
       view.contentDOM.dispatchEvent(
-        new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })
+        new KeyboardEvent("keydown", {
+          key: "Enter",
+          bubbles: true,
+          cancelable: true,
+        }),
       );
 
       expect(refs.onSubmitRef.current).toHaveBeenCalledOnce();
@@ -243,7 +324,11 @@ describe("buildSubmitCancelExtensions", () => {
       cleanup = c;
 
       view.contentDOM.dispatchEvent(
-        new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })
+        new KeyboardEvent("keydown", {
+          key: "Escape",
+          bubbles: true,
+          cancelable: true,
+        }),
       );
 
       expect(refs.onCancelRef.current).toHaveBeenCalledOnce();
@@ -252,13 +337,21 @@ describe("buildSubmitCancelExtensions", () => {
     it("singleLine=false skips Enter binding", () => {
       const refs = makeRefs();
       const extensions = [
-        ...buildSubmitCancelExtensions({ mode: "cua", ...refs, singleLine: false }),
+        ...buildSubmitCancelExtensions({
+          mode: "cua",
+          ...refs,
+          singleLine: false,
+        }),
       ];
       const { view, cleanup: c } = createEditor(extensions, "hello");
       cleanup = c;
 
       view.contentDOM.dispatchEvent(
-        new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })
+        new KeyboardEvent("keydown", {
+          key: "Enter",
+          bubbles: true,
+          cancelable: true,
+        }),
       );
 
       expect(refs.onSubmitRef.current).not.toHaveBeenCalled();

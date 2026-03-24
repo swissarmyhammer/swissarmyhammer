@@ -153,7 +153,7 @@ export function TextEditor({
       const cm = getCM(view);
       if (!cm) return;
 
-      if (onSubmit) {
+      if (popup) {
         // Popup/quick-capture mode: auto-enter insert mode so user can type immediately.
         // Same rAF retry pattern as command-palette.tsx.
         let cancelled = false;
@@ -180,7 +180,7 @@ export function TextEditor({
         }
       }
     },
-    [mode, onSubmit],
+    [mode, popup],
   );
 
   const extensions = useMemo(
