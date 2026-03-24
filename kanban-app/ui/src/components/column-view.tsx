@@ -276,7 +276,7 @@ export function ColumnView({
         </div>
         <div
           ref={setContainerRef}
-          className={`flex-1 overflow-y-auto px-2 pt-1 pb-2 space-y-1.5 m-1 rounded-lg border-2 transition-colors duration-150 ${
+          className={`flex-1 overflow-y-auto [scrollbar-gutter:stable] px-2 pt-1 pb-2 space-y-1.5 m-1 rounded-lg border-2 transition-colors duration-150 ${
             showDashes
               ? "border-dashed border-primary/60"
               : "border-transparent"
