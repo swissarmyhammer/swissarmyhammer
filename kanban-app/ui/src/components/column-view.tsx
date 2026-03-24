@@ -67,13 +67,6 @@ export function ColumnView({
   const containerRef = useRef<HTMLDivElement>(null);
   const [localInsert, setLocalInsert] = useState<number | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
-  /**
-   * Timeout-based cleanup: dragover fires continuously (~60fps) while a drag
-   * is over us. If it stops for 150ms, we know the cursor left. This is far
-   * more reliable than dragenter/dragleave counters which break with nested
-   * child elements.
-   */
-  const dragOverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const insertIndex = insertAtIndex ?? localInsert;
   const showDashes = isDragOver || isDragTargetProp;
@@ -105,33 +98,36 @@ export function ColumnView({
         onDragEnter?.(column.id);
       }
 
-      // Reset the cleanup timer on every dragover tick
-      if (dragOverTimerRef.current) clearTimeout(dragOverTimerRef.current);
-      dragOverTimerRef.current = setTimeout(() => {
-        clearDragState();
-        onDragLeave?.(column.id);
-      }, 150);
-
       if (containerRef.current) {
         const idx = computeInsertIndex(containerRef.current, e.clientY);
         setLocalInsert(idx);
         onDragOverProp?.(column.id, idx);
       }
     },
-    [
-      column.id,
-      isDragOver,
-      onDragOverProp,
-      onDragEnter,
-      onDragLeave,
-      clearDragState,
-    ],
+    [column.id, isDragOver, onDragOverProp, onDragEnter],
+  );
+
+  /** Clear drag visuals when the cursor leaves this column's container. */
+  const handleDragLeave = useCallback(
+    (e: React.DragEvent) => {
+      // Ignore spurious leave events from entering child elements —
+      // only clear when the cursor actually leaves the container.
+      if (
+        containerRef.current &&
+        e.relatedTarget instanceof Node &&
+        containerRef.current.contains(e.relatedTarget)
+      ) {
+        return;
+      }
+      clearDragState();
+      onDragLeave?.(column.id);
+    },
+    [column.id, onDragLeave, clearDragState],
   );
 
   const handleDrop = useCallback(
     (e: React.DragEvent) => {
       e.preventDefault();
-      if (dragOverTimerRef.current) clearTimeout(dragOverTimerRef.current);
       clearDragState();
       const taskData = e.dataTransfer.getData(
         "application/x-swissarmyhammer-task",
@@ -164,7 +160,9 @@ export function ColumnView({
               onCancel={() => setEditingName(false)}
             />
           ) : (
-            <span className="text-sm font-semibold text-foreground">{getStr(column, "name")}</span>
+            <span className="text-sm font-semibold text-foreground">
+              {getStr(column, "name")}
+            </span>
           )}
           <Badge variant="secondary">{tasks.length}</Badge>
           <div className="flex-1" />
@@ -187,6 +185,7 @@ export function ColumnView({
               : "border-transparent"
           }`}
           onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
           onDrop={handleDrop}
         >
           {tasks.length === 0 && insertIndex == null ? (
