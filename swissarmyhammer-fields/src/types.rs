@@ -55,8 +55,14 @@ pub enum FieldType {
         multiple: bool,
     },
     /// Read-only derived value -- no stored triple.
+    ///
+    /// `depends_on` declares which entity types this aggregate depends on.
+    /// When an entity of a listed type changes, the owning entity's computed
+    /// field is recomputed and an `entity-field-changed` event is emitted.
     Computed {
         derive: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        depends_on: Vec<String>,
     },
 }
 
@@ -85,6 +91,8 @@ pub enum Display {
     ColorSwatch,
     Number,
     Text,
+    Progress,
+    ProgressRing,
 }
 
 /// How a field sorts.
@@ -287,6 +295,7 @@ mod tests {
     fn field_type_computed_yaml_round_trip() {
         let ft = FieldType::Computed {
             derive: "parse-body-tags".into(),
+            depends_on: vec![],
         };
         let yaml = serde_yaml_ng::to_string(&ft).unwrap();
         let parsed: FieldType = serde_yaml_ng::from_str(&yaml).unwrap();
@@ -473,6 +482,7 @@ mod tests {
             description: None,
             type_: FieldType::Computed {
                 derive: "parse-body-tags".into(),
+                depends_on: vec![],
             },
             default: None,
             editor: None,
@@ -595,7 +605,7 @@ display: badge-list
         assert_eq!(field.name, "tags");
         assert_eq!(field.editor, Some(Editor::None));
         assert_eq!(field.display, Some(Display::BadgeList));
-        if let FieldType::Computed { ref derive } = field.type_ {
+        if let FieldType::Computed { ref derive, .. } = field.type_ {
             assert_eq!(derive, "parse-body-tags");
         } else {
             panic!("expected Computed type");

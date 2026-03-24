@@ -1181,6 +1181,10 @@ async fn flush_and_emit_for_handle(app: &AppHandle, handle: &BoardHandle) {
                 crate::watcher::WatchEvent::EntityRemoved { .. } => {}
             }
         }
+
+        // Cascade: recompute aggregate fields that depend on changed entity types
+        let cascade = cascade_aggregate_events(ectx, &events).await;
+        events.extend(cascade);
     }
     {
         let board_path_str = kanban_root.display().to_string();
@@ -1199,6 +1203,65 @@ async fn flush_and_emit_for_handle(app: &AppHandle, handle: &BoardHandle) {
             let _ = app.emit(event_name, &wrapped);
         }
     }
+}
+
+/// Check if any aggregate computed fields depend on the changed entity types,
+/// and if so, recompute them and produce additional `entity-field-changed` events.
+///
+/// Reads `depends_on` from field definitions — no hardcoded logic per command.
+async fn cascade_aggregate_events(
+    ectx: &swissarmyhammer_entity::EntityContext,
+    primary_events: &[crate::watcher::WatchEvent],
+) -> Vec<crate::watcher::WatchEvent> {
+    use std::collections::HashSet;
+
+    // Collect entity types that changed
+    let changed_types: HashSet<&str> = primary_events
+        .iter()
+        .filter_map(|evt| match evt {
+            crate::watcher::WatchEvent::EntityCreated { entity_type, .. }
+            | crate::watcher::WatchEvent::EntityFieldChanged { entity_type, .. }
+            | crate::watcher::WatchEvent::EntityRemoved { entity_type, .. } => {
+                Some(entity_type.as_str())
+            }
+        })
+        .collect();
+
+    if changed_types.is_empty() {
+        return vec![];
+    }
+
+    let fields_ctx = ectx.fields();
+    let mut cascade_events = Vec::new();
+
+    // Find entity types with aggregate fields depending on the changed types
+    let mut dependent_types: HashSet<&str> = HashSet::new();
+    for trigger_type in &changed_types {
+        for dep_type in fields_ctx.entity_types_depending_on(trigger_type) {
+            dependent_types.insert(dep_type);
+        }
+    }
+
+    // Re-read dependent entities to trigger recomputation
+    for entity_type in dependent_types {
+        if let Ok(entities) = ectx.list(entity_type).await {
+            for entity in entities {
+                let all_fields: std::collections::HashMap<String, serde_json::Value> = entity
+                    .fields
+                    .into_iter()
+                    .map(|(k, v)| (k.to_string(), v))
+                    .collect();
+                cascade_events.push(crate::watcher::WatchEvent::EntityFieldChanged {
+                    entity_type: entity_type.to_string(),
+                    id: entity.id.to_string(),
+                    changes: vec![],
+                    fields: Some(all_fields),
+                });
+            }
+        }
+    }
+
+    cascade_events
 }
 
 /// A single item in a generic context menu.

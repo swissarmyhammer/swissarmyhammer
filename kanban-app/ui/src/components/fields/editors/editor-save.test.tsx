@@ -174,7 +174,7 @@ const TEST_ENTITY: Entity = {
     tags: ["bug"],
     assignees: ["actor-1"],
     depends_on: [],
-    progress: 0.5,
+    progress: { total: 2, completed: 1, percent: 50 },
     position_column: "todo",
     position_swimlane: "default",
     position_ordinal: "ffff8000",

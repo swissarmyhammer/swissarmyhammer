@@ -101,7 +101,7 @@ impl ComputeEngine {
         entity_query: Option<&std::sync::Arc<EntityQueryFn>>,
     ) -> Result<serde_json::Value> {
         match &field.type_ {
-            FieldType::Computed { derive } => {
+            FieldType::Computed { derive, .. } => {
                 // Try simple derivation first
                 if let Some(f) = self.derivations.get(derive.as_str()) {
                     return Ok(f(entity_fields).await);
@@ -179,6 +179,7 @@ mod tests {
             description: None,
             type_: FieldType::Computed {
                 derive: derive.to_string(),
+                depends_on: vec![],
             },
             default: None,
             editor: None,

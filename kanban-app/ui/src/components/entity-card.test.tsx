@@ -37,7 +37,7 @@ const TASK_SCHEMA = {
       name: "progress",
       type: { kind: "computed", derive: "parse-body-progress" },
       editor: "none",
-      display: "number",
+      display: "progress",
       section: "header",
     },
     {

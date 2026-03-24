@@ -14,6 +14,8 @@ use std::path::{Path, PathBuf};
 use tokio::fs;
 use tracing::debug;
 
+use crate::types::FieldType;
+
 use crate::error::{FieldsError, Result};
 use crate::id_types::{EntityTypeName, FieldDefId, FieldName};
 use crate::types::{EntityDef, FieldDef};
@@ -282,6 +284,26 @@ impl FieldsContext {
             .fields
             .iter()
             .filter_map(|name| self.get_field_by_name(name.as_str()))
+            .collect()
+    }
+
+    /// Find entity types that have aggregate computed fields depending on the given entity type.
+    ///
+    /// Scans all entity definitions for computed fields with `depends_on` containing `trigger_type`.
+    /// Returns a list of entity type names whose aggregates need recomputation.
+    pub fn entity_types_depending_on(&self, trigger_type: &str) -> Vec<&str> {
+        self.all_entities()
+            .iter()
+            .filter(|entity_def| {
+                self.fields_for_entity(&entity_def.name).iter().any(|fd| {
+                    if let FieldType::Computed { depends_on, .. } = &fd.type_ {
+                        depends_on.iter().any(|dep| dep == trigger_type)
+                    } else {
+                        false
+                    }
+                })
+            })
+            .map(|e| e.name.as_str())
             .collect()
     }
 

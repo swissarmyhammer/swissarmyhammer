@@ -479,6 +479,7 @@ mod tests {
             description: None,
             type_: swissarmyhammer_fields::FieldType::Computed {
                 derive: "parse-body-tags".to_string(),
+                depends_on: vec![],
             },
             default: None,
             editor: None,
@@ -511,6 +512,7 @@ mod tests {
             description: None,
             type_: swissarmyhammer_fields::FieldType::Computed {
                 derive: "parse-body-tags".to_string(),
+                depends_on: vec![],
             },
             default: None,
             editor: None,
@@ -545,6 +547,7 @@ mod tests {
             description: None,
             type_: swissarmyhammer_fields::FieldType::Computed {
                 derive: "parse-body-progress".to_string(),
+                depends_on: vec![],
             },
             default: None,
             editor: None,
@@ -577,7 +580,7 @@ mod tests {
 
         for (filename, yaml) in &defs {
             let field: swissarmyhammer_fields::FieldDef = serde_yaml_ng::from_str(yaml).unwrap();
-            if let swissarmyhammer_fields::FieldType::Computed { derive } = &field.type_ {
+            if let swissarmyhammer_fields::FieldType::Computed { derive, .. } = &field.type_ {
                 assert!(
                     engine.has(derive),
                     "Builtin computed field '{}' (file: {}) references derive '{}' which is not registered in kanban_compute_engine()",
@@ -596,6 +599,7 @@ mod tests {
             description: None,
             type_: swissarmyhammer_fields::FieldType::Computed {
                 derive: "parse-body-progress".to_string(),
+                depends_on: vec![],
             },
             default: None,
             editor: None,
