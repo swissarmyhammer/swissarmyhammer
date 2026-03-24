@@ -37,6 +37,8 @@ export interface FieldDisplayProps {
   value: unknown;
   entity?: Entity;
   mode: "compact" | "full";
+  /** Persist a value without exiting display mode (e.g. checkbox toggle). */
+  onCommit?: (value: unknown) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -121,6 +123,16 @@ export function Field({
     [updateField, entityType, entityId, fieldDef.name, onDone],
   );
 
+  /** Display-only commit — persists without exiting display mode (e.g. checkbox toggle). */
+  const handleDisplayCommit = useCallback(
+    (newValue: unknown) => {
+      updateField(entityType, entityId, fieldDef.name, newValue).catch(
+        () => {},
+      );
+    },
+    [updateField, entityType, entityId, fieldDef.name],
+  );
+
   const handleCancel = useCallback(() => {
     onCancel?.();
   }, [onCancel]);
@@ -147,13 +159,25 @@ export function Field({
 
   if (!editable) {
     return (
-      <Display field={fieldDef} value={value} entity={entity} mode={mode} />
+      <Display
+        field={fieldDef}
+        value={value}
+        entity={entity}
+        mode={mode}
+        onCommit={handleDisplayCommit}
+      />
     );
   }
 
   return (
     <div className="text-sm cursor-text min-h-[1.25rem]" onClick={onEdit}>
-      <Display field={fieldDef} value={value} entity={entity} mode={mode} />
+      <Display
+        field={fieldDef}
+        value={value}
+        entity={entity}
+        mode={mode}
+        onCommit={handleDisplayCommit}
+      />
     </div>
   );
 }

@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: 7f80
+position_column: done
+position_ordinal: ffffffffffffa280
 title: Fix markdown checkbox toggling in Field display mode
 ---
 ## What
