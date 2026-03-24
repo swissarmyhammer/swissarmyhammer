@@ -38,7 +38,12 @@ interface DataTableProps {
   grid: UseGridReturn;
   onCellClick?: (row: number, col: number) => void;
   onRowContextMenu?: (entity: Entity, e: React.MouseEvent) => void;
-  renderEditor?: (entity: Entity, field: FieldDef, onCommit: (value: unknown) => void, onCancel: () => void) => React.ReactNode;
+  renderEditor?: (
+    entity: Entity,
+    field: FieldDef,
+    onCommit: (value: unknown) => void,
+    onCancel: () => void,
+  ) => React.ReactNode;
   grouping?: string[];
   /** Called when the visible data row count changes (e.g. group collapse). */
   onVisibleRowCount?: (count: number) => void;
@@ -58,7 +63,18 @@ interface DataTableProps {
   rowEntityCommands?: (entity: Entity) => CommandDef[];
 }
 
-export function DataTable({ columns, rows, grid, onCellClick, onRowContextMenu, renderEditor, grouping: groupingProp, onVisibleRowCount, showRowSelector = true, rowEntityCommands }: DataTableProps) {
+export function DataTable({
+  columns,
+  rows,
+  grid,
+  onCellClick,
+  onRowContextMenu,
+  renderEditor,
+  grouping: groupingProp,
+  onVisibleRowCount,
+  showRowSelector = true,
+  rowEntityCommands,
+}: DataTableProps) {
   const tableContainerRef = useRef<HTMLDivElement>(null);
   const cursorRef = useRef<HTMLTableCellElement>(null);
   // Grid-level context menu handler — used when rowEntityCommands is not set.
@@ -178,7 +194,10 @@ export function DataTable({ columns, rows, grid, onCellClick, onRowContextMenu, 
       <Table className="border-collapse text-sm">
         <TableHeader className="sticky top-0 z-[1] bg-muted/80 backdrop-blur-sm">
           {table.getHeaderGroups().map((headerGroup) => (
-            <TableRow key={headerGroup.id} className="border-b border-border hover:bg-transparent">
+            <TableRow
+              key={headerGroup.id}
+              className="border-b border-border hover:bg-transparent"
+            >
               {showRowSelector && (
                 <TableHead
                   data-testid="row-selector-header"
@@ -196,7 +215,11 @@ export function DataTable({ columns, rows, grid, onCellClick, onRowContextMenu, 
                       "text-left px-3 py-1.5 text-xs font-medium text-muted-foreground uppercase tracking-wide select-none cursor-pointer hover:bg-muted/60 transition-colors h-auto",
                       ci === 0 && "pl-4",
                     )}
-                    style={header.column.getSize() ? { width: header.column.getSize() } : undefined}
+                    style={
+                      header.column.getSize()
+                        ? { width: header.column.getSize() }
+                        : undefined
+                    }
                     onClick={header.column.getToggleSortingHandler()}
                     onContextMenu={(e) => {
                       e.preventDefault();
@@ -204,8 +227,13 @@ export function DataTable({ columns, rows, grid, onCellClick, onRowContextMenu, 
                     }}
                   >
                     <span className="flex items-center gap-1">
-                      {isGrouped && <ChevronRight className="h-3 w-3 text-primary" />}
-                      {flexRender(header.column.columnDef.header, header.getContext())}
+                      {isGrouped && (
+                        <ChevronRight className="h-3 w-3 text-primary" />
+                      )}
+                      {flexRender(
+                        header.column.columnDef.header,
+                        header.getContext(),
+                      )}
                       {isSorted === "asc" && <ArrowUp className="h-3 w-3" />}
                       {isSorted === "desc" && <ArrowDown className="h-3 w-3" />}
                     </span>
@@ -220,21 +248,29 @@ export function DataTable({ columns, rows, grid, onCellClick, onRowContextMenu, 
             // Group header rows — not part of grid cursor navigation
             if (row.getIsGrouped()) {
               // colSpan covers all field columns plus the selector column when visible
-              const groupColSpan = showRowSelector ? columns.length + 1 : columns.length;
+              const groupColSpan = showRowSelector
+                ? columns.length + 1
+                : columns.length;
               return (
                 <TableRow
                   key={row.id}
                   className="border-b border-border/50 bg-muted/20 hover:bg-muted/40 cursor-pointer"
                   onClick={() => row.toggleExpanded()}
                 >
-                  <TableCell colSpan={groupColSpan} className="px-4 py-1.5 font-medium text-sm">
+                  <TableCell
+                    colSpan={groupColSpan}
+                    className="px-4 py-1.5 font-medium text-sm"
+                  >
                     <span className="flex items-center gap-1.5">
-                      {row.getIsExpanded()
-                        ? <ChevronDown className="h-3.5 w-3.5" />
-                        : <ChevronRight className="h-3.5 w-3.5" />
-                      }
+                      {row.getIsExpanded() ? (
+                        <ChevronDown className="h-3.5 w-3.5" />
+                      ) : (
+                        <ChevronRight className="h-3.5 w-3.5" />
+                      )}
                       {String(row.groupingValue ?? "—")}
-                      <span className="text-muted-foreground text-xs">({row.subRows.length})</span>
+                      <span className="text-muted-foreground text-xs">
+                        ({row.subRows.length})
+                      </span>
                     </span>
                   </TableCell>
                 </TableRow>
@@ -249,7 +285,9 @@ export function DataTable({ columns, rows, grid, onCellClick, onRowContextMenu, 
                 key={row.id}
                 className={cn(
                   "border-b border-border/50 transition-colors",
-                  di === grid.cursor.row && grid.mode !== "edit" && "bg-accent/30",
+                  di === grid.cursor.row &&
+                    grid.mode !== "edit" &&
+                    "bg-accent/30",
                 )}
                 onContextMenu={(e) => {
                   grid.setCursor(di, grid.cursor.col);
@@ -257,8 +295,8 @@ export function DataTable({ columns, rows, grid, onCellClick, onRowContextMenu, 
                   contextMenuHandler(e);
                 }}
               >
-                {showRowSelector && (
-                  rowEntityCommands ? (
+                {showRowSelector &&
+                  (rowEntityCommands ? (
                     <RowSelectorWithScope
                       entity={entity}
                       di={di}
@@ -286,12 +324,13 @@ export function DataTable({ columns, rows, grid, onCellClick, onRowContextMenu, 
                     >
                       {di + 1}
                     </TableCell>
-                  )
-                )}
+                  ))}
                 {columns.map((col, ci) => {
-                  const isCursor = di === grid.cursor.row && ci === grid.cursor.col;
+                  const isCursor =
+                    di === grid.cursor.row && ci === grid.cursor.col;
                   const isSel = isSelected(di, ci);
-                  const isEditing = isCursor && grid.mode === "edit" && renderEditor;
+                  const isEditing =
+                    isCursor && grid.mode === "edit" && renderEditor;
                   return (
                     <TableCell
                       key={col.field.id}
@@ -301,7 +340,11 @@ export function DataTable({ columns, rows, grid, onCellClick, onRowContextMenu, 
                         ci === 0 && "pl-4",
                         isCursor && "ring-2 ring-primary ring-inset",
                         isSel && !isCursor && "bg-primary/10",
-                        isEditing && col.field.type.kind !== "color" && col.field.type.kind !== "date" && "p-0",
+                        isEditing &&
+                          col.field.editor !== "color-palette" &&
+                          col.field.editor !== "select" &&
+                          col.field.editor !== "multi-select" &&
+                          "p-0",
                       )}
                       onClick={() => handleCellClick(di, ci)}
                       onDoubleClick={() => {
@@ -431,18 +474,37 @@ function RowSelectorCell({
   );
 }
 
-/** Compare two field values for sorting. */
+/**
+ * Resolve the effective sort strategy for a field.
+ *
+ * Uses the explicit `field.sort` when present, otherwise infers from
+ * `field.type.kind` — mirroring the Rust backend's `effective_sort()`.
+ */
+function effectiveSort(field: FieldDef): string {
+  if (field.sort) return field.sort;
+  switch (field.type.kind) {
+    case "date":
+      return "datetime";
+    case "number":
+    case "integer":
+      return "numeric";
+    case "select":
+    case "multi-select":
+      return "option-order";
+    default:
+      return "lexical";
+  }
+}
+
+/** Compare two field values for sorting, driven by `field.sort` metadata. */
 function compareValues(a: unknown, b: unknown, field: FieldDef): number {
   if (a == null && b == null) return 0;
   if (a == null) return 1;
   if (b == null) return -1;
 
-  const kind = field.type.kind;
-  if (kind === "number" || kind === "integer") {
+  const sort = effectiveSort(field);
+  if (sort === "numeric") {
     return (Number(a) || 0) - (Number(b) || 0);
-  }
-  if (kind === "date") {
-    return String(a).localeCompare(String(b));
   }
   if (Array.isArray(a) && Array.isArray(b)) {
     return a.length - b.length;
