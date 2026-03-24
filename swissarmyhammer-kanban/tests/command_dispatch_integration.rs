@@ -857,3 +857,96 @@ async fn reorder_move_to_middle() {
         ],
     );
 }
+
+/// The YAML registry must mark task.move as undoable — this is the gate for
+/// flush_and_emit_for_handle to run and emit entity-field-changed events.
+#[tokio::test]
+async fn task_move_is_undoable_in_registry() {
+    let registry = CommandsRegistry::from_yaml_sources(&builtin_yaml_sources());
+    let cmd_def = registry.get("task.move");
+    assert!(cmd_def.is_some(), "task.move must exist in the YAML registry");
+    assert!(
+        cmd_def.unwrap().undoable,
+        "task.move must be marked undoable so flush_and_emit fires events"
+    );
+}
+
+/// After task.move, the task's .md file on disk must have the updated position_ordinal.
+/// This is the precondition for flush_and_emit to detect the change and fire events.
+#[tokio::test]
+async fn task_move_writes_new_ordinal_to_disk() {
+    let engine = TestEngine::new().await;
+    let ids = add_tasks(&engine, &["A", "B", "C", "D"]).await;
+
+    // Read C's ordinal before move
+    let task_dir = engine.kanban.root().join("tasks");
+    let c_md_path = task_dir.join(format!("{}.md", &ids[2]));
+    let before_content = std::fs::read_to_string(&c_md_path).expect("should read task C .md");
+    let before_ordinal = before_content
+        .lines()
+        .find(|l| l.starts_with("position_ordinal:"))
+        .expect("should have position_ordinal")
+        .to_string();
+
+    // Move C before B
+    move_before(&engine, &ids[2], &ids[1]).await;
+
+    // Read C's ordinal after move
+    let after_content = std::fs::read_to_string(&c_md_path).expect("should read task C .md after move");
+    let after_ordinal = after_content
+        .lines()
+        .find(|l| l.starts_with("position_ordinal:"))
+        .expect("should have position_ordinal after move")
+        .to_string();
+
+    assert_ne!(
+        before_ordinal, after_ordinal,
+        "position_ordinal in .md file must change after task.move; before={}, after={}",
+        before_ordinal, after_ordinal
+    );
+}
+
+/// Reproduces the exact bug: 4 cards [A, B, C, D], drag C (3rd) to position 2 (before B).
+/// This is the "move 3rd card to 2nd position" scenario that fails in the UI.
+#[tokio::test]
+async fn reorder_move_third_before_second() {
+    let engine = TestEngine::new().await;
+    let ids = add_tasks(&engine, &["A", "B", "C", "D"]).await;
+
+    // Verify initial order: [A, B, C, D]
+    let order = todo_order(&engine).await;
+    assert_eq!(order, vec![ids[0].clone(), ids[1].clone(), ids[2].clone(), ids[3].clone()]);
+
+    // Move C before B → expected [A, C, B, D]
+    move_before(&engine, &ids[2], &ids[1]).await;
+    let order = todo_order(&engine).await;
+    assert_eq!(
+        order,
+        vec![ids[0].clone(), ids[2].clone(), ids[1].clone(), ids[3].clone()],
+        "C should be before B after move_before(C, B)"
+    );
+}
+
+/// Verify repeated same-column reorder: move card back and forth.
+#[tokio::test]
+async fn reorder_move_third_before_second_then_back() {
+    let engine = TestEngine::new().await;
+    let ids = add_tasks(&engine, &["A", "B", "C", "D"]).await;
+
+    // Move C before B → [A, C, B, D]
+    move_before(&engine, &ids[2], &ids[1]).await;
+    let order = todo_order(&engine).await;
+    assert_eq!(
+        order,
+        vec![ids[0].clone(), ids[2].clone(), ids[1].clone(), ids[3].clone()],
+    );
+
+    // Move C back after B → [A, B, C, D] (original order)
+    move_after(&engine, &ids[2], &ids[1]).await;
+    let order = todo_order(&engine).await;
+    assert_eq!(
+        order,
+        vec![ids[0].clone(), ids[1].clone(), ids[2].clone(), ids[3].clone()],
+        "should return to original order after moving C back after B"
+    );
+}

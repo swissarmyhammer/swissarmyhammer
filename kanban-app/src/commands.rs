@@ -1069,10 +1069,15 @@ pub(crate) async fn dispatch_command_internal(
     // For undoable commands (data mutations), scan entity files for changes
     // and emit granular entity-level events. This also updates the watcher
     // cache so the file watcher won't double-fire for our own writes.
+    tracing::info!(cmd = %cmd, undoable = undoable, has_handle = active_handle.is_some(), "flush gate");
     if undoable {
         if let Some(ref handle) = active_handle {
             flush_and_emit_for_handle(app, handle).await;
+        } else {
+            tracing::info!(cmd = %cmd, "undoable but no active_handle — events NOT emitted");
         }
+    } else {
+        tracing::info!(cmd = %cmd, "non-undoable — skipping flush_and_emit");
     }
 
     // Wrap result with undoable info
@@ -1146,6 +1151,8 @@ pub async fn list_available_commands(
 async fn flush_and_emit_for_handle(app: &AppHandle, handle: &BoardHandle) {
     let kanban_root = handle.ctx.root().to_path_buf();
     let mut events = crate::watcher::flush_and_emit(&kanban_root, &handle.entity_cache);
+    tracing::info!(event_count = events.len(), path = %kanban_root.display(), "flush_and_emit result");
+    tracing::debug!(event_count = events.len(), path = %kanban_root.display(), "flush_and_emit_for_handle");
     if let Ok(ectx) = handle.ctx.entity_context().await {
         for evt in &mut events {
             match evt {
