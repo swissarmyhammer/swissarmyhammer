@@ -20,6 +20,7 @@ import { AppShell } from "@/components/app-shell";
 import { NavBar } from "@/components/nav-bar";
 import { LeftNav } from "@/components/left-nav";
 import { ModeIndicator } from "@/components/mode-indicator";
+import { Loader2 } from "lucide-react";
 import { BoardView } from "@/components/board-view";
 import { GridView } from "@/components/grid-view";
 import { InspectorFocusBridge } from "@/components/inspector-focus-bridge";
@@ -114,6 +115,7 @@ function parsePanelStack(result: {
 
 function App() {
   const [board, setBoard] = useState<BoardData | null>(null);
+  const [loading, setLoading] = useState(true);
   /** All list-type entities keyed by type (task, tag, actor, ...). */
   const [entitiesByType, setEntitiesByType] = useState<
     Record<string, Entity[]>
@@ -204,6 +206,7 @@ function App() {
   // Intentional empty deps: reads activeBoardPathRef to avoid stale closure.
   // The ref is kept in sync with state inside the callback.
   const refresh = useCallback(async () => {
+    setLoading(true);
     const result = await refreshBoards(activeBoardPathRef.current);
     // Open boards always update — even if board data failed.
     setOpenBoards(result.openBoards);
@@ -230,6 +233,7 @@ function App() {
       setBoard(null);
       setEntitiesByType({});
       setActiveBoardPath(undefined);
+      setLoading(false);
       return;
     }
     // Update board data and entities atomically. If board data arrives
@@ -237,6 +241,7 @@ function App() {
     // from a previous board.
     setBoard(result.boardData);
     setEntitiesByType(result.entitiesByType ?? {});
+    setLoading(false);
   }, []);
 
   // Restore window state from backend on mount.
@@ -429,10 +434,12 @@ function App() {
           }).catch(() => {});
           setActiveBoardPath(newPath);
           activeBoardPathRef.current = newPath;
+          setLoading(true);
           const result = await refreshBoards(newPath);
           setOpenBoards(result.openBoards);
           setBoard(result.boardData);
           setEntitiesByType(result.entitiesByType ?? {});
+          setLoading(false);
         },
       ),
       // board-changed: structural change (open/close/switch). All windows
@@ -451,6 +458,7 @@ function App() {
           setBoard(null);
           setEntitiesByType({});
           setActiveBoardPath(undefined);
+          setLoading(false);
           return;
         }
 
@@ -459,9 +467,11 @@ function App() {
         const stillOpen =
           currentPath && boards.some((b) => b.path === currentPath);
         if (stillOpen) {
+          setLoading(true);
           const result = await refreshBoards(currentPath);
           setBoard(result.boardData);
           setEntitiesByType(result.entitiesByType ?? {});
+          setLoading(false);
           return;
         }
 
@@ -473,9 +483,11 @@ function App() {
           cmd: "file.switchBoard",
           args: { windowLabel: WINDOW_LABEL, path: fallback.path },
         }).catch(() => {});
+        setLoading(true);
         const result = await refreshBoards(fallback.path);
         setBoard(result.boardData);
         setEntitiesByType(result.entitiesByType ?? {});
+        setLoading(false);
       }),
     ];
     return () => {
@@ -575,6 +587,10 @@ function App() {
                                         );
                                       })}
                                     </>
+                                  ) : loading ? (
+                                    <main className="flex-1 flex items-center justify-center">
+                                      <Loader2 className="h-8 w-8 text-muted-foreground/50 animate-spin [animation-delay:200ms] [animation-fill-mode:backwards]" />
+                                    </main>
                                   ) : (
                                     <main className="flex-1 flex items-center justify-center">
                                       <div className="text-center space-y-3">
