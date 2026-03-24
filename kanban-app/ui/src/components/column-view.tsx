@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Inbox, Plus } from "lucide-react";
 import { Field } from "@/components/fields/field";
 import { DraggableTaskCard } from "@/components/sortable-task-card";
@@ -35,6 +35,11 @@ interface ColumnViewProps {
   containerRef?: (el: HTMLDivElement | null) => void;
 }
 
+/** Distance from container edge (px) that triggers auto-scroll during drag. */
+const SCROLL_ZONE = 40;
+/** Pixels per animation frame to scroll when in the edge zone. */
+const SCROLL_SPEED = 6;
+
 /** Compute the insert index by comparing dragover Y to card midpoints. */
 function computeInsertIndex(container: HTMLElement, clientY: number): number {
   const cards = container.querySelectorAll<HTMLElement>("[data-entity-card]");
@@ -67,6 +72,39 @@ export function ColumnView({
   const containerRef = useRef<HTMLDivElement>(null);
   const [localInsert, setLocalInsert] = useState<number | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
+  /** rAF handle for edge-scroll loop during drag. */
+  const scrollRafRef = useRef<number | null>(null);
+  /** Current scroll direction: -1 (up), 0 (none), 1 (down). */
+  const scrollDirRef = useRef(0);
+
+  /** Stop the auto-scroll loop. */
+  const stopAutoScroll = useCallback(() => {
+    scrollDirRef.current = 0;
+    if (scrollRafRef.current !== null) {
+      cancelAnimationFrame(scrollRafRef.current);
+      scrollRafRef.current = null;
+    }
+  }, []);
+
+  /** Start or update the auto-scroll loop for the given direction. */
+  const startAutoScroll = useCallback((dir: -1 | 1) => {
+    scrollDirRef.current = dir;
+    if (scrollRafRef.current !== null) return; // already running
+    const tick = () => {
+      if (scrollDirRef.current === 0 || !containerRef.current) {
+        scrollRafRef.current = null;
+        return;
+      }
+      containerRef.current.scrollBy({
+        top: scrollDirRef.current * SCROLL_SPEED,
+      });
+      scrollRafRef.current = requestAnimationFrame(tick);
+    };
+    scrollRafRef.current = requestAnimationFrame(tick);
+  }, []);
+
+  // Clean up rAF on unmount
+  useEffect(() => () => stopAutoScroll(), [stopAutoScroll]);
 
   const insertIndex = insertAtIndex ?? localInsert;
   const showDashes = isDragOver || isDragTargetProp;
@@ -102,9 +140,26 @@ export function ColumnView({
         const idx = computeInsertIndex(containerRef.current, e.clientY);
         setLocalInsert(idx);
         onDragOverProp?.(column.id, idx);
+
+        // Auto-scroll when cursor is near the container's top or bottom edge
+        const rect = containerRef.current.getBoundingClientRect();
+        if (e.clientY < rect.top + SCROLL_ZONE) {
+          startAutoScroll(-1);
+        } else if (e.clientY > rect.bottom - SCROLL_ZONE) {
+          startAutoScroll(1);
+        } else {
+          stopAutoScroll();
+        }
       }
     },
-    [column.id, isDragOver, onDragOverProp, onDragEnter],
+    [
+      column.id,
+      isDragOver,
+      onDragOverProp,
+      onDragEnter,
+      startAutoScroll,
+      stopAutoScroll,
+    ],
   );
 
   /** Clear drag visuals when the cursor leaves this column's container. */
@@ -119,15 +174,17 @@ export function ColumnView({
       ) {
         return;
       }
+      stopAutoScroll();
       clearDragState();
       onDragLeave?.(column.id);
     },
-    [column.id, onDragLeave, clearDragState],
+    [column.id, onDragLeave, clearDragState, stopAutoScroll],
   );
 
   const handleDrop = useCallback(
     (e: React.DragEvent) => {
       e.preventDefault();
+      stopAutoScroll();
       clearDragState();
       const taskData = e.dataTransfer.getData(
         "application/x-swissarmyhammer-task",
@@ -137,7 +194,7 @@ export function ColumnView({
         : tasks.length;
       onDropProp?.(column.id, taskData, idx);
     },
-    [column.id, tasks.length, onDropProp, clearDragState],
+    [column.id, tasks.length, onDropProp, clearDragState, stopAutoScroll],
   );
 
   return (
