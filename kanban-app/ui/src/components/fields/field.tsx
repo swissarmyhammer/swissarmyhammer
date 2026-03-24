@@ -14,6 +14,7 @@
 import { useCallback, type ComponentType } from "react";
 import { useEntityStore, useFieldValue } from "@/lib/entity-store-context";
 import { useFieldUpdate } from "@/lib/field-update-context";
+import { resolveEditor } from "@/components/fields/editors";
 import type { FieldDef, Entity } from "@/types/kanban";
 
 // ---------------------------------------------------------------------------
@@ -142,7 +143,7 @@ export function Field({
   const Display = displayRegistry.get(fieldDef.display ?? "text");
   if (!Display) return null;
 
-  const editable = fieldDef.editor && fieldDef.editor !== "none";
+  const editable = resolveEditor(fieldDef) !== "none";
 
   if (!editable) {
     return (

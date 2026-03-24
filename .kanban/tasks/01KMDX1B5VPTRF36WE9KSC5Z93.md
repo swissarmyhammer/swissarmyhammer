@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: '7e80'
+position_ordinal: ffffffffffff9f80
 title: 'entity-card: show field caption icons on card view fields'
 ---
 ## What
