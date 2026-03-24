@@ -234,4 +234,46 @@ mod tests {
 
         assert_eq!(result["description"], "New description");
     }
+
+    #[tokio::test]
+    async fn test_update_task_multiple_dependencies() {
+        let (_temp, ctx) = setup().await;
+
+        // Create three tasks — the third will depend on the first two.
+        let a = AddTask::new("Task A")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let b = AddTask::new("Task B")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let c = AddTask::new("Task C")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        let id_a = a["id"].as_str().unwrap();
+        let id_b = b["id"].as_str().unwrap();
+        let id_c = c["id"].as_str().unwrap();
+
+        // Set two dependencies on task C.
+        let result = UpdateTask::new(id_c)
+            .with_depends_on(vec![TaskId::from_string(id_a), TaskId::from_string(id_b)])
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        let deps = result["depends_on"]
+            .as_array()
+            .expect("depends_on should be an array");
+        assert_eq!(deps.len(), 2, "should have exactly 2 dependencies");
+        let dep_strs: Vec<&str> = deps.iter().filter_map(|v| v.as_str()).collect();
+        assert!(dep_strs.contains(&id_a), "should contain task A");
+        assert!(dep_strs.contains(&id_b), "should contain task B");
+    }
 }
