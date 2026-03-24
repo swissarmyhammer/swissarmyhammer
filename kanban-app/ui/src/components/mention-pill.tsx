@@ -22,6 +22,7 @@ import { useContextMenu } from "@/lib/context-menu";
 import { useEntityFocus } from "@/lib/entity-focus-context";
 import { useEntityStore } from "@/lib/entity-store-context";
 import { useEntityCommands } from "@/lib/entity-commands";
+import { useSchema } from "@/lib/schema-context";
 import { moniker } from "@/lib/moniker";
 import { slugify } from "@/lib/slugify";
 import type { CommandDef } from "@/lib/command-scope";
@@ -47,17 +48,20 @@ export function MentionPill({
   className,
 }: MentionPillProps) {
   const { getEntities } = useEntityStore();
+  const { mentionableTypes } = useSchema();
   const entities = getEntities(entityType);
 
-  // Find entity by matching slug against common display fields,
-  // falling back to slugified comparison for fields with spaces (e.g. task titles)
+  // Use the schema-declared display field for this entity type
+  const displayField =
+    mentionableTypes.find((mt) => mt.entityType === entityType)?.displayField ??
+    "name";
+
+  // Find entity by matching slug against the display field (with slugified fallback)
   const entity = entities.find((e) => {
-    for (const field of ["tag_name", "name", "title", "id"]) {
-      const val = getStr(e, field);
-      if (!val) continue;
-      if (val === slug || slugify(val) === slug) return true;
-    }
-    return false;
+    const val = getStr(e, displayField);
+    if (val && (val === slug || slugify(val) === slug)) return true;
+    // Fall back to ID match
+    return e.id === slug;
   });
 
   const color = entity ? getStr(entity, "color", "888888") : "888888";
@@ -67,10 +71,7 @@ export function MentionPill({
 
   // Resolve display name for tooltip — show full name when slug is abbreviated
   const displayName = entity
-    ? getStr(entity, "title") ||
-      getStr(entity, "name") ||
-      getStr(entity, "tag_name") ||
-      undefined
+    ? getStr(entity, displayField) || undefined
     : undefined;
   const tooltipText =
     displayName && displayName !== slug

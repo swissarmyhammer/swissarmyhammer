@@ -1,26 +1,55 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, fireEvent, act } from "@testing-library/react";
+import { render, fireEvent } from "@testing-library/react";
+import { readdirSync, readFileSync } from "fs";
+import { join } from "path";
+import yaml from "js-yaml";
+import type { MentionableType } from "@/lib/schema-context";
+import type { EntityCommand } from "@/types/kanban";
+
+// ---------------------------------------------------------------------------
+// Load entity definitions from the actual builtin YAML files.
+// Adding a new entity YAML with mention_prefix automatically covers it here.
+// ---------------------------------------------------------------------------
+
+const ENTITIES_DIR = join(
+  __dirname,
+  "../../../../swissarmyhammer-kanban/builtin/fields/entities",
+);
+
+interface EntityYaml {
+  name: string;
+  mention_prefix?: string;
+  mention_display_field?: string;
+  commands?: EntityCommand[];
+  fields?: string[];
+}
+
+const entityDefs: EntityYaml[] = readdirSync(ENTITIES_DIR)
+  .filter((f) => f.endsWith(".yaml"))
+  .map(
+    (f) => yaml.load(readFileSync(join(ENTITIES_DIR, f), "utf8")) as EntityYaml,
+  );
+
+/** Mentionable types derived from YAML — same logic as SchemaProvider. */
+const MENTIONABLE_TYPES: MentionableType[] = entityDefs
+  .filter((e) => e.mention_prefix && e.mention_display_field)
+  .map((e) => ({
+    entityType: e.name,
+    prefix: e.mention_prefix!,
+    displayField: e.mention_display_field!,
+  }));
+
+/** Commands by entity type, from YAML. */
+const commandsByType = new Map<string, EntityCommand[]>(
+  entityDefs.map((e) => [e.name, (e.commands ?? []) as EntityCommand[]]),
+);
+
+// ---------------------------------------------------------------------------
+// Mocks
+// ---------------------------------------------------------------------------
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-const TAG_SCHEMA = {
-  entity: {
-    name: "tag",
-    commands: [
-      {
-        id: "entity.inspect",
-        name: "Inspect {{entity.type}}",
-        context_menu: true,
-      },
-    ],
-  },
-  fields: [],
-};
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const mockInvoke = vi.fn((...args: any[]) => {
-  if (args[0] === "get_entity_schema") return Promise.resolve(TAG_SCHEMA);
-  return Promise.resolve("ok");
-});
+const mockInvoke = vi.fn((..._args: any[]) => Promise.resolve("ok"));
 
 vi.mock("@tauri-apps/api/core", () => ({
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -30,16 +59,33 @@ vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(() => Promise.resolve(() => {})),
 }));
 
-// Mock entity store to return test entities
 const mockGetEntities = vi.fn(() => mockTags);
 vi.mock("@/lib/entity-store-context", () => ({
   useEntityStore: () => ({ getEntities: mockGetEntities, getEntity: vi.fn() }),
 }));
 
+vi.mock("@/lib/schema-context", () => ({
+  useSchema: () => ({
+    getSchema: () => undefined,
+    getFieldDef: () => undefined,
+    getEntityCommands: (entityType: string) =>
+      commandsByType.get(entityType) ?? [],
+    mentionableTypes: MENTIONABLE_TYPES,
+    loading: false,
+  }),
+  useSchemaOptional: () => ({
+    getSchema: () => undefined,
+    getFieldDef: () => undefined,
+    getEntityCommands: (entityType: string) =>
+      commandsByType.get(entityType) ?? [],
+  }),
+}));
+
+// ---------------------------------------------------------------------------
+
 import { MentionPill } from "./mention-pill";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
 import { InspectProvider } from "@/lib/inspect-context";
-import { SchemaProvider } from "@/lib/schema-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { FocusScope } from "@/components/focus-scope";
 import type { Entity } from "@/types/kanban";
@@ -67,13 +113,11 @@ function renderPill(props: {
     onInspect,
     ...render(
       <TooltipProvider>
-        <SchemaProvider>
-          <EntityFocusProvider>
-            <InspectProvider onInspect={onInspect} onDismiss={() => false}>
-              <MentionPill {...props} />
-            </InspectProvider>
-          </EntityFocusProvider>
-        </SchemaProvider>
+        <EntityFocusProvider>
+          <InspectProvider onInspect={onInspect} onDismiss={() => false}>
+            <MentionPill {...props} />
+          </InspectProvider>
+        </EntityFocusProvider>
       </TooltipProvider>,
     ),
   };
@@ -85,16 +129,45 @@ describe("MentionPill", () => {
     mockGetEntities.mockReturnValue(mockTags);
   });
 
-  it("right-click shows context menu with entity.inspect and task.untag for tags", async () => {
+  // --- Data-driven: every mentionable entity type resolves by its display field ---
+
+  it("loads mentionable types from YAML", () => {
+    expect(MENTIONABLE_TYPES.length).toBeGreaterThanOrEqual(3);
+    for (const mt of MENTIONABLE_TYPES) {
+      expect(mt.entityType).toBeTruthy();
+      expect(mt.prefix).toBeTruthy();
+      expect(mt.displayField).toBeTruthy();
+    }
+  });
+
+  for (const mt of MENTIONABLE_TYPES) {
+    it(`resolves ${mt.entityType} entity by ${mt.displayField} field`, () => {
+      const entity: Entity = {
+        id: `${mt.entityType}-99`,
+        entity_type: mt.entityType,
+        fields: { [mt.displayField]: "test-value", color: "aabbcc" },
+      };
+      mockGetEntities.mockReturnValue([entity]);
+      const { container } = renderPill({
+        entityType: mt.entityType,
+        slug: "test-value",
+        prefix: mt.prefix,
+      });
+      const pill = container.querySelector(
+        `[data-moniker='${mt.entityType}:${mt.entityType}-99']`,
+      );
+      expect(pill).not.toBeNull();
+    });
+  }
+
+  // --- Specific behavior tests ---
+
+  it("right-click shows context menu with entity.inspect and task.untag for tags", () => {
     const { container } = renderPill({
       entityType: "tag",
       slug: "bugfix",
       prefix: "#",
       taskId: "task-1",
-    });
-    // Wait for schema to load
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 50));
     });
     const pill = container.querySelector("[data-moniker]")!;
     fireEvent.contextMenu(pill);
@@ -110,15 +183,11 @@ describe("MentionPill", () => {
     });
   });
 
-  it("task.untag not available when taskId is undefined", async () => {
+  it("task.untag not available when taskId is undefined", () => {
     const { container } = renderPill({
       entityType: "tag",
       slug: "bugfix",
       prefix: "#",
-    });
-    // Wait for schema to load
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 50));
     });
     const pill = container.querySelector("[data-moniker]")!;
     fireEvent.contextMenu(pill);
@@ -133,16 +202,6 @@ describe("MentionPill", () => {
     });
   });
 
-  it("entity.inspect uses resolved entity id, not slug", () => {
-    const { container } = renderPill({
-      entityType: "tag",
-      slug: "bugfix",
-      prefix: "#",
-    });
-    const pill = container.querySelector("[data-moniker='tag:tag-1']");
-    expect(pill).not.toBeNull();
-  });
-
   it("falls back to slug moniker when entity not found", () => {
     mockGetEntities.mockReturnValue([]);
     const { container } = renderPill({
@@ -154,7 +213,7 @@ describe("MentionPill", () => {
     expect(pill).not.toBeNull();
   });
 
-  it("resolves entities by slugified title match", () => {
+  it("resolves entities by slugified display field match", () => {
     const taskEntities: Entity[] = [
       {
         id: "task-42",
@@ -172,55 +231,31 @@ describe("MentionPill", () => {
     expect(pill).not.toBeNull();
   });
 
-  it("works for non-tag entity types like actor", () => {
-    const actors: Entity[] = [
-      {
-        id: "actor-1",
-        entity_type: "actor",
-        fields: { name: "alice", color: "00ff00" },
-      },
-    ];
-    mockGetEntities.mockReturnValue(actors);
-    const { container } = renderPill({
-      entityType: "actor",
-      slug: "alice",
-      prefix: "@",
-    });
-    const pill = container.querySelector("[data-moniker='actor:actor-1']");
-    expect(pill).not.toBeNull();
-  });
-
-  it("unresolved entity + parent: both inspect commands accumulate", async () => {
+  it("unresolved entity + parent: both inspect commands accumulate", () => {
     mockGetEntities.mockReturnValue([]);
     const onInspect = vi.fn();
     const { container } = render(
       <TooltipProvider>
-        <SchemaProvider>
-          <EntityFocusProvider>
-            <InspectProvider onInspect={onInspect} onDismiss={() => false}>
-              <FocusScope
-                moniker="task:parent"
-                commands={[
-                  {
-                    id: "entity.inspect",
-                    name: "Inspect task",
-                    target: "task:parent",
-                    contextMenu: true,
-                    execute: vi.fn(),
-                  },
-                ]}
-              >
-                <MentionPill entityType="tag" slug="unknown-tag" prefix="#" />
-              </FocusScope>
-            </InspectProvider>
-          </EntityFocusProvider>
-        </SchemaProvider>
+        <EntityFocusProvider>
+          <InspectProvider onInspect={onInspect} onDismiss={() => false}>
+            <FocusScope
+              moniker="task:parent"
+              commands={[
+                {
+                  id: "entity.inspect",
+                  name: "Inspect task",
+                  target: "task:parent",
+                  contextMenu: true,
+                  execute: vi.fn(),
+                },
+              ]}
+            >
+              <MentionPill entityType="tag" slug="unknown-tag" prefix="#" />
+            </FocusScope>
+          </InspectProvider>
+        </EntityFocusProvider>
       </TooltipProvider>,
     );
-    // Wait for schema to load
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 50));
-    });
     const pill = container.querySelector("[data-moniker='tag:unknown-tag']")!;
     fireEvent.contextMenu(pill);
 
