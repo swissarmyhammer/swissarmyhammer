@@ -8,6 +8,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::id_types::{EntityTypeName, FieldDefId, FieldName};
 
+/// Serde helper: skip serializing a bool field when it is `false`.
+fn is_false(b: &bool) -> bool {
+    !b
+}
+
 /// A single option in a select or multi-select field.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SelectOption {
@@ -63,6 +68,12 @@ pub enum FieldType {
         derive: String,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         depends_on: Vec<String>,
+        /// Optional target entity type (e.g. "tag" for parse-body-tags).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        entity: Option<EntityTypeName>,
+        /// When true, commit display names (slugs) instead of entity IDs.
+        #[serde(default, skip_serializing_if = "is_false")]
+        commit_display_names: bool,
     },
 }
 
@@ -296,6 +307,8 @@ mod tests {
         let ft = FieldType::Computed {
             derive: "parse-body-tags".into(),
             depends_on: vec![],
+            entity: None,
+            commit_display_names: false,
         };
         let yaml = serde_yaml_ng::to_string(&ft).unwrap();
         let parsed: FieldType = serde_yaml_ng::from_str(&yaml).unwrap();
@@ -483,6 +496,8 @@ mod tests {
             type_: FieldType::Computed {
                 derive: "parse-body-tags".into(),
                 depends_on: vec![],
+                entity: None,
+                commit_display_names: false,
             },
             default: None,
             editor: None,

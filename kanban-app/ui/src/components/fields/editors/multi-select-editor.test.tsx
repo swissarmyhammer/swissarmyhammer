@@ -91,7 +91,12 @@ const TASK_SCHEMA = {
     {
       id: "f3",
       name: "tags",
-      type: { kind: "computed", derive: "parse-body-tags" },
+      type: {
+        kind: "computed",
+        derive: "parse-body-tags",
+        entity: "tag",
+        commit_display_names: true,
+      },
       section: "header",
     },
   ],
@@ -140,7 +145,12 @@ const ASSIGNEES_FIELD: FieldDef = {
 const TAGS_FIELD: FieldDef = {
   id: "f3",
   name: "tags",
-  type: { kind: "computed", derive: "parse-body-tags" },
+  type: {
+    kind: "computed",
+    derive: "parse-body-tags",
+    entity: "tag",
+    commit_display_names: true,
+  },
   section: "header",
 };
 

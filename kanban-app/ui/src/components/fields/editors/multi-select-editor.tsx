@@ -76,25 +76,18 @@ export function MultiSelectEditor({
   const { getEntities } = useEntityStore();
   const editorRef = useRef<ReactCodeMirrorRef>(null);
 
-  // Determine target entity type and mention config
-  const isComputedTags =
-    field.type.kind === "computed" && field.type.derive === "parse-body-tags";
-
-  const targetEntityType = isComputedTags
-    ? "tag"
-    : (field.type.entity as string | undefined);
-
-  // For computed tag fields, commit display names (slugs) instead of entity IDs
-  const commitDisplayNames = isComputedTags;
+  // Read target entity and commit mode from field type (set in YAML for both reference and computed fields)
+  const targetEntityType = field.type.entity as string | undefined;
+  const commitDisplayNames = !!(field.type as Record<string, unknown>)
+    .commit_display_names;
 
   const mentionConfig = useMemo(
     () => mentionableTypes.find((mt) => mt.entityType === targetEntityType),
     [mentionableTypes, targetEntityType],
   );
 
-  const prefix = mentionConfig?.prefix ?? (isComputedTags ? "#" : "");
-  const displayField =
-    mentionConfig?.displayField ?? (isComputedTags ? "tag_name" : "name");
+  const prefix = mentionConfig?.prefix ?? "";
+  const displayField = mentionConfig?.displayField ?? "name";
 
   // Target entities for building maps
   const targetEntities = useMemo(

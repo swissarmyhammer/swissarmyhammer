@@ -480,6 +480,8 @@ mod tests {
             type_: swissarmyhammer_fields::FieldType::Computed {
                 derive: "parse-body-tags".to_string(),
                 depends_on: vec![],
+                entity: None,
+                commit_display_names: false,
             },
             default: None,
             editor: None,
@@ -513,6 +515,8 @@ mod tests {
             type_: swissarmyhammer_fields::FieldType::Computed {
                 derive: "parse-body-tags".to_string(),
                 depends_on: vec![],
+                entity: None,
+                commit_display_names: false,
             },
             default: None,
             editor: None,
@@ -548,6 +552,8 @@ mod tests {
             type_: swissarmyhammer_fields::FieldType::Computed {
                 derive: "parse-body-progress".to_string(),
                 depends_on: vec![],
+                entity: None,
+                commit_display_names: false,
             },
             default: None,
             editor: None,
@@ -600,6 +606,8 @@ mod tests {
             type_: swissarmyhammer_fields::FieldType::Computed {
                 derive: "parse-body-progress".to_string(),
                 depends_on: vec![],
+                entity: None,
+                commit_display_names: false,
             },
             default: None,
             editor: None,

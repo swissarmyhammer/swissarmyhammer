@@ -107,7 +107,8 @@ impl Execute<KanbanContext, KanbanError> for UpdateEntityField {
             let fields_ctx = ectx.fields();
             let field_def = fields_ctx.get_field_by_name(&self.field_name);
             if let Some(field_def) = field_def {
-                if let swissarmyhammer_fields::FieldType::Computed { ref derive, .. } = field_def.type_
+                if let swissarmyhammer_fields::FieldType::Computed { ref derive, .. } =
+                    field_def.type_
                 {
                     let handler = ctx.derive_registry().get(derive).ok_or_else(|| {
                         KanbanError::InvalidValue {

@@ -180,6 +180,8 @@ mod tests {
             type_: FieldType::Computed {
                 derive: derive.to_string(),
                 depends_on: vec![],
+                entity: None,
+                commit_display_names: false,
             },
             default: None,
             editor: None,

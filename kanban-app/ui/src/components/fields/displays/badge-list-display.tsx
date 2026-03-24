@@ -22,13 +22,10 @@ export function BadgeListDisplay({ field, value, entity, mode }: DisplayProps) {
 
   const values = Array.isArray(value) ? (value as string[]) : [];
 
-  // Determine target entity type from the field definition
-  const isComputedTags =
-    field.type.kind === "computed" &&
-    (field.type as Record<string, unknown>).derive === "parse-body-tags";
-  const targetEntityType = isComputedTags
-    ? "tag"
-    : (field.type.entity as string | undefined);
+  // Read target entity type from field type (set in YAML for both reference and computed fields)
+  const targetEntityType = field.type.entity as string | undefined;
+  const isComputedSlug = !!(field.type as Record<string, unknown>)
+    .commit_display_names;
 
   // Look up mention config for the target entity type
   const mentionConfig = useMemo(
@@ -36,7 +33,7 @@ export function BadgeListDisplay({ field, value, entity, mode }: DisplayProps) {
     [mentionableTypes, targetEntityType],
   );
 
-  const prefix = mentionConfig?.prefix ?? (isComputedTags ? "#" : "");
+  const prefix = mentionConfig?.prefix ?? "";
   const displayField = mentionConfig?.displayField;
 
   // For reference fields, values are entity IDs — resolve to slugified display names
@@ -47,14 +44,14 @@ export function BadgeListDisplay({ field, value, entity, mode }: DisplayProps) {
 
   // Build ID → slugified display name map for reference fields
   const idToSlug = useMemo(() => {
-    if (isComputedTags || !displayField) return null;
+    if (isComputedSlug || !displayField) return null;
     const map = new Map<string, string>();
     for (const e of targetEntities) {
       const raw = getStr(e, displayField);
       if (raw) map.set(e.id, slugify(raw));
     }
     return map;
-  }, [isComputedTags, displayField, targetEntities]);
+  }, [isComputedSlug, displayField, targetEntities]);
 
   if (values.length === 0) {
     return mode === "compact" ? (
@@ -75,7 +72,7 @@ export function BadgeListDisplay({ field, value, entity, mode }: DisplayProps) {
             entityType={targetEntityType ?? "tag"}
             slug={slug}
             prefix={prefix}
-            taskId={isComputedTags ? entity.id : undefined}
+            taskId={isComputedSlug ? entity.id : undefined}
           />
         );
       })}
