@@ -248,7 +248,6 @@ export function QuickCapture() {
               onSubmit={handleSubmit}
               placeholder="What needs to be done?"
               onChange={setDraft}
-              popup
             />
           </div>
           <Button

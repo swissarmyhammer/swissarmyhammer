@@ -455,11 +455,16 @@ describe("createKeyHandler", () => {
 
 /* ---------- extractScopeBindings ---------- */
 
+interface TestScope {
+  commands: Map<string, { id: string; keys?: Record<string, string> }>;
+  parent: TestScope | null;
+}
+
 /** Build a minimal scope for testing. */
 function makeScope(
   commands: Array<{ id: string; keys?: Record<string, string> }>,
-  parent: ReturnType<typeof makeScope> | null = null,
-) {
+  parent: TestScope | null = null,
+): TestScope {
   const map = new Map<string, { id: string; keys?: Record<string, string> }>();
   for (const cmd of commands) map.set(cmd.id, cmd);
   return { commands: map, parent };

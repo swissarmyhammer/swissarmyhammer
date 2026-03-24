@@ -191,8 +191,6 @@ impl BoardHandle {
     }
 }
 
-/// Maximum age of a drag session before it is considered stale (30 seconds).
-
 /// The shared application state, managed by Tauri.
 pub(crate) struct AppState {
     pub(crate) boards: RwLock<HashMap<PathBuf, Arc<BoardHandle>>>,
