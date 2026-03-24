@@ -73,6 +73,8 @@ interface EditorProps {
   placeholder?: string;
   /** Called on every content change with the current text. */
   onChange?: (text: string) => void;
+  /** Popup mode — when true, auto-enters vim insert mode (e.g. quick-capture). */
+  popup?: boolean;
 }
 
 export function TextEditor({
@@ -82,6 +84,7 @@ export function TextEditor({
   onSubmit,
   placeholder,
   onChange,
+  popup,
 }: EditorProps) {
   const [draft, setDraft] = useState(value);
   const editorRef = useRef<ReactCodeMirrorRef>(null);
@@ -173,7 +176,7 @@ export function TextEditor({
         };
         requestAnimationFrame(tryEnterInsert);
       } else {
-        // Grid cell editing: ensure we start in normal mode
+        // Board/grid editing: ensure we start in normal mode
         if (cm.state?.vim?.insertMode) {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           Vim.exitInsertMode(cm as any);
