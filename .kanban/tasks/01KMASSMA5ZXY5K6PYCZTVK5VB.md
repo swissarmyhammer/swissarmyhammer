@@ -1,6 +1,7 @@
 ---
 assignees:
 - claude-code
+depends_on: []
 position_column: todo
 position_ordinal: '9080'
 title: 'board-view.tsx: hardcoded position field names'
