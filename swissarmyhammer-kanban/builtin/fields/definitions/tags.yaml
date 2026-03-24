@@ -4,6 +4,8 @@ description: Tags derived from tag patterns in body
 type:
   kind: computed
   derive: parse-body-tags
+  entity: tag
+  commit_display_names: true
 icon: tag
 editor: multi-select
 display: badge-list
