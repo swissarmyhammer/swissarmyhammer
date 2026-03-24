@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: doing
-position_ordinal: '80'
+position_column: done
+position_ordinal: 7d80
 title: 'entity-card: clicking fields should select/edit inline, not open inspector'
 ---
 ## What

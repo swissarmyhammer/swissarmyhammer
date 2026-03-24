@@ -3,7 +3,7 @@ name: plan
 description: Plan Mode workflow. Use this skill whenever you are in Plan Mode. Drives all planning activity — research, task decomposition, and creating kanban cards as the plan artifact.
 metadata:
   author: "swissarmyhammer"
-  version: "0.9.2"
+  version: "0.10.1"
 ---
 
 ## Project Detection
