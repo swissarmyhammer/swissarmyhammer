@@ -3,7 +3,7 @@ name: implement-loop
 description: Implement all ready kanban cards autonomously until the board is clear. Uses ralph to prevent stopping between cards.
 metadata:
   author: "swissarmyhammer"
-  version: "0.9.2"
+  version: "0.10.1"
 ---
 
 # Implement Loop

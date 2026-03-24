@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: doing
-position_ordinal: '8180'
+position_column: done
+position_ordinal: ffffffffffff9f80
 title: 'entity-card: show field caption icons on card view fields'
 ---
 ## What
