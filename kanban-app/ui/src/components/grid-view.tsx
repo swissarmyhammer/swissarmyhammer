@@ -10,8 +10,6 @@ import { invoke } from "@tauri-apps/api/core";
 import { useActiveBoardPath } from "@/lib/command-scope";
 import { useGrid } from "@/hooks/use-grid";
 import { useSchema } from "@/lib/schema-context";
-import { useUIState } from "@/lib/ui-state-context";
-import { useAppMode } from "@/lib/app-mode-context";
 import { useEntityStore } from "@/lib/entity-store-context";
 import { useEntityFocus } from "@/lib/entity-focus-context";
 import { useInspect } from "@/lib/inspect-context";
@@ -73,8 +71,6 @@ export function GridView({ view }: GridViewProps) {
   const gridRef = useRef(grid);
   gridRef.current = grid;
 
-  const { keymap_mode: keymapMode } = useUIState();
-  const { mode: appMode } = useAppMode();
   const inspectEntity = useInspect();
 
   // Current entity and field from cursor position
@@ -94,93 +90,8 @@ export function GridView({ view }: GridViewProps) {
       ? fieldMoniker(entityType, currentEntity.id, currentField.name)
       : null;
 
-  // Keyboard handler
-  useEffect(() => {
-    if (appMode !== "normal") return;
-
-    const handler = (e: KeyboardEvent) => {
-      const target = e.target as HTMLElement | null;
-      // Skip if inside an input/editor
-      if (
-        target?.tagName === "INPUT" ||
-        target?.tagName === "TEXTAREA" ||
-        target?.tagName === "SELECT" ||
-        target?.closest?.(".cm-editor") ||
-        target?.closest?.("[contenteditable]")
-      ) {
-        return;
-      }
-
-      const g = gridRef.current;
-
-      if (g.mode === "edit") {
-        if (e.key === "Escape") {
-          e.preventDefault();
-          g.exitEdit();
-        }
-        return;
-      }
-
-      // Normal mode navigation
-      let handled = true;
-      switch (e.key) {
-        // Vim + arrow navigation
-        case "j":
-        case "ArrowDown":
-          g.moveDown();
-          break;
-        case "k":
-        case "ArrowUp":
-          g.moveUp();
-          break;
-        case "h":
-        case "ArrowLeft":
-          g.moveLeft();
-          break;
-        case "l":
-        case "ArrowRight":
-          g.moveRight();
-          break;
-        case "Home":
-        case "0":
-          g.moveToRowStart();
-          break;
-        case "End":
-        case "$":
-          g.moveToRowEnd();
-          break;
-        // Edit mode entry
-        case "i":
-          if (keymapMode === "vim") g.enterEdit();
-          break;
-        case "Enter":
-          g.enterEdit();
-          break;
-        case "Escape":
-          if (g.mode === "visual") g.exitVisual();
-          break;
-        // Visual mode
-        case "v":
-          if (keymapMode === "vim") {
-            if (g.mode === "visual") g.exitVisual();
-            else g.enterVisual();
-          }
-          break;
-        default:
-          handled = false;
-      }
-
-      if (handled) {
-        e.preventDefault();
-        e.stopPropagation();
-      }
-    };
-
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [keymapMode, appMode]);
-
   // Grid-level commands (navigation, row creation — not entity-specific)
+  // Keys are dispatched by the global KeybindingHandler via extractScopeBindings.
   const gridCommands = useMemo<CommandDef[]>(
     () => [
       {
@@ -208,19 +119,47 @@ export function GridView({ view }: GridViewProps) {
         execute: () => gridRef.current.moveRight(),
       },
       {
+        id: "grid.moveToRowStart",
+        name: "Row Start",
+        keys: { vim: "0", cua: "Home" },
+        execute: () => gridRef.current.moveToRowStart(),
+      },
+      {
+        id: "grid.moveToRowEnd",
+        name: "Row End",
+        keys: { vim: "$", cua: "End" },
+        execute: () => gridRef.current.moveToRowEnd(),
+      },
+      {
         id: "grid.edit",
         name: "Edit Cell",
         keys: { vim: "i", cua: "Enter" },
         execute: () => gridRef.current.enterEdit(),
       },
       {
-        id: "grid.escape",
+        id: "grid.editEnter",
+        name: "Edit Cell (Enter)",
+        keys: { vim: "Enter" },
+        execute: () => gridRef.current.enterEdit(),
+      },
+      {
+        id: "grid.exitEdit",
         name: "Exit Edit",
-        keys: { vim: "Escape", cua: "Escape" },
+        // No keys — field editors handle Escape via onCancel.
+        // Escape falls through to app.dismiss.
         execute: () => {
           if (gridRef.current.mode === "edit") gridRef.current.exitEdit();
           else if (gridRef.current.mode === "visual")
             gridRef.current.exitVisual();
+        },
+      },
+      {
+        id: "grid.toggleVisual",
+        name: "Toggle Visual Mode",
+        keys: { vim: "v" },
+        execute: () => {
+          if (gridRef.current.mode === "visual") gridRef.current.exitVisual();
+          else gridRef.current.enterVisual();
         },
       },
       {
