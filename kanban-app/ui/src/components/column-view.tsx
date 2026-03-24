@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { Inbox, Plus } from "lucide-react";
 import { Field } from "@/components/fields/field";
 import { DraggableTaskCard } from "@/components/sortable-task-card";
@@ -6,7 +7,9 @@ import { FocusScope } from "@/components/focus-scope";
 import { Badge } from "@/components/ui/badge";
 import { moniker } from "@/lib/moniker";
 import { useEntityCommands } from "@/lib/entity-commands";
+import { useActiveBoardPath } from "@/lib/command-scope";
 import { useSchema } from "@/lib/schema-context";
+import type { CommandDef } from "@/lib/command-scope";
 import type { Entity } from "@/types/kanban";
 import { getStr } from "@/types/kanban";
 
@@ -33,6 +36,8 @@ interface ColumnViewProps {
   isDragTarget?: boolean;
   /** Ref callback for the column container — used for cross-window hit-testing. */
   containerRef?: (el: HTMLDivElement | null) => void;
+  /** ID of the first task in the todo column — used for "Do This Next" command. */
+  firstTodoTaskId?: string | null;
 }
 
 /** Distance from container edge (px) that triggers auto-scroll during drag. */
@@ -64,6 +69,7 @@ export function ColumnView({
   insertAtIndex,
   isDragTarget: isDragTargetProp,
   containerRef: containerRefProp,
+  firstTodoTaskId,
 }: ColumnViewProps) {
   const columnMoniker = moniker("column", column.id);
   const { getFieldDef } = useSchema();
@@ -120,6 +126,40 @@ export function ColumnView({
   );
 
   const commands = useEntityCommands("column", column.id, column);
+  const boardPath = useActiveBoardPath();
+
+  /** Build a "Do This Next" command for a task, or null if the task is already first in todo. */
+  const buildDoThisNextCommand = useCallback(
+    (taskId: string): CommandDef | null => {
+      // Don't show if task is already the first item in todo
+      if (taskId === firstTodoTaskId) return null;
+      return {
+        id: "task.doThisNext",
+        name: "Do This Next",
+        contextMenu: true,
+        execute: () => {
+          const args: Record<string, unknown> = { id: taskId, column: "todo" };
+          if (firstTodoTaskId) args.before_id = firstTodoTaskId;
+          invoke("dispatch_command", {
+            cmd: "task.move",
+            args,
+            ...(boardPath ? { boardPath } : {}),
+          }).catch(console.error);
+        },
+      };
+    },
+    [firstTodoTaskId, boardPath],
+  );
+
+  /** Memoized extra commands per task — includes "Do This Next" when applicable. */
+  const taskExtraCommands = useMemo(() => {
+    const map = new Map<string, CommandDef[]>();
+    for (const task of tasks) {
+      const cmd = buildDoThisNextCommand(task.id);
+      if (cmd) map.set(task.id, [cmd]);
+    }
+    return map;
+  }, [tasks, buildDoThisNextCommand]);
 
   const clearDragState = useCallback(() => {
     setIsDragOver(false);
@@ -260,6 +300,7 @@ export function ColumnView({
                   entity={entity}
                   onDragStart={onTaskDragStart}
                   onDragEnd={onTaskDragEnd}
+                  extraCommands={taskExtraCommands.get(entity.id)}
                 />
               </div>
             ))

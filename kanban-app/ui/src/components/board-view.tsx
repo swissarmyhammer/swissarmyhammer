@@ -96,6 +96,14 @@ export function BoardView({ board, tasks }: BoardViewProps) {
     return map;
   }, [columns, tasks, taskMap]);
 
+  // The first task in the todo (first) column — used for "Do This Next" placement
+  const firstTodoTaskId = useMemo(() => {
+    if (columns.length === 0) return null;
+    const todoColId = columns[0].id;
+    const todoTaskIds = baseLayout.get(todoColId);
+    return todoTaskIds && todoTaskIds.length > 0 ? todoTaskIds[0] : null;
+  }, [columns, baseLayout]);
+
   // --- Column drag state (managed by @dnd-kit) ---
   const [activeColumn, setActiveColumn] = useState<Entity | null>(null);
   const [virtualColumnOrder, setVirtualColumnOrder] = useState<string[] | null>(
@@ -396,6 +404,7 @@ export function BoardView({ board, tasks }: BoardViewProps) {
                         ? taskDrag.insertIndex
                         : null
                     }
+                    firstTodoTaskId={firstTodoTaskId}
                   />
                 </SortableColumn>
               );

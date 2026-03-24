@@ -6,6 +6,7 @@ import { useSchema } from "@/lib/schema-context";
 import { useInspect } from "@/lib/inspect-context";
 import { useEntityCommands } from "@/lib/entity-commands";
 import { moniker } from "@/lib/moniker";
+import type { CommandDef } from "@/lib/command-scope";
 import type { Entity, FieldDef } from "@/types/kanban";
 
 /** Convert kebab-case icon name to PascalCase key for lucide-react lookup. */
@@ -31,6 +32,8 @@ interface EntityCardProps {
   draggable?: boolean;
   onDragStart?: (e: React.DragEvent) => void;
   onDragEnd?: (e: React.DragEvent) => void;
+  /** Additional commands to append to the entity's context menu. */
+  extraCommands?: CommandDef[];
 }
 
 /**
@@ -48,6 +51,7 @@ export const EntityCard = memo(
       draggable,
       onDragStart,
       onDragEnd,
+      extraCommands,
       ...rest
     },
     ref,
@@ -63,7 +67,12 @@ export const EntityCard = memo(
       [schema],
     );
 
-    const commands = useEntityCommands(entity.entity_type, entity.id, entity);
+    const commands = useEntityCommands(
+      entity.entity_type,
+      entity.id,
+      entity,
+      extraCommands,
+    );
     const [editingField, setEditingField] = useState<string | null>(null);
 
     const clearEditing = useCallback(() => setEditingField(null), []);

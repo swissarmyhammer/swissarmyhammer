@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: todo
-position_ordinal: c580
+position_ordinal: '80'
 title: Fix focus indicator position on entity cards (compact mode)
 ---
 ## What

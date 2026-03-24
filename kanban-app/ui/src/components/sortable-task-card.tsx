@@ -1,11 +1,14 @@
 import { memo, useCallback, useRef, useState } from "react";
 import { EntityCard } from "@/components/entity-card";
+import type { CommandDef } from "@/lib/command-scope";
 import type { Entity } from "@/types/kanban";
 
 interface DraggableTaskCardProps {
   entity: Entity;
   onDragStart?: (entity: Entity) => void;
   onDragEnd?: (entity: Entity, dropEffect: string) => void;
+  /** Additional commands to pass through to EntityCard's context menu. */
+  extraCommands?: CommandDef[];
 }
 
 /**
@@ -22,6 +25,7 @@ export const DraggableTaskCard = memo(function DraggableTaskCard({
   entity,
   onDragStart,
   onDragEnd,
+  extraCommands,
 }: DraggableTaskCardProps) {
   const cardRef = useRef<HTMLDivElement>(null);
   const [isDragging, setIsDragging] = useState(false);
@@ -73,6 +77,7 @@ export const DraggableTaskCard = memo(function DraggableTaskCard({
       draggable
       onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}
+      extraCommands={extraCommands}
     />
   );
 });
