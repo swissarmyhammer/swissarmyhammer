@@ -82,8 +82,14 @@ async fn board_entity_has_percent_complete_computed_field() {
     let (_temp, ctx, processor) = setup().await;
 
     // Add two tasks
-    processor.process(&AddTask::new("Task A"), &ctx).await.unwrap();
-    processor.process(&AddTask::new("Task B"), &ctx).await.unwrap();
+    processor
+        .process(&AddTask::new("Task A"), &ctx)
+        .await
+        .unwrap();
+    processor
+        .process(&AddTask::new("Task B"), &ctx)
+        .await
+        .unwrap();
 
     // Read the board entity — compute engine should populate percent_complete
     let ectx = ctx.entity_context().await.unwrap();
@@ -92,7 +98,11 @@ async fn board_entity_has_percent_complete_computed_field() {
 
     // percent_complete should be a { done, total, percent } object
     let pc = &bag["percent_complete"];
-    assert!(pc.is_object(), "percent_complete should be an object, got: {}", pc);
+    assert!(
+        pc.is_object(),
+        "percent_complete should be an object, got: {}",
+        pc
+    );
     assert_eq!(pc["total"], 2, "total should be 2");
     assert_eq!(pc["done"], 0, "no tasks in done column yet");
     assert_eq!(pc["percent"], 0, "0% done");
@@ -103,9 +113,15 @@ async fn board_percent_complete_updates_after_move_to_done() {
     let (_temp, ctx, processor) = setup().await;
 
     // Add two tasks
-    let r1 = processor.process(&AddTask::new("Task A"), &ctx).await.unwrap();
+    let r1 = processor
+        .process(&AddTask::new("Task A"), &ctx)
+        .await
+        .unwrap();
     let task_id = r1["id"].as_str().unwrap().to_string();
-    processor.process(&AddTask::new("Task B"), &ctx).await.unwrap();
+    processor
+        .process(&AddTask::new("Task B"), &ctx)
+        .await
+        .unwrap();
 
     // Find the done column (last column by order)
     let ectx = ctx.entity_context().await.unwrap();

@@ -436,7 +436,7 @@ pub fn load_yaml_dir(dir: &Path) -> Vec<(String, String)> {
 mod tests {
     use super::*;
     use crate::id_types::FieldDefId;
-    use crate::types::{Editor, EntityDef, FieldDef, FieldType};
+    use crate::types::{EntityDef, FieldDef, FieldType};
     use tempfile::TempDir;
 
     fn make_test_field(name: &str) -> FieldDef {
@@ -446,7 +446,7 @@ mod tests {
             description: None,
             type_: FieldType::Text { single_line: true },
             default: None,
-            editor: Some(Editor::Markdown),
+            editor: Some("markdown".into()),
             display: None,
             sort: None,
             width: None,
