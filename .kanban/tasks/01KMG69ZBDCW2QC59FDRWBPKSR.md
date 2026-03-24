@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: 857f80
+position_column: done
+position_ordinal: ffffffffffffa680
 title: Window menu does not list open windows for switching
 ---
 ## What\n\nThe OS-level Window menu only shows \"New Window\", Minimize, and Maximize. Open windows are not listed, so users can't switch between them via the menu bar.\n\n**Root cause**: The Window submenu in `kanban-app/src/menu.rs:128-147` is created statically. On macOS, Tauri provides `setAsWindowsMenuForNSApp()` which tells the OS to auto-populate the Window menu with all open windows — this is never called.\n\n**Fix**: In `kanban-app/src/menu.rs`, after building the Window submenu, call the macOS-specific API to register it as the app's window menu. This is the standard pattern for native macOS apps — the OS handles window listing, checkmarking the focused window, and switching.\n\n### Files to modify\n- `kanban-app/src/menu.rs` — call `set_as_windows_menu_for_nsapp()` on the Window submenu after building it (line ~147)\n\n## Acceptance Criteria\n- [ ] Window menu lists all open windows by title\n- [ ] Clicking a window name in the menu brings that window to front\n- [ ] Current window is checkmarked in the menu\n- [ ] New windows appear in the menu automatically\n- [ ] Closing a window removes it from the menu\n\n## Tests\n- [ ] Manual: open 2+ windows → Window menu lists both\n- [ ] Manual: click a window name → that window focuses\n- [ ] Manual: close a window → it disappears from the menu\n- [ ] Run: `cargo build` — compiles without errors"

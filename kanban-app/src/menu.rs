@@ -145,6 +145,28 @@ pub fn build_menu_from_manifest(
     window_menu.append(&PredefinedMenuItem::minimize(app, None)?)?;
     window_menu.append(&PredefinedMenuItem::maximize(app, None)?)?;
 
+    // Manually list open windows with a checkmark on the focused one.
+    // NOTE: muda's set_as_windows_menu_for_nsapp() is broken — it uses
+    // a disconnected NSMenu that macOS ignores (muda#322, still unmerged).
+    let windows = app.webview_windows();
+    let visible: Vec<_> = windows
+        .iter()
+        .filter(|(_, w)| {
+            let title = w.title().unwrap_or_default();
+            !title.is_empty() && w.is_visible().unwrap_or(false)
+        })
+        .collect();
+    if !visible.is_empty() {
+        window_menu.append(&PredefinedMenuItem::separator(app)?)?;
+        for (label, window) in &visible {
+            let title = window.title().unwrap_or_else(|_| (*label).clone());
+            let focused = window.is_focused().unwrap_or(false);
+            let id = format!("window.focus:{}", label);
+            let item = CheckMenuItem::with_id(app, id, &title, true, focused, None::<&str>)?;
+            window_menu.append(&item)?;
+        }
+    }
+
     let menu = Menu::with_items(app, &[&app_menu, &file_menu, &edit_menu, &window_menu])?;
     app.set_menu(menu).map_err(|e| {
         tracing::error!("Failed to set menu: {}", e);
@@ -195,6 +217,34 @@ pub fn handle_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
     // Open Recent items — handled directly (carry a file path)
     if let Some(path_str) = id.strip_prefix("open_recent:") {
         handle_open_recent(app, PathBuf::from(path_str));
+        return;
+    }
+
+    // Window list items — focus the named window and update check states
+    if let Some(label) = id.strip_prefix("window.focus:") {
+        if let Some(window) = app.get_webview_window(label) {
+            let _ = window.unminimize();
+            let _ = window.set_focus();
+        }
+        // Update check marks: only the clicked window should be checked
+        if let Some(menu) = app.menu() {
+            if let Ok(items) = menu.items() {
+                for item in items {
+                    if let Some(sub) = item.as_submenu() {
+                        if let Ok(sub_items) = sub.items() {
+                            for si in sub_items {
+                                if let Some(check) = si.as_check_menuitem() {
+                                    let cid = check.id().as_ref().to_string();
+                                    if let Some(wlabel) = cid.strip_prefix("window.focus:") {
+                                        let _ = check.set_checked(wlabel == label);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
         return;
     }
 
