@@ -330,7 +330,7 @@ describe("createKeyHandler", () => {
 
     // Second 'g' completes the sequence
     handler(fakeKeyEvent("g"));
-    expect(executeCommand).toHaveBeenCalledWith("board.firstColumn");
+    expect(executeCommand).toHaveBeenCalledWith("board.firstCard");
   });
 
   it("handles vim dd sequence", () => {
@@ -368,7 +368,7 @@ describe("createKeyHandler", () => {
 
     // Complete the fresh sequence
     handler(fakeKeyEvent("g"));
-    expect(executeCommand).toHaveBeenCalledWith("board.firstColumn");
+    expect(executeCommand).toHaveBeenCalledWith("board.firstCard");
   });
 
   it("clears pending buffer when a non-matching key follows", () => {

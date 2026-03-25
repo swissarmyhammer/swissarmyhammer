@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   DndContext,
   DragOverlay,
@@ -16,11 +23,20 @@ import {
 } from "@dnd-kit/sortable";
 import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
-import { useActiveBoardPath } from "@/lib/command-scope";
+import {
+  useActiveBoardPath,
+  CommandScopeProvider,
+  CommandScopeContext,
+  type CommandDef,
+  type CommandScope,
+} from "@/lib/command-scope";
 import { ColumnView } from "@/components/column-view";
 import { SortableColumn } from "@/components/sortable-column";
 import { FocusScope } from "@/components/focus-scope";
 import { useEntityFocus } from "@/lib/entity-focus-context";
+import { useInspect } from "@/lib/inspect-context";
+import { useBoardNav } from "@/hooks/use-board-nav";
+import { BoardNavProvider } from "@/lib/board-nav-context";
 /** Default title for new tasks — the Rust side also uses this as fallback. */
 function defaultTaskTitle(_columnName: string): string {
   return "New task";
@@ -53,6 +69,7 @@ export function BoardView({ board, tasks }: BoardViewProps) {
   const { startSession, cancelSession, completeSession } = useDragSession();
   const boardMoniker = moniker("board", "board");
   const boardCommands = useEntityCommands("board", "board");
+  const inspectEntity = useInspect();
 
   const columns = useMemo(
     () =>
@@ -96,6 +113,20 @@ export function BoardView({ board, tasks }: BoardViewProps) {
     return map;
   }, [columns, tasks, taskMap]);
 
+  // Pre-resolved task entity arrays per column — memoized so that React.memo
+  // on ColumnView sees stable references and skips re-renders on cursor moves.
+  const columnTasks = useMemo(() => {
+    const map = new Map<string, Entity[]>();
+    for (const col of columns) {
+      const taskIds = baseLayout.get(col.id) ?? [];
+      const entities = taskIds
+        .map((id) => taskMap.get(id))
+        .filter((t): t is Entity => t !== undefined);
+      map.set(col.id, entities);
+    }
+    return map;
+  }, [columns, baseLayout, taskMap]);
+
   // The first task in the todo (first) column — used for "Do This Next" placement
   const firstTodoTaskId = useMemo(() => {
     if (columns.length === 0) return null;
@@ -103,6 +134,181 @@ export function BoardView({ board, tasks }: BoardViewProps) {
     const todoTaskIds = baseLayout.get(todoColId);
     return todoTaskIds && todoTaskIds.length > 0 ? todoTaskIds[0] : null;
   }, [columns, baseLayout]);
+
+  // --- Board keyboard navigation ---
+  const cardCounts = useMemo(
+    () => columns.map((col) => (baseLayout.get(col.id) ?? []).length),
+    [columns, baseLayout],
+  );
+
+  const boardNav = useBoardNav({
+    columnCount: columns.length,
+    cardCounts,
+  });
+  const boardNavRef = useRef(boardNav);
+  boardNavRef.current = boardNav;
+
+  /** Resolve the task entity at the current board cursor position. */
+  const currentBoardEntity = useMemo(() => {
+    const { col, card } = boardNav.cursor;
+    if (col < 0 || col >= columns.length || card < 0) return null;
+    const colId = columns[col].id;
+    const taskIds = baseLayout.get(colId) ?? [];
+    if (card >= taskIds.length) return null;
+    return taskMap.get(taskIds[card]) ?? null;
+  }, [boardNav.cursor, columns, baseLayout, taskMap]);
+
+  // Moniker for the focused entity, or the board moniker as fallback.
+  // The board moniker fallback ensures board nav commands are always reachable
+  // even when the cursor is on a column header (card=-1, no entity).
+  const focusBridgeMoniker = currentBoardEntity
+    ? moniker("task", currentBoardEntity.id)
+    : boardMoniker;
+
+  /** Ref for handleAddTask so boardNavCommands can reference it without circular deps. */
+  const handleAddTaskRef = useRef<(columnId: string) => void>(() => {});
+
+  // Stable colId → cursor index map
+  const colIdToIndex = useMemo(() => {
+    const map = new Map<string, number>();
+    for (let i = 0; i < columns.length; i++) map.set(columns[i].id, i);
+    return map;
+  }, [columns]);
+
+  /** Ref to the horizontal scroll container — scrolls focused column into view. */
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+
+  // Scroll the focused column into view horizontally when cursor.col changes
+  useEffect(() => {
+    const container = scrollContainerRef.current;
+    if (
+      !container ||
+      boardNav.cursor.col < 0 ||
+      boardNav.cursor.col >= columns.length
+    )
+      return;
+    const focusedColId = columns[boardNav.cursor.col].id;
+    const el = container.querySelector<HTMLElement>(
+      `[data-moniker="column:${focusedColId}"]`,
+    );
+    if (el?.scrollIntoView)
+      el.scrollIntoView({ inline: "nearest", block: "nearest" });
+  }, [boardNav.cursor.col, columns]);
+
+  const boardNavCommands = useMemo<CommandDef[]>(
+    () => [
+      {
+        id: "board.moveLeft",
+        name: "Move Left",
+        keys: { vim: "h", cua: "ArrowLeft" },
+        execute: () => boardNavRef.current.moveLeft(),
+      },
+      {
+        id: "board.moveRight",
+        name: "Move Right",
+        keys: { vim: "l", cua: "ArrowRight" },
+        execute: () => boardNavRef.current.moveRight(),
+      },
+      {
+        id: "board.moveUp",
+        name: "Move Up",
+        keys: { vim: "k", cua: "ArrowUp" },
+        execute: () => boardNavRef.current.moveUp(),
+      },
+      {
+        id: "board.moveDown",
+        name: "Move Down",
+        keys: { vim: "j", cua: "ArrowDown" },
+        execute: () => boardNavRef.current.moveDown(),
+      },
+      {
+        id: "board.firstCard",
+        name: "First Card",
+        keys: { cua: "Home" },
+        // vim: "g g" handled via SEQUENCE_TABLES in keybindings.ts
+        execute: () => boardNavRef.current.moveToFirstCard(),
+      },
+      {
+        id: "board.lastCard",
+        name: "Last Card",
+        // normalizeKeyEvent produces "Shift+G" for uppercase G
+        keys: { vim: "Shift+G", cua: "End" },
+        execute: () => boardNavRef.current.moveToLastCard(),
+      },
+      {
+        id: "board.firstColumn",
+        name: "First Column",
+        keys: { vim: "0", cua: "Mod+Home" },
+        execute: () => boardNavRef.current.moveToFirstColumn(),
+      },
+      {
+        id: "board.lastColumn",
+        name: "Last Column",
+        // normalizeKeyEvent produces "Shift+4" → "$"
+        keys: { vim: "$", cua: "Mod+End" },
+        execute: () => boardNavRef.current.moveToLastColumn(),
+      },
+      {
+        id: "board.inspect",
+        name: "Inspect",
+        keys: { vim: "Enter", cua: "Enter" },
+        execute: () => {
+          const nav = boardNavRef.current;
+          const colId = columns[nav.cursor.col]?.id;
+          if (!colId) return;
+          if (nav.cursor.card === -1) {
+            // On column header — inspect the column
+            inspectEntity(moniker("column", colId));
+          } else {
+            // On a card — inspect the task
+            const taskIds = baseLayout.get(colId) ?? [];
+            const taskId = taskIds[nav.cursor.card];
+            if (taskId) inspectEntity(moniker("task", taskId));
+          }
+        },
+      },
+      {
+        id: "board.newTask",
+        name: "New Task",
+        keys: { vim: "o", cua: "Mod+Enter" },
+        execute: () => {
+          const nav = boardNavRef.current;
+          const colId = columns[nav.cursor.col]?.id;
+          if (colId) handleAddTaskRef.current(colId);
+        },
+      },
+    ],
+    [columns, baseLayout, inspectEntity],
+  );
+
+  // --- BoardNavProvider callbacks (stable via refs in the provider) ---
+
+  const handleBoardCardClick = useCallback(
+    (columnId: string, cardIndex: number) => {
+      const colIdx = colIdToIndex.get(columnId) ?? 0;
+      boardNavRef.current.setCursor(colIdx, cardIndex);
+    },
+    [colIdToIndex],
+  );
+
+  const handleBoardHeaderClick = useCallback(
+    (columnId: string) => {
+      const colIdx = colIdToIndex.get(columnId) ?? 0;
+      boardNavRef.current.setCursor(colIdx, -1);
+    },
+    [colIdToIndex],
+  );
+
+  const handleBoardCardDoubleClick = useCallback(
+    (columnId: string, cardIndex: number) => {
+      const colIdx = colIdToIndex.get(columnId) ?? 0;
+      boardNavRef.current.setCursor(colIdx, cardIndex);
+      const taskIds = baseLayout.get(columnId) ?? [];
+      const taskId = taskIds[cardIndex];
+      if (taskId) inspectEntity(moniker("task", taskId));
+    },
+    [colIdToIndex, baseLayout, inspectEntity],
+  );
 
   // --- Column drag state (managed by @dnd-kit) ---
   const [activeColumn, setActiveColumn] = useState<Entity | null>(null);
@@ -358,6 +564,7 @@ export function BoardView({ board, tasks }: BoardViewProps) {
     },
     [columnMap],
   );
+  handleAddTaskRef.current = handleAddTask;
 
   return (
     <FocusScope
@@ -365,60 +572,126 @@ export function BoardView({ board, tasks }: BoardViewProps) {
       commands={boardCommands}
       className="flex flex-col flex-1 min-h-0 relative"
     >
-      {/* @dnd-kit context for column reordering only */}
-      <DndContext
-        sensors={sensors}
-        onDragStart={handleColumnDragStart}
-        onDragOver={handleColumnDragOver}
-        onDragEnd={handleColumnDragEnd}
-      >
-        <div
-          className="flex flex-1 min-h-0 overflow-x-auto"
-          onClick={() => setFocus(null)}
+      <CommandScopeProvider commands={boardNavCommands}>
+        <BoardFocusBridge moniker={focusBridgeMoniker} />
+        <BoardNavProvider
+          onCardClick={handleBoardCardClick}
+          onHeaderClick={handleBoardHeaderClick}
+          onCardDoubleClick={handleBoardCardDoubleClick}
         >
-          <SortableContext
-            items={currentColumnOrder}
-            strategy={horizontalListSortingStrategy}
+          {/* @dnd-kit context for column reordering only */}
+          <DndContext
+            sensors={sensors}
+            onDragStart={handleColumnDragStart}
+            onDragOver={handleColumnDragOver}
+            onDragEnd={handleColumnDragEnd}
           >
-            {currentColumnOrder.map((colId, i) => {
-              const col = columnMap.get(colId);
-              if (!col) return null;
-              const taskIds = baseLayout.get(col.id) ?? [];
-              const colTasks = taskIds
-                .map((id) => taskMap.get(id))
-                .filter((t): t is Entity => t !== undefined);
-              return (
-                <SortableColumn key={col.id} id={col.id} showSeparator={i > 0}>
-                  <ColumnView
-                    column={col}
-                    tasks={colTasks}
-                    onAddTask={i === 0 ? handleAddTask : undefined}
-                    onTaskDragStart={handleTaskDragStart}
-                    onTaskDragEnd={handleTaskDragEnd}
-                    onDragOver={handleColumnDragOverHTML5}
-                    onDrop={handleTaskDrop}
-                    onDragEnter={handleColumnDragEnter}
-                    onDragLeave={handleColumnDragLeave}
-                    insertAtIndex={
-                      taskDrag?.targetColumn === col.id
-                        ? taskDrag.insertIndex
-                        : null
-                    }
-                    firstTodoTaskId={firstTodoTaskId}
-                  />
-                </SortableColumn>
-              );
-            })}
-          </SortableContext>
-        </div>
-        <DragOverlay dropAnimation={null}>
-          {activeColumn ? (
-            <div className="rounded-md bg-card border border-border px-4 py-2 text-sm font-medium text-muted-foreground uppercase tracking-wide shadow-lg">
-              {getStr(activeColumn, "name")}
+            <div
+              ref={scrollContainerRef}
+              className="flex flex-1 min-h-0 overflow-x-auto pl-2"
+              onClick={() => {
+                setFocus(null);
+                boardNav.setCursor(boardNav.cursor.col, -1);
+              }}
+            >
+              <SortableContext
+                items={currentColumnOrder}
+                strategy={horizontalListSortingStrategy}
+              >
+                {currentColumnOrder.map((colId, i) => {
+                  const col = columnMap.get(colId);
+                  if (!col) return null;
+                  const colTasks = columnTasks.get(col.id) ?? [];
+                  // Map visual index to cursor col index (columns sorted by order)
+                  const cursorColIndex = colIdToIndex.get(colId) ?? -1;
+                  const isFocusedCol = boardNav.cursor.col === cursorColIndex;
+                  return (
+                    <SortableColumn
+                      key={col.id}
+                      id={col.id}
+                      showSeparator={i > 0}
+                    >
+                      <ColumnView
+                        column={col}
+                        tasks={colTasks}
+                        onAddTask={i === 0 ? handleAddTask : undefined}
+                        onTaskDragStart={handleTaskDragStart}
+                        onTaskDragEnd={handleTaskDragEnd}
+                        onDragOver={handleColumnDragOverHTML5}
+                        onDrop={handleTaskDrop}
+                        onDragEnter={handleColumnDragEnter}
+                        onDragLeave={handleColumnDragLeave}
+                        insertAtIndex={
+                          taskDrag?.targetColumn === col.id
+                            ? taskDrag.insertIndex
+                            : null
+                        }
+                        firstTodoTaskId={firstTodoTaskId}
+                        focusedCardIndex={
+                          isFocusedCol ? boardNav.cursor.card : null
+                        }
+                      />
+                    </SortableColumn>
+                  );
+                })}
+              </SortableContext>
             </div>
-          ) : null}
-        </DragOverlay>
-      </DndContext>
+            <DragOverlay dropAnimation={null}>
+              {activeColumn ? (
+                <div className="rounded-md bg-card border border-border px-4 py-2 text-sm font-medium text-muted-foreground uppercase tracking-wide shadow-lg">
+                  {getStr(activeColumn, "name")}
+                </div>
+              ) : null}
+            </DragOverlay>
+          </DndContext>
+        </BoardNavProvider>
+        <div className="flex items-center px-4 py-1.5 border-t border-border bg-muted/30 text-xs text-muted-foreground gap-3">
+          <span>{boardNav.mode === "edit" ? "EDIT" : "NORMAL"}</span>
+          <span className="text-muted-foreground/50">|</span>
+          <span>
+            Col {boardNav.cursor.col + 1}
+            {boardNav.cursor.card >= 0
+              ? ` Card ${boardNav.cursor.card + 1}`
+              : " (header)"}
+          </span>
+        </div>
+      </CommandScopeProvider>
     </FocusScope>
   );
+}
+
+/**
+ * Bridges the board's command scope into the entity focus system.
+ *
+ * Always registers a scope — uses the focused task moniker when a card is
+ * selected, or the board moniker as fallback when on a column header.
+ * This ensures board nav commands (j/k/h/l/gg/G) are always reachable
+ * through the scope chain regardless of cursor position.
+ */
+function BoardFocusBridge({ moniker: focusMoniker }: { moniker: string }) {
+  const boardScope = useContext(CommandScopeContext);
+  const { setFocus, registerScope, unregisterScope } = useEntityFocus();
+  const prevMonikerRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!boardScope) return;
+
+    // Unregister previous moniker if it changed
+    if (prevMonikerRef.current && prevMonikerRef.current !== focusMoniker) {
+      unregisterScope(prevMonikerRef.current);
+    }
+
+    registerScope(focusMoniker, boardScope);
+    setFocus(focusMoniker);
+    prevMonikerRef.current = focusMoniker;
+
+    return () => {
+      if (prevMonikerRef.current) {
+        unregisterScope(prevMonikerRef.current);
+        prevMonikerRef.current = null;
+      }
+    };
+  }, [boardScope, focusMoniker, registerScope, unregisterScope, setFocus]);
+
+  return null;
 }

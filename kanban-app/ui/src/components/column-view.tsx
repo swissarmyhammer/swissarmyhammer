@@ -1,14 +1,16 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Inbox, Plus } from "lucide-react";
 import { Field } from "@/components/fields/field";
 import { DraggableTaskCard } from "@/components/sortable-task-card";
 import { FocusScope } from "@/components/focus-scope";
+import { FocusHighlight } from "@/components/ui/focus-highlight";
 import { Badge } from "@/components/ui/badge";
 import { moniker } from "@/lib/moniker";
 import { useEntityCommands } from "@/lib/entity-commands";
 import { useActiveBoardPath } from "@/lib/command-scope";
 import { useSchema } from "@/lib/schema-context";
+import { useBoardNavActions } from "@/lib/board-nav-context";
 import type { CommandDef } from "@/lib/command-scope";
 import type { Entity } from "@/types/kanban";
 import { getStr } from "@/types/kanban";
@@ -38,6 +40,8 @@ interface ColumnViewProps {
   containerRef?: (el: HTMLDivElement | null) => void;
   /** ID of the first task in the todo column — used for "Do This Next" command. */
   firstTodoTaskId?: string | null;
+  /** Which card has keyboard focus: -1 = column header, 0..n = card index, null = not focused. */
+  focusedCardIndex?: number | null;
 }
 
 /** Distance from container edge (px) that triggers auto-scroll during drag. */
@@ -56,7 +60,14 @@ function computeInsertIndex(container: HTMLElement, clientY: number): number {
   return cards.length;
 }
 
-export function ColumnView({
+/**
+ * Renders a single column in the board view with drag-drop, focus highlight,
+ * and keyboard navigation support.
+ *
+ * Click handling uses BoardNavContext (stable, ref-backed) instead of callback
+ * props so that React.memo can prevent re-renders when only other columns' focus changes.
+ */
+export const ColumnView = memo(function ColumnView({
   column,
   tasks,
   onAddTask,
@@ -70,6 +81,7 @@ export function ColumnView({
   isDragTarget: isDragTargetProp,
   containerRef: containerRefProp,
   firstTodoTaskId,
+  focusedCardIndex,
 }: ColumnViewProps) {
   const columnMoniker = moniker("column", column.id);
   const { getFieldDef } = useSchema();
@@ -82,6 +94,9 @@ export function ColumnView({
   const scrollRafRef = useRef<number | null>(null);
   /** Current scroll direction: -1 (up), 0 (none), 1 (down). */
   const scrollDirRef = useRef(0);
+
+  // Board nav actions from context — stable, never triggers re-render
+  const navActions = useBoardNavActions();
 
   /** Stop the auto-scroll loop. */
   const stopAutoScroll = useCallback(() => {
@@ -160,6 +175,15 @@ export function ColumnView({
     }
     return map;
   }, [tasks, buildDoThisNextCommand]);
+
+  // Scroll the card container to top when cursor jumps to column header.
+  // The header FocusHighlight is outside the scrollable container, so its
+  // scrollIntoView won't reset the card list's scroll position.
+  useEffect(() => {
+    if (focusedCardIndex === -1 && containerRef.current) {
+      containerRef.current.scrollTop = 0;
+    }
+  }, [focusedCardIndex]);
 
   const clearDragState = useCallback(() => {
     setIsDragOver(false);
@@ -244,7 +268,11 @@ export function ColumnView({
       className="flex flex-col min-h-0 min-w-[20em] max-w-[40em] flex-1"
     >
       <div className="flex flex-col min-h-0 min-w-0 flex-1">
-        <div className="px-3 py-2 flex items-center gap-2">
+        <FocusHighlight
+          focused={focusedCardIndex === -1}
+          className="px-3 py-2 flex items-center gap-2 rounded"
+          onClickCapture={() => navActions?.onHeaderClick(column.id)}
+        >
           {nameFieldDef ? (
             <Field
               fieldDef={nameFieldDef}
@@ -273,7 +301,7 @@ export function ColumnView({
               <Plus className="h-4 w-4" />
             </button>
           )}
-        </div>
+        </FocusHighlight>
         <div
           ref={setContainerRef}
           className={`flex-1 overflow-y-auto [scrollbar-gutter:stable] px-2 pt-1 pb-2 space-y-1.5 m-1 rounded-lg border-2 transition-colors duration-150 ${
@@ -296,12 +324,21 @@ export function ColumnView({
                 {insertIndex === i && (
                   <div className="h-1 bg-primary rounded-full mx-1 my-1.5 shadow-sm shadow-primary/50" />
                 )}
-                <DraggableTaskCard
-                  entity={entity}
-                  onDragStart={onTaskDragStart}
-                  onDragEnd={onTaskDragEnd}
-                  extraCommands={taskExtraCommands.get(entity.id)}
-                />
+                <FocusHighlight
+                  focused={focusedCardIndex === i}
+                  className="rounded"
+                  onClickCapture={() => navActions?.onCardClick(column.id, i)}
+                  onDoubleClickCapture={() =>
+                    navActions?.onCardDoubleClick(column.id, i)
+                  }
+                >
+                  <DraggableTaskCard
+                    entity={entity}
+                    onDragStart={onTaskDragStart}
+                    onDragEnd={onTaskDragEnd}
+                    extraCommands={taskExtraCommands.get(entity.id)}
+                  />
+                </FocusHighlight>
               </div>
             ))
           )}
@@ -313,4 +350,4 @@ export function ColumnView({
       </div>
     </FocusScope>
   );
-}
+});
