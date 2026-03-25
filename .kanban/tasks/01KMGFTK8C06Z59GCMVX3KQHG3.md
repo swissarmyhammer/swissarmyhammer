@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KMGFT3FY71766HMMVBTQ8DEB
-position_column: todo
-position_ordinal: 7c8180
+position_column: done
+position_ordinal: ffffffffffffaf80
 title: Visual focus highlight on board cursor position
 ---
 ## What

@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KMGFSHVGCZZPE563P6Y6R3TB
-position_column: todo
-position_ordinal: 7b80
+position_column: done
+position_ordinal: ffffffffffffae80
 title: Wire board navigation commands into BoardView scope
 ---
 ## What

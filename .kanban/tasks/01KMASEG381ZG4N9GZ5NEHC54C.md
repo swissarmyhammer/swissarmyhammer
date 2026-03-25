@@ -1,6 +1,7 @@
 ---
 assignees:
 - claude-code
+depends_on: []
 position_column: todo
 position_ordinal: '8980'
 title: 'mention-pill.tsx: hardcoded field name fallback chain'

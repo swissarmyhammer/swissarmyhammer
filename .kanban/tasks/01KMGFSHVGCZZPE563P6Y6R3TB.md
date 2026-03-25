@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: 7a80
+position_column: done
+position_ordinal: ffffffffffffad80
 title: useBoardNav hook — 2D cursor state for board navigation
 ---
 ## What

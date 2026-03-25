@@ -1,6 +1,7 @@
 ---
 assignees:
 - claude-code
+depends_on: []
 position_column: todo
 position_ordinal: 8a80
 title: 'data-table.tsx: hardcoded type-kind checks for sort and cell padding'
