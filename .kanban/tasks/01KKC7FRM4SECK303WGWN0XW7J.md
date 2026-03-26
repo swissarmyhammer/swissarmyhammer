@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: ff80
+position_ordinal: fc80
 title: 'Real TS indexing test: verify tree-sitter chunks and symbols independently'
 ---
 ## What\nThe TS indexing worker in `index_discovered_files_blocking` (mod.rs) was setting `lsp_indexed = 1` alongside `ts_indexed = 1`. That's now fixed, but we need a test that proves the TS worker:\n1. Only sets `ts_indexed = 1` (not `lsp_indexed`)\n2. Actually produces chunks in `ts_chunks` with correct metadata\n3. Produces symbols via `ensure_ts_symbols`\n4. Produces call edges via `generate_ts_call_edges`\n\nCurrently the call edge tests in `ts_callgraph.rs` test the functions in isolation with hand-crafted DB state. We need an integration test that runs the full worker on a real file and verifies the complete pipeline.\n\nFile: `swissarmyhammer-code-context/tests/integration_test.rs` or new test file in `swissarmyhammer-tools/tests/`\n\n## Acceptance Criteria\n- [ ] Test runs the TS indexing pipeline on a known Rust source file\n- [ ] Verifies `ts_indexed = 1` AND `lsp_indexed = 0` after TS indexing\n- [ ] Verifies `ts_chunks` contains expected chunks with non-empty text\n- [ ] Verifies `lsp_symbols` contains symbols extracted by tree-sitter\n- [ ] Verifies `lsp_call_edges` contains edges with `source = 'treesitter'`\n\n## Tests\n- [ ] `cargo test -p swissarmyhammer-code-context -- test_ts_indexing_pipeline` passes\n- [ ] Test does NOT require rust-analyzer (pure tree-sitter)"

@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: cb80
+position_ordinal: c880
 title: Move code-context background work out of McpServer constructor
 ---
 ## What

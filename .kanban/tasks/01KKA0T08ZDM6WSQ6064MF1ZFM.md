@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: b180
+position_ordinal: ae80
 title: Add search code operation (embedding similarity)
 ---
 ## What

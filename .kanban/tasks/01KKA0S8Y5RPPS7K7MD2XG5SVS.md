@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: af80
+position_ordinal: ac80
 title: Wire LspSupervisor into code-context startup
 ---
 ## What

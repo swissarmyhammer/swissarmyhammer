@@ -2,7 +2,7 @@
 depends_on:
 - 01KKPM76VA867FDV0JPDW41A3H
 position_column: done
-position_ordinal: ffffffffff8980
+position_ordinal: ffffffffd380
 title: Publisher + Subscriber types
 ---
 ## What

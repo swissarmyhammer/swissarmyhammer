@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: ffffffffff9e80
+position_ordinal: ffffffffe580
 title: Forward-compat HookEvent::kind() maps to Notification — misleading
 ---
 `hookable_agent.rs` — HookEvent::kind()
@@ -13,4 +13,4 @@ These events should either:
 
 The current mapping could cause unintended hook execution if a Notification hook is registered and one of these events is manually fired.
 
-**Severity**: warning
+**Severity**: warning #review-finding

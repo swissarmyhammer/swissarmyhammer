@@ -1,5 +1,5 @@
 ---
 position_column: done
-position_ordinal: fffa80
+position_ordinal: fff780
 title: Wire KeybindingHandler and CommandPalette to focused scope
 ---

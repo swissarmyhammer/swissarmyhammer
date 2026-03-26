@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: ffe080
+position_ordinal: ffdd80
 title: Replace typed Task/Tag/Column interfaces with schema-driven Entity rendering.
 ---
 #ui
@@ -23,7 +23,7 @@ The UI knows what KIND of entity it's showing (entity_type = 'task' for board ca
 ## What changes
 
 ### Remove
-- `interface Task { id, title, description, position, tags, ... }`
+- `interface Task { id, title, description, position, tags, ... }` 
 - `interface Tag { id, name, color, ... }`
 - `interface Column { id, name, order, ... }`
 - All typed property access like `task.title`, `tag.color`, `column.name`
@@ -38,7 +38,7 @@ The UI knows what KIND of entity it's showing (entity_type = 'task' for board ca
 // Instead of: task.title
 entity.fields[titleFieldDef.name]
 
-// Instead of: field_name: "title"
+// Instead of: field_name: "title" 
 field_name: fieldDef.name
 ```
 

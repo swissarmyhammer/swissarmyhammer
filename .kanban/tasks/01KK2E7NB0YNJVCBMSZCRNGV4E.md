@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: ffffce80
+position_ordinal: ffffcb80
 title: Column sort command
 ---
 Implement grid.sort command that sorts entity list by field. Sort state is ephemeral (not persisted).

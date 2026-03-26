@@ -3,7 +3,7 @@ depends_on:
 - 01KKF4XH1HH7S14DYTYXSPZ3N5
 - 01KKF4Y930C9DWTYJC8NF0X57C
 position_column: done
-position_ordinal: ffa280
+position_ordinal: ff9f80
 title: Wire semantic diffs into review flow for range-based reviews
 ---
 **Files**: `builtin/skills/review/SKILL.md`, possibly `swissarmyhammer-tools/src/mcp/tools/git/changes/mod.rs`
@@ -22,7 +22,7 @@ When `get changes` returns files from a range:
 ### Changes to `GitChangesResponse`
 
 Add optional fields:
-- `range: Option<String>` — the range that was used (e.g. `HEAD~3..HEAD`)
+- `range: Option<String>` — the range that was used (e.g. `HEAD~3..HEAD`)  
 
 The agent uses these to construct `get diff` calls.
 

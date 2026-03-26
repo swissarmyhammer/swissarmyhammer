@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KKSW6A68Q9QGZZ3TMR32QXKX
 position_column: done
-position_ordinal: ffffffff8f80
+position_ordinal: ffffffffa680
 title: Update frontend BoardProgress to read percent_complete from board entity
 ---
 ## What

@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffd580
+position_ordinal: ffffff9180
 title: 'heb: HebError error messages have uppercase first letter, violating Rust convention'
 ---
 heb/src/error.rs:6-17
@@ -18,4 +18,4 @@ Per the Rust `thiserror`/`Display` convention (and the project's own RUST_REVIEW
 
 Similarly in `ElectionError` in swissarmyhammer-leader-election/src/error.rs: `"Discovery file error: {0}"`, `"Bus error: {0}"`, `"Serialization error: {0}"`, `"Message error: {0}"` are all uppercase.
 
-Suggestion: lowercase the first character of each error message string.
+Suggestion: lowercase the first character of each error message string. #review-finding

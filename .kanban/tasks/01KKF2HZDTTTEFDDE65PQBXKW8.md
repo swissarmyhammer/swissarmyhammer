@@ -2,7 +2,7 @@
 assignees:
 - assistant
 position_column: done
-position_ordinal: ff8980
+position_ordinal: ff8680
 title: LSP worker indexes files no LSP server can handle
 ---
 File discovery adds all PARSEABLE_EXTENSIONS (.toml, .yaml, .sh, etc.) to indexed_files with lsp_indexed=0. The LSP dirty-file query returns ALL lsp_indexed=0 files with no file-type filter. Files like .toml/.yaml/.sh have no LSP server, so they either hang (no timeout) or get sent to rust-analyzer which may not respond.

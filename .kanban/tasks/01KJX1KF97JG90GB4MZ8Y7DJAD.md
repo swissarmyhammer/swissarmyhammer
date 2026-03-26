@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: ff9180
+position_ordinal: ff8e80
 title: Register global commands and wire up AppShell with CommandScope
 ---
 Phase 1 deliverable from app-architecture.md.

@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: b580
+position_ordinal: b280
 title: Connect file watcher to OS notifications and LSP didChange
 ---
 ## What

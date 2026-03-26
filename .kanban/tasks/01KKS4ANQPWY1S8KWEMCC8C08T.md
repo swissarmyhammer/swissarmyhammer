@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffc580
+position_ordinal: ffffffd480
 title: 'Quick Capture: wire up provider stack + entity event listeners'
 ---
 ## What

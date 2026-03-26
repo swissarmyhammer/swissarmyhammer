@@ -2,7 +2,7 @@
 depends_on:
 - 01KKHF8D6JMY37M4RBBYEW64DM
 position_column: done
-position_ordinal: ffce80
+position_ordinal: ffcb80
 title: 'SEM-5: Migrate swissarmyhammer-tools to swissarmyhammer-sem'
 ---
 ## What\nUpdate all `use sem_core::` imports in swissarmyhammer-tools to `use swissarmyhammer_sem::`. Update Cargo.toml to depend on `swissarmyhammer-sem` instead of `sem-core`.\n\nImport mapping:\n- `sem_core::git::types::{FileChange, FileStatus}` → `swissarmyhammer_sem::git_types::{FileChange, FileStatus}`\n- `sem_core::model::change::{ChangeType, SemanticChange}` → `swissarmyhammer_sem::model::change::{ChangeType, SemanticChange}`\n- `sem_core::model::entity::SemanticEntity` → `swissarmyhammer_sem::model::entity::SemanticEntity`\n- `sem_core::model::identity::match_entities` → `swissarmyhammer_sem::model::identity::match_entities`\n- `sem_core::parser::differ::{compute_semantic_diff, DiffResult}` → `swissarmyhammer_sem::parser::differ::{compute_semantic_diff, DiffResult}`\n- `sem_core::parser::plugins::create_default_registry` → `swissarmyhammer_sem::parser::plugins::create_default_registry`\n- REMOVE `sem_core::git::bridge::GitBridge` (replaced in SEM-4)\n\nFiles:\n- `swissarmyhammer-tools/Cargo.toml` — replace `sem-core` dep with `swissarmyhammer-sem`\n- `swissarmyhammer-tools/src/mcp/tools/git/diff/mod.rs` — update all imports\n- `swissarmyhammer-tools/tests/git_diff_integration_test.rs` — update all imports\n\n## Acceptance Criteria\n- [ ] No `sem_core` references anywhere in swissarmyhammer-tools\n- [ ] `cargo check -p swissarmyhammer-tools` passes\n- [ ] All existing tests pass\n\n## Tests\n- [ ] `cargo test -p swissarmyhammer-tools` passes\n- [ ] `grep -r sem_core swissarmyhammer-tools/` returns nothing

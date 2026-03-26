@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffd280
+position_ordinal: ffffff8f80
 title: 'hookable_agent.rs: new HookEvent variants have required String fields where Optional makes more sense'
 ---
 agent-client-protocol-extras/src/hookable_agent.rs:125-182
@@ -18,4 +18,4 @@ The new `HookEvent` variants use required (non-Optional) `String` fields for pro
 
 This creates an impedance mismatch: constructors of `HookEvent` must provide a fallback string (e.g., `""`) for missing protocol fields, losing the optionality information. Matchers that use `matcher_value()` will get `Some("")` instead of `None` for absent fields, which may trigger unintended hooks.
 
-Suggestion: mirror the optionality from the input types in the `HookEvent` variants.
+Suggestion: mirror the optionality from the input types in the `HookEvent` variants. #review-finding

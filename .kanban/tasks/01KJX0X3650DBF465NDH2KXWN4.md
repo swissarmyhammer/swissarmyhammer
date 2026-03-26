@@ -1,7 +1,7 @@
 ---
 depends_on: ''
 position_column: done
-position_ordinal: b280
+position_ordinal: af80
 title: 'UI smoke test: verify board loads and data reload works!'
 ---
 Launch the Tauri app and verify the full data flow: initial load, mutation via commands, and event-driven refresh.
@@ -25,7 +25,7 @@ User action (palette, keybinding, context menu, drag-drop)
 
 ## Key event sources
 - `dispatch_command` (commands.rs:558-561): emits `board-changed` for undoable commands
-- `handle_menu_event` (menu.rs:261): emits `board-changed` for native menu actions
+- `handle_menu_event` (menu.rs:261): emits `board-changed` for native menu actions  
 - `field-update-context.tsx`: field edits dispatch `entity.update_field` → Rust emits event
 - Drag-drop in `board-view.tsx`: dispatches `task.move` → Rust emits event
 

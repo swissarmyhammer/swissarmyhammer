@@ -2,7 +2,7 @@
 depends_on:
 - 01KKFEK574ADD49DRZNNTA22BJ
 position_column: done
-position_ordinal: ffffff9280
+position_ordinal: ffffff9f80
 title: Write a real end-to-end duplicate detection test
 ---
 ## What

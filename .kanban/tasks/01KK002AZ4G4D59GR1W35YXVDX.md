@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: ffffa480
+position_ordinal: ffffa180
 title: 'Granular event system: entity change events with content hashing'
 ---
 Replace React's `refresh()` polling with granular Tauri events emitted by the Rust engine when state changes. Content hashing prevents spurious events.

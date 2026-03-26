@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffcd80
+position_ordinal: ffffff8b80
 title: 'avp-common/types/avp_output.rs: massive code duplication across new output types'
 ---
 avp-common/src/types/avp_output.rs (new types section)
@@ -11,4 +11,4 @@ The 7 new blockable output types (`AvpElicitationOutput`, `AvpElicitationResultO
 
 This is a maintenance hazard — a bug fix in one `deny_from_validator()` (e.g., changing `should_continue: true`) must be applied to all 6-7 copies manually.
 
-Suggestion: introduce a macro (e.g., `impl_blockable_output!`) or a shared `BlockableOutput<T>` generic wrapper that delegates to a common implementation. The observe-only types could also use a macro or a single unit struct wrapping `AvpOutputBase`.
+Suggestion: introduce a macro (e.g., `impl_blockable_output!`) or a shared `BlockableOutput<T>` generic wrapper that delegates to a common implementation. The observe-only types could also use a macro or a single unit struct wrapping `AvpOutputBase`. #review-finding

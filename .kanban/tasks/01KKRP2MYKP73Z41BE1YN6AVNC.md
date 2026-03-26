@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: ffffffba80
+position_ordinal: fffffe80
 title: 'heb/store.rs: seq field in header_json diverges from actual DB seq — stored value is always 0'
 ---
 heb/src/store.rs:43-58
@@ -11,4 +11,4 @@ heb/src/store.rs:43-58
 
 This is a data correctness bug. Callers using `replay()` will receive headers with seq=0 and cannot use them to resume a subscription position accurately.
 
-Suggestion: after the `INSERT`, update the header's seq field and rewrite `header_json` in a second UPDATE, or store seq as a separate column and reconstruct on read.
+Suggestion: after the `INSERT`, update the header's seq field and rewrite `header_json` in a second UPDATE, or store seq as a separate column and reconstruct on read. #review-finding

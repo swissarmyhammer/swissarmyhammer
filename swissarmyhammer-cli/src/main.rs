@@ -572,6 +572,7 @@ async fn route_subcommand(context: &CliContext, cli_tool_context: Arc<CliToolCon
         Some(("model", sub_matches)) => handle_model_command(sub_matches, context).await,
         Some(("agent", sub_matches)) => handle_agent_command(sub_matches, context).await,
         Some(("statusline", sub_matches)) => handle_statusline_command(sub_matches),
+        Some(("tools", sub_matches)) => handle_tools_command(sub_matches),
         Some((category, sub_matches)) => {
             route_category_command(category, sub_matches, context, cli_tool_context).await
         }
@@ -1193,6 +1194,40 @@ fn handle_statusline_command(matches: &clap::ArgMatches) -> i32 {
             EXIT_ERROR
         }
     }
+}
+
+/// Handle the `sah tools` command.
+///
+/// Extracts the `--global` flag and optional subcommand from `matches` and
+/// delegates to [`commands::tools::handle_command`].
+fn handle_tools_command(matches: &clap::ArgMatches) -> i32 {
+    let global = matches.get_flag("global");
+
+    let subcommand = match matches.subcommand() {
+        Some(("enable", sub)) => {
+            let names: Vec<String> = sub
+                .get_many::<String>("names")
+                .unwrap_or_default()
+                .cloned()
+                .collect();
+            Some(crate::cli::ToolsSubcommand::Enable { names })
+        }
+        Some(("disable", sub)) => {
+            let names: Vec<String> = sub
+                .get_many::<String>("names")
+                .unwrap_or_default()
+                .cloned()
+                .collect();
+            Some(crate::cli::ToolsSubcommand::Disable { names })
+        }
+        None => None,
+        Some((cmd, _)) => {
+            eprintln!("Unknown tools subcommand: {}", cmd);
+            return EXIT_ERROR;
+        }
+    };
+
+    commands::tools::handle_command(global, subcommand)
 }
 
 async fn handle_doctor_command(cli_context: &CliContext) -> i32 {

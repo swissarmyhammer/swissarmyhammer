@@ -1,0 +1,8 @@
+---
+assignees:
+- claude-code
+position_column: done
+position_ordinal: fffffffffb80
+title: 'warning: hot-reload acquires write lock then immediately re-acquires read lock'
+---
+swissarmyhammer-tools/src/mcp/server.rs:1530-1541\n\nIn `list_tools()`, the implementation acquires `self.tool_config_watcher.lock()` + `self.tool_registry.write()` in an inner block, drops them, then immediately re-acquires `self.tool_registry.read()` to build the result:\n\n```rust\n// Block 1: acquire write lock, check/reload, drop\n{\n    let mut watcher = self.tool_config_watcher.lock().await;\n    let mut registry = self.tool_registry.write().await;  // write lock\n    watcher.check_and_reload(&mut registry);\n}\n// Block 2: re-acquire read lock\ntools: self.tool_registry.read().await.list_tools(),\n```\n\nBetween the two lock acquisitions another concurrent `call_tool` could mutate the registry state (unlikely, but registry state can change). More importantly, this is an unnecessary double-lock cycle. The `list_tools()` call should happen while still holding the write lock from the reload block, or `check_and_reload` should return the tools directly.\n\nSuggestion: Merge the two blocks — keep the write guard alive through the `list_tools()` call (a `write` guard satisfies read access too), or return the tool list from `check_and_reload`.\n\nVerification: Confirm no deadlock risk with other lock acquisition orders in the codebase.\n\n#review-finding #review-finding

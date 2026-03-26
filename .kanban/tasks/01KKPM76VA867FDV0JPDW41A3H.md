@@ -2,7 +2,7 @@
 depends_on:
 - 01KKPM6TJZA2FKANFJ84W8GZT6
 position_column: done
-position_ordinal: ffffffffff9c80
+position_ordinal: ffffffffe380
 title: Discovery file + ZMQ proxy thread
 ---
 ## What

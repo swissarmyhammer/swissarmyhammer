@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: f180
+position_ordinal: ee80
 title: Extract SkillDeployment as Initializable component
 ---
 ## What

@@ -1019,7 +1019,7 @@ mod tests {
         assert!(json.get("reason").is_some(), "Must have 'reason' field");
         assert_eq!(json["decision"], "block");
         assert!(
-            json["reason"].as_str().unwrap().len() > 0,
+            !json["reason"].as_str().unwrap().is_empty(),
             "Reason must be non-empty"
         );
 

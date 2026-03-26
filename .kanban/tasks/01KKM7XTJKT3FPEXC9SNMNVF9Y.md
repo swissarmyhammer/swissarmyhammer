@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KKM7RX9ZTK4VKMB6P9NPWHWW
 position_column: done
-position_ordinal: ffffff9d80
+position_ordinal: ffffffaa80
 title: Update Tauri app config and .kanban discovery to use XDG / .sah
 ---
 ## What

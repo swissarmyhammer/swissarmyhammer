@@ -1,6 +1,6 @@
 ---
 position_column: done
-position_ordinal: ff9280
+position_ordinal: ff8f80
 title: Add `range` parameter to `get changes` git tool
 ---
 **File**: `swissarmyhammer-tools/src/mcp/tools/git/changes/mod.rs`
@@ -26,7 +26,7 @@ Add an optional `range` parameter to `GitChangesRequest` that accepts any git re
 ### Implementation
 
 1. Add `range: Option<String>` to `GitChangesRequest`
-2. Add `range` to `GET_CHANGES_PARAMS`
+2. Add `range` to `GET_CHANGES_PARAMS` 
 3. In `execute()`, if `range` is provided, call a new `get_changed_files_from_range()` on `GitOperations`
 4. If on main with clean tree and no range, default to `HEAD~1..HEAD`
 5. Parse range: if it contains `..`, split into two refs; if single ref, treat as `ref..HEAD`
@@ -34,7 +34,7 @@ Add an optional `range` parameter to `GitChangesRequest` that accepts any git re
 ### Tests
 
 - Range `HEAD~1..HEAD` returns files from last commit
-- Range `HEAD~3..HEAD` returns files from last 3 commits
+- Range `HEAD~3..HEAD` returns files from last 3 commits  
 - Single ref `HEAD~2` treated as `HEAD~2..HEAD`
 - Range takes precedence over parent branch detection
 - Default-to-last-commit on clean main #review-on-main
