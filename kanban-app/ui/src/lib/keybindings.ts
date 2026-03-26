@@ -33,6 +33,7 @@ export const BINDING_TABLES: Record<KeymapMode, BindingTable> = {
     u: "app.undo",
     "Mod+r": "app.redo",
     Escape: "app.dismiss",
+    "Mod+w": "file.closeBoard",
   },
   cua: {
     "Mod+Shift+P": "app.palette",
@@ -40,11 +41,13 @@ export const BINDING_TABLES: Record<KeymapMode, BindingTable> = {
     "Mod+z": "app.undo",
     "Mod+Shift+Z": "app.redo",
     Escape: "app.dismiss",
+    "Mod+w": "file.closeBoard",
   },
   emacs: {
     "Mod+Shift+P": "app.palette",
     "Mod+f": "app.search",
     Escape: "app.dismiss",
+    "Mod+w": "file.closeBoard",
   },
 };
 

@@ -335,13 +335,20 @@ impl AppState {
                 .map(PathBuf::from)
                 .collect();
             for path in paths {
+                // Skip and remove entries with empty or invalid paths (trashed config entries)
+                if path.as_os_str().is_empty() {
+                    tracing::warn!("auto_open_board: removing entry with empty path from config");
+                    self.ui_state.remove_open_board("");
+                    continue;
+                }
                 if path.is_dir() {
                     tracing::info!(path = %path.display(), "auto_open_board: restoring persisted board");
                     if let Err(e) = self.open_board(&path, None).await {
                         tracing::warn!(path = %path.display(), error = %e, "auto_open_board: failed to restore board");
                     }
                 } else {
-                    tracing::info!(path = %path.display(), "auto_open_board: persisted board no longer exists, skipping");
+                    tracing::info!(path = %path.display(), "auto_open_board: persisted board no longer exists, removing");
+                    self.ui_state.remove_open_board(&path.display().to_string());
                 }
             }
         }

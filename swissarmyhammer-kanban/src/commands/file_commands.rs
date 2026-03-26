@@ -79,16 +79,25 @@ impl Command for CloseBoardCmd {
             .as_ref()
             .ok_or_else(|| CommandError::ExecutionFailed("UIState not available".into()))?;
 
-        // `path` must be explicitly provided — the concept of a global "active board"
-        // no longer exists. Each window owns its board via WindowState.board_path.
-        let path = ctx
+        // `path` must be explicitly provided — each window owns its board via WindowState.board_path.
+        let raw_path = ctx
             .args
             .get("path")
             .and_then(|v| v.as_str())
             .ok_or_else(|| CommandError::MissingArg("path".into()))?
             .to_string();
 
+        // Canonicalize for consistent matching with how boards are stored.
+        let canonical = std::path::PathBuf::from(&raw_path)
+            .canonicalize()
+            .unwrap_or_else(|_| std::path::PathBuf::from(&raw_path));
+        let path = canonical.display().to_string();
+
         ui.remove_open_board(&path);
+        // Also remove the raw form in case the stored path wasn't canonical
+        if path != raw_path {
+            ui.remove_open_board(&raw_path);
+        }
 
         Ok(json!({
             "BoardClose": {

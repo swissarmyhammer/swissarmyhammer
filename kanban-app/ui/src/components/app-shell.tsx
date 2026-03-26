@@ -8,9 +8,11 @@ import {
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   CommandScopeProvider,
   useExecuteCommand,
+  useActiveBoardPath,
   resolveCommand,
   dispatchCommand,
   type CommandDef,
@@ -145,6 +147,9 @@ export function AppShell({
       : "cua";
   const { setMode } = useAppMode();
   const dismissInspector = useInspectDismiss();
+  const activeBoardPath = useActiveBoardPath();
+  const activeBoardPathRef = useRef(activeBoardPath);
+  activeBoardPathRef.current = activeBoardPath;
 
   /** Global commands available throughout the app. */
   const globalCommands: CommandDef[] = useMemo(
@@ -291,9 +296,22 @@ export function AppShell({
       {
         id: "file.closeBoard",
         name: "Close Board",
-        keys: { cua: "Mod+W", vim: "Mod+W" },
+        keys: { cua: "Mod+w", vim: "Mod+w" },
         menuPlacement: { menu: "file", group: 0, order: 2 },
-        // No execute — dispatches to Rust via dispatch_command which calls file.closeBoard
+        execute: async () => {
+          // activeBoardPath may be undefined if the board failed to load (trashed entry).
+          // Fall back to the is_active board from the openBoards list.
+          const path =
+            activeBoardPathRef.current ??
+            openBoards?.find((b) => b.is_active)?.path;
+          if (path) {
+            await invoke("dispatch_command", {
+              cmd: "file.closeBoard",
+              args: { path },
+              windowLabel: getCurrentWindow().label,
+            });
+          }
+        },
       },
       {
         id: "window.new",

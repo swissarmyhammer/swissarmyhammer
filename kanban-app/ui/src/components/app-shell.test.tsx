@@ -19,6 +19,9 @@ vi.mock("@tauri-apps/api/core", () => ({
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(() => Promise.resolve(() => {})),
 }));
+vi.mock("@tauri-apps/api/window", () => ({
+  getCurrentWindow: () => ({ label: "main" }),
+}));
 
 import { AppShell } from "./app-shell";
 import { FocusScope } from "./focus-scope";
@@ -29,8 +32,12 @@ import {
   EntityFocusProvider,
   useEntityFocus,
 } from "@/lib/entity-focus-context";
-import { useAvailableCommands } from "@/lib/command-scope";
+import {
+  useAvailableCommands,
+  ActiveBoardPathProvider,
+} from "@/lib/command-scope";
 import { InspectProvider } from "@/lib/inspect-context";
+import { invoke } from "@tauri-apps/api/core";
 
 /**
  * Helper component that renders inside AppShell to inspect commands
@@ -178,6 +185,110 @@ describe("AppShell", () => {
     });
 
     expect(focusedFn).toHaveBeenCalled();
+  });
+
+  it("file.closeBoard passes path arg to dispatch_command", async () => {
+    const mockInvoke = invoke as ReturnType<typeof vi.fn>;
+
+    // Render with an active board path and openBoards
+    render(
+      <EntityFocusProvider>
+        <UIStateProvider>
+          <AppModeProvider>
+            <UndoStackProvider>
+              <InspectProvider onInspect={() => {}} onDismiss={() => false}>
+                <ActiveBoardPathProvider value="/test/board/.kanban">
+                  <AppShell
+                    openBoards={[
+                      {
+                        path: "/test/board/.kanban",
+                        name: "Test",
+                        is_active: true,
+                      },
+                    ]}
+                  >
+                    <CommandInspector />
+                  </AppShell>
+                </ActiveBoardPathProvider>
+              </InspectProvider>
+            </UndoStackProvider>
+          </AppModeProvider>
+        </UIStateProvider>
+      </EntityFocusProvider>,
+    );
+
+    mockInvoke.mockClear();
+
+    // Find and execute the file.closeBoard command
+    const closeBoardItem = screen.getByTestId("cmd-file.closeBoard");
+    expect(closeBoardItem).toBeTruthy();
+
+    // Simulate Cmd+W (CUA mode, non-Mac = Ctrl+W)
+    await act(async () => {
+      fireEvent.keyDown(document, {
+        key: "w",
+        code: "KeyW",
+        ctrlKey: true,
+      });
+    });
+
+    // The invoke should have been called with dispatch_command and path arg
+    const closeCall = mockInvoke.mock.calls.find(
+      (c: unknown[]) =>
+        c[0] === "dispatch_command" &&
+        (c[1] as Record<string, unknown>)?.cmd === "file.closeBoard",
+    );
+    expect(closeCall).toBeTruthy();
+    expect((closeCall![1] as Record<string, unknown>).args).toEqual({
+      path: "/test/board/.kanban",
+    });
+  });
+
+  it("file.closeBoard works with openBoards fallback when activeBoardPath is undefined", async () => {
+    const mockInvoke = invoke as ReturnType<typeof vi.fn>;
+
+    // Render WITHOUT ActiveBoardPathProvider (simulates trashed board with no loaded data)
+    render(
+      <EntityFocusProvider>
+        <UIStateProvider>
+          <AppModeProvider>
+            <UndoStackProvider>
+              <InspectProvider onInspect={() => {}} onDismiss={() => false}>
+                <AppShell
+                  openBoards={[
+                    { path: "/junk/board/.kanban", name: "", is_active: true },
+                  ]}
+                >
+                  <CommandInspector />
+                </AppShell>
+              </InspectProvider>
+            </UndoStackProvider>
+          </AppModeProvider>
+        </UIStateProvider>
+      </EntityFocusProvider>,
+    );
+
+    mockInvoke.mockClear();
+
+    // Simulate Cmd+W
+    await act(async () => {
+      fireEvent.keyDown(document, {
+        key: "w",
+        code: "KeyW",
+        ctrlKey: true,
+      });
+    });
+
+    // Should still dispatch with the path from openBoards fallback
+    const closeCall = mockInvoke.mock.calls.find(
+      (c: unknown[]) =>
+        c[0] === "dispatch_command" &&
+        (c[1] as Record<string, unknown>)?.cmd === "file.closeBoard",
+    );
+    expect(closeCall).toBeTruthy();
+    expect((closeCall![1] as Record<string, unknown>).args).toEqual({
+      path: "/junk/board/.kanban",
+    });
   });
 
   it("shows mode indicator as COMMAND when palette opens", async () => {
