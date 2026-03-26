@@ -96,6 +96,7 @@ export function EntityInspector({ entity, navRef }: EntityInspectorProps) {
         focused={index === nav.focusedIndex}
         inspectorEditing={index === nav.focusedIndex && nav.mode === "edit"}
         onExitEdit={nav.exitEdit}
+        onFocus={() => { nav.setFocusedIndex(index); nav.enterEdit(); }}
       />
     );
   };
@@ -134,6 +135,7 @@ interface FieldRowProps {
   focused?: boolean;
   inspectorEditing?: boolean;
   onExitEdit?: () => void;
+  onFocus?: () => void;
 }
 
 /**
@@ -143,6 +145,7 @@ interface FieldRowProps {
  * @param focused - Whether this row is the inspector's focused field
  * @param inspectorEditing - Whether the inspector nav has entered edit mode on this row
  * @param onExitEdit - Callback to tell the inspector nav that editing is done
+ * @param onFocus - Callback to sync the inspector nav cursor when this field is clicked
  */
 function FieldRow({
   field,
@@ -151,6 +154,7 @@ function FieldRow({
   focused = false,
   inspectorEditing = false,
   onExitEdit,
+  onFocus,
 }: FieldRowProps) {
   const [editing, setEditing] = useState(false);
 
@@ -164,8 +168,11 @@ function FieldRow({
   }, [inspectorEditing, editable]);
 
   const handleEdit = useCallback(() => {
-    if (editable) setEditing(true);
-  }, [editable]);
+    if (editable) {
+      onFocus?.();
+      setEditing(true);
+    }
+  }, [editable, onFocus]);
 
   const handleDone = useCallback(() => {
     setEditing(false);

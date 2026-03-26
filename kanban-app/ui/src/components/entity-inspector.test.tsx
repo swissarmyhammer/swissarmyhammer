@@ -360,6 +360,28 @@ describe("EntityInspector", () => {
     expect(tagsRow!.getAttribute("data-focused")).toBeNull();
   });
 
+  it("clicking a field syncs the inspector nav cursor to that field", async () => {
+    const { container } = await renderInspector(
+      makeEntity({ title: "T", body: "Click me", tags: [] }),
+    );
+    // Initially first field (title) is focused
+    const titleRow = container.querySelector('[data-testid="field-row-title"]');
+    expect(titleRow!.getAttribute("data-focused")).toBe("true");
+
+    // Click the body field text to enter edit mode
+    const bodyText = screen.getByText("Click me");
+    await act(async () => {
+      fireEvent.click(bodyText);
+      await new Promise((r) => setTimeout(r, 50));
+    });
+
+    // Body field (index 3: title=0, tags=1, progress=2, body=3) should now be focused
+    const bodyRow = container.querySelector('[data-testid="field-row-body"]');
+    expect(bodyRow!.getAttribute("data-focused")).toBe("true");
+    // Title should no longer be focused
+    expect(titleRow!.getAttribute("data-focused")).toBeNull();
+  });
+
   it("only one field has data-focused at a time", async () => {
     const { container } = await renderInspector(
       makeEntity({ title: "T", body: "B", tags: [], assignees: [] }),
