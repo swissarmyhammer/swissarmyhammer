@@ -3,7 +3,7 @@ name: coverage
 description: Analyze test coverage gaps on changed code. Scans branch changes, maps functions to tests structurally, and produces kanban cards for untested code. Use when the user says "coverage", "what's untested", "find coverage gaps", or wants to know what needs tests. Automatically delegates to a tester subagent.
 metadata:
   author: "swissarmyhammer"
-  version: "0.9.2"
+  version: "0.10.1"
 ---
 
 ## Project Detection

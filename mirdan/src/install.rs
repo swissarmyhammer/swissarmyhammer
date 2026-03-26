@@ -874,7 +874,7 @@ pub async fn run_uninstall(
     )])
 }
 
-fn uninstall_skill(
+pub fn uninstall_skill(
     name: &str,
     agent_filter: Option<&str>,
     global: bool,

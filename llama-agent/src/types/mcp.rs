@@ -286,14 +286,12 @@ impl HttpServerConfig {
     /// This method extracts the relevant HTTP transport configuration fields
     /// and creates the corresponding rmcp configuration object, enabling users
     /// to work with rmcp types directly when needed for advanced scenarios.
+    #[allow(clippy::field_reassign_with_default)] // field init syntax breaks with #[non_exhaustive] in newer rmcp
     pub fn to_streamable_config(&self) -> StreamableHttpServerConfig {
-        StreamableHttpServerConfig {
-            sse_keep_alive: self.sse_keep_alive_secs.map(Duration::from_secs),
-            stateful_mode: self.stateful_mode,
-            json_response: false,
-            cancellation_token: Default::default(),
-            sse_retry: None,
-        }
+        let mut config = StreamableHttpServerConfig::default();
+        config.sse_keep_alive = self.sse_keep_alive_secs.map(Duration::from_secs);
+        config.stateful_mode = self.stateful_mode;
+        config
     }
 
     /// Create HttpServerConfig from rmcp's StreamableHttpServerConfig.

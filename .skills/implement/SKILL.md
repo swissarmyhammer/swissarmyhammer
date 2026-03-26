@@ -3,7 +3,7 @@ name: implement
 description: Implementation workflow. Use this skill whenever you are implementing, coding, or building. Picks up one kanban card and does the work. Produces verbose output — automatically delegates to an implementer subagent.
 metadata:
   author: "swissarmyhammer"
-  version: "0.9.2"
+  version: "0.10.1"
 ---
 
 ## Project Detection
