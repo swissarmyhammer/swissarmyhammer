@@ -1,4 +1,10 @@
-import { createContext, useContext, useCallback, useMemo, type ReactNode } from "react";
+import {
+  createContext,
+  useContext,
+  useCallback,
+  useMemo,
+  type ReactNode,
+} from "react";
 import { parseMoniker } from "@/lib/moniker";
 
 type InspectFn = (moniker: string) => void;
@@ -23,7 +29,11 @@ interface InspectProviderProps {
 /**
  * Provides inspect and dismiss functions for the inspector panel stack.
  */
-export function InspectProvider({ onInspect, onDismiss, children }: InspectProviderProps) {
+export function InspectProvider({
+  onInspect,
+  onDismiss,
+  children,
+}: InspectProviderProps) {
   const inspect = useCallback(
     (m: string) => {
       const { type, id } = parseMoniker(m);
@@ -38,9 +48,7 @@ export function InspectProvider({ onInspect, onDismiss, children }: InspectProvi
   );
 
   return (
-    <InspectContext.Provider value={value}>
-      {children}
-    </InspectContext.Provider>
+    <InspectContext.Provider value={value}>{children}</InspectContext.Provider>
   );
 }
 
@@ -50,7 +58,8 @@ export function InspectProvider({ onInspect, onDismiss, children }: InspectProvi
  */
 export function useInspect(): InspectFn {
   const ctx = useContext(InspectContext);
-  if (!ctx) throw new Error("useInspect must be used within an InspectProvider");
+  if (!ctx)
+    throw new Error("useInspect must be used within an InspectProvider");
   return ctx.inspect;
 }
 
@@ -69,6 +78,7 @@ export function useInspectOptional(): InspectFn | null {
  */
 export function useInspectDismiss(): DismissFn {
   const ctx = useContext(InspectContext);
-  if (!ctx) throw new Error("useInspectDismiss must be used within an InspectProvider");
+  if (!ctx)
+    throw new Error("useInspectDismiss must be used within an InspectProvider");
   return ctx.dismiss;
 }

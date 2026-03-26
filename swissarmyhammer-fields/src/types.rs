@@ -211,6 +211,9 @@ pub struct EntityCommand {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct EntityDef {
     pub name: EntityTypeName,
+    /// Lucide icon name for this entity type (e.g. "check-square", "tag", "user").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub body_field: Option<FieldName>,
     #[serde(default)]
@@ -402,6 +405,7 @@ editor: custom-widget
     fn entity_def_yaml_round_trip() {
         let entity = EntityDef {
             name: "task".into(),
+            icon: None,
             body_field: Some("body".into()),
             fields: vec![
                 "title".into(),
@@ -428,6 +432,7 @@ editor: custom-widget
     fn entity_def_without_body_field() {
         let entity = EntityDef {
             name: "tag".into(),
+            icon: None,
             body_field: None,
             fields: vec!["tag_name".into(), "color".into(), "description".into()],
             validate: None,
@@ -907,6 +912,7 @@ fields:
     fn entity_def_with_commands_yaml_round_trip() {
         let entity = EntityDef {
             name: "task".into(),
+            icon: None,
             body_field: Some("body".into()),
             fields: vec!["title".into(), "tags".into()],
             validate: None,

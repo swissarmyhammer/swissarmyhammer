@@ -3,7 +3,9 @@ import { renderHook, act } from "@testing-library/react";
 import type { ReactNode } from "react";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-const mockInvoke = vi.fn((..._args: any[]) => Promise.resolve({ id: "t1", entity_type: "task", title: "Updated" }));
+const mockInvoke = vi.fn((..._args: any[]) =>
+  Promise.resolve({ id: "t1", entity_type: "task", title: "Updated" }),
+);
 
 vi.mock("@tauri-apps/api/core", () => ({
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -25,11 +27,7 @@ import { FieldUpdateProvider, useFieldUpdate } from "./field-update-context";
 
 describe("FieldUpdateProvider", () => {
   function wrapper({ children }: { children: ReactNode }) {
-    return (
-      <FieldUpdateProvider>
-        {children}
-      </FieldUpdateProvider>
-    );
+    return <FieldUpdateProvider>{children}</FieldUpdateProvider>;
   }
 
   beforeEach(() => {
@@ -46,7 +44,12 @@ describe("FieldUpdateProvider", () => {
     expect(mockInvoke).toHaveBeenCalledTimes(1);
     expect(mockInvoke).toHaveBeenCalledWith("dispatch_command", {
       cmd: "entity.update_field",
-      args: { entity_type: "task", id: "t1", field_name: "title", value: "New Title" },
+      args: {
+        entity_type: "task",
+        id: "t1",
+        field_name: "title",
+        value: "New Title",
+      },
     });
   });
 
@@ -85,7 +88,12 @@ describe("FieldUpdateProvider", () => {
 
     expect(mockInvoke).toHaveBeenCalledWith("dispatch_command", {
       cmd: "entity.update_field",
-      args: { entity_type: "tag", id: "tag-1", field_name: "color", value: "ff0000" },
+      args: {
+        entity_type: "tag",
+        id: "tag-1",
+        field_name: "color",
+        value: "ff0000",
+      },
     });
   });
 
@@ -93,12 +101,22 @@ describe("FieldUpdateProvider", () => {
     const { result } = renderHook(() => useFieldUpdate(), { wrapper });
 
     await act(async () => {
-      await result.current.updateField("column", "col-1", "name", "In Progress");
+      await result.current.updateField(
+        "column",
+        "col-1",
+        "name",
+        "In Progress",
+      );
     });
 
     expect(mockInvoke).toHaveBeenCalledWith("dispatch_command", {
       cmd: "entity.update_field",
-      args: { entity_type: "column", id: "col-1", field_name: "name", value: "In Progress" },
+      args: {
+        entity_type: "column",
+        id: "col-1",
+        field_name: "name",
+        value: "In Progress",
+      },
     });
   });
 });

@@ -166,6 +166,25 @@ pub async fn execute_operation(
             if let Some(desc) = op.get_string("description") {
                 cmd = cmd.with_description(desc);
             }
+            if let Some(assignees) = op.get_param("assignees").and_then(|v| v.as_array()) {
+                let ids: Vec<ActorId> = assignees
+                    .iter()
+                    .filter_map(|v| v.as_str().map(|s| s.into()))
+                    .collect();
+                if !ids.is_empty() {
+                    cmd = cmd.with_assignees(ids);
+                }
+            }
+            if let Some(deps) = op.get_param("depends_on").and_then(|v| v.as_array()) {
+                let dep_ids: Vec<TaskId> = deps
+                    .iter()
+                    .filter_map(|v| v.as_str().map(TaskId::from_string))
+                    .collect();
+                cmd = cmd.with_depends_on(dep_ids);
+            }
+            if let Some(swimlane) = op.get_string("swimlane") {
+                cmd = cmd.with_swimlane(Some(swimlane.into()));
+            }
             processor.process(&cmd, ctx).await
         }
         (Verb::Move, Noun::Task) => {

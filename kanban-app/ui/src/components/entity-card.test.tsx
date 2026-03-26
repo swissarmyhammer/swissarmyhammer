@@ -53,6 +53,7 @@ const TASK_SCHEMA = {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const mockInvoke = vi.fn((...args: any[]) => {
+  if (args[0] === "list_entity_types") return Promise.resolve(["task"]);
   if (args[0] === "get_entity_schema") return Promise.resolve(TASK_SCHEMA);
   if (args[0] === "get_ui_state")
     return Promise.resolve({

@@ -9,7 +9,11 @@ interface SortableColumnProps {
   showSeparator: boolean;
 }
 
-export function SortableColumn({ id, children, showSeparator }: SortableColumnProps) {
+export function SortableColumn({
+  id,
+  children,
+  showSeparator,
+}: SortableColumnProps) {
   const {
     attributes,
     listeners,

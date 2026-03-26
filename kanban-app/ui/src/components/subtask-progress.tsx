@@ -3,7 +3,9 @@ import { useMemo } from "react";
 const CHECKBOX_RE = /- \[([ xX])\]/g;
 
 /** Compute subtask progress from markdown checkboxes. */
-export function checkboxProgress(description?: string): { checked: number; total: number } | null {
+export function checkboxProgress(
+  description?: string,
+): { checked: number; total: number } | null {
   if (!description) return null;
   let total = 0;
   let checked = 0;
@@ -19,7 +21,10 @@ interface SubtaskProgressProps {
   className?: string;
 }
 
-export function SubtaskProgress({ description, className }: SubtaskProgressProps) {
+export function SubtaskProgress({
+  description,
+  className,
+}: SubtaskProgressProps) {
   const progress = useMemo(() => checkboxProgress(description), [description]);
 
   if (!progress) return null;

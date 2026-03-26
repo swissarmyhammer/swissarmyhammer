@@ -24,15 +24,26 @@ describe("parseMoniker", () => {
   });
 
   it("handles id with colons", () => {
-    expect(parseMoniker("task:foo:bar")).toEqual({ type: "task", id: "foo:bar" });
+    expect(parseMoniker("task:foo:bar")).toEqual({
+      type: "task",
+      id: "foo:bar",
+    });
   });
 
   it("parses field-level moniker", () => {
-    expect(parseMoniker("task:abc.title")).toEqual({ type: "task", id: "abc", field: "title" });
+    expect(parseMoniker("task:abc.title")).toEqual({
+      type: "task",
+      id: "abc",
+      field: "title",
+    });
   });
 
   it("field-level with colons in id", () => {
-    expect(parseMoniker("task:foo:bar.title")).toEqual({ type: "task", id: "foo:bar", field: "title" });
+    expect(parseMoniker("task:foo:bar.title")).toEqual({
+      type: "task",
+      id: "foo:bar",
+      field: "title",
+    });
   });
 
   it("throws on no colon", () => {

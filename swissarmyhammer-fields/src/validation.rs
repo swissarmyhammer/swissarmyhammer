@@ -477,6 +477,7 @@ mod tests {
     fn entity_def_yaml_round_trip_with_validate() {
         let entity = EntityDef {
             name: "task".into(),
+            icon: None,
             body_field: Some("body".into()),
             fields: vec!["title".into(), "status".into()],
             validate: Some("if (!ctx.fields.title) throw new Error('title required');".into()),
@@ -495,6 +496,7 @@ mod tests {
         let engine = ValidationEngine::new();
         let entity_def = EntityDef {
             name: "task".into(),
+            icon: None,
             body_field: None,
             fields: vec!["title".into()],
             validate: None,
@@ -516,6 +518,7 @@ mod tests {
         let engine = ValidationEngine::new();
         let entity_def = EntityDef {
             name: "task".into(),
+            icon: None,
             body_field: None,
             fields: vec!["title".into(), "status".into()],
             validate: Some(
@@ -544,6 +547,7 @@ mod tests {
         let engine = ValidationEngine::new();
         let entity_def = EntityDef {
             name: "task".into(),
+            icon: None,
             body_field: None,
             fields: vec!["title".into()],
             validate: Some(r#"throw new Error("entity validation failed");"#.to_string()),
@@ -622,6 +626,7 @@ mod tests {
         let engine = ValidationEngine::new();
         let entity_def = EntityDef {
             name: "task".into(),
+            icon: None,
             body_field: None,
             fields: vec!["title".into()],
             validate: Some("return ctx.fields;".to_string()),

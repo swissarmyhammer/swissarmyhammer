@@ -1,4 +1,5 @@
 name: actor
+icon: user
 mention_prefix: "@"
 mention_display_field: name
 search_display_field: name

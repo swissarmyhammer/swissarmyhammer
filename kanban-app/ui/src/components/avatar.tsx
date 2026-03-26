@@ -10,6 +10,7 @@
 import { FocusScope } from "@/components/focus-scope";
 import { useEntityStore } from "@/lib/entity-store-context";
 import { useEntityCommands } from "@/lib/entity-commands";
+import { useSchema } from "@/lib/schema-context";
 import { moniker } from "@/lib/moniker";
 import { deriveActorColor } from "@/lib/actor-colors";
 import { getStr } from "@/types/kanban";
@@ -37,9 +38,14 @@ function initials(name: string): string {
 
 export function Avatar({ actorId, size = "md", className }: AvatarProps) {
   const { getEntity } = useEntityStore();
+  const { mentionableTypes } = useSchema();
   const actor = getEntity("actor", actorId);
 
-  const name = actor ? getStr(actor, "name") || actorId : actorId;
+  // Resolve the display name field from the actor schema (mention_display_field)
+  const nameField =
+    mentionableTypes.find((mt) => mt.entityType === "actor")?.displayField ??
+    "name";
+  const name = actor ? getStr(actor, nameField) || actorId : actorId;
   const color = actor
     ? getStr(actor, "color") || deriveActorColor(actorId)
     : deriveActorColor(actorId);

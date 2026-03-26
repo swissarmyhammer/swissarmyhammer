@@ -7,7 +7,7 @@
 export function neighborIds(
   ids: string[],
   index: number,
-  selfId: string
+  selfId: string,
 ): { beforeId: string | null; afterId: string | null } {
   const filtered = ids.filter((id) => id !== selfId);
   // After filtering out selfId, the task's position is the number of items before `index`

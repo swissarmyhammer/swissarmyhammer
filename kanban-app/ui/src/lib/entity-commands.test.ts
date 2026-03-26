@@ -30,6 +30,7 @@ const TASK_SCHEMA = {
 vi.mock("@tauri-apps/api/core", () => ({
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   invoke: vi.fn((...args: any[]) => {
+    if (args[0] === "list_entity_types") return Promise.resolve(["task"]);
     if (args[0] === "get_entity_schema") return Promise.resolve(TASK_SCHEMA);
     return Promise.resolve(null);
   }),

@@ -3,6 +3,8 @@ import { render, fireEvent, act } from "@testing-library/react";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const mockInvoke = vi.fn((...args: any[]) => {
+  if (args[0] === "list_entity_types")
+    return Promise.resolve(["task", "tag", "actor"]);
   if (args[0] === "get_entity_schema") {
     const entityType = args[1]?.entityType as string;
     return Promise.resolve(SCHEMAS[entityType] ?? DEFAULT_SCHEMA);

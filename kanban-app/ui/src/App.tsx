@@ -9,7 +9,7 @@ import { UIStateProvider } from "@/lib/ui-state-context";
 import { AppModeProvider } from "@/lib/app-mode-context";
 import { UndoStackProvider } from "@/lib/undo-context";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
-import { SchemaProvider } from "@/lib/schema-context";
+import { SchemaProvider, useSchema } from "@/lib/schema-context";
 import { FieldUpdateProvider } from "@/lib/field-update-context";
 import { EntityStoreProvider } from "@/lib/entity-store-context";
 import { InspectProvider } from "@/lib/inspect-context";
@@ -709,17 +709,22 @@ function InspectorPanel({
   onClose: () => void;
   style?: React.CSSProperties;
 }) {
+  const { getSchema } = useSchema();
   const [fetchedEntity, setFetchedEntity] = useState<Entity | null>(null);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const fetchedRef = useRef<string | null>(null);
 
-  // Try local store first
+  // Try local store first — match by ID, then by search_display_field from schema
   const entities = entityStore[entry.entityType];
   let localEntity = entities?.find((e) => e.id === entry.entityId);
-  if (!localEntity && entry.entityType === "tag") {
-    localEntity = entities?.find(
-      (e) => getStr(e, "tag_name") === entry.entityId,
-    );
+  if (!localEntity) {
+    const displayField = getSchema(entry.entityType)?.entity
+      .search_display_field;
+    if (displayField) {
+      localEntity = entities?.find(
+        (e) => getStr(e, displayField) === entry.entityId,
+      );
+    }
   }
   // Board entity is special
   const resolved =

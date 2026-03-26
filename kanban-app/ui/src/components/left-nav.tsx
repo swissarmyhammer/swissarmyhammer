@@ -1,30 +1,28 @@
-import { Kanban, List, Calendar, Clock, LayoutGrid, Table2, Tag } from "lucide-react";
+import { icons, LayoutGrid } from "lucide-react";
 import { useViews } from "@/lib/views-context";
 import { useExecuteCommand } from "@/lib/command-scope";
 import { cn } from "@/lib/utils";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import type { ViewDef } from "@/types/kanban";
 
-/** Map a view icon name (from YAML) to a Lucide icon component. */
+/** Convert kebab-case icon name to PascalCase key for lucide-react lookup. */
+function kebabToPascal(s: string): string {
+  return s.replace(/(^|-)([a-z])/g, (_, _dash, c: string) => c.toUpperCase());
+}
+
+/** Resolve a view's icon from its YAML `icon` property via dynamic lucide lookup. */
 function viewIcon(view: ViewDef) {
-  switch (view.icon ?? view.kind) {
-    case "kanban":
-    case "board":
-      return <Kanban className="h-4 w-4" />;
-    case "list":
-      return <List className="h-4 w-4" />;
-    case "calendar":
-      return <Calendar className="h-4 w-4" />;
-    case "timeline":
-      return <Clock className="h-4 w-4" />;
-    case "table":
-    case "grid":
-      return <Table2 className="h-4 w-4" />;
-    case "tag":
-      return <Tag className="h-4 w-4" />;
-    default:
-      return <LayoutGrid className="h-4 w-4" />;
+  const name = view.icon ?? view.kind;
+  if (name) {
+    const key = kebabToPascal(name);
+    const Icon = icons[key as keyof typeof icons];
+    if (Icon) return <Icon className="h-4 w-4" />;
   }
+  return <LayoutGrid className="h-4 w-4" />;
 }
 
 export function LeftNav() {

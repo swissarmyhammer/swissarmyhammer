@@ -46,7 +46,7 @@ describe("SubtaskProgress", () => {
 
   it("renders progress bar with correct percentage", () => {
     const { container } = render(
-      <SubtaskProgress description="- [x] a\n- [ ] b\n- [ ] c\n- [ ] d" />
+      <SubtaskProgress description="- [x] a\n- [ ] b\n- [ ] c\n- [ ] d" />,
     );
     const bar = container.querySelector('[role="progressbar"]');
     expect(bar).toBeTruthy();
@@ -55,7 +55,7 @@ describe("SubtaskProgress", () => {
 
   it("shows 0% when none checked", () => {
     const { container } = render(
-      <SubtaskProgress description="- [ ] a\n- [ ] b" />
+      <SubtaskProgress description="- [ ] a\n- [ ] b" />,
     );
     const bar = container.querySelector('[role="progressbar"]');
     expect(bar!.getAttribute("aria-valuenow")).toBe("0");
@@ -64,7 +64,7 @@ describe("SubtaskProgress", () => {
 
   it("shows 100% when all checked", () => {
     const { container } = render(
-      <SubtaskProgress description="- [x] a\n- [x] b" />
+      <SubtaskProgress description="- [x] a\n- [x] b" />,
     );
     const bar = container.querySelector('[role="progressbar"]');
     expect(bar!.getAttribute("aria-valuenow")).toBe("100");
@@ -72,7 +72,7 @@ describe("SubtaskProgress", () => {
 
   it("applies custom className", () => {
     const { container } = render(
-      <SubtaskProgress description="- [ ] a" className="mt-4" />
+      <SubtaskProgress description="- [ ] a" className="mt-4" />,
     );
     const wrapper = container.firstElementChild;
     expect(wrapper?.className).toContain("mt-4");

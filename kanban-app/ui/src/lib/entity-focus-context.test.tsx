@@ -1,6 +1,11 @@
 import { describe, it, expect, vi } from "vitest";
 import { renderHook, act } from "@testing-library/react";
-import { EntityFocusProvider, useEntityFocus, useFocusedScope, useIsFocused } from "./entity-focus-context";
+import {
+  EntityFocusProvider,
+  useEntityFocus,
+  useFocusedScope,
+  useIsFocused,
+} from "./entity-focus-context";
 import type { CommandScope } from "./command-scope";
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -19,14 +24,20 @@ describe("useEntityFocus", () => {
 
   it("setFocus updates focusedMoniker", () => {
     const { result } = renderHook(() => useEntityFocus(), { wrapper });
-    act(() => { result.current.setFocus("task:abc"); });
+    act(() => {
+      result.current.setFocus("task:abc");
+    });
     expect(result.current.focusedMoniker).toBe("task:abc");
   });
 
   it("setFocus(null) clears focus", () => {
     const { result } = renderHook(() => useEntityFocus(), { wrapper });
-    act(() => { result.current.setFocus("task:abc"); });
-    act(() => { result.current.setFocus(null); });
+    act(() => {
+      result.current.setFocus("task:abc");
+    });
+    act(() => {
+      result.current.setFocus(null);
+    });
     expect(result.current.focusedMoniker).toBeNull();
   });
 
@@ -40,12 +51,20 @@ describe("useEntityFocus", () => {
 describe("scope registry", () => {
   it("registerScope/unregisterScope lifecycle", () => {
     const { result } = renderHook(() => useEntityFocus(), { wrapper });
-    const scope: CommandScope = { commands: new Map(), parent: null, moniker: "task:abc" };
+    const scope: CommandScope = {
+      commands: new Map(),
+      parent: null,
+      moniker: "task:abc",
+    };
 
-    act(() => { result.current.registerScope("task:abc", scope); });
+    act(() => {
+      result.current.registerScope("task:abc", scope);
+    });
     expect(result.current.getScope("task:abc")).toBe(scope);
 
-    act(() => { result.current.unregisterScope("task:abc"); });
+    act(() => {
+      result.current.unregisterScope("task:abc");
+    });
     expect(result.current.getScope("task:abc")).toBeNull();
   });
 
@@ -62,7 +81,11 @@ describe("useFocusedScope", () => {
   });
 
   it("returns the scope when focused", () => {
-    const scope: CommandScope = { commands: new Map(), parent: null, moniker: "task:abc" };
+    const scope: CommandScope = {
+      commands: new Map(),
+      parent: null,
+      moniker: "task:abc",
+    };
 
     const { result } = renderHook(
       () => {
@@ -91,7 +114,9 @@ describe("useFocusedScope", () => {
       { wrapper },
     );
 
-    act(() => { result.current.focus.setFocus("task:missing"); });
+    act(() => {
+      result.current.focus.setFocus("task:missing");
+    });
     expect(result.current.focusedScope).toBeNull();
   });
 });
@@ -103,7 +128,11 @@ describe("useIsFocused", () => {
   });
 
   it("returns true for direct match", () => {
-    const scope: CommandScope = { commands: new Map(), parent: null, moniker: "task:abc" };
+    const scope: CommandScope = {
+      commands: new Map(),
+      parent: null,
+      moniker: "task:abc",
+    };
     const { result } = renderHook(
       () => {
         const focus = useEntityFocus();
@@ -121,8 +150,16 @@ describe("useIsFocused", () => {
   });
 
   it("returns true for ancestor match", () => {
-    const parentScope: CommandScope = { commands: new Map(), parent: null, moniker: "column:col1" };
-    const childScope: CommandScope = { commands: new Map(), parent: parentScope, moniker: "task:abc" };
+    const parentScope: CommandScope = {
+      commands: new Map(),
+      parent: null,
+      moniker: "column:col1",
+    };
+    const childScope: CommandScope = {
+      commands: new Map(),
+      parent: parentScope,
+      moniker: "task:abc",
+    };
 
     const { result } = renderHook(
       () => {
@@ -143,7 +180,11 @@ describe("useIsFocused", () => {
   });
 
   it("returns false for unrelated moniker", () => {
-    const scope: CommandScope = { commands: new Map(), parent: null, moniker: "task:abc" };
+    const scope: CommandScope = {
+      commands: new Map(),
+      parent: null,
+      moniker: "task:abc",
+    };
     const { result } = renderHook(
       () => {
         const focus = useEntityFocus();

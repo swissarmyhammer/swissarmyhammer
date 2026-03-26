@@ -1,4 +1,12 @@
-import { createContext, useContext, useState, useCallback, useRef, useMemo, type ReactNode } from "react";
+import {
+  createContext,
+  useContext,
+  useState,
+  useCallback,
+  useRef,
+  useMemo,
+  type ReactNode,
+} from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { CommandScope } from "./command-scope";
 
@@ -44,9 +52,15 @@ export function EntityFocusProvider({ children }: { children: ReactNode }) {
       // Fire and forget -- don't await.
       // Route through dispatch_command so focus changes flow through the unified
       // command pipeline (logging, UIState sync, etc.).
-      invoke("dispatch_command", { cmd: "ui.setFocus", args: { scope_chain: chain } }).catch((error) => console.error("ui.setFocus failed:", error));
+      invoke("dispatch_command", {
+        cmd: "ui.setFocus",
+        args: { scope_chain: chain },
+      }).catch((error) => console.error("ui.setFocus failed:", error));
     } else {
-      invoke("dispatch_command", { cmd: "ui.setFocus", args: { scope_chain: [] } }).catch((error) => console.error("ui.setFocus failed:", error));
+      invoke("dispatch_command", {
+        cmd: "ui.setFocus",
+        args: { scope_chain: [] },
+      }).catch((error) => console.error("ui.setFocus failed:", error));
     }
   }, []);
 
@@ -63,7 +77,13 @@ export function EntityFocusProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const value = useMemo<EntityFocusContextValue>(
-    () => ({ focusedMoniker, setFocus, registerScope, unregisterScope, getScope }),
+    () => ({
+      focusedMoniker,
+      setFocus,
+      registerScope,
+      unregisterScope,
+      getScope,
+    }),
     [focusedMoniker, setFocus, registerScope, unregisterScope, getScope],
   );
 
@@ -80,7 +100,10 @@ export function EntityFocusProvider({ children }: { children: ReactNode }) {
  */
 export function useEntityFocus(): EntityFocusContextValue {
   const ctx = useContext(EntityFocusContext);
-  if (!ctx) throw new Error("useEntityFocus must be used within an EntityFocusProvider");
+  if (!ctx)
+    throw new Error(
+      "useEntityFocus must be used within an EntityFocusProvider",
+    );
   return ctx;
 }
 

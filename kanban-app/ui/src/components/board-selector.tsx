@@ -57,7 +57,8 @@ export function BoardSelector({
   if (boards.length === 0) return null;
 
   const selected = boards.find((b) => b.path === selectedPath);
-  const displayName = (typeof boardName === "string" && boardName) || selected?.name || "";
+  const displayName =
+    (typeof boardName === "string" && boardName) || selected?.name || "";
   const stem = selectedPath ? pathStem(selectedPath) : "";
 
   return (
@@ -85,18 +86,23 @@ export function BoardSelector({
           size="sm"
         >
           {stem && (
-            <span className="text-xs text-muted-foreground/50 shrink-0">{stem}</span>
+            <span className="text-xs text-muted-foreground/50 shrink-0">
+              {stem}
+            </span>
           )}
         </SelectTrigger>
         <SelectContent position="popper">
           {boards.map((b) => {
-            const name = b.path === selectedPath
-              ? displayName
-              : (b.name || pathStem(b.path));
+            const name =
+              b.path === selectedPath
+                ? displayName
+                : b.name || pathStem(b.path);
             return (
               <SelectItem key={b.path} value={b.path}>
                 <span>{name}</span>
-                <span className="ml-2 text-muted-foreground/50">{pathStem(b.path)}</span>
+                <span className="ml-2 text-muted-foreground/50">
+                  {pathStem(b.path)}
+                </span>
               </SelectItem>
             );
           })}
@@ -110,7 +116,9 @@ export function BoardSelector({
           className="h-6 w-6 text-muted-foreground/40"
           title="Open in new window"
           onClick={() => {
-            invoke("create_window", { boardPath: selectedPath }).catch(console.error);
+            invoke("create_window", { boardPath: selectedPath }).catch(
+              console.error,
+            );
           }}
         >
           <ExternalLink className="h-3.5 w-3.5" />

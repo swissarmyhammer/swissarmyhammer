@@ -14,7 +14,12 @@ interface SlidePanelProps {
  * Renders children inside a 420px panel with a close button.
  * Knows nothing about entities, fields, or tasks.
  */
-export function SlidePanel({ open, onClose, style, children }: SlidePanelProps) {
+export function SlidePanel({
+  open,
+  onClose,
+  style,
+  children,
+}: SlidePanelProps) {
   const panelRef = useRef<HTMLDivElement>(null);
 
   return (
@@ -33,9 +38,7 @@ export function SlidePanel({ open, onClose, style, children }: SlidePanelProps) 
           <X className="h-4 w-4" />
         </button>
       </div>
-      <div className="flex-1 min-h-0 overflow-y-auto px-5 pb-5">
-        {children}
-      </div>
+      <div className="flex-1 min-h-0 overflow-y-auto px-5 pb-5">{children}</div>
     </div>
   );
 }
