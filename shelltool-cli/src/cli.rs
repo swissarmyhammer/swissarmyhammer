@@ -27,14 +27,15 @@ impl std::fmt::Display for InstallTarget {
     }
 }
 
-/// shelltool - Standalone MCP shell tool for AI coding agents
+/// shelltool - A shell that works the way you do
 ///
-/// Serves the SwissArmyHammer shell tool over MCP stdio, giving AI agents
-/// a persistent virtual shell with history, process management, and semantic search.
+/// Agents shouldn't drown in raw command output. shelltool gives them a
+/// persistent shell with searchable history — run commands, then grep or
+/// semantic-search the results instead of clogging the context window.
 #[derive(Parser, Debug)]
 #[command(name = "shelltool")]
 #[command(version)]
-#[command(about = "Standalone MCP shell tool CLI for AI coding agents")]
+#[command(about = "A shell that saves tokens — run, search, retrieve")]
 pub struct Cli {
     /// Enable debug output to stderr
     #[arg(short, long, global = true)]

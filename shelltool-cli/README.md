@@ -1,4 +1,14 @@
+<div align="center">
+
+<img src="shelltool.png" alt="shelltool" width="256" height="256">
+
 # shelltool
+
+**A shell that saves tokens — run, search, retrieve.**
+
+</div>
+
+---
 
 A virtual shell for AI agents that works the way a person uses a terminal.
 

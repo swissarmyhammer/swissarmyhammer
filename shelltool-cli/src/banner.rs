@@ -72,11 +72,11 @@ pub fn render_banner(out: &mut dyn Write, use_color: bool) {
     if use_color {
         let _ = writeln!(
             out,
-            "  {}Standalone MCP shell tool for AI coding agents{}",
+            "  {}A shell that saves tokens — run, search, retrieve{}",
             DIM, RESET
         );
     } else {
-        let _ = writeln!(out, "  Standalone MCP shell tool for AI coding agents");
+        let _ = writeln!(out, "  A shell that saves tokens — run, search, retrieve");
     }
     let _ = writeln!(out);
 }
@@ -116,7 +116,7 @@ mod tests {
         let mut buf = Vec::new();
         render_banner(&mut buf, false);
         let output = String::from_utf8(buf).expect("valid utf8");
-        assert!(output.contains("Standalone MCP shell tool for AI coding agents"));
+        assert!(output.contains("A shell that saves tokens — run, search, retrieve"));
         // SHELL block-letter fragment
         assert!(output.contains("███████╗"));
         // TOOL block-letter fragment
@@ -130,7 +130,7 @@ mod tests {
         let mut buf = Vec::new();
         render_banner(&mut buf, true);
         let output = String::from_utf8(buf).expect("valid utf8");
-        assert!(output.contains("Standalone MCP shell tool for AI coding agents"));
+        assert!(output.contains("A shell that saves tokens — run, search, retrieve"));
         // Should contain ANSI color codes (green gradient)
         assert!(output.contains("\x1b[38;5;"));
         assert!(output.contains(RESET));
