@@ -270,7 +270,7 @@ export const ColumnView = memo(function ColumnView({
       <div className="flex flex-col min-h-0 min-w-0 flex-1">
         <FocusHighlight
           focused={focusedCardIndex === -1}
-          className="px-3 py-2 flex items-center gap-2 rounded"
+          className="column-header-focus px-3 py-2 flex items-center gap-2 rounded"
           onClickCapture={() => navActions?.onHeaderClick(column.id)}
         >
           {nameFieldDef ? (

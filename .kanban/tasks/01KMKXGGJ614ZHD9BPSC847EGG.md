@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: c480
+position_column: done
+position_ordinal: ffffffffffffb380
 title: Fix column header focus bar position — align with title text, not column edge
 ---
 ## What
