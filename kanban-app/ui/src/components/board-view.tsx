@@ -2,6 +2,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -604,7 +605,11 @@ function BoardFocusBridge({ moniker: focusMoniker }: { moniker: string }) {
   const { setFocus, registerScope, unregisterScope } = useEntityFocus();
   const prevMonikerRef = useRef<string | null>(null);
 
-  useEffect(() => {
+  // useLayoutEffect ensures cursor→moniker sync happens before the browser
+  // paints. Without this, there's a render cycle gap where focusedCardIndex
+  // (from the cursor) and focusedMoniker (from entity focus) can point to
+  // different cards, causing two cards to briefly show the focus bar.
+  useLayoutEffect(() => {
     if (!boardScope) return;
 
     // Unregister previous moniker if it changed

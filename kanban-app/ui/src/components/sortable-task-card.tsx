@@ -50,6 +50,14 @@ export const DraggableTaskCard = memo(function DraggableTaskCard({
         clone.style.zoom = "1";
         clone.style.opacity = "1";
         clone.style.pointerEvents = "none";
+        // The OS drag image is built from this clone (outside React).
+        // Strip focus indicators so the ghost doesn't show the bar.
+        clone.removeAttribute("data-focused");
+        clone.removeAttribute("data-focus-depth");
+        for (const el of clone.querySelectorAll("[data-focused]")) {
+          el.removeAttribute("data-focused");
+          el.removeAttribute("data-focus-depth");
+        }
         document.body.appendChild(clone);
         e.dataTransfer.setDragImage(clone, 20, 20);
         requestAnimationFrame(() => clone.remove());

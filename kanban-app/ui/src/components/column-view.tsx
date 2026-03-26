@@ -260,8 +260,7 @@ export const ColumnView = memo(function ColumnView({
                     dragTaskId={dragTaskId}
                     onDrop={handleZoneDrop}
                   />
-                  <FocusHighlight
-                    focused={focusedCardIndex === i}
+                  <div
                     className="rounded"
                     onClickCapture={() => navActions?.onCardClick(column.id, i)}
                     onDoubleClickCapture={() =>
@@ -274,7 +273,7 @@ export const ColumnView = memo(function ColumnView({
                       onDragEnd={onTaskDragEnd}
                       extraCommands={taskExtraCommands.get(entity.id)}
                     />
-                  </FocusHighlight>
+                  </div>
                 </div>
               ))}
               {/* Final zone after the last card */}

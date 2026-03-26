@@ -12,6 +12,8 @@ vi.mock("@tauri-apps/api/window", () => ({
 
 import {
   CommandScopeProvider,
+  ActiveBoardPathProvider,
+  useActiveBoardPath,
   resolveCommand,
   useAvailableCommands,
   collectAvailableCommands,
@@ -53,6 +55,42 @@ function wrapper(
     return el;
   };
 }
+
+/* ---------- ActiveBoardPathProvider / useActiveBoardPath ---------- */
+
+describe("ActiveBoardPathProvider", () => {
+  it("propagates value to useActiveBoardPath consumers", () => {
+    const w = ({ children }: { children: ReactNode }) => (
+      <ActiveBoardPathProvider value="/boards/my-board">
+        {children}
+      </ActiveBoardPathProvider>
+    );
+    const { result } = renderHook(() => useActiveBoardPath(), { wrapper: w });
+    expect(result.current).toBe("/boards/my-board");
+  });
+
+  it("updating the provider value is reflected immediately in consumers", () => {
+    let boardPath = "/boards/first";
+    const w = ({ children }: { children: ReactNode }) => (
+      <ActiveBoardPathProvider value={boardPath}>
+        {children}
+      </ActiveBoardPathProvider>
+    );
+    const { result, rerender } = renderHook(() => useActiveBoardPath(), {
+      wrapper: w,
+    });
+    expect(result.current).toBe("/boards/first");
+
+    boardPath = "/boards/second";
+    rerender();
+    expect(result.current).toBe("/boards/second");
+  });
+
+  it("useActiveBoardPath returns undefined when no provider is present", () => {
+    const { result } = renderHook(() => useActiveBoardPath());
+    expect(result.current).toBeUndefined();
+  });
+});
 
 /* ---------- resolveCommand (pure) ---------- */
 
@@ -465,6 +503,22 @@ describe("dispatchCommand", () => {
       "dispatch_command",
       expect.anything(),
     );
+  });
+
+  it("includes boardPath in invoke args when a board path is provided", async () => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    (invoke as ReturnType<typeof vi.fn>).mockResolvedValue({});
+    await dispatchCommand(
+      { id: "task.create", name: "Create", target: "task:new" },
+      "/boards/my-board",
+    );
+    expect(invoke).toHaveBeenCalledWith("dispatch_command", {
+      cmd: "task.create",
+      target: "task:new",
+      args: undefined,
+      boardPath: "/boards/my-board",
+      windowLabel: "main",
+    });
   });
 
   it("dispatches to Rust when no execute is set (no args)", async () => {

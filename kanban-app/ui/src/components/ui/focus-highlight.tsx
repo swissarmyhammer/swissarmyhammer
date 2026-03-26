@@ -8,13 +8,12 @@ type FocusHighlightProps = {
 } & Omit<React.HTMLAttributes<HTMLElement>, "ref">;
 
 /**
- * Shared visual focus primitive used across the app.
+ * Low-level visual primitive: sets `data-focused` and scrolls into view.
  *
- * Sets `data-focused` when active, which is styled globally via
- * `[data-focused] { filter: brightness(0.97) }` in index.css.
- *
- * Also scrolls the element into view when it becomes focused.
- * No borders, rings, or layout-shifting effects — just the brightness filter.
+ * For entity focus, use FocusScope instead — it is the single decorator
+ * that owns focus identity, command scope, and visual rendering.
+ * FocusHighlight is only used directly for non-entity focus indicators
+ * (e.g. column headers, inspector field navigation).
  */
 export const FocusHighlight = forwardRef<HTMLElement, FocusHighlightProps>(
   function FocusHighlight(

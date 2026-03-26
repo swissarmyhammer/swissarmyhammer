@@ -130,7 +130,9 @@
   }
 }
 
-/* Entity focus — target bar on the left edge, matching the drag-and-drop insert bar style */
+/* Entity focus — target bar on the left edge.
+ * FocusScope is the single decorator that owns focus rendering.
+ * Only one FocusScope is ever focused at a time (via focusedMoniker). */
 [data-focused] {
   position: relative;
 }
@@ -149,11 +151,6 @@
 /* Column header focus — position bar just inside the header, left of the title text */
 .column-header-focus[data-focused]::before {
   left: 0.25rem;
-}
-
-/* Entity card focus — shift bar right to align with field icons, past the grip handle */
-.entity-card-focus[data-focused]::before {
-  left: 1.75rem;
 }
 
 /* CM6 autocomplete — prevent long completions from overflowing the viewport */
