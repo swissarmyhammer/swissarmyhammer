@@ -1,15 +1,35 @@
 import { describe, it, expect, vi } from "vitest";
-import { renderHook, act } from "@testing-library/react";
+import { render, renderHook, act } from "@testing-library/react";
+import { useState } from "react";
 import {
   EntityFocusProvider,
   useEntityFocus,
   useFocusedScope,
   useIsFocused,
 } from "./entity-focus-context";
-import type { CommandScope } from "./command-scope";
+import { FocusClaim } from "@/components/focus-scope";
+import {
+  CommandScopeProvider,
+  type CommandDef,
+  type CommandScope,
+} from "./command-scope";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(() => Promise.resolve()),
+}));
+vi.mock("@tauri-apps/api/window", () => ({
+  getCurrentWindow: vi.fn(() => ({ label: "main" })),
+}));
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn(() => Promise.resolve(() => {})),
+}));
+vi.mock("@tauri-apps/plugin-log", () => ({
+  error: vi.fn(),
+  warn: vi.fn(),
+  info: vi.fn(),
+  debug: vi.fn(),
+  trace: vi.fn(),
+  attachConsole: vi.fn(() => Promise.resolve()),
 }));
 
 const wrapper = ({ children }: { children: React.ReactNode }) => (
@@ -199,5 +219,260 @@ describe("useIsFocused", () => {
       result.current.focus.setFocus("task:abc");
     });
     expect(result.current.isFocused).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Claim stack tests (FocusClaim component integration)
+// ---------------------------------------------------------------------------
+
+/** Flush microtasks and pending layout effects. */
+async function flush() {
+  await act(async () => {
+    await new Promise((r) => setTimeout(r, 0));
+  });
+}
+
+/** Reads focusedMoniker from context and renders it as text. */
+function FocusMonitor() {
+  const { focusedMoniker } = useEntityFocus();
+  return <span data-testid="focus-monitor">{focusedMoniker ?? "null"}</span>;
+}
+
+/** Reads a scope from the registry and renders its moniker. */
+function ScopeMonitor({ moniker }: { moniker: string }) {
+  const { getScope } = useEntityFocus();
+  const scope = getScope(moniker);
+  return (
+    <span data-testid="scope-monitor">
+      {scope ? scope.moniker ?? "no-moniker" : "null"}
+    </span>
+  );
+}
+
+/** Conditionally renders a FocusClaim for mount/unmount testing. */
+function ConditionalClaim({
+  show,
+  moniker,
+}: {
+  show: boolean;
+  moniker: string;
+}) {
+  return show ? <FocusClaim moniker={moniker} /> : null;
+}
+
+/** Harness with two independently togglable claims. */
+function TwoClaimHarness({
+  initialA,
+  initialB,
+  monikerA,
+  monikerB,
+}: {
+  initialA: boolean;
+  initialB: boolean;
+  monikerA: string;
+  monikerB: string;
+}) {
+  const [showA, setShowA] = useState(initialA);
+  const [showB, setShowB] = useState(initialB);
+  return (
+    <>
+      <ConditionalClaim show={showA} moniker={monikerA} />
+      <ConditionalClaim show={showB} moniker={monikerB} />
+      <FocusMonitor />
+      <button data-testid="toggle-a" onClick={() => setShowA((s) => !s)} />
+      <button data-testid="toggle-b" onClick={() => setShowB((s) => !s)} />
+    </>
+  );
+}
+
+/** Harness whose single claim's moniker can change dynamically. */
+function MutableMonikerHarness({ initial }: { initial: string }) {
+  const [moniker, setMoniker] = useState(initial);
+  return (
+    <>
+      <FocusClaim moniker={moniker} />
+      <FocusMonitor />
+      <button
+        data-testid="set-moniker"
+        onClick={() => setMoniker("task:updated")}
+      />
+    </>
+  );
+}
+
+/** Harness for testing moniker update on the non-active (first) claim. */
+function MutableNonActiveMonikerHarness() {
+  const [monikerA, setMonikerA] = useState("task:a");
+  return (
+    <>
+      <FocusClaim moniker={monikerA} />
+      <FocusClaim moniker="task:b" />
+      <FocusMonitor />
+      <button
+        data-testid="set-moniker-a"
+        onClick={() => setMonikerA("task:a-updated")}
+      />
+    </>
+  );
+}
+
+const TEST_COMMANDS: CommandDef[] = [{ id: "test.hello", name: "Hello" }];
+
+/**
+ * Minimal provider tree: EntityFocusProvider + CommandScopeProvider
+ * (FocusClaim reads CommandScopeContext to build its scope).
+ */
+function ClaimProviders({ children }: { children: React.ReactNode }) {
+  return (
+    <EntityFocusProvider>
+      <CommandScopeProvider commands={TEST_COMMANDS} moniker="root">
+        {children}
+      </CommandScopeProvider>
+    </EntityFocusProvider>
+  );
+}
+
+describe("claim stack (FocusClaim)", () => {
+  it("single claim sets focusedMoniker", async () => {
+    const { getByTestId } = render(
+      <ClaimProviders>
+        <FocusClaim moniker="task:1" />
+        <FocusMonitor />
+      </ClaimProviders>,
+    );
+    await flush();
+    expect(getByTestId("focus-monitor").textContent).toBe("task:1");
+  });
+
+  it("two claims — LIFO: later mount wins", async () => {
+    const { getByTestId } = render(
+      <ClaimProviders>
+        <TwoClaimHarness
+          initialA={true}
+          initialB={true}
+          monikerA="task:a"
+          monikerB="task:b"
+        />
+      </ClaimProviders>,
+    );
+    await flush();
+    // B is mounted second so its claim ID is higher — it wins.
+    expect(getByTestId("focus-monitor").textContent).toBe("task:b");
+  });
+
+  it("pop active claim restores previous", async () => {
+    const { getByTestId } = render(
+      <ClaimProviders>
+        <TwoClaimHarness
+          initialA={true}
+          initialB={true}
+          monikerA="task:a"
+          monikerB="task:b"
+        />
+      </ClaimProviders>,
+    );
+    await flush();
+    expect(getByTestId("focus-monitor").textContent).toBe("task:b");
+
+    // Unmount B (the active claim) — focus should fall back to A
+    await act(async () => {
+      getByTestId("toggle-b").click();
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    expect(getByTestId("focus-monitor").textContent).toBe("task:a");
+  });
+
+  it("pop non-active claim doesn't change focus", async () => {
+    const { getByTestId } = render(
+      <ClaimProviders>
+        <TwoClaimHarness
+          initialA={true}
+          initialB={true}
+          monikerA="task:a"
+          monikerB="task:b"
+        />
+      </ClaimProviders>,
+    );
+    await flush();
+    expect(getByTestId("focus-monitor").textContent).toBe("task:b");
+
+    // Unmount A (non-active) — focus stays on B
+    await act(async () => {
+      getByTestId("toggle-a").click();
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    expect(getByTestId("focus-monitor").textContent).toBe("task:b");
+  });
+
+  it("moniker update on active claim changes focusedMoniker", async () => {
+    const { getByTestId } = render(
+      <ClaimProviders>
+        <MutableMonikerHarness initial="task:original" />
+      </ClaimProviders>,
+    );
+    await flush();
+    expect(getByTestId("focus-monitor").textContent).toBe("task:original");
+
+    await act(async () => {
+      getByTestId("set-moniker").click();
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    expect(getByTestId("focus-monitor").textContent).toBe("task:updated");
+  });
+
+  it("moniker update on non-active claim doesn't change focus", async () => {
+    const { getByTestId } = render(
+      <ClaimProviders>
+        <MutableNonActiveMonikerHarness />
+      </ClaimProviders>,
+    );
+    await flush();
+    // B is active (mounted second, higher claim ID)
+    expect(getByTestId("focus-monitor").textContent).toBe("task:b");
+
+    // Change A's moniker — should NOT affect entity focus
+    await act(async () => {
+      getByTestId("set-moniker-a").click();
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    expect(getByTestId("focus-monitor").textContent).toBe("task:b");
+  });
+
+  it("pop all claims: focusedMoniker is null", async () => {
+    const { getByTestId } = render(
+      <ClaimProviders>
+        <TwoClaimHarness
+          initialA={true}
+          initialB={false}
+          monikerA="task:a"
+          monikerB="task:b"
+        />
+      </ClaimProviders>,
+    );
+    await flush();
+    expect(getByTestId("focus-monitor").textContent).toBe("task:a");
+
+    // Unmount A (the only claim)
+    await act(async () => {
+      getByTestId("toggle-a").click();
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    expect(getByTestId("focus-monitor").textContent).toBe("null");
+  });
+
+  it("claim registers scope for its moniker via getScope", async () => {
+    const { getByTestId } = render(
+      <EntityFocusProvider>
+        <CommandScopeProvider commands={TEST_COMMANDS} moniker="task:scoped">
+          <FocusClaim moniker="task:scoped" />
+          <ScopeMonitor moniker="task:scoped" />
+        </CommandScopeProvider>
+      </EntityFocusProvider>,
+    );
+    await flush();
+    // The scope registered by FocusClaim should carry the moniker from
+    // CommandScopeProvider
+    expect(getByTestId("scope-monitor").textContent).toBe("task:scoped");
   });
 });

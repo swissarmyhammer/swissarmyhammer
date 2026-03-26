@@ -9,7 +9,7 @@
  * - Slugified matching for entities whose display field contains spaces (e.g. task titles)
  */
 
-import { useCallback, useMemo } from "react";
+import { useMemo } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
@@ -18,8 +18,6 @@ import {
   TooltipContent,
 } from "@/components/ui/tooltip";
 import { FocusScope } from "@/components/focus-scope";
-import { useContextMenu } from "@/lib/context-menu";
-import { useEntityFocus } from "@/lib/entity-focus-context";
 import { useEntityStore } from "@/lib/entity-store-context";
 import { useEntityCommands } from "@/lib/entity-commands";
 import { useSchema } from "@/lib/schema-context";
@@ -112,7 +110,6 @@ export function MentionPill({
         color={color}
         tooltipText={tooltipText}
         richTooltip={!!description}
-        scopeMoniker={scopeMoniker}
         className={className}
       />
     </FocusScope>
@@ -136,7 +133,6 @@ function MentionPillInner({
   color,
   tooltipText,
   richTooltip,
-  scopeMoniker,
   className,
 }: {
   slug: string;
@@ -144,22 +140,8 @@ function MentionPillInner({
   color: string;
   tooltipText?: string;
   richTooltip?: boolean;
-  scopeMoniker: string;
   className?: string;
 }) {
-  const contextMenuHandler = useContextMenu();
-  const { setFocus } = useEntityFocus();
-
-  const handleContextMenu = useCallback(
-    (e: React.MouseEvent) => {
-      e.preventDefault();
-      e.stopPropagation();
-      setFocus(scopeMoniker);
-      contextMenuHandler(e);
-    },
-    [scopeMoniker, setFocus, contextMenuHandler],
-  );
-
   const pill = (
     <span
       className={`inline-flex items-center rounded-full px-1.5 py-px text-xs font-medium cursor-default ${className ?? ""}`}
@@ -168,7 +150,6 @@ function MentionPillInner({
         color: `#${color}`,
         border: `1px solid color-mix(in srgb, #${color} 30%, transparent)`,
       }}
-      onContextMenu={handleContextMenu}
     >
       {prefix}
       {briefSlug(slug)}

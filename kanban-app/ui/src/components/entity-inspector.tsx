@@ -12,7 +12,8 @@ import {
   type UseInspectorNavReturn,
 } from "@/hooks/use-inspector-nav";
 import type { FieldDef, Entity } from "@/types/kanban";
-import { FocusHighlight } from "@/components/ui/focus-highlight";
+import { FocusScope, FocusClaim } from "@/components/focus-scope";
+import { fieldMoniker } from "@/lib/moniker";
 import { icons, HelpCircle } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
@@ -78,6 +79,12 @@ export function EntityInspector({ entity, navRef }: EntityInspectorProps) {
   // Expose nav to parent (InspectorFocusBridge) via ref
   if (navRef) navRef.current = nav;
 
+  // Derive the FocusClaim moniker from the currently focused field
+  const focusedField = navigableFields[nav.focusedIndex];
+  const claimMoniker = focusedField
+    ? fieldMoniker(entity.entity_type, entity.id, focusedField.name)
+    : `inspector:${entity.entity_type}:${entity.id}`;
+
   if (fields.length === 0) {
     return <p className="text-sm text-muted-foreground">Loading schema...</p>;
   }
@@ -93,7 +100,6 @@ export function EntityInspector({ entity, navRef }: EntityInspectorProps) {
         field={field}
         entity={entity}
         showLabel={showLabel}
-        focused={index === nav.focusedIndex}
         inspectorEditing={index === nav.focusedIndex && nav.mode === "edit"}
         onExitEdit={nav.exitEdit}
         onFocus={() => { nav.setFocusedIndex(index); nav.enterEdit(); }}
@@ -103,6 +109,7 @@ export function EntityInspector({ entity, navRef }: EntityInspectorProps) {
 
   return (
     <div data-testid="entity-inspector">
+      <FocusClaim moniker={claimMoniker} />
       {sections.header.length > 0 && (
         <div className="space-y-2" data-testid="inspector-header">
           {sections.header.map((f) => renderField(f, false))}
@@ -132,7 +139,6 @@ interface FieldRowProps {
   field: FieldDef;
   entity: Entity;
   showLabel?: boolean;
-  focused?: boolean;
   inspectorEditing?: boolean;
   onExitEdit?: () => void;
   onFocus?: () => void;
@@ -142,7 +148,9 @@ interface FieldRowProps {
  * A single field row in the inspector. Manages editing state.
  * Field handles data binding, save, and display/editor dispatch.
  *
- * @param focused - Whether this row is the inspector's focused field
+ * Wrapped in a FocusScope so the entity-focus system drives the
+ * data-focused attribute — no explicit `focused` prop needed.
+ *
  * @param inspectorEditing - Whether the inspector nav has entered edit mode on this row
  * @param onExitEdit - Callback to tell the inspector nav that editing is done
  * @param onFocus - Callback to sync the inspector nav cursor when this field is clicked
@@ -151,7 +159,6 @@ function FieldRow({
   field,
   entity,
   showLabel = true,
-  focused = false,
   inspectorEditing = false,
   onExitEdit,
   onFocus,
@@ -200,22 +207,24 @@ function FieldRow({
   const Icon = field.icon ? fieldIcon(field) : null;
   const tip = field.description || fieldLabel(field);
 
+  const scopeMoniker = fieldMoniker(entity.entity_type, entity.id, field.name);
+
   if (!showLabel && !Icon) {
     return (
-      <FocusHighlight
-        as="section"
-        focused={focused}
+      <FocusScope
+        moniker={scopeMoniker}
+        commands={[]}
         data-testid={`field-row-${field.name}`}
       >
         {content}
-      </FocusHighlight>
+      </FocusScope>
     );
   }
 
   return (
-    <FocusHighlight
-      as="section"
-      focused={focused}
+    <FocusScope
+      moniker={scopeMoniker}
+      commands={[]}
       data-testid={`field-row-${field.name}`}
       className="flex items-start gap-2"
     >
@@ -232,7 +241,7 @@ function FieldRow({
         </Tooltip>
       )}
       <div className="flex-1 min-w-0">{content}</div>
-    </FocusHighlight>
+    </FocusScope>
   );
 }
 

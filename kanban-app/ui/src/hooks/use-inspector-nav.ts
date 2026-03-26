@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback, useEffect, useMemo } from "react";
 
 export type InspectorMode = "normal" | "edit";
 
@@ -16,6 +16,12 @@ export interface UseInspectorNavReturn {
   moveToFirst: () => void;
   moveToLast: () => void;
   setFocusedIndex: (index: number) => void;
+  // Pill navigation (horizontal within badge-list fields)
+  pillIndex: number;
+  pillCount: number;
+  setPillCount: (n: number) => void;
+  movePillLeft: () => void;
+  movePillRight: () => void;
   // Mode
   enterEdit: () => void;
   exitEdit: () => void;
@@ -35,6 +41,8 @@ export function useInspectorNav({
 }: UseInspectorNavOptions): UseInspectorNavReturn {
   const [focusedIndex, setFocusedIndexState] = useState(0);
   const [mode, setMode] = useState<InspectorMode>("normal");
+  const [pillIndex, setPillIndexState] = useState(-1);
+  const [pillCount, setPillCountState] = useState(0);
 
   /** Clamp an index to valid bounds [0, fieldCount-1]. */
   const clampIndex = useCallback(
@@ -88,6 +96,29 @@ export function useInspectorNav({
     setMode("normal");
   }, []);
 
+  /** Update pill count and clamp pillIndex if it exceeds the new count. */
+  const setPillCount = useCallback((n: number) => {
+    setPillCountState(n);
+    setPillIndexState((prev) => (prev < 0 ? prev : n <= 0 ? -1 : Math.min(prev, n - 1)));
+  }, []);
+
+  /** Move pill focus left by one, clamped to 0. No-op if pill nav is inactive (-1). */
+  const movePillLeft = useCallback(() => {
+    setPillIndexState((prev) => (prev < 0 ? -1 : prev === 0 ? 0 : prev - 1));
+  }, []);
+
+  /** Move pill focus right by one. Enters pill nav from -1 → 0, clamps at pillCount - 1. */
+  const movePillRight = useCallback(() => {
+    setPillIndexState((prev) =>
+      pillCount <= 0 ? -1 : prev < 0 ? 0 : Math.min(prev + 1, pillCount - 1),
+    );
+  }, [pillCount]);
+
+  // Reset pill nav to inactive whenever the focused field changes
+  useEffect(() => {
+    setPillIndexState(-1);
+  }, [focusedIndex]);
+
   return useMemo(
     () => ({
       focusedIndex,
@@ -98,6 +129,11 @@ export function useInspectorNav({
       moveToFirst,
       moveToLast,
       setFocusedIndex,
+      pillIndex,
+      pillCount,
+      setPillCount,
+      movePillLeft,
+      movePillRight,
       enterEdit,
       exitEdit,
     }),
@@ -110,6 +146,11 @@ export function useInspectorNav({
       moveToFirst,
       moveToLast,
       setFocusedIndex,
+      pillIndex,
+      pillCount,
+      setPillCount,
+      movePillLeft,
+      movePillRight,
       enterEdit,
       exitEdit,
     ],

@@ -201,6 +201,7 @@ import { EntityFocusProvider } from "@/lib/entity-focus-context";
 import { InspectProvider } from "@/lib/inspect-context";
 import { FieldUpdateProvider } from "@/lib/field-update-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { CommandScopeProvider } from "@/lib/command-scope";
 import type { Entity } from "@/types/kanban";
 
 function makeEntity(fields: Record<string, unknown> = {}): Entity {
@@ -216,7 +217,9 @@ async function renderInspector(entity: Entity, tagEntities: Entity[] = []) {
             <InspectProvider onInspect={() => {}} onDismiss={() => false}>
               <FieldUpdateProvider>
                 <UIStateProvider>
-                  <EntityInspector entity={entity} />
+                  <CommandScopeProvider commands={[]}>
+                    <EntityInspector entity={entity} />
+                  </CommandScopeProvider>
                 </UIStateProvider>
               </FieldUpdateProvider>
             </InspectProvider>

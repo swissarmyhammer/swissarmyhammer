@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: d580
+position_column: done
+position_ordinal: ffffffffffffcf80
 title: Fix dual-focus and drag ghost focus indicator bugs
 ---
 ## What

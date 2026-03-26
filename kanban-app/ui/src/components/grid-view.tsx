@@ -1,6 +1,5 @@
 import {
   useCallback,
-  useContext,
   useEffect,
   useMemo,
   useRef,
@@ -11,7 +10,6 @@ import { useActiveBoardPath } from "@/lib/command-scope";
 import { useGrid } from "@/hooks/use-grid";
 import { useSchema } from "@/lib/schema-context";
 import { useEntityStore } from "@/lib/entity-store-context";
-import { useEntityFocus } from "@/lib/entity-focus-context";
 import { useInspect } from "@/lib/inspect-context";
 import { moniker, fieldMoniker } from "@/lib/moniker";
 import {
@@ -20,10 +18,9 @@ import {
 } from "@/lib/entity-commands";
 import {
   CommandScopeProvider,
-  CommandScopeContext,
   type CommandDef,
-  type CommandScope,
 } from "@/lib/command-scope";
+import { FocusClaim } from "@/components/focus-scope";
 import { DataTable, type DataTableColumn } from "@/components/data-table";
 import { Field } from "@/components/fields/field";
 import type { ViewDef, Entity, FieldDef } from "@/types/kanban";
@@ -281,11 +278,9 @@ export function GridView({ view }: GridViewProps) {
 
   return (
     <CommandScopeProvider commands={gridCommands}>
-      <GridFocusBridge
-        entityCommands={entityCommands}
-        entityMoniker={currentEntityMoniker}
-        fieldMoniker={currentFieldMoniker}
-      />
+      <CommandScopeProvider commands={entityCommands}>
+        <FocusClaim moniker={currentFieldMoniker ?? currentEntityMoniker ?? "grid"} />
+      </CommandScopeProvider>
       <main className="flex-1 flex flex-col min-h-0">
         <div className="flex items-center px-4 py-1.5 border-b border-border bg-muted/30 text-xs text-muted-foreground gap-3">
           <span>{entities.length} rows</span>
@@ -320,80 +315,3 @@ export function GridView({ view }: GridViewProps) {
   );
 }
 
-/**
- * Bridges the grid's command scope into the entity focus system.
- *
- * Sits inside the grid's CommandScopeProvider so it can access the grid scope
- * via context. Builds a two-level scope chain:
- *   grid scope → entity scope (inspect, archive) → field scope (future)
- *
- * Registers the deepest scope under the field-level moniker (or entity moniker
- * as fallback) in the EntityFocus registry, and sets focus so the command
- * palette and keybindings resolve through the full chain.
- */
-function GridFocusBridge({
-  entityCommands,
-  entityMoniker,
-  fieldMoniker: fMoniker,
-}: {
-  entityCommands: CommandDef[];
-  entityMoniker: string | null;
-  fieldMoniker: string | null;
-}) {
-  const gridScope = useContext(CommandScopeContext);
-  const { setFocus, registerScope, unregisterScope } = useEntityFocus();
-  const prevMonikerRef = useRef<string | null>(null);
-
-  // Build entity scope that chains off the grid scope
-  const entityScope = useMemo<CommandScope | null>(() => {
-    if (!entityMoniker || entityCommands.length === 0) return null;
-    const map = new Map<string, CommandDef>();
-    for (const cmd of entityCommands) map.set(cmd.id, cmd);
-    return { commands: map, parent: gridScope, moniker: entityMoniker };
-  }, [entityCommands, gridScope, entityMoniker]);
-
-  // The field scope chains off entity scope — placeholder for field-specific
-  // commands in the future. For now it's an empty scope that just sets the
-  // moniker so focus resolves at field granularity.
-  const fieldScope = useMemo<CommandScope | null>(() => {
-    if (!fMoniker || !entityScope) return null;
-    return { commands: new Map(), parent: entityScope, moniker: fMoniker };
-  }, [fMoniker, entityScope]);
-
-  // Register the deepest available scope and set focus
-  useEffect(() => {
-    const scope = fieldScope ?? entityScope;
-    const focusMoniker = fMoniker ?? entityMoniker;
-
-    // Unregister previous moniker if it changed
-    if (prevMonikerRef.current && prevMonikerRef.current !== focusMoniker) {
-      unregisterScope(prevMonikerRef.current);
-    }
-
-    if (!focusMoniker || !scope) {
-      prevMonikerRef.current = null;
-      return;
-    }
-
-    registerScope(focusMoniker, scope);
-    setFocus(focusMoniker);
-    prevMonikerRef.current = focusMoniker;
-
-    return () => {
-      if (prevMonikerRef.current) {
-        unregisterScope(prevMonikerRef.current);
-        prevMonikerRef.current = null;
-      }
-    };
-  }, [
-    fieldScope,
-    entityScope,
-    fMoniker,
-    entityMoniker,
-    registerScope,
-    unregisterScope,
-    setFocus,
-  ]);
-
-  return null;
-}

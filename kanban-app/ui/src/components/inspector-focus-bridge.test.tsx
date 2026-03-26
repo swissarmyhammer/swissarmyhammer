@@ -169,8 +169,9 @@ describe("InspectorFocusBridge", () => {
     await act(async () => {
       await new Promise((r) => setTimeout(r, 50));
     });
+    // FocusClaim is now inside EntityInspector, moniker is fieldMoniker for first field
     expect(getByTestId("focus-monitor").textContent).toBe(
-      "inspector:task:test-id",
+      "task:test-id.title",
     );
   });
 
@@ -186,9 +187,9 @@ describe("InspectorFocusBridge", () => {
     await act(async () => {
       await new Promise((r) => setTimeout(r, 50));
     });
-    // Inspector is focused
+    // Inspector is focused — FocusClaim is for the first field
     expect(getByTestId("focus-monitor").textContent).toBe(
-      "inspector:task:test-id",
+      "task:test-id.title",
     );
 
     // Close the inspector

@@ -205,6 +205,12 @@ export const ColumnView = memo(function ColumnView({
       className="flex flex-col min-h-0 min-w-[20em] max-w-[40em] flex-1"
     >
       <div className="flex flex-col min-h-0 min-w-0 flex-1">
+        {/* This FocusHighlight is driven by the board cursor (focusedCardIndex),
+            not by entity focus. It highlights the column header when the cursor
+            is at card=-1. This is a sub-entity visual indicator — the board's
+            FocusClaim targets the board moniker, not the column moniker.
+            Unifying this with FocusClaim requires the board to track which
+            column is focused, which is a future enhancement. */}
         <FocusHighlight
           focused={focusedCardIndex === -1}
           className="column-header-focus px-3 py-2 flex items-center gap-2 rounded"

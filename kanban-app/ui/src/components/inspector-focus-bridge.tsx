@@ -1,10 +1,8 @@
-import { useContext, useEffect, useMemo, useRef } from "react";
+import { useMemo, useRef } from "react";
 import {
-  CommandScopeContext,
   CommandScopeProvider,
   type CommandDef,
 } from "@/lib/command-scope";
-import { useEntityFocus } from "@/lib/entity-focus-context";
 import type { UseInspectorNavReturn } from "@/hooks/use-inspector-nav";
 import type { Entity } from "@/types/kanban";
 import { EntityInspector } from "@/components/entity-inspector";
@@ -84,49 +82,30 @@ export function InspectorFocusBridge({ entity }: InspectorFocusBridgeProps) {
         keys: { cua: "Shift+Tab" },
         execute: () => navRef.current?.moveUp(),
       },
+      {
+        id: "inspector.pillLeft",
+        name: "Pill Left",
+        keys: { vim: "h", cua: "ArrowLeft" },
+        execute: () => {
+          if (navRef.current?.mode === "normal") navRef.current?.movePillLeft();
+        },
+      },
+      {
+        id: "inspector.pillRight",
+        name: "Pill Right",
+        keys: { vim: "l", cua: "ArrowRight" },
+        execute: () => {
+          if (navRef.current?.mode === "normal")
+            navRef.current?.movePillRight();
+        },
+      },
     ],
     [],
   );
 
   return (
     <CommandScopeProvider commands={commands}>
-      <InspectorFocusClaimer entity={entity} />
       <EntityInspector entity={entity} navRef={navRef} />
     </CommandScopeProvider>
   );
-}
-
-/**
- * Renderless component that claims entity focus for the inspector scope on mount
- * and restores the previous focus on unmount.
- *
- * Must be rendered inside the CommandScopeProvider so it sees the inspector's scope.
- */
-function InspectorFocusClaimer({ entity }: { entity: Entity }) {
-  const scope = useContext(CommandScopeContext);
-  const { focusedMoniker, setFocus, registerScope, unregisterScope } =
-    useEntityFocus();
-  const prevFocusRef = useRef<string | null>(null);
-  const moniker = `inspector:${entity.entity_type}:${entity.id}`;
-
-  useEffect(() => {
-    if (!scope) return;
-
-    // Save whatever was focused before we claim it
-    prevFocusRef.current = focusedMoniker;
-
-    // Register our scope and claim focus
-    registerScope(moniker, scope);
-    setFocus(moniker);
-
-    return () => {
-      unregisterScope(moniker);
-      // Restore previous focus
-      setFocus(prevFocusRef.current);
-    };
-    // Only run on mount/unmount — focusedMoniker is read once at mount time
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [moniker, scope, registerScope, unregisterScope, setFocus]);
-
-  return null;
 }

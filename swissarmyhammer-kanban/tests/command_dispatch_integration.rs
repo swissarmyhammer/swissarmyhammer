@@ -864,7 +864,10 @@ async fn reorder_move_to_middle() {
 async fn task_move_is_undoable_in_registry() {
     let registry = CommandsRegistry::from_yaml_sources(&builtin_yaml_sources());
     let cmd_def = registry.get("task.move");
-    assert!(cmd_def.is_some(), "task.move must exist in the YAML registry");
+    assert!(
+        cmd_def.is_some(),
+        "task.move must exist in the YAML registry"
+    );
     assert!(
         cmd_def.unwrap().undoable,
         "task.move must be marked undoable so flush_and_emit fires events"
@@ -892,7 +895,8 @@ async fn task_move_writes_new_ordinal_to_disk() {
     move_before(&engine, &ids[2], &ids[1]).await;
 
     // Read C's ordinal after move
-    let after_content = std::fs::read_to_string(&c_md_path).expect("should read task C .md after move");
+    let after_content =
+        std::fs::read_to_string(&c_md_path).expect("should read task C .md after move");
     let after_ordinal = after_content
         .lines()
         .find(|l| l.starts_with("position_ordinal:"))
@@ -915,14 +919,27 @@ async fn reorder_move_third_before_second() {
 
     // Verify initial order: [A, B, C, D]
     let order = todo_order(&engine).await;
-    assert_eq!(order, vec![ids[0].clone(), ids[1].clone(), ids[2].clone(), ids[3].clone()]);
+    assert_eq!(
+        order,
+        vec![
+            ids[0].clone(),
+            ids[1].clone(),
+            ids[2].clone(),
+            ids[3].clone()
+        ]
+    );
 
     // Move C before B → expected [A, C, B, D]
     move_before(&engine, &ids[2], &ids[1]).await;
     let order = todo_order(&engine).await;
     assert_eq!(
         order,
-        vec![ids[0].clone(), ids[2].clone(), ids[1].clone(), ids[3].clone()],
+        vec![
+            ids[0].clone(),
+            ids[2].clone(),
+            ids[1].clone(),
+            ids[3].clone()
+        ],
         "C should be before B after move_before(C, B)"
     );
 }
@@ -938,7 +955,12 @@ async fn reorder_move_third_before_second_then_back() {
     let order = todo_order(&engine).await;
     assert_eq!(
         order,
-        vec![ids[0].clone(), ids[2].clone(), ids[1].clone(), ids[3].clone()],
+        vec![
+            ids[0].clone(),
+            ids[2].clone(),
+            ids[1].clone(),
+            ids[3].clone()
+        ],
     );
 
     // Move C back after B → [A, B, C, D] (original order)
@@ -946,7 +968,12 @@ async fn reorder_move_third_before_second_then_back() {
     let order = todo_order(&engine).await;
     assert_eq!(
         order,
-        vec![ids[0].clone(), ids[1].clone(), ids[2].clone(), ids[3].clone()],
+        vec![
+            ids[0].clone(),
+            ids[1].clone(),
+            ids[2].clone(),
+            ids[3].clone()
+        ],
         "should return to original order after moving C back after B"
     );
 }

@@ -1,11 +1,16 @@
-import type { FieldDef, Entity } from "@/types/kanban";
+import type { FieldDisplayProps } from "../field";
+import type { Entity } from "@/types/kanban";
 
-export interface DisplayProps {
-  field: FieldDef;
-  value: unknown;
+/**
+ * Display props with entity guaranteed present.
+ *
+ * Derived from FieldDisplayProps (the registry contract) with `entity`
+ * narrowed to non-optional. Field always passes the entity, so display
+ * components can rely on it without null checks.
+ */
+export type DisplayProps = Omit<FieldDisplayProps, "entity"> & {
   entity: Entity;
-  mode: "compact" | "full";
-}
+};
 
 /** Plain text display — truncates in compact mode. */
 export function TextDisplay({ value, mode }: DisplayProps) {

@@ -1,8 +1,6 @@
 import {
   useCallback,
-  useContext,
   useEffect,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -27,14 +25,11 @@ import { emit } from "@tauri-apps/api/event";
 import type { DropZoneDescriptor } from "@/lib/drop-zones";
 import {
   CommandScopeProvider,
-  CommandScopeContext,
   type CommandDef,
-  type CommandScope,
 } from "@/lib/command-scope";
 import { ColumnView } from "@/components/column-view";
 import { SortableColumn } from "@/components/sortable-column";
-import { FocusScope } from "@/components/focus-scope";
-import { useEntityFocus } from "@/lib/entity-focus-context";
+import { FocusScope, FocusClaim } from "@/components/focus-scope";
 import { useInspect } from "@/lib/inspect-context";
 import { useBoardNav } from "@/hooks/use-board-nav";
 import { BoardNavProvider } from "@/lib/board-nav-context";
@@ -64,7 +59,6 @@ interface TaskDragState {
 export function BoardView({ board, tasks, boardPath }: BoardViewProps) {
   const boardPathRef = useRef(boardPath);
   boardPathRef.current = boardPath;
-  const { setFocus } = useEntityFocus();
   const { startSession, cancelSession, completeSession } = useDragSession();
   const boardMoniker = moniker("board", "board");
   const boardCommands = useEntityCommands("board", "board");
@@ -511,7 +505,7 @@ export function BoardView({ board, tasks, boardPath }: BoardViewProps) {
       className="flex flex-col flex-1 min-h-0 relative"
     >
       <CommandScopeProvider commands={boardNavCommands}>
-        <BoardFocusBridge moniker={focusBridgeMoniker} />
+        <FocusClaim moniker={focusBridgeMoniker} />
         <BoardNavProvider
           onCardClick={handleBoardCardClick}
           onHeaderClick={handleBoardHeaderClick}
@@ -528,7 +522,6 @@ export function BoardView({ board, tasks, boardPath }: BoardViewProps) {
               ref={scrollContainerRef}
               className="flex flex-1 min-h-0 overflow-x-auto pl-2"
               onClick={() => {
-                setFocus(null);
                 boardNav.setCursor(boardNav.cursor.col, -1);
               }}
             >
@@ -577,57 +570,8 @@ export function BoardView({ board, tasks, boardPath }: BoardViewProps) {
             </DragOverlay>
           </DndContext>
         </BoardNavProvider>
-        <div className="flex items-center px-4 py-1.5 border-t border-border bg-muted/30 text-xs text-muted-foreground gap-3">
-          <span>{boardNav.mode === "edit" ? "EDIT" : "NORMAL"}</span>
-          <span className="text-muted-foreground/50">|</span>
-          <span>
-            Col {boardNav.cursor.col + 1}
-            {boardNav.cursor.card >= 0
-              ? ` Card ${boardNav.cursor.card + 1}`
-              : " (header)"}
-          </span>
-        </div>
       </CommandScopeProvider>
     </FocusScope>
   );
 }
 
-/**
- * Bridges the board's command scope into the entity focus system.
- *
- * Always registers a scope — uses the focused task moniker when a card is
- * selected, or the board moniker as fallback when on a column header.
- * This ensures board nav commands (j/k/h/l/gg/G) are always reachable
- * through the scope chain regardless of cursor position.
- */
-function BoardFocusBridge({ moniker: focusMoniker }: { moniker: string }) {
-  const boardScope = useContext(CommandScopeContext);
-  const { setFocus, registerScope, unregisterScope } = useEntityFocus();
-  const prevMonikerRef = useRef<string | null>(null);
-
-  // useLayoutEffect ensures cursor→moniker sync happens before the browser
-  // paints. Without this, there's a render cycle gap where focusedCardIndex
-  // (from the cursor) and focusedMoniker (from entity focus) can point to
-  // different cards, causing two cards to briefly show the focus bar.
-  useLayoutEffect(() => {
-    if (!boardScope) return;
-
-    // Unregister previous moniker if it changed
-    if (prevMonikerRef.current && prevMonikerRef.current !== focusMoniker) {
-      unregisterScope(prevMonikerRef.current);
-    }
-
-    registerScope(focusMoniker, boardScope);
-    setFocus(focusMoniker);
-    prevMonikerRef.current = focusMoniker;
-
-    return () => {
-      if (prevMonikerRef.current) {
-        unregisterScope(prevMonikerRef.current);
-        prevMonikerRef.current = null;
-      }
-    };
-  }, [boardScope, focusMoniker, registerScope, unregisterScope, setFocus]);
-
-  return null;
-}

@@ -1,0 +1,8 @@
+---
+assignees:
+- claude-code
+position_column: done
+position_ordinal: ffffffffffffdd80
+title: 'WARNING: FocusClaim double-fires updateClaim on initial mount'
+---
+**File:** `kanban-app/ui/src/components/focus-scope.tsx:188-206`\n\n**What:** `FocusClaim` has two `useLayoutEffect` hooks:\n1. Lines 189-199: mount effect that calls `pushClaim(moniker, scope)` and sets `claimIdRef.current`.\n2. Lines 202-206: update effect that calls `updateClaim(claimIdRef.current, moniker, scope)` whenever `moniker` or `scope` changes.\n\nOn initial mount, both effects fire in order. The first pushes the claim (which sets focus and invokes `ui.setFocus` to Rust). The second immediately calls `updateClaim` with the same moniker and scope -- triggering `getActiveClaim()`, `setFocusedMoniker`, and `invokeFocusChange` a second time. This means every `FocusClaim` mount sends two `ui.setFocus` commands to Rust.\n\n**Why this matters:** Double invocation is wasteful and could cause flicker or race conditions if the Rust side processes commands asynchronously. It also means any Rust-side logging will show duplicate focus events, making debugging harder.\n\n**Suggestion:** Add a guard in the update effect: skip if `claimIdRef.current` was just set in the same commit. A simple approach: add a `mountedRef` flag that is set at the end of the mount effect, and only call `updateClaim` when `mountedRef.current` is true. Or use a single `useLayoutEffect` with the full dep list and handle both mount and update in one place." #review-finding

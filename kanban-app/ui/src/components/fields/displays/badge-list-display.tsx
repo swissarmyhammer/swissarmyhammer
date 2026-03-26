@@ -15,6 +15,9 @@ import type { DisplayProps } from "./text-display";
  *
  * Resolves the target entity type and mention prefix from the field definition
  * and schema, so it works generically for tags, tasks, or any mentionable type.
+ *
+ * Each pill is wrapped in a FocusScope from MentionPill, enabling
+ * click-to-focus and context menu support per pill.
  */
 export function BadgeListDisplay({ field, value, entity, mode }: DisplayProps) {
   const { mentionableTypes } = useSchema();

@@ -99,4 +99,97 @@ describe("useInspectorNav", () => {
     const { result } = renderHook(() => useInspectorNav(defaults));
     expect(result.current.fieldCount).toBe(5);
   });
+
+  // --- Pill navigation ---
+
+  it("pillIndex initializes at -1 (inactive)", () => {
+    const { result } = renderHook(() => useInspectorNav(defaults));
+    expect(result.current.pillIndex).toBe(-1);
+  });
+
+  it("pillCount initializes at 0", () => {
+    const { result } = renderHook(() => useInspectorNav(defaults));
+    expect(result.current.pillCount).toBe(0);
+  });
+
+  it("movePillRight enters pill nav from -1 to 0 (first pill)", () => {
+    const { result } = renderHook(() => useInspectorNav(defaults));
+    act(() => result.current.setPillCount(3));
+    act(() => result.current.movePillRight());
+    expect(result.current.pillIndex).toBe(0);
+  });
+
+  it("movePillRight advances within active pill nav", () => {
+    const { result } = renderHook(() => useInspectorNav(defaults));
+    act(() => result.current.setPillCount(3));
+    act(() => result.current.movePillRight()); // -1 → 0
+    act(() => result.current.movePillRight()); // 0 → 1
+    expect(result.current.pillIndex).toBe(1);
+  });
+
+  it("movePillLeft decrements pillIndex", () => {
+    const { result } = renderHook(() => useInspectorNav(defaults));
+    act(() => result.current.setPillCount(3));
+    act(() => result.current.movePillRight()); // → 0
+    act(() => result.current.movePillRight()); // → 1
+    act(() => result.current.movePillRight()); // → 2
+    act(() => result.current.movePillLeft());
+    expect(result.current.pillIndex).toBe(1);
+  });
+
+  it("movePillRight clamps at pillCount - 1", () => {
+    const { result } = renderHook(() => useInspectorNav(defaults));
+    act(() => result.current.setPillCount(2));
+    act(() => result.current.movePillRight()); // → 0
+    act(() => result.current.movePillRight()); // → 1
+    act(() => result.current.movePillRight()); // clamped at 1
+    expect(result.current.pillIndex).toBe(1);
+  });
+
+  it("movePillLeft clamps at 0 once in pill nav", () => {
+    const { result } = renderHook(() => useInspectorNav(defaults));
+    act(() => result.current.setPillCount(3));
+    act(() => result.current.movePillRight()); // enter pill nav at 0
+    act(() => result.current.movePillLeft()); // stays at 0
+    expect(result.current.pillIndex).toBe(0);
+  });
+
+  it("movePillLeft is no-op when pill nav inactive (-1)", () => {
+    const { result } = renderHook(() => useInspectorNav(defaults));
+    act(() => result.current.setPillCount(3));
+    act(() => result.current.movePillLeft());
+    expect(result.current.pillIndex).toBe(-1);
+  });
+
+  it("movePillRight stays -1 when pillCount is 0", () => {
+    const { result } = renderHook(() => useInspectorNav(defaults));
+    act(() => result.current.movePillRight());
+    expect(result.current.pillIndex).toBe(-1);
+  });
+
+  it("setPillCount clamps active pillIndex if needed", () => {
+    const { result } = renderHook(() => useInspectorNav(defaults));
+    act(() => result.current.setPillCount(5));
+    act(() => result.current.movePillRight()); // → 0
+    act(() => result.current.movePillRight()); // → 1
+    act(() => result.current.movePillRight()); // → 2
+    act(() => result.current.movePillRight()); // → 3
+    act(() => result.current.setPillCount(2)); // should clamp to 1
+    expect(result.current.pillIndex).toBe(1);
+  });
+
+  it("setPillCount preserves -1 when pill nav is inactive", () => {
+    const { result } = renderHook(() => useInspectorNav(defaults));
+    act(() => result.current.setPillCount(5));
+    expect(result.current.pillIndex).toBe(-1);
+  });
+
+  it("pillIndex resets to -1 when focusedIndex changes", () => {
+    const { result } = renderHook(() => useInspectorNav(defaults));
+    act(() => result.current.setPillCount(3));
+    act(() => result.current.movePillRight()); // → 0
+    act(() => result.current.movePillRight()); // → 1
+    act(() => result.current.moveDown()); // focusedIndex changes
+    expect(result.current.pillIndex).toBe(-1);
+  });
 });
