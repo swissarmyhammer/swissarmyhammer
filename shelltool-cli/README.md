@@ -4,19 +4,17 @@
 
 # shelltool
 
-**A shell that saves tokens — run, search, retrieve.**
+**Replaces Bash/exec with a searchable shell that saves tokens.**
 
 </div>
 
 ---
 
-A virtual shell for AI agents that works the way a person uses a terminal.
-
-Instead of dumping raw command output into the agent's context window — wasting thousands of tokens on build logs, test results, and diagnostic output — shelltool keeps a persistent, searchable shell session. The agent runs commands, then searches or retrieves just the lines it needs.
+shelltool replaces built-in Bash and exec CLI tools with a persistent, searchable virtual shell. Instead of dumping thousands of tokens of raw command output into the agent's context window, shelltool stores everything in history. The agent runs commands, then searches or retrieves just the lines it needs.
 
 ## Why
 
-Built-in Bash tools flood the context with every byte of stdout. A single `cargo test` can burn 10,000+ tokens of output the agent will never look at again. shelltool stores all output in a searchable history and returns only what matters:
+Built-in Bash and exec tools flood the context with every byte of stdout. A single `cargo test` can burn 10,000+ tokens of output the agent will never look at again. shelltool replaces them with a shell that stores all output in searchable history and returns only what matters:
 
 - **Run a command** — get a summary with exit code and line count
 - **Grep the output** — regex search across history for error codes, function names, patterns

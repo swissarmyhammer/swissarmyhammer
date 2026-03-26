@@ -27,15 +27,16 @@ impl std::fmt::Display for InstallTarget {
     }
 }
 
-/// shelltool - A shell that works the way you do
+/// shelltool - A shell that saves tokens
 ///
-/// Agents shouldn't drown in raw command output. shelltool gives them a
-/// persistent shell with searchable history — run commands, then grep or
-/// semantic-search the results instead of clogging the context window.
+/// Replaces Bash and exec CLI tools with a persistent, searchable shell.
+/// Instead of flooding the context window with raw command output, shelltool
+/// stores everything in history — the agent runs commands, then greps or
+/// semantic-searches the results, retrieving only the lines that matter.
 #[derive(Parser, Debug)]
 #[command(name = "shelltool")]
 #[command(version)]
-#[command(about = "A shell that saves tokens — run, search, retrieve")]
+#[command(about = "Replaces Bash/exec with a searchable shell that saves tokens")]
 pub struct Cli {
     /// Enable debug output to stderr
     #[arg(short, long, global = true)]
