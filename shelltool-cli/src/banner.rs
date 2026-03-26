@@ -76,7 +76,10 @@ pub fn render_banner(out: &mut dyn Write, use_color: bool) {
             DIM, RESET
         );
     } else {
-        let _ = writeln!(out, "  Replaces Bash/exec — searchable shell that saves tokens");
+        let _ = writeln!(
+            out,
+            "  Replaces Bash/exec — searchable shell that saves tokens"
+        );
     }
     let _ = writeln!(out);
 }

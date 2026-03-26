@@ -18,9 +18,9 @@ brew install swissarmyhammer/tap/shelltool-cli
 
 ## `shelltool`
 
-shelltool - Standalone MCP shell tool for AI coding agents
+shelltool - A shell that saves tokens
 
-Serves the SwissArmyHammer shell tool over MCP stdio, giving AI agents a persistent virtual shell with history, process management, and semantic search.
+Replaces Bash and exec CLI tools with a persistent, searchable shell. Instead of flooding the context window with raw command output, shelltool stores everything in history — the agent runs commands, then greps or semantic-searches the results, retrieving only the lines that matter.
 
 **Usage:** `shelltool [OPTIONS] <COMMAND>`
 
