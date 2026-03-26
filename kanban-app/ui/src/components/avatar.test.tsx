@@ -17,6 +17,7 @@ vi.mock("@tauri-apps/plugin-log", () => ({
 }));
 
 import { Avatar } from "./avatar";
+import { SchemaProvider } from "@/lib/schema-context";
 import { EntityStoreProvider } from "@/lib/entity-store-context";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
 import { InspectProvider } from "@/lib/inspect-context";
@@ -31,13 +32,15 @@ function renderAvatar(
 ) {
   return render(
     <TooltipProvider>
-      <EntityStoreProvider entities={{ actor: actors }}>
-        <EntityFocusProvider>
-          <InspectProvider onInspect={() => {}} onDismiss={() => false}>
-            <Avatar actorId={actorId} size={size} />
-          </InspectProvider>
-        </EntityFocusProvider>
-      </EntityStoreProvider>
+      <SchemaProvider>
+        <EntityStoreProvider entities={{ actor: actors }}>
+          <EntityFocusProvider>
+            <InspectProvider onInspect={() => {}} onDismiss={() => false}>
+              <Avatar actorId={actorId} size={size} />
+            </InspectProvider>
+          </EntityFocusProvider>
+        </EntityStoreProvider>
+      </SchemaProvider>
     </TooltipProvider>,
   );
 }

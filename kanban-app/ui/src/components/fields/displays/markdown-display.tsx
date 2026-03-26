@@ -102,9 +102,8 @@ const MarkdownFull = forwardRef<
             entityType={md.entityType}
             slug={props.slug ?? ""}
             prefix={md.prefix}
-          />
-        ) as // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        any;
+          /> // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        ) as any;
     }
     return comps;
   }, [mentionData]);

@@ -20,7 +20,11 @@ export function fieldMoniker(type: string, id: string, field: string): string {
  * If the id portion contains a dot, the part after the last dot is the field.
  * Throws on invalid format.
  */
-export function parseMoniker(m: string): { type: string; id: string; field?: string } {
+export function parseMoniker(m: string): {
+  type: string;
+  id: string;
+  field?: string;
+} {
   const idx = m.indexOf(":");
   if (idx === -1) throw new Error(`Invalid moniker (no colon): "${m}"`);
   const type = m.slice(0, idx);

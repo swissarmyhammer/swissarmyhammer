@@ -1,4 +1,5 @@
 name: attachment
+icon: paperclip
 commands:
   - id: entity.inspect
     name: "Inspect {{entity.type}}"

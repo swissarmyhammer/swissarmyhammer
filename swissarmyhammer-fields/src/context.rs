@@ -689,6 +689,7 @@ type:
 
         let entity = EntityDef {
             name: "task".into(),
+            icon: None,
             body_field: Some("body".into()),
             fields: vec!["title".into(), "status".into()],
             validate: None,
@@ -718,6 +719,7 @@ type:
 
         let entity = EntityDef {
             name: "task".into(),
+            icon: None,
             body_field: None,
             fields: vec!["title".into(), "status".into(), "missing".into()],
             validate: None,
@@ -745,6 +747,7 @@ type:
             ctx.write_field(&make_test_field("status")).await.unwrap();
             ctx.write_entity(&EntityDef {
                 name: "task".into(),
+                icon: None,
                 body_field: Some("body".into()),
                 fields: vec!["title".into(), "status".into()],
                 validate: None,

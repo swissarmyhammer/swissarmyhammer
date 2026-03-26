@@ -160,6 +160,29 @@ pub async fn get_entity_schema(
     }))
 }
 
+/// List all registered entity type names.
+///
+/// Returns an array of entity type name strings discovered from the schema.
+#[tauri::command]
+pub async fn list_entity_types(
+    state: State<'_, AppState>,
+    board_path: Option<String>,
+) -> Result<Value, String> {
+    let handle = resolve_handle(&state, board_path).await?;
+    let ectx = handle
+        .ctx
+        .entity_context()
+        .await
+        .map_err(|e| e.to_string())?;
+    let fields_ctx = ectx.fields();
+    let names: Vec<&str> = fields_ctx
+        .all_entities()
+        .iter()
+        .map(|e| e.name.as_str())
+        .collect();
+    Ok(json!(names))
+}
+
 /// List all entities of a given type, returning raw entity bags.
 ///
 /// For tasks, enriches each entity with computed fields: `ready`, `blocked_by`,
@@ -1225,12 +1248,10 @@ async fn cascade_aggregate_events(
     // Collect entity types that changed
     let changed_types: HashSet<&str> = primary_events
         .iter()
-        .filter_map(|evt| match evt {
+        .map(|evt| match evt {
             crate::watcher::WatchEvent::EntityCreated { entity_type, .. }
             | crate::watcher::WatchEvent::EntityFieldChanged { entity_type, .. }
-            | crate::watcher::WatchEvent::EntityRemoved { entity_type, .. } => {
-                Some(entity_type.as_str())
-            }
+            | crate::watcher::WatchEvent::EntityRemoved { entity_type, .. } => entity_type.as_str(),
         })
         .collect();
 

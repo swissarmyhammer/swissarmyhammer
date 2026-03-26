@@ -1,4 +1,10 @@
-import { createContext, useContext, useCallback, useRef, type ReactNode } from "react";
+import {
+  createContext,
+  useContext,
+  useCallback,
+  useRef,
+  type ReactNode,
+} from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { error as logError } from "@/lib/log";
 import { useActiveBoardPath } from "@/lib/command-scope";
@@ -47,12 +53,19 @@ export function FieldUpdateProvider({ children }: FieldUpdateProviderProps) {
       try {
         await invoke("dispatch_command", {
           cmd: "entity.update_field",
-          args: { entity_type: entityType, id: entityId, field_name: fieldName, value },
+          args: {
+            entity_type: entityType,
+            id: entityId,
+            field_name: fieldName,
+            value,
+          },
           ...(boardPathRef.current ? { boardPath: boardPathRef.current } : {}),
         });
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : String(e);
-        logError(`updateField failed: ${entityType}/${entityId}.${fieldName}: ${msg}`);
+        logError(
+          `updateField failed: ${entityType}/${entityId}.${fieldName}: ${msg}`,
+        );
         throw e;
       }
     },

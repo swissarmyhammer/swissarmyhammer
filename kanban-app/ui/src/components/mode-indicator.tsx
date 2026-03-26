@@ -35,12 +35,18 @@ export function ModeIndicator() {
       </span>
 
       {/* Center: mode label */}
-      <span data-testid="mode-indicator-mode" className="font-bold tracking-wide">
+      <span
+        data-testid="mode-indicator-mode"
+        className="font-bold tracking-wide"
+      >
         {MODE_LABELS[mode]}
       </span>
 
       {/* Right slot: sort/filter info (placeholder) */}
-      <span data-testid="mode-indicator-right" className="min-w-0 truncate text-right">
+      <span
+        data-testid="mode-indicator-right"
+        className="min-w-0 truncate text-right"
+      >
         &nbsp;
       </span>
     </div>

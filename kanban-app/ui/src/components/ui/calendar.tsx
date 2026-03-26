@@ -39,9 +39,7 @@ function Calendar({
           buttonVariants({ variant: "ghost" }),
           "h-8 w-8 p-0 font-normal aria-selected:opacity-100",
         ),
-        day_button: cn(
-          "h-8 w-8 p-0 font-normal",
-        ),
+        day_button: cn("h-8 w-8 p-0 font-normal"),
         selected:
           "bg-primary text-primary-foreground hover:bg-primary hover:text-primary-foreground focus:bg-primary focus:text-primary-foreground",
         today: "bg-accent text-accent-foreground",

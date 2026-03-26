@@ -56,7 +56,14 @@ describe("refreshBoards", () => {
           columns: [],
           swimlanes: [],
           tags: [],
-          summary: { total_tasks: 0, total_actors: 0, ready_tasks: 0, blocked_tasks: 0, done_tasks: 0, percent_complete: 0 },
+          summary: {
+            total_tasks: 0,
+            total_actors: 0,
+            ready_tasks: 0,
+            blocked_tasks: 0,
+            done_tasks: 0,
+            percent_complete: 0,
+          },
         });
       }
       if (cmd === "list_entities") {
@@ -95,7 +102,14 @@ describe("refreshBoards", () => {
           columns: [],
           swimlanes: [],
           tags: [],
-          summary: { total_tasks: 0, total_actors: 0, ready_tasks: 0, blocked_tasks: 0, done_tasks: 0, percent_complete: 0 },
+          summary: {
+            total_tasks: 0,
+            total_actors: 0,
+            ready_tasks: 0,
+            blocked_tasks: 0,
+            done_tasks: 0,
+            percent_complete: 0,
+          },
         });
       }
       if (cmd === "list_entities") {
@@ -107,12 +121,16 @@ describe("refreshBoards", () => {
     await refreshBoards("/b/.kanban");
 
     // get_board_data should receive boardPath
-    const boardDataCall = mockInvoke.mock.calls.find((c) => c[0] === "get_board_data");
+    const boardDataCall = mockInvoke.mock.calls.find(
+      (c) => c[0] === "get_board_data",
+    );
     expect(boardDataCall).toBeDefined();
     expect(boardDataCall![1]).toEqual({ boardPath: "/b/.kanban" });
 
     // list_entities calls should receive boardPath
-    const entityCalls = mockInvoke.mock.calls.filter((c) => c[0] === "list_entities");
+    const entityCalls = mockInvoke.mock.calls.filter(
+      (c) => c[0] === "list_entities",
+    );
     for (const call of entityCalls) {
       expect(call[1]).toMatchObject({ boardPath: "/b/.kanban" });
     }
@@ -122,7 +140,9 @@ describe("refreshBoards", () => {
     mockInvoke.mockImplementation((...args: unknown[]) => {
       const cmd = args[0] as string;
       if (cmd === "list_open_boards") {
-        return Promise.resolve([{ path: "/a/.kanban", is_active: true, name: "Board A" }]);
+        return Promise.resolve([
+          { path: "/a/.kanban", is_active: true, name: "Board A" },
+        ]);
       }
       if (cmd === "get_board_data") {
         return Promise.resolve({
@@ -130,7 +150,14 @@ describe("refreshBoards", () => {
           columns: [],
           swimlanes: [],
           tags: [],
-          summary: { total_tasks: 0, total_actors: 0, ready_tasks: 0, blocked_tasks: 0, done_tasks: 0, percent_complete: 0 },
+          summary: {
+            total_tasks: 0,
+            total_actors: 0,
+            ready_tasks: 0,
+            blocked_tasks: 0,
+            done_tasks: 0,
+            percent_complete: 0,
+          },
         });
       }
       if (cmd === "list_entities") {
@@ -142,7 +169,9 @@ describe("refreshBoards", () => {
     await refreshBoards();
 
     // get_board_data should NOT have boardPath
-    const boardDataCall = mockInvoke.mock.calls.find((c) => c[0] === "get_board_data");
+    const boardDataCall = mockInvoke.mock.calls.find(
+      (c) => c[0] === "get_board_data",
+    );
     expect(boardDataCall).toBeDefined();
     expect(boardDataCall![1]).toEqual({});
   });
@@ -162,7 +191,14 @@ describe("refreshBoards", () => {
           columns: [],
           swimlanes: [],
           tags: [],
-          summary: { total_tasks: 0, total_actors: 0, ready_tasks: 0, blocked_tasks: 0, done_tasks: 0, percent_complete: 0 },
+          summary: {
+            total_tasks: 0,
+            total_actors: 0,
+            ready_tasks: 0,
+            blocked_tasks: 0,
+            done_tasks: 0,
+            percent_complete: 0,
+          },
         });
       }
       if (cmd === "list_entities") {

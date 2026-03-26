@@ -28,7 +28,11 @@ vi.mock("@/lib/command-scope", () => ({
   useActiveBoardPath: () => "/board/a/.kanban",
 }));
 
-import { DragSessionProvider, useDragSession, type DragSession } from "./drag-session-context";
+import {
+  DragSessionProvider,
+  useDragSession,
+  type DragSession,
+} from "./drag-session-context";
 
 /* ---- Helpers ---- */
 
@@ -121,7 +125,10 @@ describe("DragSessionProvider", () => {
   });
 
   it("startSession invokes dispatch_command drag.start with correct params", async () => {
-    mockInvoke.mockResolvedValue({ result: { DragStart: { session_id: "new-sess" } }, undoable: false });
+    mockInvoke.mockResolvedValue({
+      result: { DragStart: { session_id: "new-sess" } },
+      undoable: false,
+    });
     const { result } = renderHook(() => useDragSession(), { wrapper });
 
     await act(async () => {

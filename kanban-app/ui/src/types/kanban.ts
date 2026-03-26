@@ -101,6 +101,7 @@ export interface FieldDef {
 
 export interface EntityDef {
   name: string;
+  icon?: string;
   body_field?: string;
   fields: string[];
   mention_prefix?: string;

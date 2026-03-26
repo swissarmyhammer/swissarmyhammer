@@ -58,6 +58,7 @@ fn main() {
             commands::list_open_boards,
             commands::get_ui_state,
             commands::get_entity_schema,
+            commands::list_entity_types,
             commands::list_entities,
             commands::get_entity,
             commands::search_mentions,

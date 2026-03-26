@@ -9,10 +9,4 @@
  * show unless RUST_LOG includes debug).
  */
 
-export {
-  error,
-  warn,
-  info,
-  debug,
-  trace,
-} from "@tauri-apps/plugin-log";
+export { error, warn, info, debug, trace } from "@tauri-apps/plugin-log";

@@ -67,10 +67,7 @@ class FieldSubscriptions {
   }
 
   /** Diff old and new entities, notify subscribers for changed fields. */
-  diff(
-    prev: Record<string, Entity[]>,
-    next: Record<string, Entity[]>,
-  ) {
+  diff(prev: Record<string, Entity[]>, next: Record<string, Entity[]>) {
     // Check all entity types in the new state
     for (const entityType of Object.keys(next)) {
       const prevEntities = prev[entityType] ?? [];
@@ -88,7 +85,9 @@ class FieldSubscriptions {
         }
         // Existing entity — check each field by value
         for (const fieldName of Object.keys(entity.fields)) {
-          if (!fieldValuesEqual(entity.fields[fieldName], old.fields[fieldName])) {
+          if (
+            !fieldValuesEqual(entity.fields[fieldName], old.fields[fieldName])
+          ) {
             this.notify(fieldKey(entityType, entity.id, fieldName));
           }
         }
@@ -113,7 +112,12 @@ interface EntityStoreContextValue {
   /** Look up a single entity by type and id. */
   getEntity: (entityType: string, id: string) => Entity | undefined;
   /** Subscribe to changes on a specific field. Returns unsubscribe function. */
-  subscribeField: (entityType: string, id: string, fieldName: string, cb: () => void) => () => void;
+  subscribeField: (
+    entityType: string,
+    id: string,
+    fieldName: string,
+    cb: () => void,
+  ) => () => void;
   /** Get a specific field value (snapshot for useSyncExternalStore). */
   getFieldValue: (entityType: string, id: string, fieldName: string) => unknown;
 }
@@ -178,7 +182,8 @@ export function EntityStoreProvider({
 
   const getFieldValue = useCallback(
     (entityType: string, id: string, fieldName: string) => {
-      const raw = entitiesRef.current[entityType]?.find((e) => e.id === id)?.fields[fieldName];
+      const raw = entitiesRef.current[entityType]?.find((e) => e.id === id)
+        ?.fields[fieldName];
       const key = fieldKey(entityType, id, fieldName);
       const cached = snapshotCache.current.get(key);
       if (fieldValuesEqual(raw, cached)) return cached;
@@ -208,7 +213,11 @@ export function useEntityStore(): EntityStoreContextValue {
  * Subscribe to a single field value. Re-renders only when this specific
  * field changes — not when other fields on the same entity change.
  */
-export function useFieldValue(entityType: string, entityId: string, fieldName: string): unknown {
+export function useFieldValue(
+  entityType: string,
+  entityId: string,
+  fieldName: string,
+): unknown {
   const { subscribeField, getFieldValue } = useEntityStore();
 
   const subscribe = useCallback(

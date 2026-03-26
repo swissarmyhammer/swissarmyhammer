@@ -171,7 +171,13 @@ export function DragSessionProvider({ children }: { children: ReactNode }) {
 
   return (
     <DragSessionContext.Provider
-      value={{ session, startSession, cancelSession, completeSession, isSource }}
+      value={{
+        session,
+        startSession,
+        cancelSession,
+        completeSession,
+        isSource,
+      }}
     >
       {children}
     </DragSessionContext.Provider>

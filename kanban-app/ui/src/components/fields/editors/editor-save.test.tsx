@@ -98,6 +98,16 @@ let KEYMAP_MODE = "cua";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const mockInvoke = vi.fn((...args: any[]) => {
+  if (args[0] === "list_entity_types")
+    return Promise.resolve([
+      "task",
+      "tag",
+      "actor",
+      "column",
+      "swimlane",
+      "board",
+      "attachment",
+    ]);
   if (args[0] === "get_entity_schema") {
     // Return real schema data for the requested entity type
     const entityType = args[1]?.entityType as string;

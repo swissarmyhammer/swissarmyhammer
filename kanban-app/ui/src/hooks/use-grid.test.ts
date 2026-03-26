@@ -92,9 +92,7 @@ describe("useGrid", () => {
   });
 
   it("enterEdit does nothing on empty grid", () => {
-    const { result } = renderHook(() =>
-      useGrid({ rowCount: 0, colCount: 0 }),
-    );
+    const { result } = renderHook(() => useGrid({ rowCount: 0, colCount: 0 }));
     act(() => result.current.enterEdit());
     expect(result.current.mode).toBe("normal");
   });
