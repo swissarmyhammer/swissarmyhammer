@@ -1,7 +1,7 @@
 /**
  * Register markdown editor and displays with the Field registry.
  *
- * Editor: TextEditor (compact CM6 inline editor)
+ * Editor: TextEditor (compact CM6 inline editor) with mention extensions
  * Displays: "text" (plain text), "markdown" (rendered GFM with mention pills)
  */
 
@@ -14,8 +14,9 @@ import {
 import { TextEditor } from "@/components/fields/text-editor";
 import { TextDisplay } from "@/components/fields/displays/text-display";
 import { MarkdownDisplay } from "@/components/fields/displays/markdown-display";
+import { useMentionExtensions } from "@/hooks/use-mention-extensions";
 
-/** Markdown editor adapter — wraps TextEditor to match FieldEditorProps. */
+/** Markdown editor adapter — wraps TextEditor with mention extensions. */
 function MarkdownEditorAdapter({
   value,
   mode,
@@ -24,12 +25,14 @@ function MarkdownEditorAdapter({
 }: FieldEditorProps) {
   const text =
     typeof value === "string" ? value : value != null ? String(value) : "";
+  const mentionExtensions = useMentionExtensions();
   return (
     <TextEditor
       value={text}
       onCommit={(v) => onCommit(v)}
       onCancel={onCancel}
       onSubmit={mode === "compact" ? (v) => onCommit(v) : undefined}
+      extraExtensions={mentionExtensions}
     />
   );
 }

@@ -1,9 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import CodeMirror, { type ReactCodeMirrorRef } from "@uiw/react-codemirror";
 import { EditorView, placeholder as cmPlaceholder } from "@codemirror/view";
 import { Compartment } from "@codemirror/state";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
-import { languages } from "@codemirror/language-data";
 import { getCM, Vim } from "@replit/codemirror-vim";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -62,6 +61,17 @@ export function FieldPlaceholder({
   );
 }
 
+/** Static basicSetup config — hoisted to module level to avoid recreating on each render. */
+const BASIC_SETUP = {
+  lineNumbers: false,
+  foldGutter: false,
+  highlightActiveLine: false,
+  highlightActiveLineGutter: false,
+  indentOnInput: true,
+  bracketMatching: false,
+  autocompletion: false,
+} as const;
+
 interface EditorProps {
   value: string;
   /** Called with the final value when the editor commits. */
@@ -75,8 +85,57 @@ interface EditorProps {
   onChange?: (text: string) => void;
   /** Popup mode — when true, auto-enters vim insert mode (e.g. quick-capture). */
   popup?: boolean;
+  /** Additional CM6 extensions (e.g. mention decorations, autocomplete). */
+  extraExtensions?: import("@codemirror/state").Extension[];
 }
 
+/**
+ * Memoized CodeMirror wrapper that prevents re-renders from parent context changes.
+ *
+ * `@uiw/react-codemirror` is not wrapped in React.memo, so every parent re-render
+ * runs all its internal hooks — including an O(n) doc.toString() comparison.
+ * This wrapper ensures CodeMirror only re-renders when its props actually change.
+ */
+const StableCodeMirror = memo(function StableCodeMirror({
+  editorRef,
+  initialValue,
+  onBlur,
+  onCreateEditor,
+  extensions,
+  placeholder,
+  className,
+}: {
+  editorRef: React.RefObject<ReactCodeMirrorRef | null>;
+  initialValue: string;
+  onBlur: () => void;
+  onCreateEditor: (view: EditorView) => void;
+  extensions: import("@codemirror/state").Extension[];
+  placeholder?: string;
+  className?: string;
+}) {
+  return (
+    <CodeMirror
+      ref={editorRef}
+      autoFocus
+      value={initialValue}
+      onBlur={onBlur}
+      onCreateEditor={onCreateEditor}
+      extensions={extensions}
+      theme={shadcnTheme}
+      basicSetup={BASIC_SETUP}
+      className={className}
+      placeholder={placeholder}
+    />
+  );
+});
+
+/**
+ * Single-purpose CM6 text/markdown editor used across the field system.
+ *
+ * Runs in uncontrolled mode — CodeMirror owns the document, React never
+ * re-renders during typing. The value prop is only used for initialization.
+ * Commit reads from `view.state.doc.toString()` at exit time.
+ */
 export function TextEditor({
   value,
   onCommit,
@@ -85,58 +144,73 @@ export function TextEditor({
   placeholder,
   onChange,
   popup,
+  extraExtensions,
 }: EditorProps) {
-  const [draft, setDraft] = useState(value);
   const editorRef = useRef<ReactCodeMirrorRef>(null);
   const keymapCompartment = useRef(new Compartment());
   const { keymap_mode: mode } = useUIState();
 
+  // Capture initial value so the memo wrapper sees a stable string reference.
+  const initialValueRef = useRef(value);
+
+  // Refs for stable callbacks — avoids recreating closures on every render
+  const valueRef = useRef(value);
+  valueRef.current = value;
+  const onCommitRef = useRef(onCommit);
+  onCommitRef.current = onCommit;
+  const onCancelRef = useRef(onCancel);
+  onCancelRef.current = onCancel;
+  const onSubmitRef = useRef(onSubmit);
+  onSubmitRef.current = onSubmit;
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
+
   // Guard against re-entrant commits (blur fires after Escape)
   const committedRef = useRef(false);
-  useEffect(() => {
-    committedRef.current = false;
-  }, []);
 
+  /** Commit the current editor content and signal done. */
   const commitAndExit = useCallback(() => {
     if (committedRef.current) return;
     committedRef.current = true;
     const text = editorRef.current?.view
       ? editorRef.current.view.state.doc.toString()
-      : draft;
-    onCommit(text);
-  }, [draft, onCommit]);
+      : valueRef.current;
+    onCommitRef.current(text);
+  }, []);
 
+  /** Cancel without saving. */
   const cancelAndExit = useCallback(() => {
     if (committedRef.current) return;
     committedRef.current = true;
-    onCancel();
-  }, [onCancel]);
+    onCancelRef.current();
+  }, []);
 
   const commitAndExitRef = useRef(commitAndExit);
   commitAndExitRef.current = commitAndExit;
   const cancelAndExitRef = useRef(cancelAndExit);
   cancelAndExitRef.current = cancelAndExit;
 
+  /** Save current value without leaving the editor (vim insert→normal). */
   const saveInPlace = useCallback(() => {
     if (!editorRef.current?.view) return;
     const text = editorRef.current.view.state.doc.toString();
-    if (text !== value) {
-      onCommit(text);
+    if (text !== valueRef.current) {
+      onCommitRef.current(text);
     }
-  }, [value, onCommit]);
+  }, []);
   const saveInPlaceRef = useRef(saveInPlace);
   saveInPlaceRef.current = saveInPlace;
 
   // Semantic submit ref: if onSubmit provided, use it; otherwise commit-and-exit
   const semanticSubmitRef = useRef<(() => void) | null>(null);
-  semanticSubmitRef.current = onSubmit
+  semanticSubmitRef.current = onSubmitRef.current
     ? () => {
         if (committedRef.current) return;
         const text = editorRef.current?.view
           ? editorRef.current.view.state.doc.toString()
-          : draft;
+          : valueRef.current;
         if (text.length > 0) {
-          onSubmit(text);
+          onSubmitRef.current!(text);
         }
       }
     : () => commitAndExitRef.current();
@@ -158,7 +232,6 @@ export function TextEditor({
 
       if (popup) {
         // Popup/quick-capture mode: auto-enter insert mode so user can type immediately.
-        // Same rAF retry pattern as command-palette.tsx.
         let cancelled = false;
         let attempts = 0;
         const tryEnterInsert = () => {
@@ -186,11 +259,23 @@ export function TextEditor({
     [mode, popup],
   );
 
+  // Forward onChange to parent if provided — via CM6 updateListener, not React state
+  const changeExtension = useMemo(() => {
+    if (!onChange) return [];
+    return [
+      EditorView.updateListener.of((update) => {
+        if (update.docChanged) {
+          onChangeRef.current?.(update.state.doc.toString());
+        }
+      }),
+    ];
+  }, [onChange]);
+
   const extensions = useMemo(
     () => [
       keymapCompartment.current.of(keymapExtension(mode)),
       EditorView.lineWrapping,
-      markdown({ base: markdownLanguage, codeLanguages: languages }),
+      markdown({ base: markdownLanguage }),
       ...buildSubmitCancelExtensions({
         mode,
         onSubmitRef: semanticSubmitRef,
@@ -198,32 +283,25 @@ export function TextEditor({
         saveInPlaceRef,
       }),
       ...(placeholder ? [cmPlaceholder(placeholder)] : []),
+      ...changeExtension,
+      ...(extraExtensions ?? []),
     ],
-    [mode, placeholder],
+    [mode, placeholder, changeExtension, extraExtensions],
   );
 
+  // Stable onBlur — reads from ref
+  const handleBlur = useCallback(() => {
+    commitAndExitRef.current();
+  }, []);
+
   return (
-    <CodeMirror
-      ref={editorRef}
-      autoFocus
-      value={draft}
-      onChange={(val) => {
-        setDraft(val);
-        onChange?.(val);
-      }}
-      onBlur={() => commitAndExitRef.current()}
+    <StableCodeMirror
+      editorRef={editorRef}
+      initialValue={initialValueRef.current}
+      onBlur={handleBlur}
       onCreateEditor={handleCreateEditor}
       extensions={extensions}
-      theme={shadcnTheme}
-      basicSetup={{
-        lineNumbers: false,
-        foldGutter: false,
-        highlightActiveLine: false,
-        highlightActiveLineGutter: false,
-        indentOnInput: true,
-        bracketMatching: false,
-        autocompletion: false,
-      }}
+      placeholder={placeholder}
       className="text-sm"
     />
   );

@@ -8,15 +8,25 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import type { FieldDef } from "@/types/kanban";
-import type { EditorProps } from "./markdown-editor";
+import type { EditorProps } from ".";
 
 interface SelectEditorProps extends EditorProps {
   field: FieldDef;
 }
 
 /** Select editor using shadcn/Radix Select. Commits on selection, Enter, or blur. */
-export function SelectEditor({ field, value, onCommit, onCancel }: SelectEditorProps) {
-  const options = ((field.type as Record<string, unknown>).options as Array<{ value: string; label?: string; color?: string }>) ?? [];
+export function SelectEditor({
+  field,
+  value,
+  onCommit,
+  onCancel,
+}: SelectEditorProps) {
+  const options =
+    ((field.type as Record<string, unknown>).options as Array<{
+      value: string;
+      label?: string;
+      color?: string;
+    }>) ?? [];
   const initial = typeof value === "string" ? value : "";
   const [draft, setDraft] = useState(initial);
   const [open, setOpen] = useState(true);

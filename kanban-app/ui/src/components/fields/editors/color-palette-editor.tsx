@@ -1,8 +1,12 @@
 import { useCallback, useRef, useState } from "react";
 import { HexColorPicker } from "react-colorful";
-import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
+import {
+  Popover,
+  PopoverTrigger,
+  PopoverContent,
+} from "@/components/ui/popover";
 import { ColorSwatchDisplay } from "@/components/fields/displays/color-swatch-display";
-import type { EditorProps } from "./markdown-editor";
+import type { EditorProps } from ".";
 
 /**
  * Color editor — popover with HexColorPicker.

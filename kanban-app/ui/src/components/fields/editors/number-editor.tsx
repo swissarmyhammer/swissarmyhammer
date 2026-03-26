@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useUIState } from "@/lib/ui-state-context";
-import type { EditorProps } from "./markdown-editor";
+import type { EditorProps } from ".";
 
 /** Numeric input editor. Commits on Enter or blur. */
 export function NumberEditor({ value, onCommit, onCancel }: EditorProps) {

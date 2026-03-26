@@ -29,7 +29,7 @@ import { createDebouncedSearch } from "@/lib/debounced-search";
 import { slugify } from "@/lib/slugify";
 import { getStr } from "@/types/kanban";
 import type { FieldDef, Entity } from "@/types/kanban";
-import type { EditorProps } from "./markdown-editor";
+import type { EditorProps } from ".";
 
 interface MultiSelectEditorProps extends EditorProps {
   field: FieldDef;

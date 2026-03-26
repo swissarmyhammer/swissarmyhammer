@@ -12,7 +12,7 @@ import {
 import { Calendar } from "@/components/ui/calendar";
 import { useUIState } from "@/lib/ui-state-context";
 import { shadcnTheme, keymapExtension } from "@/lib/cm-keymap";
-import type { EditorProps } from "./markdown-editor";
+import type { EditorProps } from ".";
 
 /** Format a Date as YYYY-MM-DD */
 function toISO(d: Date): string {
