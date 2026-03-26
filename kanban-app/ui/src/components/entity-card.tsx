@@ -90,7 +90,7 @@ export const EntityCard = memo(
           draggable={draggable}
           onDragStart={onDragStart}
           onDragEnd={onDragEnd}
-          className="rounded-md bg-card px-3 py-2 text-sm border border-border hover:ring-1 hover:ring-ring transition-shadow relative group flex items-start gap-2 overflow-hidden"
+          className="rounded-md bg-card px-3 py-2 text-sm border border-border relative group flex items-start gap-2 overflow-hidden"
           {...rest}
         >
           <button

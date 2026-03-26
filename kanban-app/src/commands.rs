@@ -877,6 +877,7 @@ pub(crate) async fn dispatch_command_internal(
         target = ?target,
         args = ?args,
         scope_chain = ?scope_chain,
+        board_path = ?board_path,
         "command"
     );
 
@@ -1026,6 +1027,14 @@ pub(crate) async fn dispatch_command_internal(
                 .unwrap_or("")
                 .to_string();
             let drop_index = drag_complete.get("drop_index").and_then(|v| v.as_u64());
+            let before_id = drag_complete
+                .get("before_id")
+                .and_then(|v| v.as_str())
+                .map(str::to_string);
+            let after_id = drag_complete
+                .get("after_id")
+                .and_then(|v| v.as_str())
+                .map(str::to_string);
             let copy_mode = drag_complete
                 .get("copy_mode")
                 .and_then(|v| v.as_bool())
@@ -1042,6 +1051,8 @@ pub(crate) async fn dispatch_command_internal(
                         &task_id,
                         &target_column,
                         drop_index,
+                        before_id.as_deref(),
+                        after_id.as_deref(),
                         copy_mode,
                     )
                     .await;

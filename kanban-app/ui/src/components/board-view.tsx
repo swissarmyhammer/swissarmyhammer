@@ -23,8 +23,8 @@ import {
 } from "@dnd-kit/sortable";
 import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
+import type { DropZoneDescriptor } from "@/lib/drop-zones";
 import {
-  useActiveBoardPath,
   CommandScopeProvider,
   CommandScopeContext,
   type CommandDef,
@@ -50,6 +50,7 @@ import { getStr, getNum } from "@/types/kanban";
 interface BoardViewProps {
   board: BoardData;
   tasks: Entity[];
+  boardPath?: string;
 }
 
 type ColumnLayout = Map<string, string[]>;
@@ -57,12 +58,9 @@ type ColumnLayout = Map<string, string[]>;
 interface TaskDragState {
   sourceTaskId: string;
   sourceColumn: string;
-  targetColumn: string | null;
-  insertIndex: number | null;
 }
 
-export function BoardView({ board, tasks }: BoardViewProps) {
-  const boardPath = useActiveBoardPath();
+export function BoardView({ board, tasks, boardPath }: BoardViewProps) {
   const boardPathRef = useRef(boardPath);
   boardPathRef.current = boardPath;
   const { setFocus } = useEntityFocus();
@@ -404,24 +402,21 @@ export function BoardView({ board, tasks }: BoardViewProps) {
 
   // --- HTML5 task drag handlers ---
   const persistMove = useCallback(
-    async (
-      taskId: string,
-      column: string,
-      entity: Entity,
-      placement: { before?: string; after?: string },
-    ) => {
+    async (descriptor: DropZoneDescriptor, taskId: string, entity: Entity) => {
       try {
         const args: Record<string, unknown> = {
           id: taskId,
-          column,
+          column: descriptor.columnId,
           swimlane: getStr(entity, "position_swimlane") || null,
         };
-        if (placement.before) args.before_id = placement.before;
-        if (placement.after) args.after_id = placement.after;
+        if (descriptor.beforeId) args.before_id = descriptor.beforeId;
+        if (descriptor.afterId) args.after_id = descriptor.afterId;
+        const boardPath = descriptor.boardPath || boardPathRef.current;
         await invoke("dispatch_command", {
           cmd: "task.move",
           args,
-          ...(boardPathRef.current ? { boardPath: boardPathRef.current } : {}),
+          scopeChain: [`task:${taskId}`],
+          ...(boardPath ? { boardPath } : {}),
         });
       } catch (e) {
         console.error("Failed to move task:", e);
@@ -436,8 +431,6 @@ export function BoardView({ board, tasks }: BoardViewProps) {
       setTaskDrag({
         sourceTaskId: entity.id,
         sourceColumn,
-        targetColumn: null,
-        insertIndex: null,
       });
       startSession(entity.id, entity.fields, false);
     },
@@ -449,7 +442,7 @@ export function BoardView({ board, tasks }: BoardViewProps) {
       setTaskDrag(null);
       emit("drag-ended", {});
       // Only cancel the backend session if the drop was rejected (no valid target).
-      // Successful drops are handled by handleTaskDrop which calls persistMove
+      // Successful drops are handled by handleZoneDrop which calls persistMove
       // or completeSession directly.
       if (dropEffect === "none") {
         cancelSession();
@@ -458,32 +451,8 @@ export function BoardView({ board, tasks }: BoardViewProps) {
     [cancelSession],
   );
 
-  const handleColumnDragOverHTML5 = useCallback(
-    (columnId: string, insertIndex: number) => {
-      setTaskDrag((prev) => {
-        if (!prev) return prev;
-        return { ...prev, targetColumn: columnId, insertIndex };
-      });
-    },
-    [],
-  );
-
-  const handleColumnDragEnter = useCallback((columnId: string) => {
-    setTaskDrag((prev) => {
-      if (!prev) return prev;
-      return { ...prev, targetColumn: columnId };
-    });
-  }, []);
-
-  const handleColumnDragLeave = useCallback((_columnId: string) => {
-    setTaskDrag((prev) => {
-      if (!prev) return prev;
-      return { ...prev, targetColumn: null, insertIndex: null };
-    });
-  }, []);
-
-  const handleTaskDrop = useCallback(
-    (columnId: string, taskData: string, insertIndex: number) => {
+  const handleZoneDrop = useCallback(
+    (descriptor: DropZoneDescriptor, taskData: string) => {
       setTaskDrag(null);
       let entity: Entity | null = null;
       if (taskData) {
@@ -501,51 +470,19 @@ export function BoardView({ board, tasks }: BoardViewProps) {
 
       const taskId = entity.id;
       const isLocalTask = taskMap.has(taskId);
-
       if (isLocalTask) {
-        // Same-board drop — task exists locally, move it directly
+        // Same-board drop — descriptor carries all placement params
         cancelSession();
-        const colTasks = baseLayout.get(columnId) ?? [];
-
-        if (colTasks.length === 0 || insertIndex >= colTasks.length) {
-          const lastId =
-            colTasks.length > 0 ? colTasks[colTasks.length - 1] : undefined;
-          persistMove(
-            taskId,
-            columnId,
-            entity,
-            lastId ? { after: lastId } : {},
-          );
-        } else {
-          const beforeId = colTasks[insertIndex];
-          const sourceColumn = getStr(entity, "position_column");
-          const sourceIndex = (baseLayout.get(sourceColumn) ?? []).indexOf(
-            taskId,
-          );
-          if (columnId === sourceColumn && sourceIndex < insertIndex) {
-            persistMove(taskId, columnId, entity, { after: beforeId });
-          } else {
-            persistMove(taskId, columnId, entity, { before: beforeId });
-          }
-        }
+        persistMove(descriptor, taskId, entity);
       } else {
-        // Cross-board drop — task doesn't exist here yet, complete via session
-        // The backend handles creating/moving the task to this board
-        const colTasks = baseLayout.get(columnId) ?? [];
-        const beforeId =
-          insertIndex < colTasks.length ? colTasks[insertIndex] : undefined;
-        const afterId =
-          !beforeId && colTasks.length > 0
-            ? colTasks[colTasks.length - 1]
-            : undefined;
-        completeSession(columnId, {
-          dropIndex: insertIndex,
-          beforeId,
-          afterId,
+        // Cross-board drop — pass zone's placement to the session
+        completeSession(descriptor.columnId, {
+          beforeId: descriptor.beforeId,
+          afterId: descriptor.afterId,
         });
       }
     },
-    [taskMap, baseLayout, persistMove, cancelSession, completeSession],
+    [taskMap, persistMove, cancelSession, completeSession],
   );
 
   const handleAddTask = useCallback(
@@ -617,15 +554,9 @@ export function BoardView({ board, tasks }: BoardViewProps) {
                         onAddTask={i === 0 ? handleAddTask : undefined}
                         onTaskDragStart={handleTaskDragStart}
                         onTaskDragEnd={handleTaskDragEnd}
-                        onDragOver={handleColumnDragOverHTML5}
-                        onDrop={handleTaskDrop}
-                        onDragEnter={handleColumnDragEnter}
-                        onDragLeave={handleColumnDragLeave}
-                        insertAtIndex={
-                          taskDrag?.targetColumn === col.id
-                            ? taskDrag.insertIndex
-                            : null
-                        }
+                        onDrop={handleZoneDrop}
+                        dragTaskId={taskDrag?.sourceTaskId ?? null}
+                        boardPath={boardPath}
                         firstTodoTaskId={firstTodoTaskId}
                         focusedCardIndex={
                           isFocusedCol ? boardNav.cursor.card : null

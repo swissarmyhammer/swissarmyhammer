@@ -550,7 +550,7 @@ function App() {
                                       inspectEntity("board", "board")
                                     }
                                   />
-                                  {board ? (
+                                  {board && activeBoardPath ? (
                                     <>
                                       <div className="flex-1 flex min-h-0">
                                         <LeftNav />
@@ -558,6 +558,7 @@ function App() {
                                           <ActiveViewRenderer
                                             board={board}
                                             tasks={entitiesByType.task ?? []}
+                                            boardPath={activeBoardPath}
                                           />
                                         </div>
                                       </div>
@@ -671,14 +672,16 @@ function ViewCommandScope({ children }: { children: React.ReactNode }) {
 function ActiveViewRenderer({
   board,
   tasks,
+  boardPath,
 }: {
   board: BoardData;
   tasks: Entity[];
+  boardPath?: string;
 }) {
   const { activeView } = useViews();
 
   if (!activeView || activeView.kind === "board") {
-    return <BoardView board={board} tasks={tasks} />;
+    return <BoardView board={board} tasks={tasks} boardPath={boardPath} />;
   }
 
   if (activeView.kind === "grid") {

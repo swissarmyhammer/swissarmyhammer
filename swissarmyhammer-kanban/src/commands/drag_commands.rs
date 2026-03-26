@@ -354,6 +354,8 @@ impl Command for DragCompleteCmd {
                     "task_id": session.task_id,
                     "target_column": target_column,
                     "drop_index": drop_index,
+                    "before_id": before_id,
+                    "after_id": after_id,
                     "copy_mode": effective_copy_mode,
                 }
             }))

@@ -1,7 +1,6 @@
 ---
 name: implementer
 description: Delegate implementation work to this agent. It takes a single kanban card and implements it — writing code, running tests, and reporting results. Keeps verbose output out of the parent context.
-model: default
 skills:
   - implement
 ---

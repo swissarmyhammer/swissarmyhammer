@@ -14,8 +14,15 @@ use serde_json::{json, Value};
 /// - `target_ctx` - KanbanContext for the target board (where the task is going)
 /// - `task_id`    - ID of the task to transfer/copy
 /// - `target_column` - Column ID on the target board to place the task in
-/// - `drop_index` - Optional position index in the target column; if `None`, appends at end
+/// - `drop_index` - Optional position index in the target column (legacy fallback)
+/// - `before_id`  - Optional task ID to place before (highest priority placement)
+/// - `after_id`   - Optional task ID to place after (highest priority placement)
 /// - `copy_mode`  - When `true`, keep the source task; when `false`, delete it (move)
+///
+/// # Ordinal resolution priority
+/// 1. `before_id`/`after_id` — compute ordinal from neighbors
+/// 2. `drop_index` — compute from position (legacy fallback)
+/// 3. Neither — append at end
 ///
 /// # Returns
 /// A JSON object `{ id, source_id, transferred, copied }` on success, or a `String`
@@ -30,6 +37,8 @@ pub async fn transfer_task(
     task_id: &str,
     target_column: &str,
     drop_index: Option<u64>,
+    before_id: Option<&str>,
+    after_id: Option<&str>,
     copy_mode: bool,
 ) -> Result<Value, String> {
     // Read source task
@@ -49,7 +58,106 @@ pub async fn transfer_task(
         .map_err(|e| e.to_string())?;
     let ordinal = {
         let all_tasks = target_ectx.list("task").await.map_err(|e| e.to_string())?;
-        if let Some(idx) = drop_index {
+        if before_id.is_some() || after_id.is_some() {
+            // ID-based placement: same pattern as MoveTask in task/mv.rs
+            let mut col_tasks: Vec<_> = all_tasks
+                .into_iter()
+                .filter(|t| t.get_str("position_column") == Some(target_column))
+                .collect();
+            col_tasks.sort_by(|a, b| {
+                let oa = a
+                    .get_str("position_ordinal")
+                    .unwrap_or(Ordinal::DEFAULT_STR);
+                let ob = b
+                    .get_str("position_ordinal")
+                    .unwrap_or(Ordinal::DEFAULT_STR);
+                oa.cmp(ob)
+            });
+
+            if let Some(ref_id) = before_id {
+                let ref_idx = col_tasks.iter().position(|t| t.id.as_str() == ref_id);
+                match ref_idx {
+                    Some(0) => {
+                        let ref_ord = Ordinal::from_string(
+                            col_tasks[0]
+                                .get_str("position_ordinal")
+                                .unwrap_or(Ordinal::DEFAULT_STR),
+                        );
+                        task_helpers::compute_ordinal_for_neighbors(None, Some(&ref_ord))
+                    }
+                    Some(idx) => {
+                        let pred_ord = Ordinal::from_string(
+                            col_tasks[idx - 1]
+                                .get_str("position_ordinal")
+                                .unwrap_or(Ordinal::DEFAULT_STR),
+                        );
+                        let ref_ord = Ordinal::from_string(
+                            col_tasks[idx]
+                                .get_str("position_ordinal")
+                                .unwrap_or(Ordinal::DEFAULT_STR),
+                        );
+                        task_helpers::compute_ordinal_for_neighbors(Some(&pred_ord), Some(&ref_ord))
+                    }
+                    None => {
+                        // Reference not found — append at end
+                        task_helpers::compute_ordinal_for_neighbors(
+                            col_tasks
+                                .last()
+                                .map(|t| {
+                                    Ordinal::from_string(
+                                        t.get_str("position_ordinal")
+                                            .unwrap_or(Ordinal::DEFAULT_STR),
+                                    )
+                                })
+                                .as_ref(),
+                            None,
+                        )
+                    }
+                }
+            } else if let Some(ref_id) = after_id {
+                let ref_idx = col_tasks.iter().position(|t| t.id.as_str() == ref_id);
+                match ref_idx {
+                    Some(idx) if idx == col_tasks.len() - 1 => {
+                        let ref_ord = Ordinal::from_string(
+                            col_tasks[idx]
+                                .get_str("position_ordinal")
+                                .unwrap_or(Ordinal::DEFAULT_STR),
+                        );
+                        task_helpers::compute_ordinal_for_neighbors(Some(&ref_ord), None)
+                    }
+                    Some(idx) => {
+                        let ref_ord = Ordinal::from_string(
+                            col_tasks[idx]
+                                .get_str("position_ordinal")
+                                .unwrap_or(Ordinal::DEFAULT_STR),
+                        );
+                        let succ_ord = Ordinal::from_string(
+                            col_tasks[idx + 1]
+                                .get_str("position_ordinal")
+                                .unwrap_or(Ordinal::DEFAULT_STR),
+                        );
+                        task_helpers::compute_ordinal_for_neighbors(Some(&ref_ord), Some(&succ_ord))
+                    }
+                    None => {
+                        // Reference not found — append at end
+                        task_helpers::compute_ordinal_for_neighbors(
+                            col_tasks
+                                .last()
+                                .map(|t| {
+                                    Ordinal::from_string(
+                                        t.get_str("position_ordinal")
+                                            .unwrap_or(Ordinal::DEFAULT_STR),
+                                    )
+                                })
+                                .as_ref(),
+                            None,
+                        )
+                    }
+                }
+            } else {
+                unreachable!()
+            }
+        } else if let Some(idx) = drop_index {
             let mut col_tasks: Vec<_> = all_tasks
                 .into_iter()
                 .filter(|t| t.get_str("position_column") == Some(target_column))
@@ -178,11 +286,22 @@ mod tests {
 
     /// Write a minimal task entity directly via entity context.
     async fn write_task(ctx: &KanbanContext, id: &str, title: &str, column: &str) {
+        write_task_with_ordinal(ctx, id, title, column, "a0").await;
+    }
+
+    /// Write a minimal task entity with a specific ordinal.
+    async fn write_task_with_ordinal(
+        ctx: &KanbanContext,
+        id: &str,
+        title: &str,
+        column: &str,
+        ordinal: &str,
+    ) {
         let ectx = ctx.entity_context().await.unwrap();
         let mut task = swissarmyhammer_entity::Entity::new("task", id);
         task.set("title", json!(title));
         task.set("position_column", json!(column));
-        task.set("position_ordinal", json!("a0"));
+        task.set("position_ordinal", json!(ordinal));
         ectx.write(&task).await.unwrap();
     }
 
@@ -197,9 +316,11 @@ mod tests {
 
         write_task(&src_ctx, "TASK01", "Move me", "todo").await;
 
-        transfer_task(&src_ctx, &tgt_ctx, "TASK01", "todo", None, false)
-            .await
-            .expect("transfer should succeed");
+        transfer_task(
+            &src_ctx, &tgt_ctx, "TASK01", "todo", None, None, None, false,
+        )
+        .await
+        .expect("transfer should succeed");
 
         // Source should be empty
         let src_tasks = src_ctx.list_entities_generic("task").await.unwrap();
@@ -222,7 +343,7 @@ mod tests {
 
         write_task(&src_ctx, "TASK02", "Copy me", "todo").await;
 
-        transfer_task(&src_ctx, &tgt_ctx, "TASK02", "todo", None, true)
+        transfer_task(&src_ctx, &tgt_ctx, "TASK02", "todo", None, None, None, true)
             .await
             .expect("copy should succeed");
 
@@ -253,7 +374,7 @@ mod tests {
             ectx.write(&task).await.unwrap();
         }
 
-        transfer_task(&src_ctx, &tgt_ctx, "TASK03", "todo", None, true)
+        transfer_task(&src_ctx, &tgt_ctx, "TASK03", "todo", None, None, None, true)
             .await
             .expect("copy should succeed");
 
@@ -308,7 +429,7 @@ mod tests {
             "source task should have computed tags from body"
         );
 
-        transfer_task(&src_ctx, &tgt_ctx, "TASK04", "todo", None, true)
+        transfer_task(&src_ctx, &tgt_ctx, "TASK04", "todo", None, None, None, true)
             .await
             .expect("copy should succeed");
 
@@ -356,7 +477,7 @@ mod tests {
             ectx.write(&task).await.unwrap();
         }
 
-        transfer_task(&src_ctx, &tgt_ctx, "TASK05", "todo", None, true)
+        transfer_task(&src_ctx, &tgt_ctx, "TASK05", "todo", None, None, None, true)
             .await
             .expect("copy should succeed");
 
@@ -392,9 +513,18 @@ mod tests {
 
         write_task(&src_ctx, "TASK06", "Insert at 0", "todo").await;
 
-        transfer_task(&src_ctx, &tgt_ctx, "TASK06", "todo", Some(0), false)
-            .await
-            .expect("transfer should succeed");
+        transfer_task(
+            &src_ctx,
+            &tgt_ctx,
+            "TASK06",
+            "todo",
+            Some(0),
+            None,
+            None,
+            false,
+        )
+        .await
+        .expect("transfer should succeed");
 
         let mut tgt_tasks = tgt_ctx.list_entities_generic("task").await.unwrap();
         tgt_tasks.sort_by(|a, b| {
@@ -413,9 +543,11 @@ mod tests {
 
         write_task(&src_ctx, "TASK07", "Result Task", "todo").await;
 
-        let result = transfer_task(&src_ctx, &tgt_ctx, "TASK07", "todo", None, false)
-            .await
-            .unwrap();
+        let result = transfer_task(
+            &src_ctx, &tgt_ctx, "TASK07", "todo", None, None, None, false,
+        )
+        .await
+        .unwrap();
 
         assert_eq!(result["source_id"].as_str(), Some("TASK07"));
         assert_eq!(result["transferred"].as_bool(), Some(true));
@@ -438,7 +570,7 @@ mod tests {
 
         write_task(&src_ctx, "TASK08", "Copy Result Task", "todo").await;
 
-        let result = transfer_task(&src_ctx, &tgt_ctx, "TASK08", "todo", None, true)
+        let result = transfer_task(&src_ctx, &tgt_ctx, "TASK08", "todo", None, None, None, true)
             .await
             .unwrap();
 
@@ -451,7 +583,111 @@ mod tests {
         let (_src_dir, src_ctx) = make_board().await;
         let (_tgt_dir, tgt_ctx) = make_board().await;
 
-        let result = transfer_task(&src_ctx, &tgt_ctx, "NONEXISTENT", "todo", None, false).await;
+        let result = transfer_task(
+            &src_ctx,
+            &tgt_ctx,
+            "NONEXISTENT",
+            "todo",
+            None,
+            None,
+            None,
+            false,
+        )
+        .await;
         assert!(result.is_err(), "should fail for nonexistent task");
+    }
+
+    #[tokio::test]
+    async fn cross_board_transfer_before_id_places_task_before_existing() {
+        let (_src_dir, src_ctx) = make_board().await;
+        let (_tgt_dir, tgt_ctx) = make_board().await;
+
+        // Generate valid fractional index ordinals
+        let ord_a = Ordinal::first();
+        let ord_b = Ordinal::after(&ord_a);
+
+        // Pre-populate target with two tasks in known order
+        write_task_with_ordinal(&tgt_ctx, "TGT_A", "Alpha", "todo", ord_a.as_str()).await;
+        write_task_with_ordinal(&tgt_ctx, "TGT_B", "Beta", "todo", ord_b.as_str()).await;
+
+        // Transfer a task from source, placing it before TGT_B
+        write_task(&src_ctx, "SRC_01", "Inserted", "todo").await;
+        transfer_task(
+            &src_ctx,
+            &tgt_ctx,
+            "SRC_01",
+            "todo",
+            None,
+            Some("TGT_B"),
+            None,
+            false,
+        )
+        .await
+        .expect("transfer with before_id should succeed");
+
+        // Collect and sort target tasks by ordinal
+        let mut tgt_tasks = tgt_ctx.list_entities_generic("task").await.unwrap();
+        tgt_tasks.sort_by(|a, b| {
+            let oa = a
+                .get_str("position_ordinal")
+                .unwrap_or(Ordinal::DEFAULT_STR);
+            let ob = b
+                .get_str("position_ordinal")
+                .unwrap_or(Ordinal::DEFAULT_STR);
+            oa.cmp(ob)
+        });
+
+        assert_eq!(tgt_tasks.len(), 3);
+        // Order should be: Alpha, Inserted, Beta
+        assert_eq!(tgt_tasks[0].get_str("title"), Some("Alpha"));
+        assert_eq!(tgt_tasks[1].get_str("title"), Some("Inserted"));
+        assert_eq!(tgt_tasks[2].get_str("title"), Some("Beta"));
+    }
+
+    #[tokio::test]
+    async fn cross_board_transfer_after_id_places_task_after_existing() {
+        let (_src_dir, src_ctx) = make_board().await;
+        let (_tgt_dir, tgt_ctx) = make_board().await;
+
+        // Generate valid fractional index ordinals
+        let ord_x = Ordinal::first();
+        let ord_y = Ordinal::after(&ord_x);
+
+        // Pre-populate target with two tasks in known order
+        write_task_with_ordinal(&tgt_ctx, "TGT_X", "Xray", "todo", ord_x.as_str()).await;
+        write_task_with_ordinal(&tgt_ctx, "TGT_Y", "Yankee", "todo", ord_y.as_str()).await;
+
+        // Transfer a task from source, placing it after TGT_X
+        write_task(&src_ctx, "SRC_02", "Middle", "todo").await;
+        transfer_task(
+            &src_ctx,
+            &tgt_ctx,
+            "SRC_02",
+            "todo",
+            None,
+            None,
+            Some("TGT_X"),
+            false,
+        )
+        .await
+        .expect("transfer with after_id should succeed");
+
+        // Collect and sort target tasks by ordinal
+        let mut tgt_tasks = tgt_ctx.list_entities_generic("task").await.unwrap();
+        tgt_tasks.sort_by(|a, b| {
+            let oa = a
+                .get_str("position_ordinal")
+                .unwrap_or(Ordinal::DEFAULT_STR);
+            let ob = b
+                .get_str("position_ordinal")
+                .unwrap_or(Ordinal::DEFAULT_STR);
+            oa.cmp(ob)
+        });
+
+        assert_eq!(tgt_tasks.len(), 3);
+        // Order should be: Xray, Middle, Yankee
+        assert_eq!(tgt_tasks[0].get_str("title"), Some("Xray"));
+        assert_eq!(tgt_tasks[1].get_str("title"), Some("Middle"));
+        assert_eq!(tgt_tasks[2].get_str("title"), Some("Yankee"));
     }
 }

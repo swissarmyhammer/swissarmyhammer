@@ -1,6 +1,8 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Inbox, Plus } from "lucide-react";
+import { Plus } from "lucide-react";
+import { DropZone } from "@/components/drop-zone";
+import { computeDropZones, type DropZoneDescriptor } from "@/lib/drop-zones";
 import { Field } from "@/components/fields/field";
 import { DraggableTaskCard } from "@/components/sortable-task-card";
 import { FocusScope } from "@/components/focus-scope";
@@ -8,7 +10,6 @@ import { FocusHighlight } from "@/components/ui/focus-highlight";
 import { Badge } from "@/components/ui/badge";
 import { moniker } from "@/lib/moniker";
 import { useEntityCommands } from "@/lib/entity-commands";
-import { useActiveBoardPath } from "@/lib/command-scope";
 import { useSchema } from "@/lib/schema-context";
 import { useBoardNavActions } from "@/lib/board-nav-context";
 import type { CommandDef } from "@/lib/command-scope";
@@ -24,18 +25,12 @@ interface ColumnViewProps {
   onTaskDragStart?: (entity: Entity) => void;
   /** Called when a task drag ends (from this column's card). */
   onTaskDragEnd?: (entity: Entity, dropEffect: string) => void;
-  /** Called during dragover with the computed insert index. */
-  onDragOver?: (columnId: string, insertIndex: number) => void;
-  /** Called when a task is dropped on this column. */
-  onDrop?: (columnId: string, taskData: string, insertIndex: number) => void;
-  /** Called when drag enters this column. */
-  onDragEnter?: (columnId: string) => void;
-  /** Called when drag leaves this column. */
-  onDragLeave?: (columnId: string) => void;
-  /** Externally controlled insert marker position. */
-  insertAtIndex?: number | null;
-  /** Whether this column is the target of an active drag (intra or cross-window). */
-  isDragTarget?: boolean;
+  /** Called when a task is dropped on a zone in this column. */
+  onDrop?: (descriptor: DropZoneDescriptor, taskData: string) => void;
+  /** ID of the task currently being dragged (for no-op zone suppression). */
+  dragTaskId?: string | null;
+  /** Board path — passed explicitly from BoardView, not pulled from context. */
+  boardPath?: string;
   /** Ref callback for the column container — used for cross-window hit-testing. */
   containerRef?: (el: HTMLDivElement | null) => void;
   /** ID of the first task in the todo column — used for "Do This Next" command. */
@@ -48,17 +43,6 @@ interface ColumnViewProps {
 const SCROLL_ZONE = 40;
 /** Pixels per animation frame to scroll when in the edge zone. */
 const SCROLL_SPEED = 6;
-
-/** Compute the insert index by comparing dragover Y to card midpoints. */
-function computeInsertIndex(container: HTMLElement, clientY: number): number {
-  const cards = container.querySelectorAll<HTMLElement>("[data-entity-card]");
-  for (let i = 0; i < cards.length; i++) {
-    const rect = cards[i].getBoundingClientRect();
-    const midY = rect.top + rect.height / 2;
-    if (clientY < midY) return i;
-  }
-  return cards.length;
-}
 
 /**
  * Renders a single column in the board view with drag-drop, focus highlight,
@@ -73,12 +57,9 @@ export const ColumnView = memo(function ColumnView({
   onAddTask,
   onTaskDragStart,
   onTaskDragEnd,
-  onDragOver: onDragOverProp,
   onDrop: onDropProp,
-  onDragEnter,
-  onDragLeave,
-  insertAtIndex,
-  isDragTarget: isDragTargetProp,
+  dragTaskId,
+  boardPath,
   containerRef: containerRefProp,
   firstTodoTaskId,
   focusedCardIndex,
@@ -88,8 +69,6 @@ export const ColumnView = memo(function ColumnView({
   const nameFieldDef = getFieldDef("column", "name");
   const [editingName, setEditingName] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
-  const [localInsert, setLocalInsert] = useState<number | null>(null);
-  const [isDragOver, setIsDragOver] = useState(false);
   /** rAF handle for edge-scroll loop during drag. */
   const scrollRafRef = useRef<number | null>(null);
   /** Current scroll direction: -1 (up), 0 (none), 1 (down). */
@@ -127,9 +106,6 @@ export const ColumnView = memo(function ColumnView({
   // Clean up rAF on unmount
   useEffect(() => () => stopAutoScroll(), [stopAutoScroll]);
 
-  const insertIndex = insertAtIndex ?? localInsert;
-  const showDashes = isDragOver || isDragTargetProp;
-
   /** Set both internal ref and parent's ref for cross-window hit-testing. */
   const setContainerRef = useCallback(
     (el: HTMLDivElement | null) => {
@@ -141,7 +117,16 @@ export const ColumnView = memo(function ColumnView({
   );
 
   const commands = useEntityCommands("column", column.id, column);
-  const boardPath = useActiveBoardPath();
+  // Compute drop zones at render time — each zone carries preconfigured placement data
+  const zones = useMemo(
+    () =>
+      computeDropZones(
+        tasks.map((t) => t.id),
+        column.id,
+        boardPath ?? "",
+      ),
+    [tasks, column.id, boardPath],
+  );
 
   /** Build a "Do This Next" command for a task, or null if the task is already first in todo. */
   const buildDoThisNextCommand = useCallback(
@@ -185,80 +170,32 @@ export const ColumnView = memo(function ColumnView({
     }
   }, [focusedCardIndex]);
 
-  const clearDragState = useCallback(() => {
-    setIsDragOver(false);
-    setLocalInsert(null);
-  }, []);
-
-  const handleDragOver = useCallback(
+  /** Allow drops in the column + auto-scroll near edges. */
+  const handleContainerDragOver = useCallback(
     (e: React.DragEvent) => {
+      // preventDefault is REQUIRED — without it the browser rejects drops
+      // on child DropZones inside this container.
       e.preventDefault();
       e.dataTransfer.dropEffect = "move";
-
-      if (!isDragOver) {
-        setIsDragOver(true);
-        onDragEnter?.(column.id);
-      }
-
-      if (containerRef.current) {
-        const idx = computeInsertIndex(containerRef.current, e.clientY);
-        setLocalInsert(idx);
-        onDragOverProp?.(column.id, idx);
-
-        // Auto-scroll when cursor is near the container's top or bottom edge
-        const rect = containerRef.current.getBoundingClientRect();
-        if (e.clientY < rect.top + SCROLL_ZONE) {
-          startAutoScroll(-1);
-        } else if (e.clientY > rect.bottom - SCROLL_ZONE) {
-          startAutoScroll(1);
-        } else {
-          stopAutoScroll();
-        }
+      if (!containerRef.current) return;
+      const rect = containerRef.current.getBoundingClientRect();
+      if (e.clientY < rect.top + SCROLL_ZONE) {
+        startAutoScroll(-1);
+      } else if (e.clientY > rect.bottom - SCROLL_ZONE) {
+        startAutoScroll(1);
+      } else {
+        stopAutoScroll();
       }
     },
-    [
-      column.id,
-      isDragOver,
-      onDragOverProp,
-      onDragEnter,
-      startAutoScroll,
-      stopAutoScroll,
-    ],
+    [startAutoScroll, stopAutoScroll],
   );
 
-  /** Clear drag visuals when the cursor leaves this column's container. */
-  const handleDragLeave = useCallback(
-    (e: React.DragEvent) => {
-      // Ignore spurious leave events from entering child elements —
-      // only clear when the cursor actually leaves the container.
-      if (
-        containerRef.current &&
-        e.relatedTarget instanceof Node &&
-        containerRef.current.contains(e.relatedTarget)
-      ) {
-        return;
-      }
-      stopAutoScroll();
-      clearDragState();
-      onDragLeave?.(column.id);
+  /** Forward zone drops to parent. */
+  const handleZoneDrop = useCallback(
+    (descriptor: DropZoneDescriptor, taskData: string) => {
+      onDropProp?.(descriptor, taskData);
     },
-    [column.id, onDragLeave, clearDragState, stopAutoScroll],
-  );
-
-  const handleDrop = useCallback(
-    (e: React.DragEvent) => {
-      e.preventDefault();
-      stopAutoScroll();
-      clearDragState();
-      const taskData = e.dataTransfer.getData(
-        "application/x-swissarmyhammer-task",
-      );
-      const idx = containerRef.current
-        ? computeInsertIndex(containerRef.current, e.clientY)
-        : tasks.length;
-      onDropProp?.(column.id, taskData, idx);
-    },
-    [column.id, tasks.length, onDropProp, clearDragState, stopAutoScroll],
+    [onDropProp],
   );
 
   return (
@@ -304,47 +241,49 @@ export const ColumnView = memo(function ColumnView({
         </FocusHighlight>
         <div
           ref={setContainerRef}
-          className={`flex-1 overflow-y-auto [scrollbar-gutter:stable] px-2 pt-1 pb-2 space-y-1.5 m-1 rounded-lg border-2 transition-colors duration-150 ${
-            showDashes
-              ? "border-dashed border-primary/60"
-              : "border-transparent"
-          }`}
-          onDragOver={handleDragOver}
-          onDragLeave={handleDragLeave}
-          onDrop={handleDrop}
+          className="flex-1 overflow-y-auto [scrollbar-gutter:stable] px-2 pt-1 pb-2 m-1 rounded-lg border-2 border-transparent"
+          onDragOver={handleContainerDragOver}
         >
-          {tasks.length === 0 && insertIndex == null ? (
-            <div className="flex flex-col items-center justify-center h-full text-muted-foreground opacity-40">
-              <Inbox className="h-8 w-8 mb-2" />
-              <p className="text-xs">No tasks</p>
-            </div>
+          {tasks.length === 0 ? (
+            <DropZone
+              descriptor={zones[0]}
+              dragTaskId={dragTaskId}
+              onDrop={handleZoneDrop}
+              variant="empty-column"
+            />
           ) : (
-            tasks.map((entity, i) => (
-              <div key={entity.id}>
-                {insertIndex === i && (
-                  <div className="h-1 bg-primary rounded-full mx-1 my-1.5 shadow-sm shadow-primary/50" />
-                )}
-                <FocusHighlight
-                  focused={focusedCardIndex === i}
-                  className="rounded"
-                  onClickCapture={() => navActions?.onCardClick(column.id, i)}
-                  onDoubleClickCapture={() =>
-                    navActions?.onCardDoubleClick(column.id, i)
-                  }
-                >
-                  <DraggableTaskCard
-                    entity={entity}
-                    onDragStart={onTaskDragStart}
-                    onDragEnd={onTaskDragEnd}
-                    extraCommands={taskExtraCommands.get(entity.id)}
+            <>
+              {tasks.map((entity, i) => (
+                <div key={entity.id}>
+                  <DropZone
+                    descriptor={zones[i]}
+                    dragTaskId={dragTaskId}
+                    onDrop={handleZoneDrop}
                   />
-                </FocusHighlight>
-              </div>
-            ))
-          )}
-          {/* Insertion marker at the end */}
-          {insertIndex != null && insertIndex >= tasks.length && (
-            <div className="h-1 bg-primary rounded-full mx-1 my-1.5 shadow-sm shadow-primary/50" />
+                  <FocusHighlight
+                    focused={focusedCardIndex === i}
+                    className="rounded"
+                    onClickCapture={() => navActions?.onCardClick(column.id, i)}
+                    onDoubleClickCapture={() =>
+                      navActions?.onCardDoubleClick(column.id, i)
+                    }
+                  >
+                    <DraggableTaskCard
+                      entity={entity}
+                      onDragStart={onTaskDragStart}
+                      onDragEnd={onTaskDragEnd}
+                      extraCommands={taskExtraCommands.get(entity.id)}
+                    />
+                  </FocusHighlight>
+                </div>
+              ))}
+              {/* Final zone after the last card */}
+              <DropZone
+                descriptor={zones[zones.length - 1]}
+                dragTaskId={dragTaskId}
+                onDrop={handleZoneDrop}
+              />
+            </>
           )}
         </div>
       </div>
