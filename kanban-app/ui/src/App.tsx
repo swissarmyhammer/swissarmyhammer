@@ -554,10 +554,12 @@ function App() {
                                     <>
                                       <div className="flex-1 flex min-h-0">
                                         <LeftNav />
-                                        <ActiveViewRenderer
-                                          board={board}
-                                          tasks={entitiesByType.task ?? []}
-                                        />
+                                        <div className="flex-1 min-w-0 overflow-hidden">
+                                          <ActiveViewRenderer
+                                            board={board}
+                                            tasks={entitiesByType.task ?? []}
+                                          />
+                                        </div>
                                       </div>
 
                                       {/* Backdrop — visible when any panel is open */}

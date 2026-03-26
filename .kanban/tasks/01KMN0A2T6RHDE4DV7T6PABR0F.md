@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: c380
+position_column: done
+position_ordinal: ffffffffffffc580
 title: Fix board horizontal scroll pushing NavBar and LeftNav off screen
 ---
 ## What

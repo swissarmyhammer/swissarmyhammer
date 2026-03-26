@@ -43,4 +43,4 @@ Either:
 ## Acceptance Criteria
 - [ ] Dragging a card to reorder within a column updates the UI without a manual refresh
 - [ ] The `entity-field-changed` event fires with the new `position_ordinal` value
-- [ ] Add a test: call flush_and_emit after a simulated task.move with the SAME cache instance, verify events > 0
+- [ ] Add a test: call flush_and_emit after a simulated task.move with the SAME cache instance, verify events > 0 #smoke-test
