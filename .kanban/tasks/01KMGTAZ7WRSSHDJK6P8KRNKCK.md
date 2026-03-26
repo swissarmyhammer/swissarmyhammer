@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: todo
-position_ordinal: c380
+position_ordinal: '80'
 title: 'Fix: flush_and_emit returns 0 events after task.move (drag-drop snap-back)'
 ---
 ## Bug
