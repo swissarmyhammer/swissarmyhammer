@@ -7472,6 +7472,28 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dc6fe69c597f9c37bfeeeeeb33da3530379845f10be461a66d16d03eca2ded77"
 
 [[package]]
+name = "shelltool-cli"
+version = "0.10.1"
+dependencies = [
+ "clap",
+ "clap-markdown",
+ "clap_complete",
+ "clap_mangen",
+ "dirs",
+ "mirdan",
+ "rmcp",
+ "serde_json",
+ "swissarmyhammer-common",
+ "swissarmyhammer-config",
+ "swissarmyhammer-doctor",
+ "swissarmyhammer-shell",
+ "swissarmyhammer-tools",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "shlex"
 version = "1.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8462,6 +8484,7 @@ dependencies = [
  "libc",
  "llama-agent",
  "md5",
+ "mirdan",
  "model-embedding",
  "notify 6.1.1",
  "once_cell",
@@ -8493,6 +8516,7 @@ dependencies = [
  "swissarmyhammer-sem",
  "swissarmyhammer-shell",
  "swissarmyhammer-skills",
+ "swissarmyhammer-templating",
  "swissarmyhammer-treesitter",
  "swissarmyhammer-web",
  "tempfile",

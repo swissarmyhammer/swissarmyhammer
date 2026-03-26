@@ -62,6 +62,7 @@ members = [
     "benches/embedding_benchmark",
     "crates/swissarmyhammer-sem",
     "heb",
+    "shelltool-cli",
 ]
 resolver = "2"
 

@@ -1,0 +1,186 @@
+#compdef shelltool
+
+autoload -U is-at-least
+
+_shelltool() {
+    typeset -A opt_args
+    typeset -a _arguments_options
+    local ret=1
+
+    if is-at-least 5.2; then
+        _arguments_options=(-s -S -C)
+    else
+        _arguments_options=(-s -C)
+    fi
+
+    local context curcontext="$curcontext" state line
+    _arguments "${_arguments_options[@]}" : \
+'-d[Enable debug output to stderr]' \
+'--debug[Enable debug output to stderr]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+'-V[Print version]' \
+'--version[Print version]' \
+":: :_shelltool_commands" \
+"*::: :->shelltool" \
+&& ret=0
+    case $state in
+    (shelltool)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:shelltool-command-$line[1]:"
+        case $line[1] in
+            (serve)
+_arguments "${_arguments_options[@]}" : \
+'-d[Enable debug output to stderr]' \
+'--debug[Enable debug output to stderr]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(init)
+_arguments "${_arguments_options[@]}" : \
+'-d[Enable debug output to stderr]' \
+'--debug[Enable debug output to stderr]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+'::target -- Where to install the server configuration:((project\:"Project-level settings (.claude/settings.json)"
+local\:"Local project settings, not committed (.claude/settings.local.json)"
+user\:"User-level settings (~/.claude/settings.json)"))' \
+&& ret=0
+;;
+(deinit)
+_arguments "${_arguments_options[@]}" : \
+'-d[Enable debug output to stderr]' \
+'--debug[Enable debug output to stderr]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+'::target -- Where to remove the server configuration from:((project\:"Project-level settings (.claude/settings.json)"
+local\:"Local project settings, not committed (.claude/settings.local.json)"
+user\:"User-level settings (~/.claude/settings.json)"))' \
+&& ret=0
+;;
+(doctor)
+_arguments "${_arguments_options[@]}" : \
+'-v[Show detailed output including fix suggestions]' \
+'--verbose[Show detailed output including fix suggestions]' \
+'-d[Enable debug output to stderr]' \
+'--debug[Enable debug output to stderr]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+":: :_shelltool__help_commands" \
+"*::: :->help" \
+&& ret=0
+
+    case $state in
+    (help)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:shelltool-help-command-$line[1]:"
+        case $line[1] in
+            (serve)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(init)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(deinit)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(doctor)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+        esac
+    ;;
+esac
+}
+
+(( $+functions[_shelltool_commands] )) ||
+_shelltool_commands() {
+    local commands; commands=(
+'serve:Run MCP server over stdio, exposing the shell tool' \
+'init:Install shelltool MCP server into Claude Code settings' \
+'deinit:Remove shelltool from Claude Code settings' \
+'doctor:Diagnose shelltool configuration and setup' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'shelltool commands' commands "$@"
+}
+(( $+functions[_shelltool__deinit_commands] )) ||
+_shelltool__deinit_commands() {
+    local commands; commands=()
+    _describe -t commands 'shelltool deinit commands' commands "$@"
+}
+(( $+functions[_shelltool__doctor_commands] )) ||
+_shelltool__doctor_commands() {
+    local commands; commands=()
+    _describe -t commands 'shelltool doctor commands' commands "$@"
+}
+(( $+functions[_shelltool__help_commands] )) ||
+_shelltool__help_commands() {
+    local commands; commands=(
+'serve:Run MCP server over stdio, exposing the shell tool' \
+'init:Install shelltool MCP server into Claude Code settings' \
+'deinit:Remove shelltool from Claude Code settings' \
+'doctor:Diagnose shelltool configuration and setup' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'shelltool help commands' commands "$@"
+}
+(( $+functions[_shelltool__help__deinit_commands] )) ||
+_shelltool__help__deinit_commands() {
+    local commands; commands=()
+    _describe -t commands 'shelltool help deinit commands' commands "$@"
+}
+(( $+functions[_shelltool__help__doctor_commands] )) ||
+_shelltool__help__doctor_commands() {
+    local commands; commands=()
+    _describe -t commands 'shelltool help doctor commands' commands "$@"
+}
+(( $+functions[_shelltool__help__help_commands] )) ||
+_shelltool__help__help_commands() {
+    local commands; commands=()
+    _describe -t commands 'shelltool help help commands' commands "$@"
+}
+(( $+functions[_shelltool__help__init_commands] )) ||
+_shelltool__help__init_commands() {
+    local commands; commands=()
+    _describe -t commands 'shelltool help init commands' commands "$@"
+}
+(( $+functions[_shelltool__help__serve_commands] )) ||
+_shelltool__help__serve_commands() {
+    local commands; commands=()
+    _describe -t commands 'shelltool help serve commands' commands "$@"
+}
+(( $+functions[_shelltool__init_commands] )) ||
+_shelltool__init_commands() {
+    local commands; commands=()
+    _describe -t commands 'shelltool init commands' commands "$@"
+}
+(( $+functions[_shelltool__serve_commands] )) ||
+_shelltool__serve_commands() {
+    local commands; commands=()
+    _describe -t commands 'shelltool serve commands' commands "$@"
+}
+
+if [ "$funcstack[1]" = "_shelltool" ]; then
+    _shelltool "$@"
+else
+    compdef _shelltool shelltool
+fi
