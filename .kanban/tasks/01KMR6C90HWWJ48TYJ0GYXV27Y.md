@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: d380
+position_column: done
+position_ordinal: fffffffffffff880
 title: Inspector unmount restore captures stale focusedMoniker
 ---
 **Severity: Medium** (Behavioral bug)

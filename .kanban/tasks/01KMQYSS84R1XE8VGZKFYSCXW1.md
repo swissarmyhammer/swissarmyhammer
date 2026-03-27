@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: cf80
+position_column: done
+position_ordinal: fffffffffffff980
 title: 'BadgeListDisplay: first pill nav.left should return to parent field'
 ---
 **Severity**: Low / Design

@@ -121,6 +121,14 @@ export function EntityInspector({ entity, navRef }: EntityInspectorProps) {
           when: (f, isDescendantOf) => f === next || isDescendantOf(next),
         });
       }
+      // nav.left: claim if a descendant (e.g. first pill in a badge-list) is focused.
+      // Pill predicates register before field rows (children before parents), so a
+      // middle pill's nav.left fires first.  Only when no pill matches (the first pill
+      // has no nav.left predicate) does this field-row predicate win.
+      predicates.push({
+        command: "nav.left",
+        when: (f, isDescendantOf) => f !== fieldMonikers[i] && isDescendantOf(fieldMonikers[i]),
+      });
       // nav.first: claim if I'm the first field AND any sibling (or descendant) is focused
       if (i === 0) {
         predicates.push({
