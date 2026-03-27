@@ -6,7 +6,8 @@ import {
   useEntityFocus,
   useIsFocused,
 } from "@/lib/entity-focus-context";
-import { FocusScope } from "./focus-scope";
+import { FocusScope, useParentFocusScope } from "./focus-scope";
+import { CommandScopeProvider } from "@/lib/command-scope";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(() => Promise.resolve()),
@@ -472,6 +473,50 @@ describe("FocusScope", () => {
     unmount();
     // After unmount, the cleanup should have deregistered
     expect(probeGetScope!("task:abc")).toBeNull();
+  });
+
+  describe("useParentFocusScope", () => {
+    /** Helper that reads useParentFocusScope and renders the value. */
+    function ParentScopeReader() {
+      const parentMoniker = useParentFocusScope();
+      return (
+        <span data-testid="parent-scope">{parentMoniker ?? "null"}</span>
+      );
+    }
+
+    it("returns parent FocusScope moniker", () => {
+      const { getByTestId } = render(
+        <EntityFocusProvider>
+          <FocusScope moniker="column:col1" commands={[]}>
+            <ParentScopeReader />
+          </FocusScope>
+        </EntityFocusProvider>,
+      );
+      expect(getByTestId("parent-scope").textContent).toBe("column:col1");
+    });
+
+    it("skips CommandScopeProvider, returns grandparent FocusScope moniker", () => {
+      const { getByTestId } = render(
+        <EntityFocusProvider>
+          <FocusScope moniker="column:col1" commands={[]}>
+            <CommandScopeProvider commands={[]} moniker="inner-cmd">
+              <ParentScopeReader />
+            </CommandScopeProvider>
+          </FocusScope>
+        </EntityFocusProvider>,
+      );
+      // CommandScopeProvider is NOT a FocusScope, so context still shows the FocusScope ancestor
+      expect(getByTestId("parent-scope").textContent).toBe("column:col1");
+    });
+
+    it("returns null at root", () => {
+      const { getByTestId } = render(
+        <EntityFocusProvider>
+          <ParentScopeReader />
+        </EntityFocusProvider>,
+      );
+      expect(getByTestId("parent-scope").textContent).toBe("null");
+    });
   });
 
   it("useIsFocused ancestor: column gets data-focused when card inside is focused", () => {

@@ -1,4 +1,5 @@
 import {
+  createContext,
   useCallback,
   useContext,
   useEffect,
@@ -14,9 +15,16 @@ import {
   type CommandDef,
   type CommandScope,
 } from "@/lib/command-scope";
-import { useEntityFocus } from "@/lib/entity-focus-context";
+import { useEntityFocus, type ClaimPredicate } from "@/lib/entity-focus-context";
 import { useContextMenu } from "@/lib/context-menu";
 import { FocusHighlight } from "@/components/ui/focus-highlight";
+
+/**
+ * React context that carries the moniker of the nearest ancestor FocusScope.
+ * Used by useParentFocusScope() to let children discover their enclosing scope
+ * without walking the command scope chain.
+ */
+const FocusScopeContext = createContext<string | null>(null);
 
 /** Own props for FocusScope; HTML attributes (className, style, data-*) pass through. */
 type FocusScopeOwnProps = {
@@ -25,6 +33,12 @@ type FocusScopeOwnProps = {
   /** Commands to register in this scope. */
   commands: CommandDef[];
   children: ReactNode;
+  /**
+   * Predicates that let this scope claim focus when a nav command is broadcast.
+   * Callers must memoize this array (e.g. with useMemo) to avoid unnecessary
+   * effect re-runs on every render.
+   */
+  claimWhen?: ClaimPredicate[];
 };
 
 type FocusScopeProps = FocusScopeOwnProps &
@@ -43,10 +57,17 @@ export function FocusScope({
   moniker,
   commands,
   children,
+  claimWhen,
   ...rest
 }: FocusScopeProps) {
-  const { focusedMoniker, setFocus, registerScope, unregisterScope } =
-    useEntityFocus();
+  const {
+    focusedMoniker,
+    setFocus,
+    registerScope,
+    unregisterScope,
+    registerClaimPredicates,
+    unregisterClaimPredicates,
+  } = useEntityFocus();
   const isDirectFocus = focusedMoniker === moniker;
 
   // Build the scope ourselves so we can register it
@@ -64,6 +85,14 @@ export function FocusScope({
     registerScope(moniker, scope);
     return () => unregisterScope(moniker);
   }, [moniker, scope, registerScope, unregisterScope]);
+
+  // Register/deregister claim predicates when claimWhen is provided
+  useEffect(() => {
+    if (claimWhen && claimWhen.length > 0) {
+      registerClaimPredicates(moniker, claimWhen);
+      return () => unregisterClaimPredicates(moniker);
+    }
+  }, [moniker, claimWhen, registerClaimPredicates, unregisterClaimPredicates]);
 
   const handleClick = useCallback(
     (e: React.MouseEvent) => {
@@ -83,16 +112,18 @@ export function FocusScope({
   // Provide the scope via CommandScopeContext directly (not CommandScopeProvider)
   // so we have access to the scope object for registry
   return (
-    <CommandScopeContext.Provider value={scope}>
-      <FocusScopeInner
-        moniker={moniker}
-        isDirectFocus={isDirectFocus}
-        onClick={handleClick}
-        {...rest}
-      >
-        {children}
-      </FocusScopeInner>
-    </CommandScopeContext.Provider>
+    <FocusScopeContext.Provider value={moniker}>
+      <CommandScopeContext.Provider value={scope}>
+        <FocusScopeInner
+          moniker={moniker}
+          isDirectFocus={isDirectFocus}
+          onClick={handleClick}
+          {...rest}
+        >
+          {children}
+        </FocusScopeInner>
+      </CommandScopeContext.Provider>
+    </FocusScopeContext.Provider>
   );
 }
 
@@ -106,7 +137,7 @@ function FocusScopeInner({
 }: {
   moniker: string;
   isDirectFocus: boolean;
-  onClick: (e: React.MouseEvent) => void;
+  onClick: React.MouseEventHandler<HTMLElement>;
   children: ReactNode;
 } & Omit<React.HTMLAttributes<HTMLElement>, "onClick" | "children">) {
   const contextMenuHandler = useContextMenu();
@@ -153,6 +184,14 @@ function FocusScopeInner({
       {children}
     </FocusHighlight>
   );
+}
+
+/**
+ * Returns the moniker of the nearest ancestor FocusScope, or null.
+ * Uses React context so it skips CommandScopeProviders that aren't FocusScopes.
+ */
+export function useParentFocusScope(): string | null {
+  return useContext(FocusScopeContext);
 }
 
 interface FocusClaimProps {

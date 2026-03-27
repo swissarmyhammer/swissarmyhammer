@@ -10,6 +10,14 @@ import {
 import { invoke } from "@tauri-apps/api/core";
 import type { CommandScope } from "./command-scope";
 
+/** A predicate that a FocusScope uses to claim focus when a nav command fires. */
+export interface ClaimPredicate {
+  /** The command ID to match (e.g. "nav.right"). */
+  command: string;
+  /** Returns true if this scope should claim focus given the current focused moniker. */
+  when: (focusedMoniker: string | null) => boolean;
+}
+
 interface EntityFocusContextValue {
   /** The moniker ("type:id") of the currently focused entity, or null. */
   focusedMoniker: string | null;
@@ -37,6 +45,17 @@ interface EntityFocusContextValue {
    * falls back to the next claim (or null if the stack is empty).
    */
   popClaim: (id: number) => void;
+  /** Register claim predicates for a FocusScope moniker. */
+  registerClaimPredicates: (moniker: string, predicates: ClaimPredicate[]) => void;
+  /** Unregister claim predicates for a FocusScope moniker. */
+  unregisterClaimPredicates: (moniker: string) => void;
+  /**
+   * Broadcast a navigation command to all registered claim predicates.
+   * Evaluates each predicate with the current focusedMoniker.
+   * First match wins -- calls setFocus(claimantMoniker) and stops.
+   * Returns true if a claim was made, false otherwise.
+   */
+  broadcastNavCommand: (commandId: string) => boolean;
 }
 
 const EntityFocusContext = createContext<EntityFocusContextValue | null>(null);
@@ -79,10 +98,15 @@ function invokeFocusChange(
 export function EntityFocusProvider({ children }: { children: ReactNode }) {
   const [focusedMoniker, setFocusedMoniker] = useState<string | null>(null);
 
+  // Ref that shadows focusedMoniker state so callbacks can read the current
+  // value without depending on render-time state.
+  const focusedMonikerRef = useRef<string | null>(null);
+
   // Scope registry: ref so registrations don't cause re-renders
   const registryRef = useRef<Map<string, CommandScope>>(new Map());
 
   const setFocus = useCallback((moniker: string | null) => {
+    focusedMonikerRef.current = moniker;
     setFocusedMoniker(moniker);
     invokeFocusChange(moniker, registryRef);
   }, []);
@@ -119,6 +143,7 @@ export function EntityFocusProvider({ children }: { children: ReactNode }) {
     claimsRef.current.set(id, { moniker, scope });
     registryRef.current.set(moniker, scope);
     // This is now the active claim (highest ID)
+    focusedMonikerRef.current = moniker;
     setFocusedMoniker(moniker);
     invokeFocusChange(moniker, registryRef);
     return id;
@@ -147,6 +172,7 @@ export function EntityFocusProvider({ children }: { children: ReactNode }) {
     // Only update entity focus if this is the active (topmost) claim
     const active = getActiveClaim();
     if (active && active.id === id) {
+      focusedMonikerRef.current = moniker;
       setFocusedMoniker(moniker);
       invokeFocusChange(moniker, registryRef);
     }
@@ -168,16 +194,52 @@ export function EntityFocusProvider({ children }: { children: ReactNode }) {
       }
     }
 
-    // Restore focus to the new active claim (or null)
-    const active = getActiveClaim();
-    if (active) {
-      setFocusedMoniker(active.moniker);
-      invokeFocusChange(active.moniker, registryRef);
-    } else {
-      setFocusedMoniker(null);
-      invokeFocusChange(null, registryRef);
+    // Only update focus if the active moniker actually changed
+    const newMoniker = getActiveClaim()?.moniker ?? null;
+    if (newMoniker !== focusedMonikerRef.current) {
+      focusedMonikerRef.current = newMoniker;
+      setFocusedMoniker(newMoniker);
+      invokeFocusChange(newMoniker, registryRef);
     }
   }, []);
+
+  // --- Claim predicate registry (ref-based, no re-renders) ---
+  const claimPredicatesRef = useRef<Map<string, ClaimPredicate[]>>(new Map());
+
+  const registerClaimPredicates = useCallback((moniker: string, predicates: ClaimPredicate[]) => {
+    claimPredicatesRef.current.set(moniker, predicates);
+  }, []);
+
+  const unregisterClaimPredicates = useCallback((moniker: string) => {
+    claimPredicatesRef.current.delete(moniker);
+  }, []);
+
+  /**
+   * Broadcast a navigation command to all registered claim predicates.
+   *
+   * Evaluates each predicate with the current focusedMoniker (read from a ref
+   * so it's never stale). First matching predicate claims focus via setFocus
+   * and evaluation stops (short-circuit).
+   *
+   * Evaluation order follows Map insertion order (ES6 spec), which corresponds
+   * to component mount order (React depth-first). Children register before
+   * parents, so more-specific scopes (pills) are checked before less-specific
+   * ones (field rows).
+   *
+   * @returns true if a predicate claimed focus, false if none matched.
+   */
+  const broadcastNavCommand = useCallback((commandId: string): boolean => {
+    const currentFocus = focusedMonikerRef.current;
+    for (const [moniker, predicates] of claimPredicatesRef.current) {
+      for (const pred of predicates) {
+        if (pred.command === commandId && pred.when(currentFocus)) {
+          setFocus(moniker);
+          return true;
+        }
+      }
+    }
+    return false;
+  }, [setFocus]);
 
   const value = useMemo<EntityFocusContextValue>(
     () => ({
@@ -189,8 +251,11 @@ export function EntityFocusProvider({ children }: { children: ReactNode }) {
       pushClaim,
       updateClaim,
       popClaim,
+      registerClaimPredicates,
+      unregisterClaimPredicates,
+      broadcastNavCommand,
     }),
-    [focusedMoniker, setFocus, registerScope, unregisterScope, getScope, pushClaim, updateClaim, popClaim],
+    [focusedMoniker, setFocus, registerScope, unregisterScope, getScope, pushClaim, updateClaim, popClaim, registerClaimPredicates, unregisterClaimPredicates, broadcastNavCommand],
   );
 
   return (
