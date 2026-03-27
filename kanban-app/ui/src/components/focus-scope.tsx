@@ -15,7 +15,7 @@ import {
   type CommandDef,
   type CommandScope,
 } from "@/lib/command-scope";
-import { useEntityFocus, type ClaimPredicate } from "@/lib/entity-focus-context";
+import { useEntityFocus, useIsFocused, type ClaimPredicate } from "@/lib/entity-focus-context";
 import { useContextMenu } from "@/lib/context-menu";
 import { FocusHighlight } from "@/components/ui/focus-highlight";
 
@@ -68,7 +68,6 @@ export function FocusScope({
     registerClaimPredicates,
     unregisterClaimPredicates,
   } = useEntityFocus();
-  const isDirectFocus = focusedMoniker === moniker;
 
   // Build the scope ourselves so we can register it
   const parent = useContext(CommandScopeContext);
@@ -79,6 +78,14 @@ export function FocusScope({
     }
     return { commands: map, parent, moniker };
   }, [commands, parent, moniker]);
+
+  // Only show data-focused if this instance's parent scope is in the focused
+  // scope chain. This prevents duplicate highlights when the same entity moniker
+  // appears in multiple places (e.g. a tag pill in the inspector AND on a board card).
+  const parentScopeMoniker = useContext(FocusScopeContext);
+  const _parentFocused = useIsFocused(parentScopeMoniker ?? "");
+  const parentInFocusChain = parentScopeMoniker === null || _parentFocused;
+  const isDirectFocus = focusedMoniker === moniker && parentInFocusChain;
 
   // Register/deregister scope in the EntityFocus registry
   useEffect(() => {
