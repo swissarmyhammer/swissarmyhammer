@@ -34,7 +34,10 @@ export function GridView({ view }: GridViewProps) {
   const boardPathRef = useRef(boardPath);
   boardPathRef.current = boardPath;
   const { getEntities } = useEntityStore();
-  const entityType = view.entity_type ?? "task";
+
+  // All hooks must be called unconditionally (React rules of hooks).
+  // Use empty-string fallback so hooks always run; we guard before JSX below.
+  const entityType = view.entity_type ?? "";
   const entities = getEntities(entityType);
   const { getSchema, getEntityCommands } = useSchema();
   const schema = getSchema(entityType);
@@ -299,6 +302,19 @@ export function GridView({ view }: GridViewProps) {
     },
     [],
   );
+
+  // Guard: views must declare entity_type. Log a warning so misconfigured
+  // views are visible in the unified log, and render an empty state.
+  if (!view.entity_type) {
+    console.warn(
+      `[GridView] view "${view.name ?? view.id}" has no entity_type — cannot render grid without one`,
+    );
+    return (
+      <main className="flex-1 flex items-center justify-center text-muted-foreground text-sm">
+        View is missing an entity_type definition.
+      </main>
+    );
+  }
 
   return (
     <CommandScopeProvider commands={gridCommands}>

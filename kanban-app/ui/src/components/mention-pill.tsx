@@ -73,6 +73,12 @@ export function MentionPill({
     return e.id === slug;
   });
 
+  // Convention: all current mentionable entity types (tag, actor, task) either
+  // have a "color" field or gracefully fall back to the default gray. Similarly,
+  // "description" is optional — entities without it simply show no tooltip.
+  // If a future entity type needs a different field for pill color or tooltip,
+  // consider adding mention_color_field / mention_description_field to the
+  // entity YAML schema and EntityDef interface.
   const color = entity ? getStr(entity, "color", "888888") : "888888";
   const description = entity
     ? getStr(entity, "description") || undefined

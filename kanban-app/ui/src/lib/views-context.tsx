@@ -63,7 +63,9 @@ export function ViewsProvider({ children }: { children: ReactNode }) {
     };
   }, [refresh]);
 
-  // Re-fetch views when view entities change (file watcher or commands)
+  // Re-fetch views when view entities change (file watcher or commands).
+  // The "view" check is an entity-type filter, not a field name — this context
+  // only cares about view entities, so we ignore events for tasks, tags, etc.
   useEffect(() => {
     const unlisteners = [
       listen<{ entity_type: string }>("entity-field-changed", (event) => {
