@@ -6,21 +6,30 @@ import {
 import type { UseInspectorNavReturn } from "@/hooks/use-inspector-nav";
 import type { Entity } from "@/types/kanban";
 import { EntityInspector } from "@/components/entity-inspector";
+import { useEntityFocus } from "@/lib/entity-focus-context";
 
 interface InspectorFocusBridgeProps {
   entity: Entity;
 }
 
 /**
- * Wraps EntityInspector in a CommandScopeProvider with inspector navigation commands,
- * claims entity focus on mount, and installs a keydown listener for field navigation.
+ * Wraps EntityInspector in a CommandScopeProvider with inspector navigation commands.
  *
- * On unmount (panel close), restores focus to whatever was focused before.
+ * Navigation is pull-based: vim/arrow/tab keys broadcast nav commands (nav.up, nav.down,
+ * nav.first, nav.last) via broadcastNavCommand. Each field row's FocusScope uses claimWhen
+ * predicates to claim focus when the command matches its position.
+ *
+ * Edit mode is managed by the inspector nav hook exposed via navRef.
+ *
+ * On unmount (panel close), restores focus to whatever was focused before (via FocusClaim).
  *
  * @param entity - The entity to inspect
  */
 export function InspectorFocusBridge({ entity }: InspectorFocusBridgeProps) {
   const navRef = useRef<UseInspectorNavReturn | null>(null);
+  const { broadcastNavCommand } = useEntityFocus();
+  const broadcastRef = useRef(broadcastNavCommand);
+  broadcastRef.current = broadcastNavCommand;
 
   // Commands with keys — resolved by the global KeybindingHandler via scope bindings
   const commands = useMemo<CommandDef[]>(
@@ -29,13 +38,13 @@ export function InspectorFocusBridge({ entity }: InspectorFocusBridgeProps) {
         id: "inspector.moveUp",
         name: "Move Up",
         keys: { vim: "k", cua: "ArrowUp" },
-        execute: () => navRef.current?.moveUp(),
+        execute: () => broadcastRef.current("nav.up"),
       },
       {
         id: "inspector.moveDown",
         name: "Move Down",
         keys: { vim: "j", cua: "ArrowDown" },
-        execute: () => navRef.current?.moveDown(),
+        execute: () => broadcastRef.current("nav.down"),
       },
       {
         id: "inspector.edit",
@@ -62,42 +71,25 @@ export function InspectorFocusBridge({ entity }: InspectorFocusBridgeProps) {
         id: "inspector.moveToFirst",
         name: "Move to First",
         keys: { vim: "g g", cua: "Home" },
-        execute: () => navRef.current?.moveToFirst(),
+        execute: () => broadcastRef.current("nav.first"),
       },
       {
         id: "inspector.moveToLast",
         name: "Move to Last",
         keys: { vim: "G", cua: "End" },
-        execute: () => navRef.current?.moveToLast(),
+        execute: () => broadcastRef.current("nav.last"),
       },
       {
         id: "inspector.nextField",
         name: "Next Field",
         keys: { cua: "Tab" },
-        execute: () => navRef.current?.moveDown(),
+        execute: () => broadcastRef.current("nav.down"),
       },
       {
         id: "inspector.prevField",
         name: "Previous Field",
         keys: { cua: "Shift+Tab" },
-        execute: () => navRef.current?.moveUp(),
-      },
-      {
-        id: "inspector.pillLeft",
-        name: "Pill Left",
-        keys: { vim: "h", cua: "ArrowLeft" },
-        execute: () => {
-          if (navRef.current?.mode === "normal") navRef.current?.movePillLeft();
-        },
-      },
-      {
-        id: "inspector.pillRight",
-        name: "Pill Right",
-        keys: { vim: "l", cua: "ArrowRight" },
-        execute: () => {
-          if (navRef.current?.mode === "normal")
-            navRef.current?.movePillRight();
-        },
+        execute: () => broadcastRef.current("nav.up"),
       },
     ],
     [],

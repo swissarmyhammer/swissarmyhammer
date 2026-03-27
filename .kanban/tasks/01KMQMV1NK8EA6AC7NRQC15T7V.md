@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KMQMTAMHZHA79PTZAB453KYT
-position_column: todo
-position_ordinal: c580
+position_column: done
+position_ordinal: ffffffffffffed80
 title: Migrate inspector field navigation to claimWhen
 ---
 ## What
