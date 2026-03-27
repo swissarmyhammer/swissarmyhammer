@@ -92,32 +92,48 @@ export function EntityInspector({ entity, navRef }: EntityInspectorProps) {
     [navigableFields, entity.entity_type, entity.id],
   );
 
+  /** Check if a moniker is one of this inspector's fields or a descendant of one. */
+  const isInspectorField = (f: string | null, isDescendantOf: (a: string) => boolean): boolean => {
+    if (!f) return false;
+    if (fieldMonikers.includes(f)) return true;
+    // Check if focused element is a child of any field (e.g. a pill inside a badge-list)
+    return fieldMonikers.some((m) => isDescendantOf(m));
+  };
+
   /** ClaimWhen predicates for each field at index i. */
   const claimPredicates = useMemo(() => {
     return fieldMonikers.map((_, i) => {
       const predicates: ClaimPredicate[] = [];
-      // nav.down: claim if the field above me is focused
+      // nav.down: claim if the field above me (or a child of it) is focused
       if (i > 0) {
         const prev = fieldMonikers[i - 1];
-        predicates.push({ command: "nav.down", when: (f) => f === prev });
+        predicates.push({
+          command: "nav.down",
+          when: (f, isDescendantOf) => f === prev || isDescendantOf(prev),
+        });
       }
-      // nav.up: claim if the field below me is focused
+      // nav.up: claim if the field below me (or a child of it) is focused
       if (i < fieldMonikers.length - 1) {
         const next = fieldMonikers[i + 1];
-        predicates.push({ command: "nav.up", when: (f) => f === next });
+        predicates.push({
+          command: "nav.up",
+          when: (f, isDescendantOf) => f === next || isDescendantOf(next),
+        });
       }
-      // nav.first: claim if I'm the first field AND any sibling is focused
+      // nav.first: claim if I'm the first field AND any sibling (or descendant) is focused
       if (i === 0) {
         predicates.push({
           command: "nav.first",
-          when: (f) => f !== null && fieldMonikers.includes(f) && f !== fieldMonikers[0],
+          when: (f, isDescendantOf) =>
+            isInspectorField(f, isDescendantOf) && f !== fieldMonikers[0],
         });
       }
-      // nav.last: claim if I'm the last field AND any sibling is focused
+      // nav.last: claim if I'm the last field AND any sibling (or descendant) is focused
       if (i === fieldMonikers.length - 1) {
         predicates.push({
           command: "nav.last",
-          when: (f) => f !== null && fieldMonikers.includes(f) && f !== fieldMonikers[fieldMonikers.length - 1],
+          when: (f, isDescendantOf) =>
+            isInspectorField(f, isDescendantOf) && f !== fieldMonikers[fieldMonikers.length - 1],
         });
       }
       return predicates;

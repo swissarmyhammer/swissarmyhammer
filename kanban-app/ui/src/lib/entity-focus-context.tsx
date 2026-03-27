@@ -14,8 +14,17 @@ import type { CommandScope } from "./command-scope";
 export interface ClaimPredicate {
   /** The command ID to match (e.g. "nav.right"). */
   command: string;
-  /** Returns true if this scope should claim focus given the current focused moniker. */
-  when: (focusedMoniker: string | null) => boolean;
+  /**
+   * Returns true if this scope should claim focus.
+   * @param focusedMoniker - The currently focused moniker
+   * @param isDescendantOf - Returns true if the focused element is a descendant
+   *   of the given ancestor moniker (walks the scope chain). Use this when a
+   *   field should respond to nav commands even when a child (e.g. a pill) is focused.
+   */
+  when: (
+    focusedMoniker: string | null,
+    isDescendantOf: (ancestor: string) => boolean,
+  ) => boolean;
 }
 
 interface EntityFocusContextValue {
@@ -230,9 +239,23 @@ export function EntityFocusProvider({ children }: { children: ReactNode }) {
    */
   const broadcastNavCommand = useCallback((commandId: string): boolean => {
     const currentFocus = focusedMonikerRef.current;
+
+    // Build isDescendantOf helper — walks the focused scope's parent chain
+    const isDescendantOf = (ancestor: string): boolean => {
+      if (!currentFocus) return false;
+      const scope = registryRef.current.get(currentFocus);
+      if (!scope) return false;
+      let current = scope.parent;
+      while (current !== null) {
+        if (current.moniker === ancestor) return true;
+        current = current.parent;
+      }
+      return false;
+    };
+
     for (const [moniker, predicates] of claimPredicatesRef.current) {
       for (const pred of predicates) {
-        if (pred.command === commandId && pred.when(currentFocus)) {
+        if (pred.command === commandId && pred.when(currentFocus, isDescendantOf)) {
           setFocus(moniker);
           return true;
         }
