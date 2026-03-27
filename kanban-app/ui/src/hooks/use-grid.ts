@@ -15,21 +15,18 @@ export interface GridSelection {
 export interface UseGridOptions {
   rowCount: number;
   colCount: number;
+  /**
+   * Externally-derived cursor position (from the focused moniker).
+   * When provided, the grid does not maintain its own cursor state --
+   * navigation is pull-based via claimWhen.
+   */
+  cursor?: GridCursor;
 }
 
 export interface UseGridReturn {
   cursor: GridCursor;
   mode: GridMode;
   selection: GridSelection | null;
-  // Navigation
-  moveUp: (count?: number) => void;
-  moveDown: (count?: number) => void;
-  moveLeft: (count?: number) => void;
-  moveRight: (count?: number) => void;
-  moveToFirst: () => void;
-  moveToLast: () => void;
-  moveToRowStart: () => void;
-  moveToRowEnd: () => void;
   setCursor: (row: number, col: number) => void;
   // Mode
   enterEdit: () => void;
@@ -47,18 +44,26 @@ export interface UseGridReturn {
 }
 
 /**
- * Hook for managing grid cursor position, navigation, mode, and visual selection.
+ * Hook for managing grid mode (normal/edit/visual) and visual selection.
  *
- * Provides vim-like navigation (move up/down/left/right with count),
- * mode switching (normal/edit/visual), and rectangular visual selection.
+ * Navigation is pull-based: callers pass the cursor position derived from
+ * the focused moniker via options.cursor. This hook no longer drives
+ * cursor movement -- that is handled by claimWhen predicates on each
+ * cell's FocusScope.
  *
- * @param options - Grid dimensions: rowCount and colCount
+ * When options.cursor is not provided, falls back to internal state
+ * (for setCursor / click handling).
+ *
+ * @param options - Grid dimensions and optional external cursor
  * @returns Grid state and control functions
  */
-export function useGrid({ rowCount, colCount }: UseGridOptions): UseGridReturn {
-  const [cursor, setCursorState] = useState<GridCursor>({ row: 0, col: 0 });
+export function useGrid({ rowCount, colCount, cursor: externalCursor }: UseGridOptions): UseGridReturn {
+  const [internalCursor, setCursorState] = useState<GridCursor>({ row: 0, col: 0 });
   const [mode, setMode] = useState<GridMode>("normal");
   const [selection, setSelection] = useState<GridSelection | null>(null);
+
+  // Use external cursor when provided, otherwise use internal state.
+  const cursor = externalCursor ?? internalCursor;
 
   /** Clamp a row index to valid bounds [0, rowCount-1]. */
   const clampRow = useCallback(
@@ -80,61 +85,6 @@ export function useGrid({ rowCount, colCount }: UseGridOptions): UseGridReturn {
     [clampRow, clampCol],
   );
 
-  /** Move cursor up by count rows (default 1), clamped to row 0. */
-  const moveUp = useCallback(
-    (count = 1) => {
-      setCursorState((prev) => ({ ...prev, row: clampRow(prev.row - count) }));
-    },
-    [clampRow],
-  );
-
-  /** Move cursor down by count rows (default 1), clamped to last row. */
-  const moveDown = useCallback(
-    (count = 1) => {
-      setCursorState((prev) => ({ ...prev, row: clampRow(prev.row + count) }));
-    },
-    [clampRow],
-  );
-
-  /** Move cursor left by count columns (default 1), clamped to column 0. */
-  const moveLeft = useCallback(
-    (count = 1) => {
-      setCursorState((prev) => ({ ...prev, col: clampCol(prev.col - count) }));
-    },
-    [clampCol],
-  );
-
-  /** Move cursor right by count columns (default 1), clamped to last column. */
-  const moveRight = useCallback(
-    (count = 1) => {
-      setCursorState((prev) => ({ ...prev, col: clampCol(prev.col + count) }));
-    },
-    [clampCol],
-  );
-
-  /** Move cursor to the first cell (0, 0). */
-  const moveToFirst = useCallback(() => {
-    setCursorState({ row: 0, col: 0 });
-  }, []);
-
-  /** Move cursor to the last cell (last row, last col). */
-  const moveToLast = useCallback(() => {
-    setCursorState({
-      row: clampRow(rowCount - 1),
-      col: clampCol(colCount - 1),
-    });
-  }, [clampRow, clampCol, rowCount, colCount]);
-
-  /** Move cursor to column 0, keeping the current row. */
-  const moveToRowStart = useCallback(() => {
-    setCursorState((prev) => ({ ...prev, col: 0 }));
-  }, []);
-
-  /** Move cursor to the last column, keeping the current row. */
-  const moveToRowEnd = useCallback(() => {
-    setCursorState((prev) => ({ ...prev, col: clampCol(colCount - 1) }));
-  }, [clampCol, colCount]);
-
   /** Enter edit mode if the grid is non-empty. Clears any visual selection. */
   const enterEdit = useCallback(() => {
     if (rowCount > 0 && colCount > 0) {
@@ -151,11 +101,8 @@ export function useGrid({ rowCount, colCount }: UseGridOptions): UseGridReturn {
   /** Enter visual mode, anchoring the selection at the current cursor position. */
   const enterVisual = useCallback(() => {
     setMode("visual");
-    setCursorState((prev) => {
-      setSelection({ anchor: { ...prev }, head: { ...prev } });
-      return prev;
-    });
-  }, []);
+    setSelection({ anchor: { ...cursor }, head: { ...cursor } });
+  }, [cursor]);
 
   /** Exit visual mode, clearing the selection and returning to normal mode. */
   const exitVisual = useCallback(() => {
@@ -165,33 +112,30 @@ export function useGrid({ rowCount, colCount }: UseGridOptions): UseGridReturn {
 
   /**
    * Expand the visual selection by moving the head one cell in the given direction.
-   * Also moves the cursor to track the selection head.
    */
   const expandSelection = useCallback(
     (direction: "up" | "down" | "left" | "right") => {
-      setCursorState((prev) => {
-        const next = { ...prev };
+      setSelection((sel) => {
+        if (!sel) return { anchor: { ...cursor }, head: { ...cursor } };
+        const next = { ...sel.head };
         switch (direction) {
           case "up":
-            next.row = clampRow(prev.row - 1);
+            next.row = clampRow(sel.head.row - 1);
             break;
           case "down":
-            next.row = clampRow(prev.row + 1);
+            next.row = clampRow(sel.head.row + 1);
             break;
           case "left":
-            next.col = clampCol(prev.col - 1);
+            next.col = clampCol(sel.head.col - 1);
             break;
           case "right":
-            next.col = clampCol(prev.col + 1);
+            next.col = clampCol(sel.head.col + 1);
             break;
         }
-        setSelection((sel) =>
-          sel ? { ...sel, head: next } : { anchor: prev, head: next },
-        );
-        return next;
+        return { ...sel, head: next };
       });
     },
-    [clampRow, clampCol],
+    [cursor, clampRow, clampCol],
   );
 
   /**
@@ -213,14 +157,6 @@ export function useGrid({ rowCount, colCount }: UseGridOptions): UseGridReturn {
       cursor,
       mode,
       selection,
-      moveUp,
-      moveDown,
-      moveLeft,
-      moveRight,
-      moveToFirst,
-      moveToLast,
-      moveToRowStart,
-      moveToRowEnd,
       setCursor,
       enterEdit,
       exitEdit,
@@ -233,14 +169,6 @@ export function useGrid({ rowCount, colCount }: UseGridOptions): UseGridReturn {
       cursor,
       mode,
       selection,
-      moveUp,
-      moveDown,
-      moveLeft,
-      moveRight,
-      moveToFirst,
-      moveToLast,
-      moveToRowStart,
-      moveToRowEnd,
       setCursor,
       enterEdit,
       exitEdit,

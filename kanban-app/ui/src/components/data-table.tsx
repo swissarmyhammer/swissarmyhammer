@@ -23,8 +23,10 @@ import {
 import { cn } from "@/lib/utils";
 import { useContextMenu } from "@/lib/context-menu";
 import { CommandScopeProvider, type CommandDef } from "@/lib/command-scope";
+import { FocusScope } from "@/components/focus-scope";
 import { Field } from "@/components/fields/field";
 import type { UseGridReturn } from "@/hooks/use-grid";
+import type { ClaimPredicate } from "@/lib/entity-focus-context";
 import type { Entity, FieldDef } from "@/types/kanban";
 
 export interface DataTableColumn {
@@ -36,6 +38,17 @@ interface DataTableProps {
   columns: DataTableColumn[];
   rows: Entity[];
   grid: UseGridReturn;
+  /**
+   * 2D array of cell monikers: cellMonikers[row][col] = moniker string.
+   * When provided together with claimPredicates, each cell is wrapped
+   * in a FocusScope for pull-based navigation.
+   */
+  cellMonikers?: string[][];
+  /**
+   * 2D array of claim predicates: claimPredicates[row][col] = ClaimPredicate[].
+   * Must match dimensions of cellMonikers.
+   */
+  claimPredicates?: ClaimPredicate[][][];
   onCellClick?: (row: number, col: number) => void;
   onRowContextMenu?: (entity: Entity, e: React.MouseEvent) => void;
   renderEditor?: (
@@ -54,7 +67,7 @@ interface DataTableProps {
    *
    * When provided, each row's selector cell is wrapped in a per-row
    * CommandScopeProvider so that right-clicking row N always resolves
-   * commands for row N's entity — regardless of the grid cursor position.
+   * commands for row N's entity -- regardless of the grid cursor position.
    *
    * This eliminates the race between `grid.setCursor()` (async state update)
    * and `contextMenuHandler(e)` (synchronous) when the user right-clicks a
@@ -67,6 +80,8 @@ export function DataTable({
   columns,
   rows,
   grid,
+  cellMonikers,
+  claimPredicates,
   onCellClick,
   onRowContextMenu,
   renderEditor,
@@ -77,7 +92,7 @@ export function DataTable({
 }: DataTableProps) {
   const tableContainerRef = useRef<HTMLDivElement>(null);
   const cursorRef = useRef<HTMLTableCellElement>(null);
-  // Grid-level context menu handler — used when rowEntityCommands is not set.
+  // Grid-level context menu handler -- used when rowEntityCommands is not set.
   const contextMenuHandler = useContextMenu();
   const [sorting, setSorting] = useState<SortingState>([]);
   const [grouping, setGrouping] = useState<GroupingState>(groupingProp ?? []);
@@ -164,10 +179,9 @@ export function DataTable({
 
   const handleCellClick = useCallback(
     (row: number, col: number) => {
-      grid.setCursor(row, col);
       onCellClick?.(row, col);
     },
-    [grid, onCellClick],
+    [onCellClick],
   );
 
   const selectedRange = grid.getSelectedRange();
@@ -180,6 +194,9 @@ export function DataTable({
       col <= selectedRange.endCol
     );
   };
+
+  /** Whether claimWhen-based FocusScopes should wrap cells. */
+  const useClaimNav = cellMonikers !== undefined && claimPredicates !== undefined;
 
   if (flatRows.length === 0) {
     return (
@@ -245,7 +262,7 @@ export function DataTable({
         </TableHeader>
         <TableBody>
           {flatRows.map((row, ri) => {
-            // Group header rows — not part of grid cursor navigation
+            // Group header rows -- not part of grid cursor navigation
             if (row.getIsGrouped()) {
               // colSpan covers all field columns plus the selector column when visible
               const groupColSpan = showRowSelector
@@ -277,7 +294,7 @@ export function DataTable({
               );
             }
 
-            // Data row — use data-row index (di) for grid cursor, not visual index (ri)
+            // Data row -- use data-row index (di) for grid cursor, not visual index (ri)
             const di = dataRowIndices[ri];
             const entity = row.original;
             return (
@@ -290,7 +307,7 @@ export function DataTable({
                     "bg-accent/30",
                 )}
                 onContextMenu={(e) => {
-                  grid.setCursor(di, grid.cursor.col);
+                  onCellClick?.(di, grid.cursor.col);
                   onRowContextMenu?.(entity, e);
                   contextMenuHandler(e);
                 }}
@@ -317,7 +334,7 @@ export function DataTable({
                       style={{ width: 40 }}
                       onClick={() => handleCellClick(di, grid.cursor.col)}
                       onContextMenu={(e) => {
-                        grid.setCursor(di, grid.cursor.col);
+                        onCellClick?.(di, grid.cursor.col);
                         onRowContextMenu?.(entity, e);
                         contextMenuHandler(e);
                       }}
@@ -331,47 +348,76 @@ export function DataTable({
                   const isSel = isSelected(di, ci);
                   const isEditing =
                     isCursor && grid.mode === "edit" && renderEditor;
+
+                  const cellContent = isEditing ? (
+                    renderEditor(
+                      entity,
+                      col.field,
+                      () => grid.exitEdit(),
+                      () => grid.exitEdit(),
+                    )
+                  ) : (
+                    <Field
+                      fieldDef={col.field}
+                      entityType={entity.entity_type}
+                      entityId={entity.id}
+                      mode="compact"
+                      editing={false}
+                    />
+                  );
+
+                  const cellClasses = cn(
+                    "px-3 py-1.5 align-middle max-w-[300px]",
+                    ci === 0 && "pl-4",
+                    isCursor && "ring-2 ring-primary ring-inset",
+                    isSel && !isCursor && "bg-primary/10",
+                    // Strip cell padding during editing for editors that
+                    // fill the entire cell.
+                    isEditing &&
+                      col.field.editor !== "color-palette" &&
+                      col.field.editor !== "select" &&
+                      col.field.editor !== "multi-select" &&
+                      "p-0",
+                  );
+
+                  // Wrap in FocusScope when claimWhen navigation is active
+                  if (useClaimNav) {
+                    const mk = cellMonikers[di]?.[ci];
+                    const preds = claimPredicates[di]?.[ci];
+                    if (mk && preds) {
+                      return (
+                        <GridCellScope
+                          key={col.field.id}
+                          moniker={mk}
+                          claimWhen={preds}
+                          isCursor={isCursor}
+                          cursorRef={isCursor ? cursorRef : undefined}
+                          className={cellClasses}
+                          onClick={() => handleCellClick(di, ci)}
+                          onDoubleClick={() => {
+                            onCellClick?.(di, ci);
+                            grid.enterEdit();
+                          }}
+                        >
+                          {cellContent}
+                        </GridCellScope>
+                      );
+                    }
+                  }
+
+                  // Fallback: plain TableCell (no claimWhen)
                   return (
                     <TableCell
                       key={col.field.id}
                       ref={isCursor ? cursorRef : undefined}
-                      className={cn(
-                        "px-3 py-1.5 align-middle max-w-[300px]",
-                        ci === 0 && "pl-4",
-                        isCursor && "ring-2 ring-primary ring-inset",
-                        isSel && !isCursor && "bg-primary/10",
-                        // Strip cell padding during editing for editors that
-                        // fill the entire cell. Editors listed here (color-palette,
-                        // select, multi-select) render their own padding. This
-                        // check uses field.editor (metadata-driven) not type.kind.
-                        isEditing &&
-                          col.field.editor !== "color-palette" &&
-                          col.field.editor !== "select" &&
-                          col.field.editor !== "multi-select" &&
-                          "p-0",
-                      )}
+                      className={cellClasses}
                       onClick={() => handleCellClick(di, ci)}
                       onDoubleClick={() => {
-                        grid.setCursor(di, ci);
+                        onCellClick?.(di, ci);
                         grid.enterEdit();
                       }}
                     >
-                      {isEditing ? (
-                        renderEditor(
-                          entity,
-                          col.field,
-                          () => grid.exitEdit(),
-                          () => grid.exitEdit(),
-                        )
-                      ) : (
-                        <Field
-                          fieldDef={col.field}
-                          entityType={entity.entity_type}
-                          entityId={entity.id}
-                          mode="compact"
-                          editing={false}
-                        />
-                      )}
+                      {cellContent}
                     </TableCell>
                   );
                 })}
@@ -381,6 +427,56 @@ export function DataTable({
         </TableBody>
       </Table>
     </div>
+  );
+}
+
+interface GridCellScopeProps {
+  moniker: string;
+  claimWhen: ClaimPredicate[];
+  isCursor: boolean;
+  cursorRef?: React.Ref<HTMLTableCellElement>;
+  className?: string;
+  onClick: () => void;
+  onDoubleClick: () => void;
+  children: React.ReactNode;
+}
+
+/**
+ * Wraps a grid cell in a FocusScope with claimWhen predicates.
+ *
+ * The FocusScope renders as a <td> element (via the underlying FocusHighlight).
+ * This component bridges the FocusScope's div-based rendering with the table
+ * structure by wrapping FocusScope inside a TableCell.
+ *
+ * @param moniker - Cell moniker (entityType:entityId.fieldName)
+ * @param claimWhen - Predicates for pull-based navigation
+ * @param isCursor - Whether this cell is the current cursor position
+ * @param cursorRef - Ref to attach for scroll-into-view
+ * @param className - CSS classes for the cell
+ * @param onClick - Click handler
+ * @param onDoubleClick - Double-click handler
+ */
+function GridCellScope({
+  moniker,
+  claimWhen,
+  isCursor,
+  cursorRef,
+  className,
+  onClick,
+  onDoubleClick,
+  children,
+}: GridCellScopeProps) {
+  return (
+    <TableCell
+      ref={cursorRef}
+      className={className}
+      onClick={onClick}
+      onDoubleClick={onDoubleClick}
+    >
+      <FocusScope moniker={moniker} commands={[]} claimWhen={claimWhen}>
+        {children}
+      </FocusScope>
+    </TableCell>
   );
 }
 
@@ -400,7 +496,7 @@ interface RowSelectorWithScopeProps {
  * This component exists so that `useContextMenu()` is called from inside the
  * row-specific scope. When the user right-clicks this cell, the context menu
  * resolves commands from `commands` (built for this row's entity) rather than
- * from the grid-level scope — eliminating the race between `grid.setCursor()`
+ * from the grid-level scope -- eliminating the race between `grid.setCursor()`
  * (async state update) and the synchronous context menu open.
  */
 function RowSelectorWithScope({
@@ -483,7 +579,7 @@ function RowSelectorCell({
  *
  * Uses the explicit `field.sort` when present (FieldDef.sort is typed as
  * `string | undefined` in kanban.ts), otherwise infers from
- * `field.type.kind` — mirroring the Rust backend's `effective_sort()`.
+ * `field.type.kind` -- mirroring the Rust backend's `effective_sort()`.
  *
  * The kind-based fallback is a pragmatic convention: the backend resolves
  * the same fallback chain, so these two implementations must stay in sync.

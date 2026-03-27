@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KMQMTAMHZHA79PTZAB453KYT
-position_column: todo
-position_ordinal: c780
+position_column: done
+position_ordinal: ffffffffffffff9680
 title: Migrate board navigation to claimWhen
 ---
 ## What

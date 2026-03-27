@@ -7,6 +7,7 @@ import { useInspect } from "@/lib/inspect-context";
 import { useEntityCommands } from "@/lib/entity-commands";
 import { moniker } from "@/lib/moniker";
 import type { CommandDef } from "@/lib/command-scope";
+import type { ClaimPredicate } from "@/lib/entity-focus-context";
 import type { Entity, FieldDef } from "@/types/kanban";
 
 /** Convert kebab-case icon name to PascalCase key for lucide-react lookup. */
@@ -34,6 +35,8 @@ interface EntityCardProps {
   onDragEnd?: (e: React.DragEvent) => void;
   /** Additional commands to append to the entity's context menu. */
   extraCommands?: CommandDef[];
+  /** Predicates for pull-based navigation via broadcastNavCommand. */
+  claimWhen?: ClaimPredicate[];
 }
 
 /**
@@ -52,6 +55,7 @@ export const EntityCard = memo(
       onDragStart,
       onDragEnd,
       extraCommands,
+      claimWhen,
       ...rest
     },
     ref,
@@ -81,6 +85,7 @@ export const EntityCard = memo(
       <FocusScope
         moniker={entityMoniker}
         commands={commands}
+        claimWhen={claimWhen}
         className="entity-card-focus"
       >
         <div

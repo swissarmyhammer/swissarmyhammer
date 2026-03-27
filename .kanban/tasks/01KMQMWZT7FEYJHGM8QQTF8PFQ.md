@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KMQMTAMHZHA79PTZAB453KYT
-position_column: todo
-position_ordinal: c880
+position_column: done
+position_ordinal: ffffffffffffff9780
 title: Migrate grid navigation to claimWhen
 ---
 ## What
