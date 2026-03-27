@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useMemo } from "react";
+import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import {
   Tooltip,
   TooltipTrigger,
@@ -13,7 +13,8 @@ import {
   type InspectorMode,
 } from "@/hooks/use-inspector-nav";
 import type { FieldDef, Entity } from "@/types/kanban";
-import { FocusScope, FocusClaim } from "@/components/focus-scope";
+import { FocusScope } from "@/components/focus-scope";
+import { useEntityFocus } from "@/lib/entity-focus-context";
 import { useIsFocused, type ClaimPredicate } from "@/lib/entity-focus-context";
 import { fieldMoniker } from "@/lib/moniker";
 import { icons, HelpCircle } from "lucide-react";
@@ -140,8 +141,22 @@ export function EntityInspector({ entity, navRef }: EntityInspectorProps) {
     });
   }, [fieldMonikers]);
 
-  // FocusClaim moniker: always the first field (for initial mount focus)
-  const claimMoniker = fieldMonikers[0] ?? `inspector:${entity.entity_type}:${entity.id}`;
+  // Focus the first field on mount, restore previous focus on unmount.
+  // No claim stack — just direct setFocus. claimWhen handles all subsequent navigation.
+  const { setFocus, focusedMoniker } = useEntityFocus();
+  const prevFocusRef = useRef<string | null>(null);
+  const firstFieldMoniker = fieldMonikers[0];
+
+  useEffect(() => {
+    if (!firstFieldMoniker) return;
+    prevFocusRef.current = focusedMoniker;
+    setFocus(firstFieldMoniker);
+    return () => {
+      setFocus(prevFocusRef.current);
+    };
+    // Only on mount/unmount — focusedMoniker is captured once at mount time
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [firstFieldMoniker, setFocus]);
 
   if (fields.length === 0) {
     return <p className="text-sm text-muted-foreground">Loading schema...</p>;
@@ -168,7 +183,6 @@ export function EntityInspector({ entity, navRef }: EntityInspectorProps) {
 
   return (
     <div data-testid="entity-inspector">
-      <FocusClaim moniker={claimMoniker} />
       {sections.header.length > 0 && (
         <div className="space-y-2" data-testid="inspector-header">
           {sections.header.map((f) => renderField(f, false))}
