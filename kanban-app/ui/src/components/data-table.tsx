@@ -340,6 +340,10 @@ export function DataTable({
                         ci === 0 && "pl-4",
                         isCursor && "ring-2 ring-primary ring-inset",
                         isSel && !isCursor && "bg-primary/10",
+                        // Strip cell padding during editing for editors that
+                        // fill the entire cell. Editors listed here (color-palette,
+                        // select, multi-select) render their own padding. This
+                        // check uses field.editor (metadata-driven) not type.kind.
                         isEditing &&
                           col.field.editor !== "color-palette" &&
                           col.field.editor !== "select" &&
@@ -477,8 +481,14 @@ function RowSelectorCell({
 /**
  * Resolve the effective sort strategy for a field.
  *
- * Uses the explicit `field.sort` when present, otherwise infers from
+ * Uses the explicit `field.sort` when present (FieldDef.sort is typed as
+ * `string | undefined` in kanban.ts), otherwise infers from
  * `field.type.kind` — mirroring the Rust backend's `effective_sort()`.
+ *
+ * The kind-based fallback is a pragmatic convention: the backend resolves
+ * the same fallback chain, so these two implementations must stay in sync.
+ * When `field.sort` is populated by the schema loader, the kind checks
+ * are bypassed entirely.
  */
 function effectiveSort(field: FieldDef): string {
   if (field.sort) return field.sort;

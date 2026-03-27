@@ -167,6 +167,9 @@ function FocusScopeInner({
 
       e.stopPropagation();
 
+      // entity.inspect is the one client-side command — double-click opens
+      // the inspector panel. This is by design, not a special case to remove.
+      // See entity-commands.ts for the full rationale.
       const cmd = resolveCommand(scope, "entity.inspect");
       if (cmd) {
         dispatchCommand(cmd);

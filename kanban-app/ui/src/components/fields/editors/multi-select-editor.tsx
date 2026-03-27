@@ -87,6 +87,9 @@ export function MultiSelectEditor({
   );
 
   const prefix = mentionConfig?.prefix ?? "";
+  // "name" is the universal default display field for all entity types.
+  // Specific overrides (e.g. "tag_name") are declared in the YAML schema's
+  // mention_config.display_field and arrive via mentionConfig.displayField.
   const displayField = mentionConfig?.displayField ?? "name";
 
   // Target entities for building maps
@@ -118,7 +121,10 @@ export function MultiSelectEditor({
     return map;
   }, [targetEntities, displayField]);
 
-  // Build color map for decorations: slug → hex color
+  // Build color map for decorations: slug → hex color.
+  // "color" is a universal entity property (every entity type that supports
+  // mention pills has a color field), so this lookup is a stable convention
+  // rather than a field-specific hardcode.
   const colorMap = useMemo(() => {
     const map = new Map<string, string>();
     for (const e of targetEntities) {

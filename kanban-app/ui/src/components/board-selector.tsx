@@ -48,11 +48,19 @@ export function BoardSelector({
   showTearOff,
   className,
 }: BoardSelectorProps) {
-  const { getFieldDef } = useSchema();
-  const nameFieldDef = getFieldDef("board", "name");
+  const { getSchema, getFieldDef } = useSchema();
+  // Derive the display field from the board entity schema (search_display_field)
+  // rather than hardcoding "name". Falls back to "name" if schema hasn't loaded.
+  const displayFieldName =
+    getSchema("board")?.entity.search_display_field ?? "name";
+  const nameFieldDef = getFieldDef("board", displayFieldName);
   const [editingName, setEditingName] = useState(false);
   // Live board name from entity store — stays current across windows
-  const boardName = useFieldValue("board", boardEntity?.id ?? "", "name");
+  const boardName = useFieldValue(
+    "board",
+    boardEntity?.id ?? "",
+    displayFieldName,
+  );
 
   if (boards.length === 0) return null;
 

@@ -202,7 +202,11 @@ export function CommandPalette({
     const result = searchResults[selectedIndex];
     if (!result) return;
     onClose();
-    // Board results switch the active board + open inspector
+    // Board is the one entity type whose primary action is "switch to it"
+    // rather than "inspect it". This is correct domain behavior: selecting a
+    // board in search results opens (switches to) that board, while every
+    // other entity type gets inspected. The check is intentionally hardcoded
+    // because no other entity type shares this navigation semantic.
     if (result.entity_type === "board" && onSwitchBoard) {
       onSwitchBoard(result.entity_id);
     }

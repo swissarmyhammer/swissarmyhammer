@@ -60,7 +60,8 @@ export function QuickCapture() {
   }, []);
 
   // Derive a minimal board entity from the selected OpenBoard for BoardSelector.
-  // The board entity always has entity_type "board" and id "board".
+  // The "board" entity_type and "name" field are structural constants of the
+  // kanban data model — every board has exactly one entity with these values.
   const selected = boards.find((b) => b.path === selectedPath);
   const boardEntity: Entity | undefined = selected
     ? { entity_type: "board", id: "board", fields: { name: selected.name } }
@@ -90,7 +91,9 @@ export function QuickCapture() {
   // -------------------------------------------------------------------------
   useEffect(() => {
     const unlisteners = [
-      // Board name/field changes → reload board list (names come from list_open_boards)
+      // The "board" check is an entity-type filter for refresh, not a field name —
+      // we only reload the board list when a board entity changes, ignoring
+      // task/column/swimlane changes that don't affect the selector.
       listen<EntityFieldChangedEvent>("entity-field-changed", (event) => {
         if (event.payload.entity_type === "board") loadBoards();
       }),
@@ -128,6 +131,7 @@ export function QuickCapture() {
         const firstColumnId = columns[0]?.id;
         if (!firstColumnId) return;
 
+        // "task.add" is a command identifier dispatched to Rust, not a field name.
         await invoke("dispatch_command", {
           cmd: "task.add",
           args: { column: firstColumnId, title: text.trim() },
