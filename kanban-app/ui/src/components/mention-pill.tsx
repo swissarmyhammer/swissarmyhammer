@@ -134,6 +134,20 @@ function briefSlug(slug: string): string {
   return parts.slice(0, 3).join("-") + "…";
 }
 
+interface MentionPillInnerProps {
+  /** The entity slug displayed inside the pill. */
+  slug: string;
+  /** Prefix character rendered before the slug (e.g. "#", "@"). */
+  prefix: string;
+  /** 6-char hex color used for pill background, text, and border. */
+  color: string;
+  /** Plain or markdown text shown in the tooltip on hover. */
+  tooltipText?: string;
+  /** When true the tooltip renders markdown via ReactMarkdown. */
+  richTooltip?: boolean;
+  className?: string;
+}
+
 /**
  * Inner component rendered inside FocusScope so it can access
  * useContextMenu() from the correct CommandScope context.
@@ -145,14 +159,7 @@ function MentionPillInner({
   tooltipText,
   richTooltip,
   className,
-}: {
-  slug: string;
-  prefix: string;
-  color: string;
-  tooltipText?: string;
-  richTooltip?: boolean;
-  className?: string;
-}) {
+}: MentionPillInnerProps) {
   const pill = (
     <span
       className={`inline-flex items-center rounded-full px-1.5 py-px text-xs font-medium cursor-default ${className ?? ""}`}

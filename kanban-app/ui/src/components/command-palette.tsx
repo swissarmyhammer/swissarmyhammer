@@ -418,6 +418,16 @@ export function CommandPalette({
   );
 }
 
+/** Props for the SearchResults component. */
+interface ResultListProps {
+  results: SearchResult[];
+  selectedIndex: number;
+  hasQuery: boolean;
+  onClose: () => void;
+  onHoverIndex: (index: number) => void;
+  inspectEntity: ((moniker: string) => void) | null;
+}
+
 /** Renders search results in search mode. Extracted to keep CommandPalette readable. */
 function SearchResults({
   results,
@@ -426,14 +436,7 @@ function SearchResults({
   onClose,
   onHoverIndex,
   inspectEntity,
-}: {
-  results: SearchResult[];
-  selectedIndex: number;
-  hasQuery: boolean;
-  onClose: () => void;
-  onHoverIndex: (index: number) => void;
-  inspectEntity: ((moniker: string) => void) | null;
-}) {
+}: ResultListProps) {
   if (!hasQuery) {
     return (
       <div className="px-3 py-2 text-sm text-muted-foreground">
@@ -473,6 +476,16 @@ function SearchResults({
  * Extracted as a component so the `useEntityCommands` hook can be called
  * at the top level of a component (hooks cannot be called inside `.map()`).
  */
+/** Props for the SearchResultItem component. */
+interface ResultRowProps {
+  result: SearchResult;
+  index: number;
+  selectedIndex: number;
+  onClose: () => void;
+  onHoverIndex: (index: number) => void;
+  inspectEntity: ((moniker: string) => void) | null;
+}
+
 function SearchResultItem({
   result,
   index,
@@ -480,14 +493,7 @@ function SearchResultItem({
   onClose,
   onHoverIndex,
   inspectEntity,
-}: {
-  result: SearchResult;
-  index: number;
-  selectedIndex: number;
-  onClose: () => void;
-  onHoverIndex: (index: number) => void;
-  inspectEntity: ((moniker: string) => void) | null;
-}) {
+}: ResultRowProps) {
   const entityMoniker = moniker(result.entity_type, result.entity_id);
   const commands = useEntityCommands(result.entity_type, result.entity_id);
 

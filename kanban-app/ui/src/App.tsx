@@ -665,19 +665,18 @@ function ViewCommandScope({ children }: { children: React.ReactNode }) {
   );
 }
 
+/** Props for the ActiveViewRenderer component. */
+interface ViewRouterProps {
+  board: BoardData;
+  tasks: Entity[];
+  boardPath?: string;
+}
+
 /**
  * Renders the currently active view based on its kind.
  * For "board" kind, renders the BoardView. Other kinds show a placeholder.
  */
-function ActiveViewRenderer({
-  board,
-  tasks,
-  boardPath,
-}: {
-  board: BoardData;
-  tasks: Entity[];
-  boardPath?: string;
-}) {
+function ActiveViewRenderer({ board, tasks, boardPath }: ViewRouterProps) {
   const { activeView } = useViews();
 
   if (!activeView || activeView.kind === "board") {
@@ -697,6 +696,15 @@ function ActiveViewRenderer({
   );
 }
 
+/** Props for the InspectorPanel component. */
+interface InspectorPanelProps {
+  entry: PanelEntry;
+  entityStore: Record<string, Entity[]>;
+  board: BoardData | null;
+  onClose: () => void;
+  style?: React.CSSProperties;
+}
+
 /**
  * Resolves an entity for the inspector panel. Tries the local entity store
  * first, then falls back to fetching from the backend via get_entity.
@@ -707,13 +715,7 @@ function InspectorPanel({
   board,
   onClose,
   style,
-}: {
-  entry: PanelEntry;
-  entityStore: Record<string, Entity[]>;
-  board: BoardData | null;
-  onClose: () => void;
-  style?: React.CSSProperties;
-}) {
+}: InspectorPanelProps) {
   const { getSchema } = useSchema();
   const [fetchedEntity, setFetchedEntity] = useState<Entity | null>(null);
   const [fetchError, setFetchError] = useState<string | null>(null);
