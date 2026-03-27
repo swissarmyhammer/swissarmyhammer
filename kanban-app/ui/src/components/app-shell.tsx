@@ -17,7 +17,7 @@ import {
   dispatchCommand,
   type CommandDef,
 } from "@/lib/command-scope";
-import { useFocusedScope } from "@/lib/entity-focus-context";
+import { useFocusedScope, useEntityFocus } from "@/lib/entity-focus-context";
 import { useUIState } from "@/lib/ui-state-context";
 import { useAppMode } from "@/lib/app-mode-context";
 import {
@@ -150,6 +150,9 @@ export function AppShell({
   const activeBoardPath = useActiveBoardPath();
   const activeBoardPathRef = useRef(activeBoardPath);
   activeBoardPathRef.current = activeBoardPath;
+  const { broadcastNavCommand } = useEntityFocus();
+  const broadcastRef = useRef(broadcastNavCommand);
+  broadcastRef.current = broadcastNavCommand;
 
   /** Global commands available throughout the app. */
   const globalCommands: CommandDef[] = useMemo(
@@ -329,6 +332,45 @@ export function AppShell({
         execute: () => {
           // Tauri about dialog -- placeholder for now
         },
+      },
+      // --- Universal navigation commands ---
+      // These broadcast to all registered claimWhen predicates.
+      // Each FocusScope with a matching predicate can pull focus.
+      {
+        id: "nav.up",
+        name: "Navigate Up",
+        keys: { vim: "k", cua: "ArrowUp" },
+        execute: () => broadcastRef.current("nav.up"),
+      },
+      {
+        id: "nav.down",
+        name: "Navigate Down",
+        keys: { vim: "j", cua: "ArrowDown" },
+        execute: () => broadcastRef.current("nav.down"),
+      },
+      {
+        id: "nav.left",
+        name: "Navigate Left",
+        keys: { vim: "h", cua: "ArrowLeft" },
+        execute: () => broadcastRef.current("nav.left"),
+      },
+      {
+        id: "nav.right",
+        name: "Navigate Right",
+        keys: { vim: "l", cua: "ArrowRight" },
+        execute: () => broadcastRef.current("nav.right"),
+      },
+      {
+        id: "nav.first",
+        name: "Navigate to First",
+        keys: { cua: "Home" },
+        execute: () => broadcastRef.current("nav.first"),
+      },
+      {
+        id: "nav.last",
+        name: "Navigate to Last",
+        keys: { vim: "Shift+G", cua: "End" },
+        execute: () => broadcastRef.current("nav.last"),
       },
       // Dynamic board switch commands — one per open board.
       // Uses index as suffix to avoid filesystem paths in command IDs.

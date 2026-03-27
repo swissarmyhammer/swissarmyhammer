@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KMQMSTA0PYVHXKWKGT4631PN
-position_column: todo
-position_ordinal: c480
+position_column: done
+position_ordinal: ffffffffffffe980
 title: Register global nav commands and fix sequence tables
 ---
 ## What
