@@ -155,7 +155,7 @@
 
 /* Mention pill focus — tighter bar positioning for inline pills in flex layouts */
 .mention-pill-focus[data-focused]::before {
-  left: -0.125rem;
+  left: -0.25rem;
 }
 
 /* CM6 autocomplete — prevent long completions from overflowing the viewport */
