@@ -15,14 +15,17 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 
 const ActiveBoardPathContext = createContext<string | undefined>(undefined);
 
+/** Props for the per-window active board path provider. */
+export interface ActiveBoardPathProviderProps {
+  value: string | undefined;
+  children: ReactNode;
+}
+
 /** Provide the per-window active board path so dispatch_command targets the correct board. */
 export function ActiveBoardPathProvider({
   value,
   children,
-}: {
-  value: string | undefined;
-  children: ReactNode;
-}) {
+}: ActiveBoardPathProviderProps) {
   return (
     <ActiveBoardPathContext.Provider value={value}>
       {children}

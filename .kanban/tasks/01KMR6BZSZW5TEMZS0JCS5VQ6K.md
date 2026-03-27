@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: d280
+position_column: done
+position_ordinal: ffffffffffffff8680
 title: 'Focus steal: BoardFocusBridge unconditionally calls setFocus on every scope change'
 ---
 **Severity: Medium** (Behavioral bug)

@@ -45,9 +45,20 @@ export const BINDING_TABLES: Record<KeymapMode, BindingTable> = {
   },
   emacs: {
     "Mod+Shift+P": "app.palette",
-    "Mod+f": "app.search",
     Escape: "app.dismiss",
     "Mod+w": "file.closeBoard",
+    // Emacs navigation — Ctrl+ entries match macOS where Ctrl is distinct from
+    // Cmd (Mod). Mod+ entries cover non-Mac where Ctrl normalises to Mod.
+    "Ctrl+p": "nav.up",
+    "Mod+p": "nav.up",
+    "Ctrl+n": "nav.down",
+    "Mod+n": "nav.down",
+    "Ctrl+b": "nav.left",
+    "Mod+b": "nav.left",
+    "Ctrl+f": "nav.right",
+    "Mod+f": "nav.right",
+    "Alt+<": "nav.first",
+    "Alt+>": "nav.last",
   },
 };
 
@@ -100,6 +111,9 @@ export function normalizeKeyEvent(e: KeyboardEvent): string | null {
   const parts: string[] = [];
 
   if (mod) parts.push("Mod");
+  // On macOS, Ctrl is a distinct physical key from Cmd (which maps to Mod).
+  // Emit a "Ctrl" prefix so emacs-style C-p / C-n bindings can be expressed.
+  if (mac && e.ctrlKey) parts.push("Ctrl");
   if (e.altKey) parts.push("Alt");
 
   // Only add Shift modifier for letter keys (where we uppercase the letter).
@@ -186,7 +200,7 @@ export function createKeyHandler(
     // Skip non-modifier single-character keys when focus is in any editable
     // context (CodeMirror editors, inputs, textareas, contenteditable).
     const hasModifier =
-      normalized.includes("Mod") || normalized.includes("Alt");
+      normalized.includes("Mod") || normalized.includes("Alt") || normalized.includes("Ctrl");
     if (!hasModifier && target) {
       const tag = target.tagName;
       if (

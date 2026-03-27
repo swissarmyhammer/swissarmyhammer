@@ -180,7 +180,7 @@ export function AppShell({
       {
         id: "app.undo",
         name: "Undo",
-        keys: { vim: "u", cua: "Mod+Z", emacs: "C-/" },
+        keys: { vim: "u", cua: "Mod+Z", emacs: "Ctrl+/" },
         // No execute -- dispatches to Rust via dispatch_command
       },
       {
@@ -339,37 +339,37 @@ export function AppShell({
       {
         id: "nav.up",
         name: "Navigate Up",
-        keys: { vim: "k", cua: "ArrowUp" },
+        keys: { vim: "k", cua: "ArrowUp", emacs: "Ctrl+p" },
         execute: () => broadcastRef.current("nav.up"),
       },
       {
         id: "nav.down",
         name: "Navigate Down",
-        keys: { vim: "j", cua: "ArrowDown" },
+        keys: { vim: "j", cua: "ArrowDown", emacs: "Ctrl+n" },
         execute: () => broadcastRef.current("nav.down"),
       },
       {
         id: "nav.left",
         name: "Navigate Left",
-        keys: { vim: "h", cua: "ArrowLeft" },
+        keys: { vim: "h", cua: "ArrowLeft", emacs: "Ctrl+b" },
         execute: () => broadcastRef.current("nav.left"),
       },
       {
         id: "nav.right",
         name: "Navigate Right",
-        keys: { vim: "l", cua: "ArrowRight" },
+        keys: { vim: "l", cua: "ArrowRight", emacs: "Ctrl+f" },
         execute: () => broadcastRef.current("nav.right"),
       },
       {
         id: "nav.first",
         name: "Navigate to First",
-        keys: { cua: "Home" },
+        keys: { cua: "Home", emacs: "Alt+<" },
         execute: () => broadcastRef.current("nav.first"),
       },
       {
         id: "nav.last",
         name: "Navigate to Last",
-        keys: { vim: "Shift+G", cua: "End" },
+        keys: { vim: "Shift+G", cua: "End", emacs: "Alt+>" },
         execute: () => broadcastRef.current("nav.last"),
       },
       // Dynamic board switch commands — one per open board.

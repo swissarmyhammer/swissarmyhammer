@@ -126,6 +126,15 @@ export function FocusScope({
   );
 }
 
+/** Props for the inner focus-scope wrapper rendered inside CommandScopeContext. */
+interface FocusScopeInnerProps
+  extends Omit<React.HTMLAttributes<HTMLElement>, "onClick" | "children"> {
+  moniker: string;
+  isDirectFocus: boolean;
+  onClick: React.MouseEventHandler<HTMLElement>;
+  children: ReactNode;
+}
+
 /** Inner component rendered inside CommandScopeContext so useContextMenu sees the scope. */
 function FocusScopeInner({
   moniker,
@@ -133,12 +142,7 @@ function FocusScopeInner({
   onClick,
   children,
   ...htmlProps
-}: {
-  moniker: string;
-  isDirectFocus: boolean;
-  onClick: React.MouseEventHandler<HTMLElement>;
-  children: ReactNode;
-} & Omit<React.HTMLAttributes<HTMLElement>, "onClick" | "children">) {
+}: FocusScopeInnerProps) {
   const contextMenuHandler = useContextMenu();
   const { setFocus } = useEntityFocus();
   const scope = useContext(CommandScopeContext);
