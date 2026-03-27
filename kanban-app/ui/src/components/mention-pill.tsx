@@ -39,6 +39,12 @@ interface MentionPillProps {
   className?: string;
   /** Predicates that let this pill's FocusScope claim focus on nav commands. */
   claimWhen?: ClaimPredicate[];
+  /**
+   * Override the FocusScope moniker for this pill. When provided, this is used
+   * instead of the default entity moniker. Use this to make pills unique per
+   * context (e.g. `task:id.tags/tag:tag-1` in a specific inspector field).
+   */
+  focusMoniker?: string;
 }
 
 export function MentionPill({
@@ -48,6 +54,7 @@ export function MentionPill({
   taskId,
   className,
   claimWhen,
+  focusMoniker,
 }: MentionPillProps) {
   const { getEntities } = useEntityStore();
   const { mentionableTypes } = useSchema();
@@ -82,7 +89,7 @@ export function MentionPill({
         : displayName
       : description;
   const entityId = entity?.id ?? slug;
-  const scopeMoniker = moniker(entityType, entityId);
+  const scopeMoniker = focusMoniker ?? moniker(entityType, entityId);
 
   // Build the local task.untag extra command — only for tags on a specific task
   const extraCommands = useMemo<CommandDef[] | undefined>(() => {
