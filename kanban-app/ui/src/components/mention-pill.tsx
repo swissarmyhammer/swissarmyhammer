@@ -107,7 +107,7 @@ export function MentionPill({
   );
 
   return (
-    <FocusScope moniker={scopeMoniker} commands={commands} className="inline" claimWhen={claimWhen}>
+    <FocusScope moniker={scopeMoniker} commands={commands} className="inline mention-pill-focus" claimWhen={claimWhen}>
       <MentionPillInner
         slug={slug}
         prefix={prefix}

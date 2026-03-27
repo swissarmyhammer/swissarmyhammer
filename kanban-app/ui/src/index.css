@@ -153,6 +153,11 @@
   left: 0.25rem;
 }
 
+/* Mention pill focus — tighter bar positioning for inline pills in flex layouts */
+.mention-pill-focus[data-focused]::before {
+  left: -0.125rem;
+}
+
 /* CM6 autocomplete — prevent long completions from overflowing the viewport */
 .cm-tooltip.cm-tooltip-autocomplete > ul > li {
   overflow: hidden;

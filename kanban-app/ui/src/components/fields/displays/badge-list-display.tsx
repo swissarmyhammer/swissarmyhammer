@@ -105,7 +105,7 @@ export function BadgeListDisplay({ field, value, entity, mode }: DisplayProps) {
   }
 
   return (
-    <div className="flex flex-wrap gap-1">
+    <div className="flex flex-wrap gap-1.5">
       {values.map((val, i) => {
         // For computed tags, val is already the slug. For references, resolve ID to display slug.
         const slug = idToSlug ? (idToSlug.get(val) ?? val) : val;
