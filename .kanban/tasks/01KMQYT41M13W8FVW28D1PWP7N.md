@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: d180
+position_column: done
+position_ordinal: fffffffffffffc80
 title: 'badge-list-nav tests: no coverage for reference-field pill navigation'
 ---
 **Severity**: Low / Test Gap

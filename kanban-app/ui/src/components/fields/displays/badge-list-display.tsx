@@ -26,7 +26,15 @@ export function BadgeListDisplay({ field, value, entity, mode }: DisplayProps) {
   const { mentionableTypes } = useSchema();
   const { getEntities } = useEntityStore();
 
-  const values = Array.isArray(value) ? (value as string[]) : [];
+  // Stabilize the values array reference so downstream memos (pillMonikers,
+  // pillClaimPredicates) don't recompute when the parent re-renders with a
+  // structurally identical but referentially new array.
+  const valuesKey = Array.isArray(value) ? (value as string[]).join("\0") : "";
+  const values = useMemo(
+    () => (Array.isArray(value) ? (value as string[]) : []),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [valuesKey],
+  );
 
   // Read target entity type from field type (set in YAML for both reference and computed fields)
   const targetEntityType = field.type.entity as string | undefined;

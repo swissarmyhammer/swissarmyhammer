@@ -87,10 +87,22 @@ const tagField: FieldDef = {
   type: { entity: "tag", commit_display_names: true },
 } as unknown as FieldDef;
 
+const refField: FieldDef = {
+  name: "depends_on",
+  display: "badge-list",
+  type: { entity: "task" },
+} as unknown as FieldDef;
+
 const taskEntity: Entity = {
   id: "task-1",
   entity_type: "task",
   fields: { tags: ["bugfix", "feature", "docs"] },
+};
+
+const refEntity: Entity = {
+  id: "task-1",
+  entity_type: "task",
+  fields: { depends_on: ["task-dep-A", "task-dep-B"] },
 };
 
 /** Flush microtasks and pending effects. */
@@ -151,6 +163,38 @@ function NavHarness({
               field={tagField}
               value={values}
               entity={taskEntity}
+              mode="full"
+            />
+          </FocusScope>
+        </InspectProvider>
+      </TooltipProvider>
+      <FocusMonitor />
+      <SetFocusButton moniker={parentMoniker} />
+      <BroadcastButton commandId="nav.right" testId="nav-right" />
+      <BroadcastButton commandId="nav.left" testId="nav-left" />
+    </EntityFocusProvider>
+  );
+}
+
+/**
+ * Harness for reference-field navigation (entity ID values, no slug resolution).
+ */
+function RefNavHarness({
+  values,
+  parentMoniker,
+}: {
+  values: string[];
+  parentMoniker: string;
+}) {
+  return (
+    <EntityFocusProvider>
+      <TooltipProvider>
+        <InspectProvider onInspect={() => {}} onDismiss={() => false}>
+          <FocusScope moniker={parentMoniker} commands={[]}>
+            <BadgeListDisplay
+              field={refField}
+              value={values}
+              entity={refEntity}
               mode="full"
             />
           </FocusScope>
@@ -310,5 +354,51 @@ describe("BadgeListDisplay pill navigation", () => {
       await new Promise((r) => setTimeout(r, 0));
     });
     expect(getByTestId("focus-monitor").textContent).toBe("field:tags/tag:tag-1");
+  });
+});
+
+describe("BadgeListDisplay reference-field pill navigation", () => {
+  it("monikers use buildMoniker(entityType, entityId) directly — no slug resolution", async () => {
+    const { getByTestId } = render(
+      <RefNavHarness
+        values={["task-dep-A", "task-dep-B"]}
+        parentMoniker="field:depends_on"
+      />,
+    );
+    await flush();
+
+    // Focus the parent field
+    await act(async () => {
+      getByTestId("set-focus").click();
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    expect(getByTestId("focus-monitor").textContent).toBe("field:depends_on");
+
+    // nav.right → first pill uses entity ID directly: task:task-dep-A
+    await act(async () => {
+      getByTestId("nav-right").click();
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    expect(getByTestId("focus-monitor").textContent).toBe(
+      "field:depends_on/task:task-dep-A",
+    );
+
+    // nav.right → second pill: task:task-dep-B
+    await act(async () => {
+      getByTestId("nav-right").click();
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    expect(getByTestId("focus-monitor").textContent).toBe(
+      "field:depends_on/task:task-dep-B",
+    );
+
+    // nav.left → back to first pill
+    await act(async () => {
+      getByTestId("nav-left").click();
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    expect(getByTestId("focus-monitor").textContent).toBe(
+      "field:depends_on/task:task-dep-A",
+    );
   });
 });

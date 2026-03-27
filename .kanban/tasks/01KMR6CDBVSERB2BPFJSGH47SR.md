@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: d480
+position_column: done
+position_ordinal: fffffffffffffd80
 title: Duplicated BoardFocusBridge / GridFocusBridge should be a shared component
 ---
 **Severity: Low** (Code quality / DRY violation)

@@ -93,16 +93,16 @@ export function EntityInspector({ entity, navRef }: EntityInspectorProps) {
     [navigableFields, entity.entity_type, entity.id],
   );
 
-  /** Check if a moniker is one of this inspector's fields or a descendant of one. */
-  const isInspectorField = (f: string | null, isDescendantOf: (a: string) => boolean): boolean => {
-    if (!f) return false;
-    if (fieldMonikers.includes(f)) return true;
-    // Check if focused element is a child of any field (e.g. a pill inside a badge-list)
-    return fieldMonikers.some((m) => isDescendantOf(m));
-  };
-
   /** ClaimWhen predicates for each field at index i. */
   const claimPredicates = useMemo(() => {
+    /** Check if a moniker is one of this inspector's fields or a descendant of one. */
+    const isInspectorField = (f: string | null, isDescendantOf: (a: string) => boolean): boolean => {
+      if (!f) return false;
+      if (fieldMonikers.includes(f)) return true;
+      // Check if focused element is a child of any field (e.g. a pill inside a badge-list)
+      return fieldMonikers.some((m) => isDescendantOf(m));
+    };
+
     return fieldMonikers.map((_, i) => {
       const predicates: ClaimPredicate[] = [];
       // nav.down: claim if the field above me (or a child of it) is focused
