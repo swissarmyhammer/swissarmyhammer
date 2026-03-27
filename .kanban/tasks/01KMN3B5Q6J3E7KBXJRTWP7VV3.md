@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: '7780'
+position_column: done
+position_ordinal: ffffffffffffe280
 title: Add left/right keyboard navigation between pills in badge-list display
 ---
 ## What
