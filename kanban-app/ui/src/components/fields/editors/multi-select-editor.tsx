@@ -72,7 +72,7 @@ export function MultiSelectEditor({
   onCancel,
 }: MultiSelectEditorProps) {
   const { keymap_mode: mode } = useUIState();
-  const { mentionableTypes } = useSchema();
+  const { mentionableTypes, loading: schemaLoading } = useSchema();
   const { getEntities } = useEntityStore();
   const editorRef = useRef<ReactCodeMirrorRef>(null);
 
@@ -265,6 +265,15 @@ export function MultiSelectEditor({
       commitRef.current();
     }, 100);
   }, []);
+
+  // Wait for schema to load so prefix and displayField are correct before
+  // CM6 initializes. Without this, the editor mounts with empty prefix and
+  // wrong display names, producing "alice " instead of "@alice ".
+  // Only wait if the schema is still loading — some entity types (e.g.
+  // attachment) don't have a mention_prefix and that's fine.
+  if (schemaLoading && !mentionConfig && targetEntityType) {
+    return null;
+  }
 
   return (
     <CodeMirror
