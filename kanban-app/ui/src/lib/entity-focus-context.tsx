@@ -174,16 +174,22 @@ export function EntityFocusProvider({ children }: { children: ReactNode }) {
       }
     }
 
+    const monikerChanged = prev.moniker !== moniker;
+
     // Update the claim and register the new scope
     claims.set(id, { moniker, scope });
     registryRef.current.set(moniker, scope);
 
-    // Only update entity focus if this is the active (topmost) claim
-    const active = getActiveClaim();
-    if (active && active.id === id) {
-      focusedMonikerRef.current = moniker;
-      setFocusedMoniker(moniker);
-      invokeFocusChange(moniker, registryRef);
+    // Only change focus if the moniker actually changed AND this is the active claim.
+    // Scope-only changes (same moniker, new scope object) update the registry
+    // but don't reset focus — that would override the user's navigation position.
+    if (monikerChanged) {
+      const active = getActiveClaim();
+      if (active && active.id === id) {
+        focusedMonikerRef.current = moniker;
+        setFocusedMoniker(moniker);
+        invokeFocusChange(moniker, registryRef);
+      }
     }
   }, []);
 
