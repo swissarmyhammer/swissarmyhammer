@@ -21,7 +21,7 @@ interface InspectorFocusBridgeProps {
  *
  * Edit mode is managed by the inspector nav hook exposed via navRef.
  *
- * On unmount (panel close), restores focus to whatever was focused before (via FocusClaim).
+ * On unmount (panel close), restores focus to whatever was focused before (via setFocus).
  *
  * @param entity - The entity to inspect
  */

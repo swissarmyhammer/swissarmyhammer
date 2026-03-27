@@ -1,5 +1,6 @@
 import {
   useCallback,
+  useContext,
   useEffect,
   useMemo,
   useRef,
@@ -25,11 +26,13 @@ import { emit } from "@tauri-apps/api/event";
 import type { DropZoneDescriptor } from "@/lib/drop-zones";
 import {
   CommandScopeProvider,
+  CommandScopeContext,
   type CommandDef,
 } from "@/lib/command-scope";
 import { ColumnView } from "@/components/column-view";
 import { SortableColumn } from "@/components/sortable-column";
-import { FocusScope, FocusClaim } from "@/components/focus-scope";
+import { FocusScope } from "@/components/focus-scope";
+import { useEntityFocus } from "@/lib/entity-focus-context";
 import { useInspect } from "@/lib/inspect-context";
 import { useBoardNav } from "@/hooks/use-board-nav";
 import { BoardNavProvider } from "@/lib/board-nav-context";
@@ -42,6 +45,32 @@ import { useEntityCommands } from "@/lib/entity-commands";
 import { useDragSession } from "@/lib/drag-session-context";
 import type { BoardData, Entity } from "@/types/kanban";
 import { getStr, getNum } from "@/types/kanban";
+
+/**
+ * Renderless component that bridges the board cursor to entity focus.
+ *
+ * Must be rendered inside a CommandScopeProvider so it picks up the
+ * correct scope (including board nav commands). Uses two separate effects:
+ * one for scope registration (fires on scope changes) and one for focus
+ * (fires only when the moniker changes, i.e. cursor movement).
+ */
+function BoardFocusBridge({ moniker: mk }: { moniker: string }) {
+  const scope = useContext(CommandScopeContext);
+  const { setFocus, registerScope, unregisterScope } = useEntityFocus();
+
+  // Register scope — fires on any change to keep registry current
+  useEffect(() => {
+    if (scope) registerScope(mk, scope);
+    return () => unregisterScope(mk);
+  }, [mk, scope, registerScope, unregisterScope]);
+
+  // Set focus — fires ONLY when the moniker changes (cursor movement)
+  useEffect(() => {
+    setFocus(mk);
+  }, [mk, setFocus]);
+
+  return null;
+}
 
 interface BoardViewProps {
   board: BoardData;
@@ -505,7 +534,7 @@ export function BoardView({ board, tasks, boardPath }: BoardViewProps) {
       className="flex flex-col flex-1 min-h-0 relative"
     >
       <CommandScopeProvider commands={boardNavCommands}>
-        <FocusClaim moniker={focusBridgeMoniker} />
+        <BoardFocusBridge moniker={focusBridgeMoniker} />
         <BoardNavProvider
           onCardClick={handleBoardCardClick}
           onHeaderClick={handleBoardHeaderClick}

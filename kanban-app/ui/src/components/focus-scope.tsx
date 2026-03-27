@@ -3,9 +3,7 @@ import {
   useCallback,
   useContext,
   useEffect,
-  useLayoutEffect,
   useMemo,
-  useRef,
   type ReactNode,
 } from "react";
 import {
@@ -195,53 +193,3 @@ export function useParentFocusScope(): string | null {
   return useContext(FocusScopeContext);
 }
 
-interface FocusClaimProps {
-  /** The moniker to claim focus for. */
-  moniker: string;
-}
-
-/**
- * Renderless component that programmatically claims entity focus.
- *
- * Must be rendered inside a CommandScopeProvider or FocusScope.
- * Registers the enclosing command scope under the given moniker and
- * claims entity focus via the claim stack.
- *
- * Uses a LIFO claim stack: the most recently mounted FocusClaim wins.
- * When it unmounts, focus falls back to the previous claimer. When a
- * non-active claimer's moniker changes, entity focus is NOT affected.
- *
- * Use this for programmatic focus (cursor navigation, inspector panels).
- * For click-to-focus, use FocusScope instead.
- */
-export function FocusClaim({ moniker }: FocusClaimProps) {
-  const scope = useContext(CommandScopeContext);
-  const { pushClaim, updateClaim, popClaim } = useEntityFocus();
-  const claimIdRef = useRef<number | null>(null);
-  const mountedRef = useRef(false);
-
-  // Mount: push claim. Unmount: pop claim.
-  useLayoutEffect(() => {
-    if (!scope) return;
-    claimIdRef.current = pushClaim(moniker, scope);
-    mountedRef.current = true;
-    return () => {
-      if (claimIdRef.current !== null) {
-        popClaim(claimIdRef.current);
-        claimIdRef.current = null;
-      }
-      mountedRef.current = false;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount/unmount only
-  }, [scope, pushClaim, popClaim]);
-
-  // Update: when moniker changes after mount, update existing claim in place.
-  // Skip on initial mount — pushClaim already set the correct focus.
-  useLayoutEffect(() => {
-    if (mountedRef.current && claimIdRef.current !== null && scope) {
-      updateClaim(claimIdRef.current, moniker, scope);
-    }
-  }, [moniker, scope, updateClaim]);
-
-  return null;
-}

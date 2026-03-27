@@ -49,8 +49,8 @@ interface EntityInspectorProps {
  * Fields default to "body" if no section is specified.
  *
  * Navigation is pull-based: each field row's FocusScope gets claimWhen
- * predicates computed from its position in the field list. The FocusClaim
- * on mount focuses the first field. After that, navigation is purely
+ * predicates computed from its position in the field list. A mount effect
+ * focuses the first field via setFocus. After that, navigation is purely
  * driven by broadcastNavCommand triggering claimWhen predicates.
  *
  * Pulls everything from context:

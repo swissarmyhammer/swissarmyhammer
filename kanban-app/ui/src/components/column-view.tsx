@@ -208,8 +208,8 @@ export const ColumnView = memo(function ColumnView({
         {/* This FocusHighlight is driven by the board cursor (focusedCardIndex),
             not by entity focus. It highlights the column header when the cursor
             is at card=-1. This is a sub-entity visual indicator — the board's
-            FocusClaim targets the board moniker, not the column moniker.
-            Unifying this with FocusClaim requires the board to track which
+            focus bridge targets the board moniker, not the column moniker.
+            Unifying this with entity focus requires the board to track which
             column is focused, which is a future enhancement. */}
         <FocusHighlight
           focused={focusedCardIndex === -1}

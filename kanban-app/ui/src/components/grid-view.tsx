@@ -1,5 +1,6 @@
 import {
   useCallback,
+  useContext,
   useEffect,
   useMemo,
   useRef,
@@ -18,12 +19,38 @@ import {
 } from "@/lib/entity-commands";
 import {
   CommandScopeProvider,
+  CommandScopeContext,
   type CommandDef,
 } from "@/lib/command-scope";
-import { FocusClaim } from "@/components/focus-scope";
+import { useEntityFocus } from "@/lib/entity-focus-context";
 import { DataTable, type DataTableColumn } from "@/components/data-table";
 import { Field } from "@/components/fields/field";
 import type { ViewDef, Entity, FieldDef } from "@/types/kanban";
+
+/**
+ * Renderless component that bridges the grid cursor to entity focus.
+ *
+ * Must be rendered inside the appropriate CommandScopeProvider so it picks up
+ * entity-level commands. Uses two separate effects: one for scope registration
+ * and one for focus (fires only when the moniker changes).
+ */
+function GridFocusBridge({ moniker: mk }: { moniker: string }) {
+  const scope = useContext(CommandScopeContext);
+  const { setFocus, registerScope, unregisterScope } = useEntityFocus();
+
+  // Register scope — fires on any change to keep registry current
+  useEffect(() => {
+    if (scope) registerScope(mk, scope);
+    return () => unregisterScope(mk);
+  }, [mk, scope, registerScope, unregisterScope]);
+
+  // Set focus — fires ONLY when the moniker changes (cursor movement)
+  useEffect(() => {
+    setFocus(mk);
+  }, [mk, setFocus]);
+
+  return null;
+}
 
 interface GridViewProps {
   view: ViewDef;
@@ -279,7 +306,7 @@ export function GridView({ view }: GridViewProps) {
   return (
     <CommandScopeProvider commands={gridCommands}>
       <CommandScopeProvider commands={entityCommands}>
-        <FocusClaim moniker={currentFieldMoniker ?? currentEntityMoniker ?? "grid"} />
+        <GridFocusBridge moniker={currentFieldMoniker ?? currentEntityMoniker ?? "grid"} />
       </CommandScopeProvider>
       <main className="flex-1 flex flex-col min-h-0">
         <div className="flex items-center px-4 py-1.5 border-b border-border bg-muted/30 text-xs text-muted-foreground gap-3">

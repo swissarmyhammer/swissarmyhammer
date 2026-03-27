@@ -38,22 +38,6 @@ interface EntityFocusContextValue {
   unregisterScope: (moniker: string) => void;
   /** Look up a registered scope by moniker. */
   getScope: (moniker: string) => CommandScope | null;
-  /**
-   * Push a new programmatic focus claim onto the LIFO stack.
-   * The most recently pushed (highest ID) claim wins entity focus.
-   * Returns a numeric claim ID used for updateClaim/popClaim.
-   */
-  pushClaim: (moniker: string, scope: CommandScope) => number;
-  /**
-   * Update an existing claim's moniker and scope.
-   * Only changes entity focus if this claim is the active (topmost) one.
-   */
-  updateClaim: (id: number, moniker: string, scope: CommandScope) => void;
-  /**
-   * Remove a claim from the stack. If it was the active claim, focus
-   * falls back to the next claim (or null if the stack is empty).
-   */
-  popClaim: (id: number) => void;
   /** Register claim predicates for a FocusScope moniker. */
   registerClaimPredicates: (moniker: string, predicates: ClaimPredicate[]) => void;
   /** Unregister claim predicates for a FocusScope moniker. */
@@ -132,92 +116,6 @@ export function EntityFocusProvider({ children }: { children: ReactNode }) {
     return registryRef.current.get(moniker) ?? null;
   }, []);
 
-  // --- Claim stack (LIFO) for programmatic focus ---
-  const nextClaimIdRef = useRef(0);
-  /** Map from claim ID to { moniker, scope }. */
-  const claimsRef = useRef<Map<number, { moniker: string; scope: CommandScope }>>(new Map());
-
-  /** Find the active (highest ID) claim, or null if the stack is empty. */
-  function getActiveClaim(): { id: number; moniker: string; scope: CommandScope } | null {
-    let maxId = -1;
-    let result: { id: number; moniker: string; scope: CommandScope } | null = null;
-    for (const [id, entry] of claimsRef.current) {
-      if (id > maxId) { maxId = id; result = { id, ...entry }; }
-    }
-    return result;
-  }
-
-  const pushClaim = useCallback((moniker: string, scope: CommandScope): number => {
-    const id = nextClaimIdRef.current++;
-    claimsRef.current.set(id, { moniker, scope });
-    registryRef.current.set(moniker, scope);
-    // This is now the active claim (highest ID)
-    focusedMonikerRef.current = moniker;
-    setFocusedMoniker(moniker);
-    invokeFocusChange(moniker, registryRef);
-    return id;
-  }, []);
-
-  const updateClaim = useCallback((id: number, moniker: string, scope: CommandScope) => {
-    const claims = claimsRef.current;
-    const prev = claims.get(id);
-    if (!prev) return;
-
-    // Unregister old moniker from scope registry if it changed and no other claim uses it
-    if (prev.moniker !== moniker) {
-      let oldMonikerStillClaimed = false;
-      for (const [otherId, other] of claims) {
-        if (otherId !== id && other.moniker === prev.moniker) { oldMonikerStillClaimed = true; break; }
-      }
-      if (!oldMonikerStillClaimed) {
-        registryRef.current.delete(prev.moniker);
-      }
-    }
-
-    const monikerChanged = prev.moniker !== moniker;
-
-    // Update the claim and register the new scope
-    claims.set(id, { moniker, scope });
-    registryRef.current.set(moniker, scope);
-
-    // Only change focus if the moniker actually changed AND this is the active claim.
-    // Scope-only changes (same moniker, new scope object) update the registry
-    // but don't reset focus — that would override the user's navigation position.
-    if (monikerChanged) {
-      const active = getActiveClaim();
-      if (active && active.id === id) {
-        focusedMonikerRef.current = moniker;
-        setFocusedMoniker(moniker);
-        invokeFocusChange(moniker, registryRef);
-      }
-    }
-  }, []);
-
-  const popClaim = useCallback((id: number) => {
-    const claims = claimsRef.current;
-    const entry = claims.get(id);
-    claims.delete(id);
-
-    // Only unregister the scope if no other claim uses the same moniker
-    if (entry) {
-      let monikerStillClaimed = false;
-      for (const [, other] of claims) {
-        if (other.moniker === entry.moniker) { monikerStillClaimed = true; break; }
-      }
-      if (!monikerStillClaimed) {
-        registryRef.current.delete(entry.moniker);
-      }
-    }
-
-    // Only update focus if the active moniker actually changed
-    const newMoniker = getActiveClaim()?.moniker ?? null;
-    if (newMoniker !== focusedMonikerRef.current) {
-      focusedMonikerRef.current = newMoniker;
-      setFocusedMoniker(newMoniker);
-      invokeFocusChange(newMoniker, registryRef);
-    }
-  }, []);
-
   // --- Claim predicate registry (ref-based, no re-renders) ---
   const claimPredicatesRef = useRef<Map<string, ClaimPredicate[]>>(new Map());
 
@@ -277,14 +175,11 @@ export function EntityFocusProvider({ children }: { children: ReactNode }) {
       registerScope,
       unregisterScope,
       getScope,
-      pushClaim,
-      updateClaim,
-      popClaim,
       registerClaimPredicates,
       unregisterClaimPredicates,
       broadcastNavCommand,
     }),
-    [focusedMoniker, setFocus, registerScope, unregisterScope, getScope, pushClaim, updateClaim, popClaim, registerClaimPredicates, unregisterClaimPredicates, broadcastNavCommand],
+    [focusedMoniker, setFocus, registerScope, unregisterScope, getScope, registerClaimPredicates, unregisterClaimPredicates, broadcastNavCommand],
   );
 
   return (
