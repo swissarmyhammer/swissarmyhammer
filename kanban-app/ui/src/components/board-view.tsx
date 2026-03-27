@@ -252,14 +252,25 @@ export function BoardView({ board, tasks, boardPath }: BoardViewProps) {
         id: "board.firstCard",
         name: "First Card",
         keys: { cua: "Home" },
-        // vim: "g g" handled via SEQUENCE_TABLES in keybindings.ts
         execute: () => boardNavRef.current.moveToFirstCard(),
       },
       {
         id: "board.lastCard",
         name: "Last Card",
-        // normalizeKeyEvent produces "Shift+G" for uppercase G
         keys: { vim: "Shift+G", cua: "End" },
+        execute: () => boardNavRef.current.moveToLastCard(),
+      },
+      // nav.first/nav.last — generic commands from sequence table (gg) and
+      // global scope. Board scope registers these so they resolve here
+      // instead of falling through to broadcastNavCommand (no claimWhen yet).
+      {
+        id: "nav.first",
+        name: "First Card",
+        execute: () => boardNavRef.current.moveToFirstCard(),
+      },
+      {
+        id: "nav.last",
+        name: "Last Card",
         execute: () => boardNavRef.current.moveToLastCard(),
       },
       {

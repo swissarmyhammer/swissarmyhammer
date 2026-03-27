@@ -159,6 +159,30 @@ export function GridView({ view }: GridViewProps) {
         execute: () => gridRef.current.moveToRowEnd(),
       },
       {
+        id: "grid.firstCell",
+        name: "First Cell",
+        keys: { cua: "Mod+Home" },
+        execute: () => gridRef.current.moveToFirst(),
+      },
+      {
+        id: "grid.lastCell",
+        name: "Last Cell",
+        keys: { vim: "Shift+G", cua: "Mod+End" },
+        execute: () => gridRef.current.moveToLast(),
+      },
+      // nav.first/nav.last — generic commands from sequence table (gg) and
+      // global scope. Grid scope registers these so they resolve here.
+      {
+        id: "nav.first",
+        name: "First Cell",
+        execute: () => gridRef.current.moveToFirst(),
+      },
+      {
+        id: "nav.last",
+        name: "Last Cell",
+        execute: () => gridRef.current.moveToLast(),
+      },
+      {
         id: "grid.edit",
         name: "Edit Cell",
         keys: { vim: "i", cua: "Enter" },
