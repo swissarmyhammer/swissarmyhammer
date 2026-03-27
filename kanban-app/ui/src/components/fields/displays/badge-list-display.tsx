@@ -1,7 +1,10 @@
 import { useMemo } from "react";
 import { MentionPill } from "@/components/mention-pill";
+import { useParentFocusScope } from "@/components/focus-scope";
 import { useSchema } from "@/lib/schema-context";
 import { useEntityStore } from "@/lib/entity-store-context";
+import type { ClaimPredicate } from "@/lib/entity-focus-context";
+import { moniker as buildMoniker } from "@/lib/moniker";
 import { slugify } from "@/lib/slugify";
 import { getStr } from "@/types/kanban";
 import type { DisplayProps } from "./text-display";
@@ -56,6 +59,43 @@ export function BadgeListDisplay({ field, value, entity, mode }: DisplayProps) {
     return map;
   }, [isComputedSlug, displayField, targetEntities]);
 
+  const parentMoniker = useParentFocusScope();
+
+  // Compute the moniker each pill's FocusScope will use, mirroring MentionPill's
+  // internal resolution so claimWhen predicates reference the correct strings.
+  const pillMonikers = useMemo(() => {
+    return values.map((val) => {
+      if (isComputedSlug) {
+        const tagEntity = targetEntities.find((e) => {
+          const raw = getStr(e, displayField ?? "name");
+          return raw && (raw === val || slugify(raw) === val);
+        });
+        return buildMoniker(targetEntityType ?? "tag", tagEntity?.id ?? val);
+      } else {
+        return buildMoniker(targetEntityType ?? "tag", val);
+      }
+    });
+  }, [values, isComputedSlug, targetEntities, displayField, targetEntityType]);
+
+  // Build claimWhen predicates so nav.left/nav.right moves focus between pills.
+  const pillClaimPredicates = useMemo(() => {
+    return pillMonikers.map((_, i) => {
+      const predicates: ClaimPredicate[] = [];
+      // nav.right: claim when the pill to my left (or parent field) is focused
+      if (i === 0 && parentMoniker) {
+        predicates.push({ command: "nav.right", when: (f) => f === parentMoniker });
+      }
+      if (i > 0) {
+        predicates.push({ command: "nav.right", when: (f) => f === pillMonikers[i - 1] });
+      }
+      // nav.left: claim when the pill to my right is focused
+      if (i < pillMonikers.length - 1) {
+        predicates.push({ command: "nav.left", when: (f) => f === pillMonikers[i + 1] });
+      }
+      return predicates;
+    });
+  }, [pillMonikers, parentMoniker]);
+
   if (values.length === 0) {
     return mode === "compact" ? (
       <span className="text-muted-foreground/50">-</span>
@@ -66,7 +106,7 @@ export function BadgeListDisplay({ field, value, entity, mode }: DisplayProps) {
 
   return (
     <div className="flex flex-wrap gap-1">
-      {values.map((val) => {
+      {values.map((val, i) => {
         // For computed tags, val is already the slug. For references, resolve ID to display slug.
         const slug = idToSlug ? (idToSlug.get(val) ?? val) : val;
         return (
@@ -76,6 +116,7 @@ export function BadgeListDisplay({ field, value, entity, mode }: DisplayProps) {
             slug={slug}
             prefix={prefix}
             taskId={isComputedSlug ? entity.id : undefined}
+            claimWhen={pillClaimPredicates[i]}
           />
         );
       })}

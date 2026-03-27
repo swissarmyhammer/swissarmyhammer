@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KMQMV1NK8EA6AC7NRQC15T7V
-position_column: todo
-position_ordinal: c680
+position_column: done
+position_ordinal: ffffffffffffee80
 title: Pill navigation via claimWhen
 ---
 ## What

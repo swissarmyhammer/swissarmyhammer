@@ -24,6 +24,7 @@ import { useSchema } from "@/lib/schema-context";
 import { moniker } from "@/lib/moniker";
 import { slugify } from "@/lib/slugify";
 import type { CommandDef } from "@/lib/command-scope";
+import type { ClaimPredicate } from "@/lib/entity-focus-context";
 import { getStr } from "@/types/kanban";
 
 interface MentionPillProps {
@@ -36,6 +37,8 @@ interface MentionPillProps {
   /** If set, adds a "Remove Tag" context menu command (for tags on a task) */
   taskId?: string;
   className?: string;
+  /** Predicates that let this pill's FocusScope claim focus on nav commands. */
+  claimWhen?: ClaimPredicate[];
 }
 
 export function MentionPill({
@@ -44,6 +47,7 @@ export function MentionPill({
   prefix,
   taskId,
   className,
+  claimWhen,
 }: MentionPillProps) {
   const { getEntities } = useEntityStore();
   const { mentionableTypes } = useSchema();
@@ -103,7 +107,7 @@ export function MentionPill({
   );
 
   return (
-    <FocusScope moniker={scopeMoniker} commands={commands} className="inline">
+    <FocusScope moniker={scopeMoniker} commands={commands} className="inline" claimWhen={claimWhen}>
       <MentionPillInner
         slug={slug}
         prefix={prefix}
