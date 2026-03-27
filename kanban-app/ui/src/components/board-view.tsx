@@ -57,6 +57,7 @@ import { getStr, getNum } from "@/types/kanban";
 function BoardFocusBridge({ moniker: mk }: { moniker: string }) {
   const scope = useContext(CommandScopeContext);
   const { setFocus, registerScope, unregisterScope } = useEntityFocus();
+  const prevMonikerRef = useRef<string | null>(null);
 
   // Register scope — fires on any change to keep registry current
   useEffect(() => {
@@ -64,9 +65,13 @@ function BoardFocusBridge({ moniker: mk }: { moniker: string }) {
     return () => unregisterScope(mk);
   }, [mk, scope, registerScope, unregisterScope]);
 
-  // Set focus — fires ONLY when the moniker changes (cursor movement)
+  // Set focus only on cursor movement (moniker change), not on initial mount.
+  // On mount, something else may already have focus (e.g. inspector).
   useEffect(() => {
-    setFocus(mk);
+    if (prevMonikerRef.current !== null && prevMonikerRef.current !== mk) {
+      setFocus(mk);
+    }
+    prevMonikerRef.current = mk;
   }, [mk, setFocus]);
 
   return null;

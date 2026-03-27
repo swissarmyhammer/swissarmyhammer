@@ -145,16 +145,21 @@ export function EntityInspector({ entity, navRef }: EntityInspectorProps) {
   // No claim stack — just direct setFocus. claimWhen handles all subsequent navigation.
   const { setFocus, focusedMoniker } = useEntityFocus();
   const prevFocusRef = useRef<string | null>(null);
+  const mountedRef = useRef(false);
   const firstFieldMoniker = fieldMonikers[0];
 
   useEffect(() => {
     if (!firstFieldMoniker) return;
-    prevFocusRef.current = focusedMoniker;
+    // Only capture previous focus on true first mount, not on re-runs
+    if (!mountedRef.current) {
+      prevFocusRef.current = focusedMoniker;
+      mountedRef.current = true;
+    }
     setFocus(firstFieldMoniker);
     return () => {
       setFocus(prevFocusRef.current);
+      mountedRef.current = false;
     };
-    // Only on mount/unmount — focusedMoniker is captured once at mount time
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [firstFieldMoniker, setFocus]);
 

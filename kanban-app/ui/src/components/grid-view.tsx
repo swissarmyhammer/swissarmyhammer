@@ -37,6 +37,7 @@ import type { ViewDef, Entity, FieldDef } from "@/types/kanban";
 function GridFocusBridge({ moniker: mk }: { moniker: string }) {
   const scope = useContext(CommandScopeContext);
   const { setFocus, registerScope, unregisterScope } = useEntityFocus();
+  const prevMonikerRef = useRef<string | null>(null);
 
   // Register scope — fires on any change to keep registry current
   useEffect(() => {
@@ -44,9 +45,12 @@ function GridFocusBridge({ moniker: mk }: { moniker: string }) {
     return () => unregisterScope(mk);
   }, [mk, scope, registerScope, unregisterScope]);
 
-  // Set focus — fires ONLY when the moniker changes (cursor movement)
+  // Set focus only on cursor movement (moniker change), not on initial mount.
   useEffect(() => {
-    setFocus(mk);
+    if (prevMonikerRef.current !== null && prevMonikerRef.current !== mk) {
+      setFocus(mk);
+    }
+    prevMonikerRef.current = mk;
   }, [mk, setFocus]);
 
   return null;
