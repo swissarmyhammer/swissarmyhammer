@@ -27,7 +27,7 @@ The agent uses the shell like a person does: run something, scan the results, di
 ## Install
 
 ```bash
-brew install swissarmyhammer/tap/shelltool-cli
+brew install swissarmyhammer/tap/shelltool
 ```
 
 or
