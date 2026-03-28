@@ -26,8 +26,9 @@ pub struct KanbanContext {
     root: PathBuf,
     /// Field registry (populated via `open()`, None when created via `new()`)
     fields: Option<Arc<FieldsContext>>,
-    /// Entity I/O coordinator — lazy-initialized on first access
-    entities: OnceCell<EntityContext>,
+    /// Entity I/O coordinator — lazy-initialized on first access, wrapped in Arc
+    /// so it can be shared as a CommandContext extension independently of KanbanContext.
+    entities: OnceCell<Arc<EntityContext>>,
     /// View registry (populated via `open()`, None when created via `new()`)
     views: Option<RwLock<ViewsContext>>,
     /// View changelog (populated via `open()`, None when created via `new()`)
@@ -66,7 +67,7 @@ impl KanbanContext {
 
         let (fields, entities) = Self::build_entity_context(&root)?;
         let cell = OnceCell::new();
-        cell.set(entities).ok();
+        cell.set(Arc::new(entities)).ok();
 
         // Build views context: seed builtins to disk (if not present), then load all
         let views_root = root.join("views");
@@ -372,13 +373,19 @@ impl KanbanContext {
     /// Get the EntityContext for generic entity operations.
     ///
     /// Lazy-initialized on first access from builtin + local field definitions.
-    pub async fn entity_context(&self) -> Result<&EntityContext> {
-        self.entities
+    /// Access the entity context, lazy-initializing on first call.
+    ///
+    /// Returns `Arc<EntityContext>` so it can be set as a direct extension on
+    /// `CommandContext` without going through `KanbanContext`.
+    pub async fn entity_context(&self) -> Result<Arc<EntityContext>> {
+        let ectx = self
+            .entities
             .get_or_try_init(|| async {
                 let (_fields, entities) = Self::build_entity_context(&self.root)?;
-                Ok(entities)
+                Ok::<Arc<EntityContext>, KanbanError>(Arc::new(entities))
             })
-            .await
+            .await?;
+        Ok(Arc::clone(ectx))
     }
 
     /// Build a FieldsContext + EntityContext from builtin and local field definitions.

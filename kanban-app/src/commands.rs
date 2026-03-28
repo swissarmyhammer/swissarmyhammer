@@ -29,6 +29,7 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use swissarmyhammer_entity::EntityContext;
 use swissarmyhammer_kanban::task_helpers::{enrich_all_task_entities, enrich_task_entity};
 use tauri::menu::{ContextMenu, MenuBuilder};
 use tauri::webview::WebviewWindowBuilder;
@@ -919,9 +920,20 @@ pub(crate) async fn dispatch_command_internal(
     // Set KanbanContext extension if board is open.
     // Uses board_path when provided (multi-window) to avoid targeting the wrong board.
     let active_handle = resolve_handle(state, board_path).await.ok();
-    if let Some(ref handle) = active_handle {
+    let entity_ctx: Option<Arc<EntityContext>> = if let Some(ref handle) = active_handle {
         ctx.set_extension(Arc::clone(&handle.ctx));
-    }
+        // Also set EntityContext as a direct extension so commands can reach it
+        // without going through KanbanContext (decouples undo/redo from kanban).
+        match handle.ctx.entity_context().await {
+            Ok(ectx) => {
+                ctx.set_extension(Arc::clone(&ectx));
+                Some(ectx)
+            }
+            Err(_) => None,
+        }
+    } else {
+        None
+    };
 
     // Check availability
     if !cmd_impl.available(&ctx) {
@@ -929,9 +941,27 @@ pub(crate) async fn dispatch_command_internal(
         return Err(format!("Command not available: {}", cmd));
     }
 
+    // Wrap undoable commands in a transaction so all entity writes within a
+    // single command share one transaction ID for grouped undo/redo.
+    if undoable {
+        if let Some(ref ectx) = entity_ctx {
+            let tx_id = EntityContext::generate_transaction_id();
+            ectx.set_transaction(tx_id).await;
+        }
+    }
+
     // Execute
     tracing::debug!(cmd = %cmd, "executing command");
-    let result = cmd_impl.execute(&ctx).await.map_err(|e| {
+    let result = cmd_impl.execute(&ctx).await;
+
+    // Clear transaction after execution regardless of success/failure
+    if undoable {
+        if let Some(ref ectx) = entity_ctx {
+            ectx.clear_transaction().await;
+        }
+    }
+
+    let result = result.map_err(|e| {
         tracing::error!(cmd = %cmd, error = %e, "command execution failed");
         format!("Command failed: {}", e)
     })?;
@@ -1224,7 +1254,7 @@ async fn flush_and_emit_for_handle(app: &AppHandle, handle: &BoardHandle) {
         }
 
         // Cascade: recompute aggregate fields that depend on changed entity types
-        let cascade = cascade_aggregate_events(ectx, &events).await;
+        let cascade = cascade_aggregate_events(&ectx, &events).await;
         events.extend(cascade);
     }
     {

@@ -56,7 +56,7 @@ impl Execute<KanbanContext, KanbanError> for AddTag {
             let ectx = ctx.entity_context().await?;
 
             // If a tag with this name already exists, return it (idempotent)
-            if let Some(existing) = find_tag_entity_by_name(ectx, &self.name).await {
+            if let Some(existing) = find_tag_entity_by_name(&ectx, &self.name).await {
                 return Ok(tag_entity_to_json(&existing));
             }
 

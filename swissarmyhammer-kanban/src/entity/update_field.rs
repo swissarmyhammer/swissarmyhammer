@@ -138,7 +138,7 @@ impl Execute<KanbanContext, KanbanError> for UpdateEntityField {
                     ectx.write(&entity).await?;
 
                     // Auto-create tag entities for any new tags in the body
-                    auto_create_tags(ectx, &entity, entity_def).await?;
+                    auto_create_tags(&ectx, &entity, entity_def).await?;
 
                     return Ok(entity.to_json());
                 }
@@ -159,7 +159,7 @@ impl Execute<KanbanContext, KanbanError> for UpdateEntityField {
             ectx.write(&entity).await?;
 
             // Auto-create tag entities when a body field is updated directly
-            auto_create_tags(ectx, &entity, entity_def).await?;
+            auto_create_tags(&ectx, &entity, entity_def).await?;
 
             Ok(entity.to_json())
         }
