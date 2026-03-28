@@ -53,6 +53,14 @@ function KeybindingHandler({ mode }: { mode: KeymapMode }) {
 
   /** Execute a command, preferring the focused scope when available. */
   const executeCommand = useCallback(async (id: string): Promise<boolean> => {
+    // When a CM6 editor has focus, let it handle its own undo/redo
+    if (
+      (id === "app.undo" || id === "app.redo") &&
+      document.activeElement?.closest(".cm-editor")
+    ) {
+      return false;
+    }
+
     const scope = focusedScopeRef.current;
     if (scope) {
       const cmd = resolveCommand(scope, id);
@@ -114,11 +122,11 @@ function KeybindingHandler({ mode }: { mode: KeymapMode }) {
  * palette around the application content.
  *
  * Must be rendered inside UIStateProvider, AppModeProvider, and
- * UndoProvider (it reads from all three). It provides a
+ * UndoStackProvider (it reads from all three). It provides a
  * CommandScopeProvider to its children.
  *
  * Provider nesting order:
- *   UIStateProvider > AppModeProvider > UndoProvider > AppShell > children
+ *   UIStateProvider > AppModeProvider > UndoStackProvider > AppShell > children
  */
 interface AppShellProps {
   children: ReactNode;
