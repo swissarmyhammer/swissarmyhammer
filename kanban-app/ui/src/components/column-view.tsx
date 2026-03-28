@@ -7,7 +7,7 @@ import { Field } from "@/components/fields/field";
 import { DraggableTaskCard } from "@/components/sortable-task-card";
 import { FocusScope } from "@/components/focus-scope";
 import { Badge } from "@/components/ui/badge";
-import { moniker } from "@/lib/moniker";
+import { moniker, fieldMoniker } from "@/lib/moniker";
 import { useEntityCommands } from "@/lib/entity-commands";
 import { useSchema } from "@/lib/schema-context";
 import { useEntityFocus, type ClaimPredicate } from "@/lib/entity-focus-context";
@@ -94,6 +94,7 @@ export const ColumnView = memo(function ColumnView({
   isLastColumn = false,
 }: ColumnViewProps) {
   const columnMoniker = moniker("column", column.id);
+  const columnNameMoniker = fieldMoniker("column", column.id, "name");
   const { getFieldDef } = useSchema();
   const nameFieldDef = getFieldDef("column", "name");
   const [editingName, setEditingName] = useState(false);
@@ -211,8 +212,8 @@ export const ColumnView = memo(function ColumnView({
     [allBoardTaskMonikers, allBoardHeaderMonikers],
   );
 
-  /** ClaimWhen predicates for the column header FocusScope. */
-  const headerClaimWhen = useMemo<ClaimPredicate[]>(() => {
+  /** ClaimWhen predicates for the column name field FocusScope. */
+  const nameFieldClaimWhen = useMemo<ClaimPredicate[]>(() => {
     const predicates: ClaimPredicate[] = [];
 
     // nav.up: claim when the first card in this column is focused
@@ -224,7 +225,7 @@ export const ColumnView = memo(function ColumnView({
       });
     }
 
-    // nav.left: claim when the header of the column to the right is focused
+    // nav.left: claim when the name field of the column to the right is focused
     if (rightColumnHeaderMoniker) {
       predicates.push({
         command: "nav.left",
@@ -232,7 +233,7 @@ export const ColumnView = memo(function ColumnView({
       });
     }
 
-    // nav.right: claim when the header of the column to the left is focused
+    // nav.right: claim when the name field of the column to the left is focused
     if (leftColumnHeaderMoniker) {
       predicates.push({
         command: "nav.right",
@@ -241,7 +242,7 @@ export const ColumnView = memo(function ColumnView({
     }
 
     // Cross-column nav to an empty column: any card in the adjacent column
-    // should land on this header since there are no cards to target.
+    // should land on this name field since there are no cards to target.
     if (tasks.length === 0) {
       for (const m of rightColumnTaskMonikers) {
         predicates.push({
@@ -257,21 +258,21 @@ export const ColumnView = memo(function ColumnView({
       }
     }
 
-    // nav.first: claim if I'm the first column's header and column is empty
+    // nav.first: claim if I'm the first column's name field and column is empty
     // and any board element is focused (except me).
     if (isFirstColumn && tasks.length === 0) {
       predicates.push({
         command: "nav.first",
-        when: (f) => isBoardElement(f) && f !== columnMoniker,
+        when: (f) => isBoardElement(f) && f !== columnNameMoniker,
       });
     }
 
-    // nav.last: claim if I'm the last column's header and column is empty
+    // nav.last: claim if I'm the last column's name field and column is empty
     // (so there's no card to be the last element).
     if (isLastColumn && tasks.length === 0) {
       predicates.push({
         command: "nav.last",
-        when: (f) => isBoardElement(f) && f !== columnMoniker,
+        when: (f) => isBoardElement(f) && f !== columnNameMoniker,
       });
     }
 
@@ -285,7 +286,7 @@ export const ColumnView = memo(function ColumnView({
     tasks.length,
     isFirstColumn,
     isLastColumn,
-    columnMoniker,
+    columnNameMoniker,
     isBoardElement,
   ]);
 
@@ -296,10 +297,10 @@ export const ColumnView = memo(function ColumnView({
 
       // nav.down: claim when the element above me is focused
       if (i === 0) {
-        // First card claims nav.down when column header is focused
+        // First card claims nav.down when column name field is focused
         predicates.push({
           command: "nav.down",
-          when: (f) => f === columnMoniker,
+          when: (f) => f === columnNameMoniker || f === columnMoniker,
         });
       } else {
         const prev = taskMonikers[i - 1];
@@ -372,6 +373,7 @@ export const ColumnView = memo(function ColumnView({
   }, [
     taskMonikers,
     columnMoniker,
+    columnNameMoniker,
     rightColumnTaskMonikers,
     leftColumnTaskMonikers,
     isFirstColumn,
@@ -411,30 +413,36 @@ export const ColumnView = memo(function ColumnView({
     <FocusScope
       moniker={columnMoniker}
       commands={commands}
-      claimWhen={headerClaimWhen}
       className="flex flex-col min-h-0 min-w-[20em] max-w-[40em] flex-1"
     >
       <div className="flex flex-col min-h-0 min-w-0 flex-1">
         <div
           className="column-header-focus px-3 py-2 flex items-center gap-2 rounded"
-          onClickCapture={() => setFocus(columnMoniker)}
+          onClickCapture={() => setFocus(columnNameMoniker)}
         >
-          {nameFieldDef ? (
-            <Field
-              fieldDef={nameFieldDef}
-              entityType="column"
-              entityId={column.id}
-              mode="compact"
-              editing={editingName}
-              onEdit={() => setEditingName(true)}
-              onDone={() => setEditingName(false)}
-              onCancel={() => setEditingName(false)}
-            />
-          ) : (
-            <span className="text-sm font-semibold text-foreground">
-              {getStr(column, "name")}
-            </span>
-          )}
+          <FocusScope
+            moniker={columnNameMoniker}
+            commands={[]}
+            claimWhen={nameFieldClaimWhen}
+            className="inline"
+          >
+            {nameFieldDef ? (
+              <Field
+                fieldDef={nameFieldDef}
+                entityType="column"
+                entityId={column.id}
+                mode="compact"
+                editing={editingName}
+                onEdit={() => setEditingName(true)}
+                onDone={() => setEditingName(false)}
+                onCancel={() => setEditingName(false)}
+              />
+            ) : (
+              <span className="text-sm font-semibold text-foreground">
+                {getStr(column, "name")}
+              </span>
+            )}
+          </FocusScope>
           <Badge variant="secondary">{tasks.length}</Badge>
           <div className="flex-1" />
           {onAddTask && (

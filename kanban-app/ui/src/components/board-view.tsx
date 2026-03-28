@@ -36,7 +36,7 @@ import { useEntityFocus } from "@/lib/entity-focus-context";
 function defaultTaskTitle(_columnName: string): string {
   return "New task";
 }
-import { moniker } from "@/lib/moniker";
+import { moniker, fieldMoniker } from "@/lib/moniker";
 import { useEntityCommands } from "@/lib/entity-commands";
 import { useDragSession } from "@/lib/drag-session-context";
 import type { BoardData, Entity } from "@/types/kanban";
@@ -164,10 +164,13 @@ export function BoardView({ board, tasks, boardPath }: BoardViewProps) {
     return set;
   }, [columnTaskMonikers]);
 
-  /** All column header monikers. */
+  /** All column header monikers (name field level). */
   const allBoardHeaderMonikers = useMemo(() => {
     const set = new Set<string>();
-    for (const col of columns) set.add(moniker("column", col.id));
+    for (const col of columns) {
+      set.add(moniker("column", col.id));
+      set.add(fieldMoniker("column", col.id, "name"));
+    }
     return set;
   }, [columns]);
 
@@ -527,7 +530,7 @@ export function BoardView({ board, tasks, boardPath }: BoardViewProps) {
                           : []
                       }
                       leftColumnHeaderMoniker={
-                        prevColId ? moniker("column", prevColId) : null
+                        prevColId ? fieldMoniker("column", prevColId, "name") : null
                       }
                       rightColumnTaskMonikers={
                         nextColId
@@ -535,7 +538,7 @@ export function BoardView({ board, tasks, boardPath }: BoardViewProps) {
                           : []
                       }
                       rightColumnHeaderMoniker={
-                        nextColId ? moniker("column", nextColId) : null
+                        nextColId ? fieldMoniker("column", nextColId, "name") : null
                       }
                       allBoardTaskMonikers={allBoardTaskMonikers}
                       allBoardHeaderMonikers={allBoardHeaderMonikers}

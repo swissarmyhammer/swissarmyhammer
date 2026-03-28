@@ -473,7 +473,7 @@ function GridCellScope({
       onClick={onClick}
       onDoubleClick={onDoubleClick}
     >
-      <FocusScope moniker={moniker} commands={[]} claimWhen={claimWhen}>
+      <FocusScope moniker={moniker} commands={[]} claimWhen={claimWhen} showFocusBar={false}>
         {children}
       </FocusScope>
     </TableCell>

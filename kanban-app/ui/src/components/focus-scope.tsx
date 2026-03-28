@@ -37,6 +37,9 @@ type FocusScopeOwnProps = {
    * effect re-runs on every render.
    */
   claimWhen?: ClaimPredicate[];
+  /** When false, suppresses the data-focused attribute (hides the focus bar).
+   *  The scope still participates in focus/commands — only the visual indicator is hidden. */
+  showFocusBar?: boolean;
 };
 
 type FocusScopeProps = FocusScopeOwnProps &
@@ -56,6 +59,7 @@ export function FocusScope({
   commands,
   children,
   claimWhen,
+  showFocusBar = true,
   ...rest
 }: FocusScopeProps) {
   const {
@@ -77,7 +81,7 @@ export function FocusScope({
     return { commands: map, parent, moniker };
   }, [commands, parent, moniker]);
 
-  const isDirectFocus = focusedMoniker === moniker;
+  const isDirectFocus = showFocusBar && focusedMoniker === moniker;
 
   // Register/deregister scope in the EntityFocus registry
   useEffect(() => {
