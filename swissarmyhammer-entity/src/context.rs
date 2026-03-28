@@ -18,6 +18,7 @@ use crate::entity::Entity;
 use crate::error::{EntityError, Result};
 use crate::id_types::{ChangeEntryId, EntityId, TransactionId};
 use crate::io;
+use crate::undo_stack::UndoStack;
 
 /// Root-aware I/O coordinator for dynamic entities.
 ///
@@ -34,6 +35,8 @@ pub struct EntityContext {
     current_transaction: RwLock<Option<TransactionId>>,
     /// Maps transaction ULID to the ordered list of ChangeEntry ULIDs it contains.
     transaction_index: RwLock<HashMap<TransactionId, Vec<ChangeEntryId>>>,
+    /// YAML-persisted undo/redo stack, loaded from `root/undo_stack.yaml`.
+    undo_stack: RwLock<UndoStack>,
 }
 
 impl EntityContext {
@@ -42,14 +45,17 @@ impl EntityContext {
     /// - `root`: the storage root (e.g. `.kanban/`)
     /// - `fields`: the field registry containing EntityDefs
     pub fn new(root: impl Into<PathBuf>, fields: Arc<FieldsContext>) -> Self {
+        let root = root.into();
+        let undo_stack = UndoStack::load(&root.join("undo_stack.yaml"));
         Self {
-            root: root.into(),
+            root,
             fields,
             validation: None,
             compute: None,
             changelog_index: RwLock::new(HashMap::new()),
             current_transaction: RwLock::new(None),
             transaction_index: RwLock::new(HashMap::new()),
+            undo_stack: RwLock::new(undo_stack),
         }
     }
 
@@ -73,6 +79,25 @@ impl EntityContext {
     /// Get the FieldsContext.
     pub fn fields(&self) -> &FieldsContext {
         &self.fields
+    }
+
+    /// Get a read lock on the undo stack.
+    pub async fn undo_stack(&self) -> tokio::sync::RwLockReadGuard<'_, UndoStack> {
+        self.undo_stack.read().await
+    }
+
+    /// Get a write lock on the undo stack.
+    pub async fn undo_stack_mut(&self) -> tokio::sync::RwLockWriteGuard<'_, UndoStack> {
+        self.undo_stack.write().await
+    }
+
+    /// Save the undo stack to disk at `root/undo_stack.yaml`.
+    ///
+    /// Returns an `EntityError` if the write fails.
+    pub async fn save_undo_stack(&self) -> Result<()> {
+        let stack = self.undo_stack.read().await;
+        let path = self.root.join("undo_stack.yaml");
+        Ok(stack.save(&path)?)
     }
 
     /// Generate a new transaction ULID.

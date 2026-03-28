@@ -57,6 +57,12 @@ impl Execute<KanbanContext, KanbanError> for InitBoard {
             // Create directory structure
             ctx.create_directories().await?;
 
+            // Create .gitignore to exclude ephemeral files from version control
+            let gitignore_path = ctx.root().join(".gitignore");
+            if !gitignore_path.exists() {
+                tokio::fs::write(&gitignore_path, "undo_stack.yaml\n").await?;
+            }
+
             // Build board entity
             let ectx = ctx.entity_context().await?;
             let mut board_entity = Entity::new("board", "board");
