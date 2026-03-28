@@ -1,130 +1,194 @@
-//! YAML-persisted undo/redo stack.
+//! Persistent undo/redo stack backed by a YAML file on disk.
 //!
-//! Tracks an ordered list of undo entries with a pointer separating
-//! the "done" side from the "redo" side. The stack is serialized to
-//! a human-readable YAML file on disk so it survives app restarts.
+//! The `UndoStack` tracks changelog entry IDs (or transaction IDs) with a
+//! pointer-based design: entries before the pointer have been done, entries
+//! at or after the pointer are available for redo. When a new entry is pushed,
+//! the redo tail is discarded.
+//!
+//! The stack is serialized to `{root}/undo_stack.yaml` after every mutation
+//! so that `cat .kanban/undo_stack.yaml` always shows the current state.
 
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-/// A single entry in the undo stack.
+use crate::error::Result;
+
+/// A single entry on the undo stack.
 ///
-/// Each entry records the ULID of a changelog transaction, a human-readable
-/// label, and an ISO-8601 timestamp.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// Stores the ID used to invoke undo/redo (a ChangeEntryId or TransactionId)
+/// and a human-readable label describing the operation.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct UndoEntry {
-    /// Transaction ULID that can be undone/redone.
+    /// The changelog entry ID or transaction ID.
     pub id: String,
-    /// Human-readable description of what the transaction did.
+    /// Human-readable label, e.g. "create task 01ABC".
     pub label: String,
-    /// ISO-8601 timestamp of when the transaction occurred.
-    pub timestamp: String,
 }
 
-/// YAML-persisted undo/redo stack.
+/// A bounded, pointer-based undo/redo stack persisted as YAML.
 ///
-/// `entries[0..pointer]` are undoable (most recent at `pointer - 1`).
-/// `entries[pointer..]` are redoable (next redo at `pointer`).
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// `pointer` always points one past the last executed entry:
+/// - `entries[0..pointer)` have been done (and not undone)
+/// - `entries[pointer..len)` are available for redo
+///
+/// When a new entry is pushed, the redo side is discarded.
+/// When the stack exceeds `max_size`, the oldest entries are trimmed.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UndoStack {
-    /// Maximum number of entries to keep. Oldest entries are trimmed on push.
-    pub max_size: usize,
-    /// Index one past the last executed entry.
-    pub pointer: usize,
     /// Ordered list of undo entries.
     pub entries: Vec<UndoEntry>,
+    /// Index one past the last executed entry.
+    pub pointer: usize,
+    /// Maximum number of entries to retain.
+    #[serde(default = "default_max_size")]
+    pub max_size: usize,
+}
+
+fn default_max_size() -> usize {
+    100
 }
 
 impl Default for UndoStack {
     fn default() -> Self {
-        Self {
-            max_size: 100,
-            pointer: 0,
-            entries: Vec::new(),
-        }
+        Self::new()
     }
 }
 
 impl UndoStack {
-    /// Create an empty undo stack with the given capacity.
-    pub fn new(max_size: usize) -> Self {
+    /// Create a new empty UndoStack with the default max size (100).
+    pub fn new() -> Self {
         Self {
+            entries: Vec::new(),
+            pointer: 0,
+            max_size: default_max_size(),
+        }
+    }
+
+    /// Create a new empty UndoStack with a custom max size.
+    pub fn with_max_size(max_size: usize) -> Self {
+        Self {
+            entries: Vec::new(),
+            pointer: 0,
             max_size,
-            ..Default::default()
+        }
+    }
+
+    /// Whether there is at least one entry that can be undone.
+    pub fn can_undo(&self) -> bool {
+        self.pointer > 0
+    }
+
+    /// Whether there is at least one entry that can be redone.
+    pub fn can_redo(&self) -> bool {
+        self.pointer < self.entries.len()
+    }
+
+    /// Return the ID of the entry that would be undone next, if any.
+    pub fn undo_target(&self) -> Option<&str> {
+        if self.can_undo() {
+            Some(&self.entries[self.pointer - 1].id)
+        } else {
+            None
+        }
+    }
+
+    /// Return the ID of the entry that would be redone next, if any.
+    pub fn redo_target(&self) -> Option<&str> {
+        if self.can_redo() {
+            Some(&self.entries[self.pointer].id)
+        } else {
+            None
         }
     }
 
     /// Push a new entry onto the stack.
     ///
-    /// Discards any entries on the redo side (at and after `pointer`),
+    /// Discards any entries on the redo side (at or after the pointer),
     /// appends the new entry, and trims the oldest entries if the stack
     /// exceeds `max_size`.
-    pub fn push(&mut self, entry: UndoEntry) {
+    ///
+    /// **Transaction dedup**: if `id` matches the top entry's ID (i.e. the
+    /// entry at `pointer - 1`), the push is skipped. This prevents multiple
+    /// writes within the same transaction from creating duplicate stack entries.
+    pub fn push(&mut self, id: impl Into<String>, label: impl Into<String>) {
+        let id = id.into();
+
+        // Transaction dedup: skip if same ID is already at top of done side
+        if self.pointer > 0 && self.entries[self.pointer - 1].id == id {
+            return;
+        }
+
         // Discard redo side
         self.entries.truncate(self.pointer);
-        // Append new entry
-        self.entries.push(entry);
-        self.pointer = self.entries.len();
-        // Trim oldest if over capacity
+
+        self.entries.push(UndoEntry {
+            id,
+            label: label.into(),
+        });
+        self.pointer += 1;
+
+        // Trim oldest entries if over capacity
         if self.entries.len() > self.max_size {
             let excess = self.entries.len() - self.max_size;
-            self.entries.drain(..excess);
-            self.pointer = self.entries.len();
+            self.entries.drain(0..excess);
+            self.pointer -= excess;
         }
     }
 
-    /// Returns `true` if there is at least one entry that can be undone.
-    pub fn can_undo(&self) -> bool {
-        self.pointer > 0
-    }
-
-    /// Returns `true` if there is at least one entry that can be redone.
-    pub fn can_redo(&self) -> bool {
-        self.pointer < self.entries.len()
-    }
-
-    /// Returns the entry that would be undone next, without modifying the pointer.
+    /// Record that an undo was performed — move the pointer back by one.
     ///
-    /// This is `entries[pointer - 1]` when `can_undo()` is true.
-    pub fn undo_target(&self) -> Option<&UndoEntry> {
+    /// This should be called after `EntityContext::undo()` succeeds.
+    /// Does nothing if there is nothing to undo.
+    pub fn record_undo(&mut self) {
         if self.can_undo() {
-            Some(&self.entries[self.pointer - 1])
-        } else {
-            None
+            self.pointer -= 1;
         }
     }
 
-    /// Returns the entry that would be redone next, without modifying the pointer.
+    /// Record that a redo was performed — move the pointer forward by one.
     ///
-    /// This is `entries[pointer]` when `can_redo()` is true.
-    pub fn redo_target(&self) -> Option<&UndoEntry> {
+    /// This should be called after `EntityContext::redo()` succeeds.
+    /// Does nothing if there is nothing to redo.
+    pub fn record_redo(&mut self) {
         if self.can_redo() {
-            Some(&self.entries[self.pointer])
-        } else {
-            None
+            self.pointer += 1;
         }
     }
 
-    /// Load an undo stack from a YAML file on disk.
-    ///
-    /// Returns `Default::default()` if the file does not exist or cannot be parsed.
-    pub fn load(path: &Path) -> Self {
-        match std::fs::read_to_string(path) {
-            Ok(contents) => {
-                serde_yaml_ng::from_str(&contents).unwrap_or_default()
-            }
-            Err(_) => Self::default(),
-        }
+    /// Clear all entries and reset the pointer.
+    pub fn clear(&mut self) {
+        self.entries.clear();
+        self.pointer = 0;
     }
 
-    /// Write the undo stack to a YAML file on disk.
+    /// Load an UndoStack from a YAML file.
     ///
-    /// Returns an `io::Error` if the write fails.
-    pub fn save(&self, path: &Path) -> std::io::Result<()> {
-        let yaml = serde_yaml_ng::to_string(self)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
-        std::fs::write(path, yaml)
+    /// Returns a default (empty) stack if the file does not exist.
+    pub fn load(path: &Path) -> Result<Self> {
+        if !path.exists() {
+            return Ok(Self::new());
+        }
+        let contents = std::fs::read_to_string(path)?;
+        if contents.trim().is_empty() {
+            return Ok(Self::new());
+        }
+        let stack: Self = serde_yaml_ng::from_str(&contents)?;
+        Ok(stack)
+    }
+
+    /// Save the UndoStack to a YAML file.
+    ///
+    /// Creates parent directories if needed. Uses atomic write (write to
+    /// temp location + rename would be ideal, but for simplicity we write
+    /// directly — the file is small and non-critical).
+    pub fn save(&self, path: &Path) -> Result<()> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let yaml = serde_yaml_ng::to_string(self)?;
+        std::fs::write(path, yaml)?;
+        Ok(())
     }
 }
 
@@ -133,137 +197,112 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
-    /// Helper to create a test entry with a given id.
-    fn entry(id: &str, label: &str) -> UndoEntry {
-        UndoEntry {
-            id: id.to_string(),
-            label: label.to_string(),
-            timestamp: "2026-03-28T12:00:00Z".to_string(),
-        }
-    }
-
     #[test]
-    fn empty_stack_cannot_undo_or_redo() {
-        let stack = UndoStack::default();
+    fn new_stack_is_empty() {
+        let stack = UndoStack::new();
         assert!(!stack.can_undo());
         assert!(!stack.can_redo());
-        assert!(stack.undo_target().is_none());
-        assert!(stack.redo_target().is_none());
+        assert_eq!(stack.undo_target(), None);
+        assert_eq!(stack.redo_target(), None);
     }
 
     #[test]
-    fn push_and_undo_target() {
-        let mut stack = UndoStack::default();
-        stack.push(entry("A", "Create task"));
-        stack.push(entry("B", "Update task"));
+    fn push_and_undo_redo() {
+        let mut stack = UndoStack::new();
+        stack.push("id1", "create task t1");
+        stack.push("id2", "update task t1");
 
         assert!(stack.can_undo());
         assert!(!stack.can_redo());
-        assert_eq!(stack.undo_target().unwrap().id, "B");
-        assert_eq!(stack.pointer, 2);
-    }
+        assert_eq!(stack.undo_target(), Some("id2"));
 
-    #[test]
-    fn redo_target_after_simulated_undo() {
-        let mut stack = UndoStack::default();
-        stack.push(entry("A", "Create task"));
-        stack.push(entry("B", "Update task"));
-
-        // Simulate undo by moving pointer back
-        stack.pointer -= 1;
-
+        stack.record_undo();
         assert!(stack.can_undo());
         assert!(stack.can_redo());
-        assert_eq!(stack.undo_target().unwrap().id, "A");
-        assert_eq!(stack.redo_target().unwrap().id, "B");
+        assert_eq!(stack.undo_target(), Some("id1"));
+        assert_eq!(stack.redo_target(), Some("id2"));
+
+        stack.record_redo();
+        assert!(stack.can_undo());
+        assert!(!stack.can_redo());
+        assert_eq!(stack.undo_target(), Some("id2"));
     }
 
     #[test]
     fn push_discards_redo_side() {
-        let mut stack = UndoStack::default();
-        stack.push(entry("A", "Create"));
-        stack.push(entry("B", "Update"));
-        stack.push(entry("C", "Delete"));
+        let mut stack = UndoStack::new();
+        stack.push("id1", "op1");
+        stack.push("id2", "op2");
+        stack.record_undo(); // pointer at 1, redo has id2
 
-        // Simulate two undos
-        stack.pointer = 1;
-        assert_eq!(stack.redo_target().unwrap().id, "B");
-
-        // Push a new entry — B and C should be discarded
-        stack.push(entry("D", "New action"));
-
-        assert_eq!(stack.entries.len(), 2);
-        assert_eq!(stack.entries[0].id, "A");
-        assert_eq!(stack.entries[1].id, "D");
-        assert_eq!(stack.pointer, 2);
+        stack.push("id3", "op3"); // should discard id2
         assert!(!stack.can_redo());
+        assert_eq!(stack.entries.len(), 2); // id1, id3
+        assert_eq!(stack.entries[1].id, "id3");
     }
 
     #[test]
-    fn capacity_trimming() {
-        let mut stack = UndoStack::new(3);
+    fn transaction_dedup() {
+        let mut stack = UndoStack::new();
+        stack.push("tx1", "create task t1");
+        stack.push("tx1", "update task t1 (same tx)");
 
-        stack.push(entry("A", "1"));
-        stack.push(entry("B", "2"));
-        stack.push(entry("C", "3"));
-        assert_eq!(stack.entries.len(), 3);
+        assert_eq!(stack.entries.len(), 1);
+        assert_eq!(stack.pointer, 1);
+    }
 
-        // Pushing a 4th should trim the oldest
-        stack.push(entry("D", "4"));
+    #[test]
+    fn max_size_trims_oldest() {
+        let mut stack = UndoStack::with_max_size(3);
+        stack.push("id1", "op1");
+        stack.push("id2", "op2");
+        stack.push("id3", "op3");
+        stack.push("id4", "op4");
+
         assert_eq!(stack.entries.len(), 3);
-        assert_eq!(stack.entries[0].id, "B");
-        assert_eq!(stack.entries[2].id, "D");
+        assert_eq!(stack.entries[0].id, "id2");
         assert_eq!(stack.pointer, 3);
     }
 
     #[test]
-    fn yaml_round_trip() {
-        let mut stack = UndoStack::new(50);
-        stack.push(entry("01ABC", "Update task title"));
-        stack.push(entry("01DEF", "Move task to Done"));
-        // Simulate one undo
-        stack.pointer = 1;
+    fn round_trip_yaml() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("undo_stack.yaml");
 
-        let yaml = serde_yaml_ng::to_string(&stack).unwrap();
-        let deserialized: UndoStack = serde_yaml_ng::from_str(&yaml).unwrap();
+        let mut stack = UndoStack::new();
+        stack.push("id1", "create task t1");
+        stack.push("id2", "update task t1");
+        stack.record_undo();
+        stack.save(&path).unwrap();
 
-        assert_eq!(stack, deserialized);
-        assert_eq!(deserialized.pointer, 1);
-        assert_eq!(deserialized.entries.len(), 2);
-        assert_eq!(deserialized.max_size, 50);
+        let loaded = UndoStack::load(&path).unwrap();
+        assert_eq!(loaded.entries.len(), 2);
+        assert_eq!(loaded.pointer, 1);
+        assert_eq!(loaded.entries[0].id, "id1");
+        assert_eq!(loaded.entries[1].id, "id2");
     }
 
     #[test]
     fn load_missing_file_returns_default() {
-        let tmp = TempDir::new().unwrap();
-        let path = tmp.path().join("nonexistent.yaml");
-
-        let stack = UndoStack::load(&path);
-        assert_eq!(stack, UndoStack::default());
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("nonexistent.yaml");
+        let stack = UndoStack::load(&path).unwrap();
+        assert_eq!(stack.entries.len(), 0);
+        assert_eq!(stack.pointer, 0);
     }
 
     #[test]
-    fn save_and_load_round_trip() {
-        let tmp = TempDir::new().unwrap();
-        let path = tmp.path().join("undo_stack.yaml");
-
-        let mut stack = UndoStack::new(100);
-        stack.push(entry("01ABC", "Update task title"));
-        stack.push(entry("01DEF", "Move task to Done"));
-
-        stack.save(&path).unwrap();
-        let loaded = UndoStack::load(&path);
-
-        assert_eq!(stack, loaded);
+    fn record_undo_noop_when_empty() {
+        let mut stack = UndoStack::new();
+        stack.record_undo(); // should not panic
+        assert_eq!(stack.pointer, 0);
     }
 
     #[test]
-    fn load_corrupt_file_returns_default() {
-        let tmp = TempDir::new().unwrap();
-        let path = tmp.path().join("undo_stack.yaml");
-        std::fs::write(&path, "not: valid: undo: stack: [[[").unwrap();
-
-        let stack = UndoStack::load(&path);
-        assert_eq!(stack, UndoStack::default());
+    fn record_redo_noop_when_nothing_to_redo() {
+        let mut stack = UndoStack::new();
+        stack.push("id1", "op1");
+        stack.record_redo(); // should not panic, already at end
+        assert_eq!(stack.pointer, 1);
     }
 }

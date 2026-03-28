@@ -85,6 +85,10 @@ pub enum EntityError {
     #[error("cannot restore from trash: data file not found at {path}")]
     RestoreFromTrashFailed { path: PathBuf },
 
+    /// YAML serialization/deserialization error (without file path context).
+    #[error("YAML error: {0}")]
+    YamlSerde(#[from] serde_yaml_ng::Error),
+
     /// IO error.
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),

@@ -1715,3 +1715,137 @@ async fn test_redo_unarchive() {
     let restored = ctx.read("tag", "bug").await.unwrap();
     assert_eq!(restored.get_str("tag_name"), Some("Bug"));
 }
+
+// =========================================================================
+// Undo stack persistence tests
+// =========================================================================
+
+/// After a write, the undo_stack.yaml file exists and contains the entry.
+#[tokio::test]
+async fn undo_stack_yaml_written_after_write() {
+    let dir = TempDir::new().unwrap();
+    let ctx = EntityContext::new(dir.path(), test_fields_context());
+
+    let mut tag = Entity::new("tag", "t1");
+    tag.set("tag_name", json!("Hello"));
+    let create_ulid = ctx.write(&tag).await.unwrap().unwrap();
+
+    // The YAML file should exist on disk
+    let yaml_path = dir.path().join("undo_stack.yaml");
+    assert!(
+        yaml_path.exists(),
+        "undo_stack.yaml should exist after write"
+    );
+
+    let contents = std::fs::read_to_string(&yaml_path).unwrap();
+    assert!(
+        contents.contains(&create_ulid.to_string()),
+        "undo_stack.yaml should contain the create entry ID"
+    );
+
+    // Stack should report can_undo and have pointer == 1
+    let stack = ctx.undo_stack().await;
+    assert!(stack.can_undo());
+    assert!(!stack.can_redo());
+    assert_eq!(stack.entries.len(), 1);
+    assert_eq!(stack.pointer, 1);
+    assert_eq!(stack.entries[0].label, "create tag t1");
+}
+
+/// After undo, the YAML file reflects the decremented pointer.
+#[tokio::test]
+async fn undo_stack_yaml_updated_after_undo() {
+    let dir = TempDir::new().unwrap();
+    let ctx = EntityContext::new(dir.path(), test_fields_context());
+
+    let mut tag = Entity::new("tag", "t1");
+    tag.set("tag_name", json!("Original"));
+    ctx.write(&tag).await.unwrap();
+
+    tag.set("tag_name", json!("Modified"));
+    let update_ulid = ctx.write(&tag).await.unwrap().unwrap();
+
+    // Undo the update
+    ctx.undo(&update_ulid).await.unwrap();
+
+    let yaml_path = dir.path().join("undo_stack.yaml");
+    let loaded = swissarmyhammer_entity::UndoStack::load(&yaml_path).unwrap();
+    assert_eq!(loaded.entries.len(), 2);
+    assert_eq!(
+        loaded.pointer, 1,
+        "pointer should be decremented after undo"
+    );
+    assert!(loaded.can_undo(), "should still be able to undo the create");
+    assert!(loaded.can_redo(), "should be able to redo the update");
+}
+
+/// After redo, the YAML file reflects the incremented pointer.
+#[tokio::test]
+async fn undo_stack_yaml_updated_after_redo() {
+    let dir = TempDir::new().unwrap();
+    let ctx = EntityContext::new(dir.path(), test_fields_context());
+
+    let mut tag = Entity::new("tag", "t1");
+    tag.set("tag_name", json!("Original"));
+    ctx.write(&tag).await.unwrap();
+
+    tag.set("tag_name", json!("Modified"));
+    let update_ulid = ctx.write(&tag).await.unwrap().unwrap();
+
+    ctx.undo(&update_ulid).await.unwrap();
+    ctx.redo(&update_ulid).await.unwrap();
+
+    let yaml_path = dir.path().join("undo_stack.yaml");
+    let loaded = swissarmyhammer_entity::UndoStack::load(&yaml_path).unwrap();
+    assert_eq!(loaded.entries.len(), 2);
+    assert_eq!(
+        loaded.pointer, 2,
+        "pointer should be back at end after redo"
+    );
+    assert!(!loaded.can_redo());
+}
+
+/// Delete pushes onto the undo stack with "delete" label.
+#[tokio::test]
+async fn undo_stack_records_delete() {
+    let dir = TempDir::new().unwrap();
+    let ctx = EntityContext::new(dir.path(), test_fields_context());
+
+    let mut tag = Entity::new("tag", "t1");
+    tag.set("tag_name", json!("Doomed"));
+    ctx.write(&tag).await.unwrap();
+
+    ctx.delete("tag", "t1").await.unwrap();
+
+    let stack = ctx.undo_stack().await;
+    assert_eq!(stack.entries.len(), 2);
+    assert_eq!(stack.entries[1].label, "delete tag t1");
+}
+
+/// Multiple writes in the same transaction produce only one stack entry.
+#[tokio::test]
+async fn undo_stack_dedup_same_transaction() {
+    let dir = TempDir::new().unwrap();
+    let ctx = EntityContext::new(dir.path(), test_fields_context());
+
+    let tx_id = EntityContext::generate_transaction_id();
+    ctx.set_transaction(tx_id.clone()).await;
+
+    let mut tag1 = Entity::new("tag", "t1");
+    tag1.set("tag_name", json!("One"));
+    ctx.write(&tag1).await.unwrap();
+
+    let mut tag2 = Entity::new("tag", "t2");
+    tag2.set("tag_name", json!("Two"));
+    ctx.write(&tag2).await.unwrap();
+
+    ctx.clear_transaction().await;
+
+    let stack = ctx.undo_stack().await;
+    assert_eq!(
+        stack.entries.len(),
+        1,
+        "same transaction should produce only one undo stack entry"
+    );
+    assert!(stack.entries[0].id == tx_id.to_string());
+}

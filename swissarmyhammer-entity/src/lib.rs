@@ -36,7 +36,7 @@ pub use io::{
     entity_extension, entity_file_path, read_entity, read_entity_dir, restore_entity_files,
     trash_entity_files, write_entity,
 };
-pub use undo_stack::{UndoEntry, UndoStack};
+pub use undo_stack::UndoStack;
 pub use watcher::EntityWatcher;
 
 /// Test utilities shared between unit tests and integration tests.

@@ -35,7 +35,7 @@ pub struct EntityContext {
     current_transaction: RwLock<Option<TransactionId>>,
     /// Maps transaction ULID to the ordered list of ChangeEntry ULIDs it contains.
     transaction_index: RwLock<HashMap<TransactionId, Vec<ChangeEntryId>>>,
-    /// YAML-persisted undo/redo stack, loaded from `root/undo_stack.yaml`.
+    /// Persistent undo/redo stack tracking changelog entry IDs.
     undo_stack: RwLock<UndoStack>,
 }
 
@@ -46,7 +46,8 @@ impl EntityContext {
     /// - `fields`: the field registry containing EntityDefs
     pub fn new(root: impl Into<PathBuf>, fields: Arc<FieldsContext>) -> Self {
         let root = root.into();
-        let undo_stack = UndoStack::load(&root.join("undo_stack.yaml"));
+        let undo_stack_path = root.join("undo_stack.yaml");
+        let undo_stack = UndoStack::load(&undo_stack_path).unwrap_or_default();
         Self {
             root,
             fields,
@@ -81,25 +82,6 @@ impl EntityContext {
         &self.fields
     }
 
-    /// Get a read lock on the undo stack.
-    pub async fn undo_stack(&self) -> tokio::sync::RwLockReadGuard<'_, UndoStack> {
-        self.undo_stack.read().await
-    }
-
-    /// Get a write lock on the undo stack.
-    pub async fn undo_stack_mut(&self) -> tokio::sync::RwLockWriteGuard<'_, UndoStack> {
-        self.undo_stack.write().await
-    }
-
-    /// Save the undo stack to disk at `root/undo_stack.yaml`.
-    ///
-    /// Returns an `EntityError` if the write fails.
-    pub async fn save_undo_stack(&self) -> Result<()> {
-        let stack = self.undo_stack.read().await;
-        let path = self.root.join("undo_stack.yaml");
-        Ok(stack.save(&path)?)
-    }
-
     /// Generate a new transaction ULID.
     ///
     /// This is a static helper — it does not set the transaction on the context.
@@ -122,6 +104,50 @@ impl EntityContext {
     /// Subsequent `write()` and `delete()` calls will not stamp a transaction ID.
     pub async fn clear_transaction(&self) {
         *self.current_transaction.write().await = None;
+    }
+
+    /// Get the path to the undo stack YAML file.
+    pub fn undo_stack_path(&self) -> PathBuf {
+        self.root.join("undo_stack.yaml")
+    }
+
+    /// Get a read lock on the undo stack.
+    pub async fn undo_stack(&self) -> tokio::sync::RwLockReadGuard<'_, UndoStack> {
+        self.undo_stack.read().await
+    }
+
+    /// Get a write lock on the undo stack.
+    pub async fn undo_stack_mut(&self) -> tokio::sync::RwLockWriteGuard<'_, UndoStack> {
+        self.undo_stack.write().await
+    }
+
+    /// Save the current undo stack to disk.
+    pub fn save_undo_stack(&self, stack: &UndoStack) -> Result<()> {
+        stack.save(&self.undo_stack_path())
+    }
+
+    /// Push an entry onto the undo stack and save to disk.
+    ///
+    /// Uses the transaction ID as the stack entry ID if a transaction is active,
+    /// otherwise uses the changelog entry ID. The label format is
+    /// `"{op} {entity_type} {entity_id}"`.
+    async fn push_undo_stack(
+        &self,
+        entry_id: &ChangeEntryId,
+        op: &str,
+        entity_type: &str,
+        entity_id: &str,
+    ) -> Result<()> {
+        let tx_id = self.current_transaction.read().await.clone();
+        let stack_id = match &tx_id {
+            Some(tx) => tx.to_string(),
+            None => entry_id.to_string(),
+        };
+        let label = format!("{} {} {}", op, entity_type, entity_id);
+
+        let mut stack = self.undo_stack.write().await;
+        stack.push(stack_id, label);
+        self.save_undo_stack(&stack)
     }
 
     /// Look up the EntityDef for an entity type.
@@ -262,7 +288,7 @@ impl EntityContext {
             self.changelog_index
                 .write()
                 .await
-                .insert(ulid.clone(), (entity_type, entity_id));
+                .insert(ulid.clone(), (entity_type.clone(), entity_id.clone()));
 
             // Register in transaction index if applicable
             if let Some(ref tx) = tx_id {
@@ -273,6 +299,10 @@ impl EntityContext {
                     .or_default()
                     .push(ulid.clone());
             }
+
+            // Push onto undo stack and save to disk
+            self.push_undo_stack(&ulid, op, &entity_type, &entity_id)
+                .await?;
 
             return Ok(Some(ulid));
         }
@@ -346,6 +376,10 @@ impl EntityContext {
                         .push(ulid.clone());
                 }
 
+                // Push onto undo stack and save to disk
+                self.push_undo_stack(&ulid, "delete", entity_type, id)
+                    .await?;
+
                 result_ulid = Some(ulid);
             }
         }
@@ -376,16 +410,30 @@ impl EntityContext {
         //    which needs write access to changelog_index.
         let single_lookup = self.changelog_index.read().await.get(ulid).cloned();
         if let Some((entity_type, entity_id)) = single_lookup {
-            return self
+            let result = self
                 .undo_single(ulid, entity_type.as_str(), entity_id.as_str())
-                .await;
+                .await?;
+
+            // Record undo on the stack and save to disk
+            let mut stack = self.undo_stack.write().await;
+            stack.record_undo();
+            self.save_undo_stack(&stack)?;
+
+            return Ok(result);
         }
 
         // 2. Check if it's a transaction (group of entries).
         //    Same pattern: clone and drop the read guard before calling undo_transaction.
         let tx_lookup = self.transaction_index.read().await.get(ulid).cloned();
         if let Some(entry_ulids) = tx_lookup {
-            return self.undo_transaction(ulid, &entry_ulids).await;
+            let result = self.undo_transaction(ulid, &entry_ulids).await?;
+
+            // Record undo on the stack and save to disk
+            let mut stack = self.undo_stack.write().await;
+            stack.record_undo();
+            self.save_undo_stack(&stack)?;
+
+            return Ok(result);
         }
 
         // 3. Not found in either index
@@ -852,16 +900,30 @@ impl EntityContext {
         //    which needs write access to changelog_index.
         let single_lookup = self.changelog_index.read().await.get(ulid).cloned();
         if let Some((entity_type, entity_id)) = single_lookup {
-            return self
+            let result = self
                 .redo_single(ulid, entity_type.as_str(), entity_id.as_str())
-                .await;
+                .await?;
+
+            // Record redo on the stack and save to disk
+            let mut stack = self.undo_stack.write().await;
+            stack.record_redo();
+            self.save_undo_stack(&stack)?;
+
+            return Ok(result);
         }
 
         // 2. Check if it's a transaction (group of entries).
         //    Same pattern: clone and drop the read guard before calling redo_transaction.
         let tx_lookup = self.transaction_index.read().await.get(ulid).cloned();
         if let Some(entry_ulids) = tx_lookup {
-            return self.redo_transaction(ulid, &entry_ulids).await;
+            let result = self.redo_transaction(ulid, &entry_ulids).await?;
+
+            // Record redo on the stack and save to disk
+            let mut stack = self.undo_stack.write().await;
+            stack.record_redo();
+            self.save_undo_stack(&stack)?;
+
+            return Ok(result);
         }
 
         // 3. Not found in either index
@@ -1231,6 +1293,10 @@ impl EntityContext {
                         .push(ulid.clone());
                 }
 
+                // Push onto undo stack and save to disk
+                self.push_undo_stack(&ulid, "archive", entity_type, id)
+                    .await?;
+
                 result_ulid = Some(ulid);
             }
         }
@@ -1303,6 +1369,10 @@ impl EntityContext {
                 .or_default()
                 .push(ulid.clone());
         }
+
+        // Push onto undo stack and save to disk
+        self.push_undo_stack(&ulid, "unarchive", entity_type, id)
+            .await?;
 
         Ok(Some(ulid))
     }
