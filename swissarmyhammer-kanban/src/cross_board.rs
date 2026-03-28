@@ -31,6 +31,7 @@ use serde_json::{json, Value};
 /// # Notes
 /// Tags that do not exist on the target board are stripped from the transferred task.
 /// The caller is responsible for flushing/emitting entity-change events for both boards.
+#[allow(clippy::too_many_arguments)]
 pub async fn transfer_task(
     source_ctx: &KanbanContext,
     target_ctx: &KanbanContext,

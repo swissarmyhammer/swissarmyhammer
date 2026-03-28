@@ -1,0 +1,8 @@
+---
+assignees:
+- claude-code
+position_column: todo
+position_ordinal: '8680'
+title: BoardSelector board switching uses callback prop (onSelect) instead of command dispatch
+---
+**File:** `kanban-app/ui/src/components/board-selector.tsx`, line 91 and callers\n\n**Anti-pattern:** BoardSelector receives an `onSelect: (path: string) => void` callback prop and uses it with `<Select onValueChange={onSelect}>`. The actual handler in App.tsx (`handleSwitchBoard`, line 501-516) directly calls `invoke(\"dispatch_command\", { cmd: \"file.switchBoard\" })` then `refresh()`.\n\nThis callback-prop-threading pattern means:\n- NavBar receives `onSwitchBoard` from App, passes it to BoardSelector as `onSelect`\n- QuickCapture also has its own `setSelectedPath` local state handler\n- AppShell receives `onSwitchBoard` and uses it to build `board.switch.N` commands\n\n**Correct pattern:** Board switching should be a command (`board.switch` or `file.switchBoard`) dispatched through the scope chain. AppShell already creates `board.switch.N` commands for each open board, but BoardSelector does not use them.\n\n**Severity:** Warning. The callback threading works but creates tight coupling between App.tsx, NavBar, and BoardSelector. The command palette already has `board.switch.N` commands that go through dispatch -- the Select dropdown should use the same path.\n\n**Scope chain impact:** Board switches from the dropdown are not logged as command dispatches, while switches from the command palette are. #review-finding

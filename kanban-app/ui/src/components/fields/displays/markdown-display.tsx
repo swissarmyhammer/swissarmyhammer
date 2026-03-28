@@ -21,7 +21,7 @@ function toggleCheckbox(source: string, index: number): string | null {
   });
 }
 
-interface MarkdownDisplayProps extends DisplayProps {
+interface MarkdownDisplayProps extends Omit<DisplayProps, "onCommit"> {
   onCommit?: (value: string) => void;
 }
 

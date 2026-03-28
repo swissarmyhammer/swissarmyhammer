@@ -3,6 +3,7 @@ import {
   useContext,
   useState,
   useCallback,
+  useEffect,
   useRef,
   useMemo,
   type ReactNode,
@@ -244,4 +245,41 @@ export function useIsFocused(moniker: string): boolean {
     current = current.parent;
   }
   return false;
+}
+
+/**
+ * Saves the currently focused moniker on mount and restores it on unmount,
+ * but only if the saved moniker still has a registered scope. If the
+ * previously focused entity was deleted while this component was mounted,
+ * focus is cleared to null instead of restoring a stale moniker.
+ *
+ * Use this in inspector panels that temporarily steal focus from the board.
+ */
+export function useRestoreFocus(): void {
+  const { focusedMoniker, setFocus, getScope } = useEntityFocus();
+
+  // Capture the focused moniker at mount time only.
+  const prevFocusRef = useRef<string | null>(focusedMoniker);
+  const mountedRef = useRef(false);
+  if (!mountedRef.current) {
+    prevFocusRef.current = focusedMoniker;
+    mountedRef.current = true;
+  }
+
+  // On unmount, restore focus — but only if the saved moniker still exists
+  // in the scope registry. If it was removed (e.g. entity deleted), clear
+  // focus to null to avoid pointing at a nonexistent entity.
+  useEffect(() => {
+    return () => {
+      const saved = prevFocusRef.current;
+      if (saved === null) {
+        setFocus(null);
+      } else if (getScope(saved) !== null) {
+        setFocus(saved);
+      } else {
+        setFocus(null);
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- cleanup-only effect, must not re-run
+  }, []);
 }
