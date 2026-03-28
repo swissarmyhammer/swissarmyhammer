@@ -3,7 +3,7 @@ name: lsp
 description: Diagnose and install missing LSP servers for your project. Use when the user says "lsp", "language servers", "check lsp", or wants to ensure code intelligence is fully working.
 metadata:
   author: "swissarmyhammer"
-  version: "0.10.1"
+  version: "0.11.0"
 ---
 
 # LSP

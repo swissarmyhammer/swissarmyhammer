@@ -13,15 +13,7 @@ To discover project types, build commands, and language-specific guidelines for 
 {"op": "detect projects"}
 ```
 
-This will scan the directory tree and return:
-- All detected project types (Rust, Node.js, Python, Go, Java, C#, CMake, Makefile, Flutter, PHP)
-- Project locations as relative paths
-- Workspace/monorepo membership
-- Language-specific guidelines for testing, building, formatting, and linting
-
 **Call this early in your session** to understand the project structure before making changes. The guidelines returned are authoritative — follow them for test commands, build commands, and formatting.
-
-** Fix the root cause, not the symptoms **
 
 ## Code Quality
 
@@ -233,7 +225,7 @@ kanban op: "next task"  -- get next ready task
 
 ## Test Driven Development
 
-Write tests first, then implementation. This ensures code is testable and requirements are clear.
+Write tests first, then implementation. TDD, RED, GREEN, REFACTOR.
 
 ### TDD Cycle
 
