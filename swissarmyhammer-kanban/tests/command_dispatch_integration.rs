@@ -1005,11 +1005,7 @@ async fn task_delete_removes_task() {
 
     // Dispatch task.delete through the command harness
     let delete_result = engine
-        .dispatch_simple(
-            "task.delete",
-            &[&format!("task:{}", task_id)],
-            None,
-        )
+        .dispatch_simple("task.delete", &[&format!("task:{}", task_id)], None)
         .await
         .expect("task.delete should succeed");
 
@@ -1072,12 +1068,7 @@ async fn task_move_with_swimlane_arg() {
     args.insert("swimlane".to_string(), json!("urgent"));
 
     let move_result = engine
-        .dispatch(
-            "task.move",
-            &[&format!("task:{}", task_id)],
-            None,
-            args,
-        )
+        .dispatch("task.move", &[&format!("task:{}", task_id)], None, args)
         .await
         .expect("task.move with swimlane should succeed");
 

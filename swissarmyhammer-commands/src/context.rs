@@ -282,7 +282,9 @@ mod tests {
     #[test]
     fn set_and_retrieve_extension() {
         let mut ctx = test_ctx(&[]);
-        let svc = Arc::new(FakeService { name: "hello".into() });
+        let svc = Arc::new(FakeService {
+            name: "hello".into(),
+        });
         ctx.set_extension(svc);
 
         let retrieved = ctx.extension::<FakeService>().expect("should be present");
@@ -318,7 +320,9 @@ mod tests {
         ctx.set_extension(Arc::new(AnotherService { value: 42 }));
 
         let a = ctx.extension::<FakeService>().expect("FakeService present");
-        let b = ctx.extension::<AnotherService>().expect("AnotherService present");
+        let b = ctx
+            .extension::<AnotherService>()
+            .expect("AnotherService present");
         assert_eq!(a.name, "svc");
         assert_eq!(b.value, 42);
     }
@@ -326,8 +330,12 @@ mod tests {
     #[test]
     fn overwriting_extension_replaces_previous() {
         let mut ctx = test_ctx(&[]);
-        ctx.set_extension(Arc::new(FakeService { name: "first".into() }));
-        ctx.set_extension(Arc::new(FakeService { name: "second".into() }));
+        ctx.set_extension(Arc::new(FakeService {
+            name: "first".into(),
+        }));
+        ctx.set_extension(Arc::new(FakeService {
+            name: "second".into(),
+        }));
 
         let retrieved = ctx.extension::<FakeService>().expect("should be present");
         assert_eq!(retrieved.name, "second");
