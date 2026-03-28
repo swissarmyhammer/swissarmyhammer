@@ -11,7 +11,7 @@ import { useGrid } from "@/hooks/use-grid";
 import { useSchema } from "@/lib/schema-context";
 import { useEntityStore } from "@/lib/entity-store-context";
 import { useInspect } from "@/lib/inspect-context";
-import { moniker, fieldMoniker } from "@/lib/moniker";
+import { fieldMoniker } from "@/lib/moniker";
 import { useEntityFocus, type ClaimPredicate } from "@/lib/entity-focus-context";
 import {
   useEntityCommands,
@@ -232,17 +232,8 @@ export function GridView({ view }: GridViewProps) {
     grid.cursor.row >= 0 && grid.cursor.row < entities.length
       ? entities[grid.cursor.row]
       : null;
-  const currentField =
-    grid.cursor.col >= 0 && grid.cursor.col < columns.length
-      ? columns[grid.cursor.col].field
-      : null;
-  const currentEntityMoniker = currentEntity
-    ? moniker(entityType, currentEntity.id)
-    : null;
-  const currentFieldMoniker =
-    currentEntity && currentField
-      ? fieldMoniker(entityType, currentEntity.id, currentField.name)
-      : null;
+  // currentField and monikers removed — not currently needed.
+  // Re-derive from grid.cursor.col + columns if needed in the future.
 
   // Grid-level commands: navigation broadcasts nav commands via claimWhen.
   // Non-navigation commands (edit, visual, delete, new row) remain push-based.
@@ -252,61 +243,61 @@ export function GridView({ view }: GridViewProps) {
         id: "grid.moveUp",
         name: "Move Up",
         keys: { vim: "k", cua: "ArrowUp" },
-        execute: () => broadcastRef.current("nav.up"),
+        execute: () => { broadcastRef.current("nav.up"); },
       },
       {
         id: "grid.moveDown",
         name: "Move Down",
         keys: { vim: "j", cua: "ArrowDown" },
-        execute: () => broadcastRef.current("nav.down"),
+        execute: () => { broadcastRef.current("nav.down"); },
       },
       {
         id: "grid.moveLeft",
         name: "Move Left",
         keys: { vim: "h", cua: "ArrowLeft" },
-        execute: () => broadcastRef.current("nav.left"),
+        execute: () => { broadcastRef.current("nav.left"); },
       },
       {
         id: "grid.moveRight",
         name: "Move Right",
         keys: { vim: "l", cua: "ArrowRight" },
-        execute: () => broadcastRef.current("nav.right"),
+        execute: () => { broadcastRef.current("nav.right"); },
       },
       {
         id: "grid.moveToRowStart",
         name: "Row Start",
         keys: { vim: "0", cua: "Home" },
-        execute: () => broadcastRef.current("nav.rowStart"),
+        execute: () => { broadcastRef.current("nav.rowStart"); },
       },
       {
         id: "grid.moveToRowEnd",
         name: "Row End",
         keys: { vim: "$", cua: "End" },
-        execute: () => broadcastRef.current("nav.rowEnd"),
+        execute: () => { broadcastRef.current("nav.rowEnd"); },
       },
       {
         id: "grid.firstCell",
         name: "First Cell",
         keys: { cua: "Mod+Home" },
-        execute: () => broadcastRef.current("nav.first"),
+        execute: () => { broadcastRef.current("nav.first"); },
       },
       {
         id: "grid.lastCell",
         name: "Last Cell",
         keys: { vim: "Shift+G", cua: "Mod+End" },
-        execute: () => broadcastRef.current("nav.last"),
+        execute: () => { broadcastRef.current("nav.last"); },
       },
       // nav.first/nav.last -- generic commands from sequence table (gg) and
       // global scope. Grid scope registers these so they resolve here.
       {
         id: "nav.first",
         name: "First Cell",
-        execute: () => broadcastRef.current("nav.first"),
+        execute: () => { broadcastRef.current("nav.first"); },
       },
       {
         id: "nav.last",
         name: "Last Cell",
-        execute: () => broadcastRef.current("nav.last"),
+        execute: () => { broadcastRef.current("nav.last"); },
       },
       {
         id: "grid.edit",
@@ -474,8 +465,9 @@ export function GridView({ view }: GridViewProps) {
 
   return (
     <CommandScopeProvider commands={gridCommands}>
+      {/* Entity commands scope — navigation is pull-based via claimWhen */}
       <CommandScopeProvider commands={entityCommands}>
-        {/* No CursorFocusBridge -- navigation is pull-based via claimWhen */}
+        <></>
       </CommandScopeProvider>
       <main className="flex-1 flex flex-col min-h-0">
         <div className="flex items-center px-4 py-1.5 border-b border-border bg-muted/30 text-xs text-muted-foreground gap-3">

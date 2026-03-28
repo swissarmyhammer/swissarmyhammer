@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, fireEvent } from "@testing-library/react";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(() => Promise.resolve("ok")),
@@ -19,16 +19,6 @@ vi.mock("@tauri-apps/plugin-log", () => ({
 import { DropZone } from "./drop-zone";
 import type { DropZoneDescriptor } from "@/lib/drop-zones";
 
-/** Helper to build a minimal DataTransfer-like object for drop events. */
-function makeDropEvent(taskData: string) {
-  return {
-    preventDefault: vi.fn(),
-    dataTransfer: {
-      dropEffect: "",
-      getData: vi.fn(() => taskData),
-    },
-  };
-}
 
 describe("DropZone", () => {
   const baseDescriptor: DropZoneDescriptor = {
@@ -40,7 +30,6 @@ describe("DropZone", () => {
 
   it("renders data-drop-zone attribute", () => {
     render(<DropZone descriptor={baseDescriptor} onDrop={vi.fn()} />);
-    expect(screen.getByTestId ? true : true).toBe(true);
     const zone = document.querySelector("[data-drop-zone]");
     expect(zone).toBeTruthy();
   });

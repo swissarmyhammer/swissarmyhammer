@@ -61,13 +61,26 @@ function makeTask(id: string, columnId: string, ordinal: string): Entity {
 }
 
 const board: BoardData = {
-  id: "board-1",
-  name: "Test Board",
+  board: {
+    id: "board-1",
+    entity_type: "board",
+    fields: { name: "Test Board" },
+  },
   columns: [
     makeColumn("col-todo", "Todo", 0),
     makeColumn("col-doing", "Doing", 1),
     makeColumn("col-done", "Done", 2),
   ],
+  swimlanes: [],
+  tags: [],
+  summary: {
+    total_tasks: 3,
+    total_actors: 0,
+    ready_tasks: 3,
+    blocked_tasks: 0,
+    done_tasks: 0,
+    percent_complete: 0,
+  },
 };
 
 const tasks: Entity[] = [
@@ -83,7 +96,7 @@ function renderBoard(overrides?: { board?: BoardData; tasks?: Entity[] }) {
   const result = render(
     <EntityFocusProvider>
       <SchemaProvider>
-        <EntityStoreProvider>
+        <EntityStoreProvider entities={{}}>
           <ActiveBoardPathProvider value="/test/board">
             <InspectProvider onInspect={onInspect} onDismiss={onDismiss}>
               <DragSessionProvider>
@@ -126,7 +139,7 @@ describe("BoardView navigation commands", () => {
     render(
       <EntityFocusProvider>
         <SchemaProvider>
-          <EntityStoreProvider>
+          <EntityStoreProvider entities={{}}>
             <ActiveBoardPathProvider value="/test/board">
               <InspectProvider onInspect={vi.fn()} onDismiss={() => false}>
                 <DragSessionProvider>

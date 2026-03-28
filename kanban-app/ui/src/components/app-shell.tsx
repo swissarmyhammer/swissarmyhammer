@@ -340,37 +340,37 @@ export function AppShell({
         id: "nav.up",
         name: "Navigate Up",
         keys: { vim: "k", cua: "ArrowUp", emacs: "Ctrl+p" },
-        execute: () => broadcastRef.current("nav.up"),
+        execute: () => { broadcastRef.current("nav.up"); },
       },
       {
         id: "nav.down",
         name: "Navigate Down",
         keys: { vim: "j", cua: "ArrowDown", emacs: "Ctrl+n" },
-        execute: () => broadcastRef.current("nav.down"),
+        execute: () => { broadcastRef.current("nav.down"); },
       },
       {
         id: "nav.left",
         name: "Navigate Left",
         keys: { vim: "h", cua: "ArrowLeft", emacs: "Ctrl+b" },
-        execute: () => broadcastRef.current("nav.left"),
+        execute: () => { broadcastRef.current("nav.left"); },
       },
       {
         id: "nav.right",
         name: "Navigate Right",
         keys: { vim: "l", cua: "ArrowRight", emacs: "Ctrl+f" },
-        execute: () => broadcastRef.current("nav.right"),
+        execute: () => { broadcastRef.current("nav.right"); },
       },
       {
         id: "nav.first",
         name: "Navigate to First",
         keys: { cua: "Home", emacs: "Alt+<" },
-        execute: () => broadcastRef.current("nav.first"),
+        execute: () => { broadcastRef.current("nav.first"); },
       },
       {
         id: "nav.last",
         name: "Navigate to Last",
         keys: { vim: "Shift+G", cua: "End", emacs: "Alt+>" },
-        execute: () => broadcastRef.current("nav.last"),
+        execute: () => { broadcastRef.current("nav.last"); },
       },
       // Dynamic board switch commands — one per open board.
       // Uses index as suffix to avoid filesystem paths in command IDs.

@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: '8280'
+position_column: done
+position_ordinal: ffffffffffffff9e80
 title: EntityInspector focus restore reads stale focusedMoniker on mount
 ---
 **Severity: Medium (Functionality)**

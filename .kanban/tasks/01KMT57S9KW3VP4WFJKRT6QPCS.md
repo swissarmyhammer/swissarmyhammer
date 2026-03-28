@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: '8680'
+position_column: done
+position_ordinal: ffffffffffffff9d80
 title: dispatch_command_internal uses empty string fallback for cross-board drag fields
 ---
 **Severity: Medium (Robustness)**

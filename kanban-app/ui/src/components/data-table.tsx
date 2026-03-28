@@ -459,7 +459,7 @@ interface GridCellScopeProps {
 function GridCellScope({
   moniker,
   claimWhen,
-  isCursor,
+  isCursor: _isCursor,
   cursorRef,
   className,
   onClick,

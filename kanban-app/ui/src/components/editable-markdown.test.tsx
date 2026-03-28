@@ -60,7 +60,7 @@ import type { DisplayProps } from "@/components/fields/displays/text-display";
 function makeProps(
   value: unknown,
   mode: "compact" | "full" = "full",
-  onCommit?: (value: string) => void,
+  onCommit?: (value: unknown) => void,
 ) {
   return {
     field: {

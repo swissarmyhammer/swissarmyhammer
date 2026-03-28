@@ -52,7 +52,7 @@ function renderColumn(ui: React.ReactElement) {
   return render(
     <EntityFocusProvider>
       <SchemaProvider>
-        <EntityStoreProvider>
+        <EntityStoreProvider entities={{}}>
           <ActiveBoardPathProvider value="/test/board">
             <InspectProvider onInspect={vi.fn()} onDismiss={() => false}>
               {ui}
