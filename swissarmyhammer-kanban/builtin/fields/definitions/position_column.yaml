@@ -5,6 +5,7 @@ type:
   kind: reference
   entity: column
   multiple: false
+icon: columns
 editor: select
 display: badge
 width: 120

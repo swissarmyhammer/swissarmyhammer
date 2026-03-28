@@ -432,7 +432,7 @@ mod tests {
         let (_temp, ctx) = setup().await;
 
         let a = add_task(&ctx, "A").await;
-        let b = add_task(&ctx, "B").await;
+        let _b = add_task(&ctx, "B").await;
         let c = add_task(&ctx, "C").await;
 
         // Move A after C

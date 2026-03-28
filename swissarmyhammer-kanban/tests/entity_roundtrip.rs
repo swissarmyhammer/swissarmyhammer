@@ -8,8 +8,8 @@
 
 use serde_json::json;
 use swissarmyhammer_kanban::{
-    board::InitBoard, entity::UpdateEntityField, task::AddTask, task_helpers::enrich_task_entity,
-    KanbanContext, KanbanOperationProcessor, OperationProcessor,
+    board::InitBoard, entity::UpdateEntityField, task::AddTask, task::MoveTask,
+    task_helpers::enrich_task_entity, KanbanContext, KanbanOperationProcessor, OperationProcessor,
 };
 use tempfile::TempDir;
 
@@ -75,6 +75,103 @@ async fn update_field_persists_title_change() {
     // Also verify via to_json() (the wire format)
     let bag = task.to_json();
     assert_eq!(bag["title"], "Changed");
+}
+
+#[tokio::test]
+async fn board_entity_has_percent_complete_computed_field() {
+    let (_temp, ctx, processor) = setup().await;
+
+    // Add two tasks
+    processor
+        .process(&AddTask::new("Task A"), &ctx)
+        .await
+        .unwrap();
+    processor
+        .process(&AddTask::new("Task B"), &ctx)
+        .await
+        .unwrap();
+
+    // Read the board entity — compute engine should populate percent_complete
+    let ectx = ctx.entity_context().await.unwrap();
+    let board = ectx.read("board", "board").await.unwrap();
+    let bag = board.to_json();
+
+    // percent_complete should be a { done, total, percent } object
+    let pc = &bag["percent_complete"];
+    assert!(
+        pc.is_object(),
+        "percent_complete should be an object, got: {}",
+        pc
+    );
+    assert_eq!(pc["total"], 2, "total should be 2");
+    assert_eq!(pc["done"], 0, "no tasks in done column yet");
+    assert_eq!(pc["percent"], 0, "0% done");
+}
+
+#[tokio::test]
+async fn board_percent_complete_updates_after_move_to_done() {
+    let (_temp, ctx, processor) = setup().await;
+
+    // Add two tasks
+    let r1 = processor
+        .process(&AddTask::new("Task A"), &ctx)
+        .await
+        .unwrap();
+    let task_id = r1["id"].as_str().unwrap().to_string();
+    processor
+        .process(&AddTask::new("Task B"), &ctx)
+        .await
+        .unwrap();
+
+    // Find the done column (last column by order)
+    let ectx = ctx.entity_context().await.unwrap();
+    let mut columns = ectx.list("column").await.unwrap();
+    columns.sort_by_key(|c| c.get("order").and_then(|v| v.as_u64()).unwrap_or(0));
+    let done_col_id = columns.last().unwrap().id.to_string();
+
+    // Move task A to done
+    let mv = MoveTask::to_column(task_id.as_str(), done_col_id.as_str());
+    processor.process(&mv, &ctx).await.unwrap();
+
+    // Re-read board — percent_complete should be 50%
+    let ectx2 = ctx.entity_context().await.unwrap();
+    let board = ectx2.read("board", "board").await.unwrap();
+    let bag = board.to_json();
+    let pc = &bag["percent_complete"];
+    assert_eq!(pc["total"], 2);
+    assert_eq!(pc["done"], 1);
+    assert_eq!(pc["percent"], 50);
+}
+
+#[tokio::test]
+async fn depends_on_triggers_cascade_for_board_when_task_changes() {
+    let (_temp, ctx, _processor) = setup().await;
+
+    let ectx = ctx.entity_context().await.unwrap();
+    let fields_ctx = ectx.fields();
+
+    // Board's percent_complete field declares depends_on: [task, column]
+    // So changing a task should cascade to board
+    let board_deps = fields_ctx.entity_types_depending_on("task");
+    assert!(
+        board_deps.contains(&"board"),
+        "board should depend on task changes, got: {:?}",
+        board_deps
+    );
+
+    let board_deps_col = fields_ctx.entity_types_depending_on("column");
+    assert!(
+        board_deps_col.contains(&"board"),
+        "board should depend on column changes, got: {:?}",
+        board_deps_col
+    );
+
+    // Unrelated entity type should not trigger board
+    let board_deps_tag = fields_ctx.entity_types_depending_on("tag");
+    assert!(
+        !board_deps_tag.contains(&"board"),
+        "board should NOT depend on tag changes"
+    );
 }
 
 #[tokio::test]

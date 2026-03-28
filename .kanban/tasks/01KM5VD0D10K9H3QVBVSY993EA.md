@@ -1,0 +1,10 @@
+---
+assignees:
+- claude-code
+depends_on:
+- 01KM5VCDYKBDKEBHJYPV0GEQ9C
+position_column: done
+position_ordinal: ffffffffffab80
+title: 'Frontend: route inspector operations through dispatch_command'
+---
+## What\n\nReplace direct `setPanelStack` manipulation in `App.tsx` with `dispatch_command` calls. The command result contains the new `InspectorStack` — use it to update `panelStack`.\n\n### Files\n- `kanban-app/ui/src/App.tsx` — refactor `inspectEntity`, `dismissTopPanel`, `closeAll` to use dispatch_command\n\n### Approach\n- `inspectEntity(type, id)`: call `invoke('dispatch_command', { cmd: 'ui.inspect', target: '${type}:${id}' })`, read `InspectorStack` from result, update `panelStack`\n- `dismissTopPanel()`: call `invoke('dispatch_command', { cmd: 'ui.inspector.close' })`, read result, update `panelStack`\n- `closeAll()`: call `invoke('dispatch_command', { cmd: 'ui.inspector.close_all' })`, read result, update `panelStack`\n- Remove the `useEffect` that calls `set_inspector_stack` — persistence is now server-side (Card 1)\n- Keep `get_ui_context` restoration on mount (reads persisted stack)\n- Helper: parse moniker strings from `InspectorStack` result into `PanelEntry[]`\n\n## Acceptance Criteria\n- [ ] Opening inspector calls `dispatch_command('ui.inspect', ...)`\n- [ ] Closing inspector calls `dispatch_command('ui.inspector.close')`\n- [ ] Close-all calls `dispatch_command('ui.inspector.close_all')`\n- [ ] `panelStack` driven by command results, not direct state manipulation\n- [ ] `set_inspector_stack` invocation removed\n- [ ] Inspector stack restores on mount/hot-reload\n- [ ] No regressions: primary entity replaces stack, secondary pushes\n\n## Tests\n- [ ] Update existing inspector tests in `kanban-app/ui/src/components/entity-card.test.tsx` if they mock `onInspect`\n- [ ] `npx vitest run` passes\n\n## Subtasks\n- [ ] Add helper to parse `InspectorStack` result into `PanelEntry[]`\n- [ ] Refactor `inspectEntity` to use dispatch_command\n- [ ] Refactor `dismissTopPanel` and `closeAll`\n- [ ] Remove `set_inspector_stack` persistence effect\n\n## depends_on\n- Card 1: Backend persist + restore"

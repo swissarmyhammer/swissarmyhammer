@@ -1,4 +1,21 @@
 // ---------------------------------------------------------------------------
+// Entity command definitions
+// ---------------------------------------------------------------------------
+
+export interface EntityCommandKeys {
+  readonly vim?: string;
+  readonly cua?: string;
+  readonly emacs?: string;
+}
+
+export interface EntityCommand {
+  readonly id: string;
+  readonly name: string;
+  readonly context_menu?: boolean;
+  readonly keys?: EntityCommandKeys;
+}
+
+// ---------------------------------------------------------------------------
 // View definitions
 // ---------------------------------------------------------------------------
 
@@ -72,6 +89,8 @@ export interface FieldDef {
   default?: string;
   editor?: string;
   display?: string;
+  /** Lucide icon name for display in the inspector (e.g. "file-text", "users", "tag"). */
+  icon?: string;
   /** Where to render in the inspector layout: "header" | "body" | "footer" | "hidden". Default: "body". */
   section?: string;
   sort?: string;
@@ -82,11 +101,13 @@ export interface FieldDef {
 
 export interface EntityDef {
   name: string;
+  icon?: string;
   body_field?: string;
   fields: string[];
   mention_prefix?: string;
   mention_display_field?: string;
   search_display_field?: string;
+  commands?: readonly EntityCommand[];
 }
 
 /** Schema response from get_entity_schema IPC command. */
@@ -125,7 +146,11 @@ export function getNum(entity: Entity, field: string, fallback = 0): number {
 }
 
 /** Read a boolean field, returning fallback if missing/null/wrong type. */
-export function getBool(entity: Entity, field: string, fallback = false): boolean {
+export function getBool(
+  entity: Entity,
+  field: string,
+  fallback = false,
+): boolean {
   const v = entity.fields[field];
   return typeof v === "boolean" ? v : fallback;
 }
@@ -139,7 +164,10 @@ export function getBool(entity: Entity, field: string, fallback = false): boolea
 // ---------------------------------------------------------------------------
 
 /** Raw entity bag from Entity::to_json() — flat JSON with entity_type + id + fields. */
-export type EntityBag = Record<string, unknown> & { entity_type: string; id: string };
+export type EntityBag = Record<string, unknown> & {
+  entity_type: string;
+  id: string;
+};
 
 /** Convert a flat entity bag from the backend into an Entity. */
 export function entityFromBag(bag: EntityBag): Entity {

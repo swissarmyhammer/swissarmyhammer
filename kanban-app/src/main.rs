@@ -53,21 +53,12 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             commands::log_command,
             commands::dispatch_command,
-            commands::set_focus,
             commands::list_available_commands,
             commands::show_context_menu,
-            commands::open_board,
-            commands::close_board,
             commands::list_open_boards,
-            commands::set_active_board,
-            commands::switch_board,
-            commands::get_recent_boards,
-            commands::get_keymap_mode,
-            commands::set_keymap_mode,
-            commands::get_ui_context,
-            commands::set_active_view,
-            commands::set_inspector_stack,
+            commands::get_ui_state,
             commands::get_entity_schema,
+            commands::list_entity_types,
             commands::list_entities,
             commands::get_entity,
             commands::search_mentions,
@@ -80,17 +71,14 @@ fn main() {
             commands::rebuild_menu_from_manifest,
             commands::list_views,
             commands::create_window,
-            commands::start_drag_session,
-            commands::cancel_drag_session,
-            commands::complete_drag_session,
             commands::restore_windows,
-            commands::save_window_geometry,
         ])
         .setup(|app| {
             // Build initial menu with OS chrome only — the frontend will
             // send the full manifest via rebuild_menu_from_manifest once loaded.
-            let config = crate::state::AppConfig::load();
-            let _ = menu::build_menu_from_manifest(app.handle(), &[], &config.recent_boards);
+            let state = app.state::<AppState>();
+            let recent = state.ui_state.recent_boards();
+            let _ = menu::build_menu_from_manifest(app.handle(), &[], &recent);
 
             // Handle deep-link URLs at cold start
             {
@@ -116,9 +104,9 @@ fn main() {
             tauri::async_runtime::block_on(state.start_watchers(app_handle));
 
             // The window starts hidden (visible: false in tauri.conf.json).
-            // Restore saved geometry from our own config, then show.
+            // Restore saved geometry from UIState, then show.
             if let Some(win) = app.get_webview_window("main") {
-                if let Some(main_state) = config.windows.get("main") {
+                if let Some(main_state) = state.ui_state.get_window_state("main") {
                     if let (Some(x), Some(y)) = (main_state.x, main_state.y) {
                         let _ = win.set_position(tauri::PhysicalPosition::new(x, y));
                     }
@@ -207,22 +195,29 @@ fn main() {
                         let app_handle = window.app_handle().clone();
                         tauri::async_runtime::spawn(async move {
                             let state = app_handle.state::<AppState>();
-                            let mut config = state.config.write().await;
-                            let active_board = state.active_board.read().await;
-                            let entry = config.windows.entry(label.clone()).or_insert_with(|| {
-                                crate::state::WindowState::new(active_board.clone().unwrap_or_default())
-                            });
-                            drop(active_board);
-                            entry.x = Some(pos.x);
-                            entry.y = Some(pos.y);
-                            entry.width = Some(size.width);
-                            entry.height = Some(size.height);
-                            entry.maximized = maximized;
-                            let _ = config.save();
+                            state.ui_state.save_window_geometry(
+                                &label,
+                                pos.x,
+                                pos.y,
+                                size.width,
+                                size.height,
+                                maximized,
+                            );
                         });
                     }
                 }
-                // Mid-session close: remove windows entry so it doesn't resurrect.
+                // When a board window gains focus, update most_recent_board_path so quick
+                // capture and commands without an explicit board_path target the right board.
+                WindowEvent::Focused(true) => {
+                    if label == "quick-capture" {
+                        return;
+                    }
+                    let state = window.app_handle().state::<AppState>();
+                    if let Some(board_path) = state.ui_state.window_board(&label) {
+                        state.ui_state.set_most_recent_board(&board_path);
+                    }
+                }
+                // Mid-session close: remove the UIState window entry so it doesn't resurrect.
                 // On app quit (shutting_down=true) we preserve entries for restore.
                 WindowEvent::Destroyed => {
                     if label == "main" || label == "quick-capture" {
@@ -234,11 +229,10 @@ fn main() {
                         if state.shutting_down.load(Ordering::SeqCst) {
                             return;
                         }
-                        let mut config = state.config.write().await;
-                        if config.windows.remove(&label).is_some() {
-                            tracing::info!(label = %label, "removed windows entry on mid-session close");
-                            let _ = config.save();
-                        }
+                        // Remove from UIState windows and window_boards on mid-session close
+                        // so the window doesn't resurrect on next startup.
+                        state.ui_state.remove_window(&label);
+                        tracing::info!(label = %label, "removed window entry on mid-session close");
                     });
                 }
                 _ => {}

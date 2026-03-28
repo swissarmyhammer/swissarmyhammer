@@ -275,6 +275,7 @@ mod tests {
             display: None,
             sort: None,
             width: None,
+            icon: None,
             section: None,
             validate: None,
         }
@@ -476,12 +477,14 @@ mod tests {
     fn entity_def_yaml_round_trip_with_validate() {
         let entity = EntityDef {
             name: "task".into(),
+            icon: None,
             body_field: Some("body".into()),
             fields: vec!["title".into(), "status".into()],
             validate: Some("if (!ctx.fields.title) throw new Error('title required');".into()),
             mention_prefix: None,
             mention_display_field: None,
             search_display_field: None,
+            commands: vec![],
         };
         let yaml = serde_yaml_ng::to_string(&entity).unwrap();
         let parsed: EntityDef = serde_yaml_ng::from_str(&yaml).unwrap();
@@ -493,12 +496,14 @@ mod tests {
         let engine = ValidationEngine::new();
         let entity_def = EntityDef {
             name: "task".into(),
+            icon: None,
             body_field: None,
             fields: vec!["title".into()],
             validate: None,
             mention_prefix: None,
             mention_display_field: None,
             search_display_field: None,
+            commands: vec![],
         };
         let mut fields = HashMap::new();
         fields.insert("title".to_string(), serde_json::json!("Hello"));
@@ -513,6 +518,7 @@ mod tests {
         let engine = ValidationEngine::new();
         let entity_def = EntityDef {
             name: "task".into(),
+            icon: None,
             body_field: None,
             fields: vec!["title".into(), "status".into()],
             validate: Some(
@@ -526,6 +532,7 @@ mod tests {
             mention_prefix: None,
             mention_display_field: None,
             search_display_field: None,
+            commands: vec![],
         };
         let mut fields = HashMap::new();
         fields.insert("title".to_string(), serde_json::json!("My Task"));
@@ -540,12 +547,14 @@ mod tests {
         let engine = ValidationEngine::new();
         let entity_def = EntityDef {
             name: "task".into(),
+            icon: None,
             body_field: None,
             fields: vec!["title".into()],
             validate: Some(r#"throw new Error("entity validation failed");"#.to_string()),
             mention_prefix: None,
             mention_display_field: None,
             search_display_field: None,
+            commands: vec![],
         };
         let mut fields = HashMap::new();
         fields.insert("title".to_string(), serde_json::json!("Test"));
@@ -617,12 +626,14 @@ mod tests {
         let engine = ValidationEngine::new();
         let entity_def = EntityDef {
             name: "task".into(),
+            icon: None,
             body_field: None,
             fields: vec!["title".into()],
             validate: Some("return ctx.fields;".to_string()),
             mention_prefix: None,
             mention_display_field: None,
             search_display_field: None,
+            commands: vec![],
         };
 
         let adversarial = r#"}})(); globalThis.__pwned3 = true; (function(){"#;

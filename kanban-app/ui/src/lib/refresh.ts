@@ -30,7 +30,9 @@ export interface RefreshResult {
  * @param boardPath — optional board path to scope queries to a specific board
  *   (for multi-window support). When omitted, the backend uses the global active board.
  */
-export async function refreshBoards(boardPath?: string): Promise<RefreshResult> {
+export async function refreshBoards(
+  boardPath?: string,
+): Promise<RefreshResult> {
   // Always fetch open boards independently — this must not be coupled
   // to get_board_data or list_entities via Promise.all.
   let openBoards: OpenBoard[] = [];
@@ -47,13 +49,22 @@ export async function refreshBoards(boardPath?: string): Promise<RefreshResult> 
     const bp = boardPath ? { boardPath } : {};
     const [bd, taskData, actorData] = await Promise.all([
       invoke<BoardDataResponse>("get_board_data", bp),
-      invoke<EntityListResponse>("list_entities", { entityType: "task", ...bp }),
-      invoke<EntityListResponse>("list_entities", { entityType: "actor", ...bp }),
+      invoke<EntityListResponse>("list_entities", {
+        entityType: "task",
+        ...bp,
+      }),
+      invoke<EntityListResponse>("list_entities", {
+        entityType: "actor",
+        ...bp,
+      }),
     ]);
     boardData = parseBoardData(bd);
     entitiesByType = {
-      task: taskData.entities.map(entityFromBag),
+      board: [entityFromBag(bd.board)],
+      column: bd.columns.map(entityFromBag),
+      swimlane: bd.swimlanes.map(entityFromBag),
       tag: bd.tags.map(entityFromBag),
+      task: taskData.entities.map(entityFromBag),
       actor: actorData.entities.map(entityFromBag),
     };
   } catch (error) {

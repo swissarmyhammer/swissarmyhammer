@@ -558,4 +558,45 @@ mod tests {
         assert!(columns[0]["task_count"].is_null());
         assert!(columns[0]["ready_count"].is_null());
     }
+
+    #[tokio::test]
+    async fn test_get_board_excludes_archived_from_counts() {
+        let (_temp, ctx) = setup().await;
+
+        // Create 3 tasks
+        AddTask::new("Task 1")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let task2_id = AddTask::new("Task 2")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        AddTask::new("Task 3")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        // Archive task 2 directly via the entity context
+        let ectx = ctx.entity_context().await.unwrap();
+        ectx.archive("task", &task2_id).await.unwrap();
+
+        // GetBoard should report only 2 tasks (the archived one is invisible)
+        let result = GetBoard::default()
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        assert_eq!(
+            result["summary"]["total_tasks"], 2,
+            "archived task should not be counted in total_tasks"
+        );
+    }
 }

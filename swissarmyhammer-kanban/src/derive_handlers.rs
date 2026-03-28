@@ -93,12 +93,14 @@ mod tests {
     fn task_schema() -> EntityDef {
         EntityDef {
             name: "task".into(),
+            icon: None,
             body_field: Some("body".into()),
             fields: vec!["title".into(), "body".into(), "tags".into()],
             validate: None,
             mention_prefix: None,
             mention_display_field: None,
             search_display_field: None,
+            commands: vec![],
         }
     }
 

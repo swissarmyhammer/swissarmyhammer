@@ -4,17 +4,42 @@ import { render, screen, fireEvent, act } from "@testing-library/react";
 // Mock Tauri APIs before importing components that use them
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn((cmd: string, args?: any) => {
-    if (cmd === "get_keymap_mode") return Promise.resolve("cua");
+    if (cmd === "get_ui_state")
+      return Promise.resolve({
+        palette_open: false,
+        keymap_mode: "cua",
+        scope_chain: [],
+        open_boards: [],
+        windows: {},
+        recent_boards: [],
+      });
     if (cmd === "search_entities") {
       const query = args?.query ?? "";
       if (!query.trim()) return Promise.resolve([]);
       const all = [
-        { entity_type: "task", entity_id: "01ABC", display_name: "Fix the login bug", score: 100 },
-        { entity_type: "task", entity_id: "01DEF", display_name: "Add dark mode", score: 50 },
-        { entity_type: "tag", entity_id: "01GHI", display_name: "frontend", score: 30 },
+        {
+          entity_type: "task",
+          entity_id: "01ABC",
+          display_name: "Fix the login bug",
+          score: 100,
+        },
+        {
+          entity_type: "task",
+          entity_id: "01DEF",
+          display_name: "Add dark mode",
+          score: 50,
+        },
+        {
+          entity_type: "tag",
+          entity_id: "01GHI",
+          display_name: "frontend",
+          score: 30,
+        },
       ];
       return Promise.resolve(
-        all.filter((r) => r.display_name.toLowerCase().includes(query.toLowerCase()))
+        all.filter((r) =>
+          r.display_name.toLowerCase().includes(query.toLowerCase()),
+        ),
       );
     }
     if (cmd === "log_command") return Promise.resolve(null);
@@ -27,7 +52,9 @@ vi.mock("@tauri-apps/api/event", () => ({
 
 // Mock codemirror-vim: getCM returns a cm object, Vim.handleKey is the spy
 vi.mock("@replit/codemirror-vim", async () => {
-  const actual = await vi.importActual<typeof import("@replit/codemirror-vim")>("@replit/codemirror-vim");
+  const actual = await vi.importActual<typeof import("@replit/codemirror-vim")>(
+    "@replit/codemirror-vim",
+  );
   return {
     ...actual,
     getCM: vi.fn(() => ({ state: { vim: {} } }) as any),
@@ -40,7 +67,7 @@ import { getCM, Vim } from "@replit/codemirror-vim";
 import { CommandPalette } from "./command-palette";
 import { CommandScopeProvider, type CommandDef } from "@/lib/command-scope";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
-import { KeymapProvider } from "@/lib/keymap-context";
+import { UIStateProvider } from "@/lib/ui-state-context";
 import { InspectProvider } from "@/lib/inspect-context";
 
 const getCMMock = vi.mocked(getCM);
@@ -77,12 +104,12 @@ beforeEach(() => {
 function renderPalette(open: boolean, onClose = vi.fn()) {
   return render(
     <EntityFocusProvider>
-      <KeymapProvider>
+      <UIStateProvider>
         <CommandScopeProvider commands={TEST_COMMANDS}>
           <CommandPalette open={open} onClose={onClose} />
         </CommandScopeProvider>
-      </KeymapProvider>
-    </EntityFocusProvider>
+      </UIStateProvider>
+    </EntityFocusProvider>,
   );
 }
 
@@ -158,9 +185,17 @@ describe("CommandPalette vim insert mode", () => {
   });
 
   it("auto-enters insert mode when palette opens in vim mode", async () => {
-    // Mock invoke to return "vim" for get_keymap_mode
+    // Mock invoke to return "vim" for get_ui_state
     vi.mocked(invoke).mockImplementation((cmd: string) => {
-      if (cmd === "get_keymap_mode") return Promise.resolve("vim");
+      if (cmd === "get_ui_state")
+        return Promise.resolve({
+          palette_open: false,
+          keymap_mode: "vim",
+          scope_chain: [],
+          open_boards: [],
+          windows: {},
+          recent_boards: [],
+        });
       return Promise.resolve(null);
     });
 
@@ -174,13 +209,25 @@ describe("CommandPalette vim insert mode", () => {
     });
 
     expect(getCMMock).toHaveBeenCalled();
-    expect(handleKeyMock).toHaveBeenCalledWith(expect.anything(), "i", "mapping");
+    expect(handleKeyMock).toHaveBeenCalledWith(
+      expect.anything(),
+      "i",
+      "mapping",
+    );
   });
 
   it("does NOT enter insert mode in CUA mode", async () => {
     // Default mock returns "cua"
     vi.mocked(invoke).mockImplementation((cmd: string) => {
-      if (cmd === "get_keymap_mode") return Promise.resolve("cua");
+      if (cmd === "get_ui_state")
+        return Promise.resolve({
+          palette_open: false,
+          keymap_mode: "cua",
+          scope_chain: [],
+          open_boards: [],
+          windows: {},
+          recent_boards: [],
+        });
       return Promise.resolve(null);
     });
 
@@ -198,7 +245,15 @@ describe("CommandPalette vim insert mode", () => {
 
   it("retries when getCM initially returns null", async () => {
     vi.mocked(invoke).mockImplementation((cmd: string) => {
-      if (cmd === "get_keymap_mode") return Promise.resolve("vim");
+      if (cmd === "get_ui_state")
+        return Promise.resolve({
+          palette_open: false,
+          keymap_mode: "vim",
+          scope_chain: [],
+          open_boards: [],
+          windows: {},
+          recent_boards: [],
+        });
       return Promise.resolve(null);
     });
 
@@ -220,13 +275,24 @@ describe("CommandPalette vim insert mode", () => {
     });
 
     expect(callCount).toBeGreaterThan(3);
-    expect(handleKeyMock).toHaveBeenCalledWith(expect.anything(), "i", "mapping");
+    expect(handleKeyMock).toHaveBeenCalledWith(
+      expect.anything(),
+      "i",
+      "mapping",
+    );
   });
 
   it("stops retrying after cancellation (palette closes)", async () => {
-
     vi.mocked(invoke).mockImplementation((cmd: string) => {
-      if (cmd === "get_keymap_mode") return Promise.resolve("vim");
+      if (cmd === "get_ui_state")
+        return Promise.resolve({
+          palette_open: false,
+          keymap_mode: "vim",
+          scope_chain: [],
+          open_boards: [],
+          windows: {},
+          recent_boards: [],
+        });
       return Promise.resolve(null);
     });
 
@@ -257,17 +323,21 @@ describe("CommandPalette vim insert mode", () => {
 // Search mode tests
 // ---------------------------------------------------------------------------
 
-function renderSearchPalette(open: boolean, onClose = vi.fn(), onInspect = vi.fn()) {
+function renderSearchPalette(
+  open: boolean,
+  onClose = vi.fn(),
+  onInspect = vi.fn(),
+) {
   return render(
     <EntityFocusProvider>
-      <KeymapProvider>
+      <UIStateProvider>
         <InspectProvider onInspect={onInspect} onDismiss={() => false}>
           <CommandScopeProvider commands={[]}>
             <CommandPalette open={open} onClose={onClose} mode="search" />
           </CommandScopeProvider>
         </InspectProvider>
-      </KeymapProvider>
-    </EntityFocusProvider>
+      </UIStateProvider>
+    </EntityFocusProvider>,
   );
 }
 
@@ -277,7 +347,9 @@ function renderSearchPalette(open: boolean, onClose = vi.fn(), onInspect = vi.fn
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function getCMView(container: HTMLElement): any | null {
-  const cmContent = container.querySelector(".cm-content") as HTMLElement | null;
+  const cmContent = container.querySelector(
+    ".cm-content",
+  ) as HTMLElement | null;
   if (!cmContent) return null;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   return (cmContent as any).cmTile?.view ?? null;
@@ -303,7 +375,11 @@ describe("CommandPalette search mode", () => {
     if (view?.dispatch) {
       // Type a query that won't match any entities
       view.dispatch({
-        changes: { from: 0, to: view.state.doc.length, insert: "xyzzy_no_match_zzz" },
+        changes: {
+          from: 0,
+          to: view.state.doc.length,
+          insert: "xyzzy_no_match_zzz",
+        },
       });
 
       await act(async () => {
@@ -340,7 +416,10 @@ describe("CommandPalette search mode", () => {
       });
 
       // invoke should have been called with search_entities and the query
-      expect(invokeMock).toHaveBeenCalledWith("search_entities", { query: "login", limit: 50 });
+      expect(invokeMock).toHaveBeenCalledWith("search_entities", {
+        query: "login",
+        limit: 50,
+      });
     }
 
     vi.useRealTimers();
@@ -436,7 +515,11 @@ describe("CommandPalette search mode", () => {
     const onInspect = vi.fn();
 
     vi.useFakeTimers({ shouldAdvanceTime: true });
-    const { container, unmount } = renderSearchPalette(true, onClose, onInspect);
+    const { container, unmount } = renderSearchPalette(
+      true,
+      onClose,
+      onInspect,
+    );
 
     const view = getCMView(container);
     if (view?.dispatch) {
@@ -544,7 +627,9 @@ describe("CommandPalette search mode", () => {
     });
 
     // search_entities should NOT have been called with an empty query
-    const searchCalls = invokeMock.mock.calls.filter(([cmd]) => cmd === "search_entities");
+    const searchCalls = invokeMock.mock.calls.filter(
+      ([cmd]) => cmd === "search_entities",
+    );
     expect(searchCalls.length).toBe(0);
 
     vi.useRealTimers();

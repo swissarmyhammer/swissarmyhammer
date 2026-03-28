@@ -4,6 +4,8 @@ description: Board completion percentage (done tasks / total tasks)
 type:
   kind: computed
   derive: board-percent-complete
+  depends_on: [task, column]
+icon: percent
 editor: none
-display: number
+display: progress-ring
 section: header

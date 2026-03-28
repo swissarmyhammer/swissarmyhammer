@@ -3,11 +3,21 @@ import { render, fireEvent, act } from "@testing-library/react";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const mockInvoke = vi.fn((...args: any[]) => {
+  if (args[0] === "list_entity_types")
+    return Promise.resolve(["task", "tag", "actor"]);
   if (args[0] === "get_entity_schema") {
     const entityType = args[1]?.entityType as string;
     return Promise.resolve(SCHEMAS[entityType] ?? DEFAULT_SCHEMA);
   }
-  if (args[0] === "get_keymap_mode") return Promise.resolve("cua");
+  if (args[0] === "get_ui_state")
+    return Promise.resolve({
+      palette_open: false,
+      keymap_mode: "cua",
+      scope_chain: [],
+      open_boards: [],
+      windows: {},
+      recent_boards: [],
+    });
   if (args[0] === "search_mentions") return Promise.resolve([]);
   if (args[0] === "dispatch_command") return Promise.resolve("ok");
   return Promise.resolve(null);
@@ -21,13 +31,17 @@ vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(() => Promise.resolve(() => {})),
 }));
 vi.mock("@tauri-apps/plugin-log", () => ({
-  error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn(), trace: vi.fn(),
+  error: vi.fn(),
+  warn: vi.fn(),
+  info: vi.fn(),
+  debug: vi.fn(),
+  trace: vi.fn(),
   attachConsole: vi.fn(() => Promise.resolve()),
 }));
 
 import { EditorView } from "@codemirror/view";
 import { MultiSelectEditor } from "./multi-select-editor";
-import { KeymapProvider } from "@/lib/keymap-context";
+import { UIStateProvider } from "@/lib/ui-state-context";
 import { SchemaProvider } from "@/lib/schema-context";
 import { EntityStoreProvider } from "@/lib/entity-store-context";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
@@ -36,7 +50,12 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import type { Entity, FieldDef } from "@/types/kanban";
 
 const TAG_SCHEMA = {
-  entity: { name: "tag", fields: ["tag_name", "color"], mention_prefix: "#", mention_display_field: "tag_name" },
+  entity: {
+    name: "tag",
+    fields: ["tag_name", "color"],
+    mention_prefix: "#",
+    mention_display_field: "tag_name",
+  },
   fields: [
     { id: "t1", name: "tag_name", type: { kind: "text" }, section: "header" },
     { id: "t2", name: "color", type: { kind: "color" }, section: "body" },
@@ -44,7 +63,12 @@ const TAG_SCHEMA = {
 };
 
 const ACTOR_SCHEMA = {
-  entity: { name: "actor", fields: ["name", "color"], mention_prefix: "@", mention_display_field: "name" },
+  entity: {
+    name: "actor",
+    fields: ["name", "color"],
+    mention_prefix: "@",
+    mention_display_field: "name",
+  },
   fields: [
     { id: "a1", name: "name", type: { kind: "text" }, section: "header" },
     { id: "a2", name: "color", type: { kind: "color" }, section: "body" },
@@ -52,26 +76,65 @@ const ACTOR_SCHEMA = {
 };
 
 const TASK_SCHEMA = {
-  entity: { name: "task", body_field: "body", fields: ["title", "body", "assignees", "tags"] },
+  entity: {
+    name: "task",
+    body_field: "body",
+    fields: ["title", "body", "assignees", "tags"],
+  },
   fields: [
     { id: "f1", name: "title", type: { kind: "text" }, section: "header" },
     { id: "f2", name: "body", type: { kind: "markdown" }, section: "body" },
-    { id: "f5", name: "assignees", type: { kind: "reference", entity: "actor", multiple: true }, section: "body" },
-    { id: "f3", name: "tags", type: { kind: "computed", derive: "parse-body-tags" }, section: "header" },
+    {
+      id: "f5",
+      name: "assignees",
+      type: { kind: "reference", entity: "actor", multiple: true },
+      section: "body",
+    },
+    {
+      id: "f3",
+      name: "tags",
+      type: {
+        kind: "computed",
+        derive: "parse-body-tags",
+        entity: "tag",
+        commit_display_names: true,
+      },
+      section: "header",
+    },
   ],
 };
 
-const SCHEMAS: Record<string, unknown> = { tag: TAG_SCHEMA, actor: ACTOR_SCHEMA, task: TASK_SCHEMA };
+const SCHEMAS: Record<string, unknown> = {
+  tag: TAG_SCHEMA,
+  actor: ACTOR_SCHEMA,
+  task: TASK_SCHEMA,
+};
 const DEFAULT_SCHEMA = { entity: { name: "unknown", fields: [] }, fields: [] };
 
 const ACTOR_ENTITIES: Entity[] = [
-  { entity_type: "actor", id: "alice-id", fields: { name: "alice", color: "3366cc" } },
-  { entity_type: "actor", id: "bob-id", fields: { name: "bob", color: "cc3366" } },
+  {
+    entity_type: "actor",
+    id: "alice-id",
+    fields: { name: "alice", color: "3366cc" },
+  },
+  {
+    entity_type: "actor",
+    id: "bob-id",
+    fields: { name: "bob", color: "cc3366" },
+  },
 ];
 
 const TAG_ENTITIES: Entity[] = [
-  { entity_type: "tag", id: "tag-bug", fields: { tag_name: "bug", color: "ff0000" } },
-  { entity_type: "tag", id: "tag-feat", fields: { tag_name: "feature", color: "00ff00" } },
+  {
+    entity_type: "tag",
+    id: "tag-bug",
+    fields: { tag_name: "bug", color: "ff0000" },
+  },
+  {
+    entity_type: "tag",
+    id: "tag-feat",
+    fields: { tag_name: "feature", color: "00ff00" },
+  },
 ];
 
 const ASSIGNEES_FIELD: FieldDef = {
@@ -84,7 +147,12 @@ const ASSIGNEES_FIELD: FieldDef = {
 const TAGS_FIELD: FieldDef = {
   id: "f3",
   name: "tags",
-  type: { kind: "computed", derive: "parse-body-tags" },
+  type: {
+    kind: "computed",
+    derive: "parse-body-tags",
+    entity: "tag",
+    commit_display_names: true,
+  },
   section: "header",
 };
 
@@ -104,7 +172,7 @@ function renderMultiSelect(
         <EntityStoreProvider entities={entities}>
           <EntityFocusProvider>
             <InspectProvider onInspect={() => {}} onDismiss={() => false}>
-              <KeymapProvider>
+              <UIStateProvider>
                 <MultiSelectEditor
                   field={props.field}
                   value={props.value}
@@ -113,7 +181,7 @@ function renderMultiSelect(
                   entity={props.entity}
                   mode="compact"
                 />
-              </KeymapProvider>
+              </UIStateProvider>
             </InspectProvider>
           </EntityFocusProvider>
         </EntityStoreProvider>
@@ -155,7 +223,7 @@ describe("MultiSelectEditor", () => {
       expect(container.querySelector(".cm-editor")).toBeTruthy();
     });
 
-    it("shows existing selections as pills", async () => {
+    it("shows existing selections as prefixed tokens in the doc", async () => {
       const onCommit = vi.fn();
       const onCancel = vi.fn();
       const { container } = renderMultiSelect(
@@ -164,9 +232,8 @@ describe("MultiSelectEditor", () => {
       );
       await settle();
 
-      // Should show alice's avatar (initials "A" via AvatarDisplay)
-      const avatars = container.querySelectorAll(".rounded-full");
-      expect(avatars.length).toBeGreaterThanOrEqual(1);
+      const view = getCmView(container);
+      expect(view.state.doc.toString()).toContain("@alice");
     });
 
     it("Enter key calls onCommit with selected IDs", async () => {
@@ -188,7 +255,7 @@ describe("MultiSelectEditor", () => {
       expect(onCommit).toHaveBeenCalledWith(["alice-id"]);
     });
 
-    it("Escape key calls onCommit with selected IDs (commit, not discard)", async () => {
+    it("Escape in CUA mode calls onCancel (discard)", async () => {
       const onCommit = vi.fn();
       const onCancel = vi.fn();
       const { container } = renderMultiSelect(
@@ -202,8 +269,8 @@ describe("MultiSelectEditor", () => {
         fireEvent.keyDown(cmContent, { key: "Escape" });
       });
 
-      expect(onCommit).toHaveBeenCalledWith(["bob-id"]);
-      expect(onCancel).not.toHaveBeenCalled();
+      expect(onCancel).toHaveBeenCalled();
+      expect(onCommit).not.toHaveBeenCalled();
     });
 
     it("blur calls onCommit after timeout", async () => {
@@ -257,48 +324,57 @@ describe("MultiSelectEditor", () => {
       expect(onCommit).toHaveBeenCalledWith(["alice-id"]);
     });
 
-    it("actor selections render with Avatar component", async () => {
+    it("multiple selections appear as separate tokens in the doc", async () => {
       const onCommit = vi.fn();
       const onCancel = vi.fn();
       const { container } = renderMultiSelect(
-        { field: ASSIGNEES_FIELD, value: ["alice-id"], onCommit, onCancel },
+        {
+          field: ASSIGNEES_FIELD,
+          value: ["alice-id", "bob-id"],
+          onCommit,
+          onCancel,
+        },
         { actor: ACTOR_ENTITIES },
       );
       await settle();
 
-      // Actor pills use AvatarDisplay (same as grid/inspector) — renders .rounded-full avatars
-      const avatars = container.querySelectorAll(".rounded-full");
-      expect(avatars.length).toBeGreaterThanOrEqual(1);
-      // Avatar shows initials "A" for "alice"
-      expect(avatars[0].textContent).toBe("A");
+      const view = getCmView(container);
+      const doc = view.state.doc.toString();
+      expect(doc).toContain("@alice");
+      expect(doc).toContain("@bob");
     });
 
-    it("remove button removes item from selection", async () => {
+    it("deleting a token from the doc removes it from committed value", async () => {
       const onCommit = vi.fn();
       const onCancel = vi.fn();
       const { container } = renderMultiSelect(
-        { field: ASSIGNEES_FIELD, value: ["alice-id", "bob-id"], onCommit, onCancel },
+        {
+          field: ASSIGNEES_FIELD,
+          value: ["alice-id", "bob-id"],
+          onCommit,
+          onCancel,
+        },
         { actor: ACTOR_ENTITIES },
       );
       await settle();
 
-      // Each actor has an avatar (.rounded-full) and a remove button (×)
-      const avatars = container.querySelectorAll(".rounded-full");
-      expect(avatars.length).toBe(2);
-
-      // Find the first × remove button (sibling of the AvatarDisplay wrapper)
-      const removeButtons = container.querySelectorAll("button");
-      // Filter to × buttons (not CM6 internal buttons)
-      const removeBtns = Array.from(removeButtons).filter((b: Element) => b.textContent?.includes("×"));
-      expect(removeBtns.length).toBe(2);
-
+      // Remove @alice from the doc, keep @bob
+      const view = getCmView(container);
+      const doc = view.state.doc.toString();
+      const aliceStart = doc.indexOf("@alice");
+      expect(aliceStart).toBeGreaterThanOrEqual(0);
       await act(async () => {
-        fireEvent.click(removeBtns[0]);
+        view.dispatch({
+          changes: { from: aliceStart, to: aliceStart + "@alice ".length },
+        });
       });
 
-      // After removing alice, only bob's avatar should remain
-      const remainingAvatars = container.querySelectorAll(".rounded-full");
-      expect(remainingAvatars.length).toBe(1);
+      const cmContent = container.querySelector(".cm-content") as HTMLElement;
+      await act(async () => {
+        fireEvent.keyDown(cmContent, { key: "Enter" });
+      });
+
+      expect(onCommit).toHaveBeenCalledWith(["bob-id"]);
     });
   });
 
@@ -313,7 +389,13 @@ describe("MultiSelectEditor", () => {
       const onCommit = vi.fn();
       const onCancel = vi.fn();
       const { container } = renderMultiSelect(
-        { field: TAGS_FIELD, value: ["tag-bug"], onCommit, onCancel, entity: taskEntity },
+        {
+          field: TAGS_FIELD,
+          value: ["tag-bug"],
+          onCommit,
+          onCancel,
+          entity: taskEntity,
+        },
         { tag: TAG_ENTITIES },
       );
       await settle();
@@ -325,7 +407,13 @@ describe("MultiSelectEditor", () => {
       const onCommit = vi.fn();
       const onCancel = vi.fn();
       const { container } = renderMultiSelect(
-        { field: TAGS_FIELD, value: ["tag-bug"], onCommit, onCancel, entity: taskEntity },
+        {
+          field: TAGS_FIELD,
+          value: ["tag-bug"],
+          onCommit,
+          onCancel,
+          entity: taskEntity,
+        },
         { tag: TAG_ENTITIES },
       );
       await settle();
@@ -334,11 +422,17 @@ describe("MultiSelectEditor", () => {
       expect(container.textContent).toContain("bug");
     });
 
-    it("Escape commits tag slugs via onCommit", async () => {
+    it("Escape in CUA mode calls onCancel (discard)", async () => {
       const onCommit = vi.fn();
       const onCancel = vi.fn();
       const { container } = renderMultiSelect(
-        { field: TAGS_FIELD, value: ["tag-bug"], onCommit, onCancel, entity: taskEntity },
+        {
+          field: TAGS_FIELD,
+          value: ["tag-bug"],
+          onCommit,
+          onCancel,
+          entity: taskEntity,
+        },
         { tag: TAG_ENTITIES },
       );
       await settle();
@@ -348,16 +442,21 @@ describe("MultiSelectEditor", () => {
         fireEvent.keyDown(cmContent, { key: "Escape" });
       });
 
-      // Tags now commit via onCommit with display names (slugs)
-      expect(onCommit).toHaveBeenCalledWith(["bug"]);
-      expect(onCancel).not.toHaveBeenCalled();
+      expect(onCancel).toHaveBeenCalled();
+      expect(onCommit).not.toHaveBeenCalled();
     });
 
     it("Enter commits tag slugs via onCommit", async () => {
       const onCommit = vi.fn();
       const onCancel = vi.fn();
       const { container } = renderMultiSelect(
-        { field: TAGS_FIELD, value: ["tag-bug"], onCommit, onCancel, entity: taskEntity },
+        {
+          field: TAGS_FIELD,
+          value: ["tag-bug"],
+          onCommit,
+          onCancel,
+          entity: taskEntity,
+        },
         { tag: TAG_ENTITIES },
       );
       await settle();
@@ -371,34 +470,42 @@ describe("MultiSelectEditor", () => {
       expect(onCancel).not.toHaveBeenCalled();
     });
 
-    it("remove button removes tag from selection", async () => {
+    it("deleting a tag token from the doc removes it from committed value", async () => {
       const onCommit = vi.fn();
       const onCancel = vi.fn();
       const { container } = renderMultiSelect(
-        { field: TAGS_FIELD, value: ["tag-bug", "tag-feat"], onCommit, onCancel, entity: taskEntity },
+        {
+          field: TAGS_FIELD,
+          value: ["tag-bug", "tag-feat"],
+          onCommit,
+          onCancel,
+          entity: taskEntity,
+        },
         { tag: TAG_ENTITIES },
       );
       await settle();
 
-      // Should have two tag pills
-      expect(container.textContent).toContain("bug");
-      expect(container.textContent).toContain("feature");
+      // Doc should contain both tags
+      const view = getCmView(container);
+      const doc = view.state.doc.toString();
+      expect(doc).toContain("#bug");
+      expect(doc).toContain("#feature");
 
-      // Find and click the first remove button (×)
-      const removeButtons = Array.from(container.querySelectorAll("button")).filter(
-        (b: Element) => b.textContent?.includes("×"),
-      );
-      expect(removeButtons.length).toBe(2);
-
+      // Remove #bug from the doc
+      const bugStart = doc.indexOf("#bug");
       await act(async () => {
-        fireEvent.click(removeButtons[0]);
+        view.dispatch({
+          changes: { from: bugStart, to: bugStart + "#bug ".length },
+        });
       });
 
-      // After removing first tag, only one should remain
-      const remainingBtns = Array.from(container.querySelectorAll("button")).filter(
-        (b: Element) => b.textContent?.includes("×"),
-      );
-      expect(remainingBtns.length).toBe(1);
+      const cmContent = container.querySelector(".cm-content") as HTMLElement;
+      await act(async () => {
+        fireEvent.keyDown(cmContent, { key: "Enter" });
+      });
+
+      // Only feature should remain
+      expect(onCommit).toHaveBeenCalledWith(["feature"]);
     });
   });
 

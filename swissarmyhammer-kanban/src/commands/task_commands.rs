@@ -2,7 +2,7 @@
 
 use super::run_op;
 use crate::context::KanbanContext;
-use crate::types::{Ordinal, Position};
+use crate::types::Ordinal;
 use async_trait::async_trait;
 use serde_json::Value;
 use swissarmyhammer_commands::{Command, CommandContext, CommandError};
@@ -34,8 +34,8 @@ impl Command for AddTaskCmd {
             .map(|s| s.to_string())
             .unwrap_or_else(|| crate::task_helpers::default_task_title().to_string());
 
-        let position = Position::new(column_id.into(), None, Ordinal::first());
-        let op = crate::task::AddTask::new(title).with_position(position);
+        let mut op = crate::task::AddTask::new(title);
+        op.column = Some(column_id.to_string());
 
         run_op(&op, &kanban).await
     }

@@ -1,0 +1,9 @@
+---
+assignees:
+- claude-code
+depends_on: []
+position_column: todo
+position_ordinal: '8680'
+title: 'Backend: restore inspector stack into UIState on startup'
+---
+## What\n\nCurrently `UIState::new()` creates an empty inspector stack. The frontend restores the stack from `get_ui_context` into its own local state. After Cards 1-2, the frontend will rely on `UIState` as the single source of truth, so the backend must initialize `UIState.inspector_stack` from the persisted config on startup.\n\n### Files\n- `kanban-app/src/main.rs` or `kanban-app/src/state.rs` — where AppState / UIState is initialized\n- `swissarmyhammer-commands/src/ui_state.rs` — add `new_with_inspector_stack` or `restore_inspector_stack` method\n\n### Approach\n1. Add a method to `UIState` to set the initial inspector stack (e.g. `set_inspector_stack(&self, stack: Vec<String>)`)\n2. During app startup (after config is loaded), read `config.windows[\"main\"].inspector_stack` and call `ui_state.set_inspector_stack(stack)`\n3. The frontend mount flow (`get_ui_context` → restore) still works, but now UIState is also in sync\n\n## Acceptance Criteria\n- [ ] `UIState` is populated with persisted inspector stack on app startup\n- [ ] `get_ui_context` returns the same stack from both config and UIState\n- [ ] Inspector panels appear immediately after app restart without frontend needing to parse monikers itself\n\n## Tests\n- [ ] `swissarmyhammer-commands/src/ui_state.rs` — unit test for `set_inspector_stack` / initialization method\n- [ ] `cargo nextest run -p swissarmyhammer-commands` passes\n- [ ] `cargo nextest run -p kanban-app` passes\n\n## Subtasks\n- [ ] Add `set_inspector_stack` or constructor variant to UIState\n- [ ] Read persisted stack from config during AppState initialization\n- [ ] Populate UIState with restored stack"

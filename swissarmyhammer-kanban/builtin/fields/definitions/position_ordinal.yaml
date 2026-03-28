@@ -4,6 +4,7 @@ description: Fractional index for ordering within a column
 type:
   kind: text
   single_line: true
+icon: arrow-up-down
 editor: none
 display: text
 sort: alphanumeric

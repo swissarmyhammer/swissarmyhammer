@@ -4,9 +4,8 @@ import remarkGfm from "remark-gfm";
 import { useSchema } from "@/lib/schema-context";
 import { useEntityStore } from "@/lib/entity-store-context";
 import { remarkMentions } from "@/lib/remark-mentions";
-import { TagPill } from "@/components/tag-pill";
 import { MentionPill } from "@/components/mention-pill";
-import type { Entity } from "@/types/kanban";
+import { slugify } from "@/lib/slugify";
 import { getStr } from "@/types/kanban";
 import type { DisplayProps } from "./text-display";
 
@@ -22,8 +21,7 @@ function toggleCheckbox(source: string, index: number): string | null {
   });
 }
 
-interface MarkdownDisplayProps extends DisplayProps {
-  tags?: Entity[];
+interface MarkdownDisplayProps extends Omit<DisplayProps, "onCommit"> {
   onCommit?: (value: string) => void;
 }
 
@@ -31,33 +29,36 @@ interface MarkdownDisplayProps extends DisplayProps {
  * Markdown display — compact: truncated plain text, full: rendered ReactMarkdown with
  * GFM, mention pills for all mentionable types, and interactive checkboxes.
  */
-export function MarkdownDisplay({ value, mode, onCommit }: MarkdownDisplayProps) {
+export function MarkdownDisplay({
+  value,
+  mode,
+  onCommit,
+}: MarkdownDisplayProps) {
   const text = typeof value === "string" ? value : "";
   const displayRef = useRef<HTMLDivElement>(null);
 
   if (!text) {
-    return mode === "compact"
-      ? <span className="text-muted-foreground/50">-</span>
-      : <span className="text-muted-foreground italic">Empty</span>;
+    return mode === "compact" ? (
+      <span className="text-muted-foreground/50">-</span>
+    ) : (
+      <span className="text-muted-foreground italic">Empty</span>
+    );
   }
 
   if (mode === "compact") {
     return <span className="truncate block">{text}</span>;
   }
 
-  return (
-    <MarkdownFull
-      ref={displayRef}
-      text={text}
-      onCommit={onCommit}
-    />
-  );
+  return <MarkdownFull ref={displayRef} text={text} onCommit={onCommit} />;
 }
 
-const MarkdownFull = forwardRef<HTMLDivElement, {
-  text: string;
-  onCommit?: (value: string) => void;
-}>(function MarkdownFull({ text, onCommit }, ref) {
+const MarkdownFull = forwardRef<
+  HTMLDivElement,
+  {
+    text: string;
+    onCommit?: (value: string) => void;
+  }
+>(function MarkdownFull({ text, onCommit }, ref) {
   const { mentionableTypes } = useSchema();
   const { getEntities } = useEntityStore();
 
@@ -67,17 +68,26 @@ const MarkdownFull = forwardRef<HTMLDivElement, {
       return {
         ...mt,
         entities,
-        slugs: entities.map((e) => getStr(e, mt.displayField)).filter(Boolean),
+        slugs: entities
+          .map((e) => getStr(e, mt.displayField))
+          .filter(Boolean)
+          .map(slugify),
       };
     });
   }, [mentionableTypes, getEntities]);
 
   const remarkPlugins = useMemo(() => {
-    const plugins: Array<ReturnType<typeof remarkMentions> | typeof remarkGfm> = [remarkGfm];
+    const plugins: Array<ReturnType<typeof remarkMentions> | typeof remarkGfm> =
+      [remarkGfm];
     for (const md of mentionData) {
       if (md.slugs.length === 0) continue;
       plugins.push(
-        remarkMentions(md.prefix, md.slugs, `${md.entityType}Pill`, `${md.entityType}-pill`)
+        remarkMentions(
+          md.prefix,
+          md.slugs,
+          `${md.entityType}Pill`,
+          `${md.entityType}-pill`,
+        ),
       );
     }
     return plugins;
@@ -86,21 +96,14 @@ const MarkdownFull = forwardRef<HTMLDivElement, {
   const mentionComponents = useMemo(() => {
     const comps: Record<string, React.ComponentType> = {};
     for (const md of mentionData) {
-      if (md.entityType === "tag") {
-        comps["tag-pill"] = (props: { slug?: string }) => (
-          <TagPill slug={props.slug ?? ""} tags={md.entities} />
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        ) as any;
-      } else {
-        comps[`${md.entityType}-pill`] = (props: { slug?: string }) => (
+      comps[`${md.entityType}-pill`] = (props: { slug?: string }) =>
+        (
           <MentionPill
             entityType={md.entityType}
             slug={props.slug ?? ""}
             prefix={md.prefix}
-          />
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          /> // eslint-disable-next-line @typescript-eslint/no-explicit-any
         ) as any;
-      }
     }
     return comps;
   }, [mentionData]);

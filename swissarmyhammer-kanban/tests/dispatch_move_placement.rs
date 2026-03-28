@@ -147,7 +147,7 @@ async fn move_between_tasks_via_dispatch() {
 
 #[tokio::test]
 async fn move_without_placement_appends() {
-    let (_temp, ctx, id_a, id_b, id_c) = setup_board_with_tasks().await;
+    let (_temp, ctx, id_a, _id_b, _id_c) = setup_board_with_tasks().await;
 
     // Move A to "doing" without placement — should append
     dispatch_move(
@@ -169,7 +169,7 @@ async fn move_without_placement_appends() {
 async fn before_nonexistent_task_appends() {
     let (_temp, ctx, id_a, _id_b, _id_c) = setup_board_with_tasks().await;
 
-    let ord_before = ordinal(&ctx, &id_a).await;
+    let _ord_before = ordinal(&ctx, &id_a).await;
 
     // before_id references a task that doesn't exist — should fall through to append
     dispatch_move(
@@ -327,6 +327,37 @@ async fn move_to_first_in_production_board_state() {
             .map(|(i, o)| (cards[*i].title, o.as_str()))
             .collect::<Vec<_>>()
     );
+}
+
+/// Move the 3rd card to the 2nd position using before_id.
+///
+/// This exercises the exact drop-zone scenario from the frontend:
+/// [A, B, C] → user drops C on zone "before-B" → C lands between A and B.
+///
+/// Cross-reference: the notification flow after this move emits
+/// `entity-field-changed` with updated `position_ordinal`, tested in
+/// `kanban-app/src/watcher.rs` (`test_flush_and_emit_detects_task_position_ordinal_change`).
+#[tokio::test]
+async fn move_third_to_second_position_via_dispatch() {
+    let (_temp, ctx, id_a, id_b, id_c) = setup_board_with_tasks().await;
+
+    // Move C before B (3rd card to 2nd position)
+    dispatch_move(
+        &ctx,
+        json!({
+            "op": "move task",
+            "id": id_c,
+            "column": "todo",
+            "before_id": id_b
+        }),
+    )
+    .await;
+
+    let ord_a = ordinal(&ctx, &id_a).await;
+    let ord_c = ordinal(&ctx, &id_c).await;
+    let ord_b = ordinal(&ctx, &id_b).await;
+    assert!(ord_a < ord_c, "A ({}) < C ({})", ord_a, ord_c);
+    assert!(ord_c < ord_b, "C ({}) < B ({})", ord_c, ord_b);
 }
 
 /// Same production state, but move a card between two others:

@@ -4,6 +4,7 @@ description: File size in bytes, derived from attachment path
 type:
   kind: computed
   derive: attachment-file-size
+icon: hard-drive
 editor: none
 display: number
 sort: numeric

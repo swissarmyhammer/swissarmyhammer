@@ -1,5 +1,10 @@
 name: swimlane
+icon: rows-4
 search_display_field: name
+commands:
+  - id: entity.inspect
+    name: "Inspect {{entity.type}}"
+    context_menu: true
 fields:
   - name
   - order

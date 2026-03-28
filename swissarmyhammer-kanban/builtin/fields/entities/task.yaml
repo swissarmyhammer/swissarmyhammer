@@ -1,12 +1,22 @@
 name: task
+icon: check-square
 body_field: body
 search_display_field: title
+mention_prefix: "^"
+mention_display_field: title
+commands:
+  - id: entity.inspect
+    name: "Inspect {{entity.type}}"
+    context_menu: true
+  - id: entity.archive
+    name: "Archive {{entity.type}}"
+    context_menu: true
 fields:
   - title
   - tags
-  - progress
   - assignees
   - depends_on
+  - progress
   - body
   - position_column
   - position_swimlane

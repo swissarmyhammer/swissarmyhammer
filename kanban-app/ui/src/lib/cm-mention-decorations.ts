@@ -35,10 +35,7 @@ export function createMentionDecorations(
   colorVar: string,
 ) {
   /** Facet providing a map of slug → hex color (without #) */
-  const colorsFacet = Facet.define<
-    Map<string, string>,
-    Map<string, string>
-  >({
+  const colorsFacet = Facet.define<Map<string, string>, Map<string, string>>({
     combine(values) {
       return values.length > 0 ? values[values.length - 1] : new Map();
     },
@@ -50,7 +47,11 @@ export function createMentionDecorations(
     view: EditorView,
     colors: Map<string, string>,
   ): DecorationSet {
-    const decorations: { from: number; to: number; decoration: typeof defaultMark }[] = [];
+    const decorations: {
+      from: number;
+      to: number;
+      decoration: typeof defaultMark;
+    }[] = [];
     const doc = view.state.doc;
     const slugs = Array.from(colors.keys());
     let inFence = false;
@@ -70,7 +71,10 @@ export function createMentionDecorations(
       INLINE_CODE_RE.lastIndex = 0;
       let codeMatch: RegExpExecArray | null;
       while ((codeMatch = INLINE_CODE_RE.exec(text)) !== null) {
-        codeRanges.push([codeMatch.index, codeMatch.index + codeMatch[0].length]);
+        codeRanges.push([
+          codeMatch.index,
+          codeMatch.index + codeMatch[0].length,
+        ]);
       }
 
       const hits = findMentionsInText(text, prefix, slugs);
@@ -102,7 +106,9 @@ export function createMentionDecorations(
     }
 
     decorations.sort((a, b) => a.from - b.from || a.to - b.to);
-    return Decoration.set(decorations.map((d) => d.decoration.range(d.from, d.to)));
+    return Decoration.set(
+      decorations.map((d) => d.decoration.range(d.from, d.to)),
+    );
   }
 
   const plugin = ViewPlugin.fromClass(

@@ -1,7 +1,6 @@
 ---
 name: default
 description: General-purpose coding assistant with best practices
-model: default
 ---
 
 You are a skilled software engineer helping with coding tasks.

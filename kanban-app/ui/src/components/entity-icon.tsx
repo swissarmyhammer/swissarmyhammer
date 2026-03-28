@@ -1,20 +1,10 @@
-import {
-  CheckSquare,
-  Columns,
-  KanbanSquare,
-  Tag,
-  User,
-  type LucideIcon,
-} from "lucide-react";
+import { icons, LayoutGrid } from "lucide-react";
+import { useSchema } from "@/lib/schema-context";
 
-/** Map entity_type string to a Lucide icon. */
-const entityTypeIcons: Record<string, LucideIcon> = {
-  task: CheckSquare,
-  tag: Tag,
-  column: Columns,
-  actor: User,
-  board: KanbanSquare,
-};
+/** Convert kebab-case icon name to PascalCase key for lucide-react lookup. */
+function kebabToPascal(s: string): string {
+  return s.replace(/(^|-)([a-z])/g, (_, _dash, c: string) => c.toUpperCase());
+}
 
 interface EntityIconProps {
   entityType: string;
@@ -22,17 +12,21 @@ interface EntityIconProps {
 }
 
 /**
- * Renders the icon for an entity type.
- * Falls back to the entity type name when no icon is mapped.
+ * Renders the icon for an entity type from its YAML `icon` property.
+ *
+ * Resolves the icon name via the schema and does a dynamic lucide lookup.
+ * Falls back to LayoutGrid if the icon name is missing or unrecognised.
  */
 export function EntityIcon({ entityType, className }: EntityIconProps) {
-  const Icon = entityTypeIcons[entityType];
-  if (Icon) {
-    return <Icon className={className} />;
+  const { getSchema } = useSchema();
+  const schema = getSchema(entityType);
+  const iconName = schema?.entity.icon;
+
+  if (iconName) {
+    const key = kebabToPascal(iconName);
+    const Icon = icons[key as keyof typeof icons];
+    if (Icon) return <Icon className={className} />;
   }
-  return (
-    <span className={className}>
-      {entityType.charAt(0).toUpperCase() + entityType.slice(1)}
-    </span>
-  );
+
+  return <LayoutGrid className={className} />;
 }

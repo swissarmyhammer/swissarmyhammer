@@ -5,7 +5,7 @@ type:
   kind: markdown
   single_line: true
 editor: markdown
-display: markdown
+display: text
 sort: alphanumeric
 width: 300
 section: header

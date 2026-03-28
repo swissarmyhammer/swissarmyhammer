@@ -1,0 +1,14 @@
+- id: drag.start
+  name: Start Drag
+  undoable: false
+  visible: false
+
+- id: drag.cancel
+  name: Cancel Drag
+  undoable: false
+  visible: false
+
+- id: drag.complete
+  name: Complete Drag
+  undoable: false
+  visible: false

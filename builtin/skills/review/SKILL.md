@@ -128,5 +128,5 @@ Add subtasks for each fix step. Every card MUST include a verification subtask.
 - **Review the change, not the whole file.** Flag pre-existing issues only if the change makes them worse.
 - **Don't block on style.** Defer to formatters. Accept the author's style if no convention exists.
 - **Be specific and actionable.** "This function is confusing" is not enough.
-- **One concern per finding.** Don't bundle unrelated issues.
+- **One concern per finding, one card per finding.** Don't bundle unrelated issues into a single card. If three components each have the same problem, that's three cards — not one card listing three components. Each card should be independently implementable and testable.
 - **Skip gitignored files and dot-directories** (`.git/`, `.vscode/`, `.skills/`) unless explicitly asked.

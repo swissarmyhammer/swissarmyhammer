@@ -112,12 +112,15 @@ export function DragSessionProvider({ children }: { children: ReactNode }) {
       const bp = boardPathRef.current;
       if (!bp) return;
       try {
-        await invoke("start_drag_session", {
-          taskId,
-          taskFields,
-          boardPath: bp,
-          sourceWindowLabel: getCurrentWindow().label,
-          copyMode,
+        await invoke("dispatch_command", {
+          cmd: "drag.start",
+          args: {
+            taskId,
+            taskFields,
+            boardPath: bp,
+            sourceWindowLabel: getCurrentWindow().label,
+            copyMode,
+          },
         });
         setIsSource(true);
       } catch (e) {
@@ -129,7 +132,7 @@ export function DragSessionProvider({ children }: { children: ReactNode }) {
 
   const cancelSession = useCallback(async () => {
     try {
-      await invoke("cancel_drag_session");
+      await invoke("dispatch_command", { cmd: "drag.cancel" });
     } catch (e) {
       console.error("Failed to cancel drag session:", e);
     }
@@ -148,13 +151,16 @@ export function DragSessionProvider({ children }: { children: ReactNode }) {
       const bp = boardPathRef.current;
       if (!bp) return;
       try {
-        await invoke("complete_drag_session", {
-          targetBoardPath: bp,
-          targetColumn,
-          dropIndex: options?.dropIndex ?? null,
-          beforeId: options?.beforeId ?? null,
-          afterId: options?.afterId ?? null,
-          copyMode: options?.copyMode ?? false,
+        await invoke("dispatch_command", {
+          cmd: "drag.complete",
+          args: {
+            targetBoardPath: bp,
+            targetColumn,
+            dropIndex: options?.dropIndex ?? null,
+            beforeId: options?.beforeId ?? null,
+            afterId: options?.afterId ?? null,
+            copyMode: options?.copyMode ?? false,
+          },
         });
       } catch (e) {
         console.error("Failed to complete drag session:", e);
@@ -165,7 +171,13 @@ export function DragSessionProvider({ children }: { children: ReactNode }) {
 
   return (
     <DragSessionContext.Provider
-      value={{ session, startSession, cancelSession, completeSession, isSource }}
+      value={{
+        session,
+        startSession,
+        cancelSession,
+        completeSession,
+        isSource,
+      }}
     >
       {children}
     </DragSessionContext.Provider>

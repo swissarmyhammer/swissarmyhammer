@@ -32,3 +32,8 @@
   params:
     - name: view_id
       from: args
+
+- id: ui.setFocus
+  name: Set Focus
+  visible: false
+  undoable: false

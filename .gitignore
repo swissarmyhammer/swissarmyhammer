@@ -131,3 +131,4 @@ ane-embedding/convert/output/
 # Shell tool runtime state
 **/.shell/
 .claude/worktrees
+.swissarmyhammer

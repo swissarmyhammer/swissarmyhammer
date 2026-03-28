@@ -1,8 +1,9 @@
 //! Native menu bar construction and event handling.
 
 use crate::commands::MenuItemEntry;
-use crate::state::{resolve_kanban_path, AppState, RecentBoard};
+use crate::state::{resolve_kanban_path, AppState};
 use std::path::{Path, PathBuf};
+use swissarmyhammer_commands::RecentBoard;
 use swissarmyhammer_kanban::{
     board::InitBoard, KanbanContext, KanbanOperationProcessor, OperationProcessor,
 };
@@ -89,7 +90,7 @@ pub fn build_menu_from_manifest(
     // Open Recent submenu
     let recent_submenu = Submenu::new(app, "Open Recent", !recent.is_empty())?;
     for rb in recent {
-        let id = format!("open_recent:{}", rb.path.display());
+        let id = format!("open_recent:{}", rb.path);
         let item = MenuItem::with_id(app, id, &rb.name, true, None::<&str>)?;
         recent_submenu.append(&item)?;
     }
@@ -144,6 +145,28 @@ pub fn build_menu_from_manifest(
     window_menu.append(&PredefinedMenuItem::minimize(app, None)?)?;
     window_menu.append(&PredefinedMenuItem::maximize(app, None)?)?;
 
+    // Manually list open windows with a checkmark on the focused one.
+    // NOTE: muda's set_as_windows_menu_for_nsapp() is broken — it uses
+    // a disconnected NSMenu that macOS ignores (muda#322, still unmerged).
+    let windows = app.webview_windows();
+    let visible: Vec<_> = windows
+        .iter()
+        .filter(|(_, w)| {
+            let title = w.title().unwrap_or_default();
+            !title.is_empty() && w.is_visible().unwrap_or(false)
+        })
+        .collect();
+    if !visible.is_empty() {
+        window_menu.append(&PredefinedMenuItem::separator(app)?)?;
+        for (label, window) in &visible {
+            let title = window.title().unwrap_or_else(|_| (*label).clone());
+            let focused = window.is_focused().unwrap_or(false);
+            let id = format!("window.focus:{}", label);
+            let item = CheckMenuItem::with_id(app, id, &title, true, focused, None::<&str>)?;
+            window_menu.append(&item)?;
+        }
+    }
+
     let menu = Menu::with_items(app, &[&app_menu, &file_menu, &edit_menu, &window_menu])?;
     app.set_menu(menu).map_err(|e| {
         tracing::error!("Failed to set menu: {}", e);
@@ -197,12 +220,41 @@ pub fn handle_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
         return;
     }
 
+    // Window list items — focus the named window and update check states
+    if let Some(label) = id.strip_prefix("window.focus:") {
+        if let Some(window) = app.get_webview_window(label) {
+            let _ = window.unminimize();
+            let _ = window.set_focus();
+        }
+        // Update check marks: only the clicked window should be checked
+        if let Some(menu) = app.menu() {
+            if let Ok(items) = menu.items() {
+                for item in items {
+                    if let Some(sub) = item.as_submenu() {
+                        if let Ok(sub_items) = sub.items() {
+                            for si in sub_items {
+                                if let Some(check) = si.as_check_menuitem() {
+                                    let cid = check.id().as_ref().to_string();
+                                    if let Some(wlabel) = cid.strip_prefix("window.focus:") {
+                                        let _ = check.set_checked(wlabel == label);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return;
+    }
+
     // Generic context menu items — emit as context-menu-command so the
     // frontend can distinguish them from menu bar commands.
+    // UIState uses std::sync::RwLock (not tokio), so read access works in
+    // sync contexts like this menu event handler.
     {
         let state = app.state::<AppState>();
-        let ids = state.context_menu_ids.blocking_read();
-        if ids.contains(&id) {
+        if state.ui_state.is_context_menu_id(&id) {
             let _ = app.emit("context-menu-command", &id);
             return;
         }
@@ -297,24 +349,46 @@ fn focused_window_label(app: &AppHandle) -> Option<String> {
 
 /// Open a board and emit frontend events.
 ///
+/// Routes board opening through `dispatch_command_internal` so that all
+/// UIState tracking and BoardHandle lifecycle are handled consistently.
+///
 /// Emits `board-opened` to the source window (the one that initiated
-/// the open) so only that window switches. Broadcasts `board-changed`
-/// to all windows so they refresh their open boards list.
+/// the open) so only that window switches. The `board-changed` broadcast
+/// is handled by `dispatch_command_internal` via the `BoardSwitch` side effect.
 async fn open_and_notify(handle: &AppHandle, path: &Path, source_window_label: Option<&str>) {
     use serde_json::json;
     use tauri::Emitter;
 
     let state = handle.state::<AppState>();
-    match state.open_board(path, Some(handle.clone())).await {
-        Ok(canonical) => {
-            let payload = json!({ "path": canonical.display().to_string() });
+    let path_str = path.display().to_string();
+    let window_label = source_window_label.unwrap_or("main").to_string();
 
-            // Emit board-opened to the source window only (emit_to scopes to one window)
+    match crate::commands::dispatch_command_internal(
+        handle,
+        &state,
+        "file.switchBoard",
+        None,
+        None,
+        Some(json!({ "path": path_str, "windowLabel": window_label })),
+        None,
+        Some(window_label.clone()),
+    )
+    .await
+    {
+        Ok(_) => {
+            // Resolve the canonical path so the frontend gets the same path
+            // that the board was registered under in UIState.
+            let canonical = resolve_kanban_path(path)
+                .ok()
+                .and_then(|p| p.canonicalize().ok().or(Some(p)))
+                .unwrap_or_else(|| path.to_path_buf());
+
+            // Emit board-opened to the source window only so it switches its active board.
+            // dispatch_command_internal already emits board-changed to all windows.
+            let payload = json!({ "path": canonical.display().to_string() });
             if let Some(label) = source_window_label {
                 let _ = handle.emit_to(label, "board-opened", &payload);
             }
-
-            let _ = handle.emit("board-changed", ());
         }
         Err(e) => {
             tracing::error!("Failed to open board at {}: {}", path.display(), e);

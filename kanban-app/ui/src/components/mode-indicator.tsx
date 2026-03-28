@@ -1,5 +1,5 @@
 import { useAppMode, type AppMode } from "@/lib/app-mode-context";
-import { useKeymap } from "@/lib/keymap-context";
+import { useUIState } from "@/lib/ui-state-context";
 
 /** Maps each mode to its vim-style display label. */
 const MODE_LABELS: Record<AppMode, string> = {
@@ -18,10 +18,10 @@ const MODE_LABELS: Record<AppMode, string> = {
  */
 export function ModeIndicator() {
   const { mode } = useAppMode();
-  const { mode: keymapMode } = useKeymap();
+  const { keymap_mode } = useUIState();
 
   // Only show the vim-style mode indicator in vim mode
-  if (keymapMode !== "vim") return null;
+  if (keymap_mode !== "vim") return null;
 
   return (
     <div
@@ -35,12 +35,18 @@ export function ModeIndicator() {
       </span>
 
       {/* Center: mode label */}
-      <span data-testid="mode-indicator-mode" className="font-bold tracking-wide">
+      <span
+        data-testid="mode-indicator-mode"
+        className="font-bold tracking-wide"
+      >
         {MODE_LABELS[mode]}
       </span>
 
       {/* Right slot: sort/filter info (placeholder) */}
-      <span data-testid="mode-indicator-right" className="min-w-0 truncate text-right">
+      <span
+        data-testid="mode-indicator-right"
+        className="min-w-0 truncate text-right"
+      >
         &nbsp;
       </span>
     </div>

@@ -4,6 +4,7 @@ description: Task body content
 type:
   kind: markdown
   single_line: false
+icon: file-text
 editor: markdown
 display: markdown
 width: 400

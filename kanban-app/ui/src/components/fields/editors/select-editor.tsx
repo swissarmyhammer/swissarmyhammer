@@ -1,51 +1,103 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
+import { useUIState } from "@/lib/ui-state-context";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import type { FieldDef } from "@/types/kanban";
-import type { EditorProps } from "./markdown-editor";
+import type { EditorProps } from ".";
 
 interface SelectEditorProps extends EditorProps {
   field: FieldDef;
 }
 
-/** Select dropdown editor for select fields. Commits on change, cancels on Escape. */
-export function SelectEditor({ field, value, onCommit, onCancel }: SelectEditorProps) {
-  const options = ((field.type as Record<string, unknown>).options as Array<{ value: string; label?: string }>) ?? [];
-  const [draft, setDraft] = useState(typeof value === "string" ? value : "");
-  const ref = useRef<HTMLSelectElement>(null);
+/** Select editor using shadcn/Radix Select. Commits on selection, Enter, or blur. */
+export function SelectEditor({
+  field,
+  value,
+  onCommit,
+  onCancel,
+}: SelectEditorProps) {
+  const options =
+    ((field.type as Record<string, unknown>).options as Array<{
+      value: string;
+      label?: string;
+      color?: string;
+    }>) ?? [];
+  const initial = typeof value === "string" ? value : "";
+  const [draft, setDraft] = useState(initial);
+  const [open, setOpen] = useState(true);
   const committedRef = useRef(false);
+  const cancelledRef = useRef(false);
+  const { keymap_mode: mode } = useUIState();
 
-  useEffect(() => {
-    ref.current?.focus();
-  }, []);
+  const commit = useCallback(
+    (val: string) => {
+      if (committedRef.current || cancelledRef.current) return;
+      committedRef.current = true;
+      onCommit(val);
+    },
+    [onCommit],
+  );
 
-  const commit = useCallback((val: string) => {
+  const cancel = useCallback(() => {
     if (committedRef.current) return;
+    cancelledRef.current = true;
     committedRef.current = true;
-    onCommit(val);
-  }, [onCommit]);
+    onCancel();
+  }, [onCancel]);
 
   return (
-    <select
-      ref={ref}
+    <Select
       value={draft}
-      onChange={(e) => {
-        setDraft(e.target.value);
-        commit(e.target.value);
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next);
       }}
-      onKeyDown={(e) => {
-        if (e.key === "Escape") { e.preventDefault(); onCancel(); }
-        e.stopPropagation();
+      onValueChange={(val) => {
+        setDraft(val);
       }}
-      onBlur={() => {
-        if (!committedRef.current) commit(draft);
-      }}
-      className="w-full px-3 py-1.5 text-sm bg-transparent border-none outline-none ring-0"
     >
-      <option value="">-</option>
-      {options.map((opt) => (
-        <option key={opt.value} value={opt.value}>
-          {opt.label ?? opt.value}
-        </option>
-      ))}
-    </select>
+      <SelectTrigger
+        size="sm"
+        className="w-full text-sm h-auto py-1 px-2"
+        onBlur={() => {
+          if (!committedRef.current) commit(draft);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            e.stopPropagation();
+            setOpen(false);
+            commit(draft);
+          } else if (e.key === "Escape") {
+            e.preventDefault();
+            e.stopPropagation();
+            if (mode === "vim") commit(draft);
+            else cancel();
+            setOpen(false);
+          }
+        }}
+      >
+        <SelectValue placeholder="-" />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem value="__empty__">-</SelectItem>
+        {options.map((opt) => (
+          <SelectItem key={opt.value} value={opt.value}>
+            {opt.color && (
+              <span
+                className="inline-block w-2 h-2 rounded-full mr-1.5"
+                style={{ backgroundColor: `#${opt.color}` }}
+              />
+            )}
+            {opt.label ?? opt.value}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
   );
 }

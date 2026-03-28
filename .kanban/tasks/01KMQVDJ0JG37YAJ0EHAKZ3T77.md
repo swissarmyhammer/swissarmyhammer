@@ -1,0 +1,8 @@
+---
+assignees:
+- claude-code
+position_column: done
+position_ordinal: fffffffffffff580
+title: '[Correctness/Low] Key binding collision between global nav and scope commands is handled correctly by scope shadowing'
+---
+**Files:** `kanban-app/ui/src/components/app-shell.tsx` (global nav), `kanban-app/ui/src/components/board-view.tsx` (board nav), `kanban-app/ui/src/components/inspector-focus-bridge.tsx` (inspector nav), `kanban-app/ui/src/lib/keybindings.ts`\n\n**What:** The global nav commands use the same keys as scope-specific commands:\n- vim j/k/h/l and cua ArrowUp/Down/Left/Right collide between `nav.*` (global) and `board.move*` / `inspector.move*` (scope).\n- cua Home/End collide between `nav.first/last` (global) and `board.firstCard/lastCard` / `inspector.moveToFirst/Last` (scope).\n\nHowever, this is handled correctly by the keybinding architecture. `createKeyHandler` merges bindings as `{ ...globalBindings, ...scopeBindings }`, so scope bindings always shadow globals. When a FocusScope is focused, its `board.moveDown` shadows the global `nav.down` for the same key. When nothing is focused, the global `nav.down` fires (though it's currently a no-op per the other finding).\n\n**Note:** The global BINDING_TABLES in keybindings.ts do NOT include `j/k/h/l/ArrowUp/Down` etc -- the nav commands register their keys only via command `keys` properties, not via BINDING_TABLES. The `keys` on CommandDef are resolved during `extractScopeBindings` for the root scope. This means they are in the scope chain but at the outermost level, correctly shadowed by inner scopes.\n\n**Verdict:** The layered resolution is architecturally sound. No collision bug." #review-finding

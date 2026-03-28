@@ -1,0 +1,3 @@
+color: 9966ff
+description: Components with inline anonymous prop types instead of named ComponentProps interfaces
+tag_name: props-slop

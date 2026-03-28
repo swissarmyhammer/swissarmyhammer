@@ -1,0 +1,8 @@
+---
+assignees:
+- claude-code
+position_column: done
+position_ordinal: ffffffffffffffa380
+title: SlidePanel close button uses onClose callback instead of dispatching ui.inspector.close command
+---
+**File:** `kanban-app/ui/src/components/slide-panel.tsx`, lines 34-37\n\n**Anti-pattern:** The X close button calls `onClose()` directly. This callback chain goes: SlidePanel.onClose -> App.closeTopPanel -> `invoke(\"dispatch_command\", { cmd: \"ui.inspector.close\" })`. The command dispatch happens, but it is wrapped in a callback prop chain rather than going through the scope chain.\n\n**Current code:**\n```tsx\n<button onClick={onClose}>\n  <X className=\"h-4 w-4\" />\n</button>\n```\n\n**Correct pattern:** The SlidePanel (or a wrapping component) should dispatch `ui.inspector.close` through the command scope chain. Since SlidePanel is a generic shell component, this might be better handled by wrapping each inspector panel in a CommandScopeProvider that registers a close command.\n\n**Severity:** Low/informational. SlidePanel is intentionally a generic shell that knows nothing about commands. The callback pattern is pragmatic here. However, it does mean the close button click is not visible as a command dispatch in the log until it reaches App.tsx.\n\n**Scope chain impact:** Minor -- the command does get dispatched to Rust eventually via App.closeTopPanel, but the UI-side scope chain is not involved. #review-finding

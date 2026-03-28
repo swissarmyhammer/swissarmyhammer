@@ -14,6 +14,8 @@ use std::path::{Path, PathBuf};
 use tokio::fs;
 use tracing::debug;
 
+use crate::types::FieldType;
+
 use crate::error::{FieldsError, Result};
 use crate::id_types::{EntityTypeName, FieldDefId, FieldName};
 use crate::types::{EntityDef, FieldDef};
@@ -285,6 +287,26 @@ impl FieldsContext {
             .collect()
     }
 
+    /// Find entity types that have aggregate computed fields depending on the given entity type.
+    ///
+    /// Scans all entity definitions for computed fields with `depends_on` containing `trigger_type`.
+    /// Returns a list of entity type names whose aggregates need recomputation.
+    pub fn entity_types_depending_on(&self, trigger_type: &str) -> Vec<&str> {
+        self.all_entities()
+            .iter()
+            .filter(|entity_def| {
+                self.fields_for_entity(&entity_def.name).iter().any(|fd| {
+                    if let FieldType::Computed { depends_on, .. } = &fd.type_ {
+                        depends_on.iter().any(|dep| dep == trigger_type)
+                    } else {
+                        false
+                    }
+                })
+            })
+            .map(|e| e.name.as_str())
+            .collect()
+    }
+
     /// Resolve a field name to its ID.
     pub fn resolve_name_to_id(&self, name: &str) -> Option<&FieldDefId> {
         self.get_field_by_name(name).map(|f| &f.id)
@@ -414,7 +436,7 @@ pub fn load_yaml_dir(dir: &Path) -> Vec<(String, String)> {
 mod tests {
     use super::*;
     use crate::id_types::FieldDefId;
-    use crate::types::{Editor, EntityDef, FieldDef, FieldType};
+    use crate::types::{EntityDef, FieldDef, FieldType};
     use tempfile::TempDir;
 
     fn make_test_field(name: &str) -> FieldDef {
@@ -424,10 +446,11 @@ mod tests {
             description: None,
             type_: FieldType::Text { single_line: true },
             default: None,
-            editor: Some(Editor::Markdown),
+            editor: Some("markdown".into()),
             display: None,
             sort: None,
             width: None,
+            icon: None,
             section: None,
             validate: None,
         }
@@ -666,12 +689,14 @@ type:
 
         let entity = EntityDef {
             name: "task".into(),
+            icon: None,
             body_field: Some("body".into()),
             fields: vec!["title".into(), "status".into()],
             validate: None,
             mention_prefix: None,
             mention_display_field: None,
             search_display_field: None,
+            commands: vec![],
         };
         ctx.write_entity(&entity).await.unwrap();
 
@@ -694,12 +719,14 @@ type:
 
         let entity = EntityDef {
             name: "task".into(),
+            icon: None,
             body_field: None,
             fields: vec!["title".into(), "status".into(), "missing".into()],
             validate: None,
             mention_prefix: None,
             mention_display_field: None,
             search_display_field: None,
+            commands: vec![],
         };
         ctx.write_entity(&entity).await.unwrap();
 
@@ -720,12 +747,14 @@ type:
             ctx.write_field(&make_test_field("status")).await.unwrap();
             ctx.write_entity(&EntityDef {
                 name: "task".into(),
+                icon: None,
                 body_field: Some("body".into()),
                 fields: vec!["title".into(), "status".into()],
                 validate: None,
                 mention_prefix: None,
                 mention_display_field: None,
                 search_display_field: None,
+                commands: vec![],
             })
             .await
             .unwrap();
@@ -757,6 +786,7 @@ type:
                 display: None,
                 sort: None,
                 width: None,
+                icon: None,
                 section: None,
                 validate: None,
             })

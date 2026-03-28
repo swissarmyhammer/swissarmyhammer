@@ -10,17 +10,7 @@ export { AvatarDisplay } from "./avatar-display";
 
 import type { FieldDef } from "@/types/kanban";
 
-/**
- * Resolve which display component to use for a field.
- * Checks `field.display` first, then falls back to `field.type.kind`.
- */
+/** Resolve which display component to use for a field — reads directly from the YAML-configured `display` property. */
 export function resolveDisplay(field: FieldDef): string {
-  if (field.display) return field.display;
-  const kind = field.type.kind;
-  if (kind === "markdown") return "markdown";
-  if (kind === "select") return "badge";
-  if (kind === "color") return "color-swatch";
-  if (kind === "date") return "date";
-  if (kind === "number" || kind === "integer") return "number";
-  return "text";
+  return field.display ?? "text";
 }

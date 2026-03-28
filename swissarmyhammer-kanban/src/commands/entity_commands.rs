@@ -72,6 +72,83 @@ impl Command for DeleteEntityCmd {
     }
 }
 
+/// Archive any entity by its target moniker.
+///
+/// Available when a target moniker is set. Dispatches to EntityContext::archive()
+/// based on the entity type parsed from the moniker.
+pub struct ArchiveEntityCmd;
+
+#[async_trait]
+impl Command for ArchiveEntityCmd {
+    fn available(&self, ctx: &CommandContext) -> bool {
+        ctx.target.is_some()
+    }
+
+    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+        let kanban = ctx.require_extension::<KanbanContext>()?;
+
+        let moniker = ctx
+            .target
+            .as_deref()
+            .ok_or_else(|| CommandError::MissingArg("target".into()))?;
+        let (entity_type, id) =
+            parse_moniker(moniker).ok_or_else(|| CommandError::InvalidMoniker(moniker.into()))?;
+
+        // For tasks, dispatch to ArchiveTask which handles dependency cleanup
+        // (same as DeleteEntityCmd dispatches to DeleteTask for tasks).
+        // For other entity types, call EntityContext::archive() directly.
+        if entity_type == "task" {
+            return run_op(&crate::task::ArchiveTask::new(id), &kanban).await;
+        }
+
+        let ectx = kanban
+            .entity_context()
+            .await
+            .map_err(|e| CommandError::ExecutionFailed(e.to_string()))?;
+
+        ectx.archive(entity_type, id)
+            .await
+            .map_err(|e| CommandError::ExecutionFailed(e.to_string()))?;
+
+        Ok(serde_json::json!({"archived": true}))
+    }
+}
+
+/// Restore any entity from the archive by its target moniker.
+///
+/// Available when a target moniker is set. Dispatches to EntityContext::unarchive()
+/// based on the entity type parsed from the moniker.
+pub struct UnarchiveEntityCmd;
+
+#[async_trait]
+impl Command for UnarchiveEntityCmd {
+    fn available(&self, ctx: &CommandContext) -> bool {
+        ctx.target.is_some()
+    }
+
+    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+        let kanban = ctx.require_extension::<KanbanContext>()?;
+
+        let moniker = ctx
+            .target
+            .as_deref()
+            .ok_or_else(|| CommandError::MissingArg("target".into()))?;
+        let (entity_type, id) =
+            parse_moniker(moniker).ok_or_else(|| CommandError::InvalidMoniker(moniker.into()))?;
+
+        let ectx = kanban
+            .entity_context()
+            .await
+            .map_err(|e| CommandError::ExecutionFailed(e.to_string()))?;
+
+        ectx.unarchive(entity_type, id)
+            .await
+            .map_err(|e| CommandError::ExecutionFailed(e.to_string()))?;
+
+        Ok(serde_json::json!({"unarchived": true}))
+    }
+}
+
 /// Update a tag's name, color, or description.
 ///
 /// Available when `tag` is in the scope chain.

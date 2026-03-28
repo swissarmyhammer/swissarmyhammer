@@ -62,8 +62,7 @@ Each agent must target a specific card by ID. Do NOT let parallel agents call `n
 
 ### Parallel Safety
 
-- **Max 4 concurrent agents.** More than this risks resource exhaustion and merge conflicts.
-- **After parallel agents complete**, check for merge conflicts in their worktrees before proceeding.
+- **Max 4 concurrent agents.**, folks are still using their computers.
 - **If a parallel agent fails**, continue with the others. Report the failure at the end.
 
 ### Scope

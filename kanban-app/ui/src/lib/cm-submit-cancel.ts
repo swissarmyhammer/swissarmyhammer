@@ -3,7 +3,7 @@
  *
  * Vim mode:
  *   - Insert Escape → normal mode (vim handles, we optionally save in place)
- *   - Normal Escape → onCancelRef (via domEventHandlers — vim doesn't consume Esc)
+ *   - Normal Escape → onCancelRef (via two-phase DOM listener, fires after vim)
  *   - Normal Enter  → onSubmitRef (via capture-phase DOM listener on .cm-editor)
  *   - Insert Enter  → newline (vim handles, we don't intercept)
  *
@@ -12,7 +12,7 @@
  *   - Enter  → onSubmitRef (only when singleLine is true)
  */
 
-import { keymap, EditorView, ViewPlugin } from "@codemirror/view";
+import { keymap, ViewPlugin } from "@codemirror/view";
 import { Prec, type Extension } from "@codemirror/state";
 import { getCM } from "@replit/codemirror-vim";
 
@@ -46,13 +46,23 @@ export interface SubmitCancelOptions {
  * processing. We check vim state and preventDefault+stopPropagation
  * if we handle it, so vim never sees the event.
  *
- * Vim Escape uses CM6 domEventHandlers (vim doesn't consume Esc in
- * normal mode, so our handler runs fine).
+ * Vim Escape uses a two-phase strategy: a capture-phase handler records
+ * whether vim was in insert mode BEFORE vim processes the event, then a
+ * bubble-phase handler acts AFTER vim — stopping propagation so the
+ * global app.dismiss handler never fires.
  *
  * CUA/emacs uses Prec.highest keymap.of bindings.
  */
-export function buildSubmitCancelExtensions(opts: SubmitCancelOptions): Extension[] {
-  const { mode, onSubmitRef, onCancelRef, saveInPlaceRef, singleLine = true } = opts;
+export function buildSubmitCancelExtensions(
+  opts: SubmitCancelOptions,
+): Extension[] {
+  const {
+    mode,
+    onSubmitRef,
+    onCancelRef,
+    saveInPlaceRef,
+    singleLine = true,
+  } = opts;
 
   if (mode === "vim") {
     return [
@@ -80,22 +90,40 @@ export function buildSubmitCancelExtensions(opts: SubmitCancelOptions): Extensio
             }),
           ]
         : []),
-      // Escape: domEventHandlers (vim doesn't consume Esc in normal mode)
-      EditorView.domEventHandlers({
-        keydown(event, view) {
-          if (event.key === "Escape") {
-            const cm = getCM(view);
-            if (cm?.state?.vim?.insertMode) {
-              if (saveInPlaceRef?.current) {
-                setTimeout(() => saveInPlaceRef.current?.(), 0);
-              }
-              return false;
+      // Escape: two-phase handler.
+      // Capture records insertMode before vim sees the event.
+      // Bubble fires after vim has processed it, stops propagation to
+      // prevent app.dismiss, and either exits (normal) or does nothing (insert).
+      ViewPlugin.define((view) => {
+        let wasInsert = false;
+        const capture = (event: KeyboardEvent) => {
+          if (event.key !== "Escape") return;
+          const cm = getCM(view);
+          wasInsert = !!cm?.state?.vim?.insertMode;
+        };
+        const bubble = (event: KeyboardEvent) => {
+          if (event.key !== "Escape") return;
+          event.stopPropagation();
+          if (wasInsert) {
+            // Was in insert mode — vim already switched to normal mode.
+            // Save in place if configured, but don't exit.
+            if (saveInPlaceRef?.current) {
+              setTimeout(() => saveInPlaceRef.current?.(), 0);
             }
-            onCancelRef.current?.();
-            return true;
+            return;
           }
-          return false;
-        },
+          // Was in normal mode — cancel/exit the editor.
+          event.preventDefault();
+          onCancelRef.current?.();
+        };
+        view.dom.addEventListener("keydown", capture, true);
+        view.dom.addEventListener("keydown", bubble, false);
+        return {
+          destroy() {
+            view.dom.removeEventListener("keydown", capture, true);
+            view.dom.removeEventListener("keydown", bubble, false);
+          },
+        };
       }),
     ];
   }

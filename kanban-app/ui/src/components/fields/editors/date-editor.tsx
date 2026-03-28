@@ -4,11 +4,15 @@ import CodeMirror, { type ReactCodeMirrorRef } from "@uiw/react-codemirror";
 import { keymap, EditorView } from "@codemirror/view";
 import { Compartment } from "@codemirror/state";
 import { getCM } from "@replit/codemirror-vim";
-import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
+import {
+  Popover,
+  PopoverTrigger,
+  PopoverContent,
+} from "@/components/ui/popover";
 import { Calendar } from "@/components/ui/calendar";
-import { useKeymap } from "@/lib/keymap-context";
+import { useUIState } from "@/lib/ui-state-context";
 import { shadcnTheme, keymapExtension } from "@/lib/cm-keymap";
-import type { EditorProps } from "./markdown-editor";
+import type { EditorProps } from ".";
 
 /** Format a Date as YYYY-MM-DD */
 function toISO(d: Date): string {
@@ -38,7 +42,7 @@ export function DateEditor({ value, onCommit, onCancel }: EditorProps) {
   const editorRef = useRef<ReactCodeMirrorRef>(null);
   const keymapCompartment = useRef(new Compartment());
   const committedRef = useRef(false);
-  const { mode } = useKeymap();
+  const { keymap_mode: mode } = useUIState();
 
   // Parse as user types
   useEffect(() => {
@@ -122,7 +126,10 @@ export function DateEditor({ value, onCommit, onCancel }: EditorProps) {
             keymap.of([
               {
                 key: "Escape",
-                run: () => { cancelRef.current(); return true; },
+                run: () => {
+                  cancelRef.current();
+                  return true;
+                },
               },
               {
                 key: "Enter",
@@ -192,13 +199,9 @@ export function DateEditor({ value, onCommit, onCancel }: EditorProps) {
           {draft && (
             <div className="text-xs px-1">
               {resolved ? (
-                <span className="text-muted-foreground">
-                  &rarr; {resolved}
-                </span>
+                <span className="text-muted-foreground">&rarr; {resolved}</span>
               ) : (
-                <span className="text-destructive">
-                  Could not parse date
-                </span>
+                <span className="text-destructive">Could not parse date</span>
               )}
             </div>
           )}

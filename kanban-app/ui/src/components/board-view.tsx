@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   DndContext,
   DragOverlay,
@@ -16,18 +22,22 @@ import {
 } from "@dnd-kit/sortable";
 import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
-import { useActiveBoardPath } from "@/lib/command-scope";
+import type { DropZoneDescriptor } from "@/lib/drop-zones";
+import {
+  CommandScopeProvider,
+  type CommandDef,
+} from "@/lib/command-scope";
 import { ColumnView } from "@/components/column-view";
 import { SortableColumn } from "@/components/sortable-column";
 import { FocusScope } from "@/components/focus-scope";
+import { useInspect } from "@/lib/inspect-context";
 import { useEntityFocus } from "@/lib/entity-focus-context";
 /** Default title for new tasks — the Rust side also uses this as fallback. */
 function defaultTaskTitle(_columnName: string): string {
   return "New task";
 }
-import { useFieldUpdate } from "@/lib/field-update-context";
-import { moniker } from "@/lib/moniker";
-import { useInspect } from "@/lib/inspect-context";
+import { moniker, fieldMoniker } from "@/lib/moniker";
+import { useEntityCommands } from "@/lib/entity-commands";
 import { useDragSession } from "@/lib/drag-session-context";
 import type { BoardData, Entity } from "@/types/kanban";
 import { getStr, getNum } from "@/types/kanban";
@@ -35,6 +45,7 @@ import { getStr, getNum } from "@/types/kanban";
 interface BoardViewProps {
   board: BoardData;
   tasks: Entity[];
+  boardPath?: string;
 }
 
 type ColumnLayout = Map<string, string[]>;
@@ -42,30 +53,28 @@ type ColumnLayout = Map<string, string[]>;
 interface TaskDragState {
   sourceTaskId: string;
   sourceColumn: string;
-  targetColumn: string | null;
-  insertIndex: number | null;
 }
 
-export function BoardView({ board, tasks }: BoardViewProps) {
-  const boardPath = useActiveBoardPath();
+/**
+ * Board view that renders columns and cards.
+ *
+ * Navigation is pull-based: each card and column header FocusScope declares
+ * claimWhen predicates. The global KeybindingHandler broadcasts nav.up/down/
+ * left/right/first/last, and each predicate evaluates whether it should claim
+ * focus. No push-based cursor state is needed.
+ */
+export function BoardView({ board, tasks, boardPath }: BoardViewProps) {
   const boardPathRef = useRef(boardPath);
   boardPathRef.current = boardPath;
-  const { setFocus } = useEntityFocus();
-  const inspectEntity = useInspect();
   const { startSession, cancelSession, completeSession } = useDragSession();
   const boardMoniker = moniker("board", "board");
-  const boardCommands = useMemo(
-    () => [
-      {
-        id: "entity.inspect",
-        name: "Inspect board",
-        target: boardMoniker,
-        contextMenu: true,
-        execute: () => inspectEntity(boardMoniker),
-      },
-    ],
-    [boardMoniker, inspectEntity],
-  );
+  const boardCommands = useEntityCommands("board", "board");
+  const inspectEntity = useInspect();
+  const { focusedMoniker, broadcastNavCommand, setFocus } = useEntityFocus();
+  const broadcastRef = useRef(broadcastNavCommand);
+  broadcastRef.current = broadcastNavCommand;
+  const focusedMonikerRef = useRef(focusedMoniker);
+  focusedMonikerRef.current = focusedMoniker;
 
   const columns = useMemo(
     () =>
@@ -108,6 +117,167 @@ export function BoardView({ board, tasks }: BoardViewProps) {
     }
     return map;
   }, [columns, tasks, taskMap]);
+
+  // Pre-resolved task entity arrays per column — memoized so that React.memo
+  // on ColumnView sees stable references and skips re-renders on cursor moves.
+  const columnTasks = useMemo(() => {
+    const map = new Map<string, Entity[]>();
+    for (const col of columns) {
+      const taskIds = baseLayout.get(col.id) ?? [];
+      const entities = taskIds
+        .map((id) => taskMap.get(id))
+        .filter((t): t is Entity => t !== undefined);
+      map.set(col.id, entities);
+    }
+    return map;
+  }, [columns, baseLayout, taskMap]);
+
+  // The first task in the todo (first) column — used for "Do This Next" placement
+  const firstTodoTaskId = useMemo(() => {
+    if (columns.length === 0) return null;
+    const todoColId = columns[0].id;
+    const todoTaskIds = baseLayout.get(todoColId);
+    return todoTaskIds && todoTaskIds.length > 0 ? todoTaskIds[0] : null;
+  }, [columns, baseLayout]);
+
+  // --- Cross-column moniker tables for claimWhen ---
+
+  /** Task monikers per column (in display order), indexed by column ID. */
+  const columnTaskMonikers = useMemo(() => {
+    const map = new Map<string, string[]>();
+    for (const col of columns) {
+      const taskIds = baseLayout.get(col.id) ?? [];
+      map.set(
+        col.id,
+        taskIds.map((id) => moniker("task", id)),
+      );
+    }
+    return map;
+  }, [columns, baseLayout]);
+
+  /** All task monikers on the board — used for nav.first/nav.last. */
+  const allBoardTaskMonikers = useMemo(() => {
+    const set = new Set<string>();
+    for (const monikers of columnTaskMonikers.values()) {
+      for (const m of monikers) set.add(m);
+    }
+    return set;
+  }, [columnTaskMonikers]);
+
+  /** All column header monikers (name field level). */
+  const allBoardHeaderMonikers = useMemo(() => {
+    const set = new Set<string>();
+    for (const col of columns) {
+      set.add(moniker("column", col.id));
+      set.add(fieldMoniker("column", col.id, "name"));
+    }
+    return set;
+  }, [columns]);
+
+  /** Ref for handleAddTask so boardCommands can reference it without circular deps. */
+  const handleAddTaskRef = useRef<(columnId: string) => void>(() => {});
+
+  /** Ref to the horizontal scroll container — scrolls focused column into view. */
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+
+  // Scroll the focused column into view horizontally when focus changes
+  useEffect(() => {
+    const container = scrollContainerRef.current;
+    if (!container || !focusedMoniker) return;
+    // Find the DOM element with the focused moniker and scroll it into view
+    const el = container.querySelector<HTMLElement>(
+      `[data-moniker="${focusedMoniker}"]`,
+    );
+    if (el?.scrollIntoView)
+      el.scrollIntoView({ inline: "nearest", block: "nearest" });
+  }, [focusedMoniker]);
+
+  // Focus the first card (or first column header) on mount so the board
+  // starts with an active focus target for keyboard navigation.
+  const initialFocusDone = useRef(false);
+  useEffect(() => {
+    if (initialFocusDone.current) return;
+    initialFocusDone.current = true;
+    // Find the first non-empty column's first task, or the first column header
+    for (const col of columns) {
+      const monikers = columnTaskMonikers.get(col.id) ?? [];
+      if (monikers.length > 0) {
+        setFocus(monikers[0]);
+        return;
+      }
+    }
+    // All columns empty — focus first column header
+    if (columns.length > 0) {
+      setFocus(moniker("column", columns[0].id));
+    }
+  }, [columns, columnTaskMonikers, setFocus]);
+
+  /**
+   * Board-level commands that don't need cursor state.
+   * Inspect uses focusedMoniker directly; newTask finds the column from focusedMoniker.
+   */
+  const boardActionCommands = useMemo<CommandDef[]>(() => {
+    /**
+     * Determine which column the current focus is in.
+     * Walks the focused moniker to find a column: either the focused element
+     * IS a column, or it's a task whose position_column we can look up.
+     */
+    const findFocusedColumnId = (): string | null => {
+      const fm = focusedMonikerRef.current;
+      if (!fm) return columns[0]?.id ?? null;
+      // Check if it's a column header
+      if (fm.startsWith("column:")) return fm.slice("column:".length);
+      // Check if it's a task — look up its column
+      if (fm.startsWith("task:")) {
+        const taskId = fm.slice("task:".length);
+        const entity = taskMap.get(taskId);
+        if (entity) return getStr(entity, "position_column") || (columns[0]?.id ?? null);
+      }
+      return columns[0]?.id ?? null;
+    };
+
+    return [
+      {
+        id: "board.inspect",
+        name: "Inspect",
+        keys: { vim: "Enter", cua: "Enter" },
+        execute: () => {
+          const fm = focusedMonikerRef.current;
+          if (fm) inspectEntity(fm);
+        },
+      },
+      {
+        id: "board.newTask",
+        name: "New Task",
+        keys: { vim: "o", cua: "Mod+Enter" },
+        execute: () => {
+          const colId = findFocusedColumnId();
+          if (colId) handleAddTaskRef.current(colId);
+        },
+      },
+      {
+        id: "board.firstColumn",
+        name: "First Column",
+        keys: { vim: "0", cua: "Mod+Home" },
+        execute: () => {
+          // Move to the first column's header
+          if (columns.length > 0) {
+            broadcastRef.current("nav.first");
+          }
+        },
+      },
+      {
+        id: "board.lastColumn",
+        name: "Last Column",
+        keys: { vim: "$", cua: "Mod+End" },
+        execute: () => {
+          if (columns.length > 0) {
+            broadcastRef.current("nav.last");
+          }
+        },
+      },
+    ];
+  }, [columns, taskMap, inspectEntity]);
 
   // --- Column drag state (managed by @dnd-kit) ---
   const [activeColumn, setActiveColumn] = useState<Entity | null>(null);
@@ -190,9 +360,7 @@ export function BoardView({ board, tasks }: BoardViewProps) {
         await invoke("dispatch_command", {
           cmd: "column.reorder",
           args: { id: activeId, target_index: newIndex },
-          ...(boardPathRef.current
-            ? { boardPath: boardPathRef.current }
-            : {}),
+          ...(boardPathRef.current ? { boardPath: boardPathRef.current } : {}),
         });
       } catch (e) {
         console.error("Failed to reorder columns:", e);
@@ -205,26 +373,21 @@ export function BoardView({ board, tasks }: BoardViewProps) {
 
   // --- HTML5 task drag handlers ---
   const persistMove = useCallback(
-    async (
-      taskId: string,
-      column: string,
-      entity: Entity,
-      placement: { before?: string; after?: string },
-    ) => {
+    async (descriptor: DropZoneDescriptor, taskId: string, entity: Entity) => {
       try {
         const args: Record<string, unknown> = {
           id: taskId,
-          column,
+          column: descriptor.columnId,
           swimlane: getStr(entity, "position_swimlane") || null,
         };
-        if (placement.before) args.before_id = placement.before;
-        if (placement.after) args.after_id = placement.after;
+        if (descriptor.beforeId) args.before_id = descriptor.beforeId;
+        if (descriptor.afterId) args.after_id = descriptor.afterId;
+        const boardPath = descriptor.boardPath || boardPathRef.current;
         await invoke("dispatch_command", {
           cmd: "task.move",
           args,
-          ...(boardPathRef.current
-            ? { boardPath: boardPathRef.current }
-            : {}),
+          scopeChain: [`task:${taskId}`],
+          ...(boardPath ? { boardPath } : {}),
         });
       } catch (e) {
         console.error("Failed to move task:", e);
@@ -239,8 +402,6 @@ export function BoardView({ board, tasks }: BoardViewProps) {
       setTaskDrag({
         sourceTaskId: entity.id,
         sourceColumn,
-        targetColumn: null,
-        insertIndex: null,
       });
       startSession(entity.id, entity.fields, false);
     },
@@ -252,7 +413,7 @@ export function BoardView({ board, tasks }: BoardViewProps) {
       setTaskDrag(null);
       emit("drag-ended", {});
       // Only cancel the backend session if the drop was rejected (no valid target).
-      // Successful drops are handled by handleTaskDrop which calls persistMove
+      // Successful drops are handled by handleZoneDrop which calls persistMove
       // or completeSession directly.
       if (dropEffect === "none") {
         cancelSession();
@@ -261,32 +422,8 @@ export function BoardView({ board, tasks }: BoardViewProps) {
     [cancelSession],
   );
 
-  const handleColumnDragOverHTML5 = useCallback(
-    (columnId: string, insertIndex: number) => {
-      setTaskDrag((prev) => {
-        if (!prev) return prev;
-        return { ...prev, targetColumn: columnId, insertIndex };
-      });
-    },
-    [],
-  );
-
-  const handleColumnDragEnter = useCallback((columnId: string) => {
-    setTaskDrag((prev) => {
-      if (!prev) return prev;
-      return { ...prev, targetColumn: columnId };
-    });
-  }, []);
-
-  const handleColumnDragLeave = useCallback((_columnId: string) => {
-    setTaskDrag((prev) => {
-      if (!prev) return prev;
-      return { ...prev, targetColumn: null, insertIndex: null };
-    });
-  }, []);
-
-  const handleTaskDrop = useCallback(
-    (columnId: string, taskData: string, insertIndex: number) => {
+  const handleZoneDrop = useCallback(
+    (descriptor: DropZoneDescriptor, taskData: string) => {
       setTaskDrag(null);
       let entity: Entity | null = null;
       if (taskData) {
@@ -304,55 +441,19 @@ export function BoardView({ board, tasks }: BoardViewProps) {
 
       const taskId = entity.id;
       const isLocalTask = taskMap.has(taskId);
-
       if (isLocalTask) {
-        // Same-board drop — task exists locally, move it directly
+        // Same-board drop — descriptor carries all placement params
         cancelSession();
-        const colTasks = baseLayout.get(columnId) ?? [];
-
-        if (colTasks.length === 0 || insertIndex >= colTasks.length) {
-          const lastId =
-            colTasks.length > 0 ? colTasks[colTasks.length - 1] : undefined;
-          persistMove(taskId, columnId, entity, lastId ? { after: lastId } : {});
-        } else {
-          const beforeId = colTasks[insertIndex];
-          const sourceColumn = getStr(entity, "position_column");
-          const sourceIndex = (baseLayout.get(sourceColumn) ?? []).indexOf(
-            taskId,
-          );
-          if (columnId === sourceColumn && sourceIndex < insertIndex) {
-            persistMove(taskId, columnId, entity, { after: beforeId });
-          } else {
-            persistMove(taskId, columnId, entity, { before: beforeId });
-          }
-        }
+        persistMove(descriptor, taskId, entity);
       } else {
-        // Cross-board drop — task doesn't exist here yet, complete via session
-        // The backend handles creating/moving the task to this board
-        const colTasks = baseLayout.get(columnId) ?? [];
-        const beforeId = insertIndex < colTasks.length ? colTasks[insertIndex] : undefined;
-        const afterId = !beforeId && colTasks.length > 0 ? colTasks[colTasks.length - 1] : undefined;
-        completeSession(columnId, {
-          dropIndex: insertIndex,
-          beforeId,
-          afterId,
+        // Cross-board drop — pass zone's placement to the session
+        completeSession(descriptor.columnId, {
+          beforeId: descriptor.beforeId,
+          afterId: descriptor.afterId,
         });
       }
     },
-    [taskMap, baseLayout, persistMove, cancelSession, completeSession],
-  );
-
-  const { updateField } = useFieldUpdate();
-
-  const handleRenameColumn = useCallback(
-    async (columnId: string, name: string) => {
-      try {
-        await updateField("column", columnId, "name", name);
-      } catch {
-        // updateField already logs errors
-      }
-    },
-    [updateField],
+    [taskMap, persistMove, cancelSession, completeSession],
   );
 
   const handleAddTask = useCallback(
@@ -363,9 +464,7 @@ export function BoardView({ board, tasks }: BoardViewProps) {
         await invoke("dispatch_command", {
           cmd: "task.add",
           args: { title, column: columnId },
-          ...(boardPathRef.current
-            ? { boardPath: boardPathRef.current }
-            : {}),
+          ...(boardPathRef.current ? { boardPath: boardPathRef.current } : {}),
         });
       } catch (e) {
         console.error("Failed to add task:", e);
@@ -373,6 +472,7 @@ export function BoardView({ board, tasks }: BoardViewProps) {
     },
     [columnMap],
   );
+  handleAddTaskRef.current = handleAddTask;
 
   return (
     <FocusScope
@@ -380,64 +480,85 @@ export function BoardView({ board, tasks }: BoardViewProps) {
       commands={boardCommands}
       className="flex flex-col flex-1 min-h-0 relative"
     >
-      {/* @dnd-kit context for column reordering only */}
-      <DndContext
-        sensors={sensors}
-        onDragStart={handleColumnDragStart}
-        onDragOver={handleColumnDragOver}
-        onDragEnd={handleColumnDragEnd}
-      >
-        <div
-          className="flex flex-1 min-h-0 overflow-x-auto"
-          onClick={() => setFocus(null)}
+      <CommandScopeProvider commands={boardActionCommands}>
+        {/* @dnd-kit context for column reordering only */}
+        <DndContext
+          sensors={sensors}
+          onDragStart={handleColumnDragStart}
+          onDragOver={handleColumnDragOver}
+          onDragEnd={handleColumnDragEnd}
         >
-          <SortableContext
-            items={currentColumnOrder}
-            strategy={horizontalListSortingStrategy}
+          <div
+            ref={scrollContainerRef}
+            className="flex flex-1 min-h-0 overflow-x-auto pl-2"
           >
-            {currentColumnOrder.map((colId, i) => {
-              const col = columnMap.get(colId);
-              if (!col) return null;
-              const taskIds = baseLayout.get(col.id) ?? [];
-              const colTasks = taskIds
-                .map((id) => taskMap.get(id))
-                .filter((t): t is Entity => t !== undefined);
-              return (
-                <SortableColumn
-                  key={col.id}
-                  id={col.id}
-                  showSeparator={i > 0}
-                >
-                  <ColumnView
-                    column={col}
-                    tasks={colTasks}
-                    onAddTask={i === 0 ? handleAddTask : undefined}
-                    onRenameColumn={handleRenameColumn}
-                    onTaskDragStart={handleTaskDragStart}
-                    onTaskDragEnd={handleTaskDragEnd}
-                    onDragOver={handleColumnDragOverHTML5}
-                    onDrop={handleTaskDrop}
-                    onDragEnter={handleColumnDragEnter}
-                    onDragLeave={handleColumnDragLeave}
-                    insertAtIndex={
-                      taskDrag?.targetColumn === col.id
-                        ? taskDrag.insertIndex
-                        : null
-                    }
-                  />
-                </SortableColumn>
-              );
-            })}
-          </SortableContext>
-        </div>
-        <DragOverlay dropAnimation={null}>
-          {activeColumn ? (
-            <div className="rounded-md bg-card border border-border px-4 py-2 text-sm font-medium text-muted-foreground uppercase tracking-wide shadow-lg">
-              {getStr(activeColumn, "name")}
-            </div>
-          ) : null}
-        </DragOverlay>
-      </DndContext>
+            <SortableContext
+              items={currentColumnOrder}
+              strategy={horizontalListSortingStrategy}
+            >
+              {currentColumnOrder.map((colId, i) => {
+                const col = columnMap.get(colId);
+                if (!col) return null;
+                const colTasks = columnTasks.get(col.id) ?? [];
+
+                // Compute adjacent column monikers for cross-column nav
+                const prevColId = i > 0 ? currentColumnOrder[i - 1] : null;
+                const nextColId =
+                  i < currentColumnOrder.length - 1
+                    ? currentColumnOrder[i + 1]
+                    : null;
+
+                return (
+                  <SortableColumn
+                    key={col.id}
+                    id={col.id}
+                    showSeparator={i > 0}
+                  >
+                    <ColumnView
+                      column={col}
+                      tasks={colTasks}
+                      onAddTask={i === 0 ? handleAddTask : undefined}
+                      onTaskDragStart={handleTaskDragStart}
+                      onTaskDragEnd={handleTaskDragEnd}
+                      onDrop={handleZoneDrop}
+                      dragTaskId={taskDrag?.sourceTaskId ?? null}
+                      boardPath={boardPath}
+                      firstTodoTaskId={firstTodoTaskId}
+                      leftColumnTaskMonikers={
+                        prevColId
+                          ? columnTaskMonikers.get(prevColId) ?? []
+                          : []
+                      }
+                      leftColumnHeaderMoniker={
+                        prevColId ? fieldMoniker("column", prevColId, "name") : null
+                      }
+                      rightColumnTaskMonikers={
+                        nextColId
+                          ? columnTaskMonikers.get(nextColId) ?? []
+                          : []
+                      }
+                      rightColumnHeaderMoniker={
+                        nextColId ? fieldMoniker("column", nextColId, "name") : null
+                      }
+                      allBoardTaskMonikers={allBoardTaskMonikers}
+                      allBoardHeaderMonikers={allBoardHeaderMonikers}
+                      isFirstColumn={i === 0}
+                      isLastColumn={i === currentColumnOrder.length - 1}
+                    />
+                  </SortableColumn>
+                );
+              })}
+            </SortableContext>
+          </div>
+          <DragOverlay dropAnimation={null}>
+            {activeColumn ? (
+              <div className="rounded-md bg-card border border-border px-4 py-2 text-sm font-medium text-muted-foreground uppercase tracking-wide shadow-lg">
+                {getStr(activeColumn, "name")}
+              </div>
+            ) : null}
+          </DragOverlay>
+        </DndContext>
+      </CommandScopeProvider>
     </FocusScope>
   );
 }
