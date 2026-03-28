@@ -125,8 +125,14 @@ pub fn register_commands() -> HashMap<String, Arc<dyn Command>> {
 
     // App commands
     map.insert("app.quit".into(), Arc::new(app_commands::QuitCmd));
-    map.insert("app.undo".into(), Arc::new(app_commands::UndoCmd));
-    map.insert("app.redo".into(), Arc::new(app_commands::RedoCmd));
+    map.insert(
+        "app.undo".into(),
+        Arc::new(swissarmyhammer_entity::UndoCmd),
+    );
+    map.insert(
+        "app.redo".into(),
+        Arc::new(swissarmyhammer_entity::RedoCmd),
+    );
     map.insert(
         "settings.keymap.vim".into(),
         Arc::new(app_commands::SetKeymapModeCmd("vim")),

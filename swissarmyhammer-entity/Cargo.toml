@@ -16,7 +16,9 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 chrono = { workspace = true }
 ulid = { workspace = true }
+async-trait = { workspace = true }
 swissarmyhammer-common = { path = "../swissarmyhammer-common" }
+swissarmyhammer-commands = { path = "../swissarmyhammer-commands" }
 swissarmyhammer-fields = { path = "../swissarmyhammer-fields" }
 diffy = { workspace = true }
 notify = { workspace = true }

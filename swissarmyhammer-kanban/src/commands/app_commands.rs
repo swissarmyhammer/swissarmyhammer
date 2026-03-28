@@ -1,69 +1,8 @@
-//! Application-level command implementations: undo, redo, quit, keymap mode.
+//! Application-level command implementations: quit, keymap mode.
 
-use crate::context::KanbanContext;
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use swissarmyhammer_commands::{Command, CommandContext, CommandError};
-
-/// Undo the last operation by transaction ID.
-///
-/// Always available. Required arg: `id` (transaction ULID).
-pub struct UndoCmd;
-
-#[async_trait]
-impl Command for UndoCmd {
-    fn available(&self, _ctx: &CommandContext) -> bool {
-        true
-    }
-
-    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
-        let kanban = ctx.require_extension::<KanbanContext>()?;
-
-        let id = ctx.require_arg_str("id")?;
-
-        let ectx = kanban
-            .entity_context()
-            .await
-            .map_err(|e| CommandError::ExecutionFailed(e.to_string()))?;
-
-        let result_ulid = ectx
-            .undo(id)
-            .await
-            .map_err(|e| CommandError::ExecutionFailed(e.to_string()))?;
-
-        Ok(json!({ "undone": id, "operation_id": result_ulid }))
-    }
-}
-
-/// Redo a previously undone operation by transaction ID.
-///
-/// Always available. Required arg: `id` (transaction ULID).
-pub struct RedoCmd;
-
-#[async_trait]
-impl Command for RedoCmd {
-    fn available(&self, _ctx: &CommandContext) -> bool {
-        true
-    }
-
-    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
-        let kanban = ctx.require_extension::<KanbanContext>()?;
-
-        let id = ctx.require_arg_str("id")?;
-
-        let ectx = kanban
-            .entity_context()
-            .await
-            .map_err(|e| CommandError::ExecutionFailed(e.to_string()))?;
-
-        let result_ulid = ectx
-            .redo(id)
-            .await
-            .map_err(|e| CommandError::ExecutionFailed(e.to_string()))?;
-
-        Ok(json!({ "redone": id, "operation_id": result_ulid }))
-    }
-}
 
 /// Set the keymap mode to a fixed value (vim, cua, emacs).
 ///

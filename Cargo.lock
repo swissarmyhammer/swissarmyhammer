@@ -8104,12 +8104,14 @@ dependencies = [
 name = "swissarmyhammer-entity"
 version = "0.11.0"
 dependencies = [
+ "async-trait",
  "chrono",
  "diffy",
  "notify 6.1.1",
  "serde",
  "serde_json",
  "serde_yaml_ng",
+ "swissarmyhammer-commands",
  "swissarmyhammer-common",
  "swissarmyhammer-entity",
  "swissarmyhammer-fields",

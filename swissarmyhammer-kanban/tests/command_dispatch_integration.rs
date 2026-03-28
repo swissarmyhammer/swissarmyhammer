@@ -48,7 +48,6 @@ impl TestEngine {
         let registry = CommandsRegistry::from_yaml_sources(&builtin_yaml_sources());
         let commands = register_commands();
         let ui_state = Arc::new(UIState::new());
-
         Self {
             _temp: temp,
             kanban,
@@ -83,6 +82,10 @@ impl TestEngine {
         );
         ctx.ui_state = Some(Arc::clone(&self.ui_state));
         ctx.set_extension(Arc::clone(&self.kanban));
+        // Set EntityContext extension for entity-layer commands (undo/redo)
+        if let Ok(ectx_arc) = self.kanban.entity_context().await {
+            ctx.set_extension(ectx_arc);
+        }
 
         if !cmd.available(&ctx) {
             return Err(CommandError::ExecutionFailed(format!(
@@ -91,7 +94,10 @@ impl TestEngine {
             )));
         }
 
-        cmd.execute(&ctx).await
+        let result = cmd.execute(&ctx).await?;
+
+        // Undo stack push is handled automatically inside EntityContext::write()/delete()
+        Ok(result)
     }
 
     /// Convenience: dispatch with no args.
@@ -445,16 +451,13 @@ async fn undo_reverts_task_add() {
         "task should exist after add"
     );
 
-    // Undo the add
-    let mut undo_args = HashMap::new();
-    undo_args.insert("id".to_string(), json!(operation_id));
+    // Undo the add (stack-based — no explicit id needed)
     let undo_result = engine
-        .dispatch("app.undo", &[], None, undo_args)
+        .dispatch_simple("app.undo", &[], None)
         .await
         .expect("app.undo should succeed");
 
     assert_eq!(undo_result["undone"].as_str(), Some(operation_id));
-    let undo_op_id = undo_result["operation_id"].as_str();
 
     // Task should be gone (trashed)
     assert!(
@@ -466,25 +469,21 @@ async fn undo_reverts_task_add() {
         "task should not exist after undo"
     );
 
-    // Redo the add (undo the undo) — use the undo operation_id
-    if let Some(redo_id) = undo_op_id {
-        let mut redo_args = HashMap::new();
-        redo_args.insert("id".to_string(), json!(redo_id));
-        let redo_result = engine
-            .dispatch("app.redo", &[], None, redo_args)
-            .await
-            .expect("app.redo should succeed");
+    // Redo the add (stack-based — no explicit id needed)
+    let redo_result = engine
+        .dispatch_simple("app.redo", &[], None)
+        .await
+        .expect("app.redo should succeed");
 
-        assert_eq!(redo_result["redone"].as_str(), Some(redo_id));
+    assert!(redo_result.get("redone").is_some());
 
-        // Task should be back
-        let task = engine
-            .kanban
-            .read_entity_generic("task", task_id)
-            .await
-            .expect("task should exist after redo");
-        assert!(task.get_str("title").is_some());
-    }
+    // Task should be back
+    let task = engine
+        .kanban
+        .read_entity_generic("task", task_id)
+        .await
+        .expect("task should exist after redo");
+    assert!(task.get_str("title").is_some());
 }
 
 #[tokio::test]
@@ -516,7 +515,8 @@ async fn undo_reverts_field_update() {
         .dispatch("entity.update_field", &[], None, update_args)
         .await
         .expect("update should succeed");
-    let update_op_id = update_result["operation_id"].as_str().unwrap();
+    // Verify operation_id is present (used by undo stack internally)
+    assert!(update_result.get("operation_id").is_some());
 
     // Verify title changed
     let task = engine
@@ -526,11 +526,9 @@ async fn undo_reverts_field_update() {
         .unwrap();
     assert_eq!(task.get_str("title"), Some("Changed Title"));
 
-    // Undo the update
-    let mut undo_args = HashMap::new();
-    undo_args.insert("id".to_string(), json!(update_op_id));
+    // Undo the update (stack-based — no explicit id needed)
     engine
-        .dispatch("app.undo", &[], None, undo_args)
+        .dispatch_simple("app.undo", &[], None)
         .await
         .expect("undo should succeed");
 
@@ -1005,7 +1003,11 @@ async fn task_delete_removes_task() {
 
     // Dispatch task.delete through the command harness
     let delete_result = engine
-        .dispatch_simple("task.delete", &[&format!("task:{}", task_id)], None)
+        .dispatch_simple(
+            "task.delete",
+            &[&format!("task:{}", task_id)],
+            None,
+        )
         .await
         .expect("task.delete should succeed");
 
@@ -1068,7 +1070,12 @@ async fn task_move_with_swimlane_arg() {
     args.insert("swimlane".to_string(), json!("urgent"));
 
     let move_result = engine
-        .dispatch("task.move", &[&format!("task:{}", task_id)], None, args)
+        .dispatch(
+            "task.move",
+            &[&format!("task:{}", task_id)],
+            None,
+            args,
+        )
         .await
         .expect("task.move with swimlane should succeed");
 

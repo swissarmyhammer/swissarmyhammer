@@ -70,6 +70,7 @@ fn main() {
             commands::open_board_dialog,
             commands::rebuild_menu_from_manifest,
             commands::list_views,
+            commands::get_undo_state,
             commands::create_window,
             commands::restore_windows,
         ])

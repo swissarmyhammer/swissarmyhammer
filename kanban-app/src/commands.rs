@@ -29,7 +29,6 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use swissarmyhammer_entity::EntityContext;
 use swissarmyhammer_kanban::task_helpers::{enrich_all_task_entities, enrich_task_entity};
 use tauri::menu::{ContextMenu, MenuBuilder};
 use tauri::webview::WebviewWindowBuilder;
@@ -775,6 +774,36 @@ pub async fn list_views(
     Ok(json!(views_json))
 }
 
+// ---------------------------------------------------------------------------
+// get_undo_state — read-only query for undo/redo availability
+// ---------------------------------------------------------------------------
+
+/// Return the current undo/redo availability for the active board.
+///
+/// Returns `{ "can_undo": bool, "can_redo": bool }`. If no board is open,
+/// both are `false`.
+#[tauri::command]
+pub async fn get_undo_state(
+    state: State<'_, AppState>,
+    board_path: Option<String>,
+) -> Result<Value, String> {
+    let handle = match resolve_handle(&state, board_path).await {
+        Ok(h) => h,
+        Err(_) => return Ok(json!({ "can_undo": false, "can_redo": false })),
+    };
+
+    let ectx = handle
+        .ctx
+        .entity_context()
+        .await
+        .map_err(|e| e.to_string())?;
+    let stack = ectx.undo_stack().await;
+    Ok(json!({
+        "can_undo": stack.can_undo(),
+        "can_redo": stack.can_redo(),
+    }))
+}
+
 /// Rebuild the native menu bar from a frontend-generated manifest.
 ///
 /// The frontend collects all commands with `menuPlacement` metadata, builds
@@ -920,20 +949,13 @@ pub(crate) async fn dispatch_command_internal(
     // Set KanbanContext extension if board is open.
     // Uses board_path when provided (multi-window) to avoid targeting the wrong board.
     let active_handle = resolve_handle(state, board_path).await.ok();
-    let entity_ctx: Option<Arc<EntityContext>> = if let Some(ref handle) = active_handle {
+    if let Some(ref handle) = active_handle {
         ctx.set_extension(Arc::clone(&handle.ctx));
-        // Also set EntityContext as a direct extension so commands can reach it
-        // without going through KanbanContext (decouples undo/redo from kanban).
-        match handle.ctx.entity_context().await {
-            Ok(ectx) => {
-                ctx.set_extension(Arc::clone(&ectx));
-                Some(ectx)
-            }
-            Err(_) => None,
+        // Set EntityContext extension for entity-layer commands (undo/redo).
+        if let Ok(ectx_arc) = handle.ctx.entity_context().await {
+            ctx.set_extension(ectx_arc);
         }
-    } else {
-        None
-    };
+    }
 
     // Check availability
     if !cmd_impl.available(&ctx) {
@@ -941,32 +963,17 @@ pub(crate) async fn dispatch_command_internal(
         return Err(format!("Command not available: {}", cmd));
     }
 
-    // Wrap undoable commands in a transaction so all entity writes within a
-    // single command share one transaction ID for grouped undo/redo.
-    if undoable {
-        if let Some(ref ectx) = entity_ctx {
-            let tx_id = EntityContext::generate_transaction_id();
-            ectx.set_transaction(tx_id).await;
-        }
-    }
-
     // Execute
     tracing::debug!(cmd = %cmd, "executing command");
-    let result = cmd_impl.execute(&ctx).await;
-
-    // Clear transaction after execution regardless of success/failure
-    if undoable {
-        if let Some(ref ectx) = entity_ctx {
-            ectx.clear_transaction().await;
-        }
-    }
-
-    let result = result.map_err(|e| {
+    let result = cmd_impl.execute(&ctx).await.map_err(|e| {
         tracing::error!(cmd = %cmd, error = %e, "command execution failed");
         format!("Command failed: {}", e)
     })?;
 
     tracing::info!(cmd = %cmd, undoable = undoable, result = %result, "command completed");
+
+    // Undo stack push is handled automatically inside EntityContext::write()/delete()
+    // (wired in the entity crate). No need to push at the dispatch level.
 
     // Handle board management side effects from file.switchBoard and file.closeBoard.
     // These commands update UIState, but the Tauri layer must also manage BoardHandles.
