@@ -5,7 +5,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { KeymapProvider } from "@/lib/keymap-context";
 import { AppModeProvider } from "@/lib/app-mode-context";
 import { UndoStackProvider } from "@/lib/undo-context";
-import { EntityFocusProvider } from "@/lib/entity-focus-context";
+import { EntityFocusProvider, useRestoreFocus } from "@/lib/entity-focus-context";
 import { SchemaProvider } from "@/lib/schema-context";
 import { FieldUpdateProvider } from "@/lib/field-update-context";
 import { EntityStoreProvider } from "@/lib/entity-store-context";
@@ -537,6 +537,9 @@ function InspectorPanel({
   onClose: () => void;
   style?: React.CSSProperties;
 }) {
+  // Save focus on mount, restore on unmount (guarded against stale monikers)
+  useRestoreFocus();
+
   const [fetchedEntity, setFetchedEntity] = useState<Entity | null>(null);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const fetchedRef = useRef<string | null>(null);
