@@ -449,7 +449,13 @@ export const ColumnView = memo(function ColumnView({
             <button
               type="button"
               className="p-0.5 rounded text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted transition-colors"
-              onClick={() => onAddTask(column.id)}
+              onClick={() => {
+                invoke("dispatch_command", {
+                  cmd: "task.add",
+                  args: { title: "New task", column: column.id },
+                  ...(boardPath ? { boardPath } : {}),
+                });
+              }}
               title={`Add task to ${getStr(column, "name")}`}
             >
               <Plus className="h-4 w-4" />
