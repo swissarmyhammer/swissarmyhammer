@@ -1,51 +1,49 @@
-# Rust Test Coverage Conventions
+# Rust Test Coverage
 
-## Test File Locations
+## Running Coverage
 
-- **Inline tests:** `#[cfg(test)] mod tests { ... }` at the bottom of the source file. Most common for unit tests.
-- **Integration tests:** `tests/` directory at the crate root. Each `.rs` file is a separate test binary.
-- **Doc tests:** `///` comments with code blocks on public items.
+**Preferred: cargo-tarpaulin**
 
-For a source file `src/parser.rs`, look for:
-1. `#[cfg(test)]` module within `src/parser.rs` itself
-2. `tests/parser.rs` or `tests/parser/*.rs` in the crate root
+```bash
+# Full workspace
+cargo tarpaulin --out lcov --output-dir .
 
-## Treesitter AST Queries
+# Specific crate
+cargo tarpaulin -p <crate_name> --out lcov --output-dir .
 
-**Find public functions and methods:**
-```scheme
-(function_item
-  (visibility_modifier) @vis
-  name: (identifier) @name)
-
-(function_item
-  name: (identifier) @name
-  body: (block))
+# Specific directory (use manifest path)
+cargo tarpaulin --manifest-path crates/foo/Cargo.toml --out lcov --output-dir .
 ```
 
-**Find test functions:**
-```scheme
-(attribute_item
-  (attribute (identifier) @attr)
-  (#eq? @attr "test"))
+Install if missing: `cargo install cargo-tarpaulin`
+
+**Alternative: cargo-llvm-cov** (requires nightly or llvm-tools)
+
+```bash
+# Full workspace
+cargo llvm-cov --lcov --output-path lcov.info
+
+# Specific crate
+cargo llvm-cov -p <crate_name> --lcov --output-path lcov.info
 ```
 
-Test functions are annotated with `#[test]` or `#[tokio::test]`. Search for functions preceded by these attributes.
+Install if missing: `cargo install cargo-llvm-cov`
 
-**Find impl blocks and methods:**
-```scheme
-(impl_item
-  type: (_) @type
-  body: (declaration_list
-    (function_item
-      name: (identifier) @method)))
-```
+## Output
 
-**Find trait definitions:**
-```scheme
-(trait_item
-  name: (type_identifier) @name)
-```
+Both tools write `lcov.info` in LCOV format. Parse `DA:<line>,<hits>` lines per file.
+
+## Scoping
+
+- To scope to a crate: use `-p <crate_name>` flag
+- To scope to a workspace: run from workspace root with no `-p` flag
+- Tarpaulin respects `--exclude` to skip crates
+
+## Test Locations
+
+- **Inline tests:** `#[cfg(test)] mod tests { ... }` at the bottom of source files
+- **Integration tests:** `tests/` directory at crate root
+- **Doc tests:** `///` code blocks on public items (tarpaulin measures these too)
 
 ## What Requires Tests
 
@@ -53,25 +51,13 @@ Test functions are annotated with `#[test]` or `#[tokio::test]`. Search for func
 - All `impl` methods on public types
 - Trait implementations (especially `From`, `TryFrom`, custom traits)
 - Error variants and their `Display` implementations
-- `unsafe` blocks — every unsafe operation needs a test proving safety invariants hold
+- `unsafe` blocks
 - Match arms that handle error cases
 
 ## Acceptable Without Direct Tests
 
-- Private helper functions called exclusively from tested public functions
+- Private helpers called exclusively from tested public functions
 - Derived trait implementations (`#[derive(Debug, Clone, ...)]`)
 - Constants and type aliases
 - Re-exports
 - Build scripts (`build.rs`) unless they contain complex logic
-
-## Test Naming Conventions
-
-Rust tests typically follow: `test_<function_name>`, `test_<function_name>_<scenario>`, or `<function_name>_returns_error_on_invalid_input`. Match function names from the source file against test function names.
-
-## Testing Patterns
-
-- `#[should_panic]` for panic-path tests
-- `assert_eq!`, `assert_ne!`, `assert!(matches!(...))` for value assertions
-- `proptest` or `quickcheck` for property-based testing
-- `tokio::test` for async tests
-- `rstest` for parameterized tests with fixtures
