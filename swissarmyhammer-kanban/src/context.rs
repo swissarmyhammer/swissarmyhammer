@@ -66,6 +66,10 @@ impl KanbanContext {
         fs::create_dir_all(fields_root.join("entities")).await?;
 
         let (fields, entities) = Self::build_entity_context(&root)?;
+        // Rebuild changelog/transaction indexes so undo/redo survives restart.
+        if let Err(e) = entities.rebuild_indexes().await {
+            tracing::warn!("Failed to rebuild changelog indexes: {e}");
+        }
         let cell = OnceCell::new();
         cell.set(Arc::new(entities)).ok();
 

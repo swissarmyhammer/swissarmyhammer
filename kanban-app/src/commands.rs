@@ -774,6 +774,36 @@ pub async fn list_views(
     Ok(json!(views_json))
 }
 
+// ---------------------------------------------------------------------------
+// get_undo_state — read-only query for undo/redo availability
+// ---------------------------------------------------------------------------
+
+/// Return the current undo/redo availability for the active board.
+///
+/// Returns `{ "can_undo": bool, "can_redo": bool }`. If no board is open,
+/// both are `false`.
+#[tauri::command]
+pub async fn get_undo_state(
+    state: State<'_, AppState>,
+    board_path: Option<String>,
+) -> Result<Value, String> {
+    let handle = match resolve_handle(&state, board_path).await {
+        Ok(h) => h,
+        Err(_) => return Ok(json!({ "can_undo": false, "can_redo": false })),
+    };
+
+    let ectx = handle
+        .ctx
+        .entity_context()
+        .await
+        .map_err(|e| e.to_string())?;
+    let stack = ectx.undo_stack().await;
+    Ok(json!({
+        "can_undo": stack.can_undo(),
+        "can_redo": stack.can_redo(),
+    }))
+}
+
 /// Rebuild the native menu bar from a frontend-generated manifest.
 ///
 /// The frontend collects all commands with `menuPlacement` metadata, builds
@@ -921,6 +951,10 @@ pub(crate) async fn dispatch_command_internal(
     let active_handle = resolve_handle(state, board_path).await.ok();
     if let Some(ref handle) = active_handle {
         ctx.set_extension(Arc::clone(&handle.ctx));
+        // Set EntityContext extension for entity-layer commands (undo/redo).
+        if let Ok(ectx_arc) = handle.ctx.entity_context().await {
+            ctx.set_extension(ectx_arc);
+        }
     }
 
     // Check availability
@@ -937,6 +971,9 @@ pub(crate) async fn dispatch_command_internal(
     })?;
 
     tracing::info!(cmd = %cmd, undoable = undoable, result = %result, "command completed");
+
+    // Undo stack push is handled automatically inside EntityContext::write()/delete()
+    // (wired in the entity crate). No need to push at the dispatch level.
 
     // Handle board management side effects from file.switchBoard and file.closeBoard.
     // These commands update UIState, but the Tauri layer must also manage BoardHandles.
@@ -1100,7 +1137,7 @@ pub(crate) async fn dispatch_command_internal(
         let _ = app.emit("ui-state-changed", state.ui_state.to_json());
     }
 
-    // For undoable commands (data mutations), scan entity files for changes
+    // For commands that mutate entity data, scan entity files for changes
     // and emit granular entity-level events. This also updates the watcher
     // cache so the file watcher won't double-fire for our own writes.
     // Undo/redo are non-undoable (they must not push onto the undo stack) but
@@ -1227,7 +1264,7 @@ async fn flush_and_emit_for_handle(app: &AppHandle, handle: &BoardHandle) {
         }
 
         // Cascade: recompute aggregate fields that depend on changed entity types
-        let cascade = cascade_aggregate_events(ectx, &events).await;
+        let cascade = cascade_aggregate_events(&ectx, &events).await;
         events.extend(cascade);
     }
     {

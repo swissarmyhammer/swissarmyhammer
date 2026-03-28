@@ -173,15 +173,23 @@ impl UndoStack {
         if contents.trim().is_empty() {
             return Ok(Self::new());
         }
-        let stack: Self = serde_yaml_ng::from_str(&contents)?;
+        let mut stack: Self = serde_yaml_ng::from_str(&contents)?;
+        // Clamp pointer to valid range (defensive against corrupted YAML)
+        stack.pointer = stack.pointer.min(stack.entries.len());
+        // Trim if over capacity
+        if stack.entries.len() > stack.max_size {
+            let excess = stack.entries.len() - stack.max_size;
+            stack.entries.drain(0..excess);
+            stack.pointer = stack.pointer.saturating_sub(excess);
+        }
         Ok(stack)
     }
 
     /// Save the UndoStack to a YAML file.
     ///
-    /// Creates parent directories if needed. Uses atomic write (write to
-    /// temp location + rename would be ideal, but for simplicity we write
-    /// directly — the file is small and non-critical).
+    /// Creates parent directories if needed. Writes directly (not atomic);
+    /// the file is small and non-critical, so a partial write during a crash
+    /// just means the stack resets to empty on next load.
     pub fn save(&self, path: &Path) -> Result<()> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;

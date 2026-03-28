@@ -82,6 +82,59 @@ impl EntityContext {
         &self.fields
     }
 
+    /// Rebuild changelog and transaction indexes from all `.jsonl` files on disk.
+    ///
+    /// Scans live, trash, and archive directories for each known entity type.
+    /// Call this after construction and before any undo/redo operations.
+    pub async fn rebuild_indexes(&self) -> Result<()> {
+        let mut cl_index = self.changelog_index.write().await;
+        let mut tx_index = self.transaction_index.write().await;
+
+        for entity_def in self.fields.all_entities() {
+            let entity_type = entity_def.name.as_str();
+            let base_dir = self.entity_dir(entity_type);
+
+            // Scan live, trash, and archive directories
+            let dirs = [
+                base_dir.clone(),
+                base_dir.join(".trash"),
+                base_dir.join(".archive"),
+            ];
+
+            for dir in &dirs {
+                let mut read_dir = match tokio::fs::read_dir(dir).await {
+                    Ok(rd) => rd,
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                    Err(e) => return Err(crate::error::EntityError::Io(e)),
+                };
+
+                while let Some(entry) =
+                    read_dir.next_entry().await.map_err(crate::error::EntityError::Io)?
+                {
+                    let path = entry.path();
+                    if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+                        continue;
+                    }
+
+                    let entries = changelog::read_changelog(&path).await?;
+                    for ce in entries {
+                        let ce_id = ce.id.clone();
+                        let et = ce.entity_type.clone();
+                        let eid = ce.entity_id.clone();
+
+                        cl_index.insert(ce_id.clone(), (et, eid));
+
+                        if let Some(tx_id) = ce.transaction_id {
+                            tx_index.entry(tx_id).or_default().push(ce_id);
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     /// Generate a new transaction ULID.
     ///
     /// This is a static helper — it does not set the transaction on the context.
