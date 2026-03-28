@@ -27,7 +27,7 @@ import { AppShell } from "./app-shell";
 import { FocusScope } from "./focus-scope";
 import { UIStateProvider } from "@/lib/ui-state-context";
 import { AppModeProvider } from "@/lib/app-mode-context";
-import { UndoStackProvider } from "@/lib/undo-context";
+import { UndoProvider } from "@/lib/undo-context";
 import {
   EntityFocusProvider,
   useEntityFocus,
@@ -62,11 +62,11 @@ function renderShell(children?: React.ReactNode) {
     <EntityFocusProvider>
       <UIStateProvider>
         <AppModeProvider>
-          <UndoStackProvider>
+          <UndoProvider>
             <InspectProvider onInspect={() => {}} onDismiss={() => false}>
               <AppShell>{children ?? <CommandInspector />}</AppShell>
             </InspectProvider>
-          </UndoStackProvider>
+          </UndoProvider>
         </AppModeProvider>
       </UIStateProvider>
     </EntityFocusProvider>,
@@ -195,7 +195,7 @@ describe("AppShell", () => {
       <EntityFocusProvider>
         <UIStateProvider>
           <AppModeProvider>
-            <UndoStackProvider>
+            <UndoProvider>
               <InspectProvider onInspect={() => {}} onDismiss={() => false}>
                 <ActiveBoardPathProvider value="/test/board/.kanban">
                   <AppShell
@@ -211,7 +211,7 @@ describe("AppShell", () => {
                   </AppShell>
                 </ActiveBoardPathProvider>
               </InspectProvider>
-            </UndoStackProvider>
+            </UndoProvider>
           </AppModeProvider>
         </UIStateProvider>
       </EntityFocusProvider>,
@@ -252,7 +252,7 @@ describe("AppShell", () => {
       <EntityFocusProvider>
         <UIStateProvider>
           <AppModeProvider>
-            <UndoStackProvider>
+            <UndoProvider>
               <InspectProvider onInspect={() => {}} onDismiss={() => false}>
                 <AppShell
                   openBoards={[
@@ -262,7 +262,7 @@ describe("AppShell", () => {
                   <CommandInspector />
                 </AppShell>
               </InspectProvider>
-            </UndoStackProvider>
+            </UndoProvider>
           </AppModeProvider>
         </UIStateProvider>
       </EntityFocusProvider>,
@@ -296,13 +296,13 @@ describe("AppShell", () => {
       <EntityFocusProvider>
         <UIStateProvider>
           <AppModeProvider>
-            <UndoStackProvider>
+            <UndoProvider>
               <InspectProvider onInspect={() => {}} onDismiss={() => false}>
                 <AppShell>
                   <CommandInspector />
                 </AppShell>
               </InspectProvider>
-            </UndoStackProvider>
+            </UndoProvider>
           </AppModeProvider>
         </UIStateProvider>
       </EntityFocusProvider>,

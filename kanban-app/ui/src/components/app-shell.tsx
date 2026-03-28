@@ -114,11 +114,11 @@ function KeybindingHandler({ mode }: { mode: KeymapMode }) {
  * palette around the application content.
  *
  * Must be rendered inside UIStateProvider, AppModeProvider, and
- * UndoStackProvider (it reads from all three). It provides a
+ * UndoProvider (it reads from all three). It provides a
  * CommandScopeProvider to its children.
  *
  * Provider nesting order:
- *   UIStateProvider > AppModeProvider > UndoStackProvider > AppShell > children
+ *   UIStateProvider > AppModeProvider > UndoProvider > AppShell > children
  */
 interface AppShellProps {
   children: ReactNode;

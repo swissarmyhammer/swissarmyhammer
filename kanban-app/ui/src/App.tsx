@@ -7,7 +7,7 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { UIStateProvider } from "@/lib/ui-state-context";
 import { AppModeProvider } from "@/lib/app-mode-context";
-import { UndoStackProvider } from "@/lib/undo-context";
+import { UndoProvider } from "@/lib/undo-context";
 import { EntityFocusProvider, useRestoreFocus } from "@/lib/entity-focus-context";
 import { SchemaProvider, useSchema } from "@/lib/schema-context";
 import { FieldUpdateProvider } from "@/lib/field-update-context";
@@ -529,7 +529,7 @@ function App() {
               <FieldUpdateProvider>
                 <UIStateProvider>
                   <AppModeProvider>
-                    <UndoStackProvider>
+                    <UndoProvider>
                       <InspectProvider
                         onInspect={inspectEntity}
                         onDismiss={dismissTopPanel}
@@ -628,7 +628,7 @@ function App() {
                           </DragSessionProvider>
                         </AppShell>
                       </InspectProvider>
-                    </UndoStackProvider>
+                    </UndoProvider>
                   </AppModeProvider>
                 </UIStateProvider>
               </FieldUpdateProvider>

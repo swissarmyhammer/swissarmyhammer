@@ -1,28 +1,35 @@
+/**
+ * Undo/redo context — pure passthrough to the Rust backend.
+ *
+ * Zero undo logic lives in TypeScript. The frontend dispatches `app.undo` and
+ * `app.redo` commands to the backend and queries `get_undo_state` to reflect
+ * whether undo/redo are available. State is refreshed on every `entity-changed`
+ * Tauri event.
+ */
 import {
   createContext,
   useCallback,
   useContext,
-  useRef,
+  useEffect,
   useState,
   type ReactNode,
 } from "react";
-import { UndoStack, type UndoableCommand } from "./undo-stack";
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 
-interface UndoStackContextValue {
-  /** Execute a command and push it onto the undo stack. */
-  push: (cmd: UndoableCommand) => Promise<void>;
-  /** Undo the most recently executed command. No-op if nothing to undo. */
+/** The shape of the undo state exposed to consumers. */
+interface UndoState {
+  /** Undo the most recent operation via the backend. */
   undo: () => Promise<void>;
-  /** Redo the most recently undone command. No-op if nothing to redo. */
+  /** Redo the most recently undone operation via the backend. */
   redo: () => Promise<void>;
-  /** Whether there is at least one command that can be undone. */
+  /** Whether the backend has at least one undoable operation. */
   canUndo: boolean;
-  /** Whether there is at least one command that can be redone. */
+  /** Whether the backend has at least one redoable operation. */
   canRedo: boolean;
 }
 
-const UndoStackContext = createContext<UndoStackContextValue>({
-  push: async () => {},
+const UndoContext = createContext<UndoState>({
   undo: async () => {},
   redo: async () => {},
   canUndo: false,
@@ -30,57 +37,71 @@ const UndoStackContext = createContext<UndoStackContextValue>({
 });
 
 /**
- * Provides an UndoStack instance to the component tree.
+ * Fetch undo/redo availability from the backend.
  *
- * Holds a single UndoStack in a ref so the instance persists across renders.
- * A counter state is bumped after every mutating operation to trigger
- * re-renders so that `canUndo` and `canRedo` stay current.
+ * Returns `{ canUndo: false, canRedo: false }` if the backend query is not
+ * yet implemented or fails, so the UI degrades gracefully.
  */
-export function UndoStackProvider({ children }: { children: ReactNode }) {
-  const stackRef = useRef(new UndoStack());
-  // Bump this counter after every mutation to force consumers to re-render
-  // with fresh canUndo/canRedo values.
-  const [, setRevision] = useState(0);
-  const bump = useCallback(() => setRevision((r) => r + 1), []);
-
-  const push = useCallback(
-    async (cmd: UndoableCommand) => {
-      await stackRef.current.push(cmd);
-      bump();
-    },
-    [bump],
-  );
-
-  const undo = useCallback(async () => {
-    await stackRef.current.undo();
-    bump();
-  }, [bump]);
-
-  const redo = useCallback(async () => {
-    await stackRef.current.redo();
-    bump();
-  }, [bump]);
-
-  const value: UndoStackContextValue = {
-    push,
-    undo,
-    redo,
-    canUndo: stackRef.current.canUndo,
-    canRedo: stackRef.current.canRedo,
-  };
-
-  return (
-    <UndoStackContext.Provider value={value}>
-      {children}
-    </UndoStackContext.Provider>
-  );
+async function fetchUndoState(): Promise<{ canUndo: boolean; canRedo: boolean }> {
+  try {
+    const state = await invoke<{ can_undo: boolean; can_redo: boolean }>(
+      "get_undo_state",
+    );
+    return { canUndo: state.can_undo, canRedo: state.can_redo };
+  } catch {
+    // Backend query not yet available — degrade gracefully
+    return { canUndo: false, canRedo: false };
+  }
 }
 
 /**
- * Returns the undo stack operations and state flags.
+ * Provides undo/redo operations and state to the component tree.
  *
- * Must be used within an UndoStackProvider.
+ * Dispatches undo/redo to the Rust backend and refreshes `canUndo`/`canRedo`
+ * from `get_undo_state` on mount and on every `entity-changed` event.
  */
-export function useUndoStack(): UndoStackContextValue {
-  return useContext(UndoStackContext);
+export function UndoProvider({ children }: { children: ReactNode }) {
+  const [canUndo, setCanUndo] = useState(false);
+  const [canRedo, setCanRedo] = useState(false);
+
+  /** Refresh undo/redo availability from the backend. */
+  const refreshState = useCallback(async () => {
+    const state = await fetchUndoState();
+    setCanUndo(state.canUndo);
+    setCanRedo(state.canRedo);
+  }, []);
+
+  // Fetch initial state and subscribe to entity changes
+  useEffect(() => {
+    refreshState();
+    const unlisten = listen("entity-changed", () => {
+      refreshState();
+    });
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, [refreshState]);
+
+  const undo = useCallback(async () => {
+    await invoke("dispatch_command", { cmd: "app.undo" });
+    await refreshState();
+  }, [refreshState]);
+
+  const redo = useCallback(async () => {
+    await invoke("dispatch_command", { cmd: "app.redo" });
+    await refreshState();
+  }, [refreshState]);
+
+  const value: UndoState = { undo, redo, canUndo, canRedo };
+
+  return <UndoContext.Provider value={value}>{children}</UndoContext.Provider>;
+}
+
+/**
+ * Returns the undo/redo operations and state flags.
+ *
+ * Must be used within an UndoProvider.
+ */
+export function useUndoState(): UndoState {
+  return useContext(UndoContext);
 }
