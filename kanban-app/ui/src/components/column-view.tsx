@@ -450,10 +450,13 @@ export const ColumnView = memo(function ColumnView({
               type="button"
               className="p-0.5 rounded text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted transition-colors"
               onClick={() => {
+                // Set focus to the column so invokeFocusChange builds the
+                // correct scope chain (column:todo → board:board) in UIState.
+                // The Rust resolve_entity_id reads the scope chain to find the column.
+                setFocus(columnMoniker);
                 invoke("dispatch_command", {
                   cmd: "task.add",
                   args: { title: "New task", column: column.id },
-                  scopeChain: [`column:${column.id}`],
                   ...(boardPath ? { boardPath } : {}),
                 });
               }}
