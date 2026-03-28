@@ -3,7 +3,7 @@ name: kanban
 description: Execute the next task from the kanban board. Use when the user wants to make progress on planned work by implementing the next available todo item.
 metadata:
   author: "swissarmyhammer"
-  version: "0.10.1"
+  version: "0.11.0"
 ---
 
 # Do

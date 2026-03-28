@@ -15,12 +15,6 @@ To discover project types, build commands, and language-specific guidelines for 
 {"op": "detect projects"}
 ```
 
-This will scan the directory tree and return:
-- All detected project types (Rust, Node.js, Python, Go, Java, C#, CMake, Makefile, Flutter, PHP)
-- Project locations as relative paths
-- Workspace/monorepo membership
-- Language-specific guidelines for testing, building, formatting, and linting
-
 **Call this early in your session** to understand the project structure before making changes. The guidelines returned are authoritative — follow them for test commands, build commands, and formatting.
 
 ## File Tools
@@ -239,7 +233,7 @@ use the skill tool to load the full instructions, then follow them.
 
 - **commit**: Git commit workflow. Use this skill whenever the user says "commit", "save changes", "check in", or otherwise wants to commit code. Always use this skill instead of running git commands directly. (local)
 
-- **coverage**: Analyze test coverage gaps on changed code. Scans branch changes, maps functions to tests structurally, and produces kanban cards for untested code. Use when the user says "coverage", "what's untested", "find coverage gaps", or wants to know what needs tests. Automatically delegates to a tester subagent. (local)
+- **coverage**: Run tests with coverage instrumentation, identify uncovered code, and produce kanban cards for coverage gaps. Use when the user says "coverage", "what's untested", "find coverage gaps", or wants to know what needs tests. Automatically delegates to a tester subagent. (local)
 
 - **deduplicate**: Find and refactor duplicate code. Use this skill when the user wants to find near-duplicate code, check for copy-paste redundancy, or DRY up a codebase — optionally scoped to changed files. Automatically delegates to an implementer subagent. (local)
 

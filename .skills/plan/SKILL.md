@@ -3,7 +3,7 @@ name: plan
 description: Plan Mode workflow. Use this skill whenever you are in Plan Mode. Drives all planning activity — research, task decomposition, and creating kanban cards as the plan artifact.
 metadata:
   author: "swissarmyhammer"
-  version: "0.10.1"
+  version: "0.11.0"
 ---
 
 ## Project Detection
@@ -14,15 +14,7 @@ To discover project types, build commands, and language-specific guidelines for 
 {"op": "detect projects"}
 ```
 
-This will scan the directory tree and return:
-- All detected project types (Rust, Node.js, Python, Go, Java, C#, CMake, Makefile, Flutter, PHP)
-- Project locations as relative paths
-- Workspace/monorepo membership
-- Language-specific guidelines for testing, building, formatting, and linting
-
 **Call this early in your session** to understand the project structure before making changes. The guidelines returned are authoritative — follow them for test commands, build commands, and formatting.
-
-** Fix the root cause, not the symptoms **
 
 ## Code Quality
 
@@ -52,7 +44,7 @@ This will scan the directory tree and return:
 
 ## Test Driven Development
 
-Write tests first, then implementation. This ensures code is testable and requirements are clear.
+Write tests first, then implementation. TDD, RED, GREEN, REFACTOR.
 
 ### TDD Cycle
 
@@ -82,8 +74,8 @@ Use this skill whenever you enter Plan Mode or the user asks you to plan work.
 
 ## Constraints
 
-### Plans are kanban cards
-Every planned work item becomes a kanban card. The kanban board IS the plan. No markdown plan files. When presenting the plan, show the cards.
+### Plans are kanban cards — created as you go
+Every planned work item becomes a kanban card. The kanban board IS the plan. No markdown plan files. **Create cards as they crystallize during discussion, not as a batch at the end.** If a work item is defined enough to describe in conversation, it is defined enough to be a card. Don't wait for the user to ask for cards — the act of planning IS creating cards.
 
 ### Research before cards
 Use `code_context` as the primary research tool. Always check blast radius (`op: "get blastradius"`) on files you expect to change — this is how you discover downstream work you'd otherwise miss. Use symbol search, call graphs, and text search (Glob/Grep/Read) to fill in the picture.

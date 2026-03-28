@@ -3,7 +3,7 @@ name: explore
 description: Use this skill before planning or implementing when you need to understand code — how something works, why it behaves a certain way, or what a change would affect. Exploration is not done until you can articulate the test you would write. Use when the user says "explore", "investigate", "how does X work", "what would it take to change X", or when you need to understand code before acting.
 metadata:
   author: "swissarmyhammer"
-  version: "0.10.1"
+  version: "0.11.0"
 ---
 
 ## Project Detection
@@ -14,17 +14,11 @@ To discover project types, build commands, and language-specific guidelines for 
 {"op": "detect projects"}
 ```
 
-This will scan the directory tree and return:
-- All detected project types (Rust, Node.js, Python, Go, Java, C#, CMake, Makefile, Flutter, PHP)
-- Project locations as relative paths
-- Workspace/monorepo membership
-- Language-specific guidelines for testing, building, formatting, and linting
-
 **Call this early in your session** to understand the project structure before making changes. The guidelines returned are authoritative — follow them for test commands, build commands, and formatting.
 
 ## Test Driven Development
 
-Write tests first, then implementation. This ensures code is testable and requirements are clear.
+Write tests first, then implementation. TDD, RED, GREEN, REFACTOR.
 
 ### TDD Cycle
 
