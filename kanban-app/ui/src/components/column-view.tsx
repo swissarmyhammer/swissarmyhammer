@@ -453,6 +453,7 @@ export const ColumnView = memo(function ColumnView({
                 invoke("dispatch_command", {
                   cmd: "task.add",
                   args: { title: "New task", column: column.id },
+                  scopeChain: [`column:${column.id}`],
                   ...(boardPath ? { boardPath } : {}),
                 });
               }}

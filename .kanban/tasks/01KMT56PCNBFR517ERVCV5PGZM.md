@@ -11,4 +11,4 @@ In `kanban-app/ui/src/lib/entity-focus-context.tsx`, `broadcastNavCommand` itera
 
 Each predicate is a simple string comparison (`f === someMoniker`), so the constant factor is small. But this scales linearly with board size. The current design is "first match wins" with Map insertion order, which is correct.
 
-**Recommendation:** This is acceptable for MVP. If profiling shows keyboard lag on large boards (200+ tasks), consider indexing predicates by `(command, focusedMoniker)` pairs in a Map for O(1) lookup instead of linear scan. No action needed now, but document the scaling characteristic.
+**Recommendation:** This is acceptable for MVP. If profiling shows keyboard lag on large boards (200+ tasks), consider indexing predicates by `(command, focusedMoniker)` pairs in a Map for O(1) lookup instead of linear scan. No action needed now, but document the scaling characteristic. #review-finding

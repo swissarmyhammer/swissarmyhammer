@@ -11,4 +11,4 @@ In `kanban-app/ui/src/lib/keybindings.ts`, the emacs BINDING_TABLE maps `Mod+f` 
 
 The previous emacs table had `"Mod+f": "app.search"` which was removed and replaced with `"Mod+f": "nav.right"` (via `"Ctrl+f": "nav.right"` / `"Mod+f": "nav.right"`).
 
-**Fix:** Remove `"Mod+f": "nav.right"` from the emacs BINDING_TABLE. The emacs nav.right should only be `Ctrl+f` (on macOS) or rely on the global nav commands defined in app-shell.tsx. Alternatively, use `Ctrl+s` for search in emacs mode to avoid the conflict entirely.
+**Fix:** Remove `"Mod+f": "nav.right"` from the emacs BINDING_TABLE. The emacs nav.right should only be `Ctrl+f` (on macOS) or rely on the global nav commands defined in app-shell.tsx. Alternatively, use `Ctrl+s` for search in emacs mode to avoid the conflict entirely. #review-finding
