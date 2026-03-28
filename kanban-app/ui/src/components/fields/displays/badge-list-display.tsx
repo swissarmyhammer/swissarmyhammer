@@ -126,8 +126,8 @@ export function BadgeListDisplay({ field, value, entity, mode }: DisplayProps) {
             slug={slug}
             prefix={prefix}
             taskId={isComputedSlug ? entity.id : undefined}
-            claimWhen={pillClaimPredicates[i]}
-            focusMoniker={pillMonikers[i]}
+            claimWhen={mode === "full" ? pillClaimPredicates[i] : undefined}
+            focusMoniker={mode === "full" ? pillMonikers[i] : undefined}
           />
         );
       })}
