@@ -1,6 +1,6 @@
 import { memo, useCallback, useMemo, useRef } from "react";
 import CodeMirror, { type ReactCodeMirrorRef } from "@uiw/react-codemirror";
-import { EditorView, placeholder as cmPlaceholder } from "@codemirror/view";
+import { EditorView } from "@codemirror/view";
 import { Compartment } from "@codemirror/state";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { getCM, Vim } from "@replit/codemirror-vim";
@@ -282,11 +282,10 @@ export function TextEditor({
         onCancelRef: semanticCancelRef,
         saveInPlaceRef,
       }),
-      ...(placeholder ? [cmPlaceholder(placeholder)] : []),
       ...changeExtension,
       ...(extraExtensions ?? []),
     ],
-    [mode, placeholder, changeExtension, extraExtensions],
+    [mode, changeExtension, extraExtensions],
   );
 
   // Stable onBlur — reads from ref

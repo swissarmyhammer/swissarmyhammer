@@ -99,6 +99,10 @@ export function FocusScope({
 
   const handleClick = useCallback(
     (e: React.MouseEvent) => {
+      // When showFocusBar is false, don't claim focus on click — let the
+      // event propagate to the parent FocusScope (e.g. grid cell, card).
+      if (!showFocusBar) return;
+
       // Don't change entity focus when clicking inputs/textareas/selects
       const target = e.target as HTMLElement;
       const tag = target.tagName;
@@ -109,7 +113,7 @@ export function FocusScope({
       e.stopPropagation();
       setFocus(moniker);
     },
-    [moniker, setFocus],
+    [moniker, setFocus, showFocusBar],
   );
 
   // Provide the scope via CommandScopeContext directly (not CommandScopeProvider)

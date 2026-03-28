@@ -8,7 +8,7 @@ position_ordinal: 7f80
 title: Consolidate TagPill into MentionPill as unified pill component
 ---
 ## What
-Merge TagPill functionality into MentionPill so there's one pill component for all mentionable entity types (#tag, @actor, ^task). TagPill currently has features MentionPill lacks — add them to MentionPill, then replace all TagPill usage.
+Merge TagPill functionality into MentionPill so there's one pill component for all mentionable entity types (@actor, ^task). TagPill currently has features MentionPill lacks — add them to MentionPill, then replace all TagPill usage.
 
 ### Changes to `mention-pill.tsx`:
 - Add `taskId?: string` prop (for tag remove command)
@@ -42,4 +42,4 @@ Merge TagPill functionality into MentionPill so there's one pill component for a
 ## Tests
 - [ ] Update `tag-pill.test.tsx` → `mention-pill.test.tsx` with cases for tag, actor, task
 - [ ] Verify tag context menu still has "Remove Tag" when taskId is provided
-- [ ] Verify `#`, `@`, `^` prefixes all render correctly
+- [ ] Verify `#`, `@`, `^` prefixes all render correctly #tag

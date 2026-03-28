@@ -29,6 +29,7 @@ import { ViewsProvider, useViews } from "@/lib/views-context";
 import {
   CommandScopeProvider,
   ActiveBoardPathProvider,
+  dispatchCommand,
   type CommandDef,
 } from "@/lib/command-scope";
 import { DragSessionProvider } from "@/lib/drag-session-context";
@@ -546,9 +547,6 @@ function App() {
                                     openBoards={openBoards}
                                     activeBoardPath={activeBoardPath}
                                     onSwitchBoard={handleSwitchBoard}
-                                    onBoardInspect={() =>
-                                      inspectEntity("board", "board")
-                                    }
                                   />
                                   {board && activeBoardPath ? (
                                     <>
@@ -570,7 +568,13 @@ function App() {
                                             ? "opacity-100"
                                             : "opacity-0 pointer-events-none"
                                         }`}
-                                        onClick={closeAll}
+                                        onClick={() => {
+                                          dispatchCommand({
+                                            id: "ui.inspector.close_all",
+                                            name: "Close All Inspectors",
+                                            execute: closeAll,
+                                          });
+                                        }}
                                       />
 
                                       {/* Render inspector panels from the stack */}

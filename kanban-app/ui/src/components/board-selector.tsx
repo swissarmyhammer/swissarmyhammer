@@ -8,6 +8,7 @@
 import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ExternalLink } from "lucide-react";
+import { dispatchCommand } from "@/lib/command-scope";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -88,7 +89,16 @@ export function BoardSelector({
         )}
       </div>
 
-      <Select value={selectedPath ?? undefined} onValueChange={onSelect}>
+      <Select
+        value={selectedPath ?? undefined}
+        onValueChange={(path) => {
+          dispatchCommand({
+            id: "file.switchBoard",
+            name: "Switch Board",
+            execute: () => onSelect(path),
+          });
+        }}
+      >
         <SelectTrigger
           className="border-none shadow-none h-auto py-0 px-0 gap-1 w-auto min-w-0 focus-visible:ring-0 focus-visible:border-transparent"
           size="sm"
@@ -124,9 +134,12 @@ export function BoardSelector({
           className="h-6 w-6 text-muted-foreground/40"
           title="Open in new window"
           onClick={() => {
-            invoke("create_window", { boardPath: selectedPath }).catch(
-              console.error,
-            );
+            dispatchCommand({
+              id: "window.new",
+              name: "New Window",
+              execute: () =>
+                invoke("create_window", { boardPath: selectedPath }),
+            });
           }}
         >
           <ExternalLink className="h-3.5 w-3.5" />

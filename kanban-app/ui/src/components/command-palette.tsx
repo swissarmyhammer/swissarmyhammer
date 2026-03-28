@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { createPortal } from "react-dom";
 import CodeMirror, { type ReactCodeMirrorRef } from "@uiw/react-codemirror";
 import { keymap, EditorView } from "@codemirror/view";
@@ -6,8 +13,10 @@ import { Compartment } from "@codemirror/state";
 import { getCM, Vim } from "@replit/codemirror-vim";
 import { invoke } from "@tauri-apps/api/core";
 import {
+  CommandScopeContext,
   useAvailableCommands,
   collectAvailableCommands,
+  resolveCommand,
   dispatchCommand,
   type CommandAtDepth,
 } from "@/lib/command-scope";
@@ -212,7 +221,11 @@ export function CommandPalette({
     }
     if (inspectEntity) {
       const entityMoniker = moniker(result.entity_type, result.entity_id);
-      inspectEntity(entityMoniker);
+      dispatchCommand({
+        id: "entity.inspect",
+        name: "Inspect Entity",
+        execute: () => inspectEntity(entityMoniker),
+      });
     }
   }, [searchResults, selectedIndex, onClose, inspectEntity, onSwitchBoard]);
 
@@ -382,7 +395,6 @@ export function CommandPalette({
               hasQuery={debouncedFilter.length > 0}
               onClose={onClose}
               onHoverIndex={setSelectedIndex}
-              inspectEntity={inspectEntity}
             />
           ) : filteredCommands.length === 0 ? (
             <div className="px-3 py-2 text-sm text-muted-foreground">
@@ -429,7 +441,6 @@ interface ResultListProps {
   hasQuery: boolean;
   onClose: () => void;
   onHoverIndex: (index: number) => void;
-  inspectEntity: ((moniker: string) => void) | null;
 }
 
 /** Renders search results in search mode. Extracted to keep CommandPalette readable. */
@@ -439,7 +450,6 @@ function SearchResults({
   hasQuery,
   onClose,
   onHoverIndex,
-  inspectEntity,
 }: ResultListProps) {
   if (!hasQuery) {
     return (
@@ -467,7 +477,6 @@ function SearchResults({
           selectedIndex={selectedIndex}
           onClose={onClose}
           onHoverIndex={onHoverIndex}
-          inspectEntity={inspectEntity}
         />
       ))}
     </>
@@ -487,7 +496,6 @@ interface ResultRowProps {
   selectedIndex: number;
   onClose: () => void;
   onHoverIndex: (index: number) => void;
-  inspectEntity: ((moniker: string) => void) | null;
 }
 
 function SearchResultItem({
@@ -496,33 +504,62 @@ function SearchResultItem({
   selectedIndex,
   onClose,
   onHoverIndex,
-  inspectEntity,
 }: ResultRowProps) {
   const entityMoniker = moniker(result.entity_type, result.entity_id);
   const commands = useEntityCommands(result.entity_type, result.entity_id);
 
   return (
     <FocusScope moniker={entityMoniker} commands={commands}>
-      <div
-        role="option"
-        aria-selected={index === selectedIndex}
-        data-testid={`search-result-${entityMoniker}`}
-        className={`flex cursor-pointer items-center gap-2 px-3 py-1.5 text-sm
-          ${index === selectedIndex ? "bg-accent text-accent-foreground" : "hover:bg-accent/50"}`}
-        onClick={() => {
-          if (inspectEntity) {
-            onClose();
-            inspectEntity(entityMoniker);
-          }
-        }}
-        onMouseEnter={() => onHoverIndex(index)}
-      >
-        <EntityIcon
-          entityType={result.entity_type}
-          className="h-3.5 w-3.5 shrink-0 text-muted-foreground"
-        />
-        <span className="min-w-0 truncate">{result.display_name}</span>
-      </div>
+      <SearchResultRow
+        entityMoniker={entityMoniker}
+        result={result}
+        index={index}
+        selectedIndex={selectedIndex}
+        onClose={onClose}
+        onHoverIndex={onHoverIndex}
+      />
     </FocusScope>
+  );
+}
+
+/** Inner row that can access the FocusScope's CommandScopeContext. */
+function SearchResultRow({
+  entityMoniker,
+  result,
+  index,
+  selectedIndex,
+  onClose,
+  onHoverIndex,
+}: {
+  entityMoniker: string;
+  result: ResultRowProps["result"];
+  index: number;
+  selectedIndex: number;
+  onClose: () => void;
+  onHoverIndex: (index: number) => void;
+}) {
+  const scope = useContext(CommandScopeContext);
+  return (
+    <div
+      role="option"
+      aria-selected={index === selectedIndex}
+      data-testid={`search-result-${entityMoniker}`}
+      className={`flex cursor-pointer items-center gap-2 px-3 py-1.5 text-sm
+        ${index === selectedIndex ? "bg-accent text-accent-foreground" : "hover:bg-accent/50"}`}
+      onClick={() => {
+        const cmd = resolveCommand(scope, "entity.inspect");
+        if (cmd) {
+          onClose();
+          dispatchCommand(cmd);
+        }
+      }}
+      onMouseEnter={() => onHoverIndex(index)}
+    >
+      <EntityIcon
+        entityType={result.entity_type}
+        className="h-3.5 w-3.5 shrink-0 text-muted-foreground"
+      />
+      <span className="min-w-0 truncate">{result.display_name}</span>
+    </div>
   );
 }

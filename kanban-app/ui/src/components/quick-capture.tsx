@@ -21,6 +21,7 @@ import { Button } from "@/components/ui/button";
 import { TextEditor } from "@/components/fields/text-editor";
 import { BoardSelector } from "@/components/board-selector";
 import { useUIState } from "@/lib/ui-state-context";
+import { dispatchCommand } from "@/lib/command-scope";
 import appIcon from "@/assets/app-icon-32.png";
 import type { OpenBoard, BoardDataResponse, Entity } from "@/types/kanban";
 
@@ -110,7 +111,11 @@ export function QuickCapture() {
   }, [loadBoards]);
 
   const hideWindow = useCallback(() => {
-    getCurrentWindow().hide();
+    dispatchCommand({
+      id: "app.dismiss",
+      name: "Dismiss Quick Capture",
+      execute: () => getCurrentWindow().hide(),
+    });
   }, []);
 
   const handleSubmit = useCallback(
@@ -131,20 +136,29 @@ export function QuickCapture() {
         const firstColumnId = columns[0]?.id;
         if (!firstColumnId) return;
 
-        // "task.add" is a command identifier dispatched to Rust, not a field name.
-        await invoke("dispatch_command", {
-          cmd: "task.add",
-          args: { column: firstColumnId, title: text.trim() },
-          boardPath: selectedPath,
+        await dispatchCommand({
+          id: "task.add",
+          name: "Quick Capture Add Task",
+          execute: () =>
+            invoke("dispatch_command", {
+              cmd: "task.add",
+              args: { column: firstColumnId, title: text.trim() },
+              boardPath: selectedPath,
+            }),
         });
 
         localStorage.setItem(STORAGE_KEY, selectedPath);
 
         // If we switched to a different board for the add, restore the previous active
         if (active && active.path !== selectedPath) {
-          await invoke("dispatch_command", {
-            cmd: "file.switchBoard",
-            args: { path: active.path },
+          await dispatchCommand({
+            id: "file.switchBoard",
+            name: "Restore Active Board",
+            execute: () =>
+              invoke("dispatch_command", {
+                cmd: "file.switchBoard",
+                args: { path: active.path },
+              }),
           }).catch(() => {});
         }
       } catch (err) {
@@ -168,6 +182,8 @@ export function QuickCapture() {
   const { keymap_mode: keymapMode } = useUIState();
   const handleSubmitRef = useRef(handleSubmit);
   handleSubmitRef.current = handleSubmit;
+  const hideWindowRef = useRef(hideWindow);
+  hideWindowRef.current = hideWindow;
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -182,7 +198,7 @@ export function QuickCapture() {
         if (e.key === "Escape") {
           e.preventDefault();
           e.stopPropagation();
-          getCurrentWindow().hide();
+          hideWindowRef.current();
         } else if (e.key === "Enter") {
           e.preventDefault();
           e.stopPropagation();
@@ -195,7 +211,7 @@ export function QuickCapture() {
       }
 
       if (e.key === "Escape") {
-        getCurrentWindow().hide();
+        hideWindowRef.current();
       }
     };
     window.addEventListener("keydown", handler, true);

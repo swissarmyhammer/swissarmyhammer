@@ -455,4 +455,79 @@ mod tests {
         assert!(scope_matches(Some("entity:tag,entity:task"), &chain));
         assert!(!scope_matches(Some("entity:tag,entity:column"), &chain));
     }
+
+    // --- load_yaml_dir tests ---
+
+    #[test]
+    fn load_yaml_dir_nonexistent_returns_empty() {
+        let result = load_yaml_dir(std::path::Path::new("/nonexistent/path/xyz"));
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn load_yaml_dir_with_yaml_files() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("foo.yaml"), "- id: foo\n").unwrap();
+        std::fs::write(dir.path().join("bar.yaml"), "- id: bar\n").unwrap();
+        let result = load_yaml_dir(dir.path());
+        assert_eq!(result.len(), 2);
+        let names: Vec<&str> = result.iter().map(|(n, _)| n.as_str()).collect();
+        assert!(names.contains(&"foo"));
+        assert!(names.contains(&"bar"));
+    }
+
+    #[test]
+    fn load_yaml_dir_skips_non_yaml() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("commands.yaml"), "- id: test\n").unwrap();
+        std::fs::write(dir.path().join("readme.txt"), "not yaml").unwrap();
+        std::fs::write(dir.path().join("data.json"), "{}").unwrap();
+        let result = load_yaml_dir(dir.path());
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].0, "commands");
+    }
+
+    #[test]
+    fn load_yaml_dir_empty_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let result = load_yaml_dir(dir.path());
+        assert!(result.is_empty());
+    }
+
+    // --- merge_yaml_sources tests ---
+
+    #[test]
+    fn merge_yaml_sources_adds_new_commands() {
+        let base = vec![("base", "- id: task.add\n  name: Add Task\n")];
+        let mut reg = CommandsRegistry::from_yaml_sources(&base);
+        assert!(reg.get("task.add").is_some());
+        assert!(reg.get("task.delete").is_none());
+
+        let extra = vec![("extra", "- id: task.delete\n  name: Delete Task\n")];
+        reg.merge_yaml_sources(&extra);
+        assert!(reg.get("task.delete").is_some());
+        assert_eq!(reg.get("task.delete").unwrap().name, "Delete Task");
+    }
+
+    #[test]
+    fn merge_yaml_sources_overrides_existing_fields() {
+        let base = vec![("base", "- id: task.add\n  name: Add Task\n")];
+        let mut reg = CommandsRegistry::from_yaml_sources(&base);
+        assert_eq!(reg.get("task.add").unwrap().name, "Add Task");
+
+        let over = vec![("over", "- id: task.add\n  name: Add Task Updated\n")];
+        reg.merge_yaml_sources(&over);
+        assert_eq!(reg.get("task.add").unwrap().name, "Add Task Updated");
+    }
+
+    #[test]
+    fn merge_yaml_sources_invalid_yaml_skipped() {
+        let base = vec![("base", "- id: task.add\n  name: Add Task\n")];
+        let mut reg = CommandsRegistry::from_yaml_sources(&base);
+
+        let invalid = vec![("bad", "{{{{not valid yaml")];
+        reg.merge_yaml_sources(&invalid);
+        // Original command still intact
+        assert!(reg.get("task.add").is_some());
+    }
 }

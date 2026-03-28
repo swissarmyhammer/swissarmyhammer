@@ -977,3 +977,350 @@ async fn reorder_move_third_before_second_then_back() {
         "should return to original order after moving C back after B"
     );
 }
+
+// ===========================================================================
+// Card 01KMT7ZF59AYKGRA62DBTR9Y6E — DeleteTaskCmd::execute
+// ===========================================================================
+
+#[tokio::test]
+async fn task_delete_removes_task() {
+    let engine = TestEngine::new().await;
+
+    // Add a task
+    let add_result = engine
+        .dispatch_simple("task.add", &["column:todo"], None)
+        .await
+        .expect("task.add should succeed");
+    let task_id = add_result["id"].as_str().unwrap();
+
+    // Verify the task exists
+    assert!(
+        engine
+            .kanban
+            .read_entity_generic("task", task_id)
+            .await
+            .is_ok(),
+        "task should exist after add"
+    );
+
+    // Dispatch task.delete through the command harness
+    let delete_result = engine
+        .dispatch_simple(
+            "task.delete",
+            &[&format!("task:{}", task_id)],
+            None,
+        )
+        .await
+        .expect("task.delete should succeed");
+
+    assert!(
+        delete_result.get("operation_id").is_some(),
+        "result should contain operation_id"
+    );
+
+    // Verify the task is gone
+    assert!(
+        engine
+            .kanban
+            .read_entity_generic("task", task_id)
+            .await
+            .is_err(),
+        "task should not exist after delete"
+    );
+}
+
+// ===========================================================================
+// Card 01KMT7ZAFSH0BW898EV3MF3M5E — MoveTaskCmd swimlane arg
+// ===========================================================================
+
+#[tokio::test]
+async fn task_move_with_swimlane_arg() {
+    let engine = TestEngine::new().await;
+
+    // Create a swimlane via the lower-level API
+    let processor = KanbanOperationProcessor::new();
+    processor
+        .process(
+            &swissarmyhammer_kanban::swimlane::AddSwimlane::new("urgent", "Urgent"),
+            &engine.kanban,
+        )
+        .await
+        .expect("swimlane creation should succeed");
+
+    // Add a task in todo
+    let add_result = engine
+        .dispatch_simple("task.add", &["column:todo"], None)
+        .await
+        .expect("task.add should succeed");
+    let task_id = add_result["id"].as_str().unwrap();
+
+    // Verify task has no swimlane initially
+    let task = engine
+        .kanban
+        .read_entity_generic("task", task_id)
+        .await
+        .unwrap();
+    assert!(
+        task.get_str("position_swimlane").is_none()
+            || task.get_str("position_swimlane") == Some(""),
+        "task should have no swimlane initially"
+    );
+
+    // Move task to doing with swimlane arg
+    let mut args = HashMap::new();
+    args.insert("column".to_string(), json!("doing"));
+    args.insert("swimlane".to_string(), json!("urgent"));
+
+    let move_result = engine
+        .dispatch(
+            "task.move",
+            &[&format!("task:{}", task_id)],
+            None,
+            args,
+        )
+        .await
+        .expect("task.move with swimlane should succeed");
+
+    assert!(move_result.get("operation_id").is_some());
+
+    // Verify the task is in the correct column and swimlane
+    let task = engine
+        .kanban
+        .read_entity_generic("task", task_id)
+        .await
+        .unwrap();
+    assert_eq!(
+        task.get_str("position_column"),
+        Some("doing"),
+        "task should be in doing column"
+    );
+    assert_eq!(
+        task.get_str("position_swimlane"),
+        Some("urgent"),
+        "task should be in urgent swimlane"
+    );
+}
+
+// ===========================================================================
+// Card 01KMT7ZD38JXSKZT7Q51VA334C — TagTaskCmd::execute
+// ===========================================================================
+
+#[tokio::test]
+async fn task_tag_applies_tag() {
+    let engine = TestEngine::new().await;
+
+    // Create a tag via the lower-level API
+    let processor = KanbanOperationProcessor::new();
+    processor
+        .process(
+            &swissarmyhammer_kanban::tag::AddTag::new("feature"),
+            &engine.kanban,
+        )
+        .await
+        .expect("tag creation should succeed");
+
+    // Add a task
+    let add_result = engine
+        .dispatch_simple("task.add", &["column:todo"], None)
+        .await
+        .expect("task.add should succeed");
+    let task_id = add_result["id"].as_str().unwrap();
+
+    // Verify the task has no tags initially
+    let task = engine
+        .kanban
+        .read_entity_generic("task", task_id)
+        .await
+        .unwrap();
+    let tags = task
+        .get("tags")
+        .and_then(|v| v.as_array().cloned())
+        .unwrap_or_default();
+    assert!(
+        !tags.iter().any(|t| t.as_str() == Some("feature")),
+        "task should not have 'feature' tag initially"
+    );
+
+    // Dispatch task.tag via the command harness
+    let tag_result = engine
+        .dispatch_simple(
+            "task.tag",
+            &["tag:feature", &format!("task:{}", task_id)],
+            None,
+        )
+        .await
+        .expect("task.tag should succeed");
+
+    assert!(
+        tag_result.get("operation_id").is_some(),
+        "result should contain operation_id"
+    );
+
+    // Verify the tag was applied
+    let task = engine
+        .kanban
+        .read_entity_generic("task", task_id)
+        .await
+        .unwrap();
+    let tags = task
+        .get("tags")
+        .and_then(|v| v.as_array().cloned())
+        .unwrap_or_default();
+    assert!(
+        tags.iter().any(|t| t.as_str() == Some("feature")),
+        "task should have 'feature' tag after task.tag"
+    );
+}
+
+// ===========================================================================
+// Card 01KMT7Z4560S3CSHNQVR7GQ7PY — DragCompleteCmd same-board
+// ===========================================================================
+
+#[tokio::test]
+async fn drag_complete_same_board_moves_task() {
+    let engine = TestEngine::new().await;
+
+    // Add a task in todo
+    let add_result = engine
+        .dispatch_simple("task.add", &["column:todo"], None)
+        .await
+        .expect("task.add should succeed");
+    let task_id = add_result["id"].as_str().unwrap();
+
+    // Start a drag session
+    let board_path = engine.kanban.root().to_string_lossy().to_string();
+    let mut start_args = HashMap::new();
+    start_args.insert("taskId".to_string(), json!(task_id));
+    start_args.insert("boardPath".to_string(), json!(&board_path));
+
+    engine
+        .dispatch("drag.start", &[], None, start_args)
+        .await
+        .expect("drag.start should succeed");
+
+    // Complete the drag on the same board, targeting "doing" column
+    let mut complete_args = HashMap::new();
+    complete_args.insert("targetBoardPath".to_string(), json!(&board_path));
+    complete_args.insert("targetColumn".to_string(), json!("doing"));
+
+    let result = engine
+        .dispatch("drag.complete", &[], None, complete_args)
+        .await
+        .expect("drag.complete should succeed");
+
+    // Verify the result indicates same-board completion
+    let drag_complete = result
+        .get("DragComplete")
+        .expect("result should have DragComplete key");
+    assert_eq!(
+        drag_complete["same_board"].as_bool(),
+        Some(true),
+        "should be same-board drag"
+    );
+    assert_eq!(
+        drag_complete["task_id"].as_str(),
+        Some(task_id),
+        "task_id should match"
+    );
+    assert_eq!(
+        drag_complete["target_column"].as_str(),
+        Some("doing"),
+        "target column should be doing"
+    );
+
+    // Verify the task actually moved to "doing"
+    let task = engine
+        .kanban
+        .read_entity_generic("task", task_id)
+        .await
+        .unwrap();
+    assert_eq!(
+        task.get_str("position_column"),
+        Some("doing"),
+        "task should be in doing column after drag complete"
+    );
+}
+
+// ===========================================================================
+// Card 01KMT7Z7N9FD6ZJ7K48FPDQFM4 — DragCompleteCmd cross-board
+// ===========================================================================
+
+#[tokio::test]
+async fn drag_complete_cross_board_returns_transfer_params() {
+    let engine = TestEngine::new().await;
+
+    // Add a task in todo
+    let add_result = engine
+        .dispatch_simple("task.add", &["column:todo"], None)
+        .await
+        .expect("task.add should succeed");
+    let task_id = add_result["id"].as_str().unwrap();
+
+    // Start a drag session with source board path
+    let source_board_path = "/boards/source/.kanban";
+    let mut start_args = HashMap::new();
+    start_args.insert("taskId".to_string(), json!(task_id));
+    start_args.insert("boardPath".to_string(), json!(source_board_path));
+
+    engine
+        .dispatch("drag.start", &[], None, start_args)
+        .await
+        .expect("drag.start should succeed");
+
+    // Complete the drag targeting a DIFFERENT board path
+    let target_board_path = "/boards/target/.kanban";
+    let mut complete_args = HashMap::new();
+    complete_args.insert("targetBoardPath".to_string(), json!(target_board_path));
+    complete_args.insert("targetColumn".to_string(), json!("done"));
+    complete_args.insert("dropIndex".to_string(), json!(0));
+
+    let result = engine
+        .dispatch("drag.complete", &[], None, complete_args)
+        .await
+        .expect("drag.complete should succeed");
+
+    // Verify the result indicates cross-board completion
+    let drag_complete = result
+        .get("DragComplete")
+        .expect("result should have DragComplete key");
+    assert_eq!(
+        drag_complete["same_board"].as_bool(),
+        Some(false),
+        "should not be same-board"
+    );
+    assert_eq!(
+        drag_complete["cross_board"].as_bool(),
+        Some(true),
+        "should be cross-board drag"
+    );
+    assert_eq!(
+        drag_complete["source_board_path"].as_str(),
+        Some(source_board_path),
+        "source board path should match"
+    );
+    assert_eq!(
+        drag_complete["target_board_path"].as_str(),
+        Some(target_board_path),
+        "target board path should match"
+    );
+    assert_eq!(
+        drag_complete["task_id"].as_str(),
+        Some(task_id),
+        "task_id should match"
+    );
+    assert_eq!(
+        drag_complete["target_column"].as_str(),
+        Some("done"),
+        "target column should be done"
+    );
+    assert_eq!(
+        drag_complete["drop_index"].as_u64(),
+        Some(0),
+        "drop_index should be passed through"
+    );
+    assert_eq!(
+        drag_complete["copy_mode"].as_bool(),
+        Some(false),
+        "copy_mode should default to false"
+    );
+}

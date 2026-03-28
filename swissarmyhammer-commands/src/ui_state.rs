@@ -1132,4 +1132,257 @@ mod tests {
         let json = state.to_json();
         assert!(json["most_recent_board_path"].is_null());
     }
+
+    // --- drag session tests ---
+
+    fn make_drag_session(task_id: &str, board_path: &str) -> DragSession {
+        DragSession {
+            session_id: format!("sess-{task_id}"),
+            source_board_path: board_path.to_string(),
+            source_window_label: "main".to_string(),
+            task_id: task_id.to_string(),
+            task_fields: serde_json::json!({}),
+            copy_mode: false,
+            started_at_ms: 0,
+        }
+    }
+
+    #[test]
+    fn start_drag_then_drag_session_returns_session() {
+        let state = UIState::new();
+        state.start_drag(make_drag_session("task-1", "/board/a"));
+        let current = state.drag_session();
+        assert!(current.is_some());
+        assert_eq!(current.unwrap().task_id, "task-1");
+    }
+
+    #[test]
+    fn take_drag_returns_session_and_clears() {
+        let state = UIState::new();
+        state.start_drag(make_drag_session("task-1", "/board/a"));
+
+        let taken = state.take_drag();
+        assert!(taken.is_some());
+        assert_eq!(taken.unwrap().task_id, "task-1");
+
+        assert!(state.take_drag().is_none());
+    }
+
+    #[test]
+    fn cancel_drag_clears_session() {
+        let state = UIState::new();
+        state.start_drag(make_drag_session("task-1", "/board/a"));
+        state.cancel_drag();
+        assert!(state.drag_session().is_none());
+    }
+
+    #[test]
+    fn start_drag_replaces_existing_session() {
+        let state = UIState::new();
+        state.start_drag(make_drag_session("task-1", "/board/a"));
+        state.start_drag(make_drag_session("task-2", "/board/b"));
+
+        let current = state.drag_session().unwrap();
+        assert_eq!(current.task_id, "task-2");
+        assert_eq!(current.source_board_path, "/board/b");
+    }
+
+    #[test]
+    fn take_drag_on_empty_returns_none() {
+        let state = UIState::new();
+        assert!(state.take_drag().is_none());
+    }
+
+    // --- context menu tests ---
+
+    #[test]
+    fn set_context_menu_ids_and_check_membership() {
+        let state = UIState::new();
+        let ids: HashSet<String> =
+            ["task:01A", "task:01B"].iter().map(|s| s.to_string()).collect();
+        state.set_context_menu_ids(ids);
+
+        assert!(state.is_context_menu_id("task:01A"));
+        assert!(state.is_context_menu_id("task:01B"));
+    }
+
+    #[test]
+    fn is_context_menu_id_returns_false_for_non_member() {
+        let state = UIState::new();
+        let ids: HashSet<String> = ["task:01A"].iter().map(|s| s.to_string()).collect();
+        state.set_context_menu_ids(ids);
+
+        assert!(!state.is_context_menu_id("task:01MISSING"));
+    }
+
+    #[test]
+    fn replacing_context_menu_ids_clears_previous() {
+        let state = UIState::new();
+
+        let first: HashSet<String> =
+            ["task:01A", "task:01B"].iter().map(|s| s.to_string()).collect();
+        state.set_context_menu_ids(first);
+        assert!(state.is_context_menu_id("task:01A"));
+
+        let second: HashSet<String> = ["task:01C"].iter().map(|s| s.to_string()).collect();
+        state.set_context_menu_ids(second);
+
+        assert!(!state.is_context_menu_id("task:01A"), "old ID should be gone");
+        assert!(!state.is_context_menu_id("task:01B"), "old ID should be gone");
+        assert!(state.is_context_menu_id("task:01C"), "new ID should be present");
+    }
+
+    // --- open boards and window board management tests ---
+
+    #[test]
+    fn add_open_board_adds_and_deduplicates() {
+        let state = UIState::new();
+        state.add_open_board("/boards/a");
+        state.add_open_board("/boards/b");
+        state.add_open_board("/boards/a"); // duplicate
+        assert_eq!(state.open_boards(), vec!["/boards/a", "/boards/b"]);
+    }
+
+    #[test]
+    fn remove_open_board_removes_from_list() {
+        let state = UIState::new();
+        state.add_open_board("/boards/a");
+        state.add_open_board("/boards/b");
+        state.remove_open_board("/boards/a");
+        assert_eq!(state.open_boards(), vec!["/boards/b"]);
+    }
+
+    #[test]
+    fn remove_open_board_clears_window_board_path() {
+        let state = UIState::new();
+        state.add_open_board("/boards/a");
+        state.set_window_board("main", "/boards/a");
+        state.remove_open_board("/boards/a");
+        assert!(state.window_board("main").is_none());
+    }
+
+    #[test]
+    fn set_window_board_and_window_board_round_trip() {
+        let state = UIState::new();
+        state.set_window_board("main", "/boards/foo");
+        assert_eq!(state.window_board("main").as_deref(), Some("/boards/foo"));
+    }
+
+    #[test]
+    fn window_board_returns_none_for_unassigned() {
+        let state = UIState::new();
+        assert!(state.window_board("unknown").is_none());
+    }
+
+    #[test]
+    fn all_window_boards_filters_empty() {
+        let state = UIState::new();
+        state.set_window_board("main", "/boards/a");
+        state.set_window_board("secondary", "/boards/b");
+        // Create a window with empty board_path by removing its board
+        state.add_open_board("/boards/b");
+        state.remove_open_board("/boards/b");
+        let boards = state.all_window_boards();
+        assert_eq!(boards.len(), 1);
+        assert_eq!(boards.get("main").unwrap(), "/boards/a");
+    }
+
+    // --- touch_recent and recent_boards tests ---
+
+    #[test]
+    fn touch_recent_adds_entry() {
+        let state = UIState::new();
+        state.touch_recent("/boards/a", "Board A");
+        let recent = state.recent_boards();
+        assert_eq!(recent.len(), 1);
+        assert_eq!(recent[0].path, "/boards/a");
+        assert_eq!(recent[0].name, "Board A");
+    }
+
+    #[test]
+    fn touch_recent_moves_to_front() {
+        let state = UIState::new();
+        state.touch_recent("/boards/a", "A");
+        state.touch_recent("/boards/b", "B");
+        state.touch_recent("/boards/a", "A Updated");
+        let recent = state.recent_boards();
+        assert_eq!(recent.len(), 2);
+        assert_eq!(recent[0].path, "/boards/a");
+        assert_eq!(recent[0].name, "A Updated");
+        assert_eq!(recent[1].path, "/boards/b");
+    }
+
+    #[test]
+    fn touch_recent_caps_at_max() {
+        let state = UIState::new();
+        for i in 0..25 {
+            state.touch_recent(&format!("/boards/{i}"), &format!("Board {i}"));
+        }
+        assert_eq!(state.recent_boards().len(), 20);
+    }
+
+    #[test]
+    fn touch_recent_populates_last_opened() {
+        let state = UIState::new();
+        state.touch_recent("/boards/a", "A");
+        let recent = state.recent_boards();
+        assert!(!recent[0].last_opened.is_empty());
+    }
+
+    // --- window management tests ---
+
+    #[test]
+    fn save_window_geometry_and_get_window_state_round_trip() {
+        let state = UIState::new();
+        state.save_window_geometry("main", 100, 200, 800, 600, true);
+        let ws = state.get_window_state("main").expect("window state exists");
+        assert_eq!(ws.x, Some(100));
+        assert_eq!(ws.y, Some(200));
+        assert_eq!(ws.width, Some(800));
+        assert_eq!(ws.height, Some(600));
+        assert!(ws.maximized);
+    }
+
+    #[test]
+    fn remove_window_removes_entry() {
+        let state = UIState::new();
+        state.save_window_geometry("main", 0, 0, 800, 600, false);
+        state.remove_window("main");
+        assert!(state.get_window_state("main").is_none());
+    }
+
+    #[test]
+    fn clear_windows_removes_all() {
+        let state = UIState::new();
+        state.save_window_geometry("main", 0, 0, 800, 600, false);
+        state.save_window_geometry("secondary", 100, 100, 400, 300, false);
+        state.clear_windows();
+        assert!(state.all_windows().is_empty());
+    }
+
+    #[test]
+    fn restore_boards_populates_when_empty() {
+        let state = UIState::new();
+        state.restore_boards(vec!["/a".into(), "/b".into()]);
+        assert_eq!(state.open_boards(), vec!["/a", "/b"]);
+    }
+
+    #[test]
+    fn restore_boards_no_ops_when_not_empty() {
+        let state = UIState::new();
+        state.add_open_board("/existing");
+        state.restore_boards(vec!["/a".into(), "/b".into()]);
+        assert_eq!(state.open_boards(), vec!["/existing"]);
+    }
+
+    #[test]
+    fn all_windows_returns_all_entries() {
+        let state = UIState::new();
+        state.save_window_geometry("main", 0, 0, 800, 600, false);
+        state.save_window_geometry("secondary", 100, 100, 400, 300, false);
+        let all = state.all_windows();
+        assert_eq!(all.len(), 2);
+        assert!(all.contains_key("main"));
+        assert!(all.contains_key("secondary"));
+    }
 }

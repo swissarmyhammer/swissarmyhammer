@@ -1,12 +1,16 @@
-import { forwardRef, memo, useCallback, useMemo, useState } from "react";
+import { forwardRef, memo, useCallback, useContext, useMemo, useState } from "react";
 import { GripVertical, Info, icons } from "lucide-react";
 import { FocusScope } from "@/components/focus-scope";
 import { Field } from "@/components/fields/field";
 import { useSchema } from "@/lib/schema-context";
-import { useInspect } from "@/lib/inspect-context";
 import { useEntityCommands } from "@/lib/entity-commands";
 import { moniker } from "@/lib/moniker";
-import type { CommandDef } from "@/lib/command-scope";
+import {
+  CommandScopeContext,
+  resolveCommand,
+  dispatchCommand,
+  type CommandDef,
+} from "@/lib/command-scope";
 import type { ClaimPredicate } from "@/lib/entity-focus-context";
 import type { Entity, FieldDef } from "@/types/kanban";
 
@@ -61,7 +65,6 @@ export const EntityCard = memo(
     ref,
   ) {
     const { getSchema } = useSchema();
-    const inspectEntity = useInspect();
     const schema = getSchema(entity.entity_type);
 
     const entityMoniker = moniker(entity.entity_type, entity.id);
@@ -135,19 +138,28 @@ export const EntityCard = memo(
               );
             })}
           </div>
-          <button
-            type="button"
-            className="shrink-0 mt-0.5 p-0.5 rounded text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted transition-colors"
-            onClick={(e) => {
-              e.stopPropagation();
-              inspectEntity(entityMoniker);
-            }}
-            title="Inspect"
-          >
-            <Info className="h-3.5 w-3.5" />
-          </button>
+          <InspectButton />
         </div>
       </FocusScope>
     );
   }),
 );
+
+/** Dispatches entity.inspect through the scope chain instead of calling inspectEntity directly. */
+function InspectButton() {
+  const scope = useContext(CommandScopeContext);
+  return (
+    <button
+      type="button"
+      className="shrink-0 mt-0.5 p-0.5 rounded text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted transition-colors"
+      onClick={(e) => {
+        e.stopPropagation();
+        const cmd = resolveCommand(scope, "entity.inspect");
+        if (cmd) dispatchCommand(cmd);
+      }}
+      title="Inspect"
+    >
+      <Info className="h-3.5 w-3.5" />
+    </button>
+  );
+}

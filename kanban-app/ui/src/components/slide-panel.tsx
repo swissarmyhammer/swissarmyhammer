@@ -1,5 +1,6 @@
 import { useRef, type ReactNode } from "react";
 import { X } from "lucide-react";
+import { dispatchCommand } from "@/lib/command-scope";
 
 interface SlidePanelProps {
   open: boolean;
@@ -32,7 +33,13 @@ export function SlidePanel({
     >
       <div className="flex items-center justify-end px-3 pt-3">
         <button
-          onClick={onClose}
+          onClick={() => {
+            dispatchCommand({
+              id: "ui.inspector.close",
+              name: "Close Inspector",
+              execute: onClose,
+            });
+          }}
           className="shrink-0 p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
         >
           <X className="h-4 w-4" />

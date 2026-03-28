@@ -45,6 +45,8 @@ interface MentionPillProps {
    * context (e.g. `task:id.tags/tag:tag-1` in a specific inspector field).
    */
   focusMoniker?: string;
+  /** When false, suppresses the focus bar on click while keeping context menu. */
+  showFocusBar?: boolean;
 }
 
 export function MentionPill({
@@ -55,6 +57,7 @@ export function MentionPill({
   className,
   claimWhen,
   focusMoniker,
+  showFocusBar,
 }: MentionPillProps) {
   const { getEntities } = useEntityStore();
   const { mentionableTypes } = useSchema();
@@ -120,7 +123,7 @@ export function MentionPill({
   );
 
   return (
-    <FocusScope moniker={scopeMoniker} commands={commands} className="inline mention-pill-focus" claimWhen={claimWhen}>
+    <FocusScope moniker={scopeMoniker} commands={commands} className="inline mention-pill-focus" claimWhen={claimWhen} showFocusBar={showFocusBar}>
       <MentionPillInner
         slug={slug}
         prefix={prefix}
