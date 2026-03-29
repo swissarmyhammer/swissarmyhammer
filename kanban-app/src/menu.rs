@@ -135,23 +135,9 @@ pub fn build_menu_from_commands(
     file_menu.append(&PredefinedMenuItem::separator(app)?)?;
     file_menu.append(&PredefinedMenuItem::close_window(app, None)?)?;
 
-    // --- Edit menu (OS chrome + registry items) ---
-    let edit_menu = Submenu::with_items(
-        app,
-        "Edit",
-        true,
-        &[
-            &PredefinedMenuItem::undo(app, None)?,
-            &PredefinedMenuItem::redo(app, None)?,
-            &PredefinedMenuItem::separator(app)?,
-            &PredefinedMenuItem::cut(app, None)?,
-            &PredefinedMenuItem::copy(app, None)?,
-            &PredefinedMenuItem::paste(app, None)?,
-            &PredefinedMenuItem::select_all(app, None)?,
-        ],
-    )?;
+    // --- Edit menu (built from registry like all other menus) ---
+    let edit_menu = Submenu::new(app, "Edit", true)?;
     if let Some(items) = menus.get("Edit") {
-        edit_menu.append(&PredefinedMenuItem::separator(app)?)?;
         let mut last_group: Option<usize> = None;
         for entry in items {
             if last_group.is_some() && last_group != Some(entry.group) {

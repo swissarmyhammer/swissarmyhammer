@@ -21,6 +21,10 @@
   keys:
     cua: Mod+Z
     vim: u
+  menu:
+    path: [Edit]
+    group: 0
+    order: 0
 
 - id: app.redo
   name: Redo
@@ -28,6 +32,10 @@
   keys:
     cua: Mod+Shift+Z
     vim: Ctrl+R
+  menu:
+    path: [Edit]
+    group: 0
+    order: 1
 
 - id: app.search
   name: Find
@@ -38,4 +46,4 @@
   menu:
     path: [Edit]
     group: 0
-    order: 0
+    order: 2

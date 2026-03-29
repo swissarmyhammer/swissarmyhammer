@@ -115,19 +115,6 @@
     - name: target_index
       from: args
 
-- id: entity.copy
-  name: Copy
-  scope: "entity:task"
-  undoable: false
-  context_menu: true
-  keys:
-    cua: Mod+C
-    vim: "y"
-  params:
-    - name: task
-      from: scope_chain
-      entity_type: task
-
 - id: entity.cut
   name: Cut
   scope: "entity:task"
@@ -136,6 +123,27 @@
   keys:
     cua: Mod+X
     vim: x
+  menu:
+    path: [Edit]
+    group: 1
+    order: 0
+  params:
+    - name: task
+      from: scope_chain
+      entity_type: task
+
+- id: entity.copy
+  name: Copy
+  scope: "entity:task"
+  undoable: false
+  context_menu: true
+  keys:
+    cua: Mod+C
+    vim: "y"
+  menu:
+    path: [Edit]
+    group: 1
+    order: 1
   params:
     - name: task
       from: scope_chain
@@ -148,6 +156,10 @@
   keys:
     cua: Mod+V
     vim: p
+  menu:
+    path: [Edit]
+    group: 1
+    order: 2
   params:
     - name: column
       from: scope_chain
