@@ -28,6 +28,8 @@ export interface UIStateSnapshot {
   keymap_mode: string;
   scope_chain: string[];
   open_boards: string[];
+  /** Whether the system clipboard has a swissarmyhammer entity payload. */
+  has_clipboard: boolean;
   /** Per-window state map: window label → WindowStateSnapshot. */
   windows: Record<string, WindowStateSnapshot>;
   recent_boards: Array<{ path: string; name: string; last_opened: string }>;
@@ -38,6 +40,7 @@ const DEFAULT_STATE: UIStateSnapshot = {
   keymap_mode: "cua",
   scope_chain: [],
   open_boards: [],
+  has_clipboard: false,
   windows: {},
   recent_boards: [],
 };
