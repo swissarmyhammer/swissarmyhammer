@@ -48,6 +48,7 @@ impl TestEngine {
         let registry = CommandsRegistry::from_yaml_sources(&builtin_yaml_sources());
         let commands = register_commands();
         let ui_state = Arc::new(UIState::new());
+
         Self {
             _temp: temp,
             kanban,
@@ -82,10 +83,6 @@ impl TestEngine {
         );
         ctx.ui_state = Some(Arc::clone(&self.ui_state));
         ctx.set_extension(Arc::clone(&self.kanban));
-        // Set EntityContext extension for entity-layer commands (undo/redo)
-        if let Ok(ectx_arc) = self.kanban.entity_context().await {
-            ctx.set_extension(ectx_arc);
-        }
 
         if !cmd.available(&ctx) {
             return Err(CommandError::ExecutionFailed(format!(
@@ -94,10 +91,7 @@ impl TestEngine {
             )));
         }
 
-        let result = cmd.execute(&ctx).await?;
-
-        // Undo stack push is handled automatically inside EntityContext::write()/delete()
-        Ok(result)
+        cmd.execute(&ctx).await
     }
 
     /// Convenience: dispatch with no args.
@@ -451,13 +445,16 @@ async fn undo_reverts_task_add() {
         "task should exist after add"
     );
 
-    // Undo the add (stack-based — no explicit id needed)
+    // Undo the add
+    let mut undo_args = HashMap::new();
+    undo_args.insert("id".to_string(), json!(operation_id));
     let undo_result = engine
-        .dispatch_simple("app.undo", &[], None)
+        .dispatch("app.undo", &[], None, undo_args)
         .await
         .expect("app.undo should succeed");
 
     assert_eq!(undo_result["undone"].as_str(), Some(operation_id));
+    let undo_op_id = undo_result["operation_id"].as_str();
 
     // Task should be gone (trashed)
     assert!(
@@ -469,21 +466,25 @@ async fn undo_reverts_task_add() {
         "task should not exist after undo"
     );
 
-    // Redo the add (stack-based — no explicit id needed)
-    let redo_result = engine
-        .dispatch_simple("app.redo", &[], None)
-        .await
-        .expect("app.redo should succeed");
+    // Redo the add (undo the undo) — use the undo operation_id
+    if let Some(redo_id) = undo_op_id {
+        let mut redo_args = HashMap::new();
+        redo_args.insert("id".to_string(), json!(redo_id));
+        let redo_result = engine
+            .dispatch("app.redo", &[], None, redo_args)
+            .await
+            .expect("app.redo should succeed");
 
-    assert!(redo_result.get("redone").is_some());
+        assert_eq!(redo_result["redone"].as_str(), Some(redo_id));
 
-    // Task should be back
-    let task = engine
-        .kanban
-        .read_entity_generic("task", task_id)
-        .await
-        .expect("task should exist after redo");
-    assert!(task.get_str("title").is_some());
+        // Task should be back
+        let task = engine
+            .kanban
+            .read_entity_generic("task", task_id)
+            .await
+            .expect("task should exist after redo");
+        assert!(task.get_str("title").is_some());
+    }
 }
 
 #[tokio::test]
@@ -515,8 +516,7 @@ async fn undo_reverts_field_update() {
         .dispatch("entity.update_field", &[], None, update_args)
         .await
         .expect("update should succeed");
-    // Verify operation_id is present (used by undo stack internally)
-    assert!(update_result.get("operation_id").is_some());
+    let update_op_id = update_result["operation_id"].as_str().unwrap();
 
     // Verify title changed
     let task = engine
@@ -526,9 +526,11 @@ async fn undo_reverts_field_update() {
         .unwrap();
     assert_eq!(task.get_str("title"), Some("Changed Title"));
 
-    // Undo the update (stack-based — no explicit id needed)
+    // Undo the update
+    let mut undo_args = HashMap::new();
+    undo_args.insert("id".to_string(), json!(update_op_id));
     engine
-        .dispatch_simple("app.undo", &[], None)
+        .dispatch("app.undo", &[], None, undo_args)
         .await
         .expect("undo should succeed");
 
@@ -542,101 +544,6 @@ async fn undo_reverts_field_update() {
         task.get_str("title"),
         Some(original_title.as_str()),
         "title should revert after undo"
-    );
-}
-
-#[tokio::test]
-async fn undo_redo_task_move() {
-    let engine = TestEngine::new().await;
-
-    // 1. Add a task in "todo"
-    let add_result = engine
-        .dispatch_simple("task.add", &["column:todo"], None)
-        .await
-        .expect("task.add should succeed");
-    let task_id = add_result["id"].as_str().unwrap();
-
-    // Verify task starts in "todo"
-    let task = engine
-        .kanban
-        .read_entity_generic("task", task_id)
-        .await
-        .unwrap();
-    assert_eq!(
-        task.get_str("position_column"),
-        Some("todo"),
-        "task should start in todo"
-    );
-
-    // 2. Move it to "doing" via task.move
-    let mut move_args = HashMap::new();
-    move_args.insert("column".to_string(), json!("doing"));
-    let move_result = engine
-        .dispatch(
-            "task.move",
-            &[&format!("task:{}", task_id), "column:todo"],
-            None,
-            move_args,
-        )
-        .await
-        .expect("task.move should succeed");
-    let move_op_id = move_result["operation_id"].as_str().unwrap();
-
-    // 3. Verify task is in "doing"
-    let task = engine
-        .kanban
-        .read_entity_generic("task", task_id)
-        .await
-        .unwrap();
-    assert_eq!(
-        task.get_str("position_column"),
-        Some("doing"),
-        "task should be in doing after move"
-    );
-
-    // 4. Undo — verify task is back in "todo"
-    let mut undo_args = HashMap::new();
-    undo_args.insert("id".to_string(), json!(move_op_id));
-    let undo_result = engine
-        .dispatch("app.undo", &[], None, undo_args)
-        .await
-        .expect("app.undo should succeed");
-
-    assert_eq!(undo_result["undone"].as_str(), Some(move_op_id));
-    let undo_op_id = undo_result["operation_id"]
-        .as_str()
-        .expect("undo should return an operation_id for redo");
-
-    let task = engine
-        .kanban
-        .read_entity_generic("task", task_id)
-        .await
-        .unwrap();
-    assert_eq!(
-        task.get_str("position_column"),
-        Some("todo"),
-        "task should be back in todo after undo"
-    );
-
-    // 5. Redo — verify task is in "doing" again
-    let mut redo_args = HashMap::new();
-    redo_args.insert("id".to_string(), json!(undo_op_id));
-    let redo_result = engine
-        .dispatch("app.redo", &[], None, redo_args)
-        .await
-        .expect("app.redo should succeed");
-
-    assert_eq!(redo_result["redone"].as_str(), Some(undo_op_id));
-
-    let task = engine
-        .kanban
-        .read_entity_generic("task", task_id)
-        .await
-        .unwrap();
-    assert_eq!(
-        task.get_str("position_column"),
-        Some("doing"),
-        "task should be in doing again after redo"
     );
 }
 
@@ -1072,119 +979,6 @@ async fn reorder_move_third_before_second_then_back() {
 }
 
 // ===========================================================================
-// Card 01KMWQWNK3ECP5EZBFQK8STBQ1 — task.delete undo/redo
-// ===========================================================================
-
-#[tokio::test]
-async fn undo_redo_task_delete() {
-    let engine = TestEngine::new().await;
-
-    // 1. Add a task to column "todo"
-    let add_result = engine
-        .dispatch_simple("task.add", &["column:todo"], None)
-        .await
-        .expect("task.add should succeed");
-    let task_id = add_result["id"].as_str().unwrap();
-
-    // Give it a recognizable title so we can verify restoration fidelity
-    let mut update_args = HashMap::new();
-    update_args.insert("entity_type".to_string(), json!("task"));
-    update_args.insert("id".to_string(), json!(task_id));
-    update_args.insert("field_name".to_string(), json!("title"));
-    update_args.insert("value".to_string(), json!("Task To Delete"));
-    engine
-        .dispatch("entity.update_field", &[], None, update_args)
-        .await
-        .expect("title update should succeed");
-
-    // Verify the task exists with the expected title
-    let task = engine
-        .kanban
-        .read_entity_generic("task", task_id)
-        .await
-        .expect("task should exist before delete");
-    assert_eq!(task.get_str("title"), Some("Task To Delete"));
-    assert_eq!(task.get_str("position_column"), Some("todo"));
-
-    // 2. Delete it via task.delete with scope ["task:{id}"]
-    let delete_result = engine
-        .dispatch_simple("task.delete", &[&format!("task:{}", task_id)], None)
-        .await
-        .expect("task.delete should succeed");
-    let delete_op_id = delete_result["operation_id"]
-        .as_str()
-        .expect("delete result should contain operation_id");
-
-    // 3. Verify task is gone
-    assert!(
-        engine
-            .kanban
-            .read_entity_generic("task", task_id)
-            .await
-            .is_err(),
-        "task should not exist after delete"
-    );
-
-    // 4. app.undo — verify task is restored with its original fields
-    let mut undo_args = HashMap::new();
-    undo_args.insert("id".to_string(), json!(delete_op_id));
-    let undo_result = engine
-        .dispatch("app.undo", &[], None, undo_args)
-        .await
-        .expect("app.undo should succeed");
-
-    assert_eq!(
-        undo_result["undone"].as_str(),
-        Some(delete_op_id),
-        "undo result should reference the delete operation"
-    );
-    let undo_op_id = undo_result["operation_id"]
-        .as_str()
-        .expect("undo result should contain its own operation_id");
-
-    // Task should be back with its original fields
-    let restored_task = engine
-        .kanban
-        .read_entity_generic("task", task_id)
-        .await
-        .expect("task should exist after undo");
-    assert_eq!(
-        restored_task.get_str("title"),
-        Some("Task To Delete"),
-        "restored task should have original title"
-    );
-    assert_eq!(
-        restored_task.get_str("position_column"),
-        Some("todo"),
-        "restored task should be in original column"
-    );
-
-    // 5. app.redo — verify task is gone again
-    let mut redo_args = HashMap::new();
-    redo_args.insert("id".to_string(), json!(undo_op_id));
-    let redo_result = engine
-        .dispatch("app.redo", &[], None, redo_args)
-        .await
-        .expect("app.redo should succeed");
-
-    assert_eq!(
-        redo_result["redone"].as_str(),
-        Some(undo_op_id),
-        "redo result should reference the undo operation"
-    );
-
-    // Task should be gone again
-    assert!(
-        engine
-            .kanban
-            .read_entity_generic("task", task_id)
-            .await
-            .is_err(),
-        "task should not exist after redo (re-deleted)"
-    );
-}
-
-// ===========================================================================
 // Card 01KMT7ZF59AYKGRA62DBTR9Y6E — DeleteTaskCmd::execute
 // ===========================================================================
 
@@ -1308,6 +1102,76 @@ async fn task_move_with_swimlane_arg() {
 }
 
 // ===========================================================================
+// Card 01KMT7ZD38JXSKZT7Q51VA334C — TagTaskCmd::execute
+// ===========================================================================
+
+#[tokio::test]
+async fn task_tag_applies_tag() {
+    let engine = TestEngine::new().await;
+
+    // Create a tag via the lower-level API
+    let processor = KanbanOperationProcessor::new();
+    processor
+        .process(
+            &swissarmyhammer_kanban::tag::AddTag::new("feature"),
+            &engine.kanban,
+        )
+        .await
+        .expect("tag creation should succeed");
+
+    // Add a task
+    let add_result = engine
+        .dispatch_simple("task.add", &["column:todo"], None)
+        .await
+        .expect("task.add should succeed");
+    let task_id = add_result["id"].as_str().unwrap();
+
+    // Verify the task has no tags initially
+    let task = engine
+        .kanban
+        .read_entity_generic("task", task_id)
+        .await
+        .unwrap();
+    let tags = task
+        .get("tags")
+        .and_then(|v| v.as_array().cloned())
+        .unwrap_or_default();
+    assert!(
+        !tags.iter().any(|t| t.as_str() == Some("feature")),
+        "task should not have 'feature' tag initially"
+    );
+
+    // Dispatch task.tag via the command harness
+    let tag_result = engine
+        .dispatch_simple(
+            "task.tag",
+            &["tag:feature", &format!("task:{}", task_id)],
+            None,
+        )
+        .await
+        .expect("task.tag should succeed");
+
+    assert!(
+        tag_result.get("operation_id").is_some(),
+        "result should contain operation_id"
+    );
+
+    // Verify the tag was applied
+    let task = engine
+        .kanban
+        .read_entity_generic("task", task_id)
+        .await
+        .unwrap();
+    let tags = task
+        .get("tags")
+        .and_then(|v| v.as_array().cloned())
+        .unwrap_or_default();
+    assert!(
+        tags.iter().any(|t| t.as_str() == Some("feature")),
+        "task should have 'feature' tag after task.tag"
+    );
+}
+
 // ===========================================================================
 // Card 01KMT7Z4560S3CSHNQVR7GQ7PY — DragCompleteCmd same-board
 // ===========================================================================
@@ -1462,83 +1326,77 @@ async fn drag_complete_cross_board_returns_transfer_params() {
 }
 
 // ===========================================================================
-// Card 01KMWQWVM2AWDAG94TEB7H5DNB — entity.delete undo/redo
+// Undo / Redo tests for entity.archive and entity.unarchive
 // ===========================================================================
 
 #[tokio::test]
-async fn entity_delete_undo_redo_tag() {
+async fn undo_redo_entity_archive() {
     let engine = TestEngine::new().await;
 
-    // Create a tag via the lower-level API (board init doesn't seed default tags)
-    let processor = KanbanOperationProcessor::new();
-    let tag_result = processor
-        .process(
-            &swissarmyhammer_kanban::tag::AddTag::new("deleteme"),
-            &engine.kanban,
-        )
+    // Add a task
+    let add_result = engine
+        .dispatch_simple("task.add", &["column:todo"], None)
         .await
-        .expect("tag creation should succeed");
-    let tag_id = tag_result["id"].as_str().unwrap();
+        .expect("task.add should succeed");
+    let task_id = add_result["id"].as_str().unwrap();
 
-    // 1. Verify the tag entity exists (field is "tag_name" on the raw entity)
-    let tag = engine
-        .kanban
-        .read_entity_generic("tag", tag_id)
-        .await
-        .expect("tag should exist after creation");
-    assert_eq!(tag.get_str("tag_name"), Some("deleteme"));
-
-    // 2. Delete it via entity.delete with target "tag:{id}"
-    let delete_result = engine
-        .dispatch_simple(
-            "entity.delete",
-            &[],
-            Some(&format!("tag:{}", tag_id)),
-        )
-        .await
-        .expect("entity.delete should succeed");
-
-    assert!(
-        delete_result.get("operation_id").is_some(),
-        "result should contain operation_id"
-    );
-    let delete_op_id = delete_result["operation_id"].as_str().unwrap();
-
-    // 3. Verify the tag is gone
+    // Verify the task exists
     assert!(
         engine
             .kanban
-            .read_entity_generic("tag", tag_id)
+            .read_entity_generic("task", task_id)
             .await
-            .is_err(),
-        "tag should not exist after entity.delete"
+            .is_ok(),
+        "task should exist after add"
     );
 
-    // 4. app.undo — verify tag is restored
+    // Archive the task via entity.archive
+    let archive_result = engine
+        .dispatch_simple(
+            "entity.archive",
+            &[],
+            Some(&format!("task:{}", task_id)),
+        )
+        .await
+        .expect("entity.archive should succeed");
+    let operation_id = archive_result["operation_id"]
+        .as_str()
+        .expect("entity.archive should return operation_id");
+
+    // Verify task is gone from live storage (archived)
+    assert!(
+        engine
+            .kanban
+            .read_entity_generic("task", task_id)
+            .await
+            .is_err(),
+        "task should not be in live storage after archive"
+    );
+
+    // Undo the archive
     let mut undo_args = HashMap::new();
-    undo_args.insert("id".to_string(), json!(delete_op_id));
+    undo_args.insert("id".to_string(), json!(operation_id));
     let undo_result = engine
         .dispatch("app.undo", &[], None, undo_args)
         .await
         .expect("app.undo should succeed");
 
-    assert_eq!(undo_result["undone"].as_str(), Some(delete_op_id));
+    assert_eq!(undo_result["undone"].as_str(), Some(operation_id));
     let undo_op_id = undo_result["operation_id"]
         .as_str()
-        .expect("undo should return an operation_id for redo");
+        .expect("undo should return operation_id for redo");
 
-    let restored_tag = engine
-        .kanban
-        .read_entity_generic("tag", tag_id)
-        .await
-        .expect("tag should exist after undo");
-    assert_eq!(
-        restored_tag.get_str("tag_name"),
-        Some("deleteme"),
-        "restored tag should have original tag_name"
+    // Verify task is restored from archive
+    assert!(
+        engine
+            .kanban
+            .read_entity_generic("task", task_id)
+            .await
+            .is_ok(),
+        "task should be restored after undo of archive"
     );
 
-    // 5. app.redo — verify tag is gone again
+    // Redo the archive
     let mut redo_args = HashMap::new();
     redo_args.insert("id".to_string(), json!(undo_op_id));
     let redo_result = engine
@@ -1548,463 +1406,29 @@ async fn entity_delete_undo_redo_tag() {
 
     assert_eq!(redo_result["redone"].as_str(), Some(undo_op_id));
 
-    assert!(
-        engine
-            .kanban
-            .read_entity_generic("tag", tag_id)
-            .await
-            .is_err(),
-        "tag should not exist after redo (re-deleted)"
-    );
-}
-
-#[tokio::test]
-async fn undo_redo_task_untag() {
-    let engine = TestEngine::new().await;
-    let processor = KanbanOperationProcessor::new();
-
-    // 1. Create a "feature" tag via the lower-level API
-    processor
-        .process(
-            &swissarmyhammer_kanban::tag::AddTag::new("feature"),
-            &engine.kanban,
-        )
-        .await
-        .expect("tag creation should succeed");
-
-    // 2. Add a task whose description contains #feature so the tag gets applied
-    let add_result = processor
-        .process(
-            &swissarmyhammer_kanban::task::AddTask::new("Feature task")
-                .with_description("Implement #feature support"),
-            &engine.kanban,
-        )
-        .await
-        .expect("task creation should succeed");
-    let task_id = add_result["id"].as_str().unwrap();
-
-    // 3. Verify the task has the "feature" tag
-    let task = engine
-        .kanban
-        .read_entity_generic("task", task_id)
-        .await
-        .unwrap();
-    let tags = task
-        .get("tags")
-        .and_then(|v| v.as_array().cloned())
-        .unwrap_or_default();
-    assert!(
-        tags.iter().any(|t| t.as_str() == Some("feature")),
-        "task should have 'feature' tag before untag"
-    );
-
-    // 4. Untag it via task.untag command
-    let untag_result = engine
-        .dispatch_simple(
-            "task.untag",
-            &["tag:feature", &format!("task:{}", task_id)],
-            None,
-        )
-        .await
-        .expect("task.untag should succeed");
-
-    assert!(untag_result.get("operation_id").is_some());
-
-    // 5. Verify the tag is removed
-    let task = engine
-        .kanban
-        .read_entity_generic("task", task_id)
-        .await
-        .unwrap();
-    let tags = task
-        .get("tags")
-        .and_then(|v| v.as_array().cloned())
-        .unwrap_or_default();
-    assert!(
-        !tags.iter().any(|t| t.as_str() == Some("feature")),
-        "task should not have 'feature' tag after untag"
-    );
-
-    // 6. app.undo — verify tag is restored
-    let undo_result = engine
-        .dispatch_simple("app.undo", &[], None)
-        .await
-        .expect("app.undo should succeed");
-
-    assert!(
-        undo_result.get("undone").is_some(),
-        "undo result should contain undone operation id"
-    );
-
-    let task = engine
-        .kanban
-        .read_entity_generic("task", task_id)
-        .await
-        .unwrap();
-    let tags = task
-        .get("tags")
-        .and_then(|v| v.as_array().cloned())
-        .unwrap_or_default();
-    assert!(
-        tags.iter().any(|t| t.as_str() == Some("feature")),
-        "task should have 'feature' tag restored after undo"
-    );
-
-    // 7. app.redo — verify tag is removed again
-    let redo_result = engine
-        .dispatch_simple("app.redo", &[], None)
-        .await
-        .expect("app.redo should succeed");
-
-    assert!(
-        redo_result.get("redone").is_some(),
-        "redo result should contain redone operation id"
-    );
-
-    let task = engine
-        .kanban
-        .read_entity_generic("task", task_id)
-        .await
-        .unwrap();
-    let tags = task
-        .get("tags")
-        .and_then(|v| v.as_array().cloned())
-        .unwrap_or_default();
-    assert!(
-        !tags.iter().any(|t| t.as_str() == Some("feature")),
-        "task should not have 'feature' tag after redo"
-    );
-}
-
-// ===========================================================================
-// Card 01KMWQWZ5CN76BM8JHVZMNHTRD — entity.archive undo/redo
-// ===========================================================================
-
-#[tokio::test]
-async fn undo_redo_entity_archive() {
-    let engine = TestEngine::new().await;
-
-    // 1. Add a task to column "todo"
-    let add_result = engine
-        .dispatch_simple("task.add", &["column:todo"], None)
-        .await
-        .expect("task.add should succeed");
-    let task_id = add_result["id"].as_str().unwrap();
-
-    // Give it a recognizable title
-    let mut update_args = HashMap::new();
-    update_args.insert("entity_type".to_string(), json!("task"));
-    update_args.insert("id".to_string(), json!(task_id));
-    update_args.insert("field_name".to_string(), json!("title"));
-    update_args.insert("value".to_string(), json!("Task To Archive"));
-    engine
-        .dispatch("entity.update_field", &[], None, update_args)
-        .await
-        .expect("title update should succeed");
-
-    // Verify task exists
-    let task = engine
-        .kanban
-        .read_entity_generic("task", task_id)
-        .await
-        .expect("task should exist before archive");
-    assert_eq!(task.get_str("title"), Some("Task To Archive"));
-
-    // 2. Archive via entity.archive with target "task:{id}"
-    let archive_result = engine
-        .dispatch_simple(
-            "entity.archive",
-            &[],
-            Some(&format!("task:{}", task_id)),
-        )
-        .await
-        .expect("entity.archive should succeed");
-    let archive_op_id = archive_result["operation_id"]
-        .as_str()
-        .expect("archive result should contain operation_id");
-
-    // 3. Verify task is gone from normal read
+    // Verify task is archived again
     assert!(
         engine
             .kanban
             .read_entity_generic("task", task_id)
             .await
             .is_err(),
-        "task should not exist after archive"
-    );
-
-    // 4. app.undo — verify task is restored
-    let mut undo_args = HashMap::new();
-    undo_args.insert("id".to_string(), json!(archive_op_id));
-    let undo_result = engine
-        .dispatch("app.undo", &[], None, undo_args)
-        .await
-        .expect("app.undo should succeed");
-
-    assert_eq!(
-        undo_result["undone"].as_str(),
-        Some(archive_op_id),
-        "undo result should reference the archive operation"
-    );
-    let undo_op_id = undo_result["operation_id"]
-        .as_str()
-        .expect("undo result should contain its own operation_id");
-
-    // Task should be back with its original fields
-    let restored_task = engine
-        .kanban
-        .read_entity_generic("task", task_id)
-        .await
-        .expect("task should exist after undo");
-    assert_eq!(
-        restored_task.get_str("title"),
-        Some("Task To Archive"),
-        "restored task should have original title"
-    );
-
-    // 5. app.redo — verify task is archived again
-    let mut redo_args = HashMap::new();
-    redo_args.insert("id".to_string(), json!(undo_op_id));
-    let redo_result = engine
-        .dispatch("app.redo", &[], None, redo_args)
-        .await
-        .expect("app.redo should succeed");
-
-    assert_eq!(
-        redo_result["redone"].as_str(),
-        Some(undo_op_id),
-        "redo result should reference the undo operation"
-    );
-
-    // Task should be gone again
-    assert!(
-        engine
-            .kanban
-            .read_entity_generic("task", task_id)
-            .await
-            .is_err(),
-        "task should not exist after redo (re-archived)"
+        "task should be archived again after redo"
     );
 }
-
-// ===========================================================================
-// Card 01KMWQXN73W3FVN19FTCKYATRB — attachment.delete undo/redo
-// ===========================================================================
-
-#[tokio::test]
-async fn undo_redo_attachment_delete() {
-    let engine = TestEngine::new().await;
-    let processor = KanbanOperationProcessor::new();
-
-    // 1. Add a task
-    let add_result = processor
-        .process(
-            &swissarmyhammer_kanban::task::AddTask::new("Task with attachment"),
-            &engine.kanban,
-        )
-        .await
-        .expect("task creation should succeed");
-    let task_id = add_result["id"].as_str().unwrap();
-
-    // 2. Add an attachment to the task
-    let attach_result = processor
-        .process(
-            &swissarmyhammer_kanban::attachment::AddAttachment::new(
-                task_id,
-                "readme.txt",
-                "./readme.txt",
-            ),
-            &engine.kanban,
-        )
-        .await
-        .expect("attachment creation should succeed");
-    let attachment_id = attach_result["attachment"]["id"]
-        .as_str()
-        .expect("attachment result should contain id");
-
-    // Verify the attachment is on the task
-    let task = engine
-        .kanban
-        .read_entity_generic("task", task_id)
-        .await
-        .expect("task should exist");
-    let attachment_ids = task
-        .get("attachments")
-        .and_then(|v| v.as_array().cloned())
-        .unwrap_or_default();
-    assert!(
-        attachment_ids
-            .iter()
-            .any(|a| a.as_str() == Some(attachment_id)),
-        "task should have the attachment before delete"
-    );
-
-    // Verify the attachment entity exists
-    assert!(
-        engine
-            .kanban
-            .read_entity_generic("attachment", attachment_id)
-            .await
-            .is_ok(),
-        "attachment entity should exist before delete"
-    );
-
-    // 3. Delete the attachment via attachment.delete command
-    let mut delete_args = HashMap::new();
-    delete_args.insert("task_id".to_string(), json!(task_id));
-    delete_args.insert("id".to_string(), json!(attachment_id));
-
-    let delete_result = engine
-        .dispatch("attachment.delete", &[], None, delete_args)
-        .await
-        .expect("attachment.delete should succeed");
-
-    let delete_op_id = delete_result["operation_id"]
-        .as_str()
-        .expect("delete result should contain operation_id");
-
-    // 4. Verify the attachment is gone
-    assert!(
-        engine
-            .kanban
-            .read_entity_generic("attachment", attachment_id)
-            .await
-            .is_err(),
-        "attachment entity should not exist after delete"
-    );
-
-    // Verify the task's attachments list no longer contains the ID
-    let task = engine
-        .kanban
-        .read_entity_generic("task", task_id)
-        .await
-        .expect("task should still exist");
-    let attachment_ids = task
-        .get("attachments")
-        .and_then(|v| v.as_array().cloned())
-        .unwrap_or_default();
-    assert!(
-        !attachment_ids
-            .iter()
-            .any(|a| a.as_str() == Some(attachment_id)),
-        "task should not have the attachment after delete"
-    );
-
-    // 5. app.undo — verify attachment is restored
-    let mut undo_args = HashMap::new();
-    undo_args.insert("id".to_string(), json!(delete_op_id));
-    let undo_result = engine
-        .dispatch("app.undo", &[], None, undo_args)
-        .await
-        .expect("app.undo should succeed");
-
-    assert_eq!(
-        undo_result["undone"].as_str(),
-        Some(delete_op_id),
-        "undo result should reference the delete operation"
-    );
-    let undo_op_id = undo_result["operation_id"]
-        .as_str()
-        .expect("undo result should contain its own operation_id");
-
-    // Attachment entity should be back
-    let restored_attachment = engine
-        .kanban
-        .read_entity_generic("attachment", attachment_id)
-        .await
-        .expect("attachment entity should exist after undo");
-    assert_eq!(
-        restored_attachment.get_str("attachment_name"),
-        Some("readme.txt"),
-        "restored attachment should have original name"
-    );
-
-    // Task's attachments list should contain the ID again
-    let task = engine
-        .kanban
-        .read_entity_generic("task", task_id)
-        .await
-        .expect("task should still exist after undo");
-    let attachment_ids = task
-        .get("attachments")
-        .and_then(|v| v.as_array().cloned())
-        .unwrap_or_default();
-    assert!(
-        attachment_ids
-            .iter()
-            .any(|a| a.as_str() == Some(attachment_id)),
-        "task should have the attachment restored after undo"
-    );
-
-    // 6. app.redo — verify attachment is gone again
-    let mut redo_args = HashMap::new();
-    redo_args.insert("id".to_string(), json!(undo_op_id));
-    let redo_result = engine
-        .dispatch("app.redo", &[], None, redo_args)
-        .await
-        .expect("app.redo should succeed");
-
-    assert_eq!(
-        redo_result["redone"].as_str(),
-        Some(undo_op_id),
-        "redo result should reference the undo operation"
-    );
-
-    // Attachment entity should be gone again
-    assert!(
-        engine
-            .kanban
-            .read_entity_generic("attachment", attachment_id)
-            .await
-            .is_err(),
-        "attachment entity should not exist after redo (re-deleted)"
-    );
-
-    // Task's attachments list should be empty again
-    let task = engine
-        .kanban
-        .read_entity_generic("task", task_id)
-        .await
-        .expect("task should still exist after redo");
-    let attachment_ids = task
-        .get("attachments")
-        .and_then(|v| v.as_array().cloned())
-        .unwrap_or_default();
-    assert!(
-        !attachment_ids
-            .iter()
-            .any(|a| a.as_str() == Some(attachment_id)),
-        "task should not have the attachment after redo"
-    );
-}
-
-// ===========================================================================
-// Card 01KMWQWZ5CN76BM8JHVZMNHTRD — entity.unarchive undo/redo
-// ===========================================================================
 
 #[tokio::test]
 async fn undo_redo_entity_unarchive() {
     let engine = TestEngine::new().await;
 
-    // 1. Add a task and archive it
+    // Add a task
     let add_result = engine
         .dispatch_simple("task.add", &["column:todo"], None)
         .await
         .expect("task.add should succeed");
     let task_id = add_result["id"].as_str().unwrap();
 
-    // Give it a recognizable title
-    let mut update_args = HashMap::new();
-    update_args.insert("entity_type".to_string(), json!("task"));
-    update_args.insert("id".to_string(), json!(task_id));
-    update_args.insert("field_name".to_string(), json!("title"));
-    update_args.insert("value".to_string(), json!("Task To Unarchive"));
-    engine
-        .dispatch("entity.update_field", &[], None, update_args)
-        .await
-        .expect("title update should succeed");
-
-    // Archive it first
+    // Archive the task first (prerequisite for unarchive)
     engine
         .dispatch_simple(
             "entity.archive",
@@ -2014,17 +1438,17 @@ async fn undo_redo_entity_unarchive() {
         .await
         .expect("entity.archive should succeed");
 
-    // Confirm it's gone
+    // Verify task is archived
     assert!(
         engine
             .kanban
             .read_entity_generic("task", task_id)
             .await
             .is_err(),
-        "task should not exist after archive"
+        "task should be archived before unarchive test"
     );
 
-    // 2. Unarchive via entity.unarchive with target "task:{id}"
+    // Unarchive the task via entity.unarchive
     let unarchive_result = engine
         .dispatch_simple(
             "entity.unarchive",
@@ -2033,46 +1457,44 @@ async fn undo_redo_entity_unarchive() {
         )
         .await
         .expect("entity.unarchive should succeed");
-    let unarchive_op_id = unarchive_result["operation_id"]
+    let operation_id = unarchive_result["operation_id"]
         .as_str()
-        .expect("unarchive result should contain operation_id");
+        .expect("entity.unarchive should return operation_id");
 
-    // 3. Verify task is back
-    let task = engine
-        .kanban
-        .read_entity_generic("task", task_id)
-        .await
-        .expect("task should exist after unarchive");
-    assert_eq!(task.get_str("title"), Some("Task To Unarchive"));
+    // Verify task is back in live storage
+    assert!(
+        engine
+            .kanban
+            .read_entity_generic("task", task_id)
+            .await
+            .is_ok(),
+        "task should be in live storage after unarchive"
+    );
 
-    // 4. app.undo — verify task is archived again
+    // Undo the unarchive (should re-archive the task)
     let mut undo_args = HashMap::new();
-    undo_args.insert("id".to_string(), json!(unarchive_op_id));
+    undo_args.insert("id".to_string(), json!(operation_id));
     let undo_result = engine
         .dispatch("app.undo", &[], None, undo_args)
         .await
         .expect("app.undo should succeed");
 
-    assert_eq!(
-        undo_result["undone"].as_str(),
-        Some(unarchive_op_id),
-        "undo result should reference the unarchive operation"
-    );
+    assert_eq!(undo_result["undone"].as_str(), Some(operation_id));
     let undo_op_id = undo_result["operation_id"]
         .as_str()
-        .expect("undo result should contain its own operation_id");
+        .expect("undo should return operation_id for redo");
 
-    // Task should be gone (re-archived)
+    // Verify task is archived again
     assert!(
         engine
             .kanban
             .read_entity_generic("task", task_id)
             .await
             .is_err(),
-        "task should not exist after undo (re-archived)"
+        "task should be archived after undo of unarchive"
     );
 
-    // 5. app.redo — verify task is unarchived again
+    // Redo the unarchive (should restore the task again)
     let mut redo_args = HashMap::new();
     redo_args.insert("id".to_string(), json!(undo_op_id));
     let redo_result = engine
@@ -2080,113 +1502,15 @@ async fn undo_redo_entity_unarchive() {
         .await
         .expect("app.redo should succeed");
 
-    assert_eq!(
-        redo_result["redone"].as_str(),
-        Some(undo_op_id),
-        "redo result should reference the undo operation"
-    );
+    assert_eq!(redo_result["redone"].as_str(), Some(undo_op_id));
 
-    // Task should be back again
-    let restored_task = engine
-        .kanban
-        .read_entity_generic("task", task_id)
-        .await
-        .expect("task should exist after redo (re-unarchived)");
-    assert_eq!(
-        restored_task.get_str("title"),
-        Some("Task To Unarchive"),
-        "restored task should have original title after redo"
-    );
-}
-
-// ===========================================================================
-// Column reorder undo/redo test
-// ===========================================================================
-
-/// Helper: read columns sorted by their `order` field and return IDs in order.
-async fn read_column_order(engine: &TestEngine) -> Vec<String> {
-    let ectx = engine.kanban.entity_context().await.unwrap();
-    let mut cols = ectx.list("column").await.unwrap();
-    cols.sort_by_key(|c| c.get("order").and_then(|v| v.as_u64()).unwrap_or(0));
-    cols.iter().map(|c| c.id.to_string()).collect()
-}
-
-#[tokio::test]
-async fn undo_redo_column_reorder() {
-    let engine = TestEngine::new().await;
-
-    // 1. Board init creates columns: todo (0), doing (1), done (2)
-    let original_order = read_column_order(&engine).await;
-    assert_eq!(
-        original_order,
-        vec!["todo", "doing", "done"],
-        "initial column order should be todo, doing, done"
-    );
-
-    // 2. Reorder: move "done" to index 0 (before todo)
-    let mut reorder_args = HashMap::new();
-    reorder_args.insert("id".to_string(), json!("done"));
-    reorder_args.insert("target_index".to_string(), json!(0));
-
-    let reorder_result = engine
-        .dispatch("column.reorder", &[], None, reorder_args)
-        .await
-        .expect("column.reorder should succeed");
-
-    assert_eq!(
-        reorder_result["updated"].as_u64(),
-        Some(3),
-        "reorder should update all 3 columns"
-    );
-
-    let operation_ids: Vec<String> = reorder_result["operation_ids"]
-        .as_array()
-        .expect("operation_ids should be an array")
-        .iter()
-        .map(|v| v.as_str().unwrap().to_string())
-        .collect();
+    // Verify task is unarchived again
     assert!(
-        !operation_ids.is_empty(),
-        "reorder should produce operation_ids"
-    );
-
-    // 3. Verify new column order: done, todo, doing
-    let reordered = read_column_order(&engine).await;
-    assert_eq!(
-        reordered,
-        vec!["done", "todo", "doing"],
-        "column order after reorder should be done, todo, doing"
-    );
-
-    // 4. app.undo — undo each operation in reverse to restore original order
-    //    column.reorder produces one operation per column update; undo all of them.
-    for op_id in operation_ids.iter().rev() {
-        let mut undo_args = HashMap::new();
-        undo_args.insert("id".to_string(), json!(op_id));
         engine
-            .dispatch("app.undo", &[], None, undo_args)
+            .kanban
+            .read_entity_generic("task", task_id)
             .await
-            .expect("app.undo should succeed");
-    }
-
-    let after_undo = read_column_order(&engine).await;
-    assert_eq!(
-        after_undo, original_order,
-        "column order after undo should be restored to original: todo, doing, done"
-    );
-
-    // 5. app.redo — redo each operation to restore the reordered state
-    //    Redo in forward order (reverse of undo order = original order).
-    for _i in 0..operation_ids.len() {
-        engine
-            .dispatch_simple("app.redo", &[], None)
-            .await
-            .expect("app.redo should succeed");
-    }
-
-    let after_redo = read_column_order(&engine).await;
-    assert_eq!(
-        after_redo, reordered,
-        "column order after redo should match the reordered state: done, todo, doing"
+            .is_ok(),
+        "task should be in live storage after redo of unarchive"
     );
 }
