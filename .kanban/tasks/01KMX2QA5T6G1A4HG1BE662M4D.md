@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KMX2PFZ0SYDJT8E3ZCEH1YY1
-position_column: todo
-position_ordinal: '8480'
+position_column: done
+position_ordinal: ffffffffffffffeb80
 title: CopyTask, CutTask, PasteTask entity kernel operations
 ---
 ## What

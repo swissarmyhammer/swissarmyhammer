@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KMX2N13T0WEDMK9V93DCJ7VH
-position_column: todo
-position_ordinal: '8180'
+position_column: done
+position_ordinal: ffffffffffffffec80
 title: Build native menu from command registry
 ---
 ## What

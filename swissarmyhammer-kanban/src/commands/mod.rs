@@ -48,6 +48,20 @@ pub fn register_commands() -> HashMap<String, Arc<dyn Command>> {
     map.insert("task.untag".into(), Arc::new(task_commands::UntagTaskCmd));
     map.insert("task.delete".into(), Arc::new(task_commands::DeleteTaskCmd));
 
+    // Clipboard commands
+    map.insert(
+        "entity.copy".into(),
+        Arc::new(clipboard_commands::CopyTaskCmd),
+    );
+    map.insert(
+        "entity.cut".into(),
+        Arc::new(clipboard_commands::CutTaskCmd),
+    );
+    map.insert(
+        "entity.paste".into(),
+        Arc::new(clipboard_commands::PasteTaskCmd),
+    );
+
     // Entity commands
     map.insert(
         "entity.update_field".into(),
@@ -66,9 +80,6 @@ pub fn register_commands() -> HashMap<String, Arc<dyn Command>> {
         Arc::new(entity_commands::UnarchiveEntityCmd),
     );
 
-    // Clipboard commands
-    map.insert("entity.paste".into(), Arc::new(entity_commands::PasteCmd));
-
     // Tag commands
     map.insert("tag.update".into(), Arc::new(entity_commands::TagUpdateCmd));
 
@@ -77,10 +88,6 @@ pub fn register_commands() -> HashMap<String, Arc<dyn Command>> {
         "attachment.delete".into(),
         Arc::new(entity_commands::AttachmentDeleteCmd),
     );
-
-    // Clipboard commands
-    map.insert("entity.copy".into(), Arc::new(clipboard_commands::CopyCmd));
-    map.insert("entity.cut".into(), Arc::new(clipboard_commands::CutCmd));
 
     // Column commands
     map.insert(
@@ -182,7 +189,7 @@ mod tests {
     #[test]
     fn register_commands_returns_expected_count() {
         let cmds = register_commands();
-        // 4 task + 4 entity + 3 clipboard + 1 tag + 1 attachment + 1 column + 7 UI + 6 app + 2 file + 3 drag = 32
+        // 4 task + 3 clipboard + 4 entity + 1 tag + 1 attachment + 1 column + 7 UI + 6 app + 2 file + 3 drag = 32
         assert_eq!(cmds.len(), 32);
     }
 

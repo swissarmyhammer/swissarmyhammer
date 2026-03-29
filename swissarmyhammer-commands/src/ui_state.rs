@@ -29,30 +29,6 @@ pub struct DragSession {
     pub started_at_ms: u64,
 }
 
-/// Whether the clipboard entry was created by a copy or a cut.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ClipboardMode {
-    /// The entity was copied (original remains).
-    Copy,
-    /// The entity was cut (original was deleted).
-    Cut,
-}
-
-/// An in-memory clipboard snapshot of an entity's fields.
-///
-/// Transient — carried in UIState but never persisted to the YAML config.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ClipboardState {
-    /// How the clipboard entry was created.
-    pub mode: ClipboardMode,
-    /// The entity type that was copied/cut (e.g. "task").
-    pub entity_type: String,
-    /// The original entity ID.
-    pub entity_id: String,
-    /// Snapshot of all entity fields as JSON.
-    pub fields: serde_json::Value,
-}
-
 /// Persisted per-window state: board path, inspector stack, active view, and window geometry.
 ///
 /// `board_path` is the canonical path to the `.kanban` directory this window shows.
@@ -109,8 +85,6 @@ pub enum UIStateChange {
     KeymapMode(String),
     /// The focus scope chain changed.
     ScopeChain(Vec<String>),
-    /// The clipboard contents changed; carries the new clipboard state (or None if cleared).
-    Clipboard(Option<ClipboardState>),
 }
 
 /// Pure state machine for UI state: inspector stack, active view, palette, keymap.
@@ -146,9 +120,9 @@ struct UIStateInner {
     /// Active cross-window drag session. Transient — not persisted.
     #[serde(skip)]
     drag_session: Option<DragSession>,
-    /// Clipboard contents for cut/copy/paste. Transient — not persisted.
+    /// Whether the clipboard contains a copied/cut entity. Transient — not persisted.
     #[serde(skip)]
-    clipboard: Option<ClipboardState>,
+    has_clipboard: bool,
     /// IDs of items in the most recently shown context menu. Transient — not persisted.
     #[serde(skip)]
     context_menu_ids: HashSet<String>,
@@ -167,13 +141,6 @@ struct UIStateInner {
     /// board for commands that don't specify an explicit board_path.
     #[serde(default)]
     most_recent_board_path: Option<String>,
-    /// Whether the system clipboard currently holds a swissarmyhammer payload.
-    ///
-    /// Transient — set by copy/cut command implementations, checked by paste
-    /// availability. Not persisted because clipboard contents don't survive
-    /// app restart reliably.
-    #[serde(skip)]
-    has_clipboard: bool,
 }
 
 impl Default for UIStateInner {
@@ -184,13 +151,12 @@ impl Default for UIStateInner {
             keymap_mode: "cua".to_string(),
             scope_chain: Vec::new(),
             drag_session: None,
-            clipboard: None,
+            has_clipboard: false,
             context_menu_ids: HashSet::new(),
             open_boards: Vec::new(),
             windows: HashMap::new(),
             recent_boards: Vec::new(),
             most_recent_board_path: None,
-            has_clipboard: false,
         }
     }
 }
@@ -434,38 +400,6 @@ impl UIState {
         // No try_save() — transient state
     }
 
-    /// Set the clipboard contents, replacing any existing clipboard state.
-    ///
-    /// Transient — not persisted to the config file.
-    /// Returns a `UIStateChange::Clipboard` with the new state.
-    pub fn set_clipboard(&self, state: ClipboardState) -> Option<UIStateChange> {
-        let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
-        inner.clipboard = Some(state.clone());
-        Some(UIStateChange::Clipboard(Some(state)))
-        // No try_save — clipboard is transient (#[serde(skip)])
-    }
-
-    /// Get a clone of the current clipboard contents, if any.
-    pub fn clipboard(&self) -> Option<ClipboardState> {
-        self.inner
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .clipboard
-            .clone()
-    }
-
-    /// Clear the clipboard contents.
-    ///
-    /// Returns `None` if the clipboard was already empty.
-    /// Transient — not persisted to the config file.
-    pub fn clear_clipboard(&self) -> Option<UIStateChange> {
-        let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
-        inner.clipboard.as_ref()?;
-        inner.clipboard = None;
-        Some(UIStateChange::Clipboard(None))
-        // No try_save — clipboard is transient (#[serde(skip)])
-    }
-
     /// Get a clone of the current drag session, if any.
     pub fn drag_session(&self) -> Option<DragSession> {
         self.inner
@@ -643,24 +577,6 @@ impl UIState {
             .clone()
     }
 
-    /// Set the `has_clipboard` flag.
-    ///
-    /// Called by copy/cut command implementations after writing to the system
-    /// clipboard. Transient — not persisted to the config file.
-    pub fn set_has_clipboard(&self, has: bool) {
-        let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
-        inner.has_clipboard = has;
-        // No try_save() — transient state (#[serde(skip)])
-    }
-
-    /// Check whether the system clipboard holds a swissarmyhammer payload.
-    pub fn has_clipboard(&self) -> bool {
-        self.inner
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .has_clipboard
-    }
-
     /// Clear all per-window state (geometry and inspector stacks).
     ///
     /// Used by reset_windows to wipe geometry before restarting.
@@ -789,6 +705,22 @@ impl UIState {
             .palette_open
     }
 
+    /// Get whether the clipboard contains a copied/cut entity.
+    pub fn has_clipboard(&self) -> bool {
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .has_clipboard
+    }
+
+    /// Set the clipboard flag. Called after copy/cut operations.
+    pub fn set_has_clipboard(&self, has: bool) {
+        self.inner
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .has_clipboard = has;
+    }
+
     /// Get the current keymap mode.
     pub fn keymap_mode(&self) -> String {
         self.inner
@@ -819,12 +751,10 @@ impl UIState {
             "palette_open": inner.palette_open,
             "keymap_mode": inner.keymap_mode,
             "scope_chain": inner.scope_chain,
-            "clipboard": inner.clipboard,
             "open_boards": inner.open_boards,
             "windows": inner.windows,
             "recent_boards": inner.recent_boards,
             "most_recent_board_path": inner.most_recent_board_path,
-            "has_clipboard": inner.has_clipboard,
         })
     }
 }
@@ -1288,10 +1218,8 @@ mod tests {
     #[test]
     fn set_context_menu_ids_and_check_membership() {
         let state = UIState::new();
-        let ids: HashSet<String> = ["task:01A", "task:01B"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
+        let ids: HashSet<String> =
+            ["task:01A", "task:01B"].iter().map(|s| s.to_string()).collect();
         state.set_context_menu_ids(ids);
 
         assert!(state.is_context_menu_id("task:01A"));
@@ -1311,28 +1239,17 @@ mod tests {
     fn replacing_context_menu_ids_clears_previous() {
         let state = UIState::new();
 
-        let first: HashSet<String> = ["task:01A", "task:01B"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
+        let first: HashSet<String> =
+            ["task:01A", "task:01B"].iter().map(|s| s.to_string()).collect();
         state.set_context_menu_ids(first);
         assert!(state.is_context_menu_id("task:01A"));
 
         let second: HashSet<String> = ["task:01C"].iter().map(|s| s.to_string()).collect();
         state.set_context_menu_ids(second);
 
-        assert!(
-            !state.is_context_menu_id("task:01A"),
-            "old ID should be gone"
-        );
-        assert!(
-            !state.is_context_menu_id("task:01B"),
-            "old ID should be gone"
-        );
-        assert!(
-            state.is_context_menu_id("task:01C"),
-            "new ID should be present"
-        );
+        assert!(!state.is_context_menu_id("task:01A"), "old ID should be gone");
+        assert!(!state.is_context_menu_id("task:01B"), "old ID should be gone");
+        assert!(state.is_context_menu_id("task:01C"), "new ID should be present");
     }
 
     // --- open boards and window board management tests ---
@@ -1487,167 +1404,5 @@ mod tests {
         assert_eq!(all.len(), 2);
         assert!(all.contains_key("main"));
         assert!(all.contains_key("secondary"));
-    }
-
-    // --- clipboard tests ---
-
-    fn make_clipboard_state(
-        entity_type: &str,
-        entity_id: &str,
-        mode: ClipboardMode,
-    ) -> ClipboardState {
-        ClipboardState {
-            entity_type: entity_type.to_string(),
-            entity_id: entity_id.to_string(),
-            mode,
-            fields: serde_json::json!({"title": "Test Task"}),
-        }
-    }
-
-    #[test]
-    fn set_clipboard_stores_state() {
-        let state = UIState::new();
-        let clip = make_clipboard_state("task", "01XYZ", ClipboardMode::Copy);
-        let change = state.set_clipboard(clip);
-        assert!(change.is_some());
-
-        let retrieved = state.clipboard().expect("clipboard should be set");
-        assert_eq!(retrieved.entity_type, "task");
-        assert_eq!(retrieved.entity_id, "01XYZ");
-        assert_eq!(retrieved.mode, ClipboardMode::Copy);
-    }
-
-    #[test]
-    fn clipboard_returns_none_when_empty() {
-        let state = UIState::new();
-        assert!(state.clipboard().is_none());
-    }
-
-    #[test]
-    fn clear_clipboard_clears_state() {
-        let state = UIState::new();
-        let clip = make_clipboard_state("task", "01XYZ", ClipboardMode::Cut);
-        state.set_clipboard(clip);
-
-        let change = state.clear_clipboard();
-        assert!(change.is_some());
-        assert!(state.clipboard().is_none());
-    }
-
-    #[test]
-    fn clear_clipboard_returns_none_when_already_empty() {
-        let state = UIState::new();
-        assert!(state.clear_clipboard().is_none());
-    }
-
-    #[test]
-    fn set_clipboard_replaces_existing() {
-        let state = UIState::new();
-        state.set_clipboard(make_clipboard_state("task", "01A", ClipboardMode::Copy));
-        state.set_clipboard(make_clipboard_state("tag", "01B", ClipboardMode::Cut));
-
-        let clip = state.clipboard().unwrap();
-        assert_eq!(clip.entity_type, "tag");
-        assert_eq!(clip.entity_id, "01B");
-        assert_eq!(clip.mode, ClipboardMode::Cut);
-    }
-
-    #[test]
-    fn set_clipboard_returns_clipboard_change() {
-        let state = UIState::new();
-        let clip = make_clipboard_state("task", "01XYZ", ClipboardMode::Copy);
-        let change = state.set_clipboard(clip).unwrap();
-        match change {
-            UIStateChange::Clipboard(Some(c)) => {
-                assert_eq!(c.entity_id, "01XYZ");
-            }
-            other => panic!("Expected Clipboard(Some(_)), got {:?}", other),
-        }
-    }
-
-    #[test]
-    fn clear_clipboard_returns_clipboard_none_change() {
-        let state = UIState::new();
-        state.set_clipboard(make_clipboard_state("task", "01XYZ", ClipboardMode::Copy));
-        let change = state.clear_clipboard().unwrap();
-        match change {
-            UIStateChange::Clipboard(None) => {}
-            other => panic!("Expected Clipboard(None), got {:?}", other),
-        }
-    }
-
-    #[test]
-    fn clipboard_not_persisted_in_round_trip() {
-        let path = temp_yaml_path("clipboard_transient");
-        {
-            let state = UIState::load(&path);
-            state.set_clipboard(make_clipboard_state("task", "01XYZ", ClipboardMode::Copy));
-            state.set_keymap_mode("vim"); // force a persisted write
-            state.save().unwrap();
-        }
-        let state2 = UIState::load(&path);
-        // Clipboard is transient — should be None after reload
-        assert!(state2.clipboard().is_none());
-        // Persisted field is intact
-        assert_eq!(state2.keymap_mode(), "vim");
-        let _ = fs::remove_file(&path);
-    }
-
-    // --- has_clipboard tests ---
-
-    #[test]
-    fn has_clipboard_defaults_to_false() {
-        let state = UIState::new();
-        assert!(!state.has_clipboard());
-    }
-
-    #[test]
-    fn set_has_clipboard_toggles_flag() {
-        let state = UIState::new();
-        state.set_has_clipboard(true);
-        assert!(state.has_clipboard());
-        state.set_has_clipboard(false);
-        assert!(!state.has_clipboard());
-    }
-
-    #[test]
-    fn has_clipboard_is_transient() {
-        let path = temp_yaml_path("has_clipboard_transient");
-        {
-            let state = UIState::load(&path);
-            state.set_has_clipboard(true);
-            state.set_keymap_mode("vim"); // force a save
-            state.save().unwrap();
-        }
-        // Reload — transient field should reset to false.
-        let state2 = UIState::load(&path);
-        assert!(!state2.has_clipboard());
-        let _ = fs::remove_file(&path);
-    }
-
-    #[test]
-    fn clipboard_in_to_json_when_set() {
-        let state = UIState::new();
-        state.set_clipboard(make_clipboard_state("task", "01XYZ", ClipboardMode::Copy));
-        let json = state.to_json();
-        let clip = &json["clipboard"];
-        assert_eq!(clip["entity_type"].as_str(), Some("task"));
-        assert_eq!(clip["entity_id"].as_str(), Some("01XYZ"));
-        assert_eq!(clip["mode"].as_str(), Some("Copy"));
-    }
-
-    #[test]
-    fn clipboard_null_in_to_json_when_unset() {
-        let state = UIState::new();
-        let json = state.to_json();
-        assert!(json["clipboard"].is_null());
-    }
-
-    #[test]
-    fn has_clipboard_in_to_json() {
-        let state = UIState::new();
-        assert!(!state.to_json()["has_clipboard"].as_bool().unwrap());
-        state.set_has_clipboard(true);
-        assert!(state.to_json()["has_clipboard"].as_bool().unwrap());
     }
 }
