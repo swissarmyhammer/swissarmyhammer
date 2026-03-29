@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KMX9G72EYC2SSXMJYF840SE5
-position_column: todo
-position_ordinal: '8580'
+position_column: doing
+position_ordinal: '80'
 title: Make clipboard commands polymorphic (tag + task) and update YAML
 ---
 ## What

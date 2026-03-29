@@ -23,6 +23,12 @@ commands:
     keys:
       cua: Mod+X
       vim: x
+  - id: entity.paste
+    name: Paste
+    context_menu: true
+    keys:
+      cua: Mod+V
+      vim: p
 fields:
   - title
   - tags
