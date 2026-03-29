@@ -42,8 +42,10 @@ export async function dispatchContextMenuCommand(
  *
  * When fired, it:
  * 1. Collects commands with contextMenu: true from the current scope chain
- * 2. Registers their handlers in the pending map
- * 3. Calls Rust to show a native popup menu with those items
+ * 2. Calls the backend to check which commands are actually available
+ *    (e.g., paste requires clipboard content — the Rust side knows this)
+ * 3. Filters to only available commands
+ * 4. Registers their handlers and shows a native popup menu
  *
  * Must be used inside a CommandScopeProvider.
  */
@@ -62,24 +64,46 @@ export function useContextMenu(): (e: React.MouseEvent) => void {
 
       if (contextCommands.length === 0) return;
 
-      // Register handlers for the current context menu invocation.
-      // Group consecutive items by depth and insert separator sentinels between groups
-      // so the native menu visually separates commands from different scope levels.
-      pendingHandlers.clear();
-      const items: Array<{ id: string; name: string }> = [];
-      let lastDepth: number | null = null;
+      // Ask the backend which commands are available in the current context.
+      // This checks Command::available() on each — including clipboard state,
+      // scope requirements, and any other dynamic conditions.
+      invoke<Array<{ id: string }>>("list_available_commands", {
+        contextMenu: true,
+      })
+        .then((available) => {
+          const availableIds = new Set(available.map((c) => c.id));
 
-      for (const c of contextCommands) {
-        if (lastDepth !== null && c.depth !== lastDepth) {
-          items.push({ id: "__separator__", name: "" });
-        }
-        const key = handlerKey(c.command);
-        pendingHandlers.set(key, c.command);
-        items.push({ id: key, name: c.command.name });
-        lastDepth = c.depth;
-      }
+          // Filter frontend commands to those the backend says are available,
+          // deduplicating by command ID (keep innermost scope — lowest depth).
+          const seen = new Set<string>();
+          const filtered = contextCommands.filter((c) => {
+            if (!availableIds.has(c.command.id)) return false;
+            if (seen.has(c.command.id)) return false;
+            seen.add(c.command.id);
+            return true;
+          });
 
-      invoke("show_context_menu", { items }).catch(console.error);
+          if (filtered.length === 0) return;
+
+          // Register handlers and build menu items.
+          // Group consecutive items by depth with separators between groups.
+          pendingHandlers.clear();
+          const items: Array<{ id: string; name: string }> = [];
+          let lastDepth: number | null = null;
+
+          for (const c of filtered) {
+            if (lastDepth !== null && c.depth !== lastDepth) {
+              items.push({ id: "__separator__", name: "" });
+            }
+            const key = handlerKey(c.command);
+            pendingHandlers.set(key, c.command);
+            items.push({ id: key, name: c.command.name });
+            lastDepth = c.depth;
+          }
+
+          invoke("show_context_menu", { items }).catch(console.error);
+        })
+        .catch(console.error);
     },
     [contextCommands],
   );

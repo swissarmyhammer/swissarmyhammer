@@ -3,7 +3,6 @@ import { invoke } from "@tauri-apps/api/core";
 import { useSchemaOptional } from "@/lib/schema-context";
 import { useInspectOptional } from "@/lib/inspect-context";
 import { useActiveBoardPath } from "@/lib/command-scope";
-import { useUIState } from "@/lib/ui-state-context";
 import { moniker } from "@/lib/moniker";
 import type { CommandDef } from "@/lib/command-scope";
 import type { Entity, EntityCommand } from "@/types/kanban";
@@ -119,7 +118,6 @@ export function useEntityCommands(
   const { getEntityCommands } = useSchemaOptional();
   const inspect = useInspectOptional();
   const boardPath = useActiveBoardPath();
-  const { has_clipboard: hasClipboard } = useUIState();
   const entityMoniker = moniker(entityType, entityId);
   const schemaCommands = getEntityCommands(entityType);
 
@@ -131,12 +129,7 @@ export function useEntityCommands(
         target: entityMoniker,
         contextMenu: cmd.context_menu ?? false,
         keys: cmd.keys,
-        // Paste requires clipboard content — hide when clipboard is empty
-        ...(cmd.id === "entity.paste" && !hasClipboard
-          ? { available: false }
-          : {}),
         execute: () => {
-          // entity.inspect: the one client-side command (see buildEntityCommandDefs above)
           if (cmd.id === "entity.inspect") {
             inspect?.(entityMoniker);
           } else {
@@ -164,7 +157,6 @@ export function useEntityCommands(
     entityMoniker,
     inspect,
     boardPath,
-    hasClipboard,
     extraCommands,
   ]);
 }
