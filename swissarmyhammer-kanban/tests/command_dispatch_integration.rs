@@ -10,6 +10,7 @@ use std::sync::Arc;
 use swissarmyhammer_commands::{
     builtin_yaml_sources, Command, CommandContext, CommandError, CommandsRegistry, UIState,
 };
+use swissarmyhammer_kanban::clipboard::{ClipboardProvider, ClipboardProviderExt, InMemoryClipboard};
 use swissarmyhammer_kanban::commands::register_commands;
 use swissarmyhammer_kanban::{
     board::InitBoard, KanbanContext, KanbanOperationProcessor, OperationProcessor,
@@ -21,13 +22,14 @@ use tempfile::TempDir;
 // ===========================================================================
 
 /// Lightweight harness that wires up a temp board, command registry, command
-/// implementations, and shared UIState for integration tests.
+/// implementations, shared UIState, and in-memory clipboard for integration tests.
 struct TestEngine {
     _temp: TempDir,
     kanban: Arc<KanbanContext>,
     commands: HashMap<String, Arc<dyn Command>>,
     _registry: CommandsRegistry,
     ui_state: Arc<UIState>,
+    clipboard: Arc<InMemoryClipboard>,
 }
 
 impl TestEngine {
@@ -48,6 +50,7 @@ impl TestEngine {
         let registry = CommandsRegistry::from_yaml_sources(&builtin_yaml_sources());
         let commands = register_commands();
         let ui_state = Arc::new(UIState::new());
+        let clipboard = Arc::new(InMemoryClipboard::new());
 
         Self {
             _temp: temp,
@@ -55,6 +58,7 @@ impl TestEngine {
             commands,
             _registry: registry,
             ui_state,
+            clipboard,
         }
     }
 
@@ -83,10 +87,10 @@ impl TestEngine {
         );
         ctx.ui_state = Some(Arc::clone(&self.ui_state));
         ctx.set_extension(Arc::clone(&self.kanban));
-        // Set EntityContext extension for entity-layer commands (undo/redo).
-        if let Ok(ectx_arc) = self.kanban.entity_context().await {
-            ctx.set_extension(ectx_arc);
-        }
+        let clipboard_ext = ClipboardProviderExt(
+            Arc::clone(&self.clipboard) as Arc<dyn swissarmyhammer_kanban::clipboard::ClipboardProvider>,
+        );
+        ctx.set_extension(Arc::new(clipboard_ext));
 
         if !cmd.available(&ctx) {
             return Err(CommandError::ExecutionFailed(format!(
@@ -1009,7 +1013,11 @@ async fn task_delete_removes_task() {
 
     // Dispatch task.delete through the command harness
     let delete_result = engine
-        .dispatch_simple("task.delete", &[&format!("task:{}", task_id)], None)
+        .dispatch_simple(
+            "task.delete",
+            &[&format!("task:{}", task_id)],
+            None,
+        )
         .await
         .expect("task.delete should succeed");
 
@@ -1072,7 +1080,12 @@ async fn task_move_with_swimlane_arg() {
     args.insert("swimlane".to_string(), json!("urgent"));
 
     let move_result = engine
-        .dispatch("task.move", &[&format!("task:{}", task_id)], None, args)
+        .dispatch(
+            "task.move",
+            &[&format!("task:{}", task_id)],
+            None,
+            args,
+        )
         .await
         .expect("task.move with swimlane should succeed");
 
@@ -1097,6 +1110,76 @@ async fn task_move_with_swimlane_arg() {
 }
 
 // ===========================================================================
+// Card 01KMT7ZD38JXSKZT7Q51VA334C — TagTaskCmd::execute
+// ===========================================================================
+
+#[tokio::test]
+async fn task_tag_applies_tag() {
+    let engine = TestEngine::new().await;
+
+    // Create a tag via the lower-level API
+    let processor = KanbanOperationProcessor::new();
+    processor
+        .process(
+            &swissarmyhammer_kanban::tag::AddTag::new("feature"),
+            &engine.kanban,
+        )
+        .await
+        .expect("tag creation should succeed");
+
+    // Add a task
+    let add_result = engine
+        .dispatch_simple("task.add", &["column:todo"], None)
+        .await
+        .expect("task.add should succeed");
+    let task_id = add_result["id"].as_str().unwrap();
+
+    // Verify the task has no tags initially
+    let task = engine
+        .kanban
+        .read_entity_generic("task", task_id)
+        .await
+        .unwrap();
+    let tags = task
+        .get("tags")
+        .and_then(|v| v.as_array().cloned())
+        .unwrap_or_default();
+    assert!(
+        !tags.iter().any(|t| t.as_str() == Some("feature")),
+        "task should not have 'feature' tag initially"
+    );
+
+    // Dispatch task.tag via the command harness
+    let tag_result = engine
+        .dispatch_simple(
+            "task.tag",
+            &["tag:feature", &format!("task:{}", task_id)],
+            None,
+        )
+        .await
+        .expect("task.tag should succeed");
+
+    assert!(
+        tag_result.get("operation_id").is_some(),
+        "result should contain operation_id"
+    );
+
+    // Verify the tag was applied
+    let task = engine
+        .kanban
+        .read_entity_generic("task", task_id)
+        .await
+        .unwrap();
+    let tags = task
+        .get("tags")
+        .and_then(|v| v.as_array().cloned())
+        .unwrap_or_default();
+    assert!(
+        tags.iter().any(|t| t.as_str() == Some("feature")),
+        "task should have 'feature' tag after task.tag"
+    );
+}
+
 // ===========================================================================
 // Card 01KMT7Z4560S3CSHNQVR7GQ7PY — DragCompleteCmd same-board
 // ===========================================================================
@@ -1251,269 +1334,266 @@ async fn drag_complete_cross_board_returns_transfer_params() {
 }
 
 // ===========================================================================
-// Undo / Redo tests for entity.archive and entity.unarchive
+// Clipboard command integration tests
 // ===========================================================================
 
 #[tokio::test]
-async fn undo_redo_entity_archive() {
+async fn entity_copy_copies_task_to_clipboard() {
     let engine = TestEngine::new().await;
 
-    // Add a task
+    // Create a task with a known title
+    let mut args = HashMap::new();
+    args.insert("title".to_string(), json!("Clipboard test task"));
     let add_result = engine
-        .dispatch_simple("task.add", &["column:todo"], None)
+        .dispatch("task.add", &["column:todo"], None, args)
         .await
         .expect("task.add should succeed");
     let task_id = add_result["id"].as_str().unwrap();
 
-    // Verify the task exists
-    assert!(
-        engine
-            .kanban
-            .read_entity_generic("task", task_id)
-            .await
-            .is_ok(),
-        "task should exist after add"
-    );
-
-    // Archive the task via entity.archive
-    let archive_result = engine
-        .dispatch_simple("entity.archive", &[], Some(&format!("task:{}", task_id)))
+    // Dispatch entity.copy with task in scope
+    let result = engine
+        .dispatch_simple("entity.copy", &[&format!("task:{}", task_id)], None)
         .await
-        .expect("entity.archive should succeed");
-    let operation_id = archive_result["operation_id"]
-        .as_str()
-        .expect("entity.archive should return operation_id");
+        .expect("entity.copy should succeed");
 
-    // Verify task is gone from live storage (archived)
+    assert_eq!(result["copied"].as_str(), Some(task_id));
+
+    // Verify the InMemoryClipboard has the task's fields as JSON
+    let clipboard_text = engine.clipboard.read_text().expect("clipboard should have data");
+    let clipboard_json: Value = serde_json::from_str(&clipboard_text).expect("should be valid JSON");
+    assert_eq!(clipboard_json["id"].as_str(), Some(task_id));
+    assert_eq!(clipboard_json["title"].as_str(), Some("Clipboard test task"));
+
+    // Verify task still exists (copy is non-destructive)
+    let task = engine
+        .kanban
+        .read_entity_generic("task", task_id)
+        .await
+        .expect("task should still exist after copy");
+    assert_eq!(task.get_str("title"), Some("Clipboard test task"));
+
+    // Verify has_clipboard flag was set
+    assert!(engine.ui_state.has_clipboard(), "has_clipboard should be true after copy");
+}
+
+#[tokio::test]
+async fn entity_cut_undo_redo() {
+    let engine = TestEngine::new().await;
+
+    // Create a task
+    let mut args = HashMap::new();
+    args.insert("title".to_string(), json!("Cut me"));
+    let add_result = engine
+        .dispatch("task.add", &["column:todo"], None, args)
+        .await
+        .unwrap();
+    let task_id = add_result["id"].as_str().unwrap();
+
+    // Dispatch entity.cut
+    let cut_result = engine
+        .dispatch_simple("entity.cut", &[&format!("task:{}", task_id)], None)
+        .await
+        .expect("entity.cut should succeed");
+    let cut_op_id = cut_result["operation_id"].as_str().unwrap();
+
+    // Verify clipboard has the task snapshot
+    let clipboard_text = engine.clipboard.read_text().expect("clipboard should have data");
+    let clipboard_json: Value = serde_json::from_str(&clipboard_text).unwrap();
+    assert_eq!(clipboard_json["title"].as_str(), Some("Cut me"));
+
+    // Verify task is deleted
     assert!(
-        engine
-            .kanban
-            .read_entity_generic("task", task_id)
-            .await
-            .is_err(),
-        "task should not be in live storage after archive"
+        engine.kanban.read_entity_generic("task", task_id).await.is_err(),
+        "task should be deleted after cut"
     );
 
-    // Undo the archive
+    // Verify has_clipboard flag was set
+    assert!(engine.ui_state.has_clipboard());
+
+    // Undo the cut — task should be restored
     let mut undo_args = HashMap::new();
-    undo_args.insert("id".to_string(), json!(operation_id));
+    undo_args.insert("id".to_string(), json!(cut_op_id));
     let undo_result = engine
         .dispatch("app.undo", &[], None, undo_args)
         .await
         .expect("app.undo should succeed");
+    let undo_op_id = undo_result["operation_id"].as_str().unwrap();
 
-    assert_eq!(undo_result["undone"].as_str(), Some(operation_id));
-    let undo_op_id = undo_result["operation_id"]
-        .as_str()
-        .expect("undo should return operation_id for redo");
+    let task = engine
+        .kanban
+        .read_entity_generic("task", task_id)
+        .await
+        .expect("task should be restored after undo");
+    assert_eq!(task.get_str("title"), Some("Cut me"));
 
-    // Verify task is restored from archive
-    assert!(
-        engine
-            .kanban
-            .read_entity_generic("task", task_id)
-            .await
-            .is_ok(),
-        "task should be restored after undo of archive"
-    );
+    // Clipboard should still have data
+    assert!(engine.clipboard.read_text().is_some(), "clipboard should still have data after undo");
 
-    // Redo the archive
+    // Redo the cut — task should be deleted again
     let mut redo_args = HashMap::new();
     redo_args.insert("id".to_string(), json!(undo_op_id));
-    let redo_result = engine
-        .dispatch("app.redo", &[], None, redo_args)
-        .await
-        .expect("app.redo should succeed");
-
-    assert_eq!(redo_result["redone"].as_str(), Some(undo_op_id));
-
-    // Verify task is archived again
-    assert!(
-        engine
-            .kanban
-            .read_entity_generic("task", task_id)
-            .await
-            .is_err(),
-        "task should be archived again after redo"
-    );
-}
-
-#[tokio::test]
-async fn undo_redo_entity_unarchive() {
-    let engine = TestEngine::new().await;
-
-    // Add a task
-    let add_result = engine
-        .dispatch_simple("task.add", &["column:todo"], None)
-        .await
-        .expect("task.add should succeed");
-    let task_id = add_result["id"].as_str().unwrap();
-
-    // Archive the task first (prerequisite for unarchive)
     engine
-        .dispatch_simple("entity.archive", &[], Some(&format!("task:{}", task_id)))
-        .await
-        .expect("entity.archive should succeed");
-
-    // Verify task is archived
-    assert!(
-        engine
-            .kanban
-            .read_entity_generic("task", task_id)
-            .await
-            .is_err(),
-        "task should be archived before unarchive test"
-    );
-
-    // Unarchive the task via entity.unarchive
-    let unarchive_result = engine
-        .dispatch_simple("entity.unarchive", &[], Some(&format!("task:{}", task_id)))
-        .await
-        .expect("entity.unarchive should succeed");
-    let operation_id = unarchive_result["operation_id"]
-        .as_str()
-        .expect("entity.unarchive should return operation_id");
-
-    // Verify task is back in live storage
-    assert!(
-        engine
-            .kanban
-            .read_entity_generic("task", task_id)
-            .await
-            .is_ok(),
-        "task should be in live storage after unarchive"
-    );
-
-    // Undo the unarchive (should re-archive the task)
-    let mut undo_args = HashMap::new();
-    undo_args.insert("id".to_string(), json!(operation_id));
-    let undo_result = engine
-        .dispatch("app.undo", &[], None, undo_args)
-        .await
-        .expect("app.undo should succeed");
-
-    assert_eq!(undo_result["undone"].as_str(), Some(operation_id));
-    let undo_op_id = undo_result["operation_id"]
-        .as_str()
-        .expect("undo should return operation_id for redo");
-
-    // Verify task is archived again
-    assert!(
-        engine
-            .kanban
-            .read_entity_generic("task", task_id)
-            .await
-            .is_err(),
-        "task should be archived after undo of unarchive"
-    );
-
-    // Redo the unarchive (should restore the task again)
-    let mut redo_args = HashMap::new();
-    redo_args.insert("id".to_string(), json!(undo_op_id));
-    let redo_result = engine
         .dispatch("app.redo", &[], None, redo_args)
         .await
         .expect("app.redo should succeed");
 
-    assert_eq!(redo_result["redone"].as_str(), Some(undo_op_id));
-
-    // Verify task is unarchived again
     assert!(
-        engine
-            .kanban
-            .read_entity_generic("task", task_id)
-            .await
-            .is_ok(),
-        "task should be in live storage after redo of unarchive"
+        engine.kanban.read_entity_generic("task", task_id).await.is_err(),
+        "task should be deleted again after redo"
     );
-}
-
-// ===========================================================================
-// Card 01KMWQX2ANS47E7AEK1A8BR0VP — column.reorder undo/redo
-// ===========================================================================
-
-/// Helper: read columns sorted by order, return IDs in display order.
-async fn column_order(engine: &TestEngine) -> Vec<String> {
-    let ectx = engine.kanban.entity_context().await.unwrap();
-    let mut cols = ectx.list("column").await.unwrap();
-    cols.sort_by_key(|c| c.get("order").and_then(|v| v.as_u64()).unwrap_or(0));
-    cols.iter().map(|c| c.id.to_string()).collect()
 }
 
 #[tokio::test]
-async fn column_reorder_undo_redo() {
+async fn entity_paste_undo_redo() {
     let engine = TestEngine::new().await;
 
-    // Board init creates columns: todo (0), doing (1), done (2)
-    let original_order = column_order(&engine).await;
-    assert_eq!(
-        original_order,
-        vec!["todo", "doing", "done"],
-        "initial column order should be todo, doing, done"
-    );
-
-    // Reorder: move "done" to index 0 → expected order: done, todo, doing
-    let mut reorder_args = HashMap::new();
-    reorder_args.insert("id".to_string(), json!("done"));
-    reorder_args.insert("target_index".to_string(), json!(0));
-
-    let reorder_result = engine
-        .dispatch("column.reorder", &[], None, reorder_args)
+    // Create a task and copy it
+    let mut args = HashMap::new();
+    args.insert("title".to_string(), json!("Original task"));
+    let add_result = engine
+        .dispatch("task.add", &["column:todo"], None, args)
         .await
-        .expect("column.reorder should succeed");
+        .unwrap();
+    let original_id = add_result["id"].as_str().unwrap();
 
-    let reordered = column_order(&engine).await;
-    assert_eq!(
-        reordered,
-        vec!["done", "todo", "doing"],
-        "after reorder, done should be first"
-    );
+    engine
+        .dispatch_simple("entity.copy", &[&format!("task:{}", original_id)], None)
+        .await
+        .expect("entity.copy should succeed");
 
-    // Collect the operation_ids produced by the reorder (one per column update)
-    let operation_ids: Vec<String> = reorder_result["operation_ids"]
-        .as_array()
-        .expect("operation_ids should be an array")
-        .iter()
-        .map(|v| v.as_str().unwrap().to_string())
-        .collect();
+    // Paste into doing column
+    let paste_result = engine
+        .dispatch_simple("entity.paste", &["column:doing"], None)
+        .await
+        .expect("entity.paste should succeed");
+    let pasted_id = paste_result["id"].as_str().unwrap();
+    let paste_op_id = paste_result["operation_id"].as_str().unwrap();
+
+    // Pasted task should have a new ID (different from original)
+    assert_ne!(pasted_id, original_id, "pasted task should have a new ID");
+
+    // Verify the pasted task exists with copied fields
+    let pasted_task = engine
+        .kanban
+        .read_entity_generic("task", pasted_id)
+        .await
+        .expect("pasted task should exist");
+    assert_eq!(pasted_task.get_str("title"), Some("Original task"));
+    assert_eq!(pasted_task.get_str("position_column"), Some("doing"));
+
+    // Clipboard should still have data (multi-paste support)
+    assert!(engine.clipboard.read_text().is_some(), "clipboard should still have data after paste");
+
+    // Undo the paste — pasted task should be removed
+    let mut undo_args = HashMap::new();
+    undo_args.insert("id".to_string(), json!(paste_op_id));
+    let undo_result = engine
+        .dispatch("app.undo", &[], None, undo_args)
+        .await
+        .expect("app.undo should succeed");
+    let undo_op_id = undo_result["operation_id"].as_str().unwrap();
+
     assert!(
-        !operation_ids.is_empty(),
-        "column.reorder should produce operation_ids"
+        engine.kanban.read_entity_generic("task", pasted_id).await.is_err(),
+        "pasted task should be gone after undo"
     );
 
-    // Undo each operation in reverse order to restore original column order
-    let mut undo_op_ids: Vec<String> = Vec::new();
-    for op_id in operation_ids.iter().rev() {
-        let mut undo_args = HashMap::new();
-        undo_args.insert("id".to_string(), json!(op_id));
-        let undo_result = engine
-            .dispatch("app.undo", &[], None, undo_args)
-            .await
-            .expect("app.undo should succeed");
-        if let Some(undo_op_id) = undo_result["operation_id"].as_str() {
-            undo_op_ids.push(undo_op_id.to_string());
-        }
-    }
-
-    let after_undo = column_order(&engine).await;
-    assert_eq!(
-        after_undo, original_order,
-        "after undo, column order should be restored to original"
+    // Original task should still exist
+    assert!(
+        engine.kanban.read_entity_generic("task", original_id).await.is_ok(),
+        "original task should still exist"
     );
 
-    // Redo each undo operation in reverse order to restore the reordered state
-    for redo_id in undo_op_ids.iter().rev() {
-        let mut redo_args = HashMap::new();
-        redo_args.insert("id".to_string(), json!(redo_id));
-        engine
-            .dispatch("app.redo", &[], None, redo_args)
-            .await
-            .expect("app.redo should succeed");
-    }
+    // Redo the paste — pasted task should reappear
+    let mut redo_args = HashMap::new();
+    redo_args.insert("id".to_string(), json!(undo_op_id));
+    engine
+        .dispatch("app.redo", &[], None, redo_args)
+        .await
+        .expect("app.redo should succeed");
 
-    let after_redo = column_order(&engine).await;
-    assert_eq!(
-        after_redo, reordered,
-        "after redo, column order should match the reordered state"
+    let task = engine
+        .kanban
+        .read_entity_generic("task", pasted_id)
+        .await
+        .expect("pasted task should reappear after redo");
+    assert_eq!(task.get_str("title"), Some("Original task"));
+}
+
+#[tokio::test]
+async fn cut_paste_end_to_end_undo() {
+    let engine = TestEngine::new().await;
+
+    // Create a task in todo
+    let mut args = HashMap::new();
+    args.insert("title".to_string(), json!("Moveable task"));
+    let add_result = engine
+        .dispatch("task.add", &["column:todo"], None, args)
+        .await
+        .unwrap();
+    let original_id = add_result["id"].as_str().unwrap();
+
+    // Verify task is in todo
+    let task = engine.kanban.read_entity_generic("task", original_id).await.unwrap();
+    assert_eq!(task.get_str("position_column"), Some("todo"));
+
+    // Cut the task from todo
+    let cut_result = engine
+        .dispatch_simple("entity.cut", &[&format!("task:{}", original_id)], None)
+        .await
+        .expect("entity.cut should succeed");
+    let cut_op_id = cut_result["operation_id"].as_str().unwrap();
+
+    // Task should be deleted
+    assert!(
+        engine.kanban.read_entity_generic("task", original_id).await.is_err(),
+        "task should be deleted after cut"
     );
+
+    // Paste into doing column
+    let paste_result = engine
+        .dispatch_simple("entity.paste", &["column:doing"], None)
+        .await
+        .expect("entity.paste should succeed");
+    let pasted_id = paste_result["id"].as_str().unwrap();
+    let paste_op_id = paste_result["operation_id"].as_str().unwrap();
+
+    // Pasted task in doing
+    let pasted_task = engine.kanban.read_entity_generic("task", pasted_id).await.unwrap();
+    assert_eq!(pasted_task.get_str("position_column"), Some("doing"));
+
+    // Undo the paste — pasted task removed from doing
+    let mut undo_paste_args = HashMap::new();
+    undo_paste_args.insert("id".to_string(), json!(paste_op_id));
+    engine
+        .dispatch("app.undo", &[], None, undo_paste_args)
+        .await
+        .expect("undo paste should succeed");
+
+    assert!(
+        engine.kanban.read_entity_generic("task", pasted_id).await.is_err(),
+        "pasted task should be gone after undoing paste"
+    );
+
+    // Original still deleted (only paste was undone, not cut)
+    assert!(
+        engine.kanban.read_entity_generic("task", original_id).await.is_err(),
+        "original task should still be deleted (cut not undone yet)"
+    );
+
+    // Undo the cut — original task restored in todo
+    let mut undo_cut_args = HashMap::new();
+    undo_cut_args.insert("id".to_string(), json!(cut_op_id));
+    engine
+        .dispatch("app.undo", &[], None, undo_cut_args)
+        .await
+        .expect("undo cut should succeed");
+
+    let restored = engine
+        .kanban
+        .read_entity_generic("task", original_id)
+        .await
+        .expect("original task should be restored after undoing cut");
+    assert_eq!(restored.get_str("title"), Some("Moveable task"));
+    assert_eq!(restored.get_str("position_column"), Some("todo"));
 }

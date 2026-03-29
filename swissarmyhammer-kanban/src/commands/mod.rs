@@ -89,6 +89,20 @@ pub fn register_commands() -> HashMap<String, Arc<dyn Command>> {
         Arc::new(entity_commands::AttachmentDeleteCmd),
     );
 
+    // Clipboard commands
+    map.insert(
+        "entity.copy".into(),
+        Arc::new(clipboard_commands::CopyTaskCmd),
+    );
+    map.insert(
+        "entity.cut".into(),
+        Arc::new(clipboard_commands::CutTaskCmd),
+    );
+    map.insert(
+        "entity.paste".into(),
+        Arc::new(clipboard_commands::PasteTaskCmd),
+    );
+
     // Column commands
     map.insert(
         "column.reorder".into(),
