@@ -5,12 +5,6 @@ commands:
   - id: entity.inspect
     name: "Inspect {{entity.type}}"
     context_menu: true
-  - id: entity.paste
-    name: Paste
-    context_menu: true
-    keys:
-      cua: Mod+V
-      vim: p
 fields:
   - name
   - description
