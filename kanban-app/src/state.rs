@@ -9,6 +9,7 @@ use swissarmyhammer_commands::{
 };
 use swissarmyhammer_entity::Entity;
 use swissarmyhammer_entity_search::EntitySearchIndex;
+use swissarmyhammer_kanban::clipboard::ClipboardProvider;
 use swissarmyhammer_kanban::KanbanContext;
 use tokio::sync::RwLock;
 
@@ -16,6 +17,47 @@ use swissarmyhammer_kanban::actor::AddActor;
 use swissarmyhammer_kanban::Execute;
 
 use crate::watcher::{self, BoardWatcher, EntityCache};
+
+/// System clipboard provider backed by Tauri's clipboard-manager plugin.
+///
+/// Wraps an `AppHandle` and delegates read/write to the Tauri plugin.
+pub struct TauriClipboardProvider {
+    app: tauri::AppHandle,
+}
+
+impl TauriClipboardProvider {
+    /// Create a new provider from a Tauri AppHandle.
+    pub fn new(app: tauri::AppHandle) -> Self {
+        Self { app }
+    }
+}
+
+#[swissarmyhammer_kanban::async_trait]
+impl ClipboardProvider for TauriClipboardProvider {
+    async fn write_text(&self, text: &str) -> Result<(), String> {
+        use tauri_plugin_clipboard_manager::ClipboardExt;
+        self.app
+            .clipboard()
+            .write_text(text)
+            .map_err(|e| format!("clipboard write failed: {e}"))
+    }
+
+    async fn read_text(&self) -> Result<Option<String>, String> {
+        use tauri_plugin_clipboard_manager::ClipboardExt;
+        match self.app.clipboard().read_text() {
+            Ok(text) => Ok(Some(text)),
+            Err(e) => {
+                let msg = e.to_string();
+                // Clipboard may be empty or contain non-text data.
+                if msg.contains("empty") || msg.contains("format") {
+                    Ok(None)
+                } else {
+                    Err(format!("clipboard read failed: {e}"))
+                }
+            }
+        }
+    }
+}
 
 const CONFIG_APP_SUBDIR: &str = "kanban-app";
 const UI_STATE_FILE_NAME: &str = "ui-state.yaml";

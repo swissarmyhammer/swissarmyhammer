@@ -138,6 +138,13 @@ struct UIStateInner {
     /// board for commands that don't specify an explicit board_path.
     #[serde(default)]
     most_recent_board_path: Option<String>,
+    /// Whether the system clipboard currently holds a swissarmyhammer payload.
+    ///
+    /// Transient — set by copy/cut command implementations, checked by paste
+    /// availability. Not persisted because clipboard contents don't survive
+    /// app restart reliably.
+    #[serde(skip)]
+    has_clipboard: bool,
 }
 
 impl Default for UIStateInner {
@@ -153,6 +160,7 @@ impl Default for UIStateInner {
             windows: HashMap::new(),
             recent_boards: Vec::new(),
             most_recent_board_path: None,
+            has_clipboard: false,
         }
     }
 }
@@ -573,6 +581,24 @@ impl UIState {
             .clone()
     }
 
+    /// Set the `has_clipboard` flag.
+    ///
+    /// Called by copy/cut command implementations after writing to the system
+    /// clipboard. Transient — not persisted to the config file.
+    pub fn set_has_clipboard(&self, has: bool) {
+        let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+        inner.has_clipboard = has;
+        // No try_save() — transient state (#[serde(skip)])
+    }
+
+    /// Check whether the system clipboard holds a swissarmyhammer payload.
+    pub fn has_clipboard(&self) -> bool {
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .has_clipboard
+    }
+
     /// Clear all per-window state (geometry and inspector stacks).
     ///
     /// Used by reset_windows to wipe geometry before restarting.
@@ -735,6 +761,7 @@ impl UIState {
             "windows": inner.windows,
             "recent_boards": inner.recent_boards,
             "most_recent_board_path": inner.most_recent_board_path,
+            "has_clipboard": inner.has_clipboard,
         })
     }
 }
@@ -1384,5 +1411,45 @@ mod tests {
         assert_eq!(all.len(), 2);
         assert!(all.contains_key("main"));
         assert!(all.contains_key("secondary"));
+    }
+
+    // --- has_clipboard tests ---
+
+    #[test]
+    fn has_clipboard_defaults_to_false() {
+        let state = UIState::new();
+        assert!(!state.has_clipboard());
+    }
+
+    #[test]
+    fn set_has_clipboard_toggles_flag() {
+        let state = UIState::new();
+        state.set_has_clipboard(true);
+        assert!(state.has_clipboard());
+        state.set_has_clipboard(false);
+        assert!(!state.has_clipboard());
+    }
+
+    #[test]
+    fn has_clipboard_is_transient() {
+        let path = temp_yaml_path("has_clipboard_transient");
+        {
+            let state = UIState::load(&path);
+            state.set_has_clipboard(true);
+            state.set_keymap_mode("vim"); // force a save
+            state.save().unwrap();
+        }
+        // Reload — transient field should reset to false.
+        let state2 = UIState::load(&path);
+        assert!(!state2.has_clipboard());
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn has_clipboard_in_to_json() {
+        let state = UIState::new();
+        assert!(!state.to_json()["has_clipboard"].as_bool().unwrap());
+        state.set_has_clipboard(true);
+        assert!(state.to_json()["has_clipboard"].as_bool().unwrap());
     }
 }

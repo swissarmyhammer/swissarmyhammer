@@ -45,6 +45,7 @@ fn main() {
     let app_state = AppState::new();
     rt.block_on(app_state.auto_open_board());
     tauri::Builder::default()
+        .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_log::Builder::new().skip_logger().build())
