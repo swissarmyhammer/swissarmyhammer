@@ -126,19 +126,22 @@ pub struct PasteCmd;
 #[async_trait]
 impl Command for PasteCmd {
     fn available(&self, ctx: &CommandContext) -> bool {
-        let has_clipboard = ctx
-            .ui_state
-            .as_ref()
-            .map(|ui| ui.has_clipboard())
-            .unwrap_or(false);
+        let ui = match ctx.ui_state.as_ref() {
+            Some(ui) => ui,
+            None => return false,
+        };
+        if !ui.has_clipboard() {
+            return false;
+        }
 
-        // Paste is available if clipboard has content AND we have a valid target:
-        // - task in scope (for pasting a tag onto it)
-        // - column/board in scope (for pasting a task into it)
-        has_clipboard
-            && (ctx.has_in_scope("task")
-                || ctx.has_in_scope("column")
-                || ctx.has_in_scope("board"))
+        // Paste availability depends on what's on the clipboard:
+        // - tag on clipboard → needs task in scope (to tag it)
+        // - task on clipboard → needs column or board in scope (to paste into)
+        match ui.clipboard_entity_type().as_deref() {
+            Some("tag") => ctx.has_in_scope("task"),
+            Some("task") => ctx.has_in_scope("column") || ctx.has_in_scope("board"),
+            _ => false,
+        }
     }
 
     async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
@@ -312,27 +315,51 @@ mod tests {
     // =========================================================================
 
     #[tokio::test]
-    async fn paste_available_with_clipboard_and_column() {
+    async fn paste_task_available_with_column() {
         let (_temp, kanban, clipboard, ui) = setup().await;
-        ui.set_has_clipboard(true);
+        ui.set_clipboard_entity_type("task");
         let ctx = make_ctx("entity.paste", &["column:todo"], &kanban, &clipboard, &ui);
         assert!(PasteCmd.available(&ctx));
     }
 
     #[tokio::test]
-    async fn paste_available_with_clipboard_and_board() {
+    async fn paste_task_available_with_board() {
         let (_temp, kanban, clipboard, ui) = setup().await;
-        ui.set_has_clipboard(true);
+        ui.set_clipboard_entity_type("task");
         let ctx = make_ctx("entity.paste", &["board:my-board"], &kanban, &clipboard, &ui);
         assert!(PasteCmd.available(&ctx));
     }
 
     #[tokio::test]
-    async fn paste_available_with_clipboard_and_task() {
+    async fn paste_tag_available_with_task() {
         let (_temp, kanban, clipboard, ui) = setup().await;
-        ui.set_has_clipboard(true);
+        ui.set_clipboard_entity_type("tag");
         let ctx = make_ctx("entity.paste", &["task:01X", "column:todo"], &kanban, &clipboard, &ui);
         assert!(PasteCmd.available(&ctx));
+    }
+
+    #[tokio::test]
+    async fn paste_tag_not_available_on_column_only() {
+        let (_temp, kanban, clipboard, ui) = setup().await;
+        ui.set_clipboard_entity_type("tag");
+        let ctx = make_ctx("entity.paste", &["column:todo"], &kanban, &clipboard, &ui);
+        assert!(!PasteCmd.available(&ctx), "paste tag requires task in scope");
+    }
+
+    #[tokio::test]
+    async fn paste_tag_not_available_on_board_only() {
+        let (_temp, kanban, clipboard, ui) = setup().await;
+        ui.set_clipboard_entity_type("tag");
+        let ctx = make_ctx("entity.paste", &["board:my-board"], &kanban, &clipboard, &ui);
+        assert!(!PasteCmd.available(&ctx), "paste tag requires task in scope");
+    }
+
+    #[tokio::test]
+    async fn paste_task_not_available_on_task_only() {
+        let (_temp, kanban, clipboard, ui) = setup().await;
+        ui.set_clipboard_entity_type("task");
+        let ctx = make_ctx("entity.paste", &["task:01X"], &kanban, &clipboard, &ui);
+        assert!(!PasteCmd.available(&ctx), "paste task requires column/board in scope");
     }
 
     #[tokio::test]

@@ -351,28 +351,52 @@ mod tests {
     // Paste command availability tests
     // =========================================================================
 
-    fn ui_with_clipboard() -> Arc<UIState> {
+    fn ui_with_task_clipboard() -> Arc<UIState> {
         let ui = Arc::new(UIState::new());
-        ui.set_has_clipboard(true);
+        ui.set_clipboard_entity_type("task");
+        ui
+    }
+
+    fn ui_with_tag_clipboard() -> Arc<UIState> {
+        let ui = Arc::new(UIState::new());
+        ui.set_clipboard_entity_type("tag");
         ui
     }
 
     #[test]
-    fn paste_available_with_clipboard_and_column() {
+    fn paste_task_available_with_column() {
         let cmds = register_commands();
         let cmd = cmds.get("entity.paste").unwrap();
-        let ui = ui_with_clipboard();
+        let ui = ui_with_task_clipboard();
         let ctx = ctx_with(&["column:todo"], None, Some(ui));
         assert!(cmd.available(&ctx));
     }
 
     #[test]
-    fn paste_available_with_clipboard_and_board() {
+    fn paste_task_available_with_board() {
         let cmds = register_commands();
         let cmd = cmds.get("entity.paste").unwrap();
-        let ui = ui_with_clipboard();
+        let ui = ui_with_task_clipboard();
         let ctx = ctx_with(&["board:my-board"], None, Some(ui));
         assert!(cmd.available(&ctx));
+    }
+
+    #[test]
+    fn paste_tag_available_with_task() {
+        let cmds = register_commands();
+        let cmd = cmds.get("entity.paste").unwrap();
+        let ui = ui_with_tag_clipboard();
+        let ctx = ctx_with(&["task:01X", "column:todo"], None, Some(ui));
+        assert!(cmd.available(&ctx));
+    }
+
+    #[test]
+    fn paste_tag_not_available_on_column() {
+        let cmds = register_commands();
+        let cmd = cmds.get("entity.paste").unwrap();
+        let ui = ui_with_tag_clipboard();
+        let ctx = ctx_with(&["column:todo"], None, Some(ui));
+        assert!(!cmd.available(&ctx));
     }
 
     #[test]
@@ -385,10 +409,10 @@ mod tests {
     }
 
     #[test]
-    fn paste_not_available_without_column_or_board() {
+    fn paste_not_available_without_scope() {
         let cmds = register_commands();
         let cmd = cmds.get("entity.paste").unwrap();
-        let ui = ui_with_clipboard();
+        let ui = ui_with_task_clipboard();
         let ctx = ctx_with(&[], None, Some(ui));
         assert!(!cmd.available(&ctx));
     }
