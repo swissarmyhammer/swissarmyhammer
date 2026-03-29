@@ -58,6 +58,7 @@ members = [
     "swissarmyhammer-entity",
     "swissarmyhammer-entity-search",
     "swissarmyhammer-views",
+    "swissarmyhammer-merge",
     "swissarmyhammer-commands",
     "benches/embedding_benchmark",
     "crates/swissarmyhammer-sem",

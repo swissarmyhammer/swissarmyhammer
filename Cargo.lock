@@ -3974,6 +3974,7 @@ dependencies = [
  "open",
  "serde_json",
  "swissarmyhammer-kanban",
+ "swissarmyhammer-merge",
  "swissarmyhammer-operations",
  "tempfile",
  "tokio",
@@ -8245,6 +8246,17 @@ dependencies = [
  "tower-http 0.5.2",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "swissarmyhammer-merge"
+version = "0.10.1"
+dependencies = [
+ "diffy",
+ "serde_json",
+ "serde_yaml_ng",
+ "tempfile",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

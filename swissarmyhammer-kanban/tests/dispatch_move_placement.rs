@@ -147,7 +147,7 @@ async fn move_between_tasks_via_dispatch() {
 
 #[tokio::test]
 async fn move_without_placement_appends() {
-    let (_temp, ctx, id_a, id_b, id_c) = setup_board_with_tasks().await;
+    let (_temp, ctx, id_a, _id_b, _id_c) = setup_board_with_tasks().await;
 
     // Move A to "doing" without placement — should append
     dispatch_move(
@@ -169,7 +169,7 @@ async fn move_without_placement_appends() {
 async fn before_nonexistent_task_appends() {
     let (_temp, ctx, id_a, _id_b, _id_c) = setup_board_with_tasks().await;
 
-    let ord_before = ordinal(&ctx, &id_a).await;
+    let _ord_before = ordinal(&ctx, &id_a).await;
 
     // before_id references a task that doesn't exist — should fall through to append
     dispatch_move(
