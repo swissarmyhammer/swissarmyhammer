@@ -86,6 +86,7 @@ pub mod board;
 pub mod column;
 pub mod entity;
 pub mod schema;
+pub mod scope_commands;
 pub mod swimlane;
 pub mod tag;
 pub mod task;

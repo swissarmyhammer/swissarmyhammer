@@ -24,7 +24,7 @@ commands:
       cua: Mod+X
       vim: x
   - id: entity.paste
-    name: Paste
+    name: "Paste {{entity.type}}"
     context_menu: true
     keys:
       cua: Mod+V
