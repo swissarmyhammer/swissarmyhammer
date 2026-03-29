@@ -1,0 +1,8 @@
+---
+assignees:
+- claude-code
+position_column: done
+position_ordinal: ffffffffffffec80
+title: '[Bug/High] All 6 nav commands are dead code -- no claimWhen predicates registered in production'
+---
+**Files:** `kanban-app/ui/src/components/app-shell.tsx:336-374`, `kanban-app/ui/src/components/board-view.tsx`, `kanban-app/ui/src/components/column-view.tsx`\n\n**What:** The 6 nav commands (`nav.up/down/left/right/first/last`) call `broadcastNavCommand` which iterates `claimPredicatesRef` looking for matching `ClaimPredicate` entries. However, no production component passes `claimWhen` to `FocusScope`. The only usage of `claimWhen` is in test files (`entity-focus-context.test.tsx`). This means `broadcastNavCommand` always returns `false` and no focus change ever occurs.\n\n**Impact:** When a user presses j/k/h/l in vim mode (or arrow keys in CUA mode), the nav command fires, `broadcastNavCommand` finds no predicates, returns false, and nothing happens. Meanwhile, if a board-view or inspector FocusScope is focused, its scope bindings (e.g. `board.moveDown`) shadow the global `nav.down` key anyway. So the nav commands only matter when NO scope has focus -- but even then they can't do anything because there are no claim predicates.\n\n**Severity:** High -- this is the primary feature of the change and it has no effect in practice. The infrastructure is correct but the consumers haven't been wired up yet." #review-finding

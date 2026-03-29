@@ -18,7 +18,8 @@ import { vim } from "@replit/codemirror-vim";
 import { emacs } from "@replit/codemirror-emacs";
 
 /** The app's font stack — must match body in index.css. */
-const FONT = 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif';
+const FONT =
+  'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif';
 
 /**
  * CM6 theme derived from shadcn/ui CSS variables.
@@ -57,9 +58,10 @@ export const shadcnTheme = EditorView.theme({
   ".cm-cursor, .cm-dropCursor": {
     borderLeftColor: "var(--foreground)",
   },
-  "&.cm-focused .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection": {
-    backgroundColor: "var(--accent)",
-  },
+  "&.cm-focused .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection":
+    {
+      backgroundColor: "var(--accent)",
+    },
   ".cm-activeLine": {
     backgroundColor: "transparent",
   },

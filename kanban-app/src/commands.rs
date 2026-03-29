@@ -1,3 +1,26 @@
+// ┌──────────────────────────────────────────────────────────────────────────┐
+// │ 🛑🛑🛑  STOP — READ THIS BEFORE ADDING A NEW #[tauri::command]  🛑🛑🛑 │
+// │                                                                        │
+// │  ALL state mutations MUST go through `dispatch_command` so they flow    │
+// │  through the swissarmyhammer-commands system. This is REQUIRED for:     │
+// │                                                                        │
+// │    ✅  Undo / Redo support                                             │
+// │    ✅  UIState persistence                                             │
+// │    ✅  Event emission (ui-state-changed)                               │
+// │    ✅  Command logging and observability                               │
+// │                                                                        │
+// │  Adding a new #[tauri::command] that mutates state BYPASSES all of     │
+// │  this. If you think you need one, you almost certainly need a new      │
+// │  command impl in swissarmyhammer-commands instead.                     │
+// │                                                                        │
+// │  Acceptable Tauri commands:                                            │
+// │    • Read-only queries (get_board_data, list_entities, etc.)           │
+// │    • OS-level operations (create_window, restore_windows, quit_app)    │
+// │    • Transient UI plumbing (drag session start/cancel, context menus)  │
+// │                                                                        │
+// │  If in doubt, ask. Don't just add a quick invoke().                    │
+// └──────────────────────────────────────────────────────────────────────────┘
+
 //! Tauri commands for board operations.
 
 use crate::menu;
@@ -6,11 +29,7 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use swissarmyhammer_kanban::{
-    board::GetBoard,
-    task_helpers::{enrich_all_task_entities, enrich_task_entity},
-    OperationProcessor,
-};
+use swissarmyhammer_kanban::task_helpers::{enrich_all_task_entities, enrich_task_entity};
 use tauri::menu::{ContextMenu, MenuBuilder};
 use tauri::webview::WebviewWindowBuilder;
 use tauri::{AppHandle, Emitter, Manager, State, Window};
@@ -63,48 +82,15 @@ pub struct MenuItemEntry {
     pub checked: Option<bool>,
 }
 
-/// Open a board at the given path, resolving to its .kanban directory.
-#[tauri::command]
-pub async fn open_board(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    path: String,
-) -> Result<Value, String> {
-    let canonical = state
-        .open_board(&PathBuf::from(&path), Some(app.clone()))
-        .await?;
-
-    // Notify all windows to refresh their open boards list.
-    // The calling window switches itself using the returned path —
-    // no board-opened event needed for the command path.
-    let _ = app.emit("board-changed", ());
-
-    // Return the board data
-    let handle = state
-        .active_handle()
-        .await
-        .ok_or("Failed to get board after open")?;
-    let board = handle
-        .processor
-        .process(&GetBoard::default(), &handle.ctx)
-        .await
-        .map_err(|e| e.to_string())?;
-
-    Ok(json!({
-        "path": canonical.display().to_string(),
-        "board": board,
-    }))
-}
-
 /// List all currently open boards.
 #[tauri::command]
 pub async fn list_open_boards(state: State<'_, AppState>) -> Result<Value, String> {
     let boards = state.boards.read().await;
-    let active = state.active_board.read().await;
+    let most_recent = state.ui_state.most_recent_board().map(PathBuf::from);
 
     let mut list: Vec<Value> = Vec::new();
     for (path, handle) in boards.iter() {
-        let is_active = active.as_ref() == Some(path);
+        let is_active = most_recent.as_ref() == Some(path);
         // Read the board entity name if available
         let name = match handle.ctx.entity_context().await {
             Ok(ectx) => match ectx.read("board", "board").await {
@@ -128,192 +114,14 @@ pub async fn list_open_boards(state: State<'_, AppState>) -> Result<Value, Strin
     Ok(json!(list))
 }
 
-/// Close a board, removing it from the open set.
+/// Return the full UIState as JSON for the frontend.
 ///
-/// If `path` is omitted, closes the currently active board.
-/// If the closed board was active, switches to another open board (or none).
-/// Emits `board-changed` so the frontend refreshes.
+/// Returns a snapshot of all UIState fields including transient ones
+/// (`palette_open`, `scope_chain`). The frontend uses this on mount
+/// to initialise the UIStateProvider.
 #[tauri::command]
-pub async fn close_board(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    path: Option<String>,
-) -> Result<Value, String> {
-    let target = match path {
-        Some(p) => PathBuf::from(&p),
-        None => {
-            let active = state.active_board.read().await;
-            active
-                .clone()
-                .ok_or_else(|| "No active board to close".to_string())?
-        }
-    };
-
-    state.close_board(&target).await?;
-
-    // Window entries are NOT removed here — they belong to the window, not
-    // the board. The frontend will call switch_board to update board_path
-    // when it falls back to another board. Secondary windows clean up their
-    // entries via the on_window_event Destroyed handler when actually closed.
-
-    let _ = app.emit("board-changed", ());
-
-    Ok(json!({ "closed": target.display().to_string() }))
-}
-
-/// Set the active board to the specified path.
-#[tauri::command]
-pub async fn set_active_board(state: State<'_, AppState>, path: String) -> Result<Value, String> {
-    let canonical = PathBuf::from(&path)
-        .canonicalize()
-        .unwrap_or_else(|_| PathBuf::from(&path));
-
-    let boards = state.boards.read().await;
-    if !boards.contains_key(&canonical) {
-        return Err(format!("Board not open: {}", path));
-    }
-    drop(boards);
-
-    *state.active_board.write().await = Some(canonical.clone());
-
-    Ok(json!({
-        "path": canonical.display().to_string(),
-        "active": true,
-    }))
-}
-
-/// Switch a window to a different board.
-///
-/// Opens the board idempotently (no-op if already open), updates the
-/// backend active_board, and persists the window→board mapping in config.
-/// The frontend should call this instead of `set_active_board` for
-/// per-window board switching.
-#[tauri::command]
-pub async fn switch_board(
-    state: State<'_, AppState>,
-    window_label: Option<String>,
-    path: String,
-) -> Result<Value, String> {
-    let board_path = PathBuf::from(&path);
-
-    // Open the board idempotently (sets active_board on the backend)
-    state
-        .open_board(&board_path, None)
-        .await
-        .map_err(|e| e.to_string())?;
-
-    // Persist the window→board mapping
-    let label = window_label.as_deref().unwrap_or("main");
-    let canonical = board_path
-        .canonicalize()
-        .unwrap_or_else(|_| board_path.clone());
-    let mut config = state.config.write().await;
-    let ws = config
-        .windows
-        .entry(label.to_string())
-        .or_insert_with(|| crate::state::WindowState::new(canonical.clone()));
-    ws.board_path = canonical.clone();
-    config.save().map_err(|e| e.to_string())?;
-
-    Ok(json!({
-        "path": canonical.display().to_string(),
-        "window_label": label,
-    }))
-}
-
-/// Get the MRU list of recently opened boards.
-#[tauri::command]
-pub async fn get_recent_boards(state: State<'_, AppState>) -> Result<Value, String> {
-    let config = state.config.read().await;
-    serde_json::to_value(&config.recent_boards).map_err(|e| e.to_string())
-}
-
-/// Get the current editor keymap mode.
-#[tauri::command]
-pub async fn get_keymap_mode(state: State<'_, AppState>) -> Result<String, String> {
-    let config = state.config.read().await;
-    Ok(config.keymap_mode.clone())
-}
-
-/// Set the editor keymap mode and persist to config.
-///
-/// The frontend handles menu sync via `syncMenuToNative` after keymap
-/// changes, so we no longer rebuild the native menu here.
-#[tauri::command]
-pub async fn set_keymap_mode(state: State<'_, AppState>, mode: String) -> Result<Value, String> {
-    {
-        let mut config = state.config.write().await;
-        config.keymap_mode = mode.clone();
-        config.save().map_err(|e| e.to_string())?;
-    }
-    Ok(json!({ "keymap_mode": mode }))
-}
-
-/// Get the persisted window state (board path, active view, inspector stack).
-///
-/// The frontend calls this on mount to restore state across hot reloads.
-#[tauri::command]
-pub async fn get_ui_context(
-    state: State<'_, AppState>,
-    window_label: Option<String>,
-) -> Result<Value, String> {
-    let config = state.config.read().await;
-    let label = window_label.as_deref().unwrap_or("main");
-    if let Some(ws) = config.windows.get(label) {
-        Ok(json!({
-            "board_path": ws.board_path.display().to_string(),
-            "active_view_id": ws.active_view_id,
-            "inspector_stack": ws.inspector_stack,
-        }))
-    } else {
-        Ok(json!({
-            "board_path": null,
-            "active_view_id": null,
-            "inspector_stack": [],
-        }))
-    }
-}
-
-/// Persist the active view ID to the window's config entry.
-///
-/// Creates the window entry on demand if it doesn't exist yet.
-#[tauri::command]
-pub async fn set_active_view(
-    state: State<'_, AppState>,
-    view_id: String,
-    window_label: Option<String>,
-) -> Result<Value, String> {
-    let mut config = state.config.write().await;
-    let label = window_label.as_deref().unwrap_or("main");
-    let active_board = state.active_board.read().await;
-    let ws = config.windows.entry(label.to_string()).or_insert_with(|| {
-        crate::state::WindowState::new(active_board.clone().unwrap_or_default())
-    });
-    ws.active_view_id = Some(view_id.clone());
-    drop(active_board);
-    config.save().map_err(|e| e.to_string())?;
-    Ok(json!({ "active_view_id": view_id }))
-}
-
-/// Persist the inspector panel stack to the window's config entry.
-///
-/// Creates the window entry on demand if it doesn't exist yet.
-#[tauri::command]
-pub async fn set_inspector_stack(
-    state: State<'_, AppState>,
-    stack: Vec<String>,
-    window_label: Option<String>,
-) -> Result<Value, String> {
-    let mut config = state.config.write().await;
-    let label = window_label.as_deref().unwrap_or("main");
-    let active_board = state.active_board.read().await;
-    let ws = config.windows.entry(label.to_string()).or_insert_with(|| {
-        crate::state::WindowState::new(active_board.clone().unwrap_or_default())
-    });
-    ws.inspector_stack = stack.clone();
-    drop(active_board);
-    config.save().map_err(|e| e.to_string())?;
-    Ok(json!({ "inspector_stack": stack }))
+pub async fn get_ui_state(state: State<'_, AppState>) -> Result<Value, String> {
+    Ok(state.ui_state.to_json())
 }
 
 /// Get the field+entity schema for a given entity type.
@@ -350,6 +158,29 @@ pub async fn get_entity_schema(
         "entity": serde_json::to_value(entity_def).map_err(|e| e.to_string())?,
         "fields": field_defs,
     }))
+}
+
+/// List all registered entity type names.
+///
+/// Returns an array of entity type name strings discovered from the schema.
+#[tauri::command]
+pub async fn list_entity_types(
+    state: State<'_, AppState>,
+    board_path: Option<String>,
+) -> Result<Value, String> {
+    let handle = resolve_handle(&state, board_path).await?;
+    let ectx = handle
+        .ctx
+        .entity_context()
+        .await
+        .map_err(|e| e.to_string())?;
+    let fields_ctx = ectx.fields();
+    let names: Vec<&str> = fields_ctx
+        .all_entities()
+        .iter()
+        .map(|e| e.name.as_str())
+        .collect();
+    Ok(json!(names))
 }
 
 /// List all entities of a given type, returning raw entity bags.
@@ -763,12 +594,9 @@ pub async fn quit_app(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 #[allow(unreachable_code)]
 pub async fn reset_windows(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
-    {
-        let mut config = state.config.write().await;
-        config.windows.clear();
-        let _ = config.save();
-        tracing::info!("Cleared all window state");
-    }
+    // Clear window state from UIState (geometry + inspector stacks)
+    state.ui_state.clear_windows();
+    tracing::info!("Cleared all window state");
     app.restart();
     Ok(())
 }
@@ -801,15 +629,16 @@ pub async fn create_window(
     let label = new_window_label();
     tracing::info!(board_path = ?board_path, label = %label, "create_window called");
 
-    // Resolve board path: explicit > active board
+    // Resolve board path: explicit > AppState active board > first open board
     let resolved_path = match board_path {
         Some(bp) => Some(bp),
-        None => state
-            .active_board
-            .read()
-            .await
-            .as_ref()
-            .map(|p| p.display().to_string()),
+        None => {
+            // Fall back to the most recently focused board
+            state.ui_state.most_recent_board().or_else(|| {
+                let boards = state.boards.try_read().ok();
+                boards.and_then(|b| b.keys().next().map(|p| p.display().to_string()))
+            })
+        }
     };
 
     let mut url = String::from("index.html?window=board");
@@ -828,17 +657,14 @@ pub async fn create_window(
 
     let _ = window.set_focus();
 
-    // Persist window→board mapping so we can restore with the same label and position
+    // Persist window→board mapping in UIState so we can restore with the same label and position
     if let Some(ref bp) = resolved_path {
-        let mut config = state.config.write().await;
-        let entry = crate::state::WindowState::new(PathBuf::from(bp));
         tracing::info!(
             label = %label,
             board_path = %bp,
-            "persisting window state"
+            "persisting window state to UIState"
         );
-        config.windows.insert(label.clone(), entry);
-        let _ = config.save();
+        state.ui_state.set_window_board(&label, bp);
     }
 
     Ok(json!({
@@ -851,14 +677,12 @@ pub async fn create_window(
 ///
 /// Called by the main window on mount. For each saved window label that
 /// doesn't already exist, creates a new window with the same label and
-/// applies saved position/size from `config.windows`.
+/// applies saved position/size from UIState windows.
 ///
 /// Returns the list of restored window labels.
 #[tauri::command]
 pub async fn restore_windows(app: AppHandle, state: State<'_, AppState>) -> Result<Value, String> {
-    let config = state.config.read().await;
-    let saved_windows = config.windows.clone();
-    drop(config);
+    let saved_windows = state.ui_state.all_windows();
 
     tracing::info!(
         count = saved_windows.len(),
@@ -880,17 +704,25 @@ pub async fn restore_windows(app: AppHandle, state: State<'_, AppState>) -> Resu
             continue;
         }
 
+        // Look up board path from UIState window_boards
+        let board_path = match state.ui_state.window_board(label) {
+            Some(bp) => bp,
+            None => continue,
+        };
+
         // Verify the board is actually open
         {
             let boards = state.boards.read().await;
-            if !boards.contains_key(&entry.board_path) {
+            let canonical = std::path::PathBuf::from(&board_path)
+                .canonicalize()
+                .unwrap_or_else(|_| std::path::PathBuf::from(&board_path));
+            if !boards.contains_key(&canonical) {
                 continue;
             }
         }
 
-        let bp = entry.board_path.display().to_string();
         let mut url = String::from("index.html?window=board&board=");
-        url.push_str(&urlencoding::encode(&bp));
+        url.push_str(&urlencoding::encode(&board_path));
 
         // Build at default size first — we apply saved physical geometry after
         // creation because the builder takes logical coordinates while we store
@@ -912,7 +744,7 @@ pub async fn restore_windows(app: AppHandle, state: State<'_, AppState>) -> Resu
                 }
                 let _ = window.set_focus();
                 restored.push(label.clone());
-                tracing::info!(label = %label, board = %bp, x = ?entry.x, y = ?entry.y, "restored secondary window");
+                tracing::info!(label = %label, board = %board_path, x = ?entry.x, y = ?entry.y, "restored secondary window");
             }
             Err(e) => {
                 tracing::warn!(label = %label, error = %e, "failed to restore secondary window");
@@ -921,30 +753,6 @@ pub async fn restore_windows(app: AppHandle, state: State<'_, AppState>) -> Resu
     }
 
     Ok(json!({ "restored": restored }))
-}
-
-/// Save a secondary window's position and size to config.
-///
-/// Called by secondary windows on move/resize so their geometry
-/// persists across restarts and hot reloads.
-#[tauri::command]
-pub async fn save_window_geometry(
-    state: State<'_, AppState>,
-    window_label: String,
-    x: i32,
-    y: i32,
-    width: u32,
-    height: u32,
-) -> Result<(), String> {
-    let mut config = state.config.write().await;
-    if let Some(entry) = config.windows.get_mut(&window_label) {
-        entry.x = Some(x);
-        entry.y = Some(y);
-        entry.width = Some(width);
-        entry.height = Some(height);
-        let _ = config.save();
-    }
-    Ok(())
 }
 
 /// List all view definitions, returning a JSON array.
@@ -978,25 +786,8 @@ pub async fn rebuild_menu_from_manifest(
     state: State<'_, AppState>,
     manifest: Vec<MenuItemEntry>,
 ) -> Result<(), String> {
-    let config = state.config.read().await;
-    menu::build_menu_from_manifest(&app, &manifest, &config.recent_boards)
-        .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-// ---------------------------------------------------------------------------
-// set_focus — store the current focus scope chain
-// ---------------------------------------------------------------------------
-
-/// Store the current focus scope chain from the frontend.
-///
-/// The scope chain is an ordered list of `type:id` monikers representing
-/// the focused element hierarchy. It is used by `dispatch_command` when
-/// no explicit scope chain is provided.
-#[tauri::command]
-pub async fn set_focus(state: State<'_, AppState>, scope_chain: Vec<String>) -> Result<(), String> {
-    tracing::debug!(scope_chain = ?scope_chain, "set_focus");
-    *state.focus_scope_chain.write().await = scope_chain;
+    let recent = state.ui_state.recent_boards();
+    menu::build_menu_from_manifest(&app, &manifest, &recent).map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -1023,7 +814,10 @@ pub async fn log_command(cmd: String, target: Option<String>) {
 ///
 /// Looks up the command definition in the registry, resolves the scope
 /// chain, checks availability, and executes via the trait implementation.
+///
+/// This is the Tauri entry point — it delegates to `dispatch_command_internal`.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn dispatch_command(
     app: AppHandle,
     state: State<'_, AppState>,
@@ -1032,6 +826,46 @@ pub async fn dispatch_command(
     target: Option<String>,
     args: Option<Value>,
     board_path: Option<String>,
+    window_label: Option<String>,
+) -> Result<Value, String> {
+    dispatch_command_internal(
+        &app,
+        &state,
+        &cmd,
+        scope_chain,
+        target,
+        args,
+        board_path,
+        window_label,
+    )
+    .await
+}
+
+/// Internal dispatch — single path for all state-mutating command execution.
+///
+/// This is the single path for all state-mutating command execution.
+/// It handles: command lookup, context building, execution, undo tracking,
+/// entity flush, event emission, and UIState change broadcasting.
+///
+/// # Parameters
+/// - `app` - Tauri application handle for event emission
+/// - `state` - Application state with command registry, impls, and board handles
+/// - `cmd` - Command ID string (e.g. "task.move")
+/// - `scope_chain` - Optional explicit scope; falls back to stored UIState focus
+/// - `target` - Optional target entity ID
+/// - `args` - Optional JSON object of command arguments
+/// - `board_path` - Optional board path for multi-window targeting
+/// - `window_label` - Optional window label for UIState context
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn dispatch_command_internal(
+    app: &AppHandle,
+    state: &AppState,
+    cmd: &str,
+    scope_chain: Option<Vec<String>>,
+    target: Option<String>,
+    args: Option<Value>,
+    board_path: Option<String>,
+    window_label: Option<String>,
 ) -> Result<Value, String> {
     // Validate command ID: non-empty, reasonable length, ASCII-only
     if cmd.is_empty() || cmd.len() > 128 || !cmd.is_ascii() {
@@ -1043,13 +877,14 @@ pub async fn dispatch_command(
         target = ?target,
         args = ?args,
         scope_chain = ?scope_chain,
+        board_path = ?board_path,
         "command"
     );
 
     // Resolve scope chain: explicit > stored focus
     let scope = match scope_chain {
         Some(sc) => sc,
-        None => state.focus_scope_chain.read().await.clone(),
+        None => state.ui_state.scope_chain(),
     };
     tracing::debug!(scope = ?scope, "resolved scope chain");
 
@@ -1058,7 +893,7 @@ pub async fn dispatch_command(
     let undoable = {
         let registry = state.commands_registry.read().await;
         let cmd_def = registry
-            .get(&cmd)
+            .get(cmd)
             .ok_or_else(|| format!("Unknown command: {}", cmd))?;
         cmd_def.undoable
     };
@@ -1066,7 +901,7 @@ pub async fn dispatch_command(
     // Look up command implementation
     let cmd_impl = state
         .command_impls
-        .get(&cmd)
+        .get(cmd)
         .ok_or_else(|| format!("No implementation for command: {}", cmd))?;
 
     // Build CommandContext
@@ -1075,12 +910,15 @@ pub async fn dispatch_command(
         _ => HashMap::new(),
     };
     let mut ctx =
-        swissarmyhammer_commands::CommandContext::new(cmd.clone(), scope, target, args_map);
+        swissarmyhammer_commands::CommandContext::new(cmd.to_string(), scope, target, args_map);
     ctx = ctx.with_ui_state(Arc::clone(&state.ui_state));
+    if let Some(ref label) = window_label {
+        ctx = ctx.with_window_label(label.clone());
+    }
 
     // Set KanbanContext extension if board is open.
     // Uses board_path when provided (multi-window) to avoid targeting the wrong board.
-    let active_handle = resolve_handle(&state, board_path).await.ok();
+    let active_handle = resolve_handle(state, board_path).await.ok();
     if let Some(ref handle) = active_handle {
         ctx.set_extension(Arc::clone(&handle.ctx));
     }
@@ -1100,13 +938,180 @@ pub async fn dispatch_command(
 
     tracing::info!(cmd = %cmd, undoable = undoable, result = %result, "command completed");
 
+    // Handle board management side effects from file.switchBoard and file.closeBoard.
+    // These commands update UIState, but the Tauri layer must also manage BoardHandles.
+    if let Some(board_switch) = result.get("BoardSwitch") {
+        if let Some(path_str) = board_switch.get("path").and_then(|v| v.as_str()) {
+            let board_path = std::path::PathBuf::from(path_str);
+            let label = board_switch
+                .get("window_label")
+                .and_then(|v| v.as_str())
+                .unwrap_or("main");
+
+            // Open the board idempotently (also starts file watcher)
+            match state.open_board(&board_path, Some(app.clone())).await {
+                Ok(canonical) => {
+                    // Persist window→board mapping in UIState
+                    state
+                        .ui_state
+                        .set_window_board(label, &canonical.display().to_string());
+                }
+                Err(e) => {
+                    tracing::error!(cmd = %cmd, path = %path_str, error = %e, "BoardSwitch: failed to open board");
+                }
+            }
+            let _ = app.emit("board-changed", ());
+        }
+    }
+
+    if let Some(board_close) = result.get("BoardClose") {
+        if let Some(path_str) = board_close.get("path").and_then(|v| v.as_str()) {
+            let target = std::path::PathBuf::from(path_str);
+            if let Err(e) = state.close_board(&target).await {
+                tracing::error!(cmd = %cmd, path = %path_str, error = %e, "BoardClose: failed to close board");
+            }
+            let _ = app.emit("board-changed", ());
+        }
+    }
+
+    // Emit drag-session-active event when drag.start completes successfully.
+    if let Some(drag_start) = result.get("DragStart") {
+        let payload = drag_start.clone();
+        let _ = app.emit("drag-session-active", &payload);
+    }
+
+    // Emit drag-session-cancelled event when drag.cancel completes successfully.
+    if let Some(drag_cancel) = result.get("DragCancel") {
+        let _ = app.emit("drag-session-cancelled", &drag_cancel);
+    }
+
+    // Handle drag.complete result.
+    //
+    // Same-board: the task.move was already performed inside DragCompleteCmd;
+    // the active_handle flush below (undoable=false for drag.complete) won't
+    // run, so we flush the board here explicitly then emit drag-session-completed.
+    //
+    // Cross-board: call the standalone transfer_task() function with both board
+    // handles, flush both, then emit drag-session-completed.
+    if let Some(drag_complete) = result.get("DragComplete") {
+        let session_id = drag_complete
+            .get("session_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        let transfer_ok = if drag_complete
+            .get("cross_board")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
+            // Cross-board transfer: call transfer_task with both board handles
+            let source_path = drag_complete
+                .get("source_board_path")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let target_path = drag_complete
+                .get("target_board_path")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let task_id = drag_complete
+                .get("task_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let target_column = drag_complete
+                .get("target_column")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let drop_index = drag_complete.get("drop_index").and_then(|v| v.as_u64());
+            let before_id = drag_complete
+                .get("before_id")
+                .and_then(|v| v.as_str())
+                .map(str::to_string);
+            let after_id = drag_complete
+                .get("after_id")
+                .and_then(|v| v.as_str())
+                .map(str::to_string);
+            let copy_mode = drag_complete
+                .get("copy_mode")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+
+            let source_handle = resolve_handle(state, Some(source_path)).await;
+            let target_handle = resolve_handle(state, Some(target_path)).await;
+
+            match (source_handle, target_handle) {
+                (Ok(src), Ok(tgt)) => {
+                    let transfer_result = swissarmyhammer_kanban::cross_board::transfer_task(
+                        &src.ctx,
+                        &tgt.ctx,
+                        &task_id,
+                        &target_column,
+                        drop_index,
+                        before_id.as_deref(),
+                        after_id.as_deref(),
+                        copy_mode,
+                    )
+                    .await;
+
+                    let ok = transfer_result.is_ok();
+                    // Flush both boards after transfer
+                    flush_and_emit_for_handle(app, &tgt).await;
+                    if !copy_mode {
+                        flush_and_emit_for_handle(app, &src).await;
+                    }
+                    ok
+                }
+                _ => {
+                    tracing::error!(
+                        "drag.complete: failed to resolve board handles for cross-board transfer"
+                    );
+                    false
+                }
+            }
+        } else {
+            // Same-board: flush the board so entity-changed events go out
+            if let Some(ref handle) = active_handle {
+                flush_and_emit_for_handle(app, handle).await;
+            }
+            true
+        };
+
+        let _ = app.emit(
+            "drag-session-completed",
+            json!({
+                "session_id": session_id,
+                "success": transfer_ok,
+            }),
+        );
+    }
+
+    // After any UIStateChange, push the full state snapshot to the frontend.
+    // This broad approach ensures the React UIStateProvider stays in sync
+    // without needing per-field event types. Optimise per-field later if needed.
+    if serde_json::from_value::<swissarmyhammer_commands::UIStateChange>(result.clone()).is_ok() {
+        let _ = app.emit("ui-state-changed", state.ui_state.to_json());
+    }
+    // Board switch/close results are not UIStateChanges but still update ui-state.
+    if result.get("BoardSwitch").is_some() || result.get("BoardClose").is_some() {
+        let _ = app.emit("ui-state-changed", state.ui_state.to_json());
+    }
+
     // For undoable commands (data mutations), scan entity files for changes
     // and emit granular entity-level events. This also updates the watcher
     // cache so the file watcher won't double-fire for our own writes.
+    tracing::info!(cmd = %cmd, undoable = undoable, has_handle = active_handle.is_some(), "flush gate");
     if undoable {
         if let Some(ref handle) = active_handle {
-            flush_and_emit_for_handle(&app, handle).await;
+            flush_and_emit_for_handle(app, handle).await;
+        } else {
+            tracing::info!(cmd = %cmd, "undoable but no active_handle — events NOT emitted");
         }
+    } else {
+        tracing::info!(cmd = %cmd, "non-undoable — skipping flush_and_emit");
     }
 
     // Wrap result with undoable info
@@ -1129,7 +1134,7 @@ pub async fn list_available_commands(
     state: State<'_, AppState>,
     context_menu: Option<bool>,
 ) -> Result<Value, String> {
-    let scope = state.focus_scope_chain.read().await.clone();
+    let scope = state.ui_state.scope_chain();
 
     // Clone filtered defs so we can drop the registry read guard before
     // awaiting active_handle (avoids holding RwLock across an await point).
@@ -1176,357 +1181,12 @@ pub async fn list_available_commands(
 // show_context_menu — generic native context menu
 // ---------------------------------------------------------------------------
 
-// ---------------------------------------------------------------------------
-// Drag session commands — cross-window drag coordination
-// ---------------------------------------------------------------------------
-
-/// Start a cross-window drag session.
-///
-/// Called when a drag begins in any window. Stores the session in AppState
-/// and broadcasts a `drag-session-active` event to all windows.
-///
-/// If a stale session exists (older than 30 seconds), it is silently replaced.
-#[tauri::command]
-pub async fn start_drag_session(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    task_id: String,
-    task_fields: Value,
-    board_path: String,
-    source_window_label: String,
-    copy_mode: bool,
-) -> Result<Value, String> {
-    let now_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64;
-
-    // Auto-cancel stale sessions (>30s old)
-    {
-        let mut guard = state.drag_session.write().await;
-        if let Some(ref existing) = *guard {
-            if now_ms.saturating_sub(existing.started_at_ms) > crate::state::DRAG_SESSION_MAX_AGE_MS
-            {
-                tracing::info!(
-                    session_id = %existing.session_id,
-                    "auto-cancelling stale drag session"
-                );
-                let _ = app.emit(
-                    "drag-session-cancelled",
-                    json!({ "session_id": existing.session_id }),
-                );
-                *guard = None;
-            }
-        }
-    }
-
-    let session = crate::state::DragSession {
-        session_id: ulid::Ulid::new().to_string(),
-        source_board_path: board_path,
-        source_window_label,
-        task_id,
-        task_fields,
-        copy_mode,
-        started_at_ms: now_ms,
-    };
-    let session_id = session.session_id.clone();
-    let payload = serde_json::to_value(&session).map_err(|e| e.to_string())?;
-    *state.drag_session.write().await = Some(session);
-    let _ = app.emit("drag-session-active", &payload);
-    Ok(json!({ "session_id": session_id }))
-}
-
-/// Cancel the active drag session.
-///
-/// Called when a drag is cancelled (Escape, pointer released outside windows).
-/// Clears the session and broadcasts `drag-session-cancelled`.
-#[tauri::command]
-pub async fn cancel_drag_session(
-    app: AppHandle,
-    state: State<'_, AppState>,
-) -> Result<Value, String> {
-    let session = state.drag_session.write().await.take();
-    match session {
-        Some(s) => {
-            let _ = app.emit(
-                "drag-session-cancelled",
-                json!({ "session_id": s.session_id }),
-            );
-            Ok(json!({ "cancelled": true, "session_id": s.session_id }))
-        }
-        None => Ok(json!({ "cancelled": false })),
-    }
-}
-
-/// Complete the active drag session by dropping in a target window.
-///
-/// Resolves whether this is a same-board move or cross-board transfer/copy,
-/// then executes the appropriate backend operation. Emits `drag-session-completed`.
-#[tauri::command]
-#[allow(clippy::too_many_arguments)]
-pub async fn complete_drag_session(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    target_board_path: String,
-    target_column: String,
-    drop_index: Option<u64>,
-    before_id: Option<String>,
-    after_id: Option<String>,
-    copy_mode: bool,
-) -> Result<Value, String> {
-    let session = state
-        .drag_session
-        .write()
-        .await
-        .take()
-        .ok_or_else(|| "No active drag session".to_string())?;
-
-    let result = if session.source_board_path == target_board_path {
-        // Same board — use existing task.move via internal dispatch
-        let mut args = serde_json::Map::new();
-        args.insert("id".into(), json!(session.task_id));
-        args.insert("column".into(), json!(target_column));
-        if let Some(idx) = drop_index {
-            args.insert("drop_index".into(), json!(idx));
-        }
-        if let Some(ref bid) = before_id {
-            args.insert("before_id".into(), json!(bid));
-        }
-        if let Some(ref aid) = after_id {
-            args.insert("after_id".into(), json!(aid));
-        }
-        invoke_dispatch(
-            &app,
-            &state,
-            "task.move",
-            Value::Object(args),
-            Some(session.source_board_path.clone()),
-        )
-        .await
-    } else {
-        // Cross-board: transfer or copy
-        cross_board_transfer(
-            &app,
-            &state,
-            &session.source_board_path,
-            &session.task_id,
-            &target_board_path,
-            &target_column,
-            drop_index,
-            copy_mode || session.copy_mode,
-        )
-        .await
-    };
-
-    let _ = app.emit(
-        "drag-session-completed",
-        json!({
-            "session_id": session.session_id,
-            "success": result.is_ok(),
-        }),
-    );
-
-    result
-}
-
-/// Helper: invoke a command internally, reusing the dispatch logic.
-async fn invoke_dispatch(
-    app: &AppHandle,
-    state: &AppState,
-    cmd: &str,
-    args: Value,
-    board_path: Option<String>,
-) -> Result<Value, String> {
-    let cmd_impl = state
-        .command_impls
-        .get(cmd)
-        .ok_or_else(|| format!("No implementation for command: {}", cmd))?;
-
-    let args_map: HashMap<String, Value> = match args {
-        Value::Object(map) => map.into_iter().collect(),
-        _ => HashMap::new(),
-    };
-    let mut ctx =
-        swissarmyhammer_commands::CommandContext::new(cmd.to_string(), vec![], None, args_map);
-    ctx = ctx.with_ui_state(Arc::clone(&state.ui_state));
-
-    let active_handle = resolve_handle(state, board_path).await.ok();
-    if let Some(ref handle) = active_handle {
-        ctx.set_extension(Arc::clone(&handle.ctx));
-    }
-
-    if !cmd_impl.available(&ctx) {
-        return Err(format!("Command not available: {}", cmd));
-    }
-
-    let result = cmd_impl
-        .execute(&ctx)
-        .await
-        .map_err(|e| format!("Command failed: {}", e))?;
-
-    // Flush entity changes and emit events
-    if let Some(ref handle) = active_handle {
-        flush_and_emit_for_handle(app, handle).await;
-    }
-
-    Ok(json!({ "result": result, "undoable": true }))
-}
-
-/// Transfer or copy a task between boards.
-///
-/// 1. Reads the source task from the source board
-/// 2. Creates a new task on the target board with copied fields
-/// 3. If not copy mode, deletes the source task
-#[allow(clippy::too_many_arguments)]
-async fn cross_board_transfer(
-    app: &AppHandle,
-    state: &AppState,
-    source_board_path: &str,
-    task_id: &str,
-    target_board_path: &str,
-    target_column: &str,
-    drop_index: Option<u64>,
-    copy_mode: bool,
-) -> Result<Value, String> {
-    use swissarmyhammer_kanban::types::Ordinal;
-
-    let source_handle = resolve_handle(state, Some(source_board_path.to_string())).await?;
-    let target_handle = resolve_handle(state, Some(target_board_path.to_string())).await?;
-
-    // Read source task
-    let source_ectx = source_handle
-        .ctx
-        .entity_context()
-        .await
-        .map_err(|e| e.to_string())?;
-    let source_task = source_ectx
-        .read("task", task_id)
-        .await
-        .map_err(|e| format!("Failed to read source task: {}", e))?;
-
-    // Compute ordinal in target column
-    let target_ectx = target_handle
-        .ctx
-        .entity_context()
-        .await
-        .map_err(|e| e.to_string())?;
-    let ordinal = {
-        let all_tasks = target_ectx.list("task").await.map_err(|e| e.to_string())?;
-        if let Some(idx) = drop_index {
-            let mut col_tasks: Vec<_> = all_tasks
-                .into_iter()
-                .filter(|t| t.get_str("position_column") == Some(target_column))
-                .collect();
-            col_tasks.sort_by(|a, b| {
-                let oa = a.get_str("position_ordinal").unwrap_or("a0");
-                let ob = b.get_str("position_ordinal").unwrap_or("a0");
-                oa.cmp(ob)
-            });
-            swissarmyhammer_kanban::task_helpers::compute_ordinal_for_drop(&col_tasks, idx as usize)
-        } else {
-            let mut last_ord: Option<Ordinal> = None;
-            for t in &all_tasks {
-                if t.get_str("position_column") == Some(target_column) {
-                    let ord = Ordinal::from_string(t.get_str("position_ordinal").unwrap_or("a0"));
-                    last_ord = Some(match last_ord {
-                        None => ord,
-                        Some(ref o) if ord > *o => ord,
-                        Some(o) => o,
-                    });
-                }
-            }
-            match last_ord {
-                Some(last) => Ordinal::after(&last),
-                None => Ordinal::first(),
-            }
-        }
-    };
-
-    // Create new task entity on target board
-    let new_id = ulid::Ulid::new().to_string();
-    let mut new_task = swissarmyhammer_entity::Entity::new("task", new_id.as_str());
-
-    // Copy fields from source
-    let copy_fields = [
-        "title",
-        "body",
-        "assignees",
-        "depends_on",
-        "priority",
-        "estimate",
-        "due_date",
-        "color",
-    ];
-    for field in copy_fields {
-        if let Some(val) = source_task.get(field) {
-            new_task.set(field, val.clone());
-        }
-    }
-
-    // Strip tags that don't exist in the target board
-    if let Some(tags_val) = source_task.get("tags") {
-        if let Some(tags_arr) = tags_val.as_array() {
-            let target_tags = target_ectx.list("tag").await.unwrap_or_default();
-            let target_tag_names: std::collections::HashSet<String> = target_tags
-                .iter()
-                .filter_map(|t| t.get_str("tag_name").map(|s| s.to_string()))
-                .collect();
-            let filtered: Vec<Value> = tags_arr
-                .iter()
-                .filter(|t| {
-                    t.as_str()
-                        .map(|s| target_tag_names.contains(s))
-                        .unwrap_or(false)
-                })
-                .cloned()
-                .collect();
-            if !filtered.is_empty() {
-                new_task.set("tags", json!(filtered));
-            }
-        }
-    }
-
-    // Set position on target board
-    new_task.set("position_column", json!(target_column));
-    new_task.set("position_ordinal", json!(ordinal.as_str()));
-
-    // Write to target board
-    target_ectx
-        .write(&new_task)
-        .await
-        .map_err(|e| format!("Failed to write target task: {}", e))?;
-
-    // If transfer (not copy), delete source task before flushing either board.
-    // This ensures both writes succeed before any events are emitted, avoiding
-    // a state where the task appears duplicated if the delete fails.
-    if !copy_mode {
-        source_ectx
-            .delete("task", task_id)
-            .await
-            .map_err(|e| format!("Failed to delete source task: {}", e))?;
-    }
-
-    // Flush both boards after all writes succeed
-    flush_and_emit_for_handle(app, &target_handle).await;
-    if !copy_mode {
-        flush_and_emit_for_handle(app, &source_handle).await;
-    }
-
-    Ok(json!({
-        "result": {
-            "id": new_id,
-            "source_id": task_id,
-            "transferred": !copy_mode,
-            "copied": copy_mode,
-        },
-        "undoable": true,
-    }))
-}
-
 /// Flush entity changes for a board handle and emit events.
 async fn flush_and_emit_for_handle(app: &AppHandle, handle: &BoardHandle) {
     let kanban_root = handle.ctx.root().to_path_buf();
     let mut events = crate::watcher::flush_and_emit(&kanban_root, &handle.entity_cache);
+    tracing::info!(event_count = events.len(), path = %kanban_root.display(), "flush_and_emit result");
+    tracing::debug!(event_count = events.len(), path = %kanban_root.display(), "flush_and_emit_for_handle");
     if let Ok(ectx) = handle.ctx.entity_context().await {
         for evt in &mut events {
             match evt {
@@ -1562,6 +1222,10 @@ async fn flush_and_emit_for_handle(app: &AppHandle, handle: &BoardHandle) {
                 crate::watcher::WatchEvent::EntityRemoved { .. } => {}
             }
         }
+
+        // Cascade: recompute aggregate fields that depend on changed entity types
+        let cascade = cascade_aggregate_events(ectx, &events).await;
+        events.extend(cascade);
     }
     {
         let board_path_str = kanban_root.display().to_string();
@@ -1580,6 +1244,63 @@ async fn flush_and_emit_for_handle(app: &AppHandle, handle: &BoardHandle) {
             let _ = app.emit(event_name, &wrapped);
         }
     }
+}
+
+/// Check if any aggregate computed fields depend on the changed entity types,
+/// and if so, recompute them and produce additional `entity-field-changed` events.
+///
+/// Reads `depends_on` from field definitions — no hardcoded logic per command.
+async fn cascade_aggregate_events(
+    ectx: &swissarmyhammer_entity::EntityContext,
+    primary_events: &[crate::watcher::WatchEvent],
+) -> Vec<crate::watcher::WatchEvent> {
+    use std::collections::HashSet;
+
+    // Collect entity types that changed
+    let changed_types: HashSet<&str> = primary_events
+        .iter()
+        .map(|evt| match evt {
+            crate::watcher::WatchEvent::EntityCreated { entity_type, .. }
+            | crate::watcher::WatchEvent::EntityFieldChanged { entity_type, .. }
+            | crate::watcher::WatchEvent::EntityRemoved { entity_type, .. } => entity_type.as_str(),
+        })
+        .collect();
+
+    if changed_types.is_empty() {
+        return vec![];
+    }
+
+    let fields_ctx = ectx.fields();
+    let mut cascade_events = Vec::new();
+
+    // Find entity types with aggregate fields depending on the changed types
+    let mut dependent_types: HashSet<&str> = HashSet::new();
+    for trigger_type in &changed_types {
+        for dep_type in fields_ctx.entity_types_depending_on(trigger_type) {
+            dependent_types.insert(dep_type);
+        }
+    }
+
+    // Re-read dependent entities to trigger recomputation
+    for entity_type in dependent_types {
+        if let Ok(entities) = ectx.list(entity_type).await {
+            for entity in entities {
+                let all_fields: std::collections::HashMap<String, serde_json::Value> = entity
+                    .fields
+                    .into_iter()
+                    .map(|(k, v)| (k.to_string(), v))
+                    .collect();
+                cascade_events.push(crate::watcher::WatchEvent::EntityFieldChanged {
+                    entity_type: entity_type.to_string(),
+                    id: entity.id.to_string(),
+                    changes: vec![],
+                    fields: Some(all_fields),
+                });
+            }
+        }
+    }
+
+    cascade_events
 }
 
 /// A single item in a generic context menu.
@@ -1605,18 +1326,24 @@ pub async fn show_context_menu(
         return Ok(());
     }
 
-    // Store IDs so handle_menu_event can route selections correctly
+    // Store IDs so handle_menu_event can route selections correctly.
+    // Separators are not selectable items — exclude them from the id set.
     {
-        let mut ids = state.context_menu_ids.write().await;
-        ids.clear();
-        for item in &items {
-            ids.insert(item.id.clone());
-        }
+        let ids: std::collections::HashSet<String> = items
+            .iter()
+            .filter(|item| item.id != "__separator__")
+            .map(|item| item.id.clone())
+            .collect();
+        state.ui_state.set_context_menu_ids(ids);
     }
 
     let mut builder = MenuBuilder::new(&app);
     for item in &items {
-        builder = builder.text(&item.id, &item.name);
+        if item.id == "__separator__" {
+            builder = builder.separator();
+        } else {
+            builder = builder.text(&item.id, &item.name);
+        }
     }
     let menu = builder.build().map_err(|e| e.to_string())?;
     menu.popup(window)

@@ -1,7 +1,6 @@
 ---
 name: test
 description: Subagent for running tests and analyzing results. Delegate test execution here to keep verbose test output out of the parent context.
-model: default
 tools: "*"
 max-turns: 25
 version: "{{version}}"

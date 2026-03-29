@@ -17,6 +17,7 @@ vi.mock("@tauri-apps/plugin-log", () => ({
 }));
 
 import { AvatarDisplay } from "./avatar-display";
+import { SchemaProvider } from "@/lib/schema-context";
 import { EntityStoreProvider } from "@/lib/entity-store-context";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
 import { InspectProvider } from "@/lib/inspect-context";
@@ -27,18 +28,24 @@ import type { Entity } from "@/types/kanban";
 function renderDisplay(value: unknown, actors: Entity[] = []) {
   return render(
     <TooltipProvider>
-      <EntityStoreProvider entities={{ actor: actors }}>
-        <EntityFocusProvider>
-          <InspectProvider onInspect={() => {}} onDismiss={() => false}>
-            <AvatarDisplay value={value} />
-          </InspectProvider>
-        </EntityFocusProvider>
-      </EntityStoreProvider>
+      <SchemaProvider>
+        <EntityStoreProvider entities={{ actor: actors }}>
+          <EntityFocusProvider>
+            <InspectProvider onInspect={() => {}} onDismiss={() => false}>
+              <AvatarDisplay value={value} />
+            </InspectProvider>
+          </EntityFocusProvider>
+        </EntityStoreProvider>
+      </SchemaProvider>
     </TooltipProvider>,
   );
 }
 
-function makeActor(id: string, name: string, overrides: Record<string, unknown> = {}): Entity {
+function makeActor(
+  id: string,
+  name: string,
+  overrides: Record<string, unknown> = {},
+): Entity {
   return { entity_type: "actor", id, fields: { name, ...overrides } };
 }
 

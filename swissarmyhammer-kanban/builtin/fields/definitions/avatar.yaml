@@ -4,6 +4,7 @@ description: Profile image (data URI or URL)
 type:
   kind: text
   single_line: true
+icon: user
 editor: none
 display: avatar
 section: body

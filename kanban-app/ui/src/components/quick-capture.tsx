@@ -14,10 +14,14 @@ import { EntityIcon } from "@/components/entity-icon";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
+import { EditorView } from "@codemirror/view";
+import { getCM } from "@replit/codemirror-vim";
 import { Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { FieldPlaceholderEditor } from "@/components/fields/field-placeholder";
+import { TextEditor } from "@/components/fields/text-editor";
 import { BoardSelector } from "@/components/board-selector";
+import { useUIState } from "@/lib/ui-state-context";
+import { dispatchCommand } from "@/lib/command-scope";
 import appIcon from "@/assets/app-icon-32.png";
 import type { OpenBoard, BoardDataResponse, Entity } from "@/types/kanban";
 
@@ -57,7 +61,8 @@ export function QuickCapture() {
   }, []);
 
   // Derive a minimal board entity from the selected OpenBoard for BoardSelector.
-  // The board entity always has entity_type "board" and id "board".
+  // The "board" entity_type and "name" field are structural constants of the
+  // kanban data model — every board has exactly one entity with these values.
   const selected = boards.find((b) => b.path === selectedPath);
   const boardEntity: Entity | undefined = selected
     ? { entity_type: "board", id: "board", fields: { name: selected.name } }
@@ -87,7 +92,9 @@ export function QuickCapture() {
   // -------------------------------------------------------------------------
   useEffect(() => {
     const unlisteners = [
-      // Board name/field changes → reload board list (names come from list_open_boards)
+      // The "board" check is an entity-type filter for refresh, not a field name —
+      // we only reload the board list when a board entity changes, ignoring
+      // task/column/swimlane changes that don't affect the selector.
       listen<EntityFieldChangedEvent>("entity-field-changed", (event) => {
         if (event.payload.entity_type === "board") loadBoards();
       }),
@@ -103,19 +110,12 @@ export function QuickCapture() {
     };
   }, [loadBoards]);
 
-  // Window-level Escape fallback for when CM6 doesn't have focus
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !(e.target as HTMLElement)?.closest?.(".cm-editor")) {
-        getCurrentWindow().hide();
-      }
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, []);
-
   const hideWindow = useCallback(() => {
-    getCurrentWindow().hide();
+    dispatchCommand({
+      id: "app.dismiss",
+      name: "Dismiss Quick Capture",
+      execute: () => getCurrentWindow().hide(),
+    });
   }, []);
 
   const handleSubmit = useCallback(
@@ -124,11 +124,10 @@ export function QuickCapture() {
 
       try {
         const active = boards.find((b) => b.is_active);
-        if (active?.path !== selectedPath) {
-          await invoke("set_active_board", { path: selectedPath });
-        }
 
-        const boardData = await invoke<BoardDataResponse>("get_board_data");
+        const boardData = await invoke<BoardDataResponse>("get_board_data", {
+          boardPath: selectedPath,
+        });
         const columns = [...boardData.columns].sort((a, b) => {
           const orderA = typeof a.order === "number" ? a.order : 0;
           const orderB = typeof b.order === "number" ? b.order : 0;
@@ -137,16 +136,30 @@ export function QuickCapture() {
         const firstColumnId = columns[0]?.id;
         if (!firstColumnId) return;
 
-        await invoke("dispatch_command", {
-          cmd: "task.add",
-          args: { column: firstColumnId, title: text.trim() },
-          boardPath: selectedPath,
+        await dispatchCommand({
+          id: "task.add",
+          name: "Quick Capture Add Task",
+          execute: () =>
+            invoke("dispatch_command", {
+              cmd: "task.add",
+              args: { column: firstColumnId, title: text.trim() },
+              boardPath: selectedPath,
+            }),
         });
 
         localStorage.setItem(STORAGE_KEY, selectedPath);
 
+        // If we switched to a different board for the add, restore the previous active
         if (active && active.path !== selectedPath) {
-          await invoke("set_active_board", { path: active.path }).catch(() => {});
+          await dispatchCommand({
+            id: "file.switchBoard",
+            name: "Restore Active Board",
+            execute: () =>
+              invoke("dispatch_command", {
+                cmd: "file.switchBoard",
+                args: { path: active.path },
+              }),
+          }).catch(() => {});
         }
       } catch (err) {
         console.error("Quick capture failed:", err);
@@ -160,6 +173,50 @@ export function QuickCapture() {
   const handleCancel = useCallback(() => {
     hideWindow();
   }, [hideWindow]);
+
+  // Window-level keyboard handler for Escape (dismiss) and Enter (submit).
+  // In vim mode, we distinguish insert vs normal:
+  //   insert Escape → let vim handle (exits to normal)
+  //   normal Escape → dismiss window
+  //   normal Enter  → submit task
+  const { keymap_mode: keymapMode } = useUIState();
+  const handleSubmitRef = useRef(handleSubmit);
+  handleSubmitRef.current = handleSubmit;
+  const hideWindowRef = useRef(hideWindow);
+  hideWindowRef.current = hideWindow;
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const cmEl = (e.target as HTMLElement)?.closest?.(".cm-editor");
+
+      if (cmEl && keymapMode === "vim") {
+        const view = EditorView.findFromDOM(cmEl as HTMLElement);
+        if (view) {
+          const cm = getCM(view);
+          if (cm?.state?.vim?.insertMode) return;
+        }
+        if (e.key === "Escape") {
+          e.preventDefault();
+          e.stopPropagation();
+          hideWindowRef.current();
+        } else if (e.key === "Enter") {
+          e.preventDefault();
+          e.stopPropagation();
+          const text =
+            EditorView.findFromDOM(cmEl as HTMLElement)?.state.doc.toString() ??
+            "";
+          if (text.trim()) handleSubmitRef.current(text);
+        }
+        return;
+      }
+
+      if (e.key === "Escape") {
+        hideWindowRef.current();
+      }
+    };
+    window.addEventListener("keydown", handler, true);
+    return () => window.removeEventListener("keydown", handler, true);
+  }, [keymapMode]);
 
   // Auto-resize the Tauri window to match card content height (max 400px).
   // The outer wrapper has p-2 (8px each side), so window height = card + 16.
@@ -178,12 +235,23 @@ export function QuickCapture() {
   if (!ready) return null;
 
   return (
-    <div className="h-screen w-screen flex items-start justify-center p-2" style={{ background: "transparent" }}>
-      <div ref={cardRef} className="w-full rounded-xl bg-background border border-border shadow-xl animate-in fade-in zoom-in-95 duration-150">
+    <div
+      className="h-screen w-screen flex items-start justify-center p-2"
+      style={{ background: "transparent" }}
+    >
+      <div
+        ref={cardRef}
+        className="w-full rounded-xl bg-background border border-border shadow-xl animate-in fade-in zoom-in-95 duration-150"
+      >
         {/* Header — draggable, shows icon and keyboard hints */}
-        <div className="flex items-center gap-2 px-3 py-1.5 bg-muted/30 rounded-t-xl" data-tauri-drag-region>
+        <div
+          className="flex items-center gap-2 px-3 py-1.5 bg-muted/30 rounded-t-xl"
+          data-tauri-drag-region
+        >
           <img src={appIcon} alt="" className="h-4 w-4 shrink-0" />
-          <span className="text-xs font-medium text-muted-foreground/70">Quick Capture</span>
+          <span className="text-xs font-medium text-muted-foreground/70">
+            Quick Capture
+          </span>
           <span className="ml-auto text-[10px] text-muted-foreground/40">
             enter to add &middot; esc to dismiss
           </span>
@@ -192,7 +260,7 @@ export function QuickCapture() {
         {/* Editor + Add button */}
         <div className="px-3 py-3 flex items-center gap-2">
           <div className="flex-1 min-w-0">
-            <FieldPlaceholderEditor
+            <TextEditor
               key={editorKey}
               value=""
               onCommit={() => {}}
@@ -205,7 +273,9 @@ export function QuickCapture() {
           <Button
             size="icon"
             className="h-7 w-7 shrink-0"
-            onClick={() => { if (draft.trim()) handleSubmit(draft); }}
+            onClick={() => {
+              if (draft.trim()) handleSubmit(draft);
+            }}
             disabled={!draft.trim()}
           >
             <Plus className="h-4 w-4" />
@@ -214,7 +284,10 @@ export function QuickCapture() {
 
         {/* Divider + Board selector — always shown */}
         <div className="border-t border-border/50 px-3 py-1.5 flex items-center gap-2 bg-muted/20">
-          <EntityIcon entityType="board" className="h-3 w-3 shrink-0 text-muted-foreground/50" />
+          <EntityIcon
+            entityType="board"
+            className="h-3 w-3 shrink-0 text-muted-foreground/50"
+          />
           <BoardSelector
             boards={boards}
             selectedPath={selectedPath}

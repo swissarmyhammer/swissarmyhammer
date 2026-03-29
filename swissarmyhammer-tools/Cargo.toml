@@ -23,8 +23,11 @@ swissarmyhammer-config = { path = "../swissarmyhammer-config" }
 swissarmyhammer-git = { path = "../swissarmyhammer-git" }
 swissarmyhammer-kanban = { path = "../swissarmyhammer-kanban" }
 swissarmyhammer-skills = { path = "../swissarmyhammer-skills" }
+swissarmyhammer-templating = { path = "../swissarmyhammer-templating" }
 swissarmyhammer-agents = { path = "../swissarmyhammer-agents" }
 swissarmyhammer-shell = { path = "../swissarmyhammer-shell" }
+mirdan = { path = "../mirdan" }
+tempfile = { workspace = true }
 swissarmyhammer-web = { path = "../swissarmyhammer-web" }
 swissarmyhammer-code-context = { path = "../swissarmyhammer-code-context" }
 swissarmyhammer-treesitter = { path = "../swissarmyhammer-treesitter" }

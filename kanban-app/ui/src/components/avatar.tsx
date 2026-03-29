@@ -7,13 +7,12 @@
  * Wrapped in FocusScope so right-click and double-click open the inspector.
  */
 
-import { useMemo, useRef } from "react";
 import { FocusScope } from "@/components/focus-scope";
 import { useEntityStore } from "@/lib/entity-store-context";
-import { useInspect } from "@/lib/inspect-context";
+import { useEntityCommands } from "@/lib/entity-commands";
+import { useSchema } from "@/lib/schema-context";
 import { moniker } from "@/lib/moniker";
 import { deriveActorColor } from "@/lib/actor-colors";
-import type { CommandDef } from "@/lib/command-scope";
 import { getStr } from "@/types/kanban";
 
 const SIZES = {
@@ -39,29 +38,23 @@ function initials(name: string): string {
 
 export function Avatar({ actorId, size = "md", className }: AvatarProps) {
   const { getEntity } = useEntityStore();
-  const inspectEntity = useInspect();
+  const { mentionableTypes } = useSchema();
   const actor = getEntity("actor", actorId);
 
-  const name = actor ? getStr(actor, "name") || actorId : actorId;
-  const color = actor ? getStr(actor, "color") || deriveActorColor(actorId) : deriveActorColor(actorId);
+  // Resolve the display name field from the actor schema (mention_display_field)
+  const nameField =
+    mentionableTypes.find((mt) => mt.entityType === "actor")?.displayField ??
+    "name";
+  const name = actor ? getStr(actor, nameField) || actorId : actorId;
+  const color = actor
+    ? getStr(actor, "color") || deriveActorColor(actorId)
+    : deriveActorColor(actorId);
   const avatar = actor ? getStr(actor, "avatar") : undefined;
 
   const sizeClass = SIZES[size];
   const scopeMoniker = moniker("actor", actorId);
 
-  // Keep a ref so execute always uses the latest moniker
-  const monikerRef = useRef(scopeMoniker);
-  monikerRef.current = scopeMoniker;
-
-  const commands = useMemo<CommandDef[]>(() => [
-    {
-      id: "entity.inspect",
-      name: "Inspect Actor",
-      target: scopeMoniker,
-      contextMenu: true,
-      execute: () => inspectEntity(monikerRef.current),
-    },
-  ], [scopeMoniker, inspectEntity]);
+  const commands = useEntityCommands("actor", actorId, actor ?? undefined);
 
   const inner = avatar ? (
     <img
@@ -84,7 +77,11 @@ export function Avatar({ actorId, size = "md", className }: AvatarProps) {
   );
 
   return (
-    <FocusScope moniker={scopeMoniker} commands={commands} className="inline-block">
+    <FocusScope
+      moniker={scopeMoniker}
+      commands={commands}
+      className="inline-block"
+    >
       {inner}
     </FocusScope>
   );

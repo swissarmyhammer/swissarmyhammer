@@ -28,7 +28,11 @@ vi.mock("@/lib/command-scope", () => ({
   useActiveBoardPath: () => "/board/a/.kanban",
 }));
 
-import { DragSessionProvider, useDragSession, type DragSession } from "./drag-session-context";
+import {
+  DragSessionProvider,
+  useDragSession,
+  type DragSession,
+} from "./drag-session-context";
 
 /* ---- Helpers ---- */
 
@@ -120,35 +124,43 @@ describe("DragSessionProvider", () => {
     expect(result.current.isSource).toBe(false);
   });
 
-  it("startSession invokes start_drag_session with correct params", async () => {
-    mockInvoke.mockResolvedValue({ session_id: "new-sess" });
+  it("startSession invokes dispatch_command drag.start with correct params", async () => {
+    mockInvoke.mockResolvedValue({
+      result: { DragStart: { session_id: "new-sess" } },
+      undoable: false,
+    });
     const { result } = renderHook(() => useDragSession(), { wrapper });
 
     await act(async () => {
       await result.current.startSession("task-42", { title: "My task" }, false);
     });
 
-    expect(mockInvoke).toHaveBeenCalledWith("start_drag_session", {
-      taskId: "task-42",
-      taskFields: { title: "My task" },
-      boardPath: "/board/a/.kanban",
-      sourceWindowLabel: "main",
-      copyMode: false,
+    expect(mockInvoke).toHaveBeenCalledWith("dispatch_command", {
+      cmd: "drag.start",
+      args: {
+        taskId: "task-42",
+        taskFields: { title: "My task" },
+        boardPath: "/board/a/.kanban",
+        sourceWindowLabel: "main",
+        copyMode: false,
+      },
     });
   });
 
-  it("cancelSession invokes cancel_drag_session", async () => {
-    mockInvoke.mockResolvedValue({ cancelled: true });
+  it("cancelSession invokes dispatch_command with drag.cancel", async () => {
+    mockInvoke.mockResolvedValue({ result: null, undoable: false });
     const { result } = renderHook(() => useDragSession(), { wrapper });
 
     await act(async () => {
       await result.current.cancelSession();
     });
 
-    expect(mockInvoke).toHaveBeenCalledWith("cancel_drag_session");
+    expect(mockInvoke).toHaveBeenCalledWith("dispatch_command", {
+      cmd: "drag.cancel",
+    });
   });
 
-  it("completeSession invokes complete_drag_session with options", async () => {
+  it("completeSession invokes dispatch_command drag.complete with options", async () => {
     mockInvoke.mockResolvedValue({ result: {} });
     const { result } = renderHook(() => useDragSession(), { wrapper });
 
@@ -160,13 +172,16 @@ describe("DragSessionProvider", () => {
       });
     });
 
-    expect(mockInvoke).toHaveBeenCalledWith("complete_drag_session", {
-      targetBoardPath: "/board/a/.kanban",
-      targetColumn: "done",
-      dropIndex: 3,
-      beforeId: "task-5",
-      afterId: null,
-      copyMode: true,
+    expect(mockInvoke).toHaveBeenCalledWith("dispatch_command", {
+      cmd: "drag.complete",
+      args: {
+        targetBoardPath: "/board/a/.kanban",
+        targetColumn: "done",
+        dropIndex: 3,
+        beforeId: "task-5",
+        afterId: null,
+        copyMode: true,
+      },
     });
   });
 
@@ -178,13 +193,16 @@ describe("DragSessionProvider", () => {
       await result.current.completeSession("todo");
     });
 
-    expect(mockInvoke).toHaveBeenCalledWith("complete_drag_session", {
-      targetBoardPath: "/board/a/.kanban",
-      targetColumn: "todo",
-      dropIndex: null,
-      beforeId: null,
-      afterId: null,
-      copyMode: false,
+    expect(mockInvoke).toHaveBeenCalledWith("dispatch_command", {
+      cmd: "drag.complete",
+      args: {
+        targetBoardPath: "/board/a/.kanban",
+        targetColumn: "todo",
+        dropIndex: null,
+        beforeId: null,
+        afterId: null,
+        copyMode: false,
+      },
     });
   });
 

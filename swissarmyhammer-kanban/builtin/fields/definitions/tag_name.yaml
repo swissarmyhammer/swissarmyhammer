@@ -4,6 +4,7 @@ description: Tag identifier
 type:
   kind: text
   single_line: true
+icon: tag
 editor: markdown
 display: text
 sort: alphanumeric

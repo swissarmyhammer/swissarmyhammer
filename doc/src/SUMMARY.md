@@ -20,3 +20,4 @@
 - [SwissArmyHammer CLI](reference/sah-cli.md)
 - [AVP CLI](reference/avp-cli.md)
 - [Mirdan CLI](reference/mirdan-cli.md)
+- [ShellTool CLI](reference/shelltool-cli.md)

@@ -100,7 +100,9 @@ impl Execute<KanbanContext, KanbanError> for AddTask {
                     let first = columns
                         .iter()
                         .min_by_key(|c| c.get("order").and_then(|v| v.as_u64()).unwrap_or(0))
-                        .expect("board must have at least one column");
+                        .ok_or_else(|| {
+                            KanbanError::parse("board has no columns — cannot add task")
+                        })?;
                     first.id.to_string()
                 }
             };
@@ -155,8 +157,10 @@ impl Execute<KanbanContext, KanbanError> for AddTask {
 
             ectx.write(&entity).await?;
 
-            // Auto-create Tag entities for any #tag patterns in description
-            let tags = crate::task_helpers::task_tags(&entity);
+            // Auto-create Tag entities for any #tag patterns in description.
+            // Parse directly from body — the computed `tags` field isn't populated yet.
+            let body = entity.get_str("body").unwrap_or("");
+            let tags = crate::tag_parser::parse_tags(body);
             for tag_name in &tags {
                 if !tag_name_exists_entity(ectx, tag_name).await {
                     let color = auto_color::auto_color(tag_name).to_string();
@@ -234,6 +238,79 @@ mod tests {
         assert_eq!(result["title"], "Test task");
         assert_eq!(result["description"], "A test task");
         assert_eq!(result["position"]["column"], "todo");
+    }
+
+    #[tokio::test]
+    async fn test_add_task_places_in_first_column_by_default() {
+        // The default board has todo/doing/done columns (in that order).
+        // Adding a task without specifying a column should place it in "todo".
+        let (_temp, ctx) = setup().await;
+
+        let cmd = AddTask::new("My new task");
+        let result = cmd.execute(&ctx).await.into_result().unwrap();
+
+        assert_eq!(
+            result["position"]["column"], "todo",
+            "task should be placed in first column (todo) when no column specified"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_add_task_with_explicit_column_uses_that_column() {
+        // When an explicit column is provided, the task should land there, not in todo.
+        let (_temp, ctx) = setup().await;
+
+        let mut cmd = AddTask::new("Task in doing");
+        cmd.column = Some("doing".to_string());
+        let result = cmd.execute(&ctx).await.into_result().unwrap();
+
+        assert_eq!(
+            result["position"]["column"], "doing",
+            "task should be placed in the explicitly specified column"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_add_task_on_board_with_no_columns_returns_error() {
+        // Set up a board without going through InitBoard (which creates default columns).
+        // Instead, create the directory structure and a board entity manually,
+        // leaving the columns directory empty.
+        use crate::board::InitBoard;
+        use crate::column::DeleteColumn;
+
+        let temp = tempfile::TempDir::new().unwrap();
+        let kanban_dir = temp.path().join(".kanban");
+        let ctx = KanbanContext::new(&kanban_dir);
+
+        // Initialize the board (creates todo/doing/done columns)
+        InitBoard::new("Empty Board")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        // Delete all three default columns
+        for col_id in &["todo", "doing", "done"] {
+            DeleteColumn::new(*col_id)
+                .execute(&ctx)
+                .await
+                .into_result()
+                .unwrap();
+        }
+
+        // Now attempt to add a task — should return an error, not panic
+        let cmd = AddTask::new("Task on empty board");
+        let result = cmd.execute(&ctx).await.into_result();
+
+        assert!(
+            result.is_err(),
+            "adding a task to a board with no columns should return an error"
+        );
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("no columns"),
+            "error message should mention missing columns, got: {err}"
+        );
     }
 
     #[tokio::test]

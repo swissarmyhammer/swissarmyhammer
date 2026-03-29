@@ -17,8 +17,8 @@ use crate::column::{AddColumn, DeleteColumn, GetColumn, ListColumns, UpdateColum
 use crate::swimlane::{AddSwimlane, DeleteSwimlane, GetSwimlane, ListSwimlanes, UpdateSwimlane};
 use crate::tag::{AddTag, DeleteTag, GetTag, ListTags, UpdateTag};
 use crate::task::{
-    AddTask, AssignTask, CompleteTask, DeleteTask, GetTask, ListTasks, MoveTask, NextTask, TagTask,
-    UnassignTask, UntagTask, UpdateTask,
+    AddTask, ArchiveTask, AssignTask, CompleteTask, DeleteTask, GetTask, ListArchived, ListTasks,
+    MoveTask, NextTask, TagTask, UnarchiveTask, UnassignTask, UntagTask, UpdateTask,
 };
 
 /// All kanban operations — the canonical list used for schema generation and CLI.
@@ -59,6 +59,9 @@ static KANBAN_OPERATIONS: LazyLock<Vec<&'static dyn Operation>> = LazyLock::new(
         Box::leak(Box::new(TagTask::new("", ""))) as &dyn Operation,
         Box::leak(Box::new(UntagTask::new("", ""))) as &dyn Operation,
         Box::leak(Box::new(ListTasks::new())) as &dyn Operation,
+        Box::leak(Box::new(ArchiveTask::new(""))) as &dyn Operation,
+        Box::leak(Box::new(UnarchiveTask::new(""))) as &dyn Operation,
+        Box::leak(Box::new(ListArchived)) as &dyn Operation,
         // Tag
         Box::leak(Box::new(AddTag::new(""))) as &dyn Operation,
         Box::leak(Box::new(GetTag::new(""))) as &dyn Operation,

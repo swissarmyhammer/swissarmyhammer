@@ -5,6 +5,7 @@ type:
   kind: reference
   entity: swimlane
   multiple: false
+icon: rows
 editor: select
 display: badge
 width: 120

@@ -84,15 +84,30 @@ pub fn builtin_actor_entities() -> Vec<(&'static str, &'static str)> {
 pub fn kanban_compute_engine() -> ComputeEngine {
     let mut engine = ComputeEngine::new();
 
-    // parse-body-tags: extract #tag patterns from the body field
-    engine.register(
+    // parse-body-tags: extract #tag patterns from the body field,
+    // filtered to only include tags that actually exist as tag entities.
+    engine.register_aggregate(
         "parse-body-tags",
-        Box::new(|fields| {
-            let body = fields.get("body").and_then(|v| v.as_str()).unwrap_or("");
-            let tags = tag_parser::parse_tags(body);
-            let value =
-                serde_json::Value::Array(tags.into_iter().map(serde_json::Value::String).collect());
-            Box::pin(async move { value })
+        Box::new(|fields, query| {
+            let body = fields
+                .get("body")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            Box::pin(async move {
+                let parsed = tag_parser::parse_tags(&body);
+                let existing_tags = query("tag").await;
+                let known: std::collections::HashSet<&str> = existing_tags
+                    .iter()
+                    .filter_map(|t| t.get("tag_name").and_then(|v| v.as_str()))
+                    .collect();
+                let filtered: Vec<serde_json::Value> = parsed
+                    .into_iter()
+                    .filter(|slug| known.contains(slug.as_str()))
+                    .map(serde_json::Value::String)
+                    .collect();
+                serde_json::Value::Array(filtered)
+            })
         }),
     );
 
@@ -340,6 +355,8 @@ mod tests {
 
         assert_eq!(entity.name, "task");
         assert_eq!(entity.body_field, Some("body".into()));
+        assert_eq!(entity.mention_prefix, Some("^".to_string()));
+        assert_eq!(entity.mention_display_field, Some("title".into()));
         assert!(entity.fields.iter().any(|f| f == "title"));
         assert!(entity.fields.iter().any(|f| f == "position_column"));
         assert!(entity.fields.iter().any(|f| f == "position_swimlane"));
@@ -426,6 +443,33 @@ mod tests {
         assert!(engine.has("attachment-file-size"));
     }
 
+    /// Helper: build a query function that returns known tags.
+    fn tag_query(
+        tag_names: Vec<&'static str>,
+    ) -> std::sync::Arc<swissarmyhammer_fields::EntityQueryFn> {
+        std::sync::Arc::new(Box::new(move |entity_type: &str| {
+            let names = tag_names.clone();
+            let entity_type = entity_type.to_string();
+            Box::pin(async move {
+                if entity_type == "tag" {
+                    names
+                        .iter()
+                        .map(|n| {
+                            let mut m = HashMap::new();
+                            m.insert(
+                                "tag_name".to_string(),
+                                serde_json::Value::String(n.to_string()),
+                            );
+                            m
+                        })
+                        .collect()
+                } else {
+                    Vec::new()
+                }
+            })
+        }))
+    }
+
     #[tokio::test]
     async fn parse_body_tags_derivation() {
         let engine = kanban_compute_engine();
@@ -435,12 +479,16 @@ mod tests {
             description: None,
             type_: swissarmyhammer_fields::FieldType::Computed {
                 derive: "parse-body-tags".to_string(),
+                depends_on: vec![],
+                entity: None,
+                commit_display_names: false,
             },
             default: None,
             editor: None,
             display: None,
             sort: None,
             width: None,
+            icon: None,
             section: None,
             validate: None,
         };
@@ -451,9 +499,47 @@ mod tests {
             serde_json::json!("Fix the #bug in #login module"),
         );
 
-        let result = engine.derive(&field, &fields, None).await.unwrap();
+        let query = tag_query(vec!["bug", "login"]);
+        let result = engine.derive(&field, &fields, Some(&query)).await.unwrap();
         let tags: Vec<String> = serde_json::from_value(result).unwrap();
         assert_eq!(tags, vec!["bug", "login"]);
+    }
+
+    #[tokio::test]
+    async fn parse_body_tags_filters_nonexistent() {
+        let engine = kanban_compute_engine();
+        let field = swissarmyhammer_fields::FieldDef {
+            id: swissarmyhammer_fields::FieldDefId::new(),
+            name: "tags".into(),
+            description: None,
+            type_: swissarmyhammer_fields::FieldType::Computed {
+                derive: "parse-body-tags".to_string(),
+                depends_on: vec![],
+                entity: None,
+                commit_display_names: false,
+            },
+            default: None,
+            editor: None,
+            display: None,
+            sort: None,
+            width: None,
+            icon: None,
+            section: None,
+            validate: None,
+        };
+
+        let mut fields = HashMap::new();
+        fields.insert(
+            "body".to_string(),
+            serde_json::json!("Fix #bug, and #tag, not real #valid here"),
+        );
+
+        // "bug," and "tag," are parsed as-is (with comma) — neither matches "bug" or "valid".
+        // Only #valid (followed by space) parses cleanly and matches the known tag.
+        let query = tag_query(vec!["valid"]);
+        let result = engine.derive(&field, &fields, Some(&query)).await.unwrap();
+        let tags: Vec<String> = serde_json::from_value(result).unwrap();
+        assert_eq!(tags, vec!["valid"]);
     }
 
     #[tokio::test]
@@ -465,12 +551,16 @@ mod tests {
             description: None,
             type_: swissarmyhammer_fields::FieldType::Computed {
                 derive: "parse-body-progress".to_string(),
+                depends_on: vec![],
+                entity: None,
+                commit_display_names: false,
             },
             default: None,
             editor: None,
             display: None,
             sort: None,
             width: None,
+            icon: None,
             section: None,
             validate: None,
         };
@@ -496,7 +586,7 @@ mod tests {
 
         for (filename, yaml) in &defs {
             let field: swissarmyhammer_fields::FieldDef = serde_yaml_ng::from_str(yaml).unwrap();
-            if let swissarmyhammer_fields::FieldType::Computed { derive } = &field.type_ {
+            if let swissarmyhammer_fields::FieldType::Computed { derive, .. } = &field.type_ {
                 assert!(
                     engine.has(derive),
                     "Builtin computed field '{}' (file: {}) references derive '{}' which is not registered in kanban_compute_engine()",
@@ -515,12 +605,16 @@ mod tests {
             description: None,
             type_: swissarmyhammer_fields::FieldType::Computed {
                 derive: "parse-body-progress".to_string(),
+                depends_on: vec![],
+                entity: None,
+                commit_display_names: false,
             },
             default: None,
             editor: None,
             display: None,
             sort: None,
             width: None,
+            icon: None,
             section: None,
             validate: None,
         };

@@ -3,7 +3,7 @@ name: commit
 description: Git commit workflow. Use this skill whenever the user says "commit", "save changes", "check in", or otherwise wants to commit code. Always use this skill instead of running git commands directly.
 metadata:
   author: "swissarmyhammer"
-  version: "0.10.1"
+  version: "0.11.0"
 ---
 
 ## Project Detection
@@ -14,15 +14,7 @@ To discover project types, build commands, and language-specific guidelines for 
 {"op": "detect projects"}
 ```
 
-This will scan the directory tree and return:
-- All detected project types (Rust, Node.js, Python, Go, Java, C#, CMake, Makefile, Flutter, PHP)
-- Project locations as relative paths
-- Workspace/monorepo membership
-- Language-specific guidelines for testing, building, formatting, and linting
-
 **Call this early in your session** to understand the project structure before making changes. The guidelines returned are authoritative — follow them for test commands, build commands, and formatting.
-
-** Fix the root cause, not the symptoms **
 
 ## Code Quality
 
@@ -80,7 +72,6 @@ Create a git commit with a well-crafted conventional commit message.
 - You MUST NOT commit scratch files that you generated, only commit source that you want in the project permanently
 - You MUST NOT miss files on the commit
   - You MUST commit all the source files modified on the current branch
-  - You MUST always include `.kanban/` directory changes — this contains project tracking data (tasks, tags, views, activity) that must be committed alongside code changes
   - You MUST check for and create if needed a sensible project specific .gitignore
 
 ## Process

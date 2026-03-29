@@ -37,11 +37,9 @@ export function findMentionsInText(
       const idx = text.indexOf(needle, pos);
       if (idx === -1) break;
 
-      const beforeOk =
-        idx === 0 || !/\w/.test(text[idx - 1]);
+      const beforeOk = idx === 0 || !/\w/.test(text[idx - 1]);
       const end = idx + needle.length;
-      const afterOk =
-        end >= text.length || !/[\w-]/u.test(text[end]);
+      const afterOk = end >= text.length || !/[\w-]/u.test(text[end]);
 
       if (beforeOk && afterOk) {
         hits.push({ index: idx, length: needle.length, slug });

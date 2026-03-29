@@ -4,7 +4,7 @@ use crate::auto_color;
 use crate::context::KanbanContext;
 use crate::error::{KanbanError, Result};
 use crate::tag::tag_name_exists_entity;
-use crate::task_helpers::{task_entity_to_json, task_tags};
+use crate::task_helpers::task_entity_to_json;
 use crate::types::{ActorId, SwimlaneId, TaskId};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -121,8 +121,10 @@ impl Execute<KanbanContext, KanbanError> for UpdateTask {
 
             ectx.write(&entity).await?;
 
-            // Auto-create Tag entities for any new #tag patterns in description
-            let tags = task_tags(&entity);
+            // Auto-create Tag entities for any new #tag patterns in description.
+            // Parse directly from body — the computed `tags` field may be stale.
+            let body = entity.get_str("body").unwrap_or("");
+            let tags = crate::tag_parser::parse_tags(body);
             for tag_name in &tags {
                 if !tag_name_exists_entity(ectx, tag_name).await {
                     let color = auto_color::auto_color(tag_name).to_string();
@@ -231,5 +233,47 @@ mod tests {
             .unwrap();
 
         assert_eq!(result["description"], "New description");
+    }
+
+    #[tokio::test]
+    async fn test_update_task_multiple_dependencies() {
+        let (_temp, ctx) = setup().await;
+
+        // Create three tasks — the third will depend on the first two.
+        let a = AddTask::new("Task A")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let b = AddTask::new("Task B")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let c = AddTask::new("Task C")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        let id_a = a["id"].as_str().unwrap();
+        let id_b = b["id"].as_str().unwrap();
+        let id_c = c["id"].as_str().unwrap();
+
+        // Set two dependencies on task C.
+        let result = UpdateTask::new(id_c)
+            .with_depends_on(vec![TaskId::from_string(id_a), TaskId::from_string(id_b)])
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        let deps = result["depends_on"]
+            .as_array()
+            .expect("depends_on should be an array");
+        assert_eq!(deps.len(), 2, "should have exactly 2 dependencies");
+        let dep_strs: Vec<&str> = deps.iter().filter_map(|v| v.as_str()).collect();
+        assert!(dep_strs.contains(&id_a), "should contain task A");
+        assert!(dep_strs.contains(&id_b), "should contain task B");
     }
 }

@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "shelltool": {
+      "args": [
+        "serve"
+      ],
+      "command": "shelltool"
+    }
+  }
+}

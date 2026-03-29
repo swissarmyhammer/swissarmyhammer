@@ -1,6 +1,10 @@
 import { useCallback, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { useAvailableCommands, dispatchCommand, type CommandDef } from "@/lib/command-scope";
+import {
+  useAvailableCommands,
+  dispatchCommand,
+  type CommandDef,
+} from "@/lib/command-scope";
 
 /**
  * Module-level map of pending context menu handlers.
@@ -24,7 +28,9 @@ function handlerKey(cmd: CommandDef): string {
  * @param key - The handler key selected from the native context menu.
  * @returns true if the command was found and dispatched.
  */
-export async function dispatchContextMenuCommand(key: string): Promise<boolean> {
+export async function dispatchContextMenuCommand(
+  key: string,
+): Promise<boolean> {
   const cmd = pendingHandlers.get(key);
   if (!cmd) return false;
   await dispatchCommand(cmd);
@@ -56,13 +62,22 @@ export function useContextMenu(): (e: React.MouseEvent) => void {
 
       if (contextCommands.length === 0) return;
 
-      // Register handlers for the current context menu invocation
+      // Register handlers for the current context menu invocation.
+      // Group consecutive items by depth and insert separator sentinels between groups
+      // so the native menu visually separates commands from different scope levels.
       pendingHandlers.clear();
-      const items = contextCommands.map((c) => {
+      const items: Array<{ id: string; name: string }> = [];
+      let lastDepth: number | null = null;
+
+      for (const c of contextCommands) {
+        if (lastDepth !== null && c.depth !== lastDepth) {
+          items.push({ id: "__separator__", name: "" });
+        }
         const key = handlerKey(c.command);
         pendingHandlers.set(key, c.command);
-        return { id: key, name: c.command.name };
-      });
+        items.push({ id: key, name: c.command.name });
+        lastDepth = c.depth;
+      }
 
       invoke("show_context_menu", { items }).catch(console.error);
     },

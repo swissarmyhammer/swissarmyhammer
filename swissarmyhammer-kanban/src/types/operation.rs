@@ -23,6 +23,8 @@ pub enum Verb {
     Assign,
     Unassign,
     Rename,
+    Archive,
+    Unarchive,
 }
 
 impl Verb {
@@ -43,6 +45,8 @@ impl Verb {
             Self::Assign => "assign",
             Self::Unassign => "unassign",
             Self::Rename => "rename",
+            Self::Archive => "archive",
+            Self::Unarchive => "unarchive",
         }
     }
 
@@ -63,6 +67,8 @@ impl Verb {
             "assign" => Some(Self::Assign),
             "unassign" | "remove_assignee" => Some(Self::Unassign),
             "rename" => Some(Self::Rename),
+            "archive" => Some(Self::Archive),
+            "unarchive" | "restore" => Some(Self::Unarchive),
             _ => None,
         }
     }
@@ -94,6 +100,7 @@ pub enum Noun {
     Attachment,
     Attachments,
     Activity,
+    Archived,
 }
 
 impl Noun {
@@ -116,6 +123,7 @@ impl Noun {
             Self::Attachment => "attachment",
             Self::Attachments => "attachments",
             Self::Activity => "activity",
+            Self::Archived => "archived",
         }
     }
 
@@ -138,6 +146,7 @@ impl Noun {
             "attachment" => Some(Self::Attachment),
             "attachments" => Some(Self::Attachments),
             "activity" => Some(Self::Activity),
+            "archived" => Some(Self::Archived),
             _ => None,
         }
     }

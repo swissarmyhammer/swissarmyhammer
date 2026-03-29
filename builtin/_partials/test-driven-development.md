@@ -6,7 +6,7 @@ partial: true
 
 ## Test Driven Development
 
-Write tests first, then implementation. This ensures code is testable and requirements are clear.
+Write tests first, then implementation. TDD, RED, GREEN, REFACTOR.
 
 ### TDD Cycle
 

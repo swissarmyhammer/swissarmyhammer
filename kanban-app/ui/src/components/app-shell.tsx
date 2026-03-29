@@ -1,11 +1,30 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { CommandScopeProvider, useExecuteCommand, resolveCommand, dispatchCommand, type CommandDef } from "@/lib/command-scope";
-import { useFocusedScope } from "@/lib/entity-focus-context";
-import { useKeymap, type KeymapMode } from "@/lib/keymap-context";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import {
+  CommandScopeProvider,
+  useExecuteCommand,
+  useActiveBoardPath,
+  resolveCommand,
+  dispatchCommand,
+  type CommandDef,
+} from "@/lib/command-scope";
+import { useFocusedScope, useEntityFocus } from "@/lib/entity-focus-context";
+import { useUIState } from "@/lib/ui-state-context";
 import { useAppMode } from "@/lib/app-mode-context";
-import { createKeyHandler } from "@/lib/keybindings";
+import {
+  createKeyHandler,
+  extractScopeBindings,
+  type KeymapMode,
+} from "@/lib/keybindings";
 import { CommandPalette } from "@/components/command-palette";
 import { pathStem } from "@/components/board-selector";
 import { syncMenuToNative } from "@/lib/menu-sync";
@@ -47,7 +66,11 @@ function KeybindingHandler({ mode }: { mode: KeymapMode }) {
   }, []);
 
   useEffect(() => {
-    const handler = createKeyHandler(mode, executeCommand);
+    // Pass scope bindings so command `keys` from the focused scope (inspector,
+    // grid, board nav) are resolved through the same single key handler.
+    const handler = createKeyHandler(mode, executeCommand, () =>
+      extractScopeBindings(focusedScopeRef.current, mode),
+    );
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
   }, [mode, executeCommand]);
@@ -90,12 +113,12 @@ function KeybindingHandler({ mode }: { mode: KeymapMode }) {
  * Top-level shell that wires global commands, keybindings, and the command
  * palette around the application content.
  *
- * Must be rendered inside KeymapProvider, AppModeProvider, and
+ * Must be rendered inside UIStateProvider, AppModeProvider, and
  * UndoStackProvider (it reads from all three). It provides a
  * CommandScopeProvider to its children.
  *
  * Provider nesting order:
- *   KeymapProvider > AppModeProvider > UndoStackProvider > AppShell > children
+ *   UIStateProvider > AppModeProvider > UndoStackProvider > AppShell > children
  */
 interface AppShellProps {
   children: ReactNode;
@@ -105,14 +128,31 @@ interface AppShellProps {
   onSwitchBoard?: (path: string) => void;
 }
 
-export function AppShell({ children, openBoards, onSwitchBoard }: AppShellProps) {
+export function AppShell({
+  children,
+  openBoards,
+  onSwitchBoard,
+}: AppShellProps) {
   const [paletteOpen, setPaletteOpen] = useState(false);
-  const [paletteMode, setPaletteMode] = useState<"command" | "search">("command");
+  const [paletteMode, setPaletteMode] = useState<"command" | "search">(
+    "command",
+  );
   const paletteOpenRef = useRef(false);
   paletteOpenRef.current = paletteOpen;
-  const { mode: keymapMode, setMode: setKeymapMode } = useKeymap();
+  const { keymap_mode: keymapModeRaw } = useUIState();
+  // Normalize to a valid KeymapMode, defaulting to "cua" for unknown values
+  const keymapMode: KeymapMode =
+    keymapModeRaw === "vim" || keymapModeRaw === "emacs"
+      ? keymapModeRaw
+      : "cua";
   const { setMode } = useAppMode();
   const dismissInspector = useInspectDismiss();
+  const activeBoardPath = useActiveBoardPath();
+  const activeBoardPathRef = useRef(activeBoardPath);
+  activeBoardPathRef.current = activeBoardPath;
+  const { broadcastNavCommand } = useEntityFocus();
+  const broadcastRef = useRef(broadcastNavCommand);
+  broadcastRef.current = broadcastNavCommand;
 
   /** Global commands available throughout the app. */
   const globalCommands: CommandDef[] = useMemo(
@@ -140,7 +180,7 @@ export function AppShell({ children, openBoards, onSwitchBoard }: AppShellProps)
       {
         id: "app.undo",
         name: "Undo",
-        keys: { vim: "u", cua: "Mod+Z", emacs: "C-/" },
+        keys: { vim: "u", cua: "Mod+Z", emacs: "Ctrl+/" },
         // No execute -- dispatches to Rust via dispatch_command
       },
       {
@@ -197,20 +237,38 @@ export function AppShell({ children, openBoards, onSwitchBoard }: AppShellProps)
       {
         id: "settings.keymap.vim",
         name: "Keymap Vim",
-        menuPlacement: { menu: "settings", group: 0, order: 1, radioGroup: "keymap", checked: keymapMode === "vim" },
-        execute: () => setKeymapMode("vim"),
+        menuPlacement: {
+          menu: "settings",
+          group: 0,
+          order: 1,
+          radioGroup: "keymap",
+          checked: keymapMode === "vim",
+        },
+        // No execute — dispatches to Rust via dispatch_command which mutates UIState
       },
       {
         id: "settings.keymap.cua",
         name: "Keymap CUA",
-        menuPlacement: { menu: "settings", group: 0, order: 0, radioGroup: "keymap", checked: keymapMode === "cua" },
-        execute: () => setKeymapMode("cua"),
+        menuPlacement: {
+          menu: "settings",
+          group: 0,
+          order: 0,
+          radioGroup: "keymap",
+          checked: keymapMode === "cua",
+        },
+        // No execute — dispatches to Rust via dispatch_command which mutates UIState
       },
       {
         id: "settings.keymap.emacs",
         name: "Keymap Emacs",
-        menuPlacement: { menu: "settings", group: 0, order: 2, radioGroup: "keymap", checked: keymapMode === "emacs" },
-        execute: () => setKeymapMode("emacs"),
+        menuPlacement: {
+          menu: "settings",
+          group: 0,
+          order: 2,
+          radioGroup: "keymap",
+          checked: keymapMode === "emacs",
+        },
+        // No execute — dispatches to Rust via dispatch_command which mutates UIState
       },
       {
         id: "app.resetWindows",
@@ -241,10 +299,21 @@ export function AppShell({ children, openBoards, onSwitchBoard }: AppShellProps)
       {
         id: "file.closeBoard",
         name: "Close Board",
-        keys: { cua: "Mod+W", vim: "Mod+W" },
+        keys: { cua: "Mod+w", vim: "Mod+w" },
         menuPlacement: { menu: "file", group: 0, order: 2 },
         execute: async () => {
-          await invoke("close_board");
+          // activeBoardPath may be undefined if the board failed to load (trashed entry).
+          // Fall back to the is_active board from the openBoards list.
+          const path =
+            activeBoardPathRef.current ??
+            openBoards?.find((b) => b.is_active)?.path;
+          if (path) {
+            await invoke("dispatch_command", {
+              cmd: "file.closeBoard",
+              args: { path },
+              windowLabel: getCurrentWindow().label,
+            });
+          }
         },
       },
       {
@@ -264,6 +333,45 @@ export function AppShell({ children, openBoards, onSwitchBoard }: AppShellProps)
           // Tauri about dialog -- placeholder for now
         },
       },
+      // --- Universal navigation commands ---
+      // These broadcast to all registered claimWhen predicates.
+      // Each FocusScope with a matching predicate can pull focus.
+      {
+        id: "nav.up",
+        name: "Navigate Up",
+        keys: { vim: "k", cua: "ArrowUp", emacs: "Ctrl+p" },
+        execute: () => { broadcastRef.current("nav.up"); },
+      },
+      {
+        id: "nav.down",
+        name: "Navigate Down",
+        keys: { vim: "j", cua: "ArrowDown", emacs: "Ctrl+n" },
+        execute: () => { broadcastRef.current("nav.down"); },
+      },
+      {
+        id: "nav.left",
+        name: "Navigate Left",
+        keys: { vim: "h", cua: "ArrowLeft", emacs: "Ctrl+b" },
+        execute: () => { broadcastRef.current("nav.left"); },
+      },
+      {
+        id: "nav.right",
+        name: "Navigate Right",
+        keys: { vim: "l", cua: "ArrowRight", emacs: "Ctrl+f" },
+        execute: () => { broadcastRef.current("nav.right"); },
+      },
+      {
+        id: "nav.first",
+        name: "Navigate to First",
+        keys: { cua: "Home", emacs: "Alt+<" },
+        execute: () => { broadcastRef.current("nav.first"); },
+      },
+      {
+        id: "nav.last",
+        name: "Navigate to Last",
+        keys: { vim: "Shift+G", cua: "End", emacs: "Alt+>" },
+        execute: () => { broadcastRef.current("nav.last"); },
+      },
       // Dynamic board switch commands — one per open board.
       // Uses index as suffix to avoid filesystem paths in command IDs.
       ...(openBoards ?? []).map((b, i) => ({
@@ -272,7 +380,7 @@ export function AppShell({ children, openBoards, onSwitchBoard }: AppShellProps)
         execute: () => onSwitchBoard?.(b.path),
       })),
     ],
-    [setMode, setKeymapMode, keymapMode, dismissInspector, openBoards, onSwitchBoard],
+    [setMode, keymapMode, dismissInspector, openBoards, onSwitchBoard],
   );
 
   /** Close the command palette and return to normal mode. */
@@ -290,7 +398,12 @@ export function AppShell({ children, openBoards, onSwitchBoard }: AppShellProps)
     <CommandScopeProvider commands={globalCommands}>
       <KeybindingHandler mode={keymapMode} />
       {children}
-      <CommandPalette open={paletteOpen} onClose={closePalette} mode={paletteMode} onSwitchBoard={onSwitchBoard} />
+      <CommandPalette
+        open={paletteOpen}
+        onClose={closePalette}
+        mode={paletteMode}
+        onSwitchBoard={onSwitchBoard}
+      />
     </CommandScopeProvider>
   );
 }

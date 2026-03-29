@@ -362,24 +362,28 @@ mod tests {
     fn task_entity_def() -> EntityDef {
         EntityDef {
             name: "task".into(),
+            icon: None,
             body_field: Some("body".into()),
             fields: vec!["title".into(), "body".into()],
             validate: None,
             mention_prefix: None,
             mention_display_field: None,
             search_display_field: None,
+            commands: vec![],
         }
     }
 
     fn tag_entity_def() -> EntityDef {
         EntityDef {
             name: "tag".into(),
+            icon: None,
             body_field: None,
             fields: vec!["tag_name".into(), "color".into()],
             validate: None,
             mention_prefix: None,
             mention_display_field: None,
             search_display_field: None,
+            commands: vec![],
         }
     }
 

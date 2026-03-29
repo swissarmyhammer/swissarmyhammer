@@ -158,12 +158,14 @@ mod tests {
     fn test_schema() -> EntityDef {
         EntityDef {
             name: "test".into(),
+            icon: None,
             body_field: Some("body".into()),
             fields: vec!["title".into(), "body".into()],
             validate: None,
             mention_prefix: None,
             mention_display_field: None,
             search_display_field: None,
+            commands: vec![],
         }
     }
 

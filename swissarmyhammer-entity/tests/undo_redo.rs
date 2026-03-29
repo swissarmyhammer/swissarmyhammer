@@ -454,8 +454,8 @@ async fn undo_create_after_modification_trashes_modified_entity() {
     ctx.undo(&create_ulid).await.unwrap();
     assert!(ctx.read("tag", "t1").await.is_err());
 
-    // Verify the trash contains the modified version
-    let trash_dir = dir.path().join(".trash").join("tags");
+    // Verify the trash contains the modified version (new layout: {type}s/.trash/)
+    let trash_dir = dir.path().join("tags").join(".trash");
     assert!(trash_dir.join("t1.yaml").exists());
 }
 
@@ -475,8 +475,8 @@ async fn undo_delete_missing_trash_files_returns_error_or_empty() {
 
     let delete_ulid = ctx.delete("tag", "t1").await.unwrap().unwrap();
 
-    // Manually remove both trash files
-    let trash_dir = dir.path().join(".trash").join("tags");
+    // Manually remove both trash files (new layout: {type}s/.trash/)
+    let trash_dir = dir.path().join("tags").join(".trash");
     let _ = tokio::fs::remove_file(trash_dir.join("t1.yaml")).await;
     let _ = tokio::fs::remove_file(trash_dir.join("t1.jsonl")).await;
 
@@ -504,8 +504,8 @@ async fn undo_delete_missing_trash_data_file_returns_restore_error() {
     let delete_ulid = ctx.delete("tag", "t1").await.unwrap().unwrap();
 
     // Remove only the data file — leave the changelog so undo_single can
-    // find the original entry and reach restore_entity_files
-    let trash_dir = dir.path().join(".trash").join("tags");
+    // find the original entry and reach restore_entity_files (new layout: {type}s/.trash/)
+    let trash_dir = dir.path().join("tags").join(".trash");
     let _ = tokio::fs::remove_file(trash_dir.join("t1.yaml")).await;
 
     let result = ctx.undo(&delete_ulid).await;
@@ -1514,4 +1514,204 @@ async fn undo_of_redo_entry_returns_error() {
         matches!(err, EntityError::UnsupportedUndoOp { ref op } if op == "redo"),
         "expected UnsupportedUndoOp with op='redo', got: {err:?}"
     );
+}
+
+// =========================================================================
+// Archive / unarchive undo-redo integration tests
+// =========================================================================
+
+/// Archive an entity, undo the archive — entity reappears in list().
+#[tokio::test]
+async fn test_undo_archive() {
+    let dir = TempDir::new().unwrap();
+    let ctx = EntityContext::new(dir.path(), test_fields_context());
+
+    let mut tag = Entity::new("tag", "bug");
+    tag.set("tag_name", json!("Bug"));
+    tag.set("color", json!("#ff0000"));
+    ctx.write(&tag).await.unwrap();
+
+    // Verify entity is live
+    assert_eq!(ctx.list("tag").await.unwrap().len(), 1);
+
+    // Archive it
+    let archive_ulid = ctx.archive("tag", "bug").await.unwrap().unwrap();
+
+    // Verify it's archived (not in live list)
+    assert_eq!(ctx.list("tag").await.unwrap().len(), 0);
+    assert!(ctx.read("tag", "bug").await.is_err());
+
+    // Undo the archive — entity should come back to live
+    ctx.undo(&archive_ulid).await.unwrap();
+
+    assert_eq!(ctx.list("tag").await.unwrap().len(), 1);
+    let restored = ctx.read("tag", "bug").await.unwrap();
+    assert_eq!(restored.get_str("tag_name"), Some("Bug"));
+    assert_eq!(restored.get_str("color"), Some("#ff0000"));
+}
+
+/// Archive, undo, redo — entity is archived again.
+#[tokio::test]
+async fn test_redo_archive() {
+    let dir = TempDir::new().unwrap();
+    let ctx = EntityContext::new(dir.path(), test_fields_context());
+
+    let mut tag = Entity::new("tag", "bug");
+    tag.set("tag_name", json!("Bug"));
+    tag.set("color", json!("#ff0000"));
+    ctx.write(&tag).await.unwrap();
+
+    // Archive it
+    let archive_ulid = ctx.archive("tag", "bug").await.unwrap().unwrap();
+    assert_eq!(ctx.list("tag").await.unwrap().len(), 0);
+
+    // Undo the archive — entity is live again
+    ctx.undo(&archive_ulid).await.unwrap();
+    assert_eq!(ctx.list("tag").await.unwrap().len(), 1);
+
+    // Redo the archive — entity should be archived again
+    ctx.redo(&archive_ulid).await.unwrap();
+
+    assert_eq!(ctx.list("tag").await.unwrap().len(), 0);
+    assert!(ctx.read("tag", "bug").await.is_err());
+
+    // Should be in archive dir
+    let archive_dir = dir.path().join("tags").join(".archive");
+    assert!(archive_dir.join("bug.yaml").exists());
+}
+
+/// Archive, unarchive, undo unarchive — entity goes back to archive.
+#[tokio::test]
+async fn test_undo_unarchive() {
+    let dir = TempDir::new().unwrap();
+    let ctx = EntityContext::new(dir.path(), test_fields_context());
+
+    let mut tag = Entity::new("tag", "bug");
+    tag.set("tag_name", json!("Bug"));
+    ctx.write(&tag).await.unwrap();
+
+    // Archive it
+    ctx.archive("tag", "bug").await.unwrap();
+    assert_eq!(ctx.list("tag").await.unwrap().len(), 0);
+
+    // Unarchive it
+    let unarchive_ulid = ctx.unarchive("tag", "bug").await.unwrap().unwrap();
+    assert_eq!(ctx.list("tag").await.unwrap().len(), 1);
+
+    // Undo the unarchive — entity should go back to archive
+    ctx.undo(&unarchive_ulid).await.unwrap();
+
+    assert_eq!(ctx.list("tag").await.unwrap().len(), 0);
+    assert!(ctx.read("tag", "bug").await.is_err());
+
+    // Should be back in archive dir
+    let archive_dir = dir.path().join("tags").join(".archive");
+    assert!(archive_dir.join("bug.yaml").exists());
+}
+
+/// Full cycle: archive → undo → redo → undo — entity is live at the end.
+#[tokio::test]
+async fn test_archive_undo_redo_cycle() {
+    let dir = TempDir::new().unwrap();
+    let ctx = EntityContext::new(dir.path(), test_fields_context());
+
+    let mut tag = Entity::new("tag", "bug");
+    tag.set("tag_name", json!("Bug"));
+    tag.set("color", json!("#ff0000"));
+    ctx.write(&tag).await.unwrap();
+
+    // Archive
+    let archive_ulid = ctx.archive("tag", "bug").await.unwrap().unwrap();
+    assert_eq!(ctx.list("tag").await.unwrap().len(), 0);
+
+    // Undo archive — entity is live
+    ctx.undo(&archive_ulid).await.unwrap();
+    assert_eq!(ctx.list("tag").await.unwrap().len(), 1);
+
+    // Redo archive — entity is archived
+    ctx.redo(&archive_ulid).await.unwrap();
+    assert_eq!(ctx.list("tag").await.unwrap().len(), 0);
+
+    // Undo archive again — entity is live at the end
+    ctx.undo(&archive_ulid).await.unwrap();
+    assert_eq!(ctx.list("tag").await.unwrap().len(), 1);
+
+    let restored = ctx.read("tag", "bug").await.unwrap();
+    assert_eq!(restored.get_str("tag_name"), Some("Bug"));
+    assert_eq!(restored.get_str("color"), Some("#ff0000"));
+}
+
+/// Verify changelog entries have correct op strings and undone_id/redone_id references.
+#[tokio::test]
+async fn test_archive_changelog_has_undone_id() {
+    let dir = TempDir::new().unwrap();
+    let ctx = EntityContext::new(dir.path(), test_fields_context());
+
+    let mut tag = Entity::new("tag", "bug");
+    tag.set("tag_name", json!("Bug"));
+    ctx.write(&tag).await.unwrap();
+
+    // Archive
+    let archive_ulid = ctx.archive("tag", "bug").await.unwrap().unwrap();
+
+    // Undo the archive
+    let undo_ulid = ctx.undo(&archive_ulid).await.unwrap().unwrap();
+
+    // Read changelog (entity is now live again)
+    let log = ctx.read_changelog("tag", "bug").await.unwrap();
+
+    // Find the undo entry
+    let undo_entry = log.iter().find(|e| e.id == undo_ulid).unwrap();
+    assert_eq!(undo_entry.op, "undo");
+    assert_eq!(undo_entry.undone_id.as_deref(), Some(archive_ulid.as_str()));
+    assert_eq!(undo_entry.entity_type, "tag");
+    assert_eq!(undo_entry.entity_id, "bug");
+
+    // Now redo the archive
+    let redo_ulid = ctx.redo(&archive_ulid).await.unwrap().unwrap();
+
+    // Changelog is now in archive dir
+    let archive_log = dir.path().join("tags").join(".archive").join("bug.jsonl");
+    let content = tokio::fs::read_to_string(&archive_log).await.unwrap();
+    // The redo entry should be there with correct redone_id
+    assert!(
+        content.contains("\"redo\""),
+        "changelog should contain redo op"
+    );
+    assert!(
+        content.contains(archive_ulid.as_str()),
+        "redo entry should reference original archive ulid"
+    );
+    let _ = redo_ulid; // used for existence proof
+}
+
+/// Redo of an unarchive: archive → unarchive → undo unarchive → redo unarchive.
+/// After redo, the entity should be live again.
+#[tokio::test]
+async fn test_redo_unarchive() {
+    let dir = TempDir::new().unwrap();
+    let ctx = EntityContext::new(dir.path(), test_fields_context());
+
+    let mut tag = Entity::new("tag", "bug");
+    tag.set("tag_name", json!("Bug"));
+    ctx.write(&tag).await.unwrap();
+
+    // Archive
+    ctx.archive("tag", "bug").await.unwrap();
+    assert_eq!(ctx.list("tag").await.unwrap().len(), 0);
+
+    // Unarchive
+    let unarchive_ulid = ctx.unarchive("tag", "bug").await.unwrap().unwrap();
+    assert_eq!(ctx.list("tag").await.unwrap().len(), 1);
+
+    // Undo unarchive — back to archive
+    ctx.undo(&unarchive_ulid).await.unwrap();
+    assert_eq!(ctx.list("tag").await.unwrap().len(), 0);
+
+    // Redo unarchive — entity should be live again
+    ctx.redo(&unarchive_ulid).await.unwrap();
+    assert_eq!(ctx.list("tag").await.unwrap().len(), 1);
+
+    let restored = ctx.read("tag", "bug").await.unwrap();
+    assert_eq!(restored.get_str("tag_name"), Some("Bug"));
 }

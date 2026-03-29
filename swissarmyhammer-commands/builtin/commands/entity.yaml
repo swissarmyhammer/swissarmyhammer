@@ -75,6 +75,26 @@
     - name: moniker
       from: target
 
+- id: entity.archive
+  name: Archive
+  scope: "entity:task"
+  undoable: true
+  context_menu: true
+  keys:
+    vim: dd
+  params:
+    - name: moniker
+      from: target
+
+- id: entity.unarchive
+  name: Unarchive
+  scope: "entity:task"
+  undoable: true
+  context_menu: true
+  params:
+    - name: moniker
+      from: target
+
 - id: tag.update
   name: Update Tag
   scope: "entity:tag"

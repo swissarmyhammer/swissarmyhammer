@@ -4,6 +4,7 @@ description: MIME type derived from attachment path
 type:
   kind: computed
   derive: attachment-mime-type
+icon: file-type
 editor: none
 display: text
 width: 120

@@ -1,0 +1,8 @@
+---
+assignees:
+- claude-code
+position_column: done
+position_ordinal: ffffffffffffe180
+title: 'NIT: DisplayProps and FieldDisplayProps are diverging interfaces for the same concept'
+---
+**Files:** `kanban-app/ui/src/components/fields/displays/text-display.tsx:3-14` and `kanban-app/ui/src/components/fields/field.tsx:35-48`\n\n**What:** There are two interfaces describing display component props:\n- `DisplayProps` in `text-display.tsx` (used by display components: TextDisplay, BadgeListDisplay, NumberDisplay, etc.)\n- `FieldDisplayProps` in `field.tsx` (used by the display registry and registration adapters)\n\nBoth now have `focused?`, `pillIndex?`, and `onPillCount?` fields. But `DisplayProps` types `entity` as `Entity` (required), while `FieldDisplayProps` types it as `Entity | undefined` (optional, via `entity?`). `DisplayProps` also lacks `onCommit` which `FieldDisplayProps` has.\n\n**Why this matters:** Display components that import `DisplayProps` from `text-display` get a slightly different contract than what the registry promises via `FieldDisplayProps`. The registration adapters in `registrations/` bridge the gap by destructuring only the fields they need, but this is fragile. As pill nav props were added to both independently, they could drift further.\n\n**Suggestion:** Unify into a single interface. Either make `DisplayProps` extend `FieldDisplayProps` (picking the subset), or eliminate `DisplayProps` entirely and have all display components use `FieldDisplayProps` directly." #review-finding

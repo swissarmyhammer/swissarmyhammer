@@ -7,6 +7,7 @@ use rmcp::{
 };
 use swissarmyhammer_tools::mcp::unified_server::{start_mcp_server, McpServerMode};
 
+#[allow(clippy::field_reassign_with_default)] // field init syntax breaks with #[non_exhaustive] in newer rmcp
 #[tokio::test]
 #[test_log::test]
 async fn test_http_mcp_server_rmcp_client_final() {
@@ -17,14 +18,13 @@ async fn test_http_mcp_server_rmcp_client_final() {
     let server_url = server.url();
 
     // Use the same pattern as from_uri implementation
-    let transport = StreamableHttpClientTransport::with_client(
-        reqwest::Client::default(),
-        rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig {
-            uri: server_url.into(),
-            auth_header: None,
-            ..Default::default()
-        },
-    );
+    let transport = StreamableHttpClientTransport::with_client(reqwest::Client::default(), {
+        let mut config =
+            rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig::default();
+        config.uri = server_url.into();
+        config.auth_header = None;
+        config
+    });
 
     let client_info = ClientInfo::new(
         ClientCapabilities::default(),

@@ -142,11 +142,21 @@ impl EntityContext {
 
     /// Get the trash directory for an entity type.
     ///
-    /// Maps entity type → `{root}/.trash/{type}s/` (e.g. "task" → ".trash/tasks/").
+    /// Maps entity type → `{root}/{type}s/.trash/` (e.g. "task" → "tasks/.trash/").
+    ///
+    /// Each entity type's directory is self-contained: live, trashed, and archived
+    /// files all live under the same parent (`{type}s/`).
     pub fn trash_dir(&self, entity_type: impl AsRef<str>) -> PathBuf {
-        self.root
-            .join(".trash")
-            .join(format!("{}s", entity_type.as_ref()))
+        self.entity_dir(entity_type).join(".trash")
+    }
+
+    /// Get the archive directory for an entity type.
+    ///
+    /// Maps entity type → `{root}/{type}s/.archive/` (e.g. "task" → "tasks/.archive/").
+    /// Archived entities are excluded from `list()` but remain accessible via
+    /// `list_archived()` and `read_archived()`.
+    pub fn archive_dir(&self, entity_type: impl AsRef<str>) -> PathBuf {
+        self.entity_dir(entity_type).join(".archive")
     }
 
     /// Read a single entity by type and ID.
@@ -249,7 +259,7 @@ impl EntityContext {
     ///
     /// Logs a "delete" changelog entry with all fields as `Removed`,
     /// then moves the data file and changelog to the trash directory
-    /// (`{root}/.trash/{type}s/`). The entity is no longer listed or
+    /// (`{root}/{type}s/.trash/`). The entity is no longer listed or
     /// readable, but its files are preserved for recovery.
     ///
     /// Returns `Ok(Some(ulid))` when a delete changelog entry was logged,
@@ -391,6 +401,14 @@ impl EntityContext {
             }
             "delete" => {
                 self.undo_delete(entity_type, entity_id, &original_entry)
+                    .await
+            }
+            "archive" => {
+                self.undo_archive(entity_type, entity_id, &original_entry)
+                    .await
+            }
+            "unarchive" => {
+                self.undo_unarchive(entity_type, entity_id, &original_entry)
                     .await
             }
             other => Err(EntityError::UnsupportedUndoOp {
@@ -603,6 +621,192 @@ impl EntityContext {
         Ok(Some(undo_ulid))
     }
 
+    /// Undo an "archive" operation by restoring the entity from the archive.
+    ///
+    /// Restores the entity files from the archive directory back to live storage,
+    /// then appends an "undo" changelog entry referencing the original archive.
+    /// This is structurally identical to `undo_delete()` but targets `.archive/`
+    /// instead of `.trash/`.
+    async fn undo_archive(
+        &self,
+        entity_type: &str,
+        entity_id: &str,
+        original_entry: &ChangeEntry,
+    ) -> Result<Option<ChangeEntryId>> {
+        // Restore files from archive to live storage
+        self.restore_from_archive(entity_type, entity_id).await?;
+
+        let def = self.entity_def(entity_type)?;
+        let dir = self.entity_dir(entity_type);
+        let path = io::entity_file_path(&dir, entity_id, def);
+
+        // Read the restored entity to record the restoration as Set changes
+        let entity = io::read_entity(&path, entity_type, entity_id, def).await?;
+        let mut changes: Vec<_> = entity
+            .fields
+            .iter()
+            .map(|(k, v)| (k.clone(), FieldChange::Set { value: v.clone() }))
+            .collect();
+        changes.sort_by(|a, b| a.0.cmp(&b.0));
+
+        // Append undo entry to the restored changelog
+        let undo_entry = ChangeEntry::new(entity_type, entity_id, "undo", changes)
+            .with_undone_id(original_entry.id.clone());
+        let log_path = path.with_extension("jsonl");
+        changelog::append_changelog(&log_path, &undo_entry).await?;
+
+        let undo_ulid = undo_entry.id.clone();
+        self.changelog_index.write().await.insert(
+            undo_ulid.clone(),
+            (EntityTypeName::from(entity_type), EntityId::from(entity_id)),
+        );
+
+        Ok(Some(undo_ulid))
+    }
+
+    /// Undo an "unarchive" operation by moving the entity back to the archive.
+    ///
+    /// Appends an "undo" changelog entry referencing the original unarchive,
+    /// then moves the entity files back to the archive directory. This is
+    /// structurally identical to `undo_create()` but targets `.archive/`
+    /// instead of `.trash/`.
+    async fn undo_unarchive(
+        &self,
+        entity_type: &str,
+        entity_id: &str,
+        original_entry: &ChangeEntry,
+    ) -> Result<Option<ChangeEntryId>> {
+        let def = self.entity_def(entity_type)?;
+        let dir = self.entity_dir(entity_type);
+        let path = io::entity_file_path(&dir, entity_id, def);
+
+        // Read current state to record the removal
+        let entity = io::read_entity(&path, entity_type, entity_id, def).await?;
+        let mut changes: Vec<_> = entity
+            .fields
+            .iter()
+            .map(|(k, v)| {
+                (
+                    k.clone(),
+                    FieldChange::Removed {
+                        old_value: v.clone(),
+                    },
+                )
+            })
+            .collect();
+        changes.sort_by(|a, b| a.0.cmp(&b.0));
+
+        // Append undo changelog entry before archiving (so it goes with the files)
+        let undo_entry = ChangeEntry::new(entity_type, entity_id, "undo", changes)
+            .with_undone_id(original_entry.id.clone());
+        let log_path = path.with_extension("jsonl");
+        changelog::append_changelog(&log_path, &undo_entry).await?;
+
+        let undo_ulid = undo_entry.id.clone();
+        self.changelog_index.write().await.insert(
+            undo_ulid.clone(),
+            (EntityTypeName::from(entity_type), EntityId::from(entity_id)),
+        );
+
+        // Move files to archive
+        let archive = self.archive_dir(entity_type);
+        io::trash_entity_files(&path, &archive).await?;
+
+        Ok(Some(undo_ulid))
+    }
+
+    /// Redo an "archive" operation by moving the entity back to the archive.
+    ///
+    /// The entity was originally archived, then undo restored it. Redo archives
+    /// it again (same as undo-of-unarchive), reading the current entity to build
+    /// Removed changes and appending a "redo" changelog entry before archiving.
+    async fn redo_archive(
+        &self,
+        entity_type: &str,
+        entity_id: &str,
+        original_entry: &ChangeEntry,
+    ) -> Result<Option<ChangeEntryId>> {
+        let def = self.entity_def(entity_type)?;
+        let dir = self.entity_dir(entity_type);
+        let path = io::entity_file_path(&dir, entity_id, def);
+
+        // Read current state to record the archival
+        let entity = io::read_entity(&path, entity_type, entity_id, def).await?;
+        let mut changes: Vec<_> = entity
+            .fields
+            .iter()
+            .map(|(k, v)| {
+                (
+                    k.clone(),
+                    FieldChange::Removed {
+                        old_value: v.clone(),
+                    },
+                )
+            })
+            .collect();
+        changes.sort_by(|a, b| a.0.cmp(&b.0));
+
+        // Append redo changelog entry before archiving (so it goes with the files)
+        let redo_entry = ChangeEntry::new(entity_type, entity_id, "redo", changes)
+            .with_redone_id(original_entry.id.clone());
+        let log_path = path.with_extension("jsonl");
+        changelog::append_changelog(&log_path, &redo_entry).await?;
+
+        let redo_ulid = redo_entry.id.clone();
+        self.changelog_index.write().await.insert(
+            redo_ulid.clone(),
+            (EntityTypeName::from(entity_type), EntityId::from(entity_id)),
+        );
+
+        // Move files to archive
+        let archive = self.archive_dir(entity_type);
+        io::trash_entity_files(&path, &archive).await?;
+
+        Ok(Some(redo_ulid))
+    }
+
+    /// Redo an "unarchive" operation by restoring the entity from the archive.
+    ///
+    /// The entity was originally unarchived, then undo re-archived it. Redo
+    /// restores it from the archive (same as undo-of-archive), reads the
+    /// restored entity to build Set changes, and appends a "redo" changelog entry.
+    async fn redo_unarchive(
+        &self,
+        entity_type: &str,
+        entity_id: &str,
+        original_entry: &ChangeEntry,
+    ) -> Result<Option<ChangeEntryId>> {
+        // Restore files from archive to live storage
+        self.restore_from_archive(entity_type, entity_id).await?;
+
+        let def = self.entity_def(entity_type)?;
+        let dir = self.entity_dir(entity_type);
+        let path = io::entity_file_path(&dir, entity_id, def);
+
+        // Read the restored entity to record the restoration as Set changes
+        let entity = io::read_entity(&path, entity_type, entity_id, def).await?;
+        let mut changes: Vec<_> = entity
+            .fields
+            .iter()
+            .map(|(k, v)| (k.clone(), FieldChange::Set { value: v.clone() }))
+            .collect();
+        changes.sort_by(|a, b| a.0.cmp(&b.0));
+
+        // Append redo entry to the restored changelog
+        let redo_entry = ChangeEntry::new(entity_type, entity_id, "redo", changes)
+            .with_redone_id(original_entry.id.clone());
+        let log_path = path.with_extension("jsonl");
+        changelog::append_changelog(&log_path, &redo_entry).await?;
+
+        let redo_ulid = redo_entry.id.clone();
+        self.changelog_index.write().await.insert(
+            redo_ulid.clone(),
+            (EntityTypeName::from(entity_type), EntityId::from(entity_id)),
+        );
+
+        Ok(Some(redo_ulid))
+    }
+
     /// Redo a previously undone changelog operation by its original ULID.
     ///
     /// Re-applies the forward changes from the original entry. For "update"
@@ -673,6 +877,14 @@ impl EntityContext {
             }
             "delete" => {
                 self.redo_delete(entity_type, entity_id, &original_entry)
+                    .await
+            }
+            "archive" => {
+                self.redo_archive(entity_type, entity_id, &original_entry)
+                    .await
+            }
+            "unarchive" => {
+                self.redo_unarchive(entity_type, entity_id, &original_entry)
                     .await
             }
             other => Err(EntityError::UnsupportedUndoOp {
@@ -893,7 +1105,7 @@ impl EntityContext {
     /// Restore an entity from trash back to live storage.
     ///
     /// Moves the entity data file and changelog from the trash directory
-    /// (`{root}/.trash/{type}s/`) back to the live storage directory.
+    /// (`{root}/{type}s/.trash/`) back to the live storage directory.
     /// This is the inverse of the trash operation performed by `delete()`.
     pub async fn restore_from_trash(
         &self,
@@ -907,6 +1119,246 @@ impl EntityContext {
         let path = io::entity_file_path(&dir, id, def);
         let trash = self.trash_dir(entity_type);
         io::restore_entity_files(&path, &trash).await
+    }
+
+    /// Restore an entity from the archive back to live storage.
+    ///
+    /// Moves the entity data file and changelog from the archive directory
+    /// (`{root}/{type}s/.archive/`) back to the live storage directory.
+    /// This is the inverse of the archive operation performed by `archive()`.
+    pub async fn restore_from_archive(
+        &self,
+        entity_type: impl AsRef<str>,
+        id: impl AsRef<str>,
+    ) -> Result<()> {
+        let entity_type = entity_type.as_ref();
+        let id = id.as_ref();
+        let def = self.entity_def(entity_type)?;
+        let dir = self.entity_dir(entity_type);
+        let path = io::entity_file_path(&dir, id, def);
+        let archive = self.archive_dir(entity_type);
+        io::restore_entity_files(&path, &archive).await
+    }
+
+    /// Archive an entity by type and ID.
+    ///
+    /// Reads the entity, appends an "archive" changelog entry, then moves the
+    /// data file and changelog to the archive directory (`{root}/{type}s/.archive/`).
+    /// Archived entities no longer appear in `list()` but remain accessible via
+    /// `list_archived()` and `read_archived()`.
+    ///
+    /// Returns `Ok(Some(ulid))` when an archive changelog entry was logged,
+    /// or `Ok(None)` if the entity had no fields to record.
+    pub async fn archive(
+        &self,
+        entity_type: impl AsRef<str>,
+        id: impl AsRef<str>,
+    ) -> Result<Option<ChangeEntryId>> {
+        let entity_type = entity_type.as_ref();
+        let id = id.as_ref();
+        let def = self.entity_def(entity_type)?;
+        let dir = self.entity_dir(entity_type);
+        let path = io::entity_file_path(&dir, id, def);
+
+        let mut result_ulid = None;
+
+        // Read current state to log archival
+        if let Ok(old) = io::read_entity(&path, entity_type, id, def).await {
+            let mut changes: Vec<_> = old
+                .fields
+                .iter()
+                .map(|(k, v)| {
+                    (
+                        k.clone(),
+                        FieldChange::Removed {
+                            old_value: v.clone(),
+                        },
+                    )
+                })
+                .collect();
+            changes.sort_by(|a, b| a.0.cmp(&b.0));
+
+            if !changes.is_empty() {
+                let mut entry = ChangeEntry::new(entity_type, id, "archive", changes);
+
+                // Stamp transaction ID if one is active
+                let tx_id = self.current_transaction.read().await.clone();
+                if let Some(ref tx) = tx_id {
+                    entry = entry.with_transaction_id(tx.clone());
+                }
+
+                let log_path = path.with_extension("jsonl");
+                changelog::append_changelog(&log_path, &entry).await?;
+
+                let ulid = entry.id.clone();
+                self.changelog_index.write().await.insert(
+                    ulid.clone(),
+                    (EntityTypeName::from(entity_type), EntityId::from(id)),
+                );
+
+                // Register in transaction index if applicable
+                if let Some(ref tx) = tx_id {
+                    self.transaction_index
+                        .write()
+                        .await
+                        .entry(tx.clone())
+                        .or_default()
+                        .push(ulid.clone());
+                }
+
+                result_ulid = Some(ulid);
+            }
+        }
+
+        let archive = self.archive_dir(entity_type);
+        io::trash_entity_files(&path, &archive).await?;
+        Ok(result_ulid)
+    }
+
+    /// Restore an entity from the archive back to live storage.
+    ///
+    /// Moves the entity data file and changelog from the archive directory
+    /// (`{root}/{type}s/.archive/`) back to the live storage directory, then
+    /// appends an "unarchive" changelog entry. The entity reappears in `list()`.
+    ///
+    /// Returns `Ok(Some(ulid))` when an unarchive changelog entry was logged,
+    /// or `Ok(None)` if the entity had no fields to record after restoration.
+    pub async fn unarchive(
+        &self,
+        entity_type: impl AsRef<str>,
+        id: impl AsRef<str>,
+    ) -> Result<Option<ChangeEntryId>> {
+        let entity_type = entity_type.as_ref();
+        let id = id.as_ref();
+        let def = self.entity_def(entity_type)?;
+        let dir = self.entity_dir(entity_type);
+        let path = io::entity_file_path(&dir, id, def);
+        let archive = self.archive_dir(entity_type);
+
+        // Restore files from archive to live storage
+        io::restore_entity_files(&path, &archive).await?;
+
+        // Read the restored entity to record the restoration as Set changes
+        let entity = io::read_entity(&path, entity_type, id, def).await?;
+        let mut changes: Vec<_> = entity
+            .fields
+            .iter()
+            .map(|(k, v)| (k.clone(), FieldChange::Set { value: v.clone() }))
+            .collect();
+        changes.sort_by(|a, b| a.0.cmp(&b.0));
+
+        if changes.is_empty() {
+            return Ok(None);
+        }
+
+        // Append unarchive entry to the restored changelog
+        let mut entry = ChangeEntry::new(entity_type, id, "unarchive", changes);
+
+        // Stamp transaction ID if one is active
+        let tx_id = self.current_transaction.read().await.clone();
+        if let Some(ref tx) = tx_id {
+            entry = entry.with_transaction_id(tx.clone());
+        }
+
+        let log_path = path.with_extension("jsonl");
+        changelog::append_changelog(&log_path, &entry).await?;
+
+        let ulid = entry.id.clone();
+        self.changelog_index.write().await.insert(
+            ulid.clone(),
+            (EntityTypeName::from(entity_type), EntityId::from(id)),
+        );
+
+        // Register in transaction index if applicable
+        if let Some(ref tx) = tx_id {
+            self.transaction_index
+                .write()
+                .await
+                .entry(tx.clone())
+                .or_default()
+                .push(ulid.clone());
+        }
+
+        Ok(Some(ulid))
+    }
+
+    /// List all archived entities of a given type.
+    ///
+    /// Reads from the archive directory (`{root}/{type}s/.archive/`).
+    /// If a `ComputeEngine` is attached, computed fields are derived for each entity.
+    pub async fn list_archived(&self, entity_type: impl AsRef<str>) -> Result<Vec<Entity>> {
+        let entity_type = entity_type.as_ref();
+        let def = self.entity_def(entity_type)?;
+        let dir = self.archive_dir(entity_type);
+        let mut entities = io::read_entity_dir(&dir, entity_type, def).await?;
+        if self.compute.is_some() {
+            let query_fn = self.build_entity_query_fn();
+            for entity in &mut entities {
+                self.apply_compute_with_query(entity_type, entity, &query_fn)
+                    .await?;
+            }
+        }
+        Ok(entities)
+    }
+
+    /// Read a single archived entity by type and ID.
+    ///
+    /// Reads from the archive directory (`{root}/{type}s/.archive/`).
+    /// If a `ComputeEngine` is attached, computed fields are derived after reading.
+    pub async fn read_archived(
+        &self,
+        entity_type: impl AsRef<str>,
+        id: impl AsRef<str>,
+    ) -> Result<Entity> {
+        let entity_type = entity_type.as_ref();
+        let id = id.as_ref();
+        let def = self.entity_def(entity_type)?;
+        let path = io::entity_file_path(&self.archive_dir(entity_type), id, def);
+        let mut entity = io::read_entity(&path, entity_type, id, def).await?;
+        self.apply_compute(entity_type, &mut entity).await?;
+        Ok(entity)
+    }
+
+    /// Migrate old trash layout to the new layout.
+    ///
+    /// Old layout: `{root}/.trash/{type}s/` (e.g. `.kanban/.trash/tasks/`)
+    /// New layout: `{root}/{type}s/.trash/` (e.g. `.kanban/tasks/.trash/`)
+    ///
+    /// If the old layout exists for a given entity type, moves all files from the
+    /// old directory to the new directory. Removes the old directory when empty.
+    /// This is idempotent — if the old layout doesn't exist, this is a no-op.
+    pub async fn migrate_trash_layout(&self, entity_type: impl AsRef<str>) -> Result<()> {
+        let entity_type = entity_type.as_ref();
+        let old_trash = self.root.join(".trash").join(format!("{}s", entity_type));
+        let new_trash = self.trash_dir(entity_type);
+
+        if !old_trash.exists() {
+            return Ok(());
+        }
+
+        tokio::fs::create_dir_all(&new_trash).await?;
+
+        let mut entries = tokio::fs::read_dir(&old_trash).await?;
+        while let Some(entry) = entries.next_entry().await? {
+            let src = entry.path();
+            let filename = entry.file_name();
+            let dest = new_trash.join(&filename);
+            // Move file; skip if destination already exists
+            match tokio::fs::rename(&src, &dest).await {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(e) => return Err(crate::error::EntityError::Io(e)),
+            }
+        }
+
+        // Remove old directory if now empty
+        let _ = tokio::fs::remove_dir(&old_trash).await;
+
+        // Try to remove the parent `.trash/` if empty
+        let old_trash_root = self.root.join(".trash");
+        let _ = tokio::fs::remove_dir(&old_trash_root).await;
+
+        Ok(())
     }
 
     /// List all entities of a given type.
@@ -938,7 +1390,9 @@ impl EntityContext {
     }
 
     /// Read the changelog for an entity, falling back to the trash directory
-    /// if the live changelog does not exist (e.g. the entity was deleted).
+    /// if the live changelog does not exist (e.g. the entity was deleted),
+    /// and further falling back to the archive directory if neither the live
+    /// nor trash changelog exists (e.g. the entity was archived).
     pub async fn read_changelog_with_trash_fallback(
         &self,
         entity_type: impl AsRef<str>,
@@ -948,15 +1402,23 @@ impl EntityContext {
         let id = id.as_ref();
         let live_path = self.changelog_path(entity_type, id)?;
         let def = self.entity_def(entity_type)?;
+        let file_stem = io::entity_file_path(&self.entity_dir(entity_type), id, def)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or(id)
+            .to_string();
+
         let trash_dir = self.trash_dir(entity_type);
-        let trash_path = trash_dir.join(format!(
-            "{}.jsonl",
-            io::entity_file_path(&self.entity_dir(entity_type), id, def)
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or(id)
-        ));
-        changelog::read_changelog_with_fallback(&live_path, &trash_path).await
+        let trash_path = trash_dir.join(format!("{file_stem}.jsonl"));
+
+        // Try live first, then trash, then archive
+        let entries = changelog::read_changelog_with_fallback(&live_path, &trash_path).await?;
+        if entries.is_empty() && !live_path.exists() && !trash_path.exists() {
+            let archive_dir = self.archive_dir(entity_type);
+            let archive_path = archive_dir.join(format!("{file_stem}.jsonl"));
+            return changelog::read_changelog(&archive_path).await;
+        }
+        Ok(entries)
     }
 
     /// Look up which entity a changelog entry belongs to by its ULID.
@@ -1233,8 +1695,8 @@ mod tests {
         // No longer readable from live storage
         assert!(ctx.read("tag", "bug").await.is_err());
 
-        // Files moved to trash
-        let trash_dir = dir.path().join(".trash").join("tags");
+        // Files moved to trash (new layout: {type}s/.trash/)
+        let trash_dir = dir.path().join("tags").join(".trash");
         assert!(trash_dir.join("bug.yaml").exists());
         assert!(trash_dir.join("bug.jsonl").exists());
 
@@ -1251,10 +1713,11 @@ mod tests {
         let fields = test_fields_context();
         let ctx = EntityContext::new(dir.path(), fields.clone());
 
-        assert_eq!(ctx.trash_dir("tag"), dir.path().join(".trash").join("tags"));
+        // New layout: {root}/{type}s/.trash/
+        assert_eq!(ctx.trash_dir("tag"), dir.path().join("tags").join(".trash"));
         assert_eq!(
             ctx.trash_dir("task"),
-            dir.path().join(".trash").join("tasks")
+            dir.path().join("tasks").join(".trash")
         );
     }
 
@@ -1356,8 +1819,8 @@ mod tests {
         // Verify the entity is gone (in trash)
         assert!(ctx.read("tag", "bug").await.is_err());
 
-        // Verify files are in trash
-        let trash_dir = dir.path().join(".trash").join("tags");
+        // Verify files are in trash (new layout: {type}s/.trash/)
+        let trash_dir = dir.path().join("tags").join(".trash");
         assert!(trash_dir.join("bug.yaml").exists());
     }
 
@@ -1575,8 +2038,8 @@ mod tests {
         // Verify the entity is gone again
         assert!(ctx.read("tag", "bug").await.is_err());
 
-        // Verify files are in trash
-        let trash_dir = dir.path().join(".trash").join("tags");
+        // Verify files are in trash (new layout: {type}s/.trash/)
+        let trash_dir = dir.path().join("tags").join(".trash");
         assert!(trash_dir.join("bug.yaml").exists());
     }
 
@@ -1718,5 +2181,258 @@ mod tests {
 
         // Color should remain unchanged throughout all operations
         assert_eq!(loaded.get_str("color"), Some("#ff0000"));
+    }
+
+    // =========================================================================
+    // New tests for the relocated .trash/ layout and .archive/ support
+    // =========================================================================
+
+    #[tokio::test]
+    async fn archive_dir_correct() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields.clone());
+
+        assert_eq!(
+            ctx.archive_dir("tag"),
+            dir.path().join("tags").join(".archive")
+        );
+        assert_eq!(
+            ctx.archive_dir("task"),
+            dir.path().join("tasks").join(".archive")
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_moves_to_new_trash_location() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields.clone());
+
+        let mut tag = Entity::new("tag", "bug");
+        tag.set("tag_name", json!("Bug"));
+        ctx.write(&tag).await.unwrap();
+
+        ctx.delete("tag", "bug").await.unwrap();
+
+        // Entity is gone from live storage
+        assert!(ctx.read("tag", "bug").await.is_err());
+
+        // Files are in the new trash location: {type}s/.trash/
+        let trash_dir = dir.path().join("tags").join(".trash");
+        assert!(trash_dir.join("bug.yaml").exists());
+        assert!(trash_dir.join("bug.jsonl").exists());
+
+        // Old-style .trash/ at root should NOT exist
+        assert!(!dir.path().join(".trash").exists());
+    }
+
+    #[tokio::test]
+    async fn archive_moves_to_archive_dir() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields.clone());
+
+        let mut tag = Entity::new("tag", "bug");
+        tag.set("tag_name", json!("Bug"));
+        tag.set("color", json!("#ff0000"));
+        ctx.write(&tag).await.unwrap();
+
+        // Entity is visible before archiving
+        assert_eq!(ctx.list("tag").await.unwrap().len(), 1);
+
+        let archive_ulid = ctx.archive("tag", "bug").await.unwrap();
+        assert!(archive_ulid.is_some());
+
+        // Entity is gone from live storage
+        assert!(ctx.read("tag", "bug").await.is_err());
+
+        // Entity excluded from list()
+        assert_eq!(ctx.list("tag").await.unwrap().len(), 0);
+
+        // Files are in the archive directory
+        let archive_dir = dir.path().join("tags").join(".archive");
+        assert!(archive_dir.join("bug.yaml").exists());
+        assert!(archive_dir.join("bug.jsonl").exists());
+    }
+
+    #[tokio::test]
+    async fn unarchive_restores_entity() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields.clone());
+
+        let mut tag = Entity::new("tag", "bug");
+        tag.set("tag_name", json!("Bug"));
+        tag.set("color", json!("#ff0000"));
+        ctx.write(&tag).await.unwrap();
+
+        // Archive the entity
+        ctx.archive("tag", "bug").await.unwrap();
+        assert_eq!(ctx.list("tag").await.unwrap().len(), 0);
+
+        // Unarchive it
+        let unarchive_ulid = ctx.unarchive("tag", "bug").await.unwrap();
+        assert!(unarchive_ulid.is_some());
+
+        // Entity is back in live storage
+        assert_eq!(ctx.list("tag").await.unwrap().len(), 1);
+        let restored = ctx.read("tag", "bug").await.unwrap();
+        assert_eq!(restored.get_str("tag_name"), Some("Bug"));
+        assert_eq!(restored.get_str("color"), Some("#ff0000"));
+
+        // Archive directory is now empty
+        let archive_dir = dir.path().join("tags").join(".archive");
+        assert!(!archive_dir.join("bug.yaml").exists());
+    }
+
+    #[tokio::test]
+    async fn list_archived_returns_archived_only() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields.clone());
+
+        // Create two tags
+        let mut t1 = Entity::new("tag", "bug");
+        t1.set("tag_name", json!("Bug"));
+        let mut t2 = Entity::new("tag", "feature");
+        t2.set("tag_name", json!("Feature"));
+
+        ctx.write(&t1).await.unwrap();
+        ctx.write(&t2).await.unwrap();
+
+        // Archive only "bug"
+        ctx.archive("tag", "bug").await.unwrap();
+
+        // list() should only return "feature"
+        let live = ctx.list("tag").await.unwrap();
+        assert_eq!(live.len(), 1);
+        assert_eq!(live[0].id, "feature");
+
+        // list_archived() should only return "bug"
+        let archived = ctx.list_archived("tag").await.unwrap();
+        assert_eq!(archived.len(), 1);
+        assert_eq!(archived[0].id, "bug");
+    }
+
+    #[tokio::test]
+    async fn read_archived_returns_entity() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields.clone());
+
+        let mut tag = Entity::new("tag", "bug");
+        tag.set("tag_name", json!("Bug"));
+        tag.set("color", json!("#ff0000"));
+        ctx.write(&tag).await.unwrap();
+
+        ctx.archive("tag", "bug").await.unwrap();
+
+        // read() on archived entity should fail
+        assert!(ctx.read("tag", "bug").await.is_err());
+
+        // read_archived() should succeed
+        let archived = ctx.read_archived("tag", "bug").await.unwrap();
+        assert_eq!(archived.get_str("tag_name"), Some("Bug"));
+        assert_eq!(archived.get_str("color"), Some("#ff0000"));
+    }
+
+    #[tokio::test]
+    async fn archive_writes_changelog() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields.clone());
+
+        let mut tag = Entity::new("tag", "bug");
+        tag.set("tag_name", json!("Bug"));
+        ctx.write(&tag).await.unwrap();
+
+        ctx.archive("tag", "bug").await.unwrap();
+
+        // Changelog lives in the archive directory
+        let archive_log = dir.path().join("tags").join(".archive").join("bug.jsonl");
+        let content = tokio::fs::read_to_string(&archive_log).await.unwrap();
+        assert!(
+            content.contains("\"archive\""),
+            "changelog should contain archive op"
+        );
+    }
+
+    #[tokio::test]
+    async fn unarchive_writes_changelog() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields.clone());
+
+        let mut tag = Entity::new("tag", "bug");
+        tag.set("tag_name", json!("Bug"));
+        ctx.write(&tag).await.unwrap();
+
+        ctx.archive("tag", "bug").await.unwrap();
+        ctx.unarchive("tag", "bug").await.unwrap();
+
+        // After unarchive, changelog is back in live dir
+        let log = ctx.read_changelog("tag", "bug").await.unwrap();
+        assert!(
+            log.iter().any(|e| e.op == "unarchive"),
+            "changelog should contain unarchive op"
+        );
+    }
+
+    #[tokio::test]
+    async fn undo_delete_works_with_new_trash() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields.clone());
+
+        let mut tag = Entity::new("tag", "bug");
+        tag.set("tag_name", json!("Bug"));
+        tag.set("color", json!("#ff0000"));
+        ctx.write(&tag).await.unwrap();
+
+        // Delete it
+        let delete_ulid = ctx.delete("tag", "bug").await.unwrap().unwrap();
+
+        // Verify trash location is new-style
+        let trash_dir = dir.path().join("tags").join(".trash");
+        assert!(trash_dir.join("bug.yaml").exists());
+
+        // Undo the delete — should work with the new trash layout
+        ctx.undo(&delete_ulid).await.unwrap();
+
+        // Entity is restored
+        let restored = ctx.read("tag", "bug").await.unwrap();
+        assert_eq!(restored.get_str("tag_name"), Some("Bug"));
+        assert_eq!(restored.get_str("color"), Some("#ff0000"));
+    }
+
+    #[tokio::test]
+    async fn migration_moves_old_trash() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields.clone());
+
+        // Simulate old-style trash layout: {root}/.trash/{type}s/
+        let old_trash = dir.path().join(".trash").join("tags");
+        tokio::fs::create_dir_all(&old_trash).await.unwrap();
+        tokio::fs::write(old_trash.join("bug.yaml"), "tag_name: Bug\n")
+            .await
+            .unwrap();
+        tokio::fs::write(old_trash.join("bug.jsonl"), "{}\n")
+            .await
+            .unwrap();
+
+        // Run migration
+        ctx.migrate_trash_layout("tag").await.unwrap();
+
+        // Files should now be in the new location: {type}s/.trash/
+        let new_trash = dir.path().join("tags").join(".trash");
+        assert!(new_trash.join("bug.yaml").exists());
+        assert!(new_trash.join("bug.jsonl").exists());
+
+        // Old location should be gone
+        assert!(!old_trash.exists());
+        // Old root .trash/ should also be gone
+        assert!(!dir.path().join(".trash").exists());
     }
 }

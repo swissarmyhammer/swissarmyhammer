@@ -8,6 +8,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::id_types::{EntityTypeName, FieldDefId, FieldName};
 
+/// Serde helper: skip serializing a bool field when it is `false`.
+fn is_false(b: &bool) -> bool {
+    !b
+}
+
 /// A single option in a select or multi-select field.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SelectOption {
@@ -55,37 +60,26 @@ pub enum FieldType {
         multiple: bool,
     },
     /// Read-only derived value -- no stored triple.
+    ///
+    /// `depends_on` declares which entity types this aggregate depends on.
+    /// When an entity of a listed type changes, the owning entity's computed
+    /// field is recomputed and an `entity-field-changed` event is emitted.
     Computed {
         derive: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        depends_on: Vec<String>,
+        /// Optional target entity type (e.g. "tag" for parse-body-tags).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        entity: Option<EntityTypeName>,
+        /// When true, commit display names (slugs) instead of entity IDs.
+        #[serde(default, skip_serializing_if = "is_false")]
+        commit_display_names: bool,
     },
 }
 
-/// How a field value is edited.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
-#[serde(rename_all = "kebab-case")]
-pub enum Editor {
-    Markdown,
-    Select,
-    MultiSelect,
-    Date,
-    ColorPalette,
-    Number,
-    None,
-}
-
-/// How a field value is displayed.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
-#[serde(rename_all = "kebab-case")]
-pub enum Display {
-    Markdown,
-    Badge,
-    BadgeList,
-    Avatar,
-    Date,
-    ColorSwatch,
-    Number,
-    Text,
-}
+// Editor and Display are plain strings — any value is accepted.
+// The frontend resolves display/editor names to components via registries.
+// No Rust enum needed: adding a new display type is a frontend-only change.
 
 /// How a field sorts.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -110,13 +104,16 @@ pub struct FieldDef {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub editor: Option<Editor>,
+    pub editor: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub display: Option<Display>,
+    pub display: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sort: Option<SortKind>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub width: Option<u32>,
+    /// Lucide icon name for display in the inspector (e.g. "file-text", "users", "tag").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
     /// Inspector layout section: "header", "body", "footer", or "hidden".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub section: Option<String>,
@@ -126,45 +123,47 @@ pub struct FieldDef {
 
 impl FieldDef {
     /// Infer editor from field type if not explicitly set.
-    pub fn effective_editor(&self) -> Editor {
+    pub fn effective_editor(&self) -> String {
         if let Some(ref e) = self.editor {
             return e.clone();
         }
         match &self.type_ {
-            FieldType::Text { .. } => Editor::Markdown,
-            FieldType::Markdown { .. } => Editor::Markdown,
-            FieldType::Date => Editor::Date,
-            FieldType::Number { .. } => Editor::Number,
-            FieldType::Color => Editor::ColorPalette,
-            FieldType::Select { .. } => Editor::Select,
-            FieldType::MultiSelect { .. } => Editor::MultiSelect,
-            FieldType::Reference { multiple: true, .. } => Editor::MultiSelect,
+            FieldType::Text { .. } => "markdown",
+            FieldType::Markdown { .. } => "markdown",
+            FieldType::Date => "date",
+            FieldType::Number { .. } => "number",
+            FieldType::Color => "color-palette",
+            FieldType::Select { .. } => "select",
+            FieldType::MultiSelect { .. } => "multi-select",
+            FieldType::Reference { multiple: true, .. } => "multi-select",
             FieldType::Reference {
                 multiple: false, ..
-            } => Editor::Select,
-            FieldType::Computed { .. } => Editor::None,
+            } => "select",
+            FieldType::Computed { .. } => "none",
         }
+        .to_string()
     }
 
     /// Infer display from field type if not explicitly set.
-    pub fn effective_display(&self) -> Display {
+    pub fn effective_display(&self) -> String {
         if let Some(ref d) = self.display {
             return d.clone();
         }
         match &self.type_ {
-            FieldType::Text { .. } => Display::Text,
-            FieldType::Markdown { .. } => Display::Markdown,
-            FieldType::Date => Display::Date,
-            FieldType::Number { .. } => Display::Number,
-            FieldType::Color => Display::ColorSwatch,
-            FieldType::Select { .. } => Display::Badge,
-            FieldType::MultiSelect { .. } => Display::BadgeList,
-            FieldType::Reference { multiple: true, .. } => Display::BadgeList,
+            FieldType::Text { .. } => "text",
+            FieldType::Markdown { .. } => "markdown",
+            FieldType::Date => "date",
+            FieldType::Number { .. } => "number",
+            FieldType::Color => "color-swatch",
+            FieldType::Select { .. } => "badge",
+            FieldType::MultiSelect { .. } => "badge-list",
+            FieldType::Reference { multiple: true, .. } => "badge-list",
             FieldType::Reference {
                 multiple: false, ..
-            } => Display::Badge,
-            FieldType::Computed { .. } => Display::Text,
+            } => "badge",
+            FieldType::Computed { .. } => "text",
         }
+        .to_string()
     }
 
     /// Infer sort kind from field type if not explicitly set.
@@ -181,10 +180,40 @@ impl FieldDef {
     }
 }
 
+/// Keybindings for an entity command, per keymap mode.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct EntityCommandKeys {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vim: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cua: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub emacs: Option<String>,
+}
+
+/// A command declared in an entity definition.
+///
+/// Commands are metadata only -- the frontend attaches `execute` implementations
+/// at mount time by matching on `id`. The `name` field is a template string
+/// that may reference `{{entity.type}}` or `{{entity.<field>}}`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct EntityCommand {
+    pub id: String,
+    pub name: String,
+    /// Whether this command appears in context menus. Defaults to false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub context_menu: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keys: Option<EntityCommandKeys>,
+}
+
 /// An entity definition -- a template declaring which fields belong to an entity type.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct EntityDef {
     pub name: EntityTypeName,
+    /// Lucide icon name for this entity type (e.g. "check-square", "tag", "user").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub body_field: Option<FieldName>,
     #[serde(default)]
@@ -200,6 +229,9 @@ pub struct EntityDef {
     /// Which field to display in search results (e.g. "title", "name").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub search_display_field: Option<FieldName>,
+    /// Commands that can be invoked on instances of this entity type.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub commands: Vec<EntityCommand>,
 }
 
 #[cfg(test)]
@@ -254,6 +286,9 @@ mod tests {
     fn field_type_computed_yaml_round_trip() {
         let ft = FieldType::Computed {
             derive: "parse-body-tags".into(),
+            depends_on: vec![],
+            entity: None,
+            commit_display_names: false,
         };
         let yaml = serde_yaml_ng::to_string(&ft).unwrap();
         let parsed: FieldType = serde_yaml_ng::from_str(&yaml).unwrap();
@@ -272,21 +307,39 @@ mod tests {
     }
 
     #[test]
-    fn editor_display_sort_yaml_round_trip() {
-        let editor = Editor::ColorPalette;
-        let yaml = serde_yaml_ng::to_string(&editor).unwrap();
-        let parsed: Editor = serde_yaml_ng::from_str(&yaml).unwrap();
-        assert_eq!(editor, parsed);
-
-        let display = Display::BadgeList;
-        let yaml = serde_yaml_ng::to_string(&display).unwrap();
-        let parsed: Display = serde_yaml_ng::from_str(&yaml).unwrap();
-        assert_eq!(display, parsed);
-
+    fn sort_kind_yaml_round_trip() {
         let sort = SortKind::OptionOrder;
         let yaml = serde_yaml_ng::to_string(&sort).unwrap();
         let parsed: SortKind = serde_yaml_ng::from_str(&yaml).unwrap();
         assert_eq!(sort, parsed);
+    }
+
+    #[test]
+    fn unknown_display_type_parses_fine() {
+        let yaml_input = r#"
+id: 00000000000000000000000001
+name: test
+type:
+  kind: text
+  single_line: true
+display: some-new-type
+"#;
+        let field: FieldDef = serde_yaml_ng::from_str(yaml_input).unwrap();
+        assert_eq!(field.display.as_deref(), Some("some-new-type"));
+    }
+
+    #[test]
+    fn unknown_editor_type_parses_fine() {
+        let yaml_input = r#"
+id: 00000000000000000000000001
+name: test
+type:
+  kind: text
+  single_line: true
+editor: custom-widget
+"#;
+        let field: FieldDef = serde_yaml_ng::from_str(yaml_input).unwrap();
+        assert_eq!(field.editor.as_deref(), Some("custom-widget"));
     }
 
     #[test]
@@ -314,10 +367,11 @@ mod tests {
                 ],
             },
             default: Some(serde_json::json!("Backlog")),
-            editor: Some(Editor::Select),
-            display: Some(Display::Badge),
+            editor: Some("select".into()),
+            display: Some("badge".into()),
             sort: Some(SortKind::OptionOrder),
             width: Some(120),
+            icon: None,
             section: None,
             validate: None,
         };
@@ -334,10 +388,11 @@ mod tests {
             description: None,
             type_: FieldType::Markdown { single_line: true },
             default: None,
-            editor: Some(Editor::Markdown),
-            display: Some(Display::Markdown),
+            editor: Some("markdown".into()),
+            display: Some("markdown".into()),
             sort: Some(SortKind::Alphanumeric),
             width: None,
+            icon: None,
             section: None,
             validate: None,
         };
@@ -350,6 +405,7 @@ mod tests {
     fn entity_def_yaml_round_trip() {
         let entity = EntityDef {
             name: "task".into(),
+            icon: None,
             body_field: Some("body".into()),
             fields: vec![
                 "title".into(),
@@ -365,6 +421,7 @@ mod tests {
             mention_prefix: None,
             mention_display_field: None,
             search_display_field: None,
+            commands: vec![],
         };
         let yaml = serde_yaml_ng::to_string(&entity).unwrap();
         let parsed: EntityDef = serde_yaml_ng::from_str(&yaml).unwrap();
@@ -375,12 +432,14 @@ mod tests {
     fn entity_def_without_body_field() {
         let entity = EntityDef {
             name: "tag".into(),
+            icon: None,
             body_field: None,
             fields: vec!["tag_name".into(), "color".into(), "description".into()],
             validate: None,
             mention_prefix: None,
             mention_display_field: None,
             search_display_field: None,
+            commands: vec![],
         };
         let yaml = serde_yaml_ng::to_string(&entity).unwrap();
         assert!(!yaml.contains("body_field"));
@@ -400,11 +459,12 @@ mod tests {
             display: None,
             sort: None,
             width: None,
+            icon: None,
             section: None,
             validate: None,
         };
-        assert_eq!(field.effective_editor(), Editor::Date);
-        assert_eq!(field.effective_display(), Display::Date);
+        assert_eq!(field.effective_editor(), "date");
+        assert_eq!(field.effective_display(), "date");
     }
 
     #[test]
@@ -415,15 +475,16 @@ mod tests {
             description: None,
             type_: FieldType::Text { single_line: true },
             default: None,
-            editor: Some(Editor::None),
-            display: Some(Display::Badge),
+            editor: Some("none".into()),
+            display: Some("badge".into()),
             sort: None,
             width: None,
+            icon: None,
             section: None,
             validate: None,
         };
-        assert_eq!(field.effective_editor(), Editor::None);
-        assert_eq!(field.effective_display(), Display::Badge);
+        assert_eq!(field.effective_editor(), "none");
+        assert_eq!(field.effective_display(), "badge");
     }
 
     #[test]
@@ -434,17 +495,21 @@ mod tests {
             description: None,
             type_: FieldType::Computed {
                 derive: "parse-body-tags".into(),
+                depends_on: vec![],
+                entity: None,
+                commit_display_names: false,
             },
             default: None,
             editor: None,
             display: None,
             sort: None,
             width: None,
+            icon: None,
             section: None,
             validate: None,
         };
-        assert_eq!(field.effective_editor(), Editor::None);
-        assert_eq!(field.effective_display(), Display::Text);
+        assert_eq!(field.effective_editor(), "none");
+        assert_eq!(field.effective_display(), "text");
     }
 
     #[test]
@@ -462,11 +527,12 @@ mod tests {
             display: None,
             sort: None,
             width: None,
+            icon: None,
             section: None,
             validate: None,
         };
-        assert_eq!(single.effective_editor(), Editor::Select);
-        assert_eq!(single.effective_display(), Display::Badge);
+        assert_eq!(single.effective_editor(), "select");
+        assert_eq!(single.effective_display(), "badge");
 
         let multi = FieldDef {
             id: FieldDefId::new(),
@@ -481,11 +547,12 @@ mod tests {
             display: None,
             sort: None,
             width: None,
+            icon: None,
             section: None,
             validate: None,
         };
-        assert_eq!(multi.effective_editor(), Editor::MultiSelect);
-        assert_eq!(multi.effective_display(), Display::BadgeList);
+        assert_eq!(multi.effective_editor(), "multi-select");
+        assert_eq!(multi.effective_display(), "badge-list");
     }
 
     #[test]
@@ -520,8 +587,8 @@ sort: option-order
         let field: FieldDef = serde_yaml_ng::from_str(yaml_input).unwrap();
         assert_eq!(field.name, "status");
         assert_eq!(field.default, Some(serde_json::json!("Backlog")));
-        assert_eq!(field.editor, Some(Editor::Select));
-        assert_eq!(field.display, Some(Display::Badge));
+        assert_eq!(field.editor.as_deref(), Some("select"));
+        assert_eq!(field.display.as_deref(), Some("badge"));
         assert_eq!(field.sort, Some(SortKind::OptionOrder));
 
         if let FieldType::Select { ref options } = field.type_ {
@@ -551,9 +618,9 @@ display: badge-list
 "#;
         let field: FieldDef = serde_yaml_ng::from_str(yaml_input).unwrap();
         assert_eq!(field.name, "tags");
-        assert_eq!(field.editor, Some(Editor::None));
-        assert_eq!(field.display, Some(Display::BadgeList));
-        if let FieldType::Computed { ref derive } = field.type_ {
+        assert_eq!(field.editor.as_deref(), Some("none"));
+        assert_eq!(field.display.as_deref(), Some("badge-list"));
+        if let FieldType::Computed { ref derive, .. } = field.type_ {
             assert_eq!(derive, "parse-body-tags");
         } else {
             panic!("expected Computed type");
@@ -683,6 +750,7 @@ fields:
             display: None,
             sort: None,
             width: None,
+            icon: None,
             section: None,
             validate: None,
         };
@@ -701,6 +769,7 @@ fields:
             display: None,
             sort: Some(SortKind::Datetime),
             width: None,
+            icon: None,
             section: None,
             validate: None,
         };
@@ -719,6 +788,7 @@ fields:
             display: None,
             sort: None,
             width: None,
+            icon: None,
             section: None,
             validate: None,
         };
@@ -740,6 +810,7 @@ fields:
             display: None,
             sort: None,
             width: None,
+            icon: None,
             section: None,
             validate: None,
         };
@@ -766,6 +837,7 @@ fields:
             display: None,
             sort: None,
             width: None,
+            icon: None,
             section: None,
             validate: None,
         };
@@ -790,6 +862,7 @@ fields:
             display: None,
             sort: None,
             width: None,
+            icon: None,
             section: None,
             validate: None,
         };
@@ -808,6 +881,7 @@ fields:
             display: None,
             sort: None,
             width: None,
+            icon: None,
             section: None,
             validate: None,
         };
@@ -827,9 +901,99 @@ fields:
             display: None,
             sort: Some(SortKind::Lexical),
             width: None,
+            icon: None,
             section: None,
             validate: None,
         };
         assert_eq!(field.effective_sort(), SortKind::Lexical);
+    }
+
+    #[test]
+    fn entity_def_with_commands_yaml_round_trip() {
+        let entity = EntityDef {
+            name: "task".into(),
+            icon: None,
+            body_field: Some("body".into()),
+            fields: vec!["title".into(), "tags".into()],
+            validate: None,
+            mention_prefix: None,
+            mention_display_field: None,
+            search_display_field: None,
+            commands: vec![
+                EntityCommand {
+                    id: "entity.inspect".into(),
+                    name: "Inspect {{entity.type}}".into(),
+                    context_menu: true,
+                    keys: None,
+                },
+                EntityCommand {
+                    id: "entity.archive".into(),
+                    name: "Archive {{entity.type}}".into(),
+                    context_menu: true,
+                    keys: Some(EntityCommandKeys {
+                        vim: Some("da".into()),
+                        cua: None,
+                        emacs: None,
+                    }),
+                },
+            ],
+        };
+        let yaml = serde_yaml_ng::to_string(&entity).unwrap();
+        let parsed: EntityDef = serde_yaml_ng::from_str(&yaml).unwrap();
+        assert_eq!(entity, parsed);
+        // verify commands survive round-trip
+        assert_eq!(parsed.commands.len(), 2);
+        assert_eq!(parsed.commands[0].id, "entity.inspect");
+        assert!(parsed.commands[0].context_menu);
+        assert_eq!(parsed.commands[1].id, "entity.archive");
+        assert!(parsed.commands[1].keys.is_some());
+    }
+
+    #[test]
+    fn task_entity_def_from_yaml_with_commands() {
+        let yaml_input = r#"
+name: task
+body_field: body
+commands:
+  - id: entity.inspect
+    name: "Inspect {{entity.type}}"
+    context_menu: true
+  - id: entity.archive
+    name: "Archive {{entity.type}}"
+    context_menu: true
+fields:
+  - title
+  - status
+  - priority
+  - tags
+  - assignees
+  - due
+  - depends_on
+  - body
+"#;
+        let entity: EntityDef = serde_yaml_ng::from_str(yaml_input).unwrap();
+        assert_eq!(entity.name, "task");
+        assert_eq!(entity.body_field, Some("body".into()));
+        assert_eq!(entity.fields.len(), 8);
+        assert_eq!(entity.commands.len(), 2);
+        assert_eq!(entity.commands[0].id, "entity.inspect");
+        assert!(entity.commands[0].context_menu);
+        assert_eq!(entity.commands[1].id, "entity.archive");
+        assert!(entity.commands[1].context_menu);
+    }
+
+    #[test]
+    fn entity_def_without_commands_still_deserializes() {
+        // Backwards compat: existing YAML without a commands field should
+        // deserialize fine and produce an empty commands vec.
+        let yaml_input = r#"
+name: tag
+fields:
+  - tag_name
+  - color
+"#;
+        let entity: EntityDef = serde_yaml_ng::from_str(yaml_input).unwrap();
+        assert_eq!(entity.name, "tag");
+        assert!(entity.commands.is_empty());
     }
 }

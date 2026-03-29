@@ -1,17 +1,32 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { createPortal } from "react-dom";
 import CodeMirror, { type ReactCodeMirrorRef } from "@uiw/react-codemirror";
 import { keymap, EditorView } from "@codemirror/view";
 import { Compartment } from "@codemirror/state";
 import { getCM, Vim } from "@replit/codemirror-vim";
 import { invoke } from "@tauri-apps/api/core";
-import { useAvailableCommands, collectAvailableCommands, dispatchCommand, type CommandAtDepth } from "@/lib/command-scope";
+import {
+  CommandScopeContext,
+  useAvailableCommands,
+  collectAvailableCommands,
+  resolveCommand,
+  dispatchCommand,
+  type CommandAtDepth,
+} from "@/lib/command-scope";
 import { useFocusedScope } from "@/lib/entity-focus-context";
-import { useKeymap } from "@/lib/keymap-context";
+import { useUIState } from "@/lib/ui-state-context";
 import { shadcnTheme, keymapExtension } from "@/lib/cm-keymap";
 import { fuzzyMatch } from "@/lib/fuzzy-filter";
 import { useInspectOptional } from "@/lib/inspect-context";
 import { moniker } from "@/lib/moniker";
+import { useEntityCommands } from "@/lib/entity-commands";
 import { FocusScope } from "@/components/focus-scope";
 import { EntityIcon } from "@/components/entity-icon";
 
@@ -51,7 +66,12 @@ interface CommandPaletteProps {
  * the debounced query. Each result is wrapped in a FocusScope so entity.inspect
  * commands are available. Selecting a result opens the entity inspector.
  */
-export function CommandPalette({ open, onClose, mode: paletteMode = "command", onSwitchBoard }: CommandPaletteProps) {
+export function CommandPalette({
+  open,
+  onClose,
+  mode: paletteMode = "command",
+  onSwitchBoard,
+}: CommandPaletteProps) {
   const [filter, setFilter] = useState("");
   const [debouncedFilter, setDebouncedFilter] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -59,13 +79,14 @@ export function CommandPalette({ open, onClose, mode: paletteMode = "command", o
   const editorRef = useRef<ReactCodeMirrorRef>(null);
   const keymapCompartment = useRef(new Compartment());
   const listRef = useRef<HTMLDivElement>(null);
-  const { mode } = useKeymap();
+  const { keymap_mode: mode } = useUIState();
   const focusedScope = useFocusedScope();
   const rootCommands = useAvailableCommands();
   // When a scope is focused, collect commands from it (which includes its ancestor chain).
   // Otherwise fall back to commands from the root scope context.
   const allCommands = useMemo(
-    () => focusedScope ? collectAvailableCommands(focusedScope) : rootCommands,
+    () =>
+      focusedScope ? collectAvailableCommands(focusedScope) : rootCommands,
     [focusedScope, rootCommands],
   );
 
@@ -102,7 +123,10 @@ export function CommandPalette({ open, onClose, mode: paletteMode = "command", o
       return;
     }
     let cancelled = false;
-    invoke<SearchResult[]>("search_entities", { query: debouncedFilter, limit: 50 })
+    invoke<SearchResult[]>("search_entities", {
+      query: debouncedFilter,
+      limit: 50,
+    })
       .then((results) => {
         if (!cancelled) {
           setSearchResults(results);
@@ -114,7 +138,9 @@ export function CommandPalette({ open, onClose, mode: paletteMode = "command", o
           setSearchResults([]);
         }
       });
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [paletteMode, debouncedFilter]);
 
   // Auto-enter insert mode in vim when the palette opens.
@@ -140,7 +166,9 @@ export function CommandPalette({ open, onClose, mode: paletteMode = "command", o
       Vim.handleKey(cm as any, "i", "mapping");
     };
     requestAnimationFrame(tryEnterInsert);
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [open, mode]);
 
   // Filter and sort commands by fuzzy match score (command mode)
@@ -161,7 +189,8 @@ export function CommandPalette({ open, onClose, mode: paletteMode = "command", o
   }, [filter, allCommands, paletteMode]);
 
   // Combined length for selection clamping
-  const filteredLength = paletteMode === "search" ? searchResults.length : filteredCommands.length;
+  const filteredLength =
+    paletteMode === "search" ? searchResults.length : filteredCommands.length;
 
   // Clamp selection when filtered list changes
   useEffect(() => {
@@ -182,17 +211,26 @@ export function CommandPalette({ open, onClose, mode: paletteMode = "command", o
     const result = searchResults[selectedIndex];
     if (!result) return;
     onClose();
-    // Board results switch the active board + open inspector
+    // Board is the one entity type whose primary action is "switch to it"
+    // rather than "inspect it". This is correct domain behavior: selecting a
+    // board in search results opens (switches to) that board, while every
+    // other entity type gets inspected. The check is intentionally hardcoded
+    // because no other entity type shares this navigation semantic.
     if (result.entity_type === "board" && onSwitchBoard) {
       onSwitchBoard(result.entity_id);
     }
     if (inspectEntity) {
       const entityMoniker = moniker(result.entity_type, result.entity_id);
-      inspectEntity(entityMoniker);
+      dispatchCommand({
+        id: "entity.inspect",
+        name: "Inspect Entity",
+        execute: () => inspectEntity(entityMoniker),
+      });
     }
   }, [searchResults, selectedIndex, onClose, inspectEntity, onSwitchBoard]);
 
-  const executeSelected = paletteMode === "search" ? executeSelectedResult : executeSelectedCommand;
+  const executeSelected =
+    paletteMode === "search" ? executeSelectedResult : executeSelectedCommand;
 
   // Ref so CM6 extensions always see the latest closures
   const executeSelectedRef = useRef(executeSelected);
@@ -204,10 +242,10 @@ export function CommandPalette({ open, onClose, mode: paletteMode = "command", o
   const moveSelection = useCallback(
     (delta: number) => {
       setSelectedIndex((prev) =>
-        Math.max(0, Math.min(filteredLength - 1, prev + delta))
+        Math.max(0, Math.min(filteredLength - 1, prev + delta)),
       );
     },
-    [filteredLength]
+    [filteredLength],
   );
   const moveSelectionRef = useRef(moveSelection);
   moveSelectionRef.current = moveSelection;
@@ -291,7 +329,7 @@ export function CommandPalette({ open, onClose, mode: paletteMode = "command", o
         },
       }),
     ],
-    [mode]
+    [mode],
   );
 
   // Get the keybinding hint for the current keymap mode
@@ -301,7 +339,7 @@ export function CommandPalette({ open, onClose, mode: paletteMode = "command", o
       if (!keys) return undefined;
       return keys[mode as keyof typeof keys];
     },
-    [mode]
+    [mode],
   );
 
   if (!open) return null;
@@ -334,7 +372,11 @@ export function CommandPalette({ open, onClose, mode: paletteMode = "command", o
             extensions={extensions}
             theme={shadcnTheme}
             basicSetup={false}
-            placeholder={paletteMode === "search" ? "Type to search..." : "Type a command..."}
+            placeholder={
+              paletteMode === "search"
+                ? "Type to search..."
+                : "Type a command..."
+            }
             className="text-sm"
           />
         </div>
@@ -353,46 +395,52 @@ export function CommandPalette({ open, onClose, mode: paletteMode = "command", o
               hasQuery={debouncedFilter.length > 0}
               onClose={onClose}
               onHoverIndex={setSelectedIndex}
-              inspectEntity={inspectEntity}
             />
+          ) : filteredCommands.length === 0 ? (
+            <div className="px-3 py-2 text-sm text-muted-foreground">
+              No matching commands
+            </div>
           ) : (
-            filteredCommands.length === 0 ? (
-              <div className="px-3 py-2 text-sm text-muted-foreground">
-                No matching commands
-              </div>
-            ) : (
-              filteredCommands.map((entry, index) => {
-                const hint = keyHint(entry);
-                return (
-                  <div
-                    key={entry.command.id + ":" + (entry.command.target ?? "")}
-                    role="option"
-                    aria-selected={index === selectedIndex}
-                    data-testid={`command-item-${entry.command.id}`}
-                    className={`flex cursor-pointer items-center justify-between px-3 py-1.5 text-sm
+            filteredCommands.map((entry, index) => {
+              const hint = keyHint(entry);
+              return (
+                <div
+                  key={entry.command.id + ":" + (entry.command.target ?? "")}
+                  role="option"
+                  aria-selected={index === selectedIndex}
+                  data-testid={`command-item-${entry.command.id}`}
+                  className={`flex cursor-pointer items-center justify-between px-3 py-1.5 text-sm
                       ${index === selectedIndex ? "bg-accent text-accent-foreground" : "hover:bg-accent/50"}`}
-                    onClick={() => {
-                      onClose();
-                      dispatchCommand(entry.command);
-                    }}
-                    onMouseEnter={() => setSelectedIndex(index)}
-                  >
-                    <span>{entry.command.name}</span>
-                    {hint && (
-                      <kbd className="ml-4 shrink-0 rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-xs text-muted-foreground">
-                        {hint}
-                      </kbd>
-                    )}
-                  </div>
-                );
-              })
-            )
+                  onClick={() => {
+                    onClose();
+                    dispatchCommand(entry.command);
+                  }}
+                  onMouseEnter={() => setSelectedIndex(index)}
+                >
+                  <span>{entry.command.name}</span>
+                  {hint && (
+                    <kbd className="ml-4 shrink-0 rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-xs text-muted-foreground">
+                      {hint}
+                    </kbd>
+                  )}
+                </div>
+              );
+            })
           )}
         </div>
       </div>
     </div>,
-    document.body
+    document.body,
   );
+}
+
+/** Props for the SearchResults component. */
+interface ResultListProps {
+  results: SearchResult[];
+  selectedIndex: number;
+  hasQuery: boolean;
+  onClose: () => void;
+  onHoverIndex: (index: number) => void;
 }
 
 /** Renders search results in search mode. Extracted to keep CommandPalette readable. */
@@ -402,15 +450,7 @@ function SearchResults({
   hasQuery,
   onClose,
   onHoverIndex,
-  inspectEntity,
-}: {
-  results: SearchResult[];
-  selectedIndex: number;
-  hasQuery: boolean;
-  onClose: () => void;
-  onHoverIndex: (index: number) => void;
-  inspectEntity: ((moniker: string) => void) | null;
-}) {
+}: ResultListProps) {
   if (!hasQuery) {
     return (
       <div className="px-3 py-2 text-sm text-muted-foreground">
@@ -429,50 +469,97 @@ function SearchResults({
 
   return (
     <>
-      {results.map((result, index) => {
-        const entityMoniker = moniker(result.entity_type, result.entity_id);
-
-        const commands = [
-          {
-            id: "entity.inspect",
-            name: `Inspect ${result.entity_type}`,
-            target: entityMoniker,
-            contextMenu: true,
-            execute: () => {
-              if (inspectEntity) {
-                onClose();
-                inspectEntity(entityMoniker);
-              }
-            },
-          },
-        ];
-
-        return (
-          <FocusScope
-            key={entityMoniker}
-            moniker={entityMoniker}
-            commands={commands}
-          >
-            <div
-              role="option"
-              aria-selected={index === selectedIndex}
-              data-testid={`search-result-${entityMoniker}`}
-              className={`flex cursor-pointer items-center gap-2 px-3 py-1.5 text-sm
-                ${index === selectedIndex ? "bg-accent text-accent-foreground" : "hover:bg-accent/50"}`}
-              onClick={() => {
-                if (inspectEntity) {
-                  onClose();
-                  inspectEntity(entityMoniker);
-                }
-              }}
-              onMouseEnter={() => onHoverIndex(index)}
-            >
-              <EntityIcon entityType={result.entity_type} className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-              <span className="min-w-0 truncate">{result.display_name}</span>
-            </div>
-          </FocusScope>
-        );
-      })}
+      {results.map((result, index) => (
+        <SearchResultItem
+          key={moniker(result.entity_type, result.entity_id)}
+          result={result}
+          index={index}
+          selectedIndex={selectedIndex}
+          onClose={onClose}
+          onHoverIndex={onHoverIndex}
+        />
+      ))}
     </>
+  );
+}
+
+/**
+ * Single search result row wrapped in a FocusScope.
+ *
+ * Extracted as a component so the `useEntityCommands` hook can be called
+ * at the top level of a component (hooks cannot be called inside `.map()`).
+ */
+/** Props for the SearchResultItem component. */
+interface ResultRowProps {
+  result: SearchResult;
+  index: number;
+  selectedIndex: number;
+  onClose: () => void;
+  onHoverIndex: (index: number) => void;
+}
+
+function SearchResultItem({
+  result,
+  index,
+  selectedIndex,
+  onClose,
+  onHoverIndex,
+}: ResultRowProps) {
+  const entityMoniker = moniker(result.entity_type, result.entity_id);
+  const commands = useEntityCommands(result.entity_type, result.entity_id);
+
+  return (
+    <FocusScope moniker={entityMoniker} commands={commands}>
+      <SearchResultRow
+        entityMoniker={entityMoniker}
+        result={result}
+        index={index}
+        selectedIndex={selectedIndex}
+        onClose={onClose}
+        onHoverIndex={onHoverIndex}
+      />
+    </FocusScope>
+  );
+}
+
+/** Inner row that can access the FocusScope's CommandScopeContext. */
+function SearchResultRow({
+  entityMoniker,
+  result,
+  index,
+  selectedIndex,
+  onClose,
+  onHoverIndex,
+}: {
+  entityMoniker: string;
+  result: ResultRowProps["result"];
+  index: number;
+  selectedIndex: number;
+  onClose: () => void;
+  onHoverIndex: (index: number) => void;
+}) {
+  const scope = useContext(CommandScopeContext);
+  return (
+    <div
+      role="option"
+      aria-selected={index === selectedIndex}
+      data-testid={`search-result-${entityMoniker}`}
+      className={`flex cursor-pointer items-center gap-2 px-3 py-1.5 text-sm
+        ${index === selectedIndex ? "bg-accent text-accent-foreground" : "hover:bg-accent/50"}`}
+      onClick={() => {
+        const cmd = resolveCommand(scope, "entity.inspect");
+        if (cmd) {
+          onClose();
+          dispatchCommand(cmd);
+        }
+      }}
+      onMouseEnter={() => onHoverIndex(index)}
+    >
+      <EntityIcon
+        entityType={result.entity_type}
+        className="h-3.5 w-3.5 shrink-0 text-muted-foreground"
+      />
+      <span className="min-w-0 truncate">{result.display_name}</span>
+    </div>
   );
 }

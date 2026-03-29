@@ -356,4 +356,78 @@ mod tests {
         assert_eq!(result["count"], 1);
         assert_eq!(result["tasks"][0]["title"], "Blocked");
     }
+
+    #[tokio::test]
+    async fn test_list_tasks_excludes_archived() {
+        let (_temp, ctx) = setup().await;
+
+        // Create 3 tasks
+        AddTask::new("Task 1")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let r2 = AddTask::new("Task 2 (to archive)")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let id2 = r2["id"].as_str().unwrap().to_string();
+        AddTask::new("Task 3")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        // Archive task 2
+        let ectx = ctx.entity_context().await.unwrap();
+        ectx.archive("task", &id2).await.unwrap();
+
+        // ListTasks should return only the 2 active tasks
+        let result = ListTasks::new().execute(&ctx).await.into_result().unwrap();
+        assert_eq!(
+            result["count"], 2,
+            "archived task should not appear in list"
+        );
+        let titles: Vec<&str> = result["tasks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["title"].as_str().unwrap())
+            .collect();
+        assert!(titles.contains(&"Task 1"));
+        assert!(titles.contains(&"Task 3"));
+        assert!(!titles.contains(&"Task 2 (to archive)"));
+    }
+
+    #[tokio::test]
+    async fn test_list_tasks_unarchive_restores() {
+        let (_temp, ctx) = setup().await;
+
+        // Create a task and archive it
+        let r1 = AddTask::new("Task A")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let id1 = r1["id"].as_str().unwrap().to_string();
+
+        let ectx = ctx.entity_context().await.unwrap();
+        ectx.archive("task", &id1).await.unwrap();
+
+        // Archived: should not appear
+        let result = ListTasks::new().execute(&ctx).await.into_result().unwrap();
+        assert_eq!(result["count"], 0, "archived task should be hidden");
+
+        // Unarchive it
+        ectx.unarchive("task", &id1).await.unwrap();
+
+        // Should reappear
+        let result = ListTasks::new().execute(&ctx).await.into_result().unwrap();
+        assert_eq!(
+            result["count"], 1,
+            "unarchived task should reappear in list"
+        );
+        assert_eq!(result["tasks"][0]["title"], "Task A");
+    }
 }

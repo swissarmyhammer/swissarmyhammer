@@ -4,6 +4,7 @@ description: Attachment display name
 type:
   kind: text
   single_line: true
+icon: file
 editor: markdown
 display: text
 sort: alphanumeric

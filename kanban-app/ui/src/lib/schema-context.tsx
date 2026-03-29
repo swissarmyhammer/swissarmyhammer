@@ -1,6 +1,14 @@
-import { createContext, useContext, useEffect, useState, useCallback, useMemo, type ReactNode } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useState,
+  useCallback,
+  useMemo,
+  type ReactNode,
+} from "react";
 import { invoke } from "@tauri-apps/api/core";
-import type { EntitySchema, FieldDef } from "@/types/kanban";
+import type { EntityCommand, EntitySchema, FieldDef } from "@/types/kanban";
 
 /** Describes an entity type that supports prefix-based mentions (e.g. #tag, @actor). */
 export interface MentionableType {
@@ -12,6 +20,8 @@ export interface MentionableType {
 interface SchemaContextValue {
   getSchema: (entityType: string) => EntitySchema | undefined;
   getFieldDef: (entityType: string, fieldName: string) => FieldDef | undefined;
+  /** Return the commands array for an entity type, or [] if schema not loaded yet. */
+  getEntityCommands: (entityType: string) => readonly EntityCommand[];
   /** Entity types that have mention_prefix defined — for CM6 decorations/autocomplete. */
   mentionableTypes: MentionableType[];
   loading: boolean;
@@ -19,16 +29,12 @@ interface SchemaContextValue {
 
 const SchemaContext = createContext<SchemaContextValue | null>(null);
 
-/** Entity types to pre-load schemas for on mount. */
-const PRELOAD_TYPES = ["task", "column", "tag", "board", "swimlane", "actor"];
-
 /**
  * Provides cached EntitySchema lookups to the component tree.
  *
- * On mount, pre-fetches schemas for all core entity types via the
- * `get_entity_schema` Tauri command. Components access schemas through
- * the `useSchema` hook which exposes `getSchema`, `getFieldDef`, and
- * a `loading` flag.
+ * On mount, discovers all entity types from the backend via
+ * `list_entity_types`, then fetches each schema via `get_entity_schema`.
+ * Components access schemas through the `useSchema` hook.
  */
 export function SchemaProvider({ children }: { children: ReactNode }) {
   const [schemas, setSchemas] = useState<Map<string, EntitySchema>>(new Map());
@@ -38,11 +44,22 @@ export function SchemaProvider({ children }: { children: ReactNode }) {
     let cancelled = false;
 
     async function loadSchemas() {
+      // Discover entity types from backend; fall back to empty if unavailable
+      let types: string[];
+      try {
+        const result = await invoke<string[]>("list_entity_types", {});
+        types = Array.isArray(result) ? result : [];
+      } catch {
+        types = [];
+      }
+
       const results = await Promise.allSettled(
-        PRELOAD_TYPES.map(async (type) => {
-          const schema = await invoke<EntitySchema>("get_entity_schema", { entityType: type });
+        types.map(async (type) => {
+          const schema = await invoke<EntitySchema>("get_entity_schema", {
+            entityType: type,
+          });
           return [type, schema] as const;
-        })
+        }),
       );
 
       if (cancelled) return;
@@ -59,13 +76,15 @@ export function SchemaProvider({ children }: { children: ReactNode }) {
     }
 
     loadSchemas();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   /** Return the cached schema for the given entity type, or undefined. */
   const getSchema = useCallback(
     (entityType: string) => schemas.get(entityType),
-    [schemas]
+    [schemas],
   );
 
   /** Return a single field definition by entity type and field name. */
@@ -75,7 +94,16 @@ export function SchemaProvider({ children }: { children: ReactNode }) {
       if (!schema) return undefined;
       return schema.fields.find((f) => f.name === fieldName);
     },
-    [schemas]
+    [schemas],
+  );
+
+  /** Return the commands for the given entity type, or [] if schema not loaded. */
+  const getEntityCommands = useCallback(
+    (entityType: string): readonly EntityCommand[] => {
+      const schema = schemas.get(entityType);
+      return schema?.entity.commands ?? [];
+    },
+    [schemas],
   );
 
   const mentionableTypes = useMemo(() => {
@@ -94,7 +122,15 @@ export function SchemaProvider({ children }: { children: ReactNode }) {
   }, [schemas]);
 
   return (
-    <SchemaContext.Provider value={{ getSchema, getFieldDef, mentionableTypes, loading }}>
+    <SchemaContext.Provider
+      value={{
+        getSchema,
+        getFieldDef,
+        getEntityCommands,
+        mentionableTypes,
+        loading,
+      }}
+    >
       {children}
     </SchemaContext.Provider>
   );
@@ -113,14 +149,18 @@ export function useSchema() {
 }
 
 /**
- * Returns schema context if available, or a stub that always returns undefined.
+ * Returns schema context if available, or a stub that always returns undefined/[].
  * Use in components optionally rendered outside a SchemaProvider.
  */
-export function useSchemaOptional(): Pick<SchemaContextValue, "getSchema" | "getFieldDef"> {
+export function useSchemaOptional(): Pick<
+  SchemaContextValue,
+  "getSchema" | "getFieldDef" | "getEntityCommands"
+> {
   const ctx = useContext(SchemaContext);
   if (ctx) return ctx;
   return {
     getSchema: () => undefined,
     getFieldDef: () => undefined,
+    getEntityCommands: () => [],
   };
 }

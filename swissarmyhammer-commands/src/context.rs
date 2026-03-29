@@ -19,6 +19,8 @@ pub struct CommandContext {
     pub scope_chain: Vec<String>,
     pub target: Option<String>,
     pub args: HashMap<String, Value>,
+    /// The window label this command originated from (e.g. "main", "board-01abc...").
+    pub window_label: Option<String>,
     /// Shared UI state (inspector stack, palette, keymap, etc.).
     pub ui_state: Option<Arc<UIState>>,
     /// Extension point for domain-specific services (e.g., KanbanContext).
@@ -33,6 +35,7 @@ impl std::fmt::Debug for CommandContext {
             .field("scope_chain", &self.scope_chain)
             .field("target", &self.target)
             .field("args", &self.args)
+            .field("window_label", &self.window_label)
             .field("extensions_count", &self.extensions.len())
             .finish()
     }
@@ -51,9 +54,16 @@ impl CommandContext {
             scope_chain,
             target,
             args,
+            window_label: None,
             ui_state: None,
             extensions: HashMap::new(),
         }
+    }
+
+    /// Builder method to set the window label.
+    pub fn with_window_label(mut self, label: impl Into<String>) -> Self {
+        self.window_label = Some(label.into());
+        self
     }
 
     /// Builder method to set the UI state.
@@ -255,5 +265,98 @@ mod tests {
         assert!(parse_moniker("nocolon").is_none());
         assert!(parse_moniker(":id").is_none());
         assert!(parse_moniker("type:").is_none());
+    }
+
+    // --- extension tests ---
+
+    #[derive(Debug)]
+    struct FakeService {
+        name: String,
+    }
+
+    #[derive(Debug)]
+    struct AnotherService {
+        value: u64,
+    }
+
+    #[test]
+    fn set_and_retrieve_extension() {
+        let mut ctx = test_ctx(&[]);
+        let svc = Arc::new(FakeService { name: "hello".into() });
+        ctx.set_extension(svc);
+
+        let retrieved = ctx.extension::<FakeService>().expect("should be present");
+        assert_eq!(retrieved.name, "hello");
+    }
+
+    #[test]
+    fn extension_returns_none_when_missing() {
+        let ctx = test_ctx(&[]);
+        assert!(ctx.extension::<FakeService>().is_none());
+    }
+
+    #[test]
+    fn require_extension_returns_error_when_missing() {
+        let ctx = test_ctx(&[]);
+        let err = ctx.require_extension::<FakeService>().unwrap_err();
+        match err {
+            CommandError::ExecutionFailed(msg) => {
+                assert!(
+                    msg.contains("FakeService"),
+                    "error should mention the type name, got: {msg}"
+                );
+                assert!(msg.contains("not available"));
+            }
+            other => panic!("expected ExecutionFailed, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn two_different_types_stored_independently() {
+        let mut ctx = test_ctx(&[]);
+        ctx.set_extension(Arc::new(FakeService { name: "svc".into() }));
+        ctx.set_extension(Arc::new(AnotherService { value: 42 }));
+
+        let a = ctx.extension::<FakeService>().expect("FakeService present");
+        let b = ctx.extension::<AnotherService>().expect("AnotherService present");
+        assert_eq!(a.name, "svc");
+        assert_eq!(b.value, 42);
+    }
+
+    #[test]
+    fn overwriting_extension_replaces_previous() {
+        let mut ctx = test_ctx(&[]);
+        ctx.set_extension(Arc::new(FakeService { name: "first".into() }));
+        ctx.set_extension(Arc::new(FakeService { name: "second".into() }));
+
+        let retrieved = ctx.extension::<FakeService>().expect("should be present");
+        assert_eq!(retrieved.name, "second");
+    }
+
+    // --- builder tests ---
+
+    #[test]
+    fn with_window_label_sets_field() {
+        let ctx = test_ctx(&[]).with_window_label("main");
+        assert_eq!(ctx.window_label.as_deref(), Some("main"));
+    }
+
+    #[test]
+    fn with_ui_state_sets_field() {
+        let ui = Arc::new(UIState::default());
+        let ctx = test_ctx(&[]).with_ui_state(Arc::clone(&ui));
+        assert!(ctx.ui_state.is_some());
+        assert!(Arc::ptr_eq(ctx.ui_state.as_ref().unwrap(), &ui));
+    }
+
+    #[test]
+    fn chaining_with_window_label_and_with_ui_state() {
+        let ui = Arc::new(UIState::default());
+        let ctx = test_ctx(&[])
+            .with_window_label("secondary")
+            .with_ui_state(Arc::clone(&ui));
+        assert_eq!(ctx.window_label.as_deref(), Some("secondary"));
+        assert!(ctx.ui_state.is_some());
+        assert!(Arc::ptr_eq(ctx.ui_state.as_ref().unwrap(), &ui));
     }
 }

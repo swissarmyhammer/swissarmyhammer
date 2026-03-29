@@ -1274,4 +1274,46 @@ mod tests {
             "watcher should NOT fire because flush_and_emit updated the cache"
         );
     }
+
+    /// Reproduces the drag-and-drop bug: changing position_ordinal in a task .md
+    /// file must be detected by flush_and_emit as an EntityFieldChanged event.
+    /// Without this, the frontend never learns the card moved.
+    #[test]
+    fn test_flush_and_emit_detects_task_position_ordinal_change() {
+        let (_tmp, kanban) = setup_kanban_dir();
+        // Write initial task with position_ordinal: 7e80
+        std::fs::write(
+            kanban.join("tasks/task-c.md"),
+            "---\ntitle: Card C\nposition_column: todo\nposition_ordinal: 7e80\n---\n",
+        )
+        .unwrap();
+        let cache = new_entity_cache(&kanban);
+
+        // Simulate task.move changing ordinal from 7e80 to 7cc0 (moved before card B)
+        std::fs::write(
+            kanban.join("tasks/task-c.md"),
+            "---\ntitle: Card C\nposition_column: todo\nposition_ordinal: 7cc0\n---\n",
+        )
+        .unwrap();
+
+        let events = flush_and_emit(&kanban, &cache);
+        assert_eq!(events.len(), 1, "should detect the ordinal change");
+        match &events[0] {
+            WatchEvent::EntityFieldChanged {
+                entity_type,
+                id,
+                changes,
+                ..
+            } => {
+                assert_eq!(entity_type, "task");
+                assert_eq!(id, "task-c");
+                assert!(
+                    changes.iter().any(|c| c.field == "position_ordinal"),
+                    "changed field should be position_ordinal, got: {:?}",
+                    changes.iter().map(|c| &c.field).collect::<Vec<_>>()
+                );
+            }
+            other => panic!("expected EntityFieldChanged, got {:?}", other),
+        }
+    }
 }

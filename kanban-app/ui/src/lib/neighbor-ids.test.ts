@@ -121,11 +121,12 @@ describe("drag simulation (arrayMove + neighborIds)", () => {
   function simulateSameColumnDrag(
     ids: string[],
     activeId: string,
-    overId: string
+    overId: string,
   ): { beforeId: string | null; afterId: string | null } | "no-op" {
     const oldIndex = ids.indexOf(activeId);
     const newIndex = ids.indexOf(overId);
-    if (oldIndex === -1 || newIndex === -1 || oldIndex === newIndex) return "no-op";
+    if (oldIndex === -1 || newIndex === -1 || oldIndex === newIndex)
+      return "no-op";
     const reordered = arrayMove(ids, oldIndex, newIndex);
     return neighborIds(reordered, newIndex, activeId);
   }

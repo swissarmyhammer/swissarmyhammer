@@ -332,7 +332,8 @@ async fn inspect_updates_ui_state() {
         .await
         .expect("ui.inspect should succeed");
 
-    assert_eq!(engine.ui_state.inspector_stack(), vec!["task:01XYZ"]);
+    // dispatch_simple doesn't set window_label, so falls back to "main"
+    assert_eq!(engine.ui_state.inspector_stack("main"), vec!["task:01XYZ"]);
 }
 
 #[tokio::test]
@@ -352,7 +353,7 @@ async fn inspect_secondary_pushes() {
         .unwrap();
 
     assert_eq!(
-        engine.ui_state.inspector_stack(),
+        engine.ui_state.inspector_stack("main"),
         vec!["task:01XYZ", "tag:01ABC"]
     );
 }
@@ -377,7 +378,7 @@ async fn inspector_close_pops() {
         .await
         .expect("ui.inspector.close should succeed");
 
-    assert_eq!(engine.ui_state.inspector_stack(), vec!["task:01XYZ"]);
+    assert_eq!(engine.ui_state.inspector_stack("main"), vec!["task:01XYZ"]);
 }
 
 #[tokio::test]
@@ -400,7 +401,7 @@ async fn inspector_close_all() {
         .await
         .expect("ui.inspector.close_all should succeed");
 
-    assert!(engine.ui_state.inspector_stack().is_empty());
+    assert!(engine.ui_state.inspector_stack("main").is_empty());
 }
 
 #[tokio::test]
@@ -854,5 +855,472 @@ async fn reorder_move_to_middle() {
             ids[2].clone(),
             ids[3].clone()
         ],
+    );
+}
+
+/// The YAML registry must mark task.move as undoable — this is the gate for
+/// flush_and_emit_for_handle to run and emit entity-field-changed events.
+#[tokio::test]
+async fn task_move_is_undoable_in_registry() {
+    let registry = CommandsRegistry::from_yaml_sources(&builtin_yaml_sources());
+    let cmd_def = registry.get("task.move");
+    assert!(
+        cmd_def.is_some(),
+        "task.move must exist in the YAML registry"
+    );
+    assert!(
+        cmd_def.unwrap().undoable,
+        "task.move must be marked undoable so flush_and_emit fires events"
+    );
+}
+
+/// After task.move, the task's .md file on disk must have the updated position_ordinal.
+/// This is the precondition for flush_and_emit to detect the change and fire events.
+#[tokio::test]
+async fn task_move_writes_new_ordinal_to_disk() {
+    let engine = TestEngine::new().await;
+    let ids = add_tasks(&engine, &["A", "B", "C", "D"]).await;
+
+    // Read C's ordinal before move
+    let task_dir = engine.kanban.root().join("tasks");
+    let c_md_path = task_dir.join(format!("{}.md", &ids[2]));
+    let before_content = std::fs::read_to_string(&c_md_path).expect("should read task C .md");
+    let before_ordinal = before_content
+        .lines()
+        .find(|l| l.starts_with("position_ordinal:"))
+        .expect("should have position_ordinal")
+        .to_string();
+
+    // Move C before B
+    move_before(&engine, &ids[2], &ids[1]).await;
+
+    // Read C's ordinal after move
+    let after_content =
+        std::fs::read_to_string(&c_md_path).expect("should read task C .md after move");
+    let after_ordinal = after_content
+        .lines()
+        .find(|l| l.starts_with("position_ordinal:"))
+        .expect("should have position_ordinal after move")
+        .to_string();
+
+    assert_ne!(
+        before_ordinal, after_ordinal,
+        "position_ordinal in .md file must change after task.move; before={}, after={}",
+        before_ordinal, after_ordinal
+    );
+}
+
+/// Reproduces the exact bug: 4 cards [A, B, C, D], drag C (3rd) to position 2 (before B).
+/// This is the "move 3rd card to 2nd position" scenario that fails in the UI.
+#[tokio::test]
+async fn reorder_move_third_before_second() {
+    let engine = TestEngine::new().await;
+    let ids = add_tasks(&engine, &["A", "B", "C", "D"]).await;
+
+    // Verify initial order: [A, B, C, D]
+    let order = todo_order(&engine).await;
+    assert_eq!(
+        order,
+        vec![
+            ids[0].clone(),
+            ids[1].clone(),
+            ids[2].clone(),
+            ids[3].clone()
+        ]
+    );
+
+    // Move C before B → expected [A, C, B, D]
+    move_before(&engine, &ids[2], &ids[1]).await;
+    let order = todo_order(&engine).await;
+    assert_eq!(
+        order,
+        vec![
+            ids[0].clone(),
+            ids[2].clone(),
+            ids[1].clone(),
+            ids[3].clone()
+        ],
+        "C should be before B after move_before(C, B)"
+    );
+}
+
+/// Verify repeated same-column reorder: move card back and forth.
+#[tokio::test]
+async fn reorder_move_third_before_second_then_back() {
+    let engine = TestEngine::new().await;
+    let ids = add_tasks(&engine, &["A", "B", "C", "D"]).await;
+
+    // Move C before B → [A, C, B, D]
+    move_before(&engine, &ids[2], &ids[1]).await;
+    let order = todo_order(&engine).await;
+    assert_eq!(
+        order,
+        vec![
+            ids[0].clone(),
+            ids[2].clone(),
+            ids[1].clone(),
+            ids[3].clone()
+        ],
+    );
+
+    // Move C back after B → [A, B, C, D] (original order)
+    move_after(&engine, &ids[2], &ids[1]).await;
+    let order = todo_order(&engine).await;
+    assert_eq!(
+        order,
+        vec![
+            ids[0].clone(),
+            ids[1].clone(),
+            ids[2].clone(),
+            ids[3].clone()
+        ],
+        "should return to original order after moving C back after B"
+    );
+}
+
+// ===========================================================================
+// Card 01KMT7ZF59AYKGRA62DBTR9Y6E — DeleteTaskCmd::execute
+// ===========================================================================
+
+#[tokio::test]
+async fn task_delete_removes_task() {
+    let engine = TestEngine::new().await;
+
+    // Add a task
+    let add_result = engine
+        .dispatch_simple("task.add", &["column:todo"], None)
+        .await
+        .expect("task.add should succeed");
+    let task_id = add_result["id"].as_str().unwrap();
+
+    // Verify the task exists
+    assert!(
+        engine
+            .kanban
+            .read_entity_generic("task", task_id)
+            .await
+            .is_ok(),
+        "task should exist after add"
+    );
+
+    // Dispatch task.delete through the command harness
+    let delete_result = engine
+        .dispatch_simple(
+            "task.delete",
+            &[&format!("task:{}", task_id)],
+            None,
+        )
+        .await
+        .expect("task.delete should succeed");
+
+    assert!(
+        delete_result.get("operation_id").is_some(),
+        "result should contain operation_id"
+    );
+
+    // Verify the task is gone
+    assert!(
+        engine
+            .kanban
+            .read_entity_generic("task", task_id)
+            .await
+            .is_err(),
+        "task should not exist after delete"
+    );
+}
+
+// ===========================================================================
+// Card 01KMT7ZAFSH0BW898EV3MF3M5E — MoveTaskCmd swimlane arg
+// ===========================================================================
+
+#[tokio::test]
+async fn task_move_with_swimlane_arg() {
+    let engine = TestEngine::new().await;
+
+    // Create a swimlane via the lower-level API
+    let processor = KanbanOperationProcessor::new();
+    processor
+        .process(
+            &swissarmyhammer_kanban::swimlane::AddSwimlane::new("urgent", "Urgent"),
+            &engine.kanban,
+        )
+        .await
+        .expect("swimlane creation should succeed");
+
+    // Add a task in todo
+    let add_result = engine
+        .dispatch_simple("task.add", &["column:todo"], None)
+        .await
+        .expect("task.add should succeed");
+    let task_id = add_result["id"].as_str().unwrap();
+
+    // Verify task has no swimlane initially
+    let task = engine
+        .kanban
+        .read_entity_generic("task", task_id)
+        .await
+        .unwrap();
+    assert!(
+        task.get_str("position_swimlane").is_none()
+            || task.get_str("position_swimlane") == Some(""),
+        "task should have no swimlane initially"
+    );
+
+    // Move task to doing with swimlane arg
+    let mut args = HashMap::new();
+    args.insert("column".to_string(), json!("doing"));
+    args.insert("swimlane".to_string(), json!("urgent"));
+
+    let move_result = engine
+        .dispatch(
+            "task.move",
+            &[&format!("task:{}", task_id)],
+            None,
+            args,
+        )
+        .await
+        .expect("task.move with swimlane should succeed");
+
+    assert!(move_result.get("operation_id").is_some());
+
+    // Verify the task is in the correct column and swimlane
+    let task = engine
+        .kanban
+        .read_entity_generic("task", task_id)
+        .await
+        .unwrap();
+    assert_eq!(
+        task.get_str("position_column"),
+        Some("doing"),
+        "task should be in doing column"
+    );
+    assert_eq!(
+        task.get_str("position_swimlane"),
+        Some("urgent"),
+        "task should be in urgent swimlane"
+    );
+}
+
+// ===========================================================================
+// Card 01KMT7ZD38JXSKZT7Q51VA334C — TagTaskCmd::execute
+// ===========================================================================
+
+#[tokio::test]
+async fn task_tag_applies_tag() {
+    let engine = TestEngine::new().await;
+
+    // Create a tag via the lower-level API
+    let processor = KanbanOperationProcessor::new();
+    processor
+        .process(
+            &swissarmyhammer_kanban::tag::AddTag::new("feature"),
+            &engine.kanban,
+        )
+        .await
+        .expect("tag creation should succeed");
+
+    // Add a task
+    let add_result = engine
+        .dispatch_simple("task.add", &["column:todo"], None)
+        .await
+        .expect("task.add should succeed");
+    let task_id = add_result["id"].as_str().unwrap();
+
+    // Verify the task has no tags initially
+    let task = engine
+        .kanban
+        .read_entity_generic("task", task_id)
+        .await
+        .unwrap();
+    let tags = task
+        .get("tags")
+        .and_then(|v| v.as_array().cloned())
+        .unwrap_or_default();
+    assert!(
+        !tags.iter().any(|t| t.as_str() == Some("feature")),
+        "task should not have 'feature' tag initially"
+    );
+
+    // Dispatch task.tag via the command harness
+    let tag_result = engine
+        .dispatch_simple(
+            "task.tag",
+            &["tag:feature", &format!("task:{}", task_id)],
+            None,
+        )
+        .await
+        .expect("task.tag should succeed");
+
+    assert!(
+        tag_result.get("operation_id").is_some(),
+        "result should contain operation_id"
+    );
+
+    // Verify the tag was applied
+    let task = engine
+        .kanban
+        .read_entity_generic("task", task_id)
+        .await
+        .unwrap();
+    let tags = task
+        .get("tags")
+        .and_then(|v| v.as_array().cloned())
+        .unwrap_or_default();
+    assert!(
+        tags.iter().any(|t| t.as_str() == Some("feature")),
+        "task should have 'feature' tag after task.tag"
+    );
+}
+
+// ===========================================================================
+// Card 01KMT7Z4560S3CSHNQVR7GQ7PY — DragCompleteCmd same-board
+// ===========================================================================
+
+#[tokio::test]
+async fn drag_complete_same_board_moves_task() {
+    let engine = TestEngine::new().await;
+
+    // Add a task in todo
+    let add_result = engine
+        .dispatch_simple("task.add", &["column:todo"], None)
+        .await
+        .expect("task.add should succeed");
+    let task_id = add_result["id"].as_str().unwrap();
+
+    // Start a drag session
+    let board_path = engine.kanban.root().to_string_lossy().to_string();
+    let mut start_args = HashMap::new();
+    start_args.insert("taskId".to_string(), json!(task_id));
+    start_args.insert("boardPath".to_string(), json!(&board_path));
+
+    engine
+        .dispatch("drag.start", &[], None, start_args)
+        .await
+        .expect("drag.start should succeed");
+
+    // Complete the drag on the same board, targeting "doing" column
+    let mut complete_args = HashMap::new();
+    complete_args.insert("targetBoardPath".to_string(), json!(&board_path));
+    complete_args.insert("targetColumn".to_string(), json!("doing"));
+
+    let result = engine
+        .dispatch("drag.complete", &[], None, complete_args)
+        .await
+        .expect("drag.complete should succeed");
+
+    // Verify the result indicates same-board completion
+    let drag_complete = result
+        .get("DragComplete")
+        .expect("result should have DragComplete key");
+    assert_eq!(
+        drag_complete["same_board"].as_bool(),
+        Some(true),
+        "should be same-board drag"
+    );
+    assert_eq!(
+        drag_complete["task_id"].as_str(),
+        Some(task_id),
+        "task_id should match"
+    );
+    assert_eq!(
+        drag_complete["target_column"].as_str(),
+        Some("doing"),
+        "target column should be doing"
+    );
+
+    // Verify the task actually moved to "doing"
+    let task = engine
+        .kanban
+        .read_entity_generic("task", task_id)
+        .await
+        .unwrap();
+    assert_eq!(
+        task.get_str("position_column"),
+        Some("doing"),
+        "task should be in doing column after drag complete"
+    );
+}
+
+// ===========================================================================
+// Card 01KMT7Z7N9FD6ZJ7K48FPDQFM4 — DragCompleteCmd cross-board
+// ===========================================================================
+
+#[tokio::test]
+async fn drag_complete_cross_board_returns_transfer_params() {
+    let engine = TestEngine::new().await;
+
+    // Add a task in todo
+    let add_result = engine
+        .dispatch_simple("task.add", &["column:todo"], None)
+        .await
+        .expect("task.add should succeed");
+    let task_id = add_result["id"].as_str().unwrap();
+
+    // Start a drag session with source board path
+    let source_board_path = "/boards/source/.kanban";
+    let mut start_args = HashMap::new();
+    start_args.insert("taskId".to_string(), json!(task_id));
+    start_args.insert("boardPath".to_string(), json!(source_board_path));
+
+    engine
+        .dispatch("drag.start", &[], None, start_args)
+        .await
+        .expect("drag.start should succeed");
+
+    // Complete the drag targeting a DIFFERENT board path
+    let target_board_path = "/boards/target/.kanban";
+    let mut complete_args = HashMap::new();
+    complete_args.insert("targetBoardPath".to_string(), json!(target_board_path));
+    complete_args.insert("targetColumn".to_string(), json!("done"));
+    complete_args.insert("dropIndex".to_string(), json!(0));
+
+    let result = engine
+        .dispatch("drag.complete", &[], None, complete_args)
+        .await
+        .expect("drag.complete should succeed");
+
+    // Verify the result indicates cross-board completion
+    let drag_complete = result
+        .get("DragComplete")
+        .expect("result should have DragComplete key");
+    assert_eq!(
+        drag_complete["same_board"].as_bool(),
+        Some(false),
+        "should not be same-board"
+    );
+    assert_eq!(
+        drag_complete["cross_board"].as_bool(),
+        Some(true),
+        "should be cross-board drag"
+    );
+    assert_eq!(
+        drag_complete["source_board_path"].as_str(),
+        Some(source_board_path),
+        "source board path should match"
+    );
+    assert_eq!(
+        drag_complete["target_board_path"].as_str(),
+        Some(target_board_path),
+        "target board path should match"
+    );
+    assert_eq!(
+        drag_complete["task_id"].as_str(),
+        Some(task_id),
+        "task_id should match"
+    );
+    assert_eq!(
+        drag_complete["target_column"].as_str(),
+        Some("done"),
+        "target column should be done"
+    );
+    assert_eq!(
+        drag_complete["drop_index"].as_u64(),
+        Some(0),
+        "drop_index should be passed through"
+    );
+    assert_eq!(
+        drag_complete["copy_mode"].as_bool(),
+        Some(false),
+        "copy_mode should default to false"
     );
 }

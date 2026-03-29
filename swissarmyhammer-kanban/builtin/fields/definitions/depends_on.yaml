@@ -1,11 +1,12 @@
 id: "00000000000000000000000007"
 name: depends_on
-description: Task dependencies
+description: These tasks must be done before this task starts
 type:
   kind: reference
   entity: task
   multiple: true
+icon: workflow
 editor: multi-select
 display: badge-list
 width: 200
-section: body
+section: header

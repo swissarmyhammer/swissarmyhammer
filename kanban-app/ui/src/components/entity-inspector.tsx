@@ -1,26 +1,44 @@
-import { useState, useCallback, useMemo, useRef } from "react";
-import { HexColorPicker } from "react-colorful";
-import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
-import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
-import { ACTOR_COLORS } from "@/lib/actor-colors";
-import { EditableMarkdown } from "@/components/editable-markdown";
-import { SubtaskProgress } from "@/components/subtask-progress";
-import { CellDispatch } from "@/components/cells";
+import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import {
-  resolveEditor,
-  MarkdownEditor,
-  SelectEditor,
-  NumberEditor,
-  DateEditor,
-  MultiSelectEditor,
-} from "@/components/fields/editors";
+  Tooltip,
+  TooltipTrigger,
+  TooltipContent,
+} from "@/components/ui/tooltip";
+import { resolveEditor } from "@/components/fields/editors";
+import { Field } from "@/components/fields/field";
 import { useSchema } from "@/lib/schema-context";
-import { useFieldUpdate } from "@/lib/field-update-context";
+import {
+  useInspectorNav,
+  type UseInspectorNavReturn,
+  type InspectorMode,
+} from "@/hooks/use-inspector-nav";
 import type { FieldDef, Entity } from "@/types/kanban";
-import { getStr } from "@/types/kanban";
+import { FocusScope } from "@/components/focus-scope";
+import { useEntityFocus } from "@/lib/entity-focus-context";
+import { useIsFocused, type ClaimPredicate } from "@/lib/entity-focus-context";
+import { fieldMoniker } from "@/lib/moniker";
+import { icons, HelpCircle } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
+
+/** Convert kebab-case icon name (e.g. "file-text") to PascalCase key (e.g. "FileText"). */
+function kebabToPascal(s: string): string {
+  return s.replace(/(^|-)([a-z])/g, (_, _dash, c) => c.toUpperCase());
+}
+
+/** Resolve the lucide icon component from a field's `icon` property. */
+function fieldIcon(field: FieldDef): LucideIcon {
+  if (field.icon) {
+    const key = kebabToPascal(field.icon);
+    const Icon = icons[key as keyof typeof icons];
+    if (Icon) return Icon;
+  }
+  return HelpCircle;
+}
 
 interface EntityInspectorProps {
   entity: Entity;
+  /** Ref callback to expose the nav state to parent (InspectorFocusBridge). */
+  navRef?: React.RefObject<UseInspectorNavReturn | null>;
 }
 
 /**
@@ -30,15 +48,18 @@ interface EntityInspectorProps {
  * Fields with `section: "hidden"` are not rendered.
  * Fields default to "body" if no section is specified.
  *
+ * Navigation is pull-based: each field row's FocusScope gets claimWhen
+ * predicates computed from its position in the field list. A mount effect
+ * focuses the first field via setFocus. After that, navigation is purely
+ * driven by broadcastNavCommand triggering claimWhen predicates.
+ *
  * Pulls everything from context:
  * - Field definitions and ordering from SchemaContext
- * - Tag entities from EntityStoreContext (for body_field markdown decorations)
  * - Save function from FieldUpdateContext (used internally by FieldRow)
  */
-export function EntityInspector({ entity }: EntityInspectorProps) {
+export function EntityInspector({ entity, navRef }: EntityInspectorProps) {
   const { getSchema } = useSchema();
   const schema = getSchema(entity.entity_type);
-  const bodyFieldName = schema?.entity.body_field;
   const fields = schema?.fields ?? [];
 
   const sections = useMemo(() => {
@@ -55,19 +76,123 @@ export function EntityInspector({ entity }: EntityInspectorProps) {
     return { header, body, footer };
   }, [fields]);
 
+  /** Flat ordered list of all navigable fields (header → body → footer). */
+  const navigableFields = useMemo(
+    () => [...sections.header, ...sections.body, ...sections.footer],
+    [sections],
+  );
+
+  const nav = useInspectorNav();
+
+  // Expose nav to parent (InspectorFocusBridge) via ref
+  if (navRef) navRef.current = nav;
+
+  /** Monikers for all navigable fields, in flat order. */
+  const fieldMonikers = useMemo(
+    () => navigableFields.map((f) => fieldMoniker(entity.entity_type, entity.id, f.name)),
+    [navigableFields, entity.entity_type, entity.id],
+  );
+
+  /** ClaimWhen predicates for each field at index i. */
+  const claimPredicates = useMemo(() => {
+    /** Check if a moniker is one of this inspector's fields or a descendant of one. */
+    const isInspectorField = (f: string | null, isDescendantOf: (a: string) => boolean): boolean => {
+      if (!f) return false;
+      if (fieldMonikers.includes(f)) return true;
+      // Check if focused element is a child of any field (e.g. a pill inside a badge-list)
+      return fieldMonikers.some((m) => isDescendantOf(m));
+    };
+
+    return fieldMonikers.map((_, i) => {
+      const predicates: ClaimPredicate[] = [];
+      // nav.down: claim if the field above me (or a child of it) is focused
+      if (i > 0) {
+        const prev = fieldMonikers[i - 1];
+        predicates.push({
+          command: "nav.down",
+          when: (f, isDescendantOf) => f === prev || isDescendantOf(prev),
+        });
+      }
+      // nav.up: claim if the field below me (or a child of it) is focused
+      if (i < fieldMonikers.length - 1) {
+        const next = fieldMonikers[i + 1];
+        predicates.push({
+          command: "nav.up",
+          when: (f, isDescendantOf) => f === next || isDescendantOf(next),
+        });
+      }
+      // nav.left: claim if a descendant (e.g. first pill in a badge-list) is focused.
+      // Pill predicates register before field rows (children before parents), so a
+      // middle pill's nav.left fires first.  Only when no pill matches (the first pill
+      // has no nav.left predicate) does this field-row predicate win.
+      predicates.push({
+        command: "nav.left",
+        when: (f, isDescendantOf) => f !== fieldMonikers[i] && isDescendantOf(fieldMonikers[i]),
+      });
+      // nav.first: claim if I'm the first field AND any sibling (or descendant) is focused
+      if (i === 0) {
+        predicates.push({
+          command: "nav.first",
+          when: (f, isDescendantOf) =>
+            isInspectorField(f, isDescendantOf) && f !== fieldMonikers[0],
+        });
+      }
+      // nav.last: claim if I'm the last field AND any sibling (or descendant) is focused
+      if (i === fieldMonikers.length - 1) {
+        predicates.push({
+          command: "nav.last",
+          when: (f, isDescendantOf) =>
+            isInspectorField(f, isDescendantOf) && f !== fieldMonikers[fieldMonikers.length - 1],
+        });
+      }
+      return predicates;
+    });
+  }, [fieldMonikers]);
+
+  // Focus the first field on mount, restore previous focus on unmount.
+  // No claim stack — just direct setFocus. claimWhen handles all subsequent navigation.
+  const { setFocus, focusedMoniker } = useEntityFocus();
+  const prevFocusRef = useRef<string | null>(null);
+  const mountedRef = useRef(false);
+  const firstFieldMoniker = fieldMonikers[0];
+
+  useEffect(() => {
+    if (!firstFieldMoniker) return;
+    // Only capture previous focus on true first mount, not on re-runs
+    if (!mountedRef.current) {
+      prevFocusRef.current = focusedMoniker;
+      mountedRef.current = true;
+    }
+    setFocus(firstFieldMoniker);
+    return () => {
+      setFocus(prevFocusRef.current);
+      mountedRef.current = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [firstFieldMoniker, setFocus]);
+
   if (fields.length === 0) {
     return <p className="text-sm text-muted-foreground">Loading schema...</p>;
   }
 
-  const renderField = (field: FieldDef, showLabel = true) => (
-    <FieldRow
-      key={field.name}
-      field={field}
-      entity={entity}
-      bodyFieldName={bodyFieldName}
-      showLabel={showLabel}
-    />
-  );
+  /** Track the running index across sections so each FieldRow knows its flat position. */
+  let flatIndex = 0;
+
+  const renderField = (field: FieldDef, showLabel = true) => {
+    const index = flatIndex++;
+    return (
+      <FieldRow
+        key={field.name}
+        field={field}
+        entity={entity}
+        showLabel={showLabel}
+        claimWhen={claimPredicates[index]}
+        inspectorMode={nav.mode}
+        onExitEdit={nav.exitEdit}
+        onEnterEdit={nav.enterEdit}
+      />
+    );
+  };
 
   return (
     <div data-testid="entity-inspector">
@@ -99,243 +224,127 @@ export function EntityInspector({ entity }: EntityInspectorProps) {
 interface FieldRowProps {
   field: FieldDef;
   entity: Entity;
-  bodyFieldName?: string;
   showLabel?: boolean;
+  claimWhen?: ClaimPredicate[];
+  inspectorMode?: InspectorMode;
+  onExitEdit?: () => void;
+  onEnterEdit?: () => void;
 }
 
 /**
- * A single field row in the inspector. Manages its own editing state
- * and persists changes via useFieldUpdate — no onCommit prop needed.
+ * A single field row in the inspector. Manages editing state.
+ * Field handles data binding, save, and display/editor dispatch.
+ *
+ * Wrapped in a FocusScope so the entity-focus system drives the
+ * data-focused attribute — no explicit `focused` prop needed.
+ *
+ * Uses useIsFocused to determine if this row is the focused field.
+ * Editing is triggered when isFocused AND inspectorMode === "edit".
+ *
+ * @param claimWhen - Predicates for pull-based navigation via broadcastNavCommand
+ * @param inspectorMode - Current inspector mode (normal or edit)
+ * @param onExitEdit - Callback to tell the inspector nav that editing is done
+ * @param onEnterEdit - Callback to enter edit mode on the inspector
  */
 function FieldRow({
   field,
   entity,
-  bodyFieldName,
   showLabel = true,
+  claimWhen,
+  inspectorMode,
+  onExitEdit,
+  onEnterEdit,
 }: FieldRowProps) {
   const [editing, setEditing] = useState(false);
-  const { updateField } = useFieldUpdate();
 
   const editable = isEditable(field);
+  const scopeMoniker = fieldMoniker(entity.entity_type, entity.id, field.name);
+  const isFocused = useIsFocused(scopeMoniker);
+  const shouldEdit = isFocused && inspectorMode === "edit" && editable;
+
+  /** Sync inspector-driven edit mode into local editing state. */
+  useEffect(() => {
+    if (shouldEdit) {
+      setEditing(true);
+    }
+  }, [shouldEdit]);
 
   const handleEdit = useCallback(() => {
-    if (editable) setEditing(true);
-  }, [editable]);
+    if (editable) {
+      onEnterEdit?.();
+      setEditing(true);
+    }
+  }, [editable, onEnterEdit]);
 
-  const handleCommit = useCallback(
-    (value: unknown) => {
-      setEditing(false);
-      updateField(entity.entity_type, entity.id, field.name, value).catch(() => {});
-    },
-    [updateField, entity.entity_type, entity.id, field.name],
-  );
+  const handleDone = useCallback(() => {
+    setEditing(false);
+    onExitEdit?.();
+  }, [onExitEdit]);
 
   const handleCancel = useCallback(() => {
     setEditing(false);
-  }, []);
+    onExitEdit?.();
+  }, [onExitEdit]);
 
   const content = (
-    <FieldDispatch
-      field={field}
-      value={entity.fields[field.name]}
-      entity={entity}
+    <Field
+      fieldDef={field}
+      entityType={entity.entity_type}
+      entityId={entity.id}
+      mode="full"
       editing={editing && editable}
-      bodyFieldName={bodyFieldName}
       onEdit={handleEdit}
-      onCommit={handleCommit}
+      onDone={handleDone}
       onCancel={handleCancel}
     />
   );
 
-  if (!showLabel) {
-    return <section data-testid={`field-row-${field.name}`}>{content}</section>;
+  const Icon = field.icon ? fieldIcon(field) : null;
+  const tip = field.description || fieldLabel(field);
+
+  if (!showLabel && !Icon) {
+    return (
+      <FocusScope
+        moniker={scopeMoniker}
+        commands={[]}
+        claimWhen={claimWhen}
+        data-testid={`field-row-${field.name}`}
+      >
+        {content}
+      </FocusScope>
+    );
   }
 
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <section data-testid={`field-row-${field.name}`}>{content}</section>
-      </TooltipTrigger>
-      <TooltipContent side="top" align="start">
-        {fieldLabel(field)}
-      </TooltipContent>
-    </Tooltip>
+    <FocusScope
+      moniker={scopeMoniker}
+      commands={[]}
+      claimWhen={claimWhen}
+      data-testid={`field-row-${field.name}`}
+      className="flex items-start gap-2"
+    >
+      {Icon && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="mt-0.5 shrink-0 text-muted-foreground">
+              <Icon size={14} />
+            </span>
+          </TooltipTrigger>
+          <TooltipContent side="left" align="start">
+            {tip}
+          </TooltipContent>
+        </Tooltip>
+      )}
+      <div className="flex-1 min-w-0">{content}</div>
+    </FocusScope>
   );
 }
 
-/** Check if a field is editable in the inspector. */
+/** Check if a field is editable in the inspector — driven by the field's editor property. */
 function isEditable(field: FieldDef): boolean {
-  if (field.type.kind === "computed" && (field.type as Record<string, unknown>).derive === "parse-body-tags") {
-    return true;
-  }
-  return field.type.kind !== "computed";
-}
-
-function FieldDispatch({
-  field,
-  value,
-  entity,
-  editing,
-  bodyFieldName,
-  onEdit,
-  onCommit,
-  onCancel,
-}: {
-  field: FieldDef;
-  value: unknown;
-  entity: Entity;
-  editing: boolean;
-  bodyFieldName?: string;
-  onEdit: () => void;
-  onCommit: (value: unknown) => void;
-  onCancel: () => void;
-}) {
-  // Markdown fields — EditableMarkdown handles its own display/edit toggle
-  // Mentions (tags, actors, etc.) are read from context automatically.
-  if (field.type.kind === "markdown") {
-    const text = typeof value === "string" ? value : "";
-    const multiline = !field.type.single_line;
-    return (
-      <EditableMarkdown
-        value={text}
-        onCommit={(v) => onCommit(v)}
-        multiline={multiline}
-        className="text-sm leading-relaxed cursor-text"
-        inputClassName="text-sm leading-relaxed bg-transparent w-full"
-        placeholder={`Add ${field.name.replace(/_/g, " ")}...`}
-      />
-    );
-  }
-
-  // Computed: progress — render as SubtaskProgress bar using the body field
-  if (field.type.kind === "computed" && (field.type as Record<string, unknown>).derive === "parse-body-progress") {
-    const bodyText = bodyFieldName ? getStr(entity, bodyFieldName) || undefined : undefined;
-    return <SubtaskProgress description={bodyText} />;
-  }
-
-  // Color fields — palette + picker (always interactive)
-  if (field.type.kind === "color") {
-    const hex = typeof value === "string" ? value : "888888";
-    return <ColorField value={hex} onCommit={(v) => onCommit(v)} />;
-  }
-
-  // Editing: dispatch to shared editor components
-  if (editing) {
-    const editor = resolveEditor(field);
-    const editorProps = { value, onCommit, onCancel, mode: "full" as const };
-
-    switch (editor) {
-      case "select":
-        return <SelectEditor {...editorProps} field={field} />;
-      case "number":
-        return <NumberEditor {...editorProps} />;
-      case "date":
-        return <DateEditor {...editorProps} />;
-      case "multi-select":
-        return <MultiSelectEditor {...editorProps} field={field} entity={entity} />;
-      case "markdown":
-      default:
-        return (
-          <MarkdownEditor
-            {...editorProps}
-            placeholder={`Add ${field.name.replace(/_/g, " ")}...`}
-          />
-        );
-    }
-  }
-
-  // Read-only: use the same CellDispatch as the grid — single rendering path
-  if (isEmpty(value)) {
-    return (
-      <div className="text-sm cursor-text min-h-[1.25rem] text-muted-foreground/50 italic" onClick={onEdit}>
-        {fieldLabel(field)}
-      </div>
-    );
-  }
-  return (
-    <div className="text-sm cursor-text min-h-[1.25rem]" onClick={onEdit}>
-      <CellDispatch field={field} value={value} entity={entity} />
-    </div>
-  );
-}
-
-/** Palette for the color-picker grid — uses the canonical actor palette. */
-const COLOR_PALETTE = ACTOR_COLORS;
-
-function ColorField({ value, onCommit }: { value: string; onCommit: (v: string) => void }) {
-  const [selected, setSelected] = useState(value);
-  const [pickerOpen, setPickerOpen] = useState(false);
-  const timerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
-
-  const saveDebounced = useCallback(
-    (color: string) => {
-      clearTimeout(timerRef.current);
-      timerRef.current = setTimeout(() => onCommit(color), 150);
-    },
-    [onCommit],
-  );
-
-  return (
-    <div className="flex items-start gap-2">
-      <div className="grid grid-cols-8 gap-1 flex-1">
-        {COLOR_PALETTE.map((color, i) => (
-          <button
-            key={`${color}-${i}`}
-            type="button"
-            className={`w-6 h-6 rounded-full border-2 transition-all ${
-              selected === color
-                ? "border-foreground scale-110"
-                : "border-transparent hover:border-muted-foreground/50"
-            }`}
-            style={{ backgroundColor: `#${color}` }}
-            onClick={() => { setSelected(color); onCommit(color); }}
-          />
-        ))}
-      </div>
-      <Popover open={pickerOpen} onOpenChange={setPickerOpen}>
-        <PopoverTrigger asChild>
-          <button
-            type="button"
-            className="shrink-0 w-8 h-8 rounded-md border border-input cursor-pointer"
-            style={{ backgroundColor: `#${selected}` }}
-          />
-        </PopoverTrigger>
-        <PopoverContent align="end" className="w-auto p-3">
-          <HexColorPicker
-            color={`#${selected}`}
-            onChange={(hex) => {
-              const c = hex.replace("#", "");
-              setSelected(c);
-              saveDebounced(c);
-            }}
-          />
-          <div className="mt-2 flex items-center gap-2">
-            <span className="text-xs text-muted-foreground">#</span>
-            <input
-              type="text"
-              value={selected}
-              onChange={(e) => {
-                const v = e.target.value.replace(/[^0-9a-fA-F]/g, "").slice(0, 6);
-                setSelected(v);
-                if (v.length === 6) saveDebounced(v);
-              }}
-              className="flex-1 text-xs font-mono bg-transparent border border-input rounded px-1.5 py-0.5"
-              maxLength={6}
-            />
-          </div>
-        </PopoverContent>
-      </Popover>
-    </div>
-  );
+  return resolveEditor(field) !== "none";
 }
 
 function fieldLabel(field: FieldDef): string {
   return field.name.replace(/_/g, " ");
-}
-
-function isEmpty(value: unknown): boolean {
-  if (value == null) return true;
-  if (value === "") return true;
-  if (Array.isArray(value) && value.length === 0) return true;
-  return false;
 }

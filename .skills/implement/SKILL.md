@@ -3,7 +3,7 @@ name: implement
 description: Implementation workflow. Use this skill whenever you are implementing, coding, or building. Picks up one kanban card and does the work. Produces verbose output — automatically delegates to an implementer subagent.
 metadata:
   author: "swissarmyhammer"
-  version: "0.10.1"
+  version: "0.11.0"
 ---
 
 ## Project Detection
@@ -14,15 +14,7 @@ To discover project types, build commands, and language-specific guidelines for 
 {"op": "detect projects"}
 ```
 
-This will scan the directory tree and return:
-- All detected project types (Rust, Node.js, Python, Go, Java, C#, CMake, Makefile, Flutter, PHP)
-- Project locations as relative paths
-- Workspace/monorepo membership
-- Language-specific guidelines for testing, building, formatting, and linting
-
 **Call this early in your session** to understand the project structure before making changes. The guidelines returned are authoritative — follow them for test commands, build commands, and formatting.
-
-** Fix the root cause, not the symptoms **
 
 ## Code Quality
 
@@ -52,7 +44,7 @@ This will scan the directory tree and return:
 
 ## Test Driven Development
 
-Write tests first, then implementation. This ensures code is testable and requirements are clear.
+Write tests first, then implementation. TDD, RED, GREEN, REFACTOR.
 
 ### TDD Cycle
 
@@ -129,4 +121,3 @@ Only exception: if the card description explicitly says **auto-continue** or **c
 - Do NOT use TodoWrite, TaskCreate, or any other task tracking — the kanban board is the single source of truth.
 - If you discover new work, add it as a new kanban card.
 - If you get stuck, report what you tried and where you're blocked — don't silently give up.
-- **Do NOT create additional worktrees.** Spawning agents with `isolation: "worktree"` causes changes to be lost — agents write to isolated copies that are never merged back. All agents must work directly in the current working tree.

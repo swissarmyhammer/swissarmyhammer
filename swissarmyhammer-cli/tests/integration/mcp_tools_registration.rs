@@ -199,7 +199,7 @@ async fn test_tool_schemas_are_claude_api_compatible() {
     println!("   No oneOf/allOf/anyOf constructs found at top level");
 }
 
-/// Test that verifies kanban tool schema has all 50 operations
+/// Test that verifies kanban tool schema has all 44 operations
 #[tokio::test]
 async fn test_kanban_schema_has_all_operations() {
     let mut registry = ToolRegistry::new();
@@ -216,8 +216,8 @@ async fn test_kanban_schema_has_all_operations() {
     let op_count = op_enum.as_array().expect("op enum should be array").len();
 
     assert_eq!(
-        op_count, 41,
-        "Expected 41 operations in op enum, got {}",
+        op_count, 44,
+        "Expected 44 operations in op enum, got {}",
         op_count
     );
 
@@ -229,8 +229,8 @@ async fn test_kanban_schema_has_all_operations() {
         .len();
 
     assert_eq!(
-        op_schemas_count, 41,
-        "Expected 41 operation schemas, got {}",
+        op_schemas_count, 44,
+        "Expected 44 operation schemas, got {}",
         op_schemas_count
     );
 
@@ -243,6 +243,9 @@ async fn test_kanban_schema_has_all_operations() {
         "complete task",
         "add attachment",
         "list activity",
+        "archive task",
+        "unarchive task",
+        "list archived",
     ];
 
     for expected_op in &expected_ops {
@@ -253,6 +256,6 @@ async fn test_kanban_schema_has_all_operations() {
         );
     }
 
-    println!("✅ Kanban schema has all 41 operations");
+    println!("✅ Kanban schema has all 44 operations");
     println!("   Including: add attachment");
 }

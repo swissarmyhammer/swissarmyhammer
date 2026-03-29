@@ -5,6 +5,7 @@ type:
   kind: reference
   entity: actor
   multiple: true
+icon: users
 editor: multi-select
 display: avatar
 width: 150

@@ -1,0 +1,22 @@
+- id: file.switchBoard
+  name: Switch Board
+  undoable: false
+
+- id: file.closeBoard
+  name: Close Board
+  undoable: false
+  keys:
+    cua: Mod+W
+    vim: Mod+W
+
+- id: file.newBoard
+  name: New Board
+  undoable: false
+  keys:
+    cua: Mod+Shift+N
+
+- id: file.openBoard
+  name: Open Board
+  undoable: false
+  keys:
+    cua: Mod+O

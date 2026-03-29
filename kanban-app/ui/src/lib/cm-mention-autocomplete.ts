@@ -21,7 +21,9 @@ export interface MentionSearchResult {
 export type MentionSearchSync = (query: string) => MentionSearchResult[];
 
 /** Async search function type — calls backend */
-export type MentionSearchAsync = (query: string) => Promise<MentionSearchResult[]>;
+export type MentionSearchAsync = (
+  query: string,
+) => Promise<MentionSearchResult[]>;
 
 /**
  * Create a completion source for a given prefix. Returns just the source
@@ -34,7 +36,9 @@ export type MentionSearchAsync = (query: string) => Promise<MentionSearchResult[
 export function createMentionCompletionSource(
   prefix: string,
   search: MentionSearchSync | MentionSearchAsync,
-): (context: CompletionContext) => CompletionResult | null | Promise<CompletionResult | null> {
+): (
+  context: CompletionContext,
+) => CompletionResult | null | Promise<CompletionResult | null> {
   const prefixRegex = new RegExp(`\\${prefix}\\S*`);
 
   return (context: CompletionContext) => {
@@ -83,7 +87,11 @@ export function createMentionCompletionSource(
  * occurs when multiple `autocompletion()` calls are combined.
  */
 export function createMentionAutocomplete(
-  sources: Array<(context: CompletionContext) => CompletionResult | null | Promise<CompletionResult | null>>,
+  sources: Array<
+    (
+      context: CompletionContext,
+    ) => CompletionResult | null | Promise<CompletionResult | null>
+  >,
 ) {
   return autocompletion({
     override: sources,
@@ -96,7 +104,9 @@ export function createMentionAutocomplete(
  * Create a sync search function from a slug→color Map.
  * This preserves the existing tag autocomplete behavior.
  */
-export function syncSearchFromMap(colors: Map<string, string>): MentionSearchSync {
+export function syncSearchFromMap(
+  colors: Map<string, string>,
+): MentionSearchSync {
   return (query: string) => {
     const results: MentionSearchResult[] = [];
     for (const [slug, color] of colors) {
