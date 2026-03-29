@@ -1229,30 +1229,17 @@ pub async fn list_available_commands(
     serde_json::to_value(&available).map_err(|e| e.to_string())
 }
 
-/// Resolve `{{entity.type}}` from the scope chain for a command.
+/// Resolve `{{entity.type}}` from the scope chain.
 ///
-/// Walks the scope chain (innermost first) and returns the entity type
-/// from the first moniker that matches the command's scope requirement.
-/// Falls back to the first entity type found if no scope requirement is set.
+/// Returns the entity type from the innermost moniker in the scope chain.
+/// This is what the user is acting on — the focused entity.
 pub(crate) fn resolve_entity_type_from_scope<'a>(
     scope: &'a [String],
-    def: &swissarmyhammer_commands::CommandDef,
+    _def: &swissarmyhammer_commands::CommandDef,
 ) -> &'a str {
-    // Parse scope requirement entity types (e.g. "entity:task,entity:tag" → ["task", "tag"])
-    let required_types: Vec<&str> = def
-        .scope
-        .as_deref()
-        .unwrap_or("")
-        .split(',')
-        .filter_map(|s| s.trim().strip_prefix("entity:"))
-        .collect();
-
-    // Walk scope chain innermost first
     for moniker in scope {
         if let Some((entity_type, _id)) = moniker.split_once(':') {
-            if required_types.is_empty() || required_types.contains(&entity_type) {
-                return entity_type;
-            }
+            return entity_type;
         }
     }
     "entity"
