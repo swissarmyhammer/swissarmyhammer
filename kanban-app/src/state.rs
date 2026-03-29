@@ -259,7 +259,7 @@ pub(crate) struct AppState {
     /// Trait object map from `register_commands()`.
     pub(crate) command_impls: HashMap<String, Arc<dyn Command>>,
     /// Cached menu item handles keyed by command ID. Populated when the menu
-    /// is rebuilt from the frontend manifest, used by `update_menu_enabled_state`
+    /// is built from the command registry, used by `update_menu_enabled_state`
     /// to toggle enabled/disabled without a full menu rebuild.
     pub(crate) menu_items: Mutex<HashMap<String, MenuItemHandle>>,
     /// Set to `true` when the app is shutting down (RunEvent::ExitRequested).
