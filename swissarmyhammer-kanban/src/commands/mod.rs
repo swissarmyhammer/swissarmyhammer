@@ -5,6 +5,7 @@
 //! trait objects, ready to be inserted into a `CommandsRegistry`.
 
 pub mod app_commands;
+pub mod clipboard_commands;
 pub mod column_commands;
 pub mod drag_commands;
 pub mod entity_commands;
@@ -74,6 +75,13 @@ pub fn register_commands() -> HashMap<String, Arc<dyn Command>> {
         "attachment.delete".into(),
         Arc::new(entity_commands::AttachmentDeleteCmd),
     );
+
+    // Clipboard commands
+    map.insert(
+        "entity.copy".into(),
+        Arc::new(clipboard_commands::CopyCmd),
+    );
+    map.insert("entity.cut".into(), Arc::new(clipboard_commands::CutCmd));
 
     // Column commands
     map.insert(
@@ -175,8 +183,8 @@ mod tests {
     #[test]
     fn register_commands_returns_expected_count() {
         let cmds = register_commands();
-        // 5 task + 4 entity + 1 tag + 1 attachment + 1 column + 7 UI + 6 app + 2 file + 3 drag = 30
-        assert_eq!(cmds.len(), 30);
+        // 5 task + 4 entity + 2 clipboard + 1 tag + 1 attachment + 1 column + 7 UI + 6 app + 2 file + 3 drag = 32
+        assert_eq!(cmds.len(), 32);
     }
 
     // =========================================================================
@@ -269,6 +277,38 @@ mod tests {
         let cmd = cmds.get("task.delete").unwrap();
         let ctx = ctx_scope(&["task:01ABC"]);
         assert!(cmd.available(&ctx));
+    }
+
+    #[test]
+    fn copy_available_with_task_in_scope() {
+        let cmds = register_commands();
+        let cmd = cmds.get("entity.copy").unwrap();
+        let ctx = ctx_scope(&["task:01ABC", "column:todo"]);
+        assert!(cmd.available(&ctx));
+    }
+
+    #[test]
+    fn copy_not_available_without_task() {
+        let cmds = register_commands();
+        let cmd = cmds.get("entity.copy").unwrap();
+        let ctx = ctx_scope(&["column:todo"]);
+        assert!(!cmd.available(&ctx));
+    }
+
+    #[test]
+    fn cut_available_with_task_in_scope() {
+        let cmds = register_commands();
+        let cmd = cmds.get("entity.cut").unwrap();
+        let ctx = ctx_scope(&["task:01ABC", "column:todo"]);
+        assert!(cmd.available(&ctx));
+    }
+
+    #[test]
+    fn cut_not_available_without_task() {
+        let cmds = register_commands();
+        let cmd = cmds.get("entity.cut").unwrap();
+        let ctx = ctx_scope(&["column:todo"]);
+        assert!(!cmd.available(&ctx));
     }
 
     #[test]
