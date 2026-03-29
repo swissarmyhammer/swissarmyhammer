@@ -1,0 +1,8 @@
+---
+assignees:
+- claude-code
+position_column: done
+position_ordinal: ffffffffffffffc880
+title: 'Review finding: UndoCmd/RedoCmd flush_and_emit may not trigger for undo/redo results'
+---
+**Severity**: High (UI correctness -- confirmed bug)\n**Files**: `swissarmyhammer-commands/builtin/commands/app.yaml` lines 7-19, `kanban-app/src/commands.rs` lines 1140-1152\n\nCONFIRMED: Both `app.undo` and `app.redo` have `undoable: false` in `app.yaml`. The dispatch loop at line 1144 only runs `flush_and_emit_for_handle` when `undoable == true`.\n\nThis means after undo/redo:\n1. Entity files ARE changed on disk (the Rust undo/redo logic works correctly)\n2. But `entity-changed` / `entity-created` / `entity-removed` events are NOT emitted\n3. The React UI shows stale data until the file watcher fires (race-dependent delay)\n\nThe `undoable: false` setting makes semantic sense (you don't want undo/redo operations to be undoable themselves -- that would create infinite recursion). But the dispatch layer conflates \"this command should be tracked on the undo stack\" with \"this command mutates entity data and needs flush+emit\".\n\nFix: The dispatch logic needs a separate flag or the flush gate needs to also trigger for `app.undo` / `app.redo` command IDs specifically. The cleanest fix is probably changing the flush gate to:\n```rust\nif undoable || cmd == \"app.undo\" || cmd == \"app.redo\" {\n```\n\nOr better: add a `mutates_entities: true` field to the command YAML that is independent of `undoable`. #review-finding
