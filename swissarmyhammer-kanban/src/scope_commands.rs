@@ -148,12 +148,9 @@ pub fn commands_for_scope(
         }
     }
 
-    // 2. Add global commands from the registry (no scope requirement)
-    for cmd_def in registry.all_commands() {
-        // Skip commands that are entity-scoped (handled above via schema)
-        if cmd_def.scope.is_some() {
-            continue;
-        }
+    // 2. Add registry commands (global + scoped that match the current scope chain)
+    let available_from_registry = registry.available_commands(scope_chain);
+    for cmd_def in available_from_registry {
         // Skip invisible commands
         if !cmd_def.visible {
             continue;
@@ -165,10 +162,19 @@ pub fn commands_for_scope(
         }
         seen.insert(key);
 
-        let name = resolve_name_template(
-            &cmd_def.name,
-            clipboard_type.as_deref().unwrap_or("entity"),
-        );
+        // Resolve name using innermost entity type from scope chain
+        let innermost_type = scope_chain
+            .first()
+            .and_then(|m| m.split_once(':').map(|(t, _)| t))
+            .unwrap_or("entity");
+        let name = if cmd_def.id == "entity.paste" {
+            resolve_name_template(
+                &cmd_def.name,
+                clipboard_type.as_deref().unwrap_or("entity"),
+            )
+        } else {
+            resolve_name_template(&cmd_def.name, innermost_type)
+        };
 
         let keys = cmd_def.keys.clone();
 
@@ -638,6 +644,133 @@ mod tests {
             assert_eq!(ic.target.as_deref(), Some("column:todo"));
         }
     }
+
+    // =========================================================================
+    // Scoped registry commands (task.add needs column, task.untag needs tag+task)
+    // =========================================================================
+
+    #[test]
+    fn task_add_available_with_column_in_scope() {
+        let (registry, impls, fields, ui) = setup();
+        let scope = vec!["column:todo".into(), "board:board".into()];
+        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false);
+        let ids: Vec<&str> = cmds.iter().map(|c| c.id.as_str()).collect();
+        assert!(ids.contains(&"task.add"), "task.add should be available with column in scope: {:?}", ids);
+    }
+
+    #[test]
+    fn task_add_not_available_without_column() {
+        let (registry, impls, fields, ui) = setup();
+        let scope = vec!["board:board".into()];
+        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false);
+        let ids: Vec<&str> = cmds.iter().map(|c| c.id.as_str()).collect();
+        assert!(!ids.contains(&"task.add"), "task.add should NOT be available without column");
+    }
+
+    #[test]
+    fn task_untag_available_with_tag_and_task() {
+        let (registry, impls, fields, ui) = setup();
+        let scope = vec!["tag:bug".into(), "task:01X".into(), "column:todo".into()];
+        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false);
+        let ids: Vec<&str> = cmds.iter().map(|c| c.id.as_str()).collect();
+        assert!(ids.contains(&"task.untag"), "task.untag should be available with tag+task: {:?}", ids);
+    }
+
+    #[test]
+    fn task_untag_not_available_without_tag() {
+        let (registry, impls, fields, ui) = setup();
+        let scope = vec!["task:01X".into(), "column:todo".into()];
+        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false);
+        let ids: Vec<&str> = cmds.iter().map(|c| c.id.as_str()).collect();
+        assert!(!ids.contains(&"task.untag"), "task.untag should NOT be available without tag");
+    }
+
+    // =========================================================================
+    // Other entity types (actor, swimlane, attachment)
+    // =========================================================================
+
+    #[test]
+    fn actor_scope_has_inspect() {
+        let (registry, impls, fields, ui) = setup();
+        let scope = vec!["actor:alice".into()];
+        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false);
+        let names: Vec<&str> = cmds.iter().map(|c| c.name.as_str()).collect();
+        assert!(names.contains(&"Inspect Actor"), "actor should have Inspect Actor: {:?}", names);
+    }
+
+    #[test]
+    fn swimlane_scope_has_inspect() {
+        let (registry, impls, fields, ui) = setup();
+        let scope = vec!["swimlane:lane1".into()];
+        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false);
+        let names: Vec<&str> = cmds.iter().map(|c| c.name.as_str()).collect();
+        assert!(names.contains(&"Inspect Swimlane"), "swimlane should have Inspect Swimlane: {:?}", names);
+    }
+
+    // =========================================================================
+    // Unknown entity type in scope
+    // =========================================================================
+
+    #[test]
+    fn unknown_entity_type_ignored() {
+        let (registry, impls, fields, ui) = setup();
+        let scope = vec!["foo:bar".into(), "task:01X".into(), "column:todo".into()];
+        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false);
+        // Should still have task commands — unknown type just gets skipped
+        let names: Vec<&str> = cmds.iter().map(|c| c.name.as_str()).collect();
+        assert!(names.contains(&"Copy Task"));
+        // Should NOT have commands for "foo" type
+        assert!(!cmds.iter().any(|c| c.target.as_deref() == Some("foo:bar")));
+    }
+
+    // =========================================================================
+    // Drag commands (visible: false) excluded
+    // =========================================================================
+
+    // =========================================================================
+    // Paste name comes from clipboard, NOT from the entity type it's declared on
+    // =========================================================================
+
+    #[test]
+    fn paste_on_column_says_paste_task_not_paste_column() {
+        // Cut a task → clipboard has "task" → paste on column should say "Paste Task"
+        let (registry, impls, fields, ui) = setup();
+        ui.set_clipboard_entity_type("task");
+        let scope = vec!["column:todo".into(), "board:board".into()];
+        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, true);
+        let paste = cmds.iter().find(|c| c.id == "entity.paste");
+        assert!(paste.is_some(), "paste should be available");
+        assert_eq!(paste.unwrap().name, "Paste Task",
+            "paste name should come from clipboard type, not column entity type");
+    }
+
+    #[test]
+    fn paste_on_task_says_paste_tag_not_paste_task() {
+        // Copy a tag → clipboard has "tag" → paste on task should say "Paste Tag"
+        let (registry, impls, fields, ui) = setup();
+        ui.set_clipboard_entity_type("tag");
+        let scope = vec!["task:01X".into(), "column:todo".into()];
+        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, true);
+        let paste = cmds.iter().find(|c| c.id == "entity.paste");
+        assert!(paste.is_some(), "paste should be available");
+        assert_eq!(paste.unwrap().name, "Paste Tag",
+            "paste name should come from clipboard type, not task entity type");
+    }
+
+    #[test]
+    fn drag_commands_never_appear() {
+        let (registry, impls, fields, ui) = setup();
+        let scope = vec!["task:01X".into(), "column:todo".into(), "board:b".into()];
+        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false);
+        let ids: Vec<&str> = cmds.iter().map(|c| c.id.as_str()).collect();
+        assert!(!ids.contains(&"drag.start"));
+        assert!(!ids.contains(&"drag.cancel"));
+        assert!(!ids.contains(&"drag.complete"));
+    }
+
+    // =========================================================================
+    // Targets
+    // =========================================================================
 
     #[test]
     fn global_commands_have_no_target() {
