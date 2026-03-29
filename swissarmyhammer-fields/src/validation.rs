@@ -448,6 +448,39 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn non_string_single_reference_passes_through() {
+        let lookup = MockLookup::new().with_entities(
+            "actor",
+            vec![serde_json::json!({"id": "alice", "name": "Alice"})],
+        );
+        let engine = ValidationEngine::new().with_lookup(lookup);
+
+        let field = make_field(
+            "assignee",
+            FieldType::Reference {
+                entity: "actor".into(),
+                multiple: false,
+            },
+        );
+
+        // A numeric value is not a string — should pass through unchanged
+        let value = serde_json::json!(42);
+        let result = engine
+            .validate(&field, value.clone(), &HashMap::new())
+            .await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), value);
+
+        // A boolean value — should also pass through unchanged
+        let value = serde_json::json!(true);
+        let result = engine
+            .validate(&field, value.clone(), &HashMap::new())
+            .await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), value);
+    }
+
+    #[tokio::test]
     async fn explicit_validate_overrides_default_reference() {
         let engine = ValidationEngine::new();
         let mut field = make_field(

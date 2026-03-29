@@ -313,4 +313,25 @@ mod tests {
         stack.record_redo(); // should not panic, already at end
         assert_eq!(stack.pointer, 1);
     }
+
+    #[test]
+    fn clear_resets_undo_and_redo() {
+        let mut stack = UndoStack::new();
+        stack.push("id1", "op1");
+        stack.push("id2", "op2");
+        stack.push("id3", "op3");
+        stack.record_undo(); // create redo state
+
+        assert!(stack.can_undo());
+        assert!(stack.can_redo());
+
+        stack.clear();
+
+        assert!(!stack.can_undo());
+        assert!(!stack.can_redo());
+        assert_eq!(stack.undo_target(), None);
+        assert_eq!(stack.redo_target(), None);
+        assert_eq!(stack.pointer, 0);
+        assert!(stack.entries.is_empty());
+    }
 }
