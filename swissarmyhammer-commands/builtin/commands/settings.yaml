@@ -2,7 +2,7 @@
   name: Vim Keybindings
   visible: false
   menu:
-    path: [Settings]
+    path: [App, Settings]
     group: 0
     order: 1
     radio_group: keymap
@@ -11,7 +11,7 @@
   name: Standard Keybindings
   visible: false
   menu:
-    path: [Settings]
+    path: [App, Settings]
     group: 0
     order: 0
     radio_group: keymap
@@ -20,7 +20,14 @@
   name: Emacs Keybindings
   visible: false
   menu:
-    path: [Settings]
+    path: [App, Settings]
     group: 0
     order: 2
     radio_group: keymap
+
+- id: app.resetWindows
+  name: Reset Windows
+  menu:
+    path: [App, Settings]
+    group: 1
+    order: 0

@@ -409,15 +409,15 @@ mod tests {
             ("settings", settings),
         ]);
 
-        // app: quit, undo, redo = 3
+        // app: about, quit, undo, redo, search = 5
         // entity: task.add, task.move, task.delete, task.untag, entity.update_field,
         //         entity.delete, entity.archive, entity.unarchive, tag.update,
         //         column.reorder, attachment.delete,
         //         entity.copy, entity.cut, entity.paste = 14
         // ui: inspect, inspector.close, inspector.close_all, palette.open,
-        //     palette.close, view.set, setFocus = 7
-        // settings: keymap.vim, keymap.cua, keymap.emacs = 3
-        assert_eq!(registry.all_commands().len(), 27);
+        //     palette.close, view.set, setFocus, window.new = 8
+        // settings: keymap.vim, keymap.cua, keymap.emacs, app.resetWindows = 4
+        assert_eq!(registry.all_commands().len(), 31);
 
         // Spot checks
         assert!(registry.get("app.quit").is_some());

@@ -69,18 +69,31 @@ fn main() {
             commands::reset_windows,
             commands::new_board_dialog,
             commands::open_board_dialog,
-            commands::rebuild_menu_from_manifest,
             commands::list_views,
             commands::get_undo_state,
             commands::create_window,
             commands::restore_windows,
         ])
         .setup(|app| {
-            // Build initial menu with OS chrome only — the frontend will
-            // send the full manifest via rebuild_menu_from_manifest once loaded.
-            let state = app.state::<AppState>();
-            let recent = state.ui_state.recent_boards();
-            let _ = menu::build_menu_from_manifest(app.handle(), &[], &recent);
+            // Build native menu bar from the command registry.
+            {
+                let state = app.state::<AppState>();
+                let recent = state.ui_state.recent_boards();
+                let registry = state.commands_registry.blocking_read();
+                match menu::build_menu_from_commands(
+                    app.handle(),
+                    &registry,
+                    &state.ui_state,
+                    &recent,
+                ) {
+                    Ok(items) => {
+                        *state.menu_items.lock().unwrap() = items;
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to build initial menu: {}", e);
+                    }
+                }
+            }
 
             // Handle deep-link URLs at cold start
             {

@@ -65,6 +65,7 @@ async fn resolve_handle(
     }
 }
 
+<<<<<<< HEAD
 /// A single menu item entry received from the frontend manifest.
 ///
 /// The frontend collects commands with `menuPlacement` metadata and sends
@@ -82,6 +83,8 @@ pub struct MenuItemEntry {
     pub checked: Option<bool>,
 }
 
+=======
+>>>>>>> worktree-agent-aa08b4a7
 /// List all currently open boards.
 #[tauri::command]
 pub async fn list_open_boards(state: State<'_, AppState>) -> Result<Value, String> {
@@ -774,6 +777,7 @@ pub async fn list_views(
     Ok(json!(views_json))
 }
 
+<<<<<<< HEAD
 // ---------------------------------------------------------------------------
 // get_undo_state — read-only query for undo/redo availability
 // ---------------------------------------------------------------------------
@@ -823,6 +827,8 @@ pub async fn rebuild_menu_from_manifest(
     Ok(())
 }
 
+=======
+>>>>>>> worktree-agent-aa08b4a7
 // ---------------------------------------------------------------------------
 // log_command — lightweight log entry for commands that execute in the frontend
 // ---------------------------------------------------------------------------
@@ -1146,7 +1152,20 @@ pub(crate) async fn dispatch_command_internal(
         let _ = app.emit("ui-state-changed", state.ui_state.to_json());
     }
 
+<<<<<<< HEAD
     // For commands that mutate entity data, scan entity files for changes
+=======
+    // Rebuild the native menu when keymap mode changes (accelerators change)
+    // or after board switches (command registry may have overrides).
+    if cmd.starts_with("settings.keymap.")
+        || result.get("BoardSwitch").is_some()
+        || result.get("BoardClose").is_some()
+    {
+        menu::rebuild_menu(app);
+    }
+
+    // For undoable commands (data mutations), scan entity files for changes
+>>>>>>> worktree-agent-aa08b4a7
     // and emit granular entity-level events. This also updates the watcher
     // cache so the file watcher won't double-fire for our own writes.
     // Undo/redo are non-undoable (they must not push onto the undo stack) but

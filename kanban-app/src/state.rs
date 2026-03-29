@@ -243,6 +243,8 @@ pub(crate) struct AppState {
     pub(crate) commands_registry: RwLock<CommandsRegistry>,
     /// Trait object map from `register_commands()`.
     pub(crate) command_impls: HashMap<String, Arc<dyn Command>>,
+    /// Cached native menu item handles for enable/disable operations.
+    pub(crate) menu_items: std::sync::Mutex<HashMap<String, tauri::menu::MenuItem<tauri::Wry>>>,
     /// Set to `true` when the app is shutting down (RunEvent::ExitRequested).
     /// The Destroyed handler uses this to distinguish mid-session close from app quit.
     pub(crate) shutting_down: AtomicBool,
@@ -280,6 +282,7 @@ impl AppState {
             ui_state,
             commands_registry: RwLock::new(CommandsRegistry::from_yaml_sources(&source_refs)),
             command_impls: swissarmyhammer_kanban::commands::register_commands(),
+            menu_items: std::sync::Mutex::new(HashMap::new()),
             shutting_down: AtomicBool::new(false),
             last_menu_manifest: std::sync::Mutex::new(Vec::new()),
         }

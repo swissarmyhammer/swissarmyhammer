@@ -1,9 +1,9 @@
 //! Native menu bar construction and event handling.
 
-use crate::commands::MenuItemEntry;
 use crate::state::{resolve_kanban_path, AppState};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use swissarmyhammer_commands::RecentBoard;
+use swissarmyhammer_commands::{CommandDef, CommandsRegistry, RecentBoard, UIState};
 use swissarmyhammer_kanban::{
     board::InitBoard, KanbanContext, KanbanOperationProcessor, OperationProcessor,
 };
@@ -11,47 +11,58 @@ use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_dialog::DialogExt;
 
-/// Clipboard availability state for building the Edit menu.
-///
-/// When cut/copy/paste are available, predefined OS menu items are used
-/// (which get system icons on macOS). When unavailable, disabled custom
-/// menu items are used instead (same text and accelerator, grayed out).
-#[derive(Debug, Clone, Default)]
-pub struct ClipboardMenuState {
-    /// Whether entity.cut and entity.copy should be enabled.
-    pub cut_copy_enabled: bool,
-    /// Whether entity.paste should be enabled.
-    pub paste_enabled: bool,
+/// A collected menu entry derived from a `CommandDef` with menu placement.
+struct MenuEntry {
+    id: String,
+    name: String,
+    group: usize,
+    order: usize,
+    accelerator: Option<String>,
+    radio_group: Option<String>,
+    checked: bool,
 }
 
-/// Build and set the native menu from a frontend-generated manifest.
+/// Build and set the native menu bar from the command registry.
 ///
-/// Groups entries by menu name (app, file, settings), builds each submenu
-/// with separators between groups, and injects OS chrome items (About, Quit,
-/// Hide, Close Window, Open Recent, Edit menu). The manifest entries are
-/// Sorts entries by (group, order) within each menu submenu.
-pub fn build_menu_from_manifest(
+/// Reads all `CommandDef` entries with `menu` metadata, groups them by
+/// the first path element (top-level menu), sorts by `(group, order)`,
+/// and builds native menu items. OS chrome items (About, Quit, Hide,
+/// Open Recent, Edit shortcuts, Window list) are injected in their
+/// standard positions.
+///
+/// Returns a `HashMap` of all created menu item handles keyed by command ID,
+/// which can be stored in `AppState` for later enable/disable operations.
+pub fn build_menu_from_commands(
     app: &AppHandle,
-    manifest: &[MenuItemEntry],
+    registry: &CommandsRegistry,
+    ui_state: &UIState,
     recent: &[RecentBoard],
-) -> tauri::Result<()> {
-    let state = app.state::<crate::state::AppState>();
-    let clipboard_state = compute_clipboard_menu_state(&state.ui_state);
-    build_menu_from_manifest_with_clipboard(app, manifest, recent, &clipboard_state)
-}
+) -> tauri::Result<HashMap<String, MenuItem<tauri::Wry>>> {
+    let keymap_mode = ui_state.keymap_mode();
+    let mut menu_items: HashMap<String, MenuItem<tauri::Wry>> = HashMap::new();
 
-/// Build the menu with explicit clipboard state.
-fn build_menu_from_manifest_with_clipboard(
-    app: &AppHandle,
-    manifest: &[MenuItemEntry],
-    recent: &[RecentBoard],
-    clipboard: &ClipboardMenuState,
-) -> tauri::Result<()> {
-    // Group entries by menu name, then sort by (group, order) within each menu
-    let mut menus: std::collections::HashMap<String, Vec<&MenuItemEntry>> =
-        std::collections::HashMap::new();
-    for entry in manifest {
-        menus.entry(entry.menu.clone()).or_default().push(entry);
+    // Collect commands with menu metadata, grouped by top-level menu name.
+    // Nested paths (e.g. ["App", "Settings"]) are keyed as "App/Settings".
+    let mut menus: HashMap<String, Vec<MenuEntry>> = HashMap::new();
+    for cmd in registry.all_commands() {
+        let Some(ref placement) = cmd.menu else {
+            continue;
+        };
+        if placement.path.is_empty() {
+            continue;
+        }
+        let key = placement.path.join("/");
+        let accelerator = resolve_accelerator(cmd, &keymap_mode);
+        let checked = resolve_checked(cmd, ui_state);
+        menus.entry(key).or_default().push(MenuEntry {
+            id: cmd.id.clone(),
+            name: cmd.name.clone(),
+            group: placement.group,
+            order: placement.order,
+            accelerator,
+            radio_group: placement.radio_group.clone(),
+            checked,
+        });
     }
     for items in menus.values_mut() {
         items.sort_by_key(|e| (e.group, e.order));
@@ -61,7 +72,7 @@ fn build_menu_from_manifest_with_clipboard(
     let app_menu = Submenu::new(app, app.package_info().name.clone(), true)?;
     app_menu.append(&PredefinedMenuItem::about(app, None, None)?)?;
 
-    if let Some(items) = menus.get("app") {
+    if let Some(items) = menus.get("App") {
         let mut last_group: Option<usize> = None;
         for entry in items {
             if last_group.is_some() && last_group != Some(entry.group) {
@@ -72,13 +83,13 @@ fn build_menu_from_manifest_with_clipboard(
                 last_group = Some(entry.group);
                 continue;
             }
-            app_menu.append(build_menu_item(app, entry)?.as_ref())?;
+            append_menu_entry(app, &app_menu, entry, &mut menu_items)?;
             last_group = Some(entry.group);
         }
     }
 
-    // Settings submenu inside the app menu (matches original structure)
-    if let Some(items) = menus.get("settings") {
+    // Settings submenu inside the app menu (nested path "App/Settings")
+    if let Some(items) = menus.get("App/Settings") {
         app_menu.append(&PredefinedMenuItem::separator(app)?)?;
         let settings_sub = Submenu::new(app, "Settings", true)?;
         let mut last_group: Option<usize> = None;
@@ -86,7 +97,7 @@ fn build_menu_from_manifest_with_clipboard(
             if last_group.is_some() && last_group != Some(entry.group) {
                 settings_sub.append(&PredefinedMenuItem::separator(app)?)?;
             }
-            settings_sub.append(build_menu_item(app, entry)?.as_ref())?;
+            append_menu_entry(app, &settings_sub, entry, &mut menu_items)?;
             last_group = Some(entry.group);
         }
         app_menu.append(&settings_sub)?;
@@ -102,13 +113,13 @@ fn build_menu_from_manifest_with_clipboard(
 
     // --- File menu ---
     let file_menu = Submenu::new(app, "File", true)?;
-    if let Some(items) = menus.get("file") {
+    if let Some(items) = menus.get("File") {
         let mut last_group: Option<usize> = None;
         for entry in items {
             if last_group.is_some() && last_group != Some(entry.group) {
                 file_menu.append(&PredefinedMenuItem::separator(app)?)?;
             }
-            file_menu.append(build_menu_item(app, entry)?.as_ref())?;
+            append_menu_entry(app, &file_menu, entry, &mut menu_items)?;
             last_group = Some(entry.group);
         }
     }
@@ -123,63 +134,43 @@ fn build_menu_from_manifest_with_clipboard(
     file_menu.append(&PredefinedMenuItem::separator(app)?)?;
     file_menu.append(&PredefinedMenuItem::close_window(app, None)?)?;
 
-    // --- Edit menu ---
-    // Cut/Copy/Paste use MenuItem::with_id so they dispatch through the command
-    // system and can be enabled/disabled based on focus chain + clipboard state.
-    // The menu is rebuilt by update_clipboard_menu_state() when state changes.
+    // --- Edit menu (OS chrome + registry items) ---
     let edit_menu = Submenu::with_items(
         app,
         "Edit",
         true,
         &[
-            &MenuItem::with_id(app, "app.undo", "Undo", true, Some("CmdOrCtrl+Z"))?,
-            &MenuItem::with_id(app, "app.redo", "Redo", true, Some("CmdOrCtrl+Shift+Z"))?,
+            &PredefinedMenuItem::undo(app, None)?,
+            &PredefinedMenuItem::redo(app, None)?,
             &PredefinedMenuItem::separator(app)?,
-            &MenuItem::with_id(
-                app,
-                "entity.cut",
-                "Cut",
-                clipboard.cut_copy_enabled,
-                Some("CmdOrCtrl+X"),
-            )?,
-            &MenuItem::with_id(
-                app,
-                "entity.copy",
-                "Copy",
-                clipboard.cut_copy_enabled,
-                Some("CmdOrCtrl+C"),
-            )?,
-            &MenuItem::with_id(
-                app,
-                "entity.paste",
-                "Paste",
-                clipboard.paste_enabled,
-                Some("CmdOrCtrl+V"),
-            )?,
+            &PredefinedMenuItem::cut(app, None)?,
+            &PredefinedMenuItem::copy(app, None)?,
+            &PredefinedMenuItem::paste(app, None)?,
+            &PredefinedMenuItem::select_all(app, None)?,
         ],
     )?;
-    if let Some(items) = menus.get("edit") {
+    if let Some(items) = menus.get("Edit") {
         edit_menu.append(&PredefinedMenuItem::separator(app)?)?;
         let mut last_group: Option<usize> = None;
         for entry in items {
             if last_group.is_some() && last_group != Some(entry.group) {
                 edit_menu.append(&PredefinedMenuItem::separator(app)?)?;
             }
-            edit_menu.append(build_menu_item(app, entry)?.as_ref())?;
+            append_menu_entry(app, &edit_menu, entry, &mut menu_items)?;
             last_group = Some(entry.group);
         }
     }
 
     // --- Window menu ---
     let window_menu = Submenu::new(app, "Window", true)?;
-    if let Some(items) = menus.get("window") {
+    if let Some(items) = menus.get("Window") {
         let mut last_group: Option<usize> = None;
         let mut count = 0usize;
         for entry in items {
             if last_group.is_some() && last_group != Some(entry.group) {
                 window_menu.append(&PredefinedMenuItem::separator(app)?)?;
             }
-            window_menu.append(build_menu_item(app, entry)?.as_ref())?;
+            append_menu_entry(app, &window_menu, entry, &mut menu_items)?;
             last_group = Some(entry.group);
             count += 1;
         }
@@ -218,36 +209,80 @@ fn build_menu_from_manifest_with_clipboard(
         e
     })?;
 
-    Ok(())
+    Ok(menu_items)
 }
 
-/// Build a single native menu item from a manifest entry.
+/// Resolve the keyboard accelerator for a command in the current keymap mode.
 ///
-/// If the entry has a `radio_group`, a CheckMenuItem is created (for radio-style
-/// toggle items). Otherwise a regular MenuItem is created. Both support
-/// optional keyboard accelerators.
-fn build_menu_item(
-    app: &AppHandle,
-    entry: &MenuItemEntry,
-) -> tauri::Result<Box<dyn tauri::menu::IsMenuItem<tauri::Wry>>> {
-    if entry.radio_group.is_some() {
-        Ok(Box::new(CheckMenuItem::with_id(
-            app,
-            &entry.id,
-            &entry.name,
-            true,
-            entry.checked.unwrap_or(false),
-            entry.accelerator.as_deref(),
-        )?))
-    } else {
-        Ok(Box::new(MenuItem::with_id(
-            app,
-            &entry.id,
-            &entry.name,
-            true,
-            entry.accelerator.as_deref(),
-        )?))
+/// Looks up the binding for the active mode, falling back to CUA if the
+/// mode-specific binding is absent. Replaces `Mod` with `CmdOrCtrl` so
+/// Tauri maps it correctly per platform.
+fn resolve_accelerator(cmd: &CommandDef, keymap_mode: &str) -> Option<String> {
+    let keys = cmd.keys.as_ref()?;
+    let binding = match keymap_mode {
+        "vim" => keys.vim.as_deref().or(keys.cua.as_deref()),
+        "emacs" => keys.emacs.as_deref().or(keys.cua.as_deref()),
+        _ => keys.cua.as_deref(),
+    }?;
+    // Vim chord-style bindings (e.g. ":q", "dd") are not valid accelerators.
+    if binding.len() > 1 && !binding.contains('+') {
+        return None;
     }
+    Some(binding.replace("Mod", "CmdOrCtrl"))
+}
+
+/// Resolve the checked state for radio group items.
+///
+/// Currently supports the "keymap" radio group — the item matching the
+/// active keymap mode is checked.
+fn resolve_checked(cmd: &CommandDef, ui_state: &UIState) -> bool {
+    let Some(ref placement) = cmd.menu else {
+        return false;
+    };
+    match placement.radio_group.as_deref() {
+        Some("keymap") => {
+            let mode = ui_state.keymap_mode();
+            match cmd.id.as_str() {
+                "settings.keymap.vim" => mode == "vim",
+                "settings.keymap.cua" => mode == "cua",
+                "settings.keymap.emacs" => mode == "emacs",
+                _ => false,
+            }
+        }
+        _ => false,
+    }
+}
+
+/// Append a single menu entry to a submenu, creating either a CheckMenuItem
+/// (for radio group items) or a regular MenuItem.
+fn append_menu_entry(
+    app: &AppHandle,
+    submenu: &Submenu<tauri::Wry>,
+    entry: &MenuEntry,
+    menu_items: &mut HashMap<String, MenuItem<tauri::Wry>>,
+) -> tauri::Result<()> {
+    if entry.radio_group.is_some() {
+        let item = CheckMenuItem::with_id(
+            app,
+            &entry.id,
+            &entry.name,
+            true,
+            entry.checked,
+            entry.accelerator.as_deref(),
+        )?;
+        submenu.append(&item)?;
+    } else {
+        let item = MenuItem::with_id(
+            app,
+            &entry.id,
+            &entry.name,
+            true,
+            entry.accelerator.as_deref(),
+        )?;
+        menu_items.insert(entry.id.clone(), item.clone());
+        submenu.append(&item)?;
+    }
+    Ok(())
 }
 
 /// Dispatch native menu events.
@@ -308,6 +343,26 @@ pub fn handle_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
     // Everything else: emit as a generic menu-command event.
     // The frontend listens for this and routes through executeCommand(id).
     let _ = app.emit("menu-command", &id);
+}
+
+/// Rebuild the native menu bar from the command registry.
+///
+/// Called after keymap mode changes or board switches to update accelerators
+/// and checked states. Acquires the commands registry read lock synchronously
+/// via `blocking_read` — safe in async contexts as the lock is never held
+/// across an await point.
+pub fn rebuild_menu(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    let recent = state.ui_state.recent_boards();
+    let registry = state.commands_registry.blocking_read();
+    match build_menu_from_commands(app, &registry, &state.ui_state, &recent) {
+        Ok(items) => {
+            *state.menu_items.lock().unwrap() = items;
+        }
+        Err(e) => {
+            tracing::error!("Failed to rebuild menu: {}", e);
+        }
+    }
 }
 
 /// Public entry point for creating a new board -- used by both native menu and command palette.
@@ -438,62 +493,5 @@ async fn open_and_notify(handle: &AppHandle, path: &Path, source_window_label: O
         Err(e) => {
             tracing::error!("Failed to open board at {}: {}", path.display(), e);
         }
-    }
-}
-
-/// Compute clipboard menu state from current UIState.
-pub fn compute_clipboard_menu_state(ui: &swissarmyhammer_commands::UIState) -> ClipboardMenuState {
-    let scope = ui.scope_chain();
-    let has_task = scope.iter().any(|s| s.starts_with("task:"));
-    let has_column_or_board = scope
-        .iter()
-        .any(|s| s.starts_with("column:") || s.starts_with("board:"));
-    ClipboardMenuState {
-        cut_copy_enabled: has_task,
-        paste_enabled: ui.has_clipboard() && has_column_or_board,
-    }
-}
-
-/// Rebuild the menu if clipboard availability changed.
-///
-/// Computes the current clipboard menu state, compares with the cached
-/// previous state, and rebuilds only when something changed. This keeps
-/// PredefinedMenuItem (OS icons) when enabled and grayed-out placeholders
-/// when disabled.
-pub fn update_clipboard_menu_state(app: &AppHandle, ui: &swissarmyhammer_commands::UIState) {
-    use std::sync::Mutex;
-    static PREV: Mutex<Option<(bool, bool)>> = Mutex::new(None);
-
-    let new_state = compute_clipboard_menu_state(ui);
-    let new_tuple = (new_state.cut_copy_enabled, new_state.paste_enabled);
-
-    tracing::debug!(
-        cut_copy = new_state.cut_copy_enabled,
-        paste = new_state.paste_enabled,
-        has_clipboard = ui.has_clipboard(),
-        scope = ?ui.scope_chain(),
-        "clipboard menu state check"
-    );
-
-    // Skip rebuild if nothing changed.
-    {
-        let mut prev = PREV.lock().unwrap();
-        if *prev == Some(new_tuple) {
-            return;
-        }
-        *prev = Some(new_tuple);
-    }
-
-    tracing::info!(
-        cut_copy = new_state.cut_copy_enabled,
-        paste = new_state.paste_enabled,
-        "rebuilding menu for clipboard state change"
-    );
-
-    let state = app.state::<crate::state::AppState>();
-    let manifest = state.last_menu_manifest.lock().unwrap().clone();
-    let recent = ui.recent_boards();
-    if let Err(e) = build_menu_from_manifest_with_clipboard(app, &manifest, &recent, &new_state) {
-        tracing::error!("Failed to rebuild menu for clipboard state: {}", e);
     }
 }

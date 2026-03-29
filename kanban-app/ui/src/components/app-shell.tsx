@@ -27,7 +27,6 @@ import {
 } from "@/lib/keybindings";
 import { CommandPalette } from "@/components/command-palette";
 import { pathStem } from "@/components/board-selector";
-import { syncMenuToNative } from "@/lib/menu-sync";
 import { dispatchContextMenuCommand } from "@/lib/context-menu";
 import { useInspectDismiss } from "@/lib/inspect-context";
 
@@ -220,7 +219,6 @@ export function AppShell({
         id: "app.search",
         name: "Find",
         keys: { vim: "/", cua: "Mod+F", emacs: "Mod+F" },
-        menuPlacement: { menu: "edit", group: 0, order: 0 },
         execute: () => {
           setPaletteMode("search");
           setPaletteOpen(true);
@@ -237,7 +235,6 @@ export function AppShell({
         id: "app.quit",
         name: "Quit",
         keys: { cua: "Mod+Q", vim: "Mod+Q", emacs: "Mod+Q" },
-        menuPlacement: { menu: "app", group: 2, order: 0 },
         execute: async () => {
           await invoke("quit_app");
         },
@@ -245,43 +242,21 @@ export function AppShell({
       {
         id: "settings.keymap.vim",
         name: "Keymap Vim",
-        menuPlacement: {
-          menu: "settings",
-          group: 0,
-          order: 1,
-          radioGroup: "keymap",
-          checked: keymapMode === "vim",
-        },
         // No execute — dispatches to Rust via dispatch_command which mutates UIState
       },
       {
         id: "settings.keymap.cua",
         name: "Keymap CUA",
-        menuPlacement: {
-          menu: "settings",
-          group: 0,
-          order: 0,
-          radioGroup: "keymap",
-          checked: keymapMode === "cua",
-        },
         // No execute — dispatches to Rust via dispatch_command which mutates UIState
       },
       {
         id: "settings.keymap.emacs",
         name: "Keymap Emacs",
-        menuPlacement: {
-          menu: "settings",
-          group: 0,
-          order: 2,
-          radioGroup: "keymap",
-          checked: keymapMode === "emacs",
-        },
         // No execute — dispatches to Rust via dispatch_command which mutates UIState
       },
       {
         id: "app.resetWindows",
         name: "Reset Windows",
-        menuPlacement: { menu: "settings", group: 1, order: 0 },
         execute: async () => {
           await invoke("reset_windows");
         },
@@ -290,7 +265,6 @@ export function AppShell({
         id: "file.newBoard",
         name: "New Board",
         keys: { cua: "Mod+N", vim: "Mod+N" },
-        menuPlacement: { menu: "file", group: 0, order: 0 },
         execute: async () => {
           await invoke("new_board_dialog");
         },
@@ -299,7 +273,6 @@ export function AppShell({
         id: "file.openBoard",
         name: "Open Board",
         keys: { cua: "Mod+O", vim: "Mod+O" },
-        menuPlacement: { menu: "file", group: 0, order: 1 },
         execute: async () => {
           await invoke("open_board_dialog");
         },
@@ -308,7 +281,6 @@ export function AppShell({
         id: "file.closeBoard",
         name: "Close Board",
         keys: { cua: "Mod+w", vim: "Mod+w" },
-        menuPlacement: { menu: "file", group: 0, order: 2 },
         execute: async () => {
           // activeBoardPath may be undefined if the board failed to load (trashed entry).
           // Fall back to the is_active board from the openBoards list.
@@ -328,7 +300,6 @@ export function AppShell({
         id: "window.new",
         name: "New Window",
         keys: { cua: "Mod+Shift+N", vim: "Mod+Shift+N", emacs: "Mod+Shift+N" },
-        menuPlacement: { menu: "window", group: 0, order: 0 },
         execute: async () => {
           await invoke("create_window");
         },
@@ -336,7 +307,6 @@ export function AppShell({
       {
         id: "app.about",
         name: "About",
-        menuPlacement: { menu: "app", group: 0, order: 0 },
         execute: () => {
           // Tauri about dialog -- placeholder for now
         },
@@ -388,7 +358,7 @@ export function AppShell({
         execute: () => onSwitchBoard?.(b.path),
       })),
     ],
-    [setMode, keymapMode, dismissInspector, openBoards, onSwitchBoard],
+    [setMode, dismissInspector, openBoards, onSwitchBoard],
   );
 
   /** Close the command palette and return to normal mode. */
@@ -396,11 +366,6 @@ export function AppShell({
     setPaletteOpen(false);
     setMode("normal");
   }, [setMode]);
-
-  // Sync native menu bar whenever global commands or keymap mode change.
-  useEffect(() => {
-    syncMenuToNative(globalCommands, keymapMode);
-  }, [globalCommands, keymapMode]);
 
   return (
     <CommandScopeProvider commands={globalCommands}>
