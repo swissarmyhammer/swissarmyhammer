@@ -66,6 +66,12 @@ pub fn register_commands() -> HashMap<String, Arc<dyn Command>> {
         Arc::new(entity_commands::UnarchiveEntityCmd),
     );
 
+    // Clipboard commands
+    map.insert(
+        "entity.paste".into(),
+        Arc::new(entity_commands::PasteCmd),
+    );
+
     // Tag commands
     map.insert("tag.update".into(), Arc::new(entity_commands::TagUpdateCmd));
 
@@ -175,8 +181,8 @@ mod tests {
     #[test]
     fn register_commands_returns_expected_count() {
         let cmds = register_commands();
-        // 5 task + 4 entity + 1 tag + 1 attachment + 1 column + 7 UI + 6 app + 2 file + 3 drag = 30
-        assert_eq!(cmds.len(), 30);
+        // 5 task + 4 entity + 1 paste + 1 tag + 1 attachment + 1 column + 7 UI + 6 app + 2 file + 3 drag = 31
+        assert_eq!(cmds.len(), 31);
     }
 
     // =========================================================================
@@ -309,6 +315,56 @@ mod tests {
         let cmd = cmds.get("entity.unarchive").unwrap();
         let ctx = ctx_with(&[], Some("task:01ABC"), None);
         assert!(cmd.available(&ctx));
+    }
+
+    // =========================================================================
+    // Paste command availability tests
+    // =========================================================================
+
+    fn ui_with_clipboard() -> Arc<UIState> {
+        let ui = Arc::new(UIState::new());
+        ui.set_clipboard(swissarmyhammer_commands::ClipboardEntry {
+            entity_type: "task".into(),
+            entity_id: "01TASK".into(),
+            fields: serde_json::json!({"title": "Copied task"}),
+        });
+        ui
+    }
+
+    #[test]
+    fn paste_available_with_clipboard_and_column() {
+        let cmds = register_commands();
+        let cmd = cmds.get("entity.paste").unwrap();
+        let ui = ui_with_clipboard();
+        let ctx = ctx_with(&["column:todo"], None, Some(ui));
+        assert!(cmd.available(&ctx));
+    }
+
+    #[test]
+    fn paste_available_with_clipboard_and_board() {
+        let cmds = register_commands();
+        let cmd = cmds.get("entity.paste").unwrap();
+        let ui = ui_with_clipboard();
+        let ctx = ctx_with(&["board:my-board"], None, Some(ui));
+        assert!(cmd.available(&ctx));
+    }
+
+    #[test]
+    fn paste_not_available_without_clipboard() {
+        let cmds = register_commands();
+        let cmd = cmds.get("entity.paste").unwrap();
+        let ui = Arc::new(UIState::new());
+        let ctx = ctx_with(&["column:todo"], None, Some(ui));
+        assert!(!cmd.available(&ctx));
+    }
+
+    #[test]
+    fn paste_not_available_without_column_or_board() {
+        let cmds = register_commands();
+        let cmd = cmds.get("entity.paste").unwrap();
+        let ui = ui_with_clipboard();
+        let ctx = ctx_with(&[], None, Some(ui));
+        assert!(!cmd.available(&ctx));
     }
 
     // =========================================================================

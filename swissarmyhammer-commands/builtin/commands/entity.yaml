@@ -115,6 +115,18 @@
     - name: target_index
       from: args
 
+- id: entity.paste
+  name: Paste
+  undoable: true
+  context_menu: true
+  keys:
+    cua: Mod+V
+    vim: p
+  params:
+    - name: column
+      from: scope_chain
+      entity_type: column
+
 - id: attachment.delete
   name: Delete Attachment
   scope: "entity:task"

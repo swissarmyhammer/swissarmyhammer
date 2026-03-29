@@ -7,6 +7,19 @@ use serde::{Deserialize, Serialize};
 /// Maximum number of entries to keep in the MRU recent boards list.
 const MAX_RECENT_BOARDS: usize = 20;
 
+/// Clipboard entry for entity copy/cut/paste.
+///
+/// Transient — carried in UIState but never persisted to the YAML config.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClipboardEntry {
+    /// The entity type that was copied (e.g. "task").
+    pub entity_type: String,
+    /// The original entity ID.
+    pub entity_id: String,
+    /// Snapshot of the entity's fields at copy time.
+    pub fields: serde_json::Value,
+}
+
 /// Active drag session for cross-window drag coordination.
 ///
 /// Transient — carried in UIState but never persisted to the YAML config.
@@ -120,6 +133,9 @@ struct UIStateInner {
     /// Active cross-window drag session. Transient — not persisted.
     #[serde(skip)]
     drag_session: Option<DragSession>,
+    /// Clipboard entry for copy/cut/paste. Transient — not persisted.
+    #[serde(skip)]
+    clipboard: Option<ClipboardEntry>,
     /// IDs of items in the most recently shown context menu. Transient — not persisted.
     #[serde(skip)]
     context_menu_ids: HashSet<String>,
@@ -148,6 +164,7 @@ impl Default for UIStateInner {
             keymap_mode: "cua".to_string(),
             scope_chain: Vec::new(),
             drag_session: None,
+            clipboard: None,
             context_menu_ids: HashSet::new(),
             open_boards: Vec::new(),
             windows: HashMap::new(),
@@ -403,6 +420,33 @@ impl UIState {
             .unwrap_or_else(|e| e.into_inner())
             .drag_session
             .clone()
+    }
+
+    /// Set the clipboard entry, replacing any existing one.
+    ///
+    /// Transient — not persisted to the config file.
+    pub fn set_clipboard(&self, entry: ClipboardEntry) {
+        let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+        inner.clipboard = Some(entry);
+        // No try_save() — transient state
+    }
+
+    /// Get a clone of the current clipboard entry, if any.
+    pub fn clipboard(&self) -> Option<ClipboardEntry> {
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clipboard
+            .clone()
+    }
+
+    /// Clear the clipboard.
+    ///
+    /// Transient — not persisted to the config file.
+    pub fn clear_clipboard(&self) {
+        let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+        inner.clipboard = None;
+        // No try_save() — transient state
     }
 
     /// Set the context menu IDs for the current menu.
