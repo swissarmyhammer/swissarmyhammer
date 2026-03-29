@@ -98,7 +98,16 @@ pub fn build_menu_from_manifest(
     file_menu.append(&PredefinedMenuItem::separator(app)?)?;
     file_menu.append(&PredefinedMenuItem::close_window(app, None)?)?;
 
-    // --- Edit menu (OS chrome + manifest items) ---
+    // --- Edit menu (OS chrome + command-system clipboard items) ---
+    // Undo/Redo remain predefined (they dispatch app.undo/app.redo).
+    // Cut/Copy/Paste use MenuItem::with_id so they dispatch through the
+    // command system via the existing menu-command → executeCommand flow.
+    // They start disabled and are enabled/disabled dynamically by
+    // update_clipboard_menu_state() when the focus chain changes.
+    let cut_item = MenuItem::with_id(app, "entity.cut", "Cut", false, Some("CmdOrCtrl+X"))?;
+    let copy_item = MenuItem::with_id(app, "entity.copy", "Copy", false, Some("CmdOrCtrl+C"))?;
+    let paste_item =
+        MenuItem::with_id(app, "entity.paste", "Paste", false, Some("CmdOrCtrl+V"))?;
     let edit_menu = Submenu::with_items(
         app,
         "Edit",
@@ -107,10 +116,9 @@ pub fn build_menu_from_manifest(
             &PredefinedMenuItem::undo(app, None)?,
             &PredefinedMenuItem::redo(app, None)?,
             &PredefinedMenuItem::separator(app)?,
-            &PredefinedMenuItem::cut(app, None)?,
-            &PredefinedMenuItem::copy(app, None)?,
-            &PredefinedMenuItem::paste(app, None)?,
-            &PredefinedMenuItem::select_all(app, None)?,
+            &cut_item,
+            &copy_item,
+            &paste_item,
         ],
     )?;
     if let Some(items) = menus.get("edit") {
@@ -392,6 +400,56 @@ async fn open_and_notify(handle: &AppHandle, path: &Path, source_window_label: O
         }
         Err(e) => {
             tracing::error!("Failed to open board at {}: {}", path.display(), e);
+        }
+    }
+}
+
+/// Update the enabled state of clipboard menu items based on focus and clipboard.
+///
+/// Enables entity.cut and entity.copy when a task is in the scope chain.
+/// Enables entity.paste when the clipboard is non-empty AND a column or board
+/// is in the scope chain.
+///
+/// Called after `ui.setFocus` and clipboard-mutating commands so the Edit menu
+/// reflects what actions are actually available.
+pub fn update_clipboard_menu_state(app: &AppHandle, ui: &swissarmyhammer_commands::UIState) {
+    let scope = ui.scope_chain();
+    let has_clipboard = ui.has_clipboard();
+
+    let has_task = scope.iter().any(|s| s.starts_with("task:"));
+    let has_column_or_board = scope
+        .iter()
+        .any(|s| s.starts_with("column:") || s.starts_with("board:"));
+
+    let cut_copy_enabled = has_task;
+    let paste_enabled = has_clipboard && has_column_or_board;
+
+    if let Some(menu) = app.menu() {
+        set_menu_item_enabled(&menu, "entity.cut", cut_copy_enabled);
+        set_menu_item_enabled(&menu, "entity.copy", cut_copy_enabled);
+        set_menu_item_enabled(&menu, "entity.paste", paste_enabled);
+    }
+}
+
+/// Find a `MenuItem` by ID anywhere in the menu tree and set its enabled state.
+///
+/// Iterates all top-level items and their submenus. Silently does nothing
+/// if the item is not found (e.g. menu hasn't been built yet).
+fn set_menu_item_enabled(menu: &Menu<tauri::Wry>, id: &str, enabled: bool) {
+    if let Ok(items) = menu.items() {
+        for item in items {
+            if let Some(sub) = item.as_submenu() {
+                if let Ok(sub_items) = sub.items() {
+                    for si in sub_items {
+                        if let Some(mi) = si.as_menuitem() {
+                            if mi.id().as_ref() == id {
+                                let _ = mi.set_enabled(enabled);
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }

@@ -120,6 +120,9 @@ struct UIStateInner {
     /// Active cross-window drag session. Transient — not persisted.
     #[serde(skip)]
     drag_session: Option<DragSession>,
+    /// App-level clipboard for entity copy/cut/paste. Transient — not persisted.
+    #[serde(skip)]
+    clipboard: Option<serde_json::Value>,
     /// IDs of items in the most recently shown context menu. Transient — not persisted.
     #[serde(skip)]
     context_menu_ids: HashSet<String>,
@@ -148,6 +151,7 @@ impl Default for UIStateInner {
             keymap_mode: "cua".to_string(),
             scope_chain: Vec::new(),
             drag_session: None,
+            clipboard: None,
             context_menu_ids: HashSet::new(),
             open_boards: Vec::new(),
             windows: HashMap::new(),
@@ -403,6 +407,41 @@ impl UIState {
             .unwrap_or_else(|e| e.into_inner())
             .drag_session
             .clone()
+    }
+
+    /// Set the app-level clipboard contents.
+    ///
+    /// Used by entity.copy / entity.cut to store a snapshot of the copied entity.
+    /// Transient — not persisted to the config file.
+    pub fn set_clipboard(&self, value: serde_json::Value) {
+        let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+        inner.clipboard = Some(value);
+        // No try_save() — transient state
+    }
+
+    /// Clear the app-level clipboard.
+    pub fn clear_clipboard(&self) {
+        let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+        inner.clipboard = None;
+        // No try_save() — transient state
+    }
+
+    /// Get a clone of the current clipboard contents, if any.
+    pub fn clipboard(&self) -> Option<serde_json::Value> {
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clipboard
+            .clone()
+    }
+
+    /// Check whether the clipboard has contents.
+    pub fn has_clipboard(&self) -> bool {
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clipboard
+            .is_some()
     }
 
     /// Set the context menu IDs for the current menu.
@@ -731,6 +770,7 @@ impl UIState {
             "palette_open": inner.palette_open,
             "keymap_mode": inner.keymap_mode,
             "scope_chain": inner.scope_chain,
+            "clipboard": inner.clipboard,
             "open_boards": inner.open_boards,
             "windows": inner.windows,
             "recent_boards": inner.recent_boards,
