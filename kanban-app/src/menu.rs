@@ -281,25 +281,33 @@ fn append_menu_entry(
 pub fn update_menu_enabled_state(state: &AppState) {
     let scope = state.ui_state.scope_chain();
     let empty_args: HashMap<String, serde_json::Value> = HashMap::new();
-    let ctx = swissarmyhammer_commands::CommandContext::new("_menu_check", scope, None, empty_args)
+    let ctx = swissarmyhammer_commands::CommandContext::new("_menu_check", scope.clone(), None, empty_args)
         .with_ui_state(Arc::clone(&state.ui_state));
 
-    // Update paste label to reflect clipboard entity type
-    let paste_label = if let Some(entity_type) = state.ui_state.clipboard_entity_type() {
-        let cap = format!("{}{}", &entity_type[..1].to_uppercase(), &entity_type[1..]);
-        format!("Paste {cap}")
-    } else {
-        "Paste".to_string()
-    };
+    let clipboard_type = state.ui_state.clipboard_entity_type();
 
+    // Resolve names using the same logic as list_available_commands
+    let registry = state.commands_registry.blocking_read();
     let menu_items = state.menu_items.lock().unwrap();
     for (cmd_id, menu_item) in menu_items.iter() {
+        // Update enabled state
         if let Some(cmd_impl) = state.command_impls.get(cmd_id) {
             let enabled = cmd_impl.available(&ctx);
             let _ = menu_item.set_enabled(enabled);
         }
-        if cmd_id == "entity.paste" {
-            let _ = menu_item.set_text(&paste_label);
+
+        // Resolve template names
+        if let Some(def) = registry.get(cmd_id) {
+            if def.name.contains("{{entity.type}}") {
+                let resolved = if cmd_id == "entity.paste" {
+                    clipboard_type.as_deref().unwrap_or("entity")
+                } else {
+                    crate::commands::resolve_entity_type_from_scope(&scope, def)
+                };
+                let cap = format!("{}{}", &resolved[..1].to_uppercase(), &resolved[1..]);
+                let name = def.name.replace("{{entity.type}}", &cap);
+                let _ = menu_item.set_text(&name);
+            }
         }
     }
 }

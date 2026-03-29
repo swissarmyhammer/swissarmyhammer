@@ -1203,21 +1203,59 @@ pub async fn list_available_commands(
         available.retain(|def| def.context_menu);
     }
 
-    // Template paste command name with clipboard entity type
-    if let Some(entity_type) = state.ui_state.clipboard_entity_type() {
-        let capitalized = format!(
-            "{}{}",
-            &entity_type[..1].to_uppercase(),
-            &entity_type[1..]
-        );
-        for def in &mut available {
-            if def.id == "entity.paste" {
-                def.name = format!("Paste {capitalized}");
-            }
+    // Resolve {{entity.type}} templates in command names.
+    // For most commands, entity.type comes from the innermost matching scope moniker.
+    // For paste, entity.type comes from the clipboard entity type.
+    let clipboard_type = state.ui_state.clipboard_entity_type();
+    for def in &mut available {
+        if def.name.contains("{{entity.type}}") {
+            let resolved = if def.id == "entity.paste" {
+                // Paste: resolve from clipboard entity type
+                clipboard_type.as_deref().unwrap_or("entity")
+            } else {
+                // Copy/Cut/etc: resolve from scope chain — find innermost entity type
+                // that the command's scope requirement matches
+                resolve_entity_type_from_scope(&scope, def)
+            };
+            let capitalized = format!(
+                "{}{}",
+                &resolved[..1].to_uppercase(),
+                &resolved[1..]
+            );
+            def.name = def.name.replace("{{entity.type}}", &capitalized);
         }
     }
 
     serde_json::to_value(&available).map_err(|e| e.to_string())
+}
+
+/// Resolve `{{entity.type}}` from the scope chain for a command.
+///
+/// Walks the scope chain (innermost first) and returns the entity type
+/// from the first moniker that matches the command's scope requirement.
+/// Falls back to the first entity type found if no scope requirement is set.
+pub(crate) fn resolve_entity_type_from_scope<'a>(
+    scope: &'a [String],
+    def: &swissarmyhammer_commands::CommandDef,
+) -> &'a str {
+    // Parse scope requirement entity types (e.g. "entity:task,entity:tag" → ["task", "tag"])
+    let required_types: Vec<&str> = def
+        .scope
+        .as_deref()
+        .unwrap_or("")
+        .split(',')
+        .filter_map(|s| s.trim().strip_prefix("entity:"))
+        .collect();
+
+    // Walk scope chain innermost first
+    for moniker in scope {
+        if let Some((entity_type, _id)) = moniker.split_once(':') {
+            if required_types.is_empty() || required_types.contains(&entity_type) {
+                return entity_type;
+            }
+        }
+    }
+    "entity"
 }
 
 // ---------------------------------------------------------------------------

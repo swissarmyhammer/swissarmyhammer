@@ -116,7 +116,7 @@
       from: args
 
 - id: entity.cut
-  name: Cut
+  name: "Cut {{entity.type}}"
   scope: "entity:task"
   undoable: true
   context_menu: true
@@ -133,7 +133,7 @@
       entity_type: task
 
 - id: entity.copy
-  name: Copy
+  name: "Copy {{entity.type}}"
   scope: "entity:task"
   undoable: false
   context_menu: true
@@ -150,7 +150,7 @@
       entity_type: task
 
 - id: entity.paste
-  name: Paste
+  name: "Paste {{entity.type}}"
   undoable: true
   context_menu: true
   keys:
