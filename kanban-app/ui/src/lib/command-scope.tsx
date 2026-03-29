@@ -38,20 +38,6 @@ export function useActiveBoardPath(): string | undefined {
   return useContext(ActiveBoardPathContext);
 }
 
-/** Describes where a command should appear in the native OS menu bar. */
-export interface MenuPlacement {
-  /** Which menu to place the command in. */
-  menu: "app" | "file" | "edit" | "settings" | "window";
-  /** Separator group number within the menu (items in the same group are contiguous). */
-  group: number;
-  /** Sort order within the group. */
-  order: number;
-  /** If set, this command is part of a radio group (only one checked at a time). */
-  radioGroup?: string;
-  /** Whether this command's menu item is currently checked. */
-  checked?: boolean;
-}
-
 /** Definition of a single command that can be registered in a scope. */
 export interface CommandDef {
   /** Unique identifier used to resolve the command through the scope chain. */
@@ -70,8 +56,6 @@ export interface CommandDef {
    * be searched for a command with the same id.
    */
   available?: boolean;
-  /** Optional placement in the native menu bar. */
-  menuPlacement?: MenuPlacement;
   /** Whether this command appears in context menus. */
   contextMenu?: boolean;
   /**

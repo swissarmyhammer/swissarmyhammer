@@ -65,23 +65,6 @@ async fn resolve_handle(
     }
 }
 
-/// A single menu item entry received from the frontend manifest.
-///
-/// The frontend collects commands with `menuPlacement` metadata and sends
-/// them as a JSON array of these entries. Rust uses them to build the
-/// native menu bar.
-#[derive(serde::Deserialize, Debug)]
-pub struct MenuItemEntry {
-    pub id: String,
-    pub name: String,
-    pub menu: String,
-    pub group: usize,
-    pub order: usize,
-    pub accelerator: Option<String>,
-    pub radio_group: Option<String>,
-    pub checked: Option<bool>,
-}
-
 /// List all currently open boards.
 #[tauri::command]
 pub async fn list_open_boards(state: State<'_, AppState>) -> Result<Value, String> {
@@ -774,23 +757,6 @@ pub async fn list_views(
     Ok(json!(views_json))
 }
 
-/// Rebuild the native menu bar from a frontend-generated manifest.
-///
-/// The frontend collects all commands with `menuPlacement` metadata, builds
-/// a sorted manifest, and sends it here. Rust constructs the native menu
-/// from the manifest entries, injecting OS chrome (About, Quit, Hide, etc.)
-/// and the Open Recent submenu.
-#[tauri::command]
-pub async fn rebuild_menu_from_manifest(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    manifest: Vec<MenuItemEntry>,
-) -> Result<(), String> {
-    let recent = state.ui_state.recent_boards();
-    menu::build_menu_from_manifest(&app, &manifest, &recent).map_err(|e| e.to_string())?;
-    Ok(())
-}
-
 // ---------------------------------------------------------------------------
 // log_command — lightweight log entry for commands that execute in the frontend
 // ---------------------------------------------------------------------------
@@ -1098,6 +1064,15 @@ pub(crate) async fn dispatch_command_internal(
     // Board switch/close results are not UIStateChanges but still update ui-state.
     if result.get("BoardSwitch").is_some() || result.get("BoardClose").is_some() {
         let _ = app.emit("ui-state-changed", state.ui_state.to_json());
+    }
+
+    // Rebuild the native menu when keymap mode changes (accelerators change)
+    // or after board switches (command registry may have overrides).
+    if cmd.starts_with("settings.keymap.")
+        || result.get("BoardSwitch").is_some()
+        || result.get("BoardClose").is_some()
+    {
+        menu::rebuild_menu(app);
     }
 
     // For undoable commands (data mutations), scan entity files for changes

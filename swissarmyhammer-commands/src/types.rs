@@ -34,6 +34,28 @@ pub struct ParamDef {
     pub default: Option<Value>,
 }
 
+/// Where a command should appear in the native OS menu bar.
+///
+/// Commands with this metadata are collected by the Rust menu builder
+/// and placed into native submenus. `path` names the menu hierarchy
+/// (e.g. `["App"]` or `["App", "Settings"]`), `group` controls
+/// separator grouping, and `order` sorts within a group.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MenuPlacement {
+    /// Menu path hierarchy. The first element is the top-level menu name,
+    /// subsequent elements create nested submenus.
+    pub path: Vec<String>,
+    /// Separator group within the menu (items in the same group are contiguous).
+    #[serde(default)]
+    pub group: usize,
+    /// Sort order within the group.
+    #[serde(default)]
+    pub order: usize,
+    /// If set, this item is part of a radio group (mutually exclusive check items).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub radio_group: Option<String>,
+}
+
 /// YAML-loaded command metadata.
 ///
 /// Describes a command's identity, scope requirements, keybindings,
@@ -56,6 +78,9 @@ pub struct CommandDef {
     pub undoable: bool,
     #[serde(default)]
     pub context_menu: bool,
+    /// Optional native menu bar placement.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub menu: Option<MenuPlacement>,
 }
 
 fn default_true() -> bool {
@@ -102,6 +127,7 @@ mod tests {
             }],
             undoable: true,
             context_menu: false,
+            menu: None,
         };
         let yaml = serde_yaml_ng::to_string(&def).unwrap();
         let parsed: CommandDef = serde_yaml_ng::from_str(&yaml).unwrap();
@@ -123,6 +149,7 @@ name: Quit
         assert!(def.params.is_empty());
         assert!(!def.undoable);
         assert!(!def.context_menu);
+        assert!(def.menu.is_none());
     }
 
     #[test]
@@ -152,6 +179,42 @@ params:
         assert!(def.context_menu);
         assert_eq!(def.params.len(), 2);
         assert_eq!(def.params[0].from, ParamSource::ScopeChain);
+        assert!(def.menu.is_none());
+    }
+
+    #[test]
+    fn command_def_with_menu_placement() {
+        let yaml = r#"
+id: file.newBoard
+name: New Board
+menu:
+  path: [File]
+  group: 0
+  order: 0
+"#;
+        let def: CommandDef = serde_yaml_ng::from_str(yaml).unwrap();
+        let menu = def.menu.unwrap();
+        assert_eq!(menu.path, vec!["File"]);
+        assert_eq!(menu.group, 0);
+        assert_eq!(menu.order, 0);
+        assert!(menu.radio_group.is_none());
+    }
+
+    #[test]
+    fn menu_placement_with_radio_group() {
+        let yaml = r#"
+id: settings.keymap.vim
+name: Vim Keybindings
+menu:
+  path: [App, Settings]
+  group: 0
+  order: 1
+  radio_group: keymap
+"#;
+        let def: CommandDef = serde_yaml_ng::from_str(yaml).unwrap();
+        let menu = def.menu.unwrap();
+        assert_eq!(menu.path, vec!["App", "Settings"]);
+        assert_eq!(menu.radio_group.as_deref(), Some("keymap"));
     }
 
     #[test]

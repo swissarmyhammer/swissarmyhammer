@@ -1,8 +1,19 @@
+- id: app.about
+  name: About
+  menu:
+    path: [App]
+    group: 0
+    order: 0
+
 - id: app.quit
   name: Quit
   keys:
     cua: Mod+Q
     vim: ":q"
+  menu:
+    path: [App]
+    group: 2
+    order: 0
 
 - id: app.undo
   name: Undo
@@ -17,3 +28,14 @@
   keys:
     cua: Mod+Shift+Z
     vim: Ctrl+R
+
+- id: app.search
+  name: Find
+  keys:
+    vim: "/"
+    cua: Mod+F
+    emacs: Mod+F
+  menu:
+    path: [Edit]
+    group: 0
+    order: 0
