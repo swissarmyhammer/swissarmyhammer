@@ -1072,6 +1072,119 @@ async fn reorder_move_third_before_second_then_back() {
 }
 
 // ===========================================================================
+// Card 01KMWQWNK3ECP5EZBFQK8STBQ1 — task.delete undo/redo
+// ===========================================================================
+
+#[tokio::test]
+async fn undo_redo_task_delete() {
+    let engine = TestEngine::new().await;
+
+    // 1. Add a task to column "todo"
+    let add_result = engine
+        .dispatch_simple("task.add", &["column:todo"], None)
+        .await
+        .expect("task.add should succeed");
+    let task_id = add_result["id"].as_str().unwrap();
+
+    // Give it a recognizable title so we can verify restoration fidelity
+    let mut update_args = HashMap::new();
+    update_args.insert("entity_type".to_string(), json!("task"));
+    update_args.insert("id".to_string(), json!(task_id));
+    update_args.insert("field_name".to_string(), json!("title"));
+    update_args.insert("value".to_string(), json!("Task To Delete"));
+    engine
+        .dispatch("entity.update_field", &[], None, update_args)
+        .await
+        .expect("title update should succeed");
+
+    // Verify the task exists with the expected title
+    let task = engine
+        .kanban
+        .read_entity_generic("task", task_id)
+        .await
+        .expect("task should exist before delete");
+    assert_eq!(task.get_str("title"), Some("Task To Delete"));
+    assert_eq!(task.get_str("position_column"), Some("todo"));
+
+    // 2. Delete it via task.delete with scope ["task:{id}"]
+    let delete_result = engine
+        .dispatch_simple("task.delete", &[&format!("task:{}", task_id)], None)
+        .await
+        .expect("task.delete should succeed");
+    let delete_op_id = delete_result["operation_id"]
+        .as_str()
+        .expect("delete result should contain operation_id");
+
+    // 3. Verify task is gone
+    assert!(
+        engine
+            .kanban
+            .read_entity_generic("task", task_id)
+            .await
+            .is_err(),
+        "task should not exist after delete"
+    );
+
+    // 4. app.undo — verify task is restored with its original fields
+    let mut undo_args = HashMap::new();
+    undo_args.insert("id".to_string(), json!(delete_op_id));
+    let undo_result = engine
+        .dispatch("app.undo", &[], None, undo_args)
+        .await
+        .expect("app.undo should succeed");
+
+    assert_eq!(
+        undo_result["undone"].as_str(),
+        Some(delete_op_id),
+        "undo result should reference the delete operation"
+    );
+    let undo_op_id = undo_result["operation_id"]
+        .as_str()
+        .expect("undo result should contain its own operation_id");
+
+    // Task should be back with its original fields
+    let restored_task = engine
+        .kanban
+        .read_entity_generic("task", task_id)
+        .await
+        .expect("task should exist after undo");
+    assert_eq!(
+        restored_task.get_str("title"),
+        Some("Task To Delete"),
+        "restored task should have original title"
+    );
+    assert_eq!(
+        restored_task.get_str("position_column"),
+        Some("todo"),
+        "restored task should be in original column"
+    );
+
+    // 5. app.redo — verify task is gone again
+    let mut redo_args = HashMap::new();
+    redo_args.insert("id".to_string(), json!(undo_op_id));
+    let redo_result = engine
+        .dispatch("app.redo", &[], None, redo_args)
+        .await
+        .expect("app.redo should succeed");
+
+    assert_eq!(
+        redo_result["redone"].as_str(),
+        Some(undo_op_id),
+        "redo result should reference the undo operation"
+    );
+
+    // Task should be gone again
+    assert!(
+        engine
+            .kanban
+            .read_entity_generic("task", task_id)
+            .await
+            .is_err(),
+        "task should not exist after redo (re-deleted)"
+    );
+}
+
+// ===========================================================================
 // Card 01KMT7ZF59AYKGRA62DBTR9Y6E — DeleteTaskCmd::execute
 // ===========================================================================
 
