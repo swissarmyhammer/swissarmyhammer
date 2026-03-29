@@ -115,6 +115,45 @@
     - name: target_index
       from: args
 
+- id: entity.copy
+  name: Copy
+  scope: "entity:task"
+  undoable: false
+  context_menu: true
+  keys:
+    cua: Mod+C
+    vim: yy
+  params:
+    - name: task
+      from: scope_chain
+      entity_type: task
+
+- id: entity.cut
+  name: Cut
+  scope: "entity:task"
+  undoable: true
+  context_menu: true
+  keys:
+    cua: Mod+X
+    vim: dd
+  params:
+    - name: task
+      from: scope_chain
+      entity_type: task
+
+- id: entity.paste
+  name: Paste
+  scope: "entity:column"
+  undoable: true
+  context_menu: true
+  keys:
+    cua: Mod+V
+    vim: p
+  params:
+    - name: column
+      from: scope_chain
+      entity_type: column
+
 - id: attachment.delete
   name: Delete Attachment
   scope: "entity:task"

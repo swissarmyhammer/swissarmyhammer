@@ -120,6 +120,9 @@ struct UIStateInner {
     /// Active cross-window drag session. Transient — not persisted.
     #[serde(skip)]
     drag_session: Option<DragSession>,
+    /// Whether clipboard data is available for paste. Transient — not persisted.
+    #[serde(skip)]
+    has_clipboard: bool,
     /// IDs of items in the most recently shown context menu. Transient — not persisted.
     #[serde(skip)]
     context_menu_ids: HashSet<String>,
@@ -148,6 +151,7 @@ impl Default for UIStateInner {
             keymap_mode: "cua".to_string(),
             scope_chain: Vec::new(),
             drag_session: None,
+            has_clipboard: false,
             context_menu_ids: HashSet::new(),
             open_boards: Vec::new(),
             windows: HashMap::new(),
@@ -710,6 +714,22 @@ impl UIState {
             .clone()
     }
 
+    /// Get whether clipboard data is available for paste.
+    pub fn has_clipboard(&self) -> bool {
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .has_clipboard
+    }
+
+    /// Set the clipboard availability flag.
+    ///
+    /// Called by copy/cut commands after writing data to the clipboard provider.
+    pub fn set_has_clipboard(&self, has: bool) {
+        let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+        inner.has_clipboard = has;
+    }
+
     /// Get a clone of the current scope chain.
     pub fn scope_chain(&self) -> Vec<String> {
         self.inner
@@ -731,6 +751,7 @@ impl UIState {
             "palette_open": inner.palette_open,
             "keymap_mode": inner.keymap_mode,
             "scope_chain": inner.scope_chain,
+            "has_clipboard": inner.has_clipboard,
             "open_boards": inner.open_boards,
             "windows": inner.windows,
             "recent_boards": inner.recent_boards,

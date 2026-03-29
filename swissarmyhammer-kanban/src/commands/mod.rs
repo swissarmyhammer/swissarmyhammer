@@ -5,6 +5,7 @@
 //! trait objects, ready to be inserted into a `CommandsRegistry`.
 
 pub mod app_commands;
+pub mod clipboard_commands;
 pub mod column_commands;
 pub mod drag_commands;
 pub mod entity_commands;
@@ -73,6 +74,20 @@ pub fn register_commands() -> HashMap<String, Arc<dyn Command>> {
     map.insert(
         "attachment.delete".into(),
         Arc::new(entity_commands::AttachmentDeleteCmd),
+    );
+
+    // Clipboard commands
+    map.insert(
+        "entity.copy".into(),
+        Arc::new(clipboard_commands::CopyTaskCmd),
+    );
+    map.insert(
+        "entity.cut".into(),
+        Arc::new(clipboard_commands::CutTaskCmd),
+    );
+    map.insert(
+        "entity.paste".into(),
+        Arc::new(clipboard_commands::PasteTaskCmd),
     );
 
     // Column commands
@@ -175,8 +190,8 @@ mod tests {
     #[test]
     fn register_commands_returns_expected_count() {
         let cmds = register_commands();
-        // 5 task + 4 entity + 1 tag + 1 attachment + 1 column + 7 UI + 6 app + 2 file + 3 drag = 30
-        assert_eq!(cmds.len(), 30);
+        // 5 task + 4 entity + 3 clipboard + 1 tag + 1 attachment + 1 column + 7 UI + 6 app + 2 file + 3 drag = 33
+        assert_eq!(cmds.len(), 33);
     }
 
     // =========================================================================
