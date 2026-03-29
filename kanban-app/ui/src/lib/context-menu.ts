@@ -1,113 +1,69 @@
-import { useCallback, useMemo } from "react";
+import { useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import {
-  useAvailableCommands,
-  dispatchCommand,
-  type CommandDef,
-} from "@/lib/command-scope";
 
 /**
- * Module-level map of pending context menu handlers.
+ * Module-level map of pending context menu command IDs.
  * Only one context menu is open at a time, so this is safe.
- * Populated when a context menu opens, consumed when an item is selected.
  */
-const pendingHandlers = new Map<string, CommandDef>();
+const pendingCommandIds = new Map<string, string>();
 
 /**
- * Build the pendingHandlers key for a command.
- * Uses `id:target` when a target is set, plain `id` otherwise.
- */
-function handlerKey(cmd: CommandDef): string {
-  return cmd.target ? `${cmd.id}:${cmd.target}` : cmd.id;
-}
-
-/**
- * Dispatch a context menu command by handler key.
+ * Dispatch a context menu command by menu item ID.
  * Called by the global event listener when the user selects a menu item.
  *
- * @param key - The handler key selected from the native context menu.
+ * @param menuItemId - The menu item ID selected from the native context menu.
  * @returns true if the command was found and dispatched.
  */
 export async function dispatchContextMenuCommand(
-  key: string,
+  menuItemId: string,
 ): Promise<boolean> {
-  const cmd = pendingHandlers.get(key);
-  if (!cmd) return false;
-  await dispatchCommand(cmd);
+  const cmdId = pendingCommandIds.get(menuItemId);
+  if (!cmdId) return false;
+  try {
+    await invoke("dispatch_command", { cmd: cmdId });
+  } catch (e) {
+    console.error("context menu dispatch failed:", e);
+  }
   return true;
 }
 
 /**
  * Hook that returns an onContextMenu handler.
  *
- * When fired, it:
- * 1. Collects commands with contextMenu: true from the current scope chain
- * 2. Calls the backend to check which commands are actually available
- *    (e.g., paste requires clipboard content — the Rust side knows this)
- * 3. Filters to only available commands
- * 4. Registers their handlers and shows a native popup menu
+ * When fired, it passes the scope chain to the backend which returns
+ * the available context menu commands. The backend is the single source
+ * of truth for command availability, names, and filtering.
  *
- * Must be used inside a CommandScopeProvider.
+ * @param scopeChain - The scope chain monikers from the focused entity to root.
  */
 export function useContextMenu(
-  scopeChain?: string[],
+  scopeChain: string[],
 ): (e: React.MouseEvent) => void {
-  const allCommands = useAvailableCommands();
-
-  const contextCommands = useMemo(
-    () => allCommands.filter((c) => c.command.contextMenu),
-    [allCommands],
-  );
-
   return useCallback(
     (e: React.MouseEvent) => {
       e.preventDefault();
       e.stopPropagation();
 
-      if (contextCommands.length === 0) return;
-
-      // Ask the backend which commands are available in the current context.
-      // This checks Command::available() on each — including clipboard state,
-      // scope requirements, and any other dynamic conditions.
-      invoke<Array<{ id: string }>>("list_available_commands", {
+      // The backend computes everything: availability, names, filtering.
+      invoke<Array<{ id: string; name: string }>>("list_available_commands", {
         contextMenu: true,
-        scopeChain: scopeChain ?? undefined,
+        scopeChain,
       })
-        .then((available) => {
-          const availableIds = new Set(available.map((c) => c.id));
+        .then((commands) => {
+          if (commands.length === 0) return;
 
-          // Filter frontend commands to those the backend says are available,
-          // deduplicating by command ID (keep innermost scope — lowest depth).
-          const seen = new Set<string>();
-          const filtered = contextCommands.filter((c) => {
-            if (!availableIds.has(c.command.id)) return false;
-            if (seen.has(c.command.id)) return false;
-            seen.add(c.command.id);
-            return true;
-          });
-
-          if (filtered.length === 0) return;
-
-          // Register handlers and build menu items.
-          // Use backend name when available (e.g. "Paste Task" instead of "Paste").
-          pendingHandlers.clear();
+          pendingCommandIds.clear();
           const items: Array<{ id: string; name: string }> = [];
-          let lastDepth: number | null = null;
 
-          for (const c of filtered) {
-            if (lastDepth !== null && c.depth !== lastDepth) {
-              items.push({ id: "__separator__", name: "" });
-            }
-            const key = handlerKey(c.command);
-            pendingHandlers.set(key, c.command);
-            items.push({ id: key, name: c.command.name });
-            lastDepth = c.depth;
+          for (const cmd of commands) {
+            pendingCommandIds.set(cmd.id, cmd.id);
+            items.push({ id: cmd.id, name: cmd.name });
           }
 
           invoke("show_context_menu", { items }).catch(console.error);
         })
         .catch(console.error);
     },
-    [contextCommands, scopeChain],
+    [scopeChain],
   );
 }
