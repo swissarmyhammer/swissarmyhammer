@@ -166,10 +166,10 @@ export function collectAvailableCommands(
   scope: CommandScope | null,
 ): CommandAtDepth[] {
   /**
-   * Shadow key: command `id` alone.
-   * Same id at a deeper scope shadows the same id at a shallower scope.
-   * This ensures commands like entity.paste (declared on task, column, board)
-   * only appear once — the most specific (innermost) scope wins.
+   * Shadow key: `id + ":" + (target ?? "")`.
+   * Same id + same target → shadow (inner wins).
+   * Same id + different target → both visible (Copy Tag ≠ Copy Task).
+   * No target → shadow by id alone.
    */
   const seen = new Set<string>();
   const result: CommandAtDepth[] = [];
@@ -178,8 +178,9 @@ export function collectAvailableCommands(
 
   while (current !== null) {
     for (const [, cmd] of current.commands) {
-      if (seen.has(cmd.id)) continue;
-      seen.add(cmd.id);
+      const key = cmd.id + ":" + (cmd.target ?? "");
+      if (seen.has(key)) continue;
+      seen.add(key);
       if (cmd.available !== false) {
         result.push({ command: cmd, depth });
       }
