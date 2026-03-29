@@ -284,11 +284,22 @@ pub fn update_menu_enabled_state(state: &AppState) {
     let ctx = swissarmyhammer_commands::CommandContext::new("_menu_check", scope, None, empty_args)
         .with_ui_state(Arc::clone(&state.ui_state));
 
+    // Update paste label to reflect clipboard entity type
+    let paste_label = if let Some(entity_type) = state.ui_state.clipboard_entity_type() {
+        let cap = format!("{}{}", &entity_type[..1].to_uppercase(), &entity_type[1..]);
+        format!("Paste {cap}")
+    } else {
+        "Paste".to_string()
+    };
+
     let menu_items = state.menu_items.lock().unwrap();
     for (cmd_id, menu_item) in menu_items.iter() {
         if let Some(cmd_impl) = state.command_impls.get(cmd_id) {
             let enabled = cmd_impl.available(&ctx);
             let _ = menu_item.set_enabled(enabled);
+        }
+        if cmd_id == "entity.paste" {
+            let _ = menu_item.set_text(&paste_label);
         }
     }
 }

@@ -123,6 +123,9 @@ struct UIStateInner {
     /// Whether the clipboard contains a copied/cut entity. Transient — not persisted.
     #[serde(skip)]
     has_clipboard: bool,
+    /// The entity type on the clipboard (e.g. "task", "tag"). Transient — not persisted.
+    #[serde(skip)]
+    clipboard_entity_type: Option<String>,
     /// IDs of items in the most recently shown context menu. Transient — not persisted.
     #[serde(skip)]
     context_menu_ids: HashSet<String>,
@@ -152,6 +155,7 @@ impl Default for UIStateInner {
             scope_chain: Vec::new(),
             drag_session: None,
             has_clipboard: false,
+            clipboard_entity_type: None,
             context_menu_ids: HashSet::new(),
             open_boards: Vec::new(),
             windows: HashMap::new(),
@@ -713,12 +717,29 @@ impl UIState {
             .has_clipboard
     }
 
-    /// Set the clipboard flag. Called after copy/cut operations.
+    /// Set the clipboard flag and entity type. Called after copy/cut operations.
     pub fn set_has_clipboard(&self, has: bool) {
+        let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+        inner.has_clipboard = has;
+        if !has {
+            inner.clipboard_entity_type = None;
+        }
+    }
+
+    /// Set clipboard flag with the entity type that was copied/cut.
+    pub fn set_clipboard_entity_type(&self, entity_type: impl Into<String>) {
+        let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+        inner.has_clipboard = true;
+        inner.clipboard_entity_type = Some(entity_type.into());
+    }
+
+    /// Get the entity type on the clipboard (e.g. "task", "tag").
+    pub fn clipboard_entity_type(&self) -> Option<String> {
         self.inner
-            .write()
+            .read()
             .unwrap_or_else(|e| e.into_inner())
-            .has_clipboard = has;
+            .clipboard_entity_type
+            .clone()
     }
 
     /// Get the current keymap mode.
@@ -752,6 +773,8 @@ impl UIState {
             "keymap_mode": inner.keymap_mode,
             "scope_chain": inner.scope_chain,
             "open_boards": inner.open_boards,
+            "has_clipboard": inner.has_clipboard,
+            "clipboard_entity_type": inner.clipboard_entity_type,
             "windows": inner.windows,
             "recent_boards": inner.recent_boards,
             "most_recent_board_path": inner.most_recent_board_path,

@@ -246,6 +246,13 @@ impl MenuItemHandle {
             Self::Check(item) => item.set_enabled(enabled),
         }
     }
+
+    pub(crate) fn set_text(&self, text: &str) -> tauri::Result<()> {
+        match self {
+            Self::Regular(item) => item.set_text(text),
+            Self::Check(item) => item.set_text(text),
+        }
+    }
 }
 
 /// The shared application state, managed by Tauri.

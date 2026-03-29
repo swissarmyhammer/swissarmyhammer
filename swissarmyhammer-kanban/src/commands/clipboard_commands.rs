@@ -11,10 +11,11 @@ use async_trait::async_trait;
 use serde_json::Value;
 use swissarmyhammer_commands::{Command, CommandContext, CommandError};
 
-/// Helper: write clipboard JSON to system clipboard and set has_clipboard flag.
+/// Helper: write clipboard JSON to system clipboard and set has_clipboard flag + entity type.
 async fn write_to_clipboard(
     ctx: &CommandContext,
     clipboard_json: &str,
+    entity_type: &str,
 ) -> swissarmyhammer_commands::Result<()> {
     if let Ok(clipboard) = ctx.require_extension::<ClipboardProviderExt>() {
         clipboard
@@ -24,7 +25,7 @@ async fn write_to_clipboard(
             .map_err(|e| CommandError::ExecutionFailed(format!("clipboard write failed: {e}")))?;
     }
     if let Some(ref ui) = ctx.ui_state {
-        ui.set_has_clipboard(true);
+        ui.set_clipboard_entity_type(entity_type);
     }
     Ok(())
 }
@@ -44,21 +45,18 @@ impl Command for CopyCmd {
     async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
         let kanban = ctx.require_extension::<KanbanContext>()?;
 
-        let result = if let Some(tag_id) = ctx.resolve_entity_id("tag") {
-            // Tag is innermost — copy the tag
+        let (result, entity_type) = if let Some(tag_id) = ctx.resolve_entity_id("tag") {
             let op = crate::tag::CopyTag::new(tag_id);
-            run_op(&op, &kanban).await?
+            (run_op(&op, &kanban).await?, "tag")
         } else if let Some(task_id) = ctx.resolve_entity_id("task") {
-            // Task copy
             let op = crate::task::CopyTask::new(task_id);
-            run_op(&op, &kanban).await?
+            (run_op(&op, &kanban).await?, "task")
         } else {
             return Err(CommandError::MissingScope("tag or task".into()));
         };
 
-        // Write to system clipboard
         if let Some(clipboard_json) = result["clipboard_json"].as_str() {
-            write_to_clipboard(ctx, clipboard_json).await?;
+            write_to_clipboard(ctx, clipboard_json, entity_type).await?;
         }
 
         Ok(result)
@@ -80,8 +78,7 @@ impl Command for CutCmd {
     async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
         let kanban = ctx.require_extension::<KanbanContext>()?;
 
-        let result = if ctx.has_in_scope("tag") {
-            // Tag cut: needs both tag and task in scope
+        let (result, entity_type) = if ctx.has_in_scope("tag") {
             let tag_id = ctx
                 .resolve_entity_id("tag")
                 .ok_or_else(|| CommandError::MissingScope("tag".into()))?;
@@ -89,7 +86,6 @@ impl Command for CutCmd {
                 .resolve_entity_id("task")
                 .ok_or_else(|| CommandError::MissingScope("task".into()))?;
 
-            // Resolve tag name from the tag entity
             let ectx = kanban
                 .entity_context()
                 .await
@@ -104,18 +100,16 @@ impl Command for CutCmd {
                 .to_string();
 
             let op = crate::tag::CutTag::new(task_id, tag_name);
-            run_op(&op, &kanban).await?
+            (run_op(&op, &kanban).await?, "tag")
         } else if let Some(task_id) = ctx.resolve_entity_id("task") {
-            // Task cut
             let op = crate::task::CutTask::new(task_id);
-            run_op(&op, &kanban).await?
+            (run_op(&op, &kanban).await?, "task")
         } else {
             return Err(CommandError::MissingScope("tag or task".into()));
         };
 
-        // Write to system clipboard
         if let Some(clipboard_json) = result["clipboard_json"].as_str() {
-            write_to_clipboard(ctx, clipboard_json).await?;
+            write_to_clipboard(ctx, clipboard_json, entity_type).await?;
         }
 
         Ok(result)
@@ -371,6 +365,7 @@ mod tests {
         let result = CopyCmd.execute(&ctx).await.unwrap();
         assert_eq!(result["copied"], true);
         assert!(ui.has_clipboard());
+        assert_eq!(ui.clipboard_entity_type().as_deref(), Some("task"));
 
         let text = clipboard.0.read_text().await.unwrap().unwrap();
         let payload = clipboard::deserialize_from_clipboard(&text).unwrap();
@@ -388,6 +383,7 @@ mod tests {
         let result = CopyCmd.execute(&ctx).await.unwrap();
         assert_eq!(result["entity_type"], "tag");
         assert!(ui.has_clipboard());
+        assert_eq!(ui.clipboard_entity_type().as_deref(), Some("tag"));
 
         let text = clipboard.0.read_text().await.unwrap().unwrap();
         let payload = clipboard::deserialize_from_clipboard(&text).unwrap();

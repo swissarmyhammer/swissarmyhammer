@@ -1202,6 +1202,20 @@ pub async fn list_available_commands(
         available.retain(|def| def.context_menu);
     }
 
+    // Template paste command name with clipboard entity type
+    if let Some(entity_type) = state.ui_state.clipboard_entity_type() {
+        let capitalized = format!(
+            "{}{}",
+            &entity_type[..1].to_uppercase(),
+            &entity_type[1..]
+        );
+        for def in &mut available {
+            if def.id == "entity.paste" {
+                def.name = format!("Paste {capitalized}");
+            }
+        }
+    }
+
     serde_json::to_value(&available).map_err(|e| e.to_string())
 }
 
