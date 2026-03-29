@@ -45,7 +45,6 @@ pub fn register_commands() -> HashMap<String, Arc<dyn Command>> {
     // Task commands
     map.insert("task.add".into(), Arc::new(task_commands::AddTaskCmd));
     map.insert("task.move".into(), Arc::new(task_commands::MoveTaskCmd));
-    map.insert("task.tag".into(), Arc::new(task_commands::TagTaskCmd));
     map.insert("task.untag".into(), Arc::new(task_commands::UntagTaskCmd));
     map.insert("task.delete".into(), Arc::new(task_commands::DeleteTaskCmd));
 
@@ -183,8 +182,8 @@ mod tests {
     #[test]
     fn register_commands_returns_expected_count() {
         let cmds = register_commands();
-        // 5 task + 4 entity + 3 clipboard + 1 tag + 1 attachment + 1 column + 7 UI + 6 app + 2 file + 3 drag = 33
-        assert_eq!(cmds.len(), 33);
+        // 4 task + 4 entity + 3 clipboard + 1 tag + 1 attachment + 1 column + 7 UI + 6 app + 2 file + 3 drag = 32
+        assert_eq!(cmds.len(), 32);
     }
 
     // =========================================================================
