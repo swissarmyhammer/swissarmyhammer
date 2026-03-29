@@ -151,9 +151,21 @@ function FocusScopeInner({
   children,
   ...htmlProps
 }: FocusScopeInnerProps) {
-  const contextMenuHandler = useContextMenu();
-  const { setFocus } = useEntityFocus();
   const scope = useContext(CommandScopeContext);
+
+  // Build scope chain (moniker walk from this scope to root) for context menu
+  const scopeChain = useMemo(() => {
+    const chain: string[] = [];
+    let current: typeof scope | null = scope;
+    while (current) {
+      if (current.moniker) chain.push(current.moniker);
+      current = current.parent;
+    }
+    return chain;
+  }, [scope]);
+
+  const contextMenuHandler = useContextMenu(scopeChain);
+  const { setFocus } = useEntityFocus();
 
   const handleContextMenu = useCallback(
     (e: React.MouseEvent) => {

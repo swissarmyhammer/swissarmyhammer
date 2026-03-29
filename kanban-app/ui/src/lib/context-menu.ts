@@ -49,7 +49,9 @@ export async function dispatchContextMenuCommand(
  *
  * Must be used inside a CommandScopeProvider.
  */
-export function useContextMenu(): (e: React.MouseEvent) => void {
+export function useContextMenu(
+  scopeChain?: string[],
+): (e: React.MouseEvent) => void {
   const allCommands = useAvailableCommands();
 
   const contextCommands = useMemo(
@@ -69,6 +71,7 @@ export function useContextMenu(): (e: React.MouseEvent) => void {
       // scope requirements, and any other dynamic conditions.
       invoke<Array<{ id: string }>>("list_available_commands", {
         contextMenu: true,
+        scopeChain: scopeChain ?? undefined,
       })
         .then((available) => {
           const availableIds = new Set(available.map((c) => c.id));
@@ -105,6 +108,6 @@ export function useContextMenu(): (e: React.MouseEvent) => void {
         })
         .catch(console.error);
     },
-    [contextCommands],
+    [contextCommands, scopeChain],
   );
 }

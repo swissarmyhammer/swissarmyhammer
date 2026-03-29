@@ -1161,8 +1161,9 @@ pub(crate) async fn dispatch_command_internal(
 pub async fn list_available_commands(
     state: State<'_, AppState>,
     context_menu: Option<bool>,
+    scope_chain: Option<Vec<String>>,
 ) -> Result<Value, String> {
-    let scope = state.ui_state.scope_chain();
+    let scope = scope_chain.unwrap_or_else(|| state.ui_state.scope_chain());
 
     // Clone filtered defs so we can drop the registry read guard before
     // awaiting active_handle (avoids holding RwLock across an await point).
