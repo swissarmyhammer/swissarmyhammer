@@ -1154,6 +1154,15 @@ pub(crate) async fn dispatch_command_internal(
         tracing::info!(cmd = %cmd, "non-mutating — skipping flush_and_emit");
     }
 
+    // Update clipboard menu item enabled states after focus or clipboard changes.
+    // ui.setFocus changes the scope chain; entity.copy/cut/paste mutate clipboard.
+    if matches!(
+        cmd,
+        "ui.setFocus" | "entity.copy" | "entity.cut" | "entity.paste"
+    ) {
+        menu::update_clipboard_menu_state(app, &state.ui_state);
+    }
+
     // Wrap result with undoable info
     Ok(json!({
         "result": result,
