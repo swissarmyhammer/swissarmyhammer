@@ -1356,13 +1356,15 @@ async fn entity_copy_copies_task_to_clipboard() {
         .await
         .expect("entity.copy should succeed");
 
-    assert_eq!(result["copied"].as_str(), Some(task_id));
+    assert_eq!(result["id"].as_str(), Some(task_id));
+    assert_eq!(result["copied"].as_bool(), Some(true));
 
-    // Verify the InMemoryClipboard has the task's fields as JSON
-    let clipboard_text = engine.clipboard.read_text().expect("clipboard should have data");
+    // Verify the InMemoryClipboard has the task's fields as JSON (wrapped format)
+    let clipboard_text = engine.clipboard.read_text().await.unwrap().expect("clipboard should have data");
     let clipboard_json: Value = serde_json::from_str(&clipboard_text).expect("should be valid JSON");
-    assert_eq!(clipboard_json["id"].as_str(), Some(task_id));
-    assert_eq!(clipboard_json["title"].as_str(), Some("Clipboard test task"));
+    let content = &clipboard_json["swissarmyhammer_clipboard"];
+    assert_eq!(content["entity_id"].as_str(), Some(task_id));
+    assert_eq!(content["entity_type"].as_str(), Some("task"));
 
     // Verify task still exists (copy is non-destructive)
     let task = engine
@@ -1396,10 +1398,12 @@ async fn entity_cut_undo_redo() {
         .expect("entity.cut should succeed");
     let cut_op_id = cut_result["operation_id"].as_str().unwrap();
 
-    // Verify clipboard has the task snapshot
-    let clipboard_text = engine.clipboard.read_text().expect("clipboard should have data");
+    // Verify clipboard has the task snapshot (wrapped format)
+    let clipboard_text = engine.clipboard.read_text().await.unwrap().expect("clipboard should have data");
     let clipboard_json: Value = serde_json::from_str(&clipboard_text).unwrap();
-    assert_eq!(clipboard_json["title"].as_str(), Some("Cut me"));
+    let content = &clipboard_json["swissarmyhammer_clipboard"];
+    assert_eq!(content["entity_type"].as_str(), Some("task"));
+    assert_eq!(content["mode"].as_str(), Some("cut"));
 
     // Verify task is deleted
     assert!(
@@ -1427,7 +1431,7 @@ async fn entity_cut_undo_redo() {
     assert_eq!(task.get_str("title"), Some("Cut me"));
 
     // Clipboard should still have data
-    assert!(engine.clipboard.read_text().is_some(), "clipboard should still have data after undo");
+    assert!(engine.clipboard.read_text().await.unwrap().is_some(), "clipboard should still have data after undo");
 
     // Redo the cut — task should be deleted again
     let mut redo_args = HashMap::new();
@@ -1482,7 +1486,7 @@ async fn entity_paste_undo_redo() {
     assert_eq!(pasted_task.get_str("position_column"), Some("doing"));
 
     // Clipboard should still have data (multi-paste support)
-    assert!(engine.clipboard.read_text().is_some(), "clipboard should still have data after paste");
+    assert!(engine.clipboard.read_text().await.unwrap().is_some(), "clipboard should still have data after paste");
 
     // Undo the paste — pasted task should be removed
     let mut undo_args = HashMap::new();
