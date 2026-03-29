@@ -1324,3 +1324,100 @@ async fn drag_complete_cross_board_returns_transfer_params() {
         "copy_mode should default to false"
     );
 }
+
+// ===========================================================================
+// Card 01KMWQWVM2AWDAG94TEB7H5DNB — entity.delete undo/redo
+// ===========================================================================
+
+#[tokio::test]
+async fn entity_delete_undo_redo_tag() {
+    let engine = TestEngine::new().await;
+
+    // Create a tag via the lower-level API (board init doesn't seed default tags)
+    let processor = KanbanOperationProcessor::new();
+    let tag_result = processor
+        .process(
+            &swissarmyhammer_kanban::tag::AddTag::new("deleteme"),
+            &engine.kanban,
+        )
+        .await
+        .expect("tag creation should succeed");
+    let tag_id = tag_result["id"].as_str().unwrap();
+
+    // 1. Verify the tag entity exists (field is "tag_name" on the raw entity)
+    let tag = engine
+        .kanban
+        .read_entity_generic("tag", tag_id)
+        .await
+        .expect("tag should exist after creation");
+    assert_eq!(tag.get_str("tag_name"), Some("deleteme"));
+
+    // 2. Delete it via entity.delete with target "tag:{id}"
+    let delete_result = engine
+        .dispatch_simple(
+            "entity.delete",
+            &[],
+            Some(&format!("tag:{}", tag_id)),
+        )
+        .await
+        .expect("entity.delete should succeed");
+
+    assert!(
+        delete_result.get("operation_id").is_some(),
+        "result should contain operation_id"
+    );
+    let delete_op_id = delete_result["operation_id"].as_str().unwrap();
+
+    // 3. Verify the tag is gone
+    assert!(
+        engine
+            .kanban
+            .read_entity_generic("tag", tag_id)
+            .await
+            .is_err(),
+        "tag should not exist after entity.delete"
+    );
+
+    // 4. app.undo — verify tag is restored
+    let mut undo_args = HashMap::new();
+    undo_args.insert("id".to_string(), json!(delete_op_id));
+    let undo_result = engine
+        .dispatch("app.undo", &[], None, undo_args)
+        .await
+        .expect("app.undo should succeed");
+
+    assert_eq!(undo_result["undone"].as_str(), Some(delete_op_id));
+    let undo_op_id = undo_result["operation_id"]
+        .as_str()
+        .expect("undo should return an operation_id for redo");
+
+    let restored_tag = engine
+        .kanban
+        .read_entity_generic("tag", tag_id)
+        .await
+        .expect("tag should exist after undo");
+    assert_eq!(
+        restored_tag.get_str("tag_name"),
+        Some("deleteme"),
+        "restored tag should have original tag_name"
+    );
+
+    // 5. app.redo — verify tag is gone again
+    let mut redo_args = HashMap::new();
+    redo_args.insert("id".to_string(), json!(undo_op_id));
+    let redo_result = engine
+        .dispatch("app.redo", &[], None, redo_args)
+        .await
+        .expect("app.redo should succeed");
+
+    assert_eq!(redo_result["redone"].as_str(), Some(undo_op_id));
+
+    assert!(
+        engine
+            .kanban
+            .read_entity_generic("tag", tag_id)
+            .await
+            .is_err(),
+        "tag should not exist after redo (re-deleted)"
+    );
+}
