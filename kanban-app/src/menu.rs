@@ -280,34 +280,41 @@ fn append_menu_entry(
 /// Called after every command dispatch.
 pub fn update_menu_enabled_state(state: &AppState) {
     let scope = state.ui_state.scope_chain();
-    let empty_args: HashMap<String, serde_json::Value> = HashMap::new();
-    let ctx = swissarmyhammer_commands::CommandContext::new("_menu_check", scope.clone(), None, empty_args)
-        .with_ui_state(Arc::clone(&state.ui_state));
 
-    let clipboard_type = state.ui_state.clipboard_entity_type();
+    // Use commands_for_scope as the single source of truth for availability + names.
+    // Access fields through the first open board (blocking read — OK in sync context).
+    let boards = state.boards.blocking_read();
+    let fields = boards
+        .values()
+        .next()
+        .and_then(|h| h.ctx.fields());
 
-    // Resolve names using the same logic as list_available_commands
     let registry = state.commands_registry.blocking_read();
+    let resolved = swissarmyhammer_kanban::scope_commands::commands_for_scope(
+        &scope,
+        &registry,
+        &state.command_impls,
+        fields,
+        &state.ui_state,
+        false,
+    );
+    drop(registry);
+    drop(boards);
+
+    // Build lookup: command ID → resolved name + available
+    let resolved_map: HashMap<String, (String, bool)> = resolved
+        .into_iter()
+        .map(|c| (c.id.clone(), (c.name, c.available)))
+        .collect();
+
     let menu_items = state.menu_items.lock().unwrap();
     for (cmd_id, menu_item) in menu_items.iter() {
-        // Update enabled state
-        if let Some(cmd_impl) = state.command_impls.get(cmd_id) {
-            let enabled = cmd_impl.available(&ctx);
-            let _ = menu_item.set_enabled(enabled);
-        }
-
-        // Resolve template names
-        if let Some(def) = registry.get(cmd_id) {
-            if def.name.contains("{{entity.type}}") {
-                let resolved = if cmd_id == "entity.paste" {
-                    clipboard_type.as_deref().unwrap_or("entity")
-                } else {
-                    crate::commands::resolve_entity_type_from_scope(&scope, def)
-                };
-                let cap = format!("{}{}", &resolved[..1].to_uppercase(), &resolved[1..]);
-                let name = def.name.replace("{{entity.type}}", &cap);
-                let _ = menu_item.set_text(&name);
-            }
+        if let Some((name, enabled)) = resolved_map.get(cmd_id) {
+            let _ = menu_item.set_enabled(*enabled);
+            let _ = menu_item.set_text(name);
+        } else {
+            // Command not in resolved set — disable it
+            let _ = menu_item.set_enabled(false);
         }
     }
 }

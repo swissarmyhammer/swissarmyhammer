@@ -1246,6 +1246,40 @@ pub(crate) fn resolve_entity_type_from_scope<'a>(
 }
 
 // ---------------------------------------------------------------------------
+// list_commands_for_scope — backend-driven command resolution
+// ---------------------------------------------------------------------------
+
+/// Return all available commands for the given scope chain.
+///
+/// This is the single source of truth for what commands are available.
+/// The frontend calls this with a scope chain and renders the result.
+/// No command logic in the UI — just render and dispatch.
+#[tauri::command]
+pub async fn list_commands_for_scope(
+    state: State<'_, AppState>,
+    scope_chain: Vec<String>,
+    context_menu: Option<bool>,
+) -> Result<Value, String> {
+    let active_handle = state.active_handle().await;
+    let fields = active_handle
+        .as_ref()
+        .and_then(|h| h.ctx.fields());
+
+    let registry = state.commands_registry.read().await;
+
+    let result = swissarmyhammer_kanban::scope_commands::commands_for_scope(
+        &scope_chain,
+        &registry,
+        &state.command_impls,
+        fields,
+        &state.ui_state,
+        context_menu == Some(true),
+    );
+
+    serde_json::to_value(&result).map_err(|e| e.to_string())
+}
+
+// ---------------------------------------------------------------------------
 // show_context_menu — generic native context menu
 // ---------------------------------------------------------------------------
 

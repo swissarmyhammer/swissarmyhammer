@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KMXRY4SHGCHEGMG2M8EMDA6P
-position_column: todo
-position_ordinal: '8180'
+position_column: doing
+position_ordinal: '80'
 title: Tauri endpoint + wire context menu and palette to backend
 ---
 ## What

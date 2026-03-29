@@ -14,11 +14,8 @@ import { getCM, Vim } from "@replit/codemirror-vim";
 import { invoke } from "@tauri-apps/api/core";
 import {
   CommandScopeContext,
-  useAvailableCommands,
-  collectAvailableCommands,
   resolveCommand,
   dispatchCommand,
-  type CommandAtDepth,
 } from "@/lib/command-scope";
 import { useFocusedScope } from "@/lib/entity-focus-context";
 import { useUIState } from "@/lib/ui-state-context";
@@ -79,15 +76,41 @@ export function CommandPalette({
   const editorRef = useRef<ReactCodeMirrorRef>(null);
   const keymapCompartment = useRef(new Compartment());
   const listRef = useRef<HTMLDivElement>(null);
-  const { keymap_mode: mode } = useUIState();
+  const { keymap_mode: mode, scope_chain: scopeChain } = useUIState();
   const focusedScope = useFocusedScope();
-  const rootCommands = useAvailableCommands();
-  // When a scope is focused, collect commands from it (which includes its ancestor chain).
-  // Otherwise fall back to commands from the root scope context.
-  const allCommands = useMemo(
-    () =>
-      focusedScope ? collectAvailableCommands(focusedScope) : rootCommands,
-    [focusedScope, rootCommands],
+
+  /** Shape returned by the backend. */
+  interface ResolvedCommand {
+    id: string;
+    name: string;
+    target?: string;
+    context_menu: boolean;
+    keys?: { vim?: string; cua?: string; emacs?: string };
+    available: boolean;
+  }
+
+  // Fetch commands from the backend when the palette opens or scope changes.
+  const [backendCommands, setBackendCommands] = useState<ResolvedCommand[]>([]);
+  useEffect(() => {
+    if (!open) return;
+    invoke<ResolvedCommand[]>("list_commands_for_scope", {
+      scopeChain: scopeChain ?? [],
+    })
+      .then(setBackendCommands)
+      .catch((e) => {
+        console.error("list_commands_for_scope failed:", e);
+        setBackendCommands([]);
+      });
+  }, [open, scopeChain]);
+
+  // Adapt backend commands to the shape the palette expects
+  type PaletteEntry = { command: { id: string; name: string; target?: string }; depth: number };
+  const allCommands: PaletteEntry[] = useMemo(
+    () => backendCommands.map((cmd) => ({
+      command: { id: cmd.id, name: cmd.name, target: cmd.target },
+      depth: 0,
+    })),
+    [backendCommands],
   );
 
   // Inspect hook for search mode (only used in search mode)
@@ -202,7 +225,10 @@ export function CommandPalette({
     const entry = filteredCommands[selectedIndex];
     if (entry) {
       onClose();
-      dispatchCommand(entry.command);
+      invoke("dispatch_command", {
+        cmd: entry.command.id,
+        target: entry.command.target,
+      }).catch(console.error);
     }
   }, [filteredCommands, selectedIndex, onClose]);
 

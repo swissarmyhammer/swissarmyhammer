@@ -1,99 +1,81 @@
-import { useCallback, useMemo } from "react";
+import { useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import {
-  useAvailableCommands,
-  dispatchCommand,
-  type CommandDef,
-} from "@/lib/command-scope";
 
-/**
- * Module-level map of pending context menu handlers.
- * Only one context menu is open at a time, so this is safe.
- */
-const pendingHandlers = new Map<string, CommandDef>();
-
-/**
- * Build the pendingHandlers key for a command.
- */
-function handlerKey(cmd: CommandDef): string {
-  return cmd.target ? `${cmd.id}:${cmd.target}` : cmd.id;
+/** Shape returned by the backend `list_commands_for_scope`. */
+interface ResolvedCommand {
+  id: string;
+  name: string;
+  target?: string;
+  context_menu: boolean;
+  keys?: { vim?: string; cua?: string; emacs?: string };
+  available: boolean;
 }
 
 /**
- * Dispatch a context menu command by handler key.
+ * Module-level map of pending context menu commands.
+ * Only one context menu is open at a time, so this is safe.
+ * Maps menu item key → { cmd id, target } for dispatch.
+ */
+const pendingCommands = new Map<string, { id: string; target?: string }>();
+
+/**
+ * Dispatch a context menu command by menu item key.
+ * Called by the global event listener when the user selects a menu item.
  */
 export async function dispatchContextMenuCommand(
-  key: string,
+  menuItemKey: string,
 ): Promise<boolean> {
-  const cmd = pendingHandlers.get(key);
+  const cmd = pendingCommands.get(menuItemKey);
   if (!cmd) return false;
-  await dispatchCommand(cmd);
+  try {
+    await invoke("dispatch_command", {
+      cmd: cmd.id,
+      target: cmd.target,
+    });
+  } catch (e) {
+    console.error("context menu dispatch failed:", e);
+  }
   return true;
 }
 
 /**
  * Hook that returns an onContextMenu handler.
  *
- * The frontend scope chain provides the command list (with targets and
- * execute handlers). The backend provides availability filtering via
- * `list_available_commands`. This gives us both:
- * - Multiple entries for polymorphic commands (Copy Tag + Copy Task)
- * - Correct availability (paste only when clipboard has content)
+ * The backend is the single source of truth — it computes available commands,
+ * resolves names, checks clipboard state, and handles dedup. The frontend
+ * just renders what it gets back and dispatches on click.
  *
- * @param scopeChain - Monikers from focused entity to root, passed to backend.
+ * @param scopeChain - Monikers from focused entity to root.
  */
 export function useContextMenu(
   scopeChain: string[],
 ): (e: React.MouseEvent) => void {
-  const allCommands = useAvailableCommands();
-
-  const contextCommands = useMemo(
-    () => allCommands.filter((c) => c.command.contextMenu),
-    [allCommands],
-  );
-
   return useCallback(
     (e: React.MouseEvent) => {
       e.preventDefault();
       e.stopPropagation();
 
-      if (contextCommands.length === 0) return;
-
-      // Backend checks availability (clipboard state, scope requirements, etc.)
-      invoke<Array<{ id: string }>>("list_available_commands", {
-        contextMenu: true,
+      invoke<ResolvedCommand[]>("list_commands_for_scope", {
         scopeChain,
+        contextMenu: true,
       })
-        .then((available) => {
-          const availableIds = new Set(available.map((c) => c.id));
+        .then((commands) => {
+          if (commands.length === 0) return;
 
-          // Keep frontend commands that the backend says are available.
-          // Frontend has per-target entries (Copy Tag, Copy Task) — both show
-          // if the backend says entity.copy is available.
-          const filtered = contextCommands.filter((c) =>
-            availableIds.has(c.command.id),
-          );
-
-          if (filtered.length === 0) return;
-
-          pendingHandlers.clear();
+          pendingCommands.clear();
           const items: Array<{ id: string; name: string }> = [];
-          let lastDepth: number | null = null;
 
-          for (const c of filtered) {
-            if (lastDepth !== null && c.depth !== lastDepth) {
-              items.push({ id: "__separator__", name: "" });
-            }
-            const key = handlerKey(c.command);
-            pendingHandlers.set(key, c.command);
-            items.push({ id: key, name: c.command.name });
-            lastDepth = c.depth;
+          for (const cmd of commands) {
+            // Key includes target to distinguish Copy Tag from Copy Task
+            const key = cmd.target ? `${cmd.id}:${cmd.target}` : cmd.id;
+            pendingCommands.set(key, { id: cmd.id, target: cmd.target });
+            items.push({ id: key, name: cmd.name });
           }
 
           invoke("show_context_menu", { items }).catch(console.error);
         })
         .catch(console.error);
     },
-    [contextCommands, scopeChain],
+    [scopeChain],
   );
 }

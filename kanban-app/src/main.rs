@@ -55,6 +55,7 @@ fn main() {
             commands::log_command,
             commands::dispatch_command,
             commands::list_available_commands,
+            commands::list_commands_for_scope,
             commands::show_context_menu,
             commands::list_open_boards,
             commands::get_ui_state,
