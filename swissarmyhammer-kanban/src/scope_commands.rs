@@ -9,7 +9,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use swissarmyhammer_commands::{
-    Command, CommandContext, CommandDef, CommandsRegistry, KeysDef, UIState,
+    Command, CommandContext, CommandsRegistry, KeysDef, UIState,
 };
 use swissarmyhammer_fields::FieldsContext;
 

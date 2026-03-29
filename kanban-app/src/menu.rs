@@ -1,7 +1,6 @@
 //! Native menu bar construction and event handling.
 
 use crate::state::{resolve_kanban_path, AppState, MenuItemHandle};
-use std::sync::Arc;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use swissarmyhammer_commands::{CommandDef, CommandsRegistry, RecentBoard, UIState};

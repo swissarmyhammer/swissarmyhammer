@@ -787,8 +787,6 @@ pub async fn get_undo_state(
     }))
 }
 
-/// Rebuild the native menu bar from a frontend-generated manifest.
-///
 // ---------------------------------------------------------------------------
 // log_command — lightweight log entry for commands that execute in the frontend
 // ---------------------------------------------------------------------------
