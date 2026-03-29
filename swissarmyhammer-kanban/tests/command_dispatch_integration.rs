@@ -1324,3 +1324,193 @@ async fn drag_complete_cross_board_returns_transfer_params() {
         "copy_mode should default to false"
     );
 }
+
+// ===========================================================================
+// Undo / Redo tests for entity.archive and entity.unarchive
+// ===========================================================================
+
+#[tokio::test]
+async fn undo_redo_entity_archive() {
+    let engine = TestEngine::new().await;
+
+    // Add a task
+    let add_result = engine
+        .dispatch_simple("task.add", &["column:todo"], None)
+        .await
+        .expect("task.add should succeed");
+    let task_id = add_result["id"].as_str().unwrap();
+
+    // Verify the task exists
+    assert!(
+        engine
+            .kanban
+            .read_entity_generic("task", task_id)
+            .await
+            .is_ok(),
+        "task should exist after add"
+    );
+
+    // Archive the task via entity.archive
+    let archive_result = engine
+        .dispatch_simple(
+            "entity.archive",
+            &[],
+            Some(&format!("task:{}", task_id)),
+        )
+        .await
+        .expect("entity.archive should succeed");
+    let operation_id = archive_result["operation_id"]
+        .as_str()
+        .expect("entity.archive should return operation_id");
+
+    // Verify task is gone from live storage (archived)
+    assert!(
+        engine
+            .kanban
+            .read_entity_generic("task", task_id)
+            .await
+            .is_err(),
+        "task should not be in live storage after archive"
+    );
+
+    // Undo the archive
+    let mut undo_args = HashMap::new();
+    undo_args.insert("id".to_string(), json!(operation_id));
+    let undo_result = engine
+        .dispatch("app.undo", &[], None, undo_args)
+        .await
+        .expect("app.undo should succeed");
+
+    assert_eq!(undo_result["undone"].as_str(), Some(operation_id));
+    let undo_op_id = undo_result["operation_id"]
+        .as_str()
+        .expect("undo should return operation_id for redo");
+
+    // Verify task is restored from archive
+    assert!(
+        engine
+            .kanban
+            .read_entity_generic("task", task_id)
+            .await
+            .is_ok(),
+        "task should be restored after undo of archive"
+    );
+
+    // Redo the archive
+    let mut redo_args = HashMap::new();
+    redo_args.insert("id".to_string(), json!(undo_op_id));
+    let redo_result = engine
+        .dispatch("app.redo", &[], None, redo_args)
+        .await
+        .expect("app.redo should succeed");
+
+    assert_eq!(redo_result["redone"].as_str(), Some(undo_op_id));
+
+    // Verify task is archived again
+    assert!(
+        engine
+            .kanban
+            .read_entity_generic("task", task_id)
+            .await
+            .is_err(),
+        "task should be archived again after redo"
+    );
+}
+
+#[tokio::test]
+async fn undo_redo_entity_unarchive() {
+    let engine = TestEngine::new().await;
+
+    // Add a task
+    let add_result = engine
+        .dispatch_simple("task.add", &["column:todo"], None)
+        .await
+        .expect("task.add should succeed");
+    let task_id = add_result["id"].as_str().unwrap();
+
+    // Archive the task first (prerequisite for unarchive)
+    engine
+        .dispatch_simple(
+            "entity.archive",
+            &[],
+            Some(&format!("task:{}", task_id)),
+        )
+        .await
+        .expect("entity.archive should succeed");
+
+    // Verify task is archived
+    assert!(
+        engine
+            .kanban
+            .read_entity_generic("task", task_id)
+            .await
+            .is_err(),
+        "task should be archived before unarchive test"
+    );
+
+    // Unarchive the task via entity.unarchive
+    let unarchive_result = engine
+        .dispatch_simple(
+            "entity.unarchive",
+            &[],
+            Some(&format!("task:{}", task_id)),
+        )
+        .await
+        .expect("entity.unarchive should succeed");
+    let operation_id = unarchive_result["operation_id"]
+        .as_str()
+        .expect("entity.unarchive should return operation_id");
+
+    // Verify task is back in live storage
+    assert!(
+        engine
+            .kanban
+            .read_entity_generic("task", task_id)
+            .await
+            .is_ok(),
+        "task should be in live storage after unarchive"
+    );
+
+    // Undo the unarchive (should re-archive the task)
+    let mut undo_args = HashMap::new();
+    undo_args.insert("id".to_string(), json!(operation_id));
+    let undo_result = engine
+        .dispatch("app.undo", &[], None, undo_args)
+        .await
+        .expect("app.undo should succeed");
+
+    assert_eq!(undo_result["undone"].as_str(), Some(operation_id));
+    let undo_op_id = undo_result["operation_id"]
+        .as_str()
+        .expect("undo should return operation_id for redo");
+
+    // Verify task is archived again
+    assert!(
+        engine
+            .kanban
+            .read_entity_generic("task", task_id)
+            .await
+            .is_err(),
+        "task should be archived after undo of unarchive"
+    );
+
+    // Redo the unarchive (should restore the task again)
+    let mut redo_args = HashMap::new();
+    redo_args.insert("id".to_string(), json!(undo_op_id));
+    let redo_result = engine
+        .dispatch("app.redo", &[], None, redo_args)
+        .await
+        .expect("app.redo should succeed");
+
+    assert_eq!(redo_result["redone"].as_str(), Some(undo_op_id));
+
+    // Verify task is unarchived again
+    assert!(
+        engine
+            .kanban
+            .read_entity_generic("task", task_id)
+            .await
+            .is_ok(),
+        "task should be in live storage after redo of unarchive"
+    );
+}
