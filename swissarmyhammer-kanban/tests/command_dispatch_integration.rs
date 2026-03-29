@@ -87,6 +87,10 @@ impl TestEngine {
         );
         ctx.ui_state = Some(Arc::clone(&self.ui_state));
         ctx.set_extension(Arc::clone(&self.kanban));
+        // Inject EntityContext so undo/redo commands can access it
+        let ectx = self.kanban.entity_context().await
+            .expect("entity_context should be available");
+        ctx.set_extension(ectx);
         let clipboard_ext = ClipboardProviderExt(
             Arc::clone(&self.clipboard) as Arc<dyn swissarmyhammer_kanban::clipboard::ClipboardProvider>,
         );
