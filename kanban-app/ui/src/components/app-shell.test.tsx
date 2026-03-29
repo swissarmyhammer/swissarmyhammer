@@ -313,4 +313,71 @@ describe("AppShell", () => {
     // We already verified the palette opens; this is a structural smoke test.
     expect(screen.getByTestId("command-list")).toBeTruthy();
   });
+
+  it("blocks app.undo dispatch when activeElement is inside .cm-editor", async () => {
+    const mockInvoke = invoke as ReturnType<typeof vi.fn>;
+    renderShell();
+
+    // Create a .cm-editor element with a focusable child
+    const cmEditor = document.createElement("div");
+    cmEditor.className = "cm-editor";
+    const input = document.createElement("input");
+    cmEditor.appendChild(input);
+    document.body.appendChild(cmEditor);
+    input.focus();
+
+    mockInvoke.mockClear();
+
+    // Simulate Ctrl+Z (CUA undo) — should be blocked by CM6 guard
+    await act(async () => {
+      fireEvent.keyDown(document, {
+        key: "z",
+        code: "KeyZ",
+        ctrlKey: true,
+      });
+    });
+
+    // dispatch_command should NOT have been called with app.undo
+    const undoCall = mockInvoke.mock.calls.find(
+      (c: unknown[]) =>
+        c[0] === "dispatch_command" &&
+        (c[1] as Record<string, unknown>)?.cmd === "app.undo",
+    );
+    expect(undoCall).toBeUndefined();
+
+    // Cleanup
+    document.body.removeChild(cmEditor);
+  });
+
+  it("dispatches app.undo when activeElement is NOT inside .cm-editor", async () => {
+    const mockInvoke = invoke as ReturnType<typeof vi.fn>;
+    renderShell();
+
+    // Focus a regular button outside any .cm-editor
+    const button = document.createElement("button");
+    document.body.appendChild(button);
+    button.focus();
+
+    mockInvoke.mockClear();
+
+    // Simulate Ctrl+Z
+    await act(async () => {
+      fireEvent.keyDown(document, {
+        key: "z",
+        code: "KeyZ",
+        ctrlKey: true,
+      });
+    });
+
+    // dispatch_command SHOULD have been called with app.undo
+    const undoCall = mockInvoke.mock.calls.find(
+      (c: unknown[]) =>
+        c[0] === "dispatch_command" &&
+        (c[1] as Record<string, unknown>)?.cmd === "app.undo",
+    );
+    expect(undoCall).toBeTruthy();
+
+    // Cleanup
+    document.body.removeChild(button);
+  });
 });
