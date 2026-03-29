@@ -1,8 +1,9 @@
 //! Entity-level command implementations: update field, delete, tag update,
-//! attachment delete.
+//! attachment delete, paste.
 
 use super::run_op;
 use crate::context::KanbanContext;
+use crate::types::Ordinal;
 use async_trait::async_trait;
 use serde_json::Value;
 use swissarmyhammer_commands::{parse_moniker, Command, CommandContext, CommandError};
@@ -188,6 +189,175 @@ impl Command for TagUpdateCmd {
         }
 
         run_op(&op, &kanban).await
+    }
+}
+
+/// Paste from clipboard: create a new task from the clipboard snapshot.
+///
+/// Available when the UIState clipboard is populated AND (column or board
+/// is in the scope chain). Position: after the focused task if one exists,
+/// otherwise first position in the target column. Clipboard persists after
+/// paste (can paste multiple times).
+pub struct PasteCmd;
+
+#[async_trait]
+impl Command for PasteCmd {
+    fn available(&self, ctx: &CommandContext) -> bool {
+        let has_clipboard = ctx
+            .ui_state
+            .as_ref()
+            .and_then(|ui| ui.clipboard())
+            .is_some();
+        has_clipboard && (ctx.has_in_scope("column") || ctx.has_in_scope("board"))
+    }
+
+    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+        let kanban = ctx.require_extension::<KanbanContext>()?;
+
+        let ui = ctx
+            .ui_state
+            .as_ref()
+            .ok_or_else(|| CommandError::ExecutionFailed("no UIState".into()))?;
+
+        let clip = ui
+            .clipboard()
+            .ok_or_else(|| CommandError::ExecutionFailed("clipboard is empty".into()))?;
+
+        // Determine target column: from scope chain, or first column if only board in scope
+        let column_id = if let Some(col) = ctx.resolve_entity_id("column") {
+            col.to_string()
+        } else {
+            // Only board in scope — load columns and pick the first one
+            let columns = kanban
+                .list_entities_generic("column")
+                .await
+                .map_err(|e| CommandError::ExecutionFailed(e.to_string()))?;
+            let mut columns = columns;
+            columns.sort_by(|a, b| {
+                let oa = a.get_str("order").unwrap_or("0");
+                let ob = b.get_str("order").unwrap_or("0");
+                oa.cmp(ob)
+            });
+            columns
+                .first()
+                .map(|c| c.id.to_string())
+                .ok_or_else(|| CommandError::ExecutionFailed("no columns on board".into()))?
+        };
+
+        // Determine position: after focused task if one exists, otherwise first position
+        let all_tasks = kanban
+            .list_entities_generic("task")
+            .await
+            .map_err(|e| CommandError::ExecutionFailed(e.to_string()))?;
+        let mut col_tasks: Vec<_> = all_tasks
+            .into_iter()
+            .filter(|t| t.get_str("position_column") == Some(&column_id))
+            .collect();
+        col_tasks.sort_by(|a, b| {
+            let oa = a
+                .get_str("position_ordinal")
+                .unwrap_or(Ordinal::DEFAULT_STR);
+            let ob = b
+                .get_str("position_ordinal")
+                .unwrap_or(Ordinal::DEFAULT_STR);
+            oa.cmp(ob)
+        });
+
+        let ordinal = if let Some(focused_task_id) = ctx.resolve_entity_id("task") {
+            // Place after the focused task
+            let ref_idx = col_tasks
+                .iter()
+                .position(|t| t.id.as_str() == focused_task_id);
+            match ref_idx {
+                Some(idx) if idx == col_tasks.len() - 1 => {
+                    // After the last task
+                    let ref_ord = Ordinal::from_string(
+                        col_tasks[idx]
+                            .get_str("position_ordinal")
+                            .unwrap_or(Ordinal::DEFAULT_STR),
+                    );
+                    crate::task_helpers::compute_ordinal_for_neighbors(Some(&ref_ord), None)
+                }
+                Some(idx) => {
+                    // Between focused task and its successor
+                    let ref_ord = Ordinal::from_string(
+                        col_tasks[idx]
+                            .get_str("position_ordinal")
+                            .unwrap_or(Ordinal::DEFAULT_STR),
+                    );
+                    let succ_ord = Ordinal::from_string(
+                        col_tasks[idx + 1]
+                            .get_str("position_ordinal")
+                            .unwrap_or(Ordinal::DEFAULT_STR),
+                    );
+                    crate::task_helpers::compute_ordinal_for_neighbors(
+                        Some(&ref_ord),
+                        Some(&succ_ord),
+                    )
+                }
+                None => {
+                    // Focused task not in this column — first position
+                    crate::task_helpers::compute_ordinal_for_neighbors(
+                        None,
+                        col_tasks
+                            .first()
+                            .map(|t| {
+                                Ordinal::from_string(
+                                    t.get_str("position_ordinal")
+                                        .unwrap_or(Ordinal::DEFAULT_STR),
+                                )
+                            })
+                            .as_ref(),
+                    )
+                }
+            }
+        } else {
+            // No focused task — first position
+            crate::task_helpers::compute_ordinal_for_neighbors(
+                None,
+                col_tasks
+                    .first()
+                    .map(|t| {
+                        Ordinal::from_string(
+                            t.get_str("position_ordinal")
+                                .unwrap_or(Ordinal::DEFAULT_STR),
+                        )
+                    })
+                    .as_ref(),
+            )
+        };
+
+        // Build AddTask from clipboard fields
+        let title = clip
+            .fields
+            .get("title")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Pasted task")
+            .to_string();
+
+        let mut op = crate::task::AddTask::new(title);
+        op.column = Some(column_id);
+        op.ordinal = Some(ordinal.as_str().to_string());
+
+        if let Some(desc) = clip.fields.get("description").and_then(|v| v.as_str()) {
+            op.description = Some(desc.to_string());
+        }
+
+        let result = run_op(&op, &kanban).await?;
+
+        // Extract the new task ID from the result
+        let new_task_id = result
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        // Clipboard persists after paste (don't clear it)
+
+        Ok(serde_json::json!({
+            "pasted": new_task_id,
+            "from_clipboard": clip.entity_id,
+        }))
     }
 }
 

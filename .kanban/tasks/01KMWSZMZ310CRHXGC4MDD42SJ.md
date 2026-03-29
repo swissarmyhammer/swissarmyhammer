@@ -4,8 +4,8 @@ assignees:
 depends_on:
 - 01KMWS35SK4YDZ17FQG83PV1SH
 - 01KMWS3KZAZHYCTF3KR86GG6BJ
-position_column: todo
-position_ordinal: 8b80
+position_column: done
+position_ordinal: ffffffffffffffe780
 title: Wire clipboard commands into native Edit menu with dynamic enable/disable
 ---
 ## What

@@ -7,33 +7,6 @@ use serde::{Deserialize, Serialize};
 /// Maximum number of entries to keep in the MRU recent boards list.
 const MAX_RECENT_BOARDS: usize = 20;
 
-/// Whether the clipboard operation is a cut or copy.
-///
-/// `Cut` implies the source entity should be removed after paste.
-/// `Copy` leaves the source entity intact.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub enum ClipboardMode {
-    /// The source entity should be removed after paste.
-    Cut,
-    /// The source entity remains intact after paste.
-    Copy,
-}
-
-/// Snapshot of an entity placed on the clipboard by cut/copy.
-///
-/// Transient — carried in UIState but never persisted to the YAML config.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ClipboardState {
-    /// The entity type (e.g. "task", "tag").
-    pub entity_type: String,
-    /// The source entity ID.
-    pub entity_id: String,
-    /// Whether this was a cut or copy operation.
-    pub mode: ClipboardMode,
-    /// Snapshot of the entity fields at copy time.
-    pub data: serde_json::Value,
-}
-
 /// Active drag session for cross-window drag coordination.
 ///
 /// Transient — carried in UIState but never persisted to the YAML config.
@@ -179,9 +152,6 @@ struct UIStateInner {
     /// IDs of items in the most recently shown context menu. Transient — not persisted.
     #[serde(skip)]
     context_menu_ids: HashSet<String>,
-    /// In-memory clipboard for entity copy/cut. Transient — not persisted.
-    #[serde(skip)]
-    clipboard: Option<ClipboardState>,
     /// Canonical paths of boards that are open.
     open_boards: Vec<String>,
     /// Per-window state: inspector stack, board assignment, and geometry.
@@ -209,7 +179,6 @@ impl Default for UIStateInner {
             drag_session: None,
             clipboard: None,
             context_menu_ids: HashSet::new(),
-            clipboard: None,
             open_boards: Vec::new(),
             windows: HashMap::new(),
             recent_boards: Vec::new(),
@@ -1502,7 +1471,7 @@ mod tests {
             entity_type: entity_type.to_string(),
             entity_id: entity_id.to_string(),
             mode,
-            data: serde_json::json!({"title": "Test Task"}),
+            fields: serde_json::json!({"title": "Test Task"}),
         }
     }
 
