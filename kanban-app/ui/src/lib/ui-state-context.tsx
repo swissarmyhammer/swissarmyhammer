@@ -30,6 +30,8 @@ export interface UIStateSnapshot {
   open_boards: string[];
   /** Whether the system clipboard has a swissarmyhammer entity payload. */
   has_clipboard: boolean;
+  /** The entity type on the clipboard (e.g. "task", "tag"), or null. */
+  clipboard_entity_type: string | null;
   /** Per-window state map: window label → WindowStateSnapshot. */
   windows: Record<string, WindowStateSnapshot>;
   recent_boards: Array<{ path: string; name: string; last_opened: string }>;
@@ -41,6 +43,7 @@ const DEFAULT_STATE: UIStateSnapshot = {
   scope_chain: [],
   open_boards: [],
   has_clipboard: false,
+  clipboard_entity_type: null,
   windows: {},
   recent_boards: [],
 };

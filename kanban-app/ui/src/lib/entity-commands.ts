@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useSchemaOptional } from "@/lib/schema-context";
 import { useInspectOptional } from "@/lib/inspect-context";
 import { useActiveBoardPath } from "@/lib/command-scope";
+import { useUIState } from "@/lib/ui-state-context";
 import { moniker } from "@/lib/moniker";
 import type { CommandDef } from "@/lib/command-scope";
 import type { Entity, EntityCommand } from "@/types/kanban";
@@ -118,14 +119,21 @@ export function useEntityCommands(
   const { getEntityCommands } = useSchemaOptional();
   const inspect = useInspectOptional();
   const boardPath = useActiveBoardPath();
+  const { clipboard_entity_type: clipType } = useUIState();
   const entityMoniker = moniker(entityType, entityId);
   const schemaCommands = getEntityCommands(entityType);
 
   return useMemo(() => {
     const cmds: CommandDef[] = schemaCommands.map((cmd) => {
+      // Resolve paste name from clipboard entity type (e.g. "Paste Task")
+      let name = resolveCommandName(cmd.name, entityType, entity);
+      if (cmd.id === "entity.paste" && clipType) {
+        const cap = clipType.charAt(0).toUpperCase() + clipType.slice(1);
+        name = `Paste ${cap}`;
+      }
       const resolved: CommandDef = {
         id: cmd.id,
-        name: resolveCommandName(cmd.name, entityType, entity),
+        name,
         target: entityMoniker,
         contextMenu: cmd.context_menu ?? false,
         keys: cmd.keys,
@@ -157,6 +165,7 @@ export function useEntityCommands(
     entityMoniker,
     inspect,
     boardPath,
+    clipType,
     extraCommands,
   ]);
 }

@@ -67,18 +67,17 @@ export function useContextMenu(): (e: React.MouseEvent) => void {
       // Ask the backend which commands are available in the current context.
       // This checks Command::available() on each — including clipboard state,
       // scope requirements, and any other dynamic conditions.
-      invoke<Array<{ id: string; name: string }>>("list_available_commands", {
+      invoke<Array<{ id: string }>>("list_available_commands", {
         contextMenu: true,
       })
         .then((available) => {
-          // Build a map of available command IDs → backend names (may be templated)
-          const availableMap = new Map(available.map((c) => [c.id, c.name]));
+          const availableIds = new Set(available.map((c) => c.id));
 
           // Filter frontend commands to those the backend says are available,
           // deduplicating by command ID (keep innermost scope — lowest depth).
           const seen = new Set<string>();
           const filtered = contextCommands.filter((c) => {
-            if (!availableMap.has(c.command.id)) return false;
+            if (!availableIds.has(c.command.id)) return false;
             if (seen.has(c.command.id)) return false;
             seen.add(c.command.id);
             return true;
@@ -98,12 +97,7 @@ export function useContextMenu(): (e: React.MouseEvent) => void {
             }
             const key = handlerKey(c.command);
             pendingHandlers.set(key, c.command);
-            // Use backend name only for paste (templated with clipboard entity type).
-            // Other commands use the frontend-resolved name (which handles {{entity.type}}).
-            const displayName = c.command.id === "entity.paste"
-              ? (availableMap.get(c.command.id) ?? c.command.name)
-              : c.command.name;
-            items.push({ id: key, name: displayName });
+            items.push({ id: key, name: c.command.name });
             lastDepth = c.depth;
           }
 
