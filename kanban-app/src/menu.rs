@@ -1,8 +1,10 @@
 //! Native menu bar construction and event handling.
 
 use crate::commands::MenuItemEntry;
-use crate::state::{resolve_kanban_path, AppState};
+use crate::state::{resolve_kanban_path, AppState, MenuItemHandle};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use swissarmyhammer_commands::RecentBoard;
 use swissarmyhammer_kanban::{
     board::InitBoard, KanbanContext, KanbanOperationProcessor, OperationProcessor,
@@ -22,6 +24,18 @@ pub fn build_menu_from_manifest(
     manifest: &[MenuItemEntry],
     recent: &[RecentBoard],
 ) -> tauri::Result<()> {
+    // Collect menu item handles for later enabled-state updates
+    let mut handles: HashMap<String, MenuItemHandle> = HashMap::new();
+
+    /// Helper: build a menu item, append it, and stash the handle.
+    macro_rules! append_entry {
+        ($submenu:expr, $app:expr, $entry:expr, $handles:expr) => {{
+            let (boxed, handle) = build_menu_item($app, $entry)?;
+            $submenu.append(boxed.as_ref())?;
+            $handles.insert($entry.id.clone(), handle);
+        }};
+    }
+
     // Group entries by menu name, then sort by (group, order) within each menu
     let mut menus: std::collections::HashMap<String, Vec<&MenuItemEntry>> =
         std::collections::HashMap::new();
@@ -47,7 +61,7 @@ pub fn build_menu_from_manifest(
                 last_group = Some(entry.group);
                 continue;
             }
-            app_menu.append(build_menu_item(app, entry)?.as_ref())?;
+            append_entry!(app_menu, app, entry, handles);
             last_group = Some(entry.group);
         }
     }
@@ -61,7 +75,7 @@ pub fn build_menu_from_manifest(
             if last_group.is_some() && last_group != Some(entry.group) {
                 settings_sub.append(&PredefinedMenuItem::separator(app)?)?;
             }
-            settings_sub.append(build_menu_item(app, entry)?.as_ref())?;
+            append_entry!(settings_sub, app, entry, handles);
             last_group = Some(entry.group);
         }
         app_menu.append(&settings_sub)?;
@@ -83,7 +97,7 @@ pub fn build_menu_from_manifest(
             if last_group.is_some() && last_group != Some(entry.group) {
                 file_menu.append(&PredefinedMenuItem::separator(app)?)?;
             }
-            file_menu.append(build_menu_item(app, entry)?.as_ref())?;
+            append_entry!(file_menu, app, entry, handles);
             last_group = Some(entry.group);
         }
     }
@@ -120,7 +134,7 @@ pub fn build_menu_from_manifest(
             if last_group.is_some() && last_group != Some(entry.group) {
                 edit_menu.append(&PredefinedMenuItem::separator(app)?)?;
             }
-            edit_menu.append(build_menu_item(app, entry)?.as_ref())?;
+            append_entry!(edit_menu, app, entry, handles);
             last_group = Some(entry.group);
         }
     }
@@ -134,7 +148,7 @@ pub fn build_menu_from_manifest(
             if last_group.is_some() && last_group != Some(entry.group) {
                 window_menu.append(&PredefinedMenuItem::separator(app)?)?;
             }
-            window_menu.append(build_menu_item(app, entry)?.as_ref())?;
+            append_entry!(window_menu, app, entry, handles);
             last_group = Some(entry.group);
             count += 1;
         }
@@ -173,6 +187,13 @@ pub fn build_menu_from_manifest(
         e
     })?;
 
+    // Store menu item handles in AppState for enabled-state updates
+    let state = app.state::<AppState>();
+    {
+        let mut menu_items = state.menu_items.lock().unwrap();
+        *menu_items = handles;
+    }
+
     Ok(())
 }
 
@@ -181,27 +202,60 @@ pub fn build_menu_from_manifest(
 /// If the entry has a `radio_group`, a CheckMenuItem is created (for radio-style
 /// toggle items). Otherwise a regular MenuItem is created. Both support
 /// optional keyboard accelerators.
+///
+/// Returns both the trait-erased menu item (for appending to submenus) and a
+/// `MenuItemHandle` (for later `set_enabled` calls).
 fn build_menu_item(
     app: &AppHandle,
     entry: &MenuItemEntry,
-) -> tauri::Result<Box<dyn tauri::menu::IsMenuItem<tauri::Wry>>> {
+) -> tauri::Result<(Box<dyn tauri::menu::IsMenuItem<tauri::Wry>>, MenuItemHandle)> {
     if entry.radio_group.is_some() {
-        Ok(Box::new(CheckMenuItem::with_id(
+        let item = CheckMenuItem::with_id(
             app,
             &entry.id,
             &entry.name,
             true,
             entry.checked.unwrap_or(false),
             entry.accelerator.as_deref(),
-        )?))
+        )?;
+        let handle = MenuItemHandle::Check(item.clone());
+        Ok((Box::new(item), handle))
     } else {
-        Ok(Box::new(MenuItem::with_id(
+        let item = MenuItem::with_id(
             app,
             &entry.id,
             &entry.name,
             true,
             entry.accelerator.as_deref(),
-        )?))
+        )?;
+        let handle = MenuItemHandle::Regular(item.clone());
+        Ok((Box::new(item), handle))
+    }
+}
+
+/// Update the enabled state of all cached menu items.
+///
+/// Builds a `CommandContext` from the current UIState scope chain and checks
+/// each command's `available()` method. This is O(N) where N is the number
+/// of manifest-driven menu items (~15-20), so it's cheap to call after
+/// every command dispatch.
+pub fn update_menu_enabled_state(state: &AppState) {
+    let scope = state.ui_state.scope_chain();
+    let empty_args: HashMap<String, serde_json::Value> = HashMap::new();
+    let ctx = swissarmyhammer_commands::CommandContext::new(
+        "_menu_check",
+        scope,
+        None,
+        empty_args,
+    )
+    .with_ui_state(Arc::clone(&state.ui_state));
+
+    let menu_items = state.menu_items.lock().unwrap();
+    for (cmd_id, menu_item) in menu_items.iter() {
+        if let Some(cmd_impl) = state.command_impls.get(cmd_id) {
+            let enabled = cmd_impl.available(&ctx);
+            let _ = menu_item.set_enabled(enabled);
+        }
     }
 }
 

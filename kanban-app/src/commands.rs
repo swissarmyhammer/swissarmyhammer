@@ -788,6 +788,8 @@ pub async fn rebuild_menu_from_manifest(
 ) -> Result<(), String> {
     let recent = state.ui_state.recent_boards();
     menu::build_menu_from_manifest(&app, &manifest, &recent).map_err(|e| e.to_string())?;
+    // Set initial enabled state for all menu items after rebuilding the menu
+    menu::update_menu_enabled_state(&state);
     Ok(())
 }
 
@@ -1113,6 +1115,10 @@ pub(crate) async fn dispatch_command_internal(
     } else {
         tracing::info!(cmd = %cmd, "non-undoable — skipping flush_and_emit");
     }
+
+    // Update menu enabled state after every command dispatch so menu items
+    // reflect the current context (e.g. Cut/Copy enable when a task is focused).
+    menu::update_menu_enabled_state(state);
 
     // Wrap result with undoable info
     Ok(json!({

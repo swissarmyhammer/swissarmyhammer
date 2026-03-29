@@ -3,13 +3,14 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use swissarmyhammer_commands::{
     builtin_yaml_sources, load_yaml_dir, Command, CommandsRegistry, UIState,
 };
 use swissarmyhammer_entity::Entity;
 use swissarmyhammer_entity_search::EntitySearchIndex;
 use swissarmyhammer_kanban::KanbanContext;
+use tauri::menu::{CheckMenuItem, MenuItem};
 use tokio::sync::RwLock;
 
 use swissarmyhammer_kanban::actor::AddActor;
@@ -191,6 +192,24 @@ impl BoardHandle {
     }
 }
 
+/// A handle to a native menu item, wrapping both regular and check menu items.
+///
+/// Used to call `set_enabled()` without knowing which concrete type was created.
+pub(crate) enum MenuItemHandle {
+    Regular(MenuItem<tauri::Wry>),
+    Check(CheckMenuItem<tauri::Wry>),
+}
+
+impl MenuItemHandle {
+    /// Enable or disable this menu item.
+    pub(crate) fn set_enabled(&self, enabled: bool) -> tauri::Result<()> {
+        match self {
+            Self::Regular(item) => item.set_enabled(enabled),
+            Self::Check(item) => item.set_enabled(enabled),
+        }
+    }
+}
+
 /// The shared application state, managed by Tauri.
 pub(crate) struct AppState {
     pub(crate) boards: RwLock<HashMap<PathBuf, Arc<BoardHandle>>>,
@@ -201,6 +220,10 @@ pub(crate) struct AppState {
     pub(crate) commands_registry: RwLock<CommandsRegistry>,
     /// Trait object map from `register_commands()`.
     pub(crate) command_impls: HashMap<String, Arc<dyn Command>>,
+    /// Cached menu item handles keyed by command ID. Populated when the menu
+    /// is rebuilt from the frontend manifest, used by `update_menu_enabled_state`
+    /// to toggle enabled/disabled without a full menu rebuild.
+    pub(crate) menu_items: Mutex<HashMap<String, MenuItemHandle>>,
     /// Set to `true` when the app is shutting down (RunEvent::ExitRequested).
     /// The Destroyed handler uses this to distinguish mid-session close from app quit.
     pub(crate) shutting_down: AtomicBool,
@@ -236,6 +259,7 @@ impl AppState {
             ui_state,
             commands_registry: RwLock::new(CommandsRegistry::from_yaml_sources(&source_refs)),
             command_impls: swissarmyhammer_kanban::commands::register_commands(),
+            menu_items: Mutex::new(HashMap::new()),
             shutting_down: AtomicBool::new(false),
         }
     }
