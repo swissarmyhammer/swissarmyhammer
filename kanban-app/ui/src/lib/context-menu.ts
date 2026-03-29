@@ -67,17 +67,18 @@ export function useContextMenu(): (e: React.MouseEvent) => void {
       // Ask the backend which commands are available in the current context.
       // This checks Command::available() on each — including clipboard state,
       // scope requirements, and any other dynamic conditions.
-      invoke<Array<{ id: string }>>("list_available_commands", {
+      invoke<Array<{ id: string; name: string }>>("list_available_commands", {
         contextMenu: true,
       })
         .then((available) => {
-          const availableIds = new Set(available.map((c) => c.id));
+          // Build a map of available command IDs → backend names (may be templated)
+          const availableMap = new Map(available.map((c) => [c.id, c.name]));
 
           // Filter frontend commands to those the backend says are available,
           // deduplicating by command ID (keep innermost scope — lowest depth).
           const seen = new Set<string>();
           const filtered = contextCommands.filter((c) => {
-            if (!availableIds.has(c.command.id)) return false;
+            if (!availableMap.has(c.command.id)) return false;
             if (seen.has(c.command.id)) return false;
             seen.add(c.command.id);
             return true;
@@ -86,7 +87,7 @@ export function useContextMenu(): (e: React.MouseEvent) => void {
           if (filtered.length === 0) return;
 
           // Register handlers and build menu items.
-          // Group consecutive items by depth with separators between groups.
+          // Use backend name when available (e.g. "Paste Task" instead of "Paste").
           pendingHandlers.clear();
           const items: Array<{ id: string; name: string }> = [];
           let lastDepth: number | null = null;
@@ -97,7 +98,8 @@ export function useContextMenu(): (e: React.MouseEvent) => void {
             }
             const key = handlerKey(c.command);
             pendingHandlers.set(key, c.command);
-            items.push({ id: key, name: c.command.name });
+            const displayName = availableMap.get(c.command.id) ?? c.command.name;
+            items.push({ id: key, name: displayName });
             lastDepth = c.depth;
           }
 
