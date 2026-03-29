@@ -959,6 +959,13 @@ pub(crate) async fn dispatch_command_internal(
         }
     }
 
+    // Inject ClipboardProvider so commands can read/write the system clipboard.
+    // Wrapped in ClipboardProviderExt (a sized newtype) for CommandContext storage.
+    let clipboard_ext = swissarmyhammer_kanban::clipboard::ClipboardProviderExt(Arc::new(
+        crate::state::TauriClipboardProvider::new(app.clone()),
+    ));
+    ctx.set_extension(Arc::new(clipboard_ext));
+
     // Check availability
     if !cmd_impl.available(&ctx) {
         tracing::warn!(cmd = %cmd, "command not available in current context");
