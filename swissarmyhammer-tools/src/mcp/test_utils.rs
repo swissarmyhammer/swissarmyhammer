@@ -32,14 +32,12 @@ use rmcp::{
 /// # Returns
 /// An initialized RMCP client ready to make MCP protocol calls
 pub async fn create_test_client(server_url: &str) -> RunningService<rmcp::RoleClient, ClientInfo> {
-    let transport = StreamableHttpClientTransport::with_client(
-        reqwest::Client::default(),
-        {
-            let mut config = rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig::default();
-            config.uri = server_url.into();
-            config
-        },
-    );
+    let transport = StreamableHttpClientTransport::with_client(reqwest::Client::default(), {
+        let mut config =
+            rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig::default();
+        config.uri = server_url.into();
+        config
+    });
 
     let client_info = ClientInfo::new(
         ClientCapabilities::default(),
