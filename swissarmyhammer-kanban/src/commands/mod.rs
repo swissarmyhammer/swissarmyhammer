@@ -345,6 +345,7 @@ mod tests {
     fn ui_with_clipboard() -> Arc<UIState> {
         let ui = Arc::new(UIState::new());
         ui.set_clipboard(swissarmyhammer_commands::ClipboardState {
+            mode: swissarmyhammer_commands::ClipboardMode::Copy,
             entity_type: "task".into(),
             entity_id: "01TASK".into(),
             fields: serde_json::json!({"title": "Copied task"}),
