@@ -3,61 +3,20 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use swissarmyhammer_commands::{
     builtin_yaml_sources, load_yaml_dir, Command, CommandsRegistry, UIState,
 };
 use swissarmyhammer_entity::Entity;
 use swissarmyhammer_entity_search::EntitySearchIndex;
-use swissarmyhammer_kanban::clipboard::ClipboardProvider;
 use swissarmyhammer_kanban::KanbanContext;
+use tauri::menu::{CheckMenuItem, MenuItem};
 use tokio::sync::RwLock;
 
 use swissarmyhammer_kanban::actor::AddActor;
 use swissarmyhammer_kanban::Execute;
 
 use crate::watcher::{self, BoardWatcher, EntityCache};
-
-/// System clipboard provider backed by Tauri's clipboard-manager plugin.
-///
-/// Wraps an `AppHandle` and delegates read/write to the Tauri plugin.
-pub struct TauriClipboardProvider {
-    app: tauri::AppHandle,
-}
-
-impl TauriClipboardProvider {
-    /// Create a new provider from a Tauri AppHandle.
-    pub fn new(app: tauri::AppHandle) -> Self {
-        Self { app }
-    }
-}
-
-#[swissarmyhammer_kanban::async_trait]
-impl ClipboardProvider for TauriClipboardProvider {
-    async fn write_text(&self, text: &str) -> Result<(), String> {
-        use tauri_plugin_clipboard_manager::ClipboardExt;
-        self.app
-            .clipboard()
-            .write_text(text)
-            .map_err(|e| format!("clipboard write failed: {e}"))
-    }
-
-    async fn read_text(&self) -> Result<Option<String>, String> {
-        use tauri_plugin_clipboard_manager::ClipboardExt;
-        match self.app.clipboard().read_text() {
-            Ok(text) => Ok(Some(text)),
-            Err(e) => {
-                let msg = e.to_string();
-                // Clipboard may be empty or contain non-text data.
-                if msg.contains("empty") || msg.contains("format") {
-                    Ok(None)
-                } else {
-                    Err(format!("clipboard read failed: {e}"))
-                }
-            }
-        }
-    }
-}
 
 const CONFIG_APP_SUBDIR: &str = "kanban-app";
 const UI_STATE_FILE_NAME: &str = "ui-state.yaml";
@@ -233,6 +192,24 @@ impl BoardHandle {
     }
 }
 
+/// A handle to a native menu item, wrapping both regular and check menu items.
+///
+/// Used to call `set_enabled()` without knowing which concrete type was created.
+pub(crate) enum MenuItemHandle {
+    Regular(MenuItem<tauri::Wry>),
+    Check(CheckMenuItem<tauri::Wry>),
+}
+
+impl MenuItemHandle {
+    /// Enable or disable this menu item.
+    pub(crate) fn set_enabled(&self, enabled: bool) -> tauri::Result<()> {
+        match self {
+            Self::Regular(item) => item.set_enabled(enabled),
+            Self::Check(item) => item.set_enabled(enabled),
+        }
+    }
+}
+
 /// The shared application state, managed by Tauri.
 pub(crate) struct AppState {
     pub(crate) boards: RwLock<HashMap<PathBuf, Arc<BoardHandle>>>,
@@ -243,13 +220,13 @@ pub(crate) struct AppState {
     pub(crate) commands_registry: RwLock<CommandsRegistry>,
     /// Trait object map from `register_commands()`.
     pub(crate) command_impls: HashMap<String, Arc<dyn Command>>,
-    /// Cached native menu item handles for enable/disable operations.
-    pub(crate) menu_items: std::sync::Mutex<HashMap<String, tauri::menu::MenuItem<tauri::Wry>>>,
+    /// Cached menu item handles keyed by command ID. Populated when the menu
+    /// is rebuilt from the frontend manifest, used by `update_menu_enabled_state`
+    /// to toggle enabled/disabled without a full menu rebuild.
+    pub(crate) menu_items: Mutex<HashMap<String, MenuItemHandle>>,
     /// Set to `true` when the app is shutting down (RunEvent::ExitRequested).
     /// The Destroyed handler uses this to distinguish mid-session close from app quit.
     pub(crate) shutting_down: AtomicBool,
-    /// Cached menu manifest for rebuilding the menu when clipboard state changes.
-    pub(crate) last_menu_manifest: std::sync::Mutex<Vec<crate::commands::MenuItemEntry>>,
 }
 
 impl AppState {
@@ -282,9 +259,8 @@ impl AppState {
             ui_state,
             commands_registry: RwLock::new(CommandsRegistry::from_yaml_sources(&source_refs)),
             command_impls: swissarmyhammer_kanban::commands::register_commands(),
-            menu_items: std::sync::Mutex::new(HashMap::new()),
+            menu_items: Mutex::new(HashMap::new()),
             shutting_down: AtomicBool::new(false),
-            last_menu_manifest: std::sync::Mutex::new(Vec::new()),
         }
     }
 

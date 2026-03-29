@@ -1,6 +1,7 @@
 //! Native menu bar construction and event handling.
 
-use crate::state::{resolve_kanban_path, AppState};
+use crate::state::{resolve_kanban_path, AppState, MenuItemHandle};
+use std::sync::Arc;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use swissarmyhammer_commands::{CommandDef, CommandsRegistry, RecentBoard, UIState};
@@ -37,9 +38,9 @@ pub fn build_menu_from_commands(
     registry: &CommandsRegistry,
     ui_state: &UIState,
     recent: &[RecentBoard],
-) -> tauri::Result<HashMap<String, MenuItem<tauri::Wry>>> {
+) -> tauri::Result<HashMap<String, MenuItemHandle>> {
     let keymap_mode = ui_state.keymap_mode();
-    let mut menu_items: HashMap<String, MenuItem<tauri::Wry>> = HashMap::new();
+    let mut menu_items: HashMap<String, MenuItemHandle> = HashMap::new();
 
     // Collect commands with menu metadata, grouped by top-level menu name.
     // Nested paths (e.g. ["App", "Settings"]) are keyed as "App/Settings".
@@ -259,7 +260,7 @@ fn append_menu_entry(
     app: &AppHandle,
     submenu: &Submenu<tauri::Wry>,
     entry: &MenuEntry,
-    menu_items: &mut HashMap<String, MenuItem<tauri::Wry>>,
+    menu_items: &mut HashMap<String, MenuItemHandle>,
 ) -> tauri::Result<()> {
     if entry.radio_group.is_some() {
         let item = CheckMenuItem::with_id(
@@ -270,6 +271,7 @@ fn append_menu_entry(
             entry.checked,
             entry.accelerator.as_deref(),
         )?;
+        menu_items.insert(entry.id.clone(), MenuItemHandle::Check(item.clone()));
         submenu.append(&item)?;
     } else {
         let item = MenuItem::with_id(
@@ -279,10 +281,30 @@ fn append_menu_entry(
             true,
             entry.accelerator.as_deref(),
         )?;
-        menu_items.insert(entry.id.clone(), item.clone());
+        menu_items.insert(entry.id.clone(), MenuItemHandle::Regular(item.clone()));
         submenu.append(&item)?;
     }
     Ok(())
+}
+
+/// Update the enabled state of all menu items based on command availability.
+///
+/// Builds a CommandContext from the current scope chain and UIState, then
+/// checks each cached menu item's command `available()` to set enabled/disabled.
+/// Called after every command dispatch.
+pub fn update_menu_enabled_state(state: &AppState) {
+    let scope = state.ui_state.scope_chain();
+    let empty_args: HashMap<String, serde_json::Value> = HashMap::new();
+    let ctx = swissarmyhammer_commands::CommandContext::new("_menu_check", scope, None, empty_args)
+        .with_ui_state(Arc::clone(&state.ui_state));
+
+    let menu_items = state.menu_items.lock().unwrap();
+    for (cmd_id, menu_item) in menu_items.iter() {
+        if let Some(cmd_impl) = state.command_impls.get(cmd_id) {
+            let enabled = cmd_impl.available(&ctx);
+            let _ = menu_item.set_enabled(enabled);
+        }
+    }
 }
 
 /// Dispatch native menu events.

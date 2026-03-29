@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KMX2QA5T6G1A4HG1BE662M4D
-position_column: todo
-position_ordinal: '8580'
+position_column: done
+position_ordinal: ffffffffffffffee80
 title: Clipboard undo/redo integration tests
 ---
 ## What

@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KMX2NJGVEVA175YBQZ6K88BC
-position_column: todo
-position_ordinal: '8280'
+position_column: done
+position_ordinal: ffffffffffffffed80
 title: Update all menu item enabled state after every command dispatch
 ---
 ## What

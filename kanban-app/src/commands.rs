@@ -1182,9 +1182,9 @@ pub(crate) async fn dispatch_command_internal(
         tracing::info!(cmd = %cmd, "non-mutating — skipping flush_and_emit");
     }
 
-    // Update clipboard menu item enabled states after every command.
-    // Any command can change focus or clipboard state indirectly.
-    menu::update_clipboard_menu_state(app, &state.ui_state);
+    // Update all menu item enabled states after every command.
+    // Each menu item's command checks its own available() against current scope/clipboard.
+    menu::update_menu_enabled_state(state);
 
     // Wrap result with undoable info
     Ok(json!({
