@@ -98,7 +98,11 @@ export function useContextMenu(): (e: React.MouseEvent) => void {
             }
             const key = handlerKey(c.command);
             pendingHandlers.set(key, c.command);
-            const displayName = availableMap.get(c.command.id) ?? c.command.name;
+            // Use backend name only for paste (templated with clipboard entity type).
+            // Other commands use the frontend-resolved name (which handles {{entity.type}}).
+            const displayName = c.command.id === "entity.paste"
+              ? (availableMap.get(c.command.id) ?? c.command.name)
+              : c.command.name;
             items.push({ id: key, name: displayName });
             lastDepth = c.depth;
           }
