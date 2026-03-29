@@ -65,26 +65,6 @@ async fn resolve_handle(
     }
 }
 
-<<<<<<< HEAD
-/// A single menu item entry received from the frontend manifest.
-///
-/// The frontend collects commands with `menuPlacement` metadata and sends
-/// them as a JSON array of these entries. Rust uses them to build the
-/// native menu bar.
-#[derive(serde::Deserialize, Debug, Clone)]
-pub struct MenuItemEntry {
-    pub id: String,
-    pub name: String,
-    pub menu: String,
-    pub group: usize,
-    pub order: usize,
-    pub accelerator: Option<String>,
-    pub radio_group: Option<String>,
-    pub checked: Option<bool>,
-}
-
-=======
->>>>>>> worktree-agent-aa08b4a7
 /// List all currently open boards.
 #[tauri::command]
 pub async fn list_open_boards(state: State<'_, AppState>) -> Result<Value, String> {
@@ -777,7 +757,6 @@ pub async fn list_views(
     Ok(json!(views_json))
 }
 
-<<<<<<< HEAD
 // ---------------------------------------------------------------------------
 // get_undo_state — read-only query for undo/redo availability
 // ---------------------------------------------------------------------------
@@ -810,25 +789,6 @@ pub async fn get_undo_state(
 
 /// Rebuild the native menu bar from a frontend-generated manifest.
 ///
-/// The frontend collects all commands with `menuPlacement` metadata, builds
-/// a sorted manifest, and sends it here. Rust constructs the native menu
-/// from the manifest entries, injecting OS chrome (About, Quit, Hide, etc.)
-/// and the Open Recent submenu.
-#[tauri::command]
-pub async fn rebuild_menu_from_manifest(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    manifest: Vec<MenuItemEntry>,
-) -> Result<(), String> {
-    // Cache manifest for menu rebuilds triggered by clipboard state changes.
-    *state.last_menu_manifest.lock().unwrap() = manifest.clone();
-    let recent = state.ui_state.recent_boards();
-    menu::build_menu_from_manifest(&app, &manifest, &recent).map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-=======
->>>>>>> worktree-agent-aa08b4a7
 // ---------------------------------------------------------------------------
 // log_command — lightweight log entry for commands that execute in the frontend
 // ---------------------------------------------------------------------------
@@ -1152,9 +1112,6 @@ pub(crate) async fn dispatch_command_internal(
         let _ = app.emit("ui-state-changed", state.ui_state.to_json());
     }
 
-<<<<<<< HEAD
-    // For commands that mutate entity data, scan entity files for changes
-=======
     // Rebuild the native menu when keymap mode changes (accelerators change)
     // or after board switches (command registry may have overrides).
     if cmd.starts_with("settings.keymap.")
@@ -1164,8 +1121,7 @@ pub(crate) async fn dispatch_command_internal(
         menu::rebuild_menu(app);
     }
 
-    // For undoable commands (data mutations), scan entity files for changes
->>>>>>> worktree-agent-aa08b4a7
+    // For commands that mutate entity data, scan entity files for changes
     // and emit granular entity-level events. This also updates the watcher
     // cache so the file watcher won't double-fire for our own writes.
     // Undo/redo are non-undoable (they must not push onto the undo stack) but
