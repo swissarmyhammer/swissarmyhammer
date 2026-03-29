@@ -204,6 +204,8 @@ pub(crate) struct AppState {
     /// Set to `true` when the app is shutting down (RunEvent::ExitRequested).
     /// The Destroyed handler uses this to distinguish mid-session close from app quit.
     pub(crate) shutting_down: AtomicBool,
+    /// Cached menu manifest for rebuilding the menu when clipboard state changes.
+    pub(crate) last_menu_manifest: std::sync::Mutex<Vec<crate::commands::MenuItemEntry>>,
 }
 
 impl AppState {
@@ -237,6 +239,7 @@ impl AppState {
             commands_registry: RwLock::new(CommandsRegistry::from_yaml_sources(&source_refs)),
             command_impls: swissarmyhammer_kanban::commands::register_commands(),
             shutting_down: AtomicBool::new(false),
+            last_menu_manifest: std::sync::Mutex::new(Vec::new()),
         }
     }
 

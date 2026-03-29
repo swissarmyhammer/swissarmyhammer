@@ -108,8 +108,10 @@ impl EntityContext {
                     Err(e) => return Err(crate::error::EntityError::Io(e)),
                 };
 
-                while let Some(entry) =
-                    read_dir.next_entry().await.map_err(crate::error::EntityError::Io)?
+                while let Some(entry) = read_dir
+                    .next_entry()
+                    .await
+                    .map_err(crate::error::EntityError::Io)?
                 {
                     let path = entry.path();
                     if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {

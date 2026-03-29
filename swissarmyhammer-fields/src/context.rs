@@ -933,11 +933,7 @@ type:
 "#;
         std::fs::write(defs_dir.join("title.yaml"), valid_yaml).unwrap();
         std::fs::write(defs_dir.join("broken.yaml"), "this: [[[is not valid").unwrap();
-        std::fs::write(
-            defs_dir.join("wrong_schema.yaml"),
-            "just_a_string: hello",
-        )
-        .unwrap();
+        std::fs::write(defs_dir.join("wrong_schema.yaml"), "just_a_string: hello").unwrap();
 
         let ctx = FieldsContext::open(&root).build().await.unwrap();
         assert_eq!(ctx.all_fields().len(), 1);
@@ -991,12 +987,7 @@ fields:
 
     #[test]
     fn fields_for_unknown_entity_returns_empty() {
-        let ctx = FieldsContext::from_yaml_sources(
-            PathBuf::from("/tmp/test"),
-            &[],
-            &[],
-        )
-        .unwrap();
+        let ctx = FieldsContext::from_yaml_sources(PathBuf::from("/tmp/test"), &[], &[]).unwrap();
 
         let resolved = ctx.fields_for_entity("nonexistent");
         assert!(resolved.is_empty());

@@ -1,4 +1,4 @@
-//! Task-related command implementations: add, move, untag, delete.
+//! Task-related command implementations: add, move, tag, untag, delete.
 
 use super::run_op;
 use crate::context::KanbanContext;
@@ -254,6 +254,36 @@ impl Command for MoveTaskCmd {
         if let Some(swimlane) = ctx.arg("swimlane").and_then(|v| v.as_str()) {
             op.swimlane = Some(swimlane.into());
         }
+
+        run_op(&op, &kanban).await
+    }
+}
+
+/// Add a tag to a task.
+///
+/// Requires both `tag` and `task` in the scope chain or args.
+pub struct TagTaskCmd;
+
+#[async_trait]
+impl Command for TagTaskCmd {
+    fn available(&self, ctx: &CommandContext) -> bool {
+        (ctx.has_in_scope("tag") || ctx.arg("tag").and_then(|v| v.as_str()).is_some())
+            && (ctx.has_in_scope("task") || ctx.arg("task").and_then(|v| v.as_str()).is_some())
+    }
+
+    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+        let kanban = ctx.require_extension::<KanbanContext>()?;
+
+        let task_id = ctx
+            .resolve_entity_id("task")
+            .or_else(|| ctx.arg("task").and_then(|v| v.as_str()))
+            .ok_or_else(|| CommandError::MissingScope("task".into()))?;
+        let tag_name = ctx
+            .resolve_entity_id("tag")
+            .or_else(|| ctx.arg("tag").and_then(|v| v.as_str()))
+            .ok_or_else(|| CommandError::MissingScope("tag".into()))?;
+
+        let op = crate::task::TagTask::new(task_id, tag_name);
 
         run_op(&op, &kanban).await
     }

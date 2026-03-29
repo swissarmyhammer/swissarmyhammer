@@ -11,6 +11,19 @@ use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_dialog::DialogExt;
 
+/// Clipboard availability state for building the Edit menu.
+///
+/// When cut/copy/paste are available, predefined OS menu items are used
+/// (which get system icons on macOS). When unavailable, disabled custom
+/// menu items are used instead (same text and accelerator, grayed out).
+#[derive(Debug, Clone, Default)]
+pub struct ClipboardMenuState {
+    /// Whether entity.cut and entity.copy should be enabled.
+    pub cut_copy_enabled: bool,
+    /// Whether entity.paste should be enabled.
+    pub paste_enabled: bool,
+}
+
 /// Build and set the native menu from a frontend-generated manifest.
 ///
 /// Groups entries by menu name (app, file, settings), builds each submenu
@@ -21,6 +34,18 @@ pub fn build_menu_from_manifest(
     app: &AppHandle,
     manifest: &[MenuItemEntry],
     recent: &[RecentBoard],
+) -> tauri::Result<()> {
+    let state = app.state::<crate::state::AppState>();
+    let clipboard_state = compute_clipboard_menu_state(&state.ui_state);
+    build_menu_from_manifest_with_clipboard(app, manifest, recent, &clipboard_state)
+}
+
+/// Build the menu with explicit clipboard state.
+fn build_menu_from_manifest_with_clipboard(
+    app: &AppHandle,
+    manifest: &[MenuItemEntry],
+    recent: &[RecentBoard],
+    clipboard: &ClipboardMenuState,
 ) -> tauri::Result<()> {
     // Group entries by menu name, then sort by (group, order) within each menu
     let mut menus: std::collections::HashMap<String, Vec<&MenuItemEntry>> =
@@ -98,16 +123,10 @@ pub fn build_menu_from_manifest(
     file_menu.append(&PredefinedMenuItem::separator(app)?)?;
     file_menu.append(&PredefinedMenuItem::close_window(app, None)?)?;
 
-    // --- Edit menu (OS chrome + command-system clipboard items) ---
-    // Undo/Redo remain predefined (they dispatch app.undo/app.redo).
-    // Cut/Copy/Paste use MenuItem::with_id so they dispatch through the
-    // command system via the existing menu-command → executeCommand flow.
-    // They start disabled and are enabled/disabled dynamically by
-    // update_clipboard_menu_state() when the focus chain changes.
-    let cut_item = MenuItem::with_id(app, "entity.cut", "Cut", false, Some("CmdOrCtrl+X"))?;
-    let copy_item = MenuItem::with_id(app, "entity.copy", "Copy", false, Some("CmdOrCtrl+C"))?;
-    let paste_item =
-        MenuItem::with_id(app, "entity.paste", "Paste", false, Some("CmdOrCtrl+V"))?;
+    // --- Edit menu ---
+    // Cut/Copy/Paste use MenuItem::with_id so they dispatch through the command
+    // system and can be enabled/disabled based on focus chain + clipboard state.
+    // The menu is rebuilt by update_clipboard_menu_state() when state changes.
     let edit_menu = Submenu::with_items(
         app,
         "Edit",
@@ -116,9 +135,27 @@ pub fn build_menu_from_manifest(
             &MenuItem::with_id(app, "app.undo", "Undo", true, Some("CmdOrCtrl+Z"))?,
             &MenuItem::with_id(app, "app.redo", "Redo", true, Some("CmdOrCtrl+Shift+Z"))?,
             &PredefinedMenuItem::separator(app)?,
-            &cut_item,
-            &copy_item,
-            &paste_item,
+            &MenuItem::with_id(
+                app,
+                "entity.cut",
+                "Cut",
+                clipboard.cut_copy_enabled,
+                Some("CmdOrCtrl+X"),
+            )?,
+            &MenuItem::with_id(
+                app,
+                "entity.copy",
+                "Copy",
+                clipboard.cut_copy_enabled,
+                Some("CmdOrCtrl+C"),
+            )?,
+            &MenuItem::with_id(
+                app,
+                "entity.paste",
+                "Paste",
+                clipboard.paste_enabled,
+                Some("CmdOrCtrl+V"),
+            )?,
         ],
     )?;
     if let Some(items) = menus.get("edit") {
@@ -404,52 +441,45 @@ async fn open_and_notify(handle: &AppHandle, path: &Path, source_window_label: O
     }
 }
 
-/// Update the enabled state of clipboard menu items based on focus and clipboard.
-///
-/// Enables entity.cut and entity.copy when a task is in the scope chain.
-/// Enables entity.paste when the clipboard is non-empty AND a column or board
-/// is in the scope chain.
-///
-/// Called after `ui.setFocus` and clipboard-mutating commands so the Edit menu
-/// reflects what actions are actually available.
-pub fn update_clipboard_menu_state(app: &AppHandle, ui: &swissarmyhammer_commands::UIState) {
+/// Compute clipboard menu state from current UIState.
+pub fn compute_clipboard_menu_state(ui: &swissarmyhammer_commands::UIState) -> ClipboardMenuState {
     let scope = ui.scope_chain();
-    let has_clipboard = ui.has_clipboard();
-
     let has_task = scope.iter().any(|s| s.starts_with("task:"));
     let has_column_or_board = scope
         .iter()
         .any(|s| s.starts_with("column:") || s.starts_with("board:"));
-
-    let cut_copy_enabled = has_task;
-    let paste_enabled = has_clipboard && has_column_or_board;
-
-    if let Some(menu) = app.menu() {
-        set_menu_item_enabled(&menu, "entity.cut", cut_copy_enabled);
-        set_menu_item_enabled(&menu, "entity.copy", cut_copy_enabled);
-        set_menu_item_enabled(&menu, "entity.paste", paste_enabled);
+    ClipboardMenuState {
+        cut_copy_enabled: has_task,
+        paste_enabled: ui.has_clipboard() && has_column_or_board,
     }
 }
 
-/// Find a `MenuItem` by ID anywhere in the menu tree and set its enabled state.
+/// Rebuild the menu if clipboard availability changed.
 ///
-/// Iterates all top-level items and their submenus. Silently does nothing
-/// if the item is not found (e.g. menu hasn't been built yet).
-fn set_menu_item_enabled(menu: &Menu<tauri::Wry>, id: &str, enabled: bool) {
-    if let Ok(items) = menu.items() {
-        for item in items {
-            if let Some(sub) = item.as_submenu() {
-                if let Ok(sub_items) = sub.items() {
-                    for si in sub_items {
-                        if let Some(mi) = si.as_menuitem() {
-                            if mi.id().as_ref() == id {
-                                let _ = mi.set_enabled(enabled);
-                                return;
-                            }
-                        }
-                    }
-                }
-            }
+/// Computes the current clipboard menu state, compares with the cached
+/// previous state, and rebuilds only when something changed. This keeps
+/// PredefinedMenuItem (OS icons) when enabled and grayed-out placeholders
+/// when disabled.
+pub fn update_clipboard_menu_state(app: &AppHandle, ui: &swissarmyhammer_commands::UIState) {
+    use std::sync::Mutex;
+    static PREV: Mutex<Option<(bool, bool)>> = Mutex::new(None);
+
+    let new_state = compute_clipboard_menu_state(ui);
+    let new_tuple = (new_state.cut_copy_enabled, new_state.paste_enabled);
+
+    // Skip rebuild if nothing changed.
+    {
+        let mut prev = PREV.lock().unwrap();
+        if *prev == Some(new_tuple) {
+            return;
         }
+        *prev = Some(new_tuple);
+    }
+
+    let state = app.state::<crate::state::AppState>();
+    let manifest = state.last_menu_manifest.lock().unwrap().clone();
+    let recent = ui.recent_boards();
+    if let Err(e) = build_menu_from_manifest_with_clipboard(app, &manifest, &recent, &new_state) {
+        tracing::error!("Failed to rebuild menu for clipboard state: {}", e);
     }
 }

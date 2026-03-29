@@ -70,7 +70,7 @@ async fn resolve_handle(
 /// The frontend collects commands with `menuPlacement` metadata and sends
 /// them as a JSON array of these entries. Rust uses them to build the
 /// native menu bar.
-#[derive(serde::Deserialize, Debug)]
+#[derive(serde::Deserialize, Debug, Clone)]
 pub struct MenuItemEntry {
     pub id: String,
     pub name: String,
@@ -816,6 +816,8 @@ pub async fn rebuild_menu_from_manifest(
     state: State<'_, AppState>,
     manifest: Vec<MenuItemEntry>,
 ) -> Result<(), String> {
+    // Cache manifest for menu rebuilds triggered by clipboard state changes.
+    *state.last_menu_manifest.lock().unwrap() = manifest.clone();
     let recent = state.ui_state.recent_boards();
     menu::build_menu_from_manifest(&app, &manifest, &recent).map_err(|e| e.to_string())?;
     Ok(())

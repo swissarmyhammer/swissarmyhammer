@@ -106,12 +106,20 @@ async fn multi_step_undo() {
     // Undo C
     ctx.undo(&ulid_c).await.unwrap();
     let loaded = ctx.read("tag", "bug").await.unwrap();
-    assert_eq!(loaded.get_str("tag_name"), Some("B"), "C should be reverted to B");
+    assert_eq!(
+        loaded.get_str("tag_name"),
+        Some("B"),
+        "C should be reverted to B"
+    );
 
     // Undo B
     ctx.undo(&ulid_b).await.unwrap();
     let loaded = ctx.read("tag", "bug").await.unwrap();
-    assert_eq!(loaded.get_str("tag_name"), Some("A"), "B should be reverted to A");
+    assert_eq!(
+        loaded.get_str("tag_name"),
+        Some("A"),
+        "B should be reverted to A"
+    );
 
     // Verify YAML: can redo twice, can undo twice
     let yaml_stack = read_stack_yaml(&dir);
@@ -121,7 +129,11 @@ async fn multi_step_undo() {
     // Redo B
     ctx.redo(&ulid_b).await.unwrap();
     let loaded = ctx.read("tag", "bug").await.unwrap();
-    assert_eq!(loaded.get_str("tag_name"), Some("B"), "B should be restored");
+    assert_eq!(
+        loaded.get_str("tag_name"),
+        Some("B"),
+        "B should be restored"
+    );
 
     let yaml_stack = read_stack_yaml(&dir);
     assert!(yaml_stack.can_redo(), "can still redo C");

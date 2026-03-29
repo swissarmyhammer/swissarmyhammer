@@ -83,6 +83,10 @@ impl TestEngine {
         );
         ctx.ui_state = Some(Arc::clone(&self.ui_state));
         ctx.set_extension(Arc::clone(&self.kanban));
+        // Set EntityContext extension for entity-layer commands (undo/redo).
+        if let Ok(ectx_arc) = self.kanban.entity_context().await {
+            ctx.set_extension(ectx_arc);
+        }
 
         if !cmd.available(&ctx) {
             return Err(CommandError::ExecutionFailed(format!(
@@ -1005,11 +1009,7 @@ async fn task_delete_removes_task() {
 
     // Dispatch task.delete through the command harness
     let delete_result = engine
-        .dispatch_simple(
-            "task.delete",
-            &[&format!("task:{}", task_id)],
-            None,
-        )
+        .dispatch_simple("task.delete", &[&format!("task:{}", task_id)], None)
         .await
         .expect("task.delete should succeed");
 
@@ -1072,12 +1072,7 @@ async fn task_move_with_swimlane_arg() {
     args.insert("swimlane".to_string(), json!("urgent"));
 
     let move_result = engine
-        .dispatch(
-            "task.move",
-            &[&format!("task:{}", task_id)],
-            None,
-            args,
-        )
+        .dispatch("task.move", &[&format!("task:{}", task_id)], None, args)
         .await
         .expect("task.move with swimlane should succeed");
 
@@ -1352,11 +1347,7 @@ async fn undo_redo_entity_archive() {
 
     // Archive the task via entity.archive
     let archive_result = engine
-        .dispatch_simple(
-            "entity.archive",
-            &[],
-            Some(&format!("task:{}", task_id)),
-        )
+        .dispatch_simple("entity.archive", &[], Some(&format!("task:{}", task_id)))
         .await
         .expect("entity.archive should succeed");
     let operation_id = archive_result["operation_id"]
@@ -1430,11 +1421,7 @@ async fn undo_redo_entity_unarchive() {
 
     // Archive the task first (prerequisite for unarchive)
     engine
-        .dispatch_simple(
-            "entity.archive",
-            &[],
-            Some(&format!("task:{}", task_id)),
-        )
+        .dispatch_simple("entity.archive", &[], Some(&format!("task:{}", task_id)))
         .await
         .expect("entity.archive should succeed");
 
@@ -1450,11 +1437,7 @@ async fn undo_redo_entity_unarchive() {
 
     // Unarchive the task via entity.unarchive
     let unarchive_result = engine
-        .dispatch_simple(
-            "entity.unarchive",
-            &[],
-            Some(&format!("task:{}", task_id)),
-        )
+        .dispatch_simple("entity.unarchive", &[], Some(&format!("task:{}", task_id)))
         .await
         .expect("entity.unarchive should succeed");
     let operation_id = unarchive_result["operation_id"]

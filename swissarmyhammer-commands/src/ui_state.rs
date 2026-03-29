@@ -461,9 +461,7 @@ impl UIState {
     /// Transient — not persisted to the config file.
     pub fn clear_clipboard(&self) -> Option<UIStateChange> {
         let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
-        if inner.clipboard.is_none() {
-            return None;
-        }
+        inner.clipboard.as_ref()?;
         inner.clipboard = None;
         Some(UIStateChange::Clipboard(None))
         // No try_save — clipboard is transient (#[serde(skip)])
@@ -1475,7 +1473,11 @@ mod tests {
 
     // --- clipboard tests ---
 
-    fn make_clipboard_state(entity_type: &str, entity_id: &str, mode: ClipboardMode) -> ClipboardState {
+    fn make_clipboard_state(
+        entity_type: &str,
+        entity_id: &str,
+        mode: ClipboardMode,
+    ) -> ClipboardState {
         ClipboardState {
             entity_type: entity_type.to_string(),
             entity_id: entity_id.to_string(),
