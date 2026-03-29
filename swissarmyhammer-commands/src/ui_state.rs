@@ -446,6 +446,15 @@ impl UIState {
             .clone()
     }
 
+    /// Check whether the clipboard has contents without cloning.
+    pub fn has_clipboard(&self) -> bool {
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clipboard
+            .is_some()
+    }
+
     /// Clear the clipboard contents.
     ///
     /// Returns `None` if the clipboard was already empty.
