@@ -3,6 +3,10 @@
   keys:
     cua: Mod+Q
     vim: ":q"
+  menu:
+    path: [App]
+    group: 2
+    order: 0
 
 - id: app.undo
   name: Undo

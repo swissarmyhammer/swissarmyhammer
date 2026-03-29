@@ -467,6 +467,14 @@ pub fn update_clipboard_menu_state(app: &AppHandle, ui: &swissarmyhammer_command
     let new_state = compute_clipboard_menu_state(ui);
     let new_tuple = (new_state.cut_copy_enabled, new_state.paste_enabled);
 
+    tracing::debug!(
+        cut_copy = new_state.cut_copy_enabled,
+        paste = new_state.paste_enabled,
+        has_clipboard = ui.has_clipboard(),
+        scope = ?ui.scope_chain(),
+        "clipboard menu state check"
+    );
+
     // Skip rebuild if nothing changed.
     {
         let mut prev = PREV.lock().unwrap();
@@ -475,6 +483,12 @@ pub fn update_clipboard_menu_state(app: &AppHandle, ui: &swissarmyhammer_command
         }
         *prev = Some(new_tuple);
     }
+
+    tracing::info!(
+        cut_copy = new_state.cut_copy_enabled,
+        paste = new_state.paste_enabled,
+        "rebuilding menu for clipboard state change"
+    );
 
     let state = app.state::<crate::state::AppState>();
     let manifest = state.last_menu_manifest.lock().unwrap().clone();

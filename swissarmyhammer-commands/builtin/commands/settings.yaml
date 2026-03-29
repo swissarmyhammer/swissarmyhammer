@@ -1,11 +1,26 @@
 - id: settings.keymap.vim
   name: Vim Keybindings
   visible: false
+  menu:
+    path: [Settings]
+    group: 0
+    order: 1
+    radio_group: keymap
 
 - id: settings.keymap.cua
   name: Standard Keybindings
   visible: false
+  menu:
+    path: [Settings]
+    group: 0
+    order: 0
+    radio_group: keymap
 
 - id: settings.keymap.emacs
   name: Emacs Keybindings
   visible: false
+  menu:
+    path: [Settings]
+    group: 0
+    order: 2
+    radio_group: keymap

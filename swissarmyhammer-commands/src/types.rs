@@ -34,6 +34,20 @@ pub struct ParamDef {
     pub default: Option<Value>,
 }
 
+/// Where a command appears in the application menu bar.
+///
+/// `path` identifies the menu hierarchy (e.g. `["Edit"]` or `["File", "Export"]`).
+/// `group` and `order` control separator-delimited positioning within that menu.
+/// `radio_group` optionally links commands into a mutually-exclusive radio set.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MenuPlacement {
+    pub path: Vec<String>,
+    pub group: usize,
+    pub order: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub radio_group: Option<String>,
+}
+
 /// YAML-loaded command metadata.
 ///
 /// Describes a command's identity, scope requirements, keybindings,
@@ -56,6 +70,8 @@ pub struct CommandDef {
     pub undoable: bool,
     #[serde(default)]
     pub context_menu: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub menu: Option<MenuPlacement>,
 }
 
 fn default_true() -> bool {
@@ -102,6 +118,7 @@ mod tests {
             }],
             undoable: true,
             context_menu: false,
+            menu: None,
         };
         let yaml = serde_yaml_ng::to_string(&def).unwrap();
         let parsed: CommandDef = serde_yaml_ng::from_str(&yaml).unwrap();
@@ -180,5 +197,99 @@ params:
         let parsed: CommandInvocation = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.cmd, "app.quit");
         assert!(parsed.scope_chain.is_none());
+    }
+
+    #[test]
+    fn command_def_with_menu_round_trip() {
+        let def = CommandDef {
+            id: "file.newBoard".into(),
+            name: "New Board".into(),
+            scope: None,
+            visible: true,
+            keys: Some(KeysDef {
+                vim: None,
+                cua: Some("Mod+Shift+N".into()),
+                emacs: None,
+            }),
+            params: vec![],
+            undoable: false,
+            context_menu: false,
+            menu: Some(MenuPlacement {
+                path: vec!["File".into()],
+                group: 0,
+                order: 0,
+                radio_group: None,
+            }),
+        };
+        let yaml = serde_yaml_ng::to_string(&def).unwrap();
+        let parsed: CommandDef = serde_yaml_ng::from_str(&yaml).unwrap();
+        assert_eq!(def, parsed);
+    }
+
+    #[test]
+    fn command_def_menu_with_radio_group() {
+        let yaml = r#"
+id: settings.keymap.vim
+name: Vim Keybindings
+menu:
+  path: [Settings]
+  group: 0
+  order: 1
+  radio_group: keymap
+"#;
+        let def: CommandDef = serde_yaml_ng::from_str(yaml).unwrap();
+        let menu = def.menu.as_ref().unwrap();
+        assert_eq!(menu.path, vec!["Settings"]);
+        assert_eq!(menu.group, 0);
+        assert_eq!(menu.order, 1);
+        assert_eq!(menu.radio_group.as_deref(), Some("keymap"));
+    }
+
+    #[test]
+    fn command_def_menu_nested_path() {
+        let yaml = r#"
+id: file.export.csv
+name: Export CSV
+menu:
+  path: [File, Export]
+  group: 0
+  order: 0
+"#;
+        let def: CommandDef = serde_yaml_ng::from_str(yaml).unwrap();
+        let menu = def.menu.as_ref().unwrap();
+        assert_eq!(menu.path, vec!["File", "Export"]);
+        assert!(menu.radio_group.is_none());
+    }
+
+    #[test]
+    fn command_def_without_menu_parses() {
+        let yaml = r#"
+id: task.add
+name: New Task
+"#;
+        let def: CommandDef = serde_yaml_ng::from_str(yaml).unwrap();
+        assert!(def.menu.is_none());
+    }
+
+    #[test]
+    fn menu_placement_skipped_when_none() {
+        let def = CommandDef {
+            id: "test".into(),
+            name: "Test".into(),
+            scope: None,
+            visible: true,
+            keys: None,
+            params: vec![],
+            undoable: false,
+            context_menu: false,
+            menu: None,
+        };
+        let yaml = serde_yaml_ng::to_string(&def).unwrap();
+        // "menu:" would appear as a top-level key if serialized; context_menu
+        // serializes as "context_menu:" so we check for the standalone key.
+        assert!(
+            !yaml.contains("\nmenu:"),
+            "menu field should be skipped when None, got:\n{yaml}"
+        );
     }
 }
