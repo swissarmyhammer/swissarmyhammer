@@ -136,6 +136,12 @@ impl Command for UnarchiveEntityCmd {
         let (entity_type, id) =
             parse_moniker(moniker).ok_or_else(|| CommandError::InvalidMoniker(moniker.into()))?;
 
+        // For tasks, dispatch to UnarchiveTask which goes through the operation
+        // processor (produces an operation_id and integrates with undo/redo).
+        if entity_type == "task" {
+            return run_op(&crate::task::UnarchiveTask::new(id), &kanban).await;
+        }
+
         let ectx = kanban
             .entity_context()
             .await
