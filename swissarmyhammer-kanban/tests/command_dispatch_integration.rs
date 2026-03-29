@@ -1514,3 +1514,93 @@ async fn undo_redo_entity_unarchive() {
         "task should be in live storage after redo of unarchive"
     );
 }
+
+// ===========================================================================
+// Card 01KMWQX2ANS47E7AEK1A8BR0VP — column.reorder undo/redo
+// ===========================================================================
+
+/// Helper: read columns sorted by order, return IDs in display order.
+async fn column_order(engine: &TestEngine) -> Vec<String> {
+    let ectx = engine.kanban.entity_context().await.unwrap();
+    let mut cols = ectx.list("column").await.unwrap();
+    cols.sort_by_key(|c| c.get("order").and_then(|v| v.as_u64()).unwrap_or(0));
+    cols.iter().map(|c| c.id.to_string()).collect()
+}
+
+#[tokio::test]
+async fn column_reorder_undo_redo() {
+    let engine = TestEngine::new().await;
+
+    // Board init creates columns: todo (0), doing (1), done (2)
+    let original_order = column_order(&engine).await;
+    assert_eq!(
+        original_order,
+        vec!["todo", "doing", "done"],
+        "initial column order should be todo, doing, done"
+    );
+
+    // Reorder: move "done" to index 0 → expected order: done, todo, doing
+    let mut reorder_args = HashMap::new();
+    reorder_args.insert("id".to_string(), json!("done"));
+    reorder_args.insert("target_index".to_string(), json!(0));
+
+    let reorder_result = engine
+        .dispatch("column.reorder", &[], None, reorder_args)
+        .await
+        .expect("column.reorder should succeed");
+
+    let reordered = column_order(&engine).await;
+    assert_eq!(
+        reordered,
+        vec!["done", "todo", "doing"],
+        "after reorder, done should be first"
+    );
+
+    // Collect the operation_ids produced by the reorder (one per column update)
+    let operation_ids: Vec<String> = reorder_result["operation_ids"]
+        .as_array()
+        .expect("operation_ids should be an array")
+        .iter()
+        .map(|v| v.as_str().unwrap().to_string())
+        .collect();
+    assert!(
+        !operation_ids.is_empty(),
+        "column.reorder should produce operation_ids"
+    );
+
+    // Undo each operation in reverse order to restore original column order
+    let mut undo_op_ids: Vec<String> = Vec::new();
+    for op_id in operation_ids.iter().rev() {
+        let mut undo_args = HashMap::new();
+        undo_args.insert("id".to_string(), json!(op_id));
+        let undo_result = engine
+            .dispatch("app.undo", &[], None, undo_args)
+            .await
+            .expect("app.undo should succeed");
+        if let Some(undo_op_id) = undo_result["operation_id"].as_str() {
+            undo_op_ids.push(undo_op_id.to_string());
+        }
+    }
+
+    let after_undo = column_order(&engine).await;
+    assert_eq!(
+        after_undo, original_order,
+        "after undo, column order should be restored to original"
+    );
+
+    // Redo each undo operation in reverse order to restore the reordered state
+    for redo_id in undo_op_ids.iter().rev() {
+        let mut redo_args = HashMap::new();
+        redo_args.insert("id".to_string(), json!(redo_id));
+        engine
+            .dispatch("app.redo", &[], None, redo_args)
+            .await
+            .expect("app.redo should succeed");
+    }
+
+    let after_redo = column_order(&engine).await;
+    assert_eq!(
+        after_redo, reordered,
+        "after redo, column order should match the reordered state"
+    );
+}
