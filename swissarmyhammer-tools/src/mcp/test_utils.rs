@@ -34,10 +34,10 @@ use rmcp::{
 pub async fn create_test_client(server_url: &str) -> RunningService<rmcp::RoleClient, ClientInfo> {
     let transport = StreamableHttpClientTransport::with_client(
         reqwest::Client::default(),
-        rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig {
-            uri: server_url.into(),
-            auth_header: None,
-            ..Default::default()
+        {
+            let mut config = rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig::default();
+            config.uri = server_url.into();
+            config
         },
     );
 
