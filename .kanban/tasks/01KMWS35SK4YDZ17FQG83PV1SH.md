@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KMWS2PV9EVCK6J7NXVMRJAZG
-position_column: doing
-position_ordinal: '8180'
+position_column: done
+position_ordinal: ffffffffffffffe680
 title: Implement entity.copy and entity.cut commands
 ---
 ## What

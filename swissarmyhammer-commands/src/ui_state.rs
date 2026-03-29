@@ -56,6 +56,30 @@ pub struct DragSession {
     pub started_at_ms: u64,
 }
 
+/// Whether the clipboard entry was created by a copy or a cut.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ClipboardMode {
+    /// The entity was copied (original remains).
+    Copy,
+    /// The entity was cut (original was deleted).
+    Cut,
+}
+
+/// An in-memory clipboard snapshot of an entity's fields.
+///
+/// Transient — carried in UIState but never persisted to the YAML config.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClipboardState {
+    /// How the clipboard entry was created.
+    pub mode: ClipboardMode,
+    /// The entity type that was copied/cut (e.g. "task").
+    pub entity_type: String,
+    /// The original entity ID.
+    pub entity_id: String,
+    /// Snapshot of all entity fields as JSON.
+    pub fields: serde_json::Value,
+}
+
 /// Persisted per-window state: board path, inspector stack, active view, and window geometry.
 ///
 /// `board_path` is the canonical path to the `.kanban` directory this window shows.
@@ -155,6 +179,9 @@ struct UIStateInner {
     /// IDs of items in the most recently shown context menu. Transient — not persisted.
     #[serde(skip)]
     context_menu_ids: HashSet<String>,
+    /// In-memory clipboard for entity copy/cut. Transient — not persisted.
+    #[serde(skip)]
+    clipboard: Option<ClipboardState>,
     /// Canonical paths of boards that are open.
     open_boards: Vec<String>,
     /// Per-window state: inspector stack, board assignment, and geometry.
@@ -182,6 +209,7 @@ impl Default for UIStateInner {
             drag_session: None,
             clipboard: None,
             context_menu_ids: HashSet::new(),
+            clipboard: None,
             open_boards: Vec::new(),
             windows: HashMap::new(),
             recent_boards: Vec::new(),
