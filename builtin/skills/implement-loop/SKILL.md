@@ -63,6 +63,7 @@ Each agent must target a specific card by ID. Do NOT let parallel agents call `n
 ### Parallel Safety
 
 - **Max 4 concurrent agents.**, folks are still using their computers.
+- **Do NOT create additional worktrees.** Spawning agents with `isolation: "worktree"` causes changes to be lost — agents write to isolated copies that are never merged back. All agents must work directly in the current working tree.
 - **If a parallel agent fails**, continue with the others. Report the failure at the end.
 
 ### Scope

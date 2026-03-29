@@ -1198,8 +1198,10 @@ mod tests {
     #[test]
     fn set_context_menu_ids_and_check_membership() {
         let state = UIState::new();
-        let ids: HashSet<String> =
-            ["task:01A", "task:01B"].iter().map(|s| s.to_string()).collect();
+        let ids: HashSet<String> = ["task:01A", "task:01B"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
         state.set_context_menu_ids(ids);
 
         assert!(state.is_context_menu_id("task:01A"));
@@ -1219,17 +1221,28 @@ mod tests {
     fn replacing_context_menu_ids_clears_previous() {
         let state = UIState::new();
 
-        let first: HashSet<String> =
-            ["task:01A", "task:01B"].iter().map(|s| s.to_string()).collect();
+        let first: HashSet<String> = ["task:01A", "task:01B"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
         state.set_context_menu_ids(first);
         assert!(state.is_context_menu_id("task:01A"));
 
         let second: HashSet<String> = ["task:01C"].iter().map(|s| s.to_string()).collect();
         state.set_context_menu_ids(second);
 
-        assert!(!state.is_context_menu_id("task:01A"), "old ID should be gone");
-        assert!(!state.is_context_menu_id("task:01B"), "old ID should be gone");
-        assert!(state.is_context_menu_id("task:01C"), "new ID should be present");
+        assert!(
+            !state.is_context_menu_id("task:01A"),
+            "old ID should be gone"
+        );
+        assert!(
+            !state.is_context_menu_id("task:01B"),
+            "old ID should be gone"
+        );
+        assert!(
+            state.is_context_menu_id("task:01C"),
+            "new ID should be present"
+        );
     }
 
     // --- open boards and window board management tests ---

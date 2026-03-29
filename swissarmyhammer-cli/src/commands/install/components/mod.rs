@@ -24,6 +24,11 @@ pub fn register_all(registry: &mut InitRegistry, global: bool, remove_directory:
     registry.register(SkillDeployment::new(global));
     registry.register(AgentDeployment::new(global));
     registry.register(LockfileCleanup);
+
+    // Register tools that have lifecycle operations.
+    // Each tool implements Initializable — tools with no-op init/deinit
+    // are harmless to include (they'll be skipped automatically).
+    registry.register(swissarmyhammer_tools::mcp::tools::kanban::KanbanTool);
 }
 
 // ── McpRegistration (priority 10) ────────────────────────────────────

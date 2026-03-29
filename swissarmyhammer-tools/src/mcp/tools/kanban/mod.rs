@@ -158,7 +158,104 @@ fn is_task_modifying_operation(verb: Verb, noun: Noun) -> bool {
 
 // No health checks needed
 crate::impl_empty_doctorable!(KanbanTool);
-crate::impl_empty_initializable!(KanbanTool);
+
+impl swissarmyhammer_common::lifecycle::Initializable for KanbanTool {
+    fn name(&self) -> &str {
+        <Self as crate::mcp::tool_registry::McpTool>::name(self)
+    }
+
+    fn category(&self) -> &str {
+        "tools"
+    }
+
+    fn priority(&self) -> i32 {
+        25
+    }
+
+    fn is_applicable(&self, scope: &swissarmyhammer_common::lifecycle::InitScope) -> bool {
+        matches!(
+            scope,
+            swissarmyhammer_common::lifecycle::InitScope::Project
+                | swissarmyhammer_common::lifecycle::InitScope::Local
+        )
+    }
+
+    fn init(
+        &self,
+        _scope: &swissarmyhammer_common::lifecycle::InitScope,
+        reporter: &dyn swissarmyhammer_common::reporter::InitReporter,
+    ) -> Vec<swissarmyhammer_common::lifecycle::InitResult> {
+        use swissarmyhammer_common::lifecycle::{InitResult, Initializable};
+        use swissarmyhammer_common::reporter::InitEvent;
+        let name = Initializable::name(self);
+        let cwd = match std::env::current_dir() {
+            Ok(d) => d,
+            Err(_) => {
+                return vec![InitResult::skipped(
+                    name,
+                    "Cannot determine current directory",
+                )]
+            }
+        };
+
+        let kanban_dir = cwd.join(".kanban");
+        if !kanban_dir.exists() {
+            return vec![InitResult::skipped(name, "No .kanban directory found")];
+        }
+
+        if let Err(e) = swissarmyhammer_kanban::board::register_merge_drivers(&kanban_dir) {
+            return vec![InitResult::error(
+                name,
+                format!("Failed to register merge drivers: {e}"),
+            )];
+        }
+
+        reporter.emit(&InitEvent::Action {
+            verb: "Configured".to_string(),
+            message: "kanban merge drivers".to_string(),
+        });
+
+        vec![InitResult::ok(name, "Kanban merge drivers registered")]
+    }
+
+    fn deinit(
+        &self,
+        _scope: &swissarmyhammer_common::lifecycle::InitScope,
+        reporter: &dyn swissarmyhammer_common::reporter::InitReporter,
+    ) -> Vec<swissarmyhammer_common::lifecycle::InitResult> {
+        use swissarmyhammer_common::lifecycle::{InitResult, Initializable};
+        use swissarmyhammer_common::reporter::InitEvent;
+        let name = Initializable::name(self);
+        let cwd = match std::env::current_dir() {
+            Ok(d) => d,
+            Err(_) => {
+                return vec![InitResult::skipped(
+                    name,
+                    "Cannot determine current directory",
+                )]
+            }
+        };
+
+        let kanban_dir = cwd.join(".kanban");
+        if !kanban_dir.exists() {
+            return vec![InitResult::skipped(name, "No .kanban directory found")];
+        }
+
+        if let Err(e) = swissarmyhammer_kanban::board::unregister_merge_drivers(&kanban_dir) {
+            return vec![InitResult::error(
+                name,
+                format!("Failed to remove merge drivers: {e}"),
+            )];
+        }
+
+        reporter.emit(&InitEvent::Action {
+            verb: "Removed".to_string(),
+            message: "kanban merge driver configuration".to_string(),
+        });
+
+        vec![InitResult::ok(name, "Kanban merge drivers removed")]
+    }
+}
 
 #[async_trait]
 impl McpTool for KanbanTool {

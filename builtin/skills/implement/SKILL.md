@@ -85,3 +85,4 @@ Only exception: if the card description explicitly says **auto-continue** or **c
 - Do NOT use TodoWrite, TaskCreate, or any other task tracking — the kanban board is the single source of truth.
 - If you discover new work, add it as a new kanban card.
 - If you get stuck, report what you tried and where you're blocked — don't silently give up.
+- **Do NOT create additional worktrees.** Spawning agents with `isolation: "worktree"` causes changes to be lost — agents write to isolated copies that are never merged back. All agents must work directly in the current working tree.
