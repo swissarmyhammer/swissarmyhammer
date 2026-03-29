@@ -62,6 +62,7 @@
 //! JSON API responses remain unchanged — serde_json is used for all output.
 
 pub mod auto_color;
+pub mod clipboard;
 mod context;
 pub mod cross_board;
 pub mod defaults;

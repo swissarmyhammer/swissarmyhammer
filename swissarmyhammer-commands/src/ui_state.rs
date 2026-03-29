@@ -120,6 +120,9 @@ struct UIStateInner {
     /// Active cross-window drag session. Transient — not persisted.
     #[serde(skip)]
     drag_session: Option<DragSession>,
+    /// Whether the clipboard contains a copied/cut entity. Transient — not persisted.
+    #[serde(skip)]
+    has_clipboard: bool,
     /// IDs of items in the most recently shown context menu. Transient — not persisted.
     #[serde(skip)]
     context_menu_ids: HashSet<String>,
@@ -148,6 +151,7 @@ impl Default for UIStateInner {
             keymap_mode: "cua".to_string(),
             scope_chain: Vec::new(),
             drag_session: None,
+            has_clipboard: false,
             context_menu_ids: HashSet::new(),
             open_boards: Vec::new(),
             windows: HashMap::new(),
@@ -699,6 +703,22 @@ impl UIState {
             .read()
             .unwrap_or_else(|e| e.into_inner())
             .palette_open
+    }
+
+    /// Get whether the clipboard contains a copied/cut entity.
+    pub fn has_clipboard(&self) -> bool {
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .has_clipboard
+    }
+
+    /// Set the clipboard flag. Called after copy/cut operations.
+    pub fn set_has_clipboard(&self, has: bool) {
+        self.inner
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .has_clipboard = has;
     }
 
     /// Get the current keymap mode.
