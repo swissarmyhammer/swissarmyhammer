@@ -7,6 +7,9 @@ license.workspace = true
 repository.workspace = true
 description = "Tauri desktop app for SwissArmyHammer Kanban board"
 
+[package.metadata.dist]
+dist = false
+
 [[bin]]
 name = "kanban-app"
 path = "src/main.rs"

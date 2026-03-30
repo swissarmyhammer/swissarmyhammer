@@ -6,6 +6,9 @@ license.workspace = true
 repository.workspace = true
 description = "Mirdan tray app - Universal package manager for AI coding agents"
 
+[package.metadata.dist]
+dist = false
+
 [[bin]]
 name = "mirdan-app"
 path = "src/main.rs"

@@ -13,6 +13,9 @@ homepage.workspace = true
 description = "Command-line interface for SwissArmyHammer prompt management"
 default-run = "sah"
 
+[package.metadata.dist]
+dist = false
+
 [lib]
 name = "swissarmyhammer_cli"
 path = "src/lib.rs"
