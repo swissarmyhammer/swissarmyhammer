@@ -17,7 +17,7 @@ host = ["aarch64-apple-darwin"]
 # Publish jobs to run in CI
 publish-jobs = ["homebrew"]
 # Skip checking whether the specified configuration files are up to date
-allow-dirty = ["msi"]
+allow-dirty = ["ci", "msi"]
 # Allow triggering releases manually from GitHub Actions UI
 dispatch-releases = true
 # Include shell completions in release archives
@@ -26,6 +26,4 @@ include = ["completions/"]
 [dist.github-custom-runners]
 aarch64-apple-darwin = "self-hosted"
 
-# System dependencies needed for Linux builds (arboard → GTK)
-[dist.dependencies.apt]
-libgtk-3-dev = '*'
+# System dependencies installed via build-setup.sh (allow-dirty ci)
