@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: '8280'
+position_column: doing
+position_ordinal: '80'
 title: Fix inspect command — backend ui.inspect must sync with frontend InspectProvider
 ---
 ## What

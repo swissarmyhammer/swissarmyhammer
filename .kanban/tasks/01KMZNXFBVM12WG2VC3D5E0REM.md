@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: doing
-position_ordinal: '80'
+position_column: done
+position_ordinal: fffffffffffffff980
 title: Fix Open Board — dialog completes but board doesn't load as active
 ---
 ## What

@@ -5,7 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { UIStateProvider } from "@/lib/ui-state-context";
+import { UIStateProvider, useUIState } from "@/lib/ui-state-context";
 import { AppModeProvider } from "@/lib/app-mode-context";
 import { UndoProvider } from "@/lib/undo-context";
 import { EntityFocusProvider, useRestoreFocus } from "@/lib/entity-focus-context";
@@ -140,6 +140,30 @@ function App() {
   const [panelStack, setPanelStack] = useState<PanelEntry[]>([]);
   const panelStackRef = useRef(panelStack);
   panelStackRef.current = panelStack;
+
+  // Sync inspector panel stack from UIState (backend is source of truth).
+  // When any command dispatch updates the inspector_stack via ui-state-changed,
+  // this effect picks it up — works for context menu, palette, keybindings, etc.
+  const uiState = useUIState();
+  useEffect(() => {
+    const winState = uiState.windows[WINDOW_LABEL];
+    if (!winState) return;
+    const backendStack = winState.inspector_stack ?? [];
+    // Convert moniker strings to PanelEntry objects
+    const entries: PanelEntry[] = backendStack
+      .map((moniker: string) => {
+        const sep = moniker.indexOf(":");
+        if (sep < 0) return null;
+        return { entityType: moniker.substring(0, sep), entityId: moniker.substring(sep + 1) };
+      })
+      .filter((e: PanelEntry | null): e is PanelEntry => e !== null);
+    // Only update if actually different (avoid infinite loops)
+    const currentMonikers = panelStackRef.current.map(p => `${p.entityType}:${p.entityId}`);
+    const backendMonikers = backendStack;
+    if (JSON.stringify(currentMonikers) !== JSON.stringify(backendMonikers)) {
+      setPanelStack(entries);
+    }
+  }, [uiState]);
 
   /** Open an inspector for any entity via the command architecture. */
   const inspectEntity = useCallback((entityType: string, entityId: string) => {
