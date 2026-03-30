@@ -1,18 +1,9 @@
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ReactNode,
-} from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { useCallback, useEffect, useMemo, useRef, type ReactNode } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   CommandScopeProvider,
   useExecuteCommand,
-  useActiveBoardPath,
   resolveCommand,
   dispatchCommand,
   type CommandDef,
@@ -26,9 +17,7 @@ import {
   type KeymapMode,
 } from "@/lib/keybindings";
 import { CommandPalette } from "@/components/command-palette";
-import { pathStem } from "@/components/board-selector";
 import { dispatchContextMenuCommand } from "@/lib/context-menu";
-import { useInspectDismiss } from "@/lib/inspect-context";
 
 /**
  * Internal component that attaches a global keydown listener.
@@ -135,181 +124,122 @@ interface AppShellProps {
   onSwitchBoard?: (path: string) => void;
 }
 
-export function AppShell({
-  children,
-  openBoards,
-  onSwitchBoard,
-}: AppShellProps) {
-  const [paletteOpen, setPaletteOpen] = useState(false);
-  const [paletteMode, setPaletteMode] = useState<"command" | "search">(
-    "command",
-  );
-  const paletteOpenRef = useRef(false);
-  paletteOpenRef.current = paletteOpen;
-  const { keymap_mode: keymapModeRaw } = useUIState();
+export function AppShell({ children, onSwitchBoard }: AppShellProps) {
+  const uiState = useUIState();
+  const keymapModeRaw = uiState.keymap_mode;
+  const windowLabel = getCurrentWindow().label;
+  const winState = uiState.windows?.[windowLabel];
+  const paletteOpen = winState?.palette_open ?? false;
+  const paletteMode = winState?.palette_mode ?? "command";
   // Normalize to a valid KeymapMode, defaulting to "cua" for unknown values
   const keymapMode: KeymapMode =
     keymapModeRaw === "vim" || keymapModeRaw === "emacs"
       ? keymapModeRaw
       : "cua";
   const { setMode } = useAppMode();
-  const dismissInspector = useInspectDismiss();
-  const activeBoardPath = useActiveBoardPath();
-  const activeBoardPathRef = useRef(activeBoardPath);
-  activeBoardPathRef.current = activeBoardPath;
   const { broadcastNavCommand } = useEntityFocus();
   const broadcastRef = useRef(broadcastNavCommand);
   broadcastRef.current = broadcastNavCommand;
 
-  /** Global commands available throughout the app. */
+  // Sync app mode from palette state driven by backend UIState.
+  const prevPaletteOpenRef = useRef(paletteOpen);
+  useEffect(() => {
+    if (paletteOpen && !prevPaletteOpenRef.current) {
+      setMode("command");
+    } else if (!paletteOpen && prevPaletteOpenRef.current) {
+      setMode("normal");
+    }
+    prevPaletteOpenRef.current = paletteOpen;
+  }, [paletteOpen, setMode]);
+
+  /** Global commands available throughout the app.
+   *
+   * Most commands have no `execute` callback and dispatch to the Rust backend.
+   * Only navigation commands retain frontend `execute` handlers because they
+   * are purely UI focus movement that broadcasts through EntityFocusContext.
+   */
   const globalCommands: CommandDef[] = useMemo(
     () => [
+      // --- Commands dispatched to backend (no execute callback) ---
       {
         id: "app.command",
         name: "Command Palette",
         keys: { vim: ":", cua: "Mod+Shift+P", emacs: "Mod+Shift+P" },
-        execute: () => {
-          setPaletteMode("command");
-          setPaletteOpen(true);
-          setMode("command");
-        },
       },
       {
         id: "app.palette",
         name: "Command Palette",
         keys: { vim: "Mod+Shift+P", cua: "Mod+Shift+P", emacs: "Mod+Shift+P" },
-        execute: () => {
-          setPaletteMode("command");
-          setPaletteOpen(true);
-          setMode("command");
-        },
       },
       {
         id: "app.undo",
         name: "Undo",
         keys: { vim: "u", cua: "Mod+Z", emacs: "Ctrl+/" },
-        // No execute -- dispatches to Rust via dispatch_command
       },
       {
         id: "app.redo",
         name: "Redo",
         keys: { vim: "Mod+R", cua: "Mod+Shift+Z" },
-        // No execute -- dispatches to Rust via dispatch_command
       },
       {
         id: "app.dismiss",
         name: "Dismiss",
         keys: { vim: "Escape", cua: "Escape", emacs: "Escape" },
-        execute: () => {
-          // Layered dismiss: palette first, then inspector stack, then clear focus.
-          // Read paletteOpen from the ref to avoid adding it to useMemo deps.
-          if (paletteOpenRef.current) {
-            setPaletteOpen(false);
-            setMode("normal");
-            return;
-          }
-          if (dismissInspector()) {
-            return;
-          }
-          // Nothing to dismiss — just ensure we're in normal mode
-          setMode("normal");
-        },
       },
       {
         id: "app.search",
         name: "Find",
         keys: { vim: "/", cua: "Mod+F", emacs: "Mod+F" },
-        execute: () => {
-          setPaletteMode("search");
-          setPaletteOpen(true);
-          setMode("command");
-        },
       },
       {
         id: "app.help",
         name: "Help",
         keys: { vim: "F1", cua: "F1" },
-        execute: () => {},
       },
       {
         id: "app.quit",
         name: "Quit",
         keys: { cua: "Mod+Q", vim: "Mod+Q", emacs: "Mod+Q" },
-        execute: async () => {
-          await invoke("quit_app");
-        },
       },
       {
         id: "settings.keymap.vim",
         name: "Keymap Vim",
-        // No execute — dispatches to Rust via dispatch_command which mutates UIState
       },
       {
         id: "settings.keymap.cua",
         name: "Keymap CUA",
-        // No execute — dispatches to Rust via dispatch_command which mutates UIState
       },
       {
         id: "settings.keymap.emacs",
         name: "Keymap Emacs",
-        // No execute — dispatches to Rust via dispatch_command which mutates UIState
       },
       {
         id: "app.resetWindows",
         name: "Reset Windows",
-        execute: async () => {
-          await invoke("reset_windows");
-        },
       },
       {
         id: "file.newBoard",
         name: "New Board",
         keys: { cua: "Mod+N", vim: "Mod+N" },
-        execute: async () => {
-          await invoke("new_board_dialog");
-        },
       },
       {
         id: "file.openBoard",
         name: "Open Board",
         keys: { cua: "Mod+O", vim: "Mod+O" },
-        execute: async () => {
-          await invoke("open_board_dialog");
-        },
       },
       {
         id: "file.closeBoard",
         name: "Close Board",
         keys: { cua: "Mod+w", vim: "Mod+w" },
-        execute: async () => {
-          // activeBoardPath may be undefined if the board failed to load (trashed entry).
-          // Fall back to the is_active board from the openBoards list.
-          const path =
-            activeBoardPathRef.current ??
-            openBoards?.find((b) => b.is_active)?.path;
-          if (path) {
-            await invoke("dispatch_command", {
-              cmd: "file.closeBoard",
-              args: { path },
-              windowLabel: getCurrentWindow().label,
-            });
-          }
-        },
       },
       {
         id: "window.new",
         name: "New Window",
         keys: { cua: "Mod+Shift+N", vim: "Mod+Shift+N", emacs: "Mod+Shift+N" },
-        execute: async () => {
-          await invoke("create_window");
-        },
       },
       {
         id: "app.about",
         name: "About",
-        execute: () => {
-          // Tauri about dialog -- placeholder for now
-        },
       },
       // --- Universal navigation commands ---
       // These broadcast to all registered claimWhen predicates.
@@ -318,54 +248,59 @@ export function AppShell({
         id: "nav.up",
         name: "Navigate Up",
         keys: { vim: "k", cua: "ArrowUp", emacs: "Ctrl+p" },
-        execute: () => { broadcastRef.current("nav.up"); },
+        execute: () => {
+          broadcastRef.current("nav.up");
+        },
       },
       {
         id: "nav.down",
         name: "Navigate Down",
         keys: { vim: "j", cua: "ArrowDown", emacs: "Ctrl+n" },
-        execute: () => { broadcastRef.current("nav.down"); },
+        execute: () => {
+          broadcastRef.current("nav.down");
+        },
       },
       {
         id: "nav.left",
         name: "Navigate Left",
         keys: { vim: "h", cua: "ArrowLeft", emacs: "Ctrl+b" },
-        execute: () => { broadcastRef.current("nav.left"); },
+        execute: () => {
+          broadcastRef.current("nav.left");
+        },
       },
       {
         id: "nav.right",
         name: "Navigate Right",
         keys: { vim: "l", cua: "ArrowRight", emacs: "Ctrl+f" },
-        execute: () => { broadcastRef.current("nav.right"); },
+        execute: () => {
+          broadcastRef.current("nav.right");
+        },
       },
       {
         id: "nav.first",
         name: "Navigate to First",
         keys: { cua: "Home", emacs: "Alt+<" },
-        execute: () => { broadcastRef.current("nav.first"); },
+        execute: () => {
+          broadcastRef.current("nav.first");
+        },
       },
       {
         id: "nav.last",
         name: "Navigate to Last",
         keys: { vim: "Shift+G", cua: "End", emacs: "Alt+>" },
-        execute: () => { broadcastRef.current("nav.last"); },
+        execute: () => {
+          broadcastRef.current("nav.last");
+        },
       },
-      // Dynamic board switch commands — one per open board.
-      // Uses index as suffix to avoid filesystem paths in command IDs.
-      ...(openBoards ?? []).map((b, i) => ({
-        id: `board.switch.${i}`,
-        name: `Switch to Board ${b.name || pathStem(b.path)}`,
-        execute: () => onSwitchBoard?.(b.path),
-      })),
     ],
-    [setMode, dismissInspector, openBoards, onSwitchBoard],
+    [],
   );
 
-  /** Close the command palette and return to normal mode. */
+  /** Close the command palette (dispatch to backend) and return to normal mode. */
   const closePalette = useCallback(() => {
-    setPaletteOpen(false);
-    setMode("normal");
-  }, [setMode]);
+    // Dispatch app.dismiss to backend to close palette
+    dispatchCommand({ id: "app.dismiss", name: "Dismiss" });
+  }, []);
 
   return (
     <CommandScopeProvider commands={globalCommands}>

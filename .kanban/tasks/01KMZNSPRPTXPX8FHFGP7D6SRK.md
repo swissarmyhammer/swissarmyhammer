@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: doing
-position_ordinal: '80'
+position_column: done
+position_ordinal: fffffffffffffffa80
 title: Fix inspect command — backend ui.inspect must sync with frontend InspectProvider
 ---
 ## What

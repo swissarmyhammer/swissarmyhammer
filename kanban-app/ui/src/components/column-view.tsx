@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { backendDispatch } from "@/lib/command-scope";
 import { Plus } from "lucide-react";
 import { DropZone } from "@/components/drop-zone";
 import { computeDropZones, type DropZoneDescriptor } from "@/lib/drop-zones";
@@ -10,7 +10,10 @@ import { Badge } from "@/components/ui/badge";
 import { moniker, fieldMoniker } from "@/lib/moniker";
 import { useEntityCommands } from "@/lib/entity-commands";
 import { useSchema } from "@/lib/schema-context";
-import { useEntityFocus, type ClaimPredicate } from "@/lib/entity-focus-context";
+import {
+  useEntityFocus,
+  type ClaimPredicate,
+} from "@/lib/entity-focus-context";
 import type { CommandDef } from "@/lib/command-scope";
 import type { Entity } from "@/types/kanban";
 import { getStr } from "@/types/kanban";
@@ -169,7 +172,7 @@ export const ColumnView = memo(function ColumnView({
         execute: () => {
           const args: Record<string, unknown> = { id: taskId, column: "todo" };
           if (firstTodoTaskId) args.before_id = firstTodoTaskId;
-          invoke("dispatch_command", {
+          backendDispatch({
             cmd: "task.move",
             args,
             ...(boardPath ? { boardPath } : {}),
@@ -454,7 +457,7 @@ export const ColumnView = memo(function ColumnView({
                 // correct scope chain (column:todo → board:board) in UIState.
                 // The Rust resolve_entity_id reads the scope chain to find the column.
                 setFocus(columnMoniker);
-                invoke("dispatch_command", {
+                backendDispatch({
                   cmd: "task.add",
                   args: { title: "New task", column: column.id },
                   ...(boardPath ? { boardPath } : {}),

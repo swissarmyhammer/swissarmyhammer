@@ -171,10 +171,7 @@ mod tests {
             .expect("should deserialize clipboard payload");
         assert_eq!(payload.swissarmyhammer_clipboard.entity_type, "task");
         assert_eq!(payload.swissarmyhammer_clipboard.mode, "cut");
-        assert_eq!(
-            payload.swissarmyhammer_clipboard.fields["title"],
-            "Cut me"
-        );
+        assert_eq!(payload.swissarmyhammer_clipboard.fields["title"], "Cut me");
 
         // Verify the task is deleted
         let ectx = ctx.entity_context().await.unwrap();
@@ -202,11 +199,7 @@ mod tests {
         let id2 = result2["id"].as_str().unwrap();
 
         // Cut task 1
-        CutTask::new(id1)
-            .execute(&ctx)
-            .await
-            .into_result()
-            .unwrap();
+        CutTask::new(id1).execute(&ctx).await.into_result().unwrap();
 
         // Task 2 should no longer depend on task 1
         let ectx = ctx.entity_context().await.unwrap();
@@ -218,7 +211,10 @@ mod tests {
     async fn test_cut_nonexistent_task_fails() {
         let (_temp, ctx) = setup().await;
 
-        let result = CutTask::new("nonexistent").execute(&ctx).await.into_result();
+        let result = CutTask::new("nonexistent")
+            .execute(&ctx)
+            .await
+            .into_result();
         assert!(result.is_err());
     }
 }

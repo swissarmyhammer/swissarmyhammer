@@ -291,10 +291,7 @@ pub fn update_menu_enabled_state(state: &AppState) {
             return;
         }
     };
-    let fields = boards
-        .values()
-        .next()
-        .and_then(|h| h.ctx.fields());
+    let fields = boards.values().next().and_then(|h| h.ctx.fields());
 
     let registry = match state.commands_registry.try_read() {
         Ok(r) => r,
@@ -310,6 +307,7 @@ pub fn update_menu_enabled_state(state: &AppState) {
         fields,
         &state.ui_state,
         false,
+        None, // menus don't need dynamic view/board commands
     );
     drop(registry);
     drop(boards);
@@ -320,8 +318,24 @@ pub fn update_menu_enabled_state(state: &AppState) {
         .map(|c| (c.id.clone(), (c.name, c.available)))
         .collect();
 
-    // For fallback names when commands aren't available, strip templates
-    let registry2 = state.commands_registry.blocking_read();
+    // For fallback names when commands aren't available, strip templates.
+    // Use try_read to avoid blocking the tokio runtime when called from
+    // an async context (dispatch_command_internal is async).
+    let registry2 = match state.commands_registry.try_read() {
+        Ok(r) => r,
+        Err(_) => {
+            tracing::debug!("update_menu_enabled_state: skipping fallback — registry lock busy");
+            // Still apply the resolved names/enabled states we have
+            let menu_items = state.menu_items.lock().unwrap();
+            for (cmd_id, menu_item) in menu_items.iter() {
+                if let Some((name, enabled)) = resolved_map.get(cmd_id) {
+                    let _ = menu_item.set_enabled(*enabled);
+                    let _ = menu_item.set_text(name);
+                }
+            }
+            return;
+        }
+    };
     let menu_items = state.menu_items.lock().unwrap();
     for (cmd_id, menu_item) in menu_items.iter() {
         if let Some((name, enabled)) = resolved_map.get(cmd_id) {
@@ -516,15 +530,18 @@ async fn open_and_notify(handle: &AppHandle, path: &Path, source_window_label: O
     let path_str = path.display().to_string();
     let window_label = source_window_label.unwrap_or("main").to_string();
 
+    // Build a synthetic scope chain with the window moniker so the backend
+    // can derive window identity from the scope chain alone.
+    let synthetic_scope = vec![format!("window:{}", window_label)];
+
     match crate::commands::dispatch_command_internal(
         handle,
         &state,
         "file.switchBoard",
-        None,
+        Some(synthetic_scope),
         None,
         Some(json!({ "path": path_str, "windowLabel": window_label })),
         None,
-        Some(window_label.clone()),
     )
     .await
     {
@@ -536,11 +553,16 @@ async fn open_and_notify(handle: &AppHandle, path: &Path, source_window_label: O
                 .and_then(|p| p.canonicalize().ok().or(Some(p)))
                 .unwrap_or_else(|| path.to_path_buf());
 
-            // Emit board-opened to the source window only so it switches its active board.
-            // dispatch_command_internal already emits board-changed to all windows.
+            // Emit board-opened so the originating window switches its active board.
+            // Use emit_to when we know which window triggered the open; fall back
+            // to a global emit so the event always reaches at least one listener
+            // (focused_window_label can return None when OS focus shifts during
+            // native dialogs or menu interactions).
             let payload = json!({ "path": canonical.display().to_string() });
             if let Some(label) = source_window_label {
                 let _ = handle.emit_to(label, "board-opened", &payload);
+            } else {
+                let _ = handle.emit("board-opened", &payload);
             }
         }
         Err(e) => {

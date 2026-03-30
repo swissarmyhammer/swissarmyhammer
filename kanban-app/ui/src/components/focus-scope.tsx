@@ -13,7 +13,10 @@ import {
   type CommandDef,
   type CommandScope,
 } from "@/lib/command-scope";
-import { useEntityFocus, type ClaimPredicate } from "@/lib/entity-focus-context";
+import {
+  useEntityFocus,
+  type ClaimPredicate,
+} from "@/lib/entity-focus-context";
 import { useContextMenu } from "@/lib/context-menu";
 import { FocusHighlight } from "@/components/ui/focus-highlight";
 
@@ -135,8 +138,10 @@ export function FocusScope({
 }
 
 /** Props for the inner focus-scope wrapper rendered inside CommandScopeContext. */
-interface FocusScopeInnerProps
-  extends Omit<React.HTMLAttributes<HTMLElement>, "onClick" | "children"> {
+interface FocusScopeInnerProps extends Omit<
+  React.HTMLAttributes<HTMLElement>,
+  "onClick" | "children"
+> {
   moniker: string;
   isDirectFocus: boolean;
   onClick: React.MouseEventHandler<HTMLElement>;
@@ -218,4 +223,3 @@ function FocusScopeInner({
 export function useParentFocusScope(): string | null {
   return useContext(FocusScopeContext);
 }
-

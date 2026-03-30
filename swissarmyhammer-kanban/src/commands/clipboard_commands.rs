@@ -94,10 +94,7 @@ impl Command for CutCmd {
                 .read("tag", tag_id)
                 .await
                 .map_err(|e| CommandError::ExecutionFailed(e.to_string()))?;
-            let tag_name = tag_entity
-                .get_str("tag_name")
-                .unwrap_or(tag_id)
-                .to_string();
+            let tag_name = tag_entity.get_str("tag_name").unwrap_or(tag_id).to_string();
 
             let op = crate::tag::CutTag::new(task_id, tag_name);
             (run_op(&op, &kanban).await?, "tag")
@@ -164,13 +161,9 @@ impl Command for PasteCmd {
         match entity_type.as_str() {
             "tag" => {
                 // Paste tag onto focused task
-                let task_id = ctx
-                    .resolve_entity_id("task")
-                    .ok_or_else(|| {
-                        CommandError::ExecutionFailed(
-                            "paste tag requires a task in scope".into(),
-                        )
-                    })?;
+                let task_id = ctx.resolve_entity_id("task").ok_or_else(|| {
+                    CommandError::ExecutionFailed("paste tag requires a task in scope".into())
+                })?;
                 let op = crate::tag::PasteTag::new(task_id, clipboard_text);
                 run_op(&op, &kanban).await
             }
@@ -253,14 +246,26 @@ mod tests {
     #[tokio::test]
     async fn copy_available_with_task_in_scope() {
         let (_temp, kanban, clipboard, ui) = setup().await;
-        let ctx = make_ctx("entity.copy", &["task:01X", "column:todo"], &kanban, &clipboard, &ui);
+        let ctx = make_ctx(
+            "entity.copy",
+            &["task:01X", "column:todo"],
+            &kanban,
+            &clipboard,
+            &ui,
+        );
         assert!(CopyCmd.available(&ctx));
     }
 
     #[tokio::test]
     async fn copy_available_with_tag_in_scope() {
         let (_temp, kanban, clipboard, ui) = setup().await;
-        let ctx = make_ctx("entity.copy", &["tag:01X", "task:01T", "column:todo"], &kanban, &clipboard, &ui);
+        let ctx = make_ctx(
+            "entity.copy",
+            &["tag:01X", "task:01T", "column:todo"],
+            &kanban,
+            &clipboard,
+            &ui,
+        );
         assert!(CopyCmd.available(&ctx));
     }
 
@@ -292,14 +297,26 @@ mod tests {
     #[tokio::test]
     async fn cut_available_with_task_in_scope() {
         let (_temp, kanban, clipboard, ui) = setup().await;
-        let ctx = make_ctx("entity.cut", &["task:01X", "column:todo"], &kanban, &clipboard, &ui);
+        let ctx = make_ctx(
+            "entity.cut",
+            &["task:01X", "column:todo"],
+            &kanban,
+            &clipboard,
+            &ui,
+        );
         assert!(CutCmd.available(&ctx));
     }
 
     #[tokio::test]
     async fn cut_available_with_tag_in_scope() {
         let (_temp, kanban, clipboard, ui) = setup().await;
-        let ctx = make_ctx("entity.cut", &["tag:01X", "task:01T", "column:todo"], &kanban, &clipboard, &ui);
+        let ctx = make_ctx(
+            "entity.cut",
+            &["tag:01X", "task:01T", "column:todo"],
+            &kanban,
+            &clipboard,
+            &ui,
+        );
         assert!(CutCmd.available(&ctx));
     }
 
@@ -326,7 +343,13 @@ mod tests {
     async fn paste_task_available_with_board() {
         let (_temp, kanban, clipboard, ui) = setup().await;
         ui.set_clipboard_entity_type("task");
-        let ctx = make_ctx("entity.paste", &["board:my-board"], &kanban, &clipboard, &ui);
+        let ctx = make_ctx(
+            "entity.paste",
+            &["board:my-board"],
+            &kanban,
+            &clipboard,
+            &ui,
+        );
         assert!(PasteCmd.available(&ctx));
     }
 
@@ -334,7 +357,13 @@ mod tests {
     async fn paste_tag_available_with_task() {
         let (_temp, kanban, clipboard, ui) = setup().await;
         ui.set_clipboard_entity_type("tag");
-        let ctx = make_ctx("entity.paste", &["task:01X", "column:todo"], &kanban, &clipboard, &ui);
+        let ctx = make_ctx(
+            "entity.paste",
+            &["task:01X", "column:todo"],
+            &kanban,
+            &clipboard,
+            &ui,
+        );
         assert!(PasteCmd.available(&ctx));
     }
 
@@ -343,15 +372,27 @@ mod tests {
         let (_temp, kanban, clipboard, ui) = setup().await;
         ui.set_clipboard_entity_type("tag");
         let ctx = make_ctx("entity.paste", &["column:todo"], &kanban, &clipboard, &ui);
-        assert!(!PasteCmd.available(&ctx), "paste tag requires task in scope");
+        assert!(
+            !PasteCmd.available(&ctx),
+            "paste tag requires task in scope"
+        );
     }
 
     #[tokio::test]
     async fn paste_tag_not_available_on_board_only() {
         let (_temp, kanban, clipboard, ui) = setup().await;
         ui.set_clipboard_entity_type("tag");
-        let ctx = make_ctx("entity.paste", &["board:my-board"], &kanban, &clipboard, &ui);
-        assert!(!PasteCmd.available(&ctx), "paste tag requires task in scope");
+        let ctx = make_ctx(
+            "entity.paste",
+            &["board:my-board"],
+            &kanban,
+            &clipboard,
+            &ui,
+        );
+        assert!(
+            !PasteCmd.available(&ctx),
+            "paste tag requires task in scope"
+        );
     }
 
     #[tokio::test]
@@ -359,7 +400,10 @@ mod tests {
         let (_temp, kanban, clipboard, ui) = setup().await;
         ui.set_clipboard_entity_type("task");
         let ctx = make_ctx("entity.paste", &["task:01X"], &kanban, &clipboard, &ui);
-        assert!(!PasteCmd.available(&ctx), "paste task requires column/board in scope");
+        assert!(
+            !PasteCmd.available(&ctx),
+            "paste task requires column/board in scope"
+        );
     }
 
     #[tokio::test]
@@ -385,10 +429,20 @@ mod tests {
     #[tokio::test]
     async fn copy_task_puts_task_on_clipboard() {
         let (_temp, kanban, clipboard, ui) = setup().await;
-        let add = AddTask::new("My task").execute(kanban.as_ref()).await.into_result().unwrap();
+        let add = AddTask::new("My task")
+            .execute(kanban.as_ref())
+            .await
+            .into_result()
+            .unwrap();
         let task_id = add["id"].as_str().unwrap();
 
-        let ctx = make_ctx("entity.copy", &[&format!("task:{task_id}"), "column:todo"], &kanban, &clipboard, &ui);
+        let ctx = make_ctx(
+            "entity.copy",
+            &[&format!("task:{task_id}"), "column:todo"],
+            &kanban,
+            &clipboard,
+            &ui,
+        );
         let result = CopyCmd.execute(&ctx).await.unwrap();
         assert_eq!(result["copied"], true);
         assert!(ui.has_clipboard());
@@ -403,10 +457,20 @@ mod tests {
     #[tokio::test]
     async fn copy_tag_puts_tag_on_clipboard() {
         let (_temp, kanban, clipboard, ui) = setup().await;
-        let add = crate::tag::AddTag::new("bug").execute(kanban.as_ref()).await.into_result().unwrap();
+        let add = crate::tag::AddTag::new("bug")
+            .execute(kanban.as_ref())
+            .await
+            .into_result()
+            .unwrap();
         let tag_id = add["id"].as_str().unwrap();
 
-        let ctx = make_ctx("entity.copy", &[&format!("tag:{tag_id}"), "task:01T", "column:todo"], &kanban, &clipboard, &ui);
+        let ctx = make_ctx(
+            "entity.copy",
+            &[&format!("tag:{tag_id}"), "task:01T", "column:todo"],
+            &kanban,
+            &clipboard,
+            &ui,
+        );
         let result = CopyCmd.execute(&ctx).await.unwrap();
         assert_eq!(result["entity_type"], "tag");
         assert!(ui.has_clipboard());
@@ -422,18 +486,39 @@ mod tests {
     async fn copy_tag_wins_over_task_when_both_in_scope() {
         // Tag is innermost — copy should copy the tag, not the task
         let (_temp, kanban, clipboard, ui) = setup().await;
-        let add_task = AddTask::new("Task").execute(kanban.as_ref()).await.into_result().unwrap();
+        let add_task = AddTask::new("Task")
+            .execute(kanban.as_ref())
+            .await
+            .into_result()
+            .unwrap();
         let task_id = add_task["id"].as_str().unwrap();
-        let add_tag = crate::tag::AddTag::new("priority").execute(kanban.as_ref()).await.into_result().unwrap();
+        let add_tag = crate::tag::AddTag::new("priority")
+            .execute(kanban.as_ref())
+            .await
+            .into_result()
+            .unwrap();
         let tag_id = add_tag["id"].as_str().unwrap();
 
         // Tag is first in scope (innermost)
-        let ctx = make_ctx("entity.copy", &[&format!("tag:{tag_id}"), &format!("task:{task_id}"), "column:todo"], &kanban, &clipboard, &ui);
+        let ctx = make_ctx(
+            "entity.copy",
+            &[
+                &format!("tag:{tag_id}"),
+                &format!("task:{task_id}"),
+                "column:todo",
+            ],
+            &kanban,
+            &clipboard,
+            &ui,
+        );
         CopyCmd.execute(&ctx).await.unwrap();
 
         let text = clipboard.0.read_text().await.unwrap().unwrap();
         let payload = clipboard::deserialize_from_clipboard(&text).unwrap();
-        assert_eq!(payload.swissarmyhammer_clipboard.entity_type, "tag", "tag should win over task");
+        assert_eq!(
+            payload.swissarmyhammer_clipboard.entity_type, "tag",
+            "tag should win over task"
+        );
     }
 
     // =========================================================================
@@ -443,10 +528,20 @@ mod tests {
     #[tokio::test]
     async fn cut_task_deletes_and_puts_on_clipboard() {
         let (_temp, kanban, clipboard, ui) = setup().await;
-        let add = AddTask::new("Cut me").execute(kanban.as_ref()).await.into_result().unwrap();
+        let add = AddTask::new("Cut me")
+            .execute(kanban.as_ref())
+            .await
+            .into_result()
+            .unwrap();
         let task_id = add["id"].as_str().unwrap();
 
-        let ctx = make_ctx("entity.cut", &[&format!("task:{task_id}"), "column:todo"], &kanban, &clipboard, &ui);
+        let ctx = make_ctx(
+            "entity.cut",
+            &[&format!("task:{task_id}"), "column:todo"],
+            &kanban,
+            &clipboard,
+            &ui,
+        );
         let result = CutCmd.execute(&ctx).await.unwrap();
         assert_eq!(result["cut"], true);
         assert!(ui.has_clipboard());
@@ -464,14 +559,31 @@ mod tests {
     #[tokio::test]
     async fn cut_tag_untags_from_task_and_puts_on_clipboard() {
         let (_temp, kanban, clipboard, ui) = setup().await;
-        let add = AddTask::new("Tagged").with_description("Fix #bug").execute(kanban.as_ref()).await.into_result().unwrap();
+        let add = AddTask::new("Tagged")
+            .with_description("Fix #bug")
+            .execute(kanban.as_ref())
+            .await
+            .into_result()
+            .unwrap();
         let task_id = add["id"].as_str().unwrap();
 
         let ectx = kanban.entity_context().await.unwrap();
-        let tag = crate::tag::find_tag_entity_by_name(&ectx, "bug").await.unwrap();
+        let tag = crate::tag::find_tag_entity_by_name(&ectx, "bug")
+            .await
+            .unwrap();
         let tag_id = tag.id.to_string();
 
-        let ctx = make_ctx("entity.cut", &[&format!("tag:{tag_id}"), &format!("task:{task_id}"), "column:todo"], &kanban, &clipboard, &ui);
+        let ctx = make_ctx(
+            "entity.cut",
+            &[
+                &format!("tag:{tag_id}"),
+                &format!("task:{task_id}"),
+                "column:todo",
+            ],
+            &kanban,
+            &clipboard,
+            &ui,
+        );
         let result = CutCmd.execute(&ctx).await.unwrap();
         assert_eq!(result["cut"], true);
         assert_eq!(result["tag"], "bug");
@@ -493,11 +605,21 @@ mod tests {
     #[tokio::test]
     async fn paste_task_into_column_creates_new_task() {
         let (_temp, kanban, clipboard, ui) = setup().await;
-        let add = AddTask::new("Source").execute(kanban.as_ref()).await.into_result().unwrap();
+        let add = AddTask::new("Source")
+            .execute(kanban.as_ref())
+            .await
+            .into_result()
+            .unwrap();
         let task_id = add["id"].as_str().unwrap();
 
         // Copy the task
-        let copy_ctx = make_ctx("entity.copy", &[&format!("task:{task_id}"), "column:todo"], &kanban, &clipboard, &ui);
+        let copy_ctx = make_ctx(
+            "entity.copy",
+            &[&format!("task:{task_id}"), "column:todo"],
+            &kanban,
+            &clipboard,
+            &ui,
+        );
         CopyCmd.execute(&copy_ctx).await.unwrap();
 
         // Paste into doing column
@@ -515,15 +637,30 @@ mod tests {
     #[tokio::test]
     async fn paste_tag_onto_task_tags_it() {
         let (_temp, kanban, clipboard, ui) = setup().await;
-        let add = AddTask::new("Target").execute(kanban.as_ref()).await.into_result().unwrap();
+        let add = AddTask::new("Target")
+            .execute(kanban.as_ref())
+            .await
+            .into_result()
+            .unwrap();
         let task_id = add["id"].as_str().unwrap();
 
         // Put tag on clipboard
-        let clip = clipboard::serialize_to_clipboard("tag", "01FAKE", "copy", serde_json::json!({"tag_name": "urgent", "color": "ff0000"}));
+        let clip = clipboard::serialize_to_clipboard(
+            "tag",
+            "01FAKE",
+            "copy",
+            serde_json::json!({"tag_name": "urgent", "color": "ff0000"}),
+        );
         clipboard.0.write_text(&clip).await.unwrap();
         ui.set_has_clipboard(true);
 
-        let ctx = make_ctx("entity.paste", &[&format!("task:{task_id}"), "column:todo"], &kanban, &clipboard, &ui);
+        let ctx = make_ctx(
+            "entity.paste",
+            &[&format!("task:{task_id}"), "column:todo"],
+            &kanban,
+            &clipboard,
+            &ui,
+        );
         let result = PasteCmd.execute(&ctx).await.unwrap();
         assert_eq!(result["pasted"], true);
         assert_eq!(result["tag"], "urgent");
@@ -536,14 +673,30 @@ mod tests {
     #[tokio::test]
     async fn paste_tag_onto_task_noop_if_already_tagged() {
         let (_temp, kanban, clipboard, ui) = setup().await;
-        let add = AddTask::new("Already tagged").with_description("Has #bug").execute(kanban.as_ref()).await.into_result().unwrap();
+        let add = AddTask::new("Already tagged")
+            .with_description("Has #bug")
+            .execute(kanban.as_ref())
+            .await
+            .into_result()
+            .unwrap();
         let task_id = add["id"].as_str().unwrap();
 
-        let clip = clipboard::serialize_to_clipboard("tag", "01FAKE", "copy", serde_json::json!({"tag_name": "bug", "color": "ff0000"}));
+        let clip = clipboard::serialize_to_clipboard(
+            "tag",
+            "01FAKE",
+            "copy",
+            serde_json::json!({"tag_name": "bug", "color": "ff0000"}),
+        );
         clipboard.0.write_text(&clip).await.unwrap();
         ui.set_has_clipboard(true);
 
-        let ctx = make_ctx("entity.paste", &[&format!("task:{task_id}"), "column:todo"], &kanban, &clipboard, &ui);
+        let ctx = make_ctx(
+            "entity.paste",
+            &[&format!("task:{task_id}"), "column:todo"],
+            &kanban,
+            &clipboard,
+            &ui,
+        );
         let result = PasteCmd.execute(&ctx).await.unwrap();
         assert_eq!(result["pasted"], false);
         assert_eq!(result["already_tagged"], true);
@@ -554,7 +707,12 @@ mod tests {
         let (_temp, kanban, clipboard, ui) = setup().await;
 
         // Put task on clipboard
-        let clip = clipboard::serialize_to_clipboard("task", "01FAKE", "copy", serde_json::json!({"title": "A task"}));
+        let clip = clipboard::serialize_to_clipboard(
+            "task",
+            "01FAKE",
+            "copy",
+            serde_json::json!({"title": "A task"}),
+        );
         clipboard.0.write_text(&clip).await.unwrap();
         ui.set_has_clipboard(true);
 
@@ -569,7 +727,12 @@ mod tests {
         let (_temp, kanban, clipboard, ui) = setup().await;
 
         // Put tag on clipboard
-        let clip = clipboard::serialize_to_clipboard("tag", "01FAKE", "copy", serde_json::json!({"tag_name": "bug"}));
+        let clip = clipboard::serialize_to_clipboard(
+            "tag",
+            "01FAKE",
+            "copy",
+            serde_json::json!({"tag_name": "bug"}),
+        );
         clipboard.0.write_text(&clip).await.unwrap();
         ui.set_has_clipboard(true);
 
@@ -588,24 +751,51 @@ mod tests {
         let (_temp, kanban, clipboard, ui) = setup().await;
 
         // Create task A with a tag
-        let a = AddTask::new("Task A").with_description("Has #bug").execute(kanban.as_ref()).await.into_result().unwrap();
+        let a = AddTask::new("Task A")
+            .with_description("Has #bug")
+            .execute(kanban.as_ref())
+            .await
+            .into_result()
+            .unwrap();
         let a_id = a["id"].as_str().unwrap();
 
         // Create task B without the tag
-        let b = AddTask::new("Task B").execute(kanban.as_ref()).await.into_result().unwrap();
+        let b = AddTask::new("Task B")
+            .execute(kanban.as_ref())
+            .await
+            .into_result()
+            .unwrap();
         let b_id = b["id"].as_str().unwrap();
 
         // Find the tag entity
         let ectx = kanban.entity_context().await.unwrap();
-        let tag = crate::tag::find_tag_entity_by_name(&ectx, "bug").await.unwrap();
+        let tag = crate::tag::find_tag_entity_by_name(&ectx, "bug")
+            .await
+            .unwrap();
         let tag_id = tag.id.to_string();
 
         // Copy the tag (from task A's scope)
-        let copy_ctx = make_ctx("entity.copy", &[&format!("tag:{tag_id}"), &format!("task:{a_id}"), "column:todo"], &kanban, &clipboard, &ui);
+        let copy_ctx = make_ctx(
+            "entity.copy",
+            &[
+                &format!("tag:{tag_id}"),
+                &format!("task:{a_id}"),
+                "column:todo",
+            ],
+            &kanban,
+            &clipboard,
+            &ui,
+        );
         CopyCmd.execute(&copy_ctx).await.unwrap();
 
         // Paste onto task B
-        let paste_ctx = make_ctx("entity.paste", &[&format!("task:{b_id}"), "column:todo"], &kanban, &clipboard, &ui);
+        let paste_ctx = make_ctx(
+            "entity.paste",
+            &[&format!("task:{b_id}"), "column:todo"],
+            &kanban,
+            &clipboard,
+            &ui,
+        );
         let result = PasteCmd.execute(&paste_ctx).await.unwrap();
         assert_eq!(result["pasted"], true);
         assert_eq!(result["tag"], "bug");
@@ -628,19 +818,40 @@ mod tests {
         let (_temp, kanban, clipboard, ui) = setup().await;
 
         // Create task A with a tag
-        let a = AddTask::new("Task A").with_description("Has #bug").execute(kanban.as_ref()).await.into_result().unwrap();
+        let a = AddTask::new("Task A")
+            .with_description("Has #bug")
+            .execute(kanban.as_ref())
+            .await
+            .into_result()
+            .unwrap();
         let a_id = a["id"].as_str().unwrap();
 
         // Create task B
-        let b = AddTask::new("Task B").execute(kanban.as_ref()).await.into_result().unwrap();
+        let b = AddTask::new("Task B")
+            .execute(kanban.as_ref())
+            .await
+            .into_result()
+            .unwrap();
         let b_id = b["id"].as_str().unwrap();
 
         let ectx = kanban.entity_context().await.unwrap();
-        let tag = crate::tag::find_tag_entity_by_name(&ectx, "bug").await.unwrap();
+        let tag = crate::tag::find_tag_entity_by_name(&ectx, "bug")
+            .await
+            .unwrap();
         let tag_id = tag.id.to_string();
 
         // Cut the tag from task A
-        let cut_ctx = make_ctx("entity.cut", &[&format!("tag:{tag_id}"), &format!("task:{a_id}"), "column:todo"], &kanban, &clipboard, &ui);
+        let cut_ctx = make_ctx(
+            "entity.cut",
+            &[
+                &format!("tag:{tag_id}"),
+                &format!("task:{a_id}"),
+                "column:todo",
+            ],
+            &kanban,
+            &clipboard,
+            &ui,
+        );
         CutCmd.execute(&cut_ctx).await.unwrap();
 
         // Task A should no longer have #bug
@@ -648,7 +859,13 @@ mod tests {
         assert!(!task_a.get_str("body").unwrap_or("").contains("#bug"));
 
         // Paste onto task B
-        let paste_ctx = make_ctx("entity.paste", &[&format!("task:{b_id}"), "column:todo"], &kanban, &clipboard, &ui);
+        let paste_ctx = make_ctx(
+            "entity.paste",
+            &[&format!("task:{b_id}"), "column:todo"],
+            &kanban,
+            &clipboard,
+            &ui,
+        );
         let result = PasteCmd.execute(&paste_ctx).await.unwrap();
         assert_eq!(result["pasted"], true);
 

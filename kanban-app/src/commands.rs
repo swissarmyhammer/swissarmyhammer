@@ -840,19 +840,8 @@ pub async fn dispatch_command(
     target: Option<String>,
     args: Option<Value>,
     board_path: Option<String>,
-    window_label: Option<String>,
 ) -> Result<Value, String> {
-    dispatch_command_internal(
-        &app,
-        &state,
-        &cmd,
-        scope_chain,
-        target,
-        args,
-        board_path,
-        window_label,
-    )
-    .await
+    dispatch_command_internal(&app, &state, &cmd, scope_chain, target, args, board_path).await
 }
 
 /// Internal dispatch — single path for all state-mutating command execution.
@@ -869,8 +858,6 @@ pub async fn dispatch_command(
 /// - `target` - Optional target entity ID
 /// - `args` - Optional JSON object of command arguments
 /// - `board_path` - Optional board path for multi-window targeting
-/// - `window_label` - Optional window label for UIState context
-#[allow(clippy::too_many_arguments)]
 pub(crate) async fn dispatch_command_internal(
     app: &AppHandle,
     state: &AppState,
@@ -879,7 +866,6 @@ pub(crate) async fn dispatch_command_internal(
     target: Option<String>,
     args: Option<Value>,
     board_path: Option<String>,
-    window_label: Option<String>,
 ) -> Result<Value, String> {
     // Validate command ID: non-empty, reasonable length, ASCII-only
     if cmd.is_empty() || cmd.len() > 128 || !cmd.is_ascii() {
@@ -894,6 +880,45 @@ pub(crate) async fn dispatch_command_internal(
         board_path = ?board_path,
         "command"
     );
+
+    // Intercept dynamic palette commands (view.switch:*, board.switch:*)
+    // and delegate to their real command implementations with proper args.
+    if let Some(view_id) = cmd.strip_prefix("view.switch:") {
+        tracing::info!(view_id = %view_id, "redirecting view.switch to ui.view.set");
+        let mut merged_args = match args {
+            Some(Value::Object(map)) => map,
+            _ => serde_json::Map::new(),
+        };
+        merged_args.insert("view_id".into(), Value::String(view_id.to_string()));
+        return Box::pin(dispatch_command_internal(
+            app,
+            state,
+            "ui.view.set",
+            scope_chain,
+            target,
+            Some(Value::Object(merged_args)),
+            board_path,
+        ))
+        .await;
+    }
+    if let Some(board_path_suffix) = cmd.strip_prefix("board.switch:") {
+        tracing::info!(board_path = %board_path_suffix, "redirecting board.switch to file.switchBoard");
+        let mut merged_args = match args {
+            Some(Value::Object(map)) => map,
+            _ => serde_json::Map::new(),
+        };
+        merged_args.insert("path".into(), Value::String(board_path_suffix.to_string()));
+        return Box::pin(dispatch_command_internal(
+            app,
+            state,
+            "file.switchBoard",
+            scope_chain,
+            target,
+            Some(Value::Object(merged_args)),
+            Some(board_path_suffix.to_string()),
+        ))
+        .await;
+    }
 
     // Resolve scope chain: explicit > stored focus
     let scope = match scope_chain {
@@ -926,9 +951,6 @@ pub(crate) async fn dispatch_command_internal(
     let mut ctx =
         swissarmyhammer_commands::CommandContext::new(cmd.to_string(), scope, target, args_map);
     ctx = ctx.with_ui_state(Arc::clone(&state.ui_state));
-    if let Some(ref label) = window_label {
-        ctx = ctx.with_window_label(label.clone());
-    }
 
     // Set KanbanContext extension if board is open.
     // Uses board_path when provided (multi-window) to avoid targeting the wrong board.
@@ -1002,7 +1024,7 @@ pub(crate) async fn dispatch_command_internal(
         }
     }
 
-    // Handle UI-triggering command results: dialogs, window creation.
+    // Handle UI-triggering command results: dialogs, window creation, quit, reset.
     if result.get("NewBoardDialog").is_some() {
         menu::trigger_new_board(app);
     }
@@ -1011,6 +1033,12 @@ pub(crate) async fn dispatch_command_internal(
     }
     if result.get("CreateWindow").is_some() {
         create_window_internal(app, state).await;
+    }
+    if result.get("quit").is_some() {
+        app.exit(0);
+    }
+    if result.get("ResetWindows").is_some() {
+        app.restart();
     }
 
     // Emit drag-session-active event when drag.start completes successfully.
@@ -1244,11 +1272,7 @@ pub async fn list_available_commands(
                 // that the command's scope requirement matches
                 resolve_entity_type_from_scope(&scope, def)
             };
-            let capitalized = format!(
-                "{}{}",
-                &resolved[..1].to_uppercase(),
-                &resolved[1..]
-            );
+            let capitalized = format!("{}{}", &resolved[..1].to_uppercase(), &resolved[1..]);
             def.name = def.name.replace("{{entity.type}}", &capitalized);
         }
     }
@@ -1288,11 +1312,53 @@ pub async fn list_commands_for_scope(
     context_menu: Option<bool>,
 ) -> Result<Value, String> {
     let active_handle = state.active_handle().await;
-    let fields = active_handle
-        .as_ref()
-        .and_then(|h| h.ctx.fields());
+    let fields = active_handle.as_ref().and_then(|h| h.ctx.fields());
 
     let registry = state.commands_registry.read().await;
+
+    // Build dynamic sources: views from the active board, open boards from UIState.
+    let dynamic = {
+        use swissarmyhammer_kanban::scope_commands::{BoardInfo, DynamicSources, ViewInfo};
+
+        // Gather views from the active board handle
+        let mut views = Vec::new();
+        if let Some(handle) = active_handle.as_ref() {
+            if let Some(views_lock) = handle.ctx.views() {
+                if let Ok(vc) = views_lock.try_read() {
+                    for v in vc.all_views() {
+                        views.push(ViewInfo {
+                            id: v.id.clone(),
+                            name: v.name.clone(),
+                        });
+                    }
+                }
+            }
+        }
+
+        // Gather open boards from UIState
+        let open_paths = state.ui_state.open_boards();
+        let boards: Vec<BoardInfo> = open_paths
+            .iter()
+            .map(|path| {
+                // Use the parent directory name as the display name.
+                // Board paths end in `.kanban`, so file_name() would just
+                // return ".kanban" — the parent is the meaningful project name.
+                let p = std::path::Path::new(path);
+                let name = p
+                    .parent()
+                    .and_then(|parent| parent.file_name())
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("Board")
+                    .to_string();
+                BoardInfo {
+                    path: path.clone(),
+                    name,
+                }
+            })
+            .collect();
+
+        DynamicSources { views, boards }
+    };
 
     let result = swissarmyhammer_kanban::scope_commands::commands_for_scope(
         &scope_chain,
@@ -1301,6 +1367,7 @@ pub async fn list_commands_for_scope(
         fields,
         &state.ui_state,
         context_menu == Some(true),
+        Some(&dynamic),
     );
 
     serde_json::to_value(&result).map_err(|e| e.to_string())

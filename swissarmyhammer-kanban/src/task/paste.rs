@@ -61,11 +61,9 @@ impl Execute<KanbanContext, KanbanError> for PasteTask {
 
         let result: Result<Value> = async {
             // Deserialize and validate clipboard payload
-            let payload = clipboard::deserialize_from_clipboard(&self.clipboard_json)
-                .ok_or_else(|| {
-                    KanbanError::parse(
-                        "clipboard does not contain valid swissarmyhammer data",
-                    )
+            let payload =
+                clipboard::deserialize_from_clipboard(&self.clipboard_json).ok_or_else(|| {
+                    KanbanError::parse("clipboard does not contain valid swissarmyhammer data")
                 })?;
 
             let data = &payload.swissarmyhammer_clipboard;
@@ -84,9 +82,7 @@ impl Execute<KanbanContext, KanbanError> for PasteTask {
                 let all_tasks = ectx.list("task").await?;
                 let mut col_tasks: Vec<_> = all_tasks
                     .into_iter()
-                    .filter(|t| {
-                        t.get_str("position_column") == Some(self.column.as_str())
-                    })
+                    .filter(|t| t.get_str("position_column") == Some(self.column.as_str()))
                     .collect();
                 col_tasks.sort_by(|a, b| {
                     let oa = a
@@ -179,7 +175,11 @@ impl Execute<KanbanContext, KanbanError> for PasteTask {
 
             // Fields to copy from the source entity
             let copy_fields = [
-                "title", "body", "assignees", "depends_on", "position_swimlane",
+                "title",
+                "body",
+                "assignees",
+                "depends_on",
+                "position_swimlane",
             ];
 
             for field_name in &copy_fields {
@@ -332,15 +332,11 @@ mod tests {
         let fields = json!({"title": "Pasted"});
         let clipboard_json = clipboard::serialize_to_clipboard("task", "01SRC", "copy", fields);
 
-        let result = PasteTask::new(
-            "todo",
-            Some(TaskId::from_string(&id_a)),
-            clipboard_json,
-        )
-        .execute(&ctx)
-        .await
-        .into_result()
-        .unwrap();
+        let result = PasteTask::new("todo", Some(TaskId::from_string(&id_a)), clipboard_json)
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
 
         let pasted_ordinal = result["position"]["ordinal"].as_str().unwrap();
 

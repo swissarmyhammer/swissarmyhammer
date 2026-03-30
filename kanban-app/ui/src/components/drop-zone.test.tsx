@@ -19,7 +19,6 @@ vi.mock("@tauri-apps/plugin-log", () => ({
 import { DropZone } from "./drop-zone";
 import type { DropZoneDescriptor } from "@/lib/drop-zones";
 
-
 describe("DropZone", () => {
   const baseDescriptor: DropZoneDescriptor = {
     key: "before-task-2",

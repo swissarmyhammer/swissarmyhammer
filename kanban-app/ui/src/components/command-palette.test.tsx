@@ -7,6 +7,7 @@ vi.mock("@tauri-apps/api/core", () => ({
     if (cmd === "get_ui_state")
       return Promise.resolve({
         palette_open: false,
+        palette_mode: "command",
         keymap_mode: "cua",
         scope_chain: [],
         open_boards: [],
@@ -42,12 +43,39 @@ vi.mock("@tauri-apps/api/core", () => ({
         ),
       );
     }
+    if (cmd === "list_commands_for_scope")
+      return Promise.resolve([
+        {
+          id: "open-file",
+          name: "Open File",
+          context_menu: false,
+          keys: { vim: ":e", cua: "Ctrl+O" },
+          available: true,
+        },
+        {
+          id: "save-file",
+          name: "Save File",
+          context_menu: false,
+          keys: { vim: ":w", cua: "Ctrl+S" },
+          available: true,
+        },
+        {
+          id: "close-tab",
+          name: "Close Tab",
+          context_menu: false,
+          keys: { cua: "Ctrl+W" },
+          available: true,
+        },
+      ]);
     if (cmd === "log_command") return Promise.resolve(null);
     return Promise.resolve(null);
   }),
 }));
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(() => Promise.resolve(() => {})),
+}));
+vi.mock("@tauri-apps/api/window", () => ({
+  getCurrentWindow: () => ({ label: "main" }),
 }));
 
 // Mock codemirror-vim: getCM returns a cm object, Vim.handleKey is the spy
@@ -124,15 +152,19 @@ describe("CommandPalette", () => {
     expect(screen.getByTestId("command-palette")).toBeTruthy();
   });
 
-  it("shows all commands when no filter is applied", () => {
-    renderPalette(true);
+  it("shows all commands when no filter is applied", async () => {
+    await act(async () => {
+      renderPalette(true);
+    });
     expect(screen.getByText("Open File")).toBeTruthy();
     expect(screen.getByText("Save File")).toBeTruthy();
     expect(screen.getByText("Close Tab")).toBeTruthy();
   });
 
-  it("shows keybinding hints for the current mode", () => {
-    renderPalette(true);
+  it("shows keybinding hints for the current mode", async () => {
+    await act(async () => {
+      renderPalette(true);
+    });
     // Default mode is CUA (mocked invoke returns "cua")
     expect(screen.getByText("Ctrl+O")).toBeTruthy();
     expect(screen.getByText("Ctrl+S")).toBeTruthy();
@@ -153,11 +185,20 @@ describe("CommandPalette", () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
-  it("executes a command when its item is clicked", () => {
+  it("executes a command when its item is clicked", async () => {
+    const invokeMock = vi.mocked(invoke);
     const onClose = vi.fn();
-    renderPalette(true, onClose);
+    await act(async () => {
+      renderPalette(true, onClose);
+    });
+    invokeMock.mockClear();
     fireEvent.click(screen.getByText("Save File"));
-    expect(TEST_COMMANDS[1].execute).toHaveBeenCalled();
+    // Clicking a backend command dispatches via invoke, not a local execute fn
+    const dispatchCall = invokeMock.mock.calls.find(
+      ([cmd]) => cmd === "dispatch_command",
+    );
+    expect(dispatchCall).toBeDefined();
+    expect((dispatchCall![1] as Record<string, unknown>).cmd).toBe("save-file");
     expect(onClose).toHaveBeenCalled();
   });
 
@@ -165,6 +206,27 @@ describe("CommandPalette", () => {
     renderPalette(true);
     const list = screen.getByTestId("command-palette-list");
     expect(list.getAttribute("role")).toBe("listbox");
+  });
+
+  it("does not pass windowLabel when dispatching a command via invoke", async () => {
+    const invokeMock = vi.mocked(invoke);
+
+    const onClose = vi.fn();
+    await act(async () => {
+      renderPalette(true, onClose);
+    });
+    invokeMock.mockClear();
+    // Click the first command ("Open File")
+    fireEvent.click(screen.getByText("Open File"));
+
+    // Find the dispatch_command call
+    const dispatchCall = invokeMock.mock.calls.find(
+      ([cmd]) => cmd === "dispatch_command",
+    );
+    expect(dispatchCall).toBeDefined();
+    const [, args] = dispatchCall!;
+    // windowLabel should NOT be present — scope chain carries window identity
+    expect((args as Record<string, unknown>).windowLabel).toBeUndefined();
   });
 });
 
@@ -190,12 +252,14 @@ describe("CommandPalette vim insert mode", () => {
       if (cmd === "get_ui_state")
         return Promise.resolve({
           palette_open: false,
+          palette_mode: "command",
           keymap_mode: "vim",
           scope_chain: [],
           open_boards: [],
           windows: {},
           recent_boards: [],
         });
+      if (cmd === "list_commands_for_scope") return Promise.resolve([]);
       return Promise.resolve(null);
     });
 
@@ -222,12 +286,14 @@ describe("CommandPalette vim insert mode", () => {
       if (cmd === "get_ui_state")
         return Promise.resolve({
           palette_open: false,
+          palette_mode: "command",
           keymap_mode: "cua",
           scope_chain: [],
           open_boards: [],
           windows: {},
           recent_boards: [],
         });
+      if (cmd === "list_commands_for_scope") return Promise.resolve([]);
       return Promise.resolve(null);
     });
 
@@ -248,12 +314,14 @@ describe("CommandPalette vim insert mode", () => {
       if (cmd === "get_ui_state")
         return Promise.resolve({
           palette_open: false,
+          palette_mode: "command",
           keymap_mode: "vim",
           scope_chain: [],
           open_boards: [],
           windows: {},
           recent_boards: [],
         });
+      if (cmd === "list_commands_for_scope") return Promise.resolve([]);
       return Promise.resolve(null);
     });
 
@@ -287,12 +355,14 @@ describe("CommandPalette vim insert mode", () => {
       if (cmd === "get_ui_state")
         return Promise.resolve({
           palette_open: false,
+          palette_mode: "command",
           keymap_mode: "vim",
           scope_chain: [],
           open_boards: [],
           windows: {},
           recent_boards: [],
         });
+      if (cmd === "list_commands_for_scope") return Promise.resolve([]);
       return Promise.resolve(null);
     });
 

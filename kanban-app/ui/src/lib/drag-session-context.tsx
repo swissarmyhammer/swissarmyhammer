@@ -14,10 +14,9 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { useActiveBoardPath } from "@/lib/command-scope";
+import { useActiveBoardPath, backendDispatch } from "@/lib/command-scope";
 
 /** Payload emitted by `drag-session-active`. */
 export interface DragSession {
@@ -112,7 +111,7 @@ export function DragSessionProvider({ children }: { children: ReactNode }) {
       const bp = boardPathRef.current;
       if (!bp) return;
       try {
-        await invoke("dispatch_command", {
+        await backendDispatch({
           cmd: "drag.start",
           args: {
             taskId,
@@ -132,7 +131,7 @@ export function DragSessionProvider({ children }: { children: ReactNode }) {
 
   const cancelSession = useCallback(async () => {
     try {
-      await invoke("dispatch_command", { cmd: "drag.cancel" });
+      await backendDispatch({ cmd: "drag.cancel" });
     } catch (e) {
       console.error("Failed to cancel drag session:", e);
     }
@@ -151,7 +150,7 @@ export function DragSessionProvider({ children }: { children: ReactNode }) {
       const bp = boardPathRef.current;
       if (!bp) return;
       try {
-        await invoke("dispatch_command", {
+        await backendDispatch({
           cmd: "drag.complete",
           args: {
             targetBoardPath: bp,

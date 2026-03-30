@@ -150,21 +150,34 @@ pub fn register_commands() -> HashMap<String, Arc<dyn Command>> {
         "file.closeBoard".into(),
         Arc::new(file_commands::CloseBoardCmd),
     );
-    map.insert(
-        "file.newBoard".into(),
-        Arc::new(file_commands::NewBoardCmd),
-    );
+    map.insert("file.newBoard".into(), Arc::new(file_commands::NewBoardCmd));
     map.insert(
         "file.openBoard".into(),
         Arc::new(file_commands::OpenBoardCmd),
     );
-    map.insert(
-        "window.new".into(),
-        Arc::new(file_commands::NewWindowCmd),
-    );
+    map.insert("window.new".into(), Arc::new(file_commands::NewWindowCmd));
 
     // App commands
     map.insert("app.quit".into(), Arc::new(app_commands::QuitCmd));
+    map.insert("app.about".into(), Arc::new(app_commands::AboutCmd));
+    map.insert("app.help".into(), Arc::new(app_commands::HelpCmd));
+    map.insert(
+        "app.resetWindows".into(),
+        Arc::new(app_commands::ResetWindowsCmd),
+    );
+    map.insert(
+        "app.command".into(),
+        Arc::new(app_commands::CommandPaletteCmd),
+    );
+    map.insert(
+        "app.palette".into(),
+        Arc::new(app_commands::CommandPaletteCmd),
+    );
+    map.insert(
+        "app.search".into(),
+        Arc::new(app_commands::SearchPaletteCmd),
+    );
+    map.insert("app.dismiss".into(), Arc::new(app_commands::DismissCmd));
     map.insert("app.undo".into(), Arc::new(swissarmyhammer_entity::UndoCmd));
     map.insert("app.redo".into(), Arc::new(swissarmyhammer_entity::RedoCmd));
     map.insert(
@@ -215,8 +228,13 @@ mod tests {
     #[test]
     fn register_commands_returns_expected_count() {
         let cmds = register_commands();
-        // 4 task + 3 clipboard + 4 entity + 1 tag + 1 attachment + 1 column + 7 UI + 6 app + 2 file + 3 drag = 32
-        assert_eq!(cmds.len(), 35);
+        // 4 task + 3 clipboard + 4 entity + 1 tag + 1 attachment + 1 column + 7 UI
+        // + 13 app (quit, about, help, resetWindows, command, palette, search,
+        //          dismiss, undo, redo, keymap.vim, keymap.cua, keymap.emacs)
+        // + 5 file (switchBoard, closeBoard, newBoard, openBoard, window.new)
+        // + 3 drag = 42
+        // Note: clipboard entries are duplicated in the source but HashMap deduplicates.
+        assert_eq!(cmds.len(), 42);
     }
 
     // =========================================================================
@@ -503,12 +521,12 @@ mod tests {
         let cmds = register_commands();
         let cmd = cmds.get("ui.palette.open").unwrap();
         let ui = Arc::new(UIState::new());
-        assert!(!ui.palette_open());
+        assert!(!ui.palette_open("main"));
 
         let ctx = ctx_with(&[], None, Some(Arc::clone(&ui)));
         let result = cmd.execute(&ctx).await;
         assert!(result.is_ok());
-        assert!(ui.palette_open());
+        assert!(ui.palette_open("main"));
     }
 
     #[tokio::test]
@@ -516,12 +534,12 @@ mod tests {
         let cmds = register_commands();
         let cmd = cmds.get("ui.palette.close").unwrap();
         let ui = Arc::new(UIState::new());
-        ui.set_palette_open(true);
+        ui.set_palette_open("main", true);
 
         let ctx = ctx_with(&[], None, Some(Arc::clone(&ui)));
         let result = cmd.execute(&ctx).await;
         assert!(result.is_ok());
-        assert!(!ui.palette_open());
+        assert!(!ui.palette_open("main"));
     }
 
     #[tokio::test]
@@ -629,6 +647,157 @@ mod tests {
         let ctx = ctx_scope(&[]);
         let result = cmd.execute(&ctx).await.unwrap();
         assert_eq!(result["quit"], true);
+    }
+
+    // =========================================================================
+    // About, Help, ResetWindows, Palette, Search, Dismiss command tests
+    // =========================================================================
+
+    #[test]
+    fn about_always_available() {
+        let cmds = register_commands();
+        let cmd = cmds.get("app.about").unwrap();
+        assert!(cmd.available(&ctx_scope(&[])));
+    }
+
+    #[tokio::test]
+    async fn about_returns_marker() {
+        let cmds = register_commands();
+        let cmd = cmds.get("app.about").unwrap();
+        let result = cmd.execute(&ctx_scope(&[])).await.unwrap();
+        assert_eq!(result["about"], true);
+    }
+
+    #[test]
+    fn help_always_available() {
+        let cmds = register_commands();
+        let cmd = cmds.get("app.help").unwrap();
+        assert!(cmd.available(&ctx_scope(&[])));
+    }
+
+    #[tokio::test]
+    async fn help_returns_marker() {
+        let cmds = register_commands();
+        let cmd = cmds.get("app.help").unwrap();
+        let result = cmd.execute(&ctx_scope(&[])).await.unwrap();
+        assert_eq!(result["help"], true);
+    }
+
+    #[test]
+    fn reset_windows_always_available() {
+        let cmds = register_commands();
+        let cmd = cmds.get("app.resetWindows").unwrap();
+        assert!(cmd.available(&ctx_scope(&[])));
+    }
+
+    #[tokio::test]
+    async fn reset_windows_clears_windows_and_returns_marker() {
+        let cmds = register_commands();
+        let cmd = cmds.get("app.resetWindows").unwrap();
+        let ui = Arc::new(UIState::new());
+        ui.save_window_geometry("main", 0, 0, 800, 600, false);
+        assert!(!ui.all_windows().is_empty());
+
+        let ctx = ctx_with(&[], None, Some(Arc::clone(&ui)));
+        let result = cmd.execute(&ctx).await.unwrap();
+        assert_eq!(result["ResetWindows"], true);
+        assert!(ui.all_windows().is_empty());
+    }
+
+    #[test]
+    fn command_palette_always_available() {
+        let cmds = register_commands();
+        let cmd = cmds.get("app.command").unwrap();
+        assert!(cmd.available(&ctx_scope(&[])));
+    }
+
+    #[tokio::test]
+    async fn command_palette_opens_palette_in_command_mode() {
+        let cmds = register_commands();
+        let cmd = cmds.get("app.command").unwrap();
+        let ui = Arc::new(UIState::new());
+        assert!(!ui.palette_open("main"));
+
+        let ctx = ctx_with(&[], None, Some(Arc::clone(&ui)));
+        let result = cmd.execute(&ctx).await;
+        assert!(result.is_ok());
+        assert!(ui.palette_open("main"));
+        assert_eq!(ui.palette_mode("main"), "command");
+    }
+
+    #[tokio::test]
+    async fn search_palette_opens_palette_in_search_mode() {
+        let cmds = register_commands();
+        let cmd = cmds.get("app.search").unwrap();
+        let ui = Arc::new(UIState::new());
+        assert!(!ui.palette_open("main"));
+
+        let ctx = ctx_with(&[], None, Some(Arc::clone(&ui)));
+        let result = cmd.execute(&ctx).await;
+        assert!(result.is_ok());
+        assert!(ui.palette_open("main"));
+        assert_eq!(ui.palette_mode("main"), "search");
+    }
+
+    #[tokio::test]
+    async fn command_palette_targets_invoking_window_only() {
+        let cmds = register_commands();
+        let cmd = cmds.get("app.command").unwrap();
+        let ui = Arc::new(UIState::new());
+
+        // Execute with scope chain containing window:secondary
+        let ctx = ctx_with(&["window:secondary"], None, Some(Arc::clone(&ui)));
+        let result = cmd.execute(&ctx).await;
+        assert!(result.is_ok());
+        // Only secondary window should have palette open
+        assert!(ui.palette_open("secondary"));
+        assert!(!ui.palette_open("main"));
+    }
+
+    #[test]
+    fn dismiss_always_available() {
+        let cmds = register_commands();
+        let cmd = cmds.get("app.dismiss").unwrap();
+        assert!(cmd.available(&ctx_scope(&[])));
+    }
+
+    #[tokio::test]
+    async fn dismiss_closes_palette_when_open() {
+        let cmds = register_commands();
+        let cmd = cmds.get("app.dismiss").unwrap();
+        let ui = Arc::new(UIState::new());
+        ui.set_palette_open("main", true);
+
+        let ctx = ctx_with(&[], None, Some(Arc::clone(&ui)));
+        let result = cmd.execute(&ctx).await;
+        assert!(result.is_ok());
+        assert!(!ui.palette_open("main"));
+    }
+
+    #[tokio::test]
+    async fn dismiss_closes_inspector_when_palette_closed() {
+        let cmds = register_commands();
+        let cmd = cmds.get("app.dismiss").unwrap();
+        let ui = Arc::new(UIState::new());
+        ui.inspect("main", "task:01XYZ");
+        assert!(!ui.palette_open("main"));
+        assert_eq!(ui.inspector_stack("main").len(), 1);
+
+        let ctx = ctx_with(&[], None, Some(Arc::clone(&ui)));
+        let result = cmd.execute(&ctx).await;
+        assert!(result.is_ok());
+        assert!(ui.inspector_stack("main").is_empty());
+    }
+
+    #[tokio::test]
+    async fn dismiss_returns_null_when_nothing_to_dismiss() {
+        let cmds = register_commands();
+        let cmd = cmds.get("app.dismiss").unwrap();
+        let ui = Arc::new(UIState::new());
+
+        let ctx = ctx_with(&[], None, Some(Arc::clone(&ui)));
+        let result = cmd.execute(&ctx).await.unwrap();
+        assert!(result.is_null());
     }
 
     // =========================================================================

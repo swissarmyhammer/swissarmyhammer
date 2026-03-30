@@ -78,9 +78,11 @@ const taskEntity: Entity = {
   fields: { tags: ["bugfix", "feature"] },
 };
 
-function renderDisplay(overrides: {
-  value?: unknown;
-} = {}) {
+function renderDisplay(
+  overrides: {
+    value?: unknown;
+  } = {},
+) {
   return render(
     <TooltipProvider>
       <InspectProvider onInspect={() => {}} onDismiss={() => false}>
@@ -102,9 +104,7 @@ function getPills(container: HTMLElement) {
 
 /** Get the inner pill span elements (the rounded-full badges inside data-moniker wrappers). */
 function getPillSpans(container: HTMLElement) {
-  return Array.from(
-    container.querySelectorAll("[data-moniker] span"),
-  ).filter(
+  return Array.from(container.querySelectorAll("[data-moniker] span")).filter(
     (el) => el.classList.contains("rounded-full"),
   );
 }

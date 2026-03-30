@@ -56,8 +56,7 @@ impl Execute<KanbanContext, KanbanError> for CutTag {
                 .ok_or_else(|| KanbanError::TagNotFound { id: slug.clone() })?;
             let tag_id = tag_entity.id.to_string();
             let fields = serde_json::to_value(&tag_entity.fields)?;
-            let clipboard_json =
-                clipboard::serialize_to_clipboard("tag", &tag_id, "cut", fields);
+            let clipboard_json = clipboard::serialize_to_clipboard("tag", &tag_id, "cut", fields);
 
             // Remove #tag from the task body (same logic as UntagTask)
             let mut task = ectx.read("task", self.task_id.as_str()).await?;
@@ -122,7 +121,11 @@ mod tests {
     async fn setup() -> (TempDir, KanbanContext) {
         let temp = TempDir::new().unwrap();
         let ctx = KanbanContext::new(temp.path().join(".kanban"));
-        InitBoard::new("Test").execute(&ctx).await.into_result().unwrap();
+        InitBoard::new("Test")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
         (temp, ctx)
     }
 

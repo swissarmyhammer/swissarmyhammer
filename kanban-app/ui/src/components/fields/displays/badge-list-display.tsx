@@ -85,7 +85,14 @@ export function BadgeListDisplay({ field, value, entity, mode }: DisplayProps) {
         return `${prefix}${buildMoniker(targetEntityType ?? "tag", val)}`;
       }
     });
-  }, [values, isComputedSlug, targetEntities, displayField, targetEntityType, parentMoniker]);
+  }, [
+    values,
+    isComputedSlug,
+    targetEntities,
+    displayField,
+    targetEntityType,
+    parentMoniker,
+  ]);
 
   // Build claimWhen predicates so nav.left/nav.right moves focus between pills.
   const pillClaimPredicates = useMemo(() => {
@@ -93,14 +100,23 @@ export function BadgeListDisplay({ field, value, entity, mode }: DisplayProps) {
       const predicates: ClaimPredicate[] = [];
       // nav.right: claim when the pill to my left (or parent field) is focused
       if (i === 0 && parentMoniker) {
-        predicates.push({ command: "nav.right", when: (f) => f === parentMoniker });
+        predicates.push({
+          command: "nav.right",
+          when: (f) => f === parentMoniker,
+        });
       }
       if (i > 0) {
-        predicates.push({ command: "nav.right", when: (f) => f === pillMonikers[i - 1] });
+        predicates.push({
+          command: "nav.right",
+          when: (f) => f === pillMonikers[i - 1],
+        });
       }
       // nav.left: claim when the pill to my right is focused
       if (i < pillMonikers.length - 1) {
-        predicates.push({ command: "nav.left", when: (f) => f === pillMonikers[i + 1] });
+        predicates.push({
+          command: "nav.left",
+          when: (f) => f === pillMonikers[i + 1],
+        });
       }
       return predicates;
     });

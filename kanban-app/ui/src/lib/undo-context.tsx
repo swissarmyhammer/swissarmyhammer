@@ -16,6 +16,7 @@ import {
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { backendDispatch } from "@/lib/command-scope";
 
 /** The shape of the undo state exposed to consumers. */
 interface UndoState {
@@ -42,7 +43,10 @@ const UndoContext = createContext<UndoState>({
  * Returns `{ canUndo: false, canRedo: false }` if the backend query is not
  * yet implemented or fails, so the UI degrades gracefully.
  */
-async function fetchUndoState(): Promise<{ canUndo: boolean; canRedo: boolean }> {
+async function fetchUndoState(): Promise<{
+  canUndo: boolean;
+  canRedo: boolean;
+}> {
   try {
     const state = await invoke<{ can_undo: boolean; can_redo: boolean }>(
       "get_undo_state",
@@ -83,12 +87,12 @@ export function UndoProvider({ children }: { children: ReactNode }) {
   }, [refreshState]);
 
   const undo = useCallback(async () => {
-    await invoke("dispatch_command", { cmd: "app.undo" });
+    await backendDispatch({ cmd: "app.undo" });
     await refreshState();
   }, [refreshState]);
 
   const redo = useCallback(async () => {
-    await invoke("dispatch_command", { cmd: "app.redo" });
+    await backendDispatch({ cmd: "app.redo" });
     await refreshState();
   }, [refreshState]);
 

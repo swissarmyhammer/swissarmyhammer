@@ -5,6 +5,12 @@
     group: 0
     order: 0
 
+- id: app.help
+  name: Help
+  keys:
+    vim: F1
+    cua: F1
+
 - id: app.quit
   name: Quit
   keys:
@@ -14,6 +20,39 @@
     path: [App]
     group: 2
     order: 0
+
+- id: app.command
+  name: Command Palette
+  keys:
+    vim: ":"
+    cua: Mod+Shift+P
+    emacs: Mod+Shift+P
+
+- id: app.palette
+  name: Command Palette
+  visible: false
+  keys:
+    cua: Mod+Shift+P
+    vim: Mod+Shift+P
+    emacs: Mod+Shift+P
+
+- id: app.search
+  name: Find
+  keys:
+    vim: "/"
+    cua: Mod+F
+    emacs: Mod+F
+  menu:
+    path: [Edit]
+    group: 0
+    order: 2
+
+- id: app.dismiss
+  name: Dismiss
+  keys:
+    vim: Escape
+    cua: Escape
+    emacs: Escape
 
 - id: app.undo
   name: Undo
@@ -36,14 +75,3 @@
     path: [Edit]
     group: 0
     order: 1
-
-- id: app.search
-  name: Find
-  keys:
-    vim: "/"
-    cua: Mod+F
-    emacs: Mod+F
-  menu:
-    path: [Edit]
-    group: 0
-    order: 2

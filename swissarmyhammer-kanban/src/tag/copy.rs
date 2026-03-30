@@ -40,8 +40,7 @@ impl Execute<KanbanContext, KanbanError> for CopyTag {
                 .map_err(KanbanError::from_entity_error)?;
 
             let fields = serde_json::to_value(&entity.fields)?;
-            let clipboard_json =
-                clipboard::serialize_to_clipboard("tag", &self.id, "copy", fields);
+            let clipboard_json = clipboard::serialize_to_clipboard("tag", &self.id, "copy", fields);
 
             Ok(serde_json::json!({
                 "copied": true,
@@ -72,7 +71,11 @@ mod tests {
     async fn setup() -> (TempDir, KanbanContext) {
         let temp = TempDir::new().unwrap();
         let ctx = KanbanContext::new(temp.path().join(".kanban"));
-        InitBoard::new("Test").execute(&ctx).await.into_result().unwrap();
+        InitBoard::new("Test")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
         (temp, ctx)
     }
 
@@ -80,10 +83,18 @@ mod tests {
     async fn test_copy_tag_returns_clipboard_json() {
         let (_temp, ctx) = setup().await;
 
-        let add_result = AddTag::new("bug").execute(&ctx).await.into_result().unwrap();
+        let add_result = AddTag::new("bug")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
         let tag_id = add_result["id"].as_str().unwrap();
 
-        let result = CopyTag::new(tag_id).execute(&ctx).await.into_result().unwrap();
+        let result = CopyTag::new(tag_id)
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
         assert_eq!(result["copied"], true);
         assert_eq!(result["entity_type"], "tag");
 
@@ -97,7 +108,10 @@ mod tests {
     #[tokio::test]
     async fn test_copy_nonexistent_tag_fails() {
         let (_temp, ctx) = setup().await;
-        let result = CopyTag::new("nonexistent").execute(&ctx).await.into_result();
+        let result = CopyTag::new("nonexistent")
+            .execute(&ctx)
+            .await
+            .into_result();
         assert!(result.is_err());
     }
 }

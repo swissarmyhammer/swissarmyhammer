@@ -117,17 +117,17 @@ mod tests {
         assert_eq!(payload.swissarmyhammer_clipboard.entity_type, "task");
         assert_eq!(payload.swissarmyhammer_clipboard.entity_id, task_id);
         assert_eq!(payload.swissarmyhammer_clipboard.mode, "copy");
-        assert_eq!(
-            payload.swissarmyhammer_clipboard.fields["title"],
-            "Copy me"
-        );
+        assert_eq!(payload.swissarmyhammer_clipboard.fields["title"], "Copy me");
     }
 
     #[tokio::test]
     async fn test_copy_nonexistent_task_fails() {
         let (_temp, ctx) = setup().await;
 
-        let result = CopyTask::new("nonexistent").execute(&ctx).await.into_result();
+        let result = CopyTask::new("nonexistent")
+            .execute(&ctx)
+            .await
+            .into_result();
         assert!(result.is_err());
     }
 }

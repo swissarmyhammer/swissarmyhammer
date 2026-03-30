@@ -130,13 +130,15 @@ impl Command for CloseBoardCmd {
             .as_ref()
             .ok_or_else(|| CommandError::ExecutionFailed("UIState not available".into()))?;
 
-        // `path` must be explicitly provided — each window owns its board via WindowState.board_path.
+        // `path` can be explicitly provided, or resolved from the window's board_path.
+        let window_label = ctx.window_label_from_scope().unwrap_or("main");
         let raw_path = ctx
             .args
             .get("path")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| CommandError::MissingArg("path".into()))?
-            .to_string();
+            .map(|s| s.to_string())
+            .or_else(|| ui.window_board(window_label))
+            .ok_or_else(|| CommandError::MissingArg("path".into()))?;
 
         // Canonicalize for consistent matching with how boards are stored.
         let canonical = std::path::PathBuf::from(&raw_path)

@@ -3,7 +3,7 @@ name: test
 description: Run tests and analyze results. Use when the user wants to run the test suite or test specific functionality. Test runs produce verbose output — automatically delegates to a tester subagent.
 metadata:
   author: "swissarmyhammer"
-  version: "0.11.0"
+  version: "0.11.2"
 ---
 
 ## Project Detection

@@ -121,9 +121,7 @@ function FocusMonitor() {
 /** Button to set focus imperatively. */
 function SetFocusButton({ moniker }: { moniker: string }) {
   const { setFocus } = useEntityFocus();
-  return (
-    <button data-testid="set-focus" onClick={() => setFocus(moniker)} />
-  );
+  return <button data-testid="set-focus" onClick={() => setFocus(moniker)} />;
 }
 
 /** Button to call broadcastNavCommand. */
@@ -230,7 +228,9 @@ describe("BadgeListDisplay pill navigation", () => {
       getByTestId("nav-right").click();
       await new Promise((r) => setTimeout(r, 0));
     });
-    expect(getByTestId("focus-monitor").textContent).toBe("field:tags/tag:tag-1");
+    expect(getByTestId("focus-monitor").textContent).toBe(
+      "field:tags/tag:tag-1",
+    );
   });
 
   it("nav.right from first pill focuses second pill", async () => {
@@ -251,13 +251,17 @@ describe("BadgeListDisplay pill navigation", () => {
       getByTestId("nav-right").click();
       await new Promise((r) => setTimeout(r, 0));
     });
-    expect(getByTestId("focus-monitor").textContent).toBe("field:tags/tag:tag-1");
+    expect(getByTestId("focus-monitor").textContent).toBe(
+      "field:tags/tag:tag-1",
+    );
 
     await act(async () => {
       getByTestId("nav-right").click();
       await new Promise((r) => setTimeout(r, 0));
     });
-    expect(getByTestId("focus-monitor").textContent).toBe("field:tags/tag:tag-2");
+    expect(getByTestId("focus-monitor").textContent).toBe(
+      "field:tags/tag:tag-2",
+    );
   });
 
   it("nav.right from last pill leaves focus unchanged (clamp)", async () => {
@@ -286,14 +290,18 @@ describe("BadgeListDisplay pill navigation", () => {
       getByTestId("nav-right").click();
       await new Promise((r) => setTimeout(r, 0));
     });
-    expect(getByTestId("focus-monitor").textContent).toBe("field:tags/tag:tag-3");
+    expect(getByTestId("focus-monitor").textContent).toBe(
+      "field:tags/tag:tag-3",
+    );
 
     // One more nav.right — should stay on last pill
     await act(async () => {
       getByTestId("nav-right").click();
       await new Promise((r) => setTimeout(r, 0));
     });
-    expect(getByTestId("focus-monitor").textContent).toBe("field:tags/tag:tag-3");
+    expect(getByTestId("focus-monitor").textContent).toBe(
+      "field:tags/tag:tag-3",
+    );
   });
 
   it("nav.left from second pill focuses first pill", async () => {
@@ -318,14 +326,18 @@ describe("BadgeListDisplay pill navigation", () => {
       getByTestId("nav-right").click();
       await new Promise((r) => setTimeout(r, 0));
     });
-    expect(getByTestId("focus-monitor").textContent).toBe("field:tags/tag:tag-2");
+    expect(getByTestId("focus-monitor").textContent).toBe(
+      "field:tags/tag:tag-2",
+    );
 
     // nav.left → first pill
     await act(async () => {
       getByTestId("nav-left").click();
       await new Promise((r) => setTimeout(r, 0));
     });
-    expect(getByTestId("focus-monitor").textContent).toBe("field:tags/tag:tag-1");
+    expect(getByTestId("focus-monitor").textContent).toBe(
+      "field:tags/tag:tag-1",
+    );
   });
 
   it("nav.left from first pill leaves focus unchanged (clamp)", async () => {
@@ -346,14 +358,18 @@ describe("BadgeListDisplay pill navigation", () => {
       getByTestId("nav-right").click();
       await new Promise((r) => setTimeout(r, 0));
     });
-    expect(getByTestId("focus-monitor").textContent).toBe("field:tags/tag:tag-1");
+    expect(getByTestId("focus-monitor").textContent).toBe(
+      "field:tags/tag:tag-1",
+    );
 
     // nav.left — first pill has no nav.left predicate, so focus stays
     await act(async () => {
       getByTestId("nav-left").click();
       await new Promise((r) => setTimeout(r, 0));
     });
-    expect(getByTestId("focus-monitor").textContent).toBe("field:tags/tag:tag-1");
+    expect(getByTestId("focus-monitor").textContent).toBe(
+      "field:tags/tag:tag-1",
+    );
   });
 });
 

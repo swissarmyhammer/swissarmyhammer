@@ -1,5 +1,6 @@
 import { useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { backendDispatch } from "@/lib/command-scope";
 
 /** Shape returned by the backend `list_commands_for_scope`. */
 interface ResolvedCommand {
@@ -30,7 +31,7 @@ export async function dispatchContextMenuCommand(
   const cmd = pendingCommands.get(menuItemKey);
   if (!cmd) return false;
   try {
-    await invoke("dispatch_command", {
+    await backendDispatch({
       cmd: cmd.id,
       target: cmd.target,
       scopeChain: pendingScopeChain,

@@ -43,6 +43,12 @@ pub struct WindowState {
     pub inspector_stack: Vec<String>,
     /// The active view ID for this window (e.g. "board-view", "grid-view").
     pub active_view_id: String,
+    /// Whether the command palette is open in this window. Transient — not persisted.
+    #[serde(skip)]
+    pub palette_open: bool,
+    /// Palette mode for this window: "command" or "search". Transient — not persisted.
+    #[serde(skip)]
+    pub palette_mode: String,
     /// Window x position (physical pixels).
     pub x: Option<i32>,
     /// Window y position (physical pixels).
@@ -109,9 +115,6 @@ pub struct UIState {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(default)]
 struct UIStateInner {
-    /// Whether the command palette is open. Transient — not persisted.
-    #[serde(skip)]
-    palette_open: bool,
     /// Current keymap mode: "cua", "vim", or "emacs".
     keymap_mode: String,
     /// Current focus scope chain (innermost first). Transient — not persisted.
@@ -150,7 +153,6 @@ impl Default for UIStateInner {
     /// Returns the default UI state values.
     fn default() -> Self {
         Self {
-            palette_open: false,
             keymap_mode: "cua".to_string(),
             scope_chain: Vec::new(),
             drag_session: None,
@@ -336,18 +338,40 @@ impl UIState {
         change
     }
 
-    /// Set whether the command palette is open.
+    /// Set whether the command palette is open for a specific window.
     ///
     /// Returns `None` if the value is unchanged. Palette state is transient
     /// and is NOT persisted to the config file.
-    pub fn set_palette_open(&self, open: bool) -> Option<UIStateChange> {
+    pub fn set_palette_open(&self, window_label: &str, open: bool) -> Option<UIStateChange> {
         let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
-        if inner.palette_open == open {
+        let ws = inner.windows.entry(window_label.to_string()).or_default();
+        if ws.palette_open == open {
             return None;
         }
-        inner.palette_open = open;
-        Some(UIStateChange::PaletteOpen(inner.palette_open))
+        ws.palette_open = open;
+        Some(UIStateChange::PaletteOpen(ws.palette_open))
         // No try_save — palette_open is transient (#[serde(skip)])
+    }
+
+    /// Set the palette open state and mode in one call for a specific window.
+    ///
+    /// Mode is "command" or "search". Returns a UIStateChange even if only the
+    /// mode changed (so the frontend can react to mode switches).
+    pub fn set_palette_open_with_mode(
+        &self,
+        window_label: &str,
+        open: bool,
+        mode: &str,
+    ) -> Option<UIStateChange> {
+        let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+        let ws = inner.windows.entry(window_label.to_string()).or_default();
+        let changed = ws.palette_open != open || ws.palette_mode != mode;
+        if !changed {
+            return None;
+        }
+        ws.palette_open = open;
+        ws.palette_mode = mode.to_string();
+        Some(UIStateChange::PaletteOpen(ws.palette_open))
     }
 
     /// Set the keymap mode (e.g. "cua", "vim", "emacs").
@@ -701,12 +725,26 @@ impl UIState {
             .unwrap_or_default()
     }
 
-    /// Get whether the palette is open.
-    pub fn palette_open(&self) -> bool {
+    /// Get whether the palette is open for a specific window.
+    pub fn palette_open(&self, window_label: &str) -> bool {
         self.inner
             .read()
             .unwrap_or_else(|e| e.into_inner())
-            .palette_open
+            .windows
+            .get(window_label)
+            .map(|ws| ws.palette_open)
+            .unwrap_or(false)
+    }
+
+    /// Get the palette mode ("command" or "search") for a specific window.
+    pub fn palette_mode(&self, window_label: &str) -> String {
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .windows
+            .get(window_label)
+            .map(|ws| ws.palette_mode.clone())
+            .unwrap_or_else(|| "command".to_string())
     }
 
     /// Get whether the clipboard contains a copied/cut entity.
@@ -763,19 +801,40 @@ impl UIState {
     /// Serialize the current state to a JSON Value for the frontend.
     ///
     /// Includes ALL fields (both persisted and transient) so the frontend has
-    /// a complete snapshot. The `palette_open` and `scope_chain` fields are
-    /// marked `#[serde(skip)]` on the inner struct to avoid persisting them
-    /// to YAML, so we build the JSON manually to include them.
+    /// a complete snapshot. Transient fields like `palette_open`, `palette_mode`,
+    /// and `scope_chain` are `#[serde(skip)]` on the inner structs to avoid
+    /// persisting them to YAML, so we build the JSON manually to include them.
+    /// `palette_open` and `palette_mode` are per-window and included in each
+    /// window's JSON object.
     pub fn to_json(&self) -> serde_json::Value {
         let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
+        // Build the windows map with transient palette fields included
+        let windows_json: serde_json::Map<String, serde_json::Value> = inner
+            .windows
+            .iter()
+            .map(|(label, ws)| {
+                let mut obj = serde_json::to_value(ws).unwrap_or(serde_json::json!({}));
+                // Inject transient fields that serde(skip) omits
+                if let Some(map) = obj.as_object_mut() {
+                    map.insert(
+                        "palette_open".to_string(),
+                        serde_json::json!(ws.palette_open),
+                    );
+                    map.insert(
+                        "palette_mode".to_string(),
+                        serde_json::json!(ws.palette_mode),
+                    );
+                }
+                (label.clone(), obj)
+            })
+            .collect();
         serde_json::json!({
-            "palette_open": inner.palette_open,
             "keymap_mode": inner.keymap_mode,
             "scope_chain": inner.scope_chain,
             "open_boards": inner.open_boards,
             "has_clipboard": inner.has_clipboard,
             "clipboard_entity_type": inner.clipboard_entity_type,
-            "windows": inner.windows,
+            "windows": windows_json,
             "recent_boards": inner.recent_boards,
             "most_recent_board_path": inner.most_recent_board_path,
         })
@@ -786,7 +845,6 @@ impl std::fmt::Debug for UIState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
         f.debug_struct("UIState")
-            .field("palette_open", &inner.palette_open)
             .field("keymap_mode", &inner.keymap_mode)
             .field("scope_chain", &inner.scope_chain)
             .field("windows", &inner.windows)
@@ -930,15 +988,34 @@ mod tests {
     #[test]
     fn set_palette_open_toggles() {
         let state = UIState::new();
-        assert!(!state.palette_open());
+        assert!(!state.palette_open("main"));
 
-        let change = state.set_palette_open(true);
+        let change = state.set_palette_open("main", true);
         assert!(change.is_some());
-        assert!(state.palette_open());
+        assert!(state.palette_open("main"));
 
-        let change = state.set_palette_open(false);
+        let change = state.set_palette_open("main", false);
         assert!(change.is_some());
-        assert!(!state.palette_open());
+        assert!(!state.palette_open("main"));
+    }
+
+    #[test]
+    fn set_palette_open_per_window() {
+        let state = UIState::new();
+        // Open palette on secondary only
+        state.set_palette_open("secondary", true);
+        // Main should still be closed
+        assert!(!state.palette_open("main"));
+        assert!(state.palette_open("secondary"));
+    }
+
+    #[test]
+    fn palette_mode_per_window() {
+        let state = UIState::new();
+        state.set_palette_open_with_mode("main", true, "command");
+        state.set_palette_open_with_mode("secondary", true, "search");
+        assert_eq!(state.palette_mode("main"), "command");
+        assert_eq!(state.palette_mode("secondary"), "search");
     }
 
     #[test]
@@ -1034,14 +1111,14 @@ mod tests {
         let path = temp_yaml_path("transient");
         {
             let state = UIState::load(&path);
-            state.set_palette_open(true);
+            state.set_palette_open("main", true);
             state.set_scope_chain(vec!["scope:x".to_string()]);
             state.set_keymap_mode("emacs"); // persisted — forces a file to exist
             state.save().unwrap();
         }
         let state2 = UIState::load(&path);
         // Transient fields reset to defaults
-        assert!(!state2.palette_open());
+        assert!(!state2.palette_open("main"));
         assert!(state2.scope_chain().is_empty());
         // Persisted field is intact
         assert_eq!(state2.keymap_mode(), "emacs");
@@ -1091,7 +1168,7 @@ mod tests {
         }
 
         // set_palette_open returns PaletteOpen
-        let change = state.set_palette_open(true).unwrap();
+        let change = state.set_palette_open("main", true).unwrap();
         match change {
             UIStateChange::PaletteOpen(open) => assert!(open),
             other => panic!("Expected PaletteOpen, got {:?}", other),
@@ -1241,8 +1318,10 @@ mod tests {
     #[test]
     fn set_context_menu_ids_and_check_membership() {
         let state = UIState::new();
-        let ids: HashSet<String> =
-            ["task:01A", "task:01B"].iter().map(|s| s.to_string()).collect();
+        let ids: HashSet<String> = ["task:01A", "task:01B"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
         state.set_context_menu_ids(ids);
 
         assert!(state.is_context_menu_id("task:01A"));
@@ -1262,17 +1341,28 @@ mod tests {
     fn replacing_context_menu_ids_clears_previous() {
         let state = UIState::new();
 
-        let first: HashSet<String> =
-            ["task:01A", "task:01B"].iter().map(|s| s.to_string()).collect();
+        let first: HashSet<String> = ["task:01A", "task:01B"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
         state.set_context_menu_ids(first);
         assert!(state.is_context_menu_id("task:01A"));
 
         let second: HashSet<String> = ["task:01C"].iter().map(|s| s.to_string()).collect();
         state.set_context_menu_ids(second);
 
-        assert!(!state.is_context_menu_id("task:01A"), "old ID should be gone");
-        assert!(!state.is_context_menu_id("task:01B"), "old ID should be gone");
-        assert!(state.is_context_menu_id("task:01C"), "new ID should be present");
+        assert!(
+            !state.is_context_menu_id("task:01A"),
+            "old ID should be gone"
+        );
+        assert!(
+            !state.is_context_menu_id("task:01B"),
+            "old ID should be gone"
+        );
+        assert!(
+            state.is_context_menu_id("task:01C"),
+            "new ID should be present"
+        );
     }
 
     // --- open boards and window board management tests ---

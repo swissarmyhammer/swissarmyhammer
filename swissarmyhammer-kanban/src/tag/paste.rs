@@ -50,9 +50,12 @@ impl Execute<KanbanContext, KanbanError> for PasteTag {
 
         let result: Result<Value> = async {
             // Deserialize and validate clipboard
-            let payload = clipboard::deserialize_from_clipboard(&self.clipboard_json)
-                .ok_or_else(|| {
-                    KanbanError::InvalidValue { field: "clipboard".into(), message: "invalid clipboard data".into() }
+            let payload =
+                clipboard::deserialize_from_clipboard(&self.clipboard_json).ok_or_else(|| {
+                    KanbanError::InvalidValue {
+                        field: "clipboard".into(),
+                        message: "invalid clipboard data".into(),
+                    }
                 })?;
             let content = &payload.swissarmyhammer_clipboard;
 
@@ -68,8 +71,9 @@ impl Execute<KanbanContext, KanbanError> for PasteTag {
                 .fields
                 .get("tag_name")
                 .and_then(|v| v.as_str())
-                .ok_or_else(|| {
-                    KanbanError::InvalidValue { field: "clipboard".into(), message: "clipboard tag has no tag_name field".into() }
+                .ok_or_else(|| KanbanError::InvalidValue {
+                    field: "clipboard".into(),
+                    message: "clipboard tag has no tag_name field".into(),
                 })?;
             let slug = tag_parser::normalize_slug(tag_name);
 
@@ -161,7 +165,11 @@ mod tests {
     async fn setup() -> (TempDir, KanbanContext) {
         let temp = TempDir::new().unwrap();
         let ctx = KanbanContext::new(temp.path().join(".kanban"));
-        InitBoard::new("Test").execute(&ctx).await.into_result().unwrap();
+        InitBoard::new("Test")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
         (temp, ctx)
     }
 
@@ -251,12 +259,8 @@ mod tests {
             .unwrap();
         let task_id = task_result["id"].as_str().unwrap();
 
-        let clip = clipboard::serialize_to_clipboard(
-            "task",
-            "01FAKE",
-            "copy",
-            json!({"title": "A task"}),
-        );
+        let clip =
+            clipboard::serialize_to_clipboard("task", "01FAKE", "copy", json!({"title": "A task"}));
         let result = PasteTag::new(task_id, clip)
             .execute(&ctx)
             .await

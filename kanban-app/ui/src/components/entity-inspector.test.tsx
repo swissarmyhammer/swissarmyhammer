@@ -165,6 +165,7 @@ const mockInvoke = vi.fn((...args: any[]) => {
   if (args[0] === "get_ui_state")
     return Promise.resolve({
       palette_open: false,
+      palette_mode: "command",
       keymap_mode: "cua",
       scope_chain: [],
       open_boards: [],

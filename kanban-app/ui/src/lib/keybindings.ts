@@ -200,7 +200,9 @@ export function createKeyHandler(
     // Skip non-modifier single-character keys when focus is in any editable
     // context (CodeMirror editors, inputs, textareas, contenteditable).
     const hasModifier =
-      normalized.includes("Mod") || normalized.includes("Alt") || normalized.includes("Ctrl");
+      normalized.includes("Mod") ||
+      normalized.includes("Alt") ||
+      normalized.includes("Ctrl");
     if (!hasModifier && target) {
       const tag = target.tagName;
       if (

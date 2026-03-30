@@ -15,6 +15,10 @@ export interface WindowStateSnapshot {
   inspector_stack: string[];
   /** The active view ID for this window. */
   active_view_id: string;
+  /** Whether the command palette is open in this window. */
+  palette_open: boolean;
+  /** Palette mode for this window: "command" or "search". */
+  palette_mode: "command" | "search";
   x?: number;
   y?: number;
   width?: number;
@@ -24,7 +28,6 @@ export interface WindowStateSnapshot {
 
 /** Shape of the UIState from the Rust backend. */
 export interface UIStateSnapshot {
-  palette_open: boolean;
   keymap_mode: string;
   scope_chain: string[];
   open_boards: string[];
@@ -38,7 +41,6 @@ export interface UIStateSnapshot {
 }
 
 const DEFAULT_STATE: UIStateSnapshot = {
-  palette_open: false,
   keymap_mode: "cua",
   scope_chain: [],
   open_boards: [],

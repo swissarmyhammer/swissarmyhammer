@@ -3,7 +3,7 @@ name: deduplicate
 description: Find and refactor duplicate code. Use this skill when the user wants to find near-duplicate code, check for copy-paste redundancy, or DRY up a codebase — optionally scoped to changed files. Automatically delegates to an implementer subagent.
 metadata:
   author: "swissarmyhammer"
-  version: "0.11.0"
+  version: "0.11.2"
 ---
 
 ## Project Detection

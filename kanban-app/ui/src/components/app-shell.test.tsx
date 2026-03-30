@@ -7,6 +7,7 @@ vi.mock("@tauri-apps/api/core", () => ({
     if (cmd === "get_ui_state")
       return Promise.resolve({
         palette_open: false,
+        palette_mode: "command",
         keymap_mode: "cua",
         scope_chain: [],
         open_boards: [],
@@ -32,10 +33,7 @@ import {
   EntityFocusProvider,
   useEntityFocus,
 } from "@/lib/entity-focus-context";
-import {
-  useAvailableCommands,
-  ActiveBoardPathProvider,
-} from "@/lib/command-scope";
+import { useAvailableCommands } from "@/lib/command-scope";
 import { InspectProvider } from "@/lib/inspect-context";
 import { invoke } from "@tauri-apps/api/core";
 
@@ -103,8 +101,11 @@ describe("AppShell", () => {
     expect(screen.queryByTestId("command-palette")).toBeNull();
   });
 
-  it("opens command palette on Mod+Shift+P in CUA mode", async () => {
+  it("dispatches app.command to backend on Mod+Shift+P in CUA mode", async () => {
+    const mockInvoke = invoke as ReturnType<typeof vi.fn>;
     renderShell();
+    mockInvoke.mockClear();
+
     // CUA mode is the default (mocked invoke returns "cua")
     // Mod on non-Mac is Ctrl
     await act(async () => {
@@ -115,22 +116,22 @@ describe("AppShell", () => {
         shiftKey: true,
       });
     });
-    expect(screen.getByTestId("command-palette")).toBeTruthy();
+
+    // Palette opening is now driven by backend UIState, so we verify
+    // that the keybinding dispatches to the backend.
+    const cmdCall = mockInvoke.mock.calls.find(
+      (c: unknown[]) =>
+        c[0] === "dispatch_command" &&
+        ((c[1] as Record<string, unknown>)?.cmd === "app.command" ||
+          (c[1] as Record<string, unknown>)?.cmd === "app.palette"),
+    );
+    expect(cmdCall).toBeTruthy();
   });
 
-  it("closes command palette on Escape", async () => {
+  it("dispatches app.dismiss to backend on Escape", async () => {
+    const mockInvoke = invoke as ReturnType<typeof vi.fn>;
     renderShell();
-
-    // Open the palette first
-    await act(async () => {
-      fireEvent.keyDown(document, {
-        key: "P",
-        code: "KeyP",
-        ctrlKey: true,
-        shiftKey: true,
-      });
-    });
-    expect(screen.getByTestId("command-palette")).toBeTruthy();
+    mockInvoke.mockClear();
 
     // Press Escape to dismiss
     await act(async () => {
@@ -139,7 +140,13 @@ describe("AppShell", () => {
         code: "Escape",
       });
     });
-    expect(screen.queryByTestId("command-palette")).toBeNull();
+
+    const dismissCall = mockInvoke.mock.calls.find(
+      (c: unknown[]) =>
+        c[0] === "dispatch_command" &&
+        (c[1] as Record<string, unknown>)?.cmd === "app.dismiss",
+    );
+    expect(dismissCall).toBeTruthy();
   });
 
   it("keybinding handler resolves commands from focused scope", async () => {
@@ -187,35 +194,10 @@ describe("AppShell", () => {
     expect(focusedFn).toHaveBeenCalled();
   });
 
-  it("file.closeBoard passes path arg to dispatch_command", async () => {
+  it("file.closeBoard dispatches to backend via dispatch_command", async () => {
     const mockInvoke = invoke as ReturnType<typeof vi.fn>;
 
-    // Render with an active board path and openBoards
-    render(
-      <EntityFocusProvider>
-        <UIStateProvider>
-          <AppModeProvider>
-            <UndoProvider>
-              <InspectProvider onInspect={() => {}} onDismiss={() => false}>
-                <ActiveBoardPathProvider value="/test/board/.kanban">
-                  <AppShell
-                    openBoards={[
-                      {
-                        path: "/test/board/.kanban",
-                        name: "Test",
-                        is_active: true,
-                      },
-                    ]}
-                  >
-                    <CommandInspector />
-                  </AppShell>
-                </ActiveBoardPathProvider>
-              </InspectProvider>
-            </UndoProvider>
-          </AppModeProvider>
-        </UIStateProvider>
-      </EntityFocusProvider>,
-    );
+    renderShell();
 
     mockInvoke.mockClear();
 
@@ -232,63 +214,13 @@ describe("AppShell", () => {
       });
     });
 
-    // The invoke should have been called with dispatch_command and path arg
+    // The invoke should have been called with dispatch_command (backend resolves path from UIState)
     const closeCall = mockInvoke.mock.calls.find(
       (c: unknown[]) =>
         c[0] === "dispatch_command" &&
         (c[1] as Record<string, unknown>)?.cmd === "file.closeBoard",
     );
     expect(closeCall).toBeTruthy();
-    expect((closeCall![1] as Record<string, unknown>).args).toEqual({
-      path: "/test/board/.kanban",
-    });
-  });
-
-  it("file.closeBoard works with openBoards fallback when activeBoardPath is undefined", async () => {
-    const mockInvoke = invoke as ReturnType<typeof vi.fn>;
-
-    // Render WITHOUT ActiveBoardPathProvider (simulates trashed board with no loaded data)
-    render(
-      <EntityFocusProvider>
-        <UIStateProvider>
-          <AppModeProvider>
-            <UndoProvider>
-              <InspectProvider onInspect={() => {}} onDismiss={() => false}>
-                <AppShell
-                  openBoards={[
-                    { path: "/junk/board/.kanban", name: "", is_active: true },
-                  ]}
-                >
-                  <CommandInspector />
-                </AppShell>
-              </InspectProvider>
-            </UndoProvider>
-          </AppModeProvider>
-        </UIStateProvider>
-      </EntityFocusProvider>,
-    );
-
-    mockInvoke.mockClear();
-
-    // Simulate Cmd+W
-    await act(async () => {
-      fireEvent.keyDown(document, {
-        key: "w",
-        code: "KeyW",
-        ctrlKey: true,
-      });
-    });
-
-    // Should still dispatch with the path from openBoards fallback
-    const closeCall = mockInvoke.mock.calls.find(
-      (c: unknown[]) =>
-        c[0] === "dispatch_command" &&
-        (c[1] as Record<string, unknown>)?.cmd === "file.closeBoard",
-    );
-    expect(closeCall).toBeTruthy();
-    expect((closeCall![1] as Record<string, unknown>).args).toEqual({
-      path: "/junk/board/.kanban",
-    });
   });
 
   it("shows mode indicator as COMMAND when palette opens", async () => {

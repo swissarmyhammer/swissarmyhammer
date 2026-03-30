@@ -18,6 +18,7 @@ import { listen } from "@tauri-apps/api/event";
 function makeState(overrides: Record<string, unknown> = {}) {
   return {
     palette_open: false,
+    palette_mode: "command",
     keymap_mode: "cua",
     scope_chain: [],
     open_boards: [],

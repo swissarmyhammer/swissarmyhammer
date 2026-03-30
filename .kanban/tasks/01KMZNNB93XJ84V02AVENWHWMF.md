@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: '80'
+position_column: done
+position_ordinal: ffffffffffffffff8180
 title: Eliminate frontend globalCommands — move remaining commands to backend
 ---
 ## What
@@ -36,7 +36,6 @@ The frontend app-shell.tsx still has ~20 commands with client-side `execute` cal
 4. Dynamic board list: generate in `commands_for_scope`
 
 ## Acceptance Criteria
-- [ ] Frontend globalCommands array reduced to nav commands only (or eliminated entirely)
-- [ ] All dispatched commands go through backend
-- [ ] Tests for new backend command impls"
-<parameter name="assignees">[]
+- [x] Frontend globalCommands array reduced to nav commands only (or eliminated entirely)
+- [x] All dispatched commands go through backend
+- [x] Tests for new backend command impls

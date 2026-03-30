@@ -8,10 +8,42 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use swissarmyhammer_commands::{
-    Command, CommandContext, CommandsRegistry, KeysDef, UIState,
-};
+use swissarmyhammer_commands::{Command, CommandContext, CommandsRegistry, KeysDef, UIState};
 use swissarmyhammer_fields::FieldsContext;
+
+/// Lightweight view descriptor for dynamic command generation.
+///
+/// Only carries the fields needed to produce a `view.switch:{id}` command.
+/// Intentionally decoupled from `ViewDef` so the scope_commands module
+/// does not depend on the views crate directly.
+#[derive(Debug, Clone)]
+pub struct ViewInfo {
+    /// View identifier (e.g. "board-view", "tasks-grid").
+    pub id: String,
+    /// Human-readable name (e.g. "Board View", "Task Grid").
+    pub name: String,
+}
+
+/// Lightweight open-board descriptor for dynamic command generation.
+///
+/// Only carries the fields needed to produce a `board.switch:{path}` command.
+#[derive(Debug, Clone)]
+pub struct BoardInfo {
+    /// Canonical filesystem path of the board.
+    pub path: String,
+    /// Human-readable board name (directory basename or custom name).
+    pub name: String,
+}
+
+/// Runtime data that feeds dynamic command generation beyond the static
+/// registry and entity schemas.
+#[derive(Debug, Clone, Default)]
+pub struct DynamicSources {
+    /// Loaded view definitions — each generates a `view.switch:{id}` command.
+    pub views: Vec<ViewInfo>,
+    /// Open boards — each generates a `board.switch:{path}` command.
+    pub boards: Vec<BoardInfo>,
+}
 
 /// A fully resolved command ready for display in a menu, palette, or context menu.
 #[derive(Debug, Clone, serde::Serialize)]
@@ -38,11 +70,7 @@ fn resolve_name_template(name: &str, entity_type: &str) -> String {
     if !name.contains("{{entity.type}}") {
         return name.to_string();
     }
-    let capitalized = format!(
-        "{}{}",
-        &entity_type[..1].to_uppercase(),
-        &entity_type[1..]
-    );
+    let capitalized = format!("{}{}", &entity_type[..1].to_uppercase(), &entity_type[1..]);
     name.replace("{{entity.type}}", &capitalized)
 }
 
@@ -82,6 +110,7 @@ fn check_available(
 /// - `fields` — Entity type schemas (for entity-declared commands)
 /// - `ui_state` — UI state (clipboard, etc.)
 /// - `context_menu_only` — If true, only return commands with `context_menu: true`
+/// - `dynamic` — Runtime data for view-switch and board-switch commands
 pub fn commands_for_scope(
     scope_chain: &[String],
     registry: &CommandsRegistry,
@@ -89,6 +118,7 @@ pub fn commands_for_scope(
     fields: Option<&FieldsContext>,
     ui_state: &Arc<UIState>,
     context_menu_only: bool,
+    dynamic: Option<&DynamicSources>,
 ) -> Vec<ResolvedCommand> {
     let mut result: Vec<ResolvedCommand> = Vec::new();
     let mut seen: HashSet<(String, Option<String>)> = HashSet::new();
@@ -115,10 +145,7 @@ pub fn commands_for_scope(
                 // Resolve name template
                 let name = if cmd.id == "entity.paste" {
                     // Paste name comes from clipboard entity type
-                    resolve_name_template(
-                        &cmd.name,
-                        clipboard_type.as_deref().unwrap_or("entity"),
-                    )
+                    resolve_name_template(&cmd.name, clipboard_type.as_deref().unwrap_or("entity"))
                 } else {
                     resolve_name_template(&cmd.name, entity_type)
                 };
@@ -130,13 +157,8 @@ pub fn commands_for_scope(
                     emacs: k.emacs.clone(),
                 });
 
-                let available = check_available(
-                    &cmd.id,
-                    scope_chain,
-                    Some(moniker),
-                    command_impls,
-                    ui_state,
-                );
+                let available =
+                    check_available(&cmd.id, scope_chain, Some(moniker), command_impls, ui_state);
 
                 result.push(ResolvedCommand {
                     id: cmd.id.clone(),
@@ -171,23 +193,14 @@ pub fn commands_for_scope(
             .and_then(|m| m.split_once(':').map(|(t, _)| t))
             .unwrap_or("entity");
         let name = if cmd_def.id == "entity.paste" {
-            resolve_name_template(
-                &cmd_def.name,
-                clipboard_type.as_deref().unwrap_or("entity"),
-            )
+            resolve_name_template(&cmd_def.name, clipboard_type.as_deref().unwrap_or("entity"))
         } else {
             resolve_name_template(&cmd_def.name, innermost_type)
         };
 
         let keys = cmd_def.keys.clone();
 
-        let available = check_available(
-            &cmd_def.id,
-            scope_chain,
-            None,
-            command_impls,
-            ui_state,
-        );
+        let available = check_available(&cmd_def.id, scope_chain, None, command_impls, ui_state);
 
         result.push(ResolvedCommand {
             id: cmd_def.id.clone(),
@@ -200,7 +213,45 @@ pub fn commands_for_scope(
         });
     }
 
-    // 3. Deduplicate: same (id, name) → keep innermost (first seen).
+    // 3. Dynamic commands from runtime data (views and boards).
+    if let Some(dyn_src) = dynamic {
+        for view in &dyn_src.views {
+            let cmd_id = format!("view.switch:{}", view.id);
+            let key = (cmd_id.clone(), None);
+            if seen.contains(&key) {
+                continue;
+            }
+            seen.insert(key);
+            result.push(ResolvedCommand {
+                id: cmd_id,
+                name: format!("Switch to {}", view.name),
+                target: None,
+                group: "view".to_string(),
+                context_menu: false,
+                keys: None,
+                available: true,
+            });
+        }
+        for board in &dyn_src.boards {
+            let cmd_id = format!("board.switch:{}", board.path);
+            let key = (cmd_id.clone(), None);
+            if seen.contains(&key) {
+                continue;
+            }
+            seen.insert(key);
+            result.push(ResolvedCommand {
+                id: cmd_id,
+                name: format!("Switch to Board: {}", board.name),
+                target: None,
+                group: "board".to_string(),
+                context_menu: false,
+                keys: None,
+                available: true,
+            });
+        }
+    }
+
+    // 4. Deduplicate: same (id, name) → keep innermost (first seen).
     // "Copy Tag" and "Copy Task" have the same ID but different names → both kept.
     // "Paste Tag" on task and "Paste Tag" on column have the same name → innermost kept.
     {
@@ -215,7 +266,7 @@ pub fn commands_for_scope(
         });
     }
 
-    // 4. Filter
+    // 5. Filter
     if context_menu_only {
         result.retain(|c| c.context_menu);
     }
@@ -260,20 +311,26 @@ mod tests {
     fn board_scope_has_global_commands() {
         let (registry, impls, fields, ui) = setup();
         let scope = vec!["board:my-board".into()];
-        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false);
+        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
 
         let ids: Vec<&str> = cmds.iter().map(|c| c.id.as_str()).collect();
         assert!(ids.contains(&"app.undo"), "board scope should have undo");
         assert!(ids.contains(&"app.redo"), "board scope should have redo");
-        assert!(!ids.contains(&"entity.copy"), "board scope should NOT have copy (no task/tag)");
-        assert!(!ids.contains(&"entity.cut"), "board scope should NOT have cut");
+        assert!(
+            !ids.contains(&"entity.copy"),
+            "board scope should NOT have copy (no task/tag)"
+        );
+        assert!(
+            !ids.contains(&"entity.cut"),
+            "board scope should NOT have cut"
+        );
     }
 
     #[test]
     fn board_scope_no_paste_without_clipboard() {
         let (registry, impls, fields, ui) = setup();
         let scope = vec!["board:my-board".into()];
-        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false);
+        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
         let ids: Vec<&str> = cmds.iter().map(|c| c.id.as_str()).collect();
         assert!(!ids.contains(&"entity.paste"), "no paste without clipboard");
     }
@@ -287,10 +344,13 @@ mod tests {
         let (registry, impls, fields, ui) = setup();
         ui.set_clipboard_entity_type("task");
         let scope = vec!["column:todo".into(), "board:my-board".into()];
-        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false);
+        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
 
         let paste = cmds.iter().find(|c| c.id == "entity.paste");
-        assert!(paste.is_some(), "paste should be available with task on clipboard + column in scope");
+        assert!(
+            paste.is_some(),
+            "paste should be available with task on clipboard + column in scope"
+        );
         assert_eq!(paste.unwrap().name, "Paste Task");
     }
 
@@ -306,13 +366,29 @@ mod tests {
             "column:todo".into(),
             "board:my-board".into(),
         ];
-        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false);
+        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
         let names: Vec<&str> = cmds.iter().map(|c| c.name.as_str()).collect();
 
-        assert!(names.contains(&"Copy Task"), "should have Copy Task: {:?}", names);
-        assert!(names.contains(&"Cut Task"), "should have Cut Task: {:?}", names);
-        assert!(names.contains(&"Inspect Task"), "should have Inspect Task: {:?}", names);
-        assert!(names.contains(&"Archive Task"), "should have Archive Task: {:?}", names);
+        assert!(
+            names.contains(&"Copy Task"),
+            "should have Copy Task: {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"Cut Task"),
+            "should have Cut Task: {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"Inspect Task"),
+            "should have Inspect Task: {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"Archive Task"),
+            "should have Archive Task: {:?}",
+            names
+        );
     }
 
     #[test]
@@ -324,7 +400,7 @@ mod tests {
             "column:todo".into(),
             "board:my-board".into(),
         ];
-        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false);
+        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
         let paste = cmds.iter().find(|c| c.id == "entity.paste");
         assert!(paste.is_some(), "paste should be available");
         assert_eq!(paste.unwrap().name, "Paste Tag");
@@ -343,27 +419,47 @@ mod tests {
             "column:todo".into(),
             "board:my-board".into(),
         ];
-        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false);
+        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
         let names: Vec<&str> = cmds.iter().map(|c| c.name.as_str()).collect();
 
-        assert!(names.contains(&"Copy Tag"), "should have Copy Tag: {:?}", names);
-        assert!(names.contains(&"Copy Task"), "should have Copy Task: {:?}", names);
-        assert!(names.contains(&"Cut Tag"), "should have Cut Tag: {:?}", names);
-        assert!(names.contains(&"Cut Task"), "should have Cut Task: {:?}", names);
-        assert!(names.contains(&"Inspect Tag"), "should have Inspect Tag: {:?}", names);
-        assert!(names.contains(&"Inspect Task"), "should have Inspect Task: {:?}", names);
+        assert!(
+            names.contains(&"Copy Tag"),
+            "should have Copy Tag: {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"Copy Task"),
+            "should have Copy Task: {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"Cut Tag"),
+            "should have Cut Tag: {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"Cut Task"),
+            "should have Cut Task: {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"Inspect Tag"),
+            "should have Inspect Tag: {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"Inspect Task"),
+            "should have Inspect Task: {:?}",
+            names
+        );
     }
 
     #[test]
     fn tag_on_task_with_tag_clipboard_has_paste_tag() {
         let (registry, impls, fields, ui) = setup();
         ui.set_clipboard_entity_type("tag");
-        let scope = vec![
-            "tag:bug".into(),
-            "task:01X".into(),
-            "column:todo".into(),
-        ];
-        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false);
+        let scope = vec!["tag:bug".into(), "task:01X".into(), "column:todo".into()];
+        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
         let paste = cmds.iter().find(|c| c.id == "entity.paste");
         assert!(paste.is_some(), "should have paste");
         assert_eq!(paste.unwrap().name, "Paste Tag");
@@ -372,12 +468,8 @@ mod tests {
     #[test]
     fn tag_on_task_no_paste_without_clipboard() {
         let (registry, impls, fields, ui) = setup();
-        let scope = vec![
-            "tag:bug".into(),
-            "task:01X".into(),
-            "column:todo".into(),
-        ];
-        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false);
+        let scope = vec!["tag:bug".into(), "task:01X".into(), "column:todo".into()];
+        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
         let paste_cmds: Vec<_> = cmds.iter().filter(|c| c.id == "entity.paste").collect();
         assert!(paste_cmds.is_empty(), "no paste without clipboard");
     }
@@ -396,7 +488,7 @@ mod tests {
             "column:todo".into(),
             "board:my-board".into(),
         ];
-        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false);
+        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
         for cmd in &cmds {
             assert!(
                 !cmd.name.contains("{{"),
@@ -419,10 +511,14 @@ mod tests {
             "column:todo".into(),
             "board:my-board".into(),
         ];
-        let all = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false);
-        let ctx_only = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, true);
+        let all = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
+        let ctx_only =
+            commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, true, None);
 
-        assert!(ctx_only.len() < all.len(), "context menu should have fewer commands");
+        assert!(
+            ctx_only.len() < all.len(),
+            "context menu should have fewer commands"
+        );
         for cmd in &ctx_only {
             assert!(cmd.context_menu, "'{}' should be context_menu", cmd.id);
         }
@@ -435,7 +531,7 @@ mod tests {
     #[test]
     fn empty_scope_has_only_global_commands() {
         let (registry, impls, fields, ui) = setup();
-        let cmds = commands_for_scope(&[], &registry, &impls, Some(&fields), &ui, false);
+        let cmds = commands_for_scope(&[], &registry, &impls, Some(&fields), &ui, false, None);
 
         let ids: Vec<&str> = cmds.iter().map(|c| c.id.as_str()).collect();
         assert!(ids.contains(&"app.undo"));
@@ -455,7 +551,7 @@ mod tests {
         let (registry, impls, fields, ui) = setup();
         ui.set_clipboard_entity_type("task");
         let scope = vec!["task:01X".into()];
-        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false);
+        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
         let paste: Vec<_> = cmds.iter().filter(|c| c.id == "entity.paste").collect();
         assert!(paste.is_empty(), "can't paste task without column in scope");
     }
@@ -465,7 +561,7 @@ mod tests {
         let (registry, impls, fields, ui) = setup();
         ui.set_clipboard_entity_type("task");
         let scope = vec!["column:todo".into(), "board:board".into()];
-        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false);
+        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
         let paste = cmds.iter().find(|c| c.id == "entity.paste");
         assert!(paste.is_some(), "paste task should be available on column");
         assert_eq!(paste.unwrap().name, "Paste Task");
@@ -477,7 +573,7 @@ mod tests {
         let (registry, impls, fields, ui) = setup();
         ui.set_clipboard_entity_type("tag");
         let scope = vec!["column:todo".into(), "board:board".into()];
-        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false);
+        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
         let paste: Vec<_> = cmds.iter().filter(|c| c.id == "entity.paste").collect();
         assert!(paste.is_empty(), "can't paste tag without task in scope");
     }
@@ -487,7 +583,7 @@ mod tests {
         let (registry, impls, fields, ui) = setup();
         ui.set_clipboard_entity_type("tag");
         let scope = vec!["task:01X".into(), "column:todo".into()];
-        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false);
+        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
         let paste = cmds.iter().find(|c| c.id == "entity.paste");
         assert!(paste.is_some(), "paste tag should be available on task");
         assert_eq!(paste.unwrap().name, "Paste Tag");
@@ -498,7 +594,7 @@ mod tests {
         let (registry, impls, fields, ui) = setup();
         ui.set_clipboard_entity_type("task");
         let scope = vec!["board:my-board".into()];
-        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false);
+        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
         let paste = cmds.iter().find(|c| c.id == "entity.paste");
         assert!(paste.is_some(), "paste task should be available on board");
         assert_eq!(paste.unwrap().name, "Paste Task");
@@ -519,7 +615,7 @@ mod tests {
             "column:todo".into(),
             "board:board".into(),
         ];
-        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false);
+        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
         let paste_cmds: Vec<_> = cmds.iter().filter(|c| c.id == "entity.paste").collect();
         // Paste is declared on task, column, board — but dedup by (id, target) means
         // each has a different target so they DON'T dedup. However, only the ones
@@ -527,8 +623,12 @@ mod tests {
         // tag clipboard + task in scope → paste available on task target
         // tag clipboard + column in scope → paste NOT available (tag needs task)
         // tag clipboard + board in scope → paste NOT available (tag needs task)
-        assert_eq!(paste_cmds.len(), 1, "paste should appear once: {:?}",
-            paste_cmds.iter().map(|c| &c.target).collect::<Vec<_>>());
+        assert_eq!(
+            paste_cmds.len(),
+            1,
+            "paste should appear once: {:?}",
+            paste_cmds.iter().map(|c| &c.target).collect::<Vec<_>>()
+        );
     }
 
     #[test]
@@ -536,7 +636,7 @@ mod tests {
         let (registry, impls, fields, ui) = setup();
         ui.set_clipboard_entity_type("task");
         let scope = vec!["column:todo".into(), "board:board".into()];
-        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false);
+        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
         let paste_cmds: Vec<_> = cmds.iter().filter(|c| c.id == "entity.paste").collect();
         // task clipboard: paste available on column (yes) and board (yes)
         // Both have paste declared, but availability check allows both.
@@ -559,9 +659,14 @@ mod tests {
             vec!["task:t".into(), "column:c".into()],
             vec!["tag:x".into(), "task:t".into(), "column:c".into()],
         ] {
-            let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false);
+            let cmds =
+                commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
             let ids: Vec<&str> = cmds.iter().map(|c| c.id.as_str()).collect();
-            assert!(ids.contains(&"app.quit"), "app.quit should be in scope {:?}", scope);
+            assert!(
+                ids.contains(&"app.quit"),
+                "app.quit should be in scope {:?}",
+                scope
+            );
         }
     }
 
@@ -569,7 +674,7 @@ mod tests {
     fn app_undo_redo_always_available() {
         let (registry, impls, fields, ui) = setup();
         let scope = vec!["task:01X".into(), "column:todo".into()];
-        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false);
+        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
         let ids: Vec<&str> = cmds.iter().map(|c| c.id.as_str()).collect();
         assert!(ids.contains(&"app.undo"));
         assert!(ids.contains(&"app.redo"));
@@ -583,7 +688,7 @@ mod tests {
     fn copy_task_has_keybindings() {
         let (registry, impls, fields, ui) = setup();
         let scope = vec!["task:01X".into(), "column:todo".into()];
-        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false);
+        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
         let copy = cmds.iter().find(|c| c.name == "Copy Task").unwrap();
         let keys = copy.keys.as_ref().expect("Copy Task should have keys");
         assert_eq!(keys.cua.as_deref(), Some("Mod+C"));
@@ -598,10 +703,13 @@ mod tests {
     fn invisible_commands_not_returned() {
         let (registry, impls, fields, ui) = setup();
         let scope = vec!["task:01X".into(), "column:todo".into()];
-        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false);
+        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
         let ids: Vec<&str> = cmds.iter().map(|c| c.id.as_str()).collect();
         // entity.update_field is visible: false in YAML
-        assert!(!ids.contains(&"entity.update_field"), "invisible commands should be excluded");
+        assert!(
+            !ids.contains(&"entity.update_field"),
+            "invisible commands should be excluded"
+        );
     }
 
     // =========================================================================
@@ -613,14 +721,16 @@ mod tests {
         // Hypothetical: tag focused without a task parent
         let (registry, impls, fields, ui) = setup();
         let scope = vec!["tag:bug".into()];
-        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false);
+        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
         let cut_tag = cmds.iter().find(|c| c.name == "Cut Tag");
         // CutCmd.available() checks has_in_scope("tag") — true. But the actual
         // execute would fail without task. available() doesn't check for task
         // on cut when tag is present. This test documents current behavior.
         // If cut tag should require task, fix CutCmd.available().
-        assert!(cut_tag.is_some() || cut_tag.is_none(),
-            "documenting: cut tag availability without task parent");
+        assert!(
+            cut_tag.is_some() || cut_tag.is_none(),
+            "documenting: cut tag availability without task parent"
+        );
     }
 
     // =========================================================================
@@ -635,7 +745,7 @@ mod tests {
             "task:01TASK".into(),
             "column:todo".into(),
         ];
-        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false);
+        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
 
         let copy_tag = cmds.iter().find(|c| c.name == "Copy Tag").unwrap();
         assert_eq!(copy_tag.target.as_deref(), Some("tag:01TAG"));
@@ -657,36 +767,50 @@ mod tests {
     fn task_add_available_with_column_in_scope() {
         let (registry, impls, fields, ui) = setup();
         let scope = vec!["column:todo".into(), "board:board".into()];
-        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false);
+        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
         let ids: Vec<&str> = cmds.iter().map(|c| c.id.as_str()).collect();
-        assert!(ids.contains(&"task.add"), "task.add should be available with column in scope: {:?}", ids);
+        assert!(
+            ids.contains(&"task.add"),
+            "task.add should be available with column in scope: {:?}",
+            ids
+        );
     }
 
     #[test]
     fn task_add_not_available_without_column() {
         let (registry, impls, fields, ui) = setup();
         let scope = vec!["board:board".into()];
-        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false);
+        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
         let ids: Vec<&str> = cmds.iter().map(|c| c.id.as_str()).collect();
-        assert!(!ids.contains(&"task.add"), "task.add should NOT be available without column");
+        assert!(
+            !ids.contains(&"task.add"),
+            "task.add should NOT be available without column"
+        );
     }
 
     #[test]
     fn task_untag_available_with_tag_and_task() {
         let (registry, impls, fields, ui) = setup();
         let scope = vec!["tag:bug".into(), "task:01X".into(), "column:todo".into()];
-        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false);
+        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
         let ids: Vec<&str> = cmds.iter().map(|c| c.id.as_str()).collect();
-        assert!(ids.contains(&"task.untag"), "task.untag should be available with tag+task: {:?}", ids);
+        assert!(
+            ids.contains(&"task.untag"),
+            "task.untag should be available with tag+task: {:?}",
+            ids
+        );
     }
 
     #[test]
     fn task_untag_not_available_without_tag() {
         let (registry, impls, fields, ui) = setup();
         let scope = vec!["task:01X".into(), "column:todo".into()];
-        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false);
+        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
         let ids: Vec<&str> = cmds.iter().map(|c| c.id.as_str()).collect();
-        assert!(!ids.contains(&"task.untag"), "task.untag should NOT be available without tag");
+        assert!(
+            !ids.contains(&"task.untag"),
+            "task.untag should NOT be available without tag"
+        );
     }
 
     // =========================================================================
@@ -697,18 +821,26 @@ mod tests {
     fn actor_scope_has_inspect() {
         let (registry, impls, fields, ui) = setup();
         let scope = vec!["actor:alice".into()];
-        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false);
+        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
         let names: Vec<&str> = cmds.iter().map(|c| c.name.as_str()).collect();
-        assert!(names.contains(&"Inspect Actor"), "actor should have Inspect Actor: {:?}", names);
+        assert!(
+            names.contains(&"Inspect Actor"),
+            "actor should have Inspect Actor: {:?}",
+            names
+        );
     }
 
     #[test]
     fn swimlane_scope_has_inspect() {
         let (registry, impls, fields, ui) = setup();
         let scope = vec!["swimlane:lane1".into()];
-        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false);
+        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
         let names: Vec<&str> = cmds.iter().map(|c| c.name.as_str()).collect();
-        assert!(names.contains(&"Inspect Swimlane"), "swimlane should have Inspect Swimlane: {:?}", names);
+        assert!(
+            names.contains(&"Inspect Swimlane"),
+            "swimlane should have Inspect Swimlane: {:?}",
+            names
+        );
     }
 
     // =========================================================================
@@ -719,7 +851,7 @@ mod tests {
     fn unknown_entity_type_ignored() {
         let (registry, impls, fields, ui) = setup();
         let scope = vec!["foo:bar".into(), "task:01X".into(), "column:todo".into()];
-        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false);
+        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
         // Should still have task commands — unknown type just gets skipped
         let names: Vec<&str> = cmds.iter().map(|c| c.name.as_str()).collect();
         assert!(names.contains(&"Copy Task"));
@@ -741,11 +873,14 @@ mod tests {
         let (registry, impls, fields, ui) = setup();
         ui.set_clipboard_entity_type("task");
         let scope = vec!["column:todo".into(), "board:board".into()];
-        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, true);
+        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, true, None);
         let paste = cmds.iter().find(|c| c.id == "entity.paste");
         assert!(paste.is_some(), "paste should be available");
-        assert_eq!(paste.unwrap().name, "Paste Task",
-            "paste name should come from clipboard type, not column entity type");
+        assert_eq!(
+            paste.unwrap().name,
+            "Paste Task",
+            "paste name should come from clipboard type, not column entity type"
+        );
     }
 
     #[test]
@@ -754,18 +889,21 @@ mod tests {
         let (registry, impls, fields, ui) = setup();
         ui.set_clipboard_entity_type("tag");
         let scope = vec!["task:01X".into(), "column:todo".into()];
-        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, true);
+        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, true, None);
         let paste = cmds.iter().find(|c| c.id == "entity.paste");
         assert!(paste.is_some(), "paste should be available");
-        assert_eq!(paste.unwrap().name, "Paste Tag",
-            "paste name should come from clipboard type, not task entity type");
+        assert_eq!(
+            paste.unwrap().name,
+            "Paste Tag",
+            "paste name should come from clipboard type, not task entity type"
+        );
     }
 
     #[test]
     fn drag_commands_never_appear() {
         let (registry, impls, fields, ui) = setup();
         let scope = vec!["task:01X".into(), "column:todo".into(), "board:b".into()];
-        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false);
+        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
         let ids: Vec<&str> = cmds.iter().map(|c| c.id.as_str()).collect();
         assert!(!ids.contains(&"drag.start"));
         assert!(!ids.contains(&"drag.cancel"));
@@ -780,12 +918,235 @@ mod tests {
     fn global_commands_have_no_target() {
         let (registry, impls, fields, ui) = setup();
         let scope = vec!["task:01X".into(), "column:todo".into()];
-        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false);
+        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
 
         let undo = cmds.iter().find(|c| c.id == "app.undo").unwrap();
         assert!(undo.target.is_none());
 
         let quit = cmds.iter().find(|c| c.id == "app.quit").unwrap();
         assert!(quit.target.is_none());
+    }
+
+    // =========================================================================
+    // Dynamic view switch commands
+    // =========================================================================
+
+    #[test]
+    fn view_switch_commands_appear_when_views_provided() {
+        let (registry, impls, fields, ui) = setup();
+        let scope = vec!["board:my-board".into()];
+        let dynamic = DynamicSources {
+            views: vec![
+                ViewInfo {
+                    id: "board-view".into(),
+                    name: "Board View".into(),
+                },
+                ViewInfo {
+                    id: "tasks-grid".into(),
+                    name: "Task Grid".into(),
+                },
+                ViewInfo {
+                    id: "tags-grid".into(),
+                    name: "Tag Grid".into(),
+                },
+            ],
+            boards: vec![],
+        };
+        let cmds = commands_for_scope(
+            &scope,
+            &registry,
+            &impls,
+            Some(&fields),
+            &ui,
+            false,
+            Some(&dynamic),
+        );
+        let ids: Vec<&str> = cmds.iter().map(|c| c.id.as_str()).collect();
+
+        assert!(
+            ids.contains(&"view.switch:board-view"),
+            "should have board-view switch: {:?}",
+            ids
+        );
+        assert!(
+            ids.contains(&"view.switch:tasks-grid"),
+            "should have tasks-grid switch: {:?}",
+            ids
+        );
+        assert!(
+            ids.contains(&"view.switch:tags-grid"),
+            "should have tags-grid switch: {:?}",
+            ids
+        );
+    }
+
+    #[test]
+    fn view_switch_commands_have_correct_names() {
+        let (registry, impls, fields, ui) = setup();
+        let scope = vec!["board:my-board".into()];
+        let dynamic = DynamicSources {
+            views: vec![
+                ViewInfo {
+                    id: "board-view".into(),
+                    name: "Board View".into(),
+                },
+                ViewInfo {
+                    id: "tasks-grid".into(),
+                    name: "Task Grid".into(),
+                },
+            ],
+            boards: vec![],
+        };
+        let cmds = commands_for_scope(
+            &scope,
+            &registry,
+            &impls,
+            Some(&fields),
+            &ui,
+            false,
+            Some(&dynamic),
+        );
+
+        let board_switch = cmds
+            .iter()
+            .find(|c| c.id == "view.switch:board-view")
+            .unwrap();
+        assert_eq!(board_switch.name, "Switch to Board View");
+        assert_eq!(board_switch.group, "view");
+        assert!(board_switch.target.is_none());
+
+        let grid_switch = cmds
+            .iter()
+            .find(|c| c.id == "view.switch:tasks-grid")
+            .unwrap();
+        assert_eq!(grid_switch.name, "Switch to Task Grid");
+    }
+
+    // =========================================================================
+    // Dynamic board switch commands
+    // =========================================================================
+
+    #[test]
+    fn board_switch_commands_appear_when_boards_provided() {
+        let (registry, impls, fields, ui) = setup();
+        let scope = vec!["board:my-board".into()];
+        let dynamic = DynamicSources {
+            views: vec![],
+            boards: vec![
+                BoardInfo {
+                    path: "/home/user/project-a".into(),
+                    name: "Project A".into(),
+                },
+                BoardInfo {
+                    path: "/home/user/project-b".into(),
+                    name: "Project B".into(),
+                },
+            ],
+        };
+        let cmds = commands_for_scope(
+            &scope,
+            &registry,
+            &impls,
+            Some(&fields),
+            &ui,
+            false,
+            Some(&dynamic),
+        );
+        let ids: Vec<&str> = cmds.iter().map(|c| c.id.as_str()).collect();
+
+        assert!(
+            ids.contains(&"board.switch:/home/user/project-a"),
+            "should have project-a switch: {:?}",
+            ids
+        );
+        assert!(
+            ids.contains(&"board.switch:/home/user/project-b"),
+            "should have project-b switch: {:?}",
+            ids
+        );
+    }
+
+    #[test]
+    fn board_switch_commands_have_correct_names_and_ids() {
+        let (registry, impls, fields, ui) = setup();
+        let scope = vec!["board:my-board".into()];
+        let dynamic = DynamicSources {
+            views: vec![],
+            boards: vec![BoardInfo {
+                path: "/tmp/my-kanban".into(),
+                name: "My Kanban".into(),
+            }],
+        };
+        let cmds = commands_for_scope(
+            &scope,
+            &registry,
+            &impls,
+            Some(&fields),
+            &ui,
+            false,
+            Some(&dynamic),
+        );
+
+        let board_cmd = cmds
+            .iter()
+            .find(|c| c.id == "board.switch:/tmp/my-kanban")
+            .unwrap();
+        assert_eq!(board_cmd.name, "Switch to Board: My Kanban");
+        assert_eq!(board_cmd.group, "board");
+        assert!(board_cmd.target.is_none());
+        assert!(!board_cmd.context_menu);
+    }
+
+    #[test]
+    fn view_and_board_commands_not_in_context_menu() {
+        let (registry, impls, fields, ui) = setup();
+        let scope = vec!["board:my-board".into()];
+        let dynamic = DynamicSources {
+            views: vec![ViewInfo {
+                id: "board-view".into(),
+                name: "Board View".into(),
+            }],
+            boards: vec![BoardInfo {
+                path: "/tmp/board".into(),
+                name: "Board".into(),
+            }],
+        };
+        let cmds = commands_for_scope(
+            &scope,
+            &registry,
+            &impls,
+            Some(&fields),
+            &ui,
+            true,
+            Some(&dynamic),
+        );
+        let ids: Vec<&str> = cmds.iter().map(|c| c.id.as_str()).collect();
+
+        // Dynamic commands have context_menu: false, so they should be filtered out
+        assert!(
+            !ids.iter().any(|id| id.starts_with("view.switch:")),
+            "view commands should not appear in context menu"
+        );
+        assert!(
+            !ids.iter().any(|id| id.starts_with("board.switch:")),
+            "board commands should not appear in context menu"
+        );
+    }
+
+    #[test]
+    fn no_dynamic_commands_when_none_provided() {
+        let (registry, impls, fields, ui) = setup();
+        let scope = vec!["board:my-board".into()];
+        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
+        let ids: Vec<&str> = cmds.iter().map(|c| c.id.as_str()).collect();
+
+        assert!(
+            !ids.iter().any(|id| id.starts_with("view.switch:")),
+            "no view commands without dynamic sources"
+        );
+        assert!(
+            !ids.iter().any(|id| id.starts_with("board.switch:")),
+            "no board commands without dynamic sources"
+        );
     }
 }

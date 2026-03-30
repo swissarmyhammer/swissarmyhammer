@@ -5,9 +5,8 @@ import {
   useRef,
   type ReactNode,
 } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { error as logError } from "@/lib/log";
-import { useActiveBoardPath } from "@/lib/command-scope";
+import { useActiveBoardPath, backendDispatch } from "@/lib/command-scope";
 
 /**
  * Signature for the centralized field update function.
@@ -51,7 +50,7 @@ export function FieldUpdateProvider({ children }: FieldUpdateProviderProps) {
   const updateField: UpdateFieldFn = useCallback(
     async (entityType, entityId, fieldName, value) => {
       try {
-        await invoke("dispatch_command", {
+        await backendDispatch({
           cmd: "entity.update_field",
           args: {
             entity_type: entityType,

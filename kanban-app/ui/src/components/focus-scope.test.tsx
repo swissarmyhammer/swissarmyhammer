@@ -13,6 +13,10 @@ vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(() => Promise.resolve()),
 }));
 
+vi.mock("@tauri-apps/api/window", () => ({
+  getCurrentWindow: () => ({ label: "main" }),
+}));
+
 /** Helper to read focus state from inside the provider. */
 function FocusReader() {
   const { focusedMoniker } = useEntityFocus();
@@ -479,9 +483,7 @@ describe("FocusScope", () => {
     /** Helper that reads useParentFocusScope and renders the value. */
     function ParentScopeReader() {
       const parentMoniker = useParentFocusScope();
-      return (
-        <span data-testid="parent-scope">{parentMoniker ?? "null"}</span>
-      );
+      return <span data-testid="parent-scope">{parentMoniker ?? "null"}</span>;
     }
 
     it("returns parent FocusScope moniker", () => {

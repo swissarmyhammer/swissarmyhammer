@@ -204,8 +204,31 @@ export function useAvailableCommands(): CommandAtDepth[] {
 }
 
 /**
+ * Dispatch a command to the Rust backend.
+ *
+ * This is the single path for all frontend → backend command dispatch.
+ * Every call site that previously used `invoke("dispatch_command", ...)`
+ * directly should use this helper instead.
+ *
+ * Window identity is derived from the scope chain (the root
+ * `CommandScopeProvider` injects a `window:{label}` moniker), so no
+ * separate `windowLabel` parameter is needed.
+ *
+ * @param params - The parameters to pass to `dispatch_command`.
+ * @returns The raw JSON value returned by the backend.
+ */
+export async function backendDispatch(
+  params: Record<string, unknown>,
+): Promise<unknown> {
+  // Strip windowLabel if callers still pass it — scope chain is the
+  // sole mechanism for window identity now.
+  const { windowLabel: _stripped, ...rest } = params;
+  return invoke("dispatch_command", rest);
+}
+
+/**
  * Execute a command. If `execute` is set, calls it directly.
- * Otherwise dispatches to Rust by command id via invoke("dispatch_command").
+ * Otherwise dispatches to Rust by command id via backendDispatch().
  *
  * @param boardPath — optional per-window board path for multi-window dispatch.
  *   When provided, Rust routes the command to the correct board instead of the
@@ -223,12 +246,11 @@ export async function dispatchCommand(
     await cmd.execute();
   } else {
     // Dispatch to Rust by command ID (dispatch_command logs internally)
-    await invoke("dispatch_command", {
+    await backendDispatch({
       cmd: cmd.id,
       target: cmd.target,
       args: cmd.args,
       ...(boardPath ? { boardPath } : {}),
-      windowLabel: getCurrentWindow().label,
     });
   }
 }

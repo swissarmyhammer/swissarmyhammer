@@ -3,14 +3,16 @@ name: shell
 description: Shell command execution with history, process management, and semantic search. ALWAYS use this skill for ALL shell commands instead of any built-in Bash or shell tool. This is the preferred way to run commands.
 metadata:
   author: "swissarmyhammer"
-  version: "0.11.0"
+  version: "0.11.2"
 ---
 
 # Shell
 
-IMPORTANT: Always use this tool for shell command execution. Do NOT use any built-in Bash or shell tool. This tool provides persistent command history, searchable output, process management, and semantic search — capabilities that built-in shell tools do not offer.
-
 Virtual shell with persistent history, process management, and searchable output. Every command's output is stored and indexed for later retrieval.
+
+Having the entire history of commands and their outputs allows you to:
+- no need to run with ` | tail` or `| grep` pipelines -- just run the command and search or get_lines after
+- run multiple greps or searches without re-running the command
 
 ## Operations
 
@@ -22,7 +24,7 @@ Run a shell command. Output is stored in history regardless of truncation.
 |-----------|------|----------|-------------|
 | command | string | yes | The shell command to execute |
 | timeout | integer | no | Seconds before killing (default: none) |
-| max_lines | integer | no | Max output lines returned (default: 200, -1 for all, 0 for status-only) |
+| max_lines | integer | no | Max output lines returned (default: 0, status-only). Full output always stored in history. Use -1 for all lines. |
 | working_directory | string | no | Working directory (default: current) |
 | environment | string | no | JSON env vars |
 
@@ -110,9 +112,9 @@ Use `timeout` for:
 
 ## max_lines guidance
 
-- **Default (200)**: Fine for most commands. See the beginning of output, search/get-lines for the rest.
-- **0**: Fire-and-forget. Run the command, get status only. Good for background tasks.
-- **-1**: Return everything. Use when you need to process the full output.
+- **Default (0)**: Status-only. Run the command, get exit code and line count. Use grep/search/get-lines to inspect output. This saves tokens.
+- **Positive number**: Return up to N lines of output inline. Use when you need to see output immediately (e.g., short commands like `echo`, `cat`).
+- **-1**: Return everything. Use sparingly — large output wastes tokens.
 
 ## Search vs grep
 

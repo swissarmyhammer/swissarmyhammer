@@ -8,8 +8,8 @@ import {
   useMemo,
   type ReactNode,
 } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import type { CommandScope } from "./command-scope";
+import { backendDispatch } from "./command-scope";
 
 /** A predicate that a FocusScope uses to claim focus when a nav command fires. */
 export interface ClaimPredicate {
@@ -40,7 +40,10 @@ interface EntityFocusContextValue {
   /** Look up a registered scope by moniker. */
   getScope: (moniker: string) => CommandScope | null;
   /** Register claim predicates for a FocusScope moniker. */
-  registerClaimPredicates: (moniker: string, predicates: ClaimPredicate[]) => void;
+  registerClaimPredicates: (
+    moniker: string,
+    predicates: ClaimPredicate[],
+  ) => void;
   /** Unregister claim predicates for a FocusScope moniker. */
   unregisterClaimPredicates: (moniker: string) => void;
   /**
@@ -73,12 +76,12 @@ function invokeFocusChange(
       }
       current = current.parent;
     }
-    invoke("dispatch_command", {
+    backendDispatch({
       cmd: "ui.setFocus",
       args: { scope_chain: chain },
     }).catch((error) => console.error("ui.setFocus failed:", error));
   } else {
-    invoke("dispatch_command", {
+    backendDispatch({
       cmd: "ui.setFocus",
       args: { scope_chain: [] },
     }).catch((error) => console.error("ui.setFocus failed:", error));
@@ -120,9 +123,12 @@ export function EntityFocusProvider({ children }: { children: ReactNode }) {
   // --- Claim predicate registry (ref-based, no re-renders) ---
   const claimPredicatesRef = useRef<Map<string, ClaimPredicate[]>>(new Map());
 
-  const registerClaimPredicates = useCallback((moniker: string, predicates: ClaimPredicate[]) => {
-    claimPredicatesRef.current.set(moniker, predicates);
-  }, []);
+  const registerClaimPredicates = useCallback(
+    (moniker: string, predicates: ClaimPredicate[]) => {
+      claimPredicatesRef.current.set(moniker, predicates);
+    },
+    [],
+  );
 
   const unregisterClaimPredicates = useCallback((moniker: string) => {
     claimPredicatesRef.current.delete(moniker);
@@ -142,32 +148,38 @@ export function EntityFocusProvider({ children }: { children: ReactNode }) {
    *
    * @returns true if a predicate claimed focus, false if none matched.
    */
-  const broadcastNavCommand = useCallback((commandId: string): boolean => {
-    const currentFocus = focusedMonikerRef.current;
+  const broadcastNavCommand = useCallback(
+    (commandId: string): boolean => {
+      const currentFocus = focusedMonikerRef.current;
 
-    // Build isDescendantOf helper — walks the focused scope's parent chain
-    const isDescendantOf = (ancestor: string): boolean => {
-      if (!currentFocus) return false;
-      const scope = registryRef.current.get(currentFocus);
-      if (!scope) return false;
-      let current = scope.parent;
-      while (current !== null) {
-        if (current.moniker === ancestor) return true;
-        current = current.parent;
-      }
-      return false;
-    };
+      // Build isDescendantOf helper — walks the focused scope's parent chain
+      const isDescendantOf = (ancestor: string): boolean => {
+        if (!currentFocus) return false;
+        const scope = registryRef.current.get(currentFocus);
+        if (!scope) return false;
+        let current = scope.parent;
+        while (current !== null) {
+          if (current.moniker === ancestor) return true;
+          current = current.parent;
+        }
+        return false;
+      };
 
-    for (const [moniker, predicates] of claimPredicatesRef.current) {
-      for (const pred of predicates) {
-        if (pred.command === commandId && pred.when(currentFocus, isDescendantOf)) {
-          setFocus(moniker);
-          return true;
+      for (const [moniker, predicates] of claimPredicatesRef.current) {
+        for (const pred of predicates) {
+          if (
+            pred.command === commandId &&
+            pred.when(currentFocus, isDescendantOf)
+          ) {
+            setFocus(moniker);
+            return true;
+          }
         }
       }
-    }
-    return false;
-  }, [setFocus]);
+      return false;
+    },
+    [setFocus],
+  );
 
   const value = useMemo<EntityFocusContextValue>(
     () => ({
@@ -180,7 +192,16 @@ export function EntityFocusProvider({ children }: { children: ReactNode }) {
       unregisterClaimPredicates,
       broadcastNavCommand,
     }),
-    [focusedMoniker, setFocus, registerScope, unregisterScope, getScope, registerClaimPredicates, unregisterClaimPredicates, broadcastNavCommand],
+    [
+      focusedMoniker,
+      setFocus,
+      registerScope,
+      unregisterScope,
+      getScope,
+      registerClaimPredicates,
+      unregisterClaimPredicates,
+      broadcastNavCommand,
+    ],
   );
 
   return (

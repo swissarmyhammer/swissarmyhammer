@@ -10,7 +10,9 @@ use std::sync::Arc;
 use swissarmyhammer_commands::{
     builtin_yaml_sources, Command, CommandContext, CommandError, CommandsRegistry, UIState,
 };
-use swissarmyhammer_kanban::clipboard::{ClipboardProvider, ClipboardProviderExt, InMemoryClipboard};
+use swissarmyhammer_kanban::clipboard::{
+    ClipboardProvider, ClipboardProviderExt, InMemoryClipboard,
+};
 use swissarmyhammer_kanban::commands::register_commands;
 use swissarmyhammer_kanban::{
     board::InitBoard, KanbanContext, KanbanOperationProcessor, OperationProcessor,
@@ -88,12 +90,14 @@ impl TestEngine {
         ctx.ui_state = Some(Arc::clone(&self.ui_state));
         ctx.set_extension(Arc::clone(&self.kanban));
         // Inject EntityContext so undo/redo commands can access it
-        let ectx = self.kanban.entity_context().await
+        let ectx = self
+            .kanban
+            .entity_context()
+            .await
             .expect("entity_context should be available");
         ctx.set_extension(ectx);
-        let clipboard_ext = ClipboardProviderExt(
-            Arc::clone(&self.clipboard) as Arc<dyn swissarmyhammer_kanban::clipboard::ClipboardProvider>,
-        );
+        let clipboard_ext = ClipboardProviderExt(Arc::clone(&self.clipboard)
+            as Arc<dyn swissarmyhammer_kanban::clipboard::ClipboardProvider>);
         ctx.set_extension(Arc::new(clipboard_ext));
 
         if !cmd.available(&ctx) {
@@ -1017,11 +1021,7 @@ async fn task_delete_removes_task() {
 
     // Dispatch task.delete through the command harness
     let delete_result = engine
-        .dispatch_simple(
-            "task.delete",
-            &[&format!("task:{}", task_id)],
-            None,
-        )
+        .dispatch_simple("task.delete", &[&format!("task:{}", task_id)], None)
         .await
         .expect("task.delete should succeed");
 
@@ -1084,12 +1084,7 @@ async fn task_move_with_swimlane_arg() {
     args.insert("swimlane".to_string(), json!("urgent"));
 
     let move_result = engine
-        .dispatch(
-            "task.move",
-            &[&format!("task:{}", task_id)],
-            None,
-            args,
-        )
+        .dispatch("task.move", &[&format!("task:{}", task_id)], None, args)
         .await
         .expect("task.move with swimlane should succeed");
 
@@ -1296,8 +1291,14 @@ async fn entity_copy_copies_task_to_clipboard() {
     assert_eq!(result["copied"].as_bool(), Some(true));
 
     // Verify the InMemoryClipboard has the task's fields as JSON (wrapped format)
-    let clipboard_text = engine.clipboard.read_text().await.unwrap().expect("clipboard should have data");
-    let clipboard_json: Value = serde_json::from_str(&clipboard_text).expect("should be valid JSON");
+    let clipboard_text = engine
+        .clipboard
+        .read_text()
+        .await
+        .unwrap()
+        .expect("clipboard should have data");
+    let clipboard_json: Value =
+        serde_json::from_str(&clipboard_text).expect("should be valid JSON");
     let content = &clipboard_json["swissarmyhammer_clipboard"];
     assert_eq!(content["entity_id"].as_str(), Some(task_id));
     assert_eq!(content["entity_type"].as_str(), Some("task"));
@@ -1311,7 +1312,10 @@ async fn entity_copy_copies_task_to_clipboard() {
     assert_eq!(task.get_str("title"), Some("Clipboard test task"));
 
     // Verify has_clipboard flag was set
-    assert!(engine.ui_state.has_clipboard(), "has_clipboard should be true after copy");
+    assert!(
+        engine.ui_state.has_clipboard(),
+        "has_clipboard should be true after copy"
+    );
 }
 
 #[tokio::test]
@@ -1335,7 +1339,12 @@ async fn entity_cut_undo_redo() {
     let cut_op_id = cut_result["operation_id"].as_str().unwrap();
 
     // Verify clipboard has the task snapshot (wrapped format)
-    let clipboard_text = engine.clipboard.read_text().await.unwrap().expect("clipboard should have data");
+    let clipboard_text = engine
+        .clipboard
+        .read_text()
+        .await
+        .unwrap()
+        .expect("clipboard should have data");
     let clipboard_json: Value = serde_json::from_str(&clipboard_text).unwrap();
     let content = &clipboard_json["swissarmyhammer_clipboard"];
     assert_eq!(content["entity_type"].as_str(), Some("task"));
@@ -1343,7 +1352,11 @@ async fn entity_cut_undo_redo() {
 
     // Verify task is deleted
     assert!(
-        engine.kanban.read_entity_generic("task", task_id).await.is_err(),
+        engine
+            .kanban
+            .read_entity_generic("task", task_id)
+            .await
+            .is_err(),
         "task should be deleted after cut"
     );
 
@@ -1367,7 +1380,10 @@ async fn entity_cut_undo_redo() {
     assert_eq!(task.get_str("title"), Some("Cut me"));
 
     // Clipboard should still have data
-    assert!(engine.clipboard.read_text().await.unwrap().is_some(), "clipboard should still have data after undo");
+    assert!(
+        engine.clipboard.read_text().await.unwrap().is_some(),
+        "clipboard should still have data after undo"
+    );
 
     // Redo the cut — task should be deleted again
     let mut redo_args = HashMap::new();
@@ -1378,7 +1394,11 @@ async fn entity_cut_undo_redo() {
         .expect("app.redo should succeed");
 
     assert!(
-        engine.kanban.read_entity_generic("task", task_id).await.is_err(),
+        engine
+            .kanban
+            .read_entity_generic("task", task_id)
+            .await
+            .is_err(),
         "task should be deleted again after redo"
     );
 }
@@ -1422,7 +1442,10 @@ async fn entity_paste_undo_redo() {
     assert_eq!(pasted_task.get_str("position_column"), Some("doing"));
 
     // Clipboard should still have data (multi-paste support)
-    assert!(engine.clipboard.read_text().await.unwrap().is_some(), "clipboard should still have data after paste");
+    assert!(
+        engine.clipboard.read_text().await.unwrap().is_some(),
+        "clipboard should still have data after paste"
+    );
 
     // Undo the paste — pasted task should be removed
     let mut undo_args = HashMap::new();
@@ -1434,13 +1457,21 @@ async fn entity_paste_undo_redo() {
     let undo_op_id = undo_result["operation_id"].as_str().unwrap();
 
     assert!(
-        engine.kanban.read_entity_generic("task", pasted_id).await.is_err(),
+        engine
+            .kanban
+            .read_entity_generic("task", pasted_id)
+            .await
+            .is_err(),
         "pasted task should be gone after undo"
     );
 
     // Original task should still exist
     assert!(
-        engine.kanban.read_entity_generic("task", original_id).await.is_ok(),
+        engine
+            .kanban
+            .read_entity_generic("task", original_id)
+            .await
+            .is_ok(),
         "original task should still exist"
     );
 
@@ -1474,7 +1505,11 @@ async fn cut_paste_end_to_end_undo() {
     let original_id = add_result["id"].as_str().unwrap();
 
     // Verify task is in todo
-    let task = engine.kanban.read_entity_generic("task", original_id).await.unwrap();
+    let task = engine
+        .kanban
+        .read_entity_generic("task", original_id)
+        .await
+        .unwrap();
     assert_eq!(task.get_str("position_column"), Some("todo"));
 
     // Cut the task from todo
@@ -1486,7 +1521,11 @@ async fn cut_paste_end_to_end_undo() {
 
     // Task should be deleted
     assert!(
-        engine.kanban.read_entity_generic("task", original_id).await.is_err(),
+        engine
+            .kanban
+            .read_entity_generic("task", original_id)
+            .await
+            .is_err(),
         "task should be deleted after cut"
     );
 
@@ -1499,7 +1538,11 @@ async fn cut_paste_end_to_end_undo() {
     let paste_op_id = paste_result["operation_id"].as_str().unwrap();
 
     // Pasted task in doing
-    let pasted_task = engine.kanban.read_entity_generic("task", pasted_id).await.unwrap();
+    let pasted_task = engine
+        .kanban
+        .read_entity_generic("task", pasted_id)
+        .await
+        .unwrap();
     assert_eq!(pasted_task.get_str("position_column"), Some("doing"));
 
     // Undo the paste — pasted task removed from doing
@@ -1511,13 +1554,21 @@ async fn cut_paste_end_to_end_undo() {
         .expect("undo paste should succeed");
 
     assert!(
-        engine.kanban.read_entity_generic("task", pasted_id).await.is_err(),
+        engine
+            .kanban
+            .read_entity_generic("task", pasted_id)
+            .await
+            .is_err(),
         "pasted task should be gone after undoing paste"
     );
 
     // Original still deleted (only paste was undone, not cut)
     assert!(
-        engine.kanban.read_entity_generic("task", original_id).await.is_err(),
+        engine
+            .kanban
+            .read_entity_generic("task", original_id)
+            .await
+            .is_err(),
         "original task should still be deleted (cut not undone yet)"
     );
 

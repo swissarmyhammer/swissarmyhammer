@@ -89,14 +89,20 @@ export function EntityInspector({ entity, navRef }: EntityInspectorProps) {
 
   /** Monikers for all navigable fields, in flat order. */
   const fieldMonikers = useMemo(
-    () => navigableFields.map((f) => fieldMoniker(entity.entity_type, entity.id, f.name)),
+    () =>
+      navigableFields.map((f) =>
+        fieldMoniker(entity.entity_type, entity.id, f.name),
+      ),
     [navigableFields, entity.entity_type, entity.id],
   );
 
   /** ClaimWhen predicates for each field at index i. */
   const claimPredicates = useMemo(() => {
     /** Check if a moniker is one of this inspector's fields or a descendant of one. */
-    const isInspectorField = (f: string | null, isDescendantOf: (a: string) => boolean): boolean => {
+    const isInspectorField = (
+      f: string | null,
+      isDescendantOf: (a: string) => boolean,
+    ): boolean => {
       if (!f) return false;
       if (fieldMonikers.includes(f)) return true;
       // Check if focused element is a child of any field (e.g. a pill inside a badge-list)
@@ -127,7 +133,8 @@ export function EntityInspector({ entity, navRef }: EntityInspectorProps) {
       // has no nav.left predicate) does this field-row predicate win.
       predicates.push({
         command: "nav.left",
-        when: (f, isDescendantOf) => f !== fieldMonikers[i] && isDescendantOf(fieldMonikers[i]),
+        when: (f, isDescendantOf) =>
+          f !== fieldMonikers[i] && isDescendantOf(fieldMonikers[i]),
       });
       // nav.first: claim if I'm the first field AND any sibling (or descendant) is focused
       if (i === 0) {
@@ -142,7 +149,8 @@ export function EntityInspector({ entity, navRef }: EntityInspectorProps) {
         predicates.push({
           command: "nav.last",
           when: (f, isDescendantOf) =>
-            isInspectorField(f, isDescendantOf) && f !== fieldMonikers[fieldMonikers.length - 1],
+            isInspectorField(f, isDescendantOf) &&
+            f !== fieldMonikers[fieldMonikers.length - 1],
         });
       }
       return predicates;

@@ -58,6 +58,7 @@ const mockInvoke = vi.fn((...args: any[]) => {
   if (args[0] === "get_ui_state")
     return Promise.resolve({
       palette_open: false,
+      palette_mode: "command",
       keymap_mode: "cua",
       scope_chain: [],
       open_boards: [],
@@ -75,6 +76,9 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(() => Promise.resolve(() => {})),
+}));
+vi.mock("@tauri-apps/api/window", () => ({
+  getCurrentWindow: () => ({ label: "main" }),
 }));
 vi.mock("@tauri-apps/plugin-log", () => ({
   error: vi.fn(),

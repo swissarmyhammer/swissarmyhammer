@@ -7,15 +7,17 @@ import {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
+import { invoke } from "@tauri-apps/api/core";
 import CodeMirror, { type ReactCodeMirrorRef } from "@uiw/react-codemirror";
 import { keymap, EditorView } from "@codemirror/view";
 import { Compartment } from "@codemirror/state";
 import { getCM, Vim } from "@replit/codemirror-vim";
-import { invoke } from "@tauri-apps/api/core";
+import { backendDispatch } from "@/lib/command-scope";
 import {
   CommandScopeContext,
   resolveCommand,
   dispatchCommand,
+  type CommandAtDepth,
 } from "@/lib/command-scope";
 import { useFocusedScope } from "@/lib/entity-focus-context";
 import { useUIState } from "@/lib/ui-state-context";
@@ -103,13 +105,18 @@ export function CommandPalette({
       });
   }, [open, scopeChain]);
 
-  // Adapt backend commands to the shape the palette expects
-  type PaletteEntry = { command: { id: string; name: string; target?: string }; depth: number };
-  const allCommands: PaletteEntry[] = useMemo(
-    () => backendCommands.map((cmd) => ({
-      command: { id: cmd.id, name: cmd.name, target: cmd.target },
-      depth: 0,
-    })),
+  // Adapt backend commands to the shape the palette expects (CommandAtDepth)
+  const allCommands: CommandAtDepth[] = useMemo(
+    () =>
+      backendCommands.map((cmd) => ({
+        command: {
+          id: cmd.id,
+          name: cmd.name,
+          target: cmd.target,
+          keys: cmd.keys,
+        },
+        depth: 0,
+      })),
     [backendCommands],
   );
 
@@ -225,7 +232,7 @@ export function CommandPalette({
     const entry = filteredCommands[selectedIndex];
     if (entry) {
       onClose();
-      invoke("dispatch_command", {
+      backendDispatch({
         cmd: entry.command.id,
         target: entry.command.target,
         scopeChain: scopeChain ?? [],

@@ -19,6 +19,7 @@ import {
   collectAvailableCommands,
   useExecuteCommand,
   dispatchCommand,
+  backendDispatch,
   type CommandDef,
   type CommandScope,
 } from "./command-scope";
@@ -483,7 +484,6 @@ describe("dispatchCommand", () => {
       cmd: "entity.delete",
       target: "task:abc",
       args: { moniker: "task:abc" },
-      windowLabel: "main",
     });
   });
 
@@ -517,7 +517,6 @@ describe("dispatchCommand", () => {
       target: "task:new",
       args: undefined,
       boardPath: "/boards/my-board",
-      windowLabel: "main",
     });
   });
 
@@ -529,7 +528,47 @@ describe("dispatchCommand", () => {
       cmd: "app.undo",
       target: undefined,
       args: undefined,
-      windowLabel: "main",
+    });
+  });
+});
+
+/* ---------- backendDispatch ---------- */
+
+describe("backendDispatch", () => {
+  it("does not include windowLabel in invoke args", async () => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    (invoke as ReturnType<typeof vi.fn>).mockResolvedValue({});
+    await backendDispatch({ cmd: "app.undo" });
+    expect(invoke).toHaveBeenCalledWith("dispatch_command", {
+      cmd: "app.undo",
+    });
+  });
+
+  it("preserves caller params without windowLabel", async () => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    (invoke as ReturnType<typeof vi.fn>).mockResolvedValue({});
+    await backendDispatch({
+      cmd: "task.move",
+      args: { id: "t1", column: "done" },
+      boardPath: "/boards/test",
+      scopeChain: ["task:t1", "column:done"],
+    });
+    expect(invoke).toHaveBeenCalledWith("dispatch_command", {
+      cmd: "task.move",
+      args: { id: "t1", column: "done" },
+      boardPath: "/boards/test",
+      scopeChain: ["task:t1", "column:done"],
+    });
+  });
+
+  it("strips windowLabel if caller passes it", async () => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    (invoke as ReturnType<typeof vi.fn>).mockResolvedValue({});
+    // Even if caller mistakenly passes windowLabel, backendDispatch
+    // should strip it — scope chain is the sole mechanism now.
+    await backendDispatch({ cmd: "test", windowLabel: "stale" });
+    expect(invoke).toHaveBeenCalledWith("dispatch_command", {
+      cmd: "test",
     });
   });
 });

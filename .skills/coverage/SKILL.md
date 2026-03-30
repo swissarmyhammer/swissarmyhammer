@@ -3,7 +3,7 @@ name: coverage
 description: Run tests with coverage instrumentation, identify uncovered code, and produce kanban cards for coverage gaps. Use when the user says "coverage", "what's untested", "find coverage gaps", or wants to know what needs tests. Automatically delegates to a tester subagent.
 metadata:
   author: "swissarmyhammer"
-  version: "0.11.0"
+  version: "0.11.2"
 ---
 
 ## Project Detection

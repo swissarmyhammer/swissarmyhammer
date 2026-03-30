@@ -196,7 +196,8 @@ export function DataTable({
   };
 
   /** Whether claimWhen-based FocusScopes should wrap cells. */
-  const useClaimNav = cellMonikers !== undefined && claimPredicates !== undefined;
+  const useClaimNav =
+    cellMonikers !== undefined && claimPredicates !== undefined;
 
   if (flatRows.length === 0) {
     return (
@@ -473,7 +474,12 @@ function GridCellScope({
       onClick={onClick}
       onDoubleClick={onDoubleClick}
     >
-      <FocusScope moniker={moniker} commands={[]} claimWhen={claimWhen} showFocusBar={false}>
+      <FocusScope
+        moniker={moniker}
+        commands={[]}
+        claimWhen={claimWhen}
+        showFocusBar={false}
+      >
         {children}
       </FocusScope>
     </TableCell>
