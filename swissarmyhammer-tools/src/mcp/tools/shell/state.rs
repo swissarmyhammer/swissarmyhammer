@@ -25,7 +25,7 @@ use swissarmyhammer_embedding::{Embedder, TextEmbedder};
 
 const CHUNK_SIZE: usize = 15; // lines per embedding chunk
 const BYTES_PER_F32: usize = 4;
-/// Bounded channel capacity — provides backpressure when the embedding worker falls behind.
+/// Bounded channel capacity for chunk processing pipeline.
 const CHUNK_CHANNEL_CAPACITY: usize = 256;
 
 /// Command execution status
@@ -71,14 +71,20 @@ impl CommandRecord {
     }
 }
 
-/// A chunk of output text to be inserted into DB and embedded in the background.
-struct ChunkJob {
-    session_id: String,
-    command_id: usize,
-    chunk_index: usize,
-    start_line: usize,
-    end_line: usize,
-    text: String,
+/// A work item for the background embedding worker.
+enum ChunkJob {
+    /// A chunk of output text to be inserted into DB and embedded.
+    Chunk {
+        session_id: String,
+        command_id: usize,
+        chunk_index: usize,
+        start_line: usize,
+        end_line: usize,
+        text: String,
+    },
+    /// Signals that a command is done sending chunks.
+    /// The worker sends back on the oneshot once all prior chunks have been processed.
+    Flush(tokio::sync::oneshot::Sender<()>),
 }
 
 /// The virtual shell state — singleton per server process
@@ -199,7 +205,7 @@ impl ShellState {
     /// Note: This performs blocking file I/O (log file append). This is acceptable because
     /// the shell tool is single-user and log writes are small and fast. The outer async mutex
     /// is held during this call, but concurrent shell operations are not expected.
-    pub fn append_lines(&mut self, cmd_id: usize, lines: &[String]) -> anyhow::Result<()> {
+    pub async fn append_lines(&mut self, cmd_id: usize, lines: &[String]) -> anyhow::Result<()> {
         let record = self
             .commands
             .iter_mut()
@@ -235,16 +241,17 @@ impl ShellState {
             }
         }
 
-        // Now send chunks (no longer borrowing self.commands mutably)
+        // Send chunks with async send — waits if channel is full, never drops
         for (chunk_index, start_line, end_line, chunk_text) in pending_chunks {
-            self.send_chunk(cmd_id, chunk_index, start_line, end_line, chunk_text);
+            self.send_chunk(cmd_id, chunk_index, start_line, end_line, chunk_text)
+                .await;
         }
 
         Ok(())
     }
 
     /// Flush remaining buffered lines as a final chunk when a command completes.
-    fn flush_line_buffer(&mut self, cmd_id: usize) {
+    async fn flush_line_buffer(&mut self, cmd_id: usize) {
         if let Some(buf) = self.line_buffer.remove(&cmd_id) {
             if !buf.is_empty() {
                 let record = self.commands.iter().find(|r| r.id == cmd_id);
@@ -256,16 +263,16 @@ impl ShellState {
                     let end_line = record.line_count;
                     let start_line = end_line.saturating_sub(buf.len()) + 1;
 
-                    self.send_chunk(cmd_id, chunk_index, start_line, end_line, chunk_text);
+                    self.send_chunk(cmd_id, chunk_index, start_line, end_line, chunk_text)
+                        .await;
                 }
             }
         }
     }
 
     /// Send a chunk to the background worker for DB insert and embedding.
-    /// Uses try_send to avoid blocking — if the channel is full, the chunk is dropped
-    /// with a warning (backpressure shedding).
-    fn send_chunk(
+    /// Async send — waits if channel is full, never drops chunks.
+    async fn send_chunk(
         &self,
         cmd_id: usize,
         chunk_index: usize,
@@ -273,16 +280,16 @@ impl ShellState {
         end_line: usize,
         text: String,
     ) {
-        if let Err(e) = self.chunk_tx.try_send(ChunkJob {
+        if let Err(e) = self.chunk_tx.send(ChunkJob::Chunk {
             session_id: self.session_id.clone(),
             command_id: cmd_id,
             chunk_index,
             start_line,
             end_line,
             text,
-        }) {
+        }).await {
             tracing::warn!(
-                "Chunk channel full or closed (cmd {}, chunk {}) — chunk dropped: {}",
+                "Chunk channel closed (cmd {}, chunk {}): {}",
                 cmd_id,
                 chunk_index,
                 e
@@ -290,9 +297,19 @@ impl ShellState {
         }
     }
 
+    /// Wait until all chunks sent so far have been processed (DB insert + embedding).
+    /// Sends a flush sentinel through the channel and waits for the worker to acknowledge.
+    pub async fn flush_chunks(&self) {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        // Use blocking send for the flush sentinel — must not be dropped
+        if self.chunk_tx.send(ChunkJob::Flush(tx)).await.is_ok() {
+            let _ = rx.await;
+        }
+    }
+
     /// Mark a command as completed with exit code.
-    pub fn complete_command(&mut self, cmd_id: usize, exit_code: Option<i32>) {
-        self.flush_line_buffer(cmd_id);
+    pub async fn complete_command(&mut self, cmd_id: usize, exit_code: Option<i32>) {
+        self.flush_line_buffer(cmd_id).await;
         self.processes.remove(&cmd_id);
         if let Some(record) = self.commands.iter_mut().find(|r| r.id == cmd_id) {
             record.status = CommandStatus::Completed;
@@ -303,8 +320,8 @@ impl ShellState {
     }
 
     /// Mark a command as timed out.
-    pub fn timeout_command(&mut self, cmd_id: usize) {
-        self.flush_line_buffer(cmd_id);
+    pub async fn timeout_command(&mut self, cmd_id: usize) {
+        self.flush_line_buffer(cmd_id).await;
         self.processes.remove(&cmd_id);
         if let Some(record) = self.commands.iter_mut().find(|r| r.id == cmd_id) {
             record.status = CommandStatus::TimedOut;
@@ -315,7 +332,7 @@ impl ShellState {
     }
 
     /// Kill a running command by PID. Returns the command record if found.
-    pub fn kill_process(&mut self, cmd_id: usize) -> anyhow::Result<CommandRecord> {
+    pub async fn kill_process(&mut self, cmd_id: usize) -> anyhow::Result<CommandRecord> {
         let pid = self
             .processes
             .get(&cmd_id)
@@ -335,7 +352,7 @@ impl ShellState {
                 .output();
         }
 
-        self.flush_line_buffer(cmd_id);
+        self.flush_line_buffer(cmd_id).await;
         self.processes.remove(&cmd_id);
 
         if let Some(record) = self.commands.iter_mut().find(|r| r.id == cmd_id) {
@@ -395,13 +412,15 @@ impl ShellState {
     ///
     /// Note: This performs blocking file I/O. Acceptable for single-user shell tool
     /// where grep is fast over local log files.
+    /// Returns `(matching_results, total_match_count)`. Results are capped by `limit`
+    /// (default 10) but `total_match_count` reflects all matches found.
     pub fn grep(
         &self,
         pattern: &str,
         command_id: Option<usize>,
         limit: Option<usize>,
-    ) -> anyhow::Result<Vec<GrepResult>> {
-        let limit = limit.unwrap_or(50);
+    ) -> anyhow::Result<(Vec<GrepResult>, usize)> {
+        let limit = limit.unwrap_or(10);
         let matcher = RegexMatcher::new_line_matcher(pattern)
             .map_err(|e| anyhow::anyhow!("Invalid regex pattern: {}", e))?;
 
@@ -411,15 +430,13 @@ impl ShellState {
             .build();
 
         let mut results = Vec::new();
+        let mut total_matches: usize = 0;
         let session_prefix = format!("{}:", self.session_id);
 
         searcher.search_path(
             &matcher,
             &self.log_path,
             UTF8(|_line_num, line| {
-                if results.len() >= limit {
-                    return Ok(false); // stop searching
-                }
                 // Only match lines from this session
                 if let Some(rest) = line.strip_prefix(&session_prefix) {
                     // Parse cmd_id:line_number:text
@@ -431,11 +448,14 @@ impl ShellState {
                                 return Ok(true); // skip, continue searching
                             }
                             if let Ok(line_num) = parts[1].parse::<usize>() {
-                                results.push(GrepResult {
-                                    command_id: cmd_id_parsed,
-                                    line_number: line_num,
-                                    text: parts[2].trim_end().to_string(),
-                                });
+                                total_matches += 1;
+                                if results.len() < limit {
+                                    results.push(GrepResult {
+                                        command_id: cmd_id_parsed,
+                                        line_number: line_num,
+                                        text: parts[2].trim_end().to_string(),
+                                    });
+                                }
                             }
                         }
                     }
@@ -444,7 +464,7 @@ impl ShellState {
             }),
         )?;
 
-        Ok(results)
+        Ok((results, total_matches))
     }
 
     /// Get the data needed for a search operation without holding self borrowed.
@@ -469,13 +489,15 @@ impl Drop for ShellState {
 /// Semantic search across command output using embeddings.
 /// This is a standalone function (not a &self method) so the outer SHELL_STATE
 /// lock can be released before calling it.
+/// Returns `(matching_results, total_match_count)`. Results are capped by `limit`
+/// (default 10) but `total_match_count` reflects all matching chunks.
 pub async fn search(
     session_id: &str,
     db: &Arc<Mutex<Connection>>,
     query: &str,
     command_id: Option<usize>,
     limit: Option<usize>,
-) -> anyhow::Result<Vec<SearchResult>> {
+) -> anyhow::Result<(Vec<SearchResult>, usize)> {
     let limit = limit.unwrap_or(10);
 
     // Create an embedding model for the query using the platform-aware Embedder
@@ -530,8 +552,9 @@ pub async fn search(
             .partial_cmp(&a.similarity)
             .unwrap_or(std::cmp::Ordering::Equal)
     });
+    let total = scored.len();
     scored.truncate(limit);
-    Ok(scored)
+    Ok((scored, total))
 }
 
 /// Result from grep operation
@@ -553,65 +576,80 @@ pub struct SearchResult {
 }
 
 /// Background embedding worker — receives chunks via channel, inserts into DB,
-/// then computes and stores embeddings.
+/// then computes and stores embeddings. Processes every chunk — never drops work.
 async fn embedding_worker(mut rx: mpsc::Receiver<ChunkJob>, db: Arc<Mutex<Connection>>) {
     // Lazy-init the model on first chunk
     let mut model: Option<Embedder> = None;
 
     while let Some(job) = rx.recv().await {
-        // Step 1: INSERT the chunk text into DB (even if embedding fails, text is stored)
-        {
-            let conn = db.lock().await;
-            if let Err(e) = conn.execute(
-                "INSERT OR REPLACE INTO chunks (session_id, command_id, chunk_index, start_line, end_line, text) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                rusqlite::params![job.session_id, job.command_id as i64, job.chunk_index as i64, job.start_line as i64, job.end_line as i64, job.text],
-            ) {
-                tracing::warn!("Failed to insert chunk into DB (cmd {}, chunk {}): {}", job.command_id, job.chunk_index, e);
+        match job {
+            ChunkJob::Flush(done) => {
+                // All prior chunks have been processed (channel is FIFO).
+                let _ = done.send(());
             }
-        }
-
-        // Step 2: Initialize embedding model on first use
-        if model.is_none() {
-            match Embedder::default().await {
-                Ok(m) => {
-                    if let Err(e) = m.load().await {
-                        tracing::warn!(
-                            "Failed to load embedding model: {}. Embeddings disabled.",
-                            e
-                        );
-                        // Continue draining jobs (INSERT only, no embedding)
-                        drain_inserts_only(&mut rx, &db).await;
-                        return;
-                    }
-                    model = Some(m);
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        "Failed to create embedding model: {}. Embeddings disabled.",
-                        e
-                    );
-                    drain_inserts_only(&mut rx, &db).await;
-                    return;
-                }
-            }
-        }
-
-        // Step 3: Compute embedding and UPDATE the row
-        if let Some(ref mut m) = model {
-            match m.embed_text(&job.text).await {
-                Ok(mut result) => {
-                    result.normalize();
-                    let embedding_bytes = encode_embedding(result.embedding());
+            ChunkJob::Chunk {
+                session_id,
+                command_id,
+                chunk_index,
+                start_line,
+                end_line,
+                text,
+            } => {
+                // Step 1: INSERT the chunk text into DB (even if embedding fails, text is stored)
+                {
                     let conn = db.lock().await;
                     if let Err(e) = conn.execute(
-                        "UPDATE chunks SET embedding = ?1 WHERE session_id = ?2 AND command_id = ?3 AND chunk_index = ?4",
-                        rusqlite::params![embedding_bytes, job.session_id, job.command_id as i64, job.chunk_index as i64],
+                        "INSERT OR REPLACE INTO chunks (session_id, command_id, chunk_index, start_line, end_line, text) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                        rusqlite::params![session_id, command_id as i64, chunk_index as i64, start_line as i64, end_line as i64, text],
                     ) {
-                        tracing::warn!("Failed to store embedding in DB (cmd {}, chunk {}): {}", job.command_id, job.chunk_index, e);
+                        tracing::warn!("Failed to insert chunk into DB (cmd {}, chunk {}): {}", command_id, chunk_index, e);
                     }
                 }
-                Err(e) => {
-                    tracing::debug!("Failed to embed chunk: {}", e);
+
+                // Step 2: Initialize embedding model on first use
+                if model.is_none() {
+                    match Embedder::default().await {
+                        Ok(m) => {
+                            if let Err(e) = m.load().await {
+                                tracing::warn!(
+                                    "Failed to load embedding model: {}. Embeddings disabled.",
+                                    e
+                                );
+                                // Continue draining jobs (INSERT only, no embedding)
+                                drain_inserts_only(&mut rx, &db).await;
+                                return;
+                            }
+                            model = Some(m);
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                "Failed to create embedding model: {}. Embeddings disabled.",
+                                e
+                            );
+                            drain_inserts_only(&mut rx, &db).await;
+                            return;
+                        }
+                    }
+                }
+
+                // Step 3: Compute embedding and UPDATE the row
+                if let Some(ref mut m) = model {
+                    match m.embed_text(&text).await {
+                        Ok(mut result) => {
+                            result.normalize();
+                            let embedding_bytes = encode_embedding(result.embedding());
+                            let conn = db.lock().await;
+                            if let Err(e) = conn.execute(
+                                "UPDATE chunks SET embedding = ?1 WHERE session_id = ?2 AND command_id = ?3 AND chunk_index = ?4",
+                                rusqlite::params![embedding_bytes, session_id, command_id as i64, chunk_index as i64],
+                            ) {
+                                tracing::warn!("Failed to store embedding in DB (cmd {}, chunk {}): {}", command_id, chunk_index, e);
+                            }
+                        }
+                        Err(e) => {
+                            tracing::debug!("Failed to embed chunk: {}", e);
+                        }
+                    }
                 }
             }
         }
@@ -622,12 +660,26 @@ async fn embedding_worker(mut rx: mpsc::Receiver<ChunkJob>, db: Arc<Mutex<Connec
 /// Called when the embedding model fails to load.
 async fn drain_inserts_only(rx: &mut mpsc::Receiver<ChunkJob>, db: &Arc<Mutex<Connection>>) {
     while let Some(job) = rx.recv().await {
-        let conn = db.lock().await;
-        if let Err(e) = conn.execute(
-            "INSERT OR REPLACE INTO chunks (session_id, command_id, chunk_index, start_line, end_line, text) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            rusqlite::params![job.session_id, job.command_id as i64, job.chunk_index as i64, job.start_line as i64, job.end_line as i64, job.text],
-        ) {
-            tracing::warn!("Failed to insert chunk into DB (cmd {}, chunk {}): {}", job.command_id, job.chunk_index, e);
+        match job {
+            ChunkJob::Flush(done) => {
+                let _ = done.send(());
+            }
+            ChunkJob::Chunk {
+                session_id,
+                command_id,
+                chunk_index,
+                start_line,
+                end_line,
+                text,
+            } => {
+                let conn = db.lock().await;
+                if let Err(e) = conn.execute(
+                    "INSERT OR REPLACE INTO chunks (session_id, command_id, chunk_index, start_line, end_line, text) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    rusqlite::params![session_id, command_id as i64, chunk_index as i64, start_line as i64, end_line as i64, text],
+                ) {
+                    tracing::warn!("Failed to insert chunk into DB (cmd {}, chunk {}): {}", command_id, chunk_index, e);
+                }
+            }
         }
     }
 }
@@ -733,7 +785,7 @@ mod tests {
             "line2".to_string(),
             "line3".to_string(),
         ];
-        state.append_lines(id, &lines).expect("append_lines");
+        state.append_lines(id, &lines).await.expect("append_lines");
         let commands = state.list_commands();
         assert_eq!(commands[0].line_count, 3);
     }
@@ -742,7 +794,7 @@ mod tests {
     #[serial]
     async fn test_append_lines_unknown_command_returns_error() {
         let (mut state, _tmp) = create_test_state();
-        let result = state.append_lines(999, &["nope".to_string()]);
+        let result = state.append_lines(999, &["nope".to_string()]).await;
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
         assert!(
@@ -756,7 +808,7 @@ mod tests {
     async fn test_complete_command_sets_status_and_exit_code() {
         let (mut state, _tmp) = create_test_state();
         let id = state.start_command("echo done".into());
-        state.complete_command(id, Some(0));
+        state.complete_command(id, Some(0)).await;
         let commands = state.list_commands();
         assert_eq!(commands[0].status, CommandStatus::Completed);
         assert_eq!(commands[0].exit_code, Some(0));
@@ -769,7 +821,7 @@ mod tests {
     async fn test_timeout_command_sets_status() {
         let (mut state, _tmp) = create_test_state();
         let id = state.start_command("sleep 999".into());
-        state.timeout_command(id);
+        state.timeout_command(id).await;
         let commands = state.list_commands();
         assert_eq!(commands[0].status, CommandStatus::TimedOut);
         assert_eq!(commands[0].exit_code, Some(-1));
@@ -789,7 +841,7 @@ mod tests {
             "running duration unreasonable"
         );
 
-        state.complete_command(id, Some(0));
+        state.complete_command(id, Some(0)).await;
         let completed_duration = state.list_commands()[0].duration();
         assert!(
             completed_duration.as_secs() < 60,
@@ -818,7 +870,7 @@ mod tests {
         let (mut state, _tmp) = create_test_state();
         let id = state.start_command("echo stuff".into());
         let lines: Vec<String> = (1..=5).map(|i| format!("line{i}")).collect();
-        state.append_lines(id, &lines).unwrap();
+        state.append_lines(id, &lines).await.unwrap();
 
         let result = state.get_lines(id, None, None).unwrap();
         assert_eq!(result.len(), 5);
@@ -832,7 +884,7 @@ mod tests {
         let (mut state, _tmp) = create_test_state();
         let id = state.start_command("seq".into());
         let lines: Vec<String> = (1..=10).map(|i| format!("data{i}")).collect();
-        state.append_lines(id, &lines).unwrap();
+        state.append_lines(id, &lines).await.unwrap();
 
         let result = state.get_lines(id, Some(3), Some(7)).unwrap();
         assert_eq!(result.len(), 5);
@@ -846,7 +898,7 @@ mod tests {
         let (mut state, _tmp) = create_test_state();
         let id = state.start_command("cmd".into());
         let lines: Vec<String> = (1..=5).map(|i| format!("row{i}")).collect();
-        state.append_lines(id, &lines).unwrap();
+        state.append_lines(id, &lines).await.unwrap();
 
         let result = state.get_lines(id, Some(3), None).unwrap();
         assert_eq!(result.len(), 3);
@@ -860,7 +912,7 @@ mod tests {
         let (mut state, _tmp) = create_test_state();
         let id = state.start_command("cmd".into());
         let lines: Vec<String> = (1..=5).map(|i| format!("val{i}")).collect();
-        state.append_lines(id, &lines).unwrap();
+        state.append_lines(id, &lines).await.unwrap();
 
         let result = state.get_lines(id, None, Some(2)).unwrap();
         assert_eq!(result.len(), 2);
@@ -885,8 +937,8 @@ mod tests {
         let id1 = state.start_command("cmd1".into());
         let id2 = state.start_command("cmd2".into());
 
-        state.append_lines(id1, &["from_cmd1".to_string()]).unwrap();
-        state.append_lines(id2, &["from_cmd2".to_string()]).unwrap();
+        state.append_lines(id1, &["from_cmd1".to_string()]).await.unwrap();
+        state.append_lines(id2, &["from_cmd2".to_string()]).await.unwrap();
 
         let r1 = state.get_lines(id1, None, None).unwrap();
         let r2 = state.get_lines(id2, None, None).unwrap();
@@ -916,9 +968,10 @@ mod tests {
                     "done".to_string(),
                 ],
             )
+            .await
             .unwrap();
 
-        let results = state.grep("error:", None, None).unwrap();
+        let (results, _total) = state.grep("error:", None, None).unwrap();
         assert_eq!(results.len(), 2);
         assert!(results[0].text.contains("something failed"));
         assert!(results[1].text.contains("another failure"));
@@ -929,9 +982,9 @@ mod tests {
     async fn test_grep_no_matches_returns_empty() {
         let (mut state, _tmp) = create_test_state();
         let id = state.start_command("ok".into());
-        state.append_lines(id, &["all good".to_string()]).unwrap();
+        state.append_lines(id, &["all good".to_string()]).await.unwrap();
 
-        let results = state.grep("NONEXISTENT_PATTERN", None, None).unwrap();
+        let (results, _total) = state.grep("NONEXISTENT_PATTERN", None, None).unwrap();
         assert!(results.is_empty());
     }
 
@@ -944,19 +997,21 @@ mod tests {
 
         state
             .append_lines(id1, &["target_word here".to_string()])
+            .await
             .unwrap();
         state
             .append_lines(id2, &["target_word there".to_string()])
+            .await
             .unwrap();
 
         // Filter to only id1
-        let results = state.grep("target_word", Some(id1), None).unwrap();
+        let (results, _total) = state.grep("target_word", Some(id1), None).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].command_id, id1);
         assert!(results[0].text.contains("here"));
 
         // Filter to only id2
-        let results = state.grep("target_word", Some(id2), None).unwrap();
+        let (results, _total) = state.grep("target_word", Some(id2), None).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].command_id, id2);
         assert!(results[0].text.contains("there"));
@@ -968,10 +1023,11 @@ mod tests {
         let (mut state, _tmp) = create_test_state();
         let id = state.start_command("many".into());
         let lines: Vec<String> = (1..=20).map(|i| format!("match_{i}")).collect();
-        state.append_lines(id, &lines).unwrap();
+        state.append_lines(id, &lines).await.unwrap();
 
-        let results = state.grep("match_", None, Some(5)).unwrap();
+        let (results, total) = state.grep("match_", None, Some(5)).unwrap();
         assert_eq!(results.len(), 5);
+        assert_eq!(total, 20);
     }
 
     #[tokio::test]
@@ -988,9 +1044,10 @@ mod tests {
                     "2024-01-02 WARN slow".to_string(),
                 ],
             )
+            .await
             .unwrap();
 
-        let results = state.grep("ERROR|WARN", None, None).unwrap();
+        let (results, _total) = state.grep("ERROR|WARN", None, None).unwrap();
         assert_eq!(results.len(), 2);
     }
 
@@ -999,7 +1056,7 @@ mod tests {
     async fn test_grep_invalid_regex_returns_error() {
         let (mut state, _tmp) = create_test_state();
         let id = state.start_command("x".into());
-        state.append_lines(id, &["text".to_string()]).unwrap();
+        state.append_lines(id, &["text".to_string()]).await.unwrap();
 
         let result = state.grep("[unclosed", None, None);
         assert!(result.is_err());
@@ -1015,9 +1072,10 @@ mod tests {
                 id,
                 &["alpha".to_string(), "beta".to_string(), "gamma".to_string()],
             )
+            .await
             .unwrap();
 
-        let results = state.grep("beta", None, None).unwrap();
+        let (results, _total) = state.grep("beta", None, None).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].line_number, 2);
         assert_eq!(results[0].command_id, id);

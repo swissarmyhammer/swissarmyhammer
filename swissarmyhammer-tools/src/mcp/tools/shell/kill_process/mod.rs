@@ -50,7 +50,7 @@ pub async fn execute_kill_process(
     })? as usize;
 
     let mut guard = state.lock().await;
-    match guard.kill_process(id) {
+    match guard.kill_process(id).await {
         Ok(record) => Ok(BaseToolImpl::create_success_response(format!(
             "Killed command {} ({}). {} lines captured.",
             id, record.command, record.line_count

@@ -83,7 +83,7 @@ pub async fn execute_search_history(
     };
     // Lock is released — search runs without blocking other shell operations
     match state::search(&session_id, &db, query, command_id, limit).await {
-        Ok(results) => {
+        Ok((results, total)) => {
             if results.is_empty() {
                 return Ok(BaseToolImpl::create_success_response(
                     "No matching results found.".to_string(),
@@ -94,6 +94,12 @@ pub async fn execute_search_history(
                 output.push_str(&format!(
                     "[cmd {}, lines {}-{}] (similarity: {:.2})\n{}\n\n",
                     r.command_id, r.start_line, r.end_line, r.similarity, r.text
+                ));
+            }
+            if total > results.len() {
+                output.push_str(&format!(
+                    "Showing {} of {} total matches. Use 'limit' parameter to see more.\n",
+                    results.len(), total
                 ));
             }
             Ok(BaseToolImpl::create_success_response(output))

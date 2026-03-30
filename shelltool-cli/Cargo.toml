@@ -18,6 +18,7 @@ path = "src/main.rs"
 swissarmyhammer-tools = { path = "../swissarmyhammer-tools" }
 swissarmyhammer-shell = { path = "../swissarmyhammer-shell" }
 swissarmyhammer-common = { path = "../swissarmyhammer-common" }
+swissarmyhammer-directory = { path = "../swissarmyhammer-directory" }
 swissarmyhammer-doctor = { path = "../swissarmyhammer-doctor" }
 swissarmyhammer-config = { path = "../swissarmyhammer-config" }
 mirdan = { path = "../mirdan" }

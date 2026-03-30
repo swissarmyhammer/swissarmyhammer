@@ -6,18 +6,17 @@ Virtual shell with persistent history, process management, and searchable output
 
 ### execute command
 
-Run a shell command. Output is stored in history regardless of truncation.
+Run a shell command. Returns status only — use grep/search/get-lines to inspect output.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | command | string | yes | The shell command to execute |
 | timeout | integer | no | Seconds before killing (default: none) |
-| max_lines | integer | no | Max output lines returned (default: 200, -1 for all, 0 for status-only) |
 | working_directory | string | no | Working directory (default: current) |
 | environment | string | no | JSON env vars |
 
 ```json
-{"op": "execute command", "command": "cargo nextest run", "timeout": 300, "max_lines": 50}
+{"op": "execute command", "command": "cargo nextest run", "timeout": 300}
 ```
 
 ### list processes
@@ -84,10 +83,10 @@ Retrieve specific lines from a command's output.
 
 ## When to use each operation
 
-- **execute command**: Run any shell command. This is the primary operation.
+- **execute command**: Run any shell command. Returns status only — follow up with grep/search/get-lines to inspect output.
 - **grep history**: When you know the exact text or pattern to find. Use for error codes, function names, file paths. Instant, precise.
 - **search history**: When you're looking for something by meaning. "find the authentication error" matches "login denied", "403 forbidden". Semantic, fuzzy.
-- **get lines**: When you found something via grep/search and need surrounding context. Or when output was truncated and you need to see more.
+- **get lines**: When you found something via grep/search and need surrounding context, or to read specific line ranges.
 - **list processes**: Check what's running, review command history with timing.
 - **kill process**: Stop a hung command or long-running process.
 
@@ -97,12 +96,6 @@ Use `timeout` for:
 - Commands that might hang (network operations, interactive prompts)
 - Long builds where you want a safety net
 - Tailing logs or watching files
-
-## max_lines guidance
-
-- **Default (200)**: Fine for most commands. See the beginning of output, search/get-lines for the rest.
-- **0**: Fire-and-forget. Run the command, get status only. Good for background tasks.
-- **-1**: Return everything. Use when you need to process the full output.
 
 ## Search vs grep
 

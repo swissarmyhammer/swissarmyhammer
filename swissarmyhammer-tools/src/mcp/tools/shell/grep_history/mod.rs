@@ -80,7 +80,7 @@ pub async fn execute_grep_history(
 
     let guard = state.lock().await;
     match guard.grep(pattern, command_id, limit) {
-        Ok(results) => {
+        Ok((results, total)) => {
             if results.is_empty() {
                 return Ok(BaseToolImpl::create_success_response(
                     "No matching results found.".to_string(),
@@ -91,6 +91,12 @@ pub async fn execute_grep_history(
                 output.push_str(&format!(
                     "[cmd {}, line {}] {}\n",
                     r.command_id, r.line_number, r.text
+                ));
+            }
+            if total > results.len() {
+                output.push_str(&format!(
+                    "\nShowing {} of {} total matches. Use 'limit' parameter to see more.\n",
+                    results.len(), total
                 ));
             }
             Ok(BaseToolImpl::create_success_response(output))

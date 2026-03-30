@@ -781,6 +781,7 @@ impl McpTool for ShellExecuteTool {
         _context: &ToolContext,
     ) -> std::result::Result<CallToolResult, McpError> {
         let op_str = arguments.get("op").and_then(|v| v.as_str()).unwrap_or("");
+        tracing::info!("shell op: {} args: {}", if op_str.is_empty() { "execute command" } else { op_str }, serde_json::to_string(&arguments).unwrap_or_default());
 
         // Strip op from arguments before parsing
         let mut args = arguments.clone();
@@ -1120,9 +1121,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_init_creates_shell_config() {
+        use swissarmyhammer_common::test_utils::CurrentDirGuard;
+
         let tmp = tempfile::TempDir::new().unwrap();
-        let orig = std::env::current_dir().unwrap();
-        std::env::set_current_dir(tmp.path()).unwrap();
+        let _guard = CurrentDirGuard::new(tmp.path()).unwrap();
 
         let tool = ShellExecuteTool::new_isolated();
         let reporter = NullReporter;
@@ -1137,15 +1139,14 @@ mod tests {
         );
         let content = std::fs::read_to_string(&config_path).unwrap();
         assert!(!content.is_empty(), "config.yaml should not be empty");
-
-        std::env::set_current_dir(orig).unwrap();
     }
 
     #[tokio::test]
     async fn test_init_creates_shell_config_idempotent() {
+        use swissarmyhammer_common::test_utils::CurrentDirGuard;
+
         let tmp = tempfile::TempDir::new().unwrap();
-        let orig = std::env::current_dir().unwrap();
-        std::env::set_current_dir(tmp.path()).unwrap();
+        let _guard = CurrentDirGuard::new(tmp.path()).unwrap();
 
         let tool = ShellExecuteTool::new_isolated();
         let reporter = NullReporter;
@@ -1155,15 +1156,14 @@ mod tests {
 
         let config_path = tmp.path().join(".shell").join("config.yaml");
         assert!(config_path.exists());
-
-        std::env::set_current_dir(orig).unwrap();
     }
 
     #[tokio::test]
     async fn test_init_denies_bash_in_settings() {
+        use swissarmyhammer_common::test_utils::CurrentDirGuard;
+
         let tmp = tempfile::TempDir::new().unwrap();
-        let orig = std::env::current_dir().unwrap();
-        std::env::set_current_dir(tmp.path()).unwrap();
+        let _guard = CurrentDirGuard::new(tmp.path()).unwrap();
 
         let tool = ShellExecuteTool::new_isolated();
         let reporter = NullReporter;
@@ -1186,15 +1186,14 @@ mod tests {
             bash_denied,
             "Bash should be denied in settings.json after init"
         );
-
-        std::env::set_current_dir(orig).unwrap();
     }
 
     #[tokio::test]
     async fn test_deinit_removes_bash_deny() {
+        use swissarmyhammer_common::test_utils::CurrentDirGuard;
+
         let tmp = tempfile::TempDir::new().unwrap();
-        let orig = std::env::current_dir().unwrap();
-        std::env::set_current_dir(tmp.path()).unwrap();
+        let _guard = CurrentDirGuard::new(tmp.path()).unwrap();
 
         let tool = ShellExecuteTool::new_isolated();
         let reporter = NullReporter;
@@ -1224,15 +1223,14 @@ mod tests {
             .map(|arr| arr.iter().any(|v| v.as_str() == Some("Bash")))
             .unwrap_or(false);
         assert!(!bash_denied_after, "Bash should NOT be denied after deinit");
-
-        std::env::set_current_dir(orig).unwrap();
     }
 
     #[tokio::test]
     async fn test_deinit_removes_shell_dir() {
+        use swissarmyhammer_common::test_utils::CurrentDirGuard;
+
         let tmp = tempfile::TempDir::new().unwrap();
-        let orig = std::env::current_dir().unwrap();
-        std::env::set_current_dir(tmp.path()).unwrap();
+        let _guard = CurrentDirGuard::new(tmp.path()).unwrap();
 
         let tool = ShellExecuteTool::new_isolated();
         let reporter = NullReporter;
@@ -1248,7 +1246,5 @@ mod tests {
             !shell_dir.exists(),
             ".shell/ directory should be removed by deinit"
         );
-
-        std::env::set_current_dir(orig).unwrap();
     }
 }

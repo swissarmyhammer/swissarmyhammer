@@ -8,40 +8,11 @@ use crate::test_utils::create_test_context;
 use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
 use serde_json::json;
+use std::collections::HashMap;
 
 use super::ShellExecuteTool;
 
 /// Builder pattern for executing test commands with optional parameters
-///
-/// This eliminates duplication across the multiple execute_test_command_* helper functions
-/// by providing a flexible builder that can construct commands with any combination of
-/// parameters.
-///
-/// # Example
-///
-/// ```ignore
-/// // Simple command
-/// let result = TestCommandBuilder::new("echo test").execute().await?;
-///
-/// // Command with working directory
-/// let result = TestCommandBuilder::new("ls")
-///     .working_directory("/tmp")
-///     .execute()
-///     .await?;
-///
-/// // Command with environment variables
-/// let result = TestCommandBuilder::new("env")
-///     .environment("{\"VAR\":\"value\"}")
-///     .execute()
-///     .await?;
-///
-/// // Command with multiple options
-/// let result = TestCommandBuilder::new("printenv VAR")
-///     .working_directory("/tmp")
-///     .environment("{\"VAR\":\"test\"}")
-///     .execute()
-///     .await?;
-/// ```
 pub(crate) struct TestCommandBuilder {
     command: String,
     working_directory: Option<String>,
@@ -127,66 +98,60 @@ impl TestCommandBuilder {
     }
 }
 
-/// Helper function to parse execution result from CallToolResult
+/// Parse the status-only text response into a key-value map.
 ///
-/// This eliminates duplication in JSON response parsing and validation logic.
-pub(crate) fn parse_execution_result(call_result: &CallToolResult) -> serde_json::Value {
-    assert!(
-        !call_result.content.is_empty(),
-        "Content should not be empty"
-    );
-    let content_text = match &call_result.content[0].raw {
-        rmcp::model::RawContent::Text(text_content) => &text_content.text,
-        _ => panic!("Expected text content"),
-    };
-    serde_json::from_str(content_text).expect("Failed to parse JSON response")
+/// The response format is:
+/// ```text
+/// command_id: 1
+/// status: completed
+/// exit_code: 0
+/// lines: 47
+/// duration: 1234ms
+/// ```
+pub(crate) fn parse_status_response(call_result: &CallToolResult) -> HashMap<String, String> {
+    let text = extract_text(call_result);
+    let mut map = HashMap::new();
+    for line in text.lines() {
+        if let Some((key, value)) = line.split_once(':') {
+            map.insert(key.trim().to_string(), value.trim().to_string());
+        }
+    }
+    map
 }
 
-/// Builder for declarative validation of shell execution results
-///
-/// This provides a fluent API for asserting on JSON response fields,
-/// reducing duplication across test functions.
-///
-/// # Example
-///
-/// ```ignore
-/// ResultValidator::new(&call_result)
-///     .assert_exit_code(0)
-///     .assert_stdout_contains("expected text")
-///     .assert_field_exists("execution_time_ms");
-/// ```
+/// Builder for declarative validation of shell execution results (status-only format)
 pub(crate) struct ResultValidator {
-    json: serde_json::Value,
+    fields: HashMap<String, String>,
 }
 
 impl ResultValidator {
     /// Create a new validator from a CallToolResult
     pub(crate) fn new(call_result: &CallToolResult) -> Self {
-        let json = parse_execution_result(call_result);
+        let fields = parse_status_response(call_result);
         assert!(
-            json.is_object(),
-            "Expected JSON object in result, got: {:?}",
-            json
+            !fields.is_empty(),
+            "Expected non-empty status response"
         );
-        Self { json }
+        Self { fields }
     }
 
     /// Assert that a field exists in the result
     pub(crate) fn assert_field_exists(self, field: &str) -> Self {
         assert!(
-            self.json.get(field).is_some(),
-            "Field '{}' should exist in result",
-            field
+            self.fields.contains_key(field),
+            "Field '{}' should exist in result. Fields: {:?}",
+            field, self.fields.keys().collect::<Vec<_>>()
         );
         self
     }
 
     /// Assert that the exit code matches the expected value
     pub(crate) fn assert_exit_code(self, expected: i64) -> Self {
-        let exit_code = self
-            .json
+        let exit_code: i64 = self
+            .fields
             .get("exit_code")
-            .and_then(|v| v.as_i64())
+            .expect("exit_code should exist")
+            .parse()
             .expect("exit_code should be an integer");
         assert_eq!(exit_code, expected, "Exit code mismatch");
         self
@@ -194,101 +159,41 @@ impl ResultValidator {
 
     /// Assert that exit code is non-zero
     pub(crate) fn assert_exit_code_nonzero(self) -> Self {
-        let exit_code = self
-            .json
+        let exit_code: i64 = self
+            .fields
             .get("exit_code")
-            .and_then(|v| v.as_i64())
+            .expect("exit_code should exist")
+            .parse()
             .expect("exit_code should be an integer");
         assert_ne!(exit_code, 0, "Exit code should be non-zero");
         self
     }
 
-    /// Assert that stdout contains the expected text
-    pub(crate) fn assert_stdout_contains(self, expected: &str) -> Self {
-        let stdout = self
-            .json
-            .get("stdout")
-            .and_then(|v| v.as_str())
-            .expect("stdout should be a string");
-        assert!(
-            stdout.contains(expected),
-            "stdout should contain '{}', got: {}",
-            expected,
-            stdout
-        );
-        self
-    }
-
-    /// Assert that stderr contains the expected text
-    pub(crate) fn assert_stderr_contains(self, expected: &str) -> Self {
-        let stderr = self
-            .json
-            .get("stderr")
-            .and_then(|v| v.as_str())
-            .expect("stderr should be a string");
-        assert!(
-            stderr.contains(expected),
-            "stderr should contain '{}', got: {}",
-            expected,
-            stderr
-        );
-        self
-    }
-
-    /// Assert that stderr is not empty
-    pub(crate) fn assert_stderr_not_empty(self) -> Self {
-        let stderr = self
-            .json
-            .get("stderr")
-            .and_then(|v| v.as_str())
-            .expect("stderr should be a string");
-        assert!(!stderr.is_empty(), "stderr should not be empty");
-        self
-    }
-
-    /// Assert that output_truncated field has the expected value
-    pub(crate) fn assert_output_truncated(self, expected: bool) -> Self {
-        let truncated = self
-            .json
-            .get("output_truncated")
-            .and_then(|v| v.as_bool())
-            .expect("output_truncated should be a boolean");
-        assert_eq!(truncated, expected, "output_truncated mismatch");
-        self
-    }
-
-    /// Assert that a boolean field has the expected value
-    pub(crate) fn assert_bool_field(self, field: &str, expected: bool) -> Self {
-        let value = self
-            .json
-            .get(field)
-            .and_then(|v| v.as_bool())
-            .unwrap_or_else(|| panic!("Field '{}' should be a boolean", field));
-        assert_eq!(value, expected, "Field '{}' mismatch", field);
+    /// Assert that the line count is positive
+    pub(crate) fn assert_has_lines(self) -> Self {
+        let lines: usize = self
+            .fields
+            .get("lines")
+            .expect("lines should exist")
+            .parse()
+            .expect("lines should be an integer");
+        assert!(lines > 0, "Expected at least one line of output");
         self
     }
 
     /// Assert standard success fields for a successful command execution
-    ///
-    /// This validates that all expected fields exist, exit code is 0,
-    /// and output is not truncated or binary.
     pub(crate) fn assert_success(self) -> Self {
-        self.assert_field_exists("stdout")
-            .assert_field_exists("stderr")
+        self.assert_field_exists("command_id")
             .assert_field_exists("exit_code")
-            .assert_field_exists("execution_time_ms")
+            .assert_field_exists("lines")
+            .assert_field_exists("duration")
             .assert_exit_code(0)
     }
 
     /// Assert standard failure fields for a failed command execution
-    ///
-    /// This validates that required fields exist, exit code is non-zero,
-    /// and stderr contains error information.
     pub(crate) fn assert_failure(self) -> Self {
-        self.assert_field_exists("stderr")
-            .assert_field_exists("exit_code")
+        self.assert_field_exists("exit_code")
             .assert_exit_code_nonzero()
-            .assert_stderr_not_empty()
     }
 }
 
@@ -346,40 +251,15 @@ pub(crate) async fn run_command_with(tool: &ShellExecuteTool, command: &str) -> 
     let result = tool.execute(args, &context).await;
     assert!(result.is_ok(), "Setup command failed: {:?}", result.err());
     let call_result = result.unwrap();
-    let text = extract_text(&call_result);
-    // Extract command_id from the JSON response
-    if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
-        if let Some(id) = json.get("command_id").and_then(|v| v.as_u64()) {
-            return id as usize;
-        }
-    }
-    // Fallback: look for command_id in YAML-like text
-    for line in text.lines() {
-        if let Some(rest) = line.strip_prefix("command_id:") {
-            if let Ok(id) = rest.trim().parse::<usize>() {
-                return id;
-            }
-        }
-    }
-    panic!("Could not extract command_id from response: {}", text);
+    let fields = parse_status_response(&call_result);
+    fields
+        .get("command_id")
+        .expect("command_id should exist in response")
+        .parse::<usize>()
+        .expect("command_id should be a number")
 }
 
 /// Generic helper function to assert that items are blocked by security validation
-///
-/// This reduces duplication in security test cases by providing a common pattern
-/// for testing that dangerous commands or paths are properly rejected.
-///
-/// # Pattern
-///
-/// This helper follows the "generic test assertion" pattern where:
-/// 1. Test data (items to block) is provided as a slice
-/// 2. A builder function constructs the specific test arguments
-/// 3. The assertion logic is shared across all test cases
-///
-/// This pattern is preferred over individual test functions because it:
-/// - Eliminates duplication in error checking and assertion logic
-/// - Ensures consistent validation across all security tests
-/// - Makes it easy to add new test cases without duplicating code
 pub(crate) async fn assert_blocked<F>(items: &[&str], item_type: &str, build_args: F)
 where
     F: Fn(&str) -> serde_json::Map<String, serde_json::Value>,
@@ -411,8 +291,6 @@ where
 }
 
 /// Creates a test tool and context for security validation tests
-///
-/// This eliminates duplication in creating test fixtures for security tests.
 pub(crate) async fn create_security_test_fixtures() -> (ShellExecuteTool, ToolContext) {
     (
         ShellExecuteTool::new_isolated(),
@@ -421,8 +299,6 @@ pub(crate) async fn create_security_test_fixtures() -> (ShellExecuteTool, ToolCo
 }
 
 /// Helper function to assert that a list of paths are blocked by security validation
-///
-/// This reduces duplication in path traversal security tests.
 pub(crate) async fn assert_paths_blocked(paths: &[&str]) {
     assert_blocked(paths, "Path traversal attempt", |path| {
         let mut args = serde_json::Map::new();
@@ -440,9 +316,6 @@ pub(crate) async fn assert_paths_blocked(paths: &[&str]) {
 }
 
 /// Helper function to assert that validator blocks commands with expected error type
-///
-/// This reduces duplication in validator unit tests by providing a common pattern
-/// for testing command validation logic.
 pub(crate) fn assert_validator_blocks_commands(
     validator: &swissarmyhammer_shell::ShellSecurityValidator,
     commands: &[&str],
@@ -457,7 +330,6 @@ pub(crate) fn assert_validator_blocks_commands(
             command
         );
 
-        // Verify the error type is correct
         match result.unwrap_err() {
             swissarmyhammer_shell::ShellSecurityError::BlockedCommandPattern { .. } => (),
             other_error => {
@@ -471,9 +343,6 @@ pub(crate) fn assert_validator_blocks_commands(
 }
 
 /// Helper function to test that a list of commands are blocked by a validator
-///
-/// This reduces duplication across security tests by providing a common pattern
-/// for creating validators and testing blocked command lists.
 pub(crate) async fn test_blocked_commands_with_policy(
     policy: swissarmyhammer_shell::ShellSecurityPolicy,
     blocked_commands: &[&str],

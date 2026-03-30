@@ -7486,6 +7486,7 @@ dependencies = [
  "serde_json",
  "swissarmyhammer-common",
  "swissarmyhammer-config",
+ "swissarmyhammer-directory",
  "swissarmyhammer-doctor",
  "swissarmyhammer-shell",
  "swissarmyhammer-tools",

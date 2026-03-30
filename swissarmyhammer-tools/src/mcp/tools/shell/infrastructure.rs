@@ -93,9 +93,6 @@ pub(crate) struct ShellExecuteRequest {
     /// Timeout in seconds before killing the command
     pub(crate) timeout: Option<u64>,
 
-    /// Max output lines returned to agent (default: 200, -1 for all, 0 for status-only)
-    pub(crate) max_lines: Option<i64>,
-
     /// Optional working directory for command execution
     pub(crate) working_directory: Option<String>,
 
