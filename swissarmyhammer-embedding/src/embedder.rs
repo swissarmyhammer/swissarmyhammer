@@ -136,6 +136,7 @@ impl Embedder {
     pub fn backend_name(&self) -> &'static str {
         match &self.inner {
             EmbedderBackend::Llama(_) => "llama",
+            #[cfg(target_os = "macos")]
             EmbedderBackend::Ane(_) => "ane",
         }
     }
