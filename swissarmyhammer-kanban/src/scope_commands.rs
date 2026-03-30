@@ -22,6 +22,8 @@ pub struct ResolvedCommand {
     pub name: String,
     /// Target moniker (e.g. "tag:01X") or None for global commands.
     pub target: Option<String>,
+    /// Group for separator insertion (entity type like "tag", "task", or "global").
+    pub group: String,
     /// Whether this command should appear in context menus.
     pub context_menu: bool,
     /// Keybindings per keymap mode.
@@ -140,6 +142,7 @@ pub fn commands_for_scope(
                     id: cmd.id.clone(),
                     name,
                     target: Some(moniker.clone()),
+                    group: entity_type.to_string(),
                     context_menu: cmd.context_menu,
                     keys,
                     available,
@@ -190,6 +193,7 @@ pub fn commands_for_scope(
             id: cmd_def.id.clone(),
             name,
             target: None,
+            group: "global".to_string(),
             context_menu: cmd_def.context_menu,
             keys,
             available,

@@ -6,6 +6,7 @@ interface ResolvedCommand {
   id: string;
   name: string;
   target?: string;
+  group: string;
   context_menu: boolean;
   keys?: { vim?: string; cua?: string; emacs?: string };
   available: boolean;
@@ -64,12 +65,17 @@ export function useContextMenu(
 
           pendingCommands.clear();
           const items: Array<{ id: string; name: string }> = [];
+          let lastGroup: string | null = null;
 
           for (const cmd of commands) {
-            // Key includes target to distinguish Copy Tag from Copy Task
+            // Insert separator between groups (e.g. tag commands vs task commands)
+            if (lastGroup !== null && cmd.group !== lastGroup) {
+              items.push({ id: "__separator__", name: "" });
+            }
             const key = cmd.target ? `${cmd.id}:${cmd.target}` : cmd.id;
             pendingCommands.set(key, { id: cmd.id, target: cmd.target });
             items.push({ id: key, name: cmd.name });
+            lastGroup = cmd.group;
           }
 
           invoke("show_context_menu", { items }).catch(console.error);
