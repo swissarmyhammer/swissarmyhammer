@@ -58,8 +58,10 @@ colored = { workspace = true }
 is-terminal = { workspace = true }
 dirs = { workspace = true }
 dialoguer = { workspace = true }
-arboard = { workspace = true }
 atty = { workspace = true }
+
+[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
+arboard = { workspace = true }
 comfy-table = { workspace = true }
 
 # Async runtime

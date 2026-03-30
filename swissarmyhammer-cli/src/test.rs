@@ -339,15 +339,26 @@ impl TestRunner {
     }
 
     fn copy_to_clipboard(&self, content: &str) {
-        let clipboard_result =
-            arboard::Clipboard::new().and_then(|mut clipboard| clipboard.set_text(content));
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        {
+            let clipboard_result =
+                arboard::Clipboard::new().and_then(|mut clipboard| clipboard.set_text(content));
 
-        match clipboard_result {
-            Ok(_) => println!("{}", "📋 Copied to clipboard!".green()),
-            Err(e) => println!(
+            match clipboard_result {
+                Ok(_) => println!("{}", "📋 Copied to clipboard!".green()),
+                Err(e) => println!(
+                    "{}",
+                    format!("⚠️  Failed to copy to clipboard: {e}").yellow()
+                ),
+            }
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        {
+            let _ = content;
+            println!(
                 "{}",
-                format!("⚠️  Failed to copy to clipboard: {e}").yellow()
-            ),
+                "⚠️  Clipboard not available on this platform".yellow()
+            );
         }
     }
 

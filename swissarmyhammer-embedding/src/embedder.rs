@@ -1,5 +1,6 @@
 //! Platform-aware embedder that dispatches to ANE or llama.cpp backends.
 
+#[cfg(target_os = "macos")]
 use ane_embedding::{AneEmbeddingConfig, AneEmbeddingModel};
 use llama_embedding::{EmbeddingConfig, EmbeddingModel};
 use model_embedding::{EmbeddingError, EmbeddingResult, TextEmbedder};
@@ -40,6 +41,7 @@ pub struct Embedder {
 
 enum EmbedderBackend {
     Llama(Box<EmbeddingModel>),
+    #[cfg(target_os = "macos")]
     Ane(Box<AneEmbeddingModel>),
 }
 
@@ -83,6 +85,7 @@ impl Embedder {
                     normalize,
                 )
             }
+            #[cfg(target_os = "macos")]
             ModelExecutorConfig::AneEmbedding(cfg) => {
                 let max_seq = cfg.max_sequence_length.unwrap_or(256);
                 let normalize = cfg.normalize;
@@ -91,6 +94,10 @@ impl Embedder {
                     max_seq,
                     normalize,
                 )
+            }
+            #[cfg(not(target_os = "macos"))]
+            ModelExecutorConfig::AneEmbedding(_) => {
+                return Err(EmbedderError::NoCompatibleExecutor(name.to_string()));
             }
             other => {
                 let exec_type = match other {
@@ -109,6 +116,7 @@ impl Embedder {
             "Created {} embedder for model '{}' (max_seq={}, normalize={})",
             match &backend {
                 EmbedderBackend::Llama(_) => "llama",
+                #[cfg(target_os = "macos")]
                 EmbedderBackend::Ane(_) => "ane",
             },
             name,
@@ -151,6 +159,7 @@ impl TextEmbedder for Embedder {
     async fn load(&self) -> Result<(), EmbeddingError> {
         match &self.inner {
             EmbedderBackend::Llama(m) => m.load().await,
+            #[cfg(target_os = "macos")]
             EmbedderBackend::Ane(m) => m.load().await,
         }
     }
@@ -170,6 +179,7 @@ impl TextEmbedder for Embedder {
     fn embedding_dimension(&self) -> Option<usize> {
         match &self.inner {
             EmbedderBackend::Llama(m) => m.embedding_dimension(),
+            #[cfg(target_os = "macos")]
             EmbedderBackend::Ane(m) => m.embedding_dimension(),
         }
     }
@@ -177,6 +187,7 @@ impl TextEmbedder for Embedder {
     fn is_loaded(&self) -> bool {
         match &self.inner {
             EmbedderBackend::Llama(m) => m.is_loaded(),
+            #[cfg(target_os = "macos")]
             EmbedderBackend::Ane(m) => m.is_loaded(),
         }
     }
@@ -187,6 +198,7 @@ impl Embedder {
     async fn embed_single(&self, text: &str) -> Result<EmbeddingResult, EmbeddingError> {
         match &self.inner {
             EmbedderBackend::Llama(m) => m.embed_text(text).await,
+            #[cfg(target_os = "macos")]
             EmbedderBackend::Ane(m) => m.embed_text(text).await,
         }
     }
@@ -341,6 +353,7 @@ async fn build_llama_model(cfg: &EmbeddingModelConfig) -> Result<EmbeddingModel,
         .map_err(|e| EmbeddingError::model(e.to_string()))
 }
 
+#[cfg(target_os = "macos")]
 async fn build_ane_model(cfg: &EmbeddingModelConfig) -> Result<AneEmbeddingModel, EmbeddingError> {
     let seq_length = cfg.max_sequence_length.unwrap_or(256);
 

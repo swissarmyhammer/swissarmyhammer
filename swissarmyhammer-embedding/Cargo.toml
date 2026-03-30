@@ -6,8 +6,10 @@ edition = "2021"
 [dependencies]
 # Embedding backends
 llama-embedding = { workspace = true }
-ane-embedding = { path = "../ane-embedding" }
 model-embedding = { path = "../model-embedding" }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+ane-embedding = { path = "../ane-embedding" }
 model-loader = { workspace = true }
 
 # Config: model resolution + platform selection
