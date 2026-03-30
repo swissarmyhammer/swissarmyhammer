@@ -25,3 +25,7 @@ include = ["completions/"]
 # Use self-hosted runner for macOS builds, GitHub-hosted for Linux
 [dist.github-custom-runners]
 aarch64-apple-darwin = "self-hosted"
+
+# System dependencies needed for Linux builds (arboard → GTK)
+[dist.system-dependencies]
+libgtk-3-dev = { targets = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"] }
