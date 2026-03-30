@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: doing
-position_ordinal: '80'
+position_column: done
+position_ordinal: fffffffffffffff880
 title: Move file/window/view commands to backend, emit events for UI effects
 ---
 ## What

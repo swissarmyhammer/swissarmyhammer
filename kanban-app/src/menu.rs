@@ -281,14 +281,28 @@ pub fn update_menu_enabled_state(state: &AppState) {
     let scope = state.ui_state.scope_chain();
 
     // Use commands_for_scope as the single source of truth for availability + names.
-    // Access fields through the first open board (blocking read — OK in sync context).
-    let boards = state.boards.blocking_read();
+    // Use try_read to avoid deadlock when called from nested dispatch_command_internal
+    // (e.g. open_and_notify → file.switchBoard triggers menu update while outer
+    // dispatch is still running).
+    let boards = match state.boards.try_read() {
+        Ok(b) => b,
+        Err(_) => {
+            tracing::debug!("update_menu_enabled_state: skipping — boards lock busy");
+            return;
+        }
+    };
     let fields = boards
         .values()
         .next()
         .and_then(|h| h.ctx.fields());
 
-    let registry = state.commands_registry.blocking_read();
+    let registry = match state.commands_registry.try_read() {
+        Ok(r) => r,
+        Err(_) => {
+            tracing::debug!("update_menu_enabled_state: skipping — registry lock busy");
+            return;
+        }
+    };
     let resolved = swissarmyhammer_kanban::scope_commands::commands_for_scope(
         &scope,
         &registry,
