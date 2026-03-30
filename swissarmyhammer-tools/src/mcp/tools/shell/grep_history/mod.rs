@@ -96,7 +96,8 @@ pub async fn execute_grep_history(
             if total > results.len() {
                 output.push_str(&format!(
                     "\nShowing {} of {} total matches. Use 'limit' parameter to see more.\n",
-                    results.len(), total
+                    results.len(),
+                    total
                 ));
             }
             Ok(BaseToolImpl::create_success_response(output))

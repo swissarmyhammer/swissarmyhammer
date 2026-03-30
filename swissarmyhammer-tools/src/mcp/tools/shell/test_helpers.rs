@@ -128,10 +128,7 @@ impl ResultValidator {
     /// Create a new validator from a CallToolResult
     pub(crate) fn new(call_result: &CallToolResult) -> Self {
         let fields = parse_status_response(call_result);
-        assert!(
-            !fields.is_empty(),
-            "Expected non-empty status response"
-        );
+        assert!(!fields.is_empty(), "Expected non-empty status response");
         Self { fields }
     }
 
@@ -140,7 +137,8 @@ impl ResultValidator {
         assert!(
             self.fields.contains_key(field),
             "Field '{}' should exist in result. Fields: {:?}",
-            field, self.fields.keys().collect::<Vec<_>>()
+            field,
+            self.fields.keys().collect::<Vec<_>>()
         );
         self
     }

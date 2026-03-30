@@ -69,10 +69,11 @@ async fn main() {
     // Configure tracing: file-based logging to .shell/mcp.log, matching sah's approach
     let make_filter = || -> EnvFilter {
         if cli.debug {
-            EnvFilter::new("shelltool=debug,swissarmyhammer_tools=debug,swissarmyhammer_shell=debug")
+            EnvFilter::new(
+                "shelltool=debug,swissarmyhammer_tools=debug,swissarmyhammer_shell=debug",
+            )
         } else {
-            EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new("rmcp=warn,debug"))
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("rmcp=warn,debug"))
         }
     };
 

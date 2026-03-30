@@ -280,14 +280,18 @@ impl ShellState {
         end_line: usize,
         text: String,
     ) {
-        if let Err(e) = self.chunk_tx.send(ChunkJob::Chunk {
-            session_id: self.session_id.clone(),
-            command_id: cmd_id,
-            chunk_index,
-            start_line,
-            end_line,
-            text,
-        }).await {
+        if let Err(e) = self
+            .chunk_tx
+            .send(ChunkJob::Chunk {
+                session_id: self.session_id.clone(),
+                command_id: cmd_id,
+                chunk_index,
+                start_line,
+                end_line,
+                text,
+            })
+            .await
+        {
             tracing::warn!(
                 "Chunk channel closed (cmd {}, chunk {}): {}",
                 cmd_id,
@@ -937,8 +941,14 @@ mod tests {
         let id1 = state.start_command("cmd1".into());
         let id2 = state.start_command("cmd2".into());
 
-        state.append_lines(id1, &["from_cmd1".to_string()]).await.unwrap();
-        state.append_lines(id2, &["from_cmd2".to_string()]).await.unwrap();
+        state
+            .append_lines(id1, &["from_cmd1".to_string()])
+            .await
+            .unwrap();
+        state
+            .append_lines(id2, &["from_cmd2".to_string()])
+            .await
+            .unwrap();
 
         let r1 = state.get_lines(id1, None, None).unwrap();
         let r2 = state.get_lines(id2, None, None).unwrap();
@@ -982,7 +992,10 @@ mod tests {
     async fn test_grep_no_matches_returns_empty() {
         let (mut state, _tmp) = create_test_state();
         let id = state.start_command("ok".into());
-        state.append_lines(id, &["all good".to_string()]).await.unwrap();
+        state
+            .append_lines(id, &["all good".to_string()])
+            .await
+            .unwrap();
 
         let (results, _total) = state.grep("NONEXISTENT_PATTERN", None, None).unwrap();
         assert!(results.is_empty());

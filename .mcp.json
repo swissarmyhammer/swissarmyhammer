@@ -1,10 +1,10 @@
 {
   "mcpServers": {
-    "sah": {
+    "shelltool": {
       "args": [
         "serve"
       ],
-      "command": "sah"
+      "command": "shelltool"
     }
   }
 }

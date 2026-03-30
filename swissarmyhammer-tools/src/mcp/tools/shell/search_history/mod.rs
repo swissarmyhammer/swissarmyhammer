@@ -99,7 +99,8 @@ pub async fn execute_search_history(
             if total > results.len() {
                 output.push_str(&format!(
                     "Showing {} of {} total matches. Use 'limit' parameter to see more.\n",
-                    results.len(), total
+                    results.len(),
+                    total
                 ));
             }
             Ok(BaseToolImpl::create_success_response(output))

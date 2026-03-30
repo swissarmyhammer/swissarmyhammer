@@ -286,8 +286,8 @@ mod tests {
     use std::time::Duration;
 
     use super::super::test_helpers::{
-        assert_paths_blocked, test_blocked_commands_with_policy,
-        ResultValidator, TestCommandBuilder,
+        assert_paths_blocked, test_blocked_commands_with_policy, ResultValidator,
+        TestCommandBuilder,
     };
     use super::super::ShellExecuteTool;
     use crate::mcp::tool_registry::McpTool;

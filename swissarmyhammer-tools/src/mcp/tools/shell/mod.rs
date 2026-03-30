@@ -781,7 +781,15 @@ impl McpTool for ShellExecuteTool {
         _context: &ToolContext,
     ) -> std::result::Result<CallToolResult, McpError> {
         let op_str = arguments.get("op").and_then(|v| v.as_str()).unwrap_or("");
-        tracing::info!("shell op: {} args: {}", if op_str.is_empty() { "execute command" } else { op_str }, serde_json::to_string(&arguments).unwrap_or_default());
+        tracing::info!(
+            "shell op: {} args: {}",
+            if op_str.is_empty() {
+                "execute command"
+            } else {
+                op_str
+            },
+            serde_json::to_string(&arguments).unwrap_or_default()
+        );
 
         // Strip op from arguments before parsing
         let mut args = arguments.clone();

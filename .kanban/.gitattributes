@@ -1,3 +1,0 @@
-**/*.jsonl merge=kanban-jsonl
-**/*.yaml merge=kanban-yaml
-**/*.md merge=kanban-md
