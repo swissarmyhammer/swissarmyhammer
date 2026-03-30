@@ -228,6 +228,7 @@ export function CommandPalette({
       invoke("dispatch_command", {
         cmd: entry.command.id,
         target: entry.command.target,
+        scopeChain: scopeChain ?? [],
       }).catch(console.error);
     }
   }, [filteredCommands, selectedIndex, onClose]);

@@ -18,6 +18,7 @@ interface ResolvedCommand {
  * Maps menu item key → { cmd id, target } for dispatch.
  */
 const pendingCommands = new Map<string, { id: string; target?: string }>();
+let pendingScopeChain: string[] = [];
 
 /**
  * Dispatch a context menu command by menu item key.
@@ -32,6 +33,7 @@ export async function dispatchContextMenuCommand(
     await invoke("dispatch_command", {
       cmd: cmd.id,
       target: cmd.target,
+      scopeChain: pendingScopeChain,
     });
   } catch (e) {
     console.error("context menu dispatch failed:", e);
@@ -64,6 +66,7 @@ export function useContextMenu(
           if (commands.length === 0) return;
 
           pendingCommands.clear();
+          pendingScopeChain = scopeChain;
           const items: Array<{ id: string; name: string }> = [];
           let lastGroup: string | null = null;
 
