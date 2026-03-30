@@ -59,6 +59,57 @@ impl Command for SwitchBoardCmd {
     }
 }
 
+/// Open the "New Board" dialog.
+///
+/// Returns a `NewBoardDialog` marker so the Tauri layer can trigger the
+/// native folder picker dialog.
+pub struct NewBoardCmd;
+
+#[async_trait]
+impl Command for NewBoardCmd {
+    fn available(&self, _ctx: &CommandContext) -> bool {
+        true
+    }
+
+    async fn execute(&self, _ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+        Ok(json!({ "NewBoardDialog": true }))
+    }
+}
+
+/// Open the "Open Board" dialog.
+///
+/// Returns an `OpenBoardDialog` marker so the Tauri layer can trigger the
+/// native folder picker dialog.
+pub struct OpenBoardCmd;
+
+#[async_trait]
+impl Command for OpenBoardCmd {
+    fn available(&self, _ctx: &CommandContext) -> bool {
+        true
+    }
+
+    async fn execute(&self, _ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+        Ok(json!({ "OpenBoardDialog": true }))
+    }
+}
+
+/// Create a new window.
+///
+/// Returns a `CreateWindow` marker so the Tauri layer can create a new
+/// webview window.
+pub struct NewWindowCmd;
+
+#[async_trait]
+impl Command for NewWindowCmd {
+    fn available(&self, _ctx: &CommandContext) -> bool {
+        true
+    }
+
+    async fn execute(&self, _ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+        Ok(json!({ "CreateWindow": true }))
+    }
+}
+
 /// Close a board, removing it from the open boards list in UIState.
 ///
 /// Optional arg: `path`. If omitted, closes the currently active board.

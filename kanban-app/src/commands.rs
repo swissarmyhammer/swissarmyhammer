@@ -603,12 +603,30 @@ pub async fn open_board_dialog(app: AppHandle) -> Result<(), String> {
 /// If `board_path` is not provided, uses the currently active board.
 /// The window label and board path are persisted to `windows`
 /// so the window can be restored at the same position on restart.
+/// Internal helper for creating a window, callable from dispatch side effects.
+async fn create_window_internal(app: &AppHandle, state: &AppState) {
+    if let Err(e) = create_window_impl(app, state, None).await {
+        tracing::error!("create_window_internal failed: {e}");
+    }
+}
+
+/// Tauri command: create a new webview window.
 #[tauri::command]
 pub async fn create_window(
     app: AppHandle,
     state: State<'_, AppState>,
     board_path: Option<String>,
 ) -> Result<Value, String> {
+    create_window_impl(&app, &state, board_path).await
+}
+
+/// Create a new webview window with an optional board path.
+async fn create_window_impl(
+    app: &AppHandle,
+    state: &AppState,
+    board_path: Option<String>,
+) -> Result<Value, String> {
+    let app = app.clone();
     let label = new_window_label();
     tracing::info!(board_path = ?board_path, label = %label, "create_window called");
 
@@ -982,6 +1000,17 @@ pub(crate) async fn dispatch_command_internal(
             }
             let _ = app.emit("board-changed", ());
         }
+    }
+
+    // Handle UI-triggering command results: dialogs, window creation.
+    if result.get("NewBoardDialog").is_some() {
+        menu::trigger_new_board(app);
+    }
+    if result.get("OpenBoardDialog").is_some() {
+        menu::trigger_open_board(app);
+    }
+    if result.get("CreateWindow").is_some() {
+        create_window_internal(app, state).await;
     }
 
     // Emit drag-session-active event when drag.start completes successfully.

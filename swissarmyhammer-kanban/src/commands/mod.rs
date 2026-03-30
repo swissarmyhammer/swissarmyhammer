@@ -150,6 +150,18 @@ pub fn register_commands() -> HashMap<String, Arc<dyn Command>> {
         "file.closeBoard".into(),
         Arc::new(file_commands::CloseBoardCmd),
     );
+    map.insert(
+        "file.newBoard".into(),
+        Arc::new(file_commands::NewBoardCmd),
+    );
+    map.insert(
+        "file.openBoard".into(),
+        Arc::new(file_commands::OpenBoardCmd),
+    );
+    map.insert(
+        "window.new".into(),
+        Arc::new(file_commands::NewWindowCmd),
+    );
 
     // App commands
     map.insert("app.quit".into(), Arc::new(app_commands::QuitCmd));
@@ -204,7 +216,7 @@ mod tests {
     fn register_commands_returns_expected_count() {
         let cmds = register_commands();
         // 4 task + 3 clipboard + 4 entity + 1 tag + 1 attachment + 1 column + 7 UI + 6 app + 2 file + 3 drag = 32
-        assert_eq!(cmds.len(), 32);
+        assert_eq!(cmds.len(), 35);
     }
 
     // =========================================================================
