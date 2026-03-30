@@ -306,14 +306,20 @@ pub fn update_menu_enabled_state(state: &AppState) {
         .map(|c| (c.id.clone(), (c.name, c.available)))
         .collect();
 
+    // For fallback names when commands aren't available, strip templates
+    let registry2 = state.commands_registry.blocking_read();
     let menu_items = state.menu_items.lock().unwrap();
     for (cmd_id, menu_item) in menu_items.iter() {
         if let Some((name, enabled)) = resolved_map.get(cmd_id) {
             let _ = menu_item.set_enabled(*enabled);
             let _ = menu_item.set_text(name);
         } else {
-            // Command not in resolved set — disable it
+            // Command not available — disable and show clean generic name
             let _ = menu_item.set_enabled(false);
+            if let Some(def) = registry2.get(cmd_id) {
+                let clean = def.name.replace(" {{entity.type}}", "");
+                let _ = menu_item.set_text(&clean);
+            }
         }
     }
 }

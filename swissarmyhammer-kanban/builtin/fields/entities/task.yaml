@@ -5,7 +5,7 @@ search_display_field: title
 mention_prefix: "^"
 mention_display_field: title
 commands:
-  - id: entity.inspect
+  - id: ui.inspect
     name: "Inspect {{entity.type}}"
     context_menu: true
   - id: entity.archive

@@ -1,7 +1,7 @@
 name: attachment
 icon: paperclip
 commands:
-  - id: entity.inspect
+  - id: ui.inspect
     name: "Inspect {{entity.type}}"
     context_menu: true
 fields:

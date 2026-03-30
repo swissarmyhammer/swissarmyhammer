@@ -2,7 +2,7 @@ name: board
 icon: kanban
 search_display_field: name
 commands:
-  - id: entity.inspect
+  - id: ui.inspect
     name: "Inspect {{entity.type}}"
     context_menu: true
 fields:

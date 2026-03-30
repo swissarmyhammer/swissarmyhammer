@@ -4,7 +4,7 @@ mention_prefix: "#"
 mention_display_field: tag_name
 search_display_field: tag_name
 commands:
-  - id: entity.inspect
+  - id: ui.inspect
     name: "Inspect {{entity.type}}"
     context_menu: true
   - id: entity.archive
