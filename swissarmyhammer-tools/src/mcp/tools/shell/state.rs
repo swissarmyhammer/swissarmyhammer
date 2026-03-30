@@ -19,8 +19,10 @@ use rusqlite::Connection;
 use tokio::sync::{mpsc, Mutex};
 use tokio::task::JoinHandle;
 
+#[cfg(target_os = "macos")]
 use model_embedding::cosine_similarity;
 use swissarmyhammer_directory::{DirectoryConfig, ShellConfig};
+#[cfg(target_os = "macos")]
 use swissarmyhammer_embedding::{Embedder, TextEmbedder};
 
 const CHUNK_SIZE: usize = 15; // lines per embedding chunk
@@ -495,6 +497,7 @@ impl Drop for ShellState {
 /// lock can be released before calling it.
 /// Returns `(matching_results, total_match_count)`. Results are capped by `limit`
 /// (default 10) but `total_match_count` reflects all matching chunks.
+#[cfg(target_os = "macos")]
 pub async fn search(
     session_id: &str,
     db: &Arc<Mutex<Connection>>,
@@ -561,6 +564,18 @@ pub async fn search(
     Ok((scored, total))
 }
 
+/// Semantic search is not available on this platform (requires macOS embedding models).
+#[cfg(not(target_os = "macos"))]
+pub async fn search(
+    _session_id: &str,
+    _db: &Arc<Mutex<Connection>>,
+    _query: &str,
+    _command_id: Option<usize>,
+    _limit: Option<usize>,
+) -> anyhow::Result<(Vec<SearchResult>, usize)> {
+    anyhow::bail!("Semantic search is not supported on this platform. Use 'grep history' instead.")
+}
+
 /// Result from grep operation
 #[derive(Debug, Clone)]
 pub struct GrepResult {
@@ -581,6 +596,7 @@ pub struct SearchResult {
 
 /// Background embedding worker — receives chunks via channel, inserts into DB,
 /// then computes and stores embeddings. Processes every chunk — never drops work.
+#[cfg(target_os = "macos")]
 async fn embedding_worker(mut rx: mpsc::Receiver<ChunkJob>, db: Arc<Mutex<Connection>>) {
     // Lazy-init the model on first chunk
     let mut model: Option<Embedder> = None;
@@ -660,6 +676,12 @@ async fn embedding_worker(mut rx: mpsc::Receiver<ChunkJob>, db: Arc<Mutex<Connec
     }
 }
 
+/// On non-macOS platforms, the worker only stores text (no embedding).
+#[cfg(not(target_os = "macos"))]
+async fn embedding_worker(mut rx: mpsc::Receiver<ChunkJob>, db: Arc<Mutex<Connection>>) {
+    drain_inserts_only(&mut rx, &db).await;
+}
+
 /// Drain remaining jobs from the channel, performing INSERT-only (no embedding).
 /// Called when the embedding model fails to load.
 async fn drain_inserts_only(rx: &mut mpsc::Receiver<ChunkJob>, db: &Arc<Mutex<Connection>>) {
@@ -689,6 +711,7 @@ async fn drain_inserts_only(rx: &mut mpsc::Receiver<ChunkJob>, db: &Arc<Mutex<Co
 }
 
 /// Encode f32 embedding vector as little-endian bytes for SQLite BLOB storage.
+#[cfg(target_os = "macos")]
 fn encode_embedding(embedding: &[f32]) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(embedding.len() * BYTES_PER_F32);
     for val in embedding {
@@ -698,6 +721,7 @@ fn encode_embedding(embedding: &[f32]) -> Vec<u8> {
 }
 
 /// Decode little-endian bytes from SQLite BLOB back to f32 embedding vector.
+#[cfg(target_os = "macos")]
 fn decode_embedding(bytes: &[u8]) -> Vec<f32> {
     bytes
         .chunks_exact(BYTES_PER_F32)
