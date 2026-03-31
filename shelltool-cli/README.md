@@ -26,11 +26,19 @@ The agent uses the shell like a person does: run something, scan the results, di
 
 ## Install
 
+### macOS (Homebrew)
+
 ```bash
 brew install swissarmyhammer/tap/shelltool
 ```
 
-or
+### Linux
+
+```bash
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/swissarmyhammer/swissarmyhammer/releases/latest/download/shelltool-cli-installer.sh | sh
+```
+
+### From source
 
 ```bash
 cargo install --git https://github.com/swissarmyhammer/swissarmyhammer shelltool-cli

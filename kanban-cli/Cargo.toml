@@ -7,12 +7,16 @@ license.workspace = true
 repository.workspace = true
 description = "Standalone CLI for SwissArmyHammer Kanban board"
 
+[package.metadata.dist]
+formula = "kanban"
+
 [[bin]]
 name = "kanban"
 path = "src/main.rs"
 
 [dependencies]
 swissarmyhammer-kanban = { path = "../swissarmyhammer-kanban" }
+swissarmyhammer-merge = { path = "../swissarmyhammer-merge" }
 swissarmyhammer-operations = { workspace = true }
 
 clap = { workspace = true }

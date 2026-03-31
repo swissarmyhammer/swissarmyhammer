@@ -422,12 +422,12 @@ async fn test_shell_execute_handles_large_output() {
 
     // Test command that produces moderately large output
     // Generate 1000 lines of output (~50 KB)
+    // Response is status-only; output is stored in shell history
     let mut arguments = serde_json::Map::new();
     arguments.insert(
         "command".to_string(),
         json!("for i in {1..1000}; do echo \"Line $i with some content\"; done"),
     );
-    arguments.insert("max_lines".to_string(), json!(-1));
 
     let result = tool.execute(arguments, &context).await;
     assert!(
@@ -439,8 +439,8 @@ async fn test_shell_execute_handles_large_output() {
     assert_eq!(call_result.is_error, Some(false));
 
     let response_text = extract_response_text(&call_result);
-    assert!(response_text.contains("Line 1"));
-    assert!(response_text.contains("Line 1000"));
+    assert!(response_text.contains("exit_code: 0"));
+    assert!(response_text.contains("lines:"));
 }
 
 // ============================================================================

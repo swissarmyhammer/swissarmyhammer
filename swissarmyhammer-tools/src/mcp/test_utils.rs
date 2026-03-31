@@ -37,7 +37,6 @@ pub async fn create_test_client(server_url: &str) -> RunningService<rmcp::RoleCl
         let mut config =
             rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig::default();
         config.uri = server_url.into();
-        config.auth_header = None;
         config
     });
 

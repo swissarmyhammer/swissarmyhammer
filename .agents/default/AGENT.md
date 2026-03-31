@@ -271,8 +271,6 @@ use the skill tool to load the full instructions, then follow them.
 
 - **card**: Create a single, well-researched kanban card. Use when the user wants to add a task, track an idea, or capture work without entering full plan mode. (local)
 
-- **code-context**: Use this tool first when you need to understand code structure, find symbols, trace dependencies, or assess the impact of changes. It is faster and more accurate than grepping files or reading directory trees. (local)
-
 - **commit**: Git commit workflow. Use this skill whenever the user says "commit", "save changes", "check in", or otherwise wants to commit code. Always use this skill instead of running git commands directly. (local)
 
 - **coverage**: Run tests with coverage instrumentation, identify uncovered code, and produce kanban cards for coverage gaps. Use when the user says "coverage", "what's untested", "find coverage gaps", or wants to know what needs tests. Automatically delegates to a tester subagent. (local)
@@ -302,8 +300,6 @@ use the skill tool to load the full instructions, then follow them.
 - **shell**: Shell command execution with history, process management, and semantic search. ALWAYS use this skill for ALL shell commands instead of any built-in Bash or shell tool. This is the preferred way to run commands. (local)
 
 - **test**: Run tests and analyze results. Use when the user wants to run the test suite or test specific functionality. Test runs produce verbose output — automatically delegates to a tester subagent. (local)
-
-- **test-driven-development**: Use this skill whenever you are about to write or edit source code. Load it before making any code changes — it defines the required workflow of writing a failing test first, then making it pass, then refactoring. No exceptions. (local)
 
 - **test-loop**: Continuously run tests, create failure cards, and delegate fixes to /implement until the suite is fully green. Uses ralph to prevent stopping between iterations. (local)
 

@@ -589,6 +589,95 @@ fields:
     }
 
     #[test]
+    fn from_yaml_sources_definition_override_updates_id_index() {
+        let v1 = r#"
+id: "00000000000000000000000001"
+name: title
+description: "Version 1"
+type:
+  kind: text
+  single_line: true
+"#;
+        let v2 = r#"
+id: "00000000000000000000000099"
+name: title
+description: "Version 2"
+type:
+  kind: text
+  single_line: true
+"#;
+
+        let ctx = FieldsContext::from_yaml_sources(
+            PathBuf::from("/tmp/test"),
+            &[("title", v1), ("title", v2)],
+            &[],
+        )
+        .unwrap();
+
+        // Old ID should be removed from the index
+        assert!(ctx.get_field_by_id("00000000000000000000000001").is_none());
+        // New ID should be accessible
+        assert!(ctx.get_field_by_id("00000000000000000000000099").is_some());
+        assert_eq!(
+            ctx.get_field_by_id("00000000000000000000000099")
+                .unwrap()
+                .description,
+            Some("Version 2".into())
+        );
+    }
+
+    #[test]
+    fn from_yaml_sources_entity_override_replaces_earlier() {
+        let entity_v1 = r#"
+name: task
+body_field: body
+fields:
+  - title
+"#;
+        let entity_v2 = r#"
+name: task
+body_field: description
+fields:
+  - title
+  - status
+"#;
+
+        let ctx = FieldsContext::from_yaml_sources(
+            PathBuf::from("/tmp/test"),
+            &[],
+            &[("task", entity_v1), ("task", entity_v2)],
+        )
+        .unwrap();
+
+        assert_eq!(ctx.all_entities().len(), 1);
+        let entity = ctx.get_entity("task").unwrap();
+        assert_eq!(entity.body_field, Some("description".into()));
+        assert_eq!(entity.fields.len(), 2);
+    }
+
+    #[test]
+    fn from_yaml_sources_skips_invalid_entity_yaml() {
+        let good_entity = r#"
+name: task
+body_field: body
+fields:
+  - title
+"#;
+        let bad_entity = "this is not valid entity yaml: [[[";
+
+        let ctx = FieldsContext::from_yaml_sources(
+            PathBuf::from("/tmp/test"),
+            &[],
+            &[("task", good_entity), ("bad", bad_entity)],
+        )
+        .unwrap();
+
+        assert_eq!(ctx.all_entities().len(), 1);
+        assert!(ctx.get_entity("task").is_some());
+        assert!(ctx.get_entity("bad").is_none());
+    }
+
+    #[test]
     fn from_yaml_sources_skips_invalid_yaml() {
         let good = r#"
 id: "00000000000000000000000001"
@@ -894,6 +983,22 @@ type:
         assert!(ctx.all_entities().is_empty());
     }
 
+    // --- Disk I/O error path tests ---
+
+    #[test]
+    fn root_accessor_returns_configured_path() {
+        let root = PathBuf::from("/tmp/test-root");
+        let ctx = FieldsContext::from_yaml_sources(&root, &[], &[]).unwrap();
+        assert_eq!(ctx.root(), root);
+    }
+
+    #[test]
+    fn fields_for_entity_nonexistent_returns_empty() {
+        let ctx = FieldsContext::from_yaml_sources(PathBuf::from("/tmp/test"), &[], &[]).unwrap();
+        let result = ctx.fields_for_entity("nonexistent");
+        assert!(result.is_empty());
+    }
+
     #[tokio::test]
     async fn load_definitions_skips_non_yaml_files() {
         let tmp = TempDir::new().unwrap();
@@ -1006,5 +1111,96 @@ fields:
         let root = PathBuf::from("/some/custom/path");
         let ctx = FieldsContext::from_yaml_sources(&root, &[], &[]).unwrap();
         assert_eq!(ctx.root(), root.as_path());
+    }
+
+    #[tokio::test]
+    async fn write_field_creates_parent_dir() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().join("deep").join("nested").join("fields");
+        // Create root + entities + lib but NOT definitions/
+        std::fs::create_dir_all(root.join("entities")).unwrap();
+        std::fs::create_dir_all(root.join("lib")).unwrap();
+
+        let mut ctx = FieldsContext {
+            root: root.clone(),
+            fields: Vec::new(),
+            entities: Vec::new(),
+            name_index: HashMap::new(),
+            id_index: HashMap::new(),
+            entity_index: HashMap::new(),
+        };
+
+        let field = make_test_field("status");
+        // write_field should create_dir_all for the parent (definitions/)
+        ctx.write_field(&field).await.unwrap();
+        assert!(root.join("definitions/status.yaml").exists());
+    }
+
+    #[tokio::test]
+    async fn write_entity_creates_parent_dir() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().join("deep").join("nested").join("fields");
+        // Create root + definitions + lib but NOT entities/
+        std::fs::create_dir_all(root.join("definitions")).unwrap();
+        std::fs::create_dir_all(root.join("lib")).unwrap();
+
+        let mut ctx = FieldsContext {
+            root: root.clone(),
+            fields: Vec::new(),
+            entities: Vec::new(),
+            name_index: HashMap::new(),
+            id_index: HashMap::new(),
+            entity_index: HashMap::new(),
+        };
+
+        let entity = EntityDef {
+            name: "task".into(),
+            icon: None,
+            body_field: None,
+            fields: vec!["title".into()],
+            validate: None,
+            mention_prefix: None,
+            mention_display_field: None,
+            search_display_field: None,
+            commands: vec![],
+        };
+        // write_entity should create_dir_all for the parent (entities/)
+        ctx.write_entity(&entity).await.unwrap();
+        assert!(root.join("entities/task.yaml").exists());
+    }
+
+    #[tokio::test]
+    async fn delete_field_when_file_not_on_disk() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().join("fields");
+        std::fs::create_dir_all(root.join("definitions")).unwrap();
+        std::fs::create_dir_all(root.join("entities")).unwrap();
+        std::fs::create_dir_all(root.join("lib")).unwrap();
+
+        let field = make_test_field("ephemeral");
+        let id = field.id.clone();
+
+        // Build context with the field in-memory but no file on disk
+        let mut ctx = FieldsContext {
+            root: root.clone(),
+            fields: vec![field.clone()],
+            entities: Vec::new(),
+            name_index: HashMap::from([(field.name.clone(), 0)]),
+            id_index: HashMap::from([(id.clone(), 0)]),
+            entity_index: HashMap::new(),
+        };
+
+        // File doesn't exist on disk -- delete should still succeed
+        // because delete_field uses `let _ = fs::remove_file(...)` to ignore errors
+        assert!(!root.join("definitions/ephemeral.yaml").exists());
+        ctx.delete_field(&id).await.unwrap();
+        assert!(ctx.all_fields().is_empty());
+    }
+
+    #[tokio::test]
+    async fn entity_types_depending_on_no_matches() {
+        let ctx = FieldsContext::from_yaml_sources(PathBuf::from("/tmp/test"), &[], &[]).unwrap();
+        let result = ctx.entity_types_depending_on("task");
+        assert!(result.is_empty());
     }
 }
