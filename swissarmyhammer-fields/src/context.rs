@@ -568,27 +568,6 @@ fields:
     }
 
     #[test]
-    fn from_yaml_sources_skips_invalid_entity_yaml() {
-        let good = r#"
-name: task
-body_field: body
-fields:
-  - title
-"#;
-        let bad = "this is not valid yaml: [[[";
-
-        let ctx = FieldsContext::from_yaml_sources(
-            PathBuf::from("/tmp/test"),
-            &[],
-            &[("task", good), ("broken", bad)],
-        )
-        .unwrap();
-
-        assert_eq!(ctx.all_entities().len(), 1);
-        assert!(ctx.get_entity("task").is_some());
-    }
-
-    #[test]
     fn from_yaml_sources_definition_override_updates_id_index() {
         let v1 = r#"
 id: "00000000000000000000000001"

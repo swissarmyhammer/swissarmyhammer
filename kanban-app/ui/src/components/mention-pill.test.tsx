@@ -81,7 +81,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 function mockListCommands(commands: ResolvedCommand[]) {
   mockInvoke.mockImplementation(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (cmd: string, _args?: any) => {
+    (cmd: string, _args?: any): Promise<any> => {
       if (cmd === "list_commands_for_scope") return Promise.resolve(commands);
       return Promise.resolve(undefined);
     },
@@ -200,8 +200,21 @@ describe("MentionPill", () => {
 
   it("right-click shows context menu with ui.inspect and task.untag for tags", async () => {
     mockListCommands([
-      { id: "ui.inspect", name: "Inspect Tag", target: "tag:tag-1", group: "entity", context_menu: true, available: true },
-      { id: "task.untag", name: "Remove Tag", group: "entity", context_menu: true, available: true },
+      {
+        id: "ui.inspect",
+        name: "Inspect Tag",
+        target: "tag:tag-1",
+        group: "entity",
+        context_menu: true,
+        available: true,
+      },
+      {
+        id: "task.untag",
+        name: "Remove Tag",
+        group: "entity",
+        context_menu: true,
+        available: true,
+      },
     ]);
     const { container } = renderPill({
       entityType: "tag",
@@ -228,7 +241,14 @@ describe("MentionPill", () => {
   it("task.untag not available when taskId is undefined", async () => {
     // Backend only returns inspect — no task.untag since no taskId context
     mockListCommands([
-      { id: "ui.inspect", name: "Inspect Tag", target: "tag:tag-1", group: "entity", context_menu: true, available: true },
+      {
+        id: "ui.inspect",
+        name: "Inspect Tag",
+        target: "tag:tag-1",
+        group: "entity",
+        context_menu: true,
+        available: true,
+      },
     ]);
     const { container } = renderPill({
       entityType: "tag",
@@ -289,8 +309,22 @@ describe("MentionPill", () => {
     mockGetEntities.mockReturnValue([]);
     // Backend returns both inspect commands — one for the tag pill, one for the parent task
     mockListCommands([
-      { id: "ui.inspect", name: "Inspect Tag", target: "tag:unknown-tag", group: "entity", context_menu: true, available: true },
-      { id: "ui.inspect", name: "Inspect task", target: "task:parent", group: "entity", context_menu: true, available: true },
+      {
+        id: "ui.inspect",
+        name: "Inspect Tag",
+        target: "tag:unknown-tag",
+        group: "entity",
+        context_menu: true,
+        available: true,
+      },
+      {
+        id: "ui.inspect",
+        name: "Inspect task",
+        target: "task:parent",
+        group: "entity",
+        context_menu: true,
+        available: true,
+      },
     ]);
     const onInspect = vi.fn();
     const { container } = render(

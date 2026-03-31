@@ -18,6 +18,8 @@ export interface EditorProps {
   onCancel: () => void;
   /** Semantic submit — fires on Enter (CUA/emacs) or normal-mode Enter (vim). */
   onSubmit?: (value: unknown) => void;
+  /** Report intermediate value changes for debounced autosave. */
+  onChange?: (value: unknown) => void;
 
   mode: "compact" | "full";
 }
