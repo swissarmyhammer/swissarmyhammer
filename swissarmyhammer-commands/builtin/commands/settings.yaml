@@ -1,6 +1,5 @@
 - id: settings.keymap.vim
   name: Vim Keybindings
-  visible: false
   menu:
     path: [App, Settings]
     group: 0
@@ -9,7 +8,6 @@
 
 - id: settings.keymap.cua
   name: Standard Keybindings
-  visible: false
   menu:
     path: [App, Settings]
     group: 0
@@ -18,7 +16,6 @@
 
 - id: settings.keymap.emacs
   name: Emacs Keybindings
-  visible: false
   menu:
     path: [App, Settings]
     group: 0

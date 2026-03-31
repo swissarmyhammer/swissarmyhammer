@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: '8580'
+position_column: done
+position_ordinal: ffffffffffffffffa580
 title: 'Bug: keymap commands hidden from command palette by visible: false'
 ---
 ## What

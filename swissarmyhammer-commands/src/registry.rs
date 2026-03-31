@@ -522,6 +522,26 @@ mod tests {
     }
 
     #[test]
+    fn keymap_commands_are_visible_in_palette() {
+        let settings = include_str!("../builtin/commands/settings.yaml");
+        let registry = CommandsRegistry::from_yaml_sources(&[("settings", settings)]);
+
+        for cmd_id in &[
+            "settings.keymap.vim",
+            "settings.keymap.cua",
+            "settings.keymap.emacs",
+        ] {
+            let cmd = registry
+                .get(cmd_id)
+                .unwrap_or_else(|| panic!("{cmd_id} missing"));
+            assert!(
+                cmd.visible,
+                "{cmd_id} should be visible in the command palette"
+            );
+        }
+    }
+
+    #[test]
     fn merge_yaml_sources_invalid_yaml_skipped() {
         let base = vec![("base", "- id: task.add\n  name: Add Task\n")];
         let mut reg = CommandsRegistry::from_yaml_sources(&base);
