@@ -408,6 +408,22 @@ impl Doctorable for ShellExecuteTool {
     }
 }
 
+/// Maps an init scope to its Claude Code settings file path:
+/// - `Project` → `.claude/settings.json`
+/// - `Local` → `.claude/settings.local.json`
+/// - `User` → `~/.claude/settings.json`
+fn claude_settings_path(scope: &swissarmyhammer_common::lifecycle::InitScope) -> std::path::PathBuf {
+    use swissarmyhammer_common::lifecycle::InitScope;
+    match scope {
+        InitScope::Project => std::path::PathBuf::from(".claude/settings.json"),
+        InitScope::Local => std::path::PathBuf::from(".claude/settings.local.json"),
+        InitScope::User => dirs::home_dir()
+            .unwrap_or_else(|| std::path::PathBuf::from("."))
+            .join(".claude")
+            .join("settings.json"),
+    }
+}
+
 impl swissarmyhammer_common::lifecycle::Initializable for ShellExecuteTool {
     /// Returns the display name for this component in lifecycle output.
     fn name(&self) -> &str {
@@ -427,11 +443,11 @@ impl swissarmyhammer_common::lifecycle::Initializable for ShellExecuteTool {
 
     /// Initialize the shell tool for the project:
     /// 1. Create `.shell/config.yaml` from builtin template if missing
-    /// 2. Deny Bash in `.claude/settings.json`
+    /// 2. Deny Bash in Claude settings (scope-aware: project or local)
     /// 3. Deploy the shell skill to all detected agents
     fn init(
         &self,
-        _scope: &swissarmyhammer_common::lifecycle::InitScope,
+        scope: &swissarmyhammer_common::lifecycle::InitScope,
         reporter: &dyn swissarmyhammer_common::reporter::InitReporter,
     ) -> Vec<swissarmyhammer_common::lifecycle::InitResult> {
         use swissarmyhammer_common::lifecycle::InitResult;
@@ -463,8 +479,8 @@ impl swissarmyhammer_common::lifecycle::Initializable for ShellExecuteTool {
             });
         }
 
-        // Step 2: Deny Bash in .claude/settings.json
-        let claude_settings_path = std::path::PathBuf::from(".claude/settings.json");
+        // Step 2: Deny Bash in Claude settings (scope-aware path)
+        let claude_settings_path = claude_settings_path(scope);
         let mut settings = if claude_settings_path.exists() {
             match std::fs::read_to_string(&claude_settings_path) {
                 Ok(content) if !content.trim().is_empty() => {
@@ -473,7 +489,7 @@ impl swissarmyhammer_common::lifecycle::Initializable for ShellExecuteTool {
                         Err(e) => {
                             results.push(InitResult::error(
                                 component_name,
-                                format!("Failed to parse .claude/settings.json: {}", e),
+                                format!("Failed to parse {}: {}", claude_settings_path.display(), e),
                             ));
                             return results;
                         }
@@ -483,7 +499,7 @@ impl swissarmyhammer_common::lifecycle::Initializable for ShellExecuteTool {
                 Err(e) => {
                     results.push(InitResult::error(
                         component_name,
-                        format!("Failed to read .claude/settings.json: {}", e),
+                        format!("Failed to read {}: {}", claude_settings_path.display(), e),
                     ));
                     return results;
                 }
@@ -516,7 +532,7 @@ impl swissarmyhammer_common::lifecycle::Initializable for ShellExecuteTool {
                         if let Err(e) = std::fs::create_dir_all(parent) {
                             results.push(InitResult::error(
                                 component_name,
-                                format!("Failed to create .claude/ directory: {}", e),
+                                format!("Failed to create {} parent directory: {}", claude_settings_path.display(), e),
                             ));
                             return results;
                         }
@@ -527,7 +543,7 @@ impl swissarmyhammer_common::lifecycle::Initializable for ShellExecuteTool {
                     Err(e) => {
                         results.push(InitResult::error(
                             component_name,
-                            format!("Failed to serialize .claude/settings.json: {}", e),
+                            format!("Failed to serialize {}: {}", claude_settings_path.display(), e),
                         ));
                         return results;
                     }
@@ -535,13 +551,13 @@ impl swissarmyhammer_common::lifecycle::Initializable for ShellExecuteTool {
                 if let Err(e) = std::fs::write(&claude_settings_path, content) {
                     results.push(InitResult::error(
                         component_name,
-                        format!("Failed to write .claude/settings.json: {}", e),
+                        format!("Failed to write {}: {}", claude_settings_path.display(), e),
                     ));
                     return results;
                 }
                 reporter.emit(&InitEvent::Action {
                     verb: "Configured".to_string(),
-                    message: "Bash tool denied in .claude/settings.json".to_string(),
+                    message: format!("Bash tool denied in {}", claude_settings_path.display()),
                 });
             }
         }
@@ -638,11 +654,11 @@ impl swissarmyhammer_common::lifecycle::Initializable for ShellExecuteTool {
 
     /// Deinitialize the shell tool:
     /// 1. Remove the shell skill from all agents
-    /// 2. Remove "Bash" from `.claude/settings.json` permissions.deny
+    /// 2. Remove "Bash" from Claude settings permissions.deny (scope-aware)
     /// 3. Remove `.shell/` config directory if it exists
     fn deinit(
         &self,
-        _scope: &swissarmyhammer_common::lifecycle::InitScope,
+        scope: &swissarmyhammer_common::lifecycle::InitScope,
         reporter: &dyn swissarmyhammer_common::reporter::InitReporter,
     ) -> Vec<swissarmyhammer_common::lifecycle::InitResult> {
         use swissarmyhammer_common::lifecycle::InitResult;
@@ -662,8 +678,8 @@ impl swissarmyhammer_common::lifecycle::Initializable for ShellExecuteTool {
             });
         }
 
-        // Step 2: Remove "Bash" from permissions.deny in .claude/settings.json
-        let claude_settings_path = std::path::PathBuf::from(".claude/settings.json");
+        // Step 2: Remove "Bash" from permissions.deny (scope-aware path)
+        let claude_settings_path = claude_settings_path(scope);
         if claude_settings_path.exists() {
             match std::fs::read_to_string(&claude_settings_path) {
                 Ok(content) if !content.trim().is_empty() => {
@@ -687,16 +703,18 @@ impl swissarmyhammer_common::lifecycle::Initializable for ShellExecuteTool {
                                             results.push(InitResult::error(
                                                 component_name,
                                                 format!(
-                                                    "Failed to write .claude/settings.json: {}",
+                                                    "Failed to write {}: {}",
+                                                    claude_settings_path.display(),
                                                     e
                                                 ),
                                             ));
                                         } else {
                                             reporter.emit(&InitEvent::Action {
                                                 verb: "Removed".to_string(),
-                                                message:
-                                                    "Bash deny rule from .claude/settings.json"
-                                                        .to_string(),
+                                                message: format!(
+                                                    "Bash deny rule from {}",
+                                                    claude_settings_path.display()
+                                                ),
                                             });
                                         }
                                     }
@@ -704,7 +722,8 @@ impl swissarmyhammer_common::lifecycle::Initializable for ShellExecuteTool {
                                         results.push(InitResult::error(
                                             component_name,
                                             format!(
-                                                "Failed to serialize .claude/settings.json: {}",
+                                                "Failed to serialize {}: {}",
+                                                claude_settings_path.display(),
                                                 e
                                             ),
                                         ));
@@ -714,7 +733,7 @@ impl swissarmyhammer_common::lifecycle::Initializable for ShellExecuteTool {
                         }
                         Err(e) => {
                             reporter.emit(&InitEvent::Warning {
-                                message: format!("Could not parse .claude/settings.json: {}", e),
+                                message: format!("Could not parse {}: {}", claude_settings_path.display(), e),
                             });
                         }
                     }
@@ -895,6 +914,45 @@ mod tests {
         assert_eq!(shell_execute_tool.name, "shell");
         assert!(shell_execute_tool.description.is_some());
         assert!(!shell_execute_tool.input_schema.is_empty());
+    }
+
+    // =====================================================================
+    // claude_settings_path tests
+    // =====================================================================
+
+    #[test]
+    fn test_claude_settings_path_project() {
+        use swissarmyhammer_common::lifecycle::InitScope;
+        let path = claude_settings_path(&InitScope::Project);
+        assert_eq!(path, std::path::PathBuf::from(".claude/settings.json"));
+    }
+
+    #[test]
+    fn test_claude_settings_path_local() {
+        use swissarmyhammer_common::lifecycle::InitScope;
+        let path = claude_settings_path(&InitScope::Local);
+        assert_eq!(
+            path,
+            std::path::PathBuf::from(".claude/settings.local.json")
+        );
+    }
+
+    #[test]
+    fn test_claude_settings_path_user() {
+        use swissarmyhammer_common::lifecycle::InitScope;
+        let path = claude_settings_path(&InitScope::User);
+        // Should end with .claude/settings.json under the home directory
+        assert!(path.ends_with(".claude/settings.json"));
+        // Should be an absolute path (not relative like project/local)
+        assert!(path.is_absolute() || path.starts_with("."));
+    }
+
+    #[test]
+    fn test_claude_settings_path_local_differs_from_project() {
+        use swissarmyhammer_common::lifecycle::InitScope;
+        let project = claude_settings_path(&InitScope::Project);
+        let local = claude_settings_path(&InitScope::Local);
+        assert_ne!(project, local);
     }
 
     #[tokio::test]
