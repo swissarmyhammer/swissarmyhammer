@@ -131,28 +131,6 @@ interface PanelEntry {
   entityId: string;
 }
 
-/** Parse an InspectorStack moniker array from a dispatch_command result into PanelEntry[].
- *  Returns [] when result is null (e.g. closing the last panel returns None from Rust). */
-function parsePanelStack(result: {
-  result?: { InspectorStack?: string[] } | null;
-}): PanelEntry[] | null {
-  // null result means the command was a no-op (e.g. close on empty stack) or
-  // the stack is now empty — treat as empty stack
-  if (result?.result === null) return [];
-  const stack = result?.result?.InspectorStack;
-  if (!Array.isArray(stack)) return null;
-  const entries: PanelEntry[] = [];
-  for (const moniker of stack) {
-    const sep = moniker.indexOf(":");
-    if (sep < 0) continue;
-    entries.push({
-      entityType: moniker.slice(0, sep),
-      entityId: moniker.slice(sep + 1),
-    });
-  }
-  return entries;
-}
-
 function App() {
   const [board, setBoard] = useState<BoardData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -180,71 +158,39 @@ function App() {
   const panelStackRef = useRef(panelStack);
   panelStackRef.current = panelStack;
 
-  /** Open an inspector for any entity via the command architecture. */
+  /** Open an inspector for any entity via the command architecture.
+   *  Fire-and-forget — InspectorSyncBridge updates panelStack from UIState. */
   const inspectEntity = useCallback((entityType: string, entityId: string) => {
-    const target = `${entityType}:${entityId}`;
-    (
-      backendDispatch({
-        cmd: "ui.inspect",
-        target,
-      }) as Promise<{ result?: { InspectorStack?: string[] } }>
-    )
-      .then((res) => {
-        const stack = parsePanelStack(res);
-        if (stack) setPanelStack(stack);
-      })
-      .catch((e) => console.error("ui.inspect failed:", e));
+    backendDispatch({
+      cmd: "ui.inspect",
+      target: `${entityType}:${entityId}`,
+    }).catch((e) => console.error("ui.inspect failed:", e));
   }, []);
 
-  /** Close the topmost inspector panel via the command architecture. */
+  /** Close the topmost inspector panel via the command architecture.
+   *  Fire-and-forget — InspectorSyncBridge updates panelStack from UIState. */
   const closeTopPanel = useCallback(() => {
-    // Optimistic: pop immediately for instant visual feedback
-    setPanelStack((prev) => prev.slice(0, -1));
-    (
-      backendDispatch({
-        cmd: "ui.inspector.close",
-      }) as Promise<{ result?: { InspectorStack?: string[] } }>
-    )
-      .then((res) => {
-        // Reconcile with backend — backend wins if diverged
-        const stack = parsePanelStack(res);
-        if (stack) setPanelStack(stack);
-      })
-      .catch((e) => console.error("ui.inspector.close failed:", e));
+    backendDispatch({ cmd: "ui.inspector.close" }).catch((e) =>
+      console.error("ui.inspector.close failed:", e),
+    );
   }, []);
 
-  /** Close the topmost panel. Returns true if a panel was actually closed. */
+  /** Close the topmost panel. Returns true if a panel was actually closed.
+   *  Fire-and-forget — InspectorSyncBridge updates panelStack from UIState. */
   const dismissTopPanel = useCallback((): boolean => {
     if (panelStackRef.current.length === 0) return false;
-    // Optimistic: pop immediately for instant visual feedback
-    setPanelStack((prev) => prev.slice(0, -1));
-    (
-      backendDispatch({
-        cmd: "ui.inspector.close",
-      }) as Promise<{ result?: { InspectorStack?: string[] } }>
-    )
-      .then((res) => {
-        const stack = parsePanelStack(res);
-        if (stack) setPanelStack(stack);
-      })
-      .catch((e) => console.error("ui.inspector.close failed:", e));
+    backendDispatch({ cmd: "ui.inspector.close" }).catch((e) =>
+      console.error("ui.inspector.close failed:", e),
+    );
     return true;
   }, []);
 
-  /** Close all inspector panels via the command architecture. */
+  /** Close all inspector panels via the command architecture.
+   *  Fire-and-forget — InspectorSyncBridge updates panelStack from UIState. */
   const closeAll = useCallback(() => {
-    // Optimistic: clear immediately for instant visual feedback
-    setPanelStack([]);
-    (
-      backendDispatch({
-        cmd: "ui.inspector.close_all",
-      }) as Promise<{ result?: { InspectorStack?: string[] } }>
-    )
-      .then((res) => {
-        const stack = parsePanelStack(res);
-        if (stack) setPanelStack(stack);
-      })
-      .catch((e) => console.error("ui.inspector.close_all failed:", e));
+    backendDispatch({ cmd: "ui.inspector.close_all" }).catch((e) =>
+      console.error("ui.inspector.close_all failed:", e),
+    );
   }, []);
 
   // Intentional empty deps: reads activeBoardPathRef to avoid stale closure.
@@ -323,19 +269,8 @@ function App() {
           activeBoardPathRef.current = winState.board_path;
         }
 
-        // Restore inspector stack for ALL windows (main + secondary).
-        if (winState?.inspector_stack && winState.inspector_stack.length > 0) {
-          const validated: PanelEntry[] = [];
-          for (const moniker of winState.inspector_stack) {
-            const sep = moniker.indexOf(":");
-            if (sep < 0) continue;
-            validated.push({
-              entityType: moniker.slice(0, sep),
-              entityId: moniker.slice(sep + 1),
-            });
-          }
-          if (validated.length > 0) setPanelStack(validated);
-        }
+        // Inspector stack restore is handled by InspectorSyncBridge
+        // reading UIState after UIStateProvider mounts.
       } catch {
         // No saved state — will fall through to refresh below
       }

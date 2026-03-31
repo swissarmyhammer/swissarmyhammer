@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: '8480'
+position_column: done
+position_ordinal: ffffffffffffffffa480
 title: Remove optimistic inspector panel state — derive from backend UIState only
 ---
 ## What
