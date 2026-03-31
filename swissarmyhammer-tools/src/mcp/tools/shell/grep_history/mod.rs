@@ -20,9 +20,12 @@ pub struct GrepHistory;
 
 static GREP_HISTORY_PARAMS: &[ParamMeta] = &[
     ParamMeta::new("pattern")
-        .description("Regex pattern to match against command output")
+        .description("Regex pattern to match against command output. When literal is true, matched as exact text (no escaping needed).")
         .param_type(ParamType::String)
         .required(),
+    ParamMeta::new("literal")
+        .description("Treat pattern as literal text instead of regex (default: false). Use this to avoid backslash escaping issues.")
+        .param_type(ParamType::Boolean),
     ParamMeta::new("command_id")
         .description("Filter to a specific command's output (optional)")
         .param_type(ParamType::Integer),
@@ -69,6 +72,15 @@ pub async fn execute_grep_history(
         .ok_or_else(|| {
             McpError::invalid_params("'pattern' parameter is required for grep history", None)
         })?;
+    let literal = args
+        .get("literal")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let effective_pattern = if literal {
+        regex::escape(pattern)
+    } else {
+        pattern.to_string()
+    };
     let command_id = args
         .get("command_id")
         .and_then(|v| v.as_u64())
@@ -79,7 +91,7 @@ pub async fn execute_grep_history(
         .map(|v| v as usize);
 
     let guard = state.lock().await;
-    match guard.grep(pattern, command_id, limit) {
+    match guard.grep(&effective_pattern, command_id, limit) {
         Ok((results, total)) => {
             if results.is_empty() {
                 return Ok(BaseToolImpl::create_success_response(
@@ -252,5 +264,55 @@ mod tests {
     async fn test_grep_history_invalid_regex_returns_error() {
         let result = execute_op("grep history", vec![("pattern", json!("[invalid regex"))]).await;
         assert!(result.is_err(), "invalid regex should fail");
+    }
+
+    #[tokio::test]
+    #[serial(cwd)]
+    async fn test_grep_history_literal_escapes_regex_metacharacters() {
+        let tool = shared_tool();
+        // Output contains regex metacharacters: brackets and backslash
+        run_command_with(&tool, r#"echo 'error[E0001]: something \d+ failed'"#).await;
+
+        // With literal=true, brackets are matched as literal text, no escaping needed
+        let result = execute_op_with(
+            &tool,
+            "grep history",
+            vec![("pattern", json!("error[E0001]")), ("literal", json!(true))],
+        )
+        .await;
+        assert!(result.is_ok(), "literal grep should succeed");
+
+        let text = extract_text(&result.unwrap());
+        assert!(
+            text.contains("error[E0001]"),
+            "Should find literal bracket match: {}",
+            text
+        );
+    }
+
+    #[tokio::test]
+    #[serial(cwd)]
+    async fn test_grep_history_literal_false_uses_regex() {
+        let tool = shared_tool();
+        run_command_with(&tool, "echo 'error: failed at line 99'").await;
+
+        // literal=false (default) — pattern is treated as regex
+        let result = execute_op_with(
+            &tool,
+            "grep history",
+            vec![("pattern", json!("line \\d+")), ("literal", json!(false))],
+        )
+        .await;
+        assert!(
+            result.is_ok(),
+            "regex grep with literal=false should succeed"
+        );
+
+        let text = extract_text(&result.unwrap());
+        assert!(
+            text.contains("line 99"),
+            "Should find regex match: {}",
+            text
+        );
     }
 }

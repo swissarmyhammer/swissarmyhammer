@@ -68,14 +68,21 @@ Semantic search across all command output. Finds content by meaning, not exact t
 
 ### grep history
 
-Regex pattern match across command output. Exact structural search.
+Regex pattern match across command output. This uses ripgrep for fast, powerful searching.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| pattern | string | yes | Regex pattern |
+| pattern | string | yes | Regex pattern (or literal text when `literal` is true) |
+| literal | boolean | no | Treat pattern as exact text, not regex (default: false). Avoids all backslash escaping issues. |
 | command_id | integer | no | Filter to one command's output |
-| limit | integer | no | Max results (default: 50) |
+| limit | integer | no | Max results (default: 10) |
 
+Prefer `literal: true` for exact text searches — no escaping needed:
+```json
+{"op": "grep history", "pattern": "error[E0001]", "literal": true}
+```
+
+Use regex mode (the default) only when you need wildcards, character classes, etc.:
 ```json
 {"op": "grep history", "pattern": "error\\[E\\d+\\]"}
 ```
@@ -118,5 +125,5 @@ Use `timeout` for:
 
 ## Search vs grep
 
-- **grep**: Regex patterns. `error\[E\d+\]` finds Rust error codes. `FAIL` finds test failures. Structural, exact.
+- **grep**: Exact text or regex patterns. Use `literal: true` for plain text like `FAIL` or `error[E0001]` — no escaping needed. Use regex mode for wildcards like `error\[E\d+\]`.
 - **search**: Natural language. "database connection timeout" finds related errors even with different wording. Semantic, fuzzy.
