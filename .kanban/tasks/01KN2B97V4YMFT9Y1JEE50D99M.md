@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KN24NAX41PVGAZ927NKZZ95X
-position_column: todo
-position_ordinal: '8280'
+position_column: done
+position_ordinal: ffffffffffffffffa280
 title: 'Bug: command palette opens in wrong window (stale scope chain)'
 ---
 ## What
