@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: '8380'
+position_column: done
+position_ordinal: ffffffffffffffffa380
 title: 'Perf: virtualize column rendering with fixed-height cards and drop zones'
 ---
 ## What

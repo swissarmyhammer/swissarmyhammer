@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: done
-position_ordinal: '7980'
+position_ordinal: 7b8180
 title: 'Bug: secondary windows not restoring on app restart'
 ---
 ## What
