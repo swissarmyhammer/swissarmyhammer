@@ -40,10 +40,11 @@ const MERGE_DRIVERS: &[MergeDriver] = &[
     },
 ];
 
-/// Walk up the directory tree from `start` looking for a `.git` directory.
+/// Walk up the directory tree from `start` looking for a `.git` entry.
 ///
 /// Returns the path to the directory that *contains* `.git`, or `None` if not
-/// inside a git repository.
+/// inside a git repository. Works with both normal repos (`.git` is a
+/// directory) and worktrees (`.git` is a file containing a `gitdir:` pointer).
 fn find_git_root(start: &Path) -> Option<std::path::PathBuf> {
     let mut current = start.to_path_buf();
     loop {
@@ -55,6 +56,46 @@ fn find_git_root(start: &Path) -> Option<std::path::PathBuf> {
             None => return None,
         }
     }
+}
+
+/// Resolve the path to the git config file for the repository rooted at
+/// `git_root`.
+///
+/// In a normal repository `.git` is a directory and the config lives at
+/// `.git/config`. In a **worktree** `.git` is a *file* whose first line is
+/// `gitdir: <path>` — we follow that pointer and look for `config` inside the
+/// resolved directory.
+fn resolve_git_config(git_root: &Path) -> Option<std::path::PathBuf> {
+    let dot_git = git_root.join(".git");
+    if dot_git.is_dir() {
+        return Some(dot_git.join("config"));
+    }
+    // Worktree: .git is a file like `gitdir: /path/to/.git/worktrees/foo`
+    if dot_git.is_file() {
+        if let Ok(contents) = std::fs::read_to_string(&dot_git) {
+            if let Some(gitdir) = contents.trim().strip_prefix("gitdir:") {
+                let gitdir = gitdir.trim();
+                let gitdir_path = if std::path::Path::new(gitdir).is_relative() {
+                    git_root.join(gitdir)
+                } else {
+                    std::path::PathBuf::from(gitdir)
+                };
+                let config = gitdir_path.join("config");
+                if config.exists() {
+                    return Some(config);
+                }
+                // Worktree gitdir (e.g. .git/worktrees/foo) — config lives
+                // in the main .git directory, two levels up.
+                if let Some(main_git) = gitdir_path.parent().and_then(|p| p.parent()) {
+                    let main_config = main_git.join("config");
+                    if main_config.exists() {
+                        return Some(main_config);
+                    }
+                }
+            }
+        }
+    }
+    None
 }
 
 /// Register git merge drivers for `.kanban/` files.
@@ -115,7 +156,10 @@ pub fn register_merge_drivers(board_root: &Path) -> Result<(), std::io::Error> {
     // ------------------------------------------------------------------
     // Add include.path to .git/config pointing to .kanban/.gitconfig
     // ------------------------------------------------------------------
-    let git_config_path = git_root.join(".git").join("config");
+    let git_config_path = match resolve_git_config(&git_root) {
+        Some(p) => p,
+        None => return Ok(()),
+    };
     let include_path = "../.kanban/.gitconfig";
     let include_directive = format!("[include]\n\tpath = {}\n", include_path);
 
@@ -162,7 +206,10 @@ pub fn unregister_merge_drivers(board_root: &Path) -> Result<(), std::io::Error>
         Some(r) => r,
         None => return Ok(()),
     };
-    let git_config_path = git_root.join(".git").join("config");
+    let git_config_path = match resolve_git_config(&git_root) {
+        Some(p) => p,
+        None => return Ok(()),
+    };
     let include_path = "../.kanban/.gitconfig";
 
     if let Ok(config) = std::fs::read_to_string(&git_config_path) {
@@ -500,6 +547,45 @@ mod tests {
         // that a sibling dir returns None when there's no .git
         let found = find_git_root(std::path::Path::new("/"));
         assert_eq!(found, None);
+    }
+
+    /// Verify that register_merge_drivers works in a git worktree where
+    /// `.git` is a file (not a directory) containing a `gitdir:` pointer.
+    #[tokio::test]
+    async fn test_register_merge_drivers_worktree() {
+        let temp = TempDir::new().unwrap();
+
+        // Create a main .git directory with a config
+        let main_git = temp.path().join("main").join(".git");
+        std::fs::create_dir_all(main_git.join("worktrees").join("wt")).unwrap();
+        std::fs::write(
+            main_git.join("config"),
+            "[core]\n\trepositoryformatversion = 0\n",
+        )
+        .unwrap();
+
+        // Create worktree dir with a .git *file* pointing back
+        let wt_dir = temp.path().join("wt");
+        std::fs::create_dir_all(&wt_dir).unwrap();
+        let gitdir_target = main_git.join("worktrees").join("wt");
+        std::fs::write(
+            wt_dir.join(".git"),
+            format!("gitdir: {}", gitdir_target.display()),
+        )
+        .unwrap();
+
+        let kanban_dir = wt_dir.join(".kanban");
+        std::fs::create_dir_all(&kanban_dir).unwrap();
+
+        // Should not error — previously this would fail with ENOTDIR
+        register_merge_drivers(&kanban_dir).unwrap();
+
+        // The include directive should land in the main .git/config
+        let config = std::fs::read_to_string(main_git.join("config")).unwrap();
+        assert!(
+            config.contains("../.kanban/.gitconfig"),
+            "main .git/config should contain the include directive"
+        );
     }
 
     /// Verify that a board root with no parent returns Ok(()) silently.
