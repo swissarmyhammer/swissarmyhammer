@@ -151,6 +151,7 @@ pub fn register_commands() -> HashMap<String, Arc<dyn Command>> {
         "app.command".into(),
         Arc::new(app_commands::CommandPaletteCmd),
     );
+    // app.palette is an alias for app.command — both open the command palette.
     map.insert(
         "app.palette".into(),
         Arc::new(app_commands::CommandPaletteCmd),

@@ -397,17 +397,9 @@ mod tests {
 
     #[test]
     fn builtin_yaml_files_parse() {
-        let app = include_str!("../builtin/commands/app.yaml");
-        let entity = include_str!("../builtin/commands/entity.yaml");
-        let ui = include_str!("../builtin/commands/ui.yaml");
-        let settings = include_str!("../builtin/commands/settings.yaml");
-
-        let registry = CommandsRegistry::from_yaml_sources(&[
-            ("app", app),
-            ("entity", entity),
-            ("ui", ui),
-            ("settings", settings),
-        ]);
+        let sources = builtin_yaml_sources();
+        let sources_ref: Vec<(&str, &str)> = sources.iter().map(|(n, c)| (*n, *c)).collect();
+        let registry = CommandsRegistry::from_yaml_sources(&sources_ref);
 
         // app: about, help, quit, command, palette, search, dismiss, undo, redo = 9
         // entity: task.add, task.move, task.delete, task.untag, entity.update_field,
@@ -417,7 +409,9 @@ mod tests {
         // ui: inspect, inspector.close, inspector.close_all, palette.open,
         //     palette.close, view.set, setFocus, window.new = 8
         // settings: keymap.vim, keymap.cua, keymap.emacs = 3
-        assert_eq!(registry.all_commands().len(), 34);
+        // file: switchBoard, closeBoard, newBoard, openBoard = 4
+        // drag: start, cancel, complete = 3
+        assert_eq!(registry.all_commands().len(), 41);
 
         // Spot checks
         assert!(registry.get("app.quit").is_some());
@@ -427,6 +421,8 @@ mod tests {
         assert!(registry.get("task.untag").unwrap().context_menu);
         assert!(registry.get("task.add").unwrap().undoable);
         assert!(!registry.get("app.undo").unwrap().undoable);
+        assert!(registry.get("file.closeBoard").is_some());
+        assert!(registry.get("drag.start").is_some());
     }
 
     #[test]

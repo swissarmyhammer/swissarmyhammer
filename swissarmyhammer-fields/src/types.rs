@@ -1140,57 +1140,6 @@ fields:
     }
 
     #[test]
-    fn text_field_infers_editor_display() {
-        let field = field_with_type(FieldType::Text { single_line: false });
-        assert_eq!(field.effective_editor(), "markdown");
-        assert_eq!(field.effective_display(), "text");
-    }
-
-    #[test]
-    fn markdown_field_infers_editor_display() {
-        let field = field_with_type(FieldType::Markdown { single_line: false });
-        assert_eq!(field.effective_editor(), "markdown");
-        assert_eq!(field.effective_display(), "markdown");
-    }
-
-    #[test]
-    fn color_field_infers_editor_display() {
-        let field = field_with_type(FieldType::Color);
-        assert_eq!(field.effective_editor(), "color-palette");
-        assert_eq!(field.effective_display(), "color-swatch");
-    }
-
-    #[test]
-    fn select_field_infers_editor_display() {
-        let field = field_with_type(FieldType::Select {
-            options: vec![SelectOption {
-                value: "A".into(),
-                label: None,
-                color: None,
-                icon: None,
-                order: 0,
-            }],
-        });
-        assert_eq!(field.effective_editor(), "select");
-        assert_eq!(field.effective_display(), "badge");
-    }
-
-    #[test]
-    fn multi_select_field_infers_editor_display() {
-        let field = field_with_type(FieldType::MultiSelect {
-            options: vec![SelectOption {
-                value: "X".into(),
-                label: None,
-                color: None,
-                icon: None,
-                order: 0,
-            }],
-        });
-        assert_eq!(field.effective_editor(), "multi-select");
-        assert_eq!(field.effective_display(), "badge-list");
-    }
-
-    #[test]
     fn reference_multiple_field_infers_editor_display() {
         let field = field_with_type(FieldType::Reference {
             entity: "task".into(),

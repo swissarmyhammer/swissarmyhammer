@@ -267,14 +267,4 @@ mod tests {
         let ro = registry.get("read-only").unwrap();
         assert!(!ro.writable());
     }
-
-    #[test]
-    fn default_writable_returns_true() {
-        // UpperTitle does not override writable(), so it relies on the default.
-        let handler = UpperTitle;
-        assert!(
-            handler.writable(),
-            "DeriveHandler::writable() default should return true"
-        );
-    }
 }

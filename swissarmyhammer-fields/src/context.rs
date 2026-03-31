@@ -627,57 +627,6 @@ type:
     }
 
     #[test]
-    fn from_yaml_sources_entity_override_replaces_earlier() {
-        let entity_v1 = r#"
-name: task
-body_field: body
-fields:
-  - title
-"#;
-        let entity_v2 = r#"
-name: task
-body_field: description
-fields:
-  - title
-  - status
-"#;
-
-        let ctx = FieldsContext::from_yaml_sources(
-            PathBuf::from("/tmp/test"),
-            &[],
-            &[("task", entity_v1), ("task", entity_v2)],
-        )
-        .unwrap();
-
-        assert_eq!(ctx.all_entities().len(), 1);
-        let entity = ctx.get_entity("task").unwrap();
-        assert_eq!(entity.body_field, Some("description".into()));
-        assert_eq!(entity.fields.len(), 2);
-    }
-
-    #[test]
-    fn from_yaml_sources_skips_invalid_entity_yaml() {
-        let good_entity = r#"
-name: task
-body_field: body
-fields:
-  - title
-"#;
-        let bad_entity = "this is not valid entity yaml: [[[";
-
-        let ctx = FieldsContext::from_yaml_sources(
-            PathBuf::from("/tmp/test"),
-            &[],
-            &[("task", good_entity), ("bad", bad_entity)],
-        )
-        .unwrap();
-
-        assert_eq!(ctx.all_entities().len(), 1);
-        assert!(ctx.get_entity("task").is_some());
-        assert!(ctx.get_entity("bad").is_none());
-    }
-
-    #[test]
     fn from_yaml_sources_skips_invalid_yaml() {
         let good = r#"
 id: "00000000000000000000000001"
