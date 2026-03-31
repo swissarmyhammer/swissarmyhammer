@@ -412,7 +412,9 @@ impl Doctorable for ShellExecuteTool {
 /// - `Project` → `.claude/settings.json`
 /// - `Local` → `.claude/settings.local.json`
 /// - `User` → `~/.claude/settings.json`
-fn claude_settings_path(scope: &swissarmyhammer_common::lifecycle::InitScope) -> std::path::PathBuf {
+fn claude_settings_path(
+    scope: &swissarmyhammer_common::lifecycle::InitScope,
+) -> std::path::PathBuf {
     use swissarmyhammer_common::lifecycle::InitScope;
     match scope {
         InitScope::Project => std::path::PathBuf::from(".claude/settings.json"),
@@ -489,7 +491,11 @@ impl swissarmyhammer_common::lifecycle::Initializable for ShellExecuteTool {
                         Err(e) => {
                             results.push(InitResult::error(
                                 component_name,
-                                format!("Failed to parse {}: {}", claude_settings_path.display(), e),
+                                format!(
+                                    "Failed to parse {}: {}",
+                                    claude_settings_path.display(),
+                                    e
+                                ),
                             ));
                             return results;
                         }
@@ -532,7 +538,11 @@ impl swissarmyhammer_common::lifecycle::Initializable for ShellExecuteTool {
                         if let Err(e) = std::fs::create_dir_all(parent) {
                             results.push(InitResult::error(
                                 component_name,
-                                format!("Failed to create {} parent directory: {}", claude_settings_path.display(), e),
+                                format!(
+                                    "Failed to create {} parent directory: {}",
+                                    claude_settings_path.display(),
+                                    e
+                                ),
                             ));
                             return results;
                         }
@@ -543,7 +553,11 @@ impl swissarmyhammer_common::lifecycle::Initializable for ShellExecuteTool {
                     Err(e) => {
                         results.push(InitResult::error(
                             component_name,
-                            format!("Failed to serialize {}: {}", claude_settings_path.display(), e),
+                            format!(
+                                "Failed to serialize {}: {}",
+                                claude_settings_path.display(),
+                                e
+                            ),
                         ));
                         return results;
                     }
@@ -733,7 +747,11 @@ impl swissarmyhammer_common::lifecycle::Initializable for ShellExecuteTool {
                         }
                         Err(e) => {
                             reporter.emit(&InitEvent::Warning {
-                                message: format!("Could not parse {}: {}", claude_settings_path.display(), e),
+                                message: format!(
+                                    "Could not parse {}: {}",
+                                    claude_settings_path.display(),
+                                    e
+                                ),
                             });
                         }
                     }
