@@ -56,6 +56,22 @@ fn update_window_title(app: &AppHandle, label: &str, board_name: Option<&str>) {
     }
 }
 
+/// Read the board entity's display name from the entity context.
+///
+/// Returns the `name` field of the board entity (entity type "board", id "board").
+/// This is the canonical display name set during `init board` — typically the
+/// directory name, but editable by the user.
+async fn board_display_name(handle: &BoardHandle) -> Option<String> {
+    let ectx = handle.ctx.entity_context().await.ok()?;
+    let entity = ectx.read("board", "board").await.ok()?;
+    entity
+        .fields
+        .get("name")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+}
+
 /// Resolve a board handle — by explicit path or falling back to active board.
 ///
 /// When `board_path` is provided, canonicalizes it to match the key format
@@ -91,19 +107,7 @@ pub async fn list_open_boards(state: State<'_, AppState>) -> Result<Value, Strin
     let mut list: Vec<Value> = Vec::new();
     for (path, handle) in boards.iter() {
         let is_active = most_recent.as_ref() == Some(path);
-        // Read the board entity name if available
-        let name = match handle.ctx.entity_context().await {
-            Ok(ectx) => match ectx.read("board", "board").await {
-                Ok(entity) => entity
-                    .fields
-                    .get("name")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string(),
-                Err(_) => String::new(),
-            },
-            Err(_) => String::new(),
-        };
+        let name = board_display_name(handle).await.unwrap_or_default();
         list.push(json!({
             "path": path.display().to_string(),
             "is_active": is_active,
@@ -747,14 +751,15 @@ pub async fn create_window_impl(
             );
         }
 
-        // Set window title from board display name
+        // Set window title from board entity display name
         let board_path = std::path::PathBuf::from(bp);
         let canonical = board_path
             .canonicalize()
             .unwrap_or_else(|_| board_path.clone());
         let boards = state.boards.read().await;
         if let Some(handle) = boards.get(&canonical) {
-            update_window_title(&app, &label, Some(handle.ctx.name()));
+            let name = board_display_name(handle).await;
+            update_window_title(&app, &label, name.as_deref());
         }
     }
 
@@ -1061,7 +1066,8 @@ pub(crate) async fn dispatch_command_internal(
                     // Update window title to reflect the new board
                     let boards = state.boards.read().await;
                     if let Some(handle) = boards.get(&canonical) {
-                        update_window_title(app, label, Some(handle.ctx.name()));
+                        let name = board_display_name(handle).await;
+                        update_window_title(app, label, name.as_deref());
                     }
                 }
                 Err(e) => {
@@ -1267,6 +1273,20 @@ pub(crate) async fn dispatch_command_internal(
                     .ui_state
                     .set_undo_redo_state(stack.can_undo(), stack.can_redo());
             }
+            // Refresh window titles from the board entity display name.
+            // Catches board name edits, undo/redo of name changes, etc.
+            let display_name = board_display_name(handle).await;
+            let canonical = handle
+                .ctx
+                .root()
+                .canonicalize()
+                .unwrap_or_else(|_| handle.ctx.root().to_path_buf());
+            let board_path_str = canonical.display().to_string();
+            for (label, wbp) in state.ui_state.all_window_boards() {
+                if wbp == board_path_str {
+                    update_window_title(app, &label, display_name.as_deref());
+                }
+            }
         } else {
             tracing::info!(cmd = %effective_cmd, "needs_flush but no active_handle — events NOT emitted");
         }
@@ -1327,35 +1347,37 @@ pub async fn list_commands_for_scope(
             }
         }
 
-        // Gather open boards from UIState, enriched with context names from handles.
+        // Gather open boards from UIState, enriched with entity display names.
         let open_paths = state.ui_state.open_boards();
         let boards_lock = state.boards.read().await;
-        let boards: Vec<BoardInfo> = open_paths
-            .iter()
-            .map(|path| {
-                // Use the parent directory name as the display name.
-                // Board paths end in `.kanban`, so file_name() would just
-                // return ".kanban" — the parent is the meaningful project name.
-                let p = std::path::Path::new(path);
-                let name = p
-                    .parent()
-                    .and_then(|parent| parent.file_name())
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("Board")
-                    .to_string();
-                // Pull context_name from the board handle if available.
-                let context_name = boards_lock
-                    .get(p)
-                    .map(|h| h.ctx.name().to_string())
-                    .unwrap_or_else(|| name.clone());
-                BoardInfo {
-                    path: path.clone(),
-                    name: name.clone(),
-                    entity_name: name,
-                    context_name,
-                }
-            })
-            .collect();
+        let mut boards: Vec<BoardInfo> = Vec::new();
+        for path in &open_paths {
+            let p = std::path::Path::new(path);
+            // Filesystem fallback: parent directory name.
+            let dir_name = p
+                .parent()
+                .and_then(|parent| parent.file_name())
+                .and_then(|n| n.to_str())
+                .unwrap_or("Board")
+                .to_string();
+            // Read entity display name from the board entity's `name` field.
+            let entity_name = match boards_lock.get(p) {
+                Some(handle) => board_display_name(handle)
+                    .await
+                    .unwrap_or_else(|| dir_name.clone()),
+                None => dir_name.clone(),
+            };
+            let context_name = boards_lock
+                .get(p)
+                .map(|h| h.ctx.name().to_string())
+                .unwrap_or_else(|| dir_name.clone());
+            boards.push(BoardInfo {
+                path: path.clone(),
+                name: dir_name,
+                entity_name,
+                context_name,
+            });
+        }
         drop(boards_lock);
 
         // Gather open windows from Tauri
