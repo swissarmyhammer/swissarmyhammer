@@ -8,20 +8,22 @@ description = "Text embedding using CoreML for Apple Neural Engine"
 
 [dependencies]
 async-trait = { workspace = true }
-block2 = "0.6"
 half = "2"
 llama-common = { path = "../llama-common" }
 md5 = { workspace = true }
 model-embedding = { path = "../model-embedding" }
 model-loader = { path = "../model-loader" }
-objc2 = "0.6"
-objc2-core-ml = { version = "0.3", features = ["MLModel", "MLModel_MLModelCompilation", "MLModelConfiguration", "MLModelDescription", "MLMultiArray", "MLMultiArrayConstraint", "MLFeatureValue", "MLFeatureDescription", "MLDictionaryFeatureProvider", "MLFeatureProvider", "MLPredictionOptions", "block2"] }
-objc2-foundation = "0.3"
 serde = { workspace = true, features = ["derive"] }
 thiserror = { workspace = true }
 tokenizers = { version = "0.21", default-features = false, features = ["onig"] }
 tokio = { workspace = true, features = ["sync", "fs"] }
 tracing = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6"
+objc2 = "0.6"
+objc2-core-ml = { version = "0.3", features = ["MLModel", "MLModel_MLModelCompilation", "MLModelConfiguration", "MLModelDescription", "MLMultiArray", "MLMultiArrayConstraint", "MLFeatureValue", "MLFeatureDescription", "MLDictionaryFeatureProvider", "MLFeatureProvider", "MLPredictionOptions", "block2"] }
+objc2-foundation = "0.3"
 
 [dev-dependencies]
 serde_json = { workspace = true }

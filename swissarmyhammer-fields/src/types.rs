@@ -556,6 +556,145 @@ editor: custom-widget
     }
 
     #[test]
+    fn text_field_infers_editor_display() {
+        let field = FieldDef {
+            id: FieldDefId::new(),
+            name: "body".into(),
+            description: None,
+            type_: FieldType::Text { single_line: false },
+            default: None,
+            editor: None,
+            display: None,
+            sort: None,
+            width: None,
+            icon: None,
+            section: None,
+            validate: None,
+        };
+        assert_eq!(field.effective_editor(), "markdown");
+        assert_eq!(field.effective_display(), "text");
+    }
+
+    #[test]
+    fn markdown_field_infers_editor_display() {
+        let field = FieldDef {
+            id: FieldDefId::new(),
+            name: "notes".into(),
+            description: None,
+            type_: FieldType::Markdown { single_line: false },
+            default: None,
+            editor: None,
+            display: None,
+            sort: None,
+            width: None,
+            icon: None,
+            section: None,
+            validate: None,
+        };
+        assert_eq!(field.effective_editor(), "markdown");
+        assert_eq!(field.effective_display(), "markdown");
+    }
+
+    #[test]
+    fn color_field_infers_editor_display() {
+        let field = FieldDef {
+            id: FieldDefId::new(),
+            name: "accent".into(),
+            description: None,
+            type_: FieldType::Color,
+            default: None,
+            editor: None,
+            display: None,
+            sort: None,
+            width: None,
+            icon: None,
+            section: None,
+            validate: None,
+        };
+        assert_eq!(field.effective_editor(), "color-palette");
+        assert_eq!(field.effective_display(), "color-swatch");
+    }
+
+    #[test]
+    fn select_field_infers_editor_display() {
+        let field = FieldDef {
+            id: FieldDefId::new(),
+            name: "priority".into(),
+            description: None,
+            type_: FieldType::Select {
+                options: vec![SelectOption {
+                    value: "High".into(),
+                    label: None,
+                    color: None,
+                    icon: None,
+                    order: 0,
+                }],
+            },
+            default: None,
+            editor: None,
+            display: None,
+            sort: None,
+            width: None,
+            icon: None,
+            section: None,
+            validate: None,
+        };
+        assert_eq!(field.effective_editor(), "select");
+        assert_eq!(field.effective_display(), "badge");
+    }
+
+    #[test]
+    fn multi_select_field_infers_editor_display() {
+        let field = FieldDef {
+            id: FieldDefId::new(),
+            name: "labels".into(),
+            description: None,
+            type_: FieldType::MultiSelect {
+                options: vec![SelectOption {
+                    value: "bug".into(),
+                    label: None,
+                    color: None,
+                    icon: None,
+                    order: 0,
+                }],
+            },
+            default: None,
+            editor: None,
+            display: None,
+            sort: None,
+            width: None,
+            icon: None,
+            section: None,
+            validate: None,
+        };
+        assert_eq!(field.effective_editor(), "multi-select");
+        assert_eq!(field.effective_display(), "badge-list");
+    }
+
+    #[test]
+    fn number_field_infers_editor_display() {
+        let field = FieldDef {
+            id: FieldDefId::new(),
+            name: "weight".into(),
+            description: None,
+            type_: FieldType::Number {
+                min: None,
+                max: Some(100.0),
+            },
+            default: None,
+            editor: None,
+            display: None,
+            sort: None,
+            width: None,
+            icon: None,
+            section: None,
+            validate: None,
+        };
+        assert_eq!(field.effective_editor(), "number");
+        assert_eq!(field.effective_display(), "number");
+    }
+
+    #[test]
     fn built_in_status_field_serializes_correctly() {
         let yaml_input = r#"
 id: 00000000000000000000000001

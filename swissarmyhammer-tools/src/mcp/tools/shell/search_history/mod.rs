@@ -11,6 +11,7 @@ use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
 use swissarmyhammer_operations::{Operation, ParamMeta, ParamType};
 
+use super::infrastructure::value_as_u64_tolerant;
 use super::state::{self, ShellState};
 use crate::mcp::tool_registry::BaseToolImpl;
 
@@ -69,11 +70,11 @@ pub async fn execute_search_history(
     })?;
     let command_id = args
         .get("command_id")
-        .and_then(|v| v.as_u64())
+        .and_then(value_as_u64_tolerant)
         .map(|v| v as usize);
     let limit = args
         .get("limit")
-        .and_then(|v| v.as_u64())
+        .and_then(value_as_u64_tolerant)
         .map(|v| v as usize);
 
     // Clone search data under lock, then release lock before the expensive async search

@@ -12,12 +12,15 @@
 //! - **Compute**: Apple Neural Engine on Apple Silicon, CPU fallback elsewhere
 //! - **Pooling**: Mean pooling baked into the `.mlpackage` at conversion time
 
+#[cfg(target_os = "macos")]
 mod coreml;
 pub mod error;
+#[cfg(target_os = "macos")]
 pub mod model;
 pub mod types;
 
 pub use error::EmbeddingError;
+#[cfg(target_os = "macos")]
 pub use model::AneEmbeddingModel;
 pub use model_embedding::TextEmbedder;
 pub use types::{AneEmbeddingConfig, DEFAULT_MODEL_PREFIX, DEFAULT_SEQ_LENGTH};

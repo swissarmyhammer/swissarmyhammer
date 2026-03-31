@@ -143,6 +143,8 @@ jobs:
       - name: Install dependencies
         run: |
           ${{ matrix.packages_install }}
+      - name: Install system dependencies
+        run: ./build-setup.sh
       - name: Build artifacts
         run: |
           # Actually do builds and make zips and whatnot

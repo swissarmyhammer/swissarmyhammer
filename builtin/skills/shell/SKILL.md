@@ -24,12 +24,11 @@ Run a shell command. Output is stored in history regardless of truncation.
 |-----------|------|----------|-------------|
 | command | string | yes | The shell command to execute |
 | timeout | integer | no | Seconds before killing (default: none) |
-| max_lines | integer | no | Max output lines returned (default: 0, status-only). Full output always stored in history. Use -1 for all lines. |
 | working_directory | string | no | Working directory (default: current) |
 | environment | string | no | JSON env vars |
 
 ```json
-{"op": "execute command", "command": "cargo nextest run", "timeout": 300, "max_lines": 50}
+{"op": "execute command", "command": "cargo nextest run", "timeout": 300}
 ```
 
 ### list processes
@@ -116,12 +115,6 @@ Use `timeout` for:
 - Commands that might hang (network operations, interactive prompts)
 - Long builds where you want a safety net
 - Tailing logs or watching files
-
-## max_lines guidance
-
-- **Default (0)**: Status-only. Run the command, get exit code and line count. Use grep/search/get-lines to inspect output. This saves tokens.
-- **Positive number**: Return up to N lines of output inline. Use when you need to see output immediately (e.g., short commands like `echo`, `cat`).
-- **-1**: Return everything. Use sparingly — large output wastes tokens.
 
 ## Search vs grep
 

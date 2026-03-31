@@ -58,7 +58,6 @@ colored = { workspace = true }
 is-terminal = { workspace = true }
 dirs = { workspace = true }
 dialoguer = { workspace = true }
-arboard = { workspace = true }
 atty = { workspace = true }
 comfy-table = { workspace = true }
 
@@ -108,6 +107,9 @@ reqwest.workspace = true
 # Documentation generation (used by sah-generate-docs binary)
 clap-markdown = { workspace = true }
 clap_mangen = { workspace = true }
+
+[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
+arboard = { workspace = true }
 
 [dev-dependencies]
 assert_cmd = { workspace = true }

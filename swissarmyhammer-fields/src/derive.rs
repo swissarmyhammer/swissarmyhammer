@@ -222,6 +222,14 @@ mod tests {
     }
 
     #[test]
+    fn default_writable_returns_true() {
+        // UpperTitle does not override writable(), so it uses the default impl
+        // which returns true (lines 53-54).
+        let handler = UpperTitle;
+        assert!(handler.writable());
+    }
+
+    #[test]
     fn read_only_handler() {
         let handler = ReadOnlyField;
         let schema = test_schema();
