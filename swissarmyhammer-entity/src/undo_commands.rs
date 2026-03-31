@@ -21,8 +21,16 @@ pub struct UndoCmd;
 
 #[async_trait]
 impl Command for UndoCmd {
-    fn available(&self, _ctx: &CommandContext) -> bool {
-        true
+    /// Returns `true` only when the undo stack has entries to undo.
+    ///
+    /// Checks the cached `can_undo` flag on UIState, which is updated after
+    /// every stack-mutating operation (write, delete, undo, redo). Falls back
+    /// to `false` if UIState is not available on the context.
+    fn available(&self, ctx: &CommandContext) -> bool {
+        ctx.ui_state
+            .as_ref()
+            .map(|ui| ui.can_undo())
+            .unwrap_or(false)
     }
 
     async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
@@ -57,8 +65,16 @@ pub struct RedoCmd;
 
 #[async_trait]
 impl Command for RedoCmd {
-    fn available(&self, _ctx: &CommandContext) -> bool {
-        true
+    /// Returns `true` only when the undo stack has entries to redo.
+    ///
+    /// Checks the cached `can_redo` flag on UIState, which is updated after
+    /// every stack-mutating operation (write, delete, undo, redo). Falls back
+    /// to `false` if UIState is not available on the context.
+    fn available(&self, ctx: &CommandContext) -> bool {
+        ctx.ui_state
+            .as_ref()
+            .map(|ui| ui.can_redo())
+            .unwrap_or(false)
     }
 
     async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {

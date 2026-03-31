@@ -107,7 +107,18 @@ impl TestEngine {
             )));
         }
 
-        cmd.execute(&ctx).await
+        let result = cmd.execute(&ctx).await;
+
+        // Sync UIState undo/redo flags from the undo stack so that subsequent
+        // available() checks reflect the current stack state (mirrors Tauri
+        // dispatch behavior in kanban-app/src/commands.rs).
+        if let Ok(ectx) = self.kanban.entity_context().await {
+            let stack = ectx.undo_stack().await;
+            self.ui_state
+                .set_undo_redo_state(stack.can_undo(), stack.can_redo());
+        }
+
+        result
     }
 
     /// Convenience: dispatch with no args.

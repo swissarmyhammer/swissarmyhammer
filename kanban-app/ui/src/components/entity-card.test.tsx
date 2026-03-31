@@ -67,6 +67,18 @@ const mockInvoke = vi.fn((...args: any[]) => {
     });
   if (args[0] === "update_entity_field")
     return Promise.resolve({ id: "task-1" });
+  if (args[0] === "list_commands_for_scope")
+    return Promise.resolve([
+      {
+        id: "entity.inspect",
+        name: "Inspect task",
+        target: "task:task-1",
+        group: "entity",
+        context_menu: true,
+        available: true,
+      },
+    ]);
+  if (args[0] === "show_context_menu") return Promise.resolve();
   return Promise.resolve("ok");
 });
 
@@ -244,7 +256,11 @@ describe("EntityCard", () => {
       <EntityCard entity={currentEntity} />,
     );
     const card = container.querySelector("[data-moniker='task:task-1']")!;
-    fireEvent.contextMenu(card);
+    await act(async () => {
+      fireEvent.contextMenu(card);
+      // Flush the promise chain (list_commands_for_scope → show_context_menu)
+      await new Promise((r) => setTimeout(r, 50));
+    });
     // Context menu item id should include the target: "entity.inspect:task:task-1"
     const ctxCall = mockInvoke.mock.calls.find(
       (c) => c[0] === "show_context_menu",

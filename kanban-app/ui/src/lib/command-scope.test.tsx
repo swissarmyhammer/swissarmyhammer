@@ -561,14 +561,14 @@ describe("backendDispatch", () => {
     });
   });
 
-  it("strips windowLabel if caller passes it", async () => {
+  it("passes params through to invoke unchanged", async () => {
     const { invoke } = await import("@tauri-apps/api/core");
     (invoke as ReturnType<typeof vi.fn>).mockResolvedValue({});
-    // Even if caller mistakenly passes windowLabel, backendDispatch
-    // should strip it — scope chain is the sole mechanism now.
-    await backendDispatch({ cmd: "test", windowLabel: "stale" });
+    // backendDispatch is a thin wrapper — params go straight to invoke.
+    await backendDispatch({ cmd: "test", board_path: "/tmp/board" });
     expect(invoke).toHaveBeenCalledWith("dispatch_command", {
       cmd: "test",
+      board_path: "/tmp/board",
     });
   });
 });

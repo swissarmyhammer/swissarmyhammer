@@ -387,6 +387,19 @@ impl AppState {
         // Load user command overrides from .kanban/commands/
         self.reload_command_overrides(&canonical).await;
 
+        // Sync UIState undo/redo flags from the newly opened board's undo stack
+        // so that menu items reflect correct enabled state from the start.
+        {
+            let boards = self.boards.read().await;
+            if let Some(handle) = boards.get(&canonical) {
+                if let Ok(ectx) = handle.ctx.entity_context().await {
+                    let stack = ectx.undo_stack().await;
+                    self.ui_state
+                        .set_undo_redo_state(stack.can_undo(), stack.can_redo());
+                }
+            }
+        }
+
         Ok(canonical)
     }
 

@@ -89,20 +89,6 @@ pub fn register_commands() -> HashMap<String, Arc<dyn Command>> {
         Arc::new(entity_commands::AttachmentDeleteCmd),
     );
 
-    // Clipboard commands
-    map.insert(
-        "entity.copy".into(),
-        Arc::new(clipboard_commands::CopyTaskCmd),
-    );
-    map.insert(
-        "entity.cut".into(),
-        Arc::new(clipboard_commands::CutTaskCmd),
-    );
-    map.insert(
-        "entity.paste".into(),
-        Arc::new(clipboard_commands::PasteTaskCmd),
-    );
-
     // Column commands
     map.insert(
         "column.reorder".into(),
@@ -805,17 +791,46 @@ mod tests {
     // =========================================================================
 
     #[test]
-    fn undo_always_available() {
+    fn undo_unavailable_without_ui_state() {
         let cmds = register_commands();
         let cmd = cmds.get("app.undo").unwrap();
-        assert!(cmd.available(&ctx_scope(&[])));
+        // No UIState on context — undo should not be available
+        assert!(!cmd.available(&ctx_scope(&[])));
     }
 
     #[test]
-    fn redo_always_available() {
+    fn redo_unavailable_without_ui_state() {
         let cmds = register_commands();
         let cmd = cmds.get("app.redo").unwrap();
-        assert!(cmd.available(&ctx_scope(&[])));
+        // No UIState on context — redo should not be available
+        assert!(!cmd.available(&ctx_scope(&[])));
+    }
+
+    #[test]
+    fn undo_unavailable_when_stack_empty() {
+        let cmds = register_commands();
+        let cmd = cmds.get("app.undo").unwrap();
+        let ui = Arc::new(UIState::new());
+        // UIState present but can_undo defaults to false
+        assert!(!cmd.available(&ctx_with(&[], None, Some(ui))));
+    }
+
+    #[test]
+    fn undo_available_when_can_undo_set() {
+        let cmds = register_commands();
+        let cmd = cmds.get("app.undo").unwrap();
+        let ui = Arc::new(UIState::new());
+        ui.set_undo_redo_state(true, false);
+        assert!(cmd.available(&ctx_with(&[], None, Some(ui))));
+    }
+
+    #[test]
+    fn redo_available_when_can_redo_set() {
+        let cmds = register_commands();
+        let cmd = cmds.get("app.redo").unwrap();
+        let ui = Arc::new(UIState::new());
+        ui.set_undo_redo_state(false, true);
+        assert!(cmd.available(&ctx_with(&[], None, Some(ui))));
     }
 
     // =========================================================================

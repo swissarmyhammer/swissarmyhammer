@@ -19,7 +19,6 @@ import {
   dispatchCommand,
   type CommandAtDepth,
 } from "@/lib/command-scope";
-import { useFocusedScope } from "@/lib/entity-focus-context";
 import { useUIState } from "@/lib/ui-state-context";
 import { shadcnTheme, keymapExtension } from "@/lib/cm-keymap";
 import { fuzzyMatch } from "@/lib/fuzzy-filter";
@@ -79,7 +78,6 @@ export function CommandPalette({
   const keymapCompartment = useRef(new Compartment());
   const listRef = useRef<HTMLDivElement>(null);
   const { keymap_mode: mode, scope_chain: scopeChain } = useUIState();
-  const focusedScope = useFocusedScope();
 
   /** Shape returned by the backend. */
   interface ResolvedCommand {

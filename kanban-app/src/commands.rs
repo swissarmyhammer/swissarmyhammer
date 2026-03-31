@@ -34,9 +34,26 @@ use tauri::menu::{ContextMenu, MenuBuilder};
 use tauri::webview::WebviewWindowBuilder;
 use tauri::{AppHandle, Emitter, Manager, State, Window};
 
+/// The base application title shown in all window title bars.
+pub const APP_TITLE: &str = "SwissArmyHammer";
+
 /// Generate a unique window label using ULID.
 fn new_window_label() -> String {
     format!("board-{}", ulid::Ulid::new().to_string().to_lowercase())
+}
+
+/// Set the window title to reflect the currently loaded board.
+///
+/// When `board_name` is `Some`, the title becomes "SwissArmyHammer — project-name".
+/// When `None`, the title resets to just "SwissArmyHammer".
+fn update_window_title(app: &AppHandle, label: &str, board_name: Option<&str>) {
+    let title = match board_name {
+        Some(name) if !name.is_empty() => format!("{APP_TITLE} \u{2014} {name}"),
+        _ => APP_TITLE.to_string(),
+    };
+    if let Some(window) = app.get_webview_window(label) {
+        let _ = window.set_title(&title);
+    }
 }
 
 /// Resolve a board handle — by explicit path or falling back to active board.
@@ -605,7 +622,7 @@ pub async fn open_board_dialog(app: AppHandle) -> Result<(), String> {
 /// so the window can be restored at the same position on restart.
 /// Internal helper for creating a window, callable from dispatch side effects.
 async fn create_window_internal(app: &AppHandle, state: &AppState) {
-    if let Err(e) = create_window_impl(app, state, None).await {
+    if let Err(e) = create_window_impl(app, state, None, None, None, true).await {
         tracing::error!("create_window_internal failed: {e}");
     }
 }
@@ -617,17 +634,43 @@ pub async fn create_window(
     state: State<'_, AppState>,
     board_path: Option<String>,
 ) -> Result<Value, String> {
-    create_window_impl(&app, &state, board_path).await
+    create_window_impl(&app, &state, board_path, None, None, true).await
 }
 
-/// Create a new webview window with an optional board path.
-async fn create_window_impl(
+/// Options for restoring a window at a specific position and size.
+pub struct WindowGeometry {
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+    pub maximized: bool,
+}
+
+/// Create a new webview window.
+///
+/// This is the single code path for all window creation — both user-initiated
+/// (`window.new`) and startup restore. Every window created through this
+/// function gets logged, persisted to UIState, and shows up in the command log.
+///
+/// - `board_path`: board to display. Falls back to most recent / first open.
+/// - `label`: reuse a saved window label (for restore). `None` generates a new ULID.
+/// - `geometry`: apply saved position/size (for restore). `None` uses OS defaults.
+///
+/// When `rebuild_menu` is true, rebuilds the native menu after creation.
+/// Pass false when calling from `setup()` (via `block_on`) to avoid a
+/// tokio deadlock — `rebuild_menu` uses `blocking_read` which panics
+/// inside an existing `block_on`. Caller should rebuild the menu once
+/// after all windows are created.
+pub async fn create_window_impl(
     app: &AppHandle,
     state: &AppState,
     board_path: Option<String>,
+    label: Option<String>,
+    geometry: Option<WindowGeometry>,
+    rebuild_menu: bool,
 ) -> Result<Value, String> {
     let app = app.clone();
-    let label = new_window_label();
+    let label = label.unwrap_or_else(new_window_label);
     tracing::info!(board_path = ?board_path, label = %label, "create_window called");
 
     // Resolve board path: explicit > AppState active board > first open board
@@ -648,17 +691,32 @@ async fn create_window_impl(
         url.push_str(&urlencoding::encode(bp));
     }
 
-    let window = WebviewWindowBuilder::new(&app, &label, tauri::WebviewUrl::App(url.into()))
-        .title("SwissArmyHammer")
+    let builder = WebviewWindowBuilder::new(&app, &label, tauri::WebviewUrl::App(url.into()))
+        .title(APP_TITLE)
+        .visible(false)
         .inner_size(1200.0, 800.0)
         .resizable(true)
-        .disable_drag_drop_handler()
+        .disable_drag_drop_handler();
+
+    let window = builder
         .build()
         .map_err(|e| format!("Failed to create window: {e}"))?;
 
+    // Apply saved geometry if provided (restore path), otherwise read
+    // initial geometry from the newly created window (new window path).
+    if let Some(geo) = &geometry {
+        let _ = window.set_size(tauri::PhysicalSize::new(geo.width, geo.height));
+        let _ = window.set_position(tauri::PhysicalPosition::new(geo.x, geo.y));
+        if geo.maximized {
+            let _ = window.maximize();
+        }
+    }
+
+    let _ = window.show();
     let _ = window.set_focus();
 
-    // Persist window→board mapping in UIState so we can restore with the same label and position
+    // Persist window→board mapping AND geometry so the window can be
+    // restored even if the user quits without moving it.
     if let Some(ref bp) = resolved_path {
         tracing::info!(
             label = %label,
@@ -666,94 +724,49 @@ async fn create_window_impl(
             "persisting window state to UIState"
         );
         state.ui_state.set_window_board(&label, bp);
+
+        // Save geometry — either from the provided restore geometry or
+        // from the actual window position after OS placement.
+        if let Some(geo) = &geometry {
+            state.ui_state.save_window_geometry(
+                &label,
+                geo.x,
+                geo.y,
+                geo.width,
+                geo.height,
+                geo.maximized,
+            );
+        } else if let (Ok(pos), Ok(size)) = (window.outer_position(), window.outer_size()) {
+            let maximized = window.is_maximized().unwrap_or(false);
+            state.ui_state.save_window_geometry(
+                &label,
+                pos.x,
+                pos.y,
+                size.width,
+                size.height,
+                maximized,
+            );
+        }
+
+        // Set window title from board display name
+        let board_path = std::path::PathBuf::from(bp);
+        let canonical = board_path
+            .canonicalize()
+            .unwrap_or_else(|_| board_path.clone());
+        let boards = state.boards.read().await;
+        if let Some(handle) = boards.get(&canonical) {
+            update_window_title(&app, &label, Some(handle.ctx.name()));
+        }
+    }
+
+    if rebuild_menu {
+        menu::rebuild_menu(&app);
     }
 
     Ok(json!({
         "label": label,
         "board_path": resolved_path,
     }))
-}
-
-/// Restore secondary windows from persisted window state.
-///
-/// Called by the main window on mount. For each saved window label that
-/// doesn't already exist, creates a new window with the same label and
-/// applies saved position/size from UIState windows.
-///
-/// Returns the list of restored window labels.
-#[tauri::command]
-pub async fn restore_windows(app: AppHandle, state: State<'_, AppState>) -> Result<Value, String> {
-    let saved_windows = state.ui_state.all_windows();
-
-    tracing::info!(
-        count = saved_windows.len(),
-        labels = ?saved_windows.keys().collect::<Vec<_>>(),
-        "restore_windows: found {} saved window entries",
-        saved_windows.len()
-    );
-
-    let mut restored: Vec<String> = Vec::new();
-
-    for (label, entry) in &saved_windows {
-        // Skip if window already exists
-        if app.get_webview_window(label).is_some() {
-            continue;
-        }
-
-        // Skip the main window and quick-capture
-        if label == "main" || label == "quick-capture" {
-            continue;
-        }
-
-        // Look up board path from UIState window_boards
-        let board_path = match state.ui_state.window_board(label) {
-            Some(bp) => bp,
-            None => continue,
-        };
-
-        // Verify the board is actually open
-        {
-            let boards = state.boards.read().await;
-            let canonical = std::path::PathBuf::from(&board_path)
-                .canonicalize()
-                .unwrap_or_else(|_| std::path::PathBuf::from(&board_path));
-            if !boards.contains_key(&canonical) {
-                continue;
-            }
-        }
-
-        let mut url = String::from("index.html?window=board&board=");
-        url.push_str(&urlencoding::encode(&board_path));
-
-        // Build at default size first — we apply saved physical geometry after
-        // creation because the builder takes logical coordinates while we store
-        // physical pixels from outer_position()/outer_size().
-        let builder = WebviewWindowBuilder::new(&app, label, tauri::WebviewUrl::App(url.into()))
-            .title("SwissArmyHammer")
-            .inner_size(1200.0, 800.0)
-            .resizable(true)
-            .disable_drag_drop_handler();
-
-        match builder.build() {
-            Ok(window) => {
-                // Apply saved physical geometry (matches what on_window_event saves).
-                if let (Some(w), Some(h)) = (entry.width, entry.height) {
-                    let _ = window.set_size(tauri::PhysicalSize::new(w, h));
-                }
-                if let (Some(x), Some(y)) = (entry.x, entry.y) {
-                    let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
-                }
-                let _ = window.set_focus();
-                restored.push(label.clone());
-                tracing::info!(label = %label, board = %board_path, x = ?entry.x, y = ?entry.y, "restored secondary window");
-            }
-            Err(e) => {
-                tracing::warn!(label = %label, error = %e, "failed to restore secondary window");
-            }
-        }
-    }
-
-    Ok(json!({ "restored": restored }))
 }
 
 /// List all view definitions, returning a JSON array.
@@ -850,6 +863,16 @@ pub async fn dispatch_command(
 /// It handles: command lookup, context building, execution, undo tracking,
 /// entity flush, event emission, and UIState change broadcasting.
 ///
+/// Dynamic prefix commands (`view.switch:*`, `board.switch:*`) are rewritten
+/// to their canonical command IDs via a single-pass loop. The rewrite is
+/// limited to one iteration (`MAX_REWRITE_DEPTH`) to prevent unbounded
+/// recursion from malformed command chains like `board.switch:board.switch:…`.
+///
+/// The `window.focus:*` prefix is a pure side-effect (unminimize + focus) that
+/// returns early without entering the standard result-processing pipeline.
+/// This is intentional: window focus is OS-level and has no undo, UIState, or
+/// entity implications.
+///
 /// # Parameters
 /// - `app` - Tauri application handle for event emission
 /// - `state` - Application state with command registry, impls, and board handles
@@ -867,57 +890,85 @@ pub(crate) async fn dispatch_command_internal(
     args: Option<Value>,
     board_path: Option<String>,
 ) -> Result<Value, String> {
+    /// Maximum number of prefix rewrites before we reject the command.
+    /// One rewrite is sufficient for all known dynamic prefixes
+    /// (`view.switch:*` -> `ui.view.set`, `board.switch:*` -> `file.switchBoard`).
+    const MAX_REWRITE_DEPTH: u8 = 1;
+
     // Validate command ID: non-empty, reasonable length, ASCII-only
     if cmd.is_empty() || cmd.len() > 128 || !cmd.is_ascii() {
         return Err(format!("Invalid command ID: {:?}", cmd));
     }
 
-    tracing::info!(
-        cmd = %cmd,
-        target = ?target,
-        args = ?args,
-        scope_chain = ?scope_chain,
-        board_path = ?board_path,
-        "command"
-    );
+    // --- Prefix rewrite loop ---
+    // Dynamic palette commands (view.switch:*, board.switch:*) are rewritten
+    // to their canonical command IDs with merged args. The loop runs at most
+    // MAX_REWRITE_DEPTH times to prevent unbounded recursion.
+    let mut effective_cmd = cmd.to_owned();
+    let mut effective_args = args;
+    let mut effective_board_path = board_path;
 
-    // Intercept dynamic palette commands (view.switch:*, board.switch:*)
-    // and delegate to their real command implementations with proper args.
-    if let Some(view_id) = cmd.strip_prefix("view.switch:") {
-        tracing::info!(view_id = %view_id, "redirecting view.switch to ui.view.set");
-        let mut merged_args = match args {
-            Some(Value::Object(map)) => map,
-            _ => serde_json::Map::new(),
-        };
-        merged_args.insert("view_id".into(), Value::String(view_id.to_string()));
-        return Box::pin(dispatch_command_internal(
-            app,
-            state,
-            "ui.view.set",
-            scope_chain,
-            target,
-            Some(Value::Object(merged_args)),
-            board_path,
-        ))
-        .await;
-    }
-    if let Some(board_path_suffix) = cmd.strip_prefix("board.switch:") {
-        tracing::info!(board_path = %board_path_suffix, "redirecting board.switch to file.switchBoard");
-        let mut merged_args = match args {
-            Some(Value::Object(map)) => map,
-            _ => serde_json::Map::new(),
-        };
-        merged_args.insert("path".into(), Value::String(board_path_suffix.to_string()));
-        return Box::pin(dispatch_command_internal(
-            app,
-            state,
-            "file.switchBoard",
-            scope_chain,
-            target,
-            Some(Value::Object(merged_args)),
-            Some(board_path_suffix.to_string()),
-        ))
-        .await;
+    for depth in 0..=MAX_REWRITE_DEPTH {
+        tracing::info!(
+            cmd = %effective_cmd,
+            target = ?target,
+            args = ?effective_args,
+            scope_chain = ?scope_chain,
+            board_path = ?effective_board_path,
+            "command"
+        );
+
+        // `window.focus:*` — pure OS-level side-effect (unminimize + set focus).
+        // Returns early without entering the standard result-processing pipeline
+        // because window focus has no undo, UIState, or entity implications.
+        if let Some(label) = effective_cmd.strip_prefix("window.focus:") {
+            tracing::info!(label = %label, "window.focus — bringing window to front");
+            if let Some(window) = app.get_webview_window(label) {
+                let _ = window.unminimize();
+                let _ = window.set_focus();
+            }
+            return Ok(json!({ "WindowFocus": label }));
+        }
+
+        if let Some(view_id) = effective_cmd.strip_prefix("view.switch:") {
+            if depth >= MAX_REWRITE_DEPTH {
+                return Err(format!(
+                    "Command rewrite depth exceeded for: {}",
+                    effective_cmd
+                ));
+            }
+            tracing::info!(view_id = %view_id, "redirecting view.switch to ui.view.set");
+            let mut merged_args = match effective_args {
+                Some(Value::Object(map)) => map,
+                _ => serde_json::Map::new(),
+            };
+            merged_args.insert("view_id".into(), Value::String(view_id.to_string()));
+            effective_cmd = "ui.view.set".to_owned();
+            effective_args = Some(Value::Object(merged_args));
+            continue;
+        }
+
+        if let Some(board_path_suffix) = effective_cmd.strip_prefix("board.switch:") {
+            if depth >= MAX_REWRITE_DEPTH {
+                return Err(format!(
+                    "Command rewrite depth exceeded for: {}",
+                    effective_cmd
+                ));
+            }
+            tracing::info!(board_path = %board_path_suffix, "redirecting board.switch to file.switchBoard");
+            let mut merged_args = match effective_args {
+                Some(Value::Object(map)) => map,
+                _ => serde_json::Map::new(),
+            };
+            merged_args.insert("path".into(), Value::String(board_path_suffix.to_string()));
+            effective_board_path = Some(board_path_suffix.to_string());
+            effective_cmd = "file.switchBoard".to_owned();
+            effective_args = Some(Value::Object(merged_args));
+            continue;
+        }
+
+        // No prefix matched — proceed with normal dispatch.
+        break;
     }
 
     // Resolve scope chain: explicit > stored focus
@@ -932,29 +983,33 @@ pub(crate) async fn dispatch_command_internal(
     let undoable = {
         let registry = state.commands_registry.read().await;
         let cmd_def = registry
-            .get(cmd)
-            .ok_or_else(|| format!("Unknown command: {}", cmd))?;
+            .get(effective_cmd.as_str())
+            .ok_or_else(|| format!("Unknown command: {}", effective_cmd))?;
         cmd_def.undoable
     };
 
     // Look up command implementation
     let cmd_impl = state
         .command_impls
-        .get(cmd)
-        .ok_or_else(|| format!("No implementation for command: {}", cmd))?;
+        .get(effective_cmd.as_str())
+        .ok_or_else(|| format!("No implementation for command: {}", effective_cmd))?;
 
     // Build CommandContext
-    let args_map: HashMap<String, Value> = match args {
+    let args_map: HashMap<String, Value> = match effective_args {
         Some(Value::Object(map)) => map.into_iter().collect(),
         _ => HashMap::new(),
     };
-    let mut ctx =
-        swissarmyhammer_commands::CommandContext::new(cmd.to_string(), scope, target, args_map);
+    let mut ctx = swissarmyhammer_commands::CommandContext::new(
+        effective_cmd.clone(),
+        scope,
+        target,
+        args_map,
+    );
     ctx = ctx.with_ui_state(Arc::clone(&state.ui_state));
 
     // Set KanbanContext extension if board is open.
-    // Uses board_path when provided (multi-window) to avoid targeting the wrong board.
-    let active_handle = resolve_handle(state, board_path).await.ok();
+    // Uses effective_board_path when provided (multi-window) to avoid targeting the wrong board.
+    let active_handle = resolve_handle(state, effective_board_path).await.ok();
     if let Some(ref handle) = active_handle {
         ctx.set_extension(Arc::clone(&handle.ctx));
         // Set EntityContext extension for entity-layer commands (undo/redo).
@@ -972,18 +1027,18 @@ pub(crate) async fn dispatch_command_internal(
 
     // Check availability
     if !cmd_impl.available(&ctx) {
-        tracing::warn!(cmd = %cmd, "command not available in current context");
-        return Err(format!("Command not available: {}", cmd));
+        tracing::warn!(cmd = %effective_cmd, "command not available in current context");
+        return Err(format!("Command not available: {}", effective_cmd));
     }
 
     // Execute
-    tracing::debug!(cmd = %cmd, "executing command");
+    tracing::debug!(cmd = %effective_cmd, "executing command");
     let result = cmd_impl.execute(&ctx).await.map_err(|e| {
-        tracing::error!(cmd = %cmd, error = %e, "command execution failed");
+        tracing::error!(cmd = %effective_cmd, error = %e, "command execution failed");
         format!("Command failed: {}", e)
     })?;
 
-    tracing::info!(cmd = %cmd, undoable = undoable, result = %result, "command completed");
+    tracing::info!(cmd = %effective_cmd, undoable = undoable, result = %result, "command completed");
 
     // Undo stack push is handled automatically inside EntityContext::write()/delete()
     // (wired in the entity crate). No need to push at the dispatch level.
@@ -1005,9 +1060,14 @@ pub(crate) async fn dispatch_command_internal(
                     state
                         .ui_state
                         .set_window_board(label, &canonical.display().to_string());
+                    // Update window title to reflect the new board
+                    let boards = state.boards.read().await;
+                    if let Some(handle) = boards.get(&canonical) {
+                        update_window_title(app, label, Some(handle.ctx.name()));
+                    }
                 }
                 Err(e) => {
-                    tracing::error!(cmd = %cmd, path = %path_str, error = %e, "BoardSwitch: failed to open board");
+                    tracing::error!(cmd = %effective_cmd, path = %path_str, error = %e, "BoardSwitch: failed to open board");
                 }
             }
             let _ = app.emit("board-changed", ());
@@ -1016,9 +1076,22 @@ pub(crate) async fn dispatch_command_internal(
 
     if let Some(board_close) = result.get("BoardClose") {
         if let Some(path_str) = board_close.get("path").and_then(|v| v.as_str()) {
+            // Find which window(s) had this board so we can reset their titles
+            let close_labels: Vec<String> = state
+                .ui_state
+                .all_window_boards()
+                .into_iter()
+                .filter(|(_, bp)| bp == path_str)
+                .map(|(label, _)| label)
+                .collect();
+
             let target = std::path::PathBuf::from(path_str);
             if let Err(e) = state.close_board(&target).await {
-                tracing::error!(cmd = %cmd, path = %path_str, error = %e, "BoardClose: failed to close board");
+                tracing::error!(cmd = %effective_cmd, path = %path_str, error = %e, "BoardClose: failed to close board");
+            }
+            // Reset window titles back to base name
+            for label in &close_labels {
+                update_window_title(app, label, None);
             }
             let _ = app.emit("board-changed", ());
         }
@@ -1169,7 +1242,7 @@ pub(crate) async fn dispatch_command_internal(
 
     // Rebuild the native menu when keymap mode changes (accelerators change)
     // or after board switches (command registry may have overrides).
-    if cmd.starts_with("settings.keymap.")
+    if effective_cmd.starts_with("settings.keymap.")
         || result.get("BoardSwitch").is_some()
         || result.get("BoardClose").is_some()
     {
@@ -1181,16 +1254,25 @@ pub(crate) async fn dispatch_command_internal(
     // cache so the file watcher won't double-fire for our own writes.
     // Undo/redo are non-undoable (they must not push onto the undo stack) but
     // they DO mutate entities on disk, so we still need to flush and emit.
-    let needs_flush = undoable || cmd == "app.undo" || cmd == "app.redo";
-    tracing::info!(cmd = %cmd, undoable = undoable, needs_flush = needs_flush, has_handle = active_handle.is_some(), "flush gate");
+    let needs_flush = undoable || effective_cmd == "app.undo" || effective_cmd == "app.redo";
+    tracing::info!(cmd = %effective_cmd, undoable = undoable, needs_flush = needs_flush, has_handle = active_handle.is_some(), "flush gate");
     if needs_flush {
         if let Some(ref handle) = active_handle {
             flush_and_emit_for_handle(app, handle).await;
+            // Sync UIState's cached undo/redo flags from the undo stack so that
+            // Command::available() (synchronous) returns accurate results for
+            // menu-item enabled state.
+            if let Ok(ectx) = handle.ctx.entity_context().await {
+                let stack = ectx.undo_stack().await;
+                state
+                    .ui_state
+                    .set_undo_redo_state(stack.can_undo(), stack.can_redo());
+            }
         } else {
-            tracing::info!(cmd = %cmd, "needs_flush but no active_handle — events NOT emitted");
+            tracing::info!(cmd = %effective_cmd, "needs_flush but no active_handle — events NOT emitted");
         }
     } else {
-        tracing::info!(cmd = %cmd, "non-mutating — skipping flush_and_emit");
+        tracing::info!(cmd = %effective_cmd, "non-mutating — skipping flush_and_emit");
     }
 
     // Update all menu item enabled states after every command.
@@ -1205,98 +1287,6 @@ pub(crate) async fn dispatch_command_internal(
 }
 
 // ---------------------------------------------------------------------------
-// list_available_commands — return command defs filtered by scope + availability
-// ---------------------------------------------------------------------------
-
-/// List command definitions that are available in the current focus context.
-///
-/// Filters by both static scope requirements and dynamic `Command::available()`
-/// checks. Optionally filters to only context-menu commands.
-#[tauri::command]
-pub async fn list_available_commands(
-    state: State<'_, AppState>,
-    context_menu: Option<bool>,
-    scope_chain: Option<Vec<String>>,
-) -> Result<Value, String> {
-    let scope = scope_chain.unwrap_or_else(|| state.ui_state.scope_chain());
-
-    // Clone filtered defs so we can drop the registry read guard before
-    // awaiting active_handle (avoids holding RwLock across an await point).
-    let mut available: Vec<swissarmyhammer_commands::CommandDef> = {
-        let registry = state.commands_registry.read().await;
-        registry
-            .available_commands(&scope)
-            .into_iter()
-            .cloned()
-            .collect()
-    };
-
-    // Dynamic availability check — build a reusable context template and
-    // only swap the command_id per iteration to avoid repeated allocations.
-    let active_handle = state.active_handle().await;
-    let empty_args: HashMap<String, Value> = HashMap::new();
-    available.retain(|def| {
-        if let Some(cmd_impl) = state.command_impls.get(&def.id) {
-            let mut ctx = swissarmyhammer_commands::CommandContext::new(
-                &def.id,
-                scope.clone(),
-                None,
-                empty_args.clone(),
-            );
-            ctx = ctx.with_ui_state(Arc::clone(&state.ui_state));
-            if let Some(ref handle) = active_handle {
-                ctx.set_extension(Arc::clone(&handle.ctx));
-            }
-            cmd_impl.available(&ctx)
-        } else {
-            false
-        }
-    });
-
-    // Filter to context menu commands if requested
-    if context_menu == Some(true) {
-        available.retain(|def| def.context_menu);
-    }
-
-    // Resolve {{entity.type}} templates in command names.
-    // For most commands, entity.type comes from the innermost matching scope moniker.
-    // For paste, entity.type comes from the clipboard entity type.
-    let clipboard_type = state.ui_state.clipboard_entity_type();
-    for def in &mut available {
-        if def.name.contains("{{entity.type}}") {
-            let resolved = if def.id == "entity.paste" {
-                // Paste: resolve from clipboard entity type
-                clipboard_type.as_deref().unwrap_or("entity")
-            } else {
-                // Copy/Cut/etc: resolve from scope chain — find innermost entity type
-                // that the command's scope requirement matches
-                resolve_entity_type_from_scope(&scope, def)
-            };
-            let capitalized = format!("{}{}", &resolved[..1].to_uppercase(), &resolved[1..]);
-            def.name = def.name.replace("{{entity.type}}", &capitalized);
-        }
-    }
-
-    serde_json::to_value(&available).map_err(|e| e.to_string())
-}
-
-/// Resolve `{{entity.type}}` from the scope chain.
-///
-/// Returns the entity type from the innermost moniker in the scope chain.
-/// This is what the user is acting on — the focused entity.
-pub(crate) fn resolve_entity_type_from_scope<'a>(
-    scope: &'a [String],
-    _def: &swissarmyhammer_commands::CommandDef,
-) -> &'a str {
-    for moniker in scope {
-        if let Some((entity_type, _id)) = moniker.split_once(':') {
-            return entity_type;
-        }
-    }
-    "entity"
-}
-
-// ---------------------------------------------------------------------------
 // list_commands_for_scope — backend-driven command resolution
 // ---------------------------------------------------------------------------
 
@@ -1307,6 +1297,7 @@ pub(crate) fn resolve_entity_type_from_scope<'a>(
 /// No command logic in the UI — just render and dispatch.
 #[tauri::command]
 pub async fn list_commands_for_scope(
+    app: AppHandle,
     state: State<'_, AppState>,
     scope_chain: Vec<String>,
     context_menu: Option<bool>,
@@ -1318,7 +1309,9 @@ pub async fn list_commands_for_scope(
 
     // Build dynamic sources: views from the active board, open boards from UIState.
     let dynamic = {
-        use swissarmyhammer_kanban::scope_commands::{BoardInfo, DynamicSources, ViewInfo};
+        use swissarmyhammer_kanban::scope_commands::{
+            BoardInfo, DynamicSources, ViewInfo, WindowInfo,
+        };
 
         // Gather views from the active board handle
         let mut views = Vec::new();
@@ -1335,8 +1328,9 @@ pub async fn list_commands_for_scope(
             }
         }
 
-        // Gather open boards from UIState
+        // Gather open boards from UIState, enriched with context names from handles.
         let open_paths = state.ui_state.open_boards();
+        let boards_lock = state.boards.read().await;
         let boards: Vec<BoardInfo> = open_paths
             .iter()
             .map(|path| {
@@ -1350,14 +1344,43 @@ pub async fn list_commands_for_scope(
                     .and_then(|n| n.to_str())
                     .unwrap_or("Board")
                     .to_string();
+                // Pull context_name from the board handle if available.
+                let context_name = boards_lock
+                    .get(p)
+                    .map(|h| h.ctx.name().to_string())
+                    .unwrap_or_else(|| name.clone());
                 BoardInfo {
                     path: path.clone(),
-                    name,
+                    name: name.clone(),
+                    entity_name: name,
+                    context_name,
                 }
             })
             .collect();
+        drop(boards_lock);
 
-        DynamicSources { views, boards }
+        // Gather open windows from Tauri
+        let windows: Vec<WindowInfo> = app
+            .webview_windows()
+            .iter()
+            .filter_map(|(label, w)| {
+                let title = w.title().ok()?;
+                if title.is_empty() || !w.is_visible().unwrap_or(false) {
+                    return None;
+                }
+                Some(WindowInfo {
+                    label: label.clone(),
+                    title,
+                    focused: w.is_focused().unwrap_or(false),
+                })
+            })
+            .collect();
+
+        DynamicSources {
+            views,
+            boards,
+            windows,
+        }
     };
 
     let result = swissarmyhammer_kanban::scope_commands::commands_for_scope(

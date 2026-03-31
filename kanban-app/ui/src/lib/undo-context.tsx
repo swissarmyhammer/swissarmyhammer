@@ -3,8 +3,8 @@
  *
  * Zero undo logic lives in TypeScript. The frontend dispatches `app.undo` and
  * `app.redo` commands to the backend and queries `get_undo_state` to reflect
- * whether undo/redo are available. State is refreshed on every `entity-changed`
- * Tauri event.
+ * whether undo/redo are available. State is refreshed on every entity mutation
+ * event (`entity-created`, `entity-removed`, `entity-field-changed`).
  */
 import {
   createContext,
@@ -62,7 +62,7 @@ async function fetchUndoState(): Promise<{
  * Provides undo/redo operations and state to the component tree.
  *
  * Dispatches undo/redo to the Rust backend and refreshes `canUndo`/`canRedo`
- * from `get_undo_state` on mount and on every `entity-changed` event.
+ * from `get_undo_state` on mount and on every entity mutation event.
  */
 export function UndoProvider({ children }: { children: ReactNode }) {
   const [canUndo, setCanUndo] = useState(false);
@@ -75,14 +75,23 @@ export function UndoProvider({ children }: { children: ReactNode }) {
     setCanRedo(state.canRedo);
   }, []);
 
-  // Fetch initial state and subscribe to entity changes
+  // Fetch initial state and subscribe to all entity mutation events.
+  // The backend emits three distinct events — there is no single
+  // "entity-changed" umbrella event.
   useEffect(() => {
     refreshState();
-    const unlisten = listen("entity-changed", () => {
-      refreshState();
-    });
+    const events = [
+      "entity-created",
+      "entity-removed",
+      "entity-field-changed",
+    ] as const;
+    const unlisteners = events.map((name) =>
+      listen(name, () => {
+        refreshState();
+      }),
+    );
     return () => {
-      unlisten.then((fn) => fn());
+      unlisteners.forEach((p) => p.then((fn) => fn()));
     };
   }, [refreshState]);
 

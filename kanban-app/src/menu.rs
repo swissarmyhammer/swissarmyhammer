@@ -4,6 +4,7 @@ use crate::state::{resolve_kanban_path, AppState, MenuItemHandle};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use swissarmyhammer_commands::{CommandDef, CommandsRegistry, RecentBoard, UIState};
+use swissarmyhammer_kanban::scope_commands::WindowInfo;
 use swissarmyhammer_kanban::{
     board::InitBoard, KanbanContext, KanbanOperationProcessor, OperationProcessor,
 };
@@ -37,6 +38,7 @@ pub fn build_menu_from_commands(
     registry: &CommandsRegistry,
     ui_state: &UIState,
     recent: &[RecentBoard],
+    windows: &[WindowInfo],
 ) -> tauri::Result<HashMap<String, MenuItemHandle>> {
     let keymap_mode = ui_state.keymap_mode();
     let mut menu_items: HashMap<String, MenuItemHandle> = HashMap::new();
@@ -56,7 +58,7 @@ pub fn build_menu_from_commands(
         let checked = resolve_checked(cmd, ui_state);
         menus.entry(key).or_default().push(MenuEntry {
             id: cmd.id.clone(),
-            name: cmd.name.clone(),
+            name: cmd.menu_name.clone().unwrap_or_else(|| cmd.name.clone()),
             group: placement.group,
             order: placement.order,
             accelerator,
@@ -164,27 +166,18 @@ pub fn build_menu_from_commands(
             window_menu.append(&PredefinedMenuItem::separator(app)?)?;
         }
     }
+    window_menu.append(&PredefinedMenuItem::separator(app)?)?;
     window_menu.append(&PredefinedMenuItem::minimize(app, None)?)?;
     window_menu.append(&PredefinedMenuItem::maximize(app, None)?)?;
 
-    // Manually list open windows with a checkmark on the focused one.
-    // NOTE: muda's set_as_windows_menu_for_nsapp() is broken — it uses
-    // a disconnected NSMenu that macOS ignores (muda#322, still unmerged).
-    let windows = app.webview_windows();
-    let visible: Vec<_> = windows
-        .iter()
-        .filter(|(_, w)| {
-            let title = w.title().unwrap_or_default();
-            !title.is_empty() && w.is_visible().unwrap_or(false)
-        })
-        .collect();
-    if !visible.is_empty() {
+    // Open windows with a checkmark on the focused one.
+    // Driven by DynamicSources.windows so the same data feeds the palette.
+    if !windows.is_empty() {
         window_menu.append(&PredefinedMenuItem::separator(app)?)?;
-        for (label, window) in &visible {
-            let title = window.title().unwrap_or_else(|_| (*label).clone());
-            let focused = window.is_focused().unwrap_or(false);
-            let id = format!("window.focus:{}", label);
-            let item = CheckMenuItem::with_id(app, id, &title, true, focused, None::<&str>)?;
+        for win in windows {
+            let id = format!("window.focus:{}", win.label);
+            let item =
+                CheckMenuItem::with_id(app, id, &win.title, true, win.focused, None::<&str>)?;
             window_menu.append(&item)?;
         }
     }
@@ -374,24 +367,7 @@ pub fn handle_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
             let _ = window.set_focus();
         }
         // Update check marks: only the clicked window should be checked
-        if let Some(menu) = app.menu() {
-            if let Ok(items) = menu.items() {
-                for item in items {
-                    if let Some(sub) = item.as_submenu() {
-                        if let Ok(sub_items) = sub.items() {
-                            for si in sub_items {
-                                if let Some(check) = si.as_check_menuitem() {
-                                    let cid = check.id().as_ref().to_string();
-                                    if let Some(wlabel) = cid.strip_prefix("window.focus:") {
-                                        let _ = check.set_checked(wlabel == label);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        update_window_focus_checkmarks(app, label);
         return;
     }
 
@@ -412,6 +388,33 @@ pub fn handle_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
     let _ = app.emit("menu-command", &id);
 }
 
+/// Update only the Window menu checkmarks to reflect the currently focused window.
+///
+/// This is much cheaper than a full `rebuild_menu` — it walks the existing menu
+/// items and flips the `checked` state on `window.focus:*` CheckMenuItems without
+/// tearing down and rebuilding the entire native menu bar.  Called from the
+/// `WindowEvent::Focused(true)` handler to avoid flicker.
+pub fn update_window_focus_checkmarks(app: &AppHandle, focused_label: &str) {
+    if let Some(menu) = app.menu() {
+        if let Ok(items) = menu.items() {
+            for item in items {
+                if let Some(sub) = item.as_submenu() {
+                    if let Ok(sub_items) = sub.items() {
+                        for si in sub_items {
+                            if let Some(check) = si.as_check_menuitem() {
+                                let cid = check.id().as_ref().to_string();
+                                if let Some(wlabel) = cid.strip_prefix("window.focus:") {
+                                    let _ = check.set_checked(wlabel == focused_label);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Rebuild the native menu bar from the command registry.
 ///
 /// Called after keymap mode changes or board switches to update accelerators
@@ -422,7 +425,23 @@ pub fn rebuild_menu(app: &AppHandle) {
     let state = app.state::<AppState>();
     let recent = state.ui_state.recent_boards();
     let registry = state.commands_registry.blocking_read();
-    match build_menu_from_commands(app, &registry, &state.ui_state, &recent) {
+    // Build WindowInfo list from live Tauri windows.
+    let windows: Vec<WindowInfo> = app
+        .webview_windows()
+        .iter()
+        .filter_map(|(label, w)| {
+            let title = w.title().ok()?;
+            if title.is_empty() || !w.is_visible().unwrap_or(false) {
+                return None;
+            }
+            Some(WindowInfo {
+                label: label.clone(),
+                title,
+                focused: w.is_focused().unwrap_or(false),
+            })
+        })
+        .collect();
+    match build_menu_from_commands(app, &registry, &state.ui_state, &recent, &windows) {
         Ok(items) => {
             *state.menu_items.lock().unwrap() = items;
         }

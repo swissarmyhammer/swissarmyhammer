@@ -343,10 +343,9 @@ function App() {
       await refresh();
       if (cancelled) return;
 
-      // Main window restores secondary windows once boards are loaded
-      if (!INITIAL_BOARD_PATH) {
-        invoke("restore_windows").catch(() => {});
-      }
+      // Secondary windows are restored by the Rust backend in setup() —
+      // no frontend invoke needed. Each restore goes through the same
+      // create_window_impl path as window.new.
     })();
     return () => {
       cancelled = true;

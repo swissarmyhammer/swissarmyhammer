@@ -54,7 +54,6 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             commands::log_command,
             commands::dispatch_command,
-            commands::list_available_commands,
             commands::list_commands_for_scope,
             commands::show_context_menu,
             commands::list_open_boards,
@@ -73,7 +72,6 @@ fn main() {
             commands::list_views,
             commands::get_undo_state,
             commands::create_window,
-            commands::restore_windows,
         ])
         .setup(|app| {
             // Build native menu bar from the command registry.
@@ -81,11 +79,13 @@ fn main() {
                 let state = app.state::<AppState>();
                 let recent = state.ui_state.recent_boards();
                 let registry = state.commands_registry.blocking_read();
+                // At startup there are no visible windows yet, so pass an empty list.
                 match menu::build_menu_from_commands(
                     app.handle(),
                     &registry,
                     &state.ui_state,
                     &recent,
+                    &[],
                 ) {
                     Ok(items) => {
                         *state.menu_items.lock().unwrap() = items;
@@ -135,6 +135,47 @@ fn main() {
                 }
                 let _ = win.show();
                 let _ = win.set_focus();
+            }
+
+            // Restore secondary windows from persisted UIState.
+            // Uses the same create_window_impl path as window.new — no special
+            // cases, fully observable in logs.
+            {
+                let saved_windows = state.ui_state.all_windows();
+                let app_handle = app.handle().clone();
+                let restore_state = app.state::<AppState>();
+                for (label, entry) in &saved_windows {
+                    if label == "main" || label == "quick-capture" {
+                        continue;
+                    }
+                    let board_path = match state.ui_state.window_board(label) {
+                        Some(bp) => bp,
+                        None => continue,
+                    };
+                    let geometry = match (entry.x, entry.y, entry.width, entry.height) {
+                        (Some(x), Some(y), Some(w), Some(h)) => Some(commands::WindowGeometry {
+                            x,
+                            y,
+                            width: w,
+                            height: h,
+                            maximized: entry.maximized,
+                        }),
+                        _ => None,
+                    };
+                    if let Err(e) = tauri::async_runtime::block_on(commands::create_window_impl(
+                        &app_handle,
+                        &restore_state,
+                        Some(board_path),
+                        Some(label.clone()),
+                        geometry,
+                        false, // skip rebuild_menu — blocking_read panics inside block_on
+                    )) {
+                        tracing::warn!(
+                            label = %label, error = %e,
+                            "setup: failed to restore secondary window"
+                        );
+                    }
+                }
             }
 
             // The quick-capture window must always start hidden — it is shown
@@ -201,25 +242,30 @@ fn main() {
             let label = window.label().to_string();
 
             match event {
-                // Save geometry on move/resize for all windows except quick-capture.
+                // Update geometry in memory on move/resize. No disk write —
+                // final state is persisted on quit via save() in ExitRequested.
+                // Synchronous: no async spawn, no race with shutdown.
                 WindowEvent::Moved(_) | WindowEvent::Resized(_) => {
                     if label == "quick-capture" {
                         return;
                     }
+                    let state = window.app_handle().state::<AppState>();
+                    if state.shutting_down.load(Ordering::SeqCst) {
+                        return;
+                    }
                     if let (Ok(pos), Ok(size)) = (window.outer_position(), window.outer_size()) {
                         let maximized = window.is_maximized().unwrap_or(false);
-                        let app_handle = window.app_handle().clone();
-                        tauri::async_runtime::spawn(async move {
-                            let state = app_handle.state::<AppState>();
-                            state.ui_state.save_window_geometry(
-                                &label,
-                                pos.x,
-                                pos.y,
-                                size.width,
-                                size.height,
-                                maximized,
-                            );
-                        });
+                        // Memory-only update — no disk IO. update_window_geometry
+                        // only updates existing entries, preventing zombie creation
+                        // from stale events during teardown.
+                        state.ui_state.update_window_geometry(
+                            &label,
+                            pos.x,
+                            pos.y,
+                            size.width,
+                            size.height,
+                            maximized,
+                        );
                     }
                 }
                 // When a board window gains focus, update most_recent_board_path so quick
@@ -232,24 +278,40 @@ fn main() {
                     if let Some(board_path) = state.ui_state.window_board(&label) {
                         state.ui_state.set_most_recent_board(&board_path);
                     }
+                    // Update only the Window menu checkmarks — much cheaper than a
+                    // full rebuild_menu which tears down and recreates all native
+                    // menu items, causing visible flicker on macOS.
+                    crate::menu::update_window_focus_checkmarks(window.app_handle(), &label);
                 }
-                // Mid-session close: remove the UIState window entry so it doesn't resurrect.
-                // On app quit (shutting_down=true) we preserve entries for restore.
+                // Mid-session close: user clicked X on a secondary window.
+                // Remove the UIState entry synchronously BEFORE the window is
+                // destroyed, so it won't resurrect on restart. During app quit,
+                // ExitRequested sets shutting_down=true before CloseRequested
+                // fires, so entries are preserved for restore.
+                WindowEvent::CloseRequested { .. } => {
+                    if label == "main" || label == "quick-capture" {
+                        return;
+                    }
+                    let state = window.app_handle().state::<AppState>();
+                    if state.shutting_down.load(Ordering::SeqCst) {
+                        return;
+                    }
+                    // Synchronous remove + disk write — deterministic, no race.
+                    state.ui_state.remove_window(&label);
+                    tracing::info!(label = %label, "removed window entry on mid-session close");
+                }
+                // Rebuild the Window menu when a secondary window is destroyed.
+                // Actual UIState cleanup happened in CloseRequested above.
                 WindowEvent::Destroyed => {
                     if label == "main" || label == "quick-capture" {
                         return;
                     }
-                    let app_handle = window.app_handle().clone();
-                    tauri::async_runtime::spawn(async move {
-                        let state = app_handle.state::<AppState>();
-                        if state.shutting_down.load(Ordering::SeqCst) {
-                            return;
-                        }
-                        // Remove from UIState windows and window_boards on mid-session close
-                        // so the window doesn't resurrect on next startup.
-                        state.ui_state.remove_window(&label);
-                        tracing::info!(label = %label, "removed window entry on mid-session close");
-                    });
+                    // Don't rebuild menu during shutdown — the app is exiting.
+                    let state = window.app_handle().state::<AppState>();
+                    if state.shutting_down.load(Ordering::SeqCst) {
+                        return;
+                    }
+                    crate::menu::rebuild_menu(window.app_handle());
                 }
                 _ => {}
             }
@@ -260,7 +322,14 @@ fn main() {
         .run(|app_handle, event| {
             if let tauri::RunEvent::ExitRequested { .. } = event {
                 let state = app_handle.state::<AppState>();
+                // Set flag FIRST so window event handlers stop mutating state.
                 state.shutting_down.store(true, Ordering::SeqCst);
+                // Persist final window geometry. Move/resize events only update
+                // memory (via update_window_geometry), so this is the single
+                // save point that captures the latest positions.
+                if let Err(e) = state.ui_state.save() {
+                    tracing::error!(error = %e, "failed to save UIState on exit");
+                }
             }
         });
 }

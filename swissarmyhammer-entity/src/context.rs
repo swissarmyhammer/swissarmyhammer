@@ -166,6 +166,30 @@ impl EntityContext {
         self.root.join("undo_stack.yaml")
     }
 
+    /// Synchronously check whether the undo stack has entries that can be undone.
+    ///
+    /// Uses `try_read()` on the tokio RwLock so this is safe to call from
+    /// synchronous code (e.g. `Command::available()`). Returns `false` if the
+    /// lock is currently held for writing.
+    pub fn can_undo(&self) -> bool {
+        self.undo_stack
+            .try_read()
+            .map(|stack| stack.can_undo())
+            .unwrap_or(false)
+    }
+
+    /// Synchronously check whether the undo stack has entries that can be redone.
+    ///
+    /// Uses `try_read()` on the tokio RwLock so this is safe to call from
+    /// synchronous code (e.g. `Command::available()`). Returns `false` if the
+    /// lock is currently held for writing.
+    pub fn can_redo(&self) -> bool {
+        self.undo_stack
+            .try_read()
+            .map(|stack| stack.can_redo())
+            .unwrap_or(false)
+    }
+
     /// Get a read lock on the undo stack.
     pub async fn undo_stack(&self) -> tokio::sync::RwLockReadGuard<'_, UndoStack> {
         self.undo_stack.read().await

@@ -24,6 +24,21 @@ pub struct ViewInfo {
     pub name: String,
 }
 
+/// Lightweight open-window descriptor for dynamic command generation.
+///
+/// Only carries the fields needed to produce a `window.focus:{label}` command.
+/// Intentionally decoupled from Tauri's WebviewWindow so the scope_commands
+/// module does not depend on Tauri directly.
+#[derive(Debug, Clone)]
+pub struct WindowInfo {
+    /// Tauri window label (e.g. "main", "board-01jxyz").
+    pub label: String,
+    /// Human-readable window title (e.g. "SwissArmyHammer").
+    pub title: String,
+    /// Whether this window currently has focus.
+    pub focused: bool,
+}
+
 /// Lightweight open-board descriptor for dynamic command generation.
 ///
 /// Only carries the fields needed to produce a `board.switch:{path}` command.
@@ -33,6 +48,10 @@ pub struct BoardInfo {
     pub path: String,
     /// Human-readable board name (directory basename or custom name).
     pub name: String,
+    /// Entity display name (the board entity's `name` field value, or empty).
+    pub entity_name: String,
+    /// Context display name (from `KanbanContext::name()`, the path stem).
+    pub context_name: String,
 }
 
 /// Runtime data that feeds dynamic command generation beyond the static
@@ -43,6 +62,8 @@ pub struct DynamicSources {
     pub views: Vec<ViewInfo>,
     /// Open boards — each generates a `board.switch:{path}` command.
     pub boards: Vec<BoardInfo>,
+    /// Open windows — each generates a `window.focus:{label}` command.
+    pub windows: Vec<WindowInfo>,
 }
 
 /// A fully resolved command ready for display in a menu, palette, or context menu.
@@ -52,6 +73,9 @@ pub struct ResolvedCommand {
     pub id: String,
     /// Fully resolved display name (e.g. "Copy Tag", never "Copy {{entity.type}}").
     pub name: String,
+    /// Resolved menu display name. Falls back to `name` when absent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub menu_name: Option<String>,
     /// Target moniker (e.g. "tag:01X") or None for global commands.
     pub target: Option<String>,
     /// Group for separator insertion (entity type like "tag", "task", or "global").
@@ -65,13 +89,50 @@ pub struct ResolvedCommand {
     pub available: bool,
 }
 
-/// Resolve `{{entity.type}}` in a command name.
-fn resolve_name_template(name: &str, entity_type: &str) -> String {
-    if !name.contains("{{entity.type}}") {
+/// Parameters for template resolution in command names.
+#[derive(Debug, Clone, Default)]
+pub struct TemplateParams<'a> {
+    /// Entity type (e.g. "task") — resolved as capitalized for `{{entity.type}}`.
+    pub entity_type: &'a str,
+    /// Entity display name (e.g. the entity's `name` field value).
+    /// Resolves `{{entity.display_name}}`; empty string if not set.
+    pub entity_name: &'a str,
+    /// Context display name (e.g. `KanbanContext::name()`, the directory stem).
+    /// Resolves `{{entity.context.display_name}}`; empty string if not set.
+    pub context_name: &'a str,
+}
+
+/// Resolve template variables in a command name or menu_name.
+///
+/// Supported variables:
+/// - `{{entity.type}}` → capitalized entity type (e.g. "Task")
+/// - `{{entity.display_name}}` → entity name field value
+/// - `{{entity.context.display_name}}` → context path stem
+///
+/// Missing values resolve to empty string. Each variable is independent.
+pub fn resolve_name_template(name: &str, params: &TemplateParams<'_>) -> String {
+    if !name.contains("{{") {
         return name.to_string();
     }
-    let capitalized = format!("{}{}", &entity_type[..1].to_uppercase(), &entity_type[1..]);
-    name.replace("{{entity.type}}", &capitalized)
+    let mut result = name.to_string();
+    if result.contains("{{entity.type}}") {
+        let entity_type = params.entity_type;
+        let capitalized = if entity_type.is_empty() {
+            String::new()
+        } else {
+            format!("{}{}", &entity_type[..1].to_uppercase(), &entity_type[1..])
+        };
+        result = result.replace("{{entity.type}}", &capitalized);
+    }
+    // Note: context.display_name must be checked before display_name to avoid
+    // partial matching on the shorter template.
+    if result.contains("{{entity.context.display_name}}") {
+        result = result.replace("{{entity.context.display_name}}", params.context_name);
+    }
+    if result.contains("{{entity.display_name}}") {
+        result = result.replace("{{entity.display_name}}", params.entity_name);
+    }
+    result
 }
 
 /// Check command availability by building a CommandContext and calling `available()`.
@@ -143,12 +204,15 @@ pub fn commands_for_scope(
                 seen.insert(key);
 
                 // Resolve name template
-                let name = if cmd.id == "entity.paste" {
-                    // Paste name comes from clipboard entity type
-                    resolve_name_template(&cmd.name, clipboard_type.as_deref().unwrap_or("entity"))
-                } else {
-                    resolve_name_template(&cmd.name, entity_type)
+                let tpl = TemplateParams {
+                    entity_type: if cmd.id == "entity.paste" {
+                        clipboard_type.as_deref().unwrap_or("entity")
+                    } else {
+                        entity_type
+                    },
+                    ..Default::default()
                 };
+                let name = resolve_name_template(&cmd.name, &tpl);
 
                 // Convert entity command keys to registry KeysDef
                 let keys = cmd.keys.as_ref().map(|k| KeysDef {
@@ -163,6 +227,7 @@ pub fn commands_for_scope(
                 result.push(ResolvedCommand {
                     id: cmd.id.clone(),
                     name,
+                    menu_name: None,
                     target: Some(moniker.clone()),
                     group: entity_type.to_string(),
                     context_menu: cmd.context_menu,
@@ -192,11 +257,19 @@ pub fn commands_for_scope(
             .first()
             .and_then(|m| m.split_once(':').map(|(t, _)| t))
             .unwrap_or("entity");
-        let name = if cmd_def.id == "entity.paste" {
-            resolve_name_template(&cmd_def.name, clipboard_type.as_deref().unwrap_or("entity"))
-        } else {
-            resolve_name_template(&cmd_def.name, innermost_type)
+        let tpl = TemplateParams {
+            entity_type: if cmd_def.id == "entity.paste" {
+                clipboard_type.as_deref().unwrap_or("entity")
+            } else {
+                innermost_type
+            },
+            ..Default::default()
         };
+        let name = resolve_name_template(&cmd_def.name, &tpl);
+        let menu_name = cmd_def
+            .menu_name
+            .as_ref()
+            .map(|mn| resolve_name_template(mn, &tpl));
 
         let keys = cmd_def.keys.clone();
 
@@ -205,6 +278,7 @@ pub fn commands_for_scope(
         result.push(ResolvedCommand {
             id: cmd_def.id.clone(),
             name,
+            menu_name,
             target: None,
             group: "global".to_string(),
             context_menu: cmd_def.context_menu,
@@ -225,6 +299,7 @@ pub fn commands_for_scope(
             result.push(ResolvedCommand {
                 id: cmd_id,
                 name: format!("Switch to {}", view.name),
+                menu_name: None,
                 target: None,
                 group: "view".to_string(),
                 context_menu: false,
@@ -239,11 +314,46 @@ pub fn commands_for_scope(
                 continue;
             }
             seen.insert(key);
+
+            let tpl = TemplateParams {
+                entity_type: "board",
+                entity_name: &board.entity_name,
+                context_name: &board.context_name,
+            };
+
+            // Palette name: "Switch to Board: <name> (<context>)"
+            let name_template =
+                "Switch to Board: {{entity.display_name}} ({{entity.context.display_name}})";
+            let name = resolve_name_template(name_template, &tpl);
+
+            // Menu name: "<context_name>" (short label for Window menu)
+            let menu_name_template = "{{entity.context.display_name}}";
+            let menu_name = resolve_name_template(menu_name_template, &tpl);
+
             result.push(ResolvedCommand {
                 id: cmd_id,
-                name: format!("Switch to Board: {}", board.name),
+                name,
+                menu_name: Some(menu_name),
                 target: None,
                 group: "board".to_string(),
+                context_menu: false,
+                keys: None,
+                available: true,
+            });
+        }
+        for window in &dyn_src.windows {
+            let cmd_id = format!("window.focus:{}", window.label);
+            let key = (cmd_id.clone(), None);
+            if seen.contains(&key) {
+                continue;
+            }
+            seen.insert(key);
+            result.push(ResolvedCommand {
+                id: cmd_id,
+                name: window.title.clone(),
+                menu_name: Some(window.title.clone()),
+                target: None,
+                group: "window".to_string(),
                 context_menu: false,
                 keys: None,
                 available: true,
@@ -310,6 +420,7 @@ mod tests {
     #[test]
     fn board_scope_has_global_commands() {
         let (registry, impls, fields, ui) = setup();
+        ui.set_undo_redo_state(true, true);
         let scope = vec!["board:my-board".into()];
         let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
 
@@ -531,6 +642,7 @@ mod tests {
     #[test]
     fn empty_scope_has_only_global_commands() {
         let (registry, impls, fields, ui) = setup();
+        ui.set_undo_redo_state(true, true);
         let cmds = commands_for_scope(&[], &registry, &impls, Some(&fields), &ui, false, None);
 
         let ids: Vec<&str> = cmds.iter().map(|c| c.id.as_str()).collect();
@@ -671,13 +783,54 @@ mod tests {
     }
 
     #[test]
-    fn app_undo_redo_always_available() {
+    fn app_undo_redo_filtered_out_when_stack_empty() {
         let (registry, impls, fields, ui) = setup();
+        // Default UIState: can_undo=false, can_redo=false
         let scope = vec!["task:01X".into(), "column:todo".into()];
         let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
         let ids: Vec<&str> = cmds.iter().map(|c| c.id.as_str()).collect();
-        assert!(ids.contains(&"app.undo"));
-        assert!(ids.contains(&"app.redo"));
+        assert!(
+            !ids.contains(&"app.undo"),
+            "undo should not appear when stack is empty"
+        );
+        assert!(
+            !ids.contains(&"app.redo"),
+            "redo should not appear when stack is empty"
+        );
+    }
+
+    #[test]
+    fn app_undo_available_when_ui_state_says_so() {
+        let (registry, impls, fields, ui) = setup();
+        ui.set_undo_redo_state(true, false);
+        let scope = vec!["task:01X".into(), "column:todo".into()];
+        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
+        let ids: Vec<&str> = cmds.iter().map(|c| c.id.as_str()).collect();
+        assert!(
+            ids.contains(&"app.undo"),
+            "undo should appear when can_undo is true"
+        );
+        assert!(
+            !ids.contains(&"app.redo"),
+            "redo should not appear when can_redo is false"
+        );
+    }
+
+    #[test]
+    fn app_redo_available_when_ui_state_says_so() {
+        let (registry, impls, fields, ui) = setup();
+        ui.set_undo_redo_state(false, true);
+        let scope = vec!["task:01X".into(), "column:todo".into()];
+        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
+        let ids: Vec<&str> = cmds.iter().map(|c| c.id.as_str()).collect();
+        assert!(
+            !ids.contains(&"app.undo"),
+            "undo should not appear when can_undo is false"
+        );
+        assert!(
+            ids.contains(&"app.redo"),
+            "redo should appear when can_redo is true"
+        );
     }
 
     // =========================================================================
@@ -917,6 +1070,7 @@ mod tests {
     #[test]
     fn global_commands_have_no_target() {
         let (registry, impls, fields, ui) = setup();
+        ui.set_undo_redo_state(true, true);
         let scope = vec!["task:01X".into(), "column:todo".into()];
         let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
 
@@ -951,6 +1105,7 @@ mod tests {
                 },
             ],
             boards: vec![],
+            windows: vec![],
         };
         let cmds = commands_for_scope(
             &scope,
@@ -996,6 +1151,7 @@ mod tests {
                 },
             ],
             boards: vec![],
+            windows: vec![],
         };
         let cmds = commands_for_scope(
             &scope,
@@ -1036,12 +1192,17 @@ mod tests {
                 BoardInfo {
                     path: "/home/user/project-a".into(),
                     name: "Project A".into(),
+                    entity_name: "Project A".into(),
+                    context_name: "project-a".into(),
                 },
                 BoardInfo {
                     path: "/home/user/project-b".into(),
                     name: "Project B".into(),
+                    entity_name: "Project B".into(),
+                    context_name: "project-b".into(),
                 },
             ],
+            windows: vec![],
         };
         let cmds = commands_for_scope(
             &scope,
@@ -1075,7 +1236,10 @@ mod tests {
             boards: vec![BoardInfo {
                 path: "/tmp/my-kanban".into(),
                 name: "My Kanban".into(),
+                entity_name: "My Kanban".into(),
+                context_name: "my-kanban".into(),
             }],
+            windows: vec![],
         };
         let cmds = commands_for_scope(
             &scope,
@@ -1091,7 +1255,8 @@ mod tests {
             .iter()
             .find(|c| c.id == "board.switch:/tmp/my-kanban")
             .unwrap();
-        assert_eq!(board_cmd.name, "Switch to Board: My Kanban");
+        assert_eq!(board_cmd.name, "Switch to Board: My Kanban (my-kanban)");
+        assert_eq!(board_cmd.menu_name.as_deref(), Some("my-kanban"));
         assert_eq!(board_cmd.group, "board");
         assert!(board_cmd.target.is_none());
         assert!(!board_cmd.context_menu);
@@ -1109,7 +1274,10 @@ mod tests {
             boards: vec![BoardInfo {
                 path: "/tmp/board".into(),
                 name: "Board".into(),
+                entity_name: "Board".into(),
+                context_name: "board".into(),
             }],
+            windows: vec![],
         };
         let cmds = commands_for_scope(
             &scope,
@@ -1147,6 +1315,236 @@ mod tests {
         assert!(
             !ids.iter().any(|id| id.starts_with("board.switch:")),
             "no board commands without dynamic sources"
+        );
+    }
+
+    // =========================================================================
+    // Template resolution
+    // =========================================================================
+
+    #[test]
+    fn template_entity_type_resolved() {
+        let params = TemplateParams {
+            entity_type: "task",
+            ..Default::default()
+        };
+        assert_eq!(
+            resolve_name_template("Copy {{entity.type}}", &params),
+            "Copy Task"
+        );
+    }
+
+    #[test]
+    fn template_entity_display_name_with_value() {
+        let params = TemplateParams {
+            entity_name: "My Board",
+            ..Default::default()
+        };
+        assert_eq!(
+            resolve_name_template("Switch to {{entity.display_name}}", &params),
+            "Switch to My Board"
+        );
+    }
+
+    #[test]
+    fn template_entity_display_name_empty_when_missing() {
+        let params = TemplateParams::default();
+        assert_eq!(
+            resolve_name_template("Switch to {{entity.display_name}}", &params),
+            "Switch to "
+        );
+    }
+
+    #[test]
+    fn template_context_display_name_resolved() {
+        let params = TemplateParams {
+            context_name: "swissarmyhammer-kanban",
+            ..Default::default()
+        };
+        assert_eq!(
+            resolve_name_template("{{entity.context.display_name}}", &params),
+            "swissarmyhammer-kanban"
+        );
+    }
+
+    #[test]
+    fn template_combined_resolves_all_variables() {
+        let params = TemplateParams {
+            entity_type: "board",
+            entity_name: "My Project",
+            context_name: "swissarmyhammer-kanban",
+        };
+        let result = resolve_name_template(
+            "{{entity.display_name}} ({{entity.context.display_name}}) [{{entity.type}}]",
+            &params,
+        );
+        assert_eq!(result, "My Project (swissarmyhammer-kanban) [Board]");
+    }
+
+    #[test]
+    fn template_no_templates_returns_unchanged() {
+        let params = TemplateParams {
+            entity_type: "task",
+            entity_name: "Board",
+            context_name: "ctx",
+        };
+        assert_eq!(resolve_name_template("Quit", &params), "Quit");
+    }
+
+    #[test]
+    fn dynamic_board_commands_use_templates() {
+        let (registry, impls, fields, ui) = setup();
+        let scope = vec!["board:my-board".into()];
+        let dynamic = DynamicSources {
+            views: vec![],
+            boards: vec![BoardInfo {
+                path: "/home/user/my-project/.kanban".into(),
+                name: "my-project".into(),
+                entity_name: "my-project".into(),
+                context_name: "my-project".into(),
+            }],
+            windows: vec![],
+        };
+        let cmds = commands_for_scope(
+            &scope,
+            &registry,
+            &impls,
+            Some(&fields),
+            &ui,
+            false,
+            Some(&dynamic),
+        );
+        let board_cmd = cmds
+            .iter()
+            .find(|c| c.id.starts_with("board.switch:"))
+            .expect("should have board switch command");
+
+        assert_eq!(board_cmd.name, "Switch to Board: my-project (my-project)");
+        assert_eq!(board_cmd.menu_name.as_deref(), Some("my-project"));
+    }
+
+    // =========================================================================
+    // Dynamic window focus commands
+    // =========================================================================
+
+    #[test]
+    fn window_focus_commands_generated_from_dynamic_sources() {
+        let (registry, impls, fields, ui) = setup();
+        let scope = vec!["board:my-board".into()];
+        let dynamic = DynamicSources {
+            views: vec![],
+            boards: vec![],
+            windows: vec![
+                WindowInfo {
+                    label: "main".into(),
+                    title: "SwissArmyHammer".into(),
+                    focused: true,
+                },
+                WindowInfo {
+                    label: "board-01abc".into(),
+                    title: "My Project".into(),
+                    focused: false,
+                },
+            ],
+        };
+        let cmds = commands_for_scope(
+            &scope,
+            &registry,
+            &impls,
+            Some(&fields),
+            &ui,
+            false,
+            Some(&dynamic),
+        );
+        let ids: Vec<&str> = cmds.iter().map(|c| c.id.as_str()).collect();
+
+        assert!(
+            ids.contains(&"window.focus:main"),
+            "should have main window focus: {:?}",
+            ids
+        );
+        assert!(
+            ids.contains(&"window.focus:board-01abc"),
+            "should have board-01abc window focus: {:?}",
+            ids
+        );
+    }
+
+    #[test]
+    fn window_focus_commands_have_correct_names_and_ids() {
+        let (registry, impls, fields, ui) = setup();
+        let scope = vec!["board:my-board".into()];
+        let dynamic = DynamicSources {
+            views: vec![],
+            boards: vec![],
+            windows: vec![WindowInfo {
+                label: "main".into(),
+                title: "SwissArmyHammer".into(),
+                focused: true,
+            }],
+        };
+        let cmds = commands_for_scope(
+            &scope,
+            &registry,
+            &impls,
+            Some(&fields),
+            &ui,
+            false,
+            Some(&dynamic),
+        );
+
+        let win_cmd = cmds
+            .iter()
+            .find(|c| c.id == "window.focus:main")
+            .expect("should have window.focus:main");
+        assert_eq!(win_cmd.name, "SwissArmyHammer");
+        assert_eq!(win_cmd.menu_name.as_deref(), Some("SwissArmyHammer"));
+        assert_eq!(win_cmd.group, "window");
+        assert!(win_cmd.target.is_none());
+        assert!(!win_cmd.context_menu);
+        assert!(win_cmd.available);
+    }
+
+    #[test]
+    fn window_focus_commands_not_in_context_menu() {
+        let (registry, impls, fields, ui) = setup();
+        let scope = vec!["board:my-board".into()];
+        let dynamic = DynamicSources {
+            views: vec![],
+            boards: vec![],
+            windows: vec![WindowInfo {
+                label: "main".into(),
+                title: "SwissArmyHammer".into(),
+                focused: true,
+            }],
+        };
+        let cmds = commands_for_scope(
+            &scope,
+            &registry,
+            &impls,
+            Some(&fields),
+            &ui,
+            true,
+            Some(&dynamic),
+        );
+        let ids: Vec<&str> = cmds.iter().map(|c| c.id.as_str()).collect();
+
+        assert!(
+            !ids.iter().any(|id| id.starts_with("window.focus:")),
+            "window focus commands should not appear in context menu"
+        );
+    }
+
+    #[test]
+    fn no_window_commands_without_dynamic_sources() {
+        let (registry, impls, fields, ui) = setup();
+        let scope = vec!["board:my-board".into()];
+        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
+        let ids: Vec<&str> = cmds.iter().map(|c| c.id.as_str()).collect();
+
+        assert!(
+            !ids.iter().any(|id| id.starts_with("window.focus:")),
+            "no window commands without dynamic sources"
         );
     }
 }

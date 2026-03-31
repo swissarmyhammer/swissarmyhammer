@@ -140,12 +140,13 @@ export function QuickCapture() {
         await dispatchCommand({
           id: "task.add",
           name: "Quick Capture Add Task",
-          execute: () =>
+          execute: () => {
             backendDispatch({
               cmd: "task.add",
               args: { column: firstColumnId, title: text.trim() },
               boardPath: selectedPath,
-            }),
+            });
+          },
         });
 
         localStorage.setItem(STORAGE_KEY, selectedPath);
@@ -155,11 +156,12 @@ export function QuickCapture() {
           await dispatchCommand({
             id: "file.switchBoard",
             name: "Restore Active Board",
-            execute: () =>
+            execute: () => {
               backendDispatch({
                 cmd: "file.switchBoard",
                 args: { path: active.path },
-              }),
+              });
+          },
           }).catch(() => {});
         }
       } catch (err) {

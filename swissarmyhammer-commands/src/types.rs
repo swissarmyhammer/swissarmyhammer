@@ -66,6 +66,10 @@ pub struct MenuPlacement {
 pub struct CommandDef {
     pub id: String,
     pub name: String,
+    /// Optional display name for native menus. Falls back to `name` when absent.
+    /// Supports the same template variables as `name` (e.g. `{{entity.display_name}}`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub menu_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scope: Option<String>,
     #[serde(default = "default_true", skip_serializing_if = "is_true")]
@@ -112,6 +116,7 @@ mod tests {
         let def = CommandDef {
             id: "task.add".into(),
             name: "New Task".into(),
+            menu_name: None,
             scope: Some("entity:column".into()),
             visible: true,
             keys: Some(KeysDef {
@@ -243,5 +248,42 @@ menu:
         let parsed: CommandInvocation = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.cmd, "app.quit");
         assert!(parsed.scope_chain.is_none());
+    }
+
+    #[test]
+    fn command_def_with_menu_name_deserializes() {
+        let yaml = r#"
+id: board.switch
+name: "Switch to {{entity.display_name}}"
+menu_name: "{{entity.display_name}} ({{entity.context.display_name}})"
+"#;
+        let def: CommandDef = serde_yaml_ng::from_str(yaml).unwrap();
+        assert_eq!(def.id, "board.switch");
+        assert_eq!(def.name, "Switch to {{entity.display_name}}");
+        assert_eq!(
+            def.menu_name.as_deref(),
+            Some("{{entity.display_name}} ({{entity.context.display_name}})")
+        );
+    }
+
+    #[test]
+    fn command_def_without_menu_name_deserializes_to_none() {
+        let yaml = r#"
+id: app.quit
+name: Quit
+"#;
+        let def: CommandDef = serde_yaml_ng::from_str(yaml).unwrap();
+        assert!(def.menu_name.is_none());
+    }
+
+    #[test]
+    fn command_def_menu_name_omitted_from_serialization_when_none() {
+        let yaml = r#"
+id: app.quit
+name: Quit
+"#;
+        let def: CommandDef = serde_yaml_ng::from_str(yaml).unwrap();
+        let serialized = serde_yaml_ng::to_string(&def).unwrap();
+        assert!(!serialized.contains("menu_name"));
     }
 }

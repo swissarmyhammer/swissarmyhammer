@@ -33,7 +33,7 @@ pub struct DragSession {
 ///
 /// `board_path` is the canonical path to the `.kanban` directory this window shows.
 /// An empty string means no board is assigned to this window.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct WindowState {
     /// The board path assigned to this window (canonical `.kanban` dir path).
@@ -59,6 +59,23 @@ pub struct WindowState {
     pub height: Option<u32>,
     /// Whether the window is maximized.
     pub maximized: bool,
+}
+
+impl Default for WindowState {
+    fn default() -> Self {
+        Self {
+            board_path: String::new(),
+            inspector_stack: Vec::new(),
+            active_view_id: String::new(),
+            palette_open: false,
+            palette_mode: "command".to_string(),
+            x: None,
+            y: None,
+            width: None,
+            height: None,
+            maximized: false,
+        }
+    }
 }
 
 /// A recently opened board entry for MRU persistence.
@@ -132,6 +149,12 @@ struct UIStateInner {
     /// IDs of items in the most recently shown context menu. Transient — not persisted.
     #[serde(skip)]
     context_menu_ids: HashSet<String>,
+    /// Whether the undo stack has entries that can be undone. Transient — not persisted.
+    #[serde(skip)]
+    can_undo: bool,
+    /// Whether the undo stack has entries that can be redone. Transient — not persisted.
+    #[serde(skip)]
+    can_redo: bool,
     /// Canonical paths of boards that are open.
     open_boards: Vec<String>,
     /// Per-window state: inspector stack, board assignment, and geometry.
@@ -159,6 +182,8 @@ impl Default for UIStateInner {
             has_clipboard: false,
             clipboard_entity_type: None,
             context_menu_ids: HashSet::new(),
+            can_undo: false,
+            can_redo: false,
             open_boards: Vec::new(),
             windows: HashMap::new(),
             recent_boards: Vec::new(),
@@ -671,7 +696,9 @@ impl UIState {
 
     /// Save window geometry for a specific window.
     ///
-    /// Auto-saves if a config path is configured.
+    /// Auto-saves if a config path is configured. Use this for deliberate
+    /// save points (window creation, mid-session close). For high-frequency
+    /// updates during move/resize, use `update_window_geometry` instead.
     pub fn save_window_geometry(
         &self,
         label: &str,
@@ -691,6 +718,36 @@ impl UIState {
             ws.maximized = maximized;
         }
         self.try_save();
+    }
+
+    /// Update window geometry in memory only — no disk write.
+    ///
+    /// Called from move/resize event handlers where high-frequency disk writes
+    /// are wasteful. The final geometry is persisted when the app quits via
+    /// `save()` in the `ExitRequested` handler, or when explicit save points
+    /// like `save_window_geometry` or `remove_window` trigger `try_save`.
+    ///
+    /// Only updates an existing window entry — does NOT create new entries.
+    /// This prevents zombie entries (empty board_path) from appearing when
+    /// the OS fires move/resize events during window teardown after the entry
+    /// has already been removed.
+    pub fn update_window_geometry(
+        &self,
+        label: &str,
+        x: i32,
+        y: i32,
+        width: u32,
+        height: u32,
+        maximized: bool,
+    ) {
+        let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+        if let Some(ws) = inner.windows.get_mut(label) {
+            ws.x = Some(x);
+            ws.y = Some(y);
+            ws.width = Some(width);
+            ws.height = Some(height);
+            ws.maximized = maximized;
+        }
     }
 
     /// Get the window state for a specific window label.
@@ -778,6 +835,33 @@ impl UIState {
             .unwrap_or_else(|e| e.into_inner())
             .clipboard_entity_type
             .clone()
+    }
+
+    /// Whether the undo stack has entries that can be undone.
+    pub fn can_undo(&self) -> bool {
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .can_undo
+    }
+
+    /// Whether the undo stack has entries that can be redone.
+    pub fn can_redo(&self) -> bool {
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .can_redo
+    }
+
+    /// Update the cached undo/redo availability flags.
+    ///
+    /// Called after any operation that modifies the undo stack (write, delete,
+    /// undo, redo) so that synchronous `Command::available()` checks reflect
+    /// current state.
+    pub fn set_undo_redo_state(&self, can_undo: bool, can_redo: bool) {
+        let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+        inner.can_undo = can_undo;
+        inner.can_redo = can_redo;
     }
 
     /// Get the current keymap mode.
@@ -1517,5 +1601,215 @@ mod tests {
         assert_eq!(all.len(), 2);
         assert!(all.contains_key("main"));
         assert!(all.contains_key("secondary"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Window save/restore round-trip tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn window_state_persists_through_save_load() {
+        let path = temp_yaml_path("window_roundtrip");
+        {
+            let state = UIState::load(&path);
+            state.save_window_geometry("main", 10, 20, 1200, 800, false);
+            state.save_window_geometry("board-abc", 100, 200, 900, 600, true);
+            state.set_window_board("main", "/boards/alpha/.kanban");
+            state.set_window_board("board-abc", "/boards/beta/.kanban");
+            state.save().unwrap();
+        }
+        {
+            let state = UIState::load(&path);
+            let all = state.all_windows();
+            assert_eq!(all.len(), 2, "both windows should survive save/load");
+
+            let main = all.get("main").expect("main window exists after load");
+            assert_eq!(main.x, Some(10));
+            assert_eq!(main.y, Some(20));
+            assert_eq!(main.width, Some(1200));
+            assert_eq!(main.height, Some(800));
+            assert!(!main.maximized);
+            assert_eq!(main.board_path, "/boards/alpha/.kanban");
+
+            let sec = all
+                .get("board-abc")
+                .expect("secondary window exists after load");
+            assert_eq!(sec.x, Some(100));
+            assert_eq!(sec.y, Some(200));
+            assert_eq!(sec.width, Some(900));
+            assert_eq!(sec.height, Some(600));
+            assert!(sec.maximized);
+            assert_eq!(sec.board_path, "/boards/beta/.kanban");
+        }
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn window_board_survives_save_load() {
+        let path = temp_yaml_path("window_board_roundtrip");
+        {
+            let state = UIState::load(&path);
+            state.set_window_board("secondary", "/boards/test/.kanban");
+            state.save().unwrap();
+        }
+        {
+            let state = UIState::load(&path);
+            assert_eq!(
+                state.window_board("secondary").as_deref(),
+                Some("/boards/test/.kanban"),
+                "window_board mapping must survive save/load"
+            );
+        }
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn palette_state_is_transient_not_persisted() {
+        let path = temp_yaml_path("palette_transient");
+        {
+            let state = UIState::load(&path);
+            state.save_window_geometry("main", 0, 0, 800, 600, false);
+            state.set_palette_open_with_mode("main", true, "search");
+            assert!(state.palette_open("main"));
+            assert_eq!(state.palette_mode("main"), "search");
+            state.save().unwrap();
+        }
+        {
+            let state = UIState::load(&path);
+            // palette_open and palette_mode are #[serde(skip)] — should reset to defaults
+            assert!(!state.palette_open("main"), "palette_open must not persist");
+            assert_eq!(
+                state.palette_mode("main"),
+                "command",
+                "palette_mode must reset to default on load"
+            );
+        }
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn remove_window_persists_through_save_load() {
+        let path = temp_yaml_path("remove_window_roundtrip");
+        {
+            let state = UIState::load(&path);
+            state.save_window_geometry("main", 0, 0, 800, 600, false);
+            state.save_window_geometry("board-xyz", 100, 100, 400, 300, false);
+            state.set_window_board("board-xyz", "/boards/old/.kanban");
+            state.remove_window("board-xyz");
+            state.save().unwrap();
+        }
+        {
+            let state = UIState::load(&path);
+            let all = state.all_windows();
+            assert_eq!(all.len(), 1, "removed window should not reappear");
+            assert!(all.contains_key("main"));
+            assert!(!all.contains_key("board-xyz"));
+            assert!(state.window_board("board-xyz").is_none());
+        }
+        let _ = fs::remove_file(&path);
+    }
+
+    // --- update_window_geometry (memory-only) tests ---
+
+    #[test]
+    fn update_window_geometry_updates_existing_entry() {
+        let state = UIState::new();
+        state.set_window_board("board-1", "/boards/a");
+        state.save_window_geometry("board-1", 100, 200, 800, 600, false);
+
+        // Move the window — memory only
+        state.update_window_geometry("board-1", 300, 400, 900, 700, true);
+
+        let ws = state.get_window_state("board-1").unwrap();
+        assert_eq!(ws.x, Some(300));
+        assert_eq!(ws.y, Some(400));
+        assert_eq!(ws.width, Some(900));
+        assert_eq!(ws.height, Some(700));
+        assert!(ws.maximized);
+        // board_path untouched
+        assert_eq!(ws.board_path, "/boards/a");
+    }
+
+    #[test]
+    fn update_window_geometry_ignores_unknown_label() {
+        let state = UIState::new();
+        // No window entry exists for "ghost-window"
+        state.update_window_geometry("ghost-window", 0, 0, 100, 100, false);
+        // Should not create a new entry
+        assert!(state.get_window_state("ghost-window").is_none());
+        assert!(state.all_windows().is_empty());
+    }
+
+    #[test]
+    fn update_window_geometry_does_not_resurrect_removed_window() {
+        let state = UIState::new();
+        state.set_window_board("board-1", "/boards/a");
+        state.save_window_geometry("board-1", 100, 200, 800, 600, false);
+
+        // Mid-session close removes the window
+        state.remove_window("board-1");
+        assert!(state.get_window_state("board-1").is_none());
+
+        // OS fires a stale move event during teardown
+        state.update_window_geometry("board-1", 0, 0, 0, 0, false);
+
+        // Window must NOT reappear — no zombie entry
+        assert!(state.get_window_state("board-1").is_none());
+        assert!(state.all_windows().is_empty());
+    }
+
+    #[test]
+    fn update_window_geometry_does_not_write_to_disk() {
+        let path = temp_yaml_path("update_no_disk");
+        let _ = fs::remove_file(&path);
+        {
+            let state = UIState::load(&path);
+            state.set_window_board("board-1", "/boards/a");
+            state.save_window_geometry("board-1", 100, 200, 800, 600, false);
+            // save_window_geometry writes to disk (via try_save)
+        }
+        // Load to get baseline on-disk state
+        {
+            let state = UIState::load(&path);
+            // Now update geometry in memory only
+            state.update_window_geometry("board-1", 999, 999, 1, 1, true);
+            // Do NOT call save() — drop the state
+        }
+        // Reload from disk — should still have the original geometry
+        {
+            let state = UIState::load(&path);
+            let ws = state.get_window_state("board-1").unwrap();
+            assert_eq!(ws.x, Some(100), "memory-only update must not reach disk");
+            assert_eq!(ws.y, Some(200));
+        }
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn update_window_geometry_persisted_by_explicit_save() {
+        let path = temp_yaml_path("update_then_save");
+        let _ = fs::remove_file(&path);
+        {
+            let state = UIState::load(&path);
+            state.set_window_board("board-1", "/boards/a");
+            state.save_window_geometry("board-1", 100, 200, 800, 600, false);
+            // Simulate move events
+            state.update_window_geometry("board-1", 500, 600, 1024, 768, false);
+            // Simulate quit — explicit save
+            state.save().unwrap();
+        }
+        {
+            let state = UIState::load(&path);
+            let ws = state.get_window_state("board-1").unwrap();
+            assert_eq!(
+                ws.x,
+                Some(500),
+                "geometry should be saved after explicit save"
+            );
+            assert_eq!(ws.y, Some(600));
+            assert_eq!(ws.width, Some(1024));
+            assert_eq!(ws.height, Some(768));
+        }
+        let _ = fs::remove_file(&path);
     }
 }

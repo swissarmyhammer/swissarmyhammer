@@ -7,7 +7,6 @@ import {
   useRef,
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 
 // ---------------------------------------------------------------------------
 // ActiveBoardPath context — per-window board path for multi-window dispatch
@@ -210,9 +209,8 @@ export function useAvailableCommands(): CommandAtDepth[] {
  * Every call site that previously used `invoke("dispatch_command", ...)`
  * directly should use this helper instead.
  *
- * Window identity is derived from the scope chain (the root
- * `CommandScopeProvider` injects a `window:{label}` moniker), so no
- * separate `windowLabel` parameter is needed.
+ * Window identity is determined by the `board_path` parameter that
+ * `dispatchCommand` passes through to the backend.
  *
  * @param params - The parameters to pass to `dispatch_command`.
  * @returns The raw JSON value returned by the backend.
@@ -220,10 +218,7 @@ export function useAvailableCommands(): CommandAtDepth[] {
 export async function backendDispatch(
   params: Record<string, unknown>,
 ): Promise<unknown> {
-  // Strip windowLabel if callers still pass it — scope chain is the
-  // sole mechanism for window identity now.
-  const { windowLabel: _stripped, ...rest } = params;
-  return invoke("dispatch_command", rest);
+  return invoke("dispatch_command", params);
 }
 
 /**

@@ -1,4 +1,4 @@
-import { useRef, useEffect, useCallback, useMemo, useState } from "react";
+import { useRef, useEffect, useCallback, useMemo, useState, useContext } from "react";
 import { ArrowUp, ArrowDown, ChevronRight, ChevronDown } from "lucide-react";
 import {
   useReactTable,
@@ -22,12 +22,27 @@ import {
 } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
 import { useContextMenu } from "@/lib/context-menu";
-import { CommandScopeProvider, type CommandDef } from "@/lib/command-scope";
+import { CommandScopeProvider, CommandScopeContext, type CommandDef } from "@/lib/command-scope";
 import { FocusScope } from "@/components/focus-scope";
 import { Field } from "@/components/fields/field";
 import type { UseGridReturn } from "@/hooks/use-grid";
 import type { ClaimPredicate } from "@/lib/entity-focus-context";
+import type { CommandScope } from "@/lib/command-scope";
 import type { Entity, FieldDef } from "@/types/kanban";
+
+/** Build the moniker scope chain from the current CommandScopeContext to the root. */
+function useScopeChain(): string[] {
+  const scope = useContext(CommandScopeContext);
+  return useMemo(() => {
+    const chain: string[] = [];
+    let current: CommandScope | null = scope;
+    while (current) {
+      if (current.moniker) chain.push(current.moniker);
+      current = current.parent;
+    }
+    return chain;
+  }, [scope]);
+}
 
 export interface DataTableColumn {
   field: FieldDef;
@@ -93,7 +108,8 @@ export function DataTable({
   const tableContainerRef = useRef<HTMLDivElement>(null);
   const cursorRef = useRef<HTMLTableCellElement>(null);
   // Grid-level context menu handler -- used when rowEntityCommands is not set.
-  const contextMenuHandler = useContextMenu();
+  const gridScopeChain = useScopeChain();
+  const contextMenuHandler = useContextMenu(gridScopeChain);
   const [sorting, setSorting] = useState<SortingState>([]);
   const [grouping, setGrouping] = useState<GroupingState>(groupingProp ?? []);
 
@@ -552,7 +568,8 @@ function RowSelectorCell({
   onCellClick,
   onRowContextMenu,
 }: RowSelectorCellProps) {
-  const contextMenuHandler = useContextMenu();
+  const rowScopeChain = useScopeChain();
+  const contextMenuHandler = useContextMenu(rowScopeChain);
 
   const handleContextMenu = useCallback(
     (e: React.MouseEvent) => {

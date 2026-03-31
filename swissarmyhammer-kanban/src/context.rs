@@ -24,6 +24,9 @@ use tokio::sync::{OnceCell, RwLock};
 pub struct KanbanContext {
     /// Path to the .kanban directory
     root: PathBuf,
+    /// Human-readable context name derived from the parent of `.kanban`.
+    /// Computed once in the constructor from `root.parent().file_name()`.
+    context_name: String,
     /// Field registry (populated via `open()`, None when created via `new()`)
     fields: Option<Arc<FieldsContext>>,
     /// Entity I/O coordinator — lazy-initialized on first access, wrapped in Arc
@@ -38,13 +41,29 @@ pub struct KanbanContext {
 }
 
 impl KanbanContext {
+    /// Derive the context name from a `.kanban` root path.
+    ///
+    /// Returns the file-stem of the parent directory (e.g.
+    /// `/home/user/my-project/.kanban` → `"my-project"`).
+    /// Returns an empty string if the parent cannot be determined.
+    fn derive_context_name(root: &Path) -> String {
+        root.parent()
+            .and_then(|p| p.file_name())
+            .and_then(|n| n.to_str())
+            .unwrap_or("")
+            .to_string()
+    }
+
     /// Create a new context for the given .kanban directory.
     ///
     /// This is a lightweight synchronous constructor. The field registry is
     /// not initialized — use `open()` for a fully-initialized context.
     pub fn new(root: impl Into<PathBuf>) -> Self {
+        let root = root.into();
+        let context_name = Self::derive_context_name(&root);
         Self {
-            root: root.into(),
+            root,
+            context_name,
             fields: None,
             entities: OnceCell::new(),
             views: None,
@@ -81,8 +100,10 @@ impl KanbanContext {
         let views = Self::build_views_context(&views_root)?;
         let views_changelog = ViewsChangelog::new(root.join("views.jsonl"));
 
+        let context_name = Self::derive_context_name(&root);
         Ok(Self {
             root,
+            context_name,
             fields: Some(fields),
             entities: cell,
             views: Some(RwLock::new(views)),
@@ -136,6 +157,14 @@ impl KanbanContext {
     /// Get the root .kanban directory
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    /// Human-readable context name (path stem above `.kanban`).
+    ///
+    /// For example, if root is `/home/user/my-project/.kanban`, returns `"my-project"`.
+    /// Returns an empty string if the parent directory cannot be determined.
+    pub fn name(&self) -> &str {
+        &self.context_name
     }
 
     /// Path to board.yaml
@@ -597,6 +626,18 @@ mod tests {
         assert_eq!(ctx.root(), root);
         assert_eq!(ctx.board_path(), root.join("board.yaml"));
         assert_eq!(ctx.tasks_dir(), root.join("tasks"));
+    }
+
+    #[test]
+    fn context_name_returns_parent_dir_stem() {
+        let ctx = KanbanContext::new("/home/user/my-project/.kanban");
+        assert_eq!(ctx.name(), "my-project");
+    }
+
+    #[test]
+    fn context_name_empty_for_root_kanban() {
+        let ctx = KanbanContext::new("/.kanban");
+        assert_eq!(ctx.name(), "");
     }
 
     #[tokio::test]
