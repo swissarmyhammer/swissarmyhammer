@@ -181,6 +181,17 @@ export function EntityFocusProvider({ children }: { children: ReactNode }) {
     [setFocus],
   );
 
+  // Re-dispatch the current scope chain when the OS window gains focus.
+  // This ensures the backend always has the scope chain of the active window
+  // after Alt-Tab or clicking between windows, not just the last-clicked one.
+  useEffect(() => {
+    const handleWindowFocus = () => {
+      invokeFocusChange(focusedMonikerRef.current, registryRef);
+    };
+    window.addEventListener("focus", handleWindowFocus);
+    return () => window.removeEventListener("focus", handleWindowFocus);
+  }, []);
+
   const value = useMemo<EntityFocusContextValue>(
     () => ({
       focusedMoniker,

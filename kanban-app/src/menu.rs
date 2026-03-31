@@ -360,14 +360,13 @@ pub fn handle_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
         return;
     }
 
-    // Window list items — focus the named window and update check states
+    // Window list items — focus the named window; menu rebuild happens
+    // when the frontend re-dispatches ui.setFocus on window focus.
     if let Some(label) = id.strip_prefix("window.focus:") {
         if let Some(window) = app.get_webview_window(label) {
             let _ = window.unminimize();
             let _ = window.set_focus();
         }
-        // Update check marks: only the clicked window should be checked
-        update_window_focus_checkmarks(app, label);
         return;
     }
 
@@ -388,43 +387,35 @@ pub fn handle_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
     let _ = app.emit("menu-command", &id);
 }
 
-/// Update only the Window menu checkmarks to reflect the currently focused window.
+/// Rebuild the native menu bar from the command registry (sync version).
 ///
-/// This is much cheaper than a full `rebuild_menu` — it walks the existing menu
-/// items and flips the `checked` state on `window.focus:*` CheckMenuItems without
-/// tearing down and rebuilding the entire native menu bar.  Called from the
-/// `WindowEvent::Focused(true)` handler to avoid flicker.
-pub fn update_window_focus_checkmarks(app: &AppHandle, focused_label: &str) {
-    if let Some(menu) = app.menu() {
-        if let Ok(items) = menu.items() {
-            for item in items {
-                if let Some(sub) = item.as_submenu() {
-                    if let Ok(sub_items) = sub.items() {
-                        for si in sub_items {
-                            if let Some(check) = si.as_check_menuitem() {
-                                let cid = check.id().as_ref().to_string();
-                                if let Some(wlabel) = cid.strip_prefix("window.focus:") {
-                                    let _ = check.set_checked(wlabel == focused_label);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-/// Rebuild the native menu bar from the command registry.
-///
-/// Called after keymap mode changes or board switches to update accelerators
-/// and checked states. Acquires the commands registry read lock synchronously
-/// via `blocking_read` — safe in async contexts as the lock is never held
-/// across an await point.
+/// Uses `blocking_read` — only safe from synchronous contexts (e.g. window
+/// event handlers). For async contexts use `rebuild_menu_async`.
 pub fn rebuild_menu(app: &AppHandle) {
     let state = app.state::<AppState>();
     let recent = state.ui_state.recent_boards();
     let registry = state.commands_registry.blocking_read();
+    rebuild_menu_inner(app, &state, &registry, &recent);
+}
+
+/// Rebuild the native menu bar from the command registry (async version).
+///
+/// Uses `.read().await` on the tokio `RwLock`, safe from async contexts
+/// like `dispatch_command_internal`.
+pub async fn rebuild_menu_async(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    let recent = state.ui_state.recent_boards();
+    let registry = state.commands_registry.read().await;
+    rebuild_menu_inner(app, &state, &registry, &recent);
+}
+
+/// Shared implementation for menu rebuilding.
+fn rebuild_menu_inner(
+    app: &AppHandle,
+    state: &AppState,
+    registry: &CommandsRegistry,
+    recent: &[RecentBoard],
+) {
     // Build WindowInfo list from live Tauri windows.
     let windows: Vec<WindowInfo> = app
         .webview_windows()
@@ -441,7 +432,7 @@ pub fn rebuild_menu(app: &AppHandle) {
             })
         })
         .collect();
-    match build_menu_from_commands(app, &registry, &state.ui_state, &recent, &windows) {
+    match build_menu_from_commands(app, registry, &state.ui_state, recent, &windows) {
         Ok(items) => {
             *state.menu_items.lock().unwrap() = items;
         }

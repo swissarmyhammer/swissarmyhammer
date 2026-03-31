@@ -622,7 +622,7 @@ pub async fn open_board_dialog(app: AppHandle) -> Result<(), String> {
 /// so the window can be restored at the same position on restart.
 /// Internal helper for creating a window, callable from dispatch side effects.
 async fn create_window_internal(app: &AppHandle, state: &AppState) {
-    if let Err(e) = create_window_impl(app, state, None, None, None, true).await {
+    if let Err(e) = create_window_impl(app, state, None, None, None).await {
         tracing::error!("create_window_internal failed: {e}");
     }
 }
@@ -634,7 +634,7 @@ pub async fn create_window(
     state: State<'_, AppState>,
     board_path: Option<String>,
 ) -> Result<Value, String> {
-    create_window_impl(&app, &state, board_path, None, None, true).await
+    create_window_impl(&app, &state, board_path, None, None).await
 }
 
 /// Options for restoring a window at a specific position and size.
@@ -667,7 +667,6 @@ pub async fn create_window_impl(
     board_path: Option<String>,
     label: Option<String>,
     geometry: Option<WindowGeometry>,
-    rebuild_menu: bool,
 ) -> Result<Value, String> {
     let app = app.clone();
     let label = label.unwrap_or_else(new_window_label);
@@ -759,9 +758,8 @@ pub async fn create_window_impl(
         }
     }
 
-    if rebuild_menu {
-        menu::rebuild_menu(&app);
-    }
+    // Menu rebuild is handled by the frontend dispatching ui.setFocus
+    // when the new window mounts — no explicit rebuild needed here.
 
     Ok(json!({
         "label": label,
@@ -1243,10 +1241,11 @@ pub(crate) async fn dispatch_command_internal(
     // Rebuild the native menu when keymap mode changes (accelerators change)
     // or after board switches (command registry may have overrides).
     if effective_cmd.starts_with("settings.keymap.")
+        || effective_cmd == "ui.setFocus"
         || result.get("BoardSwitch").is_some()
         || result.get("BoardClose").is_some()
     {
-        menu::rebuild_menu(app);
+        menu::rebuild_menu_async(app).await;
     }
 
     // For commands that mutate entity data, scan entity files for changes

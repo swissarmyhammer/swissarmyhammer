@@ -168,7 +168,6 @@ fn main() {
                         Some(board_path),
                         Some(label.clone()),
                         geometry,
-                        false, // skip rebuild_menu — blocking_read panics inside block_on
                     )) {
                         tracing::warn!(
                             label = %label, error = %e,
@@ -278,10 +277,8 @@ fn main() {
                     if let Some(board_path) = state.ui_state.window_board(&label) {
                         state.ui_state.set_most_recent_board(&board_path);
                     }
-                    // Update only the Window menu checkmarks — much cheaper than a
-                    // full rebuild_menu which tears down and recreates all native
-                    // menu items, causing visible flicker on macOS.
-                    crate::menu::update_window_focus_checkmarks(window.app_handle(), &label);
+                    // Menu rebuild is handled by the frontend re-dispatching
+                    // ui.setFocus on window focus — no ad-hoc update needed here.
                 }
                 // Mid-session close: user clicked X on a secondary window.
                 // Remove the UIState entry synchronously BEFORE the window is
