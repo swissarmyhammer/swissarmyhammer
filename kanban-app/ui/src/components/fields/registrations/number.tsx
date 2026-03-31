@@ -12,12 +12,18 @@ import { NumberEditor } from "@/components/fields/editors/number-editor";
 import { NumberDisplay } from "@/components/fields/displays/number-display";
 
 /** Number editor adapter — wraps NumberEditor to match FieldEditorProps. */
-function NumberEditorAdapter({ value, onCommit, onCancel }: FieldEditorProps) {
+function NumberEditorAdapter({
+  value,
+  onCommit,
+  onCancel,
+  onChange,
+}: FieldEditorProps) {
   return (
     <NumberEditor
       value={value}
       onCommit={onCommit}
       onCancel={onCancel}
+      onChange={onChange}
       mode="compact"
     />
   );

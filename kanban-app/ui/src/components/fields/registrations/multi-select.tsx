@@ -20,6 +20,7 @@ function MultiSelectEditorAdapter({
   entity,
   onCommit,
   onCancel,
+  onChange,
   mode,
 }: FieldEditorProps) {
   return (
@@ -29,6 +30,7 @@ function MultiSelectEditorAdapter({
       entity={entity}
       onCommit={onCommit}
       onCancel={onCancel}
+      onChange={onChange}
       mode={mode}
     />
   );

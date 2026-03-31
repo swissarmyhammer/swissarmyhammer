@@ -15,12 +15,14 @@ function ColorPaletteEditorAdapter({
   value,
   onCommit,
   onCancel,
+  onChange,
 }: FieldEditorProps) {
   return (
     <ColorPaletteEditor
       value={value}
       onCommit={onCommit}
       onCancel={onCancel}
+      onChange={onChange}
       mode="compact"
     />
   );
