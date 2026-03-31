@@ -3,11 +3,7 @@
 //! This module contains the AsyncProcessGuard for process lifecycle management,
 //! output streaming functions, and command spawning utilities.
 
-use crate::mcp::tool_registry::{send_mcp_log, ToolContext};
-use rmcp::model::{LoggingLevel, LoggingMessageNotification, LoggingMessageNotificationParam};
-use rmcp::{Peer, RoleServer};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 use swissarmyhammer_common::Pretty;
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -234,8 +230,6 @@ struct OutputLineContext<'a> {
     line_count: &'a mut u32,
     output_buffer: &'a mut OutputBuffer,
     binary_notified: &'a mut bool,
-    peer: Option<&'a Arc<Peer<RoleServer>>>,
-    batch_size: u32,
 }
 
 /// Helper function to process a single output line with common logic
@@ -260,24 +254,6 @@ fn process_output_line(
 ) -> usize {
     *ctx.line_count += 1;
 
-    // Send batched progress notifications every batch_size lines via tokio::spawn (sync context)
-    if (*ctx.line_count).is_multiple_of(ctx.batch_size) {
-        if let Some(peer) = ctx.peer {
-            let peer = Arc::clone(peer);
-            let msg = format!("Shell output: {} lines processed", ctx.line_count);
-            tokio::spawn(async move {
-                let param = LoggingMessageNotificationParam {
-                    level: LoggingLevel::Info,
-                    logger: Some("shell".to_string()),
-                    data: serde_json::json!(msg),
-                };
-                let _ = peer
-                    .send_notification(LoggingMessageNotification::new(param).into())
-                    .await;
-            });
-        }
-    }
-
     // Convert line to bytes with newline
     let line_bytes = line.as_bytes();
     let mut line_with_newline = Vec::with_capacity(line_bytes.len() + 1);
@@ -287,22 +263,10 @@ fn process_output_line(
     // Append to the appropriate buffer
     let bytes_written = append_fn(ctx.output_buffer, &line_with_newline);
 
-    // Check for binary detection and notify once
+    // Check for binary detection and log once
     if ctx.output_buffer.has_binary_content() && !*ctx.binary_notified {
         *ctx.binary_notified = true;
-        if let Some(peer) = ctx.peer {
-            let peer = Arc::clone(peer);
-            tokio::spawn(async move {
-                let param = LoggingMessageNotificationParam {
-                    level: LoggingLevel::Info,
-                    logger: Some("shell".to_string()),
-                    data: serde_json::json!("Shell output: Binary content detected"),
-                };
-                let _ = peer
-                    .send_notification(LoggingMessageNotification::new(param).into())
-                    .await;
-            });
-        }
+        tracing::info!("Shell output: Binary content detected");
     }
 
     bytes_written
@@ -375,18 +339,14 @@ async fn read_remaining_with_context<R>(
     line_count: &mut u32,
     output_buffer: &mut OutputBuffer,
     binary_notified: &mut bool,
-    peer: Option<&Arc<Peer<RoleServer>>>,
     append_fn: impl Fn(&mut OutputBuffer, &[u8]) -> usize,
 ) where
     R: tokio::io::AsyncRead + Unpin,
 {
-    const BATCH_SIZE: u32 = 10;
     let mut ctx = OutputLineContext {
         line_count,
         output_buffer,
         binary_notified,
-        peer,
-        batch_size: BATCH_SIZE,
     };
     read_remaining_stream_output(reader, &mut ctx, append_fn).await;
 }
@@ -425,7 +385,6 @@ async fn collect_remaining_output(
     line_count: &mut u32,
     output_buffer: &mut OutputBuffer,
     binary_notified: &mut bool,
-    peer: Option<&Arc<Peer<RoleServer>>>,
 ) {
     const REMAINING_OUTPUT_TIMEOUT: Duration = Duration::from_millis(500);
 
@@ -434,7 +393,6 @@ async fn collect_remaining_output(
         line_count,
         output_buffer,
         binary_notified,
-        peer,
         |buf, data| buf.append_stdout(data),
     );
     let _ = tokio::time::timeout(REMAINING_OUTPUT_TIMEOUT, stdout_future).await;
@@ -444,7 +402,6 @@ async fn collect_remaining_output(
         line_count,
         output_buffer,
         binary_notified,
-        peer,
         |buf, data| buf.append_stderr(data),
     );
     let _ = tokio::time::timeout(REMAINING_OUTPUT_TIMEOUT, stderr_future).await;
@@ -458,16 +415,12 @@ async fn stream_output_until_complete(
     line_count: &mut u32,
     output_buffer: &mut OutputBuffer,
     binary_notified: &mut bool,
-    peer: Option<&Arc<Peer<RoleServer>>>,
 ) -> Result<std::process::ExitStatus, ShellError> {
-    const BATCH_SIZE: u32 = 10;
-
     loop {
         tokio::select! {
             stdout_line = stdout_reader.next_line() => {
                 let mut ctx = OutputLineContext {
                     line_count, output_buffer, binary_notified,
-                    peer, batch_size: BATCH_SIZE,
                 };
                 if !process_stream_line_result(
                     stdout_line, &mut ctx,
@@ -478,7 +431,6 @@ async fn stream_output_until_complete(
             stderr_line = stderr_reader.next_line() => {
                 let mut ctx = OutputLineContext {
                     line_count, output_buffer, binary_notified,
-                    peer, batch_size: BATCH_SIZE,
                 };
                 if !process_stream_line_result(
                     stderr_line, &mut ctx,
@@ -513,7 +465,6 @@ async fn stream_output_until_complete(
 pub(super) async fn process_child_output_with_limits(
     child: &mut Child,
     output_limits: &OutputLimits,
-    peer: Option<&Arc<Peer<RoleServer>>>,
 ) -> Result<(std::process::ExitStatus, OutputBuffer, u32), ShellError> {
     let mut setup = setup_output_capture(child, output_limits)?;
     let mut line_count: u32 = 0;
@@ -526,7 +477,6 @@ pub(super) async fn process_child_output_with_limits(
         &mut line_count,
         &mut setup.output_buffer,
         &mut binary_notified,
-        peer,
     )
     .await?;
 
@@ -547,7 +497,6 @@ pub(super) async fn process_child_output_with_limits(
         &mut line_count,
         &mut setup.output_buffer,
         &mut binary_notified,
-        peer,
     )
     .await;
 
@@ -621,25 +570,6 @@ pub(super) fn spawn_command_process(
     })
 }
 
-/// Send completion progress notification
-pub(super) async fn send_completion_notification(
-    context: &ToolContext,
-    line_count: u32,
-    exit_code: i32,
-    execution_time_ms: u64,
-) {
-    send_mcp_log(
-        context,
-        LoggingLevel::Info,
-        "shell",
-        format!(
-            "Command completed: {} lines, exit code {}, {}ms",
-            line_count, exit_code, execution_time_ms
-        ),
-    )
-    .await;
-}
-
 /// Format execution result from output buffer
 pub(super) fn format_execution_result(
     command_id: usize,
@@ -709,7 +639,6 @@ pub(super) async fn execute_with_guard(
     command_id: usize,
     command: String,
     work_dir: PathBuf,
-    context: &ToolContext,
 ) -> Result<ShellExecutionResult, ShellError> {
     let start_time = Instant::now();
     let output_limits = OutputLimits::with_defaults().map_err(|e| ShellError::SystemError {
@@ -722,13 +651,10 @@ pub(super) async fn execute_with_guard(
             message: "Process guard has no child process".to_string(),
         })?;
 
-    let (exit_status, output_buffer, line_count) =
-        process_child_output_with_limits(child, &output_limits, context.peer.as_ref()).await?;
+    let (exit_status, output_buffer, _) =
+        process_child_output_with_limits(child, &output_limits).await?;
 
     let execution_time_ms = start_time.elapsed().as_millis() as u64;
-    let exit_code = exit_status.code().unwrap_or(-1);
-
-    send_completion_notification(context, line_count, exit_code, execution_time_ms).await;
 
     Ok(format_execution_result(
         command_id,

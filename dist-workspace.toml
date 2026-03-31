@@ -4,19 +4,26 @@ members = ["cargo:."]
 # Config for 'dist'
 [dist]
 # The preferred dist version to use in CI (Cargo.toml SemVer syntax)
-cargo-dist-version = "0.30.0"
+cargo-dist-version = "0.31.0"
 # CI backends to support
 ci = "github"
 # The installers to generate for each app
-installers = ["homebrew"]
+installers = ["homebrew", "shell"]
 # A GitHub repo to push Homebrew formulas to
 tap = "swissarmyhammer/homebrew-tap"
 # Target platforms to build apps for (Rust target-triple syntax)
-targets = ["aarch64-apple-darwin"]
+targets = ["aarch64-apple-darwin", "x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"]
 host = ["aarch64-apple-darwin"]
 # Publish jobs to run in CI
 publish-jobs = ["homebrew"]
 # Skip checking whether the specified configuration files are up to date
 allow-dirty = ["ci", "msi"]
+# Allow triggering releases manually from GitHub Actions UI
+dispatch-releases = true
 # Include shell completions in release archives
 include = ["completions/"]
+# Use self-hosted runner for macOS builds, GitHub-hosted for Linux
+[dist.github-custom-runners]
+aarch64-apple-darwin = "self-hosted"
+
+# System dependencies installed via build-setup.sh (allow-dirty ci)

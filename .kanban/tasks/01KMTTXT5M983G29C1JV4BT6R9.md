@@ -1,0 +1,9 @@
+---
+assignees:
+- claude-code
+position_column: done
+position_ordinal: ffffffffff8d80
+title: 'Fix swissarmyhammer-merge library: error enum, JSONL timestamps, cleanup'
+---
+## What\nFix issues in the `swissarmyhammer-merge` library crate found during review.\n\n### 1. Proper error enum (MergeConflict conflates parse errors with conflicts)\n`MergeConflict::conflicting_ids` is used for both YAML parse errors and actual merge conflicts. This makes it impossible for callers to select the correct exit code (1 = conflict, 2 = fatal error).\n\nReplace with:\n```rust\npub enum MergeError {\n    ParseFailure(String),      // YAML/JSON parse error → exit 2\n    Conflict(MergeConflict),   // actual merge conflict → exit 1\n}\n```\nUpdate `merge_yaml`, `merge_md`, `merge_jsonl` return types accordingly.\n\n### 2. YAML JSONL timestamp resolution is a no-op\nIn `yaml.rs:170-188`, `theirs_timestamps = ours_timestamps.clone()` — both maps are identical from the same file, so `ot >= tt` is always true and ours always wins. Since we only have one JSONL file (the merged changelog), we can't distinguish sides. Simplify: remove the pretense of two-sided timestamps. The JSONL path reads the changelog and picks the side whose value matches the most recent changelog entry for that field. If neither matches (both diverged), fall back to precedence.\n\n### 3. Remove unused thiserror dep\n`Cargo.toml` lists `thiserror` but it's not used. Either use `#[derive(thiserror::Error)]` on the new `MergeError` enum, or remove the dep.\n\n### 4. Remove dead code in replace_merge_section\nIf `replace_merge_section` still exists after the sah CLI removal, fix the `find(|_| false)` dead code path.\n\n## Tests\n- `cargo nextest run -p swissarmyhammer-merge`\n- All existing tests must still pass with updated return types\n- Tighten the JSONL timestamp test to verify correct field-value matching"}
+</invoke>

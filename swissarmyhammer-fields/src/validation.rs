@@ -686,4 +686,53 @@ mod tests {
             "adversarial field value must not be altered"
         );
     }
+
+    /// Null value for an array (multiple:true) reference should return an empty array.
+    #[tokio::test]
+    async fn reference_null_for_multiple_returns_empty_array() {
+        let lookup = MockLookup::new().with_entities(
+            "task",
+            vec![serde_json::json!({"id": "task_001", "title": "First"})],
+        );
+        let engine = ValidationEngine::new().with_lookup(lookup);
+
+        let field = make_field(
+            "depends_on",
+            FieldType::Reference {
+                entity: "task".into(),
+                multiple: true,
+            },
+        );
+
+        let result = engine
+            .validate(&field, serde_json::Value::Null, &HashMap::new())
+            .await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), serde_json::json!([]));
+    }
+
+    /// Non-string value for a single (multiple:false) reference should pass through unchanged.
+    #[tokio::test]
+    async fn reference_non_string_for_single_returns_unchanged() {
+        let lookup = MockLookup::new().with_entities(
+            "task",
+            vec![serde_json::json!({"id": "task_001", "title": "First"})],
+        );
+        let engine = ValidationEngine::new().with_lookup(lookup);
+
+        let field = make_field(
+            "assignee",
+            FieldType::Reference {
+                entity: "task".into(),
+                multiple: false,
+            },
+        );
+
+        let numeric_value = serde_json::json!(42);
+        let result = engine
+            .validate(&field, numeric_value.clone(), &HashMap::new())
+            .await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), numeric_value);
+    }
 }

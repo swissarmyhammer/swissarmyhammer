@@ -3,7 +3,7 @@
 //! This module contains the core data types, output buffering, error types,
 //! and configuration used by the shell tool.
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::fmt;
 use std::path::PathBuf;
 use swissarmyhammer_common::{ErrorSeverity, Severity};
@@ -84,6 +84,51 @@ impl DefaultShellConfig {
     }
 }
 
+/// Deserialize an `Option<u64>` that tolerates string-encoded integers.
+///
+/// MCP clients (including Claude Code) sometimes send integer parameters as
+/// strings (e.g., `"60"` instead of `60`). This deserializer accepts both
+/// forms: a native JSON integer or a string that parses to `u64`.
+///
+/// Returns `None` when the field is absent or `null`.
+/// Returns a clear error for non-numeric strings like `"abc"`.
+fn deserialize_optional_u64_tolerant<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    use serde::de::Error;
+
+    let value: Option<serde_json::Value> = Option::deserialize(deserializer)?;
+    match value {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(serde_json::Value::Number(n)) => n
+            .as_u64()
+            .map(Some)
+            .ok_or_else(|| D::Error::custom(format!("invalid u64 value: {n}"))),
+        Some(serde_json::Value::String(s)) => s
+            .parse::<u64>()
+            .map(Some)
+            .map_err(|_| D::Error::custom(format!("invalid u64 string: \"{s}\""))),
+        Some(other) => Err(D::Error::custom(format!(
+            "expected integer or string, got: {other}"
+        ))),
+    }
+}
+
+/// Extract a `u64` from a `serde_json::Value`, tolerating string-encoded integers.
+///
+/// MCP clients sometimes send integer parameters as strings (e.g., `"60"` instead
+/// of `60`). This helper accepts both `Value::Number` and `Value::String` forms.
+///
+/// Returns `None` for `null`, non-numeric strings, or incompatible types.
+pub(crate) fn value_as_u64_tolerant(v: &serde_json::Value) -> Option<u64> {
+    match v {
+        serde_json::Value::Number(n) => n.as_u64(),
+        serde_json::Value::String(s) => s.parse::<u64>().ok(),
+        _ => None,
+    }
+}
+
 /// Request structure for shell command execution
 #[derive(Debug, Deserialize)]
 pub(crate) struct ShellExecuteRequest {
@@ -91,10 +136,8 @@ pub(crate) struct ShellExecuteRequest {
     pub(crate) command: String,
 
     /// Timeout in seconds before killing the command
+    #[serde(default, deserialize_with = "deserialize_optional_u64_tolerant")]
     pub(crate) timeout: Option<u64>,
-
-    /// Max output lines returned to agent (default: 200, -1 for all, 0 for status-only)
-    pub(crate) max_lines: Option<i64>,
 
     /// Optional working directory for command execution
     pub(crate) working_directory: Option<String>,
@@ -1038,5 +1081,100 @@ mod tests {
             // This will fail to compile if Severity is not implemented
             let _severity = error.severity();
         }
+    }
+
+    // =====================================================================
+    // Tests for tolerant integer parsing
+    // =====================================================================
+
+    #[test]
+    fn test_deserialize_shell_execute_request_string_timeout() {
+        let json = serde_json::json!({
+            "command": "echo hi",
+            "timeout": "60"
+        });
+        let req: ShellExecuteRequest = serde_json::from_value(json).unwrap();
+        assert_eq!(req.timeout, Some(60));
+    }
+
+    #[test]
+    fn test_deserialize_shell_execute_request_integer_timeout() {
+        let json = serde_json::json!({
+            "command": "echo hi",
+            "timeout": 60
+        });
+        let req: ShellExecuteRequest = serde_json::from_value(json).unwrap();
+        assert_eq!(req.timeout, Some(60));
+    }
+
+    #[test]
+    fn test_deserialize_shell_execute_request_invalid_string_timeout() {
+        let json = serde_json::json!({
+            "command": "echo hi",
+            "timeout": "abc"
+        });
+        let result = serde_json::from_value::<ShellExecuteRequest>(json);
+        assert!(result.is_err(), "should reject non-numeric string");
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("abc"),
+            "error should mention the invalid value: {}",
+            err_msg
+        );
+    }
+
+    #[test]
+    fn test_deserialize_shell_execute_request_null_timeout() {
+        let json = serde_json::json!({
+            "command": "echo hi",
+            "timeout": null
+        });
+        let req: ShellExecuteRequest = serde_json::from_value(json).unwrap();
+        assert_eq!(req.timeout, None);
+    }
+
+    #[test]
+    fn test_deserialize_shell_execute_request_missing_timeout() {
+        let json = serde_json::json!({
+            "command": "echo hi"
+        });
+        let req: ShellExecuteRequest = serde_json::from_value(json).unwrap();
+        assert_eq!(req.timeout, None);
+    }
+
+    #[test]
+    fn test_value_as_u64_tolerant_integer() {
+        let v = serde_json::json!(42);
+        assert_eq!(value_as_u64_tolerant(&v), Some(42));
+    }
+
+    #[test]
+    fn test_value_as_u64_tolerant_string() {
+        let v = serde_json::json!("42");
+        assert_eq!(value_as_u64_tolerant(&v), Some(42));
+    }
+
+    #[test]
+    fn test_value_as_u64_tolerant_invalid_string() {
+        let v = serde_json::json!("abc");
+        assert_eq!(value_as_u64_tolerant(&v), None);
+    }
+
+    #[test]
+    fn test_value_as_u64_tolerant_null() {
+        let v = serde_json::json!(null);
+        assert_eq!(value_as_u64_tolerant(&v), None);
+    }
+
+    #[test]
+    fn test_value_as_u64_tolerant_negative() {
+        let v = serde_json::json!(-5);
+        assert_eq!(value_as_u64_tolerant(&v), None);
+    }
+
+    #[test]
+    fn test_value_as_u64_tolerant_float_string() {
+        let v = serde_json::json!("3.14");
+        assert_eq!(value_as_u64_tolerant(&v), None);
     }
 }

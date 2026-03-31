@@ -8,17 +8,17 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use rmcp::model::{CallToolResult, LoggingLevel};
+use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
 use swissarmyhammer_common::Pretty;
 use swissarmyhammer_operations::{Operation, ParamMeta, ParamType};
 use tokio::sync::Mutex;
 
-use super::infrastructure::{ShellError, ShellExecuteRequest, ShellExecutionResult};
+use super::infrastructure::{ShellError, ShellExecuteRequest};
 use super::process::{execute_with_guard, spawn_shell_command};
 use super::state::ShellState;
 use crate::mcp::shared_utils::{McpErrorHandler, McpValidation};
-use crate::mcp::tool_registry::{send_mcp_log, BaseToolImpl, ToolContext};
+use crate::mcp::tool_registry::{BaseToolImpl, ToolContext};
 
 /// Operation metadata for executing shell commands
 #[derive(Debug, Default)]
@@ -31,9 +31,6 @@ static EXECUTE_COMMAND_PARAMS: &[ParamMeta] = &[
         .required(),
     ParamMeta::new("timeout")
         .description("Seconds before killing the command (optional, default: none)")
-        .param_type(ParamType::Integer),
-    ParamMeta::new("max_lines")
-        .description("Max output lines returned to agent (default: 200). Full output always stored in history. Use -1 for all lines, 0 for status-only.")
         .param_type(ParamType::Integer),
     ParamMeta::new("working_directory")
         .description("Working directory for command execution (optional, defaults to current directory)")
@@ -76,10 +73,10 @@ impl Operation for ExecuteCommand {
 pub async fn run(
     args: serde_json::Map<String, serde_json::Value>,
     state: Arc<Mutex<ShellState>>,
-    context: &ToolContext,
+    _context: &ToolContext,
 ) -> Result<CallToolResult, McpError> {
     let request: ShellExecuteRequest = BaseToolImpl::parse_arguments(args)?;
-    tracing::debug!("Executing shell command: {}", Pretty(&request.command));
+    tracing::info!("Executing shell command: {}", Pretty(&request.command));
 
     validate_shell_request(&request)?;
     let parsed_environment = parse_environment_variables(request.environment.as_deref())?;
@@ -90,8 +87,6 @@ pub async fn run(
         let mut guard = state.lock().await;
         guard.start_command(request.command.clone())
     };
-
-    send_start_notification(context, &request.command).await;
 
     // Spawn the process and register its PID for kill support
     let (mut process_guard, work_dir) = spawn_shell_command(
@@ -114,7 +109,6 @@ pub async fn run(
                 cmd_id,
                 request.command.clone(),
                 work_dir,
-                context,
             ),
         )
         .await
@@ -124,7 +118,8 @@ pub async fn run(
                 // Timeout: guard is dropped here, killing the process
                 {
                     let mut guard = state.lock().await;
-                    guard.timeout_command(cmd_id);
+                    guard.timeout_command(cmd_id).await;
+                    guard.flush_chunks().await;
                 }
                 return Ok(BaseToolImpl::create_success_response(format!(
                     "command_id: {}\nstatus: timed_out\ntimeout: {}s\nCommand timed out after {} seconds.",
@@ -138,80 +133,47 @@ pub async fn run(
             cmd_id,
             request.command.clone(),
             work_dir,
-            context,
         )
         .await
     };
 
     match result {
         Ok(result) => {
-            // Store output in shell state
+            // Store output in shell state and wait for all chunks to be embedded
             {
                 let mut guard = state.lock().await;
                 let lines: Vec<String> = result.stdout.lines().map(String::from).collect();
-                if let Err(e) = guard.append_lines(cmd_id, &lines) {
+                if let Err(e) = guard.append_lines(cmd_id, &lines).await {
                     tracing::warn!("Failed to store stdout for command {}: {}", cmd_id, e);
                 }
                 if !result.stderr.is_empty() {
                     let stderr_lines: Vec<String> =
                         result.stderr.lines().map(String::from).collect();
-                    if let Err(e) = guard.append_lines(cmd_id, &stderr_lines) {
+                    if let Err(e) = guard.append_lines(cmd_id, &stderr_lines).await {
                         tracing::warn!("Failed to store stderr for command {}: {}", cmd_id, e);
                     }
                 }
-                guard.complete_command(cmd_id, Some(result.exit_code));
+                guard.complete_command(cmd_id, Some(result.exit_code)).await;
+                // Wait for all chunks to be inserted and embedded before returning
+                guard.flush_chunks().await;
             }
 
-            // Apply max_lines capping to combined stdout+stderr
-            // -1 means unlimited (all lines), 0 means status-only, positive means cap
-            let raw_max_lines = request.max_lines.unwrap_or(200);
-            if raw_max_lines == 0 {
-                // Status-only response
-                let duration = result.execution_time_ms;
-                let total_lines = result.stdout.lines().count() + result.stderr.lines().count();
-                return Ok(BaseToolImpl::create_success_response(format!(
-                    "command_id: {}\nstatus: completed\nexit_code: {}\nlines: {}\nduration: {}ms\nUse 'get lines' id={} or 'search history' to retrieve output.",
-                    cmd_id, result.exit_code, total_lines, duration, cmd_id,
-                )));
-            } else if raw_max_lines > 0 {
-                let max = raw_max_lines as usize;
-                let stdout_lines: Vec<&str> = result.stdout.lines().collect();
-                let stderr_lines: Vec<&str> = result.stderr.lines().collect();
-                let total = stdout_lines.len() + stderr_lines.len();
-                if total > max {
-                    // Cap stdout first, then stderr with remaining budget
-                    let stdout_cap = std::cmp::min(stdout_lines.len(), max);
-                    let stderr_cap = max.saturating_sub(stdout_cap);
-                    let truncated_stdout: String = stdout_lines[..stdout_cap].join("\n");
-                    let truncated_stderr: String =
-                        stderr_lines[..std::cmp::min(stderr_lines.len(), stderr_cap)].join("\n");
-                    let remaining = total - max;
-                    let mut truncated_result = result;
-                    truncated_result.stdout = format!(
-                        "{}\n\n... {} more lines. Use 'get lines' id={} or 'search history' to find specific content.",
-                        truncated_stdout, remaining, cmd_id
-                    );
-                    truncated_result.stderr = truncated_stderr;
-                    truncated_result.output_truncated = true;
-                    return format_success_result(truncated_result);
-                }
-            }
-            // Output within limits: return full output
-            format_success_result(result)
+            // Status-only response — output is in shell history,
+            // use grep/search/get-lines to retrieve it
+            let total_lines = result.stdout.lines().count() + result.stderr.lines().count();
+            Ok(BaseToolImpl::create_success_response(format!(
+                "command_id: {}\nstatus: completed\nexit_code: {}\nlines: {}\nduration: {}ms",
+                cmd_id, result.exit_code, total_lines, result.execution_time_ms,
+            )))
         }
         Err(shell_error) => {
             // Mark command as completed with error in state
             {
                 let mut guard = state.lock().await;
-                guard.complete_command(cmd_id, Some(-1));
+                guard.complete_command(cmd_id, Some(-1)).await;
+                guard.flush_chunks().await;
             }
-            send_mcp_log(
-                context,
-                LoggingLevel::Error,
-                "shell",
-                format!("Shell: Failed - {}", shell_error),
-            )
-            .await;
+            tracing::error!("Shell: Failed - {}", shell_error);
             format_error_result(shell_error)
         }
     }
@@ -296,56 +258,6 @@ fn parse_environment_variables(
     }
 }
 
-/// Send a start notification MCP log message for command execution.
-///
-/// # Parameters
-///
-/// - `context`: tool context used to emit the log notification
-/// - `command`: the shell command string being executed
-async fn send_start_notification(context: &ToolContext, command: &str) {
-    send_mcp_log(
-        context,
-        LoggingLevel::Info,
-        "shell",
-        format!("Shell: Executing: {}", command),
-    )
-    .await;
-}
-
-/// Format a successful execution result into a `CallToolResult`.
-///
-/// Serializes the `ShellExecutionResult` as pretty-printed JSON. Returns an error
-/// result if the exit code is non-zero (command failed), success otherwise.
-///
-/// # Parameters
-///
-/// - `result`: the completed shell execution result
-///
-/// # Returns
-///
-/// `Ok(CallToolResult)` with the serialized JSON, or an `McpError` if serialization fails.
-fn format_success_result(result: ShellExecutionResult) -> Result<CallToolResult, McpError> {
-    let is_error = result.exit_code != 0;
-    let json_response = serde_json::to_string_pretty(&result).map_err(|e| {
-        tracing::error!("Failed to serialize shell result: {}", e);
-        McpError::internal_error(format!("Serialization failed: {e}"), None)
-    })?;
-
-    tracing::info!(
-        "Shell command '{}' completed with exit code {} in {}ms",
-        result.command,
-        result.exit_code,
-        result.execution_time_ms
-    );
-
-    let content = vec![rmcp::model::Content::text(json_response)];
-    Ok(if is_error {
-        CallToolResult::error(content)
-    } else {
-        CallToolResult::success(content)
-    })
-}
-
 /// Format a shell error into a `CallToolResult`.
 ///
 /// Constructs an error response from a `ShellError`, logging the error and
@@ -374,8 +286,8 @@ mod tests {
     use std::time::Duration;
 
     use super::super::test_helpers::{
-        assert_paths_blocked, parse_execution_result, test_blocked_commands_with_policy,
-        ResultValidator, TestCommandBuilder,
+        assert_paths_blocked, test_blocked_commands_with_policy, ResultValidator,
+        TestCommandBuilder,
     };
     use super::super::ShellExecuteTool;
     use crate::mcp::tool_registry::McpTool;
@@ -454,11 +366,9 @@ mod tests {
         assert!(result.is_ok(), "Command execution should succeed");
 
         let call_result = result.unwrap();
-        assert_eq!(call_result.is_error, Some(false));
-
         ResultValidator::new(&call_result)
             .assert_success()
-            .assert_stdout_contains("Hello World");
+            .assert_has_lines();
     }
 
     #[tokio::test]
@@ -472,26 +382,20 @@ mod tests {
         );
 
         let call_result = result.unwrap();
-        assert_eq!(call_result.is_error, Some(true));
-
         ResultValidator::new(&call_result).assert_failure();
     }
 
     #[tokio::test]
     async fn test_command_exit_status_zero() {
-        // Test that successful commands return exit code 0
         let result = TestCommandBuilder::new("true").execute().await;
         assert!(result.is_ok(), "Command execution should succeed");
 
         let call_result = result.unwrap();
-        assert_eq!(call_result.is_error, Some(false));
-
         ResultValidator::new(&call_result).assert_exit_code(0);
     }
 
     #[tokio::test]
     async fn test_command_exit_status_nonzero() {
-        // Test that failed commands return non-zero exit code
         let result = TestCommandBuilder::new("false").execute().await;
         assert!(
             result.is_ok(),
@@ -499,14 +403,11 @@ mod tests {
         );
 
         let call_result = result.unwrap();
-        assert_eq!(call_result.is_error, Some(true));
-
         ResultValidator::new(&call_result).assert_exit_code_nonzero();
     }
 
     #[tokio::test]
     async fn test_command_exit_status_specific_codes() {
-        // Test various specific exit codes using exit command
         let test_cases = vec![
             (1, "exit 1"),
             (2, "exit 2"),
@@ -524,46 +425,31 @@ mod tests {
             );
 
             let call_result = result.unwrap();
-            assert_eq!(call_result.is_error, Some(true));
-
             ResultValidator::new(&call_result).assert_exit_code(expected_code);
         }
     }
 
     #[tokio::test]
     async fn test_command_exit_status_in_response() {
-        // Test that exit_code field is present and correct in response
         let result = TestCommandBuilder::new("exit 7").execute().await;
         assert!(result.is_ok());
 
         let call_result = result.unwrap();
-        let response_json = parse_execution_result(&call_result);
-
-        if let response_json @ serde_json::Value::Object(_) = response_json {
-            let exit_code = response_json
-                .get("exit_code")
-                .and_then(|v| v.as_i64())
-                .expect("exit_code should be present and an integer");
-            assert_eq!(exit_code, 7, "Exit code should match command exit status");
-        } else {
-            panic!("Response should be a JSON object");
-        }
+        ResultValidator::new(&call_result).assert_exit_code(7);
     }
 
     #[tokio::test]
     async fn test_command_exit_status_with_output() {
-        // Test that exit status is preserved even when command produces output
+        // Exit status is preserved even when command produces output
         let result = TestCommandBuilder::new("echo 'output before exit'; exit 3")
             .execute()
             .await;
         assert!(result.is_ok());
 
         let call_result = result.unwrap();
-        assert_eq!(call_result.is_error, Some(true));
-
         ResultValidator::new(&call_result)
             .assert_exit_code(3)
-            .assert_stdout_contains("output before exit");
+            .assert_has_lines();
     }
 
     #[tokio::test]
@@ -575,9 +461,9 @@ mod tests {
         assert!(result.is_ok(), "Command execution should succeed");
 
         let call_result = result.unwrap();
-        assert_eq!(call_result.is_error, Some(false));
-
-        ResultValidator::new(&call_result).assert_stdout_contains("/tmp");
+        ResultValidator::new(&call_result)
+            .assert_exit_code(0)
+            .assert_has_lines();
     }
 
     #[tokio::test]
@@ -591,9 +477,9 @@ mod tests {
         assert!(result.is_ok(), "Command execution should succeed");
 
         let call_result = result.unwrap();
-        assert_eq!(call_result.is_error, Some(false));
-
-        ResultValidator::new(&call_result).assert_stdout_contains("test_value");
+        ResultValidator::new(&call_result)
+            .assert_exit_code(0)
+            .assert_has_lines();
     }
 
     // Security validation tests
@@ -728,125 +614,75 @@ mod tests {
         assert!(result.is_ok());
 
         let call_result = result.unwrap();
-        assert_eq!(call_result.is_error, Some(false));
-
         ResultValidator::new(&call_result)
-            .assert_field_exists("output_truncated")
-            .assert_field_exists("total_output_size")
-            .assert_field_exists("binary_output_detected")
-            .assert_output_truncated(false)
-            .assert_bool_field("binary_output_detected", false);
+            .assert_field_exists("command_id")
+            .assert_field_exists("exit_code")
+            .assert_field_exists("lines")
+            .assert_field_exists("duration")
+            .assert_exit_code(0)
+            .assert_has_lines();
     }
 
     #[tokio::test]
     async fn test_binary_content_detection() {
-        // Create a test that uses printf with control characters that will be captured as lines
-        // This tests the detection within text that contains binary markers
-        // Using printf instead of echo -e for cross-platform compatibility
+        // Binary content is now logged via tracing, not in MCP response.
+        // Verify the command still completes with status-only response.
         let result = TestCommandBuilder::new("printf 'text\\x01with\\x02control\\x00chars\\n'")
             .execute()
             .await;
         assert!(result.is_ok());
 
         let call_result = result.unwrap();
-        // Command should succeed but detect binary content
-        assert_eq!(call_result.is_error, Some(false));
-
-        let response_json = parse_execution_result(&call_result);
-        if let response_json @ serde_json::Value::Object(_) = response_json {
-            let total_size = response_json["total_output_size"].as_u64().unwrap();
-            println!(
-                "Binary test - total_size: {}, binary_detected: {}, stdout: '{}'",
-                total_size, response_json["binary_output_detected"], response_json["stdout"]
-            );
-
-            // Command must produce output for this test to be valid
-            assert!(
-                total_size > 0,
-                "Command must produce output to test binary detection"
-            );
-
-            // Output should contain binary markers and be detected as binary
-            assert_eq!(response_json["binary_output_detected"], true);
-
-            // stdout should indicate binary content rather than showing raw bytes
-            let stdout = response_json["stdout"].as_str().unwrap();
-            assert!(stdout.contains("Binary content"));
-            assert!(stdout.contains("bytes"));
-        }
+        ResultValidator::new(&call_result).assert_exit_code(0);
     }
 
     #[tokio::test]
     async fn test_large_output_handling() {
-        // Generate a simpler command that produces moderate output
-        // Use yes command with head to generate repeating output
         let result = TestCommandBuilder::new(
             "yes 'This is a test line that is reasonably long' | head -100",
         )
         .execute()
         .await;
 
-        // Check if the command succeeded or if it failed due to security validation
         match result {
             Ok(call_result) => {
-                assert_eq!(call_result.is_error, Some(false));
-
-                let response_json = parse_execution_result(&call_result);
-                if let response_json @ serde_json::Value::Object(_) = response_json {
-                    // Check that metadata is populated correctly
-                    let total_size = response_json["total_output_size"].as_u64().unwrap();
-                    assert!(total_size > 0);
-
-                    // Output should not be detected as binary for text commands
-                    assert_eq!(response_json["binary_output_detected"], false);
-
-                    // For this amount of output, truncation depends on the actual size vs limit
-                    let truncated = response_json["output_truncated"].as_bool().unwrap();
-                    println!("Large output test: {total_size} bytes, truncated: {truncated}");
-                }
+                // Status-only response — output is in shell history
+                ResultValidator::new(&call_result)
+                    .assert_exit_code(0)
+                    .assert_has_lines();
             }
             Err(e) => {
-                // If command is blocked by security validation, that's acceptable for this test
-                // The main goal is to test that our output handling works
+                // If command is blocked by security validation, that's acceptable
                 println!("Command blocked by security validation: {e}");
-                println!("This is acceptable - the security system is working");
             }
         }
     }
 
     #[tokio::test]
     async fn test_stderr_output_handling() {
-        // Command that outputs to stderr
+        // Command that outputs to stderr — status-only response
         let result = TestCommandBuilder::new("echo 'error message' >&2")
             .execute()
             .await;
         assert!(result.is_ok());
 
         let call_result = result.unwrap();
-        // Command should succeed (exit 0) even though it writes to stderr
-        assert_eq!(call_result.is_error, Some(false));
-
         ResultValidator::new(&call_result)
-            .assert_stderr_contains("error message")
-            .assert_bool_field("binary_output_detected", false)
-            .assert_output_truncated(false);
+            .assert_exit_code(0)
+            .assert_has_lines();
     }
 
     #[tokio::test]
     async fn test_mixed_stdout_stderr_output() {
-        // This test verifies that our output handling correctly captures both stdout and stderr
-        // We'll test this with a command that fails (goes to stderr) but might also produce stdout
         let result = TestCommandBuilder::new("ls /nonexistent_directory_12345")
             .execute()
             .await;
-        assert!(result.is_ok()); // Tool should succeed even if command fails
+        assert!(result.is_ok());
 
         let call_result = result.unwrap();
-        assert_eq!(call_result.is_error, Some(true)); // Command should fail
-
         ResultValidator::new(&call_result)
-            .assert_stderr_not_empty()
-            .assert_bool_field("binary_output_detected", false);
+            .assert_exit_code_nonzero()
+            .assert_has_lines();
     }
 
     #[tokio::test]
@@ -911,10 +747,9 @@ mod tests {
         let call_result = result.unwrap();
         assert_eq!(call_result.is_error, Some(false));
 
-        // Use ResultValidator to check exit code
         ResultValidator::new(&call_result)
             .assert_exit_code(0)
-            .assert_field_exists("execution_time_ms");
+            .assert_field_exists("duration");
     }
 
     // Security Testing Framework

@@ -1,0 +1,9 @@
+---
+assignees:
+- claude-code
+position_column: done
+position_ordinal: ffffffffff8b80
+title: Remove merge code from sah CLI
+---
+## What\nRemove all merge-related code that was incorrectly placed in `swissarmyhammer-cli` (the `sah` binary). This code belongs in `kanban-cli` instead.\n\n### Files to delete\n- `swissarmyhammer-cli/src/commands/merge/` (entire directory: mod.rs, jsonl.rs, yaml.rs, md.rs)\n- `swissarmyhammer-cli/tests/merge_e2e.rs`\n\n### Files to modify\n- `swissarmyhammer-cli/src/commands/mod.rs` — remove `pub mod merge;`\n- `swissarmyhammer-cli/src/cli.rs` — remove `MergeSubcommand` enum and the `Merge` variant from the main CLI enum\n- `swissarmyhammer-cli/src/main.rs` — remove `handle_merge_command()` function and the `merge` match arm\n- `swissarmyhammer-cli/src/dynamic_cli.rs` — remove `build_merge_command()` and its registration in `add_server_commands()`\n- `swissarmyhammer-cli/Cargo.toml` — remove `swissarmyhammer-merge` dependency if it was added\n- `.claude/worktrees/agent-ace7fe88/swissarmyhammer-cli/src/commands/install/components/mod.rs` — remove `GitMergeDrivers` struct, `MERGE_DRIVERS` const, all helper functions (`find_git_dir`, `register_git_merge_driver`, `replace_merge_section`, `unregister_git_merge_driver`, `remove_git_config_section`, `update_gitattributes_add`, `update_gitattributes_remove`), and its registration in `register_all()`\n\nNote: The `GitMergeDrivers` code is in a worktree that may not have been merged. Check if it exists in the main tree first.\n\n## Tests\n- `cargo nextest run -p swissarmyhammer-cli` — verify nothing breaks\n- `cargo check -p swissarmyhammer-cli` — clean compile"}
+</invoke>

@@ -7,6 +7,9 @@ repository.workspace = true
 homepage.workspace = true
 description = "Agent Validator Protocol - Claude Code hook processor CLI"
 
+[package.metadata.dist]
+formula = "avp"
+
 [lib]
 name = "avp"
 path = "src/lib.rs"

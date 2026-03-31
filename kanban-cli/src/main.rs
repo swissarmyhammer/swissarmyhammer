@@ -5,6 +5,7 @@
 
 mod banner;
 mod cli_gen;
+mod merge;
 
 use clap::Command;
 use serde_json::Value;
@@ -52,6 +53,9 @@ fn main() {
             ),
     );
 
+    // Add the merge subcommand (git merge drivers for .kanban/ files)
+    cmd = cmd.subcommand(merge::merge_command());
+
     let matches = cmd.get_matches();
 
     match matches.subcommand() {
@@ -61,6 +65,10 @@ fn main() {
                 .map(|s| s.as_str())
                 .unwrap_or(".");
             handle_open(path);
+        }
+        Some(("merge", sub_m)) => {
+            let code = merge::handle_merge(sub_m);
+            std::process::exit(code);
         }
         Some((name, sub_m)) => {
             // Check if it has a verb subcommand (noun-verb structure)

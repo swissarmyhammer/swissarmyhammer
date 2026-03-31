@@ -29,7 +29,7 @@ Run a shell command. Output is stored in history regardless of truncation.
 | environment | string | no | JSON env vars |
 
 ```json
-{"op": "execute command", "command": "cargo nextest run", "timeout": 300, "max_lines": 50}
+{"op": "execute command", "command": "cargo nextest run", "timeout": 300}
 ```
 
 ### list processes
@@ -115,6 +115,7 @@ Use `timeout` for:
 - **Default (0)**: Status-only. Run the command, get exit code and line count. Use grep/search/get-lines to inspect output. This saves tokens.
 - **Positive number**: Return up to N lines of output inline. Use when you need to see output immediately (e.g., short commands like `echo`, `cat`).
 - **-1**: Return everything. Use sparingly — large output wastes tokens.
+
 
 ## Search vs grep
 
