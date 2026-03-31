@@ -10,6 +10,7 @@ use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
 use swissarmyhammer_operations::{Operation, ParamMeta, ParamType};
 
+use super::infrastructure::value_as_u64_tolerant;
 use super::state::ShellState;
 use crate::mcp::tool_registry::BaseToolImpl;
 
@@ -45,9 +46,12 @@ pub async fn execute_kill_process(
     args: &serde_json::Map<String, serde_json::Value>,
     state: Arc<Mutex<ShellState>>,
 ) -> Result<CallToolResult, McpError> {
-    let id = args.get("id").and_then(|v| v.as_u64()).ok_or_else(|| {
-        McpError::invalid_params("'id' parameter is required for kill process", None)
-    })? as usize;
+    let id = args
+        .get("id")
+        .and_then(value_as_u64_tolerant)
+        .ok_or_else(|| {
+            McpError::invalid_params("'id' parameter is required for kill process", None)
+        })? as usize;
 
     let mut guard = state.lock().await;
     match guard.kill_process(id).await {

@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: '8680'
+position_column: done
+position_ordinal: ffffffffffffffbf80
 title: 'Shell tool: clamp negative max_lines to 0'
 ---
 ## What

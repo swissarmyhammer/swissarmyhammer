@@ -10,6 +10,7 @@ use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
 use swissarmyhammer_operations::{Operation, ParamMeta, ParamType};
 
+use super::infrastructure::value_as_u64_tolerant;
 use super::state::ShellState;
 use crate::mcp::tool_registry::BaseToolImpl;
 
@@ -65,15 +66,18 @@ pub async fn execute_get_lines(
 ) -> Result<CallToolResult, McpError> {
     let command_id = args
         .get("command_id")
-        .and_then(|v| v.as_u64())
+        .and_then(value_as_u64_tolerant)
         .ok_or_else(|| {
             McpError::invalid_params("'command_id' parameter is required for get lines", None)
         })? as usize;
     let start = args
         .get("start")
-        .and_then(|v| v.as_u64())
+        .and_then(value_as_u64_tolerant)
         .map(|v| v as usize);
-    let end = args.get("end").and_then(|v| v.as_u64()).map(|v| v as usize);
+    let end = args
+        .get("end")
+        .and_then(value_as_u64_tolerant)
+        .map(|v| v as usize);
 
     let guard = state.lock().await;
     match guard.get_lines(command_id, start, end) {

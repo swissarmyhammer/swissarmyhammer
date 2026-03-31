@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: '8580'
+position_column: done
+position_ordinal: ffffffffffffffbc80
 title: 'Shell tool: tolerant parsing of integer params from strings'
 ---
 ## What
