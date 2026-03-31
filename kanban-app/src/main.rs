@@ -66,7 +66,6 @@ fn main() {
             commands::search_entities,
             commands::get_board_data,
             commands::quit_app,
-            commands::reset_windows,
             commands::new_board_dialog,
             commands::open_board_dialog,
             commands::list_views,

@@ -78,28 +78,6 @@ impl Command for HelpCmd {
     }
 }
 
-/// Reset windows — clears all window geometry and restarts.
-///
-/// Always available. Returns a `ResetWindows` marker so the Tauri layer
-/// can perform the actual restart.
-pub struct ResetWindowsCmd;
-
-#[async_trait]
-impl Command for ResetWindowsCmd {
-    fn available(&self, _ctx: &CommandContext) -> bool {
-        true
-    }
-
-    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
-        let ui = ctx
-            .ui_state
-            .as_ref()
-            .ok_or_else(|| CommandError::ExecutionFailed("UIState not available".into()))?;
-        ui.clear_windows();
-        Ok(json!({ "ResetWindows": true }))
-    }
-}
-
 /// Open the command palette in "command" mode.
 ///
 /// Always available. Sets `palette_open = true` and `palette_mode = "command"`.

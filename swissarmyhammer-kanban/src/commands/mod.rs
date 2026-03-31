@@ -148,10 +148,6 @@ pub fn register_commands() -> HashMap<String, Arc<dyn Command>> {
     map.insert("app.about".into(), Arc::new(app_commands::AboutCmd));
     map.insert("app.help".into(), Arc::new(app_commands::HelpCmd));
     map.insert(
-        "app.resetWindows".into(),
-        Arc::new(app_commands::ResetWindowsCmd),
-    );
-    map.insert(
         "app.command".into(),
         Arc::new(app_commands::CommandPaletteCmd),
     );
@@ -215,12 +211,12 @@ mod tests {
     fn register_commands_returns_expected_count() {
         let cmds = register_commands();
         // 4 task + 3 clipboard + 4 entity + 1 tag + 1 attachment + 1 column + 7 UI
-        // + 13 app (quit, about, help, resetWindows, command, palette, search,
+        // + 12 app (quit, about, help, command, palette, search,
         //          dismiss, undo, redo, keymap.vim, keymap.cua, keymap.emacs)
         // + 5 file (switchBoard, closeBoard, newBoard, openBoard, window.new)
-        // + 3 drag = 42
+        // + 3 drag = 41
         // Note: clipboard entries are duplicated in the source but HashMap deduplicates.
-        assert_eq!(cmds.len(), 42);
+        assert_eq!(cmds.len(), 41);
     }
 
     // =========================================================================
@@ -667,27 +663,6 @@ mod tests {
         let cmd = cmds.get("app.help").unwrap();
         let result = cmd.execute(&ctx_scope(&[])).await.unwrap();
         assert_eq!(result["help"], true);
-    }
-
-    #[test]
-    fn reset_windows_always_available() {
-        let cmds = register_commands();
-        let cmd = cmds.get("app.resetWindows").unwrap();
-        assert!(cmd.available(&ctx_scope(&[])));
-    }
-
-    #[tokio::test]
-    async fn reset_windows_clears_windows_and_returns_marker() {
-        let cmds = register_commands();
-        let cmd = cmds.get("app.resetWindows").unwrap();
-        let ui = Arc::new(UIState::new());
-        ui.save_window_geometry("main", 0, 0, 800, 600, false);
-        assert!(!ui.all_windows().is_empty());
-
-        let ctx = ctx_with(&[], None, Some(Arc::clone(&ui)));
-        let result = cmd.execute(&ctx).await.unwrap();
-        assert_eq!(result["ResetWindows"], true);
-        assert!(ui.all_windows().is_empty());
     }
 
     #[test]

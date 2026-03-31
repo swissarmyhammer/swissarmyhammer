@@ -592,19 +592,6 @@ pub async fn quit_app(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// Reset saved window positions/sizes and exit.
-///
-/// Clear all saved window geometry (main + secondary) and restart.
-#[tauri::command]
-#[allow(unreachable_code)]
-pub async fn reset_windows(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
-    // Clear window state from UIState (geometry + inspector stacks)
-    state.ui_state.clear_windows();
-    tracing::info!("Cleared all window state");
-    app.restart();
-    Ok(())
-}
-
 /// Open a folder picker to create a new board.
 #[tauri::command]
 pub async fn new_board_dialog(app: AppHandle) -> Result<(), String> {
@@ -1113,9 +1100,6 @@ pub(crate) async fn dispatch_command_internal(
     }
     if result.get("quit").is_some() {
         app.exit(0);
-    }
-    if result.get("ResetWindows").is_some() {
-        app.restart();
     }
 
     // Emit drag-session-active event when drag.start completes successfully.

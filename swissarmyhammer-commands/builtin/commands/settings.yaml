@@ -22,9 +22,3 @@
     order: 2
     radio_group: keymap
 
-- id: app.resetWindows
-  name: Reset Windows
-  menu:
-    path: [App, Settings]
-    group: 1
-    order: 0

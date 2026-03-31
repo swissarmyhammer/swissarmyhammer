@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: '8680'
+position_column: done
+position_ordinal: ffffffffffffffffa680
 title: 'Bug: Reset Windows should close secondary windows and reset geometry, not restart the app'
 ---
 ## What
