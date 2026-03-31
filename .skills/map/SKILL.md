@@ -3,7 +3,7 @@ name: map
 description: Generate a visual architecture overview of the codebase with Mermaid diagrams. Produces ARCHITECTURE.md at repo root. Use when the user says "map", "architecture", "overview", or wants to understand the codebase structure.
 metadata:
   author: "swissarmyhammer"
-  version: "0.11.2"
+  version: "0.12.10"
 ---
 
 ## Project Detection
