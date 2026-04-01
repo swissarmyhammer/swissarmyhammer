@@ -269,60 +269,59 @@ fn test_missing_directories_graceful_handling() {
 fn test_discovery_with_nested_project_structure() {
     let test = IsolatedDiscoveryTest::new();
 
-    // Create nested directory structure
-    let nested_dir = test.temp_dir().join("workspace/project/subdir");
+    // Create nested directory structure inside the git root (temp_dir has .git)
+    let workspace_dir = test.temp_dir().join("workspace");
+    let project_dir = workspace_dir.join("project");
+    let nested_dir = project_dir.join("subdir");
     fs::create_dir_all(&nested_dir).expect("Failed to create nested dirs");
 
-    // Create config at the workspace level
-    let workspace_config_dir = test
-        .temp_dir()
-        .join("workspace")
-        .join(SwissarmyhammerDirectory::dir_name());
-    fs::create_dir_all(&workspace_config_dir).expect("Failed to create workspace config dir");
+    // Create config at the git root level (.sah/ at the repo root)
+    let root_config_dir = test.project_config_dir(); // creates temp_dir/.sah/
 
+    let root_config = r#"
+source = "root"
+root_setting = true
+"#;
+    let root_config_file = root_config_dir.join("sah.toml");
+    fs::write(&root_config_file, root_config).expect("Failed to write root config");
+
+    // Create config at workspace level (.sah/ inside workspace/)
+    let workspace_config_dir = workspace_dir.join(SwissarmyhammerDirectory::dir_name());
+    fs::create_dir_all(&workspace_config_dir).expect("Failed to create workspace config dir");
     let workspace_config = r#"
 source = "workspace"
 workspace_setting = true
 "#;
-    let workspace_config_file = workspace_config_dir.join("sah.toml");
-    fs::write(&workspace_config_file, workspace_config).expect("Failed to write workspace config");
+    fs::write(workspace_config_dir.join("sah.toml"), workspace_config)
+        .expect("Failed to write workspace config");
 
-    // Create config at the project level
-    let project_config_dir = test
-        .temp_dir()
-        .join("workspace/project")
-        .join(SwissarmyhammerDirectory::dir_name());
-    fs::create_dir_all(&project_config_dir).expect("Failed to create project config dir");
-
-    let project_config = r#"
-source = "project"
-project_setting = true
-"#;
-    let project_config_file = project_config_dir.join("sah.toml");
-    fs::write(&project_config_file, project_config).expect("Failed to write project config");
-
-    // Change to nested subdirectory
+    // Change to nested subdirectory (deeper than workspace)
     env::set_current_dir(&nested_dir).expect("Failed to change to nested dir");
 
     let context =
         TemplateContext::load_for_cli().expect("Failed to load config from nested structure");
 
-    // Should find the closest config (project level)
-    // The exact behavior depends on the implementation - it might find one or both
+    // Workspace-level config overrides root-level config for "source"
     let source = context.get("source").expect("Should find a source");
     let source_str = source.as_str().expect("Source should be string");
-
-    // Should find either workspace or project config (or both merged)
-    assert!(
-        source_str == "workspace" || source_str == "project",
-        "Should find config from workspace or project level, got: {}",
+    assert_eq!(
+        source_str, "workspace",
+        "Workspace .sah/ should override root .sah/ for 'source', got: {}",
         source_str
     );
 
-    // At least one of the settings should be present
-    assert!(
-        context.get("workspace_setting").is_some() || context.get("project_setting").is_some(),
-        "Should find at least one config setting"
+    // Root-level setting is still inherited
+    assert_eq!(
+        context.get("root_setting"),
+        Some(&json!(true)),
+        "Should inherit root config setting through merging"
+    );
+
+    // Workspace-level setting is present
+    assert_eq!(
+        context.get("workspace_setting"),
+        Some(&json!(true)),
+        "Should find workspace config setting"
     );
 }
 

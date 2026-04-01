@@ -408,24 +408,6 @@ impl Doctorable for ShellExecuteTool {
     }
 }
 
-/// Maps an init scope to its Claude Code settings file path:
-/// - `Project` → `.claude/settings.json`
-/// - `Local` → `.claude/settings.local.json`
-/// - `User` → `~/.claude/settings.json`
-fn claude_settings_path(
-    scope: &swissarmyhammer_common::lifecycle::InitScope,
-) -> std::path::PathBuf {
-    use swissarmyhammer_common::lifecycle::InitScope;
-    match scope {
-        InitScope::Project => std::path::PathBuf::from(".claude/settings.json"),
-        InitScope::Local => std::path::PathBuf::from(".claude/settings.local.json"),
-        InitScope::User => dirs::home_dir()
-            .unwrap_or_else(|| std::path::PathBuf::from("."))
-            .join(".claude")
-            .join("settings.json"),
-    }
-}
-
 impl swissarmyhammer_common::lifecycle::Initializable for ShellExecuteTool {
     /// Returns the display name for this component in lifecycle output.
     fn name(&self) -> &str {
@@ -482,7 +464,7 @@ impl swissarmyhammer_common::lifecycle::Initializable for ShellExecuteTool {
         }
 
         // Step 2: Deny Bash in Claude settings (scope-aware path)
-        let claude_settings_path = claude_settings_path(scope);
+        let claude_settings_path = scope.claude_settings_path();
         let mut settings = if claude_settings_path.exists() {
             match std::fs::read_to_string(&claude_settings_path) {
                 Ok(content) if !content.trim().is_empty() => {
@@ -693,7 +675,7 @@ impl swissarmyhammer_common::lifecycle::Initializable for ShellExecuteTool {
         }
 
         // Step 2: Remove "Bash" from permissions.deny (scope-aware path)
-        let claude_settings_path = claude_settings_path(scope);
+        let claude_settings_path = scope.claude_settings_path();
         if claude_settings_path.exists() {
             match std::fs::read_to_string(&claude_settings_path) {
                 Ok(content) if !content.trim().is_empty() => {
@@ -934,44 +916,7 @@ mod tests {
         assert!(!shell_execute_tool.input_schema.is_empty());
     }
 
-    // =====================================================================
-    // claude_settings_path tests
-    // =====================================================================
-
-    #[test]
-    fn test_claude_settings_path_project() {
-        use swissarmyhammer_common::lifecycle::InitScope;
-        let path = claude_settings_path(&InitScope::Project);
-        assert_eq!(path, std::path::PathBuf::from(".claude/settings.json"));
-    }
-
-    #[test]
-    fn test_claude_settings_path_local() {
-        use swissarmyhammer_common::lifecycle::InitScope;
-        let path = claude_settings_path(&InitScope::Local);
-        assert_eq!(
-            path,
-            std::path::PathBuf::from(".claude/settings.local.json")
-        );
-    }
-
-    #[test]
-    fn test_claude_settings_path_user() {
-        use swissarmyhammer_common::lifecycle::InitScope;
-        let path = claude_settings_path(&InitScope::User);
-        // Should end with .claude/settings.json under the home directory
-        assert!(path.ends_with(".claude/settings.json"));
-        // Should be an absolute path (not relative like project/local)
-        assert!(path.is_absolute() || path.starts_with("."));
-    }
-
-    #[test]
-    fn test_claude_settings_path_local_differs_from_project() {
-        use swissarmyhammer_common::lifecycle::InitScope;
-        let project = claude_settings_path(&InitScope::Project);
-        let local = claude_settings_path(&InitScope::Local);
-        assert_ne!(project, local);
-    }
+    // claude_settings_path tests are in swissarmyhammer-common::lifecycle (single source of truth)
 
     #[tokio::test]
     async fn test_multiple_registrations() {

@@ -3,7 +3,7 @@ name: card
 description: Create a single, well-researched kanban card. Use when the user wants to add a task, track an idea, or capture work without entering full plan mode.
 metadata:
   author: "swissarmyhammer"
-  version: "0.12.10"
+  version: "0.12.11"
 ---
 
 ## Project Detection
@@ -101,13 +101,17 @@ Use specific file paths, function names, and type names — not vague descriptio
 
 Create a single, well-researched kanban card from an idea, request, or bug report.
 
+{% if arguments %}
+## User Request
 
+> {{arguments}}
+{% endif %}
 
 ## Process
 
 ### 1. Understand the idea
 
- If anything is ambiguous or underspecified, use the `question` tool to ask clarifying questions before proceeding. A great card requires clear understanding — don't guess.
+{% if arguments %}Start from the user request above.{% endif %} If anything is ambiguous or underspecified, use the `question` tool to ask clarifying questions before proceeding. A great card requires clear understanding — don't guess.
 
 ### 2. Research the codebase
 

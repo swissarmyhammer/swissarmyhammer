@@ -1,66 +1,86 @@
-//! Agent resolver — discovers agents from builtin → local → user sources
+//! Agent resolver — discovers agents from builtin → user → local sources
 //!
-//! Precedence: builtin < local < user (later sources override earlier ones)
+//! Uses [`VirtualFileSystem`] for search-path resolution so that precedence
+//! is handled consistently across all resolver types:
+//!
+//!   builtin  <  user (`$XDG_DATA_HOME/sah/agents`)  <  local (`{git_root}/.agents`)
+//!
+//! The VFS discovers `AGENT.md` files; each file's parent directory is then
+//! loaded as a full agent (with resource files) via [`load_agent_from_dir`].
 
 use crate::agent::{Agent, AgentSource};
 use crate::agent_loader::{load_agent_from_builtin, load_agent_from_dir};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use swissarmyhammer_directory::{ManagedDirectory, SwissarmyhammerConfig};
+use swissarmyhammer_common::file_loader::{FileSource, VirtualFileSystem};
 
 // Include the generated builtin agents
 include!(concat!(env!("OUT_DIR"), "/builtin_agents.rs"));
 
-/// Resolves agents from all sources with proper override precedence
+/// Map a VFS [`FileSource`] to an [`AgentSource`].
+fn file_source_to_agent_source(fs: &FileSource) -> AgentSource {
+    match fs {
+        FileSource::Builtin | FileSource::Dynamic => AgentSource::Builtin,
+        FileSource::User => AgentSource::User,
+        FileSource::Local => AgentSource::Local,
+    }
+}
+
+/// Resolves agents from all sources with proper override precedence.
+///
+/// Internally delegates path discovery to a [`VirtualFileSystem`] configured
+/// with `use_dot_directory_paths()`, giving the standard three-tier precedence:
+///
+/// 1. **Builtin** — agents embedded in the binary (lowest)
+/// 2. **User** — `$XDG_DATA_HOME/sah/agents`
+/// 3. **Local** — `{git_root}/.agents` (highest)
 pub struct AgentResolver {
-    /// Additional search paths beyond defaults
-    extra_paths: Vec<PathBuf>,
+    /// VFS used for search-path resolution
+    vfs: VirtualFileSystem,
 }
 
 impl AgentResolver {
+    /// Create a new AgentResolver backed by a VirtualFileSystem.
     pub fn new() -> Self {
-        Self {
-            extra_paths: Vec::new(),
-        }
+        let mut vfs = VirtualFileSystem::new("agents");
+        vfs.use_dot_directory_paths();
+        Self { vfs }
     }
 
-    /// Add an extra search path for agents
+    /// Add an extra search path for agents.
+    ///
+    /// Delegates to the VFS so that extra paths appear in
+    /// `get_search_paths()` alongside user and local directories.
+    /// Files found in extra paths are loaded with `Local` precedence.
     pub fn add_search_path(&mut self, path: PathBuf) {
-        self.extra_paths.push(path);
+        self.vfs.add_search_path(path, FileSource::Local);
     }
 
-    /// Resolve all agents from all sources
+    /// Resolve all agents from all sources.
     ///
     /// Returns agents keyed by name. Later sources override earlier ones.
-    /// Precedence: builtin → local → user
+    /// Precedence: builtin < user < local (including extra paths added via
+    /// [`add_search_path`]).
     pub fn resolve_all(&self) -> HashMap<String, Agent> {
         let mut agents = HashMap::new();
 
         // 1. Load builtins (lowest precedence)
         self.load_builtins(&mut agents);
 
-        // 2. Load from local project paths
-        self.load_from_local_paths(&mut agents);
-
-        // 3. Load from user-level paths
-        self.load_from_user_paths(&mut agents);
-
-        // 4. Load from extra paths
-        for path in &self.extra_paths {
-            self.load_from_directory(path, AgentSource::Local, &mut agents);
-        }
+        // 2. Load from VFS-resolved directories (user, local, and extra paths)
+        self.load_from_vfs_directories(&mut agents);
 
         agents
     }
 
-    /// Resolve only builtin agents (no local/user overrides)
+    /// Resolve only builtin agents (no user/local overrides).
     pub fn resolve_builtins(&self) -> HashMap<String, Agent> {
         let mut agents = HashMap::new();
         self.load_builtins(&mut agents);
         agents
     }
 
-    /// Load builtin agents embedded in the binary
+    /// Load builtin agents embedded in the binary.
     fn load_builtins(&self, agents: &mut HashMap<String, Agent>) {
         let builtin_files = get_builtin_agents();
 
@@ -93,62 +113,52 @@ impl AgentResolver {
         }
     }
 
-    /// Load agents from project-local paths
-    fn load_from_local_paths(&self, agents: &mut HashMap<String, Agent>) {
-        let cwd = std::env::current_dir().unwrap_or_default();
-
-        let dot_agents = cwd.join(".agents");
-        self.load_from_directory(&dot_agents, AgentSource::Local, agents);
-
-        let sah_agents = cwd.join(".sah").join("agents");
-        self.load_from_directory(&sah_agents, AgentSource::Local, agents);
-    }
-
-    /// Load agents from user-level paths via XDG base directories.
+    /// Load agents from VFS-resolved search paths.
     ///
-    /// Looks in `$XDG_DATA_HOME/sah/agents` (defaults to `~/.local/share/sah/agents`).
-    fn load_from_user_paths(&self, agents: &mut HashMap<String, Agent>) {
-        if let Ok(dir) = ManagedDirectory::<SwissarmyhammerConfig>::xdg_data() {
-            let user_agents = dir.root().join("agents");
-            self.load_from_directory(&user_agents, AgentSource::User, agents);
+    /// Uses `get_search_paths()` which returns paths with their [`FileSource`]
+    /// metadata, so source classification comes from the VFS rather than
+    /// string-matching on directory names.
+    fn load_from_vfs_directories(&self, agents: &mut HashMap<String, Agent>) {
+        for sp in self.vfs.get_search_paths() {
+            let source = file_source_to_agent_source(&sp.source);
+            load_agents_from_directory(&sp.path, source, agents);
         }
     }
+}
 
-    /// Load all agents from a directory (each subdirectory is an agent)
-    fn load_from_directory(
-        &self,
-        dir: &Path,
-        source: AgentSource,
-        agents: &mut HashMap<String, Agent>,
-    ) {
-        if !dir.is_dir() {
+/// Load all agents from a directory (each subdirectory is an agent).
+fn load_agents_from_directory(
+    dir: &Path,
+    source: AgentSource,
+    agents: &mut HashMap<String, Agent>,
+) {
+    if !dir.is_dir() {
+        return;
+    }
+
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(e) => {
+            tracing::warn!("Failed to read agents directory {}: {}", dir.display(), e);
             return;
         }
+    };
 
-        let entries = match std::fs::read_dir(dir) {
-            Ok(entries) => entries,
-            Err(e) => {
-                tracing::warn!("Failed to read agents directory {}: {}", dir.display(), e);
-                return;
-            }
-        };
-
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                match load_agent_from_dir(&path, source.clone()) {
-                    Ok(agent) => {
-                        tracing::debug!(
-                            "Loaded {} agent: {} from {}",
-                            source,
-                            agent.name,
-                            path.display()
-                        );
-                        agents.insert(agent.name.as_str().to_string(), agent);
-                    }
-                    Err(e) => {
-                        tracing::warn!("Failed to load agent from {}: {}", path.display(), e);
-                    }
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            match load_agent_from_dir(&path, source.clone()) {
+                Ok(agent) => {
+                    tracing::debug!(
+                        "Loaded {} agent: {} from {}",
+                        source,
+                        agent.name,
+                        path.display()
+                    );
+                    agents.insert(agent.name.as_str().to_string(), agent);
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to load agent from {}: {}", path.display(), e);
                 }
             }
         }
@@ -164,6 +174,8 @@ impl Default for AgentResolver {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use tempfile::TempDir;
 
     #[test]
     fn test_resolve_builtins() {
@@ -194,5 +206,97 @@ mod tests {
         assert!(!tester.description.is_empty());
         assert!(!tester.instructions.is_empty());
         assert_eq!(tester.source, AgentSource::Builtin);
+    }
+
+    /// Helper to create an agent directory with an AGENT.md file.
+    fn create_agent_dir(base: &Path, name: &str, description: &str) {
+        let agent_dir = base.join(name);
+        fs::create_dir_all(&agent_dir).unwrap();
+        let content = format!(
+            "---\nname: {}\ndescription: {}\n---\n\nInstructions for {}.\n",
+            name, description, name
+        );
+        fs::write(agent_dir.join("AGENT.md"), content).unwrap();
+    }
+
+    #[test]
+    fn test_extra_path_overrides_builtin() {
+        let temp_dir = TempDir::new().unwrap();
+
+        // Create an agent that shadows a builtin
+        create_agent_dir(temp_dir.path(), "tester", "Custom tester from extra path");
+
+        let mut resolver = AgentResolver::new();
+        resolver.add_search_path(temp_dir.path().to_path_buf());
+
+        let agents = resolver.resolve_all();
+        let tester = agents.get("tester").unwrap();
+
+        assert_eq!(tester.source, AgentSource::Local);
+        assert_eq!(tester.description, "Custom tester from extra path");
+    }
+
+    #[test]
+    fn test_local_overrides_user_overrides_builtin() {
+        let user_dir = TempDir::new().unwrap();
+        let local_dir = TempDir::new().unwrap();
+
+        // Create the same agent in both directories
+        create_agent_dir(user_dir.path(), "my-agent", "User version");
+        create_agent_dir(local_dir.path(), "my-agent", "Local version");
+
+        let mut agents = HashMap::new();
+
+        // Simulate precedence: builtin < user < local
+        load_agents_from_directory(user_dir.path(), AgentSource::User, &mut agents);
+        load_agents_from_directory(local_dir.path(), AgentSource::Local, &mut agents);
+
+        let agent = agents.get("my-agent").unwrap();
+        assert_eq!(agent.source, AgentSource::Local);
+        assert_eq!(agent.description, "Local version");
+    }
+
+    #[test]
+    fn test_user_overrides_builtin() {
+        let user_dir = TempDir::new().unwrap();
+
+        // Create an agent that shadows a builtin
+        create_agent_dir(user_dir.path(), "tester", "User tester override");
+
+        let mut agents = HashMap::new();
+
+        // Simulate: builtin first, then user overrides
+        let resolver = AgentResolver::new();
+        resolver.load_builtins(&mut agents);
+
+        let builtin_tester = agents.get("tester").unwrap();
+        assert_eq!(builtin_tester.source, AgentSource::Builtin);
+
+        // Now user overrides
+        load_agents_from_directory(user_dir.path(), AgentSource::User, &mut agents);
+
+        let user_tester = agents.get("tester").unwrap();
+        assert_eq!(user_tester.source, AgentSource::User);
+        assert_eq!(user_tester.description, "User tester override");
+    }
+
+    #[test]
+    fn test_file_source_to_agent_source_mapping() {
+        assert_eq!(
+            file_source_to_agent_source(&FileSource::Builtin),
+            AgentSource::Builtin
+        );
+        assert_eq!(
+            file_source_to_agent_source(&FileSource::Dynamic),
+            AgentSource::Builtin
+        );
+        assert_eq!(
+            file_source_to_agent_source(&FileSource::User),
+            AgentSource::User
+        );
+        assert_eq!(
+            file_source_to_agent_source(&FileSource::Local),
+            AgentSource::Local
+        );
     }
 }

@@ -446,6 +446,7 @@ impl Initializable for DenyBash {
     }
 
     /// Add "Bash" to permissions.deny in .claude/settings.json.
+    #[allow(deprecated)]
     fn init(&self, _scope: &InitScope, reporter: &dyn InitReporter) -> Vec<InitResult> {
         let path = settings::claude_settings_path();
         let mut claude_settings = match settings::read_settings(&path) {
@@ -470,6 +471,7 @@ impl Initializable for DenyBash {
     }
 
     /// Remove "Bash" from permissions.deny in .claude/settings.json.
+    #[allow(deprecated)]
     fn deinit(&self, _scope: &InitScope, reporter: &dyn InitReporter) -> Vec<InitResult> {
         let path = settings::claude_settings_path();
         if !path.exists() {

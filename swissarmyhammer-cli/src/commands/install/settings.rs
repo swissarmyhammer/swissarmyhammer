@@ -124,8 +124,12 @@ pub fn ensure_project_entry<'a>(root: &'a mut Value, key: &str) -> &'a mut Value
 }
 
 /// Path to the project-level Claude Code settings file.
+///
+/// Delegates to `InitScope::Project.claude_settings_path()` so path logic
+/// lives in one place (`swissarmyhammer-common`).
+#[deprecated(note = "use InitScope::Project.claude_settings_path() directly")]
 pub fn claude_settings_path() -> PathBuf {
-    PathBuf::from(".claude/settings.json")
+    swissarmyhammer_common::lifecycle::InitScope::Project.claude_settings_path()
 }
 
 /// Add "Bash" to permissions.deny in settings, idempotent.

@@ -1,65 +1,82 @@
 use crate::error::{ConfigurationError, ConfigurationResult};
 use std::path::{Path, PathBuf};
-use swissarmyhammer_common::SwissarmyhammerDirectory;
-use tracing::{debug, error, info, trace};
+use swissarmyhammer_common::directory::{DirectoryConfig, SwissarmyhammerConfig};
+use swissarmyhammer_common::utils::find_git_repository_root;
+use tracing::{debug, trace};
 
 /// Configuration file discovery paths
 #[derive(Debug, Clone)]
 pub struct DiscoveryPaths {
     /// Global configuration directory (~/.sah/)
     pub global_dir: Option<PathBuf>,
-    /// Project configuration directory (./.sah/)
-    pub project_dir: Option<PathBuf>,
+    /// Project configuration directories in ascending precedence order.
+    ///
+    /// Walking from git root down to CWD, every `.sah/` directory found along
+    /// the way is included.  Parent directories come first (lowest precedence),
+    /// CWD-level last (highest precedence).
+    pub project_dirs: Vec<PathBuf>,
 }
 
-/// Configuration file discovery utility
+/// Configuration file discovery utility.
+///
+/// Resolves global (user) and project (local) configuration directories using
+/// direct filesystem checks, then scans those directories for config files with
+/// the expected name patterns (`sah.{toml,yaml,yml,json}` and
+/// `swissarmyhammer.{toml,yaml,yml,json}`).
+///
+/// Figment handles the deep key-value merging downstream.
 pub struct ConfigurationDiscovery {
     paths: DiscoveryPaths,
     validate_security: bool,
 }
 
 impl ConfigurationDiscovery {
-    /// Create a new configuration discovery instance
+    /// Create a new configuration discovery instance.
+    ///
+    /// Resolves global and project config directories:
+    /// - Global: `~/.sah/` (User source)
+    /// - Project: `{git_root}/.sah/` down to `{cwd}/.sah/` (Local sources)
     pub fn new() -> ConfigurationResult<Self> {
-        let global_dir = Self::find_global_config_dir()?;
-        let project_dir = Self::find_project_config_dir()?;
+        let (global_dir, project_dirs) = Self::resolve_directories();
 
         Ok(Self {
             paths: DiscoveryPaths {
                 global_dir,
-                project_dir,
+                project_dirs,
             },
             validate_security: true,
         })
     }
 
-    /// Create a discovery instance for CLI usage (no security validation)
+    /// Create a discovery instance for CLI usage (no security validation).
     pub fn for_cli() -> ConfigurationResult<Self> {
         let mut discovery = Self::new()?;
         discovery.validate_security = false;
         Ok(discovery)
     }
 
-    /// Get the discovered paths
+    /// Get the discovered paths.
     pub fn paths(&self) -> &DiscoveryPaths {
         &self.paths
     }
 
-    /// Find all configuration files in priority order
-    /// Returns paths in ascending precedence order (earlier files are overridden by later ones)
+    /// Find all configuration files in priority order.
+    ///
+    /// Returns paths in ascending precedence order (earlier files are overridden
+    /// by later ones in Figment merging):
+    /// 1. Global config files (`~/.sah/sah.*`) -- User/global
+    /// 2. Project config files from git root down to CWD (`{ancestor}/.sah/sah.*`)
     pub fn discover_config_files(&self) -> Vec<PathBuf> {
         let mut files = Vec::new();
 
-        // Global config files (lowest precedence)
+        // Global config files (lowest precedence among file sources)
         if let Some(ref global_dir) = self.paths.global_dir {
-            files.extend(self.find_config_files_in_dir(global_dir));
+            files.extend(Self::find_config_files_in_dir(global_dir));
         }
 
-        // Project config files from all discovered directories (higher precedence)
-        // Find all .sah directories in the path hierarchy
-        let project_dirs = Self::find_all_project_config_dirs().unwrap_or_default();
-        for project_dir in project_dirs {
-            files.extend(self.find_config_files_in_dir(&project_dir));
+        // Project config files in ascending precedence (git root first, CWD last)
+        for project_dir in &self.paths.project_dirs {
+            files.extend(Self::find_config_files_in_dir(project_dir));
         }
 
         // Filter out non-existent files and apply security validation
@@ -86,89 +103,95 @@ impl ConfigurationDiscovery {
             .collect()
     }
 
-    /// Find global config directory (~/.sah/)
-    fn find_global_config_dir() -> ConfigurationResult<Option<PathBuf>> {
-        // First try to get HOME environment variable (respects test environment)
+    /// Resolve global and project directories using direct filesystem checks.
+    ///
+    /// Returns only directories that actually exist on disk.  Project directories
+    /// are in ascending precedence order (git root first, CWD-level last).
+    fn resolve_directories() -> (Option<PathBuf>, Vec<PathBuf>) {
+        let global_dir = Self::resolve_global_dir().filter(|d| d.is_dir());
+        let project_dirs: Vec<PathBuf> = Self::resolve_project_dirs()
+            .into_iter()
+            .filter(|d| d.is_dir())
+            .collect();
+
+        if global_dir.is_some() || !project_dirs.is_empty() {
+            debug!(
+                "Resolved directories: global={}, project=[{}]",
+                global_dir
+                    .as_ref()
+                    .map_or("none".to_string(), |d| d.display().to_string()),
+                project_dirs
+                    .iter()
+                    .map(|d| d.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            );
+        } else {
+            trace!("No configuration directories found");
+        }
+
+        (global_dir, project_dirs)
+    }
+
+    /// Resolve the global configuration directory path.
+    ///
+    /// Uses `$HOME/.sah/`.
+    fn resolve_global_dir() -> Option<PathBuf> {
+        // Respect HOME env var first (important for test isolation), then fall back
+        // to dirs::home_dir()
         let home = std::env::var("HOME")
             .ok()
             .map(PathBuf::from)
-            .or_else(dirs::home_dir); // Fallback to dirs::home_dir() if HOME not set
+            .or_else(dirs::home_dir)?;
 
-        match home {
-            Some(home) => {
-                let config_dir = home.join(SwissarmyhammerDirectory::dir_name());
-                if config_dir.is_dir() {
-                    trace!("Found global config directory: {}", config_dir.display());
-                    Ok(Some(config_dir))
-                } else {
-                    error!(
-                        "Global config directory not found: {}",
-                        config_dir.display()
-                    );
-                    Ok(None)
-                }
-            }
-            None => {
-                error!("Could not determine home directory");
-                Ok(None)
-            }
-        }
+        let config_dir = home.join(SwissarmyhammerConfig::DIR_NAME);
+        Some(config_dir)
     }
 
-    /// Find project config directory (./.sah/ or walk up to find repo root)
-    fn find_project_config_dir() -> ConfigurationResult<Option<PathBuf>> {
-        let all_dirs = Self::find_all_project_config_dirs()?;
-        // Return the closest (most specific) directory if any found
-        Ok(all_dirs.last().cloned())
-    }
-
-    /// Find ALL project config directories by walking up the directory tree
-    /// Returns directories in ascending precedence order (parent directories first)
-    fn find_all_project_config_dirs() -> ConfigurationResult<Vec<PathBuf>> {
-        let current_dir = match std::env::current_dir() {
-            Ok(dir) => dir,
-            Err(e) => {
-                error!(
-                    "Could not get current directory ({}), no project config directories found",
-                    e
-                );
-                return Ok(Vec::new());
-            }
+    /// Resolve all project configuration directory paths by walking from git root to CWD.
+    ///
+    /// Walks up from CWD to the git repository root (or filesystem root when not
+    /// inside a git repo), collecting every `{ancestor}/.sah/` path.  The returned
+    /// vec is in ascending precedence order: the git-root-level directory comes
+    /// first and the CWD-level directory comes last.
+    fn resolve_project_dirs() -> Vec<PathBuf> {
+        let cwd = match std::env::current_dir() {
+            Ok(d) => d,
+            Err(_) => return Vec::new(),
         };
 
-        let mut config_dirs = Vec::new();
-        let mut dir = Some(current_dir.as_path());
+        let stop_at = find_git_repository_root().unwrap_or_else(|| cwd.clone());
 
-        while let Some(current) = dir {
-            let config_dir = current.join(SwissarmyhammerDirectory::dir_name());
-            if config_dir.is_dir() {
-                trace!("Found project config directory: {}", config_dir.display());
-                config_dirs.push(config_dir);
-            }
+        // Collect directories from CWD up to (and including) the stop point.
+        // We walk upward, then reverse so that the outermost (git root) directory
+        // is first and the CWD-level directory is last.
+        let mut dirs = Vec::new();
+        let mut current = cwd.as_path();
+        loop {
+            let config_dir = current.join(SwissarmyhammerConfig::DIR_NAME);
+            dirs.push(config_dir);
 
-            // Stop at git repository root
-            if current.join(".git").exists() {
-                trace!("Reached git repository root");
+            // Stop once we've processed the git root (or fallback root)
+            if current == stop_at {
                 break;
             }
 
-            dir = current.parent();
+            match current.parent() {
+                Some(parent) => current = parent,
+                None => break,
+            }
         }
 
-        // Reverse to get parent directories first (lower precedence)
-        config_dirs.reverse();
-
-        if config_dirs.is_empty() {
-            trace!("No project config directories found");
-        } else {
-            trace!("Found {} project config directories", config_dirs.len());
-        }
-
-        Ok(config_dirs)
+        // Reverse: git-root first (lowest precedence), CWD last (highest)
+        dirs.reverse();
+        dirs
     }
 
-    /// Find all configuration files in a directory
-    fn find_config_files_in_dir(&self, dir: &Path) -> Vec<PathBuf> {
+    /// Find all configuration files in a directory.
+    ///
+    /// Scans for both short (`sah.*`) and long (`swissarmyhammer.*`) form names
+    /// in the supported formats (toml, yaml, yml, json).
+    fn find_config_files_in_dir(dir: &Path) -> Vec<PathBuf> {
         let mut files = Vec::new();
 
         // Both short and long form names
@@ -181,7 +204,7 @@ impl ConfigurationDiscovery {
                 let filename = format!("{}.{}", base_name, extension);
                 let file_path = dir.join(&filename);
                 if file_path.is_file() {
-                    info!("Found config file: {}", file_path.display());
+                    debug!("Found config file: {}", file_path.display());
                     files.push(file_path);
                 }
             }
@@ -190,9 +213,8 @@ impl ConfigurationDiscovery {
         files
     }
 
-    /// Validate file security (only when validation is enabled)
+    /// Validate file security (only when validation is enabled).
     fn validate_file_security(&self, path: &Path) -> ConfigurationResult<()> {
-        // Get file metadata
         let metadata = path.metadata().map_err(|e| {
             ConfigurationError::discovery(format!(
                 "Could not read metadata for {}: {}",
@@ -201,7 +223,6 @@ impl ConfigurationDiscovery {
             ))
         })?;
 
-        // Check if file is readable
         if metadata.permissions().readonly() {
             return Err(ConfigurationError::discovery(format!(
                 "Configuration file is not readable: {}",
@@ -239,8 +260,7 @@ mod tests {
         .unwrap();
         fs::write(dir_path.join("sah.json"), r#"{"test": {"key": "value"}}"#).unwrap();
 
-        let discovery = ConfigurationDiscovery::for_cli().unwrap();
-        let files = discovery.find_config_files_in_dir(dir_path);
+        let files = ConfigurationDiscovery::find_config_files_in_dir(dir_path);
 
         // Should find all three files
         assert_eq!(files.len(), 3);
@@ -261,8 +281,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let dir_path = temp_dir.path();
 
-        let discovery = ConfigurationDiscovery::for_cli().unwrap();
-        let files = discovery.find_config_files_in_dir(dir_path);
+        let files = ConfigurationDiscovery::find_config_files_in_dir(dir_path);
 
         assert_eq!(files.len(), 0);
     }
@@ -273,7 +292,13 @@ mod tests {
         let file_path = temp_dir.path().join("test.toml");
         fs::write(&file_path, "[test]\nkey = \"value\"\n").unwrap();
 
-        let discovery = ConfigurationDiscovery::new().unwrap();
+        let discovery = ConfigurationDiscovery {
+            paths: DiscoveryPaths {
+                global_dir: None,
+                project_dirs: vec![],
+            },
+            validate_security: true,
+        };
 
         // Should pass security validation for a normal file
         assert!(discovery.validate_file_security(&file_path).is_ok());
@@ -287,67 +312,133 @@ mod tests {
     }
 
     #[test]
-    fn test_find_all_project_config_dirs_nested() {
+    #[serial_test::serial]
+    fn test_resolve_global_dir_uses_home() {
+        // When HOME is set, resolve_global_dir should return $HOME/.sah
+        let original_home = std::env::var("HOME").ok();
         let temp_dir = TempDir::new().unwrap();
-        let workspace_dir = temp_dir.path().join("workspace");
-        let project_dir = workspace_dir.join("my-project");
-        let nested_dir = project_dir.join("src").join("components");
 
-        // Create nested directory structure
-        fs::create_dir_all(&nested_dir).unwrap();
+        // Use a panic-safe guard so HOME is always restored, even on assertion failure.
+        let result = std::panic::catch_unwind(|| {
+            std::env::set_var("HOME", temp_dir.path());
+            ConfigurationDiscovery::resolve_global_dir()
+        });
 
-        // Create workspace config directory
-        let workspace_config_dir = workspace_dir.join(SwissarmyhammerDirectory::dir_name());
-        fs::create_dir_all(&workspace_config_dir).unwrap();
-        fs::write(
-            workspace_config_dir.join("sah.toml"),
-            "[workspace]\nname = \"test-workspace\"\n",
-        )
-        .unwrap();
-
-        // Create project config directory
-        let project_config_dir = project_dir.join(SwissarmyhammerDirectory::dir_name());
-        fs::create_dir_all(&project_config_dir).unwrap();
-        fs::write(
-            project_config_dir.join("sah.toml"),
-            "[project]\nname = \"test-project\"\n",
-        )
-        .unwrap();
-
-        // Create a fake .git directory to limit the search scope
-        fs::create_dir(workspace_dir.join(".git")).unwrap();
-
-        // Change to nested directory (save original to restore later)
-        let original_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(&nested_dir).unwrap();
-
-        // Test discovery finds both config directories
-        let result = ConfigurationDiscovery::find_all_project_config_dirs();
-
-        // Restore original directory
-        std::env::set_current_dir(original_dir).unwrap();
-
-        let config_dirs = result.unwrap();
-        println!("Found {} config directories:", config_dirs.len());
-        for (i, dir) in config_dirs.iter().enumerate() {
-            println!("  {}: {}", i, dir.display());
+        // Restore HOME before inspecting the result (runs even if the closure panicked).
+        match &original_home {
+            Some(home) => std::env::set_var("HOME", home),
+            None => std::env::remove_var("HOME"),
         }
 
-        // Should find exactly our 2 directories (workspace + project)
-        assert_eq!(
-            config_dirs.len(),
-            2,
-            "Should find exactly workspace and project config directories"
+        let result = result.expect("resolve_global_dir panicked");
+        assert!(result.is_some());
+        let dir = result.unwrap();
+        assert!(dir.ends_with(".sah"));
+        assert!(dir.starts_with(temp_dir.path()));
+    }
+
+    #[test]
+    fn test_discover_config_files_returns_existing_only() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_dir = temp_dir.path().join(".sah");
+        fs::create_dir_all(&config_dir).unwrap();
+        fs::write(config_dir.join("sah.toml"), "[test]\nkey = \"val\"\n").unwrap();
+
+        // Create a discovery with known paths
+        let discovery = ConfigurationDiscovery {
+            paths: DiscoveryPaths {
+                global_dir: None,
+                project_dirs: vec![config_dir],
+            },
+            validate_security: false,
+        };
+
+        let files = discovery.discover_config_files();
+        assert_eq!(files.len(), 1);
+        assert!(files[0].ends_with("sah.toml"));
+    }
+
+    #[test]
+    fn test_discover_config_files_from_multiple_project_dirs() {
+        let temp_dir = TempDir::new().unwrap();
+
+        // Simulate nested project structure:
+        //   root/.sah/sah.toml            (git root level)
+        //   root/workspace/.sah/sah.toml  (intermediate level)
+        let root_config = temp_dir.path().join(".sah");
+        let workspace_config = temp_dir.path().join("workspace").join(".sah");
+        fs::create_dir_all(&root_config).unwrap();
+        fs::create_dir_all(&workspace_config).unwrap();
+        fs::write(root_config.join("sah.toml"), "source = \"root\"").unwrap();
+        fs::write(workspace_config.join("sah.toml"), "source = \"workspace\"").unwrap();
+
+        // Build discovery with both dirs in ascending precedence
+        let discovery = ConfigurationDiscovery {
+            paths: DiscoveryPaths {
+                global_dir: None,
+                project_dirs: vec![root_config.clone(), workspace_config.clone()],
+            },
+            validate_security: false,
+        };
+
+        let files = discovery.discover_config_files();
+        assert_eq!(files.len(), 2);
+        // Root comes first (lower precedence), workspace second (higher precedence)
+        assert_eq!(files[0], root_config.join("sah.toml"));
+        assert_eq!(files[1], workspace_config.join("sah.toml"));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn test_resolve_project_dirs_walks_up_to_git_root() {
+        let temp_dir = TempDir::new().unwrap();
+        // Canonicalize to resolve symlinks (e.g. /var -> /private/var on macOS)
+        // so paths match what current_dir() and find_git_repository_root() return.
+        let base = temp_dir.path().canonicalize().unwrap();
+
+        // Create a fake git root
+        fs::create_dir(base.join(".git")).unwrap();
+
+        // Create nested directories with .sah/ at multiple levels
+        let workspace = base.join("workspace");
+        let project = workspace.join("project");
+        fs::create_dir_all(&project).unwrap();
+
+        let root_sah = base.join(".sah");
+        let workspace_sah = workspace.join(".sah");
+        // project/.sah/ intentionally absent
+        fs::create_dir_all(&root_sah).unwrap();
+        fs::create_dir_all(&workspace_sah).unwrap();
+
+        // Set CWD to the innermost directory
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&project).unwrap();
+
+        let dirs = ConfigurationDiscovery::resolve_project_dirs();
+
+        // Restore CWD before any assertions
+        std::env::set_current_dir(&original_dir).unwrap();
+
+        // Should include .sah/ dirs for git root, workspace, and project
+        // (even though project/.sah/ does not exist on disk yet -- resolve_project_dirs
+        // returns candidate paths; VFS filtering removes non-existent ones later)
+        assert!(
+            dirs.len() >= 3,
+            "Expected at least 3 candidate dirs (root, workspace, project), got: {:?}",
+            dirs
         );
 
-        // Verify our directories are found and in correct order
-        assert!(
-            config_dirs[0].ends_with("workspace/.sah"),
-            "First should be workspace config"
+        // Verify ascending precedence: git root first, CWD-level (project) last
+        assert_eq!(dirs[0], root_sah, "First entry should be git root .sah/");
+        assert_eq!(
+            dirs[1], workspace_sah,
+            "Second entry should be workspace .sah/"
         );
-        assert!(
-            config_dirs[1].ends_with("my-project/.sah"),
-            "Second should be project config"
+        let project_sah = project.join(".sah");
+        assert_eq!(
+            *dirs.last().unwrap(),
+            project_sah,
+            "Last entry should be CWD-level .sah/"
         );
     }
 }

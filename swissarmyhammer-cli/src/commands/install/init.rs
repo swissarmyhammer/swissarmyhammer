@@ -73,6 +73,7 @@ pub fn install(target: InstallTarget) -> Result<(), String> {
 }
 
 /// Install statusline configuration in .claude/settings.json.
+#[allow(deprecated)]
 fn install_statusline(reporter: &dyn InitReporter) -> Result<(), String> {
     let path = settings::claude_settings_path();
     let mut claude_settings = settings::read_settings(&path)?;
@@ -90,6 +91,7 @@ fn install_statusline(reporter: &dyn InitReporter) -> Result<(), String> {
 
 /// Add "Bash" to permissions.deny in .claude/settings.json.
 /// This ensures the agent uses our shell tool instead of the built-in Bash tool.
+#[allow(deprecated)]
 fn install_deny_bash(reporter: &dyn InitReporter) -> Result<(), String> {
     let path = settings::claude_settings_path();
     let mut claude_settings = settings::read_settings(&path)?;
