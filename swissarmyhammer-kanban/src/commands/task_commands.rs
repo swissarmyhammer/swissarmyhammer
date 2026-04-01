@@ -310,3 +310,491 @@ impl Command for DeleteTaskCmd {
         run_op(&op, &kanban).await
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::board::InitBoard;
+    use crate::context::KanbanContext;
+    use crate::swimlane::AddSwimlane;
+    use crate::task::{AddTask, TagTask};
+    use serde_json::Value;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    use swissarmyhammer_commands::CommandContext;
+    use swissarmyhammer_operations::Execute;
+    use tempfile::TempDir;
+
+    /// Create a fresh board with the default todo/doing/done columns.
+    async fn setup() -> (TempDir, KanbanContext) {
+        let temp = TempDir::new().unwrap();
+        let kanban_dir = temp.path().join(".kanban");
+        let ctx = KanbanContext::new(kanban_dir);
+        InitBoard::new("Test")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        (temp, ctx)
+    }
+
+    /// Build a CommandContext with args, kanban extension, and optional scope/target.
+    fn make_ctx(
+        kanban: Arc<KanbanContext>,
+        args: HashMap<String, Value>,
+        scope: Vec<String>,
+        target: Option<String>,
+    ) -> CommandContext {
+        let mut ctx = CommandContext::new("test", scope, target, args);
+        ctx.set_extension(kanban);
+        ctx
+    }
+
+    /// Helper to create a task in the given column, returning its ID.
+    async fn create_task(ctx: &KanbanContext, title: &str, column: &str) -> String {
+        let mut op = AddTask::new(title);
+        op.column = Some(column.to_string());
+        let result = op.execute(ctx).await.into_result().unwrap();
+        result["id"].as_str().unwrap().to_string()
+    }
+
+    // =========================================================================
+    // AddTaskCmd
+    // =========================================================================
+
+    #[tokio::test]
+    async fn add_task_cmd_creates_task_in_column() {
+        let (_temp, ctx) = setup().await;
+        let kanban = Arc::new(ctx);
+
+        let mut args = HashMap::new();
+        args.insert("title".into(), Value::String("My task".into()));
+
+        let cmd_ctx = make_ctx(
+            Arc::clone(&kanban),
+            args,
+            vec!["column:todo".into()],
+            None,
+        );
+        let cmd = AddTaskCmd;
+        let result = cmd.execute(&cmd_ctx).await.unwrap();
+
+        assert!(result["id"].is_string());
+        assert_eq!(result["title"], "My task");
+    }
+
+    #[tokio::test]
+    async fn add_task_cmd_uses_column_from_args() {
+        let (_temp, ctx) = setup().await;
+        let kanban = Arc::new(ctx);
+
+        let mut args = HashMap::new();
+        args.insert("title".into(), Value::String("Arg task".into()));
+        args.insert("column".into(), Value::String("doing".into()));
+
+        // No column in scope — should use args.column
+        let cmd_ctx = make_ctx(Arc::clone(&kanban), args, vec![], None);
+        let cmd = AddTaskCmd;
+        let result = cmd.execute(&cmd_ctx).await.unwrap();
+
+        assert_eq!(result["position"]["column"], "doing");
+    }
+
+    // =========================================================================
+    // MoveTaskCmd — basic column move
+    // =========================================================================
+
+    #[tokio::test]
+    async fn move_task_to_different_column() {
+        let (_temp, ctx) = setup().await;
+        let task_id = create_task(&ctx, "Movable", "todo").await;
+        let kanban = Arc::new(ctx);
+
+        let mut args = HashMap::new();
+        args.insert("id".into(), Value::String(task_id.clone()));
+        args.insert("column".into(), Value::String("doing".into()));
+
+        let cmd_ctx = make_ctx(Arc::clone(&kanban), args, vec![], None);
+        let cmd = MoveTaskCmd;
+        let result = cmd.execute(&cmd_ctx).await.unwrap();
+
+        assert_eq!(result["position"]["column"], "doing");
+    }
+
+    // =========================================================================
+    // MoveTaskCmd — explicit ordinal
+    // =========================================================================
+
+    #[tokio::test]
+    async fn move_task_with_explicit_ordinal() {
+        let (_temp, ctx) = setup().await;
+        let task_id = create_task(&ctx, "Ordinal task", "todo").await;
+        let kanban = Arc::new(ctx);
+
+        // Use a valid FractionalIndex ordinal (Ordinal::after default "80")
+        let target_ordinal = Ordinal::after(&Ordinal::first());
+        let ord_str = target_ordinal.as_str().to_string();
+
+        let mut args = HashMap::new();
+        args.insert("id".into(), Value::String(task_id.clone()));
+        args.insert("column".into(), Value::String("doing".into()));
+        args.insert("ordinal".into(), Value::String(ord_str.clone()));
+
+        let cmd_ctx = make_ctx(Arc::clone(&kanban), args, vec![], None);
+        let cmd = MoveTaskCmd;
+        let result = cmd.execute(&cmd_ctx).await.unwrap();
+
+        assert_eq!(result["position"]["column"], "doing");
+        assert_eq!(result["position"]["ordinal"], ord_str);
+    }
+
+    // =========================================================================
+    // MoveTaskCmd — before_id positioning
+    // =========================================================================
+
+    #[tokio::test]
+    async fn move_task_before_first_task() {
+        let (_temp, ctx) = setup().await;
+        let task_a = create_task(&ctx, "Task A", "doing").await;
+        let task_b = create_task(&ctx, "Task B", "todo").await;
+        let kanban = Arc::new(ctx);
+
+        // Move B before A in "doing"
+        let mut args = HashMap::new();
+        args.insert("id".into(), Value::String(task_b.clone()));
+        args.insert("column".into(), Value::String("doing".into()));
+        args.insert("before_id".into(), Value::String(task_a.clone()));
+
+        let cmd_ctx = make_ctx(Arc::clone(&kanban), args, vec![], None);
+        let cmd = MoveTaskCmd;
+        let result = cmd.execute(&cmd_ctx).await.unwrap();
+
+        assert_eq!(result["position"]["column"], "doing");
+        // B's ordinal should be less than A's
+        let b_ord = result["position"]["ordinal"].as_str().unwrap();
+
+        // Verify A's ordinal for comparison
+        let ectx = kanban.entity_context().await.unwrap();
+        let a_entity = ectx.read("task", &task_a).await.unwrap();
+        let a_ord = a_entity.get_str("position_ordinal").unwrap();
+        assert!(b_ord < a_ord, "B ({b_ord}) should sort before A ({a_ord})");
+    }
+
+    #[tokio::test]
+    async fn move_task_before_middle_task() {
+        let (_temp, ctx) = setup().await;
+        let task_a = create_task(&ctx, "Task A", "doing").await;
+        let task_b = create_task(&ctx, "Task B", "doing").await;
+        let task_c = create_task(&ctx, "Task C", "todo").await;
+        let kanban = Arc::new(ctx);
+
+        // Move C before B — should land between A and B
+        let mut args = HashMap::new();
+        args.insert("id".into(), Value::String(task_c.clone()));
+        args.insert("column".into(), Value::String("doing".into()));
+        args.insert("before_id".into(), Value::String(task_b.clone()));
+
+        let cmd_ctx = make_ctx(Arc::clone(&kanban), args, vec![], None);
+        let cmd = MoveTaskCmd;
+        let result = cmd.execute(&cmd_ctx).await.unwrap();
+
+        let c_ord = result["position"]["ordinal"].as_str().unwrap();
+
+        let ectx = kanban.entity_context().await.unwrap();
+        let a_entity = ectx.read("task", &task_a).await.unwrap();
+        let b_entity = ectx.read("task", &task_b).await.unwrap();
+        let a_ord = a_entity.get_str("position_ordinal").unwrap();
+        let b_ord = b_entity.get_str("position_ordinal").unwrap();
+
+        assert!(a_ord < c_ord, "A ({a_ord}) should sort before C ({c_ord})");
+        assert!(c_ord < b_ord, "C ({c_ord}) should sort before B ({b_ord})");
+    }
+
+    #[tokio::test]
+    async fn move_task_before_nonexistent_appends() {
+        let (_temp, ctx) = setup().await;
+        let task_a = create_task(&ctx, "Task A", "doing").await;
+        let task_b = create_task(&ctx, "Task B", "todo").await;
+        let kanban = Arc::new(ctx);
+
+        // before_id references a task not in the target column — should append
+        let mut args = HashMap::new();
+        args.insert("id".into(), Value::String(task_b.clone()));
+        args.insert("column".into(), Value::String("doing".into()));
+        args.insert(
+            "before_id".into(),
+            Value::String("nonexistent-id".into()),
+        );
+
+        let cmd_ctx = make_ctx(Arc::clone(&kanban), args, vec![], None);
+        let cmd = MoveTaskCmd;
+        let result = cmd.execute(&cmd_ctx).await.unwrap();
+
+        assert_eq!(result["position"]["column"], "doing");
+        // Should have gotten an ordinal (appended after A)
+        let b_ord = result["position"]["ordinal"].as_str().unwrap();
+
+        let ectx = kanban.entity_context().await.unwrap();
+        let a_entity = ectx.read("task", &task_a).await.unwrap();
+        let a_ord = a_entity.get_str("position_ordinal").unwrap();
+        assert!(a_ord < b_ord, "A ({a_ord}) should sort before B ({b_ord})");
+    }
+
+    // =========================================================================
+    // MoveTaskCmd — after_id positioning
+    // =========================================================================
+
+    #[tokio::test]
+    async fn move_task_after_last_task() {
+        let (_temp, ctx) = setup().await;
+        let task_a = create_task(&ctx, "Task A", "doing").await;
+        let task_b = create_task(&ctx, "Task B", "todo").await;
+        let kanban = Arc::new(ctx);
+
+        // Move B after A (A is the only/last task in doing)
+        let mut args = HashMap::new();
+        args.insert("id".into(), Value::String(task_b.clone()));
+        args.insert("column".into(), Value::String("doing".into()));
+        args.insert("after_id".into(), Value::String(task_a.clone()));
+
+        let cmd_ctx = make_ctx(Arc::clone(&kanban), args, vec![], None);
+        let cmd = MoveTaskCmd;
+        let result = cmd.execute(&cmd_ctx).await.unwrap();
+
+        assert_eq!(result["position"]["column"], "doing");
+        let b_ord = result["position"]["ordinal"].as_str().unwrap();
+
+        let ectx = kanban.entity_context().await.unwrap();
+        let a_entity = ectx.read("task", &task_a).await.unwrap();
+        let a_ord = a_entity.get_str("position_ordinal").unwrap();
+        assert!(a_ord < b_ord, "A ({a_ord}) should sort before B ({b_ord})");
+    }
+
+    #[tokio::test]
+    async fn move_task_after_middle_task() {
+        let (_temp, ctx) = setup().await;
+        let task_a = create_task(&ctx, "Task A", "doing").await;
+        let task_b = create_task(&ctx, "Task B", "doing").await;
+        let task_c = create_task(&ctx, "Task C", "todo").await;
+        let kanban = Arc::new(ctx);
+
+        // Move C after A — should land between A and B
+        let mut args = HashMap::new();
+        args.insert("id".into(), Value::String(task_c.clone()));
+        args.insert("column".into(), Value::String("doing".into()));
+        args.insert("after_id".into(), Value::String(task_a.clone()));
+
+        let cmd_ctx = make_ctx(Arc::clone(&kanban), args, vec![], None);
+        let cmd = MoveTaskCmd;
+        let result = cmd.execute(&cmd_ctx).await.unwrap();
+
+        let c_ord = result["position"]["ordinal"].as_str().unwrap();
+
+        let ectx = kanban.entity_context().await.unwrap();
+        let a_entity = ectx.read("task", &task_a).await.unwrap();
+        let b_entity = ectx.read("task", &task_b).await.unwrap();
+        let a_ord = a_entity.get_str("position_ordinal").unwrap();
+        let b_ord = b_entity.get_str("position_ordinal").unwrap();
+
+        assert!(a_ord < c_ord, "A ({a_ord}) should sort before C ({c_ord})");
+        assert!(c_ord < b_ord, "C ({c_ord}) should sort before B ({b_ord})");
+    }
+
+    #[tokio::test]
+    async fn move_task_after_nonexistent_appends() {
+        let (_temp, ctx) = setup().await;
+        let _task_a = create_task(&ctx, "Task A", "doing").await;
+        let task_b = create_task(&ctx, "Task B", "todo").await;
+        let kanban = Arc::new(ctx);
+
+        let mut args = HashMap::new();
+        args.insert("id".into(), Value::String(task_b.clone()));
+        args.insert("column".into(), Value::String("doing".into()));
+        args.insert("after_id".into(), Value::String("nonexistent-id".into()));
+
+        let cmd_ctx = make_ctx(Arc::clone(&kanban), args, vec![], None);
+        let cmd = MoveTaskCmd;
+        let result = cmd.execute(&cmd_ctx).await.unwrap();
+
+        assert_eq!(result["position"]["column"], "doing");
+        assert!(result["position"]["ordinal"].as_str().is_some());
+    }
+
+    // =========================================================================
+    // MoveTaskCmd — drop_index positioning
+    // =========================================================================
+
+    #[tokio::test]
+    async fn move_task_with_drop_index() {
+        let (_temp, ctx) = setup().await;
+        let _task_a = create_task(&ctx, "Task A", "doing").await;
+        let _task_b = create_task(&ctx, "Task B", "doing").await;
+        let task_c = create_task(&ctx, "Task C", "todo").await;
+        let kanban = Arc::new(ctx);
+
+        // Drop C at index 0 in doing (before A)
+        let mut args = HashMap::new();
+        args.insert("id".into(), Value::String(task_c.clone()));
+        args.insert("column".into(), Value::String("doing".into()));
+        args.insert("drop_index".into(), Value::Number(0.into()));
+
+        let cmd_ctx = make_ctx(Arc::clone(&kanban), args, vec![], None);
+        let cmd = MoveTaskCmd;
+        let result = cmd.execute(&cmd_ctx).await.unwrap();
+
+        assert_eq!(result["position"]["column"], "doing");
+        assert!(result["position"]["ordinal"].as_str().is_some());
+    }
+
+    // =========================================================================
+    // MoveTaskCmd — swimlane
+    // =========================================================================
+
+    #[tokio::test]
+    async fn move_task_with_swimlane() {
+        let (_temp, ctx) = setup().await;
+        // Create a swimlane
+        AddSwimlane::new("urgent", "Urgent")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        let task_id = create_task(&ctx, "Swim task", "todo").await;
+        let kanban = Arc::new(ctx);
+
+        let mut args = HashMap::new();
+        args.insert("id".into(), Value::String(task_id.clone()));
+        args.insert("column".into(), Value::String("doing".into()));
+        args.insert("swimlane".into(), Value::String("urgent".into()));
+
+        let cmd_ctx = make_ctx(Arc::clone(&kanban), args, vec![], None);
+        let cmd = MoveTaskCmd;
+        let result = cmd.execute(&cmd_ctx).await.unwrap();
+
+        assert_eq!(result["position"]["column"], "doing");
+        assert_eq!(result["position"]["swimlane"], "urgent");
+    }
+
+    // =========================================================================
+    // MoveTaskCmd — scope chain and target moniker
+    // =========================================================================
+
+    #[tokio::test]
+    async fn move_task_uses_scope_chain_for_task_id() {
+        let (_temp, ctx) = setup().await;
+        let task_id = create_task(&ctx, "Scoped task", "todo").await;
+        let kanban = Arc::new(ctx);
+
+        // task in scope, column in args
+        let mut args = HashMap::new();
+        args.insert("column".into(), Value::String("doing".into()));
+
+        let cmd_ctx = make_ctx(
+            Arc::clone(&kanban),
+            args,
+            vec![format!("task:{task_id}")],
+            None,
+        );
+        let cmd = MoveTaskCmd;
+        let result = cmd.execute(&cmd_ctx).await.unwrap();
+        assert_eq!(result["position"]["column"], "doing");
+    }
+
+    #[tokio::test]
+    async fn move_task_uses_target_moniker_for_column() {
+        let (_temp, ctx) = setup().await;
+        let task_id = create_task(&ctx, "Target task", "todo").await;
+        let kanban = Arc::new(ctx);
+
+        let mut args = HashMap::new();
+        args.insert("id".into(), Value::String(task_id.clone()));
+
+        // column via target moniker instead of args
+        let cmd_ctx = make_ctx(
+            Arc::clone(&kanban),
+            args,
+            vec![],
+            Some("column:doing".into()),
+        );
+        let cmd = MoveTaskCmd;
+        let result = cmd.execute(&cmd_ctx).await.unwrap();
+        assert_eq!(result["position"]["column"], "doing");
+    }
+
+    // =========================================================================
+    // UntagTaskCmd
+    // =========================================================================
+
+    #[tokio::test]
+    async fn untag_task_cmd_removes_tag() {
+        let (_temp, ctx) = setup().await;
+        let task_id = create_task(&ctx, "Tagged task", "todo").await;
+
+        // Tag it first
+        TagTask::new(task_id.as_str(), "bug")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        let kanban = Arc::new(ctx);
+
+        let cmd_ctx = make_ctx(
+            Arc::clone(&kanban),
+            HashMap::new(),
+            vec![format!("tag:bug"), format!("task:{task_id}")],
+            None,
+        );
+        let cmd = UntagTaskCmd;
+        let result = cmd.execute(&cmd_ctx).await.unwrap();
+
+        // Verify the tag was removed
+        let tags = result["tags"].as_array().cloned().unwrap_or_default();
+        assert!(
+            !tags.iter().any(|t| t.as_str() == Some("bug")),
+            "tag 'bug' should have been removed"
+        );
+    }
+
+    // =========================================================================
+    // DeleteTaskCmd
+    // =========================================================================
+
+    #[tokio::test]
+    async fn delete_task_cmd_removes_task() {
+        let (_temp, ctx) = setup().await;
+        let task_id = create_task(&ctx, "Doomed task", "todo").await;
+        let kanban = Arc::new(ctx);
+
+        let mut args = HashMap::new();
+        args.insert("id".into(), Value::String(task_id.clone()));
+
+        let cmd_ctx = make_ctx(Arc::clone(&kanban), args, vec![], None);
+        let cmd = DeleteTaskCmd;
+        let result = cmd.execute(&cmd_ctx).await.unwrap();
+        assert_eq!(result["deleted"], true);
+
+        // Verify it's really gone
+        let ectx = kanban.entity_context().await.unwrap();
+        let read_result = ectx.read("task", &task_id).await;
+        assert!(read_result.is_err(), "task should no longer exist");
+    }
+
+    #[tokio::test]
+    async fn delete_task_cmd_uses_scope_chain() {
+        let (_temp, ctx) = setup().await;
+        let task_id = create_task(&ctx, "Scoped doomed", "todo").await;
+        let kanban = Arc::new(ctx);
+
+        let cmd_ctx = make_ctx(
+            Arc::clone(&kanban),
+            HashMap::new(),
+            vec![format!("task:{task_id}")],
+            None,
+        );
+        let cmd = DeleteTaskCmd;
+        let result = cmd.execute(&cmd_ctx).await.unwrap();
+        assert_eq!(result["deleted"], true);
+    }
+}

@@ -1812,4 +1812,313 @@ mod tests {
         }
         let _ = fs::remove_file(&path);
     }
+
+    // -----------------------------------------------------------------------
+    // Persistence round-trip tests for open_boards, recent_boards, inspector
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn open_boards_persist_through_save_load() {
+        let path = temp_yaml_path("open_boards_roundtrip");
+        let _ = fs::remove_file(&path);
+        {
+            let state = UIState::load(&path);
+            state.add_open_board("/boards/alpha");
+            state.add_open_board("/boards/beta");
+            state.save().unwrap();
+        }
+        {
+            let state = UIState::load(&path);
+            assert_eq!(state.open_boards(), vec!["/boards/alpha", "/boards/beta"]);
+        }
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn recent_boards_persist_through_save_load() {
+        let path = temp_yaml_path("recent_boards_roundtrip");
+        let _ = fs::remove_file(&path);
+        {
+            let state = UIState::load(&path);
+            state.touch_recent("/boards/x", "X");
+            state.touch_recent("/boards/y", "Y");
+            state.save().unwrap();
+        }
+        {
+            let state = UIState::load(&path);
+            let recent = state.recent_boards();
+            assert_eq!(recent.len(), 2);
+            // Most recent first
+            assert_eq!(recent[0].path, "/boards/y");
+            assert_eq!(recent[1].path, "/boards/x");
+        }
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn inspector_stack_persists_through_save_load() {
+        let path = temp_yaml_path("inspector_stack_roundtrip");
+        let _ = fs::remove_file(&path);
+        {
+            let state = UIState::load(&path);
+            state.inspect("main", "task:01A");
+            state.inspect("main", "tag:01B");
+            state.save().unwrap();
+        }
+        {
+            let state = UIState::load(&path);
+            assert_eq!(
+                state.inspector_stack("main"),
+                vec!["task:01A", "tag:01B"]
+            );
+        }
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn set_inspector_stack_auto_saves() {
+        let path = temp_yaml_path("set_inspector_autosave");
+        let _ = fs::remove_file(&path);
+        {
+            let state = UIState::load(&path);
+            state.set_inspector_stack(
+                "main",
+                vec!["task:01X".into(), "tag:01Y".into()],
+            );
+            // No explicit save() — should auto-save
+        }
+        {
+            let state = UIState::load(&path);
+            assert_eq!(
+                state.inspector_stack("main"),
+                vec!["task:01X", "tag:01Y"]
+            );
+        }
+        let _ = fs::remove_file(&path);
+    }
+
+    // -----------------------------------------------------------------------
+    // to_json comprehensive tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn to_json_includes_all_persisted_fields() {
+        let state = UIState::new();
+        state.set_keymap_mode("vim");
+        state.add_open_board("/boards/a");
+        state.touch_recent("/boards/a", "Board A");
+        state.set_most_recent_board("/boards/a");
+
+        let json = state.to_json();
+        assert_eq!(json["keymap_mode"].as_str(), Some("vim"));
+        assert_eq!(json["open_boards"][0].as_str(), Some("/boards/a"));
+        assert_eq!(json["recent_boards"][0]["path"].as_str(), Some("/boards/a"));
+        assert_eq!(json["most_recent_board_path"].as_str(), Some("/boards/a"));
+    }
+
+    #[test]
+    fn to_json_includes_transient_fields() {
+        let state = UIState::new();
+        state.set_scope_chain(vec!["board:main".into(), "column:todo".into()]);
+        state.set_has_clipboard(true);
+        state.set_clipboard_entity_type("task");
+
+        let json = state.to_json();
+        let chain = json["scope_chain"].as_array().unwrap();
+        assert_eq!(chain.len(), 2);
+        assert_eq!(chain[0].as_str(), Some("board:main"));
+        assert!(json["has_clipboard"].as_bool().unwrap());
+        assert_eq!(json["clipboard_entity_type"].as_str(), Some("task"));
+    }
+
+    #[test]
+    fn to_json_includes_window_transient_palette_fields() {
+        let state = UIState::new();
+        state.save_window_geometry("main", 0, 0, 800, 600, false);
+        state.set_window_board("main", "/boards/test");
+        state.set_palette_open_with_mode("main", true, "search");
+        state.inspect("main", "task:01Z");
+
+        let json = state.to_json();
+        let win = &json["windows"]["main"];
+        assert!(win["palette_open"].as_bool().unwrap());
+        assert_eq!(win["palette_mode"].as_str(), Some("search"));
+        assert_eq!(win["board_path"].as_str(), Some("/boards/test"));
+        // Geometry is included
+        assert_eq!(win["x"].as_i64(), Some(0));
+        assert_eq!(win["width"].as_u64(), Some(800));
+        // Inspector stack is included
+        let stack = win["inspector_stack"].as_array().unwrap();
+        assert_eq!(stack.len(), 1);
+        assert_eq!(stack[0].as_str(), Some("task:01Z"));
+    }
+
+    #[test]
+    fn to_json_empty_state_has_expected_shape() {
+        let state = UIState::new();
+        let json = state.to_json();
+        assert_eq!(json["keymap_mode"].as_str(), Some("cua"));
+        assert!(json["scope_chain"].as_array().unwrap().is_empty());
+        assert!(json["open_boards"].as_array().unwrap().is_empty());
+        assert!(!json["has_clipboard"].as_bool().unwrap());
+        assert!(json["clipboard_entity_type"].is_null());
+        assert!(json["windows"].as_object().unwrap().is_empty());
+        assert!(json["recent_boards"].as_array().unwrap().is_empty());
+        assert!(json["most_recent_board_path"].is_null());
+    }
+
+    // -----------------------------------------------------------------------
+    // Clipboard state tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn clipboard_defaults_to_empty() {
+        let state = UIState::new();
+        assert!(!state.has_clipboard());
+        assert!(state.clipboard_entity_type().is_none());
+    }
+
+    #[test]
+    fn set_has_clipboard_toggles_flag() {
+        let state = UIState::new();
+        state.set_has_clipboard(true);
+        assert!(state.has_clipboard());
+        state.set_has_clipboard(false);
+        assert!(!state.has_clipboard());
+        // Clearing clipboard also clears entity type
+        assert!(state.clipboard_entity_type().is_none());
+    }
+
+    #[test]
+    fn set_clipboard_entity_type_sets_both() {
+        let state = UIState::new();
+        state.set_clipboard_entity_type("tag");
+        assert!(state.has_clipboard());
+        assert_eq!(state.clipboard_entity_type().as_deref(), Some("tag"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Undo/redo state tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn undo_redo_defaults_to_false() {
+        let state = UIState::new();
+        assert!(!state.can_undo());
+        assert!(!state.can_redo());
+    }
+
+    #[test]
+    fn set_undo_redo_state_updates_flags() {
+        let state = UIState::new();
+        state.set_undo_redo_state(true, false);
+        assert!(state.can_undo());
+        assert!(!state.can_redo());
+
+        state.set_undo_redo_state(false, true);
+        assert!(!state.can_undo());
+        assert!(state.can_redo());
+
+        state.set_undo_redo_state(true, true);
+        assert!(state.can_undo());
+        assert!(state.can_redo());
+    }
+
+    // -----------------------------------------------------------------------
+    // save() creates parent directories
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn save_creates_parent_directories() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nested").join("deep").join("ui_state.yaml");
+        let state = UIState::load(&path);
+        state.set_keymap_mode("emacs");
+        state.save().unwrap();
+
+        // File should exist at nested path
+        assert!(path.exists());
+        let state2 = UIState::load(&path);
+        assert_eq!(state2.keymap_mode(), "emacs");
+    }
+
+    // -----------------------------------------------------------------------
+    // Full persistence round-trip: combined state
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn full_state_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("full_roundtrip.yaml");
+        {
+            let state = UIState::load(&path);
+            state.set_keymap_mode("vim");
+            state.add_open_board("/boards/proj");
+            state.set_window_board("main", "/boards/proj");
+            state.save_window_geometry("main", 50, 75, 1024, 768, true);
+            state.inspect("main", "task:01A");
+            state.inspect("main", "tag:02B");
+            state.set_active_view("main", "grid-view");
+            state.touch_recent("/boards/proj", "My Project");
+            state.set_most_recent_board("/boards/proj");
+            state.save().unwrap();
+        }
+        {
+            let state = UIState::load(&path);
+            assert_eq!(state.keymap_mode(), "vim");
+            assert_eq!(state.open_boards(), vec!["/boards/proj"]);
+            assert_eq!(
+                state.window_board("main").as_deref(),
+                Some("/boards/proj")
+            );
+            let ws = state.get_window_state("main").unwrap();
+            assert_eq!(ws.x, Some(50));
+            assert_eq!(ws.y, Some(75));
+            assert_eq!(ws.width, Some(1024));
+            assert_eq!(ws.height, Some(768));
+            assert!(ws.maximized);
+            assert_eq!(ws.board_path, "/boards/proj");
+            assert_eq!(
+                state.inspector_stack("main"),
+                vec!["task:01A", "tag:02B"]
+            );
+            assert_eq!(state.active_view_id("main"), "grid-view");
+            assert_eq!(state.recent_boards().len(), 1);
+            assert_eq!(state.recent_boards()[0].name, "My Project");
+            assert_eq!(
+                state.most_recent_board(),
+                Some("/boards/proj".to_string())
+            );
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // to_json with multiple windows
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn to_json_multiple_windows() {
+        let state = UIState::new();
+        state.save_window_geometry("win-a", 0, 0, 800, 600, false);
+        state.save_window_geometry("win-b", 100, 100, 400, 300, true);
+        state.set_window_board("win-a", "/boards/alpha");
+        state.set_window_board("win-b", "/boards/beta");
+        state.set_palette_open("win-a", true);
+        state.inspect("win-b", "task:01Z");
+
+        let json = state.to_json();
+        let windows = json["windows"].as_object().unwrap();
+        assert_eq!(windows.len(), 2);
+
+        let win_a = &windows["win-a"];
+        assert!(win_a["palette_open"].as_bool().unwrap());
+        assert_eq!(win_a["board_path"].as_str(), Some("/boards/alpha"));
+
+        let win_b = &windows["win-b"];
+        assert!(!win_b["palette_open"].as_bool().unwrap());
+        assert_eq!(win_b["board_path"].as_str(), Some("/boards/beta"));
+        assert!(win_b["maximized"].as_bool().unwrap());
+        let stack = win_b["inspector_stack"].as_array().unwrap();
+        assert_eq!(stack[0].as_str(), Some("task:01Z"));
+    }
 }

@@ -8261,6 +8261,7 @@ dependencies = [
  "swissarmyhammer-entity",
  "swissarmyhammer-fields",
  "swissarmyhammer-operations",
+ "swissarmyhammer-perspectives",
  "swissarmyhammer-views",
  "tempfile",
  "thiserror 2.0.18",
@@ -8378,6 +8379,22 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.117",
+]
+
+[[package]]
+name = "swissarmyhammer-perspectives"
+version = "0.12.10"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "serde_yaml_ng",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-test",
+ "tracing",
+ "ulid",
 ]
 
 [[package]]

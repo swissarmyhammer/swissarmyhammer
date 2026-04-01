@@ -75,6 +75,9 @@ pub mod tag_parser;
 pub mod task_helpers;
 pub mod types;
 
+// Perspective types for saved view configurations
+pub mod perspective;
+
 // Domain command trait implementations
 pub mod commands;
 

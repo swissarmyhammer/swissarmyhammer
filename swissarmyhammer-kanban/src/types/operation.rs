@@ -99,6 +99,8 @@ pub enum Noun {
     Comments,
     Attachment,
     Attachments,
+    Perspective,
+    Perspectives,
     Activity,
     Archived,
 }
@@ -122,6 +124,8 @@ impl Noun {
             Self::Comments => "comments",
             Self::Attachment => "attachment",
             Self::Attachments => "attachments",
+            Self::Perspective => "perspective",
+            Self::Perspectives => "perspectives",
             Self::Activity => "activity",
             Self::Archived => "archived",
         }
@@ -145,6 +149,8 @@ impl Noun {
             "comments" => Some(Self::Comments),
             "attachment" => Some(Self::Attachment),
             "attachments" => Some(Self::Attachments),
+            "perspective" => Some(Self::Perspective),
+            "perspectives" => Some(Self::Perspectives),
             "activity" => Some(Self::Activity),
             "archived" => Some(Self::Archived),
             _ => None,
@@ -271,6 +277,10 @@ pub fn is_valid_operation(verb: Verb, noun: Noun) -> bool {
         (Verb::Add, Noun::Attachment) | (Verb::Get, Noun::Attachment) |
         (Verb::Update, Noun::Attachment) | (Verb::Delete, Noun::Attachment) |
         (Verb::List, Noun::Attachments) |
+        // Perspective operations
+        (Verb::Add, Noun::Perspective) | (Verb::Get, Noun::Perspective) |
+        (Verb::Update, Noun::Perspective) | (Verb::Delete, Noun::Perspective) |
+        (Verb::List, Noun::Perspectives) |
         // Activity
         (Verb::List, Noun::Activity)
     )
@@ -312,6 +322,28 @@ mod tests {
         // Invalid combinations
         assert!(!is_valid_operation(Verb::Move, Noun::Board));
         assert!(!is_valid_operation(Verb::Init, Noun::Task));
+    }
+
+    #[test]
+    fn test_noun_parsing_perspective() {
+        assert_eq!(Noun::parse("perspective"), Some(Noun::Perspective));
+        assert_eq!(Noun::parse("perspectives"), Some(Noun::Perspectives));
+        assert_eq!(Noun::parse("Perspective"), Some(Noun::Perspective));
+        assert_eq!(Noun::parse("PERSPECTIVES"), Some(Noun::Perspectives));
+    }
+
+    #[test]
+    fn test_valid_perspective_operations() {
+        assert!(is_valid_operation(Verb::Add, Noun::Perspective));
+        assert!(is_valid_operation(Verb::Get, Noun::Perspective));
+        assert!(is_valid_operation(Verb::Update, Noun::Perspective));
+        assert!(is_valid_operation(Verb::Delete, Noun::Perspective));
+        assert!(is_valid_operation(Verb::List, Noun::Perspectives));
+
+        // Invalid combinations
+        assert!(!is_valid_operation(Verb::Move, Noun::Perspective));
+        assert!(!is_valid_operation(Verb::Complete, Noun::Perspective));
+        assert!(!is_valid_operation(Verb::Init, Noun::Perspective));
     }
 
     #[test]

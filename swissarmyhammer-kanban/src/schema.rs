@@ -13,6 +13,9 @@ use crate::attachment::{
     AddAttachment, DeleteAttachment, GetAttachment, ListAttachments, UpdateAttachment,
 };
 use crate::board::{GetBoard, InitBoard, UpdateBoard};
+use crate::perspective::{
+    AddPerspective, DeletePerspective, GetPerspective, ListPerspectives, UpdatePerspective,
+};
 use crate::column::{AddColumn, DeleteColumn, GetColumn, ListColumns, UpdateColumn};
 use crate::swimlane::{AddSwimlane, DeleteSwimlane, GetSwimlane, ListSwimlanes, UpdateSwimlane};
 use crate::tag::{AddTag, DeleteTag, GetTag, ListTags, UpdateTag};
@@ -74,6 +77,12 @@ static KANBAN_OPERATIONS: LazyLock<Vec<&'static dyn Operation>> = LazyLock::new(
         Box::leak(Box::new(UpdateAttachment::new("", ""))) as &dyn Operation,
         Box::leak(Box::new(DeleteAttachment::new("", ""))) as &dyn Operation,
         Box::leak(Box::new(ListAttachments::new(""))) as &dyn Operation,
+        // Perspective
+        Box::leak(Box::new(AddPerspective::new("", ""))) as &dyn Operation,
+        Box::leak(Box::new(GetPerspective::new(""))) as &dyn Operation,
+        Box::leak(Box::new(UpdatePerspective::new(""))) as &dyn Operation,
+        Box::leak(Box::new(DeletePerspective::new(""))) as &dyn Operation,
+        Box::leak(Box::new(ListPerspectives::new())) as &dyn Operation,
         // Activity
         Box::leak(Box::new(ListActivity::default())) as &dyn Operation,
     ]
@@ -144,6 +153,14 @@ fn generate_kanban_examples() -> Vec<Value> {
         json!({
             "description": "Add attachment to a task",
             "value": {"op": "add attachment", "task_id": "01ABC...", "name": "screenshot.png", "path": "/path/to/screenshot.png"}
+        }),
+        json!({
+            "description": "Add a perspective",
+            "value": {"op": "add perspective", "name": "Active Sprint", "view": "board"}
+        }),
+        json!({
+            "description": "List all perspectives",
+            "value": {"op": "list perspectives"}
         }),
     ]
 }
@@ -262,5 +279,59 @@ mod tests {
         assert!(!schema.as_object().unwrap().contains_key("oneOf"));
         assert!(!schema.as_object().unwrap().contains_key("allOf"));
         assert!(!schema.as_object().unwrap().contains_key("anyOf"));
+    }
+
+    #[test]
+    fn test_schema_includes_perspective_ops() {
+        // Use the full canonical operation list so perspective ops are included.
+        let ops = kanban_operations();
+        let schema = generate_kanban_mcp_schema(ops);
+
+        let op_enum = schema["properties"]["op"]["enum"]
+            .as_array()
+            .expect("op enum should be an array");
+        let op_strings: Vec<&str> = op_enum
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect();
+
+        let expected = [
+            "add perspective",
+            "get perspective",
+            "update perspective",
+            "delete perspective",
+            "list perspectives",
+        ];
+        for expected_op in &expected {
+            assert!(
+                op_strings.contains(expected_op),
+                "op enum should contain {:?}, got: {:?}",
+                expected_op,
+                op_strings
+            );
+        }
+    }
+
+    #[test]
+    fn test_schema_has_perspective_examples() {
+        let ops = kanban_operations();
+        let schema = generate_kanban_mcp_schema(ops);
+
+        let examples = schema["examples"]
+            .as_array()
+            .expect("examples should be an array");
+
+        // At least one example should mention "perspective" in description or op value
+        let has_perspective_example = examples.iter().any(|ex| {
+            let desc = ex["description"].as_str().unwrap_or("");
+            let op_val = ex["value"]["op"].as_str().unwrap_or("");
+            desc.to_lowercase().contains("perspective")
+                || op_val.contains("perspective")
+        });
+
+        assert!(
+            has_perspective_example,
+            "schema examples should include at least one perspective example"
+        );
     }
 }

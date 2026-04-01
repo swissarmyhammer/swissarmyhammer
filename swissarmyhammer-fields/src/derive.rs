@@ -269,7 +269,7 @@ mod tests {
     }
 
     #[test]
-    fn default_writable_returns_true() {
+    fn default_writable_returns_true_via_trait_default() {
         // UpperTitle does not override writable(), so it relies on the default.
         let handler = UpperTitle;
         assert!(

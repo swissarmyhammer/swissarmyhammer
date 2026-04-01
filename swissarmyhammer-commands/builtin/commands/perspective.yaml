@@ -1,0 +1,56 @@
+- id: perspective.load
+  name: Load Perspective
+  params:
+    - name: name
+      from: args
+  keys: {}
+
+- id: perspective.save
+  name: Save Perspective
+  params:
+    - name: name
+      from: args
+  keys: {}
+
+- id: perspective.delete
+  name: Delete Perspective
+  params:
+    - name: name
+      from: args
+  keys: {}
+
+- id: perspective.filter
+  name: Set Filter
+  params:
+    - name: filter
+      from: args
+    - name: perspective_id
+      from: args
+  keys: {}
+
+- id: perspective.clearFilter
+  name: Clear Filter
+  params:
+    - name: perspective_id
+      from: args
+  keys: {}
+
+- id: perspective.group
+  name: Set Group
+  params:
+    - name: group
+      from: args
+    - name: perspective_id
+      from: args
+  keys: {}
+
+- id: perspective.clearGroup
+  name: Clear Group
+  params:
+    - name: perspective_id
+      from: args
+  keys: {}
+
+- id: perspective.list
+  name: List Perspectives
+  visible: false

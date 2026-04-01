@@ -57,6 +57,10 @@ pub enum KanbanError {
     #[error("duplicate {item_type} ID: {id}")]
     DuplicateId { item_type: String, id: String },
 
+    /// Duplicate name (e.g. perspective with the same name already exists)
+    #[error("{item_type} with name '{name}' already exists")]
+    DuplicateName { item_type: String, name: String },
+
     /// Dependency cycle detected
     #[error("dependency cycle detected: {path}")]
     DependencyCycle { path: String },
@@ -141,6 +145,14 @@ impl KanbanError {
         }
     }
 
+    /// Create a duplicate name error
+    pub fn duplicate_name(item_type: impl Into<String>, name: impl Into<String>) -> Self {
+        Self::DuplicateName {
+            item_type: item_type.into(),
+            name: name.into(),
+        }
+    }
+
     /// Convert an [`EntityError`] into a specific `*NotFound` variant when possible.
     ///
     /// Maps `EntityError::NotFound { entity_type, id }` to the corresponding
@@ -166,9 +178,41 @@ impl KanbanError {
         Self::EntityError(err)
     }
 
+    /// Create a generic not-found error
+    pub fn not_found(resource: impl Into<String>, id: impl Into<String>) -> Self {
+        Self::NotFound {
+            resource: resource.into(),
+            id: id.into(),
+        }
+    }
+
     /// Check if this is a retryable error
     pub fn is_retryable(&self) -> bool {
         matches!(self, Self::LockBusy)
+    }
+}
+
+impl From<swissarmyhammer_perspectives::PerspectiveError> for KanbanError {
+    /// Convert a [`PerspectiveError`] into the corresponding [`KanbanError`] variant.
+    fn from(e: swissarmyhammer_perspectives::PerspectiveError) -> Self {
+        match e {
+            swissarmyhammer_perspectives::PerspectiveError::NotFound { resource, id } => {
+                KanbanError::NotFound { resource, id }
+            }
+            swissarmyhammer_perspectives::PerspectiveError::DuplicateName {
+                item_type,
+                name,
+            } => KanbanError::DuplicateName { item_type, name },
+            swissarmyhammer_perspectives::PerspectiveError::Io(inner) => {
+                KanbanError::Io(inner)
+            }
+            swissarmyhammer_perspectives::PerspectiveError::Yaml(inner) => {
+                KanbanError::Yaml(inner)
+            }
+            swissarmyhammer_perspectives::PerspectiveError::Json(inner) => {
+                KanbanError::Json(inner)
+            }
+        }
     }
 }
 

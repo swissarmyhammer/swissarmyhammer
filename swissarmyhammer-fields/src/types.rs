@@ -1121,8 +1121,25 @@ fields:
         assert!(entity.commands[1].context_menu);
     }
 
-    /// Helper: build a FieldDef with no explicit editor/display for the given type.
-    fn field_with_type(type_: FieldType) -> FieldDef {
+    #[test]
+    fn entity_def_without_commands_still_deserializes() {
+        // Backwards compat: existing YAML without a commands field should
+        // deserialize fine and produce an empty commands vec.
+        let yaml_input = r#"
+name: tag
+fields:
+  - tag_name
+  - color
+"#;
+        let entity: EntityDef = serde_yaml_ng::from_str(yaml_input).unwrap();
+        assert_eq!(entity.name, "tag");
+        assert!(entity.commands.is_empty());
+    }
+
+    // ── helpers for effective_* tests ─────────────────────────────────
+
+    /// Build a minimal FieldDef with the given type and no explicit overrides.
+    fn make_field(type_: FieldType) -> FieldDef {
         FieldDef {
             id: FieldDefId::new(),
             name: "test".into(),
@@ -1139,79 +1156,93 @@ fields:
         }
     }
 
+    // ── is_false (serde helper) ───────────────────────────────────────
+
     #[test]
-    fn text_field_infers_editor_display() {
-        let field = field_with_type(FieldType::Text { single_line: false });
-        assert_eq!(field.effective_editor(), "markdown");
-        assert_eq!(field.effective_display(), "text");
+    fn is_false_returns_true_for_false_input() {
+        assert!(is_false(&false));
     }
 
     #[test]
-    fn markdown_field_infers_editor_display() {
-        let field = field_with_type(FieldType::Markdown { single_line: false });
-        assert_eq!(field.effective_editor(), "markdown");
-        assert_eq!(field.effective_display(), "markdown");
+    fn is_false_returns_false_for_true_input() {
+        assert!(!is_false(&true));
     }
 
-    #[test]
-    fn color_field_infers_editor_display() {
-        let field = field_with_type(FieldType::Color);
-        assert_eq!(field.effective_editor(), "color-palette");
-        assert_eq!(field.effective_display(), "color-swatch");
-    }
+    // ── effective_editor: explicit override ───────────────────────────
 
     #[test]
-    fn select_field_infers_editor_display() {
-        let field = field_with_type(FieldType::Select {
-            options: vec![SelectOption {
-                value: "A".into(),
-                label: None,
-                color: None,
-                icon: None,
-                order: 0,
-            }],
+    fn effective_editor_uses_explicit_when_set() {
+        let mut f = make_field(FieldType::Text { single_line: false });
+        f.editor = Some("custom-editor".into());
+        assert_eq!(f.effective_editor(), "custom-editor");
+    }
+
+    // ── effective_editor: Computed type (not covered by existing tests)
+
+    #[test]
+    fn effective_editor_computed_defaults_to_none() {
+        let f = make_field(FieldType::Computed {
+            derive: "count".into(),
+            depends_on: vec![],
+            entity: None,
+            commit_display_names: false,
         });
-        assert_eq!(field.effective_editor(), "select");
-        assert_eq!(field.effective_display(), "badge");
+        assert_eq!(f.effective_editor(), "none");
     }
 
+    // ── effective_display: explicit override ──────────────────────────
+
     #[test]
-    fn multi_select_field_infers_editor_display() {
-        let field = field_with_type(FieldType::MultiSelect {
-            options: vec![SelectOption {
-                value: "X".into(),
-                label: None,
-                color: None,
-                icon: None,
-                order: 0,
-            }],
+    fn effective_display_uses_explicit_when_set() {
+        let mut f = make_field(FieldType::Date);
+        f.display = Some("custom-display".into());
+        assert_eq!(f.effective_display(), "custom-display");
+    }
+
+    // ── effective_display: Computed type (not covered by existing tests)
+
+    #[test]
+    fn effective_display_computed_defaults_to_text() {
+        let f = make_field(FieldType::Computed {
+            derive: "count".into(),
+            depends_on: vec![],
+            entity: None,
+            commit_display_names: false,
         });
-        assert_eq!(field.effective_editor(), "multi-select");
-        assert_eq!(field.effective_display(), "badge-list");
+        assert_eq!(f.effective_display(), "text");
+    }
+
+    // ── effective_sort: types not covered by existing tests ───────────
+
+    #[test]
+    fn effective_sort_markdown_defaults_to_lexical() {
+        let f = make_field(FieldType::Markdown { single_line: false });
+        assert_eq!(f.effective_sort(), SortKind::Lexical);
     }
 
     #[test]
-    fn reference_multiple_field_infers_editor_display() {
-        let field = field_with_type(FieldType::Reference {
+    fn effective_sort_color_defaults_to_lexical() {
+        let f = make_field(FieldType::Color);
+        assert_eq!(f.effective_sort(), SortKind::Lexical);
+    }
+
+    #[test]
+    fn effective_sort_reference_defaults_to_lexical() {
+        let f = make_field(FieldType::Reference {
             entity: "task".into(),
-            multiple: true,
+            multiple: false,
         });
-        assert_eq!(field.effective_editor(), "multi-select");
-        assert_eq!(field.effective_display(), "badge-list");
+        assert_eq!(f.effective_sort(), SortKind::Lexical);
     }
 
     #[test]
-    fn entity_def_without_commands_still_deserializes() {
-        // Backwards compat: existing YAML without a commands field should
-        // deserialize fine and produce an empty commands vec.
-        let yaml_input = r#"
-name: tag
-fields:
-  - tag_name
-  - color
-"#;
-        let entity: EntityDef = serde_yaml_ng::from_str(yaml_input).unwrap();
-        assert_eq!(entity.name, "tag");
-        assert!(entity.commands.is_empty());
+    fn effective_sort_computed_defaults_to_lexical() {
+        let f = make_field(FieldType::Computed {
+            derive: "count".into(),
+            depends_on: vec![],
+            entity: None,
+            commit_display_names: false,
+        });
+        assert_eq!(f.effective_sort(), SortKind::Lexical);
     }
 }

@@ -10,6 +10,9 @@ use crate::attachment::{
     AddAttachment, DeleteAttachment, GetAttachment, ListAttachments, UpdateAttachment,
 };
 use crate::board::{GetBoard, InitBoard, UpdateBoard};
+use crate::perspective::{
+    AddPerspective, DeletePerspective, GetPerspective, ListPerspectives, UpdatePerspective,
+};
 use crate::column::{AddColumn, DeleteColumn, GetColumn, ListColumns, UpdateColumn};
 use crate::swimlane::{AddSwimlane, DeleteSwimlane, GetSwimlane, ListSwimlanes, UpdateSwimlane};
 use crate::tag::{AddTag, DeleteTag, GetTag, ListTags, UpdateTag};
@@ -416,6 +419,74 @@ pub async fn execute_operation(
             processor.process(&cmd, ctx).await
         }
 
+        // Perspective operations
+        (Verb::Add, Noun::Perspective) => {
+            let name = req(op, "name")?;
+            let view = req(op, "view")?;
+            let mut cmd = AddPerspective::new(name, view);
+            if let Some(fields_val) = op.get_param("fields") {
+                let fields: Vec<crate::perspective::PerspectiveFieldEntry> =
+                    serde_json::from_value(fields_val.clone())
+                        .map_err(|e| KanbanError::parse(format!("invalid fields: {}", e)))?;
+                cmd = cmd.with_fields(fields);
+            }
+            if let Some(filter) = op.get_string("filter") {
+                cmd = cmd.with_filter(filter);
+            }
+            if let Some(group) = op.get_string("group") {
+                cmd = cmd.with_group(group);
+            }
+            if let Some(sort_val) = op.get_param("sort") {
+                let sort: Vec<crate::perspective::SortEntry> =
+                    serde_json::from_value(sort_val.clone())
+                        .map_err(|e| KanbanError::parse(format!("invalid sort: {}", e)))?;
+                cmd = cmd.with_sort(sort);
+            }
+            processor.process(&cmd, ctx).await
+        }
+        (Verb::Get, Noun::Perspective) => {
+            let id = req(op, "id")?;
+            processor.process(&GetPerspective::new(id), ctx).await
+        }
+        (Verb::Update, Noun::Perspective) => {
+            let id = req(op, "id")?;
+            let mut cmd = UpdatePerspective::new(id);
+            if let Some(name) = op.get_string("name") {
+                cmd = cmd.with_name(name);
+            }
+            if let Some(view) = op.get_string("view") {
+                cmd = cmd.with_view(view);
+            }
+            if let Some(fields_val) = op.get_param("fields") {
+                let fields: Vec<crate::perspective::PerspectiveFieldEntry> =
+                    serde_json::from_value(fields_val.clone())
+                        .map_err(|e| KanbanError::parse(format!("invalid fields: {}", e)))?;
+                cmd = cmd.with_fields(fields);
+            }
+            if op.params.contains_key("filter") {
+                let filter = op.get_string("filter").map(|s| s.to_string());
+                cmd = cmd.with_filter(filter);
+            }
+            if op.params.contains_key("group") {
+                let group = op.get_string("group").map(|s| s.to_string());
+                cmd = cmd.with_group(group);
+            }
+            if let Some(sort_val) = op.get_param("sort") {
+                let sort: Vec<crate::perspective::SortEntry> =
+                    serde_json::from_value(sort_val.clone())
+                        .map_err(|e| KanbanError::parse(format!("invalid sort: {}", e)))?;
+                cmd = cmd.with_sort(sort);
+            }
+            processor.process(&cmd, ctx).await
+        }
+        (Verb::Delete, Noun::Perspective) => {
+            let id = req(op, "id")?;
+            processor.process(&DeletePerspective::new(id), ctx).await
+        }
+        (Verb::List, Noun::Perspectives) => {
+            processor.process(&ListPerspectives::new(), ctx).await
+        }
+
         // Archive operations
         (Verb::Archive, Noun::Task) => {
             let id = req(op, "id")?;
@@ -655,5 +726,811 @@ mod tests {
         assert_eq!(result["count"], 1, "should list exactly one archived task");
         let tasks = result["tasks"].as_array().unwrap();
         assert_eq!(tasks[0]["title"], "Will be archived");
+    }
+
+    #[tokio::test]
+    async fn dispatch_add_perspective() {
+        let (_temp, ctx) = setup().await;
+
+        let op = KanbanOperation::new(Verb::Add, Noun::Perspective, {
+            let mut m = serde_json::Map::new();
+            m.insert("name".into(), json!("Sprint View"));
+            m.insert("view".into(), json!("board"));
+            m
+        });
+        let result = execute_operation(&ctx, &op).await.unwrap();
+        assert_eq!(result["name"], "Sprint View");
+        assert_eq!(result["view"], "board");
+        assert!(result["id"].as_str().is_some());
+    }
+
+    #[tokio::test]
+    async fn dispatch_get_perspective() {
+        let (_temp, ctx) = setup().await;
+
+        // Add a perspective first
+        let op = KanbanOperation::new(Verb::Add, Noun::Perspective, {
+            let mut m = serde_json::Map::new();
+            m.insert("name".into(), json!("My View"));
+            m.insert("view".into(), json!("grid"));
+            m
+        });
+        let added = execute_operation(&ctx, &op).await.unwrap();
+        let id = added["id"].as_str().unwrap().to_string();
+
+        // Get by ID
+        let op = KanbanOperation::new(Verb::Get, Noun::Perspective, {
+            let mut m = serde_json::Map::new();
+            m.insert("id".into(), json!(id));
+            m
+        });
+        let result = execute_operation(&ctx, &op).await.unwrap();
+        assert_eq!(result["name"], "My View");
+        assert_eq!(result["view"], "grid");
+    }
+
+    #[tokio::test]
+    async fn dispatch_list_perspectives() {
+        let (_temp, ctx) = setup().await;
+
+        // Add two perspectives
+        for name in &["View A", "View B"] {
+            let op = KanbanOperation::new(Verb::Add, Noun::Perspective, {
+                let mut m = serde_json::Map::new();
+                m.insert("name".into(), json!(name));
+                m.insert("view".into(), json!("board"));
+                m
+            });
+            execute_operation(&ctx, &op).await.unwrap();
+        }
+
+        // List all
+        let op = KanbanOperation::new(Verb::List, Noun::Perspectives, serde_json::Map::new());
+        let result = execute_operation(&ctx, &op).await.unwrap();
+        assert_eq!(result["count"], 2);
+        let perspectives = result["perspectives"].as_array().unwrap();
+        assert_eq!(perspectives.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn dispatch_update_perspective() {
+        let (_temp, ctx) = setup().await;
+
+        // Add a perspective
+        let op = KanbanOperation::new(Verb::Add, Noun::Perspective, {
+            let mut m = serde_json::Map::new();
+            m.insert("name".into(), json!("Old Name"));
+            m.insert("view".into(), json!("board"));
+            m
+        });
+        let added = execute_operation(&ctx, &op).await.unwrap();
+        let id = added["id"].as_str().unwrap().to_string();
+
+        // Update the name
+        let op = KanbanOperation::new(Verb::Update, Noun::Perspective, {
+            let mut m = serde_json::Map::new();
+            m.insert("id".into(), json!(id));
+            m.insert("name".into(), json!("New Name"));
+            m.insert("view".into(), json!("grid"));
+            m
+        });
+        let result = execute_operation(&ctx, &op).await.unwrap();
+        assert_eq!(result["name"], "New Name");
+        assert_eq!(result["view"], "grid");
+    }
+
+    #[tokio::test]
+    async fn dispatch_delete_perspective() {
+        let (_temp, ctx) = setup().await;
+
+        // Add a perspective
+        let op = KanbanOperation::new(Verb::Add, Noun::Perspective, {
+            let mut m = serde_json::Map::new();
+            m.insert("name".into(), json!("Doomed"));
+            m.insert("view".into(), json!("board"));
+            m
+        });
+        let added = execute_operation(&ctx, &op).await.unwrap();
+        let id = added["id"].as_str().unwrap().to_string();
+
+        // Delete it
+        let op = KanbanOperation::new(Verb::Delete, Noun::Perspective, {
+            let mut m = serde_json::Map::new();
+            m.insert("id".into(), json!(id));
+            m
+        });
+        let result = execute_operation(&ctx, &op).await.unwrap();
+        assert_eq!(result["deleted"], true);
+
+        // Verify it's gone
+        let op = KanbanOperation::new(Verb::Get, Noun::Perspective, {
+            let mut m = serde_json::Map::new();
+            m.insert("id".into(), json!(id));
+            m
+        });
+        let result = execute_operation(&ctx, &op).await;
+        assert!(result.is_err(), "deleted perspective should not be found");
+    }
+
+    #[tokio::test]
+    async fn dispatch_perspective_full_lifecycle() {
+        let (_temp, ctx) = setup().await;
+
+        // Add
+        let op = KanbanOperation::new(Verb::Add, Noun::Perspective, {
+            let mut m = serde_json::Map::new();
+            m.insert("name".into(), json!("Lifecycle Test"));
+            m.insert("view".into(), json!("board"));
+            m.insert("filter".into(), json!("(e) => e.Status !== 'Done'"));
+            m
+        });
+        let added = execute_operation(&ctx, &op).await.unwrap();
+        let id = added["id"].as_str().unwrap().to_string();
+        assert_eq!(added["name"], "Lifecycle Test");
+        assert_eq!(added["filter"], "(e) => e.Status !== 'Done'");
+
+        // Get
+        let op = KanbanOperation::new(Verb::Get, Noun::Perspective, {
+            let mut m = serde_json::Map::new();
+            m.insert("id".into(), json!(&id));
+            m
+        });
+        let got = execute_operation(&ctx, &op).await.unwrap();
+        assert_eq!(got["name"], "Lifecycle Test");
+
+        // Update
+        let op = KanbanOperation::new(Verb::Update, Noun::Perspective, {
+            let mut m = serde_json::Map::new();
+            m.insert("id".into(), json!(&id));
+            m.insert("name".into(), json!("Updated Lifecycle"));
+            m.insert("group".into(), json!("(e) => e.Assignee"));
+            m
+        });
+        let updated = execute_operation(&ctx, &op).await.unwrap();
+        assert_eq!(updated["name"], "Updated Lifecycle");
+        assert_eq!(updated["group"], "(e) => e.Assignee");
+        // Filter should be preserved
+        assert_eq!(updated["filter"], "(e) => e.Status !== 'Done'");
+
+        // List
+        let op = KanbanOperation::new(Verb::List, Noun::Perspectives, serde_json::Map::new());
+        let listed = execute_operation(&ctx, &op).await.unwrap();
+        assert_eq!(listed["count"], 1);
+
+        // Delete
+        let op = KanbanOperation::new(Verb::Delete, Noun::Perspective, {
+            let mut m = serde_json::Map::new();
+            m.insert("id".into(), json!(&id));
+            m
+        });
+        let deleted = execute_operation(&ctx, &op).await.unwrap();
+        assert_eq!(deleted["deleted"], true);
+
+        // Verify empty
+        let op = KanbanOperation::new(Verb::List, Noun::Perspectives, serde_json::Map::new());
+        let listed = execute_operation(&ctx, &op).await.unwrap();
+        assert_eq!(listed["count"], 0);
+    }
+
+    #[tokio::test]
+    async fn dispatch_update_perspective_clear_filter_and_group_via_null() {
+        let (_temp, ctx) = setup().await;
+
+        // Add a perspective with filter and group set
+        let op = KanbanOperation::new(Verb::Add, Noun::Perspective, {
+            let mut m = serde_json::Map::new();
+            m.insert("name".into(), json!("Null Clear Test"));
+            m.insert("view".into(), json!("board"));
+            m.insert("filter".into(), json!("(e) => e.Status !== 'Done'"));
+            m.insert("group".into(), json!("(e) => e.Assignee"));
+            m
+        });
+        let added = execute_operation(&ctx, &op).await.unwrap();
+        let id = added["id"].as_str().unwrap().to_string();
+        assert_eq!(added["filter"], "(e) => e.Status !== 'Done'");
+        assert_eq!(added["group"], "(e) => e.Assignee");
+
+        // Update with filter: null and group: null to clear them
+        let op = KanbanOperation::new(Verb::Update, Noun::Perspective, {
+            let mut m = serde_json::Map::new();
+            m.insert("id".into(), json!(&id));
+            m.insert("filter".into(), Value::Null);
+            m.insert("group".into(), Value::Null);
+            m
+        });
+        let updated = execute_operation(&ctx, &op).await.unwrap();
+        assert!(
+            updated.get("filter").is_none() || updated["filter"].is_null(),
+            "filter should be cleared (null or absent), got: {:?}",
+            updated.get("filter")
+        );
+        assert!(
+            updated.get("group").is_none() || updated["group"].is_null(),
+            "group should be cleared (null or absent), got: {:?}",
+            updated.get("group")
+        );
+
+        // Verify via get that the clear persisted
+        let op = KanbanOperation::new(Verb::Get, Noun::Perspective, {
+            let mut m = serde_json::Map::new();
+            m.insert("id".into(), json!(&id));
+            m
+        });
+        let got = execute_operation(&ctx, &op).await.unwrap();
+        assert!(
+            got.get("filter").is_none() || got["filter"].is_null(),
+            "filter should remain cleared after re-fetch, got: {:?}",
+            got.get("filter")
+        );
+        assert!(
+            got.get("group").is_none() || got["group"].is_null(),
+            "group should remain cleared after re-fetch, got: {:?}",
+            got.get("group")
+        );
+    }
+
+    /// Passing malformed `fields` JSON to `add perspective` should return a parse error
+    /// instead of silently dropping the value.
+    #[tokio::test]
+    async fn dispatch_add_perspective_malformed_fields_returns_error() {
+        let (_temp, ctx) = setup().await;
+
+        let op = KanbanOperation::new(Verb::Add, Noun::Perspective, {
+            let mut m = serde_json::Map::new();
+            m.insert("name".into(), json!("Bad Fields"));
+            m.insert("view".into(), json!("board"));
+            // fields should be an array of PerspectiveFieldEntry, not a string
+            m.insert("fields".into(), json!("not-an-array"));
+            m
+        });
+        let result = execute_operation(&ctx, &op).await;
+        assert!(
+            result.is_err(),
+            "malformed fields should produce an error, not be silently dropped"
+        );
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(
+            err_msg.contains("invalid fields"),
+            "error should mention 'invalid fields', got: {err_msg}"
+        );
+    }
+
+    /// Passing malformed `sort` JSON to `add perspective` should return a parse error.
+    #[tokio::test]
+    async fn dispatch_add_perspective_malformed_sort_returns_error() {
+        let (_temp, ctx) = setup().await;
+
+        let op = KanbanOperation::new(Verb::Add, Noun::Perspective, {
+            let mut m = serde_json::Map::new();
+            m.insert("name".into(), json!("Bad Sort"));
+            m.insert("view".into(), json!("board"));
+            // sort should be an array of SortEntry, not a number
+            m.insert("sort".into(), json!(42));
+            m
+        });
+        let result = execute_operation(&ctx, &op).await;
+        assert!(
+            result.is_err(),
+            "malformed sort should produce an error, not be silently dropped"
+        );
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(
+            err_msg.contains("invalid sort"),
+            "error should mention 'invalid sort', got: {err_msg}"
+        );
+    }
+
+    /// Passing malformed `fields` JSON to `update perspective` should return a parse error.
+    #[tokio::test]
+    async fn dispatch_update_perspective_malformed_fields_returns_error() {
+        let (_temp, ctx) = setup().await;
+
+        // Create a valid perspective first
+        let op = KanbanOperation::new(Verb::Add, Noun::Perspective, {
+            let mut m = serde_json::Map::new();
+            m.insert("name".into(), json!("Valid"));
+            m.insert("view".into(), json!("board"));
+            m
+        });
+        let added = execute_operation(&ctx, &op).await.unwrap();
+        let id = added["id"].as_str().unwrap().to_string();
+
+        // Update with malformed fields
+        let op = KanbanOperation::new(Verb::Update, Noun::Perspective, {
+            let mut m = serde_json::Map::new();
+            m.insert("id".into(), json!(id));
+            m.insert("fields".into(), json!({"wrong": "shape"}));
+            m
+        });
+        let result = execute_operation(&ctx, &op).await;
+        assert!(
+            result.is_err(),
+            "malformed fields on update should produce an error"
+        );
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(
+            err_msg.contains("invalid fields"),
+            "error should mention 'invalid fields', got: {err_msg}"
+        );
+    }
+
+    /// Passing malformed `sort` JSON to `update perspective` should return a parse error.
+    #[tokio::test]
+    async fn dispatch_update_perspective_malformed_sort_returns_error() {
+        let (_temp, ctx) = setup().await;
+
+        // Create a valid perspective first
+        let op = KanbanOperation::new(Verb::Add, Noun::Perspective, {
+            let mut m = serde_json::Map::new();
+            m.insert("name".into(), json!("Valid"));
+            m.insert("view".into(), json!("board"));
+            m
+        });
+        let added = execute_operation(&ctx, &op).await.unwrap();
+        let id = added["id"].as_str().unwrap().to_string();
+
+        // Update with malformed sort
+        let op = KanbanOperation::new(Verb::Update, Noun::Perspective, {
+            let mut m = serde_json::Map::new();
+            m.insert("id".into(), json!(id));
+            m.insert("sort".into(), json!("not-an-array"));
+            m
+        });
+        let result = execute_operation(&ctx, &op).await;
+        assert!(
+            result.is_err(),
+            "malformed sort on update should produce an error"
+        );
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(
+            err_msg.contains("invalid sort"),
+            "error should mention 'invalid sort', got: {err_msg}"
+        );
+    }
+
+    // ── Board operations ──────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn dispatch_update_board() {
+        let (_temp, ctx) = setup().await;
+
+        let ops = parse_input(json!({"op": "update board", "name": "Renamed", "description": "New desc"})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(result["name"], "Renamed");
+        assert_eq!(result["description"], "New desc");
+    }
+
+    // ── Column operations ─────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn dispatch_add_column() {
+        let (_temp, ctx) = setup().await;
+
+        let ops = parse_input(json!({"op": "add column", "id": "review", "name": "Review"})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(result["id"], "review");
+        assert_eq!(result["name"], "Review");
+    }
+
+    #[tokio::test]
+    async fn dispatch_get_column() {
+        let (_temp, ctx) = setup().await;
+
+        let ops = parse_input(json!({"op": "get column", "id": "todo"})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(result["id"], "todo");
+    }
+
+    #[tokio::test]
+    async fn dispatch_update_column() {
+        let (_temp, ctx) = setup().await;
+
+        let ops = parse_input(json!({"op": "update column", "id": "todo", "name": "Backlog"})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(result["name"], "Backlog");
+    }
+
+    #[tokio::test]
+    async fn dispatch_delete_column() {
+        let (_temp, ctx) = setup().await;
+
+        // Add a fresh column with no tasks so we can delete it
+        let ops = parse_input(json!({"op": "add column", "id": "temp", "name": "Temp"})).unwrap();
+        execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        let ops = parse_input(json!({"op": "delete column", "id": "temp"})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(result["deleted"], true);
+    }
+
+    #[tokio::test]
+    async fn dispatch_list_columns() {
+        let (_temp, ctx) = setup().await;
+
+        let ops = parse_input(json!({"op": "list columns"})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert!(result["columns"].as_array().unwrap().len() >= 3);
+    }
+
+    // ── Task operations (get, update, move, delete, complete) ─────────
+
+    #[tokio::test]
+    async fn dispatch_get_task() {
+        let (_temp, ctx) = setup().await;
+
+        let ops = parse_input(json!({"op": "add task", "title": "Fetch me"})).unwrap();
+        let added = execute_operation(&ctx, &ops[0]).await.unwrap();
+        let id = added["id"].as_str().unwrap().to_string();
+
+        let ops = parse_input(json!({"op": "get task", "id": id})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(result["title"], "Fetch me");
+        assert_eq!(result["id"].as_str().unwrap(), id);
+    }
+
+    #[tokio::test]
+    async fn dispatch_update_task() {
+        let (_temp, ctx) = setup().await;
+
+        let ops = parse_input(json!({"op": "add task", "title": "Old title"})).unwrap();
+        let added = execute_operation(&ctx, &ops[0]).await.unwrap();
+        let id = added["id"].as_str().unwrap().to_string();
+
+        let ops = parse_input(json!({"op": "update task", "id": id, "title": "New title", "description": "Updated desc"})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(result["title"], "New title");
+        assert_eq!(result["description"], "Updated desc");
+    }
+
+    #[tokio::test]
+    async fn dispatch_move_task() {
+        let (_temp, ctx) = setup().await;
+
+        let ops = parse_input(json!({"op": "add task", "title": "Move me"})).unwrap();
+        let added = execute_operation(&ctx, &ops[0]).await.unwrap();
+        let id = added["id"].as_str().unwrap().to_string();
+
+        let ops = parse_input(json!({"op": "move task", "id": id, "column": "doing"})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(result["position"]["column"], "doing");
+    }
+
+    #[tokio::test]
+    async fn dispatch_delete_task() {
+        let (_temp, ctx) = setup().await;
+
+        let ops = parse_input(json!({"op": "add task", "title": "Delete me"})).unwrap();
+        let added = execute_operation(&ctx, &ops[0]).await.unwrap();
+        let id = added["id"].as_str().unwrap().to_string();
+
+        let ops = parse_input(json!({"op": "delete task", "id": id})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(result["deleted"], true);
+    }
+
+    #[tokio::test]
+    async fn dispatch_complete_task() {
+        let (_temp, ctx) = setup().await;
+
+        let ops = parse_input(json!({"op": "add task", "title": "Complete me"})).unwrap();
+        let added = execute_operation(&ctx, &ops[0]).await.unwrap();
+        let id = added["id"].as_str().unwrap().to_string();
+
+        let ops = parse_input(json!({"op": "complete task", "id": id})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(result["position"]["column"], "done");
+    }
+
+    // ── Task assign/unassign ──────────────────────────────────────────
+
+    #[tokio::test]
+    async fn dispatch_assign_and_unassign_task() {
+        let (_temp, ctx) = setup().await;
+
+        // Create an actor
+        let ops = parse_input(json!({"op": "add actor", "id": "alice", "name": "Alice"})).unwrap();
+        execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        // Create a task
+        let ops = parse_input(json!({"op": "add task", "title": "Assignable"})).unwrap();
+        let added = execute_operation(&ctx, &ops[0]).await.unwrap();
+        let id = added["id"].as_str().unwrap().to_string();
+
+        // Assign
+        let ops = parse_input(json!({"op": "assign task", "id": id, "assignee": "alice"})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(result["assigned"], true);
+        assert!(result["all_assignees"].as_array().unwrap().iter().any(|a| a.as_str() == Some("alice")));
+
+        // Unassign
+        let ops = parse_input(json!({"op": "unassign task", "id": id, "assignee": "alice"})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert!(!result["all_assignees"].as_array().unwrap().iter().any(|a| a.as_str() == Some("alice")));
+    }
+
+    // ── Next task ─────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn dispatch_next_task() {
+        let (_temp, ctx) = setup().await;
+
+        let ops = parse_input(json!({"op": "add task", "title": "First ready"})).unwrap();
+        execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        let ops = parse_input(json!({"op": "next task"})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(result["title"], "First ready");
+    }
+
+    // ── Tag/untag task ────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn dispatch_tag_and_untag_task() {
+        let (_temp, ctx) = setup().await;
+
+        // Create a tag
+        let ops = parse_input(json!({"op": "add tag", "name": "bug"})).unwrap();
+        execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        // Create a task
+        let ops = parse_input(json!({"op": "add task", "title": "Taggable"})).unwrap();
+        let added = execute_operation(&ctx, &ops[0]).await.unwrap();
+        let id = added["id"].as_str().unwrap().to_string();
+
+        // Tag it
+        let ops = parse_input(json!({"op": "tag task", "id": id, "tag": "bug"})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(result["tagged"], true);
+        assert_eq!(result["tag"], "bug");
+
+        // Untag it
+        let ops = parse_input(json!({"op": "untag task", "id": id, "tag": "bug"})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(result["untagged"], true);
+        assert_eq!(result["tag"], "bug");
+    }
+
+    // ── Swimlane operations ───────────────────────────────────────────
+
+    #[tokio::test]
+    async fn dispatch_swimlane_crud() {
+        let (_temp, ctx) = setup().await;
+
+        // Add
+        let ops = parse_input(json!({"op": "add swimlane", "id": "urgent", "name": "Urgent"})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(result["id"], "urgent");
+        assert_eq!(result["name"], "Urgent");
+
+        // Get
+        let ops = parse_input(json!({"op": "get swimlane", "id": "urgent"})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(result["name"], "Urgent");
+
+        // Update
+        let ops = parse_input(json!({"op": "update swimlane", "id": "urgent", "name": "Critical"})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(result["name"], "Critical");
+
+        // List
+        let ops = parse_input(json!({"op": "list swimlanes"})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert!(result["swimlanes"].as_array().unwrap().iter().any(|s| s["id"] == "urgent"));
+
+        // Delete
+        let ops = parse_input(json!({"op": "delete swimlane", "id": "urgent"})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(result["deleted"], true);
+    }
+
+    // ── Actor operations ──────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn dispatch_actor_crud() {
+        let (_temp, ctx) = setup().await;
+
+        // Add
+        let ops = parse_input(json!({"op": "add actor", "id": "bob", "name": "Bob"})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(result["actor"]["id"], "bob");
+        assert_eq!(result["actor"]["name"], "Bob");
+
+        // Get
+        let ops = parse_input(json!({"op": "get actor", "id": "bob"})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(result["name"], "Bob");
+
+        // Update
+        let ops = parse_input(json!({"op": "update actor", "id": "bob", "name": "Robert"})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(result["name"], "Robert");
+
+        // List
+        let ops = parse_input(json!({"op": "list actors"})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert!(result["actors"].as_array().unwrap().iter().any(|a| a["id"] == "bob"));
+
+        // Delete
+        let ops = parse_input(json!({"op": "delete actor", "id": "bob"})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(result["deleted"], true);
+    }
+
+    #[tokio::test]
+    async fn dispatch_add_actor_with_ensure() {
+        let (_temp, ctx) = setup().await;
+
+        // Add actor
+        let ops = parse_input(json!({"op": "add actor", "id": "eve", "name": "Eve", "ensure": true})).unwrap();
+        let r1 = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(r1["actor"]["id"], "eve");
+
+        // Ensure again returns existing actor without error
+        let ops = parse_input(json!({"op": "add actor", "id": "eve", "name": "Eve", "ensure": true})).unwrap();
+        let r2 = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(r2["actor"]["id"], "eve");
+    }
+
+    // ── Tag operations (board-level) ──────────────────────────────────
+
+    #[tokio::test]
+    async fn dispatch_tag_crud() {
+        let (_temp, ctx) = setup().await;
+
+        // Add
+        let ops = parse_input(json!({"op": "add tag", "name": "feature", "color": "00ff00"})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(result["name"], "feature");
+        let tag_id = result["id"].as_str().unwrap().to_string();
+
+        // Get
+        let ops = parse_input(json!({"op": "get tag", "id": tag_id})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(result["name"], "feature");
+
+        // Update
+        let ops = parse_input(json!({"op": "update tag", "id": tag_id, "name": "enhancement", "color": "0000ff", "description": "Feature request"})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(result["name"], "enhancement");
+
+        // List
+        let ops = parse_input(json!({"op": "list tags"})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert!(result["tags"].as_array().unwrap().iter().any(|t| t["name"] == "enhancement"));
+
+        // Delete
+        let ops = parse_input(json!({"op": "delete tag", "id": tag_id})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(result["deleted"], true);
+    }
+
+    // ── Attachment operations ─────────────────────────────────────────
+
+    #[tokio::test]
+    async fn dispatch_attachment_crud() {
+        let (_temp, ctx) = setup().await;
+
+        // Create a task to attach to
+        let ops = parse_input(json!({"op": "add task", "title": "Has attachments"})).unwrap();
+        let task = execute_operation(&ctx, &ops[0]).await.unwrap();
+        let task_id = task["id"].as_str().unwrap().to_string();
+
+        // Add attachment (use KanbanOperation::new to avoid parse_input param issues)
+        let op = KanbanOperation::new(Verb::Add, Noun::Attachment, {
+            let mut m = serde_json::Map::new();
+            m.insert("task_id".into(), json!(task_id));
+            m.insert("name".into(), json!("screenshot.png"));
+            m.insert("path".into(), json!("/tmp/screenshot.png"));
+            m
+        });
+        let result = execute_operation(&ctx, &op).await.unwrap();
+        assert_eq!(result["attachment"]["name"], "screenshot.png");
+        let att_id = result["attachment"]["id"].as_str().unwrap().to_string();
+
+        // Get attachment (returns unwrapped, not nested under "attachment")
+        let op = KanbanOperation::new(Verb::Get, Noun::Attachment, {
+            let mut m = serde_json::Map::new();
+            m.insert("task_id".into(), json!(task_id));
+            m.insert("id".into(), json!(att_id));
+            m
+        });
+        let result = execute_operation(&ctx, &op).await.unwrap();
+        assert_eq!(result["name"], "screenshot.png");
+
+        // Update attachment
+        let op = KanbanOperation::new(Verb::Update, Noun::Attachment, {
+            let mut m = serde_json::Map::new();
+            m.insert("task_id".into(), json!(task_id));
+            m.insert("id".into(), json!(att_id));
+            m.insert("name".into(), json!("renamed.png"));
+            m.insert("mime_type".into(), json!("image/png"));
+            m
+        });
+        let result = execute_operation(&ctx, &op).await.unwrap();
+        assert_eq!(result["attachment"]["name"], "renamed.png");
+
+        // List attachments
+        let op = KanbanOperation::new(Verb::List, Noun::Attachments, {
+            let mut m = serde_json::Map::new();
+            m.insert("task_id".into(), json!(task_id));
+            m
+        });
+        let result = execute_operation(&ctx, &op).await.unwrap();
+        assert_eq!(result["count"], 1);
+
+        // Delete attachment
+        let op = KanbanOperation::new(Verb::Delete, Noun::Attachment, {
+            let mut m = serde_json::Map::new();
+            m.insert("task_id".into(), json!(task_id));
+            m.insert("id".into(), json!(att_id));
+            m
+        });
+        let result = execute_operation(&ctx, &op).await.unwrap();
+        assert_eq!(result["deleted"], true);
+    }
+
+    // ── Activity operations ───────────────────────────────────────────
+
+    #[tokio::test]
+    async fn dispatch_list_activity() {
+        let (_temp, ctx) = setup().await;
+
+        // Add a task to generate activity
+        let ops = parse_input(json!({"op": "add task", "title": "Activity test"})).unwrap();
+        execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        let ops = parse_input(json!({"op": "list activity", "limit": 5})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert!(result["entries"].as_array().unwrap().len() > 0);
+    }
+
+    // ── Dispatch with actor context ───────────────────────────────────
+
+    #[tokio::test]
+    async fn dispatch_add_task_with_actor_auto_assigns() {
+        let (_temp, ctx) = setup().await;
+
+        // Create actor
+        let ops = parse_input(json!({"op": "add actor", "id": "agent-1", "name": "Agent One"})).unwrap();
+        execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        // Create an operation with actor set (simulating MCP actor context)
+        let mut op = KanbanOperation::new(Verb::Add, Noun::Task, {
+            let mut m = serde_json::Map::new();
+            m.insert("title".into(), json!("Auto-assigned task"));
+            m
+        });
+        op.actor = Some(ActorId::from_string("agent-1"));
+
+        let result = execute_operation(&ctx, &op).await.unwrap();
+        assert!(
+            result["assignees"].as_array().unwrap().iter().any(|a| a.as_str() == Some("agent-1")),
+            "task should be auto-assigned to the operation actor"
+        );
+    }
+
+    // ── Missing required field errors ─────────────────────────────────
+
+    #[tokio::test]
+    async fn dispatch_missing_required_field_returns_error() {
+        let (_temp, ctx) = setup().await;
+
+        // Move task without column should fail
+        let op = KanbanOperation::new(Verb::Move, Noun::Task, {
+            let mut m = serde_json::Map::new();
+            m.insert("id".into(), json!("some-id"));
+            m
+        });
+        let result = execute_operation(&ctx, &op).await;
+        assert!(result.is_err(), "missing required 'column' should error");
+
+        // Add column without name should fail
+        let op = KanbanOperation::new(Verb::Add, Noun::Column, {
+            let mut m = serde_json::Map::new();
+            m.insert("id".into(), json!("col"));
+            m
+        });
+        let result = execute_operation(&ctx, &op).await;
+        assert!(result.is_err(), "missing required 'name' should error");
     }
 }

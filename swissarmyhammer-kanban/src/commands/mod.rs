@@ -10,6 +10,7 @@ pub mod column_commands;
 pub mod drag_commands;
 pub mod entity_commands;
 pub mod file_commands;
+pub mod perspective_commands;
 pub mod task_commands;
 pub mod ui_commands;
 
@@ -143,6 +144,40 @@ pub fn register_commands() -> HashMap<String, Arc<dyn Command>> {
     );
     map.insert("window.new".into(), Arc::new(file_commands::NewWindowCmd));
 
+    // Perspective commands
+    map.insert(
+        "perspective.load".into(),
+        Arc::new(perspective_commands::LoadPerspectiveCmd),
+    );
+    map.insert(
+        "perspective.save".into(),
+        Arc::new(perspective_commands::SavePerspectiveCmd),
+    );
+    map.insert(
+        "perspective.delete".into(),
+        Arc::new(perspective_commands::DeletePerspectiveCmd),
+    );
+    map.insert(
+        "perspective.filter".into(),
+        Arc::new(perspective_commands::SetFilterCmd),
+    );
+    map.insert(
+        "perspective.clearFilter".into(),
+        Arc::new(perspective_commands::ClearFilterCmd),
+    );
+    map.insert(
+        "perspective.group".into(),
+        Arc::new(perspective_commands::SetGroupCmd),
+    );
+    map.insert(
+        "perspective.clearGroup".into(),
+        Arc::new(perspective_commands::ClearGroupCmd),
+    );
+    map.insert(
+        "perspective.list".into(),
+        Arc::new(perspective_commands::ListPerspectivesCmd),
+    );
+
     // App commands
     map.insert("app.quit".into(), Arc::new(app_commands::QuitCmd));
     map.insert("app.about".into(), Arc::new(app_commands::AboutCmd));
@@ -214,9 +249,9 @@ mod tests {
         // + 12 app (quit, about, help, command, palette, search,
         //          dismiss, undo, redo, keymap.vim, keymap.cua, keymap.emacs)
         // + 5 file (switchBoard, closeBoard, newBoard, openBoard, window.new)
-        // + 3 drag = 41
+        // + 3 drag + 8 perspective = 49
         // Note: clipboard entries are duplicated in the source but HashMap deduplicates.
-        assert_eq!(cmds.len(), 41);
+        assert_eq!(cmds.len(), 49);
     }
 
     // =========================================================================

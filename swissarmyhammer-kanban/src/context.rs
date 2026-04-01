@@ -15,6 +15,7 @@ use std::sync::Arc;
 use swissarmyhammer_entity::changelog::ChangeEntry;
 use swissarmyhammer_entity::{Entity, EntityContext};
 use swissarmyhammer_fields::{load_yaml_dir, DeriveRegistry, FieldsContext, ValidationEngine};
+use swissarmyhammer_perspectives::{PerspectiveChangelog, PerspectiveContext};
 use swissarmyhammer_views::{ViewsChangelog, ViewsContext};
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
@@ -36,6 +37,10 @@ pub struct KanbanContext {
     views: Option<RwLock<ViewsContext>>,
     /// View changelog (populated via `open()`, None when created via `new()`)
     views_changelog: Option<ViewsChangelog>,
+    /// Perspective registry — lazy-initialized on first access.
+    perspectives: OnceCell<RwLock<PerspectiveContext>>,
+    /// Perspective changelog — lazy-initialized on first access.
+    perspectives_changelog: std::sync::OnceLock<PerspectiveChangelog>,
     /// Derive handlers for computed field read/write
     derive_registry: Arc<DeriveRegistry>,
 }
@@ -68,6 +73,8 @@ impl KanbanContext {
             entities: OnceCell::new(),
             views: None,
             views_changelog: None,
+            perspectives: OnceCell::new(),
+            perspectives_changelog: std::sync::OnceLock::new(),
             derive_registry: Arc::new(crate::derive_handlers::kanban_derive_registry()),
         }
     }
@@ -100,6 +107,18 @@ impl KanbanContext {
         let views = Self::build_views_context(&views_root)?;
         let views_changelog = ViewsChangelog::new(root.join("views.jsonl"));
 
+        // Build perspectives context
+        let perspectives_dir = root.join("perspectives");
+        fs::create_dir_all(&perspectives_dir).await?;
+        let perspectives = PerspectiveContext::open(&perspectives_dir).await?;
+        let perspectives_changelog =
+            PerspectiveChangelog::new(root.join("perspectives.jsonl"));
+
+        let persp_cell = OnceCell::new();
+        persp_cell.set(RwLock::new(perspectives)).ok();
+        let persp_cl_cell = std::sync::OnceLock::new();
+        persp_cl_cell.set(perspectives_changelog).ok();
+
         let context_name = Self::derive_context_name(&root);
         Ok(Self {
             root,
@@ -108,6 +127,8 @@ impl KanbanContext {
             entities: cell,
             views: Some(RwLock::new(views)),
             views_changelog: Some(views_changelog),
+            perspectives: persp_cell,
+            perspectives_changelog: persp_cl_cell,
             derive_registry: Arc::new(crate::derive_handlers::kanban_derive_registry()),
         })
     }
@@ -148,6 +169,23 @@ impl KanbanContext {
     /// Access the view changelog, if initialized.
     pub fn views_changelog(&self) -> Option<&ViewsChangelog> {
         self.views_changelog.as_ref()
+    }
+
+    /// Access the perspective registry lock, lazy-initializing on first call.
+    pub async fn perspective_context(&self) -> Result<&RwLock<PerspectiveContext>> {
+        self.perspectives
+            .get_or_try_init(|| async {
+                let dir = self.perspectives_dir();
+                let ctx = PerspectiveContext::open(dir).await?;
+                Ok::<RwLock<PerspectiveContext>, KanbanError>(RwLock::new(ctx))
+            })
+            .await
+    }
+
+    /// Access the perspective changelog, lazy-initializing on first call.
+    pub fn perspective_changelog(&self) -> &PerspectiveChangelog {
+        self.perspectives_changelog
+            .get_or_init(|| PerspectiveChangelog::new(self.root.join("perspectives.jsonl")))
     }
 
     // =========================================================================
@@ -237,6 +275,11 @@ impl KanbanContext {
         self.root.join("swimlanes").join(format!("{}.jsonl", id))
     }
 
+    /// Path to the perspectives directory
+    pub fn perspectives_dir(&self) -> PathBuf {
+        self.root.join("perspectives")
+    }
+
     /// Path to the activity directory
     pub fn activity_dir(&self) -> PathBuf {
         self.root.join("activity")
@@ -273,6 +316,7 @@ impl KanbanContext {
             && self.columns_dir().exists()
             && self.swimlanes_dir().exists()
             && self.activity_dir().exists()
+            && self.perspectives_dir().exists()
     }
 
     /// Create the directory structure for a new board
@@ -290,6 +334,7 @@ impl KanbanContext {
         fs::create_dir_all(self.columns_dir()).await?;
         fs::create_dir_all(self.swimlanes_dir()).await?;
         fs::create_dir_all(self.activity_dir()).await?;
+        fs::create_dir_all(self.perspectives_dir()).await?;
         Ok(())
     }
 
@@ -606,7 +651,7 @@ impl Drop for KanbanLock {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{ColumnId, SwimlaneId};
+    use crate::types::{ActorId, ColumnId, SwimlaneId, TagId, TaskId};
     use tempfile::TempDir;
 
     async fn setup() -> (TempDir, KanbanContext) {
@@ -1063,6 +1108,395 @@ type:
         let views_dir = kanban_dir.join("views");
         let board_file = views_dir.join("01JMVIEW0000000000BOARD0.yaml");
         assert!(board_file.exists(), "board view should be seeded to disk");
+    }
+
+    // =========================================================================
+    // find() tests
+    // =========================================================================
+
+    #[test]
+    fn find_discovers_kanban_dir_in_current() {
+        let temp = TempDir::new().unwrap();
+        let kanban_dir = temp.path().join(".kanban");
+        std::fs::create_dir_all(&kanban_dir).unwrap();
+
+        let ctx = KanbanContext::find(temp.path()).unwrap();
+        assert_eq!(ctx.root(), kanban_dir);
+    }
+
+    #[test]
+    fn find_walks_up_to_parent_directory() {
+        let temp = TempDir::new().unwrap();
+        let kanban_dir = temp.path().join(".kanban");
+        std::fs::create_dir_all(&kanban_dir).unwrap();
+
+        // Start search from a nested subdirectory
+        let nested = temp.path().join("src").join("lib").join("deep");
+        std::fs::create_dir_all(&nested).unwrap();
+
+        let ctx = KanbanContext::find(&nested).unwrap();
+        assert_eq!(ctx.root(), kanban_dir);
+    }
+
+    #[test]
+    fn find_returns_error_when_no_kanban_dir() {
+        let temp = TempDir::new().unwrap();
+        // No .kanban directory created
+        let result = KanbanContext::find(temp.path());
+        assert!(matches!(result, Err(KanbanError::NotInitialized { .. })));
+    }
+
+    #[test]
+    fn find_uses_closest_kanban_dir() {
+        let temp = TempDir::new().unwrap();
+        // Create .kanban at root
+        let root_kanban = temp.path().join(".kanban");
+        std::fs::create_dir_all(&root_kanban).unwrap();
+
+        // Create .kanban in a subdirectory (closer to search start)
+        let sub_kanban = temp.path().join("sub").join(".kanban");
+        std::fs::create_dir_all(&sub_kanban).unwrap();
+
+        let ctx = KanbanContext::find(temp.path().join("sub")).unwrap();
+        assert_eq!(ctx.root(), sub_kanban);
+    }
+
+    // =========================================================================
+    // Activity logging tests
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_append_activity_and_read_back() {
+        let (_temp, ctx) = setup().await;
+
+        let entry = LogEntry::new(
+            "add task",
+            serde_json::json!({"title": "Hello"}),
+            serde_json::json!({"id": "task1"}),
+            None,
+            10,
+        );
+        ctx.append_activity(&entry).await.unwrap();
+
+        let entries = ctx.read_activity(None).await.unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].op, "add task");
+    }
+
+    #[tokio::test]
+    async fn test_read_activity_returns_newest_first() {
+        let (_temp, ctx) = setup().await;
+
+        let e1 = LogEntry::new("add task", serde_json::json!({}), serde_json::json!({}), None, 1);
+        let e2 =
+            LogEntry::new("move task", serde_json::json!({}), serde_json::json!({}), None, 2);
+        let e3 = LogEntry::new(
+            "complete task",
+            serde_json::json!({}),
+            serde_json::json!({}),
+            None,
+            3,
+        );
+
+        ctx.append_activity(&e1).await.unwrap();
+        ctx.append_activity(&e2).await.unwrap();
+        ctx.append_activity(&e3).await.unwrap();
+
+        let entries = ctx.read_activity(None).await.unwrap();
+        assert_eq!(entries.len(), 3);
+        // Newest first (reversed order)
+        assert_eq!(entries[0].op, "complete task");
+        assert_eq!(entries[1].op, "move task");
+        assert_eq!(entries[2].op, "add task");
+    }
+
+    #[tokio::test]
+    async fn test_read_activity_with_limit() {
+        let (_temp, ctx) = setup().await;
+
+        for i in 0..5 {
+            let entry = LogEntry::new(
+                format!("op{}", i),
+                serde_json::json!({}),
+                serde_json::json!({}),
+                None,
+                1,
+            );
+            ctx.append_activity(&entry).await.unwrap();
+        }
+
+        let entries = ctx.read_activity(Some(2)).await.unwrap();
+        assert_eq!(entries.len(), 2);
+        // Should be the 2 newest
+        assert_eq!(entries[0].op, "op4");
+        assert_eq!(entries[1].op, "op3");
+    }
+
+    #[tokio::test]
+    async fn test_read_activity_empty_when_no_file() {
+        let (_temp, ctx) = setup().await;
+
+        let entries = ctx.read_activity(None).await.unwrap();
+        assert!(entries.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_append_task_log() {
+        let (_temp, ctx) = setup().await;
+
+        let task_id = TaskId::new();
+        let entry = LogEntry::new(
+            "update task",
+            serde_json::json!({"id": task_id.to_string()}),
+            serde_json::json!({}),
+            Some("alice".into()),
+            5,
+        );
+        ctx.append_task_log(&task_id, &entry).await.unwrap();
+
+        // Verify the file was created at the expected path
+        let log_path = ctx.task_log_path(&task_id);
+        assert!(log_path.exists());
+
+        // Read back and verify content
+        let content = tokio::fs::read_to_string(&log_path).await.unwrap();
+        let parsed: LogEntry = serde_json::from_str(content.trim()).unwrap();
+        assert_eq!(parsed.op, "update task");
+        assert_eq!(parsed.actor, Some("alice".into()));
+    }
+
+    #[tokio::test]
+    async fn test_append_tag_log() {
+        let (_temp, ctx) = setup().await;
+
+        let tag_id = TagId::new();
+        let entry = LogEntry::new(
+            "add tag",
+            serde_json::json!({}),
+            serde_json::json!({}),
+            None,
+            1,
+        );
+        ctx.append_tag_log(&tag_id, &entry).await.unwrap();
+
+        let log_path = ctx.tag_log_path(&tag_id);
+        assert!(log_path.exists());
+    }
+
+    #[tokio::test]
+    async fn test_append_actor_log() {
+        let (_temp, ctx) = setup().await;
+
+        let actor_id = ActorId::from_string("bob");
+        let entry = LogEntry::new(
+            "add actor",
+            serde_json::json!({}),
+            serde_json::json!({}),
+            None,
+            1,
+        );
+        ctx.append_actor_log(&actor_id, &entry).await.unwrap();
+
+        let log_path = ctx.actor_log_path(&actor_id);
+        assert!(log_path.exists());
+    }
+
+    #[tokio::test]
+    async fn test_append_column_log() {
+        let (_temp, ctx) = setup().await;
+
+        let col_id = ColumnId::from_string("doing");
+        let entry = LogEntry::new(
+            "add column",
+            serde_json::json!({}),
+            serde_json::json!({}),
+            None,
+            1,
+        );
+        ctx.append_column_log(&col_id, &entry).await.unwrap();
+
+        let log_path = ctx.column_log_path(&col_id);
+        assert!(log_path.exists());
+    }
+
+    #[tokio::test]
+    async fn test_append_swimlane_log() {
+        let (_temp, ctx) = setup().await;
+
+        let lane_id = SwimlaneId::from_string("backend");
+        let entry = LogEntry::new(
+            "add swimlane",
+            serde_json::json!({}),
+            serde_json::json!({}),
+            None,
+            1,
+        );
+        ctx.append_swimlane_log(&lane_id, &entry).await.unwrap();
+
+        let log_path = ctx.swimlane_log_path(&lane_id);
+        assert!(log_path.exists());
+    }
+
+    #[tokio::test]
+    async fn test_append_board_log() {
+        let (_temp, ctx) = setup().await;
+
+        let entry = LogEntry::new(
+            "update board",
+            serde_json::json!({}),
+            serde_json::json!({}),
+            None,
+            1,
+        );
+        ctx.append_board_log(&entry).await.unwrap();
+
+        let log_path = ctx.board_log_path();
+        assert!(log_path.exists());
+    }
+
+    #[tokio::test]
+    async fn test_append_log_creates_file_and_appends() {
+        let (_temp, ctx) = setup().await;
+
+        let e1 = LogEntry::new("op1", serde_json::json!({}), serde_json::json!({}), None, 1);
+        let e2 = LogEntry::new("op2", serde_json::json!({}), serde_json::json!({}), None, 2);
+
+        ctx.append_activity(&e1).await.unwrap();
+        ctx.append_activity(&e2).await.unwrap();
+
+        // Both entries should be in the file, one per line
+        let content = tokio::fs::read_to_string(ctx.activity_path()).await.unwrap();
+        let lines: Vec<&str> = content.lines().filter(|l| !l.is_empty()).collect();
+        assert_eq!(lines.len(), 2);
+
+        let parsed1: LogEntry = serde_json::from_str(lines[0]).unwrap();
+        let parsed2: LogEntry = serde_json::from_str(lines[1]).unwrap();
+        assert_eq!(parsed1.op, "op1");
+        assert_eq!(parsed2.op, "op2");
+    }
+
+    // =========================================================================
+    // write_entity_generic / delete_entity_generic coverage
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_write_entity_generic_returns_changelog_id() {
+        let (_temp, ctx) = setup_with_fields().await;
+
+        let mut tag = swissarmyhammer_entity::Entity::new("tag", "priority");
+        tag.set("tag_name", serde_json::json!("Priority"));
+
+        // First write should return Some (changelog entry created)
+        let result = ctx.write_entity_generic(&tag).await.unwrap();
+        assert!(result.is_some(), "first write should produce a changelog ID");
+    }
+
+    #[tokio::test]
+    async fn test_write_entity_generic_no_change_returns_none() {
+        let (_temp, ctx) = setup_with_fields().await;
+
+        let mut tag = swissarmyhammer_entity::Entity::new("tag", "priority");
+        tag.set("tag_name", serde_json::json!("Priority"));
+
+        ctx.write_entity_generic(&tag).await.unwrap();
+
+        // Writing the exact same entity again should return None (no changes)
+        let result = ctx.write_entity_generic(&tag).await.unwrap();
+        assert!(
+            result.is_none(),
+            "writing identical entity should produce no changelog entry"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_delete_entity_generic_returns_changelog_id() {
+        let (_temp, ctx) = setup_with_fields().await;
+
+        let mut tag = swissarmyhammer_entity::Entity::new("tag", "todelete");
+        tag.set("tag_name", serde_json::json!("ToDelete"));
+        ctx.write_entity_generic(&tag).await.unwrap();
+
+        let result = ctx.delete_entity_generic("tag", "todelete").await.unwrap();
+        assert!(
+            result.is_some(),
+            "deleting existing entity should produce a changelog ID"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_delete_entity_generic_nonexistent_returns_none() {
+        let (_temp, ctx) = setup_with_fields().await;
+
+        let result = ctx
+            .delete_entity_generic("tag", "doesnotexist")
+            .await
+            .unwrap();
+        assert!(
+            result.is_none(),
+            "deleting nonexistent entity should return None"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_read_entity_changelog_tracks_create_and_update() {
+        let (_temp, ctx) = setup_with_fields().await;
+
+        let mut tag = swissarmyhammer_entity::Entity::new("tag", "tracked");
+        tag.set("tag_name", serde_json::json!("Tracked"));
+        ctx.write_entity_generic(&tag).await.unwrap();
+
+        tag.set("tag_name", serde_json::json!("Updated"));
+        ctx.write_entity_generic(&tag).await.unwrap();
+
+        let log = ctx.read_entity_changelog("tag", "tracked").await.unwrap();
+        assert_eq!(log.len(), 2);
+        assert_eq!(log[0].op, "create");
+        assert_eq!(log[1].op, "update");
+    }
+
+    // =========================================================================
+    // seed_builtin_views tests
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_seed_builtin_views_writes_yaml_files() {
+        let temp = TempDir::new().unwrap();
+        let views_root = temp.path().join("views");
+        std::fs::create_dir_all(&views_root).unwrap();
+
+        KanbanContext::seed_builtin_views(&views_root).await.unwrap();
+
+        // At least one view file should have been written
+        let entries: Vec<_> = std::fs::read_dir(&views_root)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().map_or(false, |ext| ext == "yaml"))
+            .collect();
+        assert!(
+            !entries.is_empty(),
+            "seed_builtin_views should write at least one YAML file"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_seed_builtin_views_does_not_overwrite_existing() {
+        let temp = TempDir::new().unwrap();
+        let views_root = temp.path().join("views");
+        std::fs::create_dir_all(&views_root).unwrap();
+
+        // Seed once
+        KanbanContext::seed_builtin_views(&views_root).await.unwrap();
+
+        // Overwrite a view file with custom content
+        let board_path = views_root.join("01JMVIEW0000000000BOARD0.yaml");
+        assert!(board_path.exists());
+        std::fs::write(&board_path, "custom: content\n").unwrap();
+
+        // Seed again - should not overwrite
+        KanbanContext::seed_builtin_views(&views_root).await.unwrap();
+
+        let content = std::fs::read_to_string(&board_path).unwrap();
+        assert_eq!(content, "custom: content\n");
     }
 
     #[tokio::test]

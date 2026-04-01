@@ -334,4 +334,198 @@ mod tests {
         assert_eq!(stack.pointer, 0);
         assert!(stack.entries.is_empty());
     }
+
+    #[test]
+    fn with_max_size_sets_capacity() {
+        let stack = UndoStack::with_max_size(5);
+        assert_eq!(stack.max_size, 5);
+        assert!(stack.entries.is_empty());
+        assert_eq!(stack.pointer, 0);
+    }
+
+    #[test]
+    fn undo_target_walks_back_through_entries() {
+        let mut stack = UndoStack::new();
+        stack.push("a", "op-a");
+        stack.push("b", "op-b");
+        stack.push("c", "op-c");
+
+        // Pointer at 3, undo target is the most recent entry
+        assert_eq!(stack.undo_target(), Some("c"));
+        assert_eq!(stack.redo_target(), None);
+
+        stack.record_undo(); // pointer 2
+        assert_eq!(stack.undo_target(), Some("b"));
+        assert_eq!(stack.redo_target(), Some("c"));
+
+        stack.record_undo(); // pointer 1
+        assert_eq!(stack.undo_target(), Some("a"));
+        assert_eq!(stack.redo_target(), Some("b"));
+
+        stack.record_undo(); // pointer 0
+        assert_eq!(stack.undo_target(), None);
+        assert_eq!(stack.redo_target(), Some("a"));
+    }
+
+    #[test]
+    fn redo_target_walks_forward_through_entries() {
+        let mut stack = UndoStack::new();
+        stack.push("a", "op-a");
+        stack.push("b", "op-b");
+        // Undo both
+        stack.record_undo();
+        stack.record_undo();
+        assert_eq!(stack.pointer, 0);
+
+        assert_eq!(stack.redo_target(), Some("a"));
+        stack.record_redo(); // pointer 1
+        assert_eq!(stack.redo_target(), Some("b"));
+        stack.record_redo(); // pointer 2
+        assert_eq!(stack.redo_target(), None);
+    }
+
+    #[test]
+    fn push_trims_multiple_excess_entries() {
+        let mut stack = UndoStack::with_max_size(2);
+        // Push 2 to fill
+        stack.push("id1", "op1");
+        stack.push("id2", "op2");
+        assert_eq!(stack.entries.len(), 2);
+
+        // Push another, should trim oldest
+        stack.push("id3", "op3");
+        assert_eq!(stack.entries.len(), 2);
+        assert_eq!(stack.entries[0].id, "id2");
+        assert_eq!(stack.entries[1].id, "id3");
+        assert_eq!(stack.pointer, 2);
+    }
+
+    #[test]
+    fn push_trims_adjusts_pointer_correctly() {
+        // With max_size=1, every push trims old entries
+        let mut stack = UndoStack::with_max_size(1);
+        stack.push("a", "op-a");
+        assert_eq!(stack.pointer, 1);
+        assert_eq!(stack.entries.len(), 1);
+
+        stack.push("b", "op-b");
+        assert_eq!(stack.pointer, 1);
+        assert_eq!(stack.entries.len(), 1);
+        assert_eq!(stack.entries[0].id, "b");
+    }
+
+    #[test]
+    fn clear_on_empty_stack_is_noop() {
+        let mut stack = UndoStack::new();
+        stack.clear();
+        assert_eq!(stack.pointer, 0);
+        assert!(stack.entries.is_empty());
+    }
+
+    #[test]
+    fn save_creates_parent_directories() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("nested").join("deep").join("undo_stack.yaml");
+
+        let mut stack = UndoStack::new();
+        stack.push("id1", "op1");
+        stack.save(&path).unwrap();
+
+        assert!(path.exists());
+        let loaded = UndoStack::load(&path).unwrap();
+        assert_eq!(loaded.entries.len(), 1);
+        assert_eq!(loaded.entries[0].id, "id1");
+    }
+
+    #[test]
+    fn load_empty_file_returns_default() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("undo_stack.yaml");
+        std::fs::write(&path, "").unwrap();
+
+        let stack = UndoStack::load(&path).unwrap();
+        assert!(stack.entries.is_empty());
+        assert_eq!(stack.pointer, 0);
+    }
+
+    #[test]
+    fn load_whitespace_only_file_returns_default() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("undo_stack.yaml");
+        std::fs::write(&path, "   \n\n  ").unwrap();
+
+        let stack = UndoStack::load(&path).unwrap();
+        assert!(stack.entries.is_empty());
+        assert_eq!(stack.pointer, 0);
+    }
+
+    #[test]
+    fn load_clamps_out_of_range_pointer() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("undo_stack.yaml");
+        // Write YAML with pointer beyond entries length
+        let yaml = "entries:\n  - id: x\n    label: op-x\npointer: 999\nmax_size: 100\n";
+        std::fs::write(&path, yaml).unwrap();
+
+        let stack = UndoStack::load(&path).unwrap();
+        assert_eq!(stack.entries.len(), 1);
+        // Pointer should be clamped to entries.len()
+        assert_eq!(stack.pointer, 1);
+    }
+
+    #[test]
+    fn load_trims_entries_exceeding_max_size() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("undo_stack.yaml");
+        // Write YAML with 3 entries but max_size of 2
+        let yaml = "\
+entries:
+  - id: a
+    label: op-a
+  - id: b
+    label: op-b
+  - id: c
+    label: op-c
+pointer: 3
+max_size: 2
+";
+        std::fs::write(&path, yaml).unwrap();
+
+        let stack = UndoStack::load(&path).unwrap();
+        assert_eq!(stack.entries.len(), 2);
+        // Oldest entry (a) should be trimmed
+        assert_eq!(stack.entries[0].id, "b");
+        assert_eq!(stack.entries[1].id, "c");
+        // Pointer was 3, excess is 1, so pointer = 3-1 = 2
+        assert_eq!(stack.pointer, 2);
+    }
+
+    #[test]
+    fn save_then_load_preserves_all_fields() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("undo_stack.yaml");
+
+        let mut stack = UndoStack::with_max_size(50);
+        stack.push("tx-001", "create task A");
+        stack.push("tx-002", "update task A");
+        stack.push("tx-003", "delete task B");
+        stack.record_undo(); // pointer moves back to 2
+
+        stack.save(&path).unwrap();
+        let loaded = UndoStack::load(&path).unwrap();
+
+        assert_eq!(loaded.entries.len(), 3);
+        assert_eq!(loaded.pointer, 2);
+        assert_eq!(loaded.max_size, 50);
+        assert_eq!(loaded.entries[0].id, "tx-001");
+        assert_eq!(loaded.entries[0].label, "create task A");
+        assert_eq!(loaded.entries[1].id, "tx-002");
+        assert_eq!(loaded.entries[1].label, "update task A");
+        assert_eq!(loaded.entries[2].id, "tx-003");
+        assert_eq!(loaded.entries[2].label, "delete task B");
+        assert!(loaded.can_undo());
+        assert!(loaded.can_redo());
+        assert_eq!(loaded.undo_target(), Some("tx-002"));
+        assert_eq!(loaded.redo_target(), Some("tx-003"));
+    }
 }

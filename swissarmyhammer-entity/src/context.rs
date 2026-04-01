@@ -2580,6 +2580,421 @@ mod tests {
         assert_eq!(restored.get_str("color"), Some("#ff0000"));
     }
 
+    // =========================================================================
+    // Undo/redo for archive and unarchive operations
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_undo_archive_restores_entity() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields.clone());
+
+        // Create a tag
+        let mut tag = Entity::new("tag", "bug");
+        tag.set("tag_name", json!("Bug"));
+        tag.set("color", json!("#ff0000"));
+        ctx.write(&tag).await.unwrap();
+
+        // Archive it
+        let archive_ulid = ctx.archive("tag", "bug").await.unwrap().unwrap();
+
+        // Verify it's archived (not in live storage)
+        assert!(ctx.read("tag", "bug").await.is_err());
+        assert_eq!(ctx.list_archived("tag").await.unwrap().len(), 1);
+
+        // Rebuild indexes so undo can find the archive changelog entry
+        ctx.rebuild_indexes().await.unwrap();
+
+        // Undo the archive
+        let undo_result = ctx.undo(&archive_ulid).await.unwrap();
+        assert!(undo_result.is_some());
+
+        // Entity should be back in live storage
+        let restored = ctx.read("tag", "bug").await.unwrap();
+        assert_eq!(restored.get_str("tag_name"), Some("Bug"));
+        assert_eq!(restored.get_str("color"), Some("#ff0000"));
+
+        // No longer in archive
+        assert_eq!(ctx.list_archived("tag").await.unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_redo_archive_re_archives_entity() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields.clone());
+
+        // Create a tag
+        let mut tag = Entity::new("tag", "bug");
+        tag.set("tag_name", json!("Bug"));
+        tag.set("color", json!("#ff0000"));
+        ctx.write(&tag).await.unwrap();
+
+        // Archive it
+        let archive_ulid = ctx.archive("tag", "bug").await.unwrap().unwrap();
+
+        // Rebuild indexes so undo can find the archive changelog entry
+        ctx.rebuild_indexes().await.unwrap();
+
+        // Undo the archive (restores to live)
+        ctx.undo(&archive_ulid).await.unwrap();
+        assert!(ctx.read("tag", "bug").await.is_ok());
+
+        // Rebuild indexes again (undo added new changelog entries)
+        ctx.rebuild_indexes().await.unwrap();
+
+        // Redo the archive (archives it again)
+        let redo_result = ctx.redo(&archive_ulid).await.unwrap();
+        assert!(redo_result.is_some());
+
+        // Entity should be gone from live storage again
+        assert!(ctx.read("tag", "bug").await.is_err());
+        assert_eq!(ctx.list_archived("tag").await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_undo_unarchive_re_archives_entity() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields.clone());
+
+        // Create a tag, archive it, then unarchive it
+        let mut tag = Entity::new("tag", "bug");
+        tag.set("tag_name", json!("Bug"));
+        tag.set("color", json!("#ff0000"));
+        ctx.write(&tag).await.unwrap();
+        ctx.archive("tag", "bug").await.unwrap();
+        let unarchive_ulid = ctx.unarchive("tag", "bug").await.unwrap().unwrap();
+
+        // Verify it's back in live storage
+        assert!(ctx.read("tag", "bug").await.is_ok());
+
+        // Rebuild indexes so undo can find the unarchive changelog entry
+        ctx.rebuild_indexes().await.unwrap();
+
+        // Undo the unarchive (re-archives it)
+        let undo_result = ctx.undo(&unarchive_ulid).await.unwrap();
+        assert!(undo_result.is_some());
+
+        // Entity should be back in archive
+        assert!(ctx.read("tag", "bug").await.is_err());
+        assert_eq!(ctx.list_archived("tag").await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_redo_unarchive_restores_from_archive() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields.clone());
+
+        // Create a tag, archive it, then unarchive it
+        let mut tag = Entity::new("tag", "bug");
+        tag.set("tag_name", json!("Bug"));
+        tag.set("color", json!("#ff0000"));
+        ctx.write(&tag).await.unwrap();
+        ctx.archive("tag", "bug").await.unwrap();
+        let unarchive_ulid = ctx.unarchive("tag", "bug").await.unwrap().unwrap();
+
+        // Rebuild indexes
+        ctx.rebuild_indexes().await.unwrap();
+
+        // Undo the unarchive (re-archives it)
+        ctx.undo(&unarchive_ulid).await.unwrap();
+        assert!(ctx.read("tag", "bug").await.is_err());
+
+        // Rebuild indexes again
+        ctx.rebuild_indexes().await.unwrap();
+
+        // Redo the unarchive (restores from archive)
+        let redo_result = ctx.redo(&unarchive_ulid).await.unwrap();
+        assert!(redo_result.is_some());
+
+        // Entity should be back in live storage
+        let restored = ctx.read("tag", "bug").await.unwrap();
+        assert_eq!(restored.get_str("tag_name"), Some("Bug"));
+        assert_eq!(restored.get_str("color"), Some("#ff0000"));
+    }
+
+    // =========================================================================
+    // Transaction undo/redo
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_undo_transaction_reverses_all_entries() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields.clone());
+
+        // Create two tags outside the transaction
+        let mut t1 = Entity::new("tag", "bug");
+        t1.set("tag_name", json!("Bug"));
+        t1.set("color", json!("#ff0000"));
+        ctx.write(&t1).await.unwrap();
+
+        let mut t2 = Entity::new("tag", "feature");
+        t2.set("tag_name", json!("Feature"));
+        t2.set("color", json!("#00ff00"));
+        ctx.write(&t2).await.unwrap();
+
+        // Start a transaction and update both tags
+        let tx_id = EntityContext::generate_transaction_id();
+        ctx.set_transaction(tx_id.clone()).await;
+
+        t1.set("tag_name", json!("Bug Report"));
+        ctx.write(&t1).await.unwrap();
+
+        t2.set("tag_name", json!("Feature Request"));
+        ctx.write(&t2).await.unwrap();
+
+        ctx.clear_transaction().await;
+
+        // Verify updates took effect
+        let loaded1 = ctx.read("tag", "bug").await.unwrap();
+        assert_eq!(loaded1.get_str("tag_name"), Some("Bug Report"));
+        let loaded2 = ctx.read("tag", "feature").await.unwrap();
+        assert_eq!(loaded2.get_str("tag_name"), Some("Feature Request"));
+
+        // Undo the entire transaction
+        let undo_result = ctx.undo(tx_id.as_str()).await.unwrap();
+        assert!(undo_result.is_some());
+
+        // Both tags should be restored to original values
+        let restored1 = ctx.read("tag", "bug").await.unwrap();
+        assert_eq!(restored1.get_str("tag_name"), Some("Bug"));
+        let restored2 = ctx.read("tag", "feature").await.unwrap();
+        assert_eq!(restored2.get_str("tag_name"), Some("Feature"));
+    }
+
+    #[tokio::test]
+    async fn test_redo_transaction_reapplies_all_entries() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields.clone());
+
+        // Create two tags outside the transaction
+        let mut t1 = Entity::new("tag", "bug");
+        t1.set("tag_name", json!("Bug"));
+        ctx.write(&t1).await.unwrap();
+
+        let mut t2 = Entity::new("tag", "feature");
+        t2.set("tag_name", json!("Feature"));
+        ctx.write(&t2).await.unwrap();
+
+        // Start a transaction and update both tags
+        let tx_id = EntityContext::generate_transaction_id();
+        ctx.set_transaction(tx_id.clone()).await;
+
+        t1.set("tag_name", json!("Bug Report"));
+        ctx.write(&t1).await.unwrap();
+
+        t2.set("tag_name", json!("Feature Request"));
+        ctx.write(&t2).await.unwrap();
+
+        ctx.clear_transaction().await;
+
+        // Undo the entire transaction
+        ctx.undo(tx_id.as_str()).await.unwrap();
+
+        // Verify undo worked
+        let restored1 = ctx.read("tag", "bug").await.unwrap();
+        assert_eq!(restored1.get_str("tag_name"), Some("Bug"));
+
+        // Redo the entire transaction
+        let redo_result = ctx.redo(tx_id.as_str()).await.unwrap();
+        assert!(redo_result.is_some());
+
+        // Both tags should have updated values again
+        let redone1 = ctx.read("tag", "bug").await.unwrap();
+        assert_eq!(redone1.get_str("tag_name"), Some("Bug Report"));
+        let redone2 = ctx.read("tag", "feature").await.unwrap();
+        assert_eq!(redone2.get_str("tag_name"), Some("Feature Request"));
+    }
+
+    // =========================================================================
+    // Undo stack integration (can_undo / can_redo)
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_can_undo_and_can_redo() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields.clone());
+
+        // Initially no undo/redo available
+        assert!(!ctx.can_undo());
+        assert!(!ctx.can_redo());
+
+        // Create a tag (pushes onto undo stack)
+        let mut tag = Entity::new("tag", "bug");
+        tag.set("tag_name", json!("Bug"));
+        let create_ulid = ctx.write(&tag).await.unwrap().unwrap();
+
+        // Now we can undo but not redo
+        assert!(ctx.can_undo());
+        assert!(!ctx.can_redo());
+
+        // Undo the create
+        ctx.undo(&create_ulid).await.unwrap();
+
+        // After undo, we can redo but not undo (stack pointer moved)
+        assert!(!ctx.can_undo());
+        assert!(ctx.can_redo());
+
+        // Redo the create
+        ctx.redo(&create_ulid).await.unwrap();
+
+        // After redo, we can undo again but not redo
+        assert!(ctx.can_undo());
+        assert!(!ctx.can_redo());
+    }
+
+    #[tokio::test]
+    async fn test_undo_stack_persists_to_disk() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+
+        // Create context, write an entity, then drop
+        {
+            let ctx = EntityContext::new(dir.path(), fields.clone());
+            let mut tag = Entity::new("tag", "bug");
+            tag.set("tag_name", json!("Bug"));
+            ctx.write(&tag).await.unwrap();
+        }
+
+        // Verify undo_stack.yaml was written
+        let undo_path = dir.path().join("undo_stack.yaml");
+        assert!(undo_path.exists());
+
+        // New context should load the persisted stack
+        let ctx2 = EntityContext::new(dir.path(), fields.clone());
+        assert!(ctx2.can_undo());
+    }
+
+    // =========================================================================
+    // Rebuild indexes
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_rebuild_indexes_populates_changelog_index() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields.clone());
+
+        // Create a tag and an update
+        let mut tag = Entity::new("tag", "bug");
+        tag.set("tag_name", json!("Bug"));
+        let create_ulid = ctx.write(&tag).await.unwrap().unwrap();
+
+        tag.set("tag_name", json!("Bug Report"));
+        let update_ulid = ctx.write(&tag).await.unwrap().unwrap();
+
+        // Create a fresh context (empty indexes)
+        let ctx2 = EntityContext::new(dir.path(), fields.clone());
+
+        // Before rebuild, undo should fail (index is empty)
+        assert!(ctx2.undo(&update_ulid).await.is_err());
+
+        // Rebuild indexes
+        ctx2.rebuild_indexes().await.unwrap();
+
+        // Now undo should work
+        let result = ctx2.undo(&update_ulid).await.unwrap();
+        assert!(result.is_some());
+
+        let restored = ctx2.read("tag", "bug").await.unwrap();
+        assert_eq!(restored.get_str("tag_name"), Some("Bug"));
+    }
+
+    #[tokio::test]
+    async fn test_rebuild_indexes_populates_transaction_index() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields.clone());
+
+        // Create two tags
+        let mut t1 = Entity::new("tag", "bug");
+        t1.set("tag_name", json!("Bug"));
+        ctx.write(&t1).await.unwrap();
+
+        let mut t2 = Entity::new("tag", "feature");
+        t2.set("tag_name", json!("Feature"));
+        ctx.write(&t2).await.unwrap();
+
+        // Update both in a transaction
+        let tx_id = EntityContext::generate_transaction_id();
+        ctx.set_transaction(tx_id.clone()).await;
+
+        t1.set("tag_name", json!("Bug Report"));
+        ctx.write(&t1).await.unwrap();
+
+        t2.set("tag_name", json!("Feature Request"));
+        ctx.write(&t2).await.unwrap();
+
+        ctx.clear_transaction().await;
+
+        // Create a fresh context and rebuild indexes
+        let ctx2 = EntityContext::new(dir.path(), fields.clone());
+        ctx2.rebuild_indexes().await.unwrap();
+
+        // Undo the transaction via the transaction ID
+        let result = ctx2.undo(tx_id.as_str()).await.unwrap();
+        assert!(result.is_some());
+
+        // Both tags restored
+        let r1 = ctx2.read("tag", "bug").await.unwrap();
+        assert_eq!(r1.get_str("tag_name"), Some("Bug"));
+        let r2 = ctx2.read("tag", "feature").await.unwrap();
+        assert_eq!(r2.get_str("tag_name"), Some("Feature"));
+    }
+
+    // =========================================================================
+    // Full undo/redo cycle for archive round-trip
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_archive_undo_redo_undo_cycle() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields.clone());
+
+        // Create a tag
+        let mut tag = Entity::new("tag", "bug");
+        tag.set("tag_name", json!("Bug"));
+        tag.set("color", json!("#ff0000"));
+        ctx.write(&tag).await.unwrap();
+
+        // Archive it
+        let archive_ulid = ctx.archive("tag", "bug").await.unwrap().unwrap();
+        ctx.rebuild_indexes().await.unwrap();
+
+        // Verify: archived
+        assert!(ctx.read("tag", "bug").await.is_err());
+        assert_eq!(ctx.list_archived("tag").await.unwrap().len(), 1);
+
+        // Undo archive: back to live
+        ctx.undo(&archive_ulid).await.unwrap();
+        assert!(ctx.read("tag", "bug").await.is_ok());
+        assert_eq!(ctx.list_archived("tag").await.unwrap().len(), 0);
+
+        // Rebuild indexes after undo (new entries were added)
+        ctx.rebuild_indexes().await.unwrap();
+
+        // Redo archive: archived again
+        ctx.redo(&archive_ulid).await.unwrap();
+        assert!(ctx.read("tag", "bug").await.is_err());
+        assert_eq!(ctx.list_archived("tag").await.unwrap().len(), 1);
+
+        // Rebuild indexes after redo
+        ctx.rebuild_indexes().await.unwrap();
+
+        // Undo again: back to live
+        ctx.undo(&archive_ulid).await.unwrap();
+        let restored = ctx.read("tag", "bug").await.unwrap();
+        assert_eq!(restored.get_str("tag_name"), Some("Bug"));
+        assert_eq!(restored.get_str("color"), Some("#ff0000"));
+    }
+
     #[tokio::test]
     async fn migration_moves_old_trash() {
         let dir = TempDir::new().unwrap();
