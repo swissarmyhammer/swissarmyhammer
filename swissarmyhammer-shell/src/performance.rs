@@ -442,10 +442,10 @@ impl PerformanceStatistics {
             metrics.iter().map(|m| m.total_execution_time).collect();
         exec_times.sort();
 
-        let p95_index = (total_commands as f64 * 0.95) as usize;
+        let p95_index = ((total_commands as f64 * 0.95).ceil() as usize).saturating_sub(1);
         let p95_execution_time = exec_times.get(p95_index).copied().unwrap_or(Duration::ZERO);
 
-        let p99_index = (total_commands as f64 * 0.99) as usize;
+        let p99_index = ((total_commands as f64 * 0.99).ceil() as usize).saturating_sub(1);
         let p99_execution_time = exec_times.get(p99_index).copied().unwrap_or(Duration::ZERO);
 
         // Calculate rates
@@ -479,6 +479,7 @@ impl PerformanceStatistics {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tracing_test::traced_test;
 
     #[test]
     fn test_profiler_lifecycle() {
@@ -708,17 +709,26 @@ mod tests {
     }
 
     #[test]
+    #[traced_test]
     fn test_warn_high_overhead() {
         // Exercises warn_performance_issues overhead path (lines 341-347)
         // and log_metrics (lines 327-337).
-        // With command_execution_time = 0, all elapsed wall time becomes overhead.
+        // Sets start_time 150ms in the past so finish_profiling() computes
+        // overhead >= 100ms without any thread::sleep.
         let mut metrics = ShellPerformanceMetrics::new("slow-setup".to_string());
         metrics.command_execution_time = Duration::ZERO;
 
-        let mut profiler = profiler_with_injected_metrics(metrics);
-
-        // Sleep so total elapsed (and therefore overhead) exceeds 100ms threshold
-        std::thread::sleep(Duration::from_millis(120));
+        let config = PerformanceConfig {
+            collect_memory_metrics: false,
+            log_metrics: true,
+            max_historical_metrics: 100,
+            warn_on_threshold_violations: true,
+        };
+        let mut profiler = ShellPerformanceProfiler::with_config(config);
+        profiler.current_metrics = Some(metrics);
+        // Place start_time 150ms in the past so elapsed() returns ~150ms
+        profiler.start_time = Instant::now().checked_sub(Duration::from_millis(150));
+        profiler.command_start_time = Some(Instant::now());
 
         let result = profiler.finish_profiling();
         assert!(result.is_some());
@@ -732,9 +742,14 @@ mod tests {
             !m.meets_performance_targets(),
             "Should NOT meet performance targets with high overhead"
         );
+
+        // Verify the warn log was actually emitted
+        assert!(logs_contain("High shell command overhead"));
+        assert!(logs_contain("slow-setup"));
     }
 
     #[test]
+    #[traced_test]
     fn test_warn_high_memory_growth() {
         // Exercises warn_performance_issues memory-growth path (lines 349-355)
         // and log_metrics (lines 327-337).
@@ -759,9 +774,14 @@ mod tests {
             !m.meets_performance_targets(),
             "Should NOT meet performance targets with high memory growth"
         );
+
+        // Verify the warn log was actually emitted
+        assert!(logs_contain("High memory usage"));
+        assert!(logs_contain("memory-hog"));
     }
 
     #[test]
+    #[traced_test]
     fn test_warn_slow_cleanup() {
         // Exercises warn_performance_issues cleanup path (lines 357-363)
         // and log_metrics (lines 327-337).
@@ -785,6 +805,10 @@ mod tests {
             !m.meets_performance_targets(),
             "Should NOT meet performance targets with slow cleanup"
         );
+
+        // Verify the warn log was actually emitted
+        assert!(logs_contain("Slow cleanup"));
+        assert!(logs_contain("slow-cleanup"));
     }
 
     #[test]
@@ -822,6 +846,7 @@ mod tests {
     }
 
     #[test]
+    #[traced_test]
     fn test_log_metrics_on_healthy_command() {
         // Exercises log_metrics (lines 327-337) via finish_profiling on a command
         // that meets all performance targets (no warnings fired).
@@ -846,5 +871,9 @@ mod tests {
         // Verify it was stored in historical metrics
         let stats = profiler.get_performance_statistics();
         assert_eq!(stats.total_commands, 1);
+
+        // Verify the info-level performance log was emitted
+        assert!(logs_contain("Shell command performance"));
+        assert!(logs_contain("echo hello"));
     }
 }

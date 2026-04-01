@@ -478,7 +478,11 @@ impl ThreatDetector {
 
     /// Get security statistics
     pub fn get_security_statistics(&self) -> SecurityStatistics {
-        let total_commands = 0; // Command history tracking was removed as dead code
+        let total_commands: usize = self
+            .command_frequency
+            .values()
+            .map(|f| f.count as usize)
+            .sum();
         let unique_commands = self.command_frequency.len();
 
         let high_frequency_commands = self
@@ -747,13 +751,18 @@ mod tests {
 
     // --- Tests for HardenedSecurityValidator::validate_command_comprehensive ---
 
-    #[test]
-    fn test_validate_command_comprehensive_safe_command() {
+    /// Create a HardenedSecurityValidator with default config and a temp directory.
+    fn default_validator_with_tmpdir() -> (HardenedSecurityValidator, tempfile::TempDir) {
         let policy = ShellSecurityPolicy::default();
         let config = SecurityHardeningConfig::default();
-        let mut validator = HardenedSecurityValidator::new(policy, config);
-
+        let validator = HardenedSecurityValidator::new(policy, config);
         let tmp_dir = tempfile::TempDir::new().unwrap();
+        (validator, tmp_dir)
+    }
+
+    #[test]
+    fn test_validate_command_comprehensive_safe_command() {
+        let (mut validator, tmp_dir) = default_validator_with_tmpdir();
         let env = HashMap::new();
         let context = CommandContext::default();
 
@@ -771,11 +780,7 @@ mod tests {
 
     #[test]
     fn test_validate_command_comprehensive_malicious_command() {
-        let policy = ShellSecurityPolicy::default();
-        let config = SecurityHardeningConfig::default();
-        let mut validator = HardenedSecurityValidator::new(policy, config);
-
-        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let (mut validator, tmp_dir) = default_validator_with_tmpdir();
         let env = HashMap::new();
         let context = CommandContext::default();
 
@@ -800,11 +805,7 @@ mod tests {
 
     #[test]
     fn test_validate_command_comprehensive_base_validation_failure() {
-        let policy = ShellSecurityPolicy::default();
-        let config = SecurityHardeningConfig::default();
-        let mut validator = HardenedSecurityValidator::new(policy, config);
-
-        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let (mut validator, tmp_dir) = default_validator_with_tmpdir();
         let env = HashMap::new();
         let context = CommandContext::default();
 
@@ -876,6 +877,7 @@ mod tests {
         detector.analyze_command("pwd", &context);
 
         let stats = detector.get_security_statistics();
+        assert_eq!(stats.total_commands_analyzed, 3);
         assert_eq!(stats.unique_commands, 3);
         assert_eq!(stats.high_frequency_commands, 0);
         assert!(stats.threat_detection_enabled);
@@ -894,6 +896,7 @@ mod tests {
         detector.analyze_command("ls", &context);
 
         let stats = detector.get_security_statistics();
+        assert_eq!(stats.total_commands_analyzed, 52);
         assert_eq!(stats.unique_commands, 2);
         assert_eq!(stats.high_frequency_commands, 1);
         assert!(stats.threat_detection_enabled);

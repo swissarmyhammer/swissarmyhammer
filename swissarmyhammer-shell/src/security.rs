@@ -607,6 +607,7 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
     use tempfile::TempDir;
+    use tracing_test::traced_test;
 
     #[test]
     fn test_shell_security_validator_creation() {
@@ -1024,6 +1025,7 @@ mod tests {
     }
 
     #[test]
+    #[traced_test]
     fn test_log_shell_completion_no_panic() {
         // Normal exit code
         log_shell_completion("echo hello", 0, 50);
@@ -1033,5 +1035,9 @@ mod tests {
 
         // Suspicious exit code (triggers warn path for unusual exit codes)
         log_shell_completion("killed_proc", 137, 200);
+
+        // Verify the warn about unusual exit code was emitted for exit_code=137
+        assert!(logs_contain("unusual exit code"));
+        assert!(logs_contain("killed_proc"));
     }
 }
