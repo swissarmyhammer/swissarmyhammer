@@ -1,9 +1,9 @@
 id: "0000000000000000000000000P"
 name: attachment_mime_type
-description: MIME type derived from attachment path
+description: MIME type of the attachment
 type:
-  kind: computed
-  derive: attachment-mime-type
+  kind: text
+  single_line: true
 icon: file-type
 editor: none
 display: text

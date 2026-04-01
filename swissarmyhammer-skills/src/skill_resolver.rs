@@ -1,59 +1,83 @@
-//! Skill resolver — discovers skills from builtin → local → user sources
+//! Skill resolver — discovers skills from builtin → user → local sources
 //!
-//! Precedence: builtin < local < user (later sources override earlier ones)
+//! Precedence: builtin < user < local (later sources override earlier ones)
+//!
+//! Uses [`VirtualFileSystem`] for search-path management, matching the same
+//! pattern as `PromptResolver`.  The VFS resolves user-level paths via
+//! `$XDG_DATA_HOME/sah/skills` and project-local paths via `{git_root}/.skills`.
 
 use crate::skill::{Skill, SkillSource};
 use crate::skill_loader::{load_skill_from_builtin, load_skill_from_dir};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use swissarmyhammer_common::file_loader::{FileSource, VirtualFileSystem};
 use swissarmyhammer_common::validation::{ValidationIssue, ValidationLevel};
 
 // Include the generated builtin skills
 include!(concat!(env!("OUT_DIR"), "/builtin_skills.rs"));
 
-/// Resolves skills from all sources with proper override precedence
+/// Convert a VFS [`FileSource`] into a skill-level [`SkillSource`].
+fn file_source_to_skill_source(fs: &FileSource) -> SkillSource {
+    match fs {
+        FileSource::Builtin | FileSource::Dynamic => SkillSource::Builtin,
+        FileSource::User => SkillSource::User,
+        FileSource::Local => SkillSource::Local,
+    }
+}
+
+/// Resolves skills from all sources with proper override precedence.
+///
+/// Delegates search-path management to a [`VirtualFileSystem`] configured
+/// with dot-directory paths (`$XDG_DATA_HOME/sah/skills` for user,
+/// `{git_root}/.skills` for local).  Builtins are loaded from data
+/// embedded in the binary.
+///
+/// Precedence (later overrides earlier): builtin < user < local < extra_paths
 pub struct SkillResolver {
-    /// Additional search paths beyond defaults
-    extra_paths: Vec<PathBuf>,
+    /// VFS used for search-path resolution (user + local directories).
+    pub(crate) vfs: VirtualFileSystem,
 }
 
 impl SkillResolver {
+    /// Create a new SkillResolver.
+    ///
+    /// Configures the VFS to resolve:
+    /// - `$XDG_DATA_HOME/sah/skills` (user skills)
+    /// - `{git_root}/.skills` (local/project skills)
     pub fn new() -> Self {
-        Self {
-            extra_paths: Vec::new(),
-        }
+        let mut vfs = VirtualFileSystem::new("skills");
+        vfs.use_dot_directory_paths();
+        Self { vfs }
     }
 
-    /// Add an extra search path for skills
+    /// Add an extra search path for skills.
+    ///
+    /// Extra paths are loaded after user and local paths, giving them the
+    /// highest precedence among filesystem-based sources.
     pub fn add_search_path(&mut self, path: PathBuf) {
-        self.extra_paths.push(path);
+        self.vfs.add_search_path(path, FileSource::Local);
     }
 
-    /// Resolve all skills from all sources
+    /// Resolve all skills from all sources.
     ///
     /// Returns skills keyed by name. Later sources override earlier ones.
-    /// Precedence: builtin → local → user
+    /// Precedence: builtin → user → local → extra_paths
     pub fn resolve_all(&self) -> HashMap<String, Skill> {
         let mut skills = HashMap::new();
 
         // 1. Load builtins (lowest precedence)
         self.load_builtins(&mut skills);
 
-        // 2. Load from local project paths
-        self.load_from_local_paths(&mut skills);
-
-        // 3. Load from user-level paths
-        self.load_from_user_paths(&mut skills);
-
-        // 4. Load from extra paths
-        for path in &self.extra_paths {
-            self.load_from_directory(path, SkillSource::Local, &mut skills);
-        }
+        // 2. Walk VFS search paths for skill subdirectories.
+        //    The VFS resolves dot-directory paths in user-then-local order,
+        //    so user skills are loaded first (lower precedence) and local
+        //    skills override them.
+        self.load_from_vfs_paths(&mut skills);
 
         skills
     }
 
-    /// Resolve only builtin skills (no local/user overrides)
+    /// Resolve only builtin skills (no local/user overrides).
     pub fn resolve_builtins(&self) -> HashMap<String, Skill> {
         let mut skills = HashMap::new();
         self.load_builtins(&mut skills);
@@ -62,7 +86,7 @@ impl SkillResolver {
 
     /// Validate all skill sources, catching parse/load failures that `resolve_all` silently skips.
     ///
-    /// Walks the same builtin → local → user tiers as `resolve_all` but converts
+    /// Walks the same builtin → user → local tiers as `resolve_all` but converts
     /// load errors into `ValidationIssue`s instead of logging warnings.
     pub fn validate_all_sources(&self) -> Vec<ValidationIssue> {
         let mut issues = Vec::new();
@@ -70,21 +94,13 @@ impl SkillResolver {
         // 1. Validate builtins
         self.validate_builtins(&mut issues);
 
-        // 2. Validate local project paths
-        self.validate_local_paths(&mut issues);
-
-        // 3. Validate user-level paths
-        self.validate_user_paths(&mut issues);
-
-        // 4. Validate extra paths
-        for path in &self.extra_paths {
-            self.validate_directory(path, SkillSource::Local, &mut issues);
-        }
+        // 2. Validate VFS search paths
+        self.validate_vfs_paths(&mut issues);
 
         issues
     }
 
-    /// Validate builtin skills, capturing load failures
+    /// Validate builtin skills, capturing load failures.
     ///
     /// Directories without a SKILL.md are skipped silently — they are resource
     /// directories (e.g. partials) rather than standalone skills.
@@ -128,29 +144,14 @@ impl SkillResolver {
         }
     }
 
-    /// Validate skills from project-local paths
-    fn validate_local_paths(&self, issues: &mut Vec<ValidationIssue>) {
-        let cwd = std::env::current_dir().unwrap_or_default();
-
-        let dot_skills = cwd.join(".skills");
-        self.validate_directory(&dot_skills, SkillSource::Local, issues);
-
-        let sah_skills = cwd.join(".sah").join("skills");
-        self.validate_directory(&sah_skills, SkillSource::Local, issues);
-    }
-
-    /// Validate skills from user-level paths
-    fn validate_user_paths(&self, issues: &mut Vec<ValidationIssue>) {
-        if let Some(home) = dirs::home_dir() {
-            let user_skills = home.join(".skills");
-            self.validate_directory(&user_skills, SkillSource::User, issues);
-
-            let user_sah_skills = home.join(".sah").join("skills");
-            self.validate_directory(&user_sah_skills, SkillSource::User, issues);
+    /// Validate skills found via VFS search paths.
+    fn validate_vfs_paths(&self, issues: &mut Vec<ValidationIssue>) {
+        for (dir, source) in self.resolve_search_paths() {
+            self.validate_directory(&dir, source, issues);
         }
     }
 
-    /// Validate all skills from a directory, capturing load failures
+    /// Validate all skills from a directory, capturing load failures.
     fn validate_directory(
         &self,
         dir: &Path,
@@ -190,19 +191,13 @@ impl SkillResolver {
                         .map(|n| n.to_string_lossy().to_string())
                         .unwrap_or_else(|| "unknown".to_string());
 
-                    let source_label = match source {
-                        SkillSource::Builtin => "builtin",
-                        SkillSource::Local => "local",
-                        SkillSource::User => "user",
-                    };
-
                     issues.push(ValidationIssue {
                         level: ValidationLevel::Error,
                         file_path: path.clone(),
                         content_title: Some(skill_name),
                         line: None,
                         column: None,
-                        message: format!("Failed to load {source_label} skill: {e}"),
+                        message: format!("Failed to load {} skill: {e}", source),
                         suggestion: Some(
                             "Check SKILL.md exists and has valid frontmatter".to_string(),
                         ),
@@ -212,7 +207,7 @@ impl SkillResolver {
         }
     }
 
-    /// Load builtin skills embedded in the binary
+    /// Load builtin skills embedded in the binary.
     fn load_builtins(&self, skills: &mut HashMap<String, Skill>) {
         let builtin_files = get_builtin_skills();
 
@@ -246,33 +241,30 @@ impl SkillResolver {
         }
     }
 
-    /// Load skills from project-local paths
-    fn load_from_local_paths(&self, skills: &mut HashMap<String, Skill>) {
-        let cwd = std::env::current_dir().unwrap_or_default();
-
-        // Try .skills/ in project root
-        let dot_skills = cwd.join(".skills");
-        self.load_from_directory(&dot_skills, SkillSource::Local, skills);
-
-        // Try .sah/skills/ in project root
-        let sah_skills = cwd.join(".sah").join("skills");
-        self.load_from_directory(&sah_skills, SkillSource::Local, skills);
+    /// Resolve VFS search paths into (directory, SkillSource) pairs.
+    ///
+    /// The VFS provides search paths in precedence order (user before local).
+    /// Extra paths added via [`add_search_path`] appear after the defaults.
+    fn resolve_search_paths(&self) -> Vec<(PathBuf, SkillSource)> {
+        self.vfs
+            .get_search_paths()
+            .iter()
+            .map(|sp| (sp.path.clone(), file_source_to_skill_source(&sp.source)))
+            .collect()
     }
 
-    /// Load skills from user-level paths
-    fn load_from_user_paths(&self, skills: &mut HashMap<String, Skill>) {
-        if let Some(home) = dirs::home_dir() {
-            // Try ~/.skills/
-            let user_skills = home.join(".skills");
-            self.load_from_directory(&user_skills, SkillSource::User, skills);
-
-            // Try ~/.sah/skills/
-            let user_sah_skills = home.join(".sah").join("skills");
-            self.load_from_directory(&user_sah_skills, SkillSource::User, skills);
+    /// Load skills from all VFS-managed search paths.
+    ///
+    /// Walks each resolved directory for skill subdirectories (directories
+    /// containing a SKILL.md). Earlier directories have lower precedence;
+    /// a skill in a later directory overrides one with the same name.
+    fn load_from_vfs_paths(&self, skills: &mut HashMap<String, Skill>) {
+        for (dir, source) in self.resolve_search_paths() {
+            self.load_from_directory(&dir, source, skills);
         }
     }
 
-    /// Load all skills from a directory (each subdirectory is a skill)
+    /// Load all skills from a directory (each subdirectory is a skill).
     fn load_from_directory(
         &self,
         dir: &Path,
@@ -347,7 +339,9 @@ mod tests {
     #[test]
     fn test_builtin_skill_content() {
         let resolver = SkillResolver::new();
-        let skills = resolver.resolve_all();
+        // Use resolve_builtins() to avoid local .skills/ overrides that
+        // may exist in the project directory during testing.
+        let skills = resolver.resolve_builtins();
 
         let plan = skills.get("plan").unwrap();
         assert_eq!(plan.name.as_str(), "plan");
@@ -393,6 +387,101 @@ mod tests {
                 .iter()
                 .map(|i| format!("{}: {}", i.file_path.display(), i.message))
                 .collect::<Vec<_>>()
+        );
+    }
+
+    /// Helper to write a minimal valid SKILL.md into a directory.
+    fn write_skill(dir: &std::path::Path, name: &str, description: &str, body: &str) {
+        let skill_dir = dir.join(name);
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            format!("---\nname: {name}\ndescription: {description}\n---\n{body}"),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn test_local_overrides_user_via_extra_paths() {
+        // Simulate user-level and local-level directories as extra search paths.
+        // The second path (local) should win because it has higher precedence.
+        let user_dir = tempfile::TempDir::new().unwrap();
+        let local_dir = tempfile::TempDir::new().unwrap();
+
+        write_skill(
+            user_dir.path(),
+            "my-skill",
+            "user version",
+            "User instructions",
+        );
+        write_skill(
+            local_dir.path(),
+            "my-skill",
+            "local version",
+            "Local instructions",
+        );
+
+        let mut resolver = SkillResolver::new();
+        // First path = lower precedence, second = higher
+        resolver
+            .vfs
+            .add_search_path(user_dir.path().to_path_buf(), FileSource::User);
+        resolver
+            .vfs
+            .add_search_path(local_dir.path().to_path_buf(), FileSource::Local);
+
+        let skills = resolver.resolve_all();
+        let skill = skills.get("my-skill").expect("my-skill should be resolved");
+        assert_eq!(
+            skill.source,
+            SkillSource::Local,
+            "local should override user"
+        );
+        assert_eq!(skill.description, "local version");
+        assert_eq!(skill.instructions, "Local instructions");
+    }
+
+    #[test]
+    fn test_extra_path_overrides_builtin() {
+        // An extra search path skill with the same name as a builtin should win.
+        let extra_dir = tempfile::TempDir::new().unwrap();
+        write_skill(
+            extra_dir.path(),
+            "plan",
+            "custom plan",
+            "Custom plan instructions",
+        );
+
+        let mut resolver = SkillResolver::new();
+        resolver.add_search_path(extra_dir.path().to_path_buf());
+
+        let skills = resolver.resolve_all();
+        let plan = skills.get("plan").expect("plan should be resolved");
+        assert_eq!(
+            plan.source,
+            SkillSource::Local,
+            "extra path should override builtin"
+        );
+        assert_eq!(plan.description, "custom plan");
+    }
+
+    #[test]
+    fn test_file_source_to_skill_source_mapping() {
+        assert_eq!(
+            file_source_to_skill_source(&FileSource::Builtin),
+            SkillSource::Builtin
+        );
+        assert_eq!(
+            file_source_to_skill_source(&FileSource::Dynamic),
+            SkillSource::Builtin
+        );
+        assert_eq!(
+            file_source_to_skill_source(&FileSource::User),
+            SkillSource::User
+        );
+        assert_eq!(
+            file_source_to_skill_source(&FileSource::Local),
+            SkillSource::Local
         );
     }
 }

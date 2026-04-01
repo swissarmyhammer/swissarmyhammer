@@ -9,7 +9,7 @@ const TASK_SCHEMA = {
     fields: ["title", "tags", "progress", "body"],
     commands: [
       {
-        id: "entity.inspect",
+        id: "ui.inspect",
         name: "Inspect {{entity.type}}",
         context_menu: true,
       },
@@ -70,7 +70,7 @@ const mockInvoke = vi.fn((...args: any[]) => {
   if (args[0] === "list_commands_for_scope")
     return Promise.resolve([
       {
-        id: "entity.inspect",
+        id: "ui.inspect",
         name: "Inspect task",
         target: "task:task-1",
         group: "entity",
@@ -268,7 +268,7 @@ describe("EntityCard", () => {
     expect(ctxCall).toBeTruthy();
     const items = ctxCall![1].items as { id: string; name: string }[];
     expect(
-      items.find((i) => i.id === "entity.inspect:task:task-1"),
+      items.find((i) => i.id === "ui.inspect:task:task-1"),
     ).toBeTruthy();
   });
 

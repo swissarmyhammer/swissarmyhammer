@@ -171,18 +171,6 @@ pub fn kanban_compute_engine() -> ComputeEngine {
         }),
     );
 
-    // attachment-mime-type: stub — actual detection requires filesystem access
-    engine.register(
-        "attachment-mime-type",
-        Box::new(|_fields| Box::pin(async { serde_json::Value::Null })),
-    );
-
-    // attachment-file-size: stub — actual computation requires filesystem access
-    engine.register(
-        "attachment-file-size",
-        Box::new(|_fields| Box::pin(async { serde_json::Value::Null })),
-    );
-
     engine
 }
 
@@ -377,20 +365,6 @@ mod tests {
     }
 
     #[test]
-    fn builtin_attachment_entity_exists() {
-        let defs = builtin_entity_definitions();
-        let (_, yaml) = defs.iter().find(|(n, _)| *n == "attachment").unwrap();
-        let entity: EntityDef = serde_yaml_ng::from_str(yaml).unwrap();
-
-        assert_eq!(entity.name, "attachment");
-        assert!(entity.fields.iter().any(|f| f == "attachment_name"));
-        assert!(entity.fields.iter().any(|f| f == "attachment_path"));
-        assert!(entity.fields.iter().any(|f| f == "attachment_mime_type"));
-        assert!(entity.fields.iter().any(|f| f == "attachment_size"));
-        assert!(!entity.fields.iter().any(|f| f == "attachment_task"));
-    }
-
-    #[test]
     fn builtin_entity_fields_reference_existing_field_defs() {
         let field_defs = builtin_field_definitions();
         let field_names: Vec<FieldName> = field_defs
@@ -435,12 +409,41 @@ mod tests {
     }
 
     #[test]
+    fn builtin_attachment_field_round_trips_through_yaml() {
+        let defs = builtin_field_definitions();
+        let entities = builtin_entity_definitions();
+
+        let ctx = swissarmyhammer_fields::FieldsContext::from_yaml_sources(
+            std::path::PathBuf::from("/tmp/test"),
+            &defs,
+            &entities,
+        )
+        .unwrap();
+
+        let field = ctx
+            .get_field_by_name("attachments")
+            .expect("builtin 'attachments' field should exist in FieldsContext");
+
+        match &field.type_ {
+            swissarmyhammer_fields::FieldType::Reference {
+                entity,
+                multiple,
+            } => {
+                assert!(multiple, "attachments field should have multiple: true");
+                assert_eq!(
+                    entity.as_str(), "attachment",
+                    "attachments should reference the attachment entity"
+                );
+            }
+            other => panic!("expected FieldType::Reference, got {:?}", other),
+        }
+    }
+
+    #[test]
     fn kanban_compute_engine_registers_all_derivations() {
         let engine = kanban_compute_engine();
         assert!(engine.has("parse-body-tags"));
         assert!(engine.has("parse-body-progress"));
-        assert!(engine.has("attachment-mime-type"));
-        assert!(engine.has("attachment-file-size"));
     }
 
     /// Helper: build a query function that returns known tags.

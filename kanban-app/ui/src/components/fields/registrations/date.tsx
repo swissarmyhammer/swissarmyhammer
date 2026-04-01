@@ -11,12 +11,18 @@ import {
 import { DateEditor } from "@/components/fields/editors/date-editor";
 import { DateDisplay } from "@/components/fields/displays/date-display";
 
-function DateEditorAdapter({ value, onCommit, onCancel }: FieldEditorProps) {
+function DateEditorAdapter({
+  value,
+  onCommit,
+  onCancel,
+  onChange,
+}: FieldEditorProps) {
   return (
     <DateEditor
       value={value}
       onCommit={onCommit}
       onCancel={onCancel}
+      onChange={onChange}
       mode="compact"
     />
   );

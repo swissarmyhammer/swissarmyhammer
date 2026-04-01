@@ -6,9 +6,7 @@
 
 use crate::activity::ListActivity;
 use crate::actor::{AddActor, DeleteActor, GetActor, ListActors, UpdateActor};
-use crate::attachment::{
-    AddAttachment, DeleteAttachment, GetAttachment, ListAttachments, UpdateAttachment,
-};
+use crate::attachment::{AddAttachment, DeleteAttachment, GetAttachment, ListAttachments, UpdateAttachment};
 use crate::board::{GetBoard, InitBoard, UpdateBoard};
 use crate::column::{AddColumn, DeleteColumn, GetColumn, ListColumns, UpdateColumn};
 use crate::perspective::{
@@ -370,46 +368,6 @@ pub async fn execute_operation(
         }
         (Verb::List, Noun::Tags) => processor.process(&ListTags::default(), ctx).await,
 
-        // Attachment operations
-        (Verb::Add, Noun::Attachment) => {
-            let task_id = req(op, "task_id")?;
-            let name = req(op, "name")?;
-            let path = req(op, "path")?;
-            processor
-                .process(&AddAttachment::new(task_id, name, path), ctx)
-                .await
-        }
-        (Verb::Get, Noun::Attachment) => {
-            let task_id = req(op, "task_id")?;
-            let id = req(op, "id")?;
-            processor
-                .process(&GetAttachment::new(task_id, id), ctx)
-                .await
-        }
-        (Verb::Update, Noun::Attachment) => {
-            let task_id = req(op, "task_id")?;
-            let id = req(op, "id")?;
-            let mut cmd = UpdateAttachment::new(task_id, id);
-            if let Some(name) = op.get_string("name") {
-                cmd.name = Some(name.to_string());
-            }
-            if let Some(mime) = op.get_string("mime_type") {
-                cmd.mime_type = Some(mime.to_string());
-            }
-            processor.process(&cmd, ctx).await
-        }
-        (Verb::Delete, Noun::Attachment) => {
-            let task_id = req(op, "task_id")?;
-            let id = req(op, "id")?;
-            processor
-                .process(&DeleteAttachment::new(task_id, id), ctx)
-                .await
-        }
-        (Verb::List, Noun::Attachments) => {
-            let task_id = req(op, "task_id")?;
-            processor.process(&ListAttachments::new(task_id), ctx).await
-        }
-
         // Activity operations
         (Verb::List, Noun::Activity) => {
             let mut cmd = ListActivity::default();
@@ -417,6 +375,50 @@ pub async fn execute_operation(
                 cmd = cmd.with_limit(limit as usize);
             }
             processor.process(&cmd, ctx).await
+        }
+
+        // Attachment operations
+        (Verb::Add, Noun::Attachment) => {
+            let task_id = req(op, "task_id")?;
+            let name = req(op, "name")?;
+            let path = req(op, "path")?;
+            let mut cmd = AddAttachment::new(task_id, name, path);
+            if let Some(mime) = op.get_string("mime_type") {
+                cmd = cmd.with_mime_type(mime);
+            }
+            if let Some(size) = op.get_param("size").and_then(|v| v.as_u64()) {
+                cmd = cmd.with_size(size);
+            }
+            processor.process(&cmd, ctx).await
+        }
+        (Verb::Get, Noun::Attachment) => {
+            let task_id = req(op, "task_id")?;
+            let id = req(op, "id")?;
+            processor.process(&GetAttachment::new(task_id, id), ctx).await
+        }
+        (Verb::Update, Noun::Attachment) => {
+            let task_id = req(op, "task_id")?;
+            let id = req(op, "id")?;
+            let mut cmd = UpdateAttachment::new(task_id, id);
+            if let Some(name) = op.get_string("name") {
+                cmd = cmd.with_name(name);
+            }
+            if let Some(mime) = op.get_string("mime_type") {
+                cmd = cmd.with_mime_type(mime);
+            }
+            if let Some(size) = op.get_param("size").and_then(|v| v.as_u64()) {
+                cmd = cmd.with_size(size);
+            }
+            processor.process(&cmd, ctx).await
+        }
+        (Verb::Delete, Noun::Attachment) => {
+            let task_id = req(op, "task_id")?;
+            let id = req(op, "id")?;
+            processor.process(&DeleteAttachment::new(task_id, id), ctx).await
+        }
+        (Verb::List, Noun::Attachments) => {
+            let task_id = req(op, "task_id")?;
+            processor.process(&ListAttachments::new(task_id), ctx).await
         }
 
         // Perspective operations

@@ -76,7 +76,7 @@ tag-name = "v{{version}}"      # Single tag for workspace
 consolidate-commits = true     # One commit for all version bumps
 
 [workspace.package]
-version = "0.12.10"
+version = "0.12.11"
 edition = "2021"
 rust-version = "1.91.1"
 authors = ["SwissArmyHammer Team"]
@@ -265,7 +265,7 @@ similar = "2"
 zstd = "0.13"
 memmap2 = "0.9"
 rayon = "1.8"
-tracing-test = "0.2"
+tracing-test = { version = "0.2", features = ["no-env-filter"] }
 criterion = "0.5"
 http = "1.1"
 piper = "0.2"

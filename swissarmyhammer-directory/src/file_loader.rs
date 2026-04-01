@@ -566,6 +566,94 @@ impl<C: DirectoryConfig> VirtualFileSystem<C> {
         Ok(directories)
     }
 
+    /// Get the effective search paths with their source metadata.
+    ///
+    /// Resolves the same directories as [`load_all`](Self::load_all) / [`get_directories`](Self::get_directories)
+    /// but returns [`SearchPath`] entries so callers can pair each directory with its
+    /// [`FileSource`].  Only directories that exist on disk are returned.
+    ///
+    /// This is useful for consumers that need to walk directories themselves (e.g.,
+    /// skill resolvers that enumerate subdirectories rather than individual files).
+    pub fn get_search_paths(&self) -> Vec<SearchPath> {
+        let mut paths = Vec::new();
+
+        if self.use_dot_dirs {
+            let dot_name = format!(".{}", self.subdirectory);
+
+            // User XDG data directory
+            if let Ok(base) = xdg_base_dir("XDG_DATA_HOME", ".local/share") {
+                let user_dir = base.join(C::XDG_NAME).join(&self.subdirectory);
+                if user_dir.exists() && user_dir.is_dir() {
+                    paths.push(SearchPath {
+                        path: user_dir,
+                        source: FileSource::User,
+                    });
+                }
+            }
+
+            // Git root or current directory fallback (dot-directory style)
+            if let Some(git_root) = find_git_repository_root() {
+                let local_dir = git_root.join(&dot_name);
+                if local_dir.exists() && local_dir.is_dir() {
+                    paths.push(SearchPath {
+                        path: local_dir,
+                        source: FileSource::Local,
+                    });
+                }
+            } else if let Ok(current_dir) = std::env::current_dir() {
+                let local_dir = current_dir.join(&dot_name);
+                if local_dir.exists() && local_dir.is_dir() {
+                    paths.push(SearchPath {
+                        path: local_dir,
+                        source: FileSource::Local,
+                    });
+                }
+            }
+        } else if self.search_paths.is_empty() {
+            // Default: use ManagedDirectory-based resolution with XDG data directory
+            if let Ok(dir) = ManagedDirectory::<C>::xdg_data() {
+                let user_dir = dir.subdir(&self.subdirectory);
+                if user_dir.exists() {
+                    paths.push(SearchPath {
+                        path: user_dir,
+                        source: FileSource::User,
+                    });
+                }
+            }
+
+            if let Ok(dir) = ManagedDirectory::<C>::from_git_root() {
+                let subdir = dir.subdir(&self.subdirectory);
+                if subdir.exists() && subdir.is_dir() {
+                    paths.push(SearchPath {
+                        path: subdir,
+                        source: FileSource::Local,
+                    });
+                }
+            } else if let Ok(current_dir) = std::env::current_dir() {
+                if let Ok(dir) = ManagedDirectory::<C>::from_custom_root(current_dir) {
+                    let subdir = dir.subdir(&self.subdirectory);
+                    if subdir.exists() && subdir.is_dir() {
+                        paths.push(SearchPath {
+                            path: subdir,
+                            source: FileSource::Local,
+                        });
+                    }
+                }
+            }
+        }
+
+        // Always append explicit search paths (highest precedence).
+        // These are added via add_search_path() and may coexist with
+        // dot-directory or managed-directory resolution.
+        for sp in &self.search_paths {
+            if sp.path.exists() && sp.path.is_dir() {
+                paths.push(sp.clone());
+            }
+        }
+
+        paths
+    }
+
     /// Validate that a path is safe and within the expected directory.
     fn is_path_safe(path: &Path, base_dir: &Path) -> bool {
         match (path.canonicalize(), base_dir.canonicalize()) {

@@ -672,16 +672,13 @@ rate_limiting = true
 #[serial_test::serial(cwd)]
 fn test_complex_nested_project_structure_with_inheritance() {
     let mut test = IntegrationTestEnvironment::new();
-    let nested_subdir = test.create_nested_project_structure();
+    let _nested_subdir = test.create_nested_project_structure();
 
-    // Create workspace-level configuration
-    let workspace_config_dir = test
-        ._env
-        .temp_dir()
-        .join("workspace")
-        .join(SwissarmyhammerDirectory::dir_name());
+    // Use global (home) config as the "workspace" base layer.
+    // VFS resolves: global (~/.sah/) < project ({git_root}/.sah/).
+    let home_config_dir = test.home_config_dir();
     let workspace_config = r#"
-# Workspace-level configuration
+# Workspace-level configuration (global/home layer)
 [workspace]
 name = "my-awesome-workspace"
 version = "1.0.0"
@@ -701,17 +698,13 @@ test_runner = "cargo-nextest"
 provider = "github-actions"
 rust_version = "1.70"
 "#;
-    let workspace_file = workspace_config_dir.join("sah.toml");
+    let workspace_file = home_config_dir.join("sah.toml");
     fs::write(&workspace_file, workspace_config).expect("Failed to write workspace config");
 
-    // Create project-level configuration
-    let project_config_dir = test
-        ._env
-        .temp_dir()
-        .join("workspace/my-project")
-        .join(SwissarmyhammerDirectory::dir_name());
+    // Use project (git root) config as the "project" override layer.
+    let project_config_dir = test.project_config_dir();
     let project_config = r#"
-# Project-level configuration
+# Project-level configuration (local/project layer at git root)
 [project]
 name = "my-project"
 version = "0.2.0"
@@ -719,8 +712,8 @@ description = "A component of the awesome workspace"
 
 # Override some workspace defaults
 [defaults]
-author = "Project Team"  # Override workspace author
-license = "Apache-2.0"   # Override workspace license
+author = "Project Team"
+license = "Apache-2.0"
 
 # Project-specific settings
 [dependencies]
@@ -740,14 +733,11 @@ serialization = ["serde"]
     test.set_env_var("SAH_CI_BRANCH", "feature/awesome-feature");
     test.set_env_var("SAH_BUILD_NUMBER", "42");
 
-    // Change to nested subdirectory and load config
-    env::set_current_dir(&nested_subdir).expect("Failed to change to nested subdir");
-
     let context = TemplateContext::load_for_cli().expect("Failed to load nested project config");
 
     // Verify inheritance and overrides work correctly
 
-    // Workspace-level settings should be inherited
+    // Workspace-level settings should be inherited (from global/home config)
     assert_eq!(
         context.get("workspace.name"),
         Some(&json!("my-awesome-workspace"))
@@ -760,7 +750,7 @@ serialization = ["serde"]
     );
     assert_eq!(context.get("ci.provider"), Some(&json!("github-actions")));
 
-    // Project-level settings
+    // Project-level settings (from project/local config)
     assert_eq!(context.get("project.name"), Some(&json!("my-project")));
     assert_eq!(context.get("project.version"), Some(&json!("0.2.0")));
     assert_eq!(
@@ -788,7 +778,7 @@ serialization = ["serde"]
 - **Workspace**: {{workspace.name}} v{{workspace.version}}
 - **Type**: {{workspace.type}}
 
-## Project Information  
+## Project Information
 - **Name**: {{project.name}}
 - **Version**: {{project.version}}
 

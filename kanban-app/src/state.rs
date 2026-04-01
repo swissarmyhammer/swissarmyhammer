@@ -48,6 +48,10 @@ impl ClipboardProvider for TauriClipboardProvider {
         match self.app.clipboard().read_text() {
             Ok(text) => Ok(Some(text)),
             Err(e) => {
+                // HACK: Tauri's clipboard plugin doesn't expose typed error variants,
+                // so we fall back to string matching to distinguish "clipboard empty /
+                // incompatible format" (which is normal) from real failures.  Fragile —
+                // revisit if tauri-plugin-clipboard-manager ever adds structured errors.
                 let msg = e.to_string();
                 if msg.contains("empty") || msg.contains("format") {
                     Ok(None)
@@ -205,6 +209,7 @@ impl BoardHandle {
                 watcher::WatchEvent::EntityCreated { .. } => "entity-created",
                 watcher::WatchEvent::EntityRemoved { .. } => "entity-removed",
                 watcher::WatchEvent::EntityFieldChanged { .. } => "entity-field-changed",
+                watcher::WatchEvent::AttachmentChanged { .. } => "attachment-changed",
             };
             let wrapped = watcher::BoardWatchEvent {
                 event: evt,

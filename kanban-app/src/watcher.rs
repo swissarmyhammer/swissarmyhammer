@@ -26,7 +26,6 @@ const WATCHED_SUBDIRS: &[&str] = &[
     "actors",
     "boards",
     "views",
-    "attachments",
 ];
 
 /// File extensions that represent entity state (not logs).
@@ -58,6 +57,19 @@ pub enum WatchEvent {
         /// context; `None` for raw watcher events.
         #[serde(skip_serializing_if = "Option::is_none")]
         fields: Option<HashMap<String, serde_json::Value>>,
+    },
+    /// An attachment file was created, modified, or deleted.
+    ///
+    /// Emitted when files inside `.attachments/` subdirectories change,
+    /// allowing the frontend to update thumbnail previews and badge counts.
+    #[serde(rename = "attachment-changed")]
+    AttachmentChanged {
+        /// The entity type that owns the attachment (e.g. "task").
+        entity_type: String,
+        /// The stored filename (e.g. "01ABC-screenshot.png").
+        filename: String,
+        /// Whether the file was removed (true) or created/modified (false).
+        removed: bool,
     },
 }
 
@@ -114,6 +126,10 @@ pub fn sync_search_index(
         }
         WatchEvent::EntityRemoved { id, .. } => {
             idx.remove(id);
+        }
+        WatchEvent::AttachmentChanged { .. } => {
+            // Attachment file changes don't affect the search index.
+            // They are forwarded to the frontend for UI updates only.
         }
     }
 }
@@ -292,6 +308,14 @@ where
             watcher
                 .watch(&dir, RecursiveMode::NonRecursive)
                 .map_err(|e| format!("Failed to watch {}: {e}", dir.display()))?;
+
+            // Also watch .attachments/ inside entity directories for attachment file changes
+            let att_dir = dir.join(".attachments");
+            if att_dir.is_dir() {
+                watcher
+                    .watch(&att_dir, RecursiveMode::NonRecursive)
+                    .map_err(|e| format!("Failed to watch {}: {e}", att_dir.display()))?;
+            }
         }
     }
 
@@ -363,7 +387,7 @@ where
                             }
                         }
 
-                        // Deduplicate by (entity_type, id)
+                        // Deduplicate by (entity_type, id/filename)
                         let mut seen: HashMap<(String, String), WatchEvent> = HashMap::new();
                         for evt in events {
                             let key = match &evt {
@@ -371,6 +395,9 @@ where
                                 WatchEvent::EntityRemoved { entity_type, id } |
                                 WatchEvent::EntityFieldChanged { entity_type, id, .. } => {
                                     (entity_type.clone(), id.clone())
+                                }
+                                WatchEvent::AttachmentChanged { entity_type, filename, .. } => {
+                                    (format!("attachment:{}", entity_type), filename.clone())
                                 }
                             };
                             seen.insert(key, evt);
@@ -403,9 +430,13 @@ where
 fn classify_event(event: &Event, kanban_root: &Path) -> Vec<FsAction> {
     let mut actions = Vec::new();
     for path in &event.paths {
-        if !is_entity_file(path) {
+        let is_entity = is_entity_file(path);
+        let is_att = is_attachment(path);
+
+        if !is_entity && !is_att {
             continue;
         }
+
         // For removals, the file may not exist, so canonicalize the parent + filename
         let canonical = if path.exists() {
             path.canonicalize().unwrap_or_else(|_| path.clone())
@@ -419,9 +450,18 @@ fn classify_event(event: &Event, kanban_root: &Path) -> Vec<FsAction> {
                 _ => path.clone(),
             }
         };
-        if path_to_entity(&canonical, kanban_root).is_none() {
+
+        if is_entity && path_to_entity(&canonical, kanban_root).is_none() {
+            // Not a recognized entity file
+            if !is_att {
+                continue;
+            }
+        }
+
+        if is_att && path_to_attachment(&canonical, kanban_root).is_none() {
             continue;
         }
+
         match event.kind {
             EventKind::Create(_) | EventKind::Modify(_) | EventKind::Access(_) => {
                 // For Changed actions, resolve_change will check
@@ -447,6 +487,17 @@ fn classify_event(event: &Event, kanban_root: &Path) -> Vec<FsAction> {
 /// Reads the file now, computes hash, compares against the cache.
 /// Returns None if the content matches the cache (our own write).
 fn resolve_change(path: &Path, cache: &EntityCache, kanban_root: &Path) -> Option<WatchEvent> {
+    // Check if this is an attachment file first
+    if is_attachment(path) {
+        if let Some((entity_type, filename)) = path_to_attachment(path, kanban_root) {
+            return Some(WatchEvent::AttachmentChanged {
+                entity_type,
+                filename,
+                removed: false,
+            });
+        }
+    }
+
     let (entity_type, id) = path_to_entity(path, kanban_root)?;
     let new_cached = cache_file(path)?;
 
@@ -497,6 +548,17 @@ fn resolve_change(path: &Path, cache: &EntityCache, kanban_root: &Path) -> Optio
 
 /// Resolve a removed file path into a WatchEvent at debounce time.
 fn resolve_removal(path: &Path, cache: &EntityCache, kanban_root: &Path) -> Option<WatchEvent> {
+    // Check if this is an attachment file first
+    if is_attachment(path) {
+        if let Some((entity_type, filename)) = path_to_attachment(path, kanban_root) {
+            return Some(WatchEvent::AttachmentChanged {
+                entity_type,
+                filename,
+                removed: true,
+            });
+        }
+    }
+
     let (entity_type, id) = path_to_entity(path, kanban_root)?;
     let was_tracked = {
         let mut map = cache.lock().unwrap();
@@ -651,6 +713,49 @@ fn is_entity_file(path: &Path) -> bool {
         .is_some_and(|ext| ENTITY_EXTENSIONS.contains(&ext))
 }
 
+/// Check if a path is an attachment file inside a `.attachments/` directory.
+///
+/// Attachment files live at `<kanban_root>/<entity_type>s/.attachments/<filename>`.
+/// Any extension is accepted. Temp files (starting with `.tmp_`) and the
+/// `.trash/` subdirectory are excluded.
+fn is_attachment(path: &Path) -> bool {
+    let Some(parent) = path.parent() else {
+        return false;
+    };
+    let Some(parent_name) = parent.file_name().and_then(|n| n.to_str()) else {
+        return false;
+    };
+    if parent_name != ".attachments" {
+        return false;
+    }
+    // Exclude temp files and directories
+    let Some(filename) = path.file_name().and_then(|n| n.to_str()) else {
+        return false;
+    };
+    !filename.starts_with(".tmp_") && !filename.starts_with('.')
+}
+
+/// Extract entity type and filename from an attachment path.
+///
+/// Given `<kanban_root>/tasks/.attachments/01ABC-screenshot.png`, returns
+/// `Some(("task", "01ABC-screenshot.png"))`.
+fn path_to_attachment(path: &Path, kanban_root: &Path) -> Option<(String, String)> {
+    // Path structure: kanban_root / <entity_type>s / .attachments / <filename>
+    let att_dir = path.parent()?; // .attachments/
+    let entity_dir = att_dir.parent()?; // tasks/
+    let entity_dir_name = entity_dir.file_name()?.to_str()?;
+
+    // Verify this is under kanban_root
+    if entity_dir.parent()? != kanban_root {
+        return None;
+    }
+
+    let entity_type = entity_dir_name.strip_suffix('s').unwrap_or(entity_dir_name);
+    let filename = path.file_name()?.to_str()?;
+
+    Some((entity_type.to_string(), filename.to_string()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -700,6 +805,58 @@ mod tests {
         assert_eq!(
             path_to_entity(Path::new("/project/.kanban/board.yaml"), &root),
             Some(("board".to_string(), "board".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_is_attachment() {
+        assert!(is_attachment(Path::new(
+            "/project/.kanban/tasks/.attachments/01ABC-screenshot.png"
+        )));
+        assert!(is_attachment(Path::new(
+            "/project/.kanban/tasks/.attachments/01XYZ-report.pdf"
+        )));
+        // Temp files should be excluded
+        assert!(!is_attachment(Path::new(
+            "/project/.kanban/tasks/.attachments/.tmp_01ABC"
+        )));
+        // Hidden files should be excluded
+        assert!(!is_attachment(Path::new(
+            "/project/.kanban/tasks/.attachments/.trash"
+        )));
+        // Regular entity files are not attachments
+        assert!(!is_attachment(Path::new("/project/.kanban/tasks/abc.yaml")));
+        // Files not in .attachments/ are not attachments
+        assert!(!is_attachment(Path::new(
+            "/project/.kanban/tasks/other/file.png"
+        )));
+    }
+
+    #[test]
+    fn test_path_to_attachment() {
+        let root = PathBuf::from("/project/.kanban");
+
+        assert_eq!(
+            path_to_attachment(
+                Path::new("/project/.kanban/tasks/.attachments/01ABC-screenshot.png"),
+                &root
+            ),
+            Some(("task".to_string(), "01ABC-screenshot.png".to_string()))
+        );
+        assert_eq!(
+            path_to_attachment(
+                Path::new("/project/.kanban/actors/.attachments/avatar.jpg"),
+                &root
+            ),
+            Some(("actor".to_string(), "avatar.jpg".to_string()))
+        );
+        // Wrong root should return None
+        assert_eq!(
+            path_to_attachment(
+                Path::new("/other/.kanban/tasks/.attachments/file.png"),
+                &root
+            ),
+            None
         );
     }
 

@@ -19,6 +19,7 @@ ulid = { workspace = true }
 chrono = { workspace = true }
 fs2 = { workspace = true }
 async-trait = { workspace = true }
+open = "5"
 
 # Local workspace dependencies
 swissarmyhammer-common = { path = "../swissarmyhammer-common" }

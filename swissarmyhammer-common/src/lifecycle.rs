@@ -7,6 +7,8 @@
 //! - `init` / `deinit` — one-time project setup/teardown (`sah init` / `sah deinit`)
 //! - `start` / `stop` — runtime background work (indexing, LSP, watchers)
 
+use std::path::PathBuf;
+
 use crate::reporter::InitReporter;
 
 /// Scope for init/deinit operations — mirrors CLI install targets without coupling to clap.
@@ -18,6 +20,24 @@ pub enum InitScope {
     Local,
     /// User-wide scope: global config
     User,
+}
+
+impl InitScope {
+    /// Returns the path to the Claude Code settings file for this scope.
+    ///
+    /// - `Project` → `.claude/settings.json` (relative to project root)
+    /// - `Local`   → `.claude/settings.local.json` (relative to project root)
+    /// - `User`    → `~/.claude/settings.json` (absolute)
+    pub fn claude_settings_path(&self) -> PathBuf {
+        match self {
+            InitScope::Project => PathBuf::from(".claude/settings.json"),
+            InitScope::Local => PathBuf::from(".claude/settings.local.json"),
+            InitScope::User => dirs::home_dir()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join(".claude")
+                .join("settings.json"),
+        }
+    }
 }
 
 /// Status of an init/deinit/start/stop operation.
@@ -287,6 +307,29 @@ mod tests {
         fn stop(&self) -> Vec<InitResult> {
             vec![InitResult::ok(self.name, format!("{} stopped", self.name))]
         }
+    }
+
+    #[test]
+    fn test_claude_settings_path_project() {
+        let path = InitScope::Project.claude_settings_path();
+        assert_eq!(path, std::path::PathBuf::from(".claude/settings.json"));
+    }
+
+    #[test]
+    fn test_claude_settings_path_local() {
+        let path = InitScope::Local.claude_settings_path();
+        assert_eq!(
+            path,
+            std::path::PathBuf::from(".claude/settings.local.json")
+        );
+    }
+
+    #[test]
+    fn test_claude_settings_path_user() {
+        let path = InitScope::User.claude_settings_path();
+        // Should be absolute and end with .claude/settings.json
+        assert!(path.is_absolute());
+        assert!(path.ends_with(".claude/settings.json"));
     }
 
     #[test]

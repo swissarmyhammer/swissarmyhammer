@@ -73,6 +73,7 @@ pub fn uninstall(target: InstallTarget, remove_directory: bool) -> Result<(), St
 }
 
 /// Remove statusline configuration from .claude/settings.json.
+#[allow(deprecated)]
 fn uninstall_statusline(reporter: &dyn InitReporter) -> Result<(), String> {
     let path = settings::claude_settings_path();
     if !path.exists() {
@@ -93,6 +94,7 @@ fn uninstall_statusline(reporter: &dyn InitReporter) -> Result<(), String> {
 }
 
 /// Remove "Bash" from permissions.deny in .claude/settings.json.
+#[allow(deprecated)]
 fn uninstall_deny_bash(reporter: &dyn InitReporter) -> Result<(), String> {
     let path = settings::claude_settings_path();
     if !path.exists() {

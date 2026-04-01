@@ -30,6 +30,7 @@ tokio = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+tracing-test = { workspace = true }
 
 [features]
 default = []

@@ -37,6 +37,7 @@ import {
   type CommandDef,
 } from "@/lib/command-scope";
 import { DragSessionProvider } from "@/lib/drag-session-context";
+import { FileDropProvider } from "@/lib/file-drop-context";
 import type { BoardData, OpenBoard, Entity, EntityBag } from "@/types/kanban";
 import { entityFromBag, getStr } from "@/types/kanban";
 import { refreshBoards } from "@/lib/refresh";
@@ -545,6 +546,7 @@ function App() {
                           onInspect={inspectEntity}
                           onDismiss={dismissTopPanel}
                         >
+                          <FileDropProvider>
                           <AppShell
                             openBoards={openBoards}
                             onSwitchBoard={handleSwitchBoard}
@@ -638,6 +640,7 @@ function App() {
                               </ViewsProvider>
                             </DragSessionProvider>
                           </AppShell>
+                          </FileDropProvider>
                         </InspectProvider>
                       </UndoProvider>
                     </AppModeProvider>

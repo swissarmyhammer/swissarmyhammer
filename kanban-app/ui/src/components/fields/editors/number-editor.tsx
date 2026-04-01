@@ -3,7 +3,12 @@ import { useUIState } from "@/lib/ui-state-context";
 import type { EditorProps } from ".";
 
 /** Numeric input editor. Commits on Enter or blur. */
-export function NumberEditor({ value, onCommit, onCancel }: EditorProps) {
+export function NumberEditor({
+  value,
+  onCommit,
+  onCancel,
+  onChange,
+}: EditorProps) {
   const initial = value != null ? String(value) : "";
   const [draft, setDraft] = useState(initial);
   const ref = useRef<HTMLInputElement>(null);
@@ -34,7 +39,11 @@ export function NumberEditor({ value, onCommit, onCancel }: EditorProps) {
       ref={ref}
       type="number"
       value={draft}
-      onChange={(e) => setDraft(e.target.value)}
+      onChange={(e) => {
+        const v = e.target.value;
+        setDraft(v);
+        onChange?.(v === "" ? null : Number(v));
+      }}
       onKeyDown={(e) => {
         if (e.key === "Enter") {
           e.preventDefault();

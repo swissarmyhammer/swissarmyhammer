@@ -20,6 +20,7 @@ export function SelectEditor({
   value,
   onCommit,
   onCancel,
+  onChange,
 }: SelectEditorProps) {
   const options =
     ((field.type as Record<string, unknown>).options as Array<{
@@ -59,6 +60,7 @@ export function SelectEditor({
       }}
       onValueChange={(val) => {
         setDraft(val);
+        onChange?.(val === "__empty__" ? null : val);
       }}
     >
       <SelectTrigger

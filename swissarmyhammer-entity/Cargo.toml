@@ -22,6 +22,7 @@ swissarmyhammer-commands = { path = "../swissarmyhammer-commands" }
 swissarmyhammer-fields = { path = "../swissarmyhammer-fields" }
 swissarmyhammer-store = { path = "../swissarmyhammer-store" }
 diffy = { workspace = true }
+mime_guess = "2"
 notify = { workspace = true }
 tempfile = { workspace = true, optional = true }
 

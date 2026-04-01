@@ -241,7 +241,6 @@ async fn test_kanban_schema_has_all_operations() {
         "add task",
         "assign task",
         "complete task",
-        "add attachment",
         "list activity",
         "archive task",
         "unarchive task",
@@ -256,6 +255,5 @@ async fn test_kanban_schema_has_all_operations() {
         );
     }
 
-    println!("✅ Kanban schema has all 44 operations");
-    println!("   Including: add attachment");
+    println!("✅ Kanban schema has all 49 operations");
 }

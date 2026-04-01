@@ -14,21 +14,27 @@
 import { useCallback, type ComponentType } from "react";
 import { useEntityStore, useFieldValue } from "@/lib/entity-store-context";
 import { useFieldUpdate } from "@/lib/field-update-context";
+import { useDebouncedSave } from "@/lib/use-debounced-save";
 import { resolveEditor } from "@/components/fields/editors";
+import type { EditorProps } from "@/components/fields/editors";
 import type { FieldDef, Entity } from "@/types/kanban";
 
 // ---------------------------------------------------------------------------
 // Contracts — every editor and display implements one of these
 // ---------------------------------------------------------------------------
 
-/** Props that every editor component receives from Field. */
-export interface FieldEditorProps {
+/**
+ * Props that every editor component receives from Field.
+ *
+ * Callback signatures (onCommit, onCancel, onChange) are picked from
+ * EditorProps so the two interfaces stay in sync automatically.
+ */
+export interface FieldEditorProps extends Pick<
+  EditorProps,
+  "value" | "mode" | "onCommit" | "onCancel" | "onChange"
+> {
   field: FieldDef;
-  value: unknown;
   entity?: Entity;
-  mode: "compact" | "full";
-  onCommit: (value: unknown) => void;
-  onCancel: () => void;
 }
 
 /** Props that every display component receives from Field. */
@@ -112,15 +118,24 @@ export function Field({
   // Entity reference for editors that need context (e.g. multi-select).
   const entity = getEntity(entityType, entityId);
 
-  /** Editor commits a value → Field persists and signals done. */
+  // Debounced autosave — editors call onChange for intermediate values.
+  const { onChange: debouncedOnChange, cancel: cancelSave } = useDebouncedSave({
+    updateField,
+    entityType,
+    entityId,
+    fieldName: fieldDef.name,
+  });
+
+  /** Editor commits a value → cancel pending debounce (commit is authoritative), persist, and signal done. */
   const handleCommit = useCallback(
     (newValue: unknown) => {
+      cancelSave();
       updateField(entityType, entityId, fieldDef.name, newValue).catch(
         () => {},
       );
       onDone?.();
     },
-    [updateField, entityType, entityId, fieldDef.name, onDone],
+    [cancelSave, updateField, entityType, entityId, fieldDef.name, onDone],
   );
 
   /** Display-only commit — persists without exiting display mode (e.g. checkbox toggle). */
@@ -133,9 +148,11 @@ export function Field({
     [updateField, entityType, entityId, fieldDef.name],
   );
 
+  /** Cancel — discard any pending debounced save. */
   const handleCancel = useCallback(() => {
+    cancelSave();
     onCancel?.();
-  }, [onCancel]);
+  }, [cancelSave, onCancel]);
 
   if (editing) {
     const Editor = editorRegistry.get(fieldDef.editor ?? "");
@@ -148,6 +165,7 @@ export function Field({
         mode={mode}
         onCommit={handleCommit}
         onCancel={handleCancel}
+        onChange={debouncedOnChange}
       />
     );
   }

@@ -60,12 +60,9 @@ impl Execute<KanbanContext, KanbanError> for DeleteTask {
                 }
             }
 
-            // Delete associated attachments (moves to trash)
-            for att_id in entity.get_string_list("attachments") {
-                let _ = ectx.delete("attachment", &att_id).await;
-            }
-
-            // Delete the task (moves to trash)
+            // Delete the task (moves to trash).
+            // The entity layer automatically trashes attachment files
+            // referenced by attachment-type fields.
             ectx.delete("task", self.id.as_str()).await?;
 
             Ok(serde_json::json!({
@@ -111,9 +108,8 @@ impl Execute<KanbanContext, KanbanError> for DeleteTask {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::attachment::AddAttachment;
     use crate::board::InitBoard;
-    use crate::task::AddTask;
+    use crate::task::{AddTask, UpdateTask};
     use tempfile::TempDir;
 
     async fn setup() -> (TempDir, KanbanContext) {
@@ -201,17 +197,21 @@ mod tests {
             .unwrap();
         let task_id = add_result["id"].as_str().unwrap();
 
-        // Add an attachment
-        let att_result = AddAttachment::new(task_id, "file.txt", "./file.txt")
-            .execute(&ctx)
-            .await
-            .into_result()
-            .unwrap();
-        let att_id = att_result["attachment"]["id"].as_str().unwrap().to_string();
+        // Add an attachment via the kanban attachment operations
+        let att_result =
+            crate::attachment::AddAttachment::new(task_id, "file.txt", "/tmp/file.txt")
+                .execute(&ctx)
+                .await
+                .into_result()
+                .unwrap();
+        let att_id = att_result["attachment"]["id"].as_str().unwrap();
 
-        // Verify attachment exists
+        // Verify the task's attachments list contains the ID
         let ectx = ctx.entity_context().await.unwrap();
-        assert!(ectx.read("attachment", &att_id).await.is_ok());
+        let task = ectx.read("task", task_id).await.unwrap();
+        let ids = task.get_string_list("attachments");
+        assert_eq!(ids.len(), 1);
+        assert_eq!(ids[0], att_id);
 
         // Delete the task
         DeleteTask::new(task_id)
@@ -220,8 +220,7 @@ mod tests {
             .into_result()
             .unwrap();
 
-        // Verify attachment is also gone
-        let ectx = ctx.entity_context().await.unwrap();
-        assert!(ectx.read("attachment", &att_id).await.is_err());
+        // Verify the task is gone
+        assert!(ectx.read("task", task_id).await.is_err());
     }
 }

@@ -22,11 +22,15 @@ pub(crate) struct TestCommandBuilder {
 }
 
 impl TestCommandBuilder {
-    /// Create a new builder with the specified command
+    /// Create a new builder with the specified command.
+    ///
+    /// Defaults the working directory to `/tmp` so tests do not depend on the
+    /// process CWD, which can become invalid during parallel test execution
+    /// when other tests create and delete temporary directories.
     pub(crate) fn new(command: impl Into<String>) -> Self {
         Self {
             command: command.into(),
-            working_directory: None,
+            working_directory: Some("/tmp".to_string()),
             environment: None,
             custom_args: None,
             custom_context: None,
