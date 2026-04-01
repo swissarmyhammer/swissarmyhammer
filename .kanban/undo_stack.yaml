@@ -25,5 +25,11 @@ entries:
   label: update board board
 - id: 01KN2VY68P6W5N0WJRCEH673P9
   label: update board board
-pointer: 13
+- id: 01KN2Y39ZM1R01EYRBA10GJ98D
+  label: update board board
+- id: 01KN2Y3PBG7C7EGTYYSY5TY0HF
+  label: update board board
+- id: 01KN2Y3SJSSQ1391HHS9YNF7K2
+  label: update board board
+pointer: 16
 max_size: 100
