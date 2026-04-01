@@ -12,7 +12,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncWriteExt;
 
-use crate::id::UndoEntryId;
+use crate::id::{StoredItemId, UndoEntryId};
 
 /// The type of change recorded in a changelog entry.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -28,8 +28,8 @@ pub enum ChangeOp {
 
 /// A single entry in the changelog, recording one mutation to the store.
 ///
-/// Contains the before/after text snapshots. Patches are computed on-the-fly
-/// from before/after when needed (e.g., for three-way merge during undo).
+/// Stores unified diffs (forward and reverse patches) rather than full
+/// before/after text snapshots, significantly reducing storage overhead.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ChangelogEntry {
     /// Unique identifier for this changelog entry.
@@ -38,12 +38,12 @@ pub struct ChangelogEntry {
     pub timestamp: DateTime<Utc>,
     /// The type of change.
     pub op: ChangeOp,
-    /// The item's ID as a string.
-    pub item_id: String,
-    /// Text content before the change (None for creates).
-    pub before: Option<String>,
-    /// Text content after the change (None for deletes).
-    pub after: Option<String>,
+    /// The item's serialized ID.
+    pub item_id: StoredItemId,
+    /// Unified diff that transforms old content into new content.
+    pub forward_patch: String,
+    /// Unified diff that transforms new content back into old content.
+    pub reverse_patch: String,
     /// Optional transaction ID for grouping related changes.
     pub transaction_id: Option<String>,
 }
@@ -166,13 +166,14 @@ mod tests {
     use tempfile::TempDir;
 
     fn make_entry(item_id: &str, op: ChangeOp) -> ChangelogEntry {
+        let (forward_patch, reverse_patch) = crate::diff::create_patches("old", "new");
         ChangelogEntry {
             id: UndoEntryId::new(),
             timestamp: Utc::now(),
             op,
-            item_id: item_id.to_string(),
-            before: Some("old".to_string()),
-            after: Some("new".to_string()),
+            item_id: StoredItemId::from(item_id),
+            forward_patch,
+            reverse_patch,
             transaction_id: None,
         }
     }
@@ -189,8 +190,8 @@ mod tests {
 
         let entries = changelog.read_all().await.unwrap();
         assert_eq!(entries.len(), 2);
-        assert_eq!(entries[0].item_id, "task-1");
-        assert_eq!(entries[1].item_id, "task-2");
+        assert_eq!(entries[0].item_id, StoredItemId::from("task-1"));
+        assert_eq!(entries[1].item_id, StoredItemId::from("task-2"));
     }
 
     #[tokio::test]
@@ -230,17 +231,19 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let changelog = Changelog::new(dir.path().join("changelog.jsonl"));
 
-        let ids: Vec<String> = (0..5).map(|i| format!("item-{}", i)).collect();
+        let ids: Vec<StoredItemId> = (0..5)
+            .map(|i| StoredItemId::from(format!("item-{}", i)))
+            .collect();
         for id in &ids {
             changelog
-                .append(&make_entry(id, ChangeOp::Create))
+                .append(&make_entry(id.as_str(), ChangeOp::Create))
                 .await
                 .unwrap();
         }
 
         let entries = changelog.read_all().await.unwrap();
-        let read_ids: Vec<&str> = entries.iter().map(|e| e.item_id.as_str()).collect();
-        let expected: Vec<&str> = ids.iter().map(|s| s.as_str()).collect();
+        let read_ids: Vec<&StoredItemId> = entries.iter().map(|e| &e.item_id).collect();
+        let expected: Vec<&StoredItemId> = ids.iter().collect();
         assert_eq!(read_ids, expected);
     }
 
@@ -257,7 +260,7 @@ mod tests {
 
         let found = changelog.find_entry(&target_id).await.unwrap();
         assert!(found.is_some());
-        assert_eq!(found.unwrap().item_id, "task-2");
+        assert_eq!(found.unwrap().item_id, StoredItemId::from("task-2"));
     }
 
     #[tokio::test]
@@ -293,6 +296,6 @@ mod tests {
         let entries = changelog.read_all().await.unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].id, keep_id);
-        assert_eq!(entries[0].item_id, "task-2");
+        assert_eq!(entries[0].item_id, StoredItemId::from("task-2"));
     }
 }

@@ -11,7 +11,7 @@ use async_trait::async_trait;
 use crate::error::Result;
 use crate::event::ChangeEvent;
 use crate::handle::StoreHandle;
-use crate::id::UndoEntryId;
+use crate::id::{StoredItemId, UndoEntryId};
 use crate::store::TrackedStore;
 
 /// Object-safe wrapper for heterogeneous store dispatch.
@@ -29,17 +29,17 @@ pub trait ErasedStore: Send + Sync {
     /// Check whether this store owns the given changelog entry.
     ///
     /// The `item_id` identifies which per-item changelog to search.
-    async fn has_entry(&self, id: &UndoEntryId, item_id: &str) -> bool;
+    async fn has_entry(&self, id: &UndoEntryId, item_id: &StoredItemId) -> bool;
 
     /// Undo an operation, discarding the typed return value.
     ///
     /// The `item_id` identifies which per-item changelog contains the entry.
-    async fn undo_erased(&self, id: &UndoEntryId, item_id: &str) -> Result<()>;
+    async fn undo_erased(&self, id: &UndoEntryId, item_id: &StoredItemId) -> Result<()>;
 
     /// Redo an operation, discarding the typed return value.
     ///
     /// The `item_id` identifies which per-item changelog contains the entry.
-    async fn redo_erased(&self, id: &UndoEntryId, item_id: &str) -> Result<()>;
+    async fn redo_erased(&self, id: &UndoEntryId, item_id: &StoredItemId) -> Result<()>;
 }
 
 #[async_trait]
@@ -52,16 +52,16 @@ impl<S: TrackedStore> ErasedStore for StoreHandle<S> {
         StoreHandle::flush_changes(self).await
     }
 
-    async fn has_entry(&self, id: &UndoEntryId, item_id: &str) -> bool {
+    async fn has_entry(&self, id: &UndoEntryId, item_id: &StoredItemId) -> bool {
         StoreHandle::has_entry(self, id, item_id).await
     }
 
-    async fn undo_erased(&self, id: &UndoEntryId, item_id: &str) -> Result<()> {
+    async fn undo_erased(&self, id: &UndoEntryId, item_id: &StoredItemId) -> Result<()> {
         self.undo(id, item_id).await?;
         Ok(())
     }
 
-    async fn redo_erased(&self, id: &UndoEntryId, item_id: &str) -> Result<()> {
+    async fn redo_erased(&self, id: &UndoEntryId, item_id: &StoredItemId) -> Result<()> {
         self.redo(id, item_id).await?;
         Ok(())
     }

@@ -83,7 +83,7 @@ impl StoreContext {
             let stores = self.stores.read().await;
             let mut found = None;
             for s in stores.iter() {
-                if s.has_entry(&target_id, item_id.as_str()).await {
+                if s.has_entry(&target_id, &item_id).await {
                     found = Some(Arc::clone(s));
                     break;
                 }
@@ -93,7 +93,7 @@ impl StoreContext {
         // Lock released here
 
         if let Some(store) = store {
-            store.undo_erased(&target_id, item_id.as_str()).await?;
+            store.undo_erased(&target_id, &item_id).await?;
         } else {
             return Err(StoreError::NoProvider(target_id.to_string()));
         }
@@ -127,7 +127,7 @@ impl StoreContext {
             let stores = self.stores.read().await;
             let mut found = None;
             for s in stores.iter() {
-                if s.has_entry(&target_id, item_id.as_str()).await {
+                if s.has_entry(&target_id, &item_id).await {
                     found = Some(Arc::clone(s));
                     break;
                 }
@@ -137,7 +137,7 @@ impl StoreContext {
         // Lock released here
 
         if let Some(store) = store {
-            store.redo_erased(&target_id, item_id.as_str()).await?;
+            store.redo_erased(&target_id, &item_id).await?;
         } else {
             return Err(StoreError::NoProvider(target_id.to_string()));
         }

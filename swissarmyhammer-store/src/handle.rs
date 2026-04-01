@@ -16,7 +16,7 @@ use crate::changelog::{ChangeOp, Changelog, ChangelogEntry};
 use crate::diff;
 use crate::error::{Result, StoreError};
 use crate::event::ChangeEvent;
-use crate::id::UndoEntryId;
+use crate::id::{StoredItemId, UndoEntryId};
 use crate::store::TrackedStore;
 use crate::trash;
 
@@ -44,8 +44,11 @@ impl<S: TrackedStore> StoreHandle<S> {
     ///
     /// The changelog lives at `{root}/{item_id}.jsonl` alongside the data
     /// file at `{root}/{item_id}.{ext}`.
-    fn changelog_for(&self, item_id: &str) -> Changelog {
-        let path = self.store.root().join(format!("{}.jsonl", item_id));
+    fn changelog_for(&self, item_id: &StoredItemId) -> Changelog {
+        let path = self
+            .store
+            .root()
+            .join(format!("{}.jsonl", item_id.as_str()));
         Changelog::new(path)
     }
 
@@ -70,6 +73,7 @@ impl<S: TrackedStore> StoreHandle<S> {
     pub async fn write(&self, item: &S::Item) -> Result<Option<UndoEntryId>> {
         let id = self.store.item_id(item);
         let id_str = id.to_string();
+        let stored_id = StoredItemId::from(id_str.clone());
         let new_text = self.store.serialize(item)?;
 
         // Hold the cache write lock across the entire operation
@@ -93,18 +97,21 @@ impl<S: TrackedStore> StoreHandle<S> {
             ChangeOp::Create
         };
 
+        let (forward_patch, reverse_patch) =
+            diff::create_patches(old_text.as_deref().unwrap_or(""), &new_text);
+
         let entry_id = UndoEntryId::new();
         let entry = ChangelogEntry {
             id: entry_id,
             timestamp: Utc::now(),
             op,
-            item_id: id_str.clone(),
-            before: old_text,
-            after: Some(new_text.clone()),
+            item_id: stored_id.clone(),
+            forward_patch,
+            reverse_patch,
             transaction_id: None,
         };
 
-        self.changelog_for(&id_str)
+        self.changelog_for(&stored_id)
             .append(&entry)
             .await
             .map_err(StoreError::Io)?;
@@ -125,6 +132,7 @@ impl<S: TrackedStore> StoreHandle<S> {
     /// TOCTOU races.
     pub async fn delete(&self, id: &S::ItemId) -> Result<UndoEntryId> {
         let id_str = id.to_string();
+        let stored_id = StoredItemId::from(id_str.clone());
 
         // Hold the cache write lock across the entire operation
         let mut cache = self.cache.write().await;
@@ -137,18 +145,20 @@ impl<S: TrackedStore> StoreHandle<S> {
                 .ok_or_else(|| StoreError::NotFound(id_str.clone()))?
         };
 
+        let (forward_patch, reverse_patch) = diff::create_patches(&text, "");
+
         let entry_id = UndoEntryId::new();
         let entry = ChangelogEntry {
             id: entry_id,
             timestamp: Utc::now(),
             op: ChangeOp::Delete,
-            item_id: id_str.clone(),
-            before: Some(text),
-            after: None,
+            item_id: stored_id.clone(),
+            forward_patch,
+            reverse_patch,
             transaction_id: None,
         };
 
-        self.changelog_for(&id_str)
+        self.changelog_for(&stored_id)
             .append(&entry)
             .await
             .map_err(StoreError::Io)?;
@@ -156,14 +166,14 @@ impl<S: TrackedStore> StoreHandle<S> {
         // Trash the data file
         trash::trash_file(
             self.store.root(),
-            &id_str,
+            &stored_id,
             self.store.extension(),
             &entry_id,
         )
         .map_err(StoreError::Io)?;
 
         // Trash the per-item changelog alongside the data file
-        trash::trash_file(self.store.root(), &id_str, "jsonl", &entry_id)
+        trash::trash_file(self.store.root(), &stored_id, "jsonl", &entry_id)
             .map_err(StoreError::Io)?;
 
         // Update cache (lock already held)
@@ -179,7 +189,7 @@ impl<S: TrackedStore> StoreHandle<S> {
     /// - Create: trashes the created file and its changelog
     /// - Update: reverts to the before text (with 3-way merge if concurrently edited)
     /// - Delete: restores the file and its changelog from trash
-    pub async fn undo(&self, entry_id: &UndoEntryId, item_id: &str) -> Result<S::Item> {
+    pub async fn undo(&self, entry_id: &UndoEntryId, item_id: &StoredItemId) -> Result<S::Item> {
         // If the changelog is in trash (from a prior delete), restore it first
         // so we can read the entry. Ignore errors -- the file may not be trashed.
         let _ = trash::restore_file(self.store.root(), item_id, "jsonl", entry_id);
@@ -193,7 +203,11 @@ impl<S: TrackedStore> StoreHandle<S> {
 
         match entry.op {
             ChangeOp::Create => {
-                // Undo create: trash both the data file and its changelog
+                // Undo create: trash both the data file and its changelog.
+                // Reconstruct the created content by applying forward_patch to ""
+                // so we can return the item that was undone.
+                let created_text = diff::apply_patch("", &entry.forward_patch)?;
+
                 trash::trash_file(
                     self.store.root(),
                     &entry.item_id,
@@ -203,49 +217,42 @@ impl<S: TrackedStore> StoreHandle<S> {
                 .map_err(StoreError::Io)?;
                 trash::trash_file(self.store.root(), &entry.item_id, "jsonl", &entry.id)
                     .map_err(StoreError::Io)?;
-                self.cache.write().await.remove(&entry.item_id);
+                self.cache.write().await.remove(entry.item_id.as_str());
 
-                let after_text = entry.after.as_deref().unwrap_or("");
                 let id = entry
                     .item_id
+                    .as_str()
                     .parse::<S::ItemId>()
-                    .map_err(|_| StoreError::Deserialize(entry.item_id.clone()))?;
-                self.store.deserialize(&id, after_text)
+                    .map_err(|_| StoreError::Deserialize(entry.item_id.to_string()))?;
+                self.store.deserialize(&id, &created_text)
             }
             ChangeOp::Update => {
-                let before_text = entry
-                    .before
-                    .as_deref()
-                    .ok_or_else(|| StoreError::PatchFailed("no before text for update".into()))?;
-                let after_text = entry
-                    .after
-                    .as_deref()
-                    .ok_or_else(|| StoreError::PatchFailed("no after text for update".into()))?;
-
                 // Read current file directly from disk to detect external edits
                 let current = self
-                    .read_text_from_disk(&entry.item_id)
+                    .read_text_from_disk(entry.item_id.as_str())
                     .await?
-                    .ok_or_else(|| StoreError::NotFound(entry.item_id.clone()))?;
+                    .ok_or_else(|| StoreError::NotFound(entry.item_id.to_string()))?;
 
-                // If current matches what we wrote, just revert directly
-                let target = if current == after_text {
-                    before_text.to_string()
-                } else {
-                    // Concurrent edit: 3-way merge
-                    diff::three_way_merge(after_text, &current, before_text)?
-                };
+                // Apply reverse_patch to current content. If the file hasn't been
+                // modified since the entry was created, this applies cleanly. If
+                // there were concurrent edits, the patch will fail with a conflict.
+                let target = diff::apply_patch(&current, &entry.reverse_patch).map_err(|_| {
+                    StoreError::MergeConflict(
+                        "reverse patch failed to apply — file was concurrently modified".into(),
+                    )
+                })?;
 
-                self.atomic_write(&entry.item_id, &target).await?;
+                self.atomic_write(entry.item_id.as_str(), &target).await?;
                 self.cache
                     .write()
                     .await
-                    .insert(entry.item_id.clone(), target.clone());
+                    .insert(entry.item_id.to_string(), target.clone());
 
                 let id = entry
                     .item_id
+                    .as_str()
                     .parse::<S::ItemId>()
-                    .map_err(|_| StoreError::Deserialize(entry.item_id.clone()))?;
+                    .map_err(|_| StoreError::Deserialize(entry.item_id.to_string()))?;
                 self.store.deserialize(&id, &target)
             }
             ChangeOp::Delete => {
@@ -259,17 +266,19 @@ impl<S: TrackedStore> StoreHandle<S> {
                 )
                 .map_err(StoreError::Io)?;
 
-                let before_text = entry.before.as_deref().unwrap_or("");
+                // Reconstruct the deleted content by applying reverse_patch to ""
+                let restored_text = diff::apply_patch("", &entry.reverse_patch)?;
                 self.cache
                     .write()
                     .await
-                    .insert(entry.item_id.clone(), before_text.to_string());
+                    .insert(entry.item_id.to_string(), restored_text.clone());
 
                 let id = entry
                     .item_id
+                    .as_str()
                     .parse::<S::ItemId>()
-                    .map_err(|_| StoreError::Deserialize(entry.item_id.clone()))?;
-                self.store.deserialize(&id, before_text)
+                    .map_err(|_| StoreError::Deserialize(entry.item_id.to_string()))?;
+                self.store.deserialize(&id, &restored_text)
             }
         }
     }
@@ -281,7 +290,7 @@ impl<S: TrackedStore> StoreHandle<S> {
     /// - Create: restores the file and its changelog from trash
     /// - Update: re-applies the forward change
     /// - Delete: trashes the file and its changelog again
-    pub async fn redo(&self, entry_id: &UndoEntryId, item_id: &str) -> Result<S::Item> {
+    pub async fn redo(&self, entry_id: &UndoEntryId, item_id: &StoredItemId) -> Result<S::Item> {
         // If the changelog is in trash (from a prior undo of a create), restore
         // it first so we can read the entry. Ignore errors -- the file may not
         // be trashed.
@@ -306,54 +315,55 @@ impl<S: TrackedStore> StoreHandle<S> {
                 )
                 .map_err(StoreError::Io)?;
 
-                let after_text = entry.after.as_deref().unwrap_or("");
+                // Reconstruct the created content by applying forward_patch to ""
+                let created_text = diff::apply_patch("", &entry.forward_patch)?;
                 self.cache
                     .write()
                     .await
-                    .insert(entry.item_id.clone(), after_text.to_string());
+                    .insert(entry.item_id.to_string(), created_text.clone());
 
                 let id = entry
                     .item_id
+                    .as_str()
                     .parse::<S::ItemId>()
-                    .map_err(|_| StoreError::Deserialize(entry.item_id.clone()))?;
-                self.store.deserialize(&id, after_text)
+                    .map_err(|_| StoreError::Deserialize(entry.item_id.to_string()))?;
+                self.store.deserialize(&id, &created_text)
             }
             ChangeOp::Update => {
-                let before_text = entry
-                    .before
-                    .as_deref()
-                    .ok_or_else(|| StoreError::PatchFailed("no before text for update".into()))?;
-                let after_text = entry
-                    .after
-                    .as_deref()
-                    .ok_or_else(|| StoreError::PatchFailed("no after text for update".into()))?;
-
                 // Read current file directly from disk to detect external edits
                 let current = self
-                    .read_text_from_disk(&entry.item_id)
+                    .read_text_from_disk(entry.item_id.as_str())
                     .await?
-                    .ok_or_else(|| StoreError::NotFound(entry.item_id.clone()))?;
+                    .ok_or_else(|| StoreError::NotFound(entry.item_id.to_string()))?;
 
-                let target = if current == before_text {
-                    after_text.to_string()
-                } else {
-                    diff::three_way_merge(before_text, &current, after_text)?
-                };
+                // Apply forward_patch to current content. If the file hasn't been
+                // modified since the undo, this applies cleanly. If there were
+                // concurrent edits, the patch will fail with a conflict.
+                let target = diff::apply_patch(&current, &entry.forward_patch).map_err(|_| {
+                    StoreError::MergeConflict(
+                        "forward patch failed to apply — file was concurrently modified".into(),
+                    )
+                })?;
 
-                self.atomic_write(&entry.item_id, &target).await?;
+                self.atomic_write(entry.item_id.as_str(), &target).await?;
                 self.cache
                     .write()
                     .await
-                    .insert(entry.item_id.clone(), target.clone());
+                    .insert(entry.item_id.to_string(), target.clone());
 
                 let id = entry
                     .item_id
+                    .as_str()
                     .parse::<S::ItemId>()
-                    .map_err(|_| StoreError::Deserialize(entry.item_id.clone()))?;
+                    .map_err(|_| StoreError::Deserialize(entry.item_id.to_string()))?;
                 self.store.deserialize(&id, &target)
             }
             ChangeOp::Delete => {
-                // Redo delete: trash both the data file and its changelog again
+                // Redo delete: trash both the data file and its changelog again.
+                // Reconstruct the deleted content by applying reverse_patch to ""
+                // so we can return the item that was re-deleted.
+                let deleted_text = diff::apply_patch("", &entry.reverse_patch)?;
+
                 trash::trash_file(
                     self.store.root(),
                     &entry.item_id,
@@ -363,14 +373,14 @@ impl<S: TrackedStore> StoreHandle<S> {
                 .map_err(StoreError::Io)?;
                 trash::trash_file(self.store.root(), &entry.item_id, "jsonl", &entry.id)
                     .map_err(StoreError::Io)?;
-                self.cache.write().await.remove(&entry.item_id);
+                self.cache.write().await.remove(entry.item_id.as_str());
 
-                let before_text = entry.before.as_deref().unwrap_or("");
                 let id = entry
                     .item_id
+                    .as_str()
                     .parse::<S::ItemId>()
-                    .map_err(|_| StoreError::Deserialize(entry.item_id.clone()))?;
-                self.store.deserialize(&id, before_text)
+                    .map_err(|_| StoreError::Deserialize(entry.item_id.to_string()))?;
+                self.store.deserialize(&id, &deleted_text)
             }
         }
     }
@@ -379,7 +389,7 @@ impl<S: TrackedStore> StoreHandle<S> {
     ///
     /// The `item_id` identifies which per-item changelog to search. Also checks
     /// if the changelog is in trash (which happens after a delete or undo-create).
-    pub async fn has_entry(&self, id: &UndoEntryId, item_id: &str) -> bool {
+    pub async fn has_entry(&self, id: &UndoEntryId, item_id: &StoredItemId) -> bool {
         // First check the live changelog
         let found = self
             .changelog_for(item_id)
@@ -557,10 +567,11 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&path).unwrap(), item);
 
         // Per-item changelog should have one entry
-        let entries = handle.changelog_for("item1").read_all().await.unwrap();
+        let item1_id = StoredItemId::from("item1");
+        let entries = handle.changelog_for(&item1_id).read_all().await.unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].op, ChangeOp::Create);
-        assert_eq!(entries[0].item_id, "item1");
+        assert_eq!(entries[0].item_id, item1_id);
     }
 
     #[tokio::test]
@@ -575,7 +586,11 @@ mod tests {
         assert!(second.is_none());
 
         // Only one changelog entry
-        let entries = handle.changelog_for("item1").read_all().await.unwrap();
+        let entries = handle
+            .changelog_for(&StoredItemId::from("item1"))
+            .read_all()
+            .await
+            .unwrap();
         assert_eq!(entries.len(), 1);
     }
 
@@ -596,10 +611,16 @@ mod tests {
         handle.write(&item).await.unwrap();
 
         let entry_id = handle.delete(&"item1".to_string()).await.unwrap();
+        let item1_id = StoredItemId::from("item1");
         assert!(!_dir.path().join("item1.txt").exists());
-        assert!(trash::is_trashed(_dir.path(), "item1", "txt", &entry_id));
+        assert!(trash::is_trashed(_dir.path(), &item1_id, "txt", &entry_id));
         // Per-item changelog is also trashed alongside the data file
-        assert!(trash::is_trashed(_dir.path(), "item1", "jsonl", &entry_id));
+        assert!(trash::is_trashed(
+            _dir.path(),
+            &item1_id,
+            "jsonl",
+            &entry_id
+        ));
     }
 
     #[tokio::test]
@@ -608,10 +629,16 @@ mod tests {
         let item = "item1\ndata".to_string();
         let entry_id = handle.write(&item).await.unwrap().unwrap();
 
-        handle.undo(&entry_id, "item1").await.unwrap();
+        let item1_id = StoredItemId::from("item1");
+        handle.undo(&entry_id, &item1_id).await.unwrap();
         assert!(!_dir.path().join("item1.txt").exists());
-        assert!(trash::is_trashed(_dir.path(), "item1", "txt", &entry_id));
-        assert!(trash::is_trashed(_dir.path(), "item1", "jsonl", &entry_id));
+        assert!(trash::is_trashed(_dir.path(), &item1_id, "txt", &entry_id));
+        assert!(trash::is_trashed(
+            _dir.path(),
+            &item1_id,
+            "jsonl",
+            &entry_id
+        ));
     }
 
     #[tokio::test]
@@ -623,7 +650,10 @@ mod tests {
         handle.write(&v1).await.unwrap();
         let update_id = handle.write(&v2).await.unwrap().unwrap();
 
-        handle.undo(&update_id, "item1").await.unwrap();
+        handle
+            .undo(&update_id, &StoredItemId::from("item1"))
+            .await
+            .unwrap();
 
         let content = std::fs::read_to_string(_dir.path().join("item1.txt")).unwrap();
         assert_eq!(content, v1);
@@ -636,7 +666,10 @@ mod tests {
         handle.write(&item).await.unwrap();
         let delete_id = handle.delete(&"item1".to_string()).await.unwrap();
 
-        handle.undo(&delete_id, "item1").await.unwrap();
+        handle
+            .undo(&delete_id, &StoredItemId::from("item1"))
+            .await
+            .unwrap();
         assert!(_dir.path().join("item1.txt").exists());
         let content = std::fs::read_to_string(_dir.path().join("item1.txt")).unwrap();
         assert_eq!(content, "item1\ndata");
@@ -652,12 +685,18 @@ mod tests {
         let update_id = handle.write(&v2).await.unwrap().unwrap();
 
         // Undo
-        handle.undo(&update_id, "item1").await.unwrap();
+        handle
+            .undo(&update_id, &StoredItemId::from("item1"))
+            .await
+            .unwrap();
         let content = std::fs::read_to_string(_dir.path().join("item1.txt")).unwrap();
         assert_eq!(content, v1);
 
         // Redo
-        handle.redo(&update_id, "item1").await.unwrap();
+        handle
+            .redo(&update_id, &StoredItemId::from("item1"))
+            .await
+            .unwrap();
         let content = std::fs::read_to_string(_dir.path().join("item1.txt")).unwrap();
         assert_eq!(content, v2);
     }
@@ -708,14 +747,22 @@ mod tests {
         let item = "item1\ndata".to_string();
         let entry_id = handle.write(&item).await.unwrap().unwrap();
 
-        assert!(handle.has_entry(&entry_id, "item1").await);
+        assert!(
+            handle
+                .has_entry(&entry_id, &StoredItemId::from("item1"))
+                .await
+        );
     }
 
     #[tokio::test]
     async fn has_entry_returns_false_for_unknown_entry() {
         let (_dir, handle) = setup();
         let unknown = UndoEntryId::new();
-        assert!(!handle.has_entry(&unknown, "item1").await);
+        assert!(
+            !handle
+                .has_entry(&unknown, &StoredItemId::from("item1"))
+                .await
+        );
     }
 
     #[tokio::test]
@@ -727,7 +774,11 @@ mod tests {
         handle.write(&v1).await.unwrap();
         handle.write(&v2).await.unwrap();
 
-        let entries = handle.changelog_for("item1").read_all().await.unwrap();
+        let entries = handle
+            .changelog_for(&StoredItemId::from("item1"))
+            .read_all()
+            .await
+            .unwrap();
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].op, ChangeOp::Create);
         assert_eq!(entries[1].op, ChangeOp::Update);
@@ -739,10 +790,16 @@ mod tests {
         let item = "item1\ndata".to_string();
         let create_id = handle.write(&item).await.unwrap().unwrap();
 
-        handle.undo(&create_id, "item1").await.unwrap();
+        handle
+            .undo(&create_id, &StoredItemId::from("item1"))
+            .await
+            .unwrap();
         assert!(!_dir.path().join("item1.txt").exists());
 
-        handle.redo(&create_id, "item1").await.unwrap();
+        handle
+            .redo(&create_id, &StoredItemId::from("item1"))
+            .await
+            .unwrap();
         assert!(_dir.path().join("item1.txt").exists());
         let content = std::fs::read_to_string(_dir.path().join("item1.txt")).unwrap();
         assert_eq!(content, item);
@@ -756,23 +813,35 @@ mod tests {
         let delete_id = handle.delete(&"item1".to_string()).await.unwrap();
 
         // Undo delete (restore)
-        handle.undo(&delete_id, "item1").await.unwrap();
+        handle
+            .undo(&delete_id, &StoredItemId::from("item1"))
+            .await
+            .unwrap();
         assert!(_dir.path().join("item1.txt").exists());
 
         // Redo delete (trash again)
-        handle.redo(&delete_id, "item1").await.unwrap();
+        handle
+            .redo(&delete_id, &StoredItemId::from("item1"))
+            .await
+            .unwrap();
         assert!(!_dir.path().join("item1.txt").exists());
-        assert!(trash::is_trashed(_dir.path(), "item1", "txt", &delete_id));
-        assert!(trash::is_trashed(_dir.path(), "item1", "jsonl", &delete_id));
+        let item1_id = StoredItemId::from("item1");
+        assert!(trash::is_trashed(_dir.path(), &item1_id, "txt", &delete_id));
+        assert!(trash::is_trashed(
+            _dir.path(),
+            &item1_id,
+            "jsonl",
+            &delete_id
+        ));
     }
 
     #[tokio::test]
-    async fn undo_update_with_concurrent_edit_merges() {
-        // Write v1, write v2, externally modify to v3, undo v1->v2
-        // Non-overlapping changes should merge cleanly
+    async fn undo_update_with_non_overlapping_concurrent_edit_succeeds() {
+        // Write v1, write v2, externally modify to v3, undo v1->v2.
+        // Non-overlapping changes apply cleanly because the reverse patch
+        // only touches the region that was changed by the update.
         let (_dir, handle) = setup();
 
-        // Need enough lines for diffy to see separate hunks
         let v1 = "item1\nline2\nline3\nline4\nline5\nline6\nline7\n".to_string();
         let v2 = "item1\nCHANGED\nline3\nline4\nline5\nline6\nline7\n".to_string();
         let v3 = "item1\nCHANGED\nline3\nline4\nline5\nline6\nEXTERNAL\n".to_string();
@@ -783,8 +852,11 @@ mod tests {
         // External edit: change last line (non-overlapping with v1->v2 change)
         std::fs::write(_dir.path().join("item1.txt"), &v3).unwrap();
 
-        // Undo should 3-way merge: revert line2 change, keep external line7 change
-        let result = handle.undo(&update_id, "item1").await.unwrap();
+        // Undo applies reverse patch, reverting line2 while keeping external edit
+        let result = handle
+            .undo(&update_id, &StoredItemId::from("item1"))
+            .await
+            .unwrap();
         assert!(result.contains("line2"), "should revert to original line2");
         assert!(
             result.contains("EXTERNAL"),
@@ -807,7 +879,7 @@ mod tests {
         // External edit on same line
         std::fs::write(_dir.path().join("item1.txt"), &v3).unwrap();
 
-        let result = handle.undo(&update_id, "item1").await;
+        let result = handle.undo(&update_id, &StoredItemId::from("item1")).await;
         assert!(
             result.is_err(),
             "conflicting concurrent edit should produce MergeConflict"
@@ -819,8 +891,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn redo_update_with_concurrent_edit_merges() {
-        // Write v1, write v2, undo, externally modify, redo -- should merge
+    async fn redo_update_with_non_overlapping_concurrent_edit_succeeds() {
+        // Write v1, write v2, undo, externally modify, redo.
+        // Non-overlapping changes apply cleanly because the forward patch
+        // only touches the region that was changed by the update.
         let (_dir, handle) = setup();
 
         let v1 = "item1\nline2\nline3\nline4\nline5\nline6\nline7\n".to_string();
@@ -830,14 +904,20 @@ mod tests {
         let update_id = handle.write(&v2).await.unwrap().unwrap();
 
         // Undo to get back to v1
-        handle.undo(&update_id, "item1").await.unwrap();
+        handle
+            .undo(&update_id, &StoredItemId::from("item1"))
+            .await
+            .unwrap();
 
         // External edit: change last line (non-overlapping with v1->v2 change)
         let v1_modified = "item1\nline2\nline3\nline4\nline5\nline6\nEXTERNAL\n".to_string();
         std::fs::write(_dir.path().join("item1.txt"), &v1_modified).unwrap();
 
-        // Redo should 3-way merge: re-apply line2 change, keep external line7 change
-        let result = handle.redo(&update_id, "item1").await.unwrap();
+        // Redo applies forward patch, re-applying line2 change while keeping external edit
+        let result = handle
+            .redo(&update_id, &StoredItemId::from("item1"))
+            .await
+            .unwrap();
         assert!(result.contains("CHANGED"), "should re-apply line2 change");
         assert!(
             result.contains("EXTERNAL"),

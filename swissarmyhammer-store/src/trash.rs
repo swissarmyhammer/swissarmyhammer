@@ -7,19 +7,24 @@
 use std::io;
 use std::path::Path;
 
-use crate::id::UndoEntryId;
+use crate::id::{StoredItemId, UndoEntryId};
 
 /// Move an item's file from the live directory to the `.trash/` subdirectory.
 ///
 /// The trash filename includes the undo entry ID so that multiple versions
 /// of the same item can coexist in trash (e.g., create → undo → create → undo).
 /// Creates the `.trash/` directory if it does not already exist.
-pub fn trash_file(root: &Path, item_id: &str, ext: &str, entry_id: &UndoEntryId) -> io::Result<()> {
+pub fn trash_file(
+    root: &Path,
+    item_id: &StoredItemId,
+    ext: &str,
+    entry_id: &UndoEntryId,
+) -> io::Result<()> {
     let trash_dir = root.join(".trash");
     std::fs::create_dir_all(&trash_dir)?;
 
-    let src = root.join(format!("{}.{}", item_id, ext));
-    let dst = trash_dir.join(format!("{}.{}.{}", item_id, entry_id, ext));
+    let src = root.join(format!("{}.{}", item_id.as_str(), ext));
+    let dst = trash_dir.join(format!("{}.{}.{}", item_id.as_str(), entry_id, ext));
     std::fs::rename(src, dst)?;
     Ok(())
 }
@@ -30,22 +35,22 @@ pub fn trash_file(root: &Path, item_id: &str, ext: &str, entry_id: &UndoEntryId)
 /// Returns an error if the trashed file does not exist.
 pub fn restore_file(
     root: &Path,
-    item_id: &str,
+    item_id: &StoredItemId,
     ext: &str,
     entry_id: &UndoEntryId,
 ) -> io::Result<()> {
     let trash_dir = root.join(".trash");
-    let src = trash_dir.join(format!("{}.{}.{}", item_id, entry_id, ext));
-    let dst = root.join(format!("{}.{}", item_id, ext));
+    let src = trash_dir.join(format!("{}.{}.{}", item_id.as_str(), entry_id, ext));
+    let dst = root.join(format!("{}.{}", item_id.as_str(), ext));
     std::fs::rename(src, dst)?;
     Ok(())
 }
 
 /// Check whether an item's file exists in the `.trash/` directory for a given entry.
-pub fn is_trashed(root: &Path, item_id: &str, ext: &str, entry_id: &UndoEntryId) -> bool {
+pub fn is_trashed(root: &Path, item_id: &StoredItemId, ext: &str, entry_id: &UndoEntryId) -> bool {
     let trash_path = root
         .join(".trash")
-        .join(format!("{}.{}.{}", item_id, entry_id, ext));
+        .join(format!("{}.{}.{}", item_id.as_str(), entry_id, ext));
     trash_path.exists()
 }
 
@@ -62,10 +67,15 @@ mod tests {
         std::fs::write(&file_path, "content").unwrap();
 
         let entry_id = UndoEntryId::new();
-        trash_file(root, "item1", "txt", &entry_id).unwrap();
+        trash_file(root, &StoredItemId::from("item1"), "txt", &entry_id).unwrap();
 
         assert!(!file_path.exists());
-        assert!(is_trashed(root, "item1", "txt", &entry_id));
+        assert!(is_trashed(
+            root,
+            &StoredItemId::from("item1"),
+            "txt",
+            &entry_id
+        ));
     }
 
     #[test]
@@ -76,10 +86,10 @@ mod tests {
         std::fs::write(&file_path, "content").unwrap();
 
         let entry_id = UndoEntryId::new();
-        trash_file(root, "item1", "txt", &entry_id).unwrap();
+        trash_file(root, &StoredItemId::from("item1"), "txt", &entry_id).unwrap();
         assert!(!file_path.exists());
 
-        restore_file(root, "item1", "txt", &entry_id).unwrap();
+        restore_file(root, &StoredItemId::from("item1"), "txt", &entry_id).unwrap();
         assert!(file_path.exists());
         assert_eq!(std::fs::read_to_string(&file_path).unwrap(), "content");
     }
@@ -92,13 +102,28 @@ mod tests {
         std::fs::write(&file_path, "content").unwrap();
 
         let entry_id = UndoEntryId::new();
-        assert!(!is_trashed(root, "item1", "txt", &entry_id));
+        assert!(!is_trashed(
+            root,
+            &StoredItemId::from("item1"),
+            "txt",
+            &entry_id
+        ));
 
-        trash_file(root, "item1", "txt", &entry_id).unwrap();
-        assert!(is_trashed(root, "item1", "txt", &entry_id));
+        trash_file(root, &StoredItemId::from("item1"), "txt", &entry_id).unwrap();
+        assert!(is_trashed(
+            root,
+            &StoredItemId::from("item1"),
+            "txt",
+            &entry_id
+        ));
 
-        restore_file(root, "item1", "txt", &entry_id).unwrap();
-        assert!(!is_trashed(root, "item1", "txt", &entry_id));
+        restore_file(root, &StoredItemId::from("item1"), "txt", &entry_id).unwrap();
+        assert!(!is_trashed(
+            root,
+            &StoredItemId::from("item1"),
+            "txt",
+            &entry_id
+        ));
     }
 
     #[test]
@@ -110,7 +135,7 @@ mod tests {
 
         let entry_id = UndoEntryId::new();
         assert!(!root.join(".trash").exists());
-        trash_file(root, "item1", "txt", &entry_id).unwrap();
+        trash_file(root, &StoredItemId::from("item1"), "txt", &entry_id).unwrap();
         assert!(root.join(".trash").exists());
     }
 
@@ -119,7 +144,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let root = dir.path();
         let entry_id = UndoEntryId::new();
-        let result = restore_file(root, "missing", "txt", &entry_id);
+        let result = restore_file(root, &StoredItemId::from("missing"), "txt", &entry_id);
         assert!(result.is_err());
     }
 
@@ -131,21 +156,22 @@ mod tests {
         // Create and trash first version
         std::fs::write(root.join("item1.txt"), "v1").unwrap();
         let entry1 = UndoEntryId::new();
-        trash_file(root, "item1", "txt", &entry1).unwrap();
+        let item_id = StoredItemId::from("item1");
+        trash_file(root, &item_id, "txt", &entry1).unwrap();
 
         // Create and trash second version
         std::fs::write(root.join("item1.txt"), "v2").unwrap();
         let entry2 = UndoEntryId::new();
-        trash_file(root, "item1", "txt", &entry2).unwrap();
+        trash_file(root, &item_id, "txt", &entry2).unwrap();
 
         // Both should exist in trash
-        assert!(is_trashed(root, "item1", "txt", &entry1));
-        assert!(is_trashed(root, "item1", "txt", &entry2));
+        assert!(is_trashed(root, &item_id, "txt", &entry1));
+        assert!(is_trashed(root, &item_id, "txt", &entry2));
 
         // Restoring one doesn't affect the other
-        restore_file(root, "item1", "txt", &entry2).unwrap();
-        assert!(is_trashed(root, "item1", "txt", &entry1));
-        assert!(!is_trashed(root, "item1", "txt", &entry2));
+        restore_file(root, &item_id, "txt", &entry2).unwrap();
+        assert!(is_trashed(root, &item_id, "txt", &entry1));
+        assert!(!is_trashed(root, &item_id, "txt", &entry2));
         assert_eq!(
             std::fs::read_to_string(root.join("item1.txt")).unwrap(),
             "v2"
