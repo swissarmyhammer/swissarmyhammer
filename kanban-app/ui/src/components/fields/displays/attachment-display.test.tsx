@@ -5,13 +5,15 @@ import { render, screen, fireEvent } from "@testing-library/react";
 // Mocks — must be declared before importing the component under test
 // ---------------------------------------------------------------------------
 
-const mockInvoke = vi.fn(() => Promise.resolve("ok"));
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const mockInvoke = vi.fn((..._args: any[]): Promise<any> => Promise.resolve("ok"));
 vi.mock("@tauri-apps/api/core", () => ({
-  invoke: (...args: unknown[]) => mockInvoke(...args),
+  invoke: (...args: any[]) => mockInvoke(...args),
 }));
-const mockListen = vi.fn(() => Promise.resolve(() => {}));
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const mockListen = vi.fn((..._args: any[]) => Promise.resolve(() => {}));
 vi.mock("@tauri-apps/api/event", () => ({
-  listen: (...args: unknown[]) => mockListen(...args),
+  listen: (...args: any[]) => mockListen(...args),
 }));
 vi.mock("@tauri-apps/api/webview", () => ({
   getCurrentWebview: () => ({
@@ -73,45 +75,6 @@ const unknownAttachment: AttachmentMeta = {
   path: "/path/to/.kanban/tasks/.attachments/att-3-data.bin",
 };
 
-const pdfAttachment: AttachmentMeta = {
-  id: "att-4",
-  name: "document.pdf",
-  size: 524288,
-  mime_type: "application/pdf",
-  path: "/path/to/.kanban/tasks/.attachments/att-4-document.pdf",
-};
-
-const videoAttachment: AttachmentMeta = {
-  id: "att-5",
-  name: "demo.mp4",
-  size: 10485760,
-  mime_type: "video/mp4",
-  path: "/path/to/.kanban/tasks/.attachments/att-5-demo.mp4",
-};
-
-const audioAttachment: AttachmentMeta = {
-  id: "att-6",
-  name: "podcast.mp3",
-  size: 5242880,
-  mime_type: "audio/mpeg",
-  path: "/path/to/.kanban/tasks/.attachments/att-6-podcast.mp3",
-};
-
-const spreadsheetAttachment: AttachmentMeta = {
-  id: "att-7",
-  name: "report.xlsx",
-  size: 32768,
-  mime_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-  path: "/path/to/.kanban/tasks/.attachments/att-7-report.xlsx",
-};
-
-const archiveAttachment: AttachmentMeta = {
-  id: "att-8",
-  name: "backup.zip",
-  size: 104857600,
-  mime_type: "application/zip",
-  path: "/path/to/.kanban/tasks/.attachments/att-8-backup.zip",
-};
 
 // ---------------------------------------------------------------------------
 // formatFileSize
@@ -228,7 +191,8 @@ describe("AttachmentItem", () => {
     mockListen.mockClear();
     mockListen.mockResolvedValue(() => {});
     // list_commands_for_scope returns resolved commands from the backend
-    mockInvoke.mockImplementation((cmd: unknown) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    mockInvoke.mockImplementation((cmd: any) => {
       if (cmd === "list_commands_for_scope") {
         return Promise.resolve([
           { id: "attachment.open", name: "Open", target: imageAttachment.path, group: "attachment" },

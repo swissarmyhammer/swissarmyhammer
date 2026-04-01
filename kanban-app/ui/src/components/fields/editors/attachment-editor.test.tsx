@@ -35,7 +35,7 @@ vi.mock("@tauri-apps/plugin-log", () => ({
 // ---------------------------------------------------------------------------
 
 import { AttachmentEditor } from "./attachment-editor";
-import { FileDropProvider, useFileDrop } from "@/lib/file-drop-context";
+import { FileDropProvider } from "@/lib/file-drop-context";
 import type { FieldDef } from "@/types/kanban";
 import type { AttachmentMeta } from "@/components/fields/displays/attachment-display";
 
@@ -273,7 +273,6 @@ describe("AttachmentEditor", () => {
 
   describe("normalizeAttachments validation", () => {
     it("filters out numbers from an attachment array", () => {
-      const onChange = vi.fn();
       const { queryByText } = renderEditor({
         value: [SAMPLE_ATTACHMENTS[0], 42, SAMPLE_ATTACHMENTS[1]],
       });

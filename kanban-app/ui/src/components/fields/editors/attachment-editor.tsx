@@ -65,7 +65,7 @@ function normalizeAttachments(value: unknown): Array<AttachmentMeta | string> {
 function isMultiple(field: FieldDef): boolean {
   const { type } = field;
   if (type && typeof type === "object" && "multiple" in type) {
-    return (type as { multiple: boolean }).multiple !== false;
+    return (type as unknown as { multiple: boolean }).multiple !== false;
   }
   return true;
 }

@@ -93,16 +93,16 @@ export function FileDropProvider({
 
     getCurrentWebview()
       .onDragDropEvent((event) => {
-        const { type, paths: eventPaths } = event.payload;
+        const payload = event.payload;
 
-        if (type === "enter") {
+        if (payload.type === "enter") {
           setIsDragging(true);
-          setPaths(eventPaths ?? null);
-        } else if (type === "leave") {
+          setPaths(payload.paths ?? null);
+        } else if (payload.type === "leave") {
           setIsDragging(false);
           setPaths(null);
-        } else if (type === "drop") {
-          const droppedPaths = eventPaths ?? [];
+        } else if (payload.type === "drop") {
+          const droppedPaths = payload.paths ?? [];
           const stack = callbackStackRef.current;
           const cb = stack.length > 0 ? stack[stack.length - 1] : null;
           if (cb && droppedPaths.length > 0) {
