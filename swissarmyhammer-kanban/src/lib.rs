@@ -81,7 +81,6 @@ pub mod commands;
 // Command modules
 pub mod activity;
 pub mod actor;
-pub mod attachment;
 pub mod board;
 pub mod column;
 pub mod entity;

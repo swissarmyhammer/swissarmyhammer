@@ -186,6 +186,10 @@ pub fn builtin_yaml_sources() -> Vec<(&'static str, &'static str)> {
         ),
         ("file", include_str!("../builtin/commands/file.yaml")),
         ("drag", include_str!("../builtin/commands/drag.yaml")),
+        (
+            "attachment",
+            include_str!("../builtin/commands/attachment.yaml"),
+        ),
     ]
 }
 
@@ -411,7 +415,8 @@ mod tests {
         // settings: keymap.vim, keymap.cua, keymap.emacs = 3
         // file: switchBoard, closeBoard, newBoard, openBoard = 4
         // drag: start, cancel, complete = 3
-        assert_eq!(registry.all_commands().len(), 41);
+        // attachment: open, reveal = 2
+        assert_eq!(registry.all_commands().len(), 43);
 
         // Spot checks
         assert!(registry.get("app.quit").is_some());

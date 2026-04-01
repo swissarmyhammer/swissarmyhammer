@@ -76,6 +76,7 @@ function editableFieldsFor(entityType: string): FieldDef[] {
         d !== undefined &&
         d.editor !== "none" &&
         d.editor !== undefined &&
+        d.editor !== "attachment" && // attachment editor uses button-based saves, not blur/Enter/Escape
         d.section !== "hidden",
     );
 }
@@ -106,7 +107,6 @@ const mockInvoke = vi.fn((...args: any[]) => {
       "column",
       "swimlane",
       "board",
-      "attachment",
     ]);
   if (args[0] === "get_entity_schema") {
     // Return real schema data for the requested entity type
@@ -156,6 +156,14 @@ vi.mock("@tauri-apps/plugin-log", () => ({
   trace: vi.fn(),
   attachConsole: vi.fn(() => Promise.resolve()),
 }));
+vi.mock("@tauri-apps/api/webview", () => ({
+  getCurrentWebview: () => ({
+    onDragDropEvent: vi.fn(() => Promise.resolve(() => {})),
+  }),
+}));
+vi.mock("@tauri-apps/plugin-dialog", () => ({
+  open: vi.fn(() => Promise.resolve(null)),
+}));
 
 // ---------------------------------------------------------------------------
 // Imports AFTER mocks — NO mock of useFieldUpdate, we use the real one
@@ -171,6 +179,7 @@ import { InspectProvider } from "@/lib/inspect-context";
 import { FieldUpdateProvider } from "@/lib/field-update-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Field } from "@/components/fields/field";
+import { FileDropProvider } from "@/lib/file-drop-context";
 import type { Entity } from "@/types/kanban";
 
 // ---------------------------------------------------------------------------
@@ -242,28 +251,30 @@ function renderField(
 
   const result = render(
     <TooltipProvider>
-      <SchemaProvider>
-        <EntityStoreProvider entities={TEST_ENTITIES}>
-          <EntityFocusProvider>
-            <InspectProvider onInspect={() => {}} onDismiss={() => false}>
-              <FieldUpdateProvider>
-                <UIStateProvider>
-                  <Field
-                    fieldDef={fieldDef}
-                    entityType="task"
-                    entityId="test-task-1"
-                    mode={mode}
-                    editing={editing}
-                    onEdit={onEdit}
-                    onDone={onDone}
-                    onCancel={onCancel}
-                  />
-                </UIStateProvider>
-              </FieldUpdateProvider>
-            </InspectProvider>
-          </EntityFocusProvider>
-        </EntityStoreProvider>
-      </SchemaProvider>
+      <FileDropProvider>
+        <SchemaProvider>
+          <EntityStoreProvider entities={TEST_ENTITIES}>
+            <EntityFocusProvider>
+              <InspectProvider onInspect={() => {}} onDismiss={() => false}>
+                <FieldUpdateProvider>
+                  <UIStateProvider>
+                    <Field
+                      fieldDef={fieldDef}
+                      entityType="task"
+                      entityId="test-task-1"
+                      mode={mode}
+                      editing={editing}
+                      onEdit={onEdit}
+                      onDone={onDone}
+                      onCancel={onCancel}
+                    />
+                  </UIStateProvider>
+                </FieldUpdateProvider>
+              </InspectProvider>
+            </EntityFocusProvider>
+          </EntityStoreProvider>
+        </SchemaProvider>
+      </FileDropProvider>
     </TooltipProvider>,
   );
 

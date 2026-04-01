@@ -1,0 +1,8 @@
+---
+assignees:
+- claude-code
+position_column: done
+position_ordinal: ffffffffffffffffc680
+title: '[warning] FileDropProvider single-callback design loses drops when multiple editors mount'
+---
+**File**: `kanban-app/ui/src/lib/file-drop-context.tsx:73,121-129`\n\n**What**: `FileDropProvider` stores only a single `callbackRef`. When multiple attachment editors (or display components) are mounted simultaneously, each calls `registerDropTarget`, overwriting the previous. Only the last-registered component receives drops. The design comment says 'Only one drop target can be active at a time (the most recently registered)' -- but this creates an order-dependent race condition.\n\n**Why**: In the inspector view, a task can have multiple attachment fields visible at once (e.g. `avatar` and `files`). Both mount and register. Only the second one will receive drops. The user sees both fields highlighted (`isDragging` is global) but the drop always goes to whichever registered last.\n\n**Suggestion**: Either (a) change to a stack-based model where the most specific / focused component receives the drop, or (b) use DOM hit-testing on drop to determine which `[data-file-drop-zone]` element the cursor is over and route to that component's callback, or (c) accept the limitation but document it clearly and ensure only one attachment field is visible at a time in the inspector." #review-finding

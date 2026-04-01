@@ -1752,11 +1752,41 @@ impl EntityContext {
             };
             let mut result = Vec::new();
             for v in values {
-                if let Value::String(s) = v {
-                    let stored = self
-                        .resolve_attachment_value(&s, field_name, max_bytes, entity_type_dir)
-                        .await?;
-                    result.push(Value::String(stored));
+                match v {
+                    Value::String(s) => {
+                        let stored = self
+                            .resolve_attachment_value(&s, field_name, max_bytes, entity_type_dir)
+                            .await?;
+                        result.push(Value::String(stored));
+                    }
+                    Value::Object(ref obj) => {
+                        // Enriched metadata object from a read round-trip.
+                        // Reconstruct the stored filename as `{id}-{name}` and
+                        // verify it still exists in `.attachments/`.
+                        if let (Some(id), Some(name)) = (
+                            obj.get("id").and_then(|v| v.as_str()),
+                            obj.get("name").and_then(|v| v.as_str()),
+                        ) {
+                            let stored = format!("{}-{}", id, name);
+                            let att_dir = crate::io::attachments_dir(entity_type_dir);
+                            let path = att_dir.join(&stored);
+                            if tokio::fs::try_exists(&path).await.unwrap_or(false) {
+                                result.push(Value::String(stored));
+                            } else {
+                                return Err(EntityError::AttachmentNotFound {
+                                    field: field_name.to_string(),
+                                    filename: stored,
+                                });
+                            }
+                        }
+                    }
+                    other => {
+                        tracing::warn!(
+                            field = field_name,
+                            value = ?other,
+                            "skipping non-string/non-object value in attachment array"
+                        );
+                    }
                 }
             }
             entity.set(field_name, Value::Array(result));
@@ -1768,6 +1798,25 @@ impl EntityContext {
                         .resolve_attachment_value(&s, field_name, max_bytes, entity_type_dir)
                         .await?;
                     entity.set(field_name, Value::String(stored));
+                }
+                Value::Object(ref obj) => {
+                    // Enriched metadata object — reconstruct stored filename
+                    if let (Some(id), Some(name)) = (
+                        obj.get("id").and_then(|v| v.as_str()),
+                        obj.get("name").and_then(|v| v.as_str()),
+                    ) {
+                        let stored = format!("{}-{}", id, name);
+                        let att_dir = crate::io::attachments_dir(entity_type_dir);
+                        let path = att_dir.join(&stored);
+                        if tokio::fs::try_exists(&path).await.unwrap_or(false) {
+                            entity.set(field_name, Value::String(stored));
+                        } else {
+                            return Err(EntityError::AttachmentNotFound {
+                                field: field_name.to_string(),
+                                filename: stored,
+                            });
+                        }
+                    }
                 }
                 Value::Null => {}
                 _ => {}
@@ -3186,5 +3235,154 @@ mod tests {
             "error should mention source not found: {}",
             err
         );
+    }
+
+    #[tokio::test]
+    async fn write_enriched_attachment_object_preserves_file() {
+        let dir = TempDir::new().unwrap();
+        let fields = attachment_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields);
+
+        // Create and write an entity with an attachment
+        let source = dir.path().join("photo.png");
+        tokio::fs::write(&source, b"png data").await.unwrap();
+
+        let mut entity = Entity::new("item", "01ENRICH");
+        entity.set("title", json!("Test"));
+        entity.set("avatar", json!(source.to_string_lossy().to_string()));
+        ctx.write(&entity).await.unwrap();
+
+        // Read — avatar is now an enriched metadata object
+        let read = ctx.read("item", "01ENRICH").await.unwrap();
+        let meta = read.fields.get("avatar").unwrap().clone();
+        assert!(meta.is_object(), "should be enriched");
+
+        // Write back unchanged — the enriched object should round-trip
+        let mut entity2 = Entity::new("item", "01ENRICH");
+        entity2.set("title", json!("Updated Title"));
+        entity2.set("avatar", meta);
+        ctx.write(&entity2).await.unwrap();
+
+        // Verify the attachment file still exists and data is intact
+        let att_dir = dir.path().join("items").join(".attachments");
+        let entries: Vec<_> = std::fs::read_dir(&att_dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| !e.file_name().to_str().unwrap_or("").starts_with('.'))
+            .collect();
+        assert_eq!(entries.len(), 1, "attachment file should still exist");
+        let contents = tokio::fs::read(entries[0].path()).await.unwrap();
+        assert_eq!(contents, b"png data");
+    }
+
+    #[tokio::test]
+    async fn write_enriched_objects_mixed_with_new_paths() {
+        let dir = TempDir::new().unwrap();
+        let fields = attachment_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields);
+
+        // Create and attach first file
+        let src1 = dir.path().join("file1.txt");
+        tokio::fs::write(&src1, b"content one").await.unwrap();
+
+        let mut entity = Entity::new("item", "01MIX");
+        entity.set("title", json!("Mixed"));
+        entity.set("files", json!([src1.to_string_lossy().to_string()]));
+        ctx.write(&entity).await.unwrap();
+
+        // Read to get enriched metadata
+        let read = ctx.read("item", "01MIX").await.unwrap();
+        let enriched_arr = read
+            .fields
+            .get("files")
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .clone();
+        assert_eq!(enriched_arr.len(), 1);
+
+        // Create a second source file to append
+        let src2 = dir.path().join("file2.txt");
+        tokio::fs::write(&src2, b"content two").await.unwrap();
+
+        // Write back with mixed array: enriched object + new source path
+        let mut entity2 = Entity::new("item", "01MIX");
+        entity2.set("title", json!("Mixed"));
+        entity2.set(
+            "files",
+            json!([enriched_arr[0], src2.to_string_lossy().to_string()]),
+        );
+        ctx.write(&entity2).await.unwrap();
+
+        // Read again — should have two attachments
+        let read2 = ctx.read("item", "01MIX").await.unwrap();
+        let files = read2.fields.get("files").unwrap().as_array().unwrap();
+        assert_eq!(files.len(), 2);
+        assert_eq!(files[0]["name"], "file1.txt");
+        assert_eq!(files[1]["name"], "file2.txt");
+    }
+
+    #[tokio::test]
+    async fn write_mixed_enriched_stored_and_source_paths() {
+        let dir = TempDir::new().unwrap();
+        let fields = attachment_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields);
+
+        // Create two source files and write them
+        let src1 = dir.path().join("a.txt");
+        let src2 = dir.path().join("b.txt");
+        tokio::fs::write(&src1, b"aaa").await.unwrap();
+        tokio::fs::write(&src2, b"bbb").await.unwrap();
+
+        let mut entity = Entity::new("item", "01ALL3");
+        entity.set("title", json!("Three Shapes"));
+        entity.set(
+            "files",
+            json!([
+                src1.to_string_lossy().to_string(),
+                src2.to_string_lossy().to_string()
+            ]),
+        );
+        ctx.write(&entity).await.unwrap();
+
+        // Read to get enriched metadata and raw stored filenames
+        let read = ctx.read("item", "01ALL3").await.unwrap();
+        let enriched = read.fields.get("files").unwrap().as_array().unwrap();
+        let enriched_obj = enriched[0].clone(); // enriched metadata object
+
+        let def = ctx.entity_def("item").unwrap();
+        let path = crate::io::entity_file_path(&ctx.entity_dir("item"), "01ALL3", def);
+        let raw = crate::io::read_entity(&path, "item", "01ALL3", def)
+            .await
+            .unwrap();
+        let stored_filename = raw.fields.get("files").unwrap().as_array().unwrap()[1]
+            .as_str()
+            .unwrap()
+            .to_string(); // raw stored filename string
+
+        // Create a third file to add as source path
+        let src3 = dir.path().join("c.txt");
+        tokio::fs::write(&src3, b"ccc").await.unwrap();
+
+        // Write with all three shapes: enriched object, stored filename, source path
+        let mut entity2 = Entity::new("item", "01ALL3");
+        entity2.set("title", json!("Three Shapes"));
+        entity2.set(
+            "files",
+            json!([
+                enriched_obj,
+                stored_filename,
+                src3.to_string_lossy().to_string()
+            ]),
+        );
+        ctx.write(&entity2).await.unwrap();
+
+        // Read — should have three attachments
+        let read2 = ctx.read("item", "01ALL3").await.unwrap();
+        let files = read2.fields.get("files").unwrap().as_array().unwrap();
+        assert_eq!(files.len(), 3);
+        assert_eq!(files[0]["name"], "a.txt");
+        assert_eq!(files[1]["name"], "b.txt");
+        assert_eq!(files[2]["name"], "c.txt");
     }
 }

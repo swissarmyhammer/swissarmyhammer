@@ -6,9 +6,6 @@
 
 use crate::activity::ListActivity;
 use crate::actor::{AddActor, DeleteActor, GetActor, ListActors, UpdateActor};
-use crate::attachment::{
-    AddAttachment, DeleteAttachment, GetAttachment, ListAttachments, UpdateAttachment,
-};
 use crate::board::{GetBoard, InitBoard, UpdateBoard};
 use crate::column::{AddColumn, DeleteColumn, GetColumn, ListColumns, UpdateColumn};
 use crate::swimlane::{AddSwimlane, DeleteSwimlane, GetSwimlane, ListSwimlanes, UpdateSwimlane};
@@ -366,46 +363,6 @@ pub async fn execute_operation(
             processor.process(&DeleteTag::new(id), ctx).await
         }
         (Verb::List, Noun::Tags) => processor.process(&ListTags::default(), ctx).await,
-
-        // Attachment operations
-        (Verb::Add, Noun::Attachment) => {
-            let task_id = req(op, "task_id")?;
-            let name = req(op, "name")?;
-            let path = req(op, "path")?;
-            processor
-                .process(&AddAttachment::new(task_id, name, path), ctx)
-                .await
-        }
-        (Verb::Get, Noun::Attachment) => {
-            let task_id = req(op, "task_id")?;
-            let id = req(op, "id")?;
-            processor
-                .process(&GetAttachment::new(task_id, id), ctx)
-                .await
-        }
-        (Verb::Update, Noun::Attachment) => {
-            let task_id = req(op, "task_id")?;
-            let id = req(op, "id")?;
-            let mut cmd = UpdateAttachment::new(task_id, id);
-            if let Some(name) = op.get_string("name") {
-                cmd.name = Some(name.to_string());
-            }
-            if let Some(mime) = op.get_string("mime_type") {
-                cmd.mime_type = Some(mime.to_string());
-            }
-            processor.process(&cmd, ctx).await
-        }
-        (Verb::Delete, Noun::Attachment) => {
-            let task_id = req(op, "task_id")?;
-            let id = req(op, "id")?;
-            processor
-                .process(&DeleteAttachment::new(task_id, id), ctx)
-                .await
-        }
-        (Verb::List, Noun::Attachments) => {
-            let task_id = req(op, "task_id")?;
-            processor.process(&ListAttachments::new(task_id), ctx).await
-        }
 
         // Activity operations
         (Verb::List, Noun::Activity) => {

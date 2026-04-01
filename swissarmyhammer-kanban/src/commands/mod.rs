@@ -83,10 +83,14 @@ pub fn register_commands() -> HashMap<String, Arc<dyn Command>> {
     // Tag commands
     map.insert("tag.update".into(), Arc::new(entity_commands::TagUpdateCmd));
 
-    // Attachment commands
+    // Attachment file commands
     map.insert(
-        "attachment.delete".into(),
-        Arc::new(entity_commands::AttachmentDeleteCmd),
+        "attachment.open".into(),
+        Arc::new(entity_commands::AttachmentOpenCmd),
+    );
+    map.insert(
+        "attachment.reveal".into(),
+        Arc::new(entity_commands::AttachmentRevealCmd),
     );
 
     // Column commands
@@ -211,13 +215,13 @@ mod tests {
     #[test]
     fn register_commands_returns_expected_count() {
         let cmds = register_commands();
-        // 4 task + 3 clipboard + 4 entity + 1 tag + 1 attachment + 1 column + 7 UI
+        // 4 task + 3 clipboard + 4 entity + 1 tag + 1 column + 7 UI
         // + 12 app (quit, about, help, command, palette, search,
         //          dismiss, undo, redo, keymap.vim, keymap.cua, keymap.emacs)
         // + 5 file (switchBoard, closeBoard, newBoard, openBoard, window.new)
-        // + 3 drag = 41
+        // + 3 drag + 2 attachment (open, reveal) = 42
         // Note: clipboard entries are duplicated in the source but HashMap deduplicates.
-        assert_eq!(cmds.len(), 41);
+        assert_eq!(cmds.len(), 42);
     }
 
     // =========================================================================

@@ -6,7 +6,7 @@ type:
   multiple: true
   max_bytes: 104857600
 icon: paperclip
-editor: multi-select
-display: badge-list
+display: attachment-list
+editor: attachment
 width: 200
 section: footer

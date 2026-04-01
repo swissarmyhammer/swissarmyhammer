@@ -108,9 +108,8 @@ impl Execute<KanbanContext, KanbanError> for DeleteTask {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::attachment::AddAttachment;
     use crate::board::InitBoard;
-    use crate::task::AddTask;
+    use crate::task::{AddTask, UpdateTask};
     use tempfile::TempDir;
 
     async fn setup() -> (TempDir, KanbanContext) {
@@ -202,14 +201,22 @@ mod tests {
         let source_file = temp.path().join("file.txt");
         std::fs::write(&source_file, b"hello").unwrap();
 
-        // Add an attachment
-        let att_result = AddAttachment::new(task_id, "file.txt", source_file.to_str().unwrap())
+        // Add an attachment via update task (entity layer copies the file)
+        UpdateTask::new(task_id)
+            .with_attachments(serde_json::json!([source_file.to_str().unwrap()]))
             .execute(&ctx)
             .await
             .into_result()
             .unwrap();
-        let att_id = att_result["attachment"]["id"].as_str().unwrap().to_string();
-        let att_name = att_result["attachment"]["name"].as_str().unwrap();
+
+        // The entity layer stores attachments as "{ulid}-{basename}" files.
+        // Read the task back to get the stored filename via enriched metadata.
+        let ectx = ctx.entity_context().await.unwrap();
+        let entity = ectx.read("task", task_id).await.unwrap();
+        let att_arr = entity.get("attachments").unwrap();
+        let att_obj = att_arr.as_array().unwrap().first().unwrap();
+        let att_id = att_obj["id"].as_str().unwrap();
+        let att_name = att_obj["name"].as_str().unwrap();
         let stored_filename = format!("{}-{}", att_id, att_name);
 
         // Verify attachment file exists in .attachments/

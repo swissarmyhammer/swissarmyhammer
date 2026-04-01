@@ -409,6 +409,37 @@ mod tests {
     }
 
     #[test]
+    fn builtin_attachment_field_round_trips_through_yaml() {
+        let defs = builtin_field_definitions();
+        let entities = builtin_entity_definitions();
+
+        let ctx = swissarmyhammer_fields::FieldsContext::from_yaml_sources(
+            std::path::PathBuf::from("/tmp/test"),
+            &defs,
+            &entities,
+        )
+        .unwrap();
+
+        let field = ctx
+            .get_field_by_name("attachments")
+            .expect("builtin 'attachments' field should exist in FieldsContext");
+
+        match &field.type_ {
+            swissarmyhammer_fields::FieldType::Attachment {
+                multiple,
+                max_bytes,
+            } => {
+                assert!(multiple, "attachments field should have multiple: true");
+                assert_eq!(
+                    *max_bytes, 104_857_600,
+                    "attachments max_bytes should be 100 MB"
+                );
+            }
+            other => panic!("expected FieldType::Attachment, got {:?}", other),
+        }
+    }
+
+    #[test]
     fn kanban_compute_engine_registers_all_derivations() {
         let engine = kanban_compute_engine();
         assert!(engine.has("parse-body-tags"));

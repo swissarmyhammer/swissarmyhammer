@@ -79,6 +79,12 @@ impl UpdateTask {
         self.depends_on = Some(deps);
         self
     }
+
+    /// Set the attachments field value (replaces all existing attachments)
+    pub fn with_attachments(mut self, attachments: Value) -> Self {
+        self.attachments = Some(attachments);
+        self
+    }
 }
 
 #[async_trait]

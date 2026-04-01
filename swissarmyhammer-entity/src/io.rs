@@ -380,7 +380,13 @@ pub fn sanitize_filename(name: &str) -> String {
         .filter(|c| *c != '/' && *c != '\\' && *c != '\0')
         .collect();
     // Strip leading dots to prevent hidden files
-    sanitized.trim_start_matches('.').to_string()
+    let safe = sanitized.trim_start_matches('.').to_string();
+    // Fallback to "unnamed" when nothing remains (e.g. input was all dots)
+    if safe.is_empty() {
+        "unnamed".to_string()
+    } else {
+        safe
+    }
 }
 
 /// Copy a source file into `.attachments/` with atomic write (temp + rename).
@@ -491,55 +497,11 @@ pub async fn attachment_metadata(
     }))
 }
 
-/// Detect MIME type from file extension.
+/// Detect MIME type from file extension using the `mime_guess` crate.
 ///
 /// Returns the MIME type string for known extensions, or `None` for unknown ones.
 pub fn detect_mime_type(path: &str) -> Option<String> {
-    let ext = std::path::Path::new(path)
-        .extension()?
-        .to_str()?
-        .to_lowercase();
-
-    let mime = match ext.as_str() {
-        // Images
-        "png" => "image/png",
-        "jpg" | "jpeg" => "image/jpeg",
-        "gif" => "image/gif",
-        "webp" => "image/webp",
-        "svg" => "image/svg+xml",
-        "bmp" => "image/bmp",
-        "ico" => "image/x-icon",
-        // Documents
-        "pdf" => "application/pdf",
-        "doc" => "application/msword",
-        "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        "xls" => "application/vnd.ms-excel",
-        "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        // Text
-        "txt" => "text/plain",
-        "md" | "markdown" => "text/markdown",
-        "html" | "htm" => "text/html",
-        "css" => "text/css",
-        "csv" => "text/csv",
-        "xml" => "text/xml",
-        // Code
-        "js" => "application/javascript",
-        "json" => "application/json",
-        "ts" => "application/typescript",
-        "rs" => "text/x-rust",
-        "py" => "text/x-python",
-        // Archives
-        "zip" => "application/zip",
-        "tar" => "application/x-tar",
-        "gz" | "gzip" => "application/gzip",
-        // Media
-        "mp3" => "audio/mpeg",
-        "mp4" => "video/mp4",
-        "wav" => "audio/wav",
-        _ => return None,
-    };
-
-    Some(mime.to_string())
+    mime_guess::from_path(path).first().map(|m| m.to_string())
 }
 
 #[cfg(test)]
@@ -616,6 +578,22 @@ mod tests {
         // Bare . becomes _invalid_
         let path = entity_file_path(dir, ".", &tag_entity_def());
         assert_eq!(path, PathBuf::from("/tmp/tasks/_invalid_.yaml"));
+    }
+
+    #[test]
+    fn sanitize_filename_falls_back_to_unnamed_when_empty() {
+        // All dots → stripped to empty → "unnamed"
+        assert_eq!(sanitize_filename("..."), "unnamed");
+        // Single dot
+        assert_eq!(sanitize_filename("."), "unnamed");
+        // Empty string
+        assert_eq!(sanitize_filename(""), "unnamed");
+        // Only path separators and dots
+        assert_eq!(sanitize_filename("/.\\."), "unnamed");
+        // Normal input still works
+        assert_eq!(sanitize_filename("photo.png"), "photo.png");
+        // Leading dots stripped, rest preserved
+        assert_eq!(sanitize_filename("..hidden"), "hidden");
     }
 
     #[test]

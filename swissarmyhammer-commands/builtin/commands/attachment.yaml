@@ -1,0 +1,9 @@
+- id: attachment.open
+  name: Open
+  scope: "attachment"
+  context_menu: true
+
+- id: attachment.reveal
+  name: Show in Finder
+  scope: "attachment"
+  context_menu: true

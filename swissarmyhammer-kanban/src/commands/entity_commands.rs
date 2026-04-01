@@ -1,5 +1,5 @@
 //! Entity-level command implementations: update field, delete, tag update,
-//! attachment delete.
+//! and attachment file operations.
 
 use super::run_op;
 use crate::context::KanbanContext;
@@ -191,27 +191,97 @@ impl Command for TagUpdateCmd {
     }
 }
 
-/// Delete an attachment from a task.
+/// Open a file with the OS default application.
 ///
-/// Available when the scope chain or args provide a task context.
-/// Required args: `task_id`, `id` (attachment ID).
-pub struct AttachmentDeleteCmd;
+/// Resolves the file path from the scope chain (`attachment:{path}`).
+/// Uses the `open` crate for cross-platform support.
+pub struct AttachmentOpenCmd;
 
 #[async_trait]
-impl Command for AttachmentDeleteCmd {
+impl Command for AttachmentOpenCmd {
     fn available(&self, ctx: &CommandContext) -> bool {
-        // Available when task_id and id args are provided
-        ctx.arg("task_id").is_some() && ctx.arg("id").is_some()
+        ctx.resolve_entity_id("attachment").is_some()
     }
 
     async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
-        let kanban = ctx.require_extension::<KanbanContext>()?;
+        let path = ctx
+            .resolve_entity_id("attachment")
+            .ok_or_else(|| CommandError::MissingArg("attachment in scope chain".into()))?
+            .to_string();
+        tokio::task::spawn_blocking({
+            let p = path.clone();
+            move || open::that(&p)
+        })
+        .await
+        .map_err(|e| CommandError::ExecutionFailed(e.to_string()))?
+        .map_err(|e| CommandError::ExecutionFailed(format!("failed to open {}: {}", path, e)))?;
+        Ok(serde_json::json!({ "opened": path }))
+    }
+}
 
-        let task_id = ctx.require_arg_str("task_id")?;
-        let attachment_id = ctx.require_arg_str("id")?;
+/// Reveal a file in the OS file manager.
+///
+/// Resolves the file path from the scope chain (`attachment:{path}`).
+/// Uses platform-specific commands:
+/// - macOS: `open -R <path>` (selects the file in Finder)
+/// - Linux: `xdg-open <parent>` (opens the parent directory)
+/// - Windows: `explorer /select,<path>` (selects the file in Explorer)
+pub struct AttachmentRevealCmd;
 
-        let op = crate::attachment::DeleteAttachment::new(task_id, attachment_id);
+/// Spawn the platform-specific "reveal in file manager" command.
+///
+/// Returns the exit status of the spawned process. Each platform uses a
+/// different binary and argument convention, so we branch at compile time
+/// with `#[cfg(target_os)]`.
+fn reveal_in_file_manager(path: &str) -> std::io::Result<std::process::ExitStatus> {
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg("-R")
+            .arg(path)
+            .status()
+    }
+    #[cfg(target_os = "linux")]
+    {
+        // xdg-open cannot select a specific file, so open the parent directory.
+        let parent = std::path::Path::new(path)
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."));
+        std::process::Command::new("xdg-open").arg(parent).status()
+    }
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("explorer")
+            .arg(format!("/select,{}", path))
+            .status()
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            format!("reveal-in-file-manager is not supported on this platform"),
+        ))
+    }
+}
 
-        run_op(&op, &kanban).await
+#[async_trait]
+impl Command for AttachmentRevealCmd {
+    fn available(&self, ctx: &CommandContext) -> bool {
+        ctx.resolve_entity_id("attachment").is_some()
+    }
+
+    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+        let path = ctx
+            .resolve_entity_id("attachment")
+            .ok_or_else(|| CommandError::MissingArg("attachment in scope chain".into()))?
+            .to_string();
+        tokio::task::spawn_blocking({
+            let p = path.clone();
+            move || reveal_in_file_manager(&p)
+        })
+        .await
+        .map_err(|e| CommandError::ExecutionFailed(e.to_string()))?
+        .map_err(|e| CommandError::ExecutionFailed(format!("failed to reveal {}: {}", path, e)))?;
+        Ok(serde_json::json!({ "revealed": path }))
     }
 }

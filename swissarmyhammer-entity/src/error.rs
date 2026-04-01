@@ -89,6 +89,10 @@ pub enum EntityError {
     #[error("attachment source file not found: {path}")]
     AttachmentSourceNotFound { path: PathBuf },
 
+    /// Enriched attachment object references a file that no longer exists.
+    #[error("attachment file not found for field '{field}': {filename}")]
+    AttachmentNotFound { field: String, filename: String },
+
     /// Attachment file exceeds max size.
     #[error(
         "attachment file too large for field '{field}': {size} bytes exceeds max {max_bytes} bytes"

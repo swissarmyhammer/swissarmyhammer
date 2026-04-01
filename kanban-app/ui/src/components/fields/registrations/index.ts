@@ -11,3 +11,4 @@ import "./color-palette";
 import "./multi-select";
 import "./progress";
 import "./progress-ring";
+import "./attachment";
