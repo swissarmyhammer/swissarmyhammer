@@ -1,5 +1,6 @@
 //! DeleteAttachment command
 
+use crate::attachment::extract_stored_filenames;
 use crate::context::KanbanContext;
 use crate::error::{KanbanError, Result};
 use crate::types::TaskId;
@@ -42,25 +43,42 @@ impl Execute<KanbanContext, KanbanError> for DeleteAttachment {
         let result: Result<Value> = async {
             let ectx = ctx.entity_context().await?;
 
-            // Verify the attachment exists and belongs to this task
-            // Read the task and verify it owns this attachment
+            // Read the task — attachments field is enriched to metadata objects
             let mut task = ectx.read("task", self.task_id.as_str()).await?;
-            if !task.get_string_list("attachments").contains(&self.id) {
+            let attachments = task
+                .fields
+                .get("attachments")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default();
+
+            // Check the attachment exists in this task's metadata
+            let found = attachments.iter().any(|a| {
+                a.get("id")
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|id| id == self.id)
+            });
+
+            if !found {
                 return Err(KanbanError::NotFound {
                     resource: "attachment".to_string(),
                     id: self.id.to_string(),
                 });
             }
 
-            // Two-phase write: delete attachment entity first, then update task.
-            // If the task update fails, the stale ID in the task's list is
-            // silently skipped by ListAttachments (tolerant of missing IDs).
-            ectx.delete("attachment", &self.id).await?;
+            // Extract stored filenames, excluding the one being deleted.
+            // The entity layer will trash the removed file on write.
+            let remaining: Vec<Value> =
+                extract_stored_filenames(task.fields.get("attachments").unwrap_or(&json!([])))
+                    .into_iter()
+                    .filter(|filename| {
+                        // Stored filenames are `{id}-{name}` — match by ID prefix
+                        !filename.starts_with(&format!("{}-", self.id))
+                    })
+                    .map(Value::String)
+                    .collect();
 
-            // Remove the attachment ID from the task's attachments list
-            let mut attachment_ids = task.get_string_list("attachments");
-            attachment_ids.retain(|id| id != &self.id);
-            task.set("attachments", json!(attachment_ids));
+            task.set("attachments", json!(remaining));
             ectx.write(&task).await?;
 
             Ok(json!({
@@ -132,7 +150,11 @@ mod tests {
             .unwrap();
         let task_id = task_result["id"].as_str().unwrap();
 
-        let add_result = AddAttachment::new(task_id, "file.txt", "./file.txt")
+        // Create a real file to attach
+        let source_file = temp.path().join("file.txt");
+        std::fs::write(&source_file, b"hello").unwrap();
+
+        let add_result = AddAttachment::new(task_id, "file.txt", source_file.to_str().unwrap())
             .execute(&ctx)
             .await
             .into_result()
@@ -149,18 +171,33 @@ mod tests {
         assert_eq!(result["attachment_id"], attachment_id);
         assert_eq!(result["task_id"], task_id);
 
-        // Verify the entity file is gone (moved to trash)
-        let attachment_file = temp
+        // Verify the attachment file was moved to trash
+        let att_dir = temp
             .path()
             .join(".kanban")
-            .join("attachments")
-            .join(format!("{}.yaml", attachment_id));
-        assert!(!attachment_file.exists());
+            .join("tasks")
+            .join(".attachments");
+        let live_entries: Vec<_> = std::fs::read_dir(&att_dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                let name = e.file_name();
+                let name = name.to_str().unwrap_or("");
+                !name.starts_with('.') && e.path().is_file()
+            })
+            .collect();
+        assert_eq!(live_entries.len(), 0, "attachment file should be trashed");
 
         // Verify the task's attachments list is empty
         let ectx = ctx.entity_context().await.unwrap();
         let task = ectx.read("task", task_id).await.unwrap();
-        assert!(task.get_string_list("attachments").is_empty());
+        let attachments = task
+            .fields
+            .get("attachments")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        assert!(attachments.is_empty());
     }
 
     #[tokio::test]
@@ -196,7 +233,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_delete_one_of_multiple_attachments() {
-        let (_temp, ctx) = setup().await;
+        let (temp, ctx) = setup().await;
 
         let task_result = AddTask::new("Task")
             .execute(&ctx)
@@ -205,15 +242,21 @@ mod tests {
             .unwrap();
         let task_id = task_result["id"].as_str().unwrap();
 
+        // Create real files
+        let source1 = temp.path().join("file1.txt");
+        std::fs::write(&source1, b"content1").unwrap();
+        let source2 = temp.path().join("file2.txt");
+        std::fs::write(&source2, b"content2").unwrap();
+
         // Add two attachments
-        let add1 = AddAttachment::new(task_id, "file1.txt", "./file1.txt")
+        let add1 = AddAttachment::new(task_id, "file1.txt", source1.to_str().unwrap())
             .execute(&ctx)
             .await
             .into_result()
             .unwrap();
         let attachment_id1 = add1["attachment"]["id"].as_str().unwrap();
 
-        let add2 = AddAttachment::new(task_id, "file2.txt", "./file2.txt")
+        let add2 = AddAttachment::new(task_id, "file2.txt", source2.to_str().unwrap())
             .execute(&ctx)
             .await
             .into_result()
@@ -227,11 +270,16 @@ mod tests {
             .into_result()
             .unwrap();
 
-        // Verify only one attachment remains in the task's list
+        // Verify only one attachment remains
         let ectx = ctx.entity_context().await.unwrap();
         let task = ectx.read("task", task_id).await.unwrap();
-        let ids = task.get_string_list("attachments");
-        assert_eq!(ids.len(), 1);
-        assert_eq!(ids[0], attachment_id2);
+        let attachments = task
+            .fields
+            .get("attachments")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        assert_eq!(attachments.len(), 1);
+        assert_eq!(attachments[0]["id"].as_str().unwrap(), attachment_id2);
     }
 }

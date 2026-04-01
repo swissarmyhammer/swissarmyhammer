@@ -27,6 +27,11 @@ pub struct SelectOption {
     pub order: i32,
 }
 
+/// Default max attachment size: 100 MB (GitHub's limit).
+fn default_max_bytes() -> u64 {
+    104_857_600
+}
+
 /// The type of a field -- determines what shape the value takes.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
@@ -56,6 +61,15 @@ pub enum FieldType {
     /// Stores entity IDs (ULIDs) pointing to another entity type.
     Reference {
         entity: EntityTypeName,
+        #[serde(default)]
+        multiple: bool,
+    },
+    /// File attachment field -- stores references to uploaded files.
+    Attachment {
+        /// Max file size in bytes. Defaults to GitHub's 100 MB limit.
+        #[serde(default = "default_max_bytes")]
+        max_bytes: u64,
+        /// Whether this field holds multiple attachments.
         #[serde(default)]
         multiple: bool,
     },
@@ -139,6 +153,7 @@ impl FieldDef {
             FieldType::Reference {
                 multiple: false, ..
             } => "select",
+            FieldType::Attachment { .. } => "attachment",
             FieldType::Computed { .. } => "none",
         }
         .to_string()
@@ -161,6 +176,10 @@ impl FieldDef {
             FieldType::Reference {
                 multiple: false, ..
             } => "badge",
+            FieldType::Attachment { multiple: true, .. } => "attachment-list",
+            FieldType::Attachment {
+                multiple: false, ..
+            } => "attachment",
             FieldType::Computed { .. } => "text",
         }
         .to_string()
@@ -1049,5 +1068,60 @@ fields:
         let entity: EntityDef = serde_yaml_ng::from_str(yaml_input).unwrap();
         assert_eq!(entity.name, "tag");
         assert!(entity.commands.is_empty());
+    }
+
+    #[test]
+    fn field_type_attachment_yaml_round_trip() {
+        let ft = FieldType::Attachment {
+            max_bytes: 104_857_600,
+            multiple: true,
+        };
+        let yaml = serde_yaml_ng::to_string(&ft).unwrap();
+        let parsed: FieldType = serde_yaml_ng::from_str(&yaml).unwrap();
+        assert_eq!(ft, parsed);
+
+        // Also round-trip with multiple=false
+        let ft_single = FieldType::Attachment {
+            max_bytes: 52_428_800,
+            multiple: false,
+        };
+        let yaml2 = serde_yaml_ng::to_string(&ft_single).unwrap();
+        let parsed2: FieldType = serde_yaml_ng::from_str(&yaml2).unwrap();
+        assert_eq!(ft_single, parsed2);
+    }
+
+    #[test]
+    fn attachment_max_bytes_defaults_to_100mb() {
+        let yaml_input = "kind: attachment\n";
+        let parsed: FieldType = serde_yaml_ng::from_str(yaml_input).unwrap();
+        if let FieldType::Attachment {
+            max_bytes,
+            multiple,
+        } = parsed
+        {
+            assert_eq!(max_bytes, 104_857_600);
+            assert!(!multiple);
+        } else {
+            panic!("expected Attachment type");
+        }
+    }
+
+    #[test]
+    fn attachment_field_infers_editor_display() {
+        let single = field_with_type(FieldType::Attachment {
+            max_bytes: 104_857_600,
+            multiple: false,
+        });
+        assert_eq!(single.effective_editor(), "attachment");
+        assert_eq!(single.effective_display(), "attachment");
+        assert_eq!(single.effective_sort(), SortKind::Lexical);
+
+        let multi = field_with_type(FieldType::Attachment {
+            max_bytes: 104_857_600,
+            multiple: true,
+        });
+        assert_eq!(multi.effective_editor(), "attachment");
+        assert_eq!(multi.effective_display(), "attachment-list");
+        assert_eq!(multi.effective_sort(), SortKind::Lexical);
     }
 }

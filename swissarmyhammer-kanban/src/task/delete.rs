@@ -60,12 +60,9 @@ impl Execute<KanbanContext, KanbanError> for DeleteTask {
                 }
             }
 
-            // Delete associated attachments (moves to trash)
-            for att_id in entity.get_string_list("attachments") {
-                let _ = ectx.delete("attachment", &att_id).await;
-            }
-
-            // Delete the task (moves to trash)
+            // Delete the task (moves to trash).
+            // The entity layer automatically trashes attachment files
+            // referenced by attachment-type fields.
             ectx.delete("task", self.id.as_str()).await?;
 
             Ok(serde_json::json!({
@@ -192,7 +189,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_delete_task_removes_attachments() {
-        let (_temp, ctx) = setup().await;
+        let (temp, ctx) = setup().await;
 
         let add_result = AddTask::new("Task with attachment")
             .execute(&ctx)
@@ -201,27 +198,38 @@ mod tests {
             .unwrap();
         let task_id = add_result["id"].as_str().unwrap();
 
+        // Create a real file to attach
+        let source_file = temp.path().join("file.txt");
+        std::fs::write(&source_file, b"hello").unwrap();
+
         // Add an attachment
-        let att_result = AddAttachment::new(task_id, "file.txt", "./file.txt")
+        let att_result = AddAttachment::new(task_id, "file.txt", source_file.to_str().unwrap())
             .execute(&ctx)
             .await
             .into_result()
             .unwrap();
         let att_id = att_result["attachment"]["id"].as_str().unwrap().to_string();
+        let att_name = att_result["attachment"]["name"].as_str().unwrap();
+        let stored_filename = format!("{}-{}", att_id, att_name);
 
-        // Verify attachment exists
-        let ectx = ctx.entity_context().await.unwrap();
-        assert!(ectx.read("attachment", &att_id).await.is_ok());
+        // Verify attachment file exists in .attachments/
+        let att_dir = temp
+            .path()
+            .join(".kanban")
+            .join("tasks")
+            .join(".attachments");
+        assert!(att_dir.join(&stored_filename).exists());
 
-        // Delete the task
+        // Delete the task — entity layer trashes attachment files automatically
         DeleteTask::new(task_id)
             .execute(&ctx)
             .await
             .into_result()
             .unwrap();
 
-        // Verify attachment is also gone
-        let ectx = ctx.entity_context().await.unwrap();
-        assert!(ectx.read("attachment", &att_id).await.is_err());
+        // Verify attachment file was moved to trash
+        assert!(!att_dir.join(&stored_filename).exists());
+        let trash_dir = att_dir.join(".trash");
+        assert!(trash_dir.join(&stored_filename).exists());
     }
 }

@@ -1,6 +1,5 @@
 //! ListAttachments command
 
-use crate::attachment::attachment_entity_to_json;
 use crate::context::KanbanContext;
 use crate::error::KanbanError;
 use crate::types::TaskId;
@@ -36,18 +35,19 @@ impl Execute<KanbanContext, KanbanError> for ListAttachments {
             let ectx = ctx.entity_context().await?;
             let task = ectx.read("task", self.task_id.as_str()).await?;
 
-            // Read each attachment entity referenced by the task
-            let attachment_ids = task.get_string_list("attachments");
-            let mut attachments = Vec::new();
-            for id in &attachment_ids {
-                if let Ok(entity) = ectx.read("attachment", id).await {
-                    attachments.push(attachment_entity_to_json(&entity));
-                }
-            }
+            // The attachment field is already enriched to metadata objects
+            let attachments = task
+                .fields
+                .get("attachments")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default();
+
+            let count = attachments.len();
 
             Ok(json!({
                 "attachments": attachments,
-                "count": attachments.len(),
+                "count": count,
                 "task_id": self.task_id.to_string()
             }))
         }
@@ -108,7 +108,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_multiple_attachments() {
-        let (_temp, ctx) = setup().await;
+        let (temp, ctx) = setup().await;
 
         let task_result = AddTask::new("Task")
             .execute(&ctx)
@@ -117,22 +117,16 @@ mod tests {
             .unwrap();
         let task_id = task_result["id"].as_str().unwrap();
 
-        // Add multiple attachments
-        AddAttachment::new(task_id, "file1.txt", "./file1.txt")
-            .execute(&ctx)
-            .await
-            .into_result()
-            .unwrap();
-        AddAttachment::new(task_id, "file2.png", "./file2.png")
-            .execute(&ctx)
-            .await
-            .into_result()
-            .unwrap();
-        AddAttachment::new(task_id, "file3.pdf", "./file3.pdf")
-            .execute(&ctx)
-            .await
-            .into_result()
-            .unwrap();
+        // Create real files to attach
+        for name in &["file1.txt", "file2.png", "file3.pdf"] {
+            let source = temp.path().join(name);
+            std::fs::write(&source, format!("content of {}", name)).unwrap();
+            AddAttachment::new(task_id, *name, source.to_str().unwrap())
+                .execute(&ctx)
+                .await
+                .into_result()
+                .unwrap();
+        }
 
         let result = ListAttachments::new(task_id)
             .execute(&ctx)

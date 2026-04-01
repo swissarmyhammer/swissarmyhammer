@@ -209,6 +209,7 @@ impl BoardHandle {
                 watcher::WatchEvent::EntityCreated { .. } => "entity-created",
                 watcher::WatchEvent::EntityRemoved { .. } => "entity-removed",
                 watcher::WatchEvent::EntityFieldChanged { .. } => "entity-field-changed",
+                watcher::WatchEvent::AttachmentChanged { .. } => "attachment-changed",
             };
             let wrapped = watcher::BoardWatchEvent {
                 event: evt,

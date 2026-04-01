@@ -72,12 +72,9 @@ impl Execute<KanbanContext, KanbanError> for CutTask {
                 }
             }
 
-            // Delete associated attachments
-            for att_id in entity.get_string_list("attachments") {
-                let _ = ectx.delete("attachment", &att_id).await;
-            }
-
-            // Delete the task
+            // Delete the task.
+            // The entity layer automatically trashes attachment files
+            // referenced by attachment-type fields.
             ectx.delete("task", self.id.as_str()).await?;
 
             Ok(serde_json::json!({

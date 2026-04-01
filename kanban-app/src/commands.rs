@@ -1444,6 +1444,10 @@ async fn flush_and_emit_for_handle(app: &AppHandle, handle: &BoardHandle) {
                     }
                 }
                 crate::watcher::WatchEvent::EntityRemoved { .. } => {}
+                crate::watcher::WatchEvent::AttachmentChanged { .. } => {
+                    // Attachment file changes are forwarded directly to the frontend;
+                    // no entity enrichment needed.
+                }
             }
         }
 
@@ -1460,6 +1464,7 @@ async fn flush_and_emit_for_handle(app: &AppHandle, handle: &BoardHandle) {
                 crate::watcher::WatchEvent::EntityCreated { .. } => "entity-created",
                 crate::watcher::WatchEvent::EntityRemoved { .. } => "entity-removed",
                 crate::watcher::WatchEvent::EntityFieldChanged { .. } => "entity-field-changed",
+                crate::watcher::WatchEvent::AttachmentChanged { .. } => "attachment-changed",
             };
             let wrapped = crate::watcher::BoardWatchEvent {
                 event: evt,
@@ -1486,7 +1491,10 @@ async fn cascade_aggregate_events(
         .map(|evt| match evt {
             crate::watcher::WatchEvent::EntityCreated { entity_type, .. }
             | crate::watcher::WatchEvent::EntityFieldChanged { entity_type, .. }
-            | crate::watcher::WatchEvent::EntityRemoved { entity_type, .. } => entity_type.as_str(),
+            | crate::watcher::WatchEvent::EntityRemoved { entity_type, .. }
+            | crate::watcher::WatchEvent::AttachmentChanged { entity_type, .. } => {
+                entity_type.as_str()
+            }
         })
         .collect();
 

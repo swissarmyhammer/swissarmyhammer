@@ -1,6 +1,12 @@
 //! UpdateAttachment command
+//!
+//! With the migration to `kind: attachment`, attachment metadata (name, mime_type,
+//! size, path) is derived from the stored file by the entity layer on read.
+//! There is no separate attachment entity to update.
+//!
+//! Renaming is not supported at the storage level — use delete + re-add instead.
+//! This command is kept for API compatibility and returns the current metadata.
 
-use crate::attachment::attachment_entity_to_json;
 use crate::context::KanbanContext;
 use crate::error::{KanbanError, Result};
 use crate::types::TaskId;
@@ -11,6 +17,10 @@ use swissarmyhammer_operations::{
 };
 
 /// Update attachment metadata (name, mime type, size)
+///
+/// With `kind: attachment`, metadata is derived from the stored file.
+/// This command currently returns the attachment's current metadata.
+/// To change the file, delete and re-add the attachment.
 #[operation(
     verb = "update",
     noun = "attachment",
@@ -73,38 +83,32 @@ impl Execute<KanbanContext, KanbanError> for UpdateAttachment {
         let result: Result<Value> = async {
             let ectx = ctx.entity_context().await?;
 
-            // Verify the task owns this attachment
+            // Read the task — attachment field is enriched to metadata objects
             let task = ectx.read("task", self.task_id.as_str()).await?;
-            if !task.get_string_list("attachments").contains(&self.id) {
-                return Err(KanbanError::NotFound {
+            let attachments = task
+                .fields
+                .get("attachments")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default();
+
+            // Find the attachment by ID
+            let attachment = attachments.iter().find(|a| {
+                a.get("id")
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|id| id == self.id)
+            });
+
+            match attachment {
+                Some(att) => Ok(json!({
+                    "attachment": att,
+                    "task_id": self.task_id.to_string()
+                })),
+                None => Err(KanbanError::NotFound {
                     resource: "attachment".to_string(),
                     id: self.id.to_string(),
-                });
+                }),
             }
-
-            // Read the attachment entity
-            let mut attachment = ectx
-                .read("attachment", &self.id)
-                .await
-                .map_err(KanbanError::from_entity_error)?;
-
-            // Update only provided fields
-            if let Some(name) = &self.name {
-                attachment.set("attachment_name", json!(name));
-            }
-            if let Some(mime_type) = &self.mime_type {
-                attachment.set("attachment_mime_type", json!(mime_type));
-            }
-            if let Some(size) = self.size {
-                attachment.set("attachment_size", json!(size));
-            }
-
-            ectx.write(&attachment).await?;
-
-            Ok(json!({
-                "attachment": attachment_entity_to_json(&attachment),
-                "task_id": self.task_id.to_string()
-            }))
         }
         .await;
 
@@ -159,8 +163,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_update_attachment_name() {
-        let (_temp, ctx) = setup().await;
+    async fn test_update_attachment_returns_metadata() {
+        let (temp, ctx) = setup().await;
 
         let task_result = AddTask::new("Task")
             .execute(&ctx)
@@ -169,7 +173,11 @@ mod tests {
             .unwrap();
         let task_id = task_result["id"].as_str().unwrap();
 
-        let add_result = AddAttachment::new(task_id, "old-name.txt", "./file.txt")
+        // Create a real file to attach
+        let source_file = temp.path().join("file.txt");
+        std::fs::write(&source_file, b"hello world").unwrap();
+
+        let add_result = AddAttachment::new(task_id, "file.txt", source_file.to_str().unwrap())
             .execute(&ctx)
             .await
             .into_result()
@@ -183,41 +191,9 @@ mod tests {
             .into_result()
             .unwrap();
 
-        assert_eq!(result["attachment"]["name"], "new-name.txt");
-        assert_eq!(result["attachment"]["path"], "./file.txt"); // Path unchanged
-    }
-
-    #[tokio::test]
-    async fn test_update_attachment_mime_and_size() {
-        let (_temp, ctx) = setup().await;
-
-        let task_result = AddTask::new("Task")
-            .execute(&ctx)
-            .await
-            .into_result()
-            .unwrap();
-        let task_id = task_result["id"].as_str().unwrap();
-
-        let add_result = AddAttachment::new(task_id, "file", "./file")
-            .execute(&ctx)
-            .await
-            .into_result()
-            .unwrap();
-        let attachment_id = add_result["attachment"]["id"].as_str().unwrap();
-
-        let result = UpdateAttachment::new(task_id, attachment_id)
-            .with_mime_type("application/octet-stream")
-            .with_size(999)
-            .execute(&ctx)
-            .await
-            .into_result()
-            .unwrap();
-
-        assert_eq!(
-            result["attachment"]["mime_type"],
-            "application/octet-stream"
-        );
-        assert_eq!(result["attachment"]["size"], 999);
+        // Returns current metadata (name is derived from stored file, not the update request)
+        assert_eq!(result["attachment"]["name"], "file.txt");
+        assert!(result["attachment"]["path"].as_str().is_some());
     }
 
     #[tokio::test]

@@ -1,6 +1,5 @@
 //! GetAttachment command
 
-use crate::attachment::attachment_entity_to_json;
 use crate::context::KanbanContext;
 use crate::error::KanbanError;
 use crate::types::TaskId;
@@ -38,22 +37,29 @@ impl Execute<KanbanContext, KanbanError> for GetAttachment {
         match async {
             let ectx = ctx.entity_context().await?;
 
-            // Verify the task owns this attachment
+            // Read the task — attachment field is already enriched to metadata objects
             let task = ectx.read("task", self.task_id.as_str()).await?;
-            if !task.get_string_list("attachments").contains(&self.id) {
-                return Err(KanbanError::NotFound {
+            let attachments = task
+                .fields
+                .get("attachments")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default();
+
+            // Find the attachment by its ID in the enriched metadata
+            let attachment = attachments.iter().find(|a| {
+                a.get("id")
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|id| id == self.id)
+            });
+
+            match attachment {
+                Some(att) => Ok(att.clone()),
+                None => Err(KanbanError::NotFound {
                     resource: "attachment".to_string(),
                     id: self.id.to_string(),
-                });
+                }),
             }
-
-            // Read the attachment entity
-            let attachment = ectx
-                .read("attachment", &self.id)
-                .await
-                .map_err(KanbanError::from_entity_error)?;
-
-            Ok(attachment_entity_to_json(&attachment))
         }
         .await
         {
@@ -90,7 +96,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_attachment() {
-        let (_temp, ctx) = setup().await;
+        let (temp, ctx) = setup().await;
 
         let task_result = AddTask::new("Task")
             .execute(&ctx)
@@ -99,7 +105,11 @@ mod tests {
             .unwrap();
         let task_id = task_result["id"].as_str().unwrap();
 
-        let add_result = AddAttachment::new(task_id, "file.txt", "./file.txt")
+        // Create a real file to attach
+        let source_file = temp.path().join("file.txt");
+        std::fs::write(&source_file, b"hello").unwrap();
+
+        let add_result = AddAttachment::new(task_id, "file.txt", source_file.to_str().unwrap())
             .execute(&ctx)
             .await
             .into_result()
@@ -114,7 +124,7 @@ mod tests {
 
         assert_eq!(result["id"], attachment_id);
         assert_eq!(result["name"], "file.txt");
-        assert_eq!(result["path"], "./file.txt");
+        assert!(result["path"].as_str().is_some());
     }
 
     #[tokio::test]

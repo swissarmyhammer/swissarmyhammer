@@ -171,23 +171,11 @@ pub fn kanban_compute_engine() -> ComputeEngine {
         }),
     );
 
-    // attachment-mime-type: stub — actual detection requires filesystem access
-    engine.register(
-        "attachment-mime-type",
-        Box::new(|_fields| Box::pin(async { serde_json::Value::Null })),
-    );
-
-    // attachment-file-size: stub — actual computation requires filesystem access
-    engine.register(
-        "attachment-file-size",
-        Box::new(|_fields| Box::pin(async { serde_json::Value::Null })),
-    );
-
     engine
 }
 
 /// Entity types supported by kanban lookup.
-const KNOWN_ENTITY_TYPES: &[&str] = &["task", "tag", "actor", "column", "swimlane", "attachment"];
+const KNOWN_ENTITY_TYPES: &[&str] = &["task", "tag", "actor", "column", "swimlane"];
 
 /// Entity lookup backed by kanban file storage.
 ///
@@ -280,13 +268,13 @@ mod tests {
     #[test]
     fn builtin_field_definitions_load() {
         let defs = builtin_field_definitions();
-        assert_eq!(defs.len(), 21, "expected 21 builtin field definitions");
+        assert_eq!(defs.len(), 17, "expected 17 builtin field definitions");
     }
 
     #[test]
     fn builtin_entity_definitions_load() {
         let defs = builtin_entity_definitions();
-        assert_eq!(defs.len(), 7, "expected 7 builtin entity definitions");
+        assert_eq!(defs.len(), 6, "expected 6 builtin entity definitions");
     }
 
     #[test]
@@ -377,20 +365,6 @@ mod tests {
     }
 
     #[test]
-    fn builtin_attachment_entity_exists() {
-        let defs = builtin_entity_definitions();
-        let (_, yaml) = defs.iter().find(|(n, _)| *n == "attachment").unwrap();
-        let entity: EntityDef = serde_yaml_ng::from_str(yaml).unwrap();
-
-        assert_eq!(entity.name, "attachment");
-        assert!(entity.fields.iter().any(|f| f == "attachment_name"));
-        assert!(entity.fields.iter().any(|f| f == "attachment_path"));
-        assert!(entity.fields.iter().any(|f| f == "attachment_mime_type"));
-        assert!(entity.fields.iter().any(|f| f == "attachment_size"));
-        assert!(!entity.fields.iter().any(|f| f == "attachment_task"));
-    }
-
-    #[test]
     fn builtin_entity_fields_reference_existing_field_defs() {
         let field_defs = builtin_field_definitions();
         let field_names: Vec<FieldName> = field_defs
@@ -427,8 +401,8 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(ctx.all_fields().len(), 21);
-        assert_eq!(ctx.all_entities().len(), 7);
+        assert_eq!(ctx.all_fields().len(), 17);
+        assert_eq!(ctx.all_entities().len(), 6);
         assert!(ctx.get_field_by_name("title").is_some());
         assert!(ctx.get_entity("task").is_some());
         assert_eq!(ctx.fields_for_entity("task").len(), 10);
@@ -439,8 +413,6 @@ mod tests {
         let engine = kanban_compute_engine();
         assert!(engine.has("parse-body-tags"));
         assert!(engine.has("parse-body-progress"));
-        assert!(engine.has("attachment-mime-type"));
-        assert!(engine.has("attachment-file-size"));
     }
 
     /// Helper: build a query function that returns known tags.
