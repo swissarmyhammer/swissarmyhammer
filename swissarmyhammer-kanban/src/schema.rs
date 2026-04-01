@@ -13,10 +13,10 @@ use crate::attachment::{
     AddAttachment, DeleteAttachment, GetAttachment, ListAttachments, UpdateAttachment,
 };
 use crate::board::{GetBoard, InitBoard, UpdateBoard};
+use crate::column::{AddColumn, DeleteColumn, GetColumn, ListColumns, UpdateColumn};
 use crate::perspective::{
     AddPerspective, DeletePerspective, GetPerspective, ListPerspectives, UpdatePerspective,
 };
-use crate::column::{AddColumn, DeleteColumn, GetColumn, ListColumns, UpdateColumn};
 use crate::swimlane::{AddSwimlane, DeleteSwimlane, GetSwimlane, ListSwimlanes, UpdateSwimlane};
 use crate::tag::{AddTag, DeleteTag, GetTag, ListTags, UpdateTag};
 use crate::task::{
@@ -290,10 +290,7 @@ mod tests {
         let op_enum = schema["properties"]["op"]["enum"]
             .as_array()
             .expect("op enum should be an array");
-        let op_strings: Vec<&str> = op_enum
-            .iter()
-            .filter_map(|v| v.as_str())
-            .collect();
+        let op_strings: Vec<&str> = op_enum.iter().filter_map(|v| v.as_str()).collect();
 
         let expected = [
             "add perspective",
@@ -325,8 +322,7 @@ mod tests {
         let has_perspective_example = examples.iter().any(|ex| {
             let desc = ex["description"].as_str().unwrap_or("");
             let op_val = ex["value"]["op"].as_str().unwrap_or("");
-            desc.to_lowercase().contains("perspective")
-                || op_val.contains("perspective")
+            desc.to_lowercase().contains("perspective") || op_val.contains("perspective")
         });
 
         assert!(

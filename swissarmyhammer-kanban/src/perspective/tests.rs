@@ -71,14 +71,10 @@ async fn test_add_perspective_minimal() {
     assert_eq!(result["view"], "grid");
     assert!(result["id"].as_str().unwrap().len() > 0);
     // Optional fields should be empty/null
-    assert!(
-        result["fields"].as_array().map_or(true, |a| a.is_empty())
-    );
+    assert!(result["fields"].as_array().map_or(true, |a| a.is_empty()));
     assert!(result["filter"].is_null());
     assert!(result["group"].is_null());
-    assert!(
-        result["sort"].as_array().map_or(true, |a| a.is_empty())
-    );
+    assert!(result["sort"].as_array().map_or(true, |a| a.is_empty()));
 }
 
 #[tokio::test]
@@ -133,7 +129,10 @@ async fn test_get_not_found() {
         .await
         .into_result();
 
-    assert!(result.is_err(), "Expected error for nonexistent perspective");
+    assert!(
+        result.is_err(),
+        "Expected error for nonexistent perspective"
+    );
 }
 
 #[tokio::test]
@@ -251,11 +250,11 @@ async fn test_delete_perspective() {
     assert_eq!(delete_result["name"], "Doomed");
 
     // Verify it's gone
-    let get_result = GetPerspective::new(&id)
-        .execute(&ctx)
-        .await
-        .into_result();
-    assert!(get_result.is_err(), "Deleted perspective should not be found");
+    let get_result = GetPerspective::new(&id).execute(&ctx).await.into_result();
+    assert!(
+        get_result.is_err(),
+        "Deleted perspective should not be found"
+    );
 }
 
 #[tokio::test]
@@ -267,7 +266,10 @@ async fn test_delete_not_found() {
         .await
         .into_result();
 
-    assert!(result.is_err(), "Expected error for nonexistent perspective");
+    assert!(
+        result.is_err(),
+        "Expected error for nonexistent perspective"
+    );
 }
 
 #[tokio::test]
@@ -359,7 +361,10 @@ async fn test_add_duplicate_name_rejected() {
         .await
         .into_result();
 
-    assert!(result.is_err(), "Expected error for duplicate perspective name");
+    assert!(
+        result.is_err(),
+        "Expected error for duplicate perspective name"
+    );
     let err_msg = format!("{}", result.unwrap_err());
     assert!(
         err_msg.contains("Sprint Board") && err_msg.contains("already exists"),
@@ -399,7 +404,10 @@ async fn test_update_rename_to_duplicate_rejected() {
         .await
         .into_result();
 
-    assert!(result.is_err(), "Expected error when renaming to an existing name");
+    assert!(
+        result.is_err(),
+        "Expected error when renaming to an existing name"
+    );
     let err_msg = format!("{}", result.unwrap_err());
     assert!(
         err_msg.contains("View A") && err_msg.contains("already exists"),

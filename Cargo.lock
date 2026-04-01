@@ -8526,6 +8526,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "swissarmyhammer-store"
+version = "0.12.10"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "diffy",
+ "serde",
+ "serde_json",
+ "serde_yaml_ng",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "ulid",
+]
+
+[[package]]
 name = "swissarmyhammer-templating"
 version = "0.12.10"
 dependencies = [

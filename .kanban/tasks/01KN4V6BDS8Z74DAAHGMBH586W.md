@@ -1,0 +1,8 @@
+---
+assignees:
+- claude-code
+position_column: done
+position_ordinal: ffffffffffffffffd380
+title: TOCTOU race between cache check and disk write in StoreHandle::write
+---
+**swissarmyhammer-store/src/handle.rs:62-106**\n\n`write()` reads old text from cache/disk, computes a diff, appends to changelog, then does the atomic write — but the `RwLock<HashMap>` is released between the cache read (line 68) and the cache write (line 103). A concurrent caller could:\n1. Read the same old_text\n2. Both compute diffs against the same base\n3. Both write different content, with the last rename winning\n4. The changelog now has two entries referencing the same base, but only one's forward patch is correct\n\nThe same issue exists in `delete()` — the cache read and the cache removal are not atomic with the file operation.\n\n**Severity: warning**\n\nIn practice this may be low-risk if all writes go through a single dispatch layer, but the `StoreHandle` API does not document or enforce single-writer semantics.\n\n**Suggestion:** Hold the write lock for the entire duration of `write()` and `delete()`, or document that concurrent writes to the same item ID are undefined behavior. A `RwLock<HashMap>` only protects the map, not the file operations.\n\n**Subtasks:**\n- [ ] Decide: hold write lock across entire mutation, or document single-writer requirement\n- [ ] If locking: restructure write/delete to hold cache write lock across changelog+file+cache\n- [ ] Add a concurrent-write test to verify the chosen strategy\n- [ ] Verify fix does not introduce deadlocks" #review-finding

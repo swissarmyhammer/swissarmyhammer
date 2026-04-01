@@ -2884,7 +2884,7 @@ mod tests {
         // Create a tag and an update
         let mut tag = Entity::new("tag", "bug");
         tag.set("tag_name", json!("Bug"));
-        let create_ulid = ctx.write(&tag).await.unwrap().unwrap();
+        let _create_ulid = ctx.write(&tag).await.unwrap().unwrap();
 
         tag.set("tag_name", json!("Bug Report"));
         let update_ulid = ctx.write(&tag).await.unwrap().unwrap();

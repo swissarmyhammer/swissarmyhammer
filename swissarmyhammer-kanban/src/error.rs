@@ -199,19 +199,12 @@ impl From<swissarmyhammer_perspectives::PerspectiveError> for KanbanError {
             swissarmyhammer_perspectives::PerspectiveError::NotFound { resource, id } => {
                 KanbanError::NotFound { resource, id }
             }
-            swissarmyhammer_perspectives::PerspectiveError::DuplicateName {
-                item_type,
-                name,
-            } => KanbanError::DuplicateName { item_type, name },
-            swissarmyhammer_perspectives::PerspectiveError::Io(inner) => {
-                KanbanError::Io(inner)
+            swissarmyhammer_perspectives::PerspectiveError::DuplicateName { item_type, name } => {
+                KanbanError::DuplicateName { item_type, name }
             }
-            swissarmyhammer_perspectives::PerspectiveError::Yaml(inner) => {
-                KanbanError::Yaml(inner)
-            }
-            swissarmyhammer_perspectives::PerspectiveError::Json(inner) => {
-                KanbanError::Json(inner)
-            }
+            swissarmyhammer_perspectives::PerspectiveError::Io(inner) => KanbanError::Io(inner),
+            swissarmyhammer_perspectives::PerspectiveError::Yaml(inner) => KanbanError::Yaml(inner),
+            swissarmyhammer_perspectives::PerspectiveError::Json(inner) => KanbanError::Json(inner),
         }
     }
 }

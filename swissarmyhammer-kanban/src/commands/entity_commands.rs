@@ -454,23 +454,13 @@ mod tests {
 
     #[tokio::test]
     async fn tag_update_available_with_tag_in_scope() {
-        let ctx = CommandContext::new(
-            "test",
-            vec!["tag:01X".into()],
-            None,
-            HashMap::new(),
-        );
+        let ctx = CommandContext::new("test", vec!["tag:01X".into()], None, HashMap::new());
         assert!(TagUpdateCmd.available(&ctx));
     }
 
     #[tokio::test]
     async fn tag_update_not_available_without_tag_scope() {
-        let ctx = CommandContext::new(
-            "test",
-            vec!["task:01X".into()],
-            None,
-            HashMap::new(),
-        );
+        let ctx = CommandContext::new("test", vec!["task:01X".into()], None, HashMap::new());
         assert!(!TagUpdateCmd.available(&ctx));
     }
 
@@ -615,11 +605,12 @@ mod tests {
         let task_id = task_result["id"].as_str().unwrap();
 
         // Add an attachment
-        let att_result = crate::attachment::AddAttachment::new(task_id, "file.txt", "/tmp/file.txt")
-            .execute(kanban.as_ref())
-            .await
-            .into_result()
-            .unwrap();
+        let att_result =
+            crate::attachment::AddAttachment::new(task_id, "file.txt", "/tmp/file.txt")
+                .execute(kanban.as_ref())
+                .await
+                .into_result()
+                .unwrap();
         let att_id = att_result["attachment"]["id"].as_str().unwrap();
 
         // Delete via AttachmentDeleteCmd

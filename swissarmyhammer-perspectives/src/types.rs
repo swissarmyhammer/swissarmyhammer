@@ -244,9 +244,7 @@ mod tests {
             name: "Filtered".to_string(),
             view: "list".to_string(),
             fields: vec![],
-            filter: Some(
-                "(entity) => entity.Status !== \"Done\"".to_string(),
-            ),
+            filter: Some("(entity) => entity.Status !== \"Done\"".to_string()),
             group: Some("(entity) => entity.Assignee".to_string()),
             sort: vec![],
         };

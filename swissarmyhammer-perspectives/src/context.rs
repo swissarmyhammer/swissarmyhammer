@@ -283,7 +283,10 @@ mod tests {
         let found = ctx.get_by_name("My Grid").unwrap();
         assert_eq!(found.id, "01BBBBBBBBBBBBBBBBBBBBBBBB");
         assert_eq!(found.fields.len(), 1);
-        assert_eq!(found.filter.as_deref(), Some("(e) => e.Status !== \"Done\""));
+        assert_eq!(
+            found.filter.as_deref(),
+            Some("(e) => e.Status !== \"Done\"")
+        );
     }
 
     #[tokio::test]
@@ -382,12 +385,9 @@ mod tests {
             ctx.write(&make_perspective("01AAAAAAAAAAAAAAAAAAAAAAAA", "Alpha"))
                 .await
                 .unwrap();
-            ctx.write(&make_rich_perspective(
-                "01BBBBBBBBBBBBBBBBBBBBBBBB",
-                "Beta",
-            ))
-            .await
-            .unwrap();
+            ctx.write(&make_rich_perspective("01BBBBBBBBBBBBBBBBBBBBBBBB", "Beta"))
+                .await
+                .unwrap();
             assert_eq!(ctx.all().len(), 2);
         }
 
@@ -436,13 +436,19 @@ mod tests {
             .await
             .unwrap();
 
-        ctx.write(&make_perspective("01AAAAAAAAAAAAAAAAAAAAAAAA", "Sprint View"))
-            .await
-            .unwrap();
+        ctx.write(&make_perspective(
+            "01AAAAAAAAAAAAAAAAAAAAAAAA",
+            "Sprint View",
+        ))
+        .await
+        .unwrap();
 
         // Second perspective with a different ID but same name should fail
         let err = ctx
-            .write(&make_perspective("01BBBBBBBBBBBBBBBBBBBBBBBB", "Sprint View"))
+            .write(&make_perspective(
+                "01BBBBBBBBBBBBBBBBBBBBBBBB",
+                "Sprint View",
+            ))
             .await;
         assert!(err.is_err());
         let msg = err.unwrap_err().to_string();
@@ -623,10 +629,7 @@ mod tests {
         let err = ctx.delete("01AAAAAAAAAAAAAAAAAAAAAAAA").await;
         assert!(err.is_err(), "delete should fail with IO error");
         let msg = err.unwrap_err().to_string();
-        assert!(
-            msg.contains("IO error"),
-            "expected IO error, got: {msg}"
-        );
+        assert!(msg.contains("IO error"), "expected IO error, got: {msg}");
     }
 
     #[tokio::test]
@@ -643,14 +646,19 @@ mod tests {
         }
 
         // Drop non-.yaml files into the directory
-        fs::write(dir.join("notes.txt"), b"some text").await.unwrap();
+        fs::write(dir.join("notes.txt"), b"some text")
+            .await
+            .unwrap();
         fs::write(dir.join("config.json"), b"{}").await.unwrap();
         fs::write(dir.join("noext"), b"data").await.unwrap();
 
         // Reopen -- non-yaml files must be silently ignored
         let ctx = PerspectiveContext::open(&dir).await.unwrap();
         assert_eq!(ctx.all().len(), 1);
-        assert_eq!(ctx.get_by_name("Valid").unwrap().id, "01AAAAAAAAAAAAAAAAAAAAAAAA");
+        assert_eq!(
+            ctx.get_by_name("Valid").unwrap().id,
+            "01AAAAAAAAAAAAAAAAAAAAAAAA"
+        );
     }
 
     #[tokio::test]
@@ -667,14 +675,20 @@ mod tests {
         }
 
         // Write a malformed YAML file that will fail deserialization
-        fs::write(dir.join("01BADBADBADBADBADBADBADBAD.yaml"), b"not: [valid: yaml: {{")
-            .await
-            .unwrap();
+        fs::write(
+            dir.join("01BADBADBADBADBADBADBADBAD.yaml"),
+            b"not: [valid: yaml: {{",
+        )
+        .await
+        .unwrap();
 
         // Reopen -- malformed file must be skipped, valid file still loads
         let ctx = PerspectiveContext::open(&dir).await.unwrap();
         assert_eq!(ctx.all().len(), 1);
-        assert_eq!(ctx.get_by_name("Good").unwrap().id, "01AAAAAAAAAAAAAAAAAAAAAAAA");
+        assert_eq!(
+            ctx.get_by_name("Good").unwrap().id,
+            "01AAAAAAAAAAAAAAAAAAAAAAAA"
+        );
     }
 
     #[tokio::test]
@@ -687,7 +701,10 @@ mod tests {
 
         assert!(dir.exists(), "open() must create the directory");
         assert!(dir.is_dir(), "created path must be a directory");
-        assert!(ctx.all().is_empty(), "fresh context must have no perspectives");
+        assert!(
+            ctx.all().is_empty(),
+            "fresh context must have no perspectives"
+        );
         assert_eq!(ctx.root(), dir);
     }
 
@@ -711,7 +728,11 @@ mod tests {
 
         let ctx = PerspectiveContext::open(&dir).await.unwrap();
 
-        assert_eq!(ctx.all().len(), 3, "all three pre-existing perspectives must load");
+        assert_eq!(
+            ctx.all().len(),
+            3,
+            "all three pre-existing perspectives must load"
+        );
         assert!(ctx.get_by_id("01AAAAAAAAAAAAAAAAAAAAAAAA").is_some());
         assert!(ctx.get_by_name("Pre B").is_some());
         // Verify rich fields survived the round-trip

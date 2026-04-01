@@ -111,8 +111,7 @@ impl KanbanContext {
         let perspectives_dir = root.join("perspectives");
         fs::create_dir_all(&perspectives_dir).await?;
         let perspectives = PerspectiveContext::open(&perspectives_dir).await?;
-        let perspectives_changelog =
-            PerspectiveChangelog::new(root.join("perspectives.jsonl"));
+        let perspectives_changelog = PerspectiveChangelog::new(root.join("perspectives.jsonl"));
 
         let persp_cell = OnceCell::new();
         persp_cell.set(RwLock::new(perspectives)).ok();
@@ -1187,9 +1186,20 @@ type:
     async fn test_read_activity_returns_newest_first() {
         let (_temp, ctx) = setup().await;
 
-        let e1 = LogEntry::new("add task", serde_json::json!({}), serde_json::json!({}), None, 1);
-        let e2 =
-            LogEntry::new("move task", serde_json::json!({}), serde_json::json!({}), None, 2);
+        let e1 = LogEntry::new(
+            "add task",
+            serde_json::json!({}),
+            serde_json::json!({}),
+            None,
+            1,
+        );
+        let e2 = LogEntry::new(
+            "move task",
+            serde_json::json!({}),
+            serde_json::json!({}),
+            None,
+            2,
+        );
         let e3 = LogEntry::new(
             "complete task",
             serde_json::json!({}),
@@ -1365,7 +1375,9 @@ type:
         ctx.append_activity(&e2).await.unwrap();
 
         // Both entries should be in the file, one per line
-        let content = tokio::fs::read_to_string(ctx.activity_path()).await.unwrap();
+        let content = tokio::fs::read_to_string(ctx.activity_path())
+            .await
+            .unwrap();
         let lines: Vec<&str> = content.lines().filter(|l| !l.is_empty()).collect();
         assert_eq!(lines.len(), 2);
 
@@ -1388,7 +1400,10 @@ type:
 
         // First write should return Some (changelog entry created)
         let result = ctx.write_entity_generic(&tag).await.unwrap();
-        assert!(result.is_some(), "first write should produce a changelog ID");
+        assert!(
+            result.is_some(),
+            "first write should produce a changelog ID"
+        );
     }
 
     #[tokio::test]
@@ -1464,7 +1479,9 @@ type:
         let views_root = temp.path().join("views");
         std::fs::create_dir_all(&views_root).unwrap();
 
-        KanbanContext::seed_builtin_views(&views_root).await.unwrap();
+        KanbanContext::seed_builtin_views(&views_root)
+            .await
+            .unwrap();
 
         // At least one view file should have been written
         let entries: Vec<_> = std::fs::read_dir(&views_root)
@@ -1485,7 +1502,9 @@ type:
         std::fs::create_dir_all(&views_root).unwrap();
 
         // Seed once
-        KanbanContext::seed_builtin_views(&views_root).await.unwrap();
+        KanbanContext::seed_builtin_views(&views_root)
+            .await
+            .unwrap();
 
         // Overwrite a view file with custom content
         let board_path = views_root.join("01JMVIEW0000000000BOARD0.yaml");
@@ -1493,7 +1512,9 @@ type:
         std::fs::write(&board_path, "custom: content\n").unwrap();
 
         // Seed again - should not overwrite
-        KanbanContext::seed_builtin_views(&views_root).await.unwrap();
+        KanbanContext::seed_builtin_views(&views_root)
+            .await
+            .unwrap();
 
         let content = std::fs::read_to_string(&board_path).unwrap();
         assert_eq!(content, "custom: content\n");

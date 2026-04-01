@@ -764,8 +764,7 @@ mod tests {
     async fn run_js_validation_transforms_value() {
         let engine = ValidationEngine::new();
         let mut field = make_field("amount", FieldType::Text { single_line: true });
-        field.validate =
-            Some(r#"return String(Number(ctx.value) * 2);"#.to_string());
+        field.validate = Some(r#"return String(Number(ctx.value) * 2);"#.to_string());
 
         let result = engine
             .validate(&field, serde_json::json!("21"), &HashMap::new())
@@ -839,9 +838,7 @@ mod tests {
         );
 
         let value = serde_json::json!(["ghost_1", "ghost_2"]);
-        let result = engine
-            .validate(&field, value, &HashMap::new())
-            .await;
+        let result = engine.validate(&field, value, &HashMap::new()).await;
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), serde_json::json!([]));
     }

@@ -260,7 +260,10 @@ mod tests {
 
         changelog.log_create(&p1).await.unwrap();
         changelog.log_create(&p2).await.unwrap();
-        changelog.log_update("01EEE", &p2, &p2_updated).await.unwrap();
+        changelog
+            .log_update("01EEE", &p2, &p2_updated)
+            .await
+            .unwrap();
         changelog.log_delete(&p1).await.unwrap();
 
         let entries = changelog.read_all().await.unwrap();
@@ -285,7 +288,10 @@ mod tests {
         // File does not exist
         let changelog = PerspectiveChangelog::new(path.clone());
         let entries = changelog.read_all().await.unwrap();
-        assert!(entries.is_empty(), "nonexistent file should yield empty vec");
+        assert!(
+            entries.is_empty(),
+            "nonexistent file should yield empty vec"
+        );
 
         // Create an empty file
         std::fs::write(&path, "").unwrap();
@@ -307,10 +313,7 @@ mod tests {
 
         // Now read back the file, inject blank/whitespace lines, and rewrite.
         let original = std::fs::read_to_string(&path).unwrap();
-        let padded = format!(
-            "\n   \n\t\n{}\n\n  \n",
-            original.trim_end()
-        );
+        let padded = format!("\n   \n\t\n{}\n\n  \n", original.trim_end());
         std::fs::write(&path, padded).unwrap();
 
         let entries = changelog.read_all().await.unwrap();

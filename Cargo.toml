@@ -60,6 +60,7 @@ members = [
     "swissarmyhammer-views",
     "swissarmyhammer-perspectives",
     "swissarmyhammer-merge",
+    "swissarmyhammer-store",
     "swissarmyhammer-commands",
     "benches/embedding_benchmark",
     "crates/swissarmyhammer-sem",

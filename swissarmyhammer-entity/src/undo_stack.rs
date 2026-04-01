@@ -425,7 +425,11 @@ mod tests {
     #[test]
     fn save_creates_parent_directories() {
         let dir = TempDir::new().unwrap();
-        let path = dir.path().join("nested").join("deep").join("undo_stack.yaml");
+        let path = dir
+            .path()
+            .join("nested")
+            .join("deep")
+            .join("undo_stack.yaml");
 
         let mut stack = UndoStack::new();
         stack.push("id1", "op1");

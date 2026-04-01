@@ -16,7 +16,7 @@ pub mod update;
 
 // Re-export domain types from the standalone perspectives crate
 pub use swissarmyhammer_perspectives::{
-    Perspective, PerspectiveChangelog, PerspectiveChangeEntry, PerspectiveChangeOp,
+    Perspective, PerspectiveChangeEntry, PerspectiveChangeOp, PerspectiveChangelog,
     PerspectiveContext, PerspectiveError, PerspectiveFieldEntry, SortDirection, SortEntry,
 };
 

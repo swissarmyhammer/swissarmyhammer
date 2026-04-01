@@ -1867,10 +1867,7 @@ mod tests {
         }
         {
             let state = UIState::load(&path);
-            assert_eq!(
-                state.inspector_stack("main"),
-                vec!["task:01A", "tag:01B"]
-            );
+            assert_eq!(state.inspector_stack("main"), vec!["task:01A", "tag:01B"]);
         }
         let _ = fs::remove_file(&path);
     }
@@ -1881,18 +1878,12 @@ mod tests {
         let _ = fs::remove_file(&path);
         {
             let state = UIState::load(&path);
-            state.set_inspector_stack(
-                "main",
-                vec!["task:01X".into(), "tag:01Y".into()],
-            );
+            state.set_inspector_stack("main", vec!["task:01X".into(), "tag:01Y".into()]);
             // No explicit save() — should auto-save
         }
         {
             let state = UIState::load(&path);
-            assert_eq!(
-                state.inspector_stack("main"),
-                vec!["task:01X", "tag:01Y"]
-            );
+            assert_eq!(state.inspector_stack("main"), vec!["task:01X", "tag:01Y"]);
         }
         let _ = fs::remove_file(&path);
     }
@@ -2067,10 +2058,7 @@ mod tests {
             let state = UIState::load(&path);
             assert_eq!(state.keymap_mode(), "vim");
             assert_eq!(state.open_boards(), vec!["/boards/proj"]);
-            assert_eq!(
-                state.window_board("main").as_deref(),
-                Some("/boards/proj")
-            );
+            assert_eq!(state.window_board("main").as_deref(), Some("/boards/proj"));
             let ws = state.get_window_state("main").unwrap();
             assert_eq!(ws.x, Some(50));
             assert_eq!(ws.y, Some(75));
@@ -2078,17 +2066,11 @@ mod tests {
             assert_eq!(ws.height, Some(768));
             assert!(ws.maximized);
             assert_eq!(ws.board_path, "/boards/proj");
-            assert_eq!(
-                state.inspector_stack("main"),
-                vec!["task:01A", "tag:02B"]
-            );
+            assert_eq!(state.inspector_stack("main"), vec!["task:01A", "tag:02B"]);
             assert_eq!(state.active_view_id("main"), "grid-view");
             assert_eq!(state.recent_boards().len(), 1);
             assert_eq!(state.recent_boards()[0].name, "My Project");
-            assert_eq!(
-                state.most_recent_board(),
-                Some("/boards/proj".to_string())
-            );
+            assert_eq!(state.most_recent_board(), Some("/boards/proj".to_string()));
         }
     }
 

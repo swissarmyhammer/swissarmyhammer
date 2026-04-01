@@ -16,7 +16,7 @@ pub mod context;
 pub mod error;
 pub mod types;
 
-pub use changelog::{PerspectiveChangelog, PerspectiveChangeEntry, PerspectiveChangeOp};
+pub use changelog::{PerspectiveChangeEntry, PerspectiveChangeOp, PerspectiveChangelog};
 pub use context::PerspectiveContext;
 pub use error::{PerspectiveError, Result};
 pub use types::{Perspective, PerspectiveFieldEntry, SortDirection, SortEntry};

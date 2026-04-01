@@ -1239,12 +1239,9 @@ type:
   kind: text
   single_line: true
 "#;
-        let ctx = FieldsContext::from_yaml_sources(
-            PathBuf::from("/tmp/test"),
-            &[("title", yaml)],
-            &[],
-        )
-        .unwrap();
+        let ctx =
+            FieldsContext::from_yaml_sources(PathBuf::from("/tmp/test"), &[("title", yaml)], &[])
+                .unwrap();
 
         assert_eq!(ctx.all_fields().len(), 1);
         assert!(ctx.all_entities().is_empty());
@@ -1257,12 +1254,9 @@ name: task
 fields:
   - title
 "#;
-        let ctx = FieldsContext::from_yaml_sources(
-            PathBuf::from("/tmp/test"),
-            &[],
-            &[("task", yaml)],
-        )
-        .unwrap();
+        let ctx =
+            FieldsContext::from_yaml_sources(PathBuf::from("/tmp/test"), &[], &[("task", yaml)])
+                .unwrap();
 
         assert!(ctx.all_fields().is_empty());
         assert_eq!(ctx.all_entities().len(), 1);
@@ -1414,10 +1408,7 @@ fields:
                 ("task_count", computed_field_yaml),
                 ("title", plain_field_yaml),
             ],
-            &[
-                ("project", project_entity_yaml),
-                ("task", task_entity_yaml),
-            ],
+            &[("project", project_entity_yaml), ("task", task_entity_yaml)],
         )
         .unwrap();
 

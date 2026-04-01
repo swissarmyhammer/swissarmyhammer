@@ -10,10 +10,10 @@ use crate::attachment::{
     AddAttachment, DeleteAttachment, GetAttachment, ListAttachments, UpdateAttachment,
 };
 use crate::board::{GetBoard, InitBoard, UpdateBoard};
+use crate::column::{AddColumn, DeleteColumn, GetColumn, ListColumns, UpdateColumn};
 use crate::perspective::{
     AddPerspective, DeletePerspective, GetPerspective, ListPerspectives, UpdatePerspective,
 };
-use crate::column::{AddColumn, DeleteColumn, GetColumn, ListColumns, UpdateColumn};
 use crate::swimlane::{AddSwimlane, DeleteSwimlane, GetSwimlane, ListSwimlanes, UpdateSwimlane};
 use crate::tag::{AddTag, DeleteTag, GetTag, ListTags, UpdateTag};
 use crate::task::{
@@ -483,9 +483,7 @@ pub async fn execute_operation(
             let id = req(op, "id")?;
             processor.process(&DeletePerspective::new(id), ctx).await
         }
-        (Verb::List, Noun::Perspectives) => {
-            processor.process(&ListPerspectives::new(), ctx).await
-        }
+        (Verb::List, Noun::Perspectives) => processor.process(&ListPerspectives::new(), ctx).await,
 
         // Archive operations
         (Verb::Archive, Noun::Task) => {
@@ -1094,7 +1092,10 @@ mod tests {
     async fn dispatch_update_board() {
         let (_temp, ctx) = setup().await;
 
-        let ops = parse_input(json!({"op": "update board", "name": "Renamed", "description": "New desc"})).unwrap();
+        let ops = parse_input(
+            json!({"op": "update board", "name": "Renamed", "description": "New desc"}),
+        )
+        .unwrap();
         let result = execute_operation(&ctx, &ops[0]).await.unwrap();
         assert_eq!(result["name"], "Renamed");
         assert_eq!(result["description"], "New desc");
@@ -1106,7 +1107,8 @@ mod tests {
     async fn dispatch_add_column() {
         let (_temp, ctx) = setup().await;
 
-        let ops = parse_input(json!({"op": "add column", "id": "review", "name": "Review"})).unwrap();
+        let ops =
+            parse_input(json!({"op": "add column", "id": "review", "name": "Review"})).unwrap();
         let result = execute_operation(&ctx, &ops[0]).await.unwrap();
         assert_eq!(result["id"], "review");
         assert_eq!(result["name"], "Review");
@@ -1125,7 +1127,8 @@ mod tests {
     async fn dispatch_update_column() {
         let (_temp, ctx) = setup().await;
 
-        let ops = parse_input(json!({"op": "update column", "id": "todo", "name": "Backlog"})).unwrap();
+        let ops =
+            parse_input(json!({"op": "update column", "id": "todo", "name": "Backlog"})).unwrap();
         let result = execute_operation(&ctx, &ops[0]).await.unwrap();
         assert_eq!(result["name"], "Backlog");
     }
@@ -1240,12 +1243,21 @@ mod tests {
         let ops = parse_input(json!({"op": "assign task", "id": id, "assignee": "alice"})).unwrap();
         let result = execute_operation(&ctx, &ops[0]).await.unwrap();
         assert_eq!(result["assigned"], true);
-        assert!(result["all_assignees"].as_array().unwrap().iter().any(|a| a.as_str() == Some("alice")));
+        assert!(result["all_assignees"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|a| a.as_str() == Some("alice")));
 
         // Unassign
-        let ops = parse_input(json!({"op": "unassign task", "id": id, "assignee": "alice"})).unwrap();
+        let ops =
+            parse_input(json!({"op": "unassign task", "id": id, "assignee": "alice"})).unwrap();
         let result = execute_operation(&ctx, &ops[0]).await.unwrap();
-        assert!(!result["all_assignees"].as_array().unwrap().iter().any(|a| a.as_str() == Some("alice")));
+        assert!(!result["all_assignees"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|a| a.as_str() == Some("alice")));
     }
 
     // ── Next task ─────────────────────────────────────────────────────
@@ -1297,7 +1309,8 @@ mod tests {
         let (_temp, ctx) = setup().await;
 
         // Add
-        let ops = parse_input(json!({"op": "add swimlane", "id": "urgent", "name": "Urgent"})).unwrap();
+        let ops =
+            parse_input(json!({"op": "add swimlane", "id": "urgent", "name": "Urgent"})).unwrap();
         let result = execute_operation(&ctx, &ops[0]).await.unwrap();
         assert_eq!(result["id"], "urgent");
         assert_eq!(result["name"], "Urgent");
@@ -1308,14 +1321,19 @@ mod tests {
         assert_eq!(result["name"], "Urgent");
 
         // Update
-        let ops = parse_input(json!({"op": "update swimlane", "id": "urgent", "name": "Critical"})).unwrap();
+        let ops = parse_input(json!({"op": "update swimlane", "id": "urgent", "name": "Critical"}))
+            .unwrap();
         let result = execute_operation(&ctx, &ops[0]).await.unwrap();
         assert_eq!(result["name"], "Critical");
 
         // List
         let ops = parse_input(json!({"op": "list swimlanes"})).unwrap();
         let result = execute_operation(&ctx, &ops[0]).await.unwrap();
-        assert!(result["swimlanes"].as_array().unwrap().iter().any(|s| s["id"] == "urgent"));
+        assert!(result["swimlanes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s["id"] == "urgent"));
 
         // Delete
         let ops = parse_input(json!({"op": "delete swimlane", "id": "urgent"})).unwrap();
@@ -1341,14 +1359,19 @@ mod tests {
         assert_eq!(result["name"], "Bob");
 
         // Update
-        let ops = parse_input(json!({"op": "update actor", "id": "bob", "name": "Robert"})).unwrap();
+        let ops =
+            parse_input(json!({"op": "update actor", "id": "bob", "name": "Robert"})).unwrap();
         let result = execute_operation(&ctx, &ops[0]).await.unwrap();
         assert_eq!(result["name"], "Robert");
 
         // List
         let ops = parse_input(json!({"op": "list actors"})).unwrap();
         let result = execute_operation(&ctx, &ops[0]).await.unwrap();
-        assert!(result["actors"].as_array().unwrap().iter().any(|a| a["id"] == "bob"));
+        assert!(result["actors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|a| a["id"] == "bob"));
 
         // Delete
         let ops = parse_input(json!({"op": "delete actor", "id": "bob"})).unwrap();
@@ -1361,12 +1384,16 @@ mod tests {
         let (_temp, ctx) = setup().await;
 
         // Add actor
-        let ops = parse_input(json!({"op": "add actor", "id": "eve", "name": "Eve", "ensure": true})).unwrap();
+        let ops =
+            parse_input(json!({"op": "add actor", "id": "eve", "name": "Eve", "ensure": true}))
+                .unwrap();
         let r1 = execute_operation(&ctx, &ops[0]).await.unwrap();
         assert_eq!(r1["actor"]["id"], "eve");
 
         // Ensure again returns existing actor without error
-        let ops = parse_input(json!({"op": "add actor", "id": "eve", "name": "Eve", "ensure": true})).unwrap();
+        let ops =
+            parse_input(json!({"op": "add actor", "id": "eve", "name": "Eve", "ensure": true}))
+                .unwrap();
         let r2 = execute_operation(&ctx, &ops[0]).await.unwrap();
         assert_eq!(r2["actor"]["id"], "eve");
     }
@@ -1378,7 +1405,8 @@ mod tests {
         let (_temp, ctx) = setup().await;
 
         // Add
-        let ops = parse_input(json!({"op": "add tag", "name": "feature", "color": "00ff00"})).unwrap();
+        let ops =
+            parse_input(json!({"op": "add tag", "name": "feature", "color": "00ff00"})).unwrap();
         let result = execute_operation(&ctx, &ops[0]).await.unwrap();
         assert_eq!(result["name"], "feature");
         let tag_id = result["id"].as_str().unwrap().to_string();
@@ -1396,7 +1424,11 @@ mod tests {
         // List
         let ops = parse_input(json!({"op": "list tags"})).unwrap();
         let result = execute_operation(&ctx, &ops[0]).await.unwrap();
-        assert!(result["tags"].as_array().unwrap().iter().any(|t| t["name"] == "enhancement"));
+        assert!(result["tags"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|t| t["name"] == "enhancement"));
 
         // Delete
         let ops = parse_input(json!({"op": "delete tag", "id": tag_id})).unwrap();
@@ -1491,7 +1523,8 @@ mod tests {
         let (_temp, ctx) = setup().await;
 
         // Create actor
-        let ops = parse_input(json!({"op": "add actor", "id": "agent-1", "name": "Agent One"})).unwrap();
+        let ops =
+            parse_input(json!({"op": "add actor", "id": "agent-1", "name": "Agent One"})).unwrap();
         execute_operation(&ctx, &ops[0]).await.unwrap();
 
         // Create an operation with actor set (simulating MCP actor context)
@@ -1504,7 +1537,11 @@ mod tests {
 
         let result = execute_operation(&ctx, &op).await.unwrap();
         assert!(
-            result["assignees"].as_array().unwrap().iter().any(|a| a.as_str() == Some("agent-1")),
+            result["assignees"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|a| a.as_str() == Some("agent-1")),
             "task should be auto-assigned to the operation actor"
         );
     }

@@ -60,10 +60,7 @@ impl Command for SavePerspectiveCmd {
             .and_then(|v| v.as_str())
             .ok_or_else(|| CommandError::MissingArg("name".into()))?;
 
-        let view = ctx
-            .arg("view")
-            .and_then(|v| v.as_str())
-            .unwrap_or("board");
+        let view = ctx.arg("view").and_then(|v| v.as_str()).unwrap_or("board");
 
         let filter = ctx.arg("filter").and_then(|v| v.as_str()).map(String::from);
         let group = ctx.arg("group").and_then(|v| v.as_str()).map(String::from);
@@ -157,9 +154,7 @@ pub struct SetFilterCmd;
 #[async_trait]
 impl Command for SetFilterCmd {
     fn available(&self, ctx: &CommandContext) -> bool {
-        ctx.arg("perspective_id")
-            .and_then(|v| v.as_str())
-            .is_some()
+        ctx.arg("perspective_id").and_then(|v| v.as_str()).is_some()
     }
 
     async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
@@ -188,9 +183,7 @@ pub struct ClearFilterCmd;
 #[async_trait]
 impl Command for ClearFilterCmd {
     fn available(&self, ctx: &CommandContext) -> bool {
-        ctx.arg("perspective_id")
-            .and_then(|v| v.as_str())
-            .is_some()
+        ctx.arg("perspective_id").and_then(|v| v.as_str()).is_some()
     }
 
     async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
@@ -214,9 +207,7 @@ pub struct SetGroupCmd;
 #[async_trait]
 impl Command for SetGroupCmd {
     fn available(&self, ctx: &CommandContext) -> bool {
-        ctx.arg("perspective_id")
-            .and_then(|v| v.as_str())
-            .is_some()
+        ctx.arg("perspective_id").and_then(|v| v.as_str()).is_some()
     }
 
     async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
@@ -245,9 +236,7 @@ pub struct ClearGroupCmd;
 #[async_trait]
 impl Command for ClearGroupCmd {
     fn available(&self, ctx: &CommandContext) -> bool {
-        ctx.arg("perspective_id")
-            .and_then(|v| v.as_str())
-            .is_some()
+        ctx.arg("perspective_id").and_then(|v| v.as_str()).is_some()
     }
 
     async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {

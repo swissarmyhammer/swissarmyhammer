@@ -370,12 +370,7 @@ mod tests {
         let mut args = HashMap::new();
         args.insert("title".into(), Value::String("My task".into()));
 
-        let cmd_ctx = make_ctx(
-            Arc::clone(&kanban),
-            args,
-            vec!["column:todo".into()],
-            None,
-        );
+        let cmd_ctx = make_ctx(Arc::clone(&kanban), args, vec!["column:todo".into()], None);
         let cmd = AddTaskCmd;
         let result = cmd.execute(&cmd_ctx).await.unwrap();
 
@@ -521,10 +516,7 @@ mod tests {
         let mut args = HashMap::new();
         args.insert("id".into(), Value::String(task_b.clone()));
         args.insert("column".into(), Value::String("doing".into()));
-        args.insert(
-            "before_id".into(),
-            Value::String("nonexistent-id".into()),
-        );
+        args.insert("before_id".into(), Value::String("nonexistent-id".into()));
 
         let cmd_ctx = make_ctx(Arc::clone(&kanban), args, vec![], None);
         let cmd = MoveTaskCmd;
