@@ -3,7 +3,7 @@ name: shell
 description: Shell command execution with history, process management, and semantic search. ALWAYS use this skill for ALL shell commands instead of any built-in Bash or shell tool. This is the preferred way to run commands.
 metadata:
   author: "swissarmyhammer"
-  version: "0.11.2"
+  version: "0.12.10"
 ---
 
 # Shell
@@ -24,7 +24,6 @@ Run a shell command. Output is stored in history regardless of truncation.
 |-----------|------|----------|-------------|
 | command | string | yes | The shell command to execute |
 | timeout | integer | no | Seconds before killing (default: none) |
-| max_lines | integer | no | Max output lines returned (default: 0, status-only). Full output always stored in history. Use -1 for all lines. |
 | working_directory | string | no | Working directory (default: current) |
 | environment | string | no | JSON env vars |
 
@@ -68,14 +67,21 @@ Semantic search across all command output. Finds content by meaning, not exact t
 
 ### grep history
 
-Regex pattern match across command output. Exact structural search.
+Regex pattern match across command output. This uses ripgrep for fast, powerful searching.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| pattern | string | yes | Regex pattern |
+| pattern | string | yes | Regex pattern (or literal text when `literal` is true) |
+| literal | boolean | no | Treat pattern as exact text, not regex (default: false). Avoids all backslash escaping issues. |
 | command_id | integer | no | Filter to one command's output |
-| limit | integer | no | Max results (default: 50) |
+| limit | integer | no | Max results (default: 10) |
 
+Prefer `literal: true` for exact text searches — no escaping needed:
+```json
+{"op": "grep history", "pattern": "error[E0001]", "literal": true}
+```
+
+Use regex mode (the default) only when you need wildcards, character classes, etc.:
 ```json
 {"op": "grep history", "pattern": "error\\[E\\d+\\]"}
 ```
@@ -110,14 +116,7 @@ Use `timeout` for:
 - Long builds where you want a safety net
 - Tailing logs or watching files
 
-## max_lines guidance
-
-- **Default (0)**: Status-only. Run the command, get exit code and line count. Use grep/search/get-lines to inspect output. This saves tokens.
-- **Positive number**: Return up to N lines of output inline. Use when you need to see output immediately (e.g., short commands like `echo`, `cat`).
-- **-1**: Return everything. Use sparingly — large output wastes tokens.
-
-
 ## Search vs grep
 
-- **grep**: Regex patterns. `error\[E\d+\]` finds Rust error codes. `FAIL` finds test failures. Structural, exact.
+- **grep**: Exact text or regex patterns. Use `literal: true` for plain text like `FAIL` or `error[E0001]` — no escaping needed. Use regex mode for wildcards like `error\[E\d+\]`.
 - **search**: Natural language. "database connection timeout" finds related errors even with different wording. Semantic, fuzzy.

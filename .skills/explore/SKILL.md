@@ -3,7 +3,7 @@ name: explore
 description: Use this skill before planning or implementing when you need to understand code — how something works, why it behaves a certain way, or what a change would affect. Exploration is not done until you can articulate the test you would write. Use when the user says "explore", "investigate", "how does X work", "what would it take to change X", or when you need to understand code before acting.
 metadata:
   author: "swissarmyhammer"
-  version: "0.11.2"
+  version: "0.12.10"
 ---
 
 ## Project Detection
