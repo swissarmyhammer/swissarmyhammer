@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, fireEvent } from "@testing-library/react";
+import { render, fireEvent, waitFor } from "@testing-library/react";
 import { readdirSync, readFileSync } from "fs";
 import { join } from "path";
 import yaml from "js-yaml";
@@ -45,18 +45,53 @@ const commandsByType = new Map<string, EntityCommand[]>(
 );
 
 // ---------------------------------------------------------------------------
+// Backend context-menu types
+// ---------------------------------------------------------------------------
+
+/**
+ * Shape returned by the backend `list_commands_for_scope`.
+ * Used to build mock responses for context menu tests.
+ */
+interface ResolvedCommand {
+  id: string;
+  name: string;
+  target?: string;
+  group: string;
+  context_menu: boolean;
+  keys?: { vim?: string; cua?: string; emacs?: string };
+  available: boolean;
+}
+
+// ---------------------------------------------------------------------------
 // Mocks
 // ---------------------------------------------------------------------------
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-const mockInvoke = vi.fn((..._args: any[]) => Promise.resolve("ok"));
+const mockInvoke = vi.fn((..._args: any[]) => Promise.resolve(undefined));
 
 vi.mock("@tauri-apps/api/core", () => ({
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   invoke: (...args: any[]) => mockInvoke(...args),
 }));
+
+/**
+ * Helper: configure invoke mock to return the given commands when
+ * `list_commands_for_scope` is called, and resolve for everything else.
+ */
+function mockListCommands(commands: ResolvedCommand[]) {
+  mockInvoke.mockImplementation(
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (cmd: string, _args?: any): Promise<any> => {
+      if (cmd === "list_commands_for_scope") return Promise.resolve(commands);
+      return Promise.resolve(undefined);
+    },
+  );
+}
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(() => Promise.resolve(() => {})),
+}));
+vi.mock("@tauri-apps/api/window", () => ({
+  getCurrentWindow: () => ({ label: "main" }),
 }));
 
 const mockGetEntities = vi.fn(() => mockTags);
@@ -125,7 +160,8 @@ function renderPill(props: {
 
 describe("MentionPill", () => {
   beforeEach(() => {
-    mockInvoke.mockClear();
+    vi.clearAllMocks();
+    mockInvoke.mockResolvedValue(undefined);
     mockGetEntities.mockReturnValue(mockTags);
   });
 
@@ -162,7 +198,24 @@ describe("MentionPill", () => {
 
   // --- Specific behavior tests ---
 
-  it("right-click shows context menu with entity.inspect and task.untag for tags", () => {
+  it("right-click shows context menu with ui.inspect and task.untag for tags", async () => {
+    mockListCommands([
+      {
+        id: "ui.inspect",
+        name: "Inspect Tag",
+        target: "tag:tag-1",
+        group: "entity",
+        context_menu: true,
+        available: true,
+      },
+      {
+        id: "task.untag",
+        name: "Remove Tag",
+        group: "entity",
+        context_menu: true,
+        available: true,
+      },
+    ]);
     const { container } = renderPill({
       entityType: "tag",
       slug: "bugfix",
@@ -172,18 +225,31 @@ describe("MentionPill", () => {
     const pill = container.querySelector("[data-moniker]")!;
     fireEvent.contextMenu(pill);
 
-    expect(mockInvoke).toHaveBeenCalledWith("show_context_menu", {
-      items: expect.arrayContaining([
-        expect.objectContaining({
-          id: "entity.inspect:tag:tag-1",
-          name: "Inspect Tag",
-        }),
-        expect.objectContaining({ id: "task.untag", name: "Remove Tag" }),
-      ]),
+    await waitFor(() => {
+      expect(mockInvoke).toHaveBeenCalledWith("show_context_menu", {
+        items: expect.arrayContaining([
+          expect.objectContaining({
+            id: "ui.inspect:tag:tag-1",
+            name: "Inspect Tag",
+          }),
+          expect.objectContaining({ id: "task.untag", name: "Remove Tag" }),
+        ]),
+      });
     });
   });
 
-  it("task.untag not available when taskId is undefined", () => {
+  it("task.untag not available when taskId is undefined", async () => {
+    // Backend only returns inspect — no task.untag since no taskId context
+    mockListCommands([
+      {
+        id: "ui.inspect",
+        name: "Inspect Tag",
+        target: "tag:tag-1",
+        group: "entity",
+        context_menu: true,
+        available: true,
+      },
+    ]);
     const { container } = renderPill({
       entityType: "tag",
       slug: "bugfix",
@@ -192,14 +258,22 @@ describe("MentionPill", () => {
     const pill = container.querySelector("[data-moniker]")!;
     fireEvent.contextMenu(pill);
 
-    expect(mockInvoke).toHaveBeenCalledWith("show_context_menu", {
-      items: expect.arrayContaining([
-        expect.objectContaining({
-          id: "entity.inspect:tag:tag-1",
-          name: "Inspect Tag",
-        }),
-      ]),
+    await waitFor(() => {
+      expect(mockInvoke).toHaveBeenCalledWith("show_context_menu", {
+        items: expect.arrayContaining([
+          expect.objectContaining({
+            id: "ui.inspect:tag:tag-1",
+            name: "Inspect Tag",
+          }),
+        ]),
+      });
     });
+    // Verify task.untag was NOT included
+    const showCall = mockInvoke.mock.calls.find(
+      (c: unknown[]) => c[0] === "show_context_menu",
+    );
+    const items = (showCall![1] as { items: { id: string }[] }).items;
+    expect(items.find((i) => i.id === "task.untag")).toBeUndefined();
   });
 
   it("falls back to slug moniker when entity not found", () => {
@@ -231,8 +305,27 @@ describe("MentionPill", () => {
     expect(pill).not.toBeNull();
   });
 
-  it("unresolved entity + parent: both inspect commands accumulate", () => {
+  it("unresolved entity + parent: both inspect commands accumulate", async () => {
     mockGetEntities.mockReturnValue([]);
+    // Backend returns both inspect commands — one for the tag pill, one for the parent task
+    mockListCommands([
+      {
+        id: "ui.inspect",
+        name: "Inspect Tag",
+        target: "tag:unknown-tag",
+        group: "entity",
+        context_menu: true,
+        available: true,
+      },
+      {
+        id: "ui.inspect",
+        name: "Inspect task",
+        target: "task:parent",
+        group: "entity",
+        context_menu: true,
+        available: true,
+      },
+    ]);
     const onInspect = vi.fn();
     const { container } = render(
       <TooltipProvider>
@@ -242,11 +335,10 @@ describe("MentionPill", () => {
               moniker="task:parent"
               commands={[
                 {
-                  id: "entity.inspect",
+                  id: "ui.inspect",
                   name: "Inspect task",
                   target: "task:parent",
                   contextMenu: true,
-                  execute: vi.fn(),
                 },
               ]}
             >
@@ -259,14 +351,16 @@ describe("MentionPill", () => {
     const pill = container.querySelector("[data-moniker='tag:unknown-tag']")!;
     fireEvent.contextMenu(pill);
 
-    const ctxCall = mockInvoke.mock.calls.find(
-      (c: unknown[]) => c[0] === "show_context_menu",
-    );
-    expect(ctxCall).toBeTruthy();
-    const items = (ctxCall![1] as { items: { id: string; name: string }[] })
-      .items;
-    expect(items.find((i) => i.name === "Inspect Tag")).toBeTruthy();
-    expect(items.find((i) => i.name === "Inspect task")).toBeTruthy();
+    await waitFor(() => {
+      const ctxCall = mockInvoke.mock.calls.find(
+        (c: unknown[]) => c[0] === "show_context_menu",
+      );
+      expect(ctxCall).toBeTruthy();
+      const items = (ctxCall![1] as { items: { id: string; name: string }[] })
+        .items;
+      expect(items.find((i) => i.name === "Inspect Tag")).toBeTruthy();
+      expect(items.find((i) => i.name === "Inspect task")).toBeTruthy();
+    });
   });
 
   it("FocusScope wrapping does not break inline layout", () => {

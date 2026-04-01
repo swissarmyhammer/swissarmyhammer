@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { backendDispatch } from "@/lib/command-scope";
 import { Plus } from "lucide-react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { DropZone } from "@/components/drop-zone";
 import { computeDropZones, type DropZoneDescriptor } from "@/lib/drop-zones";
 import { Field } from "@/components/fields/field";
@@ -10,7 +11,10 @@ import { Badge } from "@/components/ui/badge";
 import { moniker, fieldMoniker } from "@/lib/moniker";
 import { useEntityCommands } from "@/lib/entity-commands";
 import { useSchema } from "@/lib/schema-context";
-import { useEntityFocus, type ClaimPredicate } from "@/lib/entity-focus-context";
+import {
+  useEntityFocus,
+  type ClaimPredicate,
+} from "@/lib/entity-focus-context";
 import type { CommandDef } from "@/lib/command-scope";
 import type { Entity } from "@/types/kanban";
 import { getStr } from "@/types/kanban";
@@ -65,6 +69,12 @@ interface ColumnViewProps {
 const SCROLL_ZONE = 40;
 /** Pixels per animation frame to scroll when in the edge zone. */
 const SCROLL_SPEED = 6;
+/** Estimated height (px) of a DropZone + Card pair for the virtualizer. */
+const ESTIMATED_ITEM_HEIGHT = 80;
+/** Estimated height (px) of the trailing drop zone. */
+const TRAILING_ZONE_HEIGHT = 6;
+/** Minimum task count to activate virtualization. Below this, all items render directly. */
+const VIRTUALIZE_THRESHOLD = 25;
 
 /**
  * Renders a single column in the board view with drag-drop, focus highlight,
@@ -169,7 +179,7 @@ export const ColumnView = memo(function ColumnView({
         execute: () => {
           const args: Record<string, unknown> = { id: taskId, column: "todo" };
           if (firstTodoTaskId) args.before_id = firstTodoTaskId;
-          invoke("dispatch_command", {
+          backendDispatch({
             cmd: "task.move",
             args,
             ...(boardPath ? { boardPath } : {}),
@@ -454,7 +464,7 @@ export const ColumnView = memo(function ColumnView({
                 // correct scope chain (column:todo → board:board) in UIState.
                 // The Rust resolve_entity_id reads the scope chain to find the column.
                 setFocus(columnMoniker);
-                invoke("dispatch_command", {
+                backendDispatch({
                   cmd: "task.add",
                   args: { title: "New task", column: column.id },
                   ...(boardPath ? { boardPath } : {}),
@@ -466,48 +476,243 @@ export const ColumnView = memo(function ColumnView({
             </button>
           )}
         </div>
-        <div
-          ref={setContainerRef}
-          className="flex-1 overflow-y-auto [scrollbar-gutter:stable] px-2 pt-1 pb-2 m-1 rounded-lg border-2 border-transparent"
+        <VirtualizedCardList
+          tasks={tasks}
+          zones={zones}
+          dragTaskId={dragTaskId}
+          onZoneDrop={handleZoneDrop}
+          onTaskDragStart={onTaskDragStart}
+          onTaskDragEnd={onTaskDragEnd}
+          taskExtraCommands={taskExtraCommands}
+          cardClaimPredicates={cardClaimPredicates}
+          containerRef={setContainerRef}
           onDragOver={handleContainerDragOver}
-        >
-          {tasks.length === 0 ? (
-            <DropZone
-              descriptor={zones[0]}
-              dragTaskId={dragTaskId}
-              onDrop={handleZoneDrop}
-              variant="empty-column"
-            />
-          ) : (
-            <>
-              {tasks.map((entity, i) => (
-                <div key={entity.id}>
-                  <DropZone
-                    descriptor={zones[i]}
-                    dragTaskId={dragTaskId}
-                    onDrop={handleZoneDrop}
-                  />
-                  <div className="rounded">
-                    <DraggableTaskCard
-                      entity={entity}
-                      onDragStart={onTaskDragStart}
-                      onDragEnd={onTaskDragEnd}
-                      extraCommands={taskExtraCommands.get(entity.id)}
-                      claimWhen={cardClaimPredicates[i]}
-                    />
-                  </div>
-                </div>
-              ))}
-              {/* Final zone after the last card */}
-              <DropZone
-                descriptor={zones[zones.length - 1]}
-                dragTaskId={dragTaskId}
-                onDrop={handleZoneDrop}
-              />
-            </>
-          )}
-        </div>
+        />
       </div>
     </FocusScope>
   );
 });
+
+// ---------------------------------------------------------------------------
+// VirtualizedCardList — renders only visible card+zone pairs
+// ---------------------------------------------------------------------------
+
+interface VirtualizedCardListProps {
+  tasks: Entity[];
+  zones: DropZoneDescriptor[];
+  dragTaskId?: string | null;
+  onZoneDrop: (descriptor: DropZoneDescriptor, taskData: string) => void;
+  onTaskDragStart?: (entity: Entity) => void;
+  onTaskDragEnd?: (entity: Entity, dropEffect: string) => void;
+  taskExtraCommands: Map<string, CommandDef[]>;
+  cardClaimPredicates: ClaimPredicate[][];
+  containerRef: (el: HTMLDivElement | null) => void;
+  onDragOver: (e: React.DragEvent) => void;
+}
+
+/**
+ * Renders the card + drop-zone list inside a column.
+ *
+ * When the column is empty, renders a single empty-column drop zone.
+ * For small lists (< VIRTUALIZE_THRESHOLD), renders all items directly.
+ * For large lists, uses @tanstack/react-virtual to mount only visible
+ * items plus overscan.
+ */
+const VirtualizedCardList = memo(function VirtualizedCardList({
+  tasks,
+  zones,
+  dragTaskId,
+  onZoneDrop,
+  onTaskDragStart,
+  onTaskDragEnd,
+  taskExtraCommands,
+  cardClaimPredicates,
+  containerRef: containerRefProp,
+  onDragOver,
+}: VirtualizedCardListProps) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  /** Set both internal ref and parent ref. */
+  const setRef = useCallback(
+    (el: HTMLDivElement | null) => {
+      (scrollRef as React.MutableRefObject<HTMLDivElement | null>).current = el;
+      containerRefProp(el);
+    },
+    [containerRefProp],
+  );
+
+  const containerClass =
+    "flex-1 overflow-y-auto [scrollbar-gutter:stable] px-2 pt-1 pb-2 m-1 rounded-lg border-2 border-transparent";
+
+  // Empty column
+  if (tasks.length === 0) {
+    return (
+      <div ref={setRef} className={containerClass} onDragOver={onDragOver}>
+        <DropZone
+          descriptor={zones[0]}
+          dragTaskId={dragTaskId}
+          onDrop={onZoneDrop}
+          variant="empty-column"
+        />
+      </div>
+    );
+  }
+
+  // Small list — render all items directly (no virtualization overhead)
+  if (tasks.length < VIRTUALIZE_THRESHOLD) {
+    return (
+      <div ref={setRef} className={containerClass} onDragOver={onDragOver}>
+        {tasks.map((entity, i) => (
+          <div key={entity.id}>
+            <DropZone
+              descriptor={zones[i]}
+              dragTaskId={dragTaskId}
+              onDrop={onZoneDrop}
+            />
+            <div className="rounded">
+              <DraggableTaskCard
+                entity={entity}
+                onDragStart={onTaskDragStart}
+                onDragEnd={onTaskDragEnd}
+                extraCommands={taskExtraCommands.get(entity.id)}
+                claimWhen={cardClaimPredicates[i]}
+              />
+            </div>
+          </div>
+        ))}
+        <DropZone
+          descriptor={zones[zones.length - 1]}
+          dragTaskId={dragTaskId}
+          onDrop={onZoneDrop}
+        />
+      </div>
+    );
+  }
+
+  // Large list — virtualize
+  return (
+    <VirtualColumn
+      tasks={tasks}
+      zones={zones}
+      dragTaskId={dragTaskId}
+      onZoneDrop={onZoneDrop}
+      onTaskDragStart={onTaskDragStart}
+      onTaskDragEnd={onTaskDragEnd}
+      taskExtraCommands={taskExtraCommands}
+      cardClaimPredicates={cardClaimPredicates}
+      scrollRef={scrollRef}
+      setRef={setRef}
+      containerClass={containerClass}
+      onDragOver={onDragOver}
+    />
+  );
+});
+
+/** Inner component that calls useVirtualizer (hook must be unconditional). */
+function VirtualColumn({
+  tasks,
+  zones,
+  dragTaskId,
+  onZoneDrop,
+  onTaskDragStart,
+  onTaskDragEnd,
+  taskExtraCommands,
+  cardClaimPredicates,
+  scrollRef,
+  setRef,
+  containerClass,
+  onDragOver,
+}: {
+  tasks: Entity[];
+  zones: DropZoneDescriptor[];
+  dragTaskId?: string | null;
+  onZoneDrop: (descriptor: DropZoneDescriptor, taskData: string) => void;
+  onTaskDragStart?: (entity: Entity) => void;
+  onTaskDragEnd?: (entity: Entity, dropEffect: string) => void;
+  taskExtraCommands: Map<string, CommandDef[]>;
+  cardClaimPredicates: ClaimPredicate[][];
+  scrollRef: React.RefObject<HTMLDivElement | null>;
+  setRef: (el: HTMLDivElement | null) => void;
+  containerClass: string;
+  onDragOver: (e: React.DragEvent) => void;
+}) {
+  const itemCount = tasks.length + 1;
+
+  const virtualizer = useVirtualizer({
+    count: itemCount,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: (index) =>
+      index < tasks.length ? ESTIMATED_ITEM_HEIGHT : TRAILING_ZONE_HEIGHT,
+    overscan: 5,
+  });
+
+  return (
+    <div ref={setRef} className={containerClass} onDragOver={onDragOver}>
+      <div
+        style={{
+          height: virtualizer.getTotalSize(),
+          width: "100%",
+          position: "relative",
+        }}
+      >
+        {virtualizer.getVirtualItems().map((virtualRow) => {
+          const index = virtualRow.index;
+
+          if (index === tasks.length) {
+            return (
+              <div
+                key="trailing-zone"
+                data-index={index}
+                ref={virtualizer.measureElement}
+                style={{
+                  position: "absolute",
+                  top: 0,
+                  left: 0,
+                  width: "100%",
+                  transform: `translateY(${virtualRow.start}px)`,
+                }}
+              >
+                <DropZone
+                  descriptor={zones[zones.length - 1]}
+                  dragTaskId={dragTaskId}
+                  onDrop={onZoneDrop}
+                />
+              </div>
+            );
+          }
+
+          const entity = tasks[index];
+          return (
+            <div
+              key={entity.id}
+              data-index={index}
+              ref={virtualizer.measureElement}
+              style={{
+                position: "absolute",
+                top: 0,
+                left: 0,
+                width: "100%",
+                transform: `translateY(${virtualRow.start}px)`,
+              }}
+            >
+              <DropZone
+                descriptor={zones[index]}
+                dragTaskId={dragTaskId}
+                onDrop={onZoneDrop}
+              />
+              <div className="rounded">
+                <DraggableTaskCard
+                  entity={entity}
+                  onDragStart={onTaskDragStart}
+                  onDragEnd={onTaskDragEnd}
+                  extraCommands={taskExtraCommands.get(entity.id)}
+                  claimWhen={cardClaimPredicates[index]}
+                />
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}

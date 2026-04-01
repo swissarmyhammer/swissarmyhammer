@@ -34,7 +34,12 @@ function parseNatural(text: string): string | null {
 }
 
 /** Date editor — CM6 natural language input + calendar picker in a popover. */
-export function DateEditor({ value, onCommit, onCancel }: EditorProps) {
+export function DateEditor({
+  value,
+  onCommit,
+  onCancel,
+  onChange,
+}: EditorProps) {
   const initial = typeof value === "string" ? value : "";
   const [draft, setDraft] = useState(initial);
   const [open, setOpen] = useState(true);
@@ -43,11 +48,19 @@ export function DateEditor({ value, onCommit, onCancel }: EditorProps) {
   const keymapCompartment = useRef(new Compartment());
   const committedRef = useRef(false);
   const { keymap_mode: mode } = useUIState();
+  const hasMounted = useRef(false);
 
-  // Parse as user types
+  // Parse as user types and report intermediate values for autosave.
+  // Skip the first render to avoid a no-op write of the initial value.
   useEffect(() => {
-    setResolved(parseNatural(draft));
-  }, [draft]);
+    const parsed = parseNatural(draft);
+    setResolved(parsed);
+    if (!hasMounted.current) {
+      hasMounted.current = true;
+      return;
+    }
+    if (parsed) onChange?.(parsed);
+  }, [draft, onChange]);
 
   const commit = useCallback(
     (iso: string) => {

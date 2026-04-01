@@ -11,6 +11,7 @@ vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(() =>
     Promise.resolve({
       palette_open: false,
+      palette_mode: "command",
       keymap_mode: "cua",
       scope_chain: [],
       open_boards: [],

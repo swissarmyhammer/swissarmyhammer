@@ -1,0 +1,1 @@
+{"id":"01KMX7W6ZWPF2YC6C32A23D7DJ","timestamp":"2026-03-29T16:47:16.476276Z","entity_type":"task","entity_id":"01KMX7W6ZV5424VTFJP698FWT8","op":"create","changes":[["body",{"kind":"set","value":""}],["position_column",{"kind":"set","value":"done"}],["position_ordinal",{"kind":"set","value":"ffffffffffffffef80"}],["title",{"kind":"set","value":"New task"}]]}

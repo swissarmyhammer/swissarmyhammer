@@ -8,15 +8,27 @@
   keys:
     cua: Mod+W
     vim: Mod+W
+  menu:
+    path: [File]
+    group: 0
+    order: 2
 
 - id: file.newBoard
   name: New Board
   undoable: false
   keys:
-    cua: Mod+Shift+N
+    cua: Mod+Shift+B
+  menu:
+    path: [File]
+    group: 0
+    order: 0
 
 - id: file.openBoard
   name: Open Board
   undoable: false
   keys:
     cua: Mod+O
+  menu:
+    path: [File]
+    group: 0
+    order: 1

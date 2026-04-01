@@ -37,3 +37,14 @@
   name: Set Focus
   visible: false
   undoable: false
+
+- id: window.new
+  name: New Window
+  keys:
+    cua: Mod+Shift+N
+    vim: Mod+Shift+N
+    emacs: Mod+Shift+N
+  menu:
+    path: [Window]
+    group: 0
+    order: 0

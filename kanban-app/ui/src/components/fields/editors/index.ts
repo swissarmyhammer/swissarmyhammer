@@ -18,6 +18,8 @@ export interface EditorProps {
   onCancel: () => void;
   /** Semantic submit — fires on Enter (CUA/emacs) or normal-mode Enter (vim). */
   onSubmit?: (value: unknown) => void;
+  /** Report intermediate value changes for debounced autosave. */
+  onChange?: (value: unknown) => void;
 
   mode: "compact" | "full";
 }
@@ -27,6 +29,7 @@ export { NumberEditor } from "./number-editor";
 export { DateEditor } from "./date-editor";
 export { ColorPaletteEditor } from "./color-palette-editor";
 export { MultiSelectEditor } from "./multi-select-editor";
+export { AttachmentEditor } from "./attachment-editor";
 
 /** Resolve which editor component to use for a field — reads directly from the YAML-configured `editor` property. */
 export function resolveEditor(field: FieldDef): string {

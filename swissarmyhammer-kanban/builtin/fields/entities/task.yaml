@@ -5,12 +5,30 @@ search_display_field: title
 mention_prefix: "^"
 mention_display_field: title
 commands:
-  - id: entity.inspect
+  - id: ui.inspect
     name: "Inspect {{entity.type}}"
     context_menu: true
   - id: entity.archive
     name: "Archive {{entity.type}}"
     context_menu: true
+  - id: entity.copy
+    name: "Copy {{entity.type}}"
+    context_menu: true
+    keys:
+      cua: Mod+C
+      vim: "y"
+  - id: entity.cut
+    name: "Cut {{entity.type}}"
+    context_menu: true
+    keys:
+      cua: Mod+X
+      vim: x
+  - id: entity.paste
+    name: "Paste {{entity.type}}"
+    context_menu: true
+    keys:
+      cua: Mod+V
+      vim: p
 fields:
   - title
   - tags

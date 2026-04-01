@@ -19,8 +19,6 @@ pub struct CommandContext {
     pub scope_chain: Vec<String>,
     pub target: Option<String>,
     pub args: HashMap<String, Value>,
-    /// The window label this command originated from (e.g. "main", "board-01abc...").
-    pub window_label: Option<String>,
     /// Shared UI state (inspector stack, palette, keymap, etc.).
     pub ui_state: Option<Arc<UIState>>,
     /// Extension point for domain-specific services (e.g., KanbanContext).
@@ -35,7 +33,6 @@ impl std::fmt::Debug for CommandContext {
             .field("scope_chain", &self.scope_chain)
             .field("target", &self.target)
             .field("args", &self.args)
-            .field("window_label", &self.window_label)
             .field("extensions_count", &self.extensions.len())
             .finish()
     }
@@ -54,22 +51,27 @@ impl CommandContext {
             scope_chain,
             target,
             args,
-            window_label: None,
             ui_state: None,
             extensions: HashMap::new(),
         }
-    }
-
-    /// Builder method to set the window label.
-    pub fn with_window_label(mut self, label: impl Into<String>) -> Self {
-        self.window_label = Some(label.into());
-        self
     }
 
     /// Builder method to set the UI state.
     pub fn with_ui_state(mut self, ui_state: Arc<UIState>) -> Self {
         self.ui_state = Some(ui_state);
         self
+    }
+
+    /// Derive the window label from the scope chain by scanning for a
+    /// `window:*` moniker.
+    ///
+    /// The frontend always injects a root `CommandScopeProvider` with
+    /// `moniker="window:{label}"`, so the scope chain should contain it.
+    /// Returns `None` when no `window:*` moniker is present.
+    pub fn window_label_from_scope(&self) -> Option<&str> {
+        self.scope_chain
+            .iter()
+            .find_map(|m| m.strip_prefix("window:"))
     }
 
     /// Insert a typed extension service into the context.
@@ -344,12 +346,6 @@ mod tests {
     // --- builder tests ---
 
     #[test]
-    fn with_window_label_sets_field() {
-        let ctx = test_ctx(&[]).with_window_label("main");
-        assert_eq!(ctx.window_label.as_deref(), Some("main"));
-    }
-
-    #[test]
     fn with_ui_state_sets_field() {
         let ui = Arc::new(UIState::default());
         let ctx = test_ctx(&[]).with_ui_state(Arc::clone(&ui));
@@ -357,14 +353,29 @@ mod tests {
         assert!(Arc::ptr_eq(ctx.ui_state.as_ref().unwrap(), &ui));
     }
 
+    // --- window_label_from_scope tests ---
+
     #[test]
-    fn chaining_with_window_label_and_with_ui_state() {
-        let ui = Arc::new(UIState::default());
-        let ctx = test_ctx(&[])
-            .with_window_label("secondary")
-            .with_ui_state(Arc::clone(&ui));
-        assert_eq!(ctx.window_label.as_deref(), Some("secondary"));
-        assert!(ctx.ui_state.is_some());
-        assert!(Arc::ptr_eq(ctx.ui_state.as_ref().unwrap(), &ui));
+    fn window_label_from_scope_finds_label() {
+        let ctx = test_ctx(&["task:abc", "column:todo", "window:secondary-1"]);
+        assert_eq!(ctx.window_label_from_scope(), Some("secondary-1"));
+    }
+
+    #[test]
+    fn window_label_from_scope_returns_none_when_missing() {
+        let ctx = test_ctx(&["task:abc", "column:todo"]);
+        assert_eq!(ctx.window_label_from_scope(), None);
+    }
+
+    #[test]
+    fn window_label_from_scope_main() {
+        let ctx = test_ctx(&["task:t1", "window:main"]);
+        assert_eq!(ctx.window_label_from_scope(), Some("main"));
+    }
+
+    #[test]
+    fn window_label_from_scope_empty_chain() {
+        let ctx = test_ctx(&[]);
+        assert_eq!(ctx.window_label_from_scope(), None);
     }
 }

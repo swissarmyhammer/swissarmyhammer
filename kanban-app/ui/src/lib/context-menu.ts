@@ -1,86 +1,91 @@
-import { useCallback, useMemo } from "react";
+import { useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import {
-  useAvailableCommands,
-  dispatchCommand,
-  type CommandDef,
-} from "@/lib/command-scope";
+import { backendDispatch } from "@/lib/command-scope";
 
-/**
- * Module-level map of pending context menu handlers.
- * Only one context menu is open at a time, so this is safe.
- * Populated when a context menu opens, consumed when an item is selected.
- */
-const pendingHandlers = new Map<string, CommandDef>();
-
-/**
- * Build the pendingHandlers key for a command.
- * Uses `id:target` when a target is set, plain `id` otherwise.
- */
-function handlerKey(cmd: CommandDef): string {
-  return cmd.target ? `${cmd.id}:${cmd.target}` : cmd.id;
+/** Shape returned by the backend `list_commands_for_scope`. */
+interface ResolvedCommand {
+  id: string;
+  name: string;
+  target?: string;
+  group: string;
+  context_menu: boolean;
+  keys?: { vim?: string; cua?: string; emacs?: string };
+  available: boolean;
 }
 
 /**
- * Dispatch a context menu command by handler key.
+ * Module-level map of pending context menu commands.
+ * Only one context menu is open at a time, so this is safe.
+ * Maps menu item key → { cmd id, target } for dispatch.
+ */
+const pendingCommands = new Map<string, { id: string; target?: string }>();
+let pendingScopeChain: string[] = [];
+
+/**
+ * Dispatch a context menu command by menu item key.
  * Called by the global event listener when the user selects a menu item.
- *
- * @param key - The handler key selected from the native context menu.
- * @returns true if the command was found and dispatched.
  */
 export async function dispatchContextMenuCommand(
-  key: string,
+  menuItemKey: string,
 ): Promise<boolean> {
-  const cmd = pendingHandlers.get(key);
+  const cmd = pendingCommands.get(menuItemKey);
   if (!cmd) return false;
-  await dispatchCommand(cmd);
+  try {
+    await backendDispatch({
+      cmd: cmd.id,
+      target: cmd.target,
+      scopeChain: pendingScopeChain,
+    });
+  } catch (e) {
+    console.error("context menu dispatch failed:", e);
+  }
   return true;
 }
 
 /**
  * Hook that returns an onContextMenu handler.
  *
- * When fired, it:
- * 1. Collects commands with contextMenu: true from the current scope chain
- * 2. Registers their handlers in the pending map
- * 3. Calls Rust to show a native popup menu with those items
+ * The backend is the single source of truth — it computes available commands,
+ * resolves names, checks clipboard state, and handles dedup. The frontend
+ * just renders what it gets back and dispatches on click.
  *
- * Must be used inside a CommandScopeProvider.
+ * @param scopeChain - Monikers from focused entity to root.
  */
-export function useContextMenu(): (e: React.MouseEvent) => void {
-  const allCommands = useAvailableCommands();
-
-  const contextCommands = useMemo(
-    () => allCommands.filter((c) => c.command.contextMenu),
-    [allCommands],
-  );
-
+export function useContextMenu(
+  scopeChain: string[],
+): (e: React.MouseEvent) => void {
   return useCallback(
     (e: React.MouseEvent) => {
       e.preventDefault();
       e.stopPropagation();
 
-      if (contextCommands.length === 0) return;
+      invoke<ResolvedCommand[]>("list_commands_for_scope", {
+        scopeChain,
+        contextMenu: true,
+      })
+        .then((commands) => {
+          if (commands.length === 0) return;
 
-      // Register handlers for the current context menu invocation.
-      // Group consecutive items by depth and insert separator sentinels between groups
-      // so the native menu visually separates commands from different scope levels.
-      pendingHandlers.clear();
-      const items: Array<{ id: string; name: string }> = [];
-      let lastDepth: number | null = null;
+          pendingCommands.clear();
+          pendingScopeChain = scopeChain;
+          const items: Array<{ id: string; name: string }> = [];
+          let lastGroup: string | null = null;
 
-      for (const c of contextCommands) {
-        if (lastDepth !== null && c.depth !== lastDepth) {
-          items.push({ id: "__separator__", name: "" });
-        }
-        const key = handlerKey(c.command);
-        pendingHandlers.set(key, c.command);
-        items.push({ id: key, name: c.command.name });
-        lastDepth = c.depth;
-      }
+          for (const cmd of commands) {
+            // Insert separator between groups (e.g. tag commands vs task commands)
+            if (lastGroup !== null && cmd.group !== lastGroup) {
+              items.push({ id: "__separator__", name: "" });
+            }
+            const key = cmd.target ? `${cmd.id}:${cmd.target}` : cmd.id;
+            pendingCommands.set(key, { id: cmd.id, target: cmd.target });
+            items.push({ id: key, name: cmd.name });
+            lastGroup = cmd.group;
+          }
 
-      invoke("show_context_menu", { items }).catch(console.error);
+          invoke("show_context_menu", { items }).catch(console.error);
+        })
+        .catch(console.error);
     },
-    [contextCommands],
+    [scopeChain],
   );
 }

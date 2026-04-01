@@ -70,6 +70,7 @@ export function MultiSelectEditor({
   value,
   onCommit,
   onCancel,
+  onChange,
 }: MultiSelectEditorProps) {
   const { keymap_mode: mode } = useUIState();
   const { mentionableTypes, loading: schemaLoading } = useSchema();
@@ -272,6 +273,24 @@ export function MultiSelectEditor({
     }, 100);
   }, []);
 
+  /** Report intermediate selection changes for debounced autosave. */
+  const handleChange = useCallback(
+    (text: string) => {
+      if (!onChange) return;
+      const ids = parseDocTokens(
+        text.trim(),
+        prefix,
+        displayToIdRef.current,
+        commitDisplayNames,
+      );
+      const finalValue = commitDisplayNames
+        ? ids.map((id) => idToDisplayRef.current.get(id) ?? id)
+        : ids;
+      onChange(finalValue);
+    },
+    [onChange, prefix, commitDisplayNames],
+  );
+
   // Wait for schema to load so prefix and displayField are correct before
   // CM6 initializes. Without this, the editor mounts with empty prefix and
   // wrong display names, producing "alice " instead of "@alice ".
@@ -288,6 +307,7 @@ export function MultiSelectEditor({
       extensions={extensions}
       theme={shadcnTheme}
       onBlur={handleBlur}
+      onChange={handleChange}
       basicSetup={{
         lineNumbers: false,
         foldGutter: false,

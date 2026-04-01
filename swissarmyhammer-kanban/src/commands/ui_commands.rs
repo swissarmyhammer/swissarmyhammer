@@ -43,7 +43,7 @@ impl Command for InspectCmd {
             .or_else(|| first_inspectable(&ctx.scope_chain))
             .ok_or_else(|| CommandError::MissingArg("target".into()))?;
 
-        let window_label = ctx.window_label.as_deref().unwrap_or("main");
+        let window_label = ctx.window_label_from_scope().unwrap_or("main");
         let change = ui.inspect(window_label, moniker);
         Ok(serde_json::to_value(change).unwrap_or(Value::Null))
     }
@@ -66,7 +66,7 @@ impl Command for InspectorCloseCmd {
             .as_ref()
             .ok_or_else(|| CommandError::ExecutionFailed("UIState not available".into()))?;
 
-        let window_label = ctx.window_label.as_deref().unwrap_or("main");
+        let window_label = ctx.window_label_from_scope().unwrap_or("main");
         let change = ui.inspector_close(window_label);
         Ok(serde_json::to_value(change).unwrap_or(Value::Null))
     }
@@ -89,7 +89,7 @@ impl Command for InspectorCloseAllCmd {
             .as_ref()
             .ok_or_else(|| CommandError::ExecutionFailed("UIState not available".into()))?;
 
-        let window_label = ctx.window_label.as_deref().unwrap_or("main");
+        let window_label = ctx.window_label_from_scope().unwrap_or("main");
         let change = ui.inspector_close_all(window_label);
         Ok(serde_json::to_value(change).unwrap_or(Value::Null))
     }
@@ -112,7 +112,8 @@ impl Command for PaletteOpenCmd {
             .as_ref()
             .ok_or_else(|| CommandError::ExecutionFailed("UIState not available".into()))?;
 
-        let change = ui.set_palette_open(true);
+        let window_label = ctx.window_label_from_scope().unwrap_or("main");
+        let change = ui.set_palette_open(window_label, true);
         Ok(serde_json::to_value(change).unwrap_or(Value::Null))
     }
 }
@@ -134,7 +135,8 @@ impl Command for PaletteCloseCmd {
             .as_ref()
             .ok_or_else(|| CommandError::ExecutionFailed("UIState not available".into()))?;
 
-        let change = ui.set_palette_open(false);
+        let window_label = ctx.window_label_from_scope().unwrap_or("main");
+        let change = ui.set_palette_open(window_label, false);
         Ok(serde_json::to_value(change).unwrap_or(Value::Null))
     }
 }
@@ -187,7 +189,7 @@ impl Command for SetActiveViewCmd {
             .ok_or_else(|| CommandError::ExecutionFailed("UIState not available".into()))?;
 
         let view_id = ctx.require_arg_str("view_id")?;
-        let window_label = ctx.window_label.as_deref().unwrap_or("main");
+        let window_label = ctx.window_label_from_scope().unwrap_or("main");
         let change = ui.set_active_view(window_label, view_id);
         Ok(serde_json::to_value(change).unwrap_or(Value::Null))
     }

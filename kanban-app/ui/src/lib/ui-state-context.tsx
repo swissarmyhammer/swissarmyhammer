@@ -15,6 +15,10 @@ export interface WindowStateSnapshot {
   inspector_stack: string[];
   /** The active view ID for this window. */
   active_view_id: string;
+  /** Whether the command palette is open in this window. */
+  palette_open: boolean;
+  /** Palette mode for this window: "command" or "search". */
+  palette_mode: "command" | "search";
   x?: number;
   y?: number;
   width?: number;
@@ -24,20 +28,24 @@ export interface WindowStateSnapshot {
 
 /** Shape of the UIState from the Rust backend. */
 export interface UIStateSnapshot {
-  palette_open: boolean;
   keymap_mode: string;
   scope_chain: string[];
   open_boards: string[];
+  /** Whether the system clipboard has a swissarmyhammer entity payload. */
+  has_clipboard: boolean;
+  /** The entity type on the clipboard (e.g. "task", "tag"), or null. */
+  clipboard_entity_type: string | null;
   /** Per-window state map: window label → WindowStateSnapshot. */
   windows: Record<string, WindowStateSnapshot>;
   recent_boards: Array<{ path: string; name: string; last_opened: string }>;
 }
 
 const DEFAULT_STATE: UIStateSnapshot = {
-  palette_open: false,
   keymap_mode: "cua",
   scope_chain: [],
   open_boards: [],
+  has_clipboard: false,
+  clipboard_entity_type: null,
   windows: {},
   recent_boards: [],
 };

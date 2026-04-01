@@ -10,6 +10,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { backendDispatch } from "@/lib/command-scope";
 import type { ViewDef } from "@/types/kanban";
 import { useUIState } from "./ui-state-context";
 
@@ -35,10 +36,9 @@ export function ViewsProvider({ children }: { children: ReactNode }) {
 
   /** Dispatch a view switch through the command system so UIState owns the change. */
   const setActiveViewId = useCallback((id: string) => {
-    invoke("dispatch_command", {
+    backendDispatch({
       cmd: "ui.view.set",
       args: { view_id: id },
-      windowLabel: WINDOW_LABEL,
     }).catch(console.error);
   }, []);
 

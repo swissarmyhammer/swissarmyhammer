@@ -14,6 +14,7 @@ import { EntityIcon } from "@/components/entity-icon";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
+import { backendDispatch } from "@/lib/command-scope";
 import { EditorView } from "@codemirror/view";
 import { getCM } from "@replit/codemirror-vim";
 import { Plus } from "lucide-react";
@@ -139,12 +140,13 @@ export function QuickCapture() {
         await dispatchCommand({
           id: "task.add",
           name: "Quick Capture Add Task",
-          execute: () =>
-            invoke("dispatch_command", {
+          execute: () => {
+            backendDispatch({
               cmd: "task.add",
               args: { column: firstColumnId, title: text.trim() },
               boardPath: selectedPath,
-            }),
+            });
+          },
         });
 
         localStorage.setItem(STORAGE_KEY, selectedPath);
@@ -154,11 +156,12 @@ export function QuickCapture() {
           await dispatchCommand({
             id: "file.switchBoard",
             name: "Restore Active Board",
-            execute: () =>
-              invoke("dispatch_command", {
+            execute: () => {
+              backendDispatch({
                 cmd: "file.switchBoard",
                 args: { path: active.path },
-              }),
+              });
+          },
           }).catch(() => {});
         }
       } catch (err) {

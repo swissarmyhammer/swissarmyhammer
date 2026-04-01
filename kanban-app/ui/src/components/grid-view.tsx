@@ -1,26 +1,19 @@
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { useActiveBoardPath } from "@/lib/command-scope";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useActiveBoardPath, backendDispatch } from "@/lib/command-scope";
 import { useGrid } from "@/hooks/use-grid";
 import { useSchema } from "@/lib/schema-context";
 import { useEntityStore } from "@/lib/entity-store-context";
 import { useInspect } from "@/lib/inspect-context";
 import { fieldMoniker } from "@/lib/moniker";
-import { useEntityFocus, type ClaimPredicate } from "@/lib/entity-focus-context";
+import {
+  useEntityFocus,
+  type ClaimPredicate,
+} from "@/lib/entity-focus-context";
 import {
   useEntityCommands,
   buildEntityCommandDefs,
 } from "@/lib/entity-commands";
-import {
-  CommandScopeProvider,
-  type CommandDef,
-} from "@/lib/command-scope";
+import { CommandScopeProvider, type CommandDef } from "@/lib/command-scope";
 import { DataTable, type DataTableColumn } from "@/components/data-table";
 import { Field } from "@/components/fields/field";
 import type { ViewDef, Entity, FieldDef } from "@/types/kanban";
@@ -80,7 +73,11 @@ export function GridView({ view }: GridViewProps) {
     const map = new Map<string, { row: number; col: number }>();
     for (let r = 0; r < entities.length; r++) {
       for (let c = 0; c < columns.length; c++) {
-        const mk = fieldMoniker(entityType, entities[r].id, columns[c].field.name);
+        const mk = fieldMoniker(
+          entityType,
+          entities[r].id,
+          columns[c].field.name,
+        );
         map.set(mk, { row: r, col: c });
       }
     }
@@ -198,7 +195,9 @@ export function GridView({ view }: GridViewProps) {
             when: (f) => {
               if (!f) return false;
               const pos = cellMonikerMap.get(f);
-              return pos !== undefined && pos.row === ri && pos.col !== colCount - 1;
+              return (
+                pos !== undefined && pos.row === ri && pos.col !== colCount - 1
+              );
             },
           });
         }
@@ -243,61 +242,81 @@ export function GridView({ view }: GridViewProps) {
         id: "grid.moveUp",
         name: "Move Up",
         keys: { vim: "k", cua: "ArrowUp" },
-        execute: () => { broadcastRef.current("nav.up"); },
+        execute: () => {
+          broadcastRef.current("nav.up");
+        },
       },
       {
         id: "grid.moveDown",
         name: "Move Down",
         keys: { vim: "j", cua: "ArrowDown" },
-        execute: () => { broadcastRef.current("nav.down"); },
+        execute: () => {
+          broadcastRef.current("nav.down");
+        },
       },
       {
         id: "grid.moveLeft",
         name: "Move Left",
         keys: { vim: "h", cua: "ArrowLeft" },
-        execute: () => { broadcastRef.current("nav.left"); },
+        execute: () => {
+          broadcastRef.current("nav.left");
+        },
       },
       {
         id: "grid.moveRight",
         name: "Move Right",
         keys: { vim: "l", cua: "ArrowRight" },
-        execute: () => { broadcastRef.current("nav.right"); },
+        execute: () => {
+          broadcastRef.current("nav.right");
+        },
       },
       {
         id: "grid.moveToRowStart",
         name: "Row Start",
         keys: { vim: "0", cua: "Home" },
-        execute: () => { broadcastRef.current("nav.rowStart"); },
+        execute: () => {
+          broadcastRef.current("nav.rowStart");
+        },
       },
       {
         id: "grid.moveToRowEnd",
         name: "Row End",
         keys: { vim: "$", cua: "End" },
-        execute: () => { broadcastRef.current("nav.rowEnd"); },
+        execute: () => {
+          broadcastRef.current("nav.rowEnd");
+        },
       },
       {
         id: "grid.firstCell",
         name: "First Cell",
         keys: { cua: "Mod+Home" },
-        execute: () => { broadcastRef.current("nav.first"); },
+        execute: () => {
+          broadcastRef.current("nav.first");
+        },
       },
       {
         id: "grid.lastCell",
         name: "Last Cell",
         keys: { vim: "Shift+G", cua: "Mod+End" },
-        execute: () => { broadcastRef.current("nav.last"); },
+        execute: () => {
+          broadcastRef.current("nav.last");
+        },
       },
       // nav.first/nav.last -- generic commands from sequence table (gg) and
       // global scope. Grid scope registers these so they resolve here.
       {
         id: "nav.first",
         name: "First Cell",
-        execute: () => { broadcastRef.current("nav.first"); },
+        execute: () => {
+          broadcastRef.current("nav.first");
+        },
       },
       {
         id: "nav.last",
         name: "Last Cell",
-        execute: () => { broadcastRef.current("nav.last"); },
+        execute: () => {
+          broadcastRef.current("nav.last");
+        },
       },
       {
         id: "grid.edit",
@@ -338,7 +357,7 @@ export function GridView({ view }: GridViewProps) {
           const row = gridRef.current.cursor.row;
           if (row >= 0 && row < entities.length) {
             const entity = entities[row];
-            invoke("dispatch_command", {
+            backendDispatch({
               cmd: `${entityType}.archive`,
               args: { id: entity.id },
               ...(boardPathRef.current
@@ -353,7 +372,7 @@ export function GridView({ view }: GridViewProps) {
         name: "New Row Below",
         keys: { vim: "o", cua: "Mod+Enter" },
         execute: () => {
-          invoke("dispatch_command", {
+          backendDispatch({
             cmd: `${entityType}.add`,
             args: { title: `New ${entityType}` },
             ...(boardPathRef.current
@@ -367,7 +386,7 @@ export function GridView({ view }: GridViewProps) {
         name: "New Row Above",
         keys: { vim: "O", cua: "Mod+Shift+Enter" },
         execute: () => {
-          invoke("dispatch_command", {
+          backendDispatch({
             cmd: `${entityType}.add`,
             args: { title: `New ${entityType}` },
             ...(boardPathRef.current

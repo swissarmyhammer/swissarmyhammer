@@ -24,9 +24,13 @@ vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({ label: "main" }),
 }));
 
-vi.mock("@/lib/command-scope", () => ({
-  useActiveBoardPath: () => "/board/a/.kanban",
-}));
+vi.mock("@/lib/command-scope", async () => {
+  const actual = await vi.importActual("@/lib/command-scope");
+  return {
+    ...actual,
+    useActiveBoardPath: () => "/board/a/.kanban",
+  };
+});
 
 import {
   DragSessionProvider,

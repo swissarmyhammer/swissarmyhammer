@@ -1,8 +1,5 @@
 import { useMemo, useRef } from "react";
-import {
-  CommandScopeProvider,
-  type CommandDef,
-} from "@/lib/command-scope";
+import { CommandScopeProvider, type CommandDef } from "@/lib/command-scope";
 import type { UseInspectorNavReturn } from "@/hooks/use-inspector-nav";
 import type { Entity } from "@/types/kanban";
 import { EntityInspector } from "@/components/entity-inspector";
@@ -38,13 +35,17 @@ export function InspectorFocusBridge({ entity }: InspectorFocusBridgeProps) {
         id: "inspector.moveUp",
         name: "Move Up",
         keys: { vim: "k", cua: "ArrowUp" },
-        execute: () => { broadcastRef.current("nav.up"); },
+        execute: () => {
+          broadcastRef.current("nav.up");
+        },
       },
       {
         id: "inspector.moveDown",
         name: "Move Down",
         keys: { vim: "j", cua: "ArrowDown" },
-        execute: () => { broadcastRef.current("nav.down"); },
+        execute: () => {
+          broadcastRef.current("nav.down");
+        },
       },
       {
         id: "inspector.edit",
@@ -71,25 +72,33 @@ export function InspectorFocusBridge({ entity }: InspectorFocusBridgeProps) {
         id: "inspector.moveToFirst",
         name: "Move to First",
         keys: { vim: "g g", cua: "Home" },
-        execute: () => { broadcastRef.current("nav.first"); },
+        execute: () => {
+          broadcastRef.current("nav.first");
+        },
       },
       {
         id: "inspector.moveToLast",
         name: "Move to Last",
         keys: { vim: "G", cua: "End" },
-        execute: () => { broadcastRef.current("nav.last"); },
+        execute: () => {
+          broadcastRef.current("nav.last");
+        },
       },
       {
         id: "inspector.nextField",
         name: "Next Field",
         keys: { cua: "Tab" },
-        execute: () => { broadcastRef.current("nav.down"); },
+        execute: () => {
+          broadcastRef.current("nav.down");
+        },
       },
       {
         id: "inspector.prevField",
         name: "Previous Field",
         keys: { cua: "Shift+Tab" },
-        execute: () => { broadcastRef.current("nav.up"); },
+        execute: () => {
+          broadcastRef.current("nav.up");
+        },
       },
     ],
     [],

@@ -59,6 +59,57 @@ impl Command for SwitchBoardCmd {
     }
 }
 
+/// Open the "New Board" dialog.
+///
+/// Returns a `NewBoardDialog` marker so the Tauri layer can trigger the
+/// native folder picker dialog.
+pub struct NewBoardCmd;
+
+#[async_trait]
+impl Command for NewBoardCmd {
+    fn available(&self, _ctx: &CommandContext) -> bool {
+        true
+    }
+
+    async fn execute(&self, _ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+        Ok(json!({ "NewBoardDialog": true }))
+    }
+}
+
+/// Open the "Open Board" dialog.
+///
+/// Returns an `OpenBoardDialog` marker so the Tauri layer can trigger the
+/// native folder picker dialog.
+pub struct OpenBoardCmd;
+
+#[async_trait]
+impl Command for OpenBoardCmd {
+    fn available(&self, _ctx: &CommandContext) -> bool {
+        true
+    }
+
+    async fn execute(&self, _ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+        Ok(json!({ "OpenBoardDialog": true }))
+    }
+}
+
+/// Create a new window.
+///
+/// Returns a `CreateWindow` marker so the Tauri layer can create a new
+/// webview window.
+pub struct NewWindowCmd;
+
+#[async_trait]
+impl Command for NewWindowCmd {
+    fn available(&self, _ctx: &CommandContext) -> bool {
+        true
+    }
+
+    async fn execute(&self, _ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+        Ok(json!({ "CreateWindow": true }))
+    }
+}
+
 /// Close a board, removing it from the open boards list in UIState.
 ///
 /// Optional arg: `path`. If omitted, closes the currently active board.
@@ -79,13 +130,15 @@ impl Command for CloseBoardCmd {
             .as_ref()
             .ok_or_else(|| CommandError::ExecutionFailed("UIState not available".into()))?;
 
-        // `path` must be explicitly provided — each window owns its board via WindowState.board_path.
+        // `path` can be explicitly provided, or resolved from the window's board_path.
+        let window_label = ctx.window_label_from_scope().unwrap_or("main");
         let raw_path = ctx
             .args
             .get("path")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| CommandError::MissingArg("path".into()))?
-            .to_string();
+            .map(|s| s.to_string())
+            .or_else(|| ui.window_board(window_label))
+            .ok_or_else(|| CommandError::MissingArg("path".into()))?;
 
         // Canonicalize for consistent matching with how boards are stored.
         let canonical = std::path::PathBuf::from(&raw_path)

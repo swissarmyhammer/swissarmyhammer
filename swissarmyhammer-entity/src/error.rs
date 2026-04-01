@@ -85,6 +85,28 @@ pub enum EntityError {
     #[error("cannot restore from trash: data file not found at {path}")]
     RestoreFromTrashFailed { path: PathBuf },
 
+    /// Attachment source file not found.
+    #[error("attachment source file not found: {path}")]
+    AttachmentSourceNotFound { path: PathBuf },
+
+    /// Enriched attachment object references a file that no longer exists.
+    #[error("attachment file not found for field '{field}': {filename}")]
+    AttachmentNotFound { field: String, filename: String },
+
+    /// Attachment file exceeds max size.
+    #[error(
+        "attachment file too large for field '{field}': {size} bytes exceeds max {max_bytes} bytes"
+    )]
+    AttachmentTooLarge {
+        field: String,
+        size: u64,
+        max_bytes: u64,
+    },
+
+    /// YAML serialization/deserialization error (without file path context).
+    #[error("YAML error: {0}")]
+    YamlSerde(#[from] serde_yaml_ng::Error),
+
     /// IO error.
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),

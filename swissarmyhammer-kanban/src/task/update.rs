@@ -79,6 +79,12 @@ impl UpdateTask {
         self.depends_on = Some(deps);
         self
     }
+
+    /// Set the attachments field value (replaces all existing attachments)
+    pub fn with_attachments(mut self, attachments: Value) -> Self {
+        self.attachments = Some(attachments);
+        self
+    }
 }
 
 #[async_trait]
@@ -126,7 +132,7 @@ impl Execute<KanbanContext, KanbanError> for UpdateTask {
             let body = entity.get_str("body").unwrap_or("");
             let tags = crate::tag_parser::parse_tags(body);
             for tag_name in &tags {
-                if !tag_name_exists_entity(ectx, tag_name).await {
+                if !tag_name_exists_entity(&ectx, tag_name).await {
                     let color = auto_color::auto_color(tag_name).to_string();
                     let tag_id = ulid::Ulid::new().to_string();
                     let mut tag_entity = Entity::new("tag", tag_id.as_str());

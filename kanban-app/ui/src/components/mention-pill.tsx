@@ -123,7 +123,13 @@ export function MentionPill({
   );
 
   return (
-    <FocusScope moniker={scopeMoniker} commands={commands} className="inline mention-pill-focus" claimWhen={claimWhen} showFocusBar={showFocusBar}>
+    <FocusScope
+      moniker={scopeMoniker}
+      commands={commands}
+      className="inline mention-pill-focus"
+      claimWhen={claimWhen}
+      showFocusBar={showFocusBar}
+    >
       <MentionPillInner
         slug={slug}
         prefix={prefix}

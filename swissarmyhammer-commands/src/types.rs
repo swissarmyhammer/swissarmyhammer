@@ -34,6 +34,28 @@ pub struct ParamDef {
     pub default: Option<Value>,
 }
 
+/// Where a command should appear in the native OS menu bar.
+///
+/// Commands with this metadata are collected by the Rust menu builder
+/// and placed into native submenus. `path` names the menu hierarchy
+/// (e.g. `["App"]` or `["App", "Settings"]`), `group` controls
+/// separator grouping, and `order` sorts within a group.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MenuPlacement {
+    /// Menu path hierarchy. The first element is the top-level menu name,
+    /// subsequent elements create nested submenus.
+    pub path: Vec<String>,
+    /// Separator group within the menu (items in the same group are contiguous).
+    #[serde(default)]
+    pub group: usize,
+    /// Sort order within the group.
+    #[serde(default)]
+    pub order: usize,
+    /// If set, this item is part of a radio group (mutually exclusive check items).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub radio_group: Option<String>,
+}
+
 /// YAML-loaded command metadata.
 ///
 /// Describes a command's identity, scope requirements, keybindings,
@@ -44,6 +66,10 @@ pub struct ParamDef {
 pub struct CommandDef {
     pub id: String,
     pub name: String,
+    /// Optional display name for native menus. Falls back to `name` when absent.
+    /// Supports the same template variables as `name` (e.g. `{{entity.display_name}}`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub menu_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scope: Option<String>,
     #[serde(default = "default_true", skip_serializing_if = "is_true")]
@@ -56,6 +82,9 @@ pub struct CommandDef {
     pub undoable: bool,
     #[serde(default)]
     pub context_menu: bool,
+    /// Optional native menu bar placement.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub menu: Option<MenuPlacement>,
 }
 
 fn default_true() -> bool {
@@ -87,6 +116,7 @@ mod tests {
         let def = CommandDef {
             id: "task.add".into(),
             name: "New Task".into(),
+            menu_name: None,
             scope: Some("entity:column".into()),
             visible: true,
             keys: Some(KeysDef {
@@ -102,6 +132,7 @@ mod tests {
             }],
             undoable: true,
             context_menu: false,
+            menu: None,
         };
         let yaml = serde_yaml_ng::to_string(&def).unwrap();
         let parsed: CommandDef = serde_yaml_ng::from_str(&yaml).unwrap();
@@ -123,6 +154,7 @@ name: Quit
         assert!(def.params.is_empty());
         assert!(!def.undoable);
         assert!(!def.context_menu);
+        assert!(def.menu.is_none());
     }
 
     #[test]
@@ -152,6 +184,42 @@ params:
         assert!(def.context_menu);
         assert_eq!(def.params.len(), 2);
         assert_eq!(def.params[0].from, ParamSource::ScopeChain);
+        assert!(def.menu.is_none());
+    }
+
+    #[test]
+    fn command_def_with_menu_placement() {
+        let yaml = r#"
+id: file.newBoard
+name: New Board
+menu:
+  path: [File]
+  group: 0
+  order: 0
+"#;
+        let def: CommandDef = serde_yaml_ng::from_str(yaml).unwrap();
+        let menu = def.menu.unwrap();
+        assert_eq!(menu.path, vec!["File"]);
+        assert_eq!(menu.group, 0);
+        assert_eq!(menu.order, 0);
+        assert!(menu.radio_group.is_none());
+    }
+
+    #[test]
+    fn menu_placement_with_radio_group() {
+        let yaml = r#"
+id: settings.keymap.vim
+name: Vim Keybindings
+menu:
+  path: [App, Settings]
+  group: 0
+  order: 1
+  radio_group: keymap
+"#;
+        let def: CommandDef = serde_yaml_ng::from_str(yaml).unwrap();
+        let menu = def.menu.unwrap();
+        assert_eq!(menu.path, vec!["App", "Settings"]);
+        assert_eq!(menu.radio_group.as_deref(), Some("keymap"));
     }
 
     #[test]
@@ -180,5 +248,42 @@ params:
         let parsed: CommandInvocation = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.cmd, "app.quit");
         assert!(parsed.scope_chain.is_none());
+    }
+
+    #[test]
+    fn command_def_with_menu_name_deserializes() {
+        let yaml = r#"
+id: board.switch
+name: "Switch to {{entity.display_name}}"
+menu_name: "{{entity.display_name}} ({{entity.context.display_name}})"
+"#;
+        let def: CommandDef = serde_yaml_ng::from_str(yaml).unwrap();
+        assert_eq!(def.id, "board.switch");
+        assert_eq!(def.name, "Switch to {{entity.display_name}}");
+        assert_eq!(
+            def.menu_name.as_deref(),
+            Some("{{entity.display_name}} ({{entity.context.display_name}})")
+        );
+    }
+
+    #[test]
+    fn command_def_without_menu_name_deserializes_to_none() {
+        let yaml = r#"
+id: app.quit
+name: Quit
+"#;
+        let def: CommandDef = serde_yaml_ng::from_str(yaml).unwrap();
+        assert!(def.menu_name.is_none());
+    }
+
+    #[test]
+    fn command_def_menu_name_omitted_from_serialization_when_none() {
+        let yaml = r#"
+id: app.quit
+name: Quit
+"#;
+        let def: CommandDef = serde_yaml_ng::from_str(yaml).unwrap();
+        let serialized = serde_yaml_ng::to_string(&def).unwrap();
+        assert!(!serialized.contains("menu_name"));
     }
 }

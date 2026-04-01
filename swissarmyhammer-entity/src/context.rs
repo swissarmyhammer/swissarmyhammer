@@ -18,6 +18,7 @@ use crate::entity::Entity;
 use crate::error::{EntityError, Result};
 use crate::id_types::{ChangeEntryId, EntityId, TransactionId};
 use crate::io;
+use crate::undo_stack::UndoStack;
 
 /// Root-aware I/O coordinator for dynamic entities.
 ///
@@ -34,6 +35,8 @@ pub struct EntityContext {
     current_transaction: RwLock<Option<TransactionId>>,
     /// Maps transaction ULID to the ordered list of ChangeEntry ULIDs it contains.
     transaction_index: RwLock<HashMap<TransactionId, Vec<ChangeEntryId>>>,
+    /// Persistent undo/redo stack tracking changelog entry IDs.
+    undo_stack: RwLock<UndoStack>,
 }
 
 impl EntityContext {
@@ -42,14 +45,18 @@ impl EntityContext {
     /// - `root`: the storage root (e.g. `.kanban/`)
     /// - `fields`: the field registry containing EntityDefs
     pub fn new(root: impl Into<PathBuf>, fields: Arc<FieldsContext>) -> Self {
+        let root = root.into();
+        let undo_stack_path = root.join("undo_stack.yaml");
+        let undo_stack = UndoStack::load(&undo_stack_path).unwrap_or_default();
         Self {
-            root: root.into(),
+            root,
             fields,
             validation: None,
             compute: None,
             changelog_index: RwLock::new(HashMap::new()),
             current_transaction: RwLock::new(None),
             transaction_index: RwLock::new(HashMap::new()),
+            undo_stack: RwLock::new(undo_stack),
         }
     }
 
@@ -75,6 +82,61 @@ impl EntityContext {
         &self.fields
     }
 
+    /// Rebuild changelog and transaction indexes from all `.jsonl` files on disk.
+    ///
+    /// Scans live, trash, and archive directories for each known entity type.
+    /// Call this after construction and before any undo/redo operations.
+    pub async fn rebuild_indexes(&self) -> Result<()> {
+        let mut cl_index = self.changelog_index.write().await;
+        let mut tx_index = self.transaction_index.write().await;
+
+        for entity_def in self.fields.all_entities() {
+            let entity_type = entity_def.name.as_str();
+            let base_dir = self.entity_dir(entity_type);
+
+            // Scan live, trash, and archive directories
+            let dirs = [
+                base_dir.clone(),
+                base_dir.join(".trash"),
+                base_dir.join(".archive"),
+            ];
+
+            for dir in &dirs {
+                let mut read_dir = match tokio::fs::read_dir(dir).await {
+                    Ok(rd) => rd,
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                    Err(e) => return Err(crate::error::EntityError::Io(e)),
+                };
+
+                while let Some(entry) = read_dir
+                    .next_entry()
+                    .await
+                    .map_err(crate::error::EntityError::Io)?
+                {
+                    let path = entry.path();
+                    if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+                        continue;
+                    }
+
+                    let entries = changelog::read_changelog(&path).await?;
+                    for ce in entries {
+                        let ce_id = ce.id.clone();
+                        let et = ce.entity_type.clone();
+                        let eid = ce.entity_id.clone();
+
+                        cl_index.insert(ce_id.clone(), (et, eid));
+
+                        if let Some(tx_id) = ce.transaction_id {
+                            tx_index.entry(tx_id).or_default().push(ce_id);
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     /// Generate a new transaction ULID.
     ///
     /// This is a static helper — it does not set the transaction on the context.
@@ -97,6 +159,74 @@ impl EntityContext {
     /// Subsequent `write()` and `delete()` calls will not stamp a transaction ID.
     pub async fn clear_transaction(&self) {
         *self.current_transaction.write().await = None;
+    }
+
+    /// Get the path to the undo stack YAML file.
+    pub fn undo_stack_path(&self) -> PathBuf {
+        self.root.join("undo_stack.yaml")
+    }
+
+    /// Synchronously check whether the undo stack has entries that can be undone.
+    ///
+    /// Uses `try_read()` on the tokio RwLock so this is safe to call from
+    /// synchronous code (e.g. `Command::available()`). Returns `false` if the
+    /// lock is currently held for writing.
+    pub fn can_undo(&self) -> bool {
+        self.undo_stack
+            .try_read()
+            .map(|stack| stack.can_undo())
+            .unwrap_or(false)
+    }
+
+    /// Synchronously check whether the undo stack has entries that can be redone.
+    ///
+    /// Uses `try_read()` on the tokio RwLock so this is safe to call from
+    /// synchronous code (e.g. `Command::available()`). Returns `false` if the
+    /// lock is currently held for writing.
+    pub fn can_redo(&self) -> bool {
+        self.undo_stack
+            .try_read()
+            .map(|stack| stack.can_redo())
+            .unwrap_or(false)
+    }
+
+    /// Get a read lock on the undo stack.
+    pub async fn undo_stack(&self) -> tokio::sync::RwLockReadGuard<'_, UndoStack> {
+        self.undo_stack.read().await
+    }
+
+    /// Get a write lock on the undo stack.
+    pub async fn undo_stack_mut(&self) -> tokio::sync::RwLockWriteGuard<'_, UndoStack> {
+        self.undo_stack.write().await
+    }
+
+    /// Save the current undo stack to disk.
+    pub fn save_undo_stack(&self, stack: &UndoStack) -> Result<()> {
+        stack.save(&self.undo_stack_path())
+    }
+
+    /// Push an entry onto the undo stack and save to disk.
+    ///
+    /// Uses the transaction ID as the stack entry ID if a transaction is active,
+    /// otherwise uses the changelog entry ID. The label format is
+    /// `"{op} {entity_type} {entity_id}"`.
+    async fn push_undo_stack(
+        &self,
+        entry_id: &ChangeEntryId,
+        op: &str,
+        entity_type: &str,
+        entity_id: &str,
+    ) -> Result<()> {
+        let tx_id = self.current_transaction.read().await.clone();
+        let stack_id = match &tx_id {
+            Some(tx) => tx.to_string(),
+            None => entry_id.to_string(),
+        };
+        let label = format!("{} {} {}", op, entity_type, entity_id);
+
+        let mut stack = self.undo_stack.write().await;
+        stack.push(stack_id, label);
+        self.save_undo_stack(&stack)
     }
 
     /// Look up the EntityDef for an entity type.
@@ -201,6 +331,12 @@ impl EntityContext {
         // Write the entity
         io::write_entity(&path, &entity, def).await?;
 
+        // Trash attachment files that were removed during update
+        if let Some(ref old) = previous {
+            self.trash_removed_attachments(&entity.entity_type, old, &entity)
+                .await?;
+        }
+
         // Compute and append changelog
         let changes = match &previous {
             Some(old) => changelog::diff_entities(old, &entity),
@@ -237,7 +373,7 @@ impl EntityContext {
             self.changelog_index
                 .write()
                 .await
-                .insert(ulid.clone(), (entity_type, entity_id));
+                .insert(ulid.clone(), (entity_type.clone(), entity_id.clone()));
 
             // Register in transaction index if applicable
             if let Some(ref tx) = tx_id {
@@ -248,6 +384,10 @@ impl EntityContext {
                     .or_default()
                     .push(ulid.clone());
             }
+
+            // Push onto undo stack and save to disk
+            self.push_undo_stack(&ulid, op, &entity_type, &entity_id)
+                .await?;
 
             return Ok(Some(ulid));
         }
@@ -279,6 +419,9 @@ impl EntityContext {
 
         // Read current state to log deletion
         if let Ok(old) = io::read_entity(&path, entity_type, id, def).await {
+            // Trash attachment files before deleting the entity
+            self.trash_entity_attachments(entity_type, &old).await?;
+
             let mut changes: Vec<_> = old
                 .fields
                 .iter()
@@ -321,6 +464,10 @@ impl EntityContext {
                         .push(ulid.clone());
                 }
 
+                // Push onto undo stack and save to disk
+                self.push_undo_stack(&ulid, "delete", entity_type, id)
+                    .await?;
+
                 result_ulid = Some(ulid);
             }
         }
@@ -351,16 +498,30 @@ impl EntityContext {
         //    which needs write access to changelog_index.
         let single_lookup = self.changelog_index.read().await.get(ulid).cloned();
         if let Some((entity_type, entity_id)) = single_lookup {
-            return self
+            let result = self
                 .undo_single(ulid, entity_type.as_str(), entity_id.as_str())
-                .await;
+                .await?;
+
+            // Record undo on the stack and save to disk
+            let mut stack = self.undo_stack.write().await;
+            stack.record_undo();
+            self.save_undo_stack(&stack)?;
+
+            return Ok(result);
         }
 
         // 2. Check if it's a transaction (group of entries).
         //    Same pattern: clone and drop the read guard before calling undo_transaction.
         let tx_lookup = self.transaction_index.read().await.get(ulid).cloned();
         if let Some(entry_ulids) = tx_lookup {
-            return self.undo_transaction(ulid, &entry_ulids).await;
+            let result = self.undo_transaction(ulid, &entry_ulids).await?;
+
+            // Record undo on the stack and save to disk
+            let mut stack = self.undo_stack.write().await;
+            stack.record_undo();
+            self.save_undo_stack(&stack)?;
+
+            return Ok(result);
         }
 
         // 3. Not found in either index
@@ -827,16 +988,30 @@ impl EntityContext {
         //    which needs write access to changelog_index.
         let single_lookup = self.changelog_index.read().await.get(ulid).cloned();
         if let Some((entity_type, entity_id)) = single_lookup {
-            return self
+            let result = self
                 .redo_single(ulid, entity_type.as_str(), entity_id.as_str())
-                .await;
+                .await?;
+
+            // Record redo on the stack and save to disk
+            let mut stack = self.undo_stack.write().await;
+            stack.record_redo();
+            self.save_undo_stack(&stack)?;
+
+            return Ok(result);
         }
 
         // 2. Check if it's a transaction (group of entries).
         //    Same pattern: clone and drop the read guard before calling redo_transaction.
         let tx_lookup = self.transaction_index.read().await.get(ulid).cloned();
         if let Some(entry_ulids) = tx_lookup {
-            return self.redo_transaction(ulid, &entry_ulids).await;
+            let result = self.redo_transaction(ulid, &entry_ulids).await?;
+
+            // Record redo on the stack and save to disk
+            let mut stack = self.undo_stack.write().await;
+            stack.record_redo();
+            self.save_undo_stack(&stack)?;
+
+            return Ok(result);
         }
 
         // 3. Not found in either index
@@ -1206,6 +1381,10 @@ impl EntityContext {
                         .push(ulid.clone());
                 }
 
+                // Push onto undo stack and save to disk
+                self.push_undo_stack(&ulid, "archive", entity_type, id)
+                    .await?;
+
                 result_ulid = Some(ulid);
             }
         }
@@ -1278,6 +1457,10 @@ impl EntityContext {
                 .or_default()
                 .push(ulid.clone());
         }
+
+        // Push onto undo stack and save to disk
+        self.push_undo_stack(&ulid, "unarchive", entity_type, id)
+            .await?;
 
         Ok(Some(ulid))
     }
@@ -1477,6 +1660,25 @@ impl EntityContext {
             }
         }
 
+        // Process attachment fields — copy source files, validate sizes.
+        let entity_type_dir = self.entity_dir(entity_type);
+        for fd in &field_defs {
+            if let FieldType::Attachment {
+                max_bytes,
+                multiple,
+            } = &fd.type_
+            {
+                self.process_attachment_field(
+                    entity,
+                    fd.name.as_str(),
+                    *max_bytes,
+                    *multiple,
+                    &entity_type_dir,
+                )
+                .await?;
+            }
+        }
+
         // Validate fields
         let Some(ref engine) = self.validation else {
             return Ok(());
@@ -1519,6 +1721,139 @@ impl EntityContext {
         Ok(())
     }
 
+    /// Process a single attachment field during validation.
+    ///
+    /// For each value in the field:
+    /// - If the value is a path to an existing file on disk, copy it into
+    ///   `.attachments/` and replace the value with the stored filename.
+    /// - If the value already names a file in `.attachments/`, leave it alone.
+    /// - For `multiple: true`, the value is an array of strings.
+    async fn process_attachment_field(
+        &self,
+        entity: &mut Entity,
+        field_name: &str,
+        max_bytes: u64,
+        multiple: bool,
+        entity_type_dir: &Path,
+    ) -> Result<()> {
+        use serde_json::Value;
+
+        let Some(value) = entity.fields.get(field_name).cloned() else {
+            return Ok(());
+        };
+
+        if multiple {
+            // Array of attachment values
+            let values = match value {
+                Value::Array(arr) => arr,
+                Value::Null => return Ok(()),
+                // Single value provided for a multiple field — wrap in array
+                other => vec![other],
+            };
+            let mut result = Vec::new();
+            for v in values {
+                match v {
+                    Value::String(s) => {
+                        let stored = self
+                            .resolve_attachment_value(&s, field_name, max_bytes, entity_type_dir)
+                            .await?;
+                        result.push(Value::String(stored));
+                    }
+                    Value::Object(ref obj) => {
+                        // Enriched metadata object from a read round-trip.
+                        // Reconstruct the stored filename as `{id}-{name}` and
+                        // verify it still exists in `.attachments/`.
+                        if let (Some(id), Some(name)) = (
+                            obj.get("id").and_then(|v| v.as_str()),
+                            obj.get("name").and_then(|v| v.as_str()),
+                        ) {
+                            let stored = format!("{}-{}", id, name);
+                            let att_dir = crate::io::attachments_dir(entity_type_dir);
+                            let path = att_dir.join(&stored);
+                            if tokio::fs::try_exists(&path).await.unwrap_or(false) {
+                                result.push(Value::String(stored));
+                            } else {
+                                return Err(EntityError::AttachmentNotFound {
+                                    field: field_name.to_string(),
+                                    filename: stored,
+                                });
+                            }
+                        }
+                    }
+                    other => {
+                        tracing::warn!(
+                            field = field_name,
+                            value = ?other,
+                            "skipping non-string/non-object value in attachment array"
+                        );
+                    }
+                }
+            }
+            entity.set(field_name, Value::Array(result));
+        } else {
+            // Single attachment value
+            match value {
+                Value::String(s) => {
+                    let stored = self
+                        .resolve_attachment_value(&s, field_name, max_bytes, entity_type_dir)
+                        .await?;
+                    entity.set(field_name, Value::String(stored));
+                }
+                Value::Object(ref obj) => {
+                    // Enriched metadata object — reconstruct stored filename
+                    if let (Some(id), Some(name)) = (
+                        obj.get("id").and_then(|v| v.as_str()),
+                        obj.get("name").and_then(|v| v.as_str()),
+                    ) {
+                        let stored = format!("{}-{}", id, name);
+                        let att_dir = crate::io::attachments_dir(entity_type_dir);
+                        let path = att_dir.join(&stored);
+                        if tokio::fs::try_exists(&path).await.unwrap_or(false) {
+                            entity.set(field_name, Value::String(stored));
+                        } else {
+                            return Err(EntityError::AttachmentNotFound {
+                                field: field_name.to_string(),
+                                filename: stored,
+                            });
+                        }
+                    }
+                }
+                Value::Null => {}
+                _ => {}
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Resolve a single attachment value: either an existing stored filename
+    /// or a source file path to copy.
+    ///
+    /// Returns the stored filename to persist in the YAML.
+    async fn resolve_attachment_value(
+        &self,
+        value: &str,
+        field_name: &str,
+        max_bytes: u64,
+        entity_type_dir: &Path,
+    ) -> Result<String> {
+        // Only check .attachments/ for bare filenames (no path separators).
+        // Values containing '/' or '\' are always treated as source file paths
+        // to copy, preventing PathBuf::join from replacing the base when given
+        // an absolute path.
+        if !value.contains('/') && !value.contains('\\') {
+            let att_dir = io::attachments_dir(entity_type_dir);
+            let existing = att_dir.join(value);
+            if tokio::fs::try_exists(&existing).await.unwrap_or(false) {
+                return Ok(value.to_string());
+            }
+        }
+
+        // Treat as a source file path to copy
+        let source = Path::new(value);
+        io::copy_attachment(source, entity_type_dir, field_name, max_bytes).await
+    }
+
     /// Build a read-only entity query function for aggregate computed fields.
     ///
     /// The query reads raw entities from disk (without applying compute)
@@ -1544,8 +1879,13 @@ impl EntityContext {
     }
 
     /// Derive computed fields after reading.
+    ///
+    /// Attachment enrichment is handled inside `apply_compute_with_query` so
+    /// it only runs once, regardless of which entry point is used.
     async fn apply_compute(&self, entity_type: &str, entity: &mut Entity) -> Result<()> {
         if self.compute.is_none() {
+            // No compute engine — just enrich attachment fields
+            self.enrich_attachment_fields(entity_type, entity).await?;
             return Ok(());
         }
         let query_fn = self.build_entity_query_fn();
@@ -1563,6 +1903,9 @@ impl EntityContext {
         entity: &mut Entity,
         query_fn: &std::sync::Arc<swissarmyhammer_fields::EntityQueryFn>,
     ) -> Result<()> {
+        // Enrich attachment fields with metadata (runs regardless of ComputeEngine)
+        self.enrich_attachment_fields(entity_type, entity).await?;
+
         let Some(ref engine) = self.compute else {
             return Ok(());
         };
@@ -1581,6 +1924,136 @@ impl EntityContext {
                 EntityError::ComputeError { field, message }
             })?;
         Ok(())
+    }
+
+    /// Enrich attachment fields with metadata objects on read.
+    ///
+    /// Replaces stored filenames with rich JSON objects containing
+    /// id, name, size, mime_type, and absolute path.
+    async fn enrich_attachment_fields(&self, entity_type: &str, entity: &mut Entity) -> Result<()> {
+        use serde_json::Value;
+
+        let field_defs = self.fields.fields_for_entity(entity_type);
+        let entity_type_dir = self.entity_dir(entity_type);
+
+        for fd in &field_defs {
+            if let FieldType::Attachment { multiple, .. } = &fd.type_ {
+                let Some(value) = entity.fields.get(fd.name.as_str()).cloned() else {
+                    continue;
+                };
+
+                if *multiple {
+                    let filenames = match value {
+                        Value::Array(arr) => arr,
+                        Value::Null => continue,
+                        other => vec![other],
+                    };
+                    let mut metadata_arr = Vec::new();
+                    for v in filenames {
+                        if let Value::String(filename) = v {
+                            if let Some(meta) =
+                                io::attachment_metadata(&filename, &entity_type_dir).await
+                            {
+                                metadata_arr.push(meta);
+                            }
+                        }
+                    }
+                    entity.set(fd.name.to_string(), Value::Array(metadata_arr));
+                } else if let Value::String(filename) = value {
+                    if let Some(meta) = io::attachment_metadata(&filename, &entity_type_dir).await {
+                        entity.set(fd.name.to_string(), meta);
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Trash attachment files that were removed between old and new entity state.
+    ///
+    /// Compares attachment field values between old and new versions. Any filenames
+    /// present in the old entity but absent from the new one are moved to
+    /// `.attachments/.trash/`.
+    async fn trash_removed_attachments(
+        &self,
+        entity_type: &str,
+        old: &Entity,
+        new: &Entity,
+    ) -> Result<()> {
+        let field_defs = self.fields.fields_for_entity(entity_type);
+        let entity_type_dir = self.entity_dir(entity_type);
+
+        for fd in &field_defs {
+            if let FieldType::Attachment { multiple, .. } = &fd.type_ {
+                let old_names =
+                    Self::extract_attachment_filenames(old.fields.get(fd.name.as_str()), *multiple);
+                let new_names =
+                    Self::extract_attachment_filenames(new.fields.get(fd.name.as_str()), *multiple);
+
+                for name in &old_names {
+                    if !new_names.contains(name) {
+                        io::trash_attachment(name, &entity_type_dir).await?;
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Trash all attachment files for an entity being deleted.
+    ///
+    /// Reads attachment field values and moves each referenced file to
+    /// `.attachments/.trash/`.
+    async fn trash_entity_attachments(&self, entity_type: &str, entity: &Entity) -> Result<()> {
+        let field_defs = self.fields.fields_for_entity(entity_type);
+        let entity_type_dir = self.entity_dir(entity_type);
+
+        for fd in &field_defs {
+            if let FieldType::Attachment { multiple, .. } = &fd.type_ {
+                let filenames = Self::extract_attachment_filenames(
+                    entity.fields.get(fd.name.as_str()),
+                    *multiple,
+                );
+                for name in filenames {
+                    io::trash_attachment(&name, &entity_type_dir).await?;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Extract attachment filenames from a field value.
+    ///
+    /// Returns a list of stored filenames (strings) from either a single
+    /// value or an array, depending on the `multiple` flag.
+    fn extract_attachment_filenames(
+        value: Option<&serde_json::Value>,
+        multiple: bool,
+    ) -> Vec<String> {
+        use serde_json::Value;
+
+        let Some(value) = value else {
+            return Vec::new();
+        };
+
+        if multiple {
+            match value {
+                Value::Array(arr) => arr
+                    .iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect(),
+                Value::String(s) => vec![s.clone()],
+                _ => Vec::new(),
+            }
+        } else {
+            match value {
+                Value::String(s) => vec![s.clone()],
+                _ => Vec::new(),
+            }
+        }
     }
 }
 
@@ -2434,5 +2907,482 @@ mod tests {
         assert!(!old_trash.exists());
         // Old root .trash/ should also be gone
         assert!(!dir.path().join(".trash").exists());
+    }
+
+    // --- Attachment tests ---
+
+    /// Build a FieldsContext with an entity type that has attachment fields.
+    fn attachment_fields_context() -> Arc<FieldsContext> {
+        let defs = vec![
+            (
+                "title",
+                "id: 00000000000000000000000TTL\nname: title\ntype:\n  kind: text\n  single_line: true\n",
+            ),
+            (
+                "avatar",
+                "id: 00000000000000000000000AVT\nname: avatar\ntype:\n  kind: attachment\n  max_bytes: 1048576\n  multiple: false\n",
+            ),
+            (
+                "files",
+                "id: 00000000000000000000000FLS\nname: files\ntype:\n  kind: attachment\n  max_bytes: 1048576\n  multiple: true\n",
+            ),
+        ];
+        let entities = vec![(
+            "item",
+            "name: item\nfields:\n  - title\n  - avatar\n  - files\n",
+        )];
+
+        let dir = TempDir::new().unwrap();
+        Arc::new(FieldsContext::from_yaml_sources(dir.path(), &defs, &entities).unwrap())
+    }
+
+    #[tokio::test]
+    async fn write_attachment_copies_file_and_stores_filename() {
+        let dir = TempDir::new().unwrap();
+        let fields = attachment_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields);
+
+        // Create a source file to attach
+        let source = dir.path().join("photo.jpg");
+        tokio::fs::write(&source, b"fake image data").await.unwrap();
+
+        let mut entity = Entity::new("item", "01TEST");
+        entity.set("title", json!("Test Item"));
+        entity.set("avatar", json!(source.to_string_lossy().to_string()));
+
+        ctx.write(&entity).await.unwrap();
+
+        // Read raw (without compute) to check stored filename
+        let def = ctx.entity_def("item").unwrap();
+        let path = crate::io::entity_file_path(&ctx.entity_dir("item"), "01TEST", def);
+        let raw = crate::io::read_entity(&path, "item", "01TEST", def)
+            .await
+            .unwrap();
+
+        let stored = raw.fields.get("avatar").unwrap().as_str().unwrap();
+        assert!(
+            stored.contains("photo.jpg"),
+            "stored name should contain original filename"
+        );
+        assert!(
+            stored.len() > "photo.jpg".len(),
+            "stored name should have ULID prefix"
+        );
+
+        // Verify the file was copied to .attachments/
+        let att_dir = dir.path().join("items").join(".attachments");
+        assert!(att_dir.join(stored).exists());
+
+        // Verify contents match
+        let copied = tokio::fs::read(att_dir.join(stored)).await.unwrap();
+        assert_eq!(copied, b"fake image data");
+    }
+
+    #[tokio::test]
+    async fn write_existing_attachment_filename_leaves_file_untouched() {
+        let dir = TempDir::new().unwrap();
+        let fields = attachment_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields);
+
+        // Create a source file and write it as an attachment
+        let source = dir.path().join("photo.jpg");
+        tokio::fs::write(&source, b"original data").await.unwrap();
+
+        let mut entity = Entity::new("item", "01TEST");
+        entity.set("title", json!("Test"));
+        entity.set("avatar", json!(source.to_string_lossy().to_string()));
+        ctx.write(&entity).await.unwrap();
+
+        // Get the stored filename
+        let def = ctx.entity_def("item").unwrap();
+        let path = crate::io::entity_file_path(&ctx.entity_dir("item"), "01TEST", def);
+        let raw = crate::io::read_entity(&path, "item", "01TEST", def)
+            .await
+            .unwrap();
+        let stored = raw
+            .fields
+            .get("avatar")
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        // Write again with the stored filename (not a source path)
+        let mut entity2 = Entity::new("item", "01TEST");
+        entity2.set("title", json!("Updated Title"));
+        entity2.set("avatar", json!(stored.clone()));
+        ctx.write(&entity2).await.unwrap();
+
+        // Verify the file still exists and contents unchanged
+        let att_dir = dir.path().join("items").join(".attachments");
+        let contents = tokio::fs::read(att_dir.join(&stored)).await.unwrap();
+        assert_eq!(contents, b"original data");
+    }
+
+    #[tokio::test]
+    async fn read_attachment_returns_metadata_with_path() {
+        let dir = TempDir::new().unwrap();
+        let fields = attachment_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields);
+
+        let source = dir.path().join("photo.png");
+        tokio::fs::write(&source, b"png data here").await.unwrap();
+
+        let mut entity = Entity::new("item", "01TEST");
+        entity.set("title", json!("Test"));
+        entity.set("avatar", json!(source.to_string_lossy().to_string()));
+        ctx.write(&entity).await.unwrap();
+
+        // Read with compute (should enrich attachment fields)
+        let read = ctx.read("item", "01TEST").await.unwrap();
+        let meta = read.fields.get("avatar").unwrap();
+
+        assert!(
+            meta.is_object(),
+            "attachment field should be a metadata object"
+        );
+        assert_eq!(meta["name"], "photo.png");
+        assert_eq!(meta["mime_type"], "image/png");
+        assert_eq!(meta["size"], 13); // b"png data here".len()
+        assert!(meta["id"].is_string());
+        assert!(meta["path"].as_str().unwrap().contains(".attachments"));
+
+        // Verify the path is readable and content matches
+        let resolved_path = meta["path"].as_str().unwrap();
+        let contents = tokio::fs::read(resolved_path).await.unwrap();
+        assert_eq!(contents, b"png data here");
+    }
+
+    #[tokio::test]
+    async fn write_attachment_exceeding_max_bytes_errors() {
+        let dir = TempDir::new().unwrap();
+        let fields = attachment_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields);
+
+        // max_bytes is 1MB; create a file slightly over
+        let source = dir.path().join("huge.bin");
+        let data = vec![0u8; 1_048_577]; // 1MB + 1
+        tokio::fs::write(&source, &data).await.unwrap();
+
+        let mut entity = Entity::new("item", "01TEST");
+        entity.set("title", json!("Test"));
+        entity.set("avatar", json!(source.to_string_lossy().to_string()));
+
+        let result = ctx.write(&entity).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("too large"),
+            "error should mention file too large: {}",
+            err
+        );
+    }
+
+    #[tokio::test]
+    async fn update_removing_attachment_trashes_file() {
+        let dir = TempDir::new().unwrap();
+        let fields = attachment_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields);
+
+        let source = dir.path().join("photo.jpg");
+        tokio::fs::write(&source, b"image data").await.unwrap();
+
+        let mut entity = Entity::new("item", "01TEST");
+        entity.set("title", json!("Test"));
+        entity.set("avatar", json!(source.to_string_lossy().to_string()));
+        ctx.write(&entity).await.unwrap();
+
+        // Get the stored filename
+        let def = ctx.entity_def("item").unwrap();
+        let path = crate::io::entity_file_path(&ctx.entity_dir("item"), "01TEST", def);
+        let raw = crate::io::read_entity(&path, "item", "01TEST", def)
+            .await
+            .unwrap();
+        let stored = raw
+            .fields
+            .get("avatar")
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        // Update entity removing the avatar field
+        let mut entity2 = Entity::new("item", "01TEST");
+        entity2.set("title", json!("No Avatar"));
+        // avatar field is absent → attachment should be trashed
+        ctx.write(&entity2).await.unwrap();
+
+        // Verify file moved to .trash
+        let att_dir = dir.path().join("items").join(".attachments");
+        assert!(
+            !att_dir.join(&stored).exists(),
+            "attachment should be removed from .attachments/"
+        );
+        let trash_dir = att_dir.join(".trash");
+        assert!(
+            trash_dir.join(&stored).exists(),
+            "attachment should be in .attachments/.trash/"
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_entity_trashes_attachment_files() {
+        let dir = TempDir::new().unwrap();
+        let fields = attachment_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields);
+
+        let source = dir.path().join("doc.pdf");
+        tokio::fs::write(&source, b"pdf content").await.unwrap();
+
+        let mut entity = Entity::new("item", "01TEST");
+        entity.set("title", json!("Test"));
+        entity.set("avatar", json!(source.to_string_lossy().to_string()));
+        ctx.write(&entity).await.unwrap();
+
+        // Get stored filename
+        let def = ctx.entity_def("item").unwrap();
+        let path = crate::io::entity_file_path(&ctx.entity_dir("item"), "01TEST", def);
+        let raw = crate::io::read_entity(&path, "item", "01TEST", def)
+            .await
+            .unwrap();
+        let stored = raw
+            .fields
+            .get("avatar")
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        // Delete the entity
+        ctx.delete("item", "01TEST").await.unwrap();
+
+        // Attachment file should be in .attachments/.trash/
+        let att_dir = dir.path().join("items").join(".attachments");
+        assert!(!att_dir.join(&stored).exists());
+        assert!(att_dir.join(".trash").join(&stored).exists());
+    }
+
+    #[tokio::test]
+    async fn multiple_attachments_add_read_remove() {
+        let dir = TempDir::new().unwrap();
+        let fields = attachment_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields);
+
+        // Create two source files
+        let src1 = dir.path().join("file1.txt");
+        let src2 = dir.path().join("file2.txt");
+        tokio::fs::write(&src1, b"content one").await.unwrap();
+        tokio::fs::write(&src2, b"content two").await.unwrap();
+
+        // Write entity with two attachments in the `files` (multiple) field
+        let mut entity = Entity::new("item", "01MULTI");
+        entity.set("title", json!("Multi"));
+        entity.set(
+            "files",
+            json!([
+                src1.to_string_lossy().to_string(),
+                src2.to_string_lossy().to_string()
+            ]),
+        );
+        ctx.write(&entity).await.unwrap();
+
+        // Read raw to get stored filenames
+        let def = ctx.entity_def("item").unwrap();
+        let path = crate::io::entity_file_path(&ctx.entity_dir("item"), "01MULTI", def);
+        let raw = crate::io::read_entity(&path, "item", "01MULTI", def)
+            .await
+            .unwrap();
+        let stored_arr = raw.fields.get("files").unwrap().as_array().unwrap();
+        assert_eq!(stored_arr.len(), 2);
+        let stored1 = stored_arr[0].as_str().unwrap().to_string();
+        let stored2 = stored_arr[1].as_str().unwrap().to_string();
+
+        // Read with compute — should get metadata array
+        let read = ctx.read("item", "01MULTI").await.unwrap();
+        let meta_arr = read.fields.get("files").unwrap().as_array().unwrap();
+        assert_eq!(meta_arr.len(), 2);
+        assert_eq!(meta_arr[0]["name"], "file1.txt");
+        assert_eq!(meta_arr[1]["name"], "file2.txt");
+
+        // Update removing one attachment (keep stored2, drop stored1)
+        let mut entity2 = Entity::new("item", "01MULTI");
+        entity2.set("title", json!("Multi"));
+        entity2.set("files", json!([stored2.clone()]));
+        ctx.write(&entity2).await.unwrap();
+
+        // stored1 should be trashed, stored2 should remain
+        let att_dir = dir.path().join("items").join(".attachments");
+        assert!(!att_dir.join(&stored1).exists());
+        assert!(att_dir.join(".trash").join(&stored1).exists());
+        assert!(att_dir.join(&stored2).exists());
+    }
+
+    #[tokio::test]
+    async fn write_attachment_source_not_found_errors() {
+        let dir = TempDir::new().unwrap();
+        let fields = attachment_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields);
+
+        let mut entity = Entity::new("item", "01TEST");
+        entity.set("title", json!("Test"));
+        entity.set("avatar", json!("/nonexistent/path/photo.jpg"));
+
+        let result = ctx.write(&entity).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("not found"),
+            "error should mention source not found: {}",
+            err
+        );
+    }
+
+    #[tokio::test]
+    async fn write_enriched_attachment_object_preserves_file() {
+        let dir = TempDir::new().unwrap();
+        let fields = attachment_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields);
+
+        // Create and write an entity with an attachment
+        let source = dir.path().join("photo.png");
+        tokio::fs::write(&source, b"png data").await.unwrap();
+
+        let mut entity = Entity::new("item", "01ENRICH");
+        entity.set("title", json!("Test"));
+        entity.set("avatar", json!(source.to_string_lossy().to_string()));
+        ctx.write(&entity).await.unwrap();
+
+        // Read — avatar is now an enriched metadata object
+        let read = ctx.read("item", "01ENRICH").await.unwrap();
+        let meta = read.fields.get("avatar").unwrap().clone();
+        assert!(meta.is_object(), "should be enriched");
+
+        // Write back unchanged — the enriched object should round-trip
+        let mut entity2 = Entity::new("item", "01ENRICH");
+        entity2.set("title", json!("Updated Title"));
+        entity2.set("avatar", meta);
+        ctx.write(&entity2).await.unwrap();
+
+        // Verify the attachment file still exists and data is intact
+        let att_dir = dir.path().join("items").join(".attachments");
+        let entries: Vec<_> = std::fs::read_dir(&att_dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| !e.file_name().to_str().unwrap_or("").starts_with('.'))
+            .collect();
+        assert_eq!(entries.len(), 1, "attachment file should still exist");
+        let contents = tokio::fs::read(entries[0].path()).await.unwrap();
+        assert_eq!(contents, b"png data");
+    }
+
+    #[tokio::test]
+    async fn write_enriched_objects_mixed_with_new_paths() {
+        let dir = TempDir::new().unwrap();
+        let fields = attachment_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields);
+
+        // Create and attach first file
+        let src1 = dir.path().join("file1.txt");
+        tokio::fs::write(&src1, b"content one").await.unwrap();
+
+        let mut entity = Entity::new("item", "01MIX");
+        entity.set("title", json!("Mixed"));
+        entity.set("files", json!([src1.to_string_lossy().to_string()]));
+        ctx.write(&entity).await.unwrap();
+
+        // Read to get enriched metadata
+        let read = ctx.read("item", "01MIX").await.unwrap();
+        let enriched_arr = read
+            .fields
+            .get("files")
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .clone();
+        assert_eq!(enriched_arr.len(), 1);
+
+        // Create a second source file to append
+        let src2 = dir.path().join("file2.txt");
+        tokio::fs::write(&src2, b"content two").await.unwrap();
+
+        // Write back with mixed array: enriched object + new source path
+        let mut entity2 = Entity::new("item", "01MIX");
+        entity2.set("title", json!("Mixed"));
+        entity2.set(
+            "files",
+            json!([enriched_arr[0], src2.to_string_lossy().to_string()]),
+        );
+        ctx.write(&entity2).await.unwrap();
+
+        // Read again — should have two attachments
+        let read2 = ctx.read("item", "01MIX").await.unwrap();
+        let files = read2.fields.get("files").unwrap().as_array().unwrap();
+        assert_eq!(files.len(), 2);
+        assert_eq!(files[0]["name"], "file1.txt");
+        assert_eq!(files[1]["name"], "file2.txt");
+    }
+
+    #[tokio::test]
+    async fn write_mixed_enriched_stored_and_source_paths() {
+        let dir = TempDir::new().unwrap();
+        let fields = attachment_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields);
+
+        // Create two source files and write them
+        let src1 = dir.path().join("a.txt");
+        let src2 = dir.path().join("b.txt");
+        tokio::fs::write(&src1, b"aaa").await.unwrap();
+        tokio::fs::write(&src2, b"bbb").await.unwrap();
+
+        let mut entity = Entity::new("item", "01ALL3");
+        entity.set("title", json!("Three Shapes"));
+        entity.set(
+            "files",
+            json!([
+                src1.to_string_lossy().to_string(),
+                src2.to_string_lossy().to_string()
+            ]),
+        );
+        ctx.write(&entity).await.unwrap();
+
+        // Read to get enriched metadata and raw stored filenames
+        let read = ctx.read("item", "01ALL3").await.unwrap();
+        let enriched = read.fields.get("files").unwrap().as_array().unwrap();
+        let enriched_obj = enriched[0].clone(); // enriched metadata object
+
+        let def = ctx.entity_def("item").unwrap();
+        let path = crate::io::entity_file_path(&ctx.entity_dir("item"), "01ALL3", def);
+        let raw = crate::io::read_entity(&path, "item", "01ALL3", def)
+            .await
+            .unwrap();
+        let stored_filename = raw.fields.get("files").unwrap().as_array().unwrap()[1]
+            .as_str()
+            .unwrap()
+            .to_string(); // raw stored filename string
+
+        // Create a third file to add as source path
+        let src3 = dir.path().join("c.txt");
+        tokio::fs::write(&src3, b"ccc").await.unwrap();
+
+        // Write with all three shapes: enriched object, stored filename, source path
+        let mut entity2 = Entity::new("item", "01ALL3");
+        entity2.set("title", json!("Three Shapes"));
+        entity2.set(
+            "files",
+            json!([
+                enriched_obj,
+                stored_filename,
+                src3.to_string_lossy().to_string()
+            ]),
+        );
+        ctx.write(&entity2).await.unwrap();
+
+        // Read — should have three attachments
+        let read2 = ctx.read("item", "01ALL3").await.unwrap();
+        let files = read2.fields.get("files").unwrap().as_array().unwrap();
+        assert_eq!(files.len(), 3);
+        assert_eq!(files[0]["name"], "a.txt");
+        assert_eq!(files[1]["name"], "b.txt");
+        assert_eq!(files[2]["name"], "c.txt");
     }
 }

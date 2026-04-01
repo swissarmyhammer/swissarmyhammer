@@ -13,7 +13,12 @@ import type { EditorProps } from ".";
  * Picking a color updates the draft. Closing the popover (blur, click-outside)
  * or pressing Enter commits. Escape cancels.
  */
-export function ColorPaletteEditor({ value, onCommit, onCancel }: EditorProps) {
+export function ColorPaletteEditor({
+  value,
+  onCommit,
+  onCancel,
+  onChange,
+}: EditorProps) {
   const initial = typeof value === "string" ? value : "888888";
   const [draft, setDraft] = useState(initial);
   const [open, setOpen] = useState(true);
@@ -72,7 +77,9 @@ export function ColorPaletteEditor({ value, onCommit, onCancel }: EditorProps) {
         <HexColorPicker
           color={`#${draft}`}
           onChange={(hex) => {
-            setDraft(hex.replace("#", ""));
+            const v = hex.replace("#", "");
+            setDraft(v);
+            onChange?.(v);
           }}
         />
         <div className="mt-2 flex items-center gap-2">
@@ -83,6 +90,7 @@ export function ColorPaletteEditor({ value, onCommit, onCancel }: EditorProps) {
             onChange={(e) => {
               const v = e.target.value.replace(/[^0-9a-fA-F]/g, "").slice(0, 6);
               setDraft(v);
+              onChange?.(v);
             }}
             className="flex-1 text-xs font-mono bg-transparent border border-input rounded px-1.5 py-0.5"
             maxLength={6}

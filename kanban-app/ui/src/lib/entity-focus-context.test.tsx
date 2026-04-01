@@ -355,7 +355,11 @@ describe("broadcastNavCommand", () => {
 
     function UnmountableScope({ show }: { show: boolean }) {
       return show ? (
-        <FocusScope moniker="panel:temp" commands={[]} claimWhen={claimPredicates}>
+        <FocusScope
+          moniker="panel:temp"
+          commands={[]}
+          claimWhen={claimPredicates}
+        >
           <span>temp</span>
         </FocusScope>
       ) : null;
@@ -403,16 +407,17 @@ describe("broadcastNavCommand", () => {
 /** Helper button to set focus imperatively. */
 function SetFocusButton({ moniker }: { moniker: string }) {
   const { setFocus } = useEntityFocus();
-  return (
-    <button data-testid="set-focus" onClick={() => setFocus(moniker)} />
-  );
+  return <button data-testid="set-focus" onClick={() => setFocus(moniker)} />;
 }
 
 /** Helper button to call broadcastNavCommand. */
 function BroadcastButton({ commandId }: { commandId: string }) {
   const { broadcastNavCommand } = useEntityFocus();
   return (
-    <button data-testid="broadcast" onClick={() => broadcastNavCommand(commandId)} />
+    <button
+      data-testid="broadcast"
+      onClick={() => broadcastNavCommand(commandId)}
+    />
   );
 }
 
@@ -421,26 +426,41 @@ describe("useRestoreFocus", () => {
    * Helper component that conditionally renders a child that calls useRestoreFocus.
    * The parent manages focus state and controls when the child mounts/unmounts.
    */
-  function RestoreFocusHarness({ initialMoniker, scope }: { initialMoniker: string | null; scope?: CommandScope }) {
+  function RestoreFocusHarness({
+    initialMoniker,
+    scope,
+  }: {
+    initialMoniker: string | null;
+    scope?: CommandScope;
+  }) {
     const [showChild, setShowChild] = useState(false);
     const focus = useEntityFocus();
 
     return (
       <>
-        <button data-testid="setup" onClick={() => {
-          if (initialMoniker && scope) {
-            focus.registerScope(initialMoniker, scope);
-          }
-          if (initialMoniker) {
-            focus.setFocus(initialMoniker);
-          }
-        }} />
+        <button
+          data-testid="setup"
+          onClick={() => {
+            if (initialMoniker && scope) {
+              focus.registerScope(initialMoniker, scope);
+            }
+            if (initialMoniker) {
+              focus.setFocus(initialMoniker);
+            }
+          }}
+        />
         <button data-testid="show" onClick={() => setShowChild(true)} />
         <button data-testid="hide" onClick={() => setShowChild(false)} />
-        <button data-testid="steal-focus" onClick={() => focus.setFocus("task:inspected")} />
-        <button data-testid="unregister" onClick={() => {
-          if (initialMoniker) focus.unregisterScope(initialMoniker);
-        }} />
+        <button
+          data-testid="steal-focus"
+          onClick={() => focus.setFocus("task:inspected")}
+        />
+        <button
+          data-testid="unregister"
+          onClick={() => {
+            if (initialMoniker) focus.unregisterScope(initialMoniker);
+          }}
+        />
         <span data-testid="focused">{focus.focusedMoniker ?? "null"}</span>
         {showChild && <RestoreChild />}
       </>
@@ -453,7 +473,11 @@ describe("useRestoreFocus", () => {
   }
 
   it("restores focus to saved moniker when scope still exists", () => {
-    const scope: CommandScope = { commands: new Map(), parent: null, moniker: "task:abc" };
+    const scope: CommandScope = {
+      commands: new Map(),
+      parent: null,
+      moniker: "task:abc",
+    };
     const { getByTestId } = render(
       <EntityFocusProvider>
         <RestoreFocusHarness initialMoniker="task:abc" scope={scope} />
@@ -461,39 +485,61 @@ describe("useRestoreFocus", () => {
     );
 
     // 1. Set up focus
-    act(() => { getByTestId("setup").click(); });
+    act(() => {
+      getByTestId("setup").click();
+    });
     expect(getByTestId("focused").textContent).toBe("task:abc");
 
     // 2. Mount the restore hook — captures "task:abc"
-    act(() => { getByTestId("show").click(); });
+    act(() => {
+      getByTestId("show").click();
+    });
     expect(getByTestId("child")).toBeTruthy();
 
     // 3. Inspector steals focus
-    act(() => { getByTestId("steal-focus").click(); });
+    act(() => {
+      getByTestId("steal-focus").click();
+    });
     expect(getByTestId("focused").textContent).toBe("task:inspected");
 
     // 4. Unmount — should restore to "task:abc"
-    act(() => { getByTestId("hide").click(); });
+    act(() => {
+      getByTestId("hide").click();
+    });
     expect(getByTestId("focused").textContent).toBe("task:abc");
   });
 
   it("clears focus when saved moniker no longer exists in registry", () => {
-    const scope: CommandScope = { commands: new Map(), parent: null, moniker: "task:abc" };
+    const scope: CommandScope = {
+      commands: new Map(),
+      parent: null,
+      moniker: "task:abc",
+    };
     const { getByTestId } = render(
       <EntityFocusProvider>
         <RestoreFocusHarness initialMoniker="task:abc" scope={scope} />
       </EntityFocusProvider>,
     );
 
-    act(() => { getByTestId("setup").click(); });
-    act(() => { getByTestId("show").click(); });
-    act(() => { getByTestId("steal-focus").click(); });
+    act(() => {
+      getByTestId("setup").click();
+    });
+    act(() => {
+      getByTestId("show").click();
+    });
+    act(() => {
+      getByTestId("steal-focus").click();
+    });
 
     // Simulate deletion — unregister the scope
-    act(() => { getByTestId("unregister").click(); });
+    act(() => {
+      getByTestId("unregister").click();
+    });
 
     // Unmount — should clear to null since scope no longer exists
-    act(() => { getByTestId("hide").click(); });
+    act(() => {
+      getByTestId("hide").click();
+    });
     expect(getByTestId("focused").textContent).toBe("null");
   });
 
@@ -505,14 +551,69 @@ describe("useRestoreFocus", () => {
     );
 
     // Mount with no focus
-    act(() => { getByTestId("show").click(); });
+    act(() => {
+      getByTestId("show").click();
+    });
 
     // Inspector steals focus
-    act(() => { getByTestId("steal-focus").click(); });
+    act(() => {
+      getByTestId("steal-focus").click();
+    });
     expect(getByTestId("focused").textContent).toBe("task:inspected");
 
     // Unmount — should restore to null
-    act(() => { getByTestId("hide").click(); });
+    act(() => {
+      getByTestId("hide").click();
+    });
     expect(getByTestId("focused").textContent).toBe("null");
+  });
+});
+
+/* ---------- window moniker in scope chain ---------- */
+
+describe("window moniker in scope chain", () => {
+  it("scope chain built from a focused entity includes window:main at the root", async () => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    (invoke as ReturnType<typeof vi.fn>).mockClear();
+
+    // Build a scope chain: task:abc → column:col1 → window:main
+    const windowScope: CommandScope = {
+      commands: new Map(),
+      parent: null,
+      moniker: "window:main",
+    };
+    const columnScope: CommandScope = {
+      commands: new Map(),
+      parent: windowScope,
+      moniker: "column:col1",
+    };
+    const taskScope: CommandScope = {
+      commands: new Map(),
+      parent: columnScope,
+      moniker: "task:abc",
+    };
+
+    const { result } = renderHook(() => useEntityFocus(), { wrapper });
+
+    act(() => {
+      result.current.registerScope("task:abc", taskScope);
+      result.current.setFocus("task:abc");
+    });
+
+    // Wait for the async dispatch to flush
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    // invokeFocusChange should have been called with a scope chain
+    // that includes window:main as the last (root) element.
+    // backendDispatch calls invoke("dispatch_command", ...) internally.
+    expect(invoke).toHaveBeenCalledWith(
+      "dispatch_command",
+      expect.objectContaining({
+        cmd: "ui.setFocus",
+        args: { scope_chain: ["task:abc", "column:col1", "window:main"] },
+      }),
+    );
   });
 });

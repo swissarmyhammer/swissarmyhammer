@@ -13,7 +13,10 @@ import {
   type CommandDef,
   type CommandScope,
 } from "@/lib/command-scope";
-import { useEntityFocus, type ClaimPredicate } from "@/lib/entity-focus-context";
+import {
+  useEntityFocus,
+  type ClaimPredicate,
+} from "@/lib/entity-focus-context";
 import { useContextMenu } from "@/lib/context-menu";
 import { FocusHighlight } from "@/components/ui/focus-highlight";
 
@@ -135,8 +138,10 @@ export function FocusScope({
 }
 
 /** Props for the inner focus-scope wrapper rendered inside CommandScopeContext. */
-interface FocusScopeInnerProps
-  extends Omit<React.HTMLAttributes<HTMLElement>, "onClick" | "children"> {
+interface FocusScopeInnerProps extends Omit<
+  React.HTMLAttributes<HTMLElement>,
+  "onClick" | "children"
+> {
   moniker: string;
   isDirectFocus: boolean;
   onClick: React.MouseEventHandler<HTMLElement>;
@@ -151,9 +156,21 @@ function FocusScopeInner({
   children,
   ...htmlProps
 }: FocusScopeInnerProps) {
-  const contextMenuHandler = useContextMenu();
-  const { setFocus } = useEntityFocus();
   const scope = useContext(CommandScopeContext);
+
+  // Build scope chain (moniker walk from this scope to root) for context menu
+  const scopeChain = useMemo(() => {
+    const chain: string[] = [];
+    let current: typeof scope | null = scope;
+    while (current) {
+      if (current.moniker) chain.push(current.moniker);
+      current = current.parent;
+    }
+    return chain;
+  }, [scope]);
+
+  const contextMenuHandler = useContextMenu(scopeChain);
+  const { setFocus } = useEntityFocus();
 
   const handleContextMenu = useCallback(
     (e: React.MouseEvent) => {
@@ -175,10 +192,9 @@ function FocusScopeInner({
 
       e.stopPropagation();
 
-      // entity.inspect is the one client-side command — double-click opens
-      // the inspector panel. This is by design, not a special case to remove.
-      // See entity-commands.ts for the full rationale.
-      const cmd = resolveCommand(scope, "entity.inspect");
+      // ui.inspect opens the inspector panel. Double-click dispatches it
+      // to the backend which pushes onto the inspector stack.
+      const cmd = resolveCommand(scope, "ui.inspect");
       if (cmd) {
         dispatchCommand(cmd);
       }
@@ -207,4 +223,3 @@ function FocusScopeInner({
 export function useParentFocusScope(): string | null {
   return useContext(FocusScopeContext);
 }
-

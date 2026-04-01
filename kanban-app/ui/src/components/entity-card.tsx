@@ -1,4 +1,11 @@
-import { forwardRef, memo, useCallback, useContext, useMemo, useState } from "react";
+import {
+  forwardRef,
+  memo,
+  useCallback,
+  useContext,
+  useMemo,
+  useState,
+} from "react";
 import { GripVertical, Info, icons } from "lucide-react";
 import { FocusScope } from "@/components/focus-scope";
 import { Field } from "@/components/fields/field";
@@ -154,7 +161,7 @@ function InspectButton() {
       className="shrink-0 mt-0.5 p-0.5 rounded text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted transition-colors"
       onClick={(e) => {
         e.stopPropagation();
-        const cmd = resolveCommand(scope, "entity.inspect");
+        const cmd = resolveCommand(scope, "ui.inspect");
         if (cmd) dispatchCommand(cmd);
       }}
       title="Inspect"

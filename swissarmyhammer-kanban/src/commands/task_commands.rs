@@ -1,4 +1,4 @@
-//! Task-related command implementations: add, move, untag, delete.
+//! Task-related command implementations: add, move, tag, untag, delete.
 
 use super::run_op;
 use crate::context::KanbanContext;
@@ -254,33 +254,6 @@ impl Command for MoveTaskCmd {
         if let Some(swimlane) = ctx.arg("swimlane").and_then(|v| v.as_str()) {
             op.swimlane = Some(swimlane.into());
         }
-
-        run_op(&op, &kanban).await
-    }
-}
-
-/// Add a tag to a task.
-///
-/// Requires both `tag` and `task` in the scope chain.
-pub struct TagTaskCmd;
-
-#[async_trait]
-impl Command for TagTaskCmd {
-    fn available(&self, ctx: &CommandContext) -> bool {
-        ctx.has_in_scope("tag") && ctx.has_in_scope("task")
-    }
-
-    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
-        let kanban = ctx.require_extension::<KanbanContext>()?;
-
-        let task_id = ctx
-            .resolve_entity_id("task")
-            .ok_or_else(|| CommandError::MissingScope("task".into()))?;
-        let tag_name = ctx
-            .resolve_entity_id("tag")
-            .ok_or_else(|| CommandError::MissingScope("tag".into()))?;
-
-        let op = crate::task::TagTask::new(task_id, tag_name);
 
         run_op(&op, &kanban).await
     }

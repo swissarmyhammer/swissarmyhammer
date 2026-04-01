@@ -1,9 +1,10 @@
 //! Native menu bar construction and event handling.
 
-use crate::commands::MenuItemEntry;
-use crate::state::{resolve_kanban_path, AppState};
+use crate::state::{resolve_kanban_path, AppState, MenuItemHandle};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use swissarmyhammer_commands::RecentBoard;
+use swissarmyhammer_commands::{CommandDef, CommandsRegistry, RecentBoard, UIState};
+use swissarmyhammer_kanban::scope_commands::WindowInfo;
 use swissarmyhammer_kanban::{
     board::InitBoard, KanbanContext, KanbanOperationProcessor, OperationProcessor,
 };
@@ -11,22 +12,59 @@ use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_dialog::DialogExt;
 
-/// Build and set the native menu from a frontend-generated manifest.
+/// A collected menu entry derived from a `CommandDef` with menu placement.
+struct MenuEntry {
+    id: String,
+    name: String,
+    group: usize,
+    order: usize,
+    accelerator: Option<String>,
+    radio_group: Option<String>,
+    checked: bool,
+}
+
+/// Build and set the native menu bar from the command registry.
 ///
-/// Groups entries by menu name (app, file, settings), builds each submenu
-/// with separators between groups, and injects OS chrome items (About, Quit,
-/// Hide, Close Window, Open Recent, Edit menu). The manifest entries are
-/// Sorts entries by (group, order) within each menu submenu.
-pub fn build_menu_from_manifest(
+/// Reads all `CommandDef` entries with `menu` metadata, groups them by
+/// the first path element (top-level menu), sorts by `(group, order)`,
+/// and builds native menu items. OS chrome items (About, Quit, Hide,
+/// Open Recent, Edit shortcuts, Window list) are injected in their
+/// standard positions.
+///
+/// Returns a `HashMap` of all created menu item handles keyed by command ID,
+/// which can be stored in `AppState` for later enable/disable operations.
+pub fn build_menu_from_commands(
     app: &AppHandle,
-    manifest: &[MenuItemEntry],
+    registry: &CommandsRegistry,
+    ui_state: &UIState,
     recent: &[RecentBoard],
-) -> tauri::Result<()> {
-    // Group entries by menu name, then sort by (group, order) within each menu
-    let mut menus: std::collections::HashMap<String, Vec<&MenuItemEntry>> =
-        std::collections::HashMap::new();
-    for entry in manifest {
-        menus.entry(entry.menu.clone()).or_default().push(entry);
+    windows: &[WindowInfo],
+) -> tauri::Result<HashMap<String, MenuItemHandle>> {
+    let keymap_mode = ui_state.keymap_mode();
+    let mut menu_items: HashMap<String, MenuItemHandle> = HashMap::new();
+
+    // Collect commands with menu metadata, grouped by top-level menu name.
+    // Nested paths (e.g. ["App", "Settings"]) are keyed as "App/Settings".
+    let mut menus: HashMap<String, Vec<MenuEntry>> = HashMap::new();
+    for cmd in registry.all_commands() {
+        let Some(ref placement) = cmd.menu else {
+            continue;
+        };
+        if placement.path.is_empty() {
+            continue;
+        }
+        let key = placement.path.join("/");
+        let accelerator = resolve_accelerator(cmd, &keymap_mode);
+        let checked = resolve_checked(cmd, ui_state);
+        menus.entry(key).or_default().push(MenuEntry {
+            id: cmd.id.clone(),
+            name: cmd.menu_name.clone().unwrap_or_else(|| cmd.name.clone()),
+            group: placement.group,
+            order: placement.order,
+            accelerator,
+            radio_group: placement.radio_group.clone(),
+            checked,
+        });
     }
     for items in menus.values_mut() {
         items.sort_by_key(|e| (e.group, e.order));
@@ -36,7 +74,7 @@ pub fn build_menu_from_manifest(
     let app_menu = Submenu::new(app, app.package_info().name.clone(), true)?;
     app_menu.append(&PredefinedMenuItem::about(app, None, None)?)?;
 
-    if let Some(items) = menus.get("app") {
+    if let Some(items) = menus.get("App") {
         let mut last_group: Option<usize> = None;
         for entry in items {
             if last_group.is_some() && last_group != Some(entry.group) {
@@ -47,13 +85,13 @@ pub fn build_menu_from_manifest(
                 last_group = Some(entry.group);
                 continue;
             }
-            app_menu.append(build_menu_item(app, entry)?.as_ref())?;
+            append_menu_entry(app, &app_menu, entry, &mut menu_items)?;
             last_group = Some(entry.group);
         }
     }
 
-    // Settings submenu inside the app menu (matches original structure)
-    if let Some(items) = menus.get("settings") {
+    // Settings submenu inside the app menu (nested path "App/Settings")
+    if let Some(items) = menus.get("App/Settings") {
         app_menu.append(&PredefinedMenuItem::separator(app)?)?;
         let settings_sub = Submenu::new(app, "Settings", true)?;
         let mut last_group: Option<usize> = None;
@@ -61,7 +99,7 @@ pub fn build_menu_from_manifest(
             if last_group.is_some() && last_group != Some(entry.group) {
                 settings_sub.append(&PredefinedMenuItem::separator(app)?)?;
             }
-            settings_sub.append(build_menu_item(app, entry)?.as_ref())?;
+            append_menu_entry(app, &settings_sub, entry, &mut menu_items)?;
             last_group = Some(entry.group);
         }
         app_menu.append(&settings_sub)?;
@@ -77,13 +115,13 @@ pub fn build_menu_from_manifest(
 
     // --- File menu ---
     let file_menu = Submenu::new(app, "File", true)?;
-    if let Some(items) = menus.get("file") {
+    if let Some(items) = menus.get("File") {
         let mut last_group: Option<usize> = None;
         for entry in items {
             if last_group.is_some() && last_group != Some(entry.group) {
                 file_menu.append(&PredefinedMenuItem::separator(app)?)?;
             }
-            file_menu.append(build_menu_item(app, entry)?.as_ref())?;
+            append_menu_entry(app, &file_menu, entry, &mut menu_items)?;
             last_group = Some(entry.group);
         }
     }
@@ -98,43 +136,29 @@ pub fn build_menu_from_manifest(
     file_menu.append(&PredefinedMenuItem::separator(app)?)?;
     file_menu.append(&PredefinedMenuItem::close_window(app, None)?)?;
 
-    // --- Edit menu (OS chrome + manifest items) ---
-    let edit_menu = Submenu::with_items(
-        app,
-        "Edit",
-        true,
-        &[
-            &PredefinedMenuItem::undo(app, None)?,
-            &PredefinedMenuItem::redo(app, None)?,
-            &PredefinedMenuItem::separator(app)?,
-            &PredefinedMenuItem::cut(app, None)?,
-            &PredefinedMenuItem::copy(app, None)?,
-            &PredefinedMenuItem::paste(app, None)?,
-            &PredefinedMenuItem::select_all(app, None)?,
-        ],
-    )?;
-    if let Some(items) = menus.get("edit") {
-        edit_menu.append(&PredefinedMenuItem::separator(app)?)?;
+    // --- Edit menu (built from registry like all other menus) ---
+    let edit_menu = Submenu::new(app, "Edit", true)?;
+    if let Some(items) = menus.get("Edit") {
         let mut last_group: Option<usize> = None;
         for entry in items {
             if last_group.is_some() && last_group != Some(entry.group) {
                 edit_menu.append(&PredefinedMenuItem::separator(app)?)?;
             }
-            edit_menu.append(build_menu_item(app, entry)?.as_ref())?;
+            append_menu_entry(app, &edit_menu, entry, &mut menu_items)?;
             last_group = Some(entry.group);
         }
     }
 
     // --- Window menu ---
     let window_menu = Submenu::new(app, "Window", true)?;
-    if let Some(items) = menus.get("window") {
+    if let Some(items) = menus.get("Window") {
         let mut last_group: Option<usize> = None;
         let mut count = 0usize;
         for entry in items {
             if last_group.is_some() && last_group != Some(entry.group) {
                 window_menu.append(&PredefinedMenuItem::separator(app)?)?;
             }
-            window_menu.append(build_menu_item(app, entry)?.as_ref())?;
+            append_menu_entry(app, &window_menu, entry, &mut menu_items)?;
             last_group = Some(entry.group);
             count += 1;
         }
@@ -142,27 +166,18 @@ pub fn build_menu_from_manifest(
             window_menu.append(&PredefinedMenuItem::separator(app)?)?;
         }
     }
+    window_menu.append(&PredefinedMenuItem::separator(app)?)?;
     window_menu.append(&PredefinedMenuItem::minimize(app, None)?)?;
     window_menu.append(&PredefinedMenuItem::maximize(app, None)?)?;
 
-    // Manually list open windows with a checkmark on the focused one.
-    // NOTE: muda's set_as_windows_menu_for_nsapp() is broken — it uses
-    // a disconnected NSMenu that macOS ignores (muda#322, still unmerged).
-    let windows = app.webview_windows();
-    let visible: Vec<_> = windows
-        .iter()
-        .filter(|(_, w)| {
-            let title = w.title().unwrap_or_default();
-            !title.is_empty() && w.is_visible().unwrap_or(false)
-        })
-        .collect();
-    if !visible.is_empty() {
+    // Open windows with a checkmark on the focused one.
+    // Driven by DynamicSources.windows so the same data feeds the palette.
+    if !windows.is_empty() {
         window_menu.append(&PredefinedMenuItem::separator(app)?)?;
-        for (label, window) in &visible {
-            let title = window.title().unwrap_or_else(|_| (*label).clone());
-            let focused = window.is_focused().unwrap_or(false);
-            let id = format!("window.focus:{}", label);
-            let item = CheckMenuItem::with_id(app, id, &title, true, focused, None::<&str>)?;
+        for win in windows {
+            let id = format!("window.focus:{}", win.label);
+            let item =
+                CheckMenuItem::with_id(app, id, &win.title, true, win.focused, None::<&str>)?;
             window_menu.append(&item)?;
         }
     }
@@ -173,35 +188,160 @@ pub fn build_menu_from_manifest(
         e
     })?;
 
+    Ok(menu_items)
+}
+
+/// Resolve the keyboard accelerator for a command in the current keymap mode.
+///
+/// Looks up the binding for the active mode, falling back to CUA if the
+/// mode-specific binding is absent. Replaces `Mod` with `CmdOrCtrl` so
+/// Tauri maps it correctly per platform.
+fn resolve_accelerator(cmd: &CommandDef, keymap_mode: &str) -> Option<String> {
+    let keys = cmd.keys.as_ref()?;
+    let binding = match keymap_mode {
+        "vim" => keys.vim.as_deref().or(keys.cua.as_deref()),
+        "emacs" => keys.emacs.as_deref().or(keys.cua.as_deref()),
+        _ => keys.cua.as_deref(),
+    }?;
+    // Vim chord-style bindings (e.g. ":q", "dd") are not valid accelerators.
+    if binding.len() > 1 && !binding.contains('+') {
+        return None;
+    }
+    Some(binding.replace("Mod", "CmdOrCtrl"))
+}
+
+/// Resolve the checked state for radio group items.
+///
+/// Currently supports the "keymap" radio group — the item matching the
+/// active keymap mode is checked.
+fn resolve_checked(cmd: &CommandDef, ui_state: &UIState) -> bool {
+    let Some(ref placement) = cmd.menu else {
+        return false;
+    };
+    match placement.radio_group.as_deref() {
+        Some("keymap") => {
+            let mode = ui_state.keymap_mode();
+            match cmd.id.as_str() {
+                "settings.keymap.vim" => mode == "vim",
+                "settings.keymap.cua" => mode == "cua",
+                "settings.keymap.emacs" => mode == "emacs",
+                _ => false,
+            }
+        }
+        _ => false,
+    }
+}
+
+/// Append a single menu entry to a submenu, creating either a CheckMenuItem
+/// (for radio group items) or a regular MenuItem.
+fn append_menu_entry(
+    app: &AppHandle,
+    submenu: &Submenu<tauri::Wry>,
+    entry: &MenuEntry,
+    menu_items: &mut HashMap<String, MenuItemHandle>,
+) -> tauri::Result<()> {
+    if entry.radio_group.is_some() {
+        let item = CheckMenuItem::with_id(
+            app,
+            &entry.id,
+            &entry.name,
+            true,
+            entry.checked,
+            entry.accelerator.as_deref(),
+        )?;
+        menu_items.insert(entry.id.clone(), MenuItemHandle::Check(item.clone()));
+        submenu.append(&item)?;
+    } else {
+        let item = MenuItem::with_id(
+            app,
+            &entry.id,
+            &entry.name,
+            true,
+            entry.accelerator.as_deref(),
+        )?;
+        menu_items.insert(entry.id.clone(), MenuItemHandle::Regular(item.clone()));
+        submenu.append(&item)?;
+    }
     Ok(())
 }
 
-/// Build a single native menu item from a manifest entry.
+/// Update the enabled state of all menu items based on command availability.
 ///
-/// If the entry has a `radio_group`, a CheckMenuItem is created (for radio-style
-/// toggle items). Otherwise a regular MenuItem is created. Both support
-/// optional keyboard accelerators.
-fn build_menu_item(
-    app: &AppHandle,
-    entry: &MenuItemEntry,
-) -> tauri::Result<Box<dyn tauri::menu::IsMenuItem<tauri::Wry>>> {
-    if entry.radio_group.is_some() {
-        Ok(Box::new(CheckMenuItem::with_id(
-            app,
-            &entry.id,
-            &entry.name,
-            true,
-            entry.checked.unwrap_or(false),
-            entry.accelerator.as_deref(),
-        )?))
-    } else {
-        Ok(Box::new(MenuItem::with_id(
-            app,
-            &entry.id,
-            &entry.name,
-            true,
-            entry.accelerator.as_deref(),
-        )?))
+/// Builds a CommandContext from the current scope chain and UIState, then
+/// checks each cached menu item's command `available()` to set enabled/disabled.
+/// Called after every command dispatch.
+pub fn update_menu_enabled_state(state: &AppState) {
+    let scope = state.ui_state.scope_chain();
+
+    // Use commands_for_scope as the single source of truth for availability + names.
+    // Use try_read to avoid deadlock when called from nested dispatch_command_internal
+    // (e.g. open_and_notify → file.switchBoard triggers menu update while outer
+    // dispatch is still running).
+    let boards = match state.boards.try_read() {
+        Ok(b) => b,
+        Err(_) => {
+            tracing::debug!("update_menu_enabled_state: skipping — boards lock busy");
+            return;
+        }
+    };
+    let fields = boards.values().next().and_then(|h| h.ctx.fields());
+
+    let registry = match state.commands_registry.try_read() {
+        Ok(r) => r,
+        Err(_) => {
+            tracing::debug!("update_menu_enabled_state: skipping — registry lock busy");
+            return;
+        }
+    };
+    let resolved = swissarmyhammer_kanban::scope_commands::commands_for_scope(
+        &scope,
+        &registry,
+        &state.command_impls,
+        fields,
+        &state.ui_state,
+        false,
+        None, // menus don't need dynamic view/board commands
+    );
+    drop(registry);
+    drop(boards);
+
+    // Build lookup: command ID → resolved name + available
+    let resolved_map: HashMap<String, (String, bool)> = resolved
+        .into_iter()
+        .map(|c| (c.id.clone(), (c.name, c.available)))
+        .collect();
+
+    // For fallback names when commands aren't available, strip templates.
+    // Use try_read to avoid blocking the tokio runtime when called from
+    // an async context (dispatch_command_internal is async).
+    let registry2 = match state.commands_registry.try_read() {
+        Ok(r) => r,
+        Err(_) => {
+            tracing::debug!("update_menu_enabled_state: skipping fallback — registry lock busy");
+            // Still apply the resolved names/enabled states we have
+            let menu_items = state.menu_items.lock().unwrap();
+            for (cmd_id, menu_item) in menu_items.iter() {
+                if let Some((name, enabled)) = resolved_map.get(cmd_id) {
+                    let _ = menu_item.set_enabled(*enabled);
+                    let _ = menu_item.set_text(name);
+                }
+            }
+            return;
+        }
+    };
+    let menu_items = state.menu_items.lock().unwrap();
+    for (cmd_id, menu_item) in menu_items.iter() {
+        if let Some((name, enabled)) = resolved_map.get(cmd_id) {
+            let _ = menu_item.set_enabled(*enabled);
+            let _ = menu_item.set_text(name);
+        } else {
+            // Command not available — disable and show clean generic name
+            let _ = menu_item.set_enabled(false);
+            if let Some(def) = registry2.get(cmd_id) {
+                let clean = def.name.replace(" {{entity.type}}", "");
+                let _ = menu_item.set_text(&clean);
+            }
+        }
     }
 }
 
@@ -220,30 +360,12 @@ pub fn handle_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
         return;
     }
 
-    // Window list items — focus the named window and update check states
+    // Window list items — focus the named window; menu rebuild happens
+    // when the frontend re-dispatches ui.setFocus on window focus.
     if let Some(label) = id.strip_prefix("window.focus:") {
         if let Some(window) = app.get_webview_window(label) {
             let _ = window.unminimize();
             let _ = window.set_focus();
-        }
-        // Update check marks: only the clicked window should be checked
-        if let Some(menu) = app.menu() {
-            if let Ok(items) = menu.items() {
-                for item in items {
-                    if let Some(sub) = item.as_submenu() {
-                        if let Ok(sub_items) = sub.items() {
-                            for si in sub_items {
-                                if let Some(check) = si.as_check_menuitem() {
-                                    let cid = check.id().as_ref().to_string();
-                                    if let Some(wlabel) = cid.strip_prefix("window.focus:") {
-                                        let _ = check.set_checked(wlabel == label);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
         }
         return;
     }
@@ -263,6 +385,61 @@ pub fn handle_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
     // Everything else: emit as a generic menu-command event.
     // The frontend listens for this and routes through executeCommand(id).
     let _ = app.emit("menu-command", &id);
+}
+
+/// Rebuild the native menu bar from the command registry (sync version).
+///
+/// Uses `blocking_read` — only safe from synchronous contexts (e.g. window
+/// event handlers). For async contexts use `rebuild_menu_async`.
+pub fn rebuild_menu(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    let recent = state.ui_state.recent_boards();
+    let registry = state.commands_registry.blocking_read();
+    rebuild_menu_inner(app, &state, &registry, &recent);
+}
+
+/// Rebuild the native menu bar from the command registry (async version).
+///
+/// Uses `.read().await` on the tokio `RwLock`, safe from async contexts
+/// like `dispatch_command_internal`.
+pub async fn rebuild_menu_async(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    let recent = state.ui_state.recent_boards();
+    let registry = state.commands_registry.read().await;
+    rebuild_menu_inner(app, &state, &registry, &recent);
+}
+
+/// Shared implementation for menu rebuilding.
+fn rebuild_menu_inner(
+    app: &AppHandle,
+    state: &AppState,
+    registry: &CommandsRegistry,
+    recent: &[RecentBoard],
+) {
+    // Build WindowInfo list from live Tauri windows.
+    let windows: Vec<WindowInfo> = app
+        .webview_windows()
+        .iter()
+        .filter_map(|(label, w)| {
+            let title = w.title().ok()?;
+            if title.is_empty() || !w.is_visible().unwrap_or(false) {
+                return None;
+            }
+            Some(WindowInfo {
+                label: label.clone(),
+                title,
+                focused: w.is_focused().unwrap_or(false),
+            })
+        })
+        .collect();
+    match build_menu_from_commands(app, registry, &state.ui_state, recent, &windows) {
+        Ok(items) => {
+            *state.menu_items.lock().unwrap() = items;
+        }
+        Err(e) => {
+            tracing::error!("Failed to rebuild menu: {}", e);
+        }
+    }
 }
 
 /// Public entry point for creating a new board -- used by both native menu and command palette.
@@ -363,15 +540,18 @@ async fn open_and_notify(handle: &AppHandle, path: &Path, source_window_label: O
     let path_str = path.display().to_string();
     let window_label = source_window_label.unwrap_or("main").to_string();
 
+    // Build a synthetic scope chain with the window moniker so the backend
+    // can derive window identity from the scope chain alone.
+    let synthetic_scope = vec![format!("window:{}", window_label)];
+
     match crate::commands::dispatch_command_internal(
         handle,
         &state,
         "file.switchBoard",
-        None,
+        Some(synthetic_scope),
         None,
         Some(json!({ "path": path_str, "windowLabel": window_label })),
         None,
-        Some(window_label.clone()),
     )
     .await
     {
@@ -383,11 +563,16 @@ async fn open_and_notify(handle: &AppHandle, path: &Path, source_window_label: O
                 .and_then(|p| p.canonicalize().ok().or(Some(p)))
                 .unwrap_or_else(|| path.to_path_buf());
 
-            // Emit board-opened to the source window only so it switches its active board.
-            // dispatch_command_internal already emits board-changed to all windows.
+            // Emit board-opened so the originating window switches its active board.
+            // Use emit_to when we know which window triggered the open; fall back
+            // to a global emit so the event always reaches at least one listener
+            // (focused_window_label can return None when OS focus shifts during
+            // native dialogs or menu interactions).
             let payload = json!({ "path": canonical.display().to_string() });
             if let Some(label) = source_window_label {
                 let _ = handle.emit_to(label, "board-opened", &payload);
+            } else {
+                let _ = handle.emit("board-opened", &payload);
             }
         }
         Err(e) => {

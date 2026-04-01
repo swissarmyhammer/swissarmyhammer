@@ -1,8 +1,7 @@
 import { useMemo } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { useSchemaOptional } from "@/lib/schema-context";
 import { useInspectOptional } from "@/lib/inspect-context";
-import { useActiveBoardPath } from "@/lib/command-scope";
+import { useActiveBoardPath, backendDispatch } from "@/lib/command-scope";
 import { moniker } from "@/lib/moniker";
 import type { CommandDef } from "@/lib/command-scope";
 import type { Entity, EntityCommand } from "@/types/kanban";
@@ -81,10 +80,10 @@ export function buildEntityCommandDefs(
       // execution mode (client vs backend) is an inherent property of the
       // inspect action. See also focus-scope.tsx which resolves
       // entity.inspect for the double-click gesture.
-      if (cmd.id === "entity.inspect") {
+      if (cmd.id === "ui.inspect" || cmd.id === "entity.inspect") {
         inspectEntity(entityMoniker);
       } else {
-        invoke("dispatch_command", {
+        backendDispatch({
           cmd: cmd.id,
           target: entityMoniker,
           ...(boardPath ? { boardPath } : {}),
@@ -130,11 +129,10 @@ export function useEntityCommands(
         contextMenu: cmd.context_menu ?? false,
         keys: cmd.keys,
         execute: () => {
-          // entity.inspect: the one client-side command (see buildEntityCommandDefs above)
-          if (cmd.id === "entity.inspect") {
+          if (cmd.id === "ui.inspect" || cmd.id === "entity.inspect") {
             inspect?.(entityMoniker);
           } else {
-            invoke("dispatch_command", {
+            backendDispatch({
               cmd: cmd.id,
               target: entityMoniker,
               ...(boardPath ? { boardPath } : {}),

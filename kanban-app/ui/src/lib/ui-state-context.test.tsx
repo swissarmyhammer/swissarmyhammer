@@ -17,7 +17,6 @@ import { listen } from "@tauri-apps/api/event";
 /** Minimal valid UIStateSnapshot matching the new backend shape. */
 function makeState(overrides: Record<string, unknown> = {}) {
   return {
-    palette_open: false,
     keymap_mode: "cua",
     scope_chain: [],
     open_boards: [],
@@ -38,7 +37,8 @@ describe("useUIState", () => {
       wrapper: UIStateProvider,
     });
     expect(result.current.keymap_mode).toBe("cua");
-    expect(result.current.palette_open).toBe(false);
+    // palette_open lives in per-window state; default has no windows
+    expect(result.current.windows).toEqual({});
   });
 
   it("fetches initial state on mount", async () => {

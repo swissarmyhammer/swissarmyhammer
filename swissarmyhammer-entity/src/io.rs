@@ -355,6 +355,155 @@ fn format_plain_yaml(entity: &Entity) -> Result<String> {
     })
 }
 
+// --- Attachment helpers ---
+
+/// Get the `.attachments/` directory for an entity type.
+///
+/// Lives inside the entity type's pluralized directory:
+/// `{root}/{type}s/.attachments/`
+pub fn attachments_dir(entity_type_dir: &Path) -> PathBuf {
+    entity_type_dir.join(".attachments")
+}
+
+/// Get the `.attachments/.trash/` directory for trashed attachment files.
+pub fn attachments_trash_dir(entity_type_dir: &Path) -> PathBuf {
+    attachments_dir(entity_type_dir).join(".trash")
+}
+
+/// Sanitize a filename for safe storage.
+///
+/// Strips path separators, null bytes, and leading dots to prevent
+/// hidden files or path traversal.
+pub fn sanitize_filename(name: &str) -> String {
+    let sanitized: String = name
+        .chars()
+        .filter(|c| *c != '/' && *c != '\\' && *c != '\0')
+        .collect();
+    // Strip leading dots to prevent hidden files
+    let safe = sanitized.trim_start_matches('.').to_string();
+    // Fallback to "unnamed" when nothing remains (e.g. input was all dots)
+    if safe.is_empty() {
+        "unnamed".to_string()
+    } else {
+        safe
+    }
+}
+
+/// Copy a source file into `.attachments/` with atomic write (temp + rename).
+///
+/// Returns the stored filename (`{ulid}-{sanitized_name}`).
+/// Validates that the source exists and does not exceed `max_bytes`.
+pub async fn copy_attachment(
+    source: &Path,
+    entity_type_dir: &Path,
+    field_name: &str,
+    max_bytes: u64,
+) -> Result<String> {
+    // Validate source exists
+    let metadata = fs::metadata(source).await.map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            EntityError::AttachmentSourceNotFound {
+                path: source.to_path_buf(),
+            }
+        } else {
+            EntityError::Io(e)
+        }
+    })?;
+
+    // Check file size
+    let size = metadata.len();
+    if size > max_bytes {
+        return Err(EntityError::AttachmentTooLarge {
+            field: field_name.to_string(),
+            size,
+            max_bytes,
+        });
+    }
+
+    // Generate stored filename
+    let original_name = source
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("unnamed");
+    let safe_name = sanitize_filename(original_name);
+    let ulid = Ulid::new();
+    let stored_name = format!("{}-{}", ulid, safe_name);
+
+    let dest_dir = attachments_dir(entity_type_dir);
+    fs::create_dir_all(&dest_dir).await?;
+
+    let dest = dest_dir.join(&stored_name);
+    let temp_path = dest_dir.join(format!(".tmp_{}", Ulid::new()));
+
+    // Copy to temp file, then atomic rename
+    fs::copy(source, &temp_path).await?;
+    if let Err(e) = fs::rename(&temp_path, &dest).await {
+        let _ = fs::remove_file(&temp_path).await;
+        return Err(e.into());
+    }
+
+    Ok(stored_name)
+}
+
+/// Move an attachment file to `.attachments/.trash/`.
+///
+/// Silently succeeds if the source file doesn't exist (already cleaned up).
+pub async fn trash_attachment(filename: &str, entity_type_dir: &Path) -> Result<()> {
+    let src = attachments_dir(entity_type_dir).join(filename);
+    let trash = attachments_trash_dir(entity_type_dir);
+    fs::create_dir_all(&trash).await?;
+    let dest = trash.join(filename);
+    match fs::rename(&src, &dest).await {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// Derive attachment metadata from a stored filename.
+///
+/// Given a stored filename like `01ABC123-screenshot.png`, extracts:
+/// - `id`: the ULID prefix (before the first `-`)
+/// - `name`: the original filename (after the first `-`)
+/// - `size`: file size from fs::metadata
+/// - `mime_type`: detected from extension
+/// - `path`: absolute filesystem path
+///
+/// Returns a JSON object with the metadata, or `None` if the file doesn't exist.
+pub async fn attachment_metadata(
+    filename: &str,
+    entity_type_dir: &Path,
+) -> Option<serde_json::Value> {
+    let file_path = attachments_dir(entity_type_dir).join(filename);
+    let metadata = fs::metadata(&file_path).await.ok()?;
+
+    // Split on first `-` to get id and original name
+    let (id, name) = match filename.find('-') {
+        Some(pos) => (&filename[..pos], &filename[pos + 1..]),
+        None => (filename, filename),
+    };
+
+    let mime_type = detect_mime_type(filename);
+    let abs_path = file_path
+        .canonicalize()
+        .unwrap_or_else(|_| file_path.clone());
+
+    Some(serde_json::json!({
+        "id": id,
+        "name": name,
+        "size": metadata.len(),
+        "mime_type": mime_type.unwrap_or_else(|| "application/octet-stream".to_string()),
+        "path": abs_path.to_string_lossy(),
+    }))
+}
+
+/// Detect MIME type from file extension using the `mime_guess` crate.
+///
+/// Returns the MIME type string for known extensions, or `None` for unknown ones.
+pub fn detect_mime_type(path: &str) -> Option<String> {
+    mime_guess::from_path(path).first().map(|m| m.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -429,6 +578,22 @@ mod tests {
         // Bare . becomes _invalid_
         let path = entity_file_path(dir, ".", &tag_entity_def());
         assert_eq!(path, PathBuf::from("/tmp/tasks/_invalid_.yaml"));
+    }
+
+    #[test]
+    fn sanitize_filename_falls_back_to_unnamed_when_empty() {
+        // All dots → stripped to empty → "unnamed"
+        assert_eq!(sanitize_filename("..."), "unnamed");
+        // Single dot
+        assert_eq!(sanitize_filename("."), "unnamed");
+        // Empty string
+        assert_eq!(sanitize_filename(""), "unnamed");
+        // Only path separators and dots
+        assert_eq!(sanitize_filename("/.\\."), "unnamed");
+        // Normal input still works
+        assert_eq!(sanitize_filename("photo.png"), "photo.png");
+        // Leading dots stripped, rest preserved
+        assert_eq!(sanitize_filename("..hidden"), "hidden");
     }
 
     #[test]

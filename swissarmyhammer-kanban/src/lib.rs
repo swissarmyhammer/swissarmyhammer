@@ -62,6 +62,7 @@
 //! JSON API responses remain unchanged — serde_json is used for all output.
 
 pub mod auto_color;
+pub mod clipboard;
 mod context;
 pub mod cross_board;
 pub mod defaults;
@@ -80,11 +81,11 @@ pub mod commands;
 // Command modules
 pub mod activity;
 pub mod actor;
-pub mod attachment;
 pub mod board;
 pub mod column;
 pub mod entity;
 pub mod schema;
+pub mod scope_commands;
 pub mod swimlane;
 pub mod tag;
 pub mod task;

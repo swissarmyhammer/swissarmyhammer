@@ -524,10 +524,47 @@ type:
         .unwrap();
 
         assert_eq!(ctx.all_fields().len(), 1);
-        assert_eq!(
-            ctx.get_field_by_name("title").unwrap().description,
-            Some("Version 2".into())
+        let field = ctx.get_field_by_name("title").unwrap();
+        assert_eq!(field.description, Some("Version 2".into()));
+        // The new ID replaces the old one in the id_index
+        assert_eq!(field.id.as_str(), "00000000000000000000000099");
+        assert!(
+            ctx.get_field_by_id("00000000000000000000000099").is_some(),
+            "new ID should be in id_index"
         );
+        assert!(
+            ctx.get_field_by_id("00000000000000000000000001").is_none(),
+            "old ID should be removed from id_index"
+        );
+    }
+
+    #[test]
+    fn from_yaml_sources_entity_override_later_wins() {
+        let v1 = r#"
+name: task
+body_field: body
+fields:
+  - title
+"#;
+        let v2 = r#"
+name: task
+body_field: description
+fields:
+  - title
+  - status
+"#;
+
+        let ctx = FieldsContext::from_yaml_sources(
+            PathBuf::from("/tmp/test"),
+            &[],
+            &[("task", v1), ("task", v2)],
+        )
+        .unwrap();
+
+        assert_eq!(ctx.all_entities().len(), 1);
+        let entity = ctx.get_entity("task").unwrap();
+        assert_eq!(entity.body_field, Some("description".into()));
+        assert_eq!(entity.fields.len(), 2);
     }
 
     #[test]
@@ -566,57 +603,6 @@ type:
                 .description,
             Some("Version 2".into())
         );
-    }
-
-    #[test]
-    fn from_yaml_sources_entity_override_replaces_earlier() {
-        let entity_v1 = r#"
-name: task
-body_field: body
-fields:
-  - title
-"#;
-        let entity_v2 = r#"
-name: task
-body_field: description
-fields:
-  - title
-  - status
-"#;
-
-        let ctx = FieldsContext::from_yaml_sources(
-            PathBuf::from("/tmp/test"),
-            &[],
-            &[("task", entity_v1), ("task", entity_v2)],
-        )
-        .unwrap();
-
-        assert_eq!(ctx.all_entities().len(), 1);
-        let entity = ctx.get_entity("task").unwrap();
-        assert_eq!(entity.body_field, Some("description".into()));
-        assert_eq!(entity.fields.len(), 2);
-    }
-
-    #[test]
-    fn from_yaml_sources_skips_invalid_entity_yaml() {
-        let good_entity = r#"
-name: task
-body_field: body
-fields:
-  - title
-"#;
-        let bad_entity = "this is not valid entity yaml: [[[";
-
-        let ctx = FieldsContext::from_yaml_sources(
-            PathBuf::from("/tmp/test"),
-            &[],
-            &[("task", good_entity), ("bad", bad_entity)],
-        )
-        .unwrap();
-
-        assert_eq!(ctx.all_entities().len(), 1);
-        assert!(ctx.get_entity("task").is_some());
-        assert!(ctx.get_entity("bad").is_none());
     }
 
     #[test]
@@ -948,17 +934,16 @@ type:
         let defs_dir = root.join("definitions");
         std::fs::create_dir_all(&defs_dir).unwrap();
 
-        // Non-yaml file should be skipped
-        std::fs::write(defs_dir.join("readme.md"), "# not a field").unwrap();
-
-        let yaml = r#"
+        let valid_yaml = r#"
 id: "00000000000000000000000001"
 name: title
 type:
   kind: text
   single_line: true
 "#;
-        std::fs::write(defs_dir.join("title.yaml"), yaml).unwrap();
+        std::fs::write(defs_dir.join("title.yaml"), valid_yaml).unwrap();
+        std::fs::write(defs_dir.join("readme.md"), "# not a field").unwrap();
+        std::fs::write(defs_dir.join("notes.txt"), "just notes").unwrap();
 
         let ctx = FieldsContext::open(&root).build().await.unwrap();
         assert_eq!(ctx.all_fields().len(), 1);
@@ -972,21 +957,20 @@ type:
         let defs_dir = root.join("definitions");
         std::fs::create_dir_all(&defs_dir).unwrap();
 
-        // Invalid field definition YAML -- should be skipped with a warning
-        std::fs::write(defs_dir.join("bad.yaml"), "this: is not a field def").unwrap();
-
-        let yaml = r#"
+        let valid_yaml = r#"
 id: "00000000000000000000000001"
-name: good
+name: title
 type:
   kind: text
   single_line: true
 "#;
-        std::fs::write(defs_dir.join("good.yaml"), yaml).unwrap();
+        std::fs::write(defs_dir.join("title.yaml"), valid_yaml).unwrap();
+        std::fs::write(defs_dir.join("broken.yaml"), "this: [[[is not valid").unwrap();
+        std::fs::write(defs_dir.join("wrong_schema.yaml"), "just_a_string: hello").unwrap();
 
         let ctx = FieldsContext::open(&root).build().await.unwrap();
         assert_eq!(ctx.all_fields().len(), 1);
-        assert!(ctx.get_field_by_name("good").is_some());
+        assert!(ctx.get_field_by_name("title").is_some());
     }
 
     #[tokio::test]
@@ -996,15 +980,13 @@ type:
         let entities_dir = root.join("entities");
         std::fs::create_dir_all(&entities_dir).unwrap();
 
-        // Non-yaml file should be skipped
-        std::fs::write(entities_dir.join("notes.txt"), "not an entity").unwrap();
-
-        let yaml = r#"
+        let valid_yaml = r#"
 name: task
 fields:
   - title
 "#;
-        std::fs::write(entities_dir.join("task.yaml"), yaml).unwrap();
+        std::fs::write(entities_dir.join("task.yaml"), valid_yaml).unwrap();
+        std::fs::write(entities_dir.join("readme.md"), "# not an entity").unwrap();
 
         let ctx = FieldsContext::open(&root).build().await.unwrap();
         assert_eq!(ctx.all_entities().len(), 1);
@@ -1018,19 +1000,45 @@ fields:
         let entities_dir = root.join("entities");
         std::fs::create_dir_all(&entities_dir).unwrap();
 
-        // Invalid entity YAML -- should be skipped with a warning
-        std::fs::write(entities_dir.join("bad.yaml"), "just: garbage [[[").unwrap();
-
-        let yaml = r#"
-name: issue
+        let valid_yaml = r#"
+name: task
 fields:
   - title
 "#;
-        std::fs::write(entities_dir.join("issue.yaml"), yaml).unwrap();
+        std::fs::write(entities_dir.join("task.yaml"), valid_yaml).unwrap();
+        std::fs::write(entities_dir.join("broken.yaml"), "not: [[[valid yaml").unwrap();
+        std::fs::write(
+            entities_dir.join("wrong_schema.yaml"),
+            "just_a_string: hello",
+        )
+        .unwrap();
 
         let ctx = FieldsContext::open(&root).build().await.unwrap();
         assert_eq!(ctx.all_entities().len(), 1);
-        assert!(ctx.get_entity("issue").is_some());
+        assert!(ctx.get_entity("task").is_some());
+    }
+
+    #[test]
+    fn fields_for_unknown_entity_returns_empty() {
+        let ctx = FieldsContext::from_yaml_sources(PathBuf::from("/tmp/test"), &[], &[]).unwrap();
+
+        let resolved = ctx.fields_for_entity("nonexistent");
+        assert!(resolved.is_empty());
+    }
+
+    #[tokio::test]
+    async fn root_accessor_returns_correct_path() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().join("fields");
+        let ctx = FieldsContext::open(&root).build().await.unwrap();
+        assert_eq!(ctx.root(), root.as_path());
+    }
+
+    #[test]
+    fn root_accessor_from_yaml_sources() {
+        let root = PathBuf::from("/some/custom/path");
+        let ctx = FieldsContext::from_yaml_sources(&root, &[], &[]).unwrap();
+        assert_eq!(ctx.root(), root.as_path());
     }
 
     #[tokio::test]

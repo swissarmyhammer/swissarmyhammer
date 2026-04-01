@@ -33,7 +33,7 @@ pub struct DragSession {
 ///
 /// `board_path` is the canonical path to the `.kanban` directory this window shows.
 /// An empty string means no board is assigned to this window.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct WindowState {
     /// The board path assigned to this window (canonical `.kanban` dir path).
@@ -43,6 +43,12 @@ pub struct WindowState {
     pub inspector_stack: Vec<String>,
     /// The active view ID for this window (e.g. "board-view", "grid-view").
     pub active_view_id: String,
+    /// Whether the command palette is open in this window. Transient — not persisted.
+    #[serde(skip)]
+    pub palette_open: bool,
+    /// Palette mode for this window: "command" or "search". Transient — not persisted.
+    #[serde(skip)]
+    pub palette_mode: String,
     /// Window x position (physical pixels).
     pub x: Option<i32>,
     /// Window y position (physical pixels).
@@ -53,6 +59,23 @@ pub struct WindowState {
     pub height: Option<u32>,
     /// Whether the window is maximized.
     pub maximized: bool,
+}
+
+impl Default for WindowState {
+    fn default() -> Self {
+        Self {
+            board_path: String::new(),
+            inspector_stack: Vec::new(),
+            active_view_id: String::new(),
+            palette_open: false,
+            palette_mode: "command".to_string(),
+            x: None,
+            y: None,
+            width: None,
+            height: None,
+            maximized: false,
+        }
+    }
 }
 
 /// A recently opened board entry for MRU persistence.
@@ -109,9 +132,6 @@ pub struct UIState {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(default)]
 struct UIStateInner {
-    /// Whether the command palette is open. Transient — not persisted.
-    #[serde(skip)]
-    palette_open: bool,
     /// Current keymap mode: "cua", "vim", or "emacs".
     keymap_mode: String,
     /// Current focus scope chain (innermost first). Transient — not persisted.
@@ -120,9 +140,21 @@ struct UIStateInner {
     /// Active cross-window drag session. Transient — not persisted.
     #[serde(skip)]
     drag_session: Option<DragSession>,
+    /// Whether the clipboard contains a copied/cut entity. Transient — not persisted.
+    #[serde(skip)]
+    has_clipboard: bool,
+    /// The entity type on the clipboard (e.g. "task", "tag"). Transient — not persisted.
+    #[serde(skip)]
+    clipboard_entity_type: Option<String>,
     /// IDs of items in the most recently shown context menu. Transient — not persisted.
     #[serde(skip)]
     context_menu_ids: HashSet<String>,
+    /// Whether the undo stack has entries that can be undone. Transient — not persisted.
+    #[serde(skip)]
+    can_undo: bool,
+    /// Whether the undo stack has entries that can be redone. Transient — not persisted.
+    #[serde(skip)]
+    can_redo: bool,
     /// Canonical paths of boards that are open.
     open_boards: Vec<String>,
     /// Per-window state: inspector stack, board assignment, and geometry.
@@ -144,11 +176,14 @@ impl Default for UIStateInner {
     /// Returns the default UI state values.
     fn default() -> Self {
         Self {
-            palette_open: false,
             keymap_mode: "cua".to_string(),
             scope_chain: Vec::new(),
             drag_session: None,
+            has_clipboard: false,
+            clipboard_entity_type: None,
             context_menu_ids: HashSet::new(),
+            can_undo: false,
+            can_redo: false,
             open_boards: Vec::new(),
             windows: HashMap::new(),
             recent_boards: Vec::new(),
@@ -328,18 +363,40 @@ impl UIState {
         change
     }
 
-    /// Set whether the command palette is open.
+    /// Set whether the command palette is open for a specific window.
     ///
     /// Returns `None` if the value is unchanged. Palette state is transient
     /// and is NOT persisted to the config file.
-    pub fn set_palette_open(&self, open: bool) -> Option<UIStateChange> {
+    pub fn set_palette_open(&self, window_label: &str, open: bool) -> Option<UIStateChange> {
         let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
-        if inner.palette_open == open {
+        let ws = inner.windows.entry(window_label.to_string()).or_default();
+        if ws.palette_open == open {
             return None;
         }
-        inner.palette_open = open;
-        Some(UIStateChange::PaletteOpen(inner.palette_open))
+        ws.palette_open = open;
+        Some(UIStateChange::PaletteOpen(ws.palette_open))
         // No try_save — palette_open is transient (#[serde(skip)])
+    }
+
+    /// Set the palette open state and mode in one call for a specific window.
+    ///
+    /// Mode is "command" or "search". Returns a UIStateChange even if only the
+    /// mode changed (so the frontend can react to mode switches).
+    pub fn set_palette_open_with_mode(
+        &self,
+        window_label: &str,
+        open: bool,
+        mode: &str,
+    ) -> Option<UIStateChange> {
+        let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+        let ws = inner.windows.entry(window_label.to_string()).or_default();
+        let changed = ws.palette_open != open || ws.palette_mode != mode;
+        if !changed {
+            return None;
+        }
+        ws.palette_open = open;
+        ws.palette_mode = mode.to_string();
+        Some(UIStateChange::PaletteOpen(ws.palette_open))
     }
 
     /// Set the keymap mode (e.g. "cua", "vim", "emacs").
@@ -639,7 +696,9 @@ impl UIState {
 
     /// Save window geometry for a specific window.
     ///
-    /// Auto-saves if a config path is configured.
+    /// Auto-saves if a config path is configured. Use this for deliberate
+    /// save points (window creation, mid-session close). For high-frequency
+    /// updates during move/resize, use `update_window_geometry` instead.
     pub fn save_window_geometry(
         &self,
         label: &str,
@@ -659,6 +718,36 @@ impl UIState {
             ws.maximized = maximized;
         }
         self.try_save();
+    }
+
+    /// Update window geometry in memory only — no disk write.
+    ///
+    /// Called from move/resize event handlers where high-frequency disk writes
+    /// are wasteful. The final geometry is persisted when the app quits via
+    /// `save()` in the `ExitRequested` handler, or when explicit save points
+    /// like `save_window_geometry` or `remove_window` trigger `try_save`.
+    ///
+    /// Only updates an existing window entry — does NOT create new entries.
+    /// This prevents zombie entries (empty board_path) from appearing when
+    /// the OS fires move/resize events during window teardown after the entry
+    /// has already been removed.
+    pub fn update_window_geometry(
+        &self,
+        label: &str,
+        x: i32,
+        y: i32,
+        width: u32,
+        height: u32,
+        maximized: bool,
+    ) {
+        let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+        if let Some(ws) = inner.windows.get_mut(label) {
+            ws.x = Some(x);
+            ws.y = Some(y);
+            ws.width = Some(width);
+            ws.height = Some(height);
+            ws.maximized = maximized;
+        }
     }
 
     /// Get the window state for a specific window label.
@@ -693,12 +782,86 @@ impl UIState {
             .unwrap_or_default()
     }
 
-    /// Get whether the palette is open.
-    pub fn palette_open(&self) -> bool {
+    /// Get whether the palette is open for a specific window.
+    pub fn palette_open(&self, window_label: &str) -> bool {
         self.inner
             .read()
             .unwrap_or_else(|e| e.into_inner())
-            .palette_open
+            .windows
+            .get(window_label)
+            .map(|ws| ws.palette_open)
+            .unwrap_or(false)
+    }
+
+    /// Get the palette mode ("command" or "search") for a specific window.
+    pub fn palette_mode(&self, window_label: &str) -> String {
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .windows
+            .get(window_label)
+            .map(|ws| ws.palette_mode.clone())
+            .unwrap_or_else(|| "command".to_string())
+    }
+
+    /// Get whether the clipboard contains a copied/cut entity.
+    pub fn has_clipboard(&self) -> bool {
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .has_clipboard
+    }
+
+    /// Set the clipboard flag and entity type. Called after copy/cut operations.
+    pub fn set_has_clipboard(&self, has: bool) {
+        let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+        inner.has_clipboard = has;
+        if !has {
+            inner.clipboard_entity_type = None;
+        }
+    }
+
+    /// Set clipboard flag with the entity type that was copied/cut.
+    pub fn set_clipboard_entity_type(&self, entity_type: impl Into<String>) {
+        let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+        inner.has_clipboard = true;
+        inner.clipboard_entity_type = Some(entity_type.into());
+    }
+
+    /// Get the entity type on the clipboard (e.g. "task", "tag").
+    pub fn clipboard_entity_type(&self) -> Option<String> {
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clipboard_entity_type
+            .clone()
+    }
+
+    /// Whether the undo stack has entries that can be undone.
+    pub fn can_undo(&self) -> bool {
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .can_undo
+    }
+
+    /// Whether the undo stack has entries that can be redone.
+    pub fn can_redo(&self) -> bool {
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .can_redo
+    }
+
+    /// Update the cached undo/redo availability flags.
+    ///
+    /// Called after any operation that modifies the undo stack (write, delete,
+    /// undo, redo) so that synchronous `Command::available()` checks reflect
+    /// current state.
+    pub fn set_undo_redo_state(&self, can_undo: bool, can_redo: bool) {
+        let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+        inner.can_undo = can_undo;
+        inner.can_redo = can_redo;
     }
 
     /// Get the current keymap mode.
@@ -722,17 +885,40 @@ impl UIState {
     /// Serialize the current state to a JSON Value for the frontend.
     ///
     /// Includes ALL fields (both persisted and transient) so the frontend has
-    /// a complete snapshot. The `palette_open` and `scope_chain` fields are
-    /// marked `#[serde(skip)]` on the inner struct to avoid persisting them
-    /// to YAML, so we build the JSON manually to include them.
+    /// a complete snapshot. Transient fields like `palette_open`, `palette_mode`,
+    /// and `scope_chain` are `#[serde(skip)]` on the inner structs to avoid
+    /// persisting them to YAML, so we build the JSON manually to include them.
+    /// `palette_open` and `palette_mode` are per-window and included in each
+    /// window's JSON object.
     pub fn to_json(&self) -> serde_json::Value {
         let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
+        // Build the windows map with transient palette fields included
+        let windows_json: serde_json::Map<String, serde_json::Value> = inner
+            .windows
+            .iter()
+            .map(|(label, ws)| {
+                let mut obj = serde_json::to_value(ws).unwrap_or(serde_json::json!({}));
+                // Inject transient fields that serde(skip) omits
+                if let Some(map) = obj.as_object_mut() {
+                    map.insert(
+                        "palette_open".to_string(),
+                        serde_json::json!(ws.palette_open),
+                    );
+                    map.insert(
+                        "palette_mode".to_string(),
+                        serde_json::json!(ws.palette_mode),
+                    );
+                }
+                (label.clone(), obj)
+            })
+            .collect();
         serde_json::json!({
-            "palette_open": inner.palette_open,
             "keymap_mode": inner.keymap_mode,
             "scope_chain": inner.scope_chain,
             "open_boards": inner.open_boards,
-            "windows": inner.windows,
+            "has_clipboard": inner.has_clipboard,
+            "clipboard_entity_type": inner.clipboard_entity_type,
+            "windows": windows_json,
             "recent_boards": inner.recent_boards,
             "most_recent_board_path": inner.most_recent_board_path,
         })
@@ -743,7 +929,6 @@ impl std::fmt::Debug for UIState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
         f.debug_struct("UIState")
-            .field("palette_open", &inner.palette_open)
             .field("keymap_mode", &inner.keymap_mode)
             .field("scope_chain", &inner.scope_chain)
             .field("windows", &inner.windows)
@@ -887,15 +1072,34 @@ mod tests {
     #[test]
     fn set_palette_open_toggles() {
         let state = UIState::new();
-        assert!(!state.palette_open());
+        assert!(!state.palette_open("main"));
 
-        let change = state.set_palette_open(true);
+        let change = state.set_palette_open("main", true);
         assert!(change.is_some());
-        assert!(state.palette_open());
+        assert!(state.palette_open("main"));
 
-        let change = state.set_palette_open(false);
+        let change = state.set_palette_open("main", false);
         assert!(change.is_some());
-        assert!(!state.palette_open());
+        assert!(!state.palette_open("main"));
+    }
+
+    #[test]
+    fn set_palette_open_per_window() {
+        let state = UIState::new();
+        // Open palette on secondary only
+        state.set_palette_open("secondary", true);
+        // Main should still be closed
+        assert!(!state.palette_open("main"));
+        assert!(state.palette_open("secondary"));
+    }
+
+    #[test]
+    fn palette_mode_per_window() {
+        let state = UIState::new();
+        state.set_palette_open_with_mode("main", true, "command");
+        state.set_palette_open_with_mode("secondary", true, "search");
+        assert_eq!(state.palette_mode("main"), "command");
+        assert_eq!(state.palette_mode("secondary"), "search");
     }
 
     #[test]
@@ -991,14 +1195,14 @@ mod tests {
         let path = temp_yaml_path("transient");
         {
             let state = UIState::load(&path);
-            state.set_palette_open(true);
+            state.set_palette_open("main", true);
             state.set_scope_chain(vec!["scope:x".to_string()]);
             state.set_keymap_mode("emacs"); // persisted — forces a file to exist
             state.save().unwrap();
         }
         let state2 = UIState::load(&path);
         // Transient fields reset to defaults
-        assert!(!state2.palette_open());
+        assert!(!state2.palette_open("main"));
         assert!(state2.scope_chain().is_empty());
         // Persisted field is intact
         assert_eq!(state2.keymap_mode(), "emacs");
@@ -1048,7 +1252,7 @@ mod tests {
         }
 
         // set_palette_open returns PaletteOpen
-        let change = state.set_palette_open(true).unwrap();
+        let change = state.set_palette_open("main", true).unwrap();
         match change {
             UIStateChange::PaletteOpen(open) => assert!(open),
             other => panic!("Expected PaletteOpen, got {:?}", other),
@@ -1397,5 +1601,215 @@ mod tests {
         assert_eq!(all.len(), 2);
         assert!(all.contains_key("main"));
         assert!(all.contains_key("secondary"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Window save/restore round-trip tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn window_state_persists_through_save_load() {
+        let path = temp_yaml_path("window_roundtrip");
+        {
+            let state = UIState::load(&path);
+            state.save_window_geometry("main", 10, 20, 1200, 800, false);
+            state.save_window_geometry("board-abc", 100, 200, 900, 600, true);
+            state.set_window_board("main", "/boards/alpha/.kanban");
+            state.set_window_board("board-abc", "/boards/beta/.kanban");
+            state.save().unwrap();
+        }
+        {
+            let state = UIState::load(&path);
+            let all = state.all_windows();
+            assert_eq!(all.len(), 2, "both windows should survive save/load");
+
+            let main = all.get("main").expect("main window exists after load");
+            assert_eq!(main.x, Some(10));
+            assert_eq!(main.y, Some(20));
+            assert_eq!(main.width, Some(1200));
+            assert_eq!(main.height, Some(800));
+            assert!(!main.maximized);
+            assert_eq!(main.board_path, "/boards/alpha/.kanban");
+
+            let sec = all
+                .get("board-abc")
+                .expect("secondary window exists after load");
+            assert_eq!(sec.x, Some(100));
+            assert_eq!(sec.y, Some(200));
+            assert_eq!(sec.width, Some(900));
+            assert_eq!(sec.height, Some(600));
+            assert!(sec.maximized);
+            assert_eq!(sec.board_path, "/boards/beta/.kanban");
+        }
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn window_board_survives_save_load() {
+        let path = temp_yaml_path("window_board_roundtrip");
+        {
+            let state = UIState::load(&path);
+            state.set_window_board("secondary", "/boards/test/.kanban");
+            state.save().unwrap();
+        }
+        {
+            let state = UIState::load(&path);
+            assert_eq!(
+                state.window_board("secondary").as_deref(),
+                Some("/boards/test/.kanban"),
+                "window_board mapping must survive save/load"
+            );
+        }
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn palette_state_is_transient_not_persisted() {
+        let path = temp_yaml_path("palette_transient");
+        {
+            let state = UIState::load(&path);
+            state.save_window_geometry("main", 0, 0, 800, 600, false);
+            state.set_palette_open_with_mode("main", true, "search");
+            assert!(state.palette_open("main"));
+            assert_eq!(state.palette_mode("main"), "search");
+            state.save().unwrap();
+        }
+        {
+            let state = UIState::load(&path);
+            // palette_open and palette_mode are #[serde(skip)] — should reset to defaults
+            assert!(!state.palette_open("main"), "palette_open must not persist");
+            assert_eq!(
+                state.palette_mode("main"),
+                "command",
+                "palette_mode must reset to default on load"
+            );
+        }
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn remove_window_persists_through_save_load() {
+        let path = temp_yaml_path("remove_window_roundtrip");
+        {
+            let state = UIState::load(&path);
+            state.save_window_geometry("main", 0, 0, 800, 600, false);
+            state.save_window_geometry("board-xyz", 100, 100, 400, 300, false);
+            state.set_window_board("board-xyz", "/boards/old/.kanban");
+            state.remove_window("board-xyz");
+            state.save().unwrap();
+        }
+        {
+            let state = UIState::load(&path);
+            let all = state.all_windows();
+            assert_eq!(all.len(), 1, "removed window should not reappear");
+            assert!(all.contains_key("main"));
+            assert!(!all.contains_key("board-xyz"));
+            assert!(state.window_board("board-xyz").is_none());
+        }
+        let _ = fs::remove_file(&path);
+    }
+
+    // --- update_window_geometry (memory-only) tests ---
+
+    #[test]
+    fn update_window_geometry_updates_existing_entry() {
+        let state = UIState::new();
+        state.set_window_board("board-1", "/boards/a");
+        state.save_window_geometry("board-1", 100, 200, 800, 600, false);
+
+        // Move the window — memory only
+        state.update_window_geometry("board-1", 300, 400, 900, 700, true);
+
+        let ws = state.get_window_state("board-1").unwrap();
+        assert_eq!(ws.x, Some(300));
+        assert_eq!(ws.y, Some(400));
+        assert_eq!(ws.width, Some(900));
+        assert_eq!(ws.height, Some(700));
+        assert!(ws.maximized);
+        // board_path untouched
+        assert_eq!(ws.board_path, "/boards/a");
+    }
+
+    #[test]
+    fn update_window_geometry_ignores_unknown_label() {
+        let state = UIState::new();
+        // No window entry exists for "ghost-window"
+        state.update_window_geometry("ghost-window", 0, 0, 100, 100, false);
+        // Should not create a new entry
+        assert!(state.get_window_state("ghost-window").is_none());
+        assert!(state.all_windows().is_empty());
+    }
+
+    #[test]
+    fn update_window_geometry_does_not_resurrect_removed_window() {
+        let state = UIState::new();
+        state.set_window_board("board-1", "/boards/a");
+        state.save_window_geometry("board-1", 100, 200, 800, 600, false);
+
+        // Mid-session close removes the window
+        state.remove_window("board-1");
+        assert!(state.get_window_state("board-1").is_none());
+
+        // OS fires a stale move event during teardown
+        state.update_window_geometry("board-1", 0, 0, 0, 0, false);
+
+        // Window must NOT reappear — no zombie entry
+        assert!(state.get_window_state("board-1").is_none());
+        assert!(state.all_windows().is_empty());
+    }
+
+    #[test]
+    fn update_window_geometry_does_not_write_to_disk() {
+        let path = temp_yaml_path("update_no_disk");
+        let _ = fs::remove_file(&path);
+        {
+            let state = UIState::load(&path);
+            state.set_window_board("board-1", "/boards/a");
+            state.save_window_geometry("board-1", 100, 200, 800, 600, false);
+            // save_window_geometry writes to disk (via try_save)
+        }
+        // Load to get baseline on-disk state
+        {
+            let state = UIState::load(&path);
+            // Now update geometry in memory only
+            state.update_window_geometry("board-1", 999, 999, 1, 1, true);
+            // Do NOT call save() — drop the state
+        }
+        // Reload from disk — should still have the original geometry
+        {
+            let state = UIState::load(&path);
+            let ws = state.get_window_state("board-1").unwrap();
+            assert_eq!(ws.x, Some(100), "memory-only update must not reach disk");
+            assert_eq!(ws.y, Some(200));
+        }
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn update_window_geometry_persisted_by_explicit_save() {
+        let path = temp_yaml_path("update_then_save");
+        let _ = fs::remove_file(&path);
+        {
+            let state = UIState::load(&path);
+            state.set_window_board("board-1", "/boards/a");
+            state.save_window_geometry("board-1", 100, 200, 800, 600, false);
+            // Simulate move events
+            state.update_window_geometry("board-1", 500, 600, 1024, 768, false);
+            // Simulate quit — explicit save
+            state.save().unwrap();
+        }
+        {
+            let state = UIState::load(&path);
+            let ws = state.get_window_state("board-1").unwrap();
+            assert_eq!(
+                ws.x,
+                Some(500),
+                "geometry should be saved after explicit save"
+            );
+            assert_eq!(ws.y, Some(600));
+            assert_eq!(ws.width, Some(1024));
+            assert_eq!(ws.height, Some(768));
+        }
+        let _ = fs::remove_file(&path);
     }
 }

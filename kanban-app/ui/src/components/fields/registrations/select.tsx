@@ -16,6 +16,7 @@ function SelectEditorAdapter({
   value,
   onCommit,
   onCancel,
+  onChange,
 }: FieldEditorProps) {
   return (
     <SelectEditor
@@ -23,6 +24,7 @@ function SelectEditorAdapter({
       value={value}
       onCommit={onCommit}
       onCancel={onCancel}
+      onChange={onChange}
       mode="compact"
     />
   );

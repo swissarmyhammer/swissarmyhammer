@@ -97,8 +97,6 @@ pub enum Noun {
     Tags,
     Comment,
     Comments,
-    Attachment,
-    Attachments,
     Activity,
     Archived,
 }
@@ -120,8 +118,6 @@ impl Noun {
             Self::Tags => "tags",
             Self::Comment => "comment",
             Self::Comments => "comments",
-            Self::Attachment => "attachment",
-            Self::Attachments => "attachments",
             Self::Activity => "activity",
             Self::Archived => "archived",
         }
@@ -143,8 +139,6 @@ impl Noun {
             "tags" => Some(Self::Tags),
             "comment" => Some(Self::Comment),
             "comments" => Some(Self::Comments),
-            "attachment" => Some(Self::Attachment),
-            "attachments" => Some(Self::Attachments),
             "activity" => Some(Self::Activity),
             "archived" => Some(Self::Archived),
             _ => None,
@@ -267,10 +261,6 @@ pub fn is_valid_operation(verb: Verb, noun: Noun) -> bool {
         // Comment operations
         (Verb::Get, Noun::Comment) | (Verb::Add, Noun::Comment) | (Verb::Update, Noun::Comment) |
         (Verb::Delete, Noun::Comment) | (Verb::List, Noun::Comments) |
-        // Attachment operations
-        (Verb::Add, Noun::Attachment) | (Verb::Get, Noun::Attachment) |
-        (Verb::Update, Noun::Attachment) | (Verb::Delete, Noun::Attachment) |
-        (Verb::List, Noun::Attachments) |
         // Activity
         (Verb::List, Noun::Activity)
     )

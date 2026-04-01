@@ -5,6 +5,7 @@
 //! trait objects, ready to be inserted into a `CommandsRegistry`.
 
 pub mod app_commands;
+pub mod clipboard_commands;
 pub mod column_commands;
 pub mod drag_commands;
 pub mod entity_commands;
@@ -44,9 +45,22 @@ pub fn register_commands() -> HashMap<String, Arc<dyn Command>> {
     // Task commands
     map.insert("task.add".into(), Arc::new(task_commands::AddTaskCmd));
     map.insert("task.move".into(), Arc::new(task_commands::MoveTaskCmd));
-    map.insert("task.tag".into(), Arc::new(task_commands::TagTaskCmd));
     map.insert("task.untag".into(), Arc::new(task_commands::UntagTaskCmd));
     map.insert("task.delete".into(), Arc::new(task_commands::DeleteTaskCmd));
+
+    // Clipboard commands
+    map.insert(
+        "entity.copy".into(),
+        Arc::new(clipboard_commands::CopyTaskCmd),
+    );
+    map.insert(
+        "entity.cut".into(),
+        Arc::new(clipboard_commands::CutTaskCmd),
+    );
+    map.insert(
+        "entity.paste".into(),
+        Arc::new(clipboard_commands::PasteTaskCmd),
+    );
 
     // Entity commands
     map.insert(
@@ -69,10 +83,14 @@ pub fn register_commands() -> HashMap<String, Arc<dyn Command>> {
     // Tag commands
     map.insert("tag.update".into(), Arc::new(entity_commands::TagUpdateCmd));
 
-    // Attachment commands
+    // Attachment file commands
     map.insert(
-        "attachment.delete".into(),
-        Arc::new(entity_commands::AttachmentDeleteCmd),
+        "attachment.open".into(),
+        Arc::new(entity_commands::AttachmentOpenCmd),
+    );
+    map.insert(
+        "attachment.reveal".into(),
+        Arc::new(entity_commands::AttachmentRevealCmd),
     );
 
     // Column commands
@@ -122,11 +140,33 @@ pub fn register_commands() -> HashMap<String, Arc<dyn Command>> {
         "file.closeBoard".into(),
         Arc::new(file_commands::CloseBoardCmd),
     );
+    map.insert("file.newBoard".into(), Arc::new(file_commands::NewBoardCmd));
+    map.insert(
+        "file.openBoard".into(),
+        Arc::new(file_commands::OpenBoardCmd),
+    );
+    map.insert("window.new".into(), Arc::new(file_commands::NewWindowCmd));
 
     // App commands
     map.insert("app.quit".into(), Arc::new(app_commands::QuitCmd));
-    map.insert("app.undo".into(), Arc::new(app_commands::UndoCmd));
-    map.insert("app.redo".into(), Arc::new(app_commands::RedoCmd));
+    map.insert("app.about".into(), Arc::new(app_commands::AboutCmd));
+    map.insert("app.help".into(), Arc::new(app_commands::HelpCmd));
+    map.insert(
+        "app.command".into(),
+        Arc::new(app_commands::CommandPaletteCmd),
+    );
+    // app.palette is an alias for app.command — both open the command palette.
+    map.insert(
+        "app.palette".into(),
+        Arc::new(app_commands::CommandPaletteCmd),
+    );
+    map.insert(
+        "app.search".into(),
+        Arc::new(app_commands::SearchPaletteCmd),
+    );
+    map.insert("app.dismiss".into(), Arc::new(app_commands::DismissCmd));
+    map.insert("app.undo".into(), Arc::new(swissarmyhammer_entity::UndoCmd));
+    map.insert("app.redo".into(), Arc::new(swissarmyhammer_entity::RedoCmd));
     map.insert(
         "settings.keymap.vim".into(),
         Arc::new(app_commands::SetKeymapModeCmd("vim")),
@@ -175,8 +215,13 @@ mod tests {
     #[test]
     fn register_commands_returns_expected_count() {
         let cmds = register_commands();
-        // 5 task + 4 entity + 1 tag + 1 attachment + 1 column + 7 UI + 6 app + 2 file + 3 drag = 30
-        assert_eq!(cmds.len(), 30);
+        // 4 task + 3 clipboard + 4 entity + 1 tag + 1 column + 7 UI
+        // + 12 app (quit, about, help, command, palette, search,
+        //          dismiss, undo, redo, keymap.vim, keymap.cua, keymap.emacs)
+        // + 5 file (switchBoard, closeBoard, newBoard, openBoard, window.new)
+        // + 3 drag + 2 attachment (open, reveal) = 42
+        // Note: clipboard entries are duplicated in the source but HashMap deduplicates.
+        assert_eq!(cmds.len(), 42);
     }
 
     // =========================================================================
@@ -216,30 +261,6 @@ mod tests {
     }
 
     #[test]
-    fn tag_available_with_tag_and_task() {
-        let cmds = register_commands();
-        let cmd = cmds.get("task.tag").unwrap();
-        let ctx = ctx_scope(&["tag:bug", "task:01ABC", "column:todo"]);
-        assert!(cmd.available(&ctx));
-    }
-
-    #[test]
-    fn tag_not_available_without_tag() {
-        let cmds = register_commands();
-        let cmd = cmds.get("task.tag").unwrap();
-        let ctx = ctx_scope(&["task:01ABC", "column:todo"]);
-        assert!(!cmd.available(&ctx));
-    }
-
-    #[test]
-    fn tag_not_available_without_task() {
-        let cmds = register_commands();
-        let cmd = cmds.get("task.tag").unwrap();
-        let ctx = ctx_scope(&["tag:bug", "column:todo"]);
-        assert!(!cmd.available(&ctx));
-    }
-
-    #[test]
     fn untag_available_with_tag_and_task() {
         let cmds = register_commands();
         let cmd = cmds.get("task.untag").unwrap();
@@ -269,6 +290,38 @@ mod tests {
         let cmd = cmds.get("task.delete").unwrap();
         let ctx = ctx_scope(&["task:01ABC"]);
         assert!(cmd.available(&ctx));
+    }
+
+    #[test]
+    fn copy_available_with_task_in_scope() {
+        let cmds = register_commands();
+        let cmd = cmds.get("entity.copy").unwrap();
+        let ctx = ctx_scope(&["task:01ABC", "column:todo"]);
+        assert!(cmd.available(&ctx));
+    }
+
+    #[test]
+    fn copy_not_available_without_task() {
+        let cmds = register_commands();
+        let cmd = cmds.get("entity.copy").unwrap();
+        let ctx = ctx_scope(&["column:todo"]);
+        assert!(!cmd.available(&ctx));
+    }
+
+    #[test]
+    fn cut_available_with_task_in_scope() {
+        let cmds = register_commands();
+        let cmd = cmds.get("entity.cut").unwrap();
+        let ctx = ctx_scope(&["task:01ABC", "column:todo"]);
+        assert!(cmd.available(&ctx));
+    }
+
+    #[test]
+    fn cut_not_available_without_task() {
+        let cmds = register_commands();
+        let cmd = cmds.get("entity.cut").unwrap();
+        let ctx = ctx_scope(&["column:todo"]);
+        assert!(!cmd.available(&ctx));
     }
 
     #[test]
@@ -309,6 +362,76 @@ mod tests {
         let cmd = cmds.get("entity.unarchive").unwrap();
         let ctx = ctx_with(&[], Some("task:01ABC"), None);
         assert!(cmd.available(&ctx));
+    }
+
+    // =========================================================================
+    // Paste command availability tests
+    // =========================================================================
+
+    fn ui_with_task_clipboard() -> Arc<UIState> {
+        let ui = Arc::new(UIState::new());
+        ui.set_clipboard_entity_type("task");
+        ui
+    }
+
+    fn ui_with_tag_clipboard() -> Arc<UIState> {
+        let ui = Arc::new(UIState::new());
+        ui.set_clipboard_entity_type("tag");
+        ui
+    }
+
+    #[test]
+    fn paste_task_available_with_column() {
+        let cmds = register_commands();
+        let cmd = cmds.get("entity.paste").unwrap();
+        let ui = ui_with_task_clipboard();
+        let ctx = ctx_with(&["column:todo"], None, Some(ui));
+        assert!(cmd.available(&ctx));
+    }
+
+    #[test]
+    fn paste_task_available_with_board() {
+        let cmds = register_commands();
+        let cmd = cmds.get("entity.paste").unwrap();
+        let ui = ui_with_task_clipboard();
+        let ctx = ctx_with(&["board:my-board"], None, Some(ui));
+        assert!(cmd.available(&ctx));
+    }
+
+    #[test]
+    fn paste_tag_available_with_task() {
+        let cmds = register_commands();
+        let cmd = cmds.get("entity.paste").unwrap();
+        let ui = ui_with_tag_clipboard();
+        let ctx = ctx_with(&["task:01X", "column:todo"], None, Some(ui));
+        assert!(cmd.available(&ctx));
+    }
+
+    #[test]
+    fn paste_tag_not_available_on_column() {
+        let cmds = register_commands();
+        let cmd = cmds.get("entity.paste").unwrap();
+        let ui = ui_with_tag_clipboard();
+        let ctx = ctx_with(&["column:todo"], None, Some(ui));
+        assert!(!cmd.available(&ctx));
+    }
+
+    #[test]
+    fn paste_not_available_without_clipboard() {
+        let cmds = register_commands();
+        let cmd = cmds.get("entity.paste").unwrap();
+        let ui = Arc::new(UIState::new());
+        let ctx = ctx_with(&["column:todo"], None, Some(ui));
+        assert!(!cmd.available(&ctx));
+    }
+
+    #[test]
+    fn paste_not_available_without_scope() {
+        let cmds = register_commands();
+        let cmd = cmds.get("entity.paste").unwrap();
+        let ui = ui_with_task_clipboard();
+        let ctx = ctx_with(&[], None, Some(ui));
+        assert!(!cmd.available(&ctx));
     }
 
     // =========================================================================
@@ -385,12 +508,12 @@ mod tests {
         let cmds = register_commands();
         let cmd = cmds.get("ui.palette.open").unwrap();
         let ui = Arc::new(UIState::new());
-        assert!(!ui.palette_open());
+        assert!(!ui.palette_open("main"));
 
         let ctx = ctx_with(&[], None, Some(Arc::clone(&ui)));
         let result = cmd.execute(&ctx).await;
         assert!(result.is_ok());
-        assert!(ui.palette_open());
+        assert!(ui.palette_open("main"));
     }
 
     #[tokio::test]
@@ -398,12 +521,12 @@ mod tests {
         let cmds = register_commands();
         let cmd = cmds.get("ui.palette.close").unwrap();
         let ui = Arc::new(UIState::new());
-        ui.set_palette_open(true);
+        ui.set_palette_open("main", true);
 
         let ctx = ctx_with(&[], None, Some(Arc::clone(&ui)));
         let result = cmd.execute(&ctx).await;
         assert!(result.is_ok());
-        assert!(!ui.palette_open());
+        assert!(!ui.palette_open("main"));
     }
 
     #[tokio::test]
@@ -514,21 +637,180 @@ mod tests {
     }
 
     // =========================================================================
+    // About, Help, ResetWindows, Palette, Search, Dismiss command tests
+    // =========================================================================
+
+    #[test]
+    fn about_always_available() {
+        let cmds = register_commands();
+        let cmd = cmds.get("app.about").unwrap();
+        assert!(cmd.available(&ctx_scope(&[])));
+    }
+
+    #[tokio::test]
+    async fn about_returns_marker() {
+        let cmds = register_commands();
+        let cmd = cmds.get("app.about").unwrap();
+        let result = cmd.execute(&ctx_scope(&[])).await.unwrap();
+        assert_eq!(result["about"], true);
+    }
+
+    #[test]
+    fn help_always_available() {
+        let cmds = register_commands();
+        let cmd = cmds.get("app.help").unwrap();
+        assert!(cmd.available(&ctx_scope(&[])));
+    }
+
+    #[tokio::test]
+    async fn help_returns_marker() {
+        let cmds = register_commands();
+        let cmd = cmds.get("app.help").unwrap();
+        let result = cmd.execute(&ctx_scope(&[])).await.unwrap();
+        assert_eq!(result["help"], true);
+    }
+
+    #[test]
+    fn command_palette_always_available() {
+        let cmds = register_commands();
+        let cmd = cmds.get("app.command").unwrap();
+        assert!(cmd.available(&ctx_scope(&[])));
+    }
+
+    #[tokio::test]
+    async fn command_palette_opens_palette_in_command_mode() {
+        let cmds = register_commands();
+        let cmd = cmds.get("app.command").unwrap();
+        let ui = Arc::new(UIState::new());
+        assert!(!ui.palette_open("main"));
+
+        let ctx = ctx_with(&[], None, Some(Arc::clone(&ui)));
+        let result = cmd.execute(&ctx).await;
+        assert!(result.is_ok());
+        assert!(ui.palette_open("main"));
+        assert_eq!(ui.palette_mode("main"), "command");
+    }
+
+    #[tokio::test]
+    async fn search_palette_opens_palette_in_search_mode() {
+        let cmds = register_commands();
+        let cmd = cmds.get("app.search").unwrap();
+        let ui = Arc::new(UIState::new());
+        assert!(!ui.palette_open("main"));
+
+        let ctx = ctx_with(&[], None, Some(Arc::clone(&ui)));
+        let result = cmd.execute(&ctx).await;
+        assert!(result.is_ok());
+        assert!(ui.palette_open("main"));
+        assert_eq!(ui.palette_mode("main"), "search");
+    }
+
+    #[tokio::test]
+    async fn command_palette_targets_invoking_window_only() {
+        let cmds = register_commands();
+        let cmd = cmds.get("app.command").unwrap();
+        let ui = Arc::new(UIState::new());
+
+        // Execute with scope chain containing window:secondary
+        let ctx = ctx_with(&["window:secondary"], None, Some(Arc::clone(&ui)));
+        let result = cmd.execute(&ctx).await;
+        assert!(result.is_ok());
+        // Only secondary window should have palette open
+        assert!(ui.palette_open("secondary"));
+        assert!(!ui.palette_open("main"));
+    }
+
+    #[test]
+    fn dismiss_always_available() {
+        let cmds = register_commands();
+        let cmd = cmds.get("app.dismiss").unwrap();
+        assert!(cmd.available(&ctx_scope(&[])));
+    }
+
+    #[tokio::test]
+    async fn dismiss_closes_palette_when_open() {
+        let cmds = register_commands();
+        let cmd = cmds.get("app.dismiss").unwrap();
+        let ui = Arc::new(UIState::new());
+        ui.set_palette_open("main", true);
+
+        let ctx = ctx_with(&[], None, Some(Arc::clone(&ui)));
+        let result = cmd.execute(&ctx).await;
+        assert!(result.is_ok());
+        assert!(!ui.palette_open("main"));
+    }
+
+    #[tokio::test]
+    async fn dismiss_closes_inspector_when_palette_closed() {
+        let cmds = register_commands();
+        let cmd = cmds.get("app.dismiss").unwrap();
+        let ui = Arc::new(UIState::new());
+        ui.inspect("main", "task:01XYZ");
+        assert!(!ui.palette_open("main"));
+        assert_eq!(ui.inspector_stack("main").len(), 1);
+
+        let ctx = ctx_with(&[], None, Some(Arc::clone(&ui)));
+        let result = cmd.execute(&ctx).await;
+        assert!(result.is_ok());
+        assert!(ui.inspector_stack("main").is_empty());
+    }
+
+    #[tokio::test]
+    async fn dismiss_returns_null_when_nothing_to_dismiss() {
+        let cmds = register_commands();
+        let cmd = cmds.get("app.dismiss").unwrap();
+        let ui = Arc::new(UIState::new());
+
+        let ctx = ctx_with(&[], None, Some(Arc::clone(&ui)));
+        let result = cmd.execute(&ctx).await.unwrap();
+        assert!(result.is_null());
+    }
+
+    // =========================================================================
     // Undo/Redo availability tests
     // =========================================================================
 
     #[test]
-    fn undo_always_available() {
+    fn undo_unavailable_without_ui_state() {
         let cmds = register_commands();
         let cmd = cmds.get("app.undo").unwrap();
-        assert!(cmd.available(&ctx_scope(&[])));
+        // No UIState on context — undo should not be available
+        assert!(!cmd.available(&ctx_scope(&[])));
     }
 
     #[test]
-    fn redo_always_available() {
+    fn redo_unavailable_without_ui_state() {
         let cmds = register_commands();
         let cmd = cmds.get("app.redo").unwrap();
-        assert!(cmd.available(&ctx_scope(&[])));
+        // No UIState on context — redo should not be available
+        assert!(!cmd.available(&ctx_scope(&[])));
+    }
+
+    #[test]
+    fn undo_unavailable_when_stack_empty() {
+        let cmds = register_commands();
+        let cmd = cmds.get("app.undo").unwrap();
+        let ui = Arc::new(UIState::new());
+        // UIState present but can_undo defaults to false
+        assert!(!cmd.available(&ctx_with(&[], None, Some(ui))));
+    }
+
+    #[test]
+    fn undo_available_when_can_undo_set() {
+        let cmds = register_commands();
+        let cmd = cmds.get("app.undo").unwrap();
+        let ui = Arc::new(UIState::new());
+        ui.set_undo_redo_state(true, false);
+        assert!(cmd.available(&ctx_with(&[], None, Some(ui))));
+    }
+
+    #[test]
+    fn redo_available_when_can_redo_set() {
+        let cmds = register_commands();
+        let cmd = cmds.get("app.redo").unwrap();
+        let ui = Arc::new(UIState::new());
+        ui.set_undo_redo_state(false, true);
+        assert!(cmd.available(&ctx_with(&[], None, Some(ui))));
     }
 
     // =========================================================================

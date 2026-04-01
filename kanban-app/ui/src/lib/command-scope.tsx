@@ -7,7 +7,6 @@ import {
   useRef,
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 
 // ---------------------------------------------------------------------------
 // ActiveBoardPath context — per-window board path for multi-window dispatch
@@ -38,20 +37,6 @@ export function useActiveBoardPath(): string | undefined {
   return useContext(ActiveBoardPathContext);
 }
 
-/** Describes where a command should appear in the native OS menu bar. */
-export interface MenuPlacement {
-  /** Which menu to place the command in. */
-  menu: "app" | "file" | "edit" | "settings" | "window";
-  /** Separator group number within the menu (items in the same group are contiguous). */
-  group: number;
-  /** Sort order within the group. */
-  order: number;
-  /** If set, this command is part of a radio group (only one checked at a time). */
-  radioGroup?: string;
-  /** Whether this command's menu item is currently checked. */
-  checked?: boolean;
-}
-
 /** Definition of a single command that can be registered in a scope. */
 export interface CommandDef {
   /** Unique identifier used to resolve the command through the scope chain. */
@@ -70,8 +55,6 @@ export interface CommandDef {
    * be searched for a command with the same id.
    */
   available?: boolean;
-  /** Optional placement in the native menu bar. */
-  menuPlacement?: MenuPlacement;
   /** Whether this command appears in context menus. */
   contextMenu?: boolean;
   /**
@@ -184,8 +167,8 @@ export function collectAvailableCommands(
   /**
    * Shadow key: `id + ":" + (target ?? "")`.
    * Same id + same target → shadow (inner wins).
-   * Same id + different target → accumulate (both visible).
-   * No target → shadow by id alone (existing behaviour for app.quit etc.)
+   * Same id + different target → both visible (Copy Tag ≠ Copy Task).
+   * No target → shadow by id alone.
    */
   const seen = new Set<string>();
   const result: CommandAtDepth[] = [];
@@ -220,8 +203,27 @@ export function useAvailableCommands(): CommandAtDepth[] {
 }
 
 /**
+ * Dispatch a command to the Rust backend.
+ *
+ * This is the single path for all frontend → backend command dispatch.
+ * Every call site that previously used `invoke("dispatch_command", ...)`
+ * directly should use this helper instead.
+ *
+ * Window identity is determined by the `board_path` parameter that
+ * `dispatchCommand` passes through to the backend.
+ *
+ * @param params - The parameters to pass to `dispatch_command`.
+ * @returns The raw JSON value returned by the backend.
+ */
+export async function backendDispatch(
+  params: Record<string, unknown>,
+): Promise<unknown> {
+  return invoke("dispatch_command", params);
+}
+
+/**
  * Execute a command. If `execute` is set, calls it directly.
- * Otherwise dispatches to Rust by command id via invoke("dispatch_command").
+ * Otherwise dispatches to Rust by command id via backendDispatch().
  *
  * @param boardPath — optional per-window board path for multi-window dispatch.
  *   When provided, Rust routes the command to the correct board instead of the
@@ -239,12 +241,11 @@ export async function dispatchCommand(
     await cmd.execute();
   } else {
     // Dispatch to Rust by command ID (dispatch_command logs internally)
-    await invoke("dispatch_command", {
+    await backendDispatch({
       cmd: cmd.id,
       target: cmd.target,
       args: cmd.args,
       ...(boardPath ? { boardPath } : {}),
-      windowLabel: getCurrentWindow().label,
     });
   }
 }

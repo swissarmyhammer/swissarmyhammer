@@ -27,6 +27,10 @@ const TASK_SCHEMA = {
   fields: [],
 };
 
+vi.mock("@tauri-apps/api/window", () => ({
+  getCurrentWindow: () => ({ label: "main" }),
+}));
+
 vi.mock("@tauri-apps/api/core", () => ({
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   invoke: vi.fn((...args: any[]) => {

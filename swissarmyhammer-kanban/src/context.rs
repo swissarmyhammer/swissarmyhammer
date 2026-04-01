@@ -24,10 +24,14 @@ use tokio::sync::{OnceCell, RwLock};
 pub struct KanbanContext {
     /// Path to the .kanban directory
     root: PathBuf,
+    /// Human-readable context name derived from the parent of `.kanban`.
+    /// Computed once in the constructor from `root.parent().file_name()`.
+    context_name: String,
     /// Field registry (populated via `open()`, None when created via `new()`)
     fields: Option<Arc<FieldsContext>>,
-    /// Entity I/O coordinator — lazy-initialized on first access
-    entities: OnceCell<EntityContext>,
+    /// Entity I/O coordinator — lazy-initialized on first access, wrapped in Arc
+    /// so it can be shared as a CommandContext extension independently of KanbanContext.
+    entities: OnceCell<Arc<EntityContext>>,
     /// View registry (populated via `open()`, None when created via `new()`)
     views: Option<RwLock<ViewsContext>>,
     /// View changelog (populated via `open()`, None when created via `new()`)
@@ -37,13 +41,29 @@ pub struct KanbanContext {
 }
 
 impl KanbanContext {
+    /// Derive the context name from a `.kanban` root path.
+    ///
+    /// Returns the file-stem of the parent directory (e.g.
+    /// `/home/user/my-project/.kanban` → `"my-project"`).
+    /// Returns an empty string if the parent cannot be determined.
+    fn derive_context_name(root: &Path) -> String {
+        root.parent()
+            .and_then(|p| p.file_name())
+            .and_then(|n| n.to_str())
+            .unwrap_or("")
+            .to_string()
+    }
+
     /// Create a new context for the given .kanban directory.
     ///
     /// This is a lightweight synchronous constructor. The field registry is
     /// not initialized — use `open()` for a fully-initialized context.
     pub fn new(root: impl Into<PathBuf>) -> Self {
+        let root = root.into();
+        let context_name = Self::derive_context_name(&root);
         Self {
-            root: root.into(),
+            root,
+            context_name,
             fields: None,
             entities: OnceCell::new(),
             views: None,
@@ -65,8 +85,12 @@ impl KanbanContext {
         fs::create_dir_all(fields_root.join("entities")).await?;
 
         let (fields, entities) = Self::build_entity_context(&root)?;
+        // Rebuild changelog/transaction indexes so undo/redo survives restart.
+        if let Err(e) = entities.rebuild_indexes().await {
+            tracing::warn!("Failed to rebuild changelog indexes: {e}");
+        }
         let cell = OnceCell::new();
-        cell.set(entities).ok();
+        cell.set(Arc::new(entities)).ok();
 
         // Build views context: seed builtins to disk (if not present), then load all
         let views_root = root.join("views");
@@ -76,8 +100,10 @@ impl KanbanContext {
         let views = Self::build_views_context(&views_root)?;
         let views_changelog = ViewsChangelog::new(root.join("views.jsonl"));
 
+        let context_name = Self::derive_context_name(&root);
         Ok(Self {
             root,
+            context_name,
             fields: Some(fields),
             entities: cell,
             views: Some(RwLock::new(views)),
@@ -131,6 +157,14 @@ impl KanbanContext {
     /// Get the root .kanban directory
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    /// Human-readable context name (path stem above `.kanban`).
+    ///
+    /// For example, if root is `/home/user/my-project/.kanban`, returns `"my-project"`.
+    /// Returns an empty string if the parent directory cannot be determined.
+    pub fn name(&self) -> &str {
+        &self.context_name
     }
 
     /// Path to board.yaml
@@ -372,13 +406,19 @@ impl KanbanContext {
     /// Get the EntityContext for generic entity operations.
     ///
     /// Lazy-initialized on first access from builtin + local field definitions.
-    pub async fn entity_context(&self) -> Result<&EntityContext> {
-        self.entities
+    /// Access the entity context, lazy-initializing on first call.
+    ///
+    /// Returns `Arc<EntityContext>` so it can be set as a direct extension on
+    /// `CommandContext` without going through `KanbanContext`.
+    pub async fn entity_context(&self) -> Result<Arc<EntityContext>> {
+        let ectx = self
+            .entities
             .get_or_try_init(|| async {
                 let (_fields, entities) = Self::build_entity_context(&self.root)?;
-                Ok(entities)
+                Ok::<Arc<EntityContext>, KanbanError>(Arc::new(entities))
             })
-            .await
+            .await?;
+        Ok(Arc::clone(ectx))
     }
 
     /// Build a FieldsContext + EntityContext from builtin and local field definitions.
@@ -588,6 +628,18 @@ mod tests {
         assert_eq!(ctx.tasks_dir(), root.join("tasks"));
     }
 
+    #[test]
+    fn context_name_returns_parent_dir_stem() {
+        let ctx = KanbanContext::new("/home/user/my-project/.kanban");
+        assert_eq!(ctx.name(), "my-project");
+    }
+
+    #[test]
+    fn context_name_empty_for_root_kanban() {
+        let ctx = KanbanContext::new("/.kanban");
+        assert_eq!(ctx.name(), "");
+    }
+
     #[tokio::test]
     async fn test_task_io() {
         let (_temp, ctx) = setup_with_fields().await;
@@ -771,11 +823,11 @@ mod tests {
         let ctx = KanbanContext::open(&kanban_dir).await.unwrap();
         let fields = ctx.fields().unwrap();
 
-        // Should have all 21 built-in fields
-        assert_eq!(fields.all_fields().len(), 21);
+        // Should have all 17 built-in fields
+        assert_eq!(fields.all_fields().len(), 17);
 
-        // Should have all 7 entity templates
-        assert_eq!(fields.all_entities().len(), 7);
+        // Should have all 6 entity templates
+        assert_eq!(fields.all_entities().len(), 6);
 
         // Check a specific field
         let title = fields.get_field_by_name("title").unwrap();
@@ -800,10 +852,10 @@ type:
             .await
             .unwrap();
 
-        // Open — should have 21 built-in + 1 custom = 22
+        // Open — should have 17 built-in + 1 custom = 18
         let ctx = KanbanContext::open(&kanban_dir).await.unwrap();
         let fields = ctx.fields().unwrap();
-        assert_eq!(fields.all_fields().len(), 22);
+        assert_eq!(fields.all_fields().len(), 18);
 
         // Custom field should be present
         let sprint = fields.get_field_by_name("sprint").unwrap();

@@ -57,8 +57,15 @@ export interface UseGridReturn {
  * @param options - Grid dimensions and optional external cursor
  * @returns Grid state and control functions
  */
-export function useGrid({ rowCount, colCount, cursor: externalCursor }: UseGridOptions): UseGridReturn {
-  const [internalCursor, setCursorState] = useState<GridCursor>({ row: 0, col: 0 });
+export function useGrid({
+  rowCount,
+  colCount,
+  cursor: externalCursor,
+}: UseGridOptions): UseGridReturn {
+  const [internalCursor, setCursorState] = useState<GridCursor>({
+    row: 0,
+    col: 0,
+  });
   const [mode, setMode] = useState<GridMode>("normal");
   const [selection, setSelection] = useState<GridSelection | null>(null);
 

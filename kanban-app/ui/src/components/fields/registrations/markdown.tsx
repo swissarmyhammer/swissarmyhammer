@@ -22,6 +22,7 @@ function MarkdownEditorAdapter({
   mode,
   onCommit,
   onCancel,
+  onChange,
 }: FieldEditorProps) {
   const text =
     typeof value === "string" ? value : value != null ? String(value) : "";
@@ -31,6 +32,7 @@ function MarkdownEditorAdapter({
       value={text}
       onCommit={(v) => onCommit(v)}
       onCancel={onCancel}
+      onChange={onChange ? (v) => onChange(v) : undefined}
       onSubmit={mode === "compact" ? (v) => onCommit(v) : undefined}
       extraExtensions={mentionExtensions}
     />

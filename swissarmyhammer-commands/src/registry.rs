@@ -186,6 +186,10 @@ pub fn builtin_yaml_sources() -> Vec<(&'static str, &'static str)> {
         ),
         ("file", include_str!("../builtin/commands/file.yaml")),
         ("drag", include_str!("../builtin/commands/drag.yaml")),
+        (
+            "attachment",
+            include_str!("../builtin/commands/attachment.yaml"),
+        ),
     ]
 }
 
@@ -397,26 +401,22 @@ mod tests {
 
     #[test]
     fn builtin_yaml_files_parse() {
-        let app = include_str!("../builtin/commands/app.yaml");
-        let entity = include_str!("../builtin/commands/entity.yaml");
-        let ui = include_str!("../builtin/commands/ui.yaml");
-        let settings = include_str!("../builtin/commands/settings.yaml");
+        let sources = builtin_yaml_sources();
+        let sources_ref: Vec<(&str, &str)> = sources.iter().map(|(n, c)| (*n, *c)).collect();
+        let registry = CommandsRegistry::from_yaml_sources(&sources_ref);
 
-        let registry = CommandsRegistry::from_yaml_sources(&[
-            ("app", app),
-            ("entity", entity),
-            ("ui", ui),
-            ("settings", settings),
-        ]);
-
-        // app: quit, undo, redo = 3
+        // app: about, help, quit, command, palette, search, dismiss, undo, redo = 9
         // entity: task.add, task.move, task.delete, task.untag, entity.update_field,
         //         entity.delete, entity.archive, entity.unarchive, tag.update,
-        //         column.reorder, attachment.delete = 11
+        //         column.reorder, attachment.delete,
+        //         entity.copy, entity.cut, entity.paste = 14
         // ui: inspect, inspector.close, inspector.close_all, palette.open,
-        //     palette.close, view.set, setFocus = 7
+        //     palette.close, view.set, setFocus, window.new = 8
         // settings: keymap.vim, keymap.cua, keymap.emacs = 3
-        assert_eq!(registry.all_commands().len(), 24);
+        // file: switchBoard, closeBoard, newBoard, openBoard = 4
+        // drag: start, cancel, complete = 3
+        // attachment: open, reveal = 2
+        assert_eq!(registry.all_commands().len(), 43);
 
         // Spot checks
         assert!(registry.get("app.quit").is_some());
@@ -426,6 +426,8 @@ mod tests {
         assert!(registry.get("task.untag").unwrap().context_menu);
         assert!(registry.get("task.add").unwrap().undoable);
         assert!(!registry.get("app.undo").unwrap().undoable);
+        assert!(registry.get("file.closeBoard").is_some());
+        assert!(registry.get("drag.start").is_some());
     }
 
     #[test]
@@ -518,6 +520,26 @@ mod tests {
         let over = vec![("over", "- id: task.add\n  name: Add Task Updated\n")];
         reg.merge_yaml_sources(&over);
         assert_eq!(reg.get("task.add").unwrap().name, "Add Task Updated");
+    }
+
+    #[test]
+    fn keymap_commands_are_visible_in_palette() {
+        let settings = include_str!("../builtin/commands/settings.yaml");
+        let registry = CommandsRegistry::from_yaml_sources(&[("settings", settings)]);
+
+        for cmd_id in &[
+            "settings.keymap.vim",
+            "settings.keymap.cua",
+            "settings.keymap.emacs",
+        ] {
+            let cmd = registry
+                .get(cmd_id)
+                .unwrap_or_else(|| panic!("{cmd_id} missing"));
+            assert!(
+                cmd.visible,
+                "{cmd_id} should be visible in the command palette"
+            );
+        }
     }
 
     #[test]

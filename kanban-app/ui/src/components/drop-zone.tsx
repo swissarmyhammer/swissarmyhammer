@@ -79,7 +79,7 @@ export function DropZone({
         {...(descriptor.afterId
           ? { "data-drop-after": descriptor.afterId }
           : {})}
-        style={{ height: 6 }}
+        style={{ height: 12 }}
       />
     );
   }
@@ -105,7 +105,8 @@ export function DropZone({
     );
   }
 
-  // "between" variant — thin line that expands when a drag is active
+  // "between" variant — fixed-height zone with opacity-based indicator.
+  // Height never changes during drag to avoid reflowing cards below.
   return (
     <div
       data-drop-zone
@@ -113,16 +114,17 @@ export function DropZone({
         ? { "data-drop-before": descriptor.beforeId }
         : {})}
       {...(descriptor.afterId ? { "data-drop-after": descriptor.afterId } : {})}
-      className="relative transition-all duration-150"
-      style={{ height: isOver ? 24 : 6 }}
+      className="relative"
+      style={{ height: 12, padding: "3px 0" }}
       onDragOver={handleDragOver}
       onDragEnter={handleDragEnter}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
-      {isOver && (
-        <div className="absolute inset-x-1 top-1/2 -translate-y-1/2 h-1 bg-primary rounded-full shadow-sm shadow-primary/50" />
-      )}
+      <div
+        className="absolute inset-x-1 top-1/2 -translate-y-1/2 h-1 bg-primary rounded-full shadow-sm shadow-primary/50 transition-opacity duration-100"
+        style={{ opacity: isOver ? 1 : 0 }}
+      />
     </div>
   );
 }

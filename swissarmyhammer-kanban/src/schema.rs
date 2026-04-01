@@ -9,9 +9,6 @@ use swissarmyhammer_operations::{generate_mcp_schema, Operation, SchemaConfig};
 
 use crate::activity::ListActivity;
 use crate::actor::{AddActor, DeleteActor, GetActor, ListActors, UpdateActor};
-use crate::attachment::{
-    AddAttachment, DeleteAttachment, GetAttachment, ListAttachments, UpdateAttachment,
-};
 use crate::board::{GetBoard, InitBoard, UpdateBoard};
 use crate::column::{AddColumn, DeleteColumn, GetColumn, ListColumns, UpdateColumn};
 use crate::swimlane::{AddSwimlane, DeleteSwimlane, GetSwimlane, ListSwimlanes, UpdateSwimlane};
@@ -68,12 +65,6 @@ static KANBAN_OPERATIONS: LazyLock<Vec<&'static dyn Operation>> = LazyLock::new(
         Box::leak(Box::new(UpdateTag::new(""))) as &dyn Operation,
         Box::leak(Box::new(DeleteTag::new(""))) as &dyn Operation,
         Box::leak(Box::new(ListTags::default())) as &dyn Operation,
-        // Attachment
-        Box::leak(Box::new(AddAttachment::new("", "", ""))) as &dyn Operation,
-        Box::leak(Box::new(GetAttachment::new("", ""))) as &dyn Operation,
-        Box::leak(Box::new(UpdateAttachment::new("", ""))) as &dyn Operation,
-        Box::leak(Box::new(DeleteAttachment::new("", ""))) as &dyn Operation,
-        Box::leak(Box::new(ListAttachments::new(""))) as &dyn Operation,
         // Activity
         Box::leak(Box::new(ListActivity::default())) as &dyn Operation,
     ]
@@ -140,10 +131,6 @@ fn generate_kanban_examples() -> Vec<Value> {
         json!({
             "description": "List my assigned tasks",
             "value": {"op": "list tasks", "assignee": "alice", "exclude_done": true}
-        }),
-        json!({
-            "description": "Add attachment to a task",
-            "value": {"op": "add attachment", "task_id": "01ABC...", "name": "screenshot.png", "path": "/path/to/screenshot.png"}
         }),
     ]
 }

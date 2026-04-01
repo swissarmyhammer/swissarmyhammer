@@ -9,7 +9,7 @@ const TASK_SCHEMA = {
     fields: ["title", "tags", "progress", "body"],
     commands: [
       {
-        id: "entity.inspect",
+        id: "ui.inspect",
         name: "Inspect {{entity.type}}",
         context_menu: true,
       },
@@ -58,6 +58,7 @@ const mockInvoke = vi.fn((...args: any[]) => {
   if (args[0] === "get_ui_state")
     return Promise.resolve({
       palette_open: false,
+      palette_mode: "command",
       keymap_mode: "cua",
       scope_chain: [],
       open_boards: [],
@@ -66,6 +67,18 @@ const mockInvoke = vi.fn((...args: any[]) => {
     });
   if (args[0] === "update_entity_field")
     return Promise.resolve({ id: "task-1" });
+  if (args[0] === "list_commands_for_scope")
+    return Promise.resolve([
+      {
+        id: "ui.inspect",
+        name: "Inspect task",
+        target: "task:task-1",
+        group: "entity",
+        context_menu: true,
+        available: true,
+      },
+    ]);
+  if (args[0] === "show_context_menu") return Promise.resolve();
   return Promise.resolve("ok");
 });
 
@@ -75,6 +88,9 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(() => Promise.resolve(() => {})),
+}));
+vi.mock("@tauri-apps/api/window", () => ({
+  getCurrentWindow: () => ({ label: "main" }),
 }));
 vi.mock("@tauri-apps/plugin-log", () => ({
   error: vi.fn(),
@@ -240,7 +256,11 @@ describe("EntityCard", () => {
       <EntityCard entity={currentEntity} />,
     );
     const card = container.querySelector("[data-moniker='task:task-1']")!;
-    fireEvent.contextMenu(card);
+    await act(async () => {
+      fireEvent.contextMenu(card);
+      // Flush the promise chain (list_commands_for_scope → show_context_menu)
+      await new Promise((r) => setTimeout(r, 50));
+    });
     // Context menu item id should include the target: "entity.inspect:task:task-1"
     const ctxCall = mockInvoke.mock.calls.find(
       (c) => c[0] === "show_context_menu",
@@ -248,7 +268,7 @@ describe("EntityCard", () => {
     expect(ctxCall).toBeTruthy();
     const items = ctxCall![1].items as { id: string; name: string }[];
     expect(
-      items.find((i) => i.id === "entity.inspect:task:task-1"),
+      items.find((i) => i.id === "ui.inspect:task:task-1"),
     ).toBeTruthy();
   });
 

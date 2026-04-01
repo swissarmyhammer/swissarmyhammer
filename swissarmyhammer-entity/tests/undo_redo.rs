@@ -1715,3 +1715,111 @@ async fn test_redo_unarchive() {
     let restored = ctx.read("tag", "bug").await.unwrap();
     assert_eq!(restored.get_str("tag_name"), Some("Bug"));
 }
+
+// =========================================================================
+// Rebuild indexes on load — undo survives restart
+// =========================================================================
+
+/// After dropping and recreating an EntityContext from the same root,
+/// `rebuild_indexes()` should populate the changelog/transaction indexes
+/// so that undo still works for operations from the previous session.
+#[tokio::test]
+async fn undo_works_after_rebuild_indexes() {
+    let dir = TempDir::new().unwrap();
+
+    // Session 1: create an entity and update it
+    let ulid = {
+        let ctx = EntityContext::new(dir.path(), test_fields_context());
+        let mut tag = Entity::new("tag", "t1");
+        tag.set("tag_name", json!("Original"));
+        ctx.write(&tag).await.unwrap();
+
+        tag.set("tag_name", json!("Modified"));
+        let update_ulid = ctx.write(&tag).await.unwrap().unwrap();
+        update_ulid
+    };
+    // ctx is dropped — simulates app restart
+
+    // Session 2: new context, rebuild indexes, then undo
+    let ctx2 = EntityContext::new(dir.path(), test_fields_context());
+
+    // Without rebuild_indexes, this would fail with ChangelogEntryNotFound
+    ctx2.rebuild_indexes().await.unwrap();
+
+    ctx2.undo(&ulid).await.unwrap();
+
+    let restored = ctx2.read("tag", "t1").await.unwrap();
+    assert_eq!(
+        restored.get_str("tag_name"),
+        Some("Original"),
+        "undo after rebuild should restore the previous value"
+    );
+}
+
+/// Rebuild indexes also restores transaction index entries so that
+/// undoing a transaction (group of changes) works after restart.
+#[tokio::test]
+async fn undo_transaction_works_after_rebuild_indexes() {
+    let dir = TempDir::new().unwrap();
+
+    let tx_id = {
+        let ctx = EntityContext::new(dir.path(), test_fields_context());
+
+        let mut tag1 = Entity::new("tag", "a");
+        tag1.set("tag_name", json!("Alpha"));
+        ctx.write(&tag1).await.unwrap();
+
+        let mut tag2 = Entity::new("tag", "b");
+        tag2.set("tag_name", json!("Beta"));
+        ctx.write(&tag2).await.unwrap();
+
+        // Update both in a transaction
+        let tx = EntityContext::generate_transaction_id();
+        ctx.set_transaction(tx.clone()).await;
+
+        tag1.set("tag_name", json!("Alpha-v2"));
+        ctx.write(&tag1).await.unwrap();
+
+        tag2.set("tag_name", json!("Beta-v2"));
+        ctx.write(&tag2).await.unwrap();
+
+        ctx.clear_transaction().await;
+        tx
+    };
+
+    // Session 2
+    let ctx2 = EntityContext::new(dir.path(), test_fields_context());
+    ctx2.rebuild_indexes().await.unwrap();
+
+    ctx2.undo(&tx_id).await.unwrap();
+
+    let a = ctx2.read("tag", "a").await.unwrap();
+    let b = ctx2.read("tag", "b").await.unwrap();
+    assert_eq!(a.get_str("tag_name"), Some("Alpha"));
+    assert_eq!(b.get_str("tag_name"), Some("Beta"));
+}
+
+/// Without `rebuild_indexes`, undo on a fresh context should fail
+/// with `ChangelogEntryNotFound`.
+#[tokio::test]
+async fn undo_without_rebuild_fails() {
+    let dir = TempDir::new().unwrap();
+
+    let ulid = {
+        let ctx = EntityContext::new(dir.path(), test_fields_context());
+        let mut tag = Entity::new("tag", "t1");
+        tag.set("tag_name", json!("Original"));
+        ctx.write(&tag).await.unwrap();
+
+        tag.set("tag_name", json!("Modified"));
+        ctx.write(&tag).await.unwrap().unwrap()
+    };
+
+    // Fresh context without rebuild — undo should fail
+    let ctx2 = EntityContext::new(dir.path(), test_fields_context());
+    let result = ctx2.undo(&ulid).await;
+    assert!(
+        result.is_err(),
+        "undo without rebuild_indexes should fail with ChangelogEntryNotFound"
+    );
+}

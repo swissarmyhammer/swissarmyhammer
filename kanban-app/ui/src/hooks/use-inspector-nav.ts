@@ -25,5 +25,8 @@ export function useInspectorNav(): UseInspectorNavReturn {
   /** Exit edit mode, returning to normal mode. */
   const exitEdit = useCallback(() => setMode("normal"), []);
 
-  return useMemo(() => ({ mode, enterEdit, exitEdit }), [mode, enterEdit, exitEdit]);
+  return useMemo(
+    () => ({ mode, enterEdit, exitEdit }),
+    [mode, enterEdit, exitEdit],
+  );
 }

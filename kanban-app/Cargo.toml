@@ -39,6 +39,7 @@ tracing-subscriber = { workspace = true }
 notify = { workspace = true }
 sha2 = { workspace = true }
 tracing-oslog = "0.3"
+tauri-plugin-clipboard-manager = "2"
 tauri-plugin-deep-link = "2"
 tauri-plugin-global-shortcut = "2"
 urlencoding = { workspace = true }

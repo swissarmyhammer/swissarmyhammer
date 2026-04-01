@@ -1,10 +1,4 @@
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   DndContext,
   DragOverlay,
@@ -20,11 +14,11 @@ import {
   arrayMove,
   horizontalListSortingStrategy,
 } from "@dnd-kit/sortable";
-import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
 import type { DropZoneDescriptor } from "@/lib/drop-zones";
 import {
   CommandScopeProvider,
+  backendDispatch,
   type CommandDef,
 } from "@/lib/command-scope";
 import { ColumnView } from "@/components/column-view";
@@ -231,7 +225,8 @@ export function BoardView({ board, tasks, boardPath }: BoardViewProps) {
       if (fm.startsWith("task:")) {
         const taskId = fm.slice("task:".length);
         const entity = taskMap.get(taskId);
-        if (entity) return getStr(entity, "position_column") || (columns[0]?.id ?? null);
+        if (entity)
+          return getStr(entity, "position_column") || (columns[0]?.id ?? null);
       }
       return columns[0]?.id ?? null;
     };
@@ -357,7 +352,7 @@ export function BoardView({ board, tasks, boardPath }: BoardViewProps) {
       }
 
       try {
-        await invoke("dispatch_command", {
+        await backendDispatch({
           cmd: "column.reorder",
           args: { id: activeId, target_index: newIndex },
           ...(boardPathRef.current ? { boardPath: boardPathRef.current } : {}),
@@ -383,7 +378,7 @@ export function BoardView({ board, tasks, boardPath }: BoardViewProps) {
         if (descriptor.beforeId) args.before_id = descriptor.beforeId;
         if (descriptor.afterId) args.after_id = descriptor.afterId;
         const boardPath = descriptor.boardPath || boardPathRef.current;
-        await invoke("dispatch_command", {
+        await backendDispatch({
           cmd: "task.move",
           args,
           scopeChain: [`task:${taskId}`],
@@ -461,7 +456,7 @@ export function BoardView({ board, tasks, boardPath }: BoardViewProps) {
       const col = columnMap.get(columnId);
       const title = defaultTaskTitle(col ? getStr(col, "name") : "");
       try {
-        await invoke("dispatch_command", {
+        await backendDispatch({
           cmd: "task.add",
           args: { title, column: columnId },
           ...(boardPathRef.current ? { boardPath: boardPathRef.current } : {}),
@@ -526,19 +521,23 @@ export function BoardView({ board, tasks, boardPath }: BoardViewProps) {
                       firstTodoTaskId={firstTodoTaskId}
                       leftColumnTaskMonikers={
                         prevColId
-                          ? columnTaskMonikers.get(prevColId) ?? []
+                          ? (columnTaskMonikers.get(prevColId) ?? [])
                           : []
                       }
                       leftColumnHeaderMoniker={
-                        prevColId ? fieldMoniker("column", prevColId, "name") : null
+                        prevColId
+                          ? fieldMoniker("column", prevColId, "name")
+                          : null
                       }
                       rightColumnTaskMonikers={
                         nextColId
-                          ? columnTaskMonikers.get(nextColId) ?? []
+                          ? (columnTaskMonikers.get(nextColId) ?? [])
                           : []
                       }
                       rightColumnHeaderMoniker={
-                        nextColId ? fieldMoniker("column", nextColId, "name") : null
+                        nextColId
+                          ? fieldMoniker("column", nextColId, "name")
+                          : null
                       }
                       allBoardTaskMonikers={allBoardTaskMonikers}
                       allBoardHeaderMonikers={allBoardHeaderMonikers}

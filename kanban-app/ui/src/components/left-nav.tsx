@@ -39,7 +39,7 @@ export function LeftNav() {
           <Tooltip key={view.id}>
             <TooltipTrigger asChild>
               <button
-                onClick={() => executeCommand(`nav.view.${view.id}`)}
+                onClick={() => executeCommand(`view.switch:${view.id}`)}
                 className={cn(
                   "flex items-center justify-center rounded-md p-1.5 transition-colors",
                   isActive
