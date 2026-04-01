@@ -11,6 +11,7 @@ use std::sync::Arc;
 use swissarmyhammer_fields::{
     ComputeEngine, EntityDef, EntityTypeName, FieldType, FieldsContext, ValidationEngine,
 };
+use swissarmyhammer_store::StoreHandle;
 use tokio::sync::RwLock;
 
 use crate::changelog::{self, ChangeEntry, FieldChange};
@@ -18,6 +19,7 @@ use crate::entity::Entity;
 use crate::error::{EntityError, Result};
 use crate::id_types::{ChangeEntryId, EntityId, TransactionId};
 use crate::io;
+use crate::store::EntityTypeStore;
 use crate::undo_stack::UndoStack;
 
 /// Root-aware I/O coordinator for dynamic entities.
@@ -37,6 +39,10 @@ pub struct EntityContext {
     transaction_index: RwLock<HashMap<TransactionId, Vec<ChangeEntryId>>>,
     /// Persistent undo/redo stack tracking changelog entry IDs.
     undo_stack: RwLock<UndoStack>,
+    /// Optional store handles for entity types.
+    /// When present, `write()` and `delete()` delegate file I/O to the store handle
+    /// instead of using the legacy `io::write_entity` / `io::trash_entity_files` path.
+    store_handles: RwLock<HashMap<String, Arc<StoreHandle<EntityTypeStore>>>>,
 }
 
 impl EntityContext {
@@ -57,6 +63,7 @@ impl EntityContext {
             current_transaction: RwLock::new(None),
             transaction_index: RwLock::new(HashMap::new()),
             undo_stack: RwLock::new(undo_stack),
+            store_handles: RwLock::new(HashMap::new()),
         }
     }
 
@@ -70,6 +77,22 @@ impl EntityContext {
     pub fn with_compute(mut self, engine: Arc<ComputeEngine>) -> Self {
         self.compute = Some(engine);
         self
+    }
+
+    /// Register a `StoreHandle` for an entity type.
+    ///
+    /// When registered, `write()` and `delete()` delegate file I/O to the store
+    /// handle instead of using the legacy `io::write_entity` / `io::trash_entity_files`
+    /// path. The old per-entity changelog continues to be written for activity history.
+    pub async fn register_store(
+        &self,
+        entity_type: &str,
+        handle: Arc<StoreHandle<EntityTypeStore>>,
+    ) {
+        self.store_handles
+            .write()
+            .await
+            .insert(entity_type.to_string(), handle);
     }
 
     /// Get the storage root path.
@@ -327,8 +350,19 @@ impl EntityContext {
             .await
             .ok();
 
-        // Write the entity
-        io::write_entity(&path, &entity, def).await?;
+        // Write the entity — delegate to StoreHandle when available, otherwise
+        // fall back to the legacy io::write_entity path.
+        let store_handle = self
+            .store_handles
+            .read()
+            .await
+            .get(entity.entity_type.as_str())
+            .cloned();
+        if let Some(sh) = store_handle {
+            sh.write(&entity).await?;
+        } else {
+            io::write_entity(&path, &entity, def).await?;
+        }
 
         // Compute and append changelog
         let changes = match &previous {
@@ -462,8 +496,16 @@ impl EntityContext {
             }
         }
 
-        let trash = self.trash_dir(entity_type);
-        io::trash_entity_files(&path, &trash).await?;
+        // Delete the entity files — delegate to StoreHandle when available,
+        // otherwise fall back to the legacy io::trash_entity_files path.
+        let store_handle = self.store_handles.read().await.get(entity_type).cloned();
+        if let Some(sh) = store_handle {
+            let entity_id = EntityId::from(id);
+            sh.delete(&entity_id).await?;
+        } else {
+            let trash = self.trash_dir(entity_type);
+            io::trash_entity_files(&path, &trash).await?;
+        }
         Ok(result_ulid)
     }
 

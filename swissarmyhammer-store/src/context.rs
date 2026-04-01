@@ -13,7 +13,7 @@ use tracing;
 use crate::erased::ErasedStore;
 use crate::error::{Result, StoreError};
 use crate::event::ChangeEvent;
-use crate::id::UndoEntryId;
+use crate::id::{StoredItemId, UndoEntryId};
 use crate::stack::UndoStack;
 
 /// Central coordinator for multiple file-backed stores.
@@ -52,9 +52,12 @@ impl StoreContext {
     }
 
     /// Push an entry onto the undo stack and persist to disk.
-    pub async fn push(&self, id: UndoEntryId, label: String) {
+    ///
+    /// The `item_id` records which item's per-item changelog contains this
+    /// entry, so that undo/redo can look it up without scanning all files.
+    pub async fn push(&self, id: UndoEntryId, label: String, item_id: StoredItemId) {
         let mut stack = self.stack.write().await;
-        stack.push(id, label);
+        stack.push(id, label, item_id);
         if let Err(e) = stack.save(&self.root.join("undo_stack.yaml")) {
             tracing::warn!(error = %e, "failed to save undo stack");
         }
@@ -67,12 +70,12 @@ impl StoreContext {
     /// Minimizes the scope of the stores read lock by cloning the matching
     /// `Arc<dyn ErasedStore>` before awaiting the undo operation.
     pub async fn undo(&self) -> Result<()> {
-        let target_id = {
+        let (target_id, item_id) = {
             let stack = self.stack.read().await;
             let entry = stack
                 .undo_target()
                 .ok_or_else(|| StoreError::NotFound("nothing to undo".into()))?;
-            entry.id
+            (entry.id, entry.item_id.clone())
         };
 
         // Clone matching store out of the lock, then release it before awaiting
@@ -80,7 +83,7 @@ impl StoreContext {
             let stores = self.stores.read().await;
             let mut found = None;
             for s in stores.iter() {
-                if s.has_entry(&target_id).await {
+                if s.has_entry(&target_id, item_id.as_str()).await {
                     found = Some(Arc::clone(s));
                     break;
                 }
@@ -90,7 +93,7 @@ impl StoreContext {
         // Lock released here
 
         if let Some(store) = store {
-            store.undo_erased(&target_id).await?;
+            store.undo_erased(&target_id, item_id.as_str()).await?;
         } else {
             return Err(StoreError::NoProvider(target_id.to_string()));
         }
@@ -111,12 +114,12 @@ impl StoreContext {
     /// Minimizes the scope of the stores read lock by cloning the matching
     /// `Arc<dyn ErasedStore>` before awaiting the redo operation.
     pub async fn redo(&self) -> Result<()> {
-        let target_id = {
+        let (target_id, item_id) = {
             let stack = self.stack.read().await;
             let entry = stack
                 .redo_target()
                 .ok_or_else(|| StoreError::NotFound("nothing to redo".into()))?;
-            entry.id
+            (entry.id, entry.item_id.clone())
         };
 
         // Clone matching store out of the lock, then release it before awaiting
@@ -124,7 +127,7 @@ impl StoreContext {
             let stores = self.stores.read().await;
             let mut found = None;
             for s in stores.iter() {
-                if s.has_entry(&target_id).await {
+                if s.has_entry(&target_id, item_id.as_str()).await {
                     found = Some(Arc::clone(s));
                     break;
                 }
@@ -134,7 +137,7 @@ impl StoreContext {
         // Lock released here
 
         if let Some(store) = store {
-            store.redo_erased(&target_id).await?;
+            store.redo_erased(&target_id, item_id.as_str()).await?;
         } else {
             return Err(StoreError::NoProvider(target_id.to_string()));
         }
@@ -237,7 +240,12 @@ mod tests {
         // Write an item through the handle
         let item = "item1\ndata".to_string();
         let entry_id = handle.write(&item).await.unwrap().unwrap();
-        ctx.push(entry_id, "create item1".to_string()).await;
+        ctx.push(
+            entry_id,
+            "create item1".to_string(),
+            StoredItemId::from("item1"),
+        )
+        .await;
 
         assert!(ctx.can_undo().await);
         assert!(!ctx.can_redo().await);
@@ -261,7 +269,12 @@ mod tests {
 
         let item = "item1\ndata".to_string();
         let entry_id = handle.write(&item).await.unwrap().unwrap();
-        ctx.push(entry_id, "create item1".to_string()).await;
+        ctx.push(
+            entry_id,
+            "create item1".to_string(),
+            StoredItemId::from("item1"),
+        )
+        .await;
 
         ctx.undo().await.unwrap();
         assert!(!store_dir.join("item1.txt").exists());
@@ -321,7 +334,8 @@ mod tests {
         assert!(!ctx.can_redo().await);
 
         let id = UndoEntryId::new();
-        ctx.push(id, "op1".to_string()).await;
+        ctx.push(id, "op1".to_string(), StoredItemId::from("item1"))
+            .await;
         assert!(ctx.can_undo().await);
         assert!(!ctx.can_redo().await);
     }
@@ -344,12 +358,22 @@ mod tests {
         // Write to store1
         let item1 = "s1item\ndata1".to_string();
         let id1 = handle1.write(&item1).await.unwrap().unwrap();
-        ctx.push(id1, "store1 create".to_string()).await;
+        ctx.push(
+            id1,
+            "store1 create".to_string(),
+            StoredItemId::from("s1item"),
+        )
+        .await;
 
         // Write to store2
         let item2 = "s2item\ndata2".to_string();
         let id2 = handle2.write(&item2).await.unwrap().unwrap();
-        ctx.push(id2, "store2 create".to_string()).await;
+        ctx.push(
+            id2,
+            "store2 create".to_string(),
+            StoredItemId::from("s2item"),
+        )
+        .await;
 
         // Undo should target store2 (most recent)
         ctx.undo().await.unwrap();
@@ -373,7 +397,12 @@ mod tests {
 
         // Push an entry ID that no store owns
         let orphan_id = UndoEntryId::new();
-        ctx.push(orphan_id, "orphan op".to_string()).await;
+        ctx.push(
+            orphan_id,
+            "orphan op".to_string(),
+            StoredItemId::from("orphan_item"),
+        )
+        .await;
 
         let result = ctx.undo().await;
         assert!(result.is_err());

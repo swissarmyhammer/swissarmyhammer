@@ -62,6 +62,46 @@ impl<'de> Deserialize<'de> for UndoEntryId {
     }
 }
 
+/// Serialized form of a store item's ID, as stored in the undo stack.
+///
+/// Each store's `ItemId` associated type converts to/from this via
+/// `Display`/`FromStr`. This newtype exists so the undo stack can hold
+/// item IDs from heterogeneous stores (e.g. `EntityId`, `PerspectiveId`)
+/// without being generic over the ID type.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct StoredItemId(String);
+
+impl StoredItemId {
+    /// Create from any type that implements `Display` (all `ItemId` types do).
+    pub fn from_display(id: &impl fmt::Display) -> Self {
+        Self(id.to_string())
+    }
+
+    /// Get the string representation for passing to store methods.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for StoredItemId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl From<&str> for StoredItemId {
+    fn from(s: &str) -> Self {
+        Self(s.to_string())
+    }
+}
+
+impl From<String> for StoredItemId {
+    fn from(s: String) -> Self {
+        Self(s)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

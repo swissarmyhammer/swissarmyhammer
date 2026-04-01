@@ -92,4 +92,8 @@ pub enum EntityError {
     /// IO error.
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
+
+    /// An error from the underlying `StoreHandle`.
+    #[error("store error: {0}")]
+    Store(#[from] swissarmyhammer_store::StoreError),
 }

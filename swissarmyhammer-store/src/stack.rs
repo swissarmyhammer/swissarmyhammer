@@ -10,18 +10,21 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
-use crate::id::UndoEntryId;
+use crate::id::{StoredItemId, UndoEntryId};
 
 /// A single entry on the undo stack.
 ///
-/// Stores the ID used to invoke undo/redo (a changelog entry ID) and a
-/// human-readable label describing the operation.
+/// Stores the ID used to invoke undo/redo (a changelog entry ID), the item
+/// whose per-item changelog contains the entry, and a human-readable label.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct UndoEntry {
     /// The changelog entry ID.
     pub id: UndoEntryId,
     /// Human-readable label, e.g. "create task 01ABC".
     pub label: String,
+    /// The item whose per-item changelog contains this entry.
+    #[serde(default)]
+    pub item_id: StoredItemId,
 }
 
 /// A bounded, pointer-based undo/redo stack persisted as YAML.
@@ -109,7 +112,7 @@ impl UndoStack {
     /// **Transaction dedup**: if `id` matches the top entry's ID (i.e. the
     /// entry at `pointer - 1`), the push is skipped. This prevents multiple
     /// writes within the same transaction from creating duplicate stack entries.
-    pub fn push(&mut self, id: UndoEntryId, label: impl Into<String>) {
+    pub fn push(&mut self, id: UndoEntryId, label: impl Into<String>, item_id: StoredItemId) {
         // Transaction dedup: skip if same ID is already at top of done side
         if self.pointer > 0 && self.entries[self.pointer - 1].id == id {
             return;
@@ -121,6 +124,7 @@ impl UndoStack {
         self.entries.push(UndoEntry {
             id,
             label: label.into(),
+            item_id,
         });
         self.pointer += 1;
 
@@ -211,8 +215,8 @@ mod tests {
         let mut stack = UndoStack::new();
         let id1 = UndoEntryId::new();
         let id2 = UndoEntryId::new();
-        stack.push(id1, "create task t1");
-        stack.push(id2, "update task t1");
+        stack.push(id1, "create task t1", "t1".into());
+        stack.push(id2, "update task t1", "t1".into());
 
         assert!(stack.can_undo());
         assert!(!stack.can_redo());
@@ -236,11 +240,11 @@ mod tests {
         let id1 = UndoEntryId::new();
         let id2 = UndoEntryId::new();
         let id3 = UndoEntryId::new();
-        stack.push(id1, "op1");
-        stack.push(id2, "op2");
+        stack.push(id1, "op1", "i1".into());
+        stack.push(id2, "op2", "i2".into());
         stack.record_undo(); // pointer at 1, redo has id2
 
-        stack.push(id3, "op3"); // should discard id2
+        stack.push(id3, "op3", "i3".into()); // should discard id2
         assert!(!stack.can_redo());
         assert_eq!(stack.entries.len(), 2); // id1, id3
         assert_eq!(stack.entries[1].id, id3);
@@ -250,8 +254,8 @@ mod tests {
     fn transaction_dedup() {
         let mut stack = UndoStack::new();
         let id = UndoEntryId::new();
-        stack.push(id, "create task t1");
-        stack.push(id, "update task t1 (same tx)");
+        stack.push(id, "create task t1", "t1".into());
+        stack.push(id, "update task t1 (same tx)", "t1".into());
 
         assert_eq!(stack.entries.len(), 1);
         assert_eq!(stack.pointer, 1);
@@ -262,7 +266,11 @@ mod tests {
         let mut stack = UndoStack::with_max_size(3);
         let ids: Vec<_> = (0..4).map(|_| UndoEntryId::new()).collect();
         for (i, id) in ids.iter().enumerate() {
-            stack.push(*id, format!("op{}", i + 1));
+            stack.push(
+                *id,
+                format!("op{}", i + 1),
+                StoredItemId::from(format!("item{}", i + 1)),
+            );
         }
 
         assert_eq!(stack.entries.len(), 3);
@@ -278,8 +286,8 @@ mod tests {
         let mut stack = UndoStack::new();
         let id1 = UndoEntryId::new();
         let id2 = UndoEntryId::new();
-        stack.push(id1, "create task t1");
-        stack.push(id2, "update task t1");
+        stack.push(id1, "create task t1", "t1".into());
+        stack.push(id2, "update task t1", "t1".into());
         stack.record_undo();
         stack.save(&path).unwrap();
 
@@ -309,7 +317,7 @@ mod tests {
     #[test]
     fn record_redo_noop_when_nothing_to_redo() {
         let mut stack = UndoStack::new();
-        stack.push(UndoEntryId::new(), "op1");
+        stack.push(UndoEntryId::new(), "op1", "i1".into());
         stack.record_redo();
         assert_eq!(stack.pointer, 1);
     }
@@ -317,9 +325,9 @@ mod tests {
     #[test]
     fn clear_resets_undo_and_redo() {
         let mut stack = UndoStack::new();
-        stack.push(UndoEntryId::new(), "op1");
-        stack.push(UndoEntryId::new(), "op2");
-        stack.push(UndoEntryId::new(), "op3");
+        stack.push(UndoEntryId::new(), "op1", "i1".into());
+        stack.push(UndoEntryId::new(), "op2", "i2".into());
+        stack.push(UndoEntryId::new(), "op3", "i3".into());
         stack.record_undo();
 
         assert!(stack.can_undo());
@@ -353,7 +361,7 @@ mod tests {
             .join("undo_stack.yaml");
 
         let mut stack = UndoStack::new();
-        stack.push(UndoEntryId::new(), "op1");
+        stack.push(UndoEntryId::new(), "op1", "i1".into());
         stack.save(&path).unwrap();
 
         assert!(path.exists());

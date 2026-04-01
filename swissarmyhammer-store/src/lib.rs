@@ -40,6 +40,6 @@ pub use context::StoreContext;
 pub use error::StoreError;
 pub use event::ChangeEvent;
 pub use handle::StoreHandle;
-pub use id::UndoEntryId;
+pub use id::{StoredItemId, UndoEntryId};
 pub use stack::{UndoEntry, UndoStack};
 pub use store::TrackedStore;

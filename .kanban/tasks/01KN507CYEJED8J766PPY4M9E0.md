@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KN506PPQ09AQ2TW9FDW2V85Z
-position_column: todo
-position_ordinal: 8a80
+position_column: done
+position_ordinal: ffffffffffffffffef80
 title: Wire entity writes through StoreHandle
 ---
 ## What

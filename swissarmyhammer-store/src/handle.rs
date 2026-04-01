@@ -22,27 +22,31 @@ use crate::trash;
 
 /// A handle wrapping a [`TrackedStore`] with changelog, cache, and undo support.
 ///
-/// All mutations go through this handle, which records changes to the changelog,
-/// maintains an in-memory cache for idempotency detection, and supports undo/redo
-/// via patch reversal.
+/// All mutations go through this handle, which records changes to per-item
+/// changelogs, maintains an in-memory cache for idempotency detection, and
+/// supports undo/redo via patch reversal. Each item gets its own `.jsonl`
+/// changelog file alongside its data file.
 pub struct StoreHandle<S: TrackedStore> {
     pub(crate) store: Arc<S>,
     cache: RwLock<HashMap<String, String>>,
-    pub(crate) changelog: Changelog,
 }
 
 impl<S: TrackedStore> StoreHandle<S> {
     /// Create a new `StoreHandle` wrapping the given store.
-    ///
-    /// The changelog is stored at `{root}/changelog.jsonl`.
     pub fn new(store: Arc<S>) -> Self {
-        let root = store.root().to_path_buf();
-        let changelog_path = root.join("changelog.jsonl");
         Self {
             store,
             cache: RwLock::new(HashMap::new()),
-            changelog: Changelog::new(changelog_path),
         }
+    }
+
+    /// Return the path to the per-item changelog for the given item ID.
+    ///
+    /// The changelog lives at `{root}/{item_id}.jsonl` alongside the data
+    /// file at `{root}/{item_id}.{ext}`.
+    fn changelog_for(&self, item_id: &str) -> Changelog {
+        let path = self.store.root().join(format!("{}.jsonl", item_id));
+        Changelog::new(path)
     }
 
     /// Read an item by ID from disk.
@@ -100,7 +104,7 @@ impl<S: TrackedStore> StoreHandle<S> {
             transaction_id: None,
         };
 
-        self.changelog
+        self.changelog_for(&id_str)
             .append(&entry)
             .await
             .map_err(StoreError::Io)?;
@@ -144,11 +148,12 @@ impl<S: TrackedStore> StoreHandle<S> {
             transaction_id: None,
         };
 
-        self.changelog
+        self.changelog_for(&id_str)
             .append(&entry)
             .await
             .map_err(StoreError::Io)?;
 
+        // Trash the data file
         trash::trash_file(
             self.store.root(),
             &id_str,
@@ -156,6 +161,10 @@ impl<S: TrackedStore> StoreHandle<S> {
             &entry_id,
         )
         .map_err(StoreError::Io)?;
+
+        // Trash the per-item changelog alongside the data file
+        trash::trash_file(self.store.root(), &id_str, "jsonl", &entry_id)
+            .map_err(StoreError::Io)?;
 
         // Update cache (lock already held)
         cache.remove(&id_str);
@@ -165,12 +174,18 @@ impl<S: TrackedStore> StoreHandle<S> {
 
     /// Undo an operation identified by its changelog entry ID.
     ///
-    /// - Create: trashes the created file
+    /// The `item_id` identifies which per-item changelog contains the entry.
+    ///
+    /// - Create: trashes the created file and its changelog
     /// - Update: reverts to the before text (with 3-way merge if concurrently edited)
-    /// - Delete: restores the file from trash
-    pub async fn undo(&self, entry_id: &UndoEntryId) -> Result<S::Item> {
+    /// - Delete: restores the file and its changelog from trash
+    pub async fn undo(&self, entry_id: &UndoEntryId, item_id: &str) -> Result<S::Item> {
+        // If the changelog is in trash (from a prior delete), restore it first
+        // so we can read the entry. Ignore errors -- the file may not be trashed.
+        let _ = trash::restore_file(self.store.root(), item_id, "jsonl", entry_id);
+
         let entry = self
-            .changelog
+            .changelog_for(item_id)
             .find_entry(entry_id)
             .await
             .map_err(StoreError::Io)?
@@ -178,7 +193,7 @@ impl<S: TrackedStore> StoreHandle<S> {
 
         match entry.op {
             ChangeOp::Create => {
-                // Undo create: trash the file, keyed by the original entry ID
+                // Undo create: trash both the data file and its changelog
                 trash::trash_file(
                     self.store.root(),
                     &entry.item_id,
@@ -186,6 +201,8 @@ impl<S: TrackedStore> StoreHandle<S> {
                     &entry.id,
                 )
                 .map_err(StoreError::Io)?;
+                trash::trash_file(self.store.root(), &entry.item_id, "jsonl", &entry.id)
+                    .map_err(StoreError::Io)?;
                 self.cache.write().await.remove(&entry.item_id);
 
                 let after_text = entry.after.as_deref().unwrap_or("");
@@ -232,7 +249,8 @@ impl<S: TrackedStore> StoreHandle<S> {
                 self.store.deserialize(&id, &target)
             }
             ChangeOp::Delete => {
-                // Undo delete: restore from trash using the delete entry's ID
+                // Undo delete: restore the data file from trash.
+                // The changelog was already restored at the top of undo().
                 trash::restore_file(
                     self.store.root(),
                     &entry.item_id,
@@ -258,12 +276,19 @@ impl<S: TrackedStore> StoreHandle<S> {
 
     /// Redo an operation (inverse of undo).
     ///
-    /// - Create: restores the file from trash
+    /// The `item_id` identifies which per-item changelog contains the entry.
+    ///
+    /// - Create: restores the file and its changelog from trash
     /// - Update: re-applies the forward change
-    /// - Delete: trashes the file again
-    pub async fn redo(&self, entry_id: &UndoEntryId) -> Result<S::Item> {
+    /// - Delete: trashes the file and its changelog again
+    pub async fn redo(&self, entry_id: &UndoEntryId, item_id: &str) -> Result<S::Item> {
+        // If the changelog is in trash (from a prior undo of a create), restore
+        // it first so we can read the entry. Ignore errors -- the file may not
+        // be trashed.
+        let _ = trash::restore_file(self.store.root(), item_id, "jsonl", entry_id);
+
         let entry = self
-            .changelog
+            .changelog_for(item_id)
             .find_entry(entry_id)
             .await
             .map_err(StoreError::Io)?
@@ -271,7 +296,8 @@ impl<S: TrackedStore> StoreHandle<S> {
 
         match entry.op {
             ChangeOp::Create => {
-                // Redo create: restore from trash using the original entry ID
+                // Redo create: restore the data file from trash.
+                // The changelog was already restored at the top of redo().
                 trash::restore_file(
                     self.store.root(),
                     &entry.item_id,
@@ -327,7 +353,7 @@ impl<S: TrackedStore> StoreHandle<S> {
                 self.store.deserialize(&id, &target)
             }
             ChangeOp::Delete => {
-                // Redo delete: trash the file again using the original entry ID
+                // Redo delete: trash both the data file and its changelog again
                 trash::trash_file(
                     self.store.root(),
                     &entry.item_id,
@@ -335,6 +361,8 @@ impl<S: TrackedStore> StoreHandle<S> {
                     &entry.id,
                 )
                 .map_err(StoreError::Io)?;
+                trash::trash_file(self.store.root(), &entry.item_id, "jsonl", &entry.id)
+                    .map_err(StoreError::Io)?;
                 self.cache.write().await.remove(&entry.item_id);
 
                 let before_text = entry.before.as_deref().unwrap_or("");
@@ -347,13 +375,23 @@ impl<S: TrackedStore> StoreHandle<S> {
         }
     }
 
-    /// Check whether this store's changelog contains the given entry ID.
-    pub async fn has_entry(&self, id: &UndoEntryId) -> bool {
-        self.changelog
+    /// Check whether this store's per-item changelog contains the given entry ID.
+    ///
+    /// The `item_id` identifies which per-item changelog to search. Also checks
+    /// if the changelog is in trash (which happens after a delete or undo-create).
+    pub async fn has_entry(&self, id: &UndoEntryId, item_id: &str) -> bool {
+        // First check the live changelog
+        let found = self
+            .changelog_for(item_id)
             .find_entry(id)
             .await
             .map(|opt| opt.is_some())
-            .unwrap_or(false)
+            .unwrap_or(false);
+        if found {
+            return true;
+        }
+        // Also check if the changelog is in trash (e.g. after delete)
+        trash::is_trashed(self.store.root(), item_id, "jsonl", id)
     }
 
     /// Scan the store directory and detect changes since the last flush.
@@ -518,8 +556,8 @@ mod tests {
         assert!(path.exists());
         assert_eq!(std::fs::read_to_string(&path).unwrap(), item);
 
-        // Changelog should have one entry
-        let entries = handle.changelog.read_all().await.unwrap();
+        // Per-item changelog should have one entry
+        let entries = handle.changelog_for("item1").read_all().await.unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].op, ChangeOp::Create);
         assert_eq!(entries[0].item_id, "item1");
@@ -537,7 +575,7 @@ mod tests {
         assert!(second.is_none());
 
         // Only one changelog entry
-        let entries = handle.changelog.read_all().await.unwrap();
+        let entries = handle.changelog_for("item1").read_all().await.unwrap();
         assert_eq!(entries.len(), 1);
     }
 
@@ -560,12 +598,8 @@ mod tests {
         let entry_id = handle.delete(&"item1".to_string()).await.unwrap();
         assert!(!_dir.path().join("item1.txt").exists());
         assert!(trash::is_trashed(_dir.path(), "item1", "txt", &entry_id));
-
-        // Changelog has create + delete
-        let entries = handle.changelog.read_all().await.unwrap();
-        assert_eq!(entries.len(), 2);
-        assert_eq!(entries[1].op, ChangeOp::Delete);
-        assert_eq!(entries[1].id, entry_id);
+        // Per-item changelog is also trashed alongside the data file
+        assert!(trash::is_trashed(_dir.path(), "item1", "jsonl", &entry_id));
     }
 
     #[tokio::test]
@@ -574,9 +608,10 @@ mod tests {
         let item = "item1\ndata".to_string();
         let entry_id = handle.write(&item).await.unwrap().unwrap();
 
-        handle.undo(&entry_id).await.unwrap();
+        handle.undo(&entry_id, "item1").await.unwrap();
         assert!(!_dir.path().join("item1.txt").exists());
         assert!(trash::is_trashed(_dir.path(), "item1", "txt", &entry_id));
+        assert!(trash::is_trashed(_dir.path(), "item1", "jsonl", &entry_id));
     }
 
     #[tokio::test]
@@ -588,7 +623,7 @@ mod tests {
         handle.write(&v1).await.unwrap();
         let update_id = handle.write(&v2).await.unwrap().unwrap();
 
-        handle.undo(&update_id).await.unwrap();
+        handle.undo(&update_id, "item1").await.unwrap();
 
         let content = std::fs::read_to_string(_dir.path().join("item1.txt")).unwrap();
         assert_eq!(content, v1);
@@ -601,7 +636,7 @@ mod tests {
         handle.write(&item).await.unwrap();
         let delete_id = handle.delete(&"item1".to_string()).await.unwrap();
 
-        handle.undo(&delete_id).await.unwrap();
+        handle.undo(&delete_id, "item1").await.unwrap();
         assert!(_dir.path().join("item1.txt").exists());
         let content = std::fs::read_to_string(_dir.path().join("item1.txt")).unwrap();
         assert_eq!(content, "item1\ndata");
@@ -617,12 +652,12 @@ mod tests {
         let update_id = handle.write(&v2).await.unwrap().unwrap();
 
         // Undo
-        handle.undo(&update_id).await.unwrap();
+        handle.undo(&update_id, "item1").await.unwrap();
         let content = std::fs::read_to_string(_dir.path().join("item1.txt")).unwrap();
         assert_eq!(content, v1);
 
         // Redo
-        handle.redo(&update_id).await.unwrap();
+        handle.redo(&update_id, "item1").await.unwrap();
         let content = std::fs::read_to_string(_dir.path().join("item1.txt")).unwrap();
         assert_eq!(content, v2);
     }
@@ -673,14 +708,14 @@ mod tests {
         let item = "item1\ndata".to_string();
         let entry_id = handle.write(&item).await.unwrap().unwrap();
 
-        assert!(handle.has_entry(&entry_id).await);
+        assert!(handle.has_entry(&entry_id, "item1").await);
     }
 
     #[tokio::test]
     async fn has_entry_returns_false_for_unknown_entry() {
         let (_dir, handle) = setup();
         let unknown = UndoEntryId::new();
-        assert!(!handle.has_entry(&unknown).await);
+        assert!(!handle.has_entry(&unknown, "item1").await);
     }
 
     #[tokio::test]
@@ -692,7 +727,7 @@ mod tests {
         handle.write(&v1).await.unwrap();
         handle.write(&v2).await.unwrap();
 
-        let entries = handle.changelog.read_all().await.unwrap();
+        let entries = handle.changelog_for("item1").read_all().await.unwrap();
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].op, ChangeOp::Create);
         assert_eq!(entries[1].op, ChangeOp::Update);
@@ -704,10 +739,10 @@ mod tests {
         let item = "item1\ndata".to_string();
         let create_id = handle.write(&item).await.unwrap().unwrap();
 
-        handle.undo(&create_id).await.unwrap();
+        handle.undo(&create_id, "item1").await.unwrap();
         assert!(!_dir.path().join("item1.txt").exists());
 
-        handle.redo(&create_id).await.unwrap();
+        handle.redo(&create_id, "item1").await.unwrap();
         assert!(_dir.path().join("item1.txt").exists());
         let content = std::fs::read_to_string(_dir.path().join("item1.txt")).unwrap();
         assert_eq!(content, item);
@@ -721,13 +756,14 @@ mod tests {
         let delete_id = handle.delete(&"item1".to_string()).await.unwrap();
 
         // Undo delete (restore)
-        handle.undo(&delete_id).await.unwrap();
+        handle.undo(&delete_id, "item1").await.unwrap();
         assert!(_dir.path().join("item1.txt").exists());
 
         // Redo delete (trash again)
-        handle.redo(&delete_id).await.unwrap();
+        handle.redo(&delete_id, "item1").await.unwrap();
         assert!(!_dir.path().join("item1.txt").exists());
         assert!(trash::is_trashed(_dir.path(), "item1", "txt", &delete_id));
+        assert!(trash::is_trashed(_dir.path(), "item1", "jsonl", &delete_id));
     }
 
     #[tokio::test]
@@ -748,7 +784,7 @@ mod tests {
         std::fs::write(_dir.path().join("item1.txt"), &v3).unwrap();
 
         // Undo should 3-way merge: revert line2 change, keep external line7 change
-        let result = handle.undo(&update_id).await.unwrap();
+        let result = handle.undo(&update_id, "item1").await.unwrap();
         assert!(result.contains("line2"), "should revert to original line2");
         assert!(
             result.contains("EXTERNAL"),
@@ -771,7 +807,7 @@ mod tests {
         // External edit on same line
         std::fs::write(_dir.path().join("item1.txt"), &v3).unwrap();
 
-        let result = handle.undo(&update_id).await;
+        let result = handle.undo(&update_id, "item1").await;
         assert!(
             result.is_err(),
             "conflicting concurrent edit should produce MergeConflict"
@@ -794,14 +830,14 @@ mod tests {
         let update_id = handle.write(&v2).await.unwrap().unwrap();
 
         // Undo to get back to v1
-        handle.undo(&update_id).await.unwrap();
+        handle.undo(&update_id, "item1").await.unwrap();
 
         // External edit: change last line (non-overlapping with v1->v2 change)
         let v1_modified = "item1\nline2\nline3\nline4\nline5\nline6\nEXTERNAL\n".to_string();
         std::fs::write(_dir.path().join("item1.txt"), &v1_modified).unwrap();
 
         // Redo should 3-way merge: re-apply line2 change, keep external line7 change
-        let result = handle.redo(&update_id).await.unwrap();
+        let result = handle.redo(&update_id, "item1").await.unwrap();
         assert!(result.contains("CHANGED"), "should re-apply line2 change");
         assert!(
             result.contains("EXTERNAL"),

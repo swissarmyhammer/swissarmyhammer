@@ -27,13 +27,19 @@ pub trait ErasedStore: Send + Sync {
     async fn flush_changes(&self) -> Vec<ChangeEvent>;
 
     /// Check whether this store owns the given changelog entry.
-    async fn has_entry(&self, id: &UndoEntryId) -> bool;
+    ///
+    /// The `item_id` identifies which per-item changelog to search.
+    async fn has_entry(&self, id: &UndoEntryId, item_id: &str) -> bool;
 
     /// Undo an operation, discarding the typed return value.
-    async fn undo_erased(&self, id: &UndoEntryId) -> Result<()>;
+    ///
+    /// The `item_id` identifies which per-item changelog contains the entry.
+    async fn undo_erased(&self, id: &UndoEntryId, item_id: &str) -> Result<()>;
 
     /// Redo an operation, discarding the typed return value.
-    async fn redo_erased(&self, id: &UndoEntryId) -> Result<()>;
+    ///
+    /// The `item_id` identifies which per-item changelog contains the entry.
+    async fn redo_erased(&self, id: &UndoEntryId, item_id: &str) -> Result<()>;
 }
 
 #[async_trait]
@@ -46,17 +52,17 @@ impl<S: TrackedStore> ErasedStore for StoreHandle<S> {
         StoreHandle::flush_changes(self).await
     }
 
-    async fn has_entry(&self, id: &UndoEntryId) -> bool {
-        StoreHandle::has_entry(self, id).await
+    async fn has_entry(&self, id: &UndoEntryId, item_id: &str) -> bool {
+        StoreHandle::has_entry(self, id, item_id).await
     }
 
-    async fn undo_erased(&self, id: &UndoEntryId) -> Result<()> {
-        self.undo(id).await?;
+    async fn undo_erased(&self, id: &UndoEntryId, item_id: &str) -> Result<()> {
+        self.undo(id, item_id).await?;
         Ok(())
     }
 
-    async fn redo_erased(&self, id: &UndoEntryId) -> Result<()> {
-        self.redo(id).await?;
+    async fn redo_erased(&self, id: &UndoEntryId, item_id: &str) -> Result<()> {
+        self.redo(id, item_id).await?;
         Ok(())
     }
 }
