@@ -315,11 +315,10 @@ impl EntityContext {
         let def = self.entity_def(&entity.entity_type)?;
         let dir = self.entity_dir(&entity.entity_type);
 
-        // Apply validation and strip computed fields
-        let mut entity = entity.clone();
+        // Validate, strip computed fields, and apply defaults
+        let entity = self.validate_for_write(entity).await?;
         let entity_type = entity.entity_type.clone();
         let entity_id = entity.id.clone();
-        self.apply_validation(&entity_type, &mut entity).await?;
 
         let path = io::entity_file_path(&dir, &entity.id, def);
 
@@ -1618,18 +1617,24 @@ impl EntityContext {
     /// Validate fields on write and strip computed fields.
     ///
     /// For each field defined on the entity type:
-    /// - Skip `Computed` fields (remove from entity — they are derived on read).
-    /// - If a validation engine is present, validate and possibly transform the value.
-    /// - If a field has a default and is missing from the entity, insert the default.
-    async fn apply_validation(
-        &self,
-        entity_type: impl AsRef<str>,
-        entity: &mut Entity,
-    ) -> Result<()> {
-        let entity_type = entity_type.as_ref();
-        let field_defs = self.fields.fields_for_entity(entity_type);
+    /// Validate and prepare an entity for writing to disk.
+    ///
+    /// This is the domain-level validation layer that runs before storage.
+    /// It clones the entity and returns a cleaned version ready for persistence:
+    ///
+    /// 1. Strips computed fields (they are derived on read, never persisted).
+    /// 2. Applies field defaults for missing non-computed fields.
+    /// 3. Runs field-level validation via the ValidationEngine (if present).
+    /// 4. Runs entity-level cross-field validation (if present).
+    ///
+    /// Callers can use this independently of `write()` to validate an entity
+    /// before passing it to a `StoreHandle`.
+    pub async fn validate_for_write(&self, entity: &Entity) -> Result<Entity> {
+        let mut entity = entity.clone();
+        let entity_type = entity.entity_type.to_string();
+        let field_defs = self.fields.fields_for_entity(&entity_type);
         if field_defs.is_empty() {
-            return Ok(());
+            return Ok(entity);
         }
 
         // Strip computed fields — they must never be persisted.
@@ -1653,7 +1658,7 @@ impl EntityContext {
 
         // Validate fields
         let Some(ref engine) = self.validation else {
-            return Ok(());
+            return Ok(entity);
         };
 
         // Collect field names to validate (avoid borrowing entity.fields while mutating)
@@ -1681,7 +1686,7 @@ impl EntityContext {
         }
 
         // Entity-level cross-field validation (runs after all field validations)
-        let entity_def = self.entity_def(entity_type)?;
+        let entity_def = self.entity_def(&entity_type)?;
         engine
             .validate_entity(entity_def, &mut entity.fields)
             .await
@@ -1690,7 +1695,7 @@ impl EntityContext {
                 message: e.to_string(),
             })?;
 
-        Ok(())
+        Ok(entity)
     }
 
     /// Build a read-only entity query function for aggregate computed fields.

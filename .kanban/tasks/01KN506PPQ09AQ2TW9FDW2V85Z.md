@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KN4S7XVZJ7ZZ6MSB7WAG2F99
-position_column: todo
-position_ordinal: '8980'
+position_column: done
+position_ordinal: ffffffffffffffffe880
 title: Extract validation layer above EntityContext::write()
 ---
 ## What
