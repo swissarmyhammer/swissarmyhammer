@@ -6,7 +6,9 @@
 
 use crate::activity::ListActivity;
 use crate::actor::{AddActor, DeleteActor, GetActor, ListActors, UpdateActor};
-use crate::attachment::{AddAttachment, DeleteAttachment, GetAttachment, ListAttachments, UpdateAttachment};
+use crate::attachment::{
+    AddAttachment, DeleteAttachment, GetAttachment, ListAttachments, UpdateAttachment,
+};
 use crate::board::{GetBoard, InitBoard, UpdateBoard};
 use crate::column::{AddColumn, DeleteColumn, GetColumn, ListColumns, UpdateColumn};
 use crate::perspective::{
@@ -394,7 +396,9 @@ pub async fn execute_operation(
         (Verb::Get, Noun::Attachment) => {
             let task_id = req(op, "task_id")?;
             let id = req(op, "id")?;
-            processor.process(&GetAttachment::new(task_id, id), ctx).await
+            processor
+                .process(&GetAttachment::new(task_id, id), ctx)
+                .await
         }
         (Verb::Update, Noun::Attachment) => {
             let task_id = req(op, "task_id")?;
@@ -414,7 +418,9 @@ pub async fn execute_operation(
         (Verb::Delete, Noun::Attachment) => {
             let task_id = req(op, "task_id")?;
             let id = req(op, "id")?;
-            processor.process(&DeleteAttachment::new(task_id, id), ctx).await
+            processor
+                .process(&DeleteAttachment::new(task_id, id), ctx)
+                .await
         }
         (Verb::List, Noun::Attachments) => {
             let task_id = req(op, "task_id")?;

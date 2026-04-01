@@ -390,4 +390,98 @@ mod tests {
         assert!(stack.entries.is_empty());
         assert_eq!(stack.pointer, 0);
     }
+
+    #[test]
+    fn load_trims_over_capacity() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("undo_stack.yaml");
+
+        // Build a stack with 5 entries but max_size=3, save it with max_size=5
+        // first so all entries are written, then edit the YAML to set max_size=3.
+        let mut stack = UndoStack::with_max_size(5);
+        let ids: Vec<_> = (0..5).map(|_| UndoEntryId::new()).collect();
+        for (i, id) in ids.iter().enumerate() {
+            stack.push(
+                *id,
+                format!("op{}", i),
+                StoredItemId::from(format!("i{}", i)),
+            );
+        }
+        stack.save(&path).unwrap();
+
+        // Manually overwrite max_size in the YAML to 3
+        let yaml = std::fs::read_to_string(&path).unwrap();
+        let yaml = yaml.replace("max_size: 5", "max_size: 3");
+        std::fs::write(&path, yaml).unwrap();
+
+        let loaded = UndoStack::load(&path).unwrap();
+        assert_eq!(loaded.entries.len(), 3);
+        assert_eq!(loaded.max_size, 3);
+        // Should have kept the last 3 entries (trimmed oldest 2)
+        assert_eq!(loaded.entries[0].id, ids[2]);
+    }
+
+    #[test]
+    fn load_clamps_pointer_to_entries_len() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("undo_stack.yaml");
+
+        // Build a small stack, save it, then manually set pointer too high
+        let mut stack = UndoStack::new();
+        let id1 = UndoEntryId::new();
+        let id2 = UndoEntryId::new();
+        stack.push(id1, "op1", "i1".into());
+        stack.push(id2, "op2", "i2".into());
+        stack.save(&path).unwrap();
+
+        // Manually overwrite pointer in the YAML to a value beyond entries.len()
+        let yaml = std::fs::read_to_string(&path).unwrap();
+        let yaml = yaml.replace("pointer: 2", "pointer: 10");
+        std::fs::write(&path, yaml).unwrap();
+
+        let loaded = UndoStack::load(&path).unwrap();
+        // pointer should be clamped to entries.len() == 2
+        assert_eq!(loaded.pointer, 2);
+        assert_eq!(loaded.entries.len(), 2);
+    }
+
+    #[test]
+    fn push_after_undo_trims_when_over_capacity() {
+        let mut stack = UndoStack::with_max_size(3);
+        let ids: Vec<_> = (0..3).map(|_| UndoEntryId::new()).collect();
+        for (i, id) in ids.iter().enumerate() {
+            stack.push(
+                *id,
+                format!("op{}", i),
+                StoredItemId::from(format!("i{}", i)),
+            );
+        }
+        assert_eq!(stack.entries.len(), 3);
+        assert_eq!(stack.pointer, 3);
+
+        // Undo one
+        stack.record_undo();
+        assert_eq!(stack.pointer, 2);
+
+        // Push two new items -- first discards redo side, then may exceed capacity
+        let new_id1 = UndoEntryId::new();
+        let new_id2 = UndoEntryId::new();
+        stack.push(new_id1, "new1", "n1".into());
+        stack.push(new_id2, "new2", "n2".into());
+
+        // Stack should be trimmed to max_size=3
+        assert_eq!(stack.entries.len(), 3);
+        assert!(stack.pointer <= stack.entries.len());
+        // The last entry should be new_id2
+        assert_eq!(stack.entries.last().unwrap().id, new_id2);
+    }
+
+    #[test]
+    fn default_matches_new() {
+        let from_default = UndoStack::default();
+        let from_new = UndoStack::new();
+        assert_eq!(from_default.entries.len(), from_new.entries.len());
+        assert_eq!(from_default.pointer, from_new.pointer);
+        assert_eq!(from_default.max_size, from_new.max_size);
+    }
 }

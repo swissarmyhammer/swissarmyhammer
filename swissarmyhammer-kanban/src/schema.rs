@@ -9,7 +9,9 @@ use swissarmyhammer_operations::{generate_mcp_schema, Operation, SchemaConfig};
 
 use crate::activity::ListActivity;
 use crate::actor::{AddActor, DeleteActor, GetActor, ListActors, UpdateActor};
-use crate::attachment::{AddAttachment, DeleteAttachment, GetAttachment, ListAttachments, UpdateAttachment};
+use crate::attachment::{
+    AddAttachment, DeleteAttachment, GetAttachment, ListAttachments, UpdateAttachment,
+};
 use crate::board::{GetBoard, InitBoard, UpdateBoard};
 use crate::column::{AddColumn, DeleteColumn, GetColumn, ListColumns, UpdateColumn};
 use crate::perspective::{

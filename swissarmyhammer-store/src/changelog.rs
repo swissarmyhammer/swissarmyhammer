@@ -298,4 +298,80 @@ mod tests {
         assert_eq!(entries[0].id, keep_id);
         assert_eq!(entries[0].item_id, StoredItemId::from("task-2"));
     }
+
+    #[tokio::test]
+    async fn read_all_skips_corrupt_json_lines() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("changelog.jsonl");
+        let changelog = Changelog::new(path.clone());
+
+        let e1 = make_entry("task-1", ChangeOp::Create);
+        changelog.append(&e1).await.unwrap();
+
+        // Manually inject a corrupt JSON line
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        writeln!(file, "{{not valid json at all").unwrap();
+
+        let e2 = make_entry("task-2", ChangeOp::Update);
+        changelog.append(&e2).await.unwrap();
+
+        let entries = changelog.read_all().await.unwrap();
+        // Should have 2 valid entries, corrupt line skipped
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].item_id, StoredItemId::from("task-1"));
+        assert_eq!(entries[1].item_id, StoredItemId::from("task-2"));
+    }
+
+    #[tokio::test]
+    async fn find_entry_skips_blank_lines() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("changelog.jsonl");
+        let changelog = Changelog::new(path.clone());
+
+        let e1 = make_entry("task-1", ChangeOp::Create);
+        let target_id = e1.id;
+        changelog.append(&e1).await.unwrap();
+
+        // Manually inject blank lines
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        writeln!(file).unwrap();
+        writeln!(file, "   ").unwrap();
+
+        let e2 = make_entry("task-2", ChangeOp::Update);
+        changelog.append(&e2).await.unwrap();
+
+        // find_entry should find e1 despite blank lines in the file
+        let found = changelog.find_entry(&target_id).await.unwrap();
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().item_id, StoredItemId::from("task-1"));
+    }
+
+    #[tokio::test]
+    async fn compact_with_single_id_removes_others() {
+        let dir = TempDir::new().unwrap();
+        let changelog = Changelog::new(dir.path().join("changelog.jsonl"));
+
+        let e1 = make_entry("task-1", ChangeOp::Create);
+        let e2 = make_entry("task-2", ChangeOp::Update);
+        let e3 = make_entry("task-3", ChangeOp::Delete);
+        let keep_id = e1.id;
+        changelog.append(&e1).await.unwrap();
+        changelog.append(&e2).await.unwrap();
+        changelog.append(&e3).await.unwrap();
+
+        let mut referenced = HashSet::new();
+        referenced.insert(keep_id);
+        changelog.compact(&referenced).await.unwrap();
+
+        let entries = changelog.read_all().await.unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].id, keep_id);
+        assert_eq!(entries[0].item_id, StoredItemId::from("task-1"));
+    }
 }

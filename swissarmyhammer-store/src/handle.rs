@@ -891,6 +891,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn flush_changes_skips_dot_prefixed_files() {
+        let (_dir, handle) = setup();
+
+        // Write a dot-prefixed file externally
+        std::fs::write(_dir.path().join(".hidden.txt"), "hidden content").unwrap();
+        // Write a normal file externally
+        std::fs::write(_dir.path().join("visible.txt"), "visible content").unwrap();
+
+        let events = handle.flush_changes().await;
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_name, "item-created");
+        assert_eq!(events[0].payload["id"], "visible");
+    }
+
+    #[tokio::test]
+    async fn flush_changes_skips_wrong_extension_files() {
+        let (_dir, handle) = setup();
+
+        // Write a file with wrong extension
+        std::fs::write(_dir.path().join("item1.json"), r#"{"id": "item1"}"#).unwrap();
+        // Write a file with correct extension
+        std::fs::write(_dir.path().join("item2.txt"), "item2\ndata").unwrap();
+
+        let events = handle.flush_changes().await;
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_name, "item-created");
+        assert_eq!(events[0].payload["id"], "item2");
+    }
+
+    #[tokio::test]
+    async fn get_missing_item_returns_not_found() {
+        let (_dir, handle) = setup();
+        let result = handle.get(&"nonexistent".to_string()).await;
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            StoreError::NotFound(id) => assert_eq!(id, "nonexistent"),
+            other => panic!("expected NotFound, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
     async fn redo_update_with_non_overlapping_concurrent_edit_succeeds() {
         // Write v1, write v2, undo, externally modify, redo.
         // Non-overlapping changes apply cleanly because the forward patch

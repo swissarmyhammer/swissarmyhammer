@@ -425,13 +425,11 @@ mod tests {
             .expect("builtin 'attachments' field should exist in FieldsContext");
 
         match &field.type_ {
-            swissarmyhammer_fields::FieldType::Reference {
-                entity,
-                multiple,
-            } => {
+            swissarmyhammer_fields::FieldType::Reference { entity, multiple } => {
                 assert!(multiple, "attachments field should have multiple: true");
                 assert_eq!(
-                    entity.as_str(), "attachment",
+                    entity.as_str(),
+                    "attachment",
                     "attachments should reference the attachment entity"
                 );
             }

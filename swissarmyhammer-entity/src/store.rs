@@ -570,4 +570,22 @@ mod tests {
         let restored = store.deserialize(&id, &text).unwrap();
         assert_eq!(restored.get_str("body"), Some("   \n  \n"));
     }
+
+    #[test]
+    fn test_malformed_yaml_in_frontmatter_returns_error() {
+        let store = make_store(body_entity_def("task", "body"), vec![]);
+        // Valid frontmatter delimiters but garbage YAML between them
+        let text = "---\n: : [invalid yaml {{ not closed\n---\nSome body";
+        let id = EntityId::from("01ABC");
+
+        let result = store.deserialize(&id, text);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            StoreError::Deserialize(msg) => {
+                // Should contain a YAML parse error message
+                assert!(!msg.is_empty());
+            }
+            other => panic!("expected StoreError::Deserialize, got {:?}", other),
+        }
+    }
 }
