@@ -8170,6 +8170,7 @@ dependencies = [
  "swissarmyhammer-common",
  "swissarmyhammer-entity",
  "swissarmyhammer-fields",
+ "swissarmyhammer-store",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",

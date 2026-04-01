@@ -20,6 +20,7 @@ async-trait = { workspace = true }
 swissarmyhammer-common = { path = "../swissarmyhammer-common" }
 swissarmyhammer-commands = { path = "../swissarmyhammer-commands" }
 swissarmyhammer-fields = { path = "../swissarmyhammer-fields" }
+swissarmyhammer-store = { path = "../swissarmyhammer-store" }
 diffy = { workspace = true }
 notify = { workspace = true }
 tempfile = { workspace = true, optional = true }

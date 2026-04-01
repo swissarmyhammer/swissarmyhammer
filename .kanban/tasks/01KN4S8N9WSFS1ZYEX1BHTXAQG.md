@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 depends_on:
-- 01KN4S7XVZJ7ZZ6MSB7WAG2F99
+- 01KN508KF8KTZX1ZE371DHRFF7
 position_column: todo
 position_ordinal: '8880'
 title: Implement TrackedStore for Perspective + undoable commands + events
