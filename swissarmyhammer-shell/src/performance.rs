@@ -442,10 +442,10 @@ impl PerformanceStatistics {
             metrics.iter().map(|m| m.total_execution_time).collect();
         exec_times.sort();
 
-        let p95_index = (total_commands as f64 * 0.95) as usize;
+        let p95_index = ((total_commands as f64 * 0.95).ceil() as usize).saturating_sub(1);
         let p95_execution_time = exec_times.get(p95_index).copied().unwrap_or(Duration::ZERO);
 
-        let p99_index = (total_commands as f64 * 0.99) as usize;
+        let p99_index = ((total_commands as f64 * 0.99).ceil() as usize).saturating_sub(1);
         let p99_execution_time = exec_times.get(p99_index).copied().unwrap_or(Duration::ZERO);
 
         // Calculate rates
@@ -479,6 +479,7 @@ impl PerformanceStatistics {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tracing_test::traced_test;
 
     #[test]
     fn test_profiler_lifecycle() {
@@ -506,5 +507,373 @@ mod tests {
         assert_eq!(metrics.exit_code, 0);
         assert!(!metrics.total_execution_time.is_zero());
         assert_eq!(metrics.stdout_size, 10);
+    }
+
+    #[test]
+    fn test_set_timeout_info() {
+        let mut profiler = ShellPerformanceProfiler::new();
+
+        profiler.start_profiling("sleep 999".to_string());
+        profiler.mark_command_start();
+        profiler.set_timeout_info(true);
+        profiler.mark_command_end(124);
+
+        let metrics = profiler
+            .finish_profiling()
+            .expect("metrics should be present");
+        assert!(
+            metrics.timed_out,
+            "timed_out should be true after set_timeout_info(true)"
+        );
+    }
+
+    #[test]
+    fn test_record_cleanup_time() {
+        let mut profiler = ShellPerformanceProfiler::new();
+        let cleanup_duration = Duration::from_millis(42);
+
+        profiler.start_profiling("echo cleanup".to_string());
+        profiler.mark_command_start();
+        profiler.mark_command_end(0);
+        profiler.record_cleanup_time(cleanup_duration);
+
+        let metrics = profiler
+            .finish_profiling()
+            .expect("metrics should be present");
+        assert_eq!(
+            metrics.cleanup_time, cleanup_duration,
+            "cleanup_time should match the recorded duration"
+        );
+    }
+
+    /// Helper to build a metric with specific field overrides for testing.
+    fn make_metric(
+        total_time_ms: u64,
+        overhead_ms: u64,
+        initial_mem: u64,
+        peak_mem: u64,
+        exit_code: i32,
+        timed_out: bool,
+    ) -> ShellPerformanceMetrics {
+        ShellPerformanceMetrics {
+            command: "test".to_string(),
+            total_execution_time: Duration::from_millis(total_time_ms),
+            command_execution_time: Duration::from_millis(
+                total_time_ms.saturating_sub(overhead_ms),
+            ),
+            overhead_time: Duration::from_millis(overhead_ms),
+            peak_memory_usage: peak_mem,
+            initial_memory_usage: initial_mem,
+            exit_code,
+            stdout_size: 0,
+            stderr_size: 0,
+            output_truncated: false,
+            process_count: 1,
+            cleanup_time: Duration::ZERO,
+            timed_out,
+        }
+    }
+
+    #[test]
+    fn test_from_metrics_empty() {
+        let stats = PerformanceStatistics::from_metrics(&[]);
+
+        assert_eq!(stats.total_commands, 0);
+        assert_eq!(stats.avg_execution_time, Duration::ZERO);
+        assert_eq!(stats.p95_execution_time, Duration::ZERO);
+        assert_eq!(stats.p99_execution_time, Duration::ZERO);
+        assert_eq!(stats.avg_overhead_time, Duration::ZERO);
+        assert_eq!(stats.avg_memory_growth, 0);
+        assert_eq!(stats.max_memory_growth, 0);
+        assert_eq!(stats.success_rate, 0.0);
+        assert_eq!(stats.timeout_rate, 0.0);
+        assert_eq!(stats.performance_target_rate, 0.0);
+    }
+
+    #[test]
+    fn test_from_metrics_single() {
+        let m = make_metric(
+            200,   // total 200ms
+            10,    // overhead 10ms
+            1000,  // initial mem
+            5000,  // peak mem (growth = 4000)
+            0,     // success
+            false, // no timeout
+        );
+        let stats = PerformanceStatistics::from_metrics(&[m]);
+
+        assert_eq!(stats.total_commands, 1);
+        assert_eq!(stats.avg_execution_time, Duration::from_millis(200));
+        assert_eq!(stats.avg_overhead_time, Duration::from_millis(10));
+        assert_eq!(stats.avg_memory_growth, 4000);
+        assert_eq!(stats.max_memory_growth, 4000);
+        assert_eq!(stats.success_rate, 1.0);
+        assert_eq!(stats.timeout_rate, 0.0);
+        assert_eq!(stats.performance_target_rate, 1.0);
+        // With a single element, p95 index = (1 * 0.95) as usize = 0
+        assert_eq!(stats.p95_execution_time, Duration::from_millis(200));
+        // p99 index = (1 * 0.99) as usize = 0
+        assert_eq!(stats.p99_execution_time, Duration::from_millis(200));
+    }
+
+    #[test]
+    fn test_from_metrics_multiple_varied() {
+        // Build 4 metrics with different characteristics:
+        //  0: 100ms, exit 0, no timeout, mem growth 1000
+        //  1: 200ms, exit 1, no timeout, mem growth 2000
+        //  2: 300ms, exit 0, timed out,  mem growth 3000
+        //  3: 400ms, exit 0, no timeout, mem growth 4000
+        let metrics = vec![
+            make_metric(100, 5, 0, 1000, 0, false),
+            make_metric(200, 15, 0, 2000, 1, false),
+            make_metric(300, 25, 0, 3000, 0, true),
+            make_metric(400, 35, 0, 4000, 0, false),
+        ];
+        let stats = PerformanceStatistics::from_metrics(&metrics);
+
+        assert_eq!(stats.total_commands, 4);
+
+        // avg execution = (100+200+300+400)/4 = 250ms
+        assert_eq!(stats.avg_execution_time, Duration::from_millis(250));
+
+        // avg overhead = (5+15+25+35)/4 = 20ms
+        assert_eq!(stats.avg_overhead_time, Duration::from_millis(20));
+
+        // avg memory growth = (1000+2000+3000+4000)/4 = 2500
+        assert_eq!(stats.avg_memory_growth, 2500);
+
+        // max memory growth = 4000
+        assert_eq!(stats.max_memory_growth, 4000);
+
+        // Success: metrics 0, 2, 3 have exit_code 0 => 3/4 = 0.75
+        assert!((stats.success_rate - 0.75).abs() < f64::EPSILON);
+
+        // Timeout: only metric 2 => 1/4 = 0.25
+        assert!((stats.timeout_rate - 0.25).abs() < f64::EPSILON);
+
+        // All four meet performance targets (overhead < 100ms, mem growth < 50MB, cleanup < 1s)
+        assert!((stats.performance_target_rate - 1.0).abs() < f64::EPSILON);
+
+        // Sorted exec times: [100, 200, 300, 400]
+        // p95 index = (4 * 0.95) as usize = 3 => 400ms
+        assert_eq!(stats.p95_execution_time, Duration::from_millis(400));
+        // p99 index = (4 * 0.99) as usize = 3 => 400ms
+        assert_eq!(stats.p99_execution_time, Duration::from_millis(400));
+    }
+
+    #[test]
+    fn test_from_metrics_percentile_ordering() {
+        // 10 metrics with execution times 10..100ms to verify percentile index selection
+        let metrics: Vec<ShellPerformanceMetrics> = (1..=10)
+            .map(|i| make_metric(i * 10, 0, 0, 0, 0, false))
+            .collect();
+        let stats = PerformanceStatistics::from_metrics(&metrics);
+
+        assert_eq!(stats.total_commands, 10);
+        // Sorted: [10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
+        // p95 index = (10 * 0.95) as usize = 9 => 100ms
+        assert_eq!(stats.p95_execution_time, Duration::from_millis(100));
+        // p99 index = (10 * 0.99) as usize = 9 => 100ms
+        assert_eq!(stats.p99_execution_time, Duration::from_millis(100));
+    }
+
+    #[test]
+    fn test_from_metrics_all_failures_and_timeouts() {
+        let metrics = vec![
+            make_metric(50, 0, 0, 0, 1, true),
+            make_metric(60, 0, 0, 0, 127, true),
+        ];
+        let stats = PerformanceStatistics::from_metrics(&metrics);
+
+        assert_eq!(stats.total_commands, 2);
+        assert_eq!(stats.success_rate, 0.0);
+        assert_eq!(stats.timeout_rate, 1.0);
+    }
+
+    /// Helper: create a profiler with pre-injected metrics for threshold testing.
+    /// Disables memory collection so the profiler won't overwrite injected values.
+    fn profiler_with_injected_metrics(
+        metrics: ShellPerformanceMetrics,
+    ) -> ShellPerformanceProfiler {
+        let config = PerformanceConfig {
+            collect_memory_metrics: false,
+            log_metrics: true,
+            max_historical_metrics: 100,
+            warn_on_threshold_violations: true,
+        };
+        let mut profiler = ShellPerformanceProfiler::with_config(config);
+        profiler.current_metrics = Some(metrics);
+        profiler.start_time = Some(Instant::now());
+        profiler.command_start_time = Some(Instant::now());
+        profiler
+    }
+
+    #[test]
+    #[traced_test]
+    fn test_warn_high_overhead() {
+        // Exercises warn_performance_issues overhead path (lines 341-347)
+        // and log_metrics (lines 327-337).
+        // Sets start_time 150ms in the past so finish_profiling() computes
+        // overhead >= 100ms without any thread::sleep.
+        let mut metrics = ShellPerformanceMetrics::new("slow-setup".to_string());
+        metrics.command_execution_time = Duration::ZERO;
+
+        let config = PerformanceConfig {
+            collect_memory_metrics: false,
+            log_metrics: true,
+            max_historical_metrics: 100,
+            warn_on_threshold_violations: true,
+        };
+        let mut profiler = ShellPerformanceProfiler::with_config(config);
+        profiler.current_metrics = Some(metrics);
+        // Place start_time 150ms in the past so elapsed() returns ~150ms
+        profiler.start_time = Instant::now().checked_sub(Duration::from_millis(150));
+        profiler.command_start_time = Some(Instant::now());
+
+        let result = profiler.finish_profiling();
+        assert!(result.is_some());
+        let m = result.unwrap();
+        assert!(
+            m.overhead_time >= Duration::from_millis(100),
+            "Expected overhead >= 100ms, got {}ms",
+            m.overhead_time.as_millis()
+        );
+        assert!(
+            !m.meets_performance_targets(),
+            "Should NOT meet performance targets with high overhead"
+        );
+
+        // Verify the warn log was actually emitted
+        assert!(logs_contain("High shell command overhead"));
+        assert!(logs_contain("slow-setup"));
+    }
+
+    #[test]
+    #[traced_test]
+    fn test_warn_high_memory_growth() {
+        // Exercises warn_performance_issues memory-growth path (lines 349-355)
+        // and log_metrics (lines 327-337).
+        // Inject peak_memory_usage = 60MB with initial = 0 so growth >= 50MB.
+        let mut metrics = ShellPerformanceMetrics::new("memory-hog".to_string());
+        metrics.initial_memory_usage = 0;
+        metrics.peak_memory_usage = 60 * 1024 * 1024; // 60MB
+                                                      // Keep command_execution_time near total so overhead stays low
+        metrics.command_execution_time = Duration::from_millis(1);
+
+        let mut profiler = profiler_with_injected_metrics(metrics);
+
+        let result = profiler.finish_profiling();
+        assert!(result.is_some());
+        let m = result.unwrap();
+        assert!(
+            m.memory_growth() >= DEFAULT_MEMORY_GROWTH_THRESHOLD_BYTES,
+            "Expected memory growth >= 50MB, got {}MB",
+            m.memory_growth() / (1024 * 1024)
+        );
+        assert!(
+            !m.meets_performance_targets(),
+            "Should NOT meet performance targets with high memory growth"
+        );
+
+        // Verify the warn log was actually emitted
+        assert!(logs_contain("High memory usage"));
+        assert!(logs_contain("memory-hog"));
+    }
+
+    #[test]
+    #[traced_test]
+    fn test_warn_slow_cleanup() {
+        // Exercises warn_performance_issues cleanup path (lines 357-363)
+        // and log_metrics (lines 327-337).
+        // Inject cleanup_time = 2s which exceeds the 1s threshold.
+        let mut metrics = ShellPerformanceMetrics::new("slow-cleanup".to_string());
+        metrics.cleanup_time = Duration::from_secs(2);
+        // Keep command_execution_time near total so overhead stays low
+        metrics.command_execution_time = Duration::from_millis(1);
+
+        let mut profiler = profiler_with_injected_metrics(metrics);
+
+        let result = profiler.finish_profiling();
+        assert!(result.is_some());
+        let m = result.unwrap();
+        assert!(
+            m.cleanup_time >= Duration::from_secs(DEFAULT_CLEANUP_THRESHOLD_SECS),
+            "Expected cleanup >= 1s, got {}ms",
+            m.cleanup_time.as_millis()
+        );
+        assert!(
+            !m.meets_performance_targets(),
+            "Should NOT meet performance targets with slow cleanup"
+        );
+
+        // Verify the warn log was actually emitted
+        assert!(logs_contain("Slow cleanup"));
+        assert!(logs_contain("slow-cleanup"));
+    }
+
+    #[test]
+    fn test_overhead_percentage_zero_total_time() {
+        // When total_execution_time is zero, overhead_percentage should return 0.0
+        // to avoid division by zero (early return at line 68-69).
+        let metrics = ShellPerformanceMetrics::new("test".to_string());
+        assert_eq!(metrics.overhead_percentage(), 0.0);
+    }
+
+    #[test]
+    fn test_overhead_percentage_nonzero_values() {
+        // total=1000ms, overhead=250ms → 25.0%
+        let mut metrics = ShellPerformanceMetrics::new("test".to_string());
+        metrics.total_execution_time = Duration::from_millis(1000);
+        metrics.overhead_time = Duration::from_millis(250);
+        let pct = metrics.overhead_percentage();
+        assert!(
+            (pct - 25.0).abs() < f64::EPSILON,
+            "Expected 25.0%, got {pct}%"
+        );
+    }
+
+    #[test]
+    fn test_overhead_percentage_all_overhead() {
+        // When total == overhead, the result should be 100.0%
+        let mut metrics = ShellPerformanceMetrics::new("test".to_string());
+        metrics.total_execution_time = Duration::from_millis(500);
+        metrics.overhead_time = Duration::from_millis(500);
+        let pct = metrics.overhead_percentage();
+        assert!(
+            (pct - 100.0).abs() < f64::EPSILON,
+            "Expected 100.0%, got {pct}%"
+        );
+    }
+
+    #[test]
+    #[traced_test]
+    fn test_log_metrics_on_healthy_command() {
+        // Exercises log_metrics (lines 327-337) via finish_profiling on a command
+        // that meets all performance targets (no warnings fired).
+        let config = PerformanceConfig {
+            collect_memory_metrics: false,
+            log_metrics: true,
+            max_historical_metrics: 100,
+            warn_on_threshold_violations: false,
+        };
+        let mut profiler = ShellPerformanceProfiler::with_config(config);
+        profiler.start_profiling("echo hello".to_string());
+        profiler.mark_command_start();
+        profiler.mark_command_end(0);
+
+        let result = profiler.finish_profiling();
+        assert!(result.is_some());
+        let m = result.unwrap();
+        assert!(
+            m.meets_performance_targets(),
+            "Healthy command should meet all performance targets"
+        );
+        // Verify it was stored in historical metrics
+        let stats = profiler.get_performance_statistics();
+        assert_eq!(stats.total_commands, 1);
+
+        // Verify the info-level performance log was emitted
+        assert!(logs_contain("Shell command performance"));
+        assert!(logs_contain("echo hello"));
     }
 }
