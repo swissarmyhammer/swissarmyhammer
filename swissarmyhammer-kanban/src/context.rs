@@ -92,10 +92,6 @@ impl KanbanContext {
         fs::create_dir_all(fields_root.join("entities")).await?;
 
         let (fields, entities) = Self::build_entity_context(&root)?;
-        // Rebuild changelog/transaction indexes so undo/redo survives restart.
-        if let Err(e) = entities.rebuild_indexes().await {
-            tracing::warn!("Failed to rebuild changelog indexes: {e}");
-        }
         let cell = OnceCell::new();
         cell.set(Arc::new(entities)).ok();
 
@@ -1014,23 +1010,6 @@ type:
     }
 
     #[tokio::test]
-    async fn test_generic_entity_changelog_on_create_and_update() {
-        let (_temp, ctx) = setup_with_fields().await;
-
-        let mut tag = swissarmyhammer_entity::Entity::new("tag", "bug");
-        tag.set("tag_name", serde_json::json!("Bug"));
-        ctx.write_entity_generic(&tag).await.unwrap();
-
-        tag.set("tag_name", serde_json::json!("Bug Report"));
-        ctx.write_entity_generic(&tag).await.unwrap();
-
-        let log = ctx.read_entity_changelog("tag", "bug").await.unwrap();
-        assert_eq!(log.len(), 2);
-        assert_eq!(log[0].op, "create");
-        assert_eq!(log[1].op, "update");
-    }
-
-    #[tokio::test]
     async fn test_entity_error_for_unknown_type() {
         let (_temp, ctx) = setup_with_fields().await;
         assert!(ctx.read_entity_generic("unicorn", "xyz").await.is_err());
@@ -1385,88 +1364,6 @@ type:
         let parsed2: LogEntry = serde_json::from_str(lines[1]).unwrap();
         assert_eq!(parsed1.op, "op1");
         assert_eq!(parsed2.op, "op2");
-    }
-
-    // =========================================================================
-    // write_entity_generic / delete_entity_generic coverage
-    // =========================================================================
-
-    #[tokio::test]
-    async fn test_write_entity_generic_returns_changelog_id() {
-        let (_temp, ctx) = setup_with_fields().await;
-
-        let mut tag = swissarmyhammer_entity::Entity::new("tag", "priority");
-        tag.set("tag_name", serde_json::json!("Priority"));
-
-        // First write should return Some (changelog entry created)
-        let result = ctx.write_entity_generic(&tag).await.unwrap();
-        assert!(
-            result.is_some(),
-            "first write should produce a changelog ID"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_write_entity_generic_no_change_returns_none() {
-        let (_temp, ctx) = setup_with_fields().await;
-
-        let mut tag = swissarmyhammer_entity::Entity::new("tag", "priority");
-        tag.set("tag_name", serde_json::json!("Priority"));
-
-        ctx.write_entity_generic(&tag).await.unwrap();
-
-        // Writing the exact same entity again should return None (no changes)
-        let result = ctx.write_entity_generic(&tag).await.unwrap();
-        assert!(
-            result.is_none(),
-            "writing identical entity should produce no changelog entry"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_delete_entity_generic_returns_changelog_id() {
-        let (_temp, ctx) = setup_with_fields().await;
-
-        let mut tag = swissarmyhammer_entity::Entity::new("tag", "todelete");
-        tag.set("tag_name", serde_json::json!("ToDelete"));
-        ctx.write_entity_generic(&tag).await.unwrap();
-
-        let result = ctx.delete_entity_generic("tag", "todelete").await.unwrap();
-        assert!(
-            result.is_some(),
-            "deleting existing entity should produce a changelog ID"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_delete_entity_generic_nonexistent_returns_none() {
-        let (_temp, ctx) = setup_with_fields().await;
-
-        let result = ctx
-            .delete_entity_generic("tag", "doesnotexist")
-            .await
-            .unwrap();
-        assert!(
-            result.is_none(),
-            "deleting nonexistent entity should return None"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_read_entity_changelog_tracks_create_and_update() {
-        let (_temp, ctx) = setup_with_fields().await;
-
-        let mut tag = swissarmyhammer_entity::Entity::new("tag", "tracked");
-        tag.set("tag_name", serde_json::json!("Tracked"));
-        ctx.write_entity_generic(&tag).await.unwrap();
-
-        tag.set("tag_name", serde_json::json!("Updated"));
-        ctx.write_entity_generic(&tag).await.unwrap();
-
-        let log = ctx.read_entity_changelog("tag", "tracked").await.unwrap();
-        assert_eq!(log.len(), 2);
-        assert_eq!(log[0].op, "create");
-        assert_eq!(log[1].op, "update");
     }
 
     // =========================================================================

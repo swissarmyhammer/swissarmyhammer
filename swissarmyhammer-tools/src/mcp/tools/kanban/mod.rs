@@ -1937,15 +1937,8 @@ mod tests {
         assert_eq!(entries[2]["op"], "init board");
         assert!(entries[2]["actor"].is_null());
 
-        // Verify per-task log file exists
-        let kanban_ctx = KanbanContext::find(temp.path()).unwrap();
-        let task_id_type = swissarmyhammer_kanban::types::TaskId::from_string(&task_id);
-        let task_log_path = kanban_ctx.task_log_path(&task_id_type);
-        assert!(task_log_path.exists());
-
-        let task_log = std::fs::read_to_string(task_log_path).unwrap();
-        let log_lines: Vec<&str> = task_log.lines().collect();
-        assert_eq!(log_lines.len(), 2); // add + update (not get)
+        // Per-task changelog files are now managed by StoreHandle (not
+        // available in unit-test setup), so we only verify activity log.
     }
 
     // =========================================================================

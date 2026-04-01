@@ -24,6 +24,10 @@ pub enum ChangeOp {
     Update,
     /// An item was deleted.
     Delete,
+    /// An item was archived (moved to `.archive/`).
+    Archive,
+    /// An item was unarchived (restored from `.archive/`).
+    Unarchive,
 }
 
 /// A single entry in the changelog, recording one mutation to the store.

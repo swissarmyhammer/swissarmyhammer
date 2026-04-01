@@ -17,7 +17,7 @@ use crate::context::EntityContext;
 use crate::entity::Entity;
 use crate::error::Result;
 use crate::events::EntityEvent;
-use crate::id_types::ChangeEntryId;
+use swissarmyhammer_store::UndoEntryId;
 
 /// A cached entity with its content hash and version stamp.
 #[derive(Debug, Clone)]
@@ -147,9 +147,9 @@ impl EntityCache {
     /// Delegates to `inner.write()` first. On success, computes the content hash
     /// and inserts/updates the cache entry. Only bumps the version and emits an
     /// `EntityChanged` event if the content hash actually changed (or the entity
-    /// is new). Returns the `ChangeEntryId` from the underlying write (or `None`
+    /// is new). Returns the `UndoEntryId` from the underlying write (or `None`
     /// if unchanged).
-    pub async fn write(&self, entity: &Entity) -> Result<Option<ChangeEntryId>> {
+    pub async fn write(&self, entity: &Entity) -> Result<Option<UndoEntryId>> {
         // Grab the old hash before writing, so we can detect no-op writes.
         let old_hash = {
             let map = self.cache.read().await;
@@ -207,7 +207,7 @@ impl EntityCache {
     /// Delegates to `inner.delete()` first, then removes the cache entry and
     /// emits an `EntityDeleted` event. Returns the `ChangeEntryId` from the
     /// underlying delete (or `None`).
-    pub async fn delete(&self, entity_type: &str, id: &str) -> Result<Option<ChangeEntryId>> {
+    pub async fn delete(&self, entity_type: &str, id: &str) -> Result<Option<UndoEntryId>> {
         let change_id = self.inner.delete(entity_type, id).await?;
 
         let mut map = self.cache.write().await;

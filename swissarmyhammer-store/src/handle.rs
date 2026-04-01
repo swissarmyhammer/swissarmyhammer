@@ -182,6 +182,152 @@ impl<S: TrackedStore> StoreHandle<S> {
         Ok(entry_id)
     }
 
+    /// Archive an item by moving it to `.archive/`.
+    ///
+    /// Records the archive in the changelog so it can be undone.
+    /// Works like [`delete`] but uses `.archive/` instead of `.trash/`.
+    pub async fn archive(&self, id: &S::ItemId) -> Result<UndoEntryId> {
+        let id_str = id.to_string();
+        let stored_id = StoredItemId::from(id_str.clone());
+
+        // Hold the cache write lock across the entire operation
+        let mut cache = self.cache.write().await;
+
+        let text = if let Some(text) = cache.get(&id_str) {
+            text.clone()
+        } else {
+            self.read_text_from_disk(&id_str)
+                .await?
+                .ok_or_else(|| StoreError::NotFound(id_str.clone()))?
+        };
+
+        let (forward_patch, reverse_patch) = diff::create_patches(&text, "");
+
+        let entry_id = UndoEntryId::new();
+        let entry = ChangelogEntry {
+            id: entry_id,
+            timestamp: Utc::now(),
+            op: ChangeOp::Archive,
+            item_id: stored_id.clone(),
+            forward_patch,
+            reverse_patch,
+            transaction_id: None,
+        };
+
+        self.changelog_for(&stored_id)
+            .append(&entry)
+            .await
+            .map_err(StoreError::Io)?;
+
+        // Archive the data file
+        trash::archive_file(
+            self.store.root(),
+            &stored_id,
+            self.store.extension(),
+            &entry_id,
+        )
+        .map_err(StoreError::Io)?;
+
+        // Archive the per-item changelog alongside the data file
+        trash::archive_file(self.store.root(), &stored_id, "jsonl", &entry_id)
+            .map_err(StoreError::Io)?;
+
+        // Update cache (lock already held)
+        cache.remove(&id_str);
+
+        Ok(entry_id)
+    }
+
+    /// Unarchive an item by restoring it from `.archive/`, finding the entry automatically.
+    ///
+    /// Scans the `.archive/` directory for the most recently archived version
+    /// of the item and restores it. Records the unarchive in the changelog
+    /// so it can be undone. Returns the restored item and the new undo entry ID.
+    pub async fn unarchive_latest(&self, id: &S::ItemId) -> Result<(S::Item, UndoEntryId)> {
+        let id_str = id.to_string();
+        let stored_id = StoredItemId::from(id_str);
+
+        let archive_entry_id =
+            trash::find_archived_entry_id(self.store.root(), &stored_id, self.store.extension())
+                .ok_or_else(|| StoreError::NotFound(stored_id.to_string()))?;
+
+        let item = self.unarchive(id, &archive_entry_id).await?;
+        // Find the unarchive entry we just created (most recent entry)
+        let entries = self
+            .changelog_for(&stored_id)
+            .read_all()
+            .await
+            .map_err(StoreError::Io)?;
+        let unarchive_entry_id = entries
+            .iter()
+            .rev()
+            .find(|e| e.op == ChangeOp::Unarchive)
+            .map(|e| e.id)
+            .ok_or_else(|| StoreError::EntryNotFound("unarchive entry not found".into()))?;
+        Ok((item, unarchive_entry_id))
+    }
+
+    /// Unarchive an item by restoring it from `.archive/`.
+    ///
+    /// Records the unarchive in the changelog so it can be undone.
+    /// The `archive_entry_id` identifies which archived version to restore.
+    pub async fn unarchive(
+        &self,
+        id: &S::ItemId,
+        archive_entry_id: &UndoEntryId,
+    ) -> Result<S::Item> {
+        let id_str = id.to_string();
+        let stored_id = StoredItemId::from(id_str.clone());
+
+        // Restore the changelog first so we can append to it
+        trash::restore_archived_file(self.store.root(), &stored_id, "jsonl", archive_entry_id)
+            .map_err(StoreError::Io)?;
+
+        // Restore the data file from archive
+        trash::restore_archived_file(
+            self.store.root(),
+            &stored_id,
+            self.store.extension(),
+            archive_entry_id,
+        )
+        .map_err(StoreError::Io)?;
+
+        // Read the restored content
+        let restored_text = self
+            .read_text_from_disk(&id_str)
+            .await?
+            .ok_or_else(|| StoreError::NotFound(id_str.clone()))?;
+
+        let (forward_patch, reverse_patch) = diff::create_patches("", &restored_text);
+
+        let entry_id = UndoEntryId::new();
+        let entry = ChangelogEntry {
+            id: entry_id,
+            timestamp: Utc::now(),
+            op: ChangeOp::Unarchive,
+            item_id: stored_id.clone(),
+            forward_patch,
+            reverse_patch,
+            transaction_id: None,
+        };
+
+        self.changelog_for(&stored_id)
+            .append(&entry)
+            .await
+            .map_err(StoreError::Io)?;
+
+        // Update cache
+        self.cache
+            .write()
+            .await
+            .insert(id_str.clone(), restored_text.clone());
+
+        let parsed_id = id_str
+            .parse::<S::ItemId>()
+            .map_err(|_| StoreError::Deserialize(id_str))?;
+        self.store.deserialize(&parsed_id, &restored_text)
+    }
+
     /// Undo an operation identified by its changelog entry ID.
     ///
     /// The `item_id` identifies which per-item changelog contains the entry.
@@ -189,10 +335,14 @@ impl<S: TrackedStore> StoreHandle<S> {
     /// - Create: trashes the created file and its changelog
     /// - Update: reverts to the before text (with 3-way merge if concurrently edited)
     /// - Delete: restores the file and its changelog from trash
+    /// - Archive: restores the file and its changelog from `.archive/`
+    /// - Unarchive: moves the file back to `.archive/`
     pub async fn undo(&self, entry_id: &UndoEntryId, item_id: &StoredItemId) -> Result<S::Item> {
-        // If the changelog is in trash (from a prior delete), restore it first
-        // so we can read the entry. Ignore errors -- the file may not be trashed.
+        // If the changelog is in trash (from a prior delete) or archive
+        // (from a prior archive), restore it first so we can read the entry.
+        // Ignore errors -- the file may not be trashed/archived.
         let _ = trash::restore_file(self.store.root(), item_id, "jsonl", entry_id);
+        let _ = trash::restore_archived_file(self.store.root(), item_id, "jsonl", entry_id);
 
         let entry = self
             .changelog_for(item_id)
@@ -280,6 +430,54 @@ impl<S: TrackedStore> StoreHandle<S> {
                     .map_err(|_| StoreError::Deserialize(entry.item_id.to_string()))?;
                 self.store.deserialize(&id, &restored_text)
             }
+            ChangeOp::Archive => {
+                // Undo archive: restore both the data file and its changelog from .archive/.
+                // The changelog was already restored at the top of undo().
+                trash::restore_archived_file(
+                    self.store.root(),
+                    &entry.item_id,
+                    self.store.extension(),
+                    &entry.id,
+                )
+                .map_err(StoreError::Io)?;
+
+                // Reconstruct the archived content by applying reverse_patch to ""
+                let restored_text = diff::apply_patch("", &entry.reverse_patch)?;
+                self.cache
+                    .write()
+                    .await
+                    .insert(entry.item_id.to_string(), restored_text.clone());
+
+                let id = entry
+                    .item_id
+                    .as_str()
+                    .parse::<S::ItemId>()
+                    .map_err(|_| StoreError::Deserialize(entry.item_id.to_string()))?;
+                self.store.deserialize(&id, &restored_text)
+            }
+            ChangeOp::Unarchive => {
+                // Undo unarchive: move the file back to .archive/.
+                // Reconstruct the content so we can return the item.
+                let content_text = diff::apply_patch("", &entry.forward_patch)?;
+
+                trash::archive_file(
+                    self.store.root(),
+                    &entry.item_id,
+                    self.store.extension(),
+                    &entry.id,
+                )
+                .map_err(StoreError::Io)?;
+                trash::archive_file(self.store.root(), &entry.item_id, "jsonl", &entry.id)
+                    .map_err(StoreError::Io)?;
+                self.cache.write().await.remove(entry.item_id.as_str());
+
+                let id = entry
+                    .item_id
+                    .as_str()
+                    .parse::<S::ItemId>()
+                    .map_err(|_| StoreError::Deserialize(entry.item_id.to_string()))?;
+                self.store.deserialize(&id, &content_text)
+            }
         }
     }
 
@@ -290,11 +488,14 @@ impl<S: TrackedStore> StoreHandle<S> {
     /// - Create: restores the file and its changelog from trash
     /// - Update: re-applies the forward change
     /// - Delete: trashes the file and its changelog again
+    /// - Archive: moves the file back to `.archive/`
+    /// - Unarchive: restores the file from `.archive/`
     pub async fn redo(&self, entry_id: &UndoEntryId, item_id: &StoredItemId) -> Result<S::Item> {
-        // If the changelog is in trash (from a prior undo of a create), restore
-        // it first so we can read the entry. Ignore errors -- the file may not
-        // be trashed.
+        // If the changelog is in trash (from a prior undo of a create) or archive
+        // (from a prior undo of an unarchive), restore it first so we can read
+        // the entry. Ignore errors -- the file may not be trashed/archived.
         let _ = trash::restore_file(self.store.root(), item_id, "jsonl", entry_id);
+        let _ = trash::restore_archived_file(self.store.root(), item_id, "jsonl", entry_id);
 
         let entry = self
             .changelog_for(item_id)
@@ -382,6 +583,55 @@ impl<S: TrackedStore> StoreHandle<S> {
                     .map_err(|_| StoreError::Deserialize(entry.item_id.to_string()))?;
                 self.store.deserialize(&id, &deleted_text)
             }
+            ChangeOp::Archive => {
+                // Redo archive: move the file back to .archive/.
+                // Reconstruct the archived content by applying reverse_patch to ""
+                // so we can return the item that was re-archived.
+                let archived_text = diff::apply_patch("", &entry.reverse_patch)?;
+
+                trash::archive_file(
+                    self.store.root(),
+                    &entry.item_id,
+                    self.store.extension(),
+                    &entry.id,
+                )
+                .map_err(StoreError::Io)?;
+                trash::archive_file(self.store.root(), &entry.item_id, "jsonl", &entry.id)
+                    .map_err(StoreError::Io)?;
+                self.cache.write().await.remove(entry.item_id.as_str());
+
+                let id = entry
+                    .item_id
+                    .as_str()
+                    .parse::<S::ItemId>()
+                    .map_err(|_| StoreError::Deserialize(entry.item_id.to_string()))?;
+                self.store.deserialize(&id, &archived_text)
+            }
+            ChangeOp::Unarchive => {
+                // Redo unarchive: restore the file from .archive/.
+                // The changelog was already restored at the top of redo().
+                trash::restore_archived_file(
+                    self.store.root(),
+                    &entry.item_id,
+                    self.store.extension(),
+                    &entry.id,
+                )
+                .map_err(StoreError::Io)?;
+
+                // Reconstruct the unarchived content by applying forward_patch to ""
+                let restored_text = diff::apply_patch("", &entry.forward_patch)?;
+                self.cache
+                    .write()
+                    .await
+                    .insert(entry.item_id.to_string(), restored_text.clone());
+
+                let id = entry
+                    .item_id
+                    .as_str()
+                    .parse::<S::ItemId>()
+                    .map_err(|_| StoreError::Deserialize(entry.item_id.to_string()))?;
+                self.store.deserialize(&id, &restored_text)
+            }
         }
     }
 
@@ -400,8 +650,9 @@ impl<S: TrackedStore> StoreHandle<S> {
         if found {
             return true;
         }
-        // Also check if the changelog is in trash (e.g. after delete)
+        // Also check if the changelog is in trash (e.g. after delete) or archive
         trash::is_trashed(self.store.root(), item_id, "jsonl", id)
+            || trash::is_archived(self.store.root(), item_id, "jsonl", id)
     }
 
     /// Scan the store directory and detect changes since the last flush.
@@ -903,6 +1154,126 @@ mod tests {
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].event_name, "item-created");
         assert_eq!(events[0].payload["id"], "visible");
+    }
+
+    #[tokio::test]
+    async fn archive_moves_to_archive_dir() {
+        let (_dir, handle) = setup();
+        let item = "item1\ndata".to_string();
+        handle.write(&item).await.unwrap();
+
+        let entry_id = handle.archive(&"item1".to_string()).await.unwrap();
+        let item1_id = StoredItemId::from("item1");
+        assert!(!_dir.path().join("item1.txt").exists());
+        assert!(trash::is_archived(_dir.path(), &item1_id, "txt", &entry_id));
+        // Per-item changelog is also archived alongside the data file
+        assert!(trash::is_archived(
+            _dir.path(),
+            &item1_id,
+            "jsonl",
+            &entry_id
+        ));
+    }
+
+    #[tokio::test]
+    async fn undo_archive_restores_file() {
+        let (_dir, handle) = setup();
+        let item = "item1\ndata".to_string();
+        handle.write(&item).await.unwrap();
+        let archive_id = handle.archive(&"item1".to_string()).await.unwrap();
+
+        handle
+            .undo(&archive_id, &StoredItemId::from("item1"))
+            .await
+            .unwrap();
+        assert!(_dir.path().join("item1.txt").exists());
+        let content = std::fs::read_to_string(_dir.path().join("item1.txt")).unwrap();
+        assert_eq!(content, "item1\ndata");
+    }
+
+    #[tokio::test]
+    async fn unarchive_restores_from_archive() {
+        let (_dir, handle) = setup();
+        let item = "item1\ndata".to_string();
+        handle.write(&item).await.unwrap();
+        let archive_id = handle.archive(&"item1".to_string()).await.unwrap();
+
+        let restored = handle
+            .unarchive(&"item1".to_string(), &archive_id)
+            .await
+            .unwrap();
+        assert!(_dir.path().join("item1.txt").exists());
+        assert_eq!(restored, "item1\ndata");
+    }
+
+    #[tokio::test]
+    async fn undo_unarchive_re_archives() {
+        let (_dir, handle) = setup();
+        let item = "item1\ndata".to_string();
+        handle.write(&item).await.unwrap();
+        let archive_id = handle.archive(&"item1".to_string()).await.unwrap();
+
+        let unarchive_id = {
+            // Unarchive first
+            handle
+                .unarchive(&"item1".to_string(), &archive_id)
+                .await
+                .unwrap();
+            assert!(_dir.path().join("item1.txt").exists());
+
+            // Find the unarchive entry (most recent entry for this item)
+            let item1_id = StoredItemId::from("item1");
+            let entries = handle.changelog_for(&item1_id).read_all().await.unwrap();
+            let unarchive_entry = entries
+                .iter()
+                .rev()
+                .find(|e| e.op == ChangeOp::Unarchive)
+                .unwrap();
+            unarchive_entry.id
+        };
+
+        // Undo the unarchive should re-archive the file
+        handle
+            .undo(&unarchive_id, &StoredItemId::from("item1"))
+            .await
+            .unwrap();
+        assert!(!_dir.path().join("item1.txt").exists());
+        let item1_id = StoredItemId::from("item1");
+        assert!(trash::is_archived(
+            _dir.path(),
+            &item1_id,
+            "txt",
+            &unarchive_id
+        ));
+    }
+
+    #[tokio::test]
+    async fn redo_archive_re_archives_file() {
+        let (_dir, handle) = setup();
+        let item = "item1\ndata".to_string();
+        handle.write(&item).await.unwrap();
+        let archive_id = handle.archive(&"item1".to_string()).await.unwrap();
+
+        // Undo archive (restore)
+        handle
+            .undo(&archive_id, &StoredItemId::from("item1"))
+            .await
+            .unwrap();
+        assert!(_dir.path().join("item1.txt").exists());
+
+        // Redo archive (archive again)
+        handle
+            .redo(&archive_id, &StoredItemId::from("item1"))
+            .await
+            .unwrap();
+        assert!(!_dir.path().join("item1.txt").exists());
+        let item1_id = StoredItemId::from("item1");
+        assert!(trash::is_archived(
+            _dir.path(),
+            &item1_id,
+            "txt",
+            &archive_id
+        ));
     }
 
     #[tokio::test]

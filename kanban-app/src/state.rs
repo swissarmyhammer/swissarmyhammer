@@ -66,6 +66,8 @@ impl ClipboardProvider for TauriClipboardProvider {
 /// A handle to a single open kanban board.
 pub(crate) struct BoardHandle {
     pub(crate) ctx: Arc<KanbanContext>,
+    /// Store-level undo/redo context shared across all entity type stores.
+    pub(crate) store_context: Arc<swissarmyhammer_store::StoreContext>,
     /// Entity cache for detecting external file changes with field-level diffing.
     pub(crate) entity_cache: EntityCache,
     /// In-memory search index over all entities.
@@ -84,6 +86,36 @@ impl BoardHandle {
             .await
             .map_err(|e| format!("Failed to open board context: {e}"))?;
         let entity_cache = watcher::new_entity_cache(&kanban_path);
+
+        // Create StoreContext for undo/redo and register entity type stores.
+        let store_context = Arc::new(swissarmyhammer_store::StoreContext::new(
+            kanban_path.to_path_buf(),
+        ));
+        if let Ok(ectx) = ctx.entity_context().await {
+            // Wire the StoreContext into EntityContext so write/delete
+            // automatically push onto the shared undo stack.
+            ectx.set_store_context(Arc::clone(&store_context));
+
+            let fields_ctx = ectx.fields();
+            for entity_def in fields_ctx.all_entities() {
+                let entity_type = entity_def.name.as_str();
+                let field_defs = fields_ctx.fields_for_entity(entity_type);
+                let owned_defs: Vec<_> = field_defs.into_iter().cloned().collect();
+                let entity_type_store = swissarmyhammer_entity::EntityTypeStore::new(
+                    ectx.entity_dir(entity_type),
+                    entity_type,
+                    std::sync::Arc::new(entity_def.clone()),
+                    std::sync::Arc::new(owned_defs),
+                );
+                let handle = std::sync::Arc::new(swissarmyhammer_store::StoreHandle::new(
+                    std::sync::Arc::new(entity_type_store),
+                ));
+                // Register with EntityContext so write/delete delegates to the store
+                ectx.register_store(entity_type, handle.clone()).await;
+                // Register with StoreContext so undo/redo dispatches correctly
+                store_context.register(handle).await;
+            }
+        }
 
         // Migrate legacy ordinals to FractionalIndex format.
         // Reads all tasks, groups by column, sorts by existing ordinal string,
@@ -144,6 +176,7 @@ impl BoardHandle {
 
         Ok(Self {
             ctx: Arc::new(ctx),
+            store_context,
             entity_cache,
             search_index,
             _watcher: None,
@@ -392,16 +425,15 @@ impl AppState {
         // Load user command overrides from .kanban/commands/
         self.reload_command_overrides(&canonical).await;
 
-        // Sync UIState undo/redo flags from the newly opened board's undo stack
+        // Sync UIState undo/redo flags from the newly opened board's StoreContext
         // so that menu items reflect correct enabled state from the start.
         {
             let boards = self.boards.read().await;
             if let Some(handle) = boards.get(&canonical) {
-                if let Ok(ectx) = handle.ctx.entity_context().await {
-                    let stack = ectx.undo_stack().await;
-                    self.ui_state
-                        .set_undo_redo_state(stack.can_undo(), stack.can_redo());
-                }
+                self.ui_state.set_undo_redo_state(
+                    handle.store_context.can_undo().await,
+                    handle.store_context.can_redo().await,
+                );
             }
         }
 

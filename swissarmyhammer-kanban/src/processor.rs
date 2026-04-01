@@ -4,7 +4,6 @@ use crate::types::default_column_entities;
 use crate::{KanbanContext, KanbanError, Result};
 use async_trait::async_trait;
 use serde_json::Value;
-use swissarmyhammer_entity::EntityContext;
 use swissarmyhammer_operations::{Execute, LogEntry, OperationProcessor};
 
 /// Kanban-specific operation processor
@@ -53,12 +52,9 @@ impl OperationProcessor<KanbanContext, KanbanError> for KanbanOperationProcessor
             }
         }
 
-        // Generate a transaction ID and set it on the EntityContext.
-        // All write/delete calls during operation execution get this stamped,
-        // enabling compound undo/redo as a single unit.
-        let tx_id = EntityContext::generate_transaction_id();
-        let ectx = ctx.entity_context().await?;
-        ectx.set_transaction(tx_id.clone()).await;
+        // TODO: Add store-level transaction support so compound operations
+        // (e.g. tag rename that touches multiple tasks) can be undone as a
+        // single unit. For now, each write/delete is an independent undo entry.
 
         // Log every operation flowing through the processor so we can trace
         // activity from any entry point (Tauri, MCP, CLI, tests).
@@ -71,9 +67,6 @@ impl OperationProcessor<KanbanContext, KanbanError> for KanbanOperationProcessor
 
         // Execute the operation
         let exec_result = operation.execute(ctx).await;
-
-        // Clear the transaction after execution
-        ectx.clear_transaction().await;
 
         // Split into result and log entry
         let (result, mut log_entry) = exec_result.split();
@@ -95,17 +88,7 @@ impl OperationProcessor<KanbanContext, KanbanError> for KanbanOperationProcessor
             }
         }
 
-        // Add the operation_id (transaction ULID) to the result JSON
-        // so callers can use it for undo/redo.
-        match result {
-            Ok(mut value) => {
-                if let Some(obj) = value.as_object_mut() {
-                    obj.insert("operation_id".to_string(), Value::String(tx_id.to_string()));
-                }
-                Ok(value)
-            }
-            Err(e) => Err(e),
-        }
+        result
     }
 
     async fn write_log(
@@ -132,7 +115,6 @@ mod tests {
     use super::*;
     use crate::board::InitBoard;
     use crate::task::AddTask;
-    use crate::types::TaskId;
     use tempfile::TempDir;
 
     async fn setup() -> (TempDir, KanbanContext) {
@@ -162,25 +144,6 @@ mod tests {
         let entries = ctx.read_activity(None).await.unwrap();
         assert_eq!(entries.len(), 2); // InitBoard + AddTask
         assert_eq!(entries[0].op, "add task"); // Newest entry
-    }
-
-    #[tokio::test]
-    async fn test_processor_writes_entity_changelog() {
-        let (_temp, ctx) = setup().await;
-        let processor = KanbanOperationProcessor::new();
-
-        // Add task
-        let cmd = AddTask::new("Test task");
-        let result = processor.process(&cmd, &ctx).await.unwrap();
-        let task_id = result["id"].as_str().unwrap();
-
-        // Check entity changelog (written by EntityContext::write)
-        let task_log_path = ctx.task_log_path(&TaskId::from_string(task_id));
-        let content = std::fs::read_to_string(task_log_path).unwrap();
-        let lines: Vec<&str> = content.lines().collect();
-
-        // Only entity changelog entry (processor no longer writes per-entity logs)
-        assert_eq!(lines.len(), 1);
     }
 
     #[tokio::test]

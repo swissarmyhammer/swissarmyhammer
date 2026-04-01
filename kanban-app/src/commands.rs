@@ -796,15 +796,10 @@ pub async fn get_undo_state(
         Err(_) => return Ok(json!({ "can_undo": false, "can_redo": false })),
     };
 
-    let ectx = handle
-        .ctx
-        .entity_context()
-        .await
-        .map_err(|e| e.to_string())?;
-    let stack = ectx.undo_stack().await;
+    let sc = &handle.store_context;
     Ok(json!({
-        "can_undo": stack.can_undo(),
-        "can_redo": stack.can_redo(),
+        "can_undo": sc.can_undo().await,
+        "can_redo": sc.can_redo().await,
     }))
 }
 
@@ -1002,10 +997,12 @@ pub(crate) async fn dispatch_command_internal(
     let active_handle = resolve_handle(state, effective_board_path).await.ok();
     if let Some(ref handle) = active_handle {
         ctx.set_extension(Arc::clone(&handle.ctx));
-        // Set EntityContext extension for entity-layer commands (undo/redo).
+        // Set EntityContext extension for entity-layer commands.
         if let Ok(ectx_arc) = handle.ctx.entity_context().await {
             ctx.set_extension(ectx_arc);
         }
+        // Set StoreContext extension for undo/redo commands.
+        ctx.set_extension(Arc::clone(&handle.store_context));
     }
 
     // Inject ClipboardProvider so commands can read/write the system clipboard.
@@ -1248,15 +1245,13 @@ pub(crate) async fn dispatch_command_internal(
     if needs_flush {
         if let Some(ref handle) = active_handle {
             flush_and_emit_for_handle(app, handle).await;
-            // Sync UIState's cached undo/redo flags from the undo stack so that
+            // Sync UIState's cached undo/redo flags from the StoreContext so that
             // Command::available() (synchronous) returns accurate results for
             // menu-item enabled state.
-            if let Ok(ectx) = handle.ctx.entity_context().await {
-                let stack = ectx.undo_stack().await;
-                state
-                    .ui_state
-                    .set_undo_redo_state(stack.can_undo(), stack.can_redo());
-            }
+            state.ui_state.set_undo_redo_state(
+                handle.store_context.can_undo().await,
+                handle.store_context.can_redo().await,
+            );
             // Refresh window titles from the board entity display name.
             // Catches board name edits, undo/redo of name changes, etc.
             let display_name = board_display_name(handle).await;

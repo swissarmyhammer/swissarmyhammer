@@ -109,7 +109,7 @@ impl Execute<KanbanContext, KanbanError> for DeleteTask {
 mod tests {
     use super::*;
     use crate::board::InitBoard;
-    use crate::task::{AddTask, UpdateTask};
+    use crate::task::AddTask;
     use tempfile::TempDir;
 
     async fn setup() -> (TempDir, KanbanContext) {

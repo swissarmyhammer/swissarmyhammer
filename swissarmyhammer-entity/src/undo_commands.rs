@@ -1,21 +1,19 @@
 //! Entity-layer undo/redo command implementations.
 //!
-//! These commands operate on `EntityContext` directly (via extension) and use
-//! the EntityContext's built-in `UndoStack` to track which changelog/transaction
-//! IDs to target. They are entity-layer infrastructure, reusable outside kanban.
+//! These commands operate on `StoreContext` (via extension) and use the
+//! store-level undo/redo stack. They are entity-layer infrastructure,
+//! reusable outside kanban.
 
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
 use swissarmyhammer_commands::{Command, CommandContext, CommandError};
-
-use crate::context::EntityContext;
+use swissarmyhammer_store::StoreContext;
 
 /// Undo the most recent undoable operation.
 ///
-/// Reads the undo target from the EntityContext's UndoStack, calls
-/// `EntityContext::undo()` (which also updates the stack pointer and saves),
-/// then returns the result.
+/// Delegates to `StoreContext::undo()` which finds the correct store and
+/// reverses the most recent changelog entry.
 /// Returns `{ "noop": true }` when the stack is empty.
 pub struct UndoCmd;
 
@@ -34,32 +32,20 @@ impl Command for UndoCmd {
     }
 
     async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
-        let ectx = ctx.require_extension::<EntityContext>()?;
+        let store_ctx = ctx.require_extension::<StoreContext>()?;
 
-        // Read the undo target ID from the stack (clone to release the lock)
-        let id = {
-            let stack = ectx.undo_stack().await;
-            match stack.undo_target() {
-                Some(id) => id.to_string(),
-                None => return Ok(json!({ "noop": true })),
-            }
-        };
-
-        // undo() internally calls record_undo + save_undo_stack
-        let result_ulid = ectx
-            .undo(&id)
-            .await
-            .map_err(|e| CommandError::ExecutionFailed(e.to_string()))?;
-
-        Ok(json!({ "undone": id, "operation_id": result_ulid }))
+        match store_ctx.undo().await {
+            Ok(()) => Ok(json!({ "undone": true })),
+            Err(swissarmyhammer_store::StoreError::NotFound(_)) => Ok(json!({ "noop": true })),
+            Err(e) => Err(CommandError::ExecutionFailed(e.to_string())),
+        }
     }
 }
 
 /// Redo the most recently undone operation.
 ///
-/// Reads the redo target from the EntityContext's UndoStack, calls
-/// `EntityContext::redo()` (which also updates the stack pointer and saves),
-/// then returns the result.
+/// Delegates to `StoreContext::redo()` which finds the correct store and
+/// re-applies the most recently undone changelog entry.
 /// Returns `{ "noop": true }` when the stack is empty.
 pub struct RedoCmd;
 
@@ -78,23 +64,12 @@ impl Command for RedoCmd {
     }
 
     async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
-        let ectx = ctx.require_extension::<EntityContext>()?;
+        let store_ctx = ctx.require_extension::<StoreContext>()?;
 
-        // Read the redo target ID from the stack (clone to release the lock)
-        let id = {
-            let stack = ectx.undo_stack().await;
-            match stack.redo_target() {
-                Some(id) => id.to_string(),
-                None => return Ok(json!({ "noop": true })),
-            }
-        };
-
-        // redo() internally calls record_redo + save_undo_stack
-        let result_ulid = ectx
-            .redo(&id)
-            .await
-            .map_err(|e| CommandError::ExecutionFailed(e.to_string()))?;
-
-        Ok(json!({ "redone": id, "operation_id": result_ulid }))
+        match store_ctx.redo().await {
+            Ok(()) => Ok(json!({ "redone": true })),
+            Err(swissarmyhammer_store::StoreError::NotFound(_)) => Ok(json!({ "noop": true })),
+            Err(e) => Err(CommandError::ExecutionFailed(e.to_string())),
+        }
     }
 }

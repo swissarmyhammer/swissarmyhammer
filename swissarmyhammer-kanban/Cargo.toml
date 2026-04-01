@@ -36,3 +36,4 @@ fractional_index = "2.0.2"
 [dev-dependencies]
 tempfile = { workspace = true }
 tokio-test = { workspace = true }
+swissarmyhammer-store = { path = "../swissarmyhammer-store" }
