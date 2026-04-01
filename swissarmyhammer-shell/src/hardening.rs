@@ -744,4 +744,158 @@ mod tests {
         assert_eq!(deserialized.threat_level, ThreatLevel::High);
         assert!(!deserialized.allow_execution);
     }
+
+    // --- Tests for HardenedSecurityValidator::validate_command_comprehensive ---
+
+    #[test]
+    fn test_validate_command_comprehensive_safe_command() {
+        let policy = ShellSecurityPolicy::default();
+        let config = SecurityHardeningConfig::default();
+        let mut validator = HardenedSecurityValidator::new(policy, config);
+
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let env = HashMap::new();
+        let context = CommandContext::default();
+
+        let result =
+            validator.validate_command_comprehensive("echo hello", tmp_dir.path(), &env, context);
+
+        let assessment = result.expect("safe command should pass validation");
+        assert_eq!(
+            assessment.threat_level,
+            ThreatLevel::None,
+            "safe command should have no threats"
+        );
+        assert!(assessment.allow_execution);
+    }
+
+    #[test]
+    fn test_validate_command_comprehensive_malicious_command() {
+        let policy = ShellSecurityPolicy::default();
+        let config = SecurityHardeningConfig::default();
+        let mut validator = HardenedSecurityValidator::new(policy, config);
+
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let env = HashMap::new();
+        let context = CommandContext::default();
+
+        // Contains semicolon which triggers the CommandInjection pattern in
+        // the threat detector, but does NOT match any base-validator blocked
+        // patterns (those target specific dangerous commands like rm -rf /).
+        let result = validator.validate_command_comprehensive(
+            "ls; echo injected",
+            tmp_dir.path(),
+            &env,
+            context,
+        );
+
+        let assessment = result.expect("command should pass base validation and return assessment");
+        assert!(
+            assessment.threat_level >= ThreatLevel::High,
+            "command with shell metacharacters should have High or Critical threat level, got {:?}",
+            assessment.threat_level
+        );
+        assert!(!assessment.threats.is_empty());
+    }
+
+    #[test]
+    fn test_validate_command_comprehensive_base_validation_failure() {
+        let policy = ShellSecurityPolicy::default();
+        let config = SecurityHardeningConfig::default();
+        let mut validator = HardenedSecurityValidator::new(policy, config);
+
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let env = HashMap::new();
+        let context = CommandContext::default();
+
+        // "sudo rm" matches the default blocked pattern `sudo\s+`
+        let result = validator.validate_command_comprehensive(
+            "sudo rm /important/file",
+            tmp_dir.path(),
+            &env,
+            context,
+        );
+
+        assert!(
+            result.is_err(),
+            "command matching blocked pattern should fail base validation"
+        );
+    }
+
+    #[test]
+    fn test_validate_command_comprehensive_threat_detection_disabled() {
+        let policy = ShellSecurityPolicy::default();
+        let config = SecurityHardeningConfig {
+            enable_threat_detection: false,
+            ..SecurityHardeningConfig::default()
+        };
+        let mut validator = HardenedSecurityValidator::new(policy, config);
+
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let env = HashMap::new();
+        let context = CommandContext::default();
+
+        // This command has a semicolon (normally flagged as injection) but threat
+        // detection is off, so it should return ThreatLevel::None.
+        let result = validator.validate_command_comprehensive(
+            "echo test; echo again",
+            tmp_dir.path(),
+            &env,
+            context,
+        );
+
+        let assessment = result.expect("should pass when threat detection disabled");
+        assert_eq!(
+            assessment.threat_level,
+            ThreatLevel::None,
+            "threat detection disabled should always yield ThreatLevel::None"
+        );
+        assert!(assessment.threats.is_empty());
+        assert!(assessment.allow_execution);
+    }
+
+    #[test]
+    fn test_get_security_statistics_fresh_detector() {
+        let detector = ThreatDetector::new();
+        let stats = detector.get_security_statistics();
+
+        assert_eq!(stats.total_commands_analyzed, 0);
+        assert_eq!(stats.unique_commands, 0);
+        assert_eq!(stats.high_frequency_commands, 0);
+        assert!(stats.threat_detection_enabled);
+    }
+
+    #[test]
+    fn test_get_security_statistics_unique_commands() {
+        let mut detector = ThreatDetector::new();
+        let context = CommandContext::default();
+
+        // Analyze three distinct commands
+        detector.analyze_command("echo hello", &context);
+        detector.analyze_command("ls -la", &context);
+        detector.analyze_command("pwd", &context);
+
+        let stats = detector.get_security_statistics();
+        assert_eq!(stats.unique_commands, 3);
+        assert_eq!(stats.high_frequency_commands, 0);
+        assert!(stats.threat_detection_enabled);
+    }
+
+    #[test]
+    fn test_get_security_statistics_high_frequency_commands() {
+        let mut detector = ThreatDetector::new();
+        let context = CommandContext::default();
+
+        // Exceed the default suspicious_frequency_threshold of 50
+        for _ in 0..51 {
+            detector.analyze_command("echo spam", &context);
+        }
+        // Add one normal command below the threshold
+        detector.analyze_command("ls", &context);
+
+        let stats = detector.get_security_statistics();
+        assert_eq!(stats.unique_commands, 2);
+        assert_eq!(stats.high_frequency_commands, 1);
+        assert!(stats.threat_detection_enabled);
+    }
 }

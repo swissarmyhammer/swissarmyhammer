@@ -923,4 +923,115 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn test_env_var_value_exceeding_max_length() {
+        let policy = ShellSecurityPolicy {
+            max_env_value_length: 10,
+            ..Default::default()
+        };
+        let validator = ShellSecurityValidator::new(policy).unwrap();
+
+        let mut env = HashMap::new();
+        env.insert("MY_VAR".to_string(), "a".repeat(11));
+        let result = validator.validate_environment_variables(&env);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            ShellSecurityError::InvalidEnvironmentVariableValue { name, reason } => {
+                assert_eq!(name, "MY_VAR");
+                assert!(
+                    reason.contains("exceeds maximum"),
+                    "Expected reason to mention exceeding maximum, got: {reason}"
+                );
+            }
+            other => panic!("Expected InvalidEnvironmentVariableValue, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_env_var_value_containing_null_bytes() {
+        let policy = ShellSecurityPolicy::default();
+        let validator = ShellSecurityValidator::new(policy).unwrap();
+
+        let mut env = HashMap::new();
+        env.insert("MY_VAR".to_string(), "hello\0world".to_string());
+        let result = validator.validate_environment_variables(&env);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            ShellSecurityError::InvalidEnvironmentVariableValue { name, reason } => {
+                assert_eq!(name, "MY_VAR");
+                assert!(
+                    reason.contains("null bytes"),
+                    "Expected reason to mention null bytes, got: {reason}"
+                );
+            }
+            other => panic!("Expected InvalidEnvironmentVariableValue, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_env_var_value_containing_newlines() {
+        let policy = ShellSecurityPolicy::default();
+        let validator = ShellSecurityValidator::new(policy).unwrap();
+
+        let mut env = HashMap::new();
+        env.insert("MY_VAR".to_string(), "hello\nworld".to_string());
+        let result = validator.validate_environment_variables(&env);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            ShellSecurityError::InvalidEnvironmentVariableValue { name, reason } => {
+                assert_eq!(name, "MY_VAR");
+                assert!(
+                    reason.contains("newlines"),
+                    "Expected reason to mention newlines, got: {reason}"
+                );
+            }
+            other => panic!("Expected InvalidEnvironmentVariableValue, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_with_execution_result() {
+        let env_vars = HashMap::new();
+        let event = ShellAuditEvent::new("echo test".to_string(), None, &env_vars)
+            .with_execution_result(0, 100);
+
+        assert_eq!(event.exit_code, Some(0));
+        assert_eq!(event.execution_time_ms, Some(100));
+    }
+
+    #[test]
+    fn test_with_validation_failure() {
+        let env_vars = HashMap::new();
+        let event = ShellAuditEvent::new("bad cmd".to_string(), None, &env_vars)
+            .with_validation_failure("blocked");
+
+        assert!(
+            event.validation_result.starts_with("failed:"),
+            "Expected validation_result to start with 'failed:', got '{}'",
+            event.validation_result
+        );
+    }
+
+    #[test]
+    fn test_log_shell_execution_no_panic() {
+        let temp_dir = TempDir::new().unwrap();
+        let env_vars = HashMap::new();
+
+        // Should not panic regardless of audit logging config
+        log_shell_execution("echo hello", Some(temp_dir.path()), &env_vars);
+        log_shell_execution("ls -la", None, &env_vars);
+    }
+
+    #[test]
+    fn test_log_shell_completion_no_panic() {
+        // Normal exit code
+        log_shell_completion("echo hello", 0, 50);
+
+        // Standard failure exit code
+        log_shell_completion("false", 1, 10);
+
+        // Suspicious exit code (triggers warn path for unusual exit codes)
+        log_shell_completion("killed_proc", 137, 200);
+    }
 }
