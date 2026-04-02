@@ -43,4 +43,15 @@ pub trait TrackedStore: Send + Sync + 'static {
 
     /// File extension for items in this store (e.g. "yaml", "md").
     fn extension(&self) -> &str;
+
+    /// A human-readable name for this store, used in change events.
+    ///
+    /// For entity stores this is the entity type name (e.g. "task", "column").
+    /// The default implementation infers the name from the directory basename.
+    fn store_name(&self) -> &str {
+        self.root()
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("unknown")
+    }
 }

@@ -23,6 +23,9 @@ pub trait ErasedStore: Send + Sync {
     /// The root directory this store manages.
     fn root(&self) -> &Path;
 
+    /// A human-readable name for this store (e.g. "task", "column").
+    fn store_name(&self) -> &str;
+
     /// Scan for changes and produce change events.
     async fn flush_changes(&self) -> Vec<ChangeEvent>;
 
@@ -46,6 +49,10 @@ pub trait ErasedStore: Send + Sync {
 impl<S: TrackedStore> ErasedStore for StoreHandle<S> {
     fn root(&self) -> &Path {
         self.store.root()
+    }
+
+    fn store_name(&self) -> &str {
+        self.store.store_name()
     }
 
     async fn flush_changes(&self) -> Vec<ChangeEvent> {

@@ -662,6 +662,7 @@ impl<S: TrackedStore> StoreHandle<S> {
     pub async fn flush_changes(&self) -> Vec<ChangeEvent> {
         let ext = self.store.extension();
         let root = self.store.root();
+        let store_name = self.store.store_name();
         let mut events = Vec::new();
         let mut cache = self.cache.write().await;
 
@@ -695,13 +696,13 @@ impl<S: TrackedStore> StoreHandle<S> {
                 None => {
                     events.push(ChangeEvent {
                         event_name: "item-created".to_string(),
-                        payload: serde_json::json!({ "id": id }),
+                        payload: serde_json::json!({ "store": store_name, "id": id }),
                     });
                 }
                 Some(cached) if cached != content => {
                     events.push(ChangeEvent {
                         event_name: "item-changed".to_string(),
-                        payload: serde_json::json!({ "id": id }),
+                        payload: serde_json::json!({ "store": store_name, "id": id }),
                     });
                 }
                 _ => {}
@@ -713,7 +714,7 @@ impl<S: TrackedStore> StoreHandle<S> {
             if !current_files.contains_key(id) {
                 events.push(ChangeEvent {
                     event_name: "item-removed".to_string(),
-                    payload: serde_json::json!({ "id": id }),
+                    payload: serde_json::json!({ "store": store_name, "id": id }),
                 });
             }
         }

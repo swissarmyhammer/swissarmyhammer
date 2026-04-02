@@ -98,6 +98,10 @@ impl TrackedStore for EntityTypeStore {
         }
     }
 
+    fn store_name(&self) -> &str {
+        &self.entity_type_name
+    }
+
     /// Serialize an entity to its on-disk text representation.
     ///
     /// Computed fields are stripped. Field keys are sorted alphabetically for

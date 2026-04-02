@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KN5083QR3K060WAK60YEFAB9
-position_column: todo
-position_ordinal: 8c80
+position_column: done
+position_ordinal: ffffffffffffffffff8a80
 title: Route file watcher through StoreContext
 ---
 ## What

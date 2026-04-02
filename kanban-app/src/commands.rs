@@ -1401,12 +1401,90 @@ pub async fn list_commands_for_scope(
 // ---------------------------------------------------------------------------
 
 /// Flush entity changes for a board handle and emit events.
+///
+/// Routes change detection through `StoreContext.flush_all()` for entity files
+/// managed by stores, then falls back to the watcher's `flush_and_emit` for
+/// non-store files (attachments). Store events are converted to `WatchEvent`s
+/// via a bridge that reads through the entity context for enrichment.
 async fn flush_and_emit_for_handle(app: &AppHandle, handle: &BoardHandle) {
     let kanban_root = handle.ctx.root().to_path_buf();
-    let mut events = crate::watcher::flush_and_emit(&kanban_root, &handle.entity_cache);
-    tracing::info!(event_count = events.len(), path = %kanban_root.display(), "flush_and_emit result");
-    tracing::debug!(event_count = events.len(), path = %kanban_root.display(), "flush_and_emit_for_handle");
-    if let Ok(ectx) = handle.ctx.entity_context().await {
+
+    // 1. Get store-level change events for entity files.
+    let store_events = handle.store_context.flush_all().await;
+    tracing::info!(
+        store_event_count = store_events.len(),
+        path = %kanban_root.display(),
+        "store_context.flush_all result"
+    );
+
+    // 2. Also flush the watcher cache so it stays in sync and we pick up
+    //    attachment changes. Entity-file events from the watcher are discarded
+    //    in favour of the store events (which are the source of truth).
+    let watcher_events = crate::watcher::flush_and_emit(&kanban_root, &handle.entity_cache);
+    tracing::debug!(
+        watcher_event_count = watcher_events.len(),
+        path = %kanban_root.display(),
+        "watcher flush_and_emit (attachment passthrough)"
+    );
+
+    // 3. Convert store ChangeEvents into WatchEvents.
+    let mut events: Vec<crate::watcher::WatchEvent> = Vec::new();
+    for se in &store_events {
+        let store_name = se
+            .payload
+            .get("store")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let id = se.payload.get("id").and_then(|v| v.as_str()).unwrap_or("");
+        if store_name.is_empty() || id.is_empty() {
+            tracing::warn!(event_name = %se.event_name, "dropping store event with empty store_name or id");
+            continue;
+        }
+
+        match se.event_name.as_str() {
+            "item-created" => {
+                events.push(crate::watcher::WatchEvent::EntityCreated {
+                    entity_type: store_name.to_string(),
+                    id: id.to_string(),
+                    fields: std::collections::HashMap::new(),
+                });
+            }
+            "item-changed" => {
+                events.push(crate::watcher::WatchEvent::EntityFieldChanged {
+                    entity_type: store_name.to_string(),
+                    id: id.to_string(),
+                    changes: vec![],
+                    fields: None,
+                });
+            }
+            "item-removed" => {
+                events.push(crate::watcher::WatchEvent::EntityRemoved {
+                    entity_type: store_name.to_string(),
+                    id: id.to_string(),
+                });
+            }
+            _ => {}
+        }
+    }
+
+    // 4. Keep only attachment events from the watcher (stores handle entity files).
+    for evt in watcher_events {
+        if matches!(evt, crate::watcher::WatchEvent::AttachmentChanged { .. }) {
+            events.push(evt);
+        }
+    }
+
+    // 5. Enrich entity events with computed fields via EntityContext.
+    let ectx_result = handle.ctx.entity_context().await;
+    if let Err(ref e) = ectx_result {
+        tracing::warn!(
+            path = %kanban_root.display(),
+            error = %e,
+            event_count = events.len(),
+            "failed to obtain EntityContext; skipping enrichment for all events"
+        );
+    }
+    if let Ok(ectx) = ectx_result {
         for evt in &mut events {
             match evt {
                 crate::watcher::WatchEvent::EntityCreated {
@@ -1414,12 +1492,14 @@ async fn flush_and_emit_for_handle(app: &AppHandle, handle: &BoardHandle) {
                     id,
                     fields,
                 } => {
-                    if let Ok(entity) = ectx.read(entity_type, id).await {
+                    if let Ok(entity) = ectx.read(&*entity_type, &*id).await {
                         *fields = entity
                             .fields
                             .into_iter()
                             .map(|(k, v)| (k.to_string(), v))
                             .collect();
+                    } else {
+                        tracing::warn!(entity_type = %entity_type, id = %id, "enrichment failed for created entity");
                     }
                 }
                 crate::watcher::WatchEvent::EntityFieldChanged {
@@ -1428,7 +1508,7 @@ async fn flush_and_emit_for_handle(app: &AppHandle, handle: &BoardHandle) {
                     fields,
                     ..
                 } => {
-                    if let Ok(entity) = ectx.read(entity_type, id).await {
+                    if let Ok(entity) = ectx.read(&*entity_type, &*id).await {
                         *fields = Some(
                             entity
                                 .fields
@@ -1436,6 +1516,8 @@ async fn flush_and_emit_for_handle(app: &AppHandle, handle: &BoardHandle) {
                                 .map(|(k, v)| (k.to_string(), v))
                                 .collect(),
                         );
+                    } else {
+                        tracing::warn!(entity_type = %entity_type, id = %id, "enrichment failed for changed entity");
                     }
                 }
                 crate::watcher::WatchEvent::EntityRemoved { .. } => {}
@@ -1446,10 +1528,12 @@ async fn flush_and_emit_for_handle(app: &AppHandle, handle: &BoardHandle) {
             }
         }
 
-        // Cascade: recompute aggregate fields that depend on changed entity types
+        // 6. Cascade: recompute aggregate fields that depend on changed entity types.
         let cascade = cascade_aggregate_events(&ectx, &events).await;
         events.extend(cascade);
     }
+
+    // 7. Sync search index and emit to frontend (unchanged).
     {
         let board_path_str = kanban_root.display().to_string();
         let mut search_idx = handle.search_index.write().await;
@@ -1577,4 +1661,77 @@ pub async fn show_context_menu(
         .map_err(|e: tauri::Error| e.to_string())?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    /// Verifies that store_name and id are correctly extracted from ChangeEvent
+    /// payloads, and that events with missing fields are identified.
+    #[test]
+    fn store_name_extraction_from_change_event() {
+        let event = swissarmyhammer_store::ChangeEvent {
+            event_name: "item-created".to_string(),
+            payload: serde_json::json!({
+                "store": "task",
+                "id": "01ABC"
+            }),
+        };
+        let store_name = event
+            .payload
+            .get("store")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let id = event
+            .payload
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        assert_eq!(store_name, "task");
+        assert_eq!(id, "01ABC");
+    }
+
+    /// Events missing store or id should be detected so they can be dropped.
+    #[test]
+    fn store_name_extraction_missing_fields() {
+        let event = swissarmyhammer_store::ChangeEvent {
+            event_name: "item-changed".to_string(),
+            payload: serde_json::json!({}),
+        };
+        let store_name = event
+            .payload
+            .get("store")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let id = event
+            .payload
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        assert!(store_name.is_empty());
+        assert!(id.is_empty());
+    }
+
+    /// Events with null values for store/id should also be treated as empty.
+    #[test]
+    fn store_name_extraction_null_values() {
+        let event = swissarmyhammer_store::ChangeEvent {
+            event_name: "item-changed".to_string(),
+            payload: serde_json::json!({
+                "store": null,
+                "id": null
+            }),
+        };
+        let store_name = event
+            .payload
+            .get("store")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let id = event
+            .payload
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        assert!(store_name.is_empty());
+        assert!(id.is_empty());
+    }
 }
