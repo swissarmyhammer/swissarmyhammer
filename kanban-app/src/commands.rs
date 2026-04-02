@@ -1420,7 +1420,8 @@ async fn flush_and_emit_for_handle(app: &AppHandle, handle: &BoardHandle) {
     // 2. Also flush the watcher cache so it stays in sync and we pick up
     //    attachment changes. Entity-file events from the watcher are discarded
     //    in favour of the store events (which are the source of truth).
-    let watcher_events = crate::watcher::flush_and_emit(&kanban_root, &handle.entity_cache);
+    let watcher_events =
+        crate::watcher::flush_and_emit(&kanban_root, &handle.store_roots, &handle.entity_cache);
     tracing::debug!(
         watcher_event_count = watcher_events.len(),
         path = %kanban_root.display(),

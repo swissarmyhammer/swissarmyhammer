@@ -68,6 +68,8 @@ pub(crate) struct BoardHandle {
     pub(crate) ctx: Arc<KanbanContext>,
     /// Store-level undo/redo context shared across all entity type stores.
     pub(crate) store_context: Arc<swissarmyhammer_store::StoreContext>,
+    /// Root paths of all registered stores, used to drive the file watcher.
+    pub(crate) store_roots: Vec<std::path::PathBuf>,
     /// Entity cache for detecting external file changes with field-level diffing.
     pub(crate) entity_cache: EntityCache,
     /// In-memory search index over all entities.
@@ -85,7 +87,6 @@ impl BoardHandle {
         let ctx = KanbanContext::open(&kanban_path)
             .await
             .map_err(|e| format!("Failed to open board context: {e}"))?;
-        let entity_cache = watcher::new_entity_cache(&kanban_path);
 
         // Create StoreContext for undo/redo and register entity type stores.
         let store_context = Arc::new(swissarmyhammer_store::StoreContext::new(
@@ -127,6 +128,12 @@ impl BoardHandle {
             ));
             store_context.register(handle).await;
         }
+
+        // Collect store roots now that all stores are registered.
+        // This drives the file watcher — every registered store's directory
+        // will be watched automatically (no hardcoded list needed).
+        let store_roots = store_context.watched_roots().await;
+        let entity_cache = watcher::new_entity_cache(&kanban_path, &store_roots);
 
         // Migrate legacy ordinals to FractionalIndex format.
         // Reads all tasks, groups by column, sorts by existing ordinal string,
@@ -188,6 +195,7 @@ impl BoardHandle {
         Ok(Self {
             ctx: Arc::new(ctx),
             store_context,
+            store_roots,
             entity_cache,
             search_index,
             _watcher: None,
@@ -241,32 +249,37 @@ impl BoardHandle {
         let search_index = self.search_index.clone();
         let board_path_str = kanban_root.display().to_string();
 
-        match watcher::start_watching(kanban_root.clone(), cache, move |evt| {
-            use tauri::Emitter;
-            // Update search index for external file changes.
-            // Use try_write to avoid blocking the notify thread if the async
-            // dispatch_command path holds the write lock concurrently.
-            if let Ok(mut idx) = search_index.try_write() {
-                watcher::sync_search_index(&mut idx, &evt);
-            }
-            let event_name = match &evt {
-                watcher::WatchEvent::EntityCreated { .. } => "entity-created",
-                watcher::WatchEvent::EntityRemoved { .. } => "entity-removed",
-                watcher::WatchEvent::EntityFieldChanged { .. } => "entity-field-changed",
-                watcher::WatchEvent::AttachmentChanged { .. } => "attachment-changed",
-            };
-            tracing::info!(
-                event_name,
-                board_path = %board_path_str,
-                event = ?evt,
-                "watcher callback: emitting Tauri event to frontend"
-            );
-            let wrapped = watcher::BoardWatchEvent {
-                event: evt,
-                board_path: board_path_str.clone(),
-            };
-            let _ = app_handle.emit(event_name, &wrapped);
-        }) {
+        match watcher::start_watching(
+            kanban_root.clone(),
+            self.store_roots.clone(),
+            cache,
+            move |evt| {
+                use tauri::Emitter;
+                // Update search index for external file changes.
+                // Use try_write to avoid blocking the notify thread if the async
+                // dispatch_command path holds the write lock concurrently.
+                if let Ok(mut idx) = search_index.try_write() {
+                    watcher::sync_search_index(&mut idx, &evt);
+                }
+                let event_name = match &evt {
+                    watcher::WatchEvent::EntityCreated { .. } => "entity-created",
+                    watcher::WatchEvent::EntityRemoved { .. } => "entity-removed",
+                    watcher::WatchEvent::EntityFieldChanged { .. } => "entity-field-changed",
+                    watcher::WatchEvent::AttachmentChanged { .. } => "attachment-changed",
+                };
+                tracing::info!(
+                    event_name,
+                    board_path = %board_path_str,
+                    event = ?evt,
+                    "watcher callback: emitting Tauri event to frontend"
+                );
+                let wrapped = watcher::BoardWatchEvent {
+                    event: evt,
+                    board_path: board_path_str.clone(),
+                };
+                let _ = app_handle.emit(event_name, &wrapped);
+            },
+        ) {
             Ok(w) => {
                 tracing::info!(
                     path = %kanban_root.display(),

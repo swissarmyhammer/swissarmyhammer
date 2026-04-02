@@ -175,6 +175,15 @@ impl StoreContext {
         all_events
     }
 
+    /// Return the root paths of all registered stores.
+    ///
+    /// Used by the file watcher to discover which directories to watch without
+    /// hardcoding a fixed list of subdirectory names.
+    pub async fn watched_roots(&self) -> Vec<PathBuf> {
+        let stores = self.stores.read().await;
+        stores.iter().map(|s| s.root().to_path_buf()).collect()
+    }
+
     /// Find the store whose root is a prefix of the given path.
     pub async fn store_for_path(&self, path: &Path) -> Option<Arc<dyn ErasedStore>> {
         let stores = self.stores.read().await;
@@ -225,6 +234,27 @@ mod tests {
             root: dir.to_path_buf(),
         });
         Arc::new(StoreHandle::new(store))
+    }
+
+    #[tokio::test]
+    async fn watched_roots_returns_all_store_roots() {
+        let dir = TempDir::new().unwrap();
+        let store1_dir = dir.path().join("tasks");
+        let store2_dir = dir.path().join("perspectives");
+        std::fs::create_dir_all(&store1_dir).unwrap();
+        std::fs::create_dir_all(&store2_dir).unwrap();
+
+        let handle1 = make_handle(&store1_dir);
+        let handle2 = make_handle(&store2_dir);
+
+        let ctx = StoreContext::new(dir.path().to_path_buf());
+        ctx.register(handle1).await;
+        ctx.register(handle2).await;
+
+        let roots = ctx.watched_roots().await;
+        assert_eq!(roots.len(), 2);
+        assert!(roots.contains(&store1_dir));
+        assert!(roots.contains(&store2_dir));
     }
 
     #[tokio::test]
