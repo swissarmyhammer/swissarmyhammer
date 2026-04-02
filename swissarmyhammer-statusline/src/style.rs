@@ -99,4 +99,70 @@ mod tests {
         let s = Style::parse("dim");
         assert_eq!(s.apply("x"), "\x1b[2mx\x1b[0m");
     }
+
+    #[test]
+    fn test_dimmed_method() {
+        let s = Style::parse("green");
+        let d = s.dimmed();
+        let result = d.apply("x");
+        assert!(result.contains("\x1b[32m"));
+        assert!(result.contains("\x1b[2m"));
+    }
+
+    #[test]
+    fn test_dimmed_already_dim() {
+        let s = Style::parse("dim");
+        let d = s.dimmed();
+        // Should not add dim twice
+        let result = d.apply("x");
+        assert_eq!(result.matches("\x1b[2m").count(), 1);
+    }
+
+    #[test]
+    fn test_italic() {
+        let s = Style::parse("italic");
+        assert_eq!(s.apply("x"), "\x1b[3mx\x1b[0m");
+    }
+
+    #[test]
+    fn test_underline() {
+        let s = Style::parse("underline");
+        assert_eq!(s.apply("x"), "\x1b[4mx\x1b[0m");
+    }
+
+    #[test]
+    fn test_all_colors() {
+        for (name, code) in &[
+            ("black", 30),
+            ("red", 31),
+            ("green", 32),
+            ("yellow", 33),
+            ("blue", 34),
+            ("magenta", 35),
+            ("cyan", 36),
+            ("white", 37),
+        ] {
+            let s = Style::parse(name);
+            assert_eq!(s.apply("x"), format!("\x1b[{}mx\x1b[0m", code));
+        }
+    }
+
+    #[test]
+    fn test_unknown_token() {
+        let s = Style::parse("unknown");
+        // Unknown tokens are ignored, so no codes
+        assert_eq!(s.apply("x"), "x");
+    }
+
+    #[test]
+    fn test_dimmed_alias() {
+        let s = Style::parse("dimmed");
+        assert_eq!(s.apply("x"), "\x1b[2mx\x1b[0m");
+    }
+
+    #[test]
+    fn test_default_style() {
+        let s = Style::default();
+        assert_eq!(s.apply("x"), "x");
+    }
 }

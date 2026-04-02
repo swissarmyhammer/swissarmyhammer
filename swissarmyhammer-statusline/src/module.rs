@@ -120,3 +120,95 @@ pub fn interpolate(format: &str, vars: &HashMap<String, String>) -> String {
     }
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_module_output_new() {
+        let out = ModuleOutput::new("hello", Style::parse("green"));
+        assert_eq!(out.text, "hello");
+        assert!(!out.is_empty());
+    }
+
+    #[test]
+    fn test_module_output_hidden() {
+        let out = ModuleOutput::hidden();
+        assert!(out.is_empty());
+        assert_eq!(out.render(), "");
+    }
+
+    #[test]
+    fn test_module_output_render_with_style() {
+        let out = ModuleOutput::new("hello", Style::parse("green"));
+        let rendered = out.render();
+        assert!(rendered.contains("hello"));
+        assert!(rendered.contains("\x1b[32m"));
+    }
+
+    #[test]
+    fn test_module_output_render_empty() {
+        let out = ModuleOutput::new("", Style::parse("green"));
+        assert_eq!(out.render(), "");
+    }
+
+    #[test]
+    fn test_module_registry_new() {
+        let reg = ModuleRegistry::new();
+        assert!(reg.get("directory").is_some());
+        assert!(reg.get("model").is_some());
+        assert!(reg.get("context_bar").is_some());
+        assert!(reg.get("cost").is_some());
+        assert!(reg.get("session").is_some());
+        assert!(reg.get("vim_mode").is_some());
+        assert!(reg.get("agent").is_some());
+        assert!(reg.get("worktree").is_some());
+        assert!(reg.get("version").is_some());
+        assert!(reg.get("git_branch").is_some());
+        assert!(reg.get("git_status").is_some());
+        assert!(reg.get("git_state").is_some());
+        assert!(reg.get("kanban").is_some());
+        assert!(reg.get("index").is_some());
+        assert!(reg.get("languages").is_some());
+    }
+
+    #[test]
+    fn test_module_registry_default() {
+        let reg = ModuleRegistry::default();
+        assert!(reg.get("directory").is_some());
+    }
+
+    #[test]
+    fn test_module_registry_get_nonexistent() {
+        let reg = ModuleRegistry::new();
+        assert!(reg.get("nonexistent").is_none());
+    }
+
+    #[test]
+    fn test_interpolate_basic() {
+        let mut vars = HashMap::new();
+        vars.insert("name".into(), "world".into());
+        assert_eq!(interpolate("hello $name!", &vars), "hello world!");
+    }
+
+    #[test]
+    fn test_interpolate_missing_var() {
+        let vars = HashMap::new();
+        assert_eq!(interpolate("hello $name", &vars), "hello ");
+    }
+
+    #[test]
+    fn test_interpolate_no_vars() {
+        let vars = HashMap::new();
+        assert_eq!(interpolate("literal text", &vars), "literal text");
+    }
+
+    #[test]
+    fn test_interpolate_multiple_vars() {
+        let mut vars = HashMap::new();
+        vars.insert("a".into(), "1".into());
+        vars.insert("b".into(), "2".into());
+        assert_eq!(interpolate("$a+$b", &vars), "1+2");
+    }
+}

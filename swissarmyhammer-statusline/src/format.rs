@@ -125,4 +125,16 @@ mod tests {
         let segs = parse_format("");
         assert!(segs.is_empty());
     }
+
+    #[test]
+    fn test_trailing_dollar() {
+        let segs = parse_format("cost$");
+        assert_eq!(segs, vec![FormatSegment::Literal("cost$".into())]);
+    }
+
+    #[test]
+    fn test_dollar_non_alphanumeric() {
+        let segs = parse_format("$!bang");
+        assert_eq!(segs, vec![FormatSegment::Literal("$!bang".into())]);
+    }
 }

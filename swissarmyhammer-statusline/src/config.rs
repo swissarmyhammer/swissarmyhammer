@@ -430,11 +430,16 @@ impl Default for LanguagesModuleConfig {
 /// only needs to specify the fields they want to override. Unspecified fields
 /// retain their values from the previous layer.
 pub fn load_config() -> StatuslineConfig {
+    load_config_with_home(dirs::home_dir())
+}
+
+/// Load config with an explicit home directory (for testing).
+fn load_config_with_home(home: Option<std::path::PathBuf>) -> StatuslineConfig {
     let mut base: serde_yaml_ng::Value =
         serde_yaml_ng::from_str(BUILTIN_CONFIG_YAML).expect("builtin config.yaml must parse");
 
     // User layer
-    if let Some(home) = dirs::home_dir() {
+    if let Some(home) = home {
         let user_path = home.join(".sah").join("statusline").join("config.yaml");
         if let Some(overlay) = load_yaml_value(&user_path) {
             deep_merge(&mut base, overlay);
@@ -551,5 +556,54 @@ mod tests {
         let builtin: StatuslineConfig = serde_yaml_ng::from_str(BUILTIN_CONFIG_YAML).unwrap();
         assert_eq!(config.format, builtin.format);
         assert_eq!(config.directory.style, builtin.directory.style);
+    }
+
+    #[test]
+    fn test_load_yaml_value_nonexistent() {
+        let result = load_yaml_value(Path::new("/nonexistent/path/config.yaml"));
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_load_yaml_value_invalid_yaml() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bad.yaml");
+        std::fs::write(&path, ": [\ninvalid yaml content\n").unwrap();
+        let result = load_yaml_value(&path);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_load_yaml_value_valid() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("good.yaml");
+        std::fs::write(&path, "format: custom\n").unwrap();
+        let result = load_yaml_value(&path);
+        assert!(result.is_some());
+    }
+
+    #[test]
+    fn test_load_config_with_user_overlay() {
+        let home = tempfile::tempdir().unwrap();
+        let config_dir = home.path().join(".sah").join("statusline");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::write(
+            config_dir.join("config.yaml"),
+            "directory:\n  style: \"magenta\"\n",
+        )
+        .unwrap();
+
+        let config = load_config_with_home(Some(home.path().to_path_buf()));
+        assert_eq!(config.directory.style, "magenta");
+        // Other fields should be preserved from builtin
+        let builtin: StatuslineConfig = serde_yaml_ng::from_str(BUILTIN_CONFIG_YAML).unwrap();
+        assert_eq!(config.git_branch.style, builtin.git_branch.style);
+    }
+
+    #[test]
+    fn test_load_config_with_no_home() {
+        let config = load_config_with_home(None);
+        let builtin: StatuslineConfig = serde_yaml_ng::from_str(BUILTIN_CONFIG_YAML).unwrap();
+        assert_eq!(config.format, builtin.format);
     }
 }

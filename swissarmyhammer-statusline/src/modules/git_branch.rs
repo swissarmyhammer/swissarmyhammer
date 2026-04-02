@@ -21,6 +21,11 @@ pub fn eval(ctx: &ModuleContext) -> ModuleOutput {
     };
 
     let branch = head.shorthand().unwrap_or("HEAD").to_string();
+    format_branch(&branch, ctx)
+}
+
+/// Format the branch name with truncation and styling.
+fn format_branch(branch: &str, ctx: &ModuleContext) -> ModuleOutput {
     let cfg = &ctx.config.git_branch;
 
     let truncated = if branch.len() > cfg.truncation_length && cfg.truncation_length > 0 {
@@ -30,7 +35,7 @@ pub fn eval(ctx: &ModuleContext) -> ModuleOutput {
             cfg.truncation_symbol
         )
     } else {
-        branch
+        branch.to_string()
     };
 
     let mut vars = HashMap::new();
@@ -38,4 +43,90 @@ pub fn eval(ctx: &ModuleContext) -> ModuleOutput {
     vars.insert("branch".into(), truncated);
     let text = interpolate(&cfg.format, &vars);
     ModuleOutput::new(text, Style::parse(&cfg.style))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::StatuslineConfig;
+    use crate::input::StatuslineInput;
+
+    #[test]
+    fn test_git_branch_in_repo() {
+        let input = StatuslineInput::default();
+        let config = StatuslineConfig::default();
+        let ctx = ModuleContext {
+            input: &input,
+            config: &config,
+        };
+        let out = eval(&ctx);
+        // We're in a git repo, so this should produce output
+        assert!(!out.is_empty());
+    }
+
+    #[test]
+    fn test_git_branch_truncation() {
+        let input = StatuslineInput::default();
+        let mut config = StatuslineConfig::default();
+        config.git_branch.truncation_length = 3;
+        let ctx = ModuleContext {
+            input: &input,
+            config: &config,
+        };
+        let out = eval(&ctx);
+        assert!(!out.is_empty());
+    }
+
+    #[test]
+    fn test_git_branch_no_truncation() {
+        let input = StatuslineInput::default();
+        let mut config = StatuslineConfig::default();
+        config.git_branch.truncation_length = 0;
+        let ctx = ModuleContext {
+            input: &input,
+            config: &config,
+        };
+        let out = eval(&ctx);
+        assert!(!out.is_empty());
+    }
+
+    #[test]
+    fn test_format_branch_short() {
+        let input = StatuslineInput::default();
+        let config = StatuslineConfig::default();
+        let ctx = ModuleContext {
+            input: &input,
+            config: &config,
+        };
+        let out = format_branch("main", &ctx);
+        assert!(out.text.contains("main"));
+    }
+
+    #[test]
+    fn test_format_branch_long_truncated() {
+        let input = StatuslineInput::default();
+        let mut config = StatuslineConfig::default();
+        config.git_branch.truncation_length = 5;
+        config.git_branch.truncation_symbol = "…".into();
+        let ctx = ModuleContext {
+            input: &input,
+            config: &config,
+        };
+        let out = format_branch("feature/very-long-branch-name", &ctx);
+        assert!(out.text.contains("featu"));
+        assert!(out.text.contains("…"));
+    }
+
+    #[test]
+    fn test_format_branch_zero_truncation() {
+        let input = StatuslineInput::default();
+        let mut config = StatuslineConfig::default();
+        config.git_branch.truncation_length = 0;
+        let ctx = ModuleContext {
+            input: &input,
+            config: &config,
+        };
+        let out = format_branch("main", &ctx);
+        assert!(out.text.contains("main"));
+    }
 }

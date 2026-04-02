@@ -24,3 +24,55 @@ pub fn eval(ctx: &ModuleContext) -> ModuleOutput {
     let text = interpolate(&ctx.config.worktree.format, &vars);
     ModuleOutput::new(text, Style::parse(&ctx.config.worktree.style))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::StatuslineConfig;
+    use crate::input::{StatuslineInput, WorktreeInfo};
+
+    #[test]
+    fn test_worktree_present() {
+        let input = StatuslineInput {
+            worktree: Some(WorktreeInfo {
+                branch: Some("feature-123".into()),
+            }),
+            ..Default::default()
+        };
+        let config = StatuslineConfig::default();
+        let ctx = ModuleContext {
+            input: &input,
+            config: &config,
+        };
+        let out = eval(&ctx);
+        assert!(!out.is_empty());
+        assert!(out.text.contains("feature-123"));
+    }
+
+    #[test]
+    fn test_worktree_none() {
+        let input = StatuslineInput::default();
+        let config = StatuslineConfig::default();
+        let ctx = ModuleContext {
+            input: &input,
+            config: &config,
+        };
+        let out = eval(&ctx);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn test_worktree_no_branch() {
+        let input = StatuslineInput {
+            worktree: Some(WorktreeInfo { branch: None }),
+            ..Default::default()
+        };
+        let config = StatuslineConfig::default();
+        let ctx = ModuleContext {
+            input: &input,
+            config: &config,
+        };
+        let out = eval(&ctx);
+        assert!(out.is_empty());
+    }
+}

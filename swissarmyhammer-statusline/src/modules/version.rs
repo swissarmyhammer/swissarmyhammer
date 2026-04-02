@@ -19,3 +19,38 @@ pub fn eval(ctx: &ModuleContext) -> ModuleOutput {
     let text = interpolate(&ctx.config.version.format, &vars);
     ModuleOutput::new(text, Style::parse(&ctx.config.version.style))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::StatuslineConfig;
+    use crate::input::StatuslineInput;
+
+    #[test]
+    fn test_version_present() {
+        let input = StatuslineInput {
+            version: Some("1.2.3".into()),
+            ..Default::default()
+        };
+        let config = StatuslineConfig::default();
+        let ctx = ModuleContext {
+            input: &input,
+            config: &config,
+        };
+        let out = eval(&ctx);
+        assert!(!out.is_empty());
+        assert!(out.text.contains("1.2.3"));
+    }
+
+    #[test]
+    fn test_version_none() {
+        let input = StatuslineInput::default();
+        let config = StatuslineConfig::default();
+        let ctx = ModuleContext {
+            input: &input,
+            config: &config,
+        };
+        let out = eval(&ctx);
+        assert!(out.is_empty());
+    }
+}

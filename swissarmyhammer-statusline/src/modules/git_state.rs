@@ -16,26 +16,151 @@ pub fn eval(ctx: &ModuleContext) -> ModuleOutput {
     };
 
     let state = repo.state();
-    let state_str = match state {
+    render_state(state, ctx)
+}
+
+/// Map a git repository state to a human-readable label.
+/// Returns None for Clean state.
+fn state_label(state: git2::RepositoryState) -> Option<&'static str> {
+    match state {
         git2::RepositoryState::Rebase
         | git2::RepositoryState::RebaseInteractive
-        | git2::RepositoryState::RebaseMerge => "REBASING",
-        git2::RepositoryState::Merge => "MERGING",
+        | git2::RepositoryState::RebaseMerge => Some("REBASING"),
+        git2::RepositoryState::Merge => Some("MERGING"),
         git2::RepositoryState::CherryPick | git2::RepositoryState::CherryPickSequence => {
-            "CHERRY-PICKING"
+            Some("CHERRY-PICKING")
         }
-        git2::RepositoryState::Revert | git2::RepositoryState::RevertSequence => "REVERTING",
-        git2::RepositoryState::Bisect => "BISECTING",
+        git2::RepositoryState::Revert | git2::RepositoryState::RevertSequence => Some("REVERTING"),
+        git2::RepositoryState::Bisect => Some("BISECTING"),
         git2::RepositoryState::ApplyMailbox | git2::RepositoryState::ApplyMailboxOrRebase => {
-            "APPLYING"
+            Some("APPLYING")
         }
-        git2::RepositoryState::Clean => return ModuleOutput::hidden(),
+        git2::RepositoryState::Clean => None,
+    }
+}
+
+/// Render a git state label into styled module output.
+fn render_state(state: git2::RepositoryState, ctx: &ModuleContext) -> ModuleOutput {
+    let state_str = match state_label(state) {
+        Some(s) => s,
+        None => return ModuleOutput::hidden(),
     };
 
     let cfg = &ctx.config.git_state;
     let mut vars = HashMap::new();
     vars.insert("state".into(), state_str.to_string());
-    vars.insert("progress".into(), String::new()); // TODO: parse rebase progress
+    vars.insert("progress".into(), String::new());
     let text = interpolate(&cfg.format, &vars);
     ModuleOutput::new(text, Style::parse(&cfg.style))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::StatuslineConfig;
+    use crate::input::StatuslineInput;
+
+    #[test]
+    fn test_git_state_clean() {
+        let input = StatuslineInput::default();
+        let config = StatuslineConfig::default();
+        let ctx = ModuleContext {
+            input: &input,
+            config: &config,
+        };
+        let out = eval(&ctx);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn test_state_label_clean() {
+        assert!(state_label(git2::RepositoryState::Clean).is_none());
+    }
+
+    #[test]
+    fn test_state_label_rebase() {
+        assert_eq!(state_label(git2::RepositoryState::Rebase), Some("REBASING"));
+        assert_eq!(
+            state_label(git2::RepositoryState::RebaseInteractive),
+            Some("REBASING")
+        );
+        assert_eq!(
+            state_label(git2::RepositoryState::RebaseMerge),
+            Some("REBASING")
+        );
+    }
+
+    #[test]
+    fn test_state_label_merge() {
+        assert_eq!(state_label(git2::RepositoryState::Merge), Some("MERGING"));
+    }
+
+    #[test]
+    fn test_state_label_cherry_pick() {
+        assert_eq!(
+            state_label(git2::RepositoryState::CherryPick),
+            Some("CHERRY-PICKING")
+        );
+        assert_eq!(
+            state_label(git2::RepositoryState::CherryPickSequence),
+            Some("CHERRY-PICKING")
+        );
+    }
+
+    #[test]
+    fn test_state_label_revert() {
+        assert_eq!(
+            state_label(git2::RepositoryState::Revert),
+            Some("REVERTING")
+        );
+        assert_eq!(
+            state_label(git2::RepositoryState::RevertSequence),
+            Some("REVERTING")
+        );
+    }
+
+    #[test]
+    fn test_state_label_bisect() {
+        assert_eq!(
+            state_label(git2::RepositoryState::Bisect),
+            Some("BISECTING")
+        );
+    }
+
+    #[test]
+    fn test_state_label_apply() {
+        assert_eq!(
+            state_label(git2::RepositoryState::ApplyMailbox),
+            Some("APPLYING")
+        );
+        assert_eq!(
+            state_label(git2::RepositoryState::ApplyMailboxOrRebase),
+            Some("APPLYING")
+        );
+    }
+
+    #[test]
+    fn test_render_state_rebase() {
+        let input = StatuslineInput::default();
+        let config = StatuslineConfig::default();
+        let ctx = ModuleContext {
+            input: &input,
+            config: &config,
+        };
+        let out = render_state(git2::RepositoryState::Rebase, &ctx);
+        assert!(!out.is_empty());
+        assert!(out.text.contains("REBASING"));
+    }
+
+    #[test]
+    fn test_render_state_clean_hidden() {
+        let input = StatuslineInput::default();
+        let config = StatuslineConfig::default();
+        let ctx = ModuleContext {
+            input: &input,
+            config: &config,
+        };
+        let out = render_state(git2::RepositoryState::Clean, &ctx);
+        assert!(out.is_empty());
+    }
 }
