@@ -286,6 +286,89 @@ impl Command for UntagTaskCmd {
     }
 }
 
+/// Move a task to the top of the todo (first) column.
+///
+/// Requires `task` in the scope chain. Finds the first column on the board,
+/// loads the first task in that column, and dispatches a `MoveTask` with
+/// `before_id` set to that first task so the target lands at position zero.
+pub struct DoThisNextCmd;
+
+#[async_trait]
+impl Command for DoThisNextCmd {
+    fn available(&self, ctx: &CommandContext) -> bool {
+        ctx.has_in_scope("task")
+    }
+
+    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+        let kanban = ctx.require_extension::<KanbanContext>()?;
+
+        let task_id = ctx
+            .resolve_entity_id("task")
+            .ok_or_else(|| CommandError::MissingScope("task".into()))?;
+
+        // Find the first column (todo) on the board.
+        let ectx = kanban
+            .entity_context()
+            .await
+            .map_err(|e| CommandError::ExecutionFailed(e.to_string()))?;
+
+        let columns = ectx
+            .list("column")
+            .await
+            .map_err(|e| CommandError::ExecutionFailed(e.to_string()))?;
+
+        let mut sorted_columns = columns;
+        sorted_columns.sort_by(|a, b| {
+            let oa = a.get_str("order").unwrap_or("0");
+            let ob = b.get_str("order").unwrap_or("0");
+            oa.cmp(ob)
+        });
+
+        let todo_column = sorted_columns
+            .first()
+            .ok_or_else(|| CommandError::ExecutionFailed("no columns on board".into()))?;
+        let todo_col_id = todo_column.id.as_str();
+
+        // Find the first task in the todo column (by ordinal).
+        let all_tasks = ectx
+            .list("task")
+            .await
+            .map_err(|e| CommandError::ExecutionFailed(e.to_string()))?;
+
+        let mut todo_tasks: Vec<_> = all_tasks
+            .into_iter()
+            .filter(|t| {
+                t.get_str("position_column") == Some(todo_col_id) && t.id.as_str() != task_id
+            })
+            .collect();
+        todo_tasks.sort_by(|a, b| {
+            let oa = a
+                .get_str("position_ordinal")
+                .unwrap_or(Ordinal::DEFAULT_STR);
+            let ob = b
+                .get_str("position_ordinal")
+                .unwrap_or(Ordinal::DEFAULT_STR);
+            oa.cmp(ob)
+        });
+
+        let mut op = crate::task::MoveTask::to_column(task_id, todo_col_id.to_string());
+
+        // Place before the first task in todo, if any.
+        if let Some(first_task) = todo_tasks.first() {
+            let first_ord = Ordinal::from_string(
+                first_task
+                    .get_str("position_ordinal")
+                    .unwrap_or(Ordinal::DEFAULT_STR),
+            );
+            let ordinal =
+                crate::task_helpers::compute_ordinal_for_neighbors(None, Some(&first_ord));
+            op = op.with_ordinal(ordinal.as_str());
+        }
+
+        run_op(&op, &kanban).await
+    }
+}
+
 /// Delete a task.
 ///
 /// Requires `task` in the scope chain or `id` in args.
@@ -788,5 +871,95 @@ mod tests {
         let cmd = DeleteTaskCmd;
         let result = cmd.execute(&cmd_ctx).await.unwrap();
         assert_eq!(result["deleted"], true);
+    }
+
+    // =========================================================================
+    // DoThisNextCmd
+    // =========================================================================
+
+    #[tokio::test]
+    async fn do_this_next_moves_task_to_top_of_todo() {
+        let (_temp, ctx) = setup().await;
+
+        // Create 3 tasks in todo — they get sequential ordinals.
+        let task_a = create_task(&ctx, "Task A", "todo").await;
+        let task_b = create_task(&ctx, "Task B", "todo").await;
+        let task_c = create_task(&ctx, "Task C", "todo").await;
+        let kanban = Arc::new(ctx);
+
+        // Execute DoThisNext on task C — it should move to the top.
+        let cmd_ctx = make_ctx(
+            Arc::clone(&kanban),
+            HashMap::new(),
+            vec![format!("task:{task_c}")],
+            None,
+        );
+        let cmd = DoThisNextCmd;
+        let result = cmd.execute(&cmd_ctx).await.unwrap();
+
+        // C should now be in todo column
+        assert_eq!(result["position"]["column"], "todo");
+
+        // C's ordinal should be less than A's (top of the list)
+        let c_ord = result["position"]["ordinal"].as_str().unwrap();
+
+        let ectx = kanban.entity_context().await.unwrap();
+        let a_entity = ectx.read("task", &task_a).await.unwrap();
+        let a_ord = a_entity.get_str("position_ordinal").unwrap();
+        assert!(c_ord < a_ord, "C ({c_ord}) should sort before A ({a_ord})");
+
+        // B should still be after A
+        let b_entity = ectx.read("task", &task_b).await.unwrap();
+        let b_ord = b_entity.get_str("position_ordinal").unwrap();
+        assert!(a_ord < b_ord, "A ({a_ord}) should sort before B ({b_ord})");
+    }
+
+    #[tokio::test]
+    async fn do_this_next_from_different_column() {
+        let (_temp, ctx) = setup().await;
+
+        // Task in todo and task in doing
+        let task_a = create_task(&ctx, "Task A", "todo").await;
+        let task_b = create_task(&ctx, "Task B", "doing").await;
+        let kanban = Arc::new(ctx);
+
+        // DoThisNext on B (in doing) should move it to top of todo
+        let cmd_ctx = make_ctx(
+            Arc::clone(&kanban),
+            HashMap::new(),
+            vec![format!("task:{task_b}")],
+            None,
+        );
+        let cmd = DoThisNextCmd;
+        let result = cmd.execute(&cmd_ctx).await.unwrap();
+
+        assert_eq!(result["position"]["column"], "todo");
+
+        let b_ord = result["position"]["ordinal"].as_str().unwrap();
+        let ectx = kanban.entity_context().await.unwrap();
+        let a_entity = ectx.read("task", &task_a).await.unwrap();
+        let a_ord = a_entity.get_str("position_ordinal").unwrap();
+        assert!(b_ord < a_ord, "B ({b_ord}) should sort before A ({a_ord})");
+    }
+
+    #[tokio::test]
+    async fn do_this_next_on_empty_todo() {
+        let (_temp, ctx) = setup().await;
+
+        // Only task is in doing — todo is empty
+        let task_a = create_task(&ctx, "Task A", "doing").await;
+        let kanban = Arc::new(ctx);
+
+        let cmd_ctx = make_ctx(
+            Arc::clone(&kanban),
+            HashMap::new(),
+            vec![format!("task:{task_a}")],
+            None,
+        );
+        let cmd = DoThisNextCmd;
+        let result = cmd.execute(&cmd_ctx).await.unwrap();
+
+        // Should succeed and place in todo
+        assert_eq!(result["position"]["column"], "todo");
     }
 }

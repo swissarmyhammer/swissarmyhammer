@@ -126,14 +126,6 @@ export function BoardView({ board, tasks, boardPath }: BoardViewProps) {
     return map;
   }, [columns, baseLayout, taskMap]);
 
-  // The first task in the todo (first) column — used for "Do This Next" placement
-  const firstTodoTaskId = useMemo(() => {
-    if (columns.length === 0) return null;
-    const todoColId = columns[0].id;
-    const todoTaskIds = baseLayout.get(todoColId);
-    return todoTaskIds && todoTaskIds.length > 0 ? todoTaskIds[0] : null;
-  }, [columns, baseLayout]);
-
   // --- Cross-column moniker tables for claimWhen ---
 
   /** Task monikers per column (in display order), indexed by column ID. */
@@ -518,7 +510,6 @@ export function BoardView({ board, tasks, boardPath }: BoardViewProps) {
                       onDrop={handleZoneDrop}
                       dragTaskId={taskDrag?.sourceTaskId ?? null}
                       boardPath={boardPath}
-                      firstTodoTaskId={firstTodoTaskId}
                       leftColumnTaskMonikers={
                         prevColId
                           ? (columnTaskMonikers.get(prevColId) ?? [])

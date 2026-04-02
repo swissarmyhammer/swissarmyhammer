@@ -6,7 +6,9 @@ import { render, screen, fireEvent } from "@testing-library/react";
 // ---------------------------------------------------------------------------
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-const mockInvoke = vi.fn((..._args: any[]): Promise<any> => Promise.resolve("ok"));
+const mockInvoke = vi.fn(
+  (..._args: any[]): Promise<any> => Promise.resolve("ok"),
+);
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: (...args: any[]) => mockInvoke(...args),
 }));
@@ -75,7 +77,6 @@ const unknownAttachment: AttachmentMeta = {
   path: "/path/to/.kanban/tasks/.attachments/att-3-data.bin",
 };
 
-
 // ---------------------------------------------------------------------------
 // formatFileSize
 // ---------------------------------------------------------------------------
@@ -142,13 +143,21 @@ describe("getFileIcon", () => {
   });
 
   it("returns FileSpreadsheet for spreadsheet extensions", () => {
-    expect(getFileIcon("application/octet-stream", "data.csv")).toBe(FileSpreadsheet);
-    expect(getFileIcon("application/vnd.ms-excel", "report.xlsx")).toBe(FileSpreadsheet);
+    expect(getFileIcon("application/octet-stream", "data.csv")).toBe(
+      FileSpreadsheet,
+    );
+    expect(getFileIcon("application/vnd.ms-excel", "report.xlsx")).toBe(
+      FileSpreadsheet,
+    );
   });
 
   it("returns FileArchive for archive extensions", () => {
-    expect(getFileIcon("application/octet-stream", "backup.zip")).toBe(FileArchive);
-    expect(getFileIcon("application/octet-stream", "archive.tar")).toBe(FileArchive);
+    expect(getFileIcon("application/octet-stream", "backup.zip")).toBe(
+      FileArchive,
+    );
+    expect(getFileIcon("application/octet-stream", "archive.tar")).toBe(
+      FileArchive,
+    );
   });
 
   it("returns File for unknown types", () => {
@@ -168,14 +177,18 @@ describe("AttachmentItem", () => {
   });
 
   it("has cursor-pointer class for interactivity", () => {
-    const { container } = render(<AttachmentItem attachment={imageAttachment} />);
+    const { container } = render(
+      <AttachmentItem attachment={imageAttachment} />,
+    );
     const item = container.firstElementChild;
     expect(item?.className).toContain("cursor-pointer");
   });
 
   it("calls dispatch_command on double-click", async () => {
     mockInvoke.mockClear();
-    const { container } = render(<AttachmentItem attachment={imageAttachment} />);
+    const { container } = render(
+      <AttachmentItem attachment={imageAttachment} />,
+    );
     fireEvent.doubleClick(container.firstElementChild!);
     // backendDispatch calls invoke("dispatch_command", ...) asynchronously
     await vi.waitFor(() => {
@@ -195,19 +208,34 @@ describe("AttachmentItem", () => {
     mockInvoke.mockImplementation((cmd: any) => {
       if (cmd === "list_commands_for_scope") {
         return Promise.resolve([
-          { id: "attachment.open", name: "Open", target: imageAttachment.path, group: "attachment" },
-          { id: "attachment.reveal", name: "Show in Finder", target: imageAttachment.path, group: "attachment" },
+          {
+            id: "attachment.open",
+            name: "Open",
+            target: imageAttachment.path,
+            group: "attachment",
+          },
+          {
+            id: "attachment.reveal",
+            name: "Show in Finder",
+            target: imageAttachment.path,
+            group: "attachment",
+          },
         ]);
       }
       return Promise.resolve("ok");
     });
-    const { container } = render(<AttachmentItem attachment={imageAttachment} />);
+    const { container } = render(
+      <AttachmentItem attachment={imageAttachment} />,
+    );
     fireEvent.contextMenu(container.firstElementChild!);
     await vi.waitFor(() => {
       expect(mockInvoke).toHaveBeenCalledWith("show_context_menu", {
         items: [
           { id: `attachment.open:${imageAttachment.path}`, name: "Open" },
-          { id: `attachment.reveal:${imageAttachment.path}`, name: "Show in Finder" },
+          {
+            id: `attachment.reveal:${imageAttachment.path}`,
+            name: "Show in Finder",
+          },
         ],
       });
     });
@@ -222,23 +250,32 @@ describe("AttachmentItem", () => {
 
 describe("AttachmentDisplay", () => {
   it("renders a single attachment", () => {
-    render(<AttachmentDisplay value={imageAttachment} mode="full" />, { wrapper: Wrapper });
+    render(<AttachmentDisplay value={imageAttachment} mode="full" />, {
+      wrapper: Wrapper,
+    });
     expect(screen.getByText("screenshot.png")).toBeTruthy();
     expect(screen.getByText("12.1 KB")).toBeTruthy();
   });
 
   it("renders empty state in full mode with drop hint", () => {
-    render(<AttachmentDisplay value={null} mode="full" />, { wrapper: Wrapper });
+    render(<AttachmentDisplay value={null} mode="full" />, {
+      wrapper: Wrapper,
+    });
     expect(screen.getByText("Drop file here")).toBeTruthy();
   });
 
   it("renders dash in compact mode for empty", () => {
-    render(<AttachmentDisplay value={null} mode="compact" />, { wrapper: Wrapper });
+    render(<AttachmentDisplay value={null} mode="compact" />, {
+      wrapper: Wrapper,
+    });
     expect(screen.getByText("-")).toBeTruthy();
   });
 
   it("shows dashed border when empty", () => {
-    const { container } = render(<AttachmentDisplay value={null} mode="full" />, { wrapper: Wrapper });
+    const { container } = render(
+      <AttachmentDisplay value={null} mode="full" />,
+      { wrapper: Wrapper },
+    );
     const zone = container.querySelector(".border-dashed");
     expect(zone).toBeTruthy();
   });
@@ -247,7 +284,7 @@ describe("AttachmentDisplay", () => {
     const { container } = render(
       <FileDropProvider _testOverride={{ isDragging: true }}>
         <AttachmentDisplay value={null} mode="full" />
-      </FileDropProvider>
+      </FileDropProvider>,
     );
     const zone = container.querySelector(".border-primary\\/60");
     expect(zone).toBeTruthy();
@@ -261,7 +298,9 @@ describe("AttachmentDisplay", () => {
 describe("AttachmentListDisplay", () => {
   it("renders multiple attachments with filenames and sizes", () => {
     const attachments = [imageAttachment, codeAttachment, unknownAttachment];
-    render(<AttachmentListDisplay value={attachments} mode="full" />, { wrapper: Wrapper });
+    render(<AttachmentListDisplay value={attachments} mode="full" />, {
+      wrapper: Wrapper,
+    });
     expect(screen.getByText("screenshot.png")).toBeTruthy();
     expect(screen.getByText("12.1 KB")).toBeTruthy();
     expect(screen.getByText("main.rs")).toBeTruthy();
@@ -271,17 +310,23 @@ describe("AttachmentListDisplay", () => {
   });
 
   it("renders empty state in full mode with drop hint", () => {
-    render(<AttachmentListDisplay value={[]} mode="full" />, { wrapper: Wrapper });
+    render(<AttachmentListDisplay value={[]} mode="full" />, {
+      wrapper: Wrapper,
+    });
     expect(screen.getByText("Drop files here")).toBeTruthy();
   });
 
   it("renders dash in compact mode for empty", () => {
-    render(<AttachmentListDisplay value={[]} mode="compact" />, { wrapper: Wrapper });
+    render(<AttachmentListDisplay value={[]} mode="compact" />, {
+      wrapper: Wrapper,
+    });
     expect(screen.getByText("-")).toBeTruthy();
   });
 
   it("handles non-array value gracefully", () => {
-    render(<AttachmentListDisplay value={null} mode="full" />, { wrapper: Wrapper });
+    render(<AttachmentListDisplay value={null} mode="full" />, {
+      wrapper: Wrapper,
+    });
     expect(screen.getByText("Drop files here")).toBeTruthy();
   });
 
@@ -289,7 +334,7 @@ describe("AttachmentListDisplay", () => {
     const { container } = render(
       <FileDropProvider _testOverride={{ isDragging: true }}>
         <AttachmentListDisplay value={[]} mode="full" />
-      </FileDropProvider>
+      </FileDropProvider>,
     );
     const zone = container.querySelector(".border-primary\\/60");
     expect(zone).toBeTruthy();

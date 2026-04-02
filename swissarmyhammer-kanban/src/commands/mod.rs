@@ -47,6 +47,10 @@ pub fn register_commands() -> HashMap<String, Arc<dyn Command>> {
     map.insert("task.add".into(), Arc::new(task_commands::AddTaskCmd));
     map.insert("task.move".into(), Arc::new(task_commands::MoveTaskCmd));
     map.insert("task.untag".into(), Arc::new(task_commands::UntagTaskCmd));
+    map.insert(
+        "task.doThisNext".into(),
+        Arc::new(task_commands::DoThisNextCmd),
+    );
     map.insert("task.delete".into(), Arc::new(task_commands::DeleteTaskCmd));
 
     // Clipboard commands
@@ -121,6 +125,10 @@ pub fn register_commands() -> HashMap<String, Arc<dyn Command>> {
     map.insert(
         "ui.view.set".into(),
         Arc::new(ui_commands::SetActiveViewCmd),
+    );
+    map.insert(
+        "ui.perspective.set".into(),
+        Arc::new(ui_commands::SetActivePerspectiveCmd),
     );
     map.insert("ui.setFocus".into(), Arc::new(ui_commands::SetFocusCmd));
 
@@ -250,13 +258,14 @@ mod tests {
     #[test]
     fn register_commands_returns_expected_count() {
         let cmds = register_commands();
-        // 4 task + 3 clipboard + 4 entity + 1 tag + 1 column + 7 UI
+        // 5 task (add, move, untag, doThisNext, delete) + 3 clipboard
+        // + 4 entity + 1 tag + 1 column + 8 UI
         // + 12 app (quit, about, help, command, palette, search,
         //          dismiss, undo, redo, keymap.vim, keymap.cua, keymap.emacs)
         // + 5 file (switchBoard, closeBoard, newBoard, openBoard, window.new)
-        // + 3 drag + 8 perspective + 2 attachment (open, reveal) = 50
+        // + 3 drag + 8 perspective + 2 attachment (open, reveal) = 52
         // Note: clipboard entries are duplicated in the source but HashMap deduplicates.
-        assert_eq!(cmds.len(), 50);
+        assert_eq!(cmds.len(), 52);
     }
 
     // =========================================================================
@@ -292,6 +301,22 @@ mod tests {
         let cmds = register_commands();
         let cmd = cmds.get("task.move").unwrap();
         let ctx = ctx_scope(&["column:todo"]);
+        assert!(!cmd.available(&ctx));
+    }
+
+    #[test]
+    fn do_this_next_available_with_task_in_scope() {
+        let cmds = register_commands();
+        let cmd = cmds.get("task.doThisNext").unwrap();
+        let ctx = ctx_scope(&["task:01ABC", "column:doing"]);
+        assert!(cmd.available(&ctx));
+    }
+
+    #[test]
+    fn do_this_next_not_available_without_task() {
+        let cmds = register_commands();
+        let cmd = cmds.get("task.doThisNext").unwrap();
+        let ctx = ctx_scope(&["column:doing"]);
         assert!(!cmd.available(&ctx));
     }
 

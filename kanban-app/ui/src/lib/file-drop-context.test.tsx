@@ -7,16 +7,21 @@ import type { ReactNode } from "react";
 // ---------------------------------------------------------------------------
 
 /** Captured callback from onDragDropEvent so tests can simulate events. */
-let dragDropCallback: ((event: { payload: { type: string; paths?: string[] } }) => void) | null =
-  null;
+let dragDropCallback:
+  | ((event: { payload: { type: string; paths?: string[] } }) => void)
+  | null = null;
 const mockUnlisten = vi.fn();
 
 vi.mock("@tauri-apps/api/webview", () => ({
   getCurrentWebview: () => ({
-    onDragDropEvent: vi.fn((cb: (event: { payload: { type: string; paths?: string[] } }) => void) => {
-      dragDropCallback = cb;
-      return Promise.resolve(mockUnlisten);
-    }),
+    onDragDropEvent: vi.fn(
+      (
+        cb: (event: { payload: { type: string; paths?: string[] } }) => void,
+      ) => {
+        dragDropCallback = cb;
+        return Promise.resolve(mockUnlisten);
+      },
+    ),
   }),
 }));
 

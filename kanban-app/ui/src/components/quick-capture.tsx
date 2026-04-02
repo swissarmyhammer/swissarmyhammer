@@ -161,7 +161,7 @@ export function QuickCapture() {
                 cmd: "file.switchBoard",
                 args: { path: active.path },
               });
-          },
+            },
           }).catch(() => {});
         }
       } catch (err) {

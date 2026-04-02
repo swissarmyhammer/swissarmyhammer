@@ -43,6 +43,8 @@ pub struct WindowState {
     pub inspector_stack: Vec<String>,
     /// The active view ID for this window (e.g. "board-view", "grid-view").
     pub active_view_id: String,
+    /// The active perspective ID for this window. Empty string means no perspective selected.
+    pub active_perspective_id: String,
     /// Whether the command palette is open in this window. Transient — not persisted.
     #[serde(skip)]
     pub palette_open: bool,
@@ -67,6 +69,7 @@ impl Default for WindowState {
             board_path: String::new(),
             inspector_stack: Vec::new(),
             active_view_id: String::new(),
+            active_perspective_id: String::new(),
             palette_open: false,
             palette_mode: "command".to_string(),
             x: None,
@@ -102,6 +105,8 @@ pub enum UIStateChange {
     InspectorStack(Vec<String>),
     /// The active view changed; carries the new view ID.
     ActiveView(String),
+    /// The active perspective changed; carries the new perspective ID.
+    ActivePerspective(String),
     /// The palette open/closed state changed.
     PaletteOpen(bool),
     /// The keymap mode changed (e.g. "cua", "vim", "emacs").
@@ -358,6 +363,24 @@ impl UIState {
             }
             ws.active_view_id = id.to_string();
             Some(UIStateChange::ActiveView(id.to_string()))
+        };
+        self.try_save();
+        change
+    }
+
+    /// Set the active perspective ID for a specific window.
+    ///
+    /// Returns `None` if the perspective ID is unchanged.
+    /// Auto-saves if a config path is configured.
+    pub fn set_active_perspective(&self, window_label: &str, id: &str) -> Option<UIStateChange> {
+        let change = {
+            let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+            let ws = inner.windows.entry(window_label.to_string()).or_default();
+            if ws.active_perspective_id == id {
+                return None;
+            }
+            ws.active_perspective_id = id.to_string();
+            Some(UIStateChange::ActivePerspective(id.to_string()))
         };
         self.try_save();
         change
@@ -779,6 +802,19 @@ impl UIState {
             .windows
             .get(window_label)
             .map(|ws| ws.active_view_id.clone())
+            .unwrap_or_default()
+    }
+
+    /// Get the active perspective ID for a specific window.
+    ///
+    /// Returns an empty string if the window has no active perspective set.
+    pub fn active_perspective_id(&self, window_label: &str) -> String {
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .windows
+            .get(window_label)
+            .map(|ws| ws.active_perspective_id.clone())
             .unwrap_or_default()
     }
 

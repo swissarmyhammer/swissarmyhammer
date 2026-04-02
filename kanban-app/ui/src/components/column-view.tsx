@@ -15,7 +15,6 @@ import {
   useEntityFocus,
   type ClaimPredicate,
 } from "@/lib/entity-focus-context";
-import type { CommandDef } from "@/lib/command-scope";
 import type { Entity } from "@/types/kanban";
 import { getStr } from "@/types/kanban";
 
@@ -36,8 +35,6 @@ interface ColumnViewProps {
   boardPath?: string;
   /** Ref callback for the column container — used for cross-window hit-testing. */
   containerRef?: (el: HTMLDivElement | null) => void;
-  /** ID of the first task in the todo column — used for "Do This Next" command. */
-  firstTodoTaskId?: string | null;
   /**
    * Task monikers in the column to the left (in order), or empty array.
    * Used to compute nav.right claimWhen predicates for cross-column navigation.
@@ -93,7 +90,6 @@ export const ColumnView = memo(function ColumnView({
   dragTaskId,
   boardPath,
   containerRef: containerRefProp,
-  firstTodoTaskId,
   leftColumnTaskMonikers = [],
   leftColumnHeaderMoniker = null,
   rightColumnTaskMonikers = [],
@@ -166,39 +162,6 @@ export const ColumnView = memo(function ColumnView({
       ),
     [tasks, column.id, boardPath],
   );
-
-  /** Build a "Do This Next" command for a task, or null if the task is already first in todo. */
-  const buildDoThisNextCommand = useCallback(
-    (taskId: string): CommandDef | null => {
-      // Don't show if task is already the first item in todo
-      if (taskId === firstTodoTaskId) return null;
-      return {
-        id: "task.doThisNext",
-        name: "Do This Next",
-        contextMenu: true,
-        execute: () => {
-          const args: Record<string, unknown> = { id: taskId, column: "todo" };
-          if (firstTodoTaskId) args.before_id = firstTodoTaskId;
-          backendDispatch({
-            cmd: "task.move",
-            args,
-            ...(boardPath ? { boardPath } : {}),
-          }).catch(console.error);
-        },
-      };
-    },
-    [firstTodoTaskId, boardPath],
-  );
-
-  /** Memoized extra commands per task — includes "Do This Next" when applicable. */
-  const taskExtraCommands = useMemo(() => {
-    const map = new Map<string, CommandDef[]>();
-    for (const task of tasks) {
-      const cmd = buildDoThisNextCommand(task.id);
-      if (cmd) map.set(task.id, [cmd]);
-    }
-    return map;
-  }, [tasks, buildDoThisNextCommand]);
 
   // --- Compute claimWhen predicates for header and each card ---
 
@@ -483,7 +446,6 @@ export const ColumnView = memo(function ColumnView({
           onZoneDrop={handleZoneDrop}
           onTaskDragStart={onTaskDragStart}
           onTaskDragEnd={onTaskDragEnd}
-          taskExtraCommands={taskExtraCommands}
           cardClaimPredicates={cardClaimPredicates}
           containerRef={setContainerRef}
           onDragOver={handleContainerDragOver}
@@ -504,7 +466,6 @@ interface VirtualizedCardListProps {
   onZoneDrop: (descriptor: DropZoneDescriptor, taskData: string) => void;
   onTaskDragStart?: (entity: Entity) => void;
   onTaskDragEnd?: (entity: Entity, dropEffect: string) => void;
-  taskExtraCommands: Map<string, CommandDef[]>;
   cardClaimPredicates: ClaimPredicate[][];
   containerRef: (el: HTMLDivElement | null) => void;
   onDragOver: (e: React.DragEvent) => void;
@@ -525,7 +486,6 @@ const VirtualizedCardList = memo(function VirtualizedCardList({
   onZoneDrop,
   onTaskDragStart,
   onTaskDragEnd,
-  taskExtraCommands,
   cardClaimPredicates,
   containerRef: containerRefProp,
   onDragOver,
@@ -574,7 +534,6 @@ const VirtualizedCardList = memo(function VirtualizedCardList({
                 entity={entity}
                 onDragStart={onTaskDragStart}
                 onDragEnd={onTaskDragEnd}
-                extraCommands={taskExtraCommands.get(entity.id)}
                 claimWhen={cardClaimPredicates[i]}
               />
             </div>
@@ -598,7 +557,6 @@ const VirtualizedCardList = memo(function VirtualizedCardList({
       onZoneDrop={onZoneDrop}
       onTaskDragStart={onTaskDragStart}
       onTaskDragEnd={onTaskDragEnd}
-      taskExtraCommands={taskExtraCommands}
       cardClaimPredicates={cardClaimPredicates}
       scrollRef={scrollRef}
       setRef={setRef}
@@ -616,7 +574,6 @@ function VirtualColumn({
   onZoneDrop,
   onTaskDragStart,
   onTaskDragEnd,
-  taskExtraCommands,
   cardClaimPredicates,
   scrollRef,
   setRef,
@@ -629,7 +586,6 @@ function VirtualColumn({
   onZoneDrop: (descriptor: DropZoneDescriptor, taskData: string) => void;
   onTaskDragStart?: (entity: Entity) => void;
   onTaskDragEnd?: (entity: Entity, dropEffect: string) => void;
-  taskExtraCommands: Map<string, CommandDef[]>;
   cardClaimPredicates: ClaimPredicate[][];
   scrollRef: React.RefObject<HTMLDivElement | null>;
   setRef: (el: HTMLDivElement | null) => void;
@@ -705,7 +661,6 @@ function VirtualColumn({
                   entity={entity}
                   onDragStart={onTaskDragStart}
                   onDragEnd={onTaskDragEnd}
-                  extraCommands={taskExtraCommands.get(entity.id)}
                   claimWhen={cardClaimPredicates[index]}
                 />
               </div>

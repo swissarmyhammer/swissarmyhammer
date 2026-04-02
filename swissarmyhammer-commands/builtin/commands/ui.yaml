@@ -33,6 +33,13 @@
     - name: view_id
       from: args
 
+- id: ui.perspective.set
+  name: Switch Perspective
+  visible: false
+  params:
+    - name: perspective_id
+      from: args
+
 - id: ui.setFocus
   name: Set Focus
   visible: false

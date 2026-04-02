@@ -1547,4 +1547,45 @@ mod tests {
             "no window commands without dynamic sources"
         );
     }
+
+    // =========================================================================
+    // Perspective scope
+    // =========================================================================
+
+    #[test]
+    fn perspective_scope_has_filter_and_group_commands() {
+        let (registry, impls, fields, ui) = setup();
+        let scope = vec!["perspective:01ABC".into(), "board:my-board".into()];
+        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
+        let ids: Vec<&str> = cmds.iter().map(|c| c.id.as_str()).collect();
+
+        assert!(
+            ids.contains(&"perspective.filter"),
+            "perspective scope should have perspective.filter: {:?}",
+            ids
+        );
+        assert!(
+            ids.contains(&"perspective.group"),
+            "perspective scope should have perspective.group: {:?}",
+            ids
+        );
+    }
+
+    #[test]
+    fn perspective_commands_not_available_without_perspective_in_scope() {
+        let (registry, impls, fields, ui) = setup();
+        let scope = vec![
+            "task:01X".into(),
+            "column:todo".into(),
+            "board:my-board".into(),
+        ];
+        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
+        let ids: Vec<&str> = cmds.iter().map(|c| c.id.as_str()).collect();
+
+        assert!(
+            !ids.contains(&"perspective.filter"),
+            "perspective.filter should NOT appear without perspective in scope: {:?}",
+            ids
+        );
+    }
 }

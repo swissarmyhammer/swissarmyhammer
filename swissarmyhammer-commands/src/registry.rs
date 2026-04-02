@@ -415,13 +415,13 @@ mod tests {
         //         column.reorder, attachment.delete,
         //         entity.copy, entity.cut, entity.paste = 14
         // ui: inspect, inspector.close, inspector.close_all, palette.open,
-        //     palette.close, view.set, setFocus, window.new = 8
+        //     palette.close, view.set, perspective.set, setFocus, window.new = 9
         // settings: keymap.vim, keymap.cua, keymap.emacs = 3
         // file: switchBoard, closeBoard, newBoard, openBoard = 4
         // drag: start, cancel, complete = 3
         // perspective: load, save, delete, filter, clearFilter, group, clearGroup, list = 8
         // attachment: open, reveal = 2
-        assert_eq!(registry.all_commands().len(), 51);
+        assert_eq!(registry.all_commands().len(), 52);
 
         // Spot checks
         assert!(registry.get("app.quit").is_some());

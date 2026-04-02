@@ -171,6 +171,30 @@ impl Command for SetFocusCmd {
     }
 }
 
+/// Set the active perspective by ID.
+///
+/// Always available. Required arg: `perspective_id`.
+pub struct SetActivePerspectiveCmd;
+
+#[async_trait]
+impl Command for SetActivePerspectiveCmd {
+    fn available(&self, _ctx: &CommandContext) -> bool {
+        true
+    }
+
+    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+        let ui = ctx
+            .ui_state
+            .as_ref()
+            .ok_or_else(|| CommandError::ExecutionFailed("UIState not available".into()))?;
+
+        let perspective_id = ctx.require_arg_str("perspective_id")?;
+        let window_label = ctx.window_label_from_scope().unwrap_or("main");
+        let change = ui.set_active_perspective(window_label, perspective_id);
+        Ok(serde_json::to_value(change).unwrap_or(Value::Null))
+    }
+}
+
 /// Set the active view by ID.
 ///
 /// Always available. Required arg: `view_id`.

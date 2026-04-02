@@ -148,13 +148,13 @@ impl Command for DeletePerspectiveCmd {
 
 /// Set the filter on an active perspective.
 ///
-/// Requires `perspective_id` and `filter` args.
+/// Available when a `perspective` moniker is in the scope chain.
 pub struct SetFilterCmd;
 
 #[async_trait]
 impl Command for SetFilterCmd {
     fn available(&self, ctx: &CommandContext) -> bool {
-        ctx.arg("perspective_id").and_then(|v| v.as_str()).is_some()
+        ctx.has_in_scope("perspective")
     }
 
     async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
@@ -177,13 +177,13 @@ impl Command for SetFilterCmd {
 
 /// Clear the filter on an active perspective.
 ///
-/// Requires `perspective_id` arg.
+/// Available when a `perspective` moniker is in the scope chain.
 pub struct ClearFilterCmd;
 
 #[async_trait]
 impl Command for ClearFilterCmd {
     fn available(&self, ctx: &CommandContext) -> bool {
-        ctx.arg("perspective_id").and_then(|v| v.as_str()).is_some()
+        ctx.has_in_scope("perspective")
     }
 
     async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
@@ -201,13 +201,13 @@ impl Command for ClearFilterCmd {
 
 /// Set the group on an active perspective.
 ///
-/// Requires `perspective_id` and `group` args.
+/// Available when a `perspective` moniker is in the scope chain.
 pub struct SetGroupCmd;
 
 #[async_trait]
 impl Command for SetGroupCmd {
     fn available(&self, ctx: &CommandContext) -> bool {
-        ctx.arg("perspective_id").and_then(|v| v.as_str()).is_some()
+        ctx.has_in_scope("perspective")
     }
 
     async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
@@ -230,13 +230,13 @@ impl Command for SetGroupCmd {
 
 /// Clear the group on an active perspective.
 ///
-/// Requires `perspective_id` arg.
+/// Available when a `perspective` moniker is in the scope chain.
 pub struct ClearGroupCmd;
 
 #[async_trait]
 impl Command for ClearGroupCmd {
     fn available(&self, ctx: &CommandContext) -> bool {
-        ctx.arg("perspective_id").and_then(|v| v.as_str()).is_some()
+        ctx.has_in_scope("perspective")
     }
 
     async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {

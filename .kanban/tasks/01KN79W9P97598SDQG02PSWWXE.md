@@ -4,45 +4,53 @@ assignees:
 depends_on:
 - 01KN79NWWHY3FZ6GMJXR6Q6C2S
 position_column: todo
-position_ordinal: 9c80
-title: 4. Add perspective commands to scope chain — perspectives are Commandable like entities
+position_ordinal: '9e80'
+title: 4. Add perspective commands to scope chain
 ---
 ## What
 
-Perspectives and views need to participate in the command scope chain just like entities do. The good news: the command system is already generic — monikers, scope resolution, dispatch, context menus all work with arbitrary `type:id` strings. No core command system changes needed.
+Add perspective commands to the scope chain so they appear in the command palette and context menus when a perspective is active.
 
-What's missing: perspective commands aren't in the scope chain because perspectives don't generate monikers in the UI yet, and the backend schema doesn't define perspective-level commands.
+## CRITICAL: Perspective is NOT an entity
 
-### What's already generic (no changes needed)
-- `moniker.ts` — `moniker(type, id)` works for any type
-- `command-scope.tsx` — generic scope chain + shadowing
-- `entity-commands.ts` — `useEntityCommands(entityType, entityId)` works for any type
-- `focus-scope.tsx` — generic moniker handling
-- `context-menu.ts` — generic command dedup
-- `scope_commands.rs` — `commands_for_scope()` works with any entity type from schema
-- `commands.rs` dispatch — fully generic
+**Do NOT create a perspective entity YAML.** Do NOT add perspective to `builtin/fields/entities/`. Do NOT touch entity count assertions in `defaults.rs` or `context.rs`. Perspectives are managed by `PerspectiveContext` / `swissarmyhammer_perspectives` — a completely separate system from the entity/fields system.
 
-### What needs to happen
-1. **Rename `useEntityCommands` to `useCommands`** — or alias it. The function already works for any type, but the name implies entity-only. This is a naming/clarity change, not a logic change.
-   - `kanban-app/ui/src/lib/entity-commands.ts` → rename exports
-   - Update callers (board-view.tsx, grid-view.tsx, entity-inspector.tsx)
+## How the scope chain already works
 
-2. **PerspectiveProvider generates a perspective moniker in scope chain** — when rendering the active perspective tab bar (future card), wrap content in `<CommandScopeProvider moniker={moniker("perspective", perspectiveId)}>`. This puts `perspective:{id}` in the scope chain.
+Read `swissarmyhammer-kanban/src/scope_commands.rs` before writing any code. The relevant path:
 
-3. **Backend: perspective commands resolve from scope chain** — the existing `perspective.filter`, `perspective.sort.set`, etc. commands already exist in the YAML. They need `scope: "entity:perspective"` (or equivalent) so `commands_for_scope()` includes them when a perspective moniker is in the chain.
+- `commands_for_scope()` Pass 2 calls `registry.available_commands(scope_chain)`
+- That calls `scope_matches(def.scope, scope_chain)` in `registry.rs`
+- `scope_matches` with `Some("entity:perspective")` will match if **any moniker in the chain** has type `"perspective"` — it uses `parse_moniker()` which works on any `type:id` string
+- No entity YAML, no entity registration, no Rust changes needed for scope matching to work
 
-### Files to modify
-- `kanban-app/ui/src/lib/entity-commands.ts` — rename `useEntityCommands` → `useCommands` (keep old name as alias for backwards compat)
-- `swissarmyhammer-commands/builtin/commands/perspective.yaml` — add `scope` field to perspective commands so they appear in context menus when perspective is in scope
+## What actually needs to happen
+
+### 1. Backend — add `scope` to perspective commands
+
+In `swissarmyhammer-commands/builtin/commands/perspective.yaml`, add `scope: "entity:perspective"` and `context_menu: true` to the perspective commands (`perspective.filter`, `perspective.clearFilter`, `perspective.group`, `perspective.clearGroup`). This makes them appear when `perspective:{id}` is in the scope chain. No Rust changes needed — `scope_matches` already handles this.
+
+### 2. Frontend — alias `useEntityCommands` as `useCommands`
+
+In `kanban-app/ui/src/lib/entity-commands.ts`, export `useCommands` as an alias for `useEntityCommands`. The function already works for any type string. This is a naming clarity change only — do NOT change any logic, do NOT remove `useEntityCommands`.
+
+### 3. Frontend — test that `useCommands` works for perspective type
+
+## Files to modify
+- `swissarmyhammer-commands/builtin/commands/perspective.yaml` — add `scope` + `context_menu` fields
+- `kanban-app/ui/src/lib/entity-commands.ts` — add `useCommands` alias
 
 ## Acceptance Criteria
-- [ ] `useCommands()` hook available (alias or rename of `useEntityCommands`)
-- [ ] Perspective commands appear in command palette when perspective moniker is in scope chain
-- [ ] Perspective commands appear in context menu on right-click within a perspective scope
-- [ ] Existing entity commands unaffected
+- [ ] `useCommands()` hook exported (alias of `useEntityCommands`)
+- [ ] Perspective commands have `scope: "entity:perspective"` in YAML
+- [ ] Rust test: perspective commands appear when `perspective:01ABC` is in scope chain
+- [ ] Rust test: perspective commands absent when no perspective in scope
+- [ ] Frontend test: `useCommands("perspective", id)` works
+- [ ] Entity count assertions in `defaults.rs` and `context.rs` stay at 7 (unchanged)
+- [ ] All existing tests pass
 
 ## Tests
 - [ ] `kanban-app/ui/src/lib/entity-commands.test.ts` — verify `useCommands` works for perspective type
-- [ ] `swissarmyhammer-kanban/src/scope_commands.rs` — test: perspective commands available when `"perspective:01ABC"` is in scope
+- [ ] `swissarmyhammer-kanban/src/scope_commands.rs` — test: perspective commands available when `perspective:01ABC` is in scope
 - [ ] `cargo nextest run -E 'rdeps(swissarmyhammer-kanban)'` — all pass
 - [ ] `pnpm test` from `kanban-app/ui/` — all pass

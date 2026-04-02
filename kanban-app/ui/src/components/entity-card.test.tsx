@@ -267,9 +267,7 @@ describe("EntityCard", () => {
     );
     expect(ctxCall).toBeTruthy();
     const items = ctxCall![1].items as { id: string; name: string }[];
-    expect(
-      items.find((i) => i.id === "ui.inspect:task:task-1"),
-    ).toBeTruthy();
+    expect(items.find((i) => i.id === "ui.inspect:task:task-1")).toBeTruthy();
   });
 
   it("clicking card body does not trigger inspect", async () => {

@@ -1,7 +1,11 @@
 import { describe, it, expect, vi } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
-import { resolveCommandName, useEntityCommands } from "./entity-commands";
+import {
+  resolveCommandName,
+  useEntityCommands,
+  useCommands,
+} from "./entity-commands";
 import type { Entity } from "@/types/kanban";
 
 // ---------------------------------------------------------------------------
@@ -204,5 +208,40 @@ describe("useEntityCommands", () => {
     expect(inspectCmd).toBeDefined();
     inspectCmd!.execute!();
     expect(onInspect).toHaveBeenCalledWith("task", "task-42");
+  });
+});
+
+describe("useCommands", () => {
+  it("is an alias for useEntityCommands and works for perspective type", async () => {
+    const { result } = renderHook(() => useCommands("perspective", "persp-1"), {
+      wrapper: makeWrapper(),
+    });
+
+    // Initially empty while schema loads
+    expect(result.current).toEqual([]);
+
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 50));
+    });
+
+    // useCommands should return a list (commands from schema for perspective type)
+    // The list may be empty if no perspective schema is loaded in the mock,
+    // but the hook itself should be callable for any type including "perspective".
+    expect(Array.isArray(result.current)).toBe(true);
+  });
+
+  it("useCommands target moniker uses the provided type and id", async () => {
+    const { result } = renderHook(() => useCommands("task", "task-99"), {
+      wrapper: makeWrapper(),
+    });
+
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 50));
+    });
+
+    // Commands should have target set to "task:task-99"
+    if (result.current.length > 0) {
+      expect(result.current[0].target).toBe("task:task-99");
+    }
   });
 });

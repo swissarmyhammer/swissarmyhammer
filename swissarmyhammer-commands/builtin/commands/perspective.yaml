@@ -23,7 +23,9 @@
 
 - id: perspective.filter
   name: Set Filter
+  scope: "entity:perspective"
   undoable: true
+  context_menu: true
   params:
     - name: filter
       from: args
@@ -33,7 +35,9 @@
 
 - id: perspective.clearFilter
   name: Clear Filter
+  scope: "entity:perspective"
   undoable: true
+  context_menu: true
   params:
     - name: perspective_id
       from: args
@@ -41,7 +45,9 @@
 
 - id: perspective.group
   name: Set Group
+  scope: "entity:perspective"
   undoable: true
+  context_menu: true
   params:
     - name: group
       from: args
@@ -51,7 +57,9 @@
 
 - id: perspective.clearGroup
   name: Clear Group
+  scope: "entity:perspective"
   undoable: true
+  context_menu: true
   params:
     - name: perspective_id
       from: args

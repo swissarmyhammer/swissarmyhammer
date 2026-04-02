@@ -29,6 +29,7 @@ import { GridView } from "@/components/grid-view";
 import { InspectorFocusBridge } from "@/components/inspector-focus-bridge";
 import { SlidePanel } from "@/components/slide-panel";
 import { ViewsProvider, useViews } from "@/lib/views-context";
+import { PerspectiveProvider } from "@/lib/perspective-context";
 import {
   CommandScopeProvider,
   ActiveBoardPathProvider,
@@ -308,9 +309,7 @@ function App() {
           return;
         }
         if (entity_type === "column" || entity_type === "swimlane") {
-          console.warn(
-            `[entity-created] structural type → full refresh`,
-          );
+          console.warn(`[entity-created] structural type → full refresh`);
           refresh();
           return;
         }
@@ -353,9 +352,7 @@ function App() {
           activeBoardPathRef.current &&
           board_path !== activeBoardPathRef.current
         ) {
-          console.warn(
-            `[entity-removed] SKIPPED: board_path mismatch`,
-          );
+          console.warn(`[entity-removed] SKIPPED: board_path mismatch`);
           return;
         }
         if (entity_type === "column" || entity_type === "swimlane") {
@@ -409,9 +406,7 @@ function App() {
               setBoard((prev) => (prev ? { ...prev, board: entity } : prev));
             } else if (entity_type === "column") {
               setBoard((prev) =>
-                prev
-                  ? { ...prev, columns: replaceById(prev.columns) }
-                  : prev,
+                prev ? { ...prev, columns: replaceById(prev.columns) } : prev,
               );
             } else if (entity_type === "swimlane") {
               setBoard((prev) =>
@@ -575,99 +570,105 @@ function App() {
                           onDismiss={dismissTopPanel}
                         >
                           <FileDropProvider>
-                          <AppShell
-                            openBoards={openBoards}
-                            onSwitchBoard={handleSwitchBoard}
-                          >
-                            <DragSessionProvider>
-                              <ViewsProvider>
-                                <ViewCommandScope>
-                                  <div className="h-screen bg-background text-foreground flex flex-col">
-                                    <NavBar
-                                      board={board}
-                                      openBoards={openBoards}
-                                      activeBoardPath={activeBoardPath}
-                                      onSwitchBoard={handleSwitchBoard}
-                                    />
-                                    {board && activeBoardPath ? (
-                                      <>
-                                        <div className="flex-1 flex min-h-0">
-                                          <LeftNav />
-                                          <div className="flex-1 min-w-0 overflow-hidden flex flex-col">
-                                            <ActiveViewRenderer
-                                              board={board}
-                                              tasks={entitiesByType.task ?? []}
-                                              boardPath={activeBoardPath}
-                                            />
-                                          </div>
-                                        </div>
-
-                                        {/* Backdrop — visible when any panel is open */}
-                                        <div
-                                          className={`fixed inset-0 z-20 bg-black/20 transition-opacity duration-200 ${
-                                            panelStack.length > 0
-                                              ? "opacity-100"
-                                              : "opacity-0 pointer-events-none"
-                                          }`}
-                                          onClick={() => {
-                                            dispatchCommand({
-                                              id: "ui.inspector.close_all",
-                                              name: "Close All Inspectors",
-                                              execute: closeAll,
-                                            });
-                                          }}
+                            <AppShell
+                              openBoards={openBoards}
+                              onSwitchBoard={handleSwitchBoard}
+                            >
+                              <DragSessionProvider>
+                                <ViewsProvider>
+                                  <PerspectiveProvider>
+                                    <ViewCommandScope>
+                                      <div className="h-screen bg-background text-foreground flex flex-col">
+                                        <NavBar
+                                          board={board}
+                                          openBoards={openBoards}
+                                          activeBoardPath={activeBoardPath}
+                                          onSwitchBoard={handleSwitchBoard}
                                         />
+                                        {board && activeBoardPath ? (
+                                          <>
+                                            <div className="flex-1 flex min-h-0">
+                                              <LeftNav />
+                                              <div className="flex-1 min-w-0 overflow-hidden flex flex-col">
+                                                <ActiveViewRenderer
+                                                  board={board}
+                                                  tasks={
+                                                    entitiesByType.task ?? []
+                                                  }
+                                                  boardPath={activeBoardPath}
+                                                />
+                                              </div>
+                                            </div>
 
-                                        {/* Render inspector panels from the stack */}
-                                        {panelStack.map((entry, index) => {
-                                          const rightOffset =
-                                            (panelStack.length - 1 - index) *
-                                            PANEL_WIDTH;
-                                          return (
-                                            <InspectorPanel
-                                              key={`${entry.entityType}-${entry.entityId}`}
-                                              entry={entry}
-                                              entityStore={entityStore}
-                                              board={board}
-                                              onClose={closeTopPanel}
-                                              style={{ right: rightOffset }}
+                                            {/* Backdrop — visible when any panel is open */}
+                                            <div
+                                              className={`fixed inset-0 z-20 bg-black/20 transition-opacity duration-200 ${
+                                                panelStack.length > 0
+                                                  ? "opacity-100"
+                                                  : "opacity-0 pointer-events-none"
+                                              }`}
+                                              onClick={() => {
+                                                dispatchCommand({
+                                                  id: "ui.inspector.close_all",
+                                                  name: "Close All Inspectors",
+                                                  execute: closeAll,
+                                                });
+                                              }}
                                             />
-                                          );
-                                        })}
-                                      </>
-                                    ) : loading ? (
-                                      <main className="flex-1 flex items-center justify-center">
-                                        <Loader2 className="h-8 w-8 text-muted-foreground/50 animate-spin [animation-delay:200ms] [animation-fill-mode:backwards]" />
-                                      </main>
-                                    ) : (
-                                      <main className="flex-1 flex items-center justify-center">
-                                        <div className="text-center space-y-3">
-                                          <p className="text-muted-foreground text-lg">
-                                            No board loaded
-                                          </p>
-                                          <div className="text-sm text-muted-foreground/70 space-y-1">
-                                            <p>
-                                              <kbd className="px-1.5 py-0.5 rounded bg-muted text-xs font-mono">
-                                                Cmd+N
-                                              </kbd>{" "}
-                                              New Board
-                                            </p>
-                                            <p>
-                                              <kbd className="px-1.5 py-0.5 rounded bg-muted text-xs font-mono">
-                                                Cmd+O
-                                              </kbd>{" "}
-                                              Open Board
-                                            </p>
-                                          </div>
-                                        </div>
-                                      </main>
-                                    )}
-                                    <ModeIndicator />
-                                  </div>
-                                </ViewCommandScope>
-                              </ViewsProvider>
-                            </DragSessionProvider>
-                          </AppShell>
+
+                                            {/* Render inspector panels from the stack */}
+                                            {panelStack.map((entry, index) => {
+                                              const rightOffset =
+                                                (panelStack.length -
+                                                  1 -
+                                                  index) *
+                                                PANEL_WIDTH;
+                                              return (
+                                                <InspectorPanel
+                                                  key={`${entry.entityType}-${entry.entityId}`}
+                                                  entry={entry}
+                                                  entityStore={entityStore}
+                                                  board={board}
+                                                  onClose={closeTopPanel}
+                                                  style={{ right: rightOffset }}
+                                                />
+                                              );
+                                            })}
+                                          </>
+                                        ) : loading ? (
+                                          <main className="flex-1 flex items-center justify-center">
+                                            <Loader2 className="h-8 w-8 text-muted-foreground/50 animate-spin [animation-delay:200ms] [animation-fill-mode:backwards]" />
+                                          </main>
+                                        ) : (
+                                          <main className="flex-1 flex items-center justify-center">
+                                            <div className="text-center space-y-3">
+                                              <p className="text-muted-foreground text-lg">
+                                                No board loaded
+                                              </p>
+                                              <div className="text-sm text-muted-foreground/70 space-y-1">
+                                                <p>
+                                                  <kbd className="px-1.5 py-0.5 rounded bg-muted text-xs font-mono">
+                                                    Cmd+N
+                                                  </kbd>{" "}
+                                                  New Board
+                                                </p>
+                                                <p>
+                                                  <kbd className="px-1.5 py-0.5 rounded bg-muted text-xs font-mono">
+                                                    Cmd+O
+                                                  </kbd>{" "}
+                                                  Open Board
+                                                </p>
+                                              </div>
+                                            </div>
+                                          </main>
+                                        )}
+                                        <ModeIndicator />
+                                      </div>
+                                    </ViewCommandScope>
+                                  </PerspectiveProvider>
+                                </ViewsProvider>
+                              </DragSessionProvider>
+                            </AppShell>
                           </FileDropProvider>
                         </InspectProvider>
                       </UndoProvider>

@@ -77,7 +77,13 @@ describe("FocusScope", () => {
 
   it("right-click sets entity focus and calls show_context_menu", async () => {
     mockListCommands([
-      { id: "entity.inspect", name: "Inspect", group: "entity", context_menu: true, available: true },
+      {
+        id: "entity.inspect",
+        name: "Inspect",
+        group: "entity",
+        context_menu: true,
+        available: true,
+      },
     ]);
     const execute = vi.fn();
     const { getByTestId, getByText } = renderWithFocus(
@@ -125,8 +131,20 @@ describe("FocusScope", () => {
   it("nested FocusScope: inner right-click stops propagation", async () => {
     // Backend returns both inner and outer commands (scope chain walks up on backend)
     mockListCommands([
-      { id: "inner.cmd", name: "Inner", group: "inner", context_menu: true, available: true },
-      { id: "outer.cmd", name: "Outer", group: "outer", context_menu: true, available: true },
+      {
+        id: "inner.cmd",
+        name: "Inner",
+        group: "inner",
+        context_menu: true,
+        available: true,
+      },
+      {
+        id: "outer.cmd",
+        name: "Outer",
+        group: "outer",
+        context_menu: true,
+        available: true,
+      },
     ]);
     const outerExec = vi.fn();
     const innerExec = vi.fn();
@@ -180,7 +198,13 @@ describe("FocusScope", () => {
   it("nested FocusScope: same command ID without target shadows — inner wins", async () => {
     // Backend handles shadowing: only inner command returned
     mockListCommands([
-      { id: "entity.inspect", name: "Inspect tag", group: "entity", context_menu: true, available: true },
+      {
+        id: "entity.inspect",
+        name: "Inspect tag",
+        group: "entity",
+        context_menu: true,
+        available: true,
+      },
     ]);
     const outerExec = vi.fn();
     const innerExec = vi.fn();
@@ -229,8 +253,22 @@ describe("FocusScope", () => {
   it("nested FocusScope: same command ID with different targets accumulates both", async () => {
     // Backend returns both commands with different targets
     mockListCommands([
-      { id: "entity.inspect", name: "Inspect tag", target: "tag:xyz", group: "entity", context_menu: true, available: true },
-      { id: "entity.inspect", name: "Inspect task", target: "task:abc", group: "entity", context_menu: true, available: true },
+      {
+        id: "entity.inspect",
+        name: "Inspect tag",
+        target: "tag:xyz",
+        group: "entity",
+        context_menu: true,
+        available: true,
+      },
+      {
+        id: "entity.inspect",
+        name: "Inspect task",
+        target: "task:abc",
+        group: "entity",
+        context_menu: true,
+        available: true,
+      },
     ]);
     const outerExec = vi.fn();
     const innerExec = vi.fn();
@@ -289,7 +327,14 @@ describe("FocusScope", () => {
   it("nested FocusScope: same command ID with same target shadows — inner wins", async () => {
     // Backend handles shadowing: only inner command returned
     mockListCommands([
-      { id: "entity.inspect", name: "Inspect task inner", target: "task:abc", group: "entity", context_menu: true, available: true },
+      {
+        id: "entity.inspect",
+        name: "Inspect task inner",
+        target: "task:abc",
+        group: "entity",
+        context_menu: true,
+        available: true,
+      },
     ]);
     const outerExec = vi.fn();
     const innerExec = vi.fn();
@@ -505,7 +550,13 @@ describe("FocusScope", () => {
 
   it("commands are provided to CommandScopeProvider", async () => {
     mockListCommands([
-      { id: "entity.inspect", name: "Inspect", group: "entity", context_menu: true, available: true },
+      {
+        id: "entity.inspect",
+        name: "Inspect",
+        group: "entity",
+        context_menu: true,
+        available: true,
+      },
     ]);
     const execute = vi.fn();
     const { getByText } = renderWithFocus(

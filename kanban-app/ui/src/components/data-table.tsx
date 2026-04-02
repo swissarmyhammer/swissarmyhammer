@@ -1,4 +1,11 @@
-import { useRef, useEffect, useCallback, useMemo, useState, useContext } from "react";
+import {
+  useRef,
+  useEffect,
+  useCallback,
+  useMemo,
+  useState,
+  useContext,
+} from "react";
 import { ArrowUp, ArrowDown, ChevronRight, ChevronDown } from "lucide-react";
 import {
   useReactTable,
@@ -22,7 +29,11 @@ import {
 } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
 import { useContextMenu } from "@/lib/context-menu";
-import { CommandScopeProvider, CommandScopeContext, type CommandDef } from "@/lib/command-scope";
+import {
+  CommandScopeProvider,
+  CommandScopeContext,
+  type CommandDef,
+} from "@/lib/command-scope";
 import { FocusScope } from "@/components/focus-scope";
 import { Field } from "@/components/fields/field";
 import type { UseGridReturn } from "@/hooks/use-grid";

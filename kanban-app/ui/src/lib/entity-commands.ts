@@ -94,6 +94,31 @@ export function buildEntityCommandDefs(
 }
 
 /**
+ * Build CommandDefs from schema commands for any type (entity, perspective, view, etc.).
+ *
+ * Generic alias for `useEntityCommands` that works for any type string —
+ * not just entity types. Reads the type's commands from the YAML-defined schema,
+ * resolves name templates, and wires up execute handlers.
+ *
+ * - `entity.inspect` → calls the inspect function from InspectContext
+ * - All other commands → dispatched to Rust via `dispatch_command`
+ *
+ * @param type - The type name (e.g. "task", "perspective", "view")
+ * @param id - The instance ID
+ * @param entity - Optional entity instance for template resolution
+ * @param extraCommands - Optional additional commands to append
+ * @returns Array of CommandDefs ready to pass to FocusScope or CommandScopeProvider
+ */
+export function useCommands(
+  type: string,
+  id: string,
+  entity?: Entity,
+  extraCommands?: CommandDef[],
+): CommandDef[] {
+  return useEntityCommands(type, id, entity, extraCommands);
+}
+
+/**
  * Build CommandDefs from entity schema commands.
  *
  * Reads the entity type's commands from the YAML-defined schema,

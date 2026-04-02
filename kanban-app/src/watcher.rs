@@ -1622,4 +1622,186 @@ mod tests {
             other => panic!("expected EntityCreated for perspective, got {:?}", other),
         }
     }
+
+    // =========================================================================
+    // Named integration tests required by acceptance criteria
+    // These test the full start_watching → external write → callback pipeline.
+    // =========================================================================
+
+    /// Integration test: external write to an existing entity file while
+    /// `start_watching` is running fires `EntityFieldChanged` with the correct
+    /// `changes` vec containing the modified field name and value.
+    #[tokio::test]
+    async fn test_start_watching_field_change_event() {
+        let (_tmp, kanban) = setup_kanban_dir();
+
+        let tag_path = kanban.join("tags/mytag.yaml");
+        std::fs::write(&tag_path, "tag_name: Original\ncolor: \"ff0000\"\n").unwrap();
+
+        let roots = store_roots(&kanban);
+        let cache = new_entity_cache(&kanban, &roots);
+        let events: Arc<Mutex<Vec<WatchEvent>>> = Arc::new(Mutex::new(Vec::new()));
+        let events_clone = events.clone();
+
+        let _watcher = start_watching(kanban.clone(), roots.clone(), cache.clone(), move |evt| {
+            events_clone.lock().unwrap().push(evt);
+        })
+        .expect("start_watching should succeed");
+
+        // Allow the watcher to initialize before writing
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        // External write: modify a single field
+        std::fs::write(&tag_path, "tag_name: Original\ncolor: \"00ff00\"\n").unwrap();
+
+        // Wait for the debounce to fire (debounce is 200ms, sleep 600ms)
+        tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+
+        let captured = events.lock().unwrap();
+        assert!(!captured.is_empty(), "watcher should have fired an event");
+        match &captured[0] {
+            WatchEvent::EntityFieldChanged {
+                entity_type,
+                id,
+                changes,
+                ..
+            } => {
+                assert_eq!(entity_type, "tag");
+                assert_eq!(id, "mytag");
+                assert!(
+                    changes.iter().any(|c| c.field == "color"),
+                    "changes should contain 'color', got: {:?}",
+                    changes.iter().map(|c| &c.field).collect::<Vec<_>>()
+                );
+                let color_change = changes.iter().find(|c| c.field == "color").unwrap();
+                assert_eq!(color_change.value, serde_json::json!("00ff00"));
+            }
+            other => panic!("expected EntityFieldChanged, got {:?}", other),
+        }
+    }
+
+    /// Integration test: creating a new YAML entity file while `start_watching`
+    /// is running fires `EntityCreated` with the correct entity type, id, and fields.
+    #[tokio::test]
+    async fn test_start_watching_creates_entity_event() {
+        let (_tmp, kanban) = setup_kanban_dir();
+
+        let roots = store_roots(&kanban);
+        let cache = new_entity_cache(&kanban, &roots);
+        let events: Arc<Mutex<Vec<WatchEvent>>> = Arc::new(Mutex::new(Vec::new()));
+        let events_clone = events.clone();
+
+        let _watcher = start_watching(kanban.clone(), roots.clone(), cache.clone(), move |evt| {
+            events_clone.lock().unwrap().push(evt);
+        })
+        .expect("start_watching should succeed");
+
+        // Allow the watcher to initialize before writing
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        // External write: create a brand-new entity file
+        std::fs::write(
+            kanban.join("tasks/new-task.md"),
+            "---\ntitle: New Task\nassignees: []\n---\nTask body\n",
+        )
+        .unwrap();
+
+        // Wait for the debounce to fire
+        tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+
+        let captured = events.lock().unwrap();
+        assert!(!captured.is_empty(), "watcher should have fired an event");
+        match &captured[0] {
+            WatchEvent::EntityCreated {
+                entity_type,
+                id,
+                fields,
+            } => {
+                assert_eq!(entity_type, "task");
+                assert_eq!(id, "new-task");
+                assert_eq!(fields.get("title").unwrap(), &serde_json::json!("New Task"));
+            }
+            other => panic!("expected EntityCreated, got {:?}", other),
+        }
+    }
+
+    /// Integration test: deleting an entity file while `start_watching` is
+    /// running fires `EntityRemoved` with the correct entity type and id.
+    #[tokio::test]
+    async fn test_start_watching_removes_entity_event() {
+        let (_tmp, kanban) = setup_kanban_dir();
+
+        let tag_path = kanban.join("tags/deleteme.yaml");
+        std::fs::write(&tag_path, "tag_name: deleteme\n").unwrap();
+
+        let roots = store_roots(&kanban);
+        let cache = new_entity_cache(&kanban, &roots);
+        let events: Arc<Mutex<Vec<WatchEvent>>> = Arc::new(Mutex::new(Vec::new()));
+        let events_clone = events.clone();
+
+        let _watcher = start_watching(kanban.clone(), roots.clone(), cache.clone(), move |evt| {
+            events_clone.lock().unwrap().push(evt);
+        })
+        .expect("start_watching should succeed");
+
+        // Allow the watcher to initialize before deleting
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        // External removal of the entity file
+        std::fs::remove_file(&tag_path).unwrap();
+
+        // Wait for the debounce to fire
+        tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+
+        let captured = events.lock().unwrap();
+        assert!(!captured.is_empty(), "watcher should have fired an event");
+        match &captured[0] {
+            WatchEvent::EntityRemoved { entity_type, id } => {
+                assert_eq!(entity_type, "tag");
+                assert_eq!(id, "deleteme");
+            }
+            other => panic!("expected EntityRemoved, got {:?}", other),
+        }
+    }
+
+    /// Integration test: writing a file through "our own" code path (update
+    /// cache first, before the debounce fires) does NOT trigger a watcher event.
+    ///
+    /// This verifies the full async suppression pipeline:
+    /// write file → update_cache → debounce fires → hash unchanged → no event.
+    #[tokio::test]
+    async fn test_start_watching_suppresses_own_writes() {
+        let (_tmp, kanban) = setup_kanban_dir();
+
+        let tag_path = kanban.join("tags/own-write.yaml");
+        std::fs::write(&tag_path, "tag_name: Original\n").unwrap();
+
+        let roots = store_roots(&kanban);
+        let cache = new_entity_cache(&kanban, &roots);
+        let event_count = Arc::new(AtomicUsize::new(0));
+        let count_clone = event_count.clone();
+
+        let _watcher = start_watching(kanban.clone(), roots.clone(), cache.clone(), move |_| {
+            count_clone.fetch_add(1, Ordering::SeqCst);
+        })
+        .expect("start_watching should succeed");
+
+        // Allow the watcher to initialize
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        // Simulate our own write: write the file and immediately update the
+        // cache. The debounce (200ms) hasn't fired yet, so when it does, the
+        // hash will match and no event will be emitted.
+        std::fs::write(&tag_path, "tag_name: Updated\n").unwrap();
+        update_cache(&cache, &tag_path);
+
+        // Wait longer than the debounce to confirm no event fires
+        tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+
+        assert_eq!(
+            event_count.load(Ordering::SeqCst),
+            0,
+            "watcher must NOT fire for writes that update the cache first"
+        );
+    }
 }

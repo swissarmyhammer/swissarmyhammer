@@ -43,6 +43,34 @@ export interface ViewDef {
 }
 
 // ---------------------------------------------------------------------------
+// Perspective definitions
+// ---------------------------------------------------------------------------
+
+export interface PerspectiveFieldEntry {
+  readonly field: string;
+  readonly caption?: string;
+  readonly width?: number;
+  readonly editor?: string;
+  readonly display?: string;
+  readonly sort_comparator?: string;
+}
+
+export interface PerspectiveSortEntry {
+  readonly field: string;
+  readonly direction: "asc" | "desc";
+}
+
+export interface PerspectiveDef {
+  readonly id: string;
+  readonly name: string;
+  readonly view: string;
+  readonly fields?: readonly PerspectiveFieldEntry[];
+  readonly filter?: string;
+  readonly group?: string;
+  readonly sort?: readonly PerspectiveSortEntry[];
+}
+
+// ---------------------------------------------------------------------------
 // Board types
 // ---------------------------------------------------------------------------
 
