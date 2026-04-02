@@ -71,6 +71,7 @@ fn main() {
             commands::list_views,
             commands::get_undo_state,
             commands::create_window,
+            commands::save_dropped_file,
         ])
         .setup(|app| {
             // Build native menu bar from the command registry.
