@@ -3958,6 +3958,7 @@ dependencies = [
  "swissarmyhammer-entity",
  "swissarmyhammer-entity-search",
  "swissarmyhammer-kanban",
+ "swissarmyhammer-perspectives",
  "swissarmyhammer-store",
  "swissarmyhammer-views",
  "tauri",
@@ -8390,10 +8391,11 @@ dependencies = [
 name = "swissarmyhammer-perspectives"
 version = "0.12.11"
 dependencies = [
- "chrono",
  "serde",
  "serde_json",
  "serde_yaml_ng",
+ "swissarmyhammer-common",
+ "swissarmyhammer-store",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",

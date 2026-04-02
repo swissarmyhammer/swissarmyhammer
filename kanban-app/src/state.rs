@@ -117,6 +117,17 @@ impl BoardHandle {
             }
         }
 
+        // Register perspective store for undo/redo changelog support.
+        {
+            let perspectives_dir = kanban_path.join("perspectives");
+            let perspective_store =
+                swissarmyhammer_perspectives::PerspectiveStore::new(&perspectives_dir);
+            let handle = std::sync::Arc::new(swissarmyhammer_store::StoreHandle::new(
+                std::sync::Arc::new(perspective_store),
+            ));
+            store_context.register(handle).await;
+        }
+
         // Migrate legacy ordinals to FractionalIndex format.
         // Reads all tasks, groups by column, sorts by existing ordinal string,
         // then assigns new FractionalIndex ordinals preserving that order.

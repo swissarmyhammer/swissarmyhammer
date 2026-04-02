@@ -6,11 +6,7 @@
 
 use serde_json::json;
 use swissarmyhammer_kanban::{
-    board::InitBoard,
-    dispatch::execute_operation,
-    parse::parse_input,
-    perspective::{PerspectiveChangeOp, PerspectiveChangelog},
-    Execute, KanbanContext,
+    board::InitBoard, dispatch::execute_operation, parse::parse_input, Execute, KanbanContext,
 };
 use tempfile::TempDir;
 
@@ -46,7 +42,7 @@ async fn dispatch(ctx: &KanbanContext, input: serde_json::Value) -> serde_json::
 /// `perspectives.jsonl` changelog contains the expected entries.
 #[tokio::test]
 async fn test_perspective_lifecycle_integration() {
-    let (temp, ctx) = setup().await;
+    let (_temp, ctx) = setup().await;
 
     // --- Add ---
     let added = dispatch(
@@ -134,64 +130,5 @@ async fn test_perspective_lifecycle_integration() {
     assert_eq!(
         listed_after["count"], 0,
         "after delete, count should be zero"
-    );
-
-    // --- Changelog verification ---
-    let changelog_path = temp.path().join(".kanban").join("perspectives.jsonl");
-    let changelog = PerspectiveChangelog::new(changelog_path);
-    let entries = changelog.read_all().await.unwrap();
-
-    // We expect 3 changelog entries: create, update, delete
-    assert_eq!(
-        entries.len(),
-        3,
-        "changelog should have exactly 3 entries (create, update, delete), got {}",
-        entries.len()
-    );
-
-    assert_eq!(entries[0].op, PerspectiveChangeOp::Create);
-    assert_eq!(entries[0].perspective_id, id);
-    assert!(
-        entries[0].previous.is_none(),
-        "create entry should have no previous"
-    );
-    assert!(
-        entries[0].current.is_some(),
-        "create entry should have current"
-    );
-    assert_eq!(entries[0].current.as_ref().unwrap()["name"], "Sprint Board");
-
-    assert_eq!(entries[1].op, PerspectiveChangeOp::Update);
-    assert_eq!(entries[1].perspective_id, id);
-    assert!(
-        entries[1].previous.is_some(),
-        "update entry should have previous"
-    );
-    assert!(
-        entries[1].current.is_some(),
-        "update entry should have current"
-    );
-    assert_eq!(
-        entries[1].previous.as_ref().unwrap()["name"],
-        "Sprint Board"
-    );
-    assert_eq!(
-        entries[1].current.as_ref().unwrap()["name"],
-        "Updated Sprint"
-    );
-
-    assert_eq!(entries[2].op, PerspectiveChangeOp::Delete);
-    assert_eq!(entries[2].perspective_id, id);
-    assert!(
-        entries[2].previous.is_some(),
-        "delete entry should have previous"
-    );
-    assert!(
-        entries[2].current.is_none(),
-        "delete entry should have no current"
-    );
-    assert_eq!(
-        entries[2].previous.as_ref().unwrap()["name"],
-        "Updated Sprint"
     );
 }

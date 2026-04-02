@@ -15,7 +15,8 @@ tokio = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 ulid = { workspace = true }
-chrono = { workspace = true }
+swissarmyhammer-store = { path = "../swissarmyhammer-store" }
+swissarmyhammer-common = { path = "../swissarmyhammer-common" }
 
 [dev-dependencies]
 tempfile = { workspace = true }

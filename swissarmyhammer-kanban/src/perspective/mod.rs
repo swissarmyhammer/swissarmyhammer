@@ -4,9 +4,9 @@
 //! plus optional filter/group functions and sort entries. Perspectives are
 //! stored as YAML and reference fields by ULID.
 //!
-//! Domain types (`Perspective`, `PerspectiveContext`, `PerspectiveChangelog`, etc.)
-//! are owned by the `swissarmyhammer-perspectives` crate and re-exported here
-//! so that downstream code can keep using `crate::perspective::*`.
+//! Domain types (`Perspective`, `PerspectiveContext`, etc.) are owned by the
+//! `swissarmyhammer-perspectives` crate and re-exported here so that
+//! downstream code can keep using `crate::perspective::*`.
 
 pub mod add;
 pub mod delete;
@@ -16,8 +16,8 @@ pub mod update;
 
 // Re-export domain types from the standalone perspectives crate
 pub use swissarmyhammer_perspectives::{
-    Perspective, PerspectiveChangeEntry, PerspectiveChangeOp, PerspectiveChangelog,
-    PerspectiveContext, PerspectiveError, PerspectiveFieldEntry, SortDirection, SortEntry,
+    Perspective, PerspectiveContext, PerspectiveError, PerspectiveFieldEntry, PerspectiveId,
+    PerspectiveStore, SortDirection, SortEntry,
 };
 
 pub use add::AddPerspective;

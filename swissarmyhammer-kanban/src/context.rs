@@ -15,7 +15,7 @@ use std::sync::Arc;
 use swissarmyhammer_entity::changelog::ChangeEntry;
 use swissarmyhammer_entity::{Entity, EntityContext};
 use swissarmyhammer_fields::{load_yaml_dir, DeriveRegistry, FieldsContext, ValidationEngine};
-use swissarmyhammer_perspectives::{PerspectiveChangelog, PerspectiveContext};
+use swissarmyhammer_perspectives::PerspectiveContext;
 use swissarmyhammer_views::{ViewsChangelog, ViewsContext};
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
@@ -39,8 +39,6 @@ pub struct KanbanContext {
     views_changelog: Option<ViewsChangelog>,
     /// Perspective registry — lazy-initialized on first access.
     perspectives: OnceCell<RwLock<PerspectiveContext>>,
-    /// Perspective changelog — lazy-initialized on first access.
-    perspectives_changelog: std::sync::OnceLock<PerspectiveChangelog>,
     /// Derive handlers for computed field read/write
     derive_registry: Arc<DeriveRegistry>,
 }
@@ -74,7 +72,6 @@ impl KanbanContext {
             views: None,
             views_changelog: None,
             perspectives: OnceCell::new(),
-            perspectives_changelog: std::sync::OnceLock::new(),
             derive_registry: Arc::new(crate::derive_handlers::kanban_derive_registry()),
         }
     }
@@ -107,12 +104,9 @@ impl KanbanContext {
         let perspectives_dir = root.join("perspectives");
         fs::create_dir_all(&perspectives_dir).await?;
         let perspectives = PerspectiveContext::open(&perspectives_dir).await?;
-        let perspectives_changelog = PerspectiveChangelog::new(root.join("perspectives.jsonl"));
 
         let persp_cell = OnceCell::new();
         persp_cell.set(RwLock::new(perspectives)).ok();
-        let persp_cl_cell = std::sync::OnceLock::new();
-        persp_cl_cell.set(perspectives_changelog).ok();
 
         let context_name = Self::derive_context_name(&root);
         Ok(Self {
@@ -123,7 +117,6 @@ impl KanbanContext {
             views: Some(RwLock::new(views)),
             views_changelog: Some(views_changelog),
             perspectives: persp_cell,
-            perspectives_changelog: persp_cl_cell,
             derive_registry: Arc::new(crate::derive_handlers::kanban_derive_registry()),
         })
     }
@@ -175,12 +168,6 @@ impl KanbanContext {
                 Ok::<RwLock<PerspectiveContext>, KanbanError>(RwLock::new(ctx))
             })
             .await
-    }
-
-    /// Access the perspective changelog, lazy-initializing on first call.
-    pub fn perspective_changelog(&self) -> &PerspectiveChangelog {
-        self.perspectives_changelog
-            .get_or_init(|| PerspectiveChangelog::new(self.root.join("perspectives.jsonl")))
     }
 
     // =========================================================================

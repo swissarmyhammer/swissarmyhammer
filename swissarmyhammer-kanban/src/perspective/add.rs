@@ -104,11 +104,6 @@ impl Execute<KanbanContext, KanbanError> for AddPerspective {
 
             pctx.write(&perspective).await?;
 
-            // Log to changelog
-            if let Err(e) = ctx.perspective_changelog().log_create(&perspective).await {
-                tracing::warn!(%e, "failed to log perspective create");
-            }
-
             Ok(perspective_to_json(&perspective))
         }
         .await;

@@ -7,6 +7,7 @@
 
 - id: perspective.save
   name: Save Perspective
+  undoable: true
   params:
     - name: name
       from: args
@@ -14,6 +15,7 @@
 
 - id: perspective.delete
   name: Delete Perspective
+  undoable: true
   params:
     - name: name
       from: args
@@ -21,6 +23,7 @@
 
 - id: perspective.filter
   name: Set Filter
+  undoable: true
   params:
     - name: filter
       from: args
@@ -30,6 +33,7 @@
 
 - id: perspective.clearFilter
   name: Clear Filter
+  undoable: true
   params:
     - name: perspective_id
       from: args
@@ -37,6 +41,7 @@
 
 - id: perspective.group
   name: Set Group
+  undoable: true
   params:
     - name: group
       from: args
@@ -46,6 +51,7 @@
 
 - id: perspective.clearGroup
   name: Clear Group
+  undoable: true
   params:
     - name: perspective_id
       from: args

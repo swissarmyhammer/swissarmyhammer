@@ -40,13 +40,8 @@ impl Execute<KanbanContext, KanbanError> for DeletePerspective {
             let pctx = ctx.perspective_context().await?;
             let mut pctx = pctx.write().await;
 
-            // Delete returns the removed perspective for changelog snapshot
+            // Delete returns the removed perspective
             let deleted = pctx.delete(&self.id).await?;
-
-            // Log to changelog
-            if let Err(e) = ctx.perspective_changelog().log_delete(&deleted).await {
-                tracing::warn!(%e, "failed to log perspective delete");
-            }
 
             Ok(serde_json::json!({
                 "deleted": true,

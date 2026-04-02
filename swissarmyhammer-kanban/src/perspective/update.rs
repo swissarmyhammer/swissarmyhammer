@@ -107,8 +107,6 @@ impl Execute<KanbanContext, KanbanError> for UpdatePerspective {
                 })?
                 .clone();
 
-            let previous = existing.clone();
-
             // If renaming, reject if the new name is taken by a different perspective
             if let Some(new_name) = &self.name {
                 if *new_name != existing.name {
@@ -138,15 +136,6 @@ impl Execute<KanbanContext, KanbanError> for UpdatePerspective {
             };
 
             pctx.write(&updated).await?;
-
-            // Log to changelog
-            if let Err(e) = ctx
-                .perspective_changelog()
-                .log_update(&self.id, &previous, &updated)
-                .await
-            {
-                tracing::warn!(%e, "failed to log perspective update");
-            }
 
             Ok(perspective_to_json(&updated))
         }
