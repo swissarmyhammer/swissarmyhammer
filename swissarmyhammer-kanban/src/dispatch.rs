@@ -1310,6 +1310,160 @@ mod tests {
         assert_eq!(result["tag"], "bug");
     }
 
+    /// Tag a task using the tag's slug name, verify `#bug` appears in body.
+    #[tokio::test]
+    async fn tag_with_slug() {
+        let (_temp, ctx) = setup().await;
+
+        // Create a tag and a task
+        let ops = parse_input(json!({"op": "add tag", "name": "bug"})).unwrap();
+        execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        let ops = parse_input(json!({"op": "add task", "title": "Slug tag test"})).unwrap();
+        let added = execute_operation(&ctx, &ops[0]).await.unwrap();
+        let task_id = added["id"].as_str().unwrap().to_string();
+
+        // Tag using the slug
+        let ops = parse_input(json!({"op": "tag task", "id": task_id, "tag": "bug"})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(result["tagged"], true);
+        assert_eq!(result["tag"], "bug");
+
+        // Verify description contains #bug (task_entity_to_json maps body → description)
+        let ops = parse_input(json!({"op": "get task", "id": task_id})).unwrap();
+        let task = execute_operation(&ctx, &ops[0]).await.unwrap();
+        let desc = task["description"].as_str().unwrap_or("");
+        assert!(
+            desc.contains("#bug"),
+            "description should contain #bug, got: {desc}"
+        );
+        // Also verify the computed tags array includes "bug"
+        let tags = task["tags"].as_array().unwrap();
+        assert!(
+            tags.iter().any(|t| t.as_str() == Some("bug")),
+            "tags array should include 'bug'"
+        );
+    }
+
+    /// Tag a task using the tag's entity ID (ULID), verify it resolves to the
+    /// slug and `#bug` appears in description.
+    #[tokio::test]
+    async fn tag_with_entity_id() {
+        let (_temp, ctx) = setup().await;
+
+        // Create a tag and capture its entity ID
+        let ops = parse_input(json!({"op": "add tag", "name": "bug"})).unwrap();
+        let tag_result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        let tag_entity_id = tag_result["id"].as_str().unwrap().to_string();
+
+        let ops = parse_input(json!({"op": "add task", "title": "Entity ID tag test"})).unwrap();
+        let added = execute_operation(&ctx, &ops[0]).await.unwrap();
+        let task_id = added["id"].as_str().unwrap().to_string();
+
+        // Tag using the entity ID instead of the slug
+        let ops =
+            parse_input(json!({"op": "tag task", "id": task_id, "tag": tag_entity_id})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(result["tagged"], true);
+        assert_eq!(result["tag"], "bug", "should resolve ULID to slug 'bug'");
+
+        // Verify description contains #bug (not the raw ULID)
+        let ops = parse_input(json!({"op": "get task", "id": task_id})).unwrap();
+        let task = execute_operation(&ctx, &ops[0]).await.unwrap();
+        let desc = task["description"].as_str().unwrap_or("");
+        assert!(
+            desc.contains("#bug"),
+            "description should contain #bug, got: {desc}"
+        );
+        assert!(
+            !desc.contains(&tag_entity_id),
+            "description should NOT contain raw entity ID"
+        );
+        let tags = task["tags"].as_array().unwrap();
+        assert!(
+            tags.iter().any(|t| t.as_str() == Some("bug")),
+            "tags array should include 'bug'"
+        );
+    }
+
+    /// Untag a task using the tag's slug name, verify `#bug` is removed from body.
+    #[tokio::test]
+    async fn untag_with_slug() {
+        let (_temp, ctx) = setup().await;
+
+        // Create tag + task, then tag the task
+        let ops = parse_input(json!({"op": "add tag", "name": "bug"})).unwrap();
+        execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        let ops = parse_input(json!({"op": "add task", "title": "Slug untag test"})).unwrap();
+        let added = execute_operation(&ctx, &ops[0]).await.unwrap();
+        let task_id = added["id"].as_str().unwrap().to_string();
+
+        let ops = parse_input(json!({"op": "tag task", "id": task_id, "tag": "bug"})).unwrap();
+        execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        // Untag using the slug
+        let ops = parse_input(json!({"op": "untag task", "id": task_id, "tag": "bug"})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(result["untagged"], true);
+        assert_eq!(result["tag"], "bug");
+
+        // Verify description no longer contains #bug
+        let ops = parse_input(json!({"op": "get task", "id": task_id})).unwrap();
+        let task = execute_operation(&ctx, &ops[0]).await.unwrap();
+        let desc = task["description"].as_str().unwrap_or("");
+        assert!(
+            !desc.contains("#bug"),
+            "description should NOT contain #bug after untag, got: {desc}"
+        );
+        let tags = task["tags"].as_array().unwrap();
+        assert!(
+            !tags.iter().any(|t| t.as_str() == Some("bug")),
+            "tags array should NOT include 'bug' after untag"
+        );
+    }
+
+    /// Untag a task using the tag's entity ID (ULID), verify it resolves to the
+    /// slug and `#bug` is removed from description.
+    #[tokio::test]
+    async fn untag_with_entity_id() {
+        let (_temp, ctx) = setup().await;
+
+        // Create a tag and capture its entity ID
+        let ops = parse_input(json!({"op": "add tag", "name": "bug"})).unwrap();
+        let tag_result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        let tag_entity_id = tag_result["id"].as_str().unwrap().to_string();
+
+        let ops = parse_input(json!({"op": "add task", "title": "Entity ID untag test"})).unwrap();
+        let added = execute_operation(&ctx, &ops[0]).await.unwrap();
+        let task_id = added["id"].as_str().unwrap().to_string();
+
+        // Tag using slug first so the description has #bug
+        let ops = parse_input(json!({"op": "tag task", "id": task_id, "tag": "bug"})).unwrap();
+        execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        // Untag using the entity ID instead of the slug
+        let ops =
+            parse_input(json!({"op": "untag task", "id": task_id, "tag": tag_entity_id})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(result["untagged"], true);
+        assert_eq!(result["tag"], "bug", "should resolve ULID to slug 'bug'");
+
+        // Verify description no longer contains #bug
+        let ops = parse_input(json!({"op": "get task", "id": task_id})).unwrap();
+        let task = execute_operation(&ctx, &ops[0]).await.unwrap();
+        let desc = task["description"].as_str().unwrap_or("");
+        assert!(
+            !desc.contains("#bug"),
+            "description should NOT contain #bug after untag, got: {desc}"
+        );
+        let tags = task["tags"].as_array().unwrap();
+        assert!(
+            !tags.iter().any(|t| t.as_str() == Some("bug")),
+            "tags array should NOT include 'bug' after untag"
+        );
+    }
+
     // ── Swimlane operations ───────────────────────────────────────────
 
     #[tokio::test]
