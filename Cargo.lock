@@ -3987,6 +3987,7 @@ dependencies = [
  "once_cell",
  "open",
  "serde_json",
+ "serde_yaml_ng",
  "swissarmyhammer-kanban",
  "swissarmyhammer-merge",
  "swissarmyhammer-operations",

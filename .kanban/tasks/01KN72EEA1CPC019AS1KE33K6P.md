@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: '8280'
+position_column: done
+position_ordinal: ffffffffffffffffca80
 title: 'Kanban CLI: output entities as YAML instead of JSON'
 ---
 ## What
