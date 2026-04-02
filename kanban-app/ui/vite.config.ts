@@ -4,6 +4,7 @@ import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { playwright } from "@vitest/browser-playwright";
 import path from "path";
+import * as integrationCommands from "./src/test/integration-commands.ts";
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
@@ -45,13 +46,7 @@ export default defineConfig({
           alias: { "@": path.resolve(__dirname, "./src") },
         },
         optimizeDeps: {
-          include: [
-            "vitest-browser-react",
-            "@tauri-apps/api/core",
-            "@tauri-apps/api/event",
-            "@tauri-apps/api/webview",
-            "@tauri-apps/plugin-log",
-          ],
+          entries: ["src/**/*.browser.test.{ts,tsx}"],
         },
         test: {
           name: "browser",
@@ -61,6 +56,7 @@ export default defineConfig({
             enabled: true,
             provider: playwright(),
             instances: [{ browser: "chromium" }],
+            commands: integrationCommands,
           },
         },
       },
