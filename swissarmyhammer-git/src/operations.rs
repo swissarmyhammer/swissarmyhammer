@@ -1508,6 +1508,19 @@ mod tests {
     }
 
     /// Helper to add files and commit in a raw repo
+    /// Helper to ensure the default branch is `main` after the first commit.
+    /// Must be called after at least one commit exists on the default branch.
+    fn rename_default_branch_to_main(repo: &Repository) {
+        let head = repo.head().unwrap();
+        let current_branch = head.shorthand().unwrap_or("");
+        if current_branch == "main" {
+            return; // Already on main, nothing to do
+        }
+        let head_commit = head.peel_to_commit().unwrap();
+        repo.branch("main", &head_commit, true).unwrap();
+        repo.set_head("refs/heads/main").unwrap();
+    }
+
     fn raw_commit(repo: &Repository, message: &str, files: Vec<(&str, &str)>) -> git2::Oid {
         for (filename, content) in &files {
             let file_path = repo.workdir().unwrap().join(filename);
@@ -1675,11 +1688,7 @@ mod tests {
 
         // Initial commit on master/main
         raw_commit(&repo, "Initial commit", vec![("README.md", "# Repo")]);
-
-        // Rename default branch to main
-        repo.set_head("refs/heads/main").ok();
-        let head_commit = repo.head().unwrap().peel_to_commit().unwrap();
-        repo.branch("main", &head_commit, true).ok();
+        rename_default_branch_to_main(&repo);
 
         create_branch_from_head(&repo, "feature-ff");
         checkout_branch_raw(&repo, "feature-ff");
@@ -1706,11 +1715,9 @@ mod tests {
         config.set_str("user.email", "test@example.com").unwrap();
 
         raw_commit(&repo, "Initial commit", vec![("README.md", "# Repo")]);
+        rename_default_branch_to_main(&repo);
 
         // Create a branch that points to same commit as HEAD
-        repo.set_head("refs/heads/main").ok();
-        let head_commit = repo.head().unwrap().peel_to_commit().unwrap();
-        repo.branch("main", &head_commit, true).ok();
         create_branch_from_head(&repo, "same-branch");
 
         let git_ops = GitOperations::with_work_dir(repo_path.to_path_buf()).unwrap();
@@ -1738,10 +1745,7 @@ mod tests {
 
         // Initial commit
         raw_commit(&repo, "Initial commit", vec![("README.md", "# Repo")]);
-
-        repo.set_head("refs/heads/main").ok();
-        let head_commit = repo.head().unwrap().peel_to_commit().unwrap();
-        repo.branch("main", &head_commit, true).ok();
+        rename_default_branch_to_main(&repo);
 
         // Create feature branch and add a commit on it
         create_branch_from_head(&repo, "feature-3way");
@@ -1780,9 +1784,7 @@ mod tests {
 
         // Initial commit on main
         raw_commit(&repo, "Initial commit", vec![("README.md", "# Repo")]);
-        repo.set_head("refs/heads/main").ok();
-        let head_commit = repo.head().unwrap().peel_to_commit().unwrap();
-        repo.branch("main", &head_commit, true).ok();
+        rename_default_branch_to_main(&repo);
 
         // Create issue branch from main
         create_branch_from_head(&repo, "issue/42");
@@ -1806,9 +1808,7 @@ mod tests {
 
         // Initial commit on main
         raw_commit(&repo, "Initial commit", vec![("README.md", "# Repo")]);
-        repo.set_head("refs/heads/main").ok();
-        let head_commit = repo.head().unwrap().peel_to_commit().unwrap();
-        repo.branch("main", &head_commit, true).ok();
+        rename_default_branch_to_main(&repo);
 
         // Create feature branch from main
         create_branch_from_head(&repo, "feature/myfeature");
@@ -1838,9 +1838,7 @@ mod tests {
 
         // Initial commit on main
         raw_commit(&repo, "Initial commit", vec![("README.md", "# Repo")]);
-        repo.set_head("refs/heads/main").ok();
-        let head_commit = repo.head().unwrap().peel_to_commit().unwrap();
-        repo.branch("main", &head_commit, true).ok();
+        rename_default_branch_to_main(&repo);
 
         // Create two issue branches from main
         create_branch_from_head(&repo, "issue/1");
