@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: '8280'
+position_column: done
+position_ordinal: ffffffffffffffffd580
 title: 'Cross-window card drag broken: cards cannot be dragged between windows'
 ---
 ## What
