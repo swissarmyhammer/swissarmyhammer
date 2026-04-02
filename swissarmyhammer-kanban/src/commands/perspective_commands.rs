@@ -104,27 +104,24 @@ impl Command for SavePerspectiveCmd {
     }
 }
 
-/// Delete a perspective by name.
+/// Delete a perspective by name or scope chain.
 ///
-/// Requires `name` arg (the perspective name or ID).
+/// Accepts `name` arg (the perspective name or ID), or resolves the
+/// perspective ID from the scope chain moniker `perspective:{id}`.
 pub struct DeletePerspectiveCmd;
 
 #[async_trait]
 impl Command for DeletePerspectiveCmd {
     fn available(&self, ctx: &CommandContext) -> bool {
-        ctx.arg("name").and_then(|v| v.as_str()).is_some()
+        ctx.arg("name").and_then(|v| v.as_str()).is_some() || ctx.has_in_scope("perspective")
     }
 
     async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
         let kanban = ctx.require_extension::<KanbanContext>()?;
 
-        let name = ctx
-            .arg("name")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| CommandError::MissingArg("name".into()))?;
-
-        // Resolve name to ID if necessary
-        let id = {
+        // Try explicit name arg first, then fall back to scope chain moniker.
+        let id = if let Some(name) = ctx.arg("name").and_then(|v| v.as_str()) {
+            // Resolve name to ID if necessary
             let pctx = kanban
                 .perspective_context()
                 .await
@@ -139,6 +136,10 @@ impl Command for DeletePerspectiveCmd {
                     "perspective not found: {name}"
                 )));
             }
+        } else if let Some(scope_id) = ctx.resolve_entity_id("perspective") {
+            scope_id.to_string()
+        } else {
+            return Err(CommandError::MissingArg("name".into()));
         };
 
         let op = DeletePerspective::new(id);

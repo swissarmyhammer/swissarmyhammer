@@ -53,6 +53,15 @@ vi.mock("./ui-state-context", () => ({
   useUIState: () => mockUIState,
 }));
 
+vi.mock("./views-context", () => ({
+  useViews: () => ({
+    views: [{ id: "board-1", name: "Board", kind: "board" }],
+    activeView: { id: "board-1", name: "Board", kind: "board" },
+    setActiveViewId: vi.fn(),
+    refresh: vi.fn(() => Promise.resolve()),
+  }),
+}));
+
 import { PerspectiveProvider, usePerspectives } from "./perspective-context";
 import type { PerspectiveDef } from "@/types/kanban";
 

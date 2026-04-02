@@ -4,6 +4,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -12,6 +13,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { backendDispatch } from "@/lib/command-scope";
 import type { PerspectiveDef } from "@/types/kanban";
 import { useUIState } from "./ui-state-context";
+import { useViews } from "./views-context";
 
 /** This window's label — stable for the lifetime of the window. */
 const WINDOW_LABEL = getCurrentWindow().label;
@@ -35,6 +37,7 @@ const PerspectivesContext = createContext<PerspectivesContextValue | null>(
  */
 export function PerspectiveProvider({ children }: { children: ReactNode }) {
   const [perspectives, setPerspectives] = useState<PerspectiveDef[]>([]);
+  const [loaded, setLoaded] = useState(false);
 
   // active_perspective_id comes from UIState per-window data — it is the single
   // source of truth. UIStateProvider keeps it in sync via the "ui-state-changed"
@@ -42,6 +45,9 @@ export function PerspectiveProvider({ children }: { children: ReactNode }) {
   const uiState = useUIState();
   const active_perspective_id =
     uiState.windows?.[WINDOW_LABEL]?.active_perspective_id ?? "";
+
+  const { activeView } = useViews();
+  const viewKind = activeView?.kind ?? "board";
 
   /** Dispatch a perspective switch through the command system so UIState owns
    *  the change. */
@@ -58,6 +64,7 @@ export function PerspectiveProvider({ children }: { children: ReactNode }) {
         cmd: "perspective.list",
       })) as { perspectives: PerspectiveDef[] };
       setPerspectives(result?.perspectives ?? []);
+      setLoaded(true);
     } catch (error) {
       console.error("Failed to load perspectives:", error);
     }
@@ -74,6 +81,22 @@ export function PerspectiveProvider({ children }: { children: ReactNode }) {
       cancelled = true;
     };
   }, [refresh]);
+
+  // Auto-create a "Default" perspective when none exist for the current view kind.
+  // Uses a ref to avoid repeated creation attempts per view kind.
+  const autoCreatedForKindRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!loaded) return;
+    if (autoCreatedForKindRef.current === viewKind) return;
+    const hasForKind = perspectives.some((p) => p.view === viewKind);
+    if (!hasForKind) {
+      autoCreatedForKindRef.current = viewKind;
+      backendDispatch({
+        cmd: "perspective.save",
+        args: { name: "Default", view: viewKind },
+      }).catch(console.error);
+    }
+  }, [loaded, perspectives, viewKind]);
 
   // Re-fetch perspectives when perspective entities change (file watcher or
   // commands). The "perspective" check is an entity-type filter — this context

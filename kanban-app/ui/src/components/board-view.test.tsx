@@ -22,6 +22,19 @@ vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(() => Promise.resolve(() => {})),
 }));
 
+vi.mock("@/components/perspective-tab-bar", () => ({
+  PerspectiveTabBar: () => null,
+}));
+
+vi.mock("@/lib/perspective-context", () => ({
+  usePerspectives: () => ({
+    perspectives: [],
+    activePerspective: null,
+    setActivePerspectiveId: vi.fn(),
+    refresh: vi.fn(),
+  }),
+}));
+
 vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({
     label: "main",

@@ -33,6 +33,9 @@ function defaultTaskTitle(_columnName: string): string {
 import { moniker, fieldMoniker } from "@/lib/moniker";
 import { useEntityCommands } from "@/lib/entity-commands";
 import { useDragSession } from "@/lib/drag-session-context";
+import { PerspectiveTabBar } from "@/components/perspective-tab-bar";
+import { usePerspectives } from "@/lib/perspective-context";
+import { evaluateFilter } from "@/lib/perspective-eval";
 import type { BoardData, Entity } from "@/types/kanban";
 import { getStr, getNum } from "@/types/kanban";
 
@@ -80,11 +83,18 @@ export function BoardView({ board, tasks, boardPath }: BoardViewProps) {
 
   const columnIdList = useMemo(() => columns.map((c) => c.id), [columns]);
 
+  // Filter tasks through the active perspective's filter expression.
+  const { activePerspective } = usePerspectives();
+  const filteredTasks = useMemo(
+    () => evaluateFilter(activePerspective?.filter, tasks),
+    [activePerspective?.filter, tasks],
+  );
+
   const taskMap = useMemo(() => {
     const map = new Map<string, Entity>();
-    for (const task of tasks) map.set(task.id, task);
+    for (const task of filteredTasks) map.set(task.id, task);
     return map;
-  }, [tasks]);
+  }, [filteredTasks]);
 
   const columnMap = useMemo(() => {
     const map = new Map<string, Entity>();
@@ -95,7 +105,7 @@ export function BoardView({ board, tasks, boardPath }: BoardViewProps) {
   const baseLayout = useMemo<ColumnLayout>(() => {
     const map: ColumnLayout = new Map();
     for (const col of columns) map.set(col.id, []);
-    for (const task of tasks) {
+    for (const task of filteredTasks) {
       const col = getStr(task, "position_column");
       const list = map.get(col);
       if (list) list.push(task.id);
@@ -110,7 +120,7 @@ export function BoardView({ board, tasks, boardPath }: BoardViewProps) {
       });
     }
     return map;
-  }, [columns, tasks, taskMap]);
+  }, [columns, filteredTasks, taskMap]);
 
   // Pre-resolved task entity arrays per column — memoized so that React.memo
   // on ColumnView sees stable references and skips re-renders on cursor moves.
@@ -468,6 +478,7 @@ export function BoardView({ board, tasks, boardPath }: BoardViewProps) {
       className="flex flex-col flex-1 min-h-0 relative"
     >
       <CommandScopeProvider commands={boardActionCommands}>
+        <PerspectiveTabBar />
         {/* @dnd-kit context for column reordering only */}
         <DndContext
           sensors={sensors}

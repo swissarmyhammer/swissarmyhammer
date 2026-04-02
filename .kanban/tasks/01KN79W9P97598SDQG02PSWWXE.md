@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KN79NWWHY3FZ6GMJXR6Q6C2S
-position_column: todo
-position_ordinal: '9e80'
+position_column: done
+position_ordinal: ffffffffffffffffffa780
 title: 4. Add perspective commands to scope chain
 ---
 ## What

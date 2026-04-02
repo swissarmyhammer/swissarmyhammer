@@ -15,7 +15,9 @@
 
 - id: perspective.delete
   name: Delete Perspective
+  scope: "entity:perspective"
   undoable: true
+  context_menu: true
   params:
     - name: name
       from: args
