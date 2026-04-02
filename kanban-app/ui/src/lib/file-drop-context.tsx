@@ -75,10 +75,16 @@ export function FileDropProvider({
   const [paths, setPaths] = useState<string[] | null>(null);
   const callbackStackRef = useRef<DropCallback[]>([]);
 
-  // Prevent browser default drag-drop behavior globally
+  // Prevent browser default drag-drop behavior for file drags only.
+  // Task card drags (application/x-swissarmyhammer-task) must pass through
+  // so DropZones work and dropEffect is correctly "none" when missing a target.
   useEffect(() => {
-    const preventDragOver = (e: DragEvent) => e.preventDefault();
-    const preventDrop = (e: DragEvent) => e.preventDefault();
+    const preventDragOver = (e: DragEvent) => {
+      if (e.dataTransfer?.types.includes("Files")) e.preventDefault();
+    };
+    const preventDrop = (e: DragEvent) => {
+      if (e.dataTransfer?.types.includes("Files")) e.preventDefault();
+    };
     document.addEventListener("dragover", preventDragOver);
     document.addEventListener("drop", preventDrop);
     return () => {

@@ -30,6 +30,8 @@ export function DropZone({
   const [isOver, setIsOver] = useState(false);
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
+    // Ignore file drags from Finder — those go through FileDropProvider.
+    if (e.dataTransfer.types.includes("Files")) return;
     e.preventDefault();
     e.stopPropagation();
     e.dataTransfer.dropEffect = "move";
@@ -37,6 +39,7 @@ export function DropZone({
   }, []);
 
   const handleDragEnter = useCallback((e: React.DragEvent) => {
+    if (e.dataTransfer.types.includes("Files")) return;
     e.preventDefault();
     e.stopPropagation();
     setIsOver(true);
