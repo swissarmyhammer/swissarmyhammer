@@ -4,6 +4,9 @@ import type { UseInspectorNavReturn } from "@/hooks/use-inspector-nav";
 import type { Entity } from "@/types/kanban";
 import { EntityInspector } from "@/components/entity-inspector";
 import { useEntityFocus } from "@/lib/entity-focus-context";
+import { FocusScope } from "@/components/focus-scope";
+import { useEntityCommands } from "@/lib/entity-commands";
+import { moniker } from "@/lib/moniker";
 
 interface InspectorFocusBridgeProps {
   entity: Entity;
@@ -27,6 +30,13 @@ export function InspectorFocusBridge({ entity }: InspectorFocusBridgeProps) {
   const { broadcastNavCommand } = useEntityFocus();
   const broadcastRef = useRef(broadcastNavCommand);
   broadcastRef.current = broadcastNavCommand;
+
+  const entityMoniker = moniker(entity.entity_type, entity.id);
+  const entityCommands = useEntityCommands(
+    entity.entity_type,
+    entity.id,
+    entity,
+  );
 
   // Commands with keys — resolved by the global KeybindingHandler via scope bindings
   const commands = useMemo<CommandDef[]>(
@@ -105,8 +115,14 @@ export function InspectorFocusBridge({ entity }: InspectorFocusBridgeProps) {
   );
 
   return (
-    <CommandScopeProvider commands={commands}>
-      <EntityInspector entity={entity} navRef={navRef} />
-    </CommandScopeProvider>
+    <FocusScope
+      moniker={entityMoniker}
+      commands={entityCommands}
+      showFocusBar={false}
+    >
+      <CommandScopeProvider commands={commands}>
+        <EntityInspector entity={entity} navRef={navRef} />
+      </CommandScopeProvider>
+    </FocusScope>
   );
 }

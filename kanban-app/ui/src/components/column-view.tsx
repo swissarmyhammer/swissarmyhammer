@@ -394,6 +394,8 @@ export const ColumnView = memo(function ColumnView({
   /** Allow drops in the column + auto-scroll near edges. */
   const handleContainerDragOver = useCallback(
     (e: React.DragEvent) => {
+      // Ignore file drags from Finder/Explorer — those go through FileDropProvider.
+      if (e.dataTransfer.types.includes("Files")) return;
       // preventDefault is REQUIRED — without it the browser rejects drops
       // on child DropZones inside this container.
       e.preventDefault();

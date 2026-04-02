@@ -361,17 +361,18 @@ pub fn commands_for_scope(
         }
     }
 
-    // 4. Deduplicate: same (id, name) → keep innermost (first seen).
-    // "Copy Tag" and "Copy Task" have the same ID but different names → both kept.
-    // "Paste Tag" on task and "Paste Tag" on column have the same name → innermost kept.
+    // 4. Deduplicate: same id → keep innermost (first seen).
+    // When a command like "entity.cut" appears in both tag and task scopes, only
+    // the innermost (tag) version is shown. To act on the task, right-click the
+    // task card directly. This prevents confusing menus that show both "Cut Tag"
+    // and "Cut Task" when right-clicking a tag pill.
     {
-        let mut seen_names: HashSet<(String, String)> = HashSet::new();
+        let mut seen_ids: HashSet<String> = HashSet::new();
         result.retain(|c| {
-            let key = (c.id.clone(), c.name.clone());
-            if seen_names.contains(&key) {
+            if seen_ids.contains(&c.id) {
                 return false;
             }
-            seen_names.insert(key);
+            seen_ids.insert(c.id.clone());
             true
         });
     }
@@ -522,7 +523,10 @@ mod tests {
     // =========================================================================
 
     #[test]
-    fn tag_on_task_has_both_copy_tag_and_copy_task() {
+    fn tag_on_task_has_only_tag_copy_cut_inspect() {
+        // With dedup-by-id (innermost wins), right-clicking a tag pill shows
+        // only the tag-level commands for shared IDs like entity.copy, entity.cut,
+        // entity.inspect. The task-level versions are suppressed.
         let (registry, impls, fields, ui) = setup();
         let scope = vec![
             "tag:bug".into(),
@@ -533,14 +537,10 @@ mod tests {
         let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
         let names: Vec<&str> = cmds.iter().map(|c| c.name.as_str()).collect();
 
+        // Innermost (tag) versions are present
         assert!(
             names.contains(&"Copy Tag"),
             "should have Copy Tag: {:?}",
-            names
-        );
-        assert!(
-            names.contains(&"Copy Task"),
-            "should have Copy Task: {:?}",
             names
         );
         assert!(
@@ -549,18 +549,25 @@ mod tests {
             names
         );
         assert!(
-            names.contains(&"Cut Task"),
-            "should have Cut Task: {:?}",
-            names
-        );
-        assert!(
             names.contains(&"Inspect Tag"),
             "should have Inspect Tag: {:?}",
             names
         );
+
+        // Outer (task) versions are suppressed by dedup-by-id
         assert!(
-            names.contains(&"Inspect Task"),
-            "should have Inspect Task: {:?}",
+            !names.contains(&"Copy Task"),
+            "should NOT have Copy Task (deduped by id, tag wins): {:?}",
+            names
+        );
+        assert!(
+            !names.contains(&"Cut Task"),
+            "should NOT have Cut Task (deduped by id, tag wins): {:?}",
+            names
+        );
+        assert!(
+            !names.contains(&"Inspect Task"),
+            "should NOT have Inspect Task (deduped by id, tag wins): {:?}",
             names
         );
     }
@@ -900,11 +907,30 @@ mod tests {
         ];
         let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
 
+        // With dedup-by-id (innermost wins), the tag scope wins for entity.copy.
+        // "Copy Tag" appears with target "tag:01TAG"; "Copy Task" is deduped away.
         let copy_tag = cmds.iter().find(|c| c.name == "Copy Tag").unwrap();
         assert_eq!(copy_tag.target.as_deref(), Some("tag:01TAG"));
 
-        let copy_task = cmds.iter().find(|c| c.name == "Copy Task").unwrap();
-        assert_eq!(copy_task.target.as_deref(), Some("task:01TASK"));
+        let copy_task = cmds.iter().find(|c| c.name == "Copy Task");
+        assert!(
+            copy_task.is_none(),
+            "Copy Task should be deduped away when tag is innermost scope"
+        );
+
+        // Task-only scope to verify task target is correct when no tag present
+        let task_only_scope = vec!["task:01TASK".into(), "column:todo".into()];
+        let task_cmds = commands_for_scope(
+            &task_only_scope,
+            &registry,
+            &impls,
+            Some(&fields),
+            &ui,
+            false,
+            None,
+        );
+        let copy_task_direct = task_cmds.iter().find(|c| c.name == "Copy Task").unwrap();
+        assert_eq!(copy_task_direct.target.as_deref(), Some("task:01TASK"));
 
         let inspect_col = cmds.iter().find(|c| c.name == "Inspect Column");
         if let Some(ic) = inspect_col {
@@ -1545,6 +1571,110 @@ mod tests {
         assert!(
             !ids.iter().any(|id| id.starts_with("window.focus:")),
             "no window commands without dynamic sources"
+        );
+    }
+
+    // =========================================================================
+    // Dedup-by-id: innermost scope wins for shared command IDs
+    // =========================================================================
+
+    #[test]
+    fn dedup_by_id_tag_task_scope_only_one_cut_command() {
+        // entity.cut appears in both tag and task schemas.
+        // With scope ["tag:X", "task:Y"], only the innermost (tag) cut should appear.
+        let (registry, impls, fields, ui) = setup();
+        let scope = vec![
+            "tag:some-tag".into(),
+            "task:01TASK".into(),
+            "column:todo".into(),
+            "board:my-board".into(),
+        ];
+        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
+
+        let cut_cmds: Vec<_> = cmds.iter().filter(|c| c.id == "entity.cut").collect();
+        assert_eq!(
+            cut_cmds.len(),
+            1,
+            "entity.cut should appear exactly once (innermost wins): {:?}",
+            cut_cmds.iter().map(|c| &c.name).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            cut_cmds[0].name, "Cut Tag",
+            "the single cut command should be 'Cut Tag' (tag is innermost): {:?}",
+            cut_cmds[0]
+        );
+        assert_eq!(
+            cut_cmds[0].target.as_deref(),
+            Some("tag:some-tag"),
+            "cut target should be the tag"
+        );
+    }
+
+    #[test]
+    fn dedup_by_id_task_only_scope_shows_cut_task() {
+        // When the scope has no tag, "Cut Task" should appear normally.
+        let (registry, impls, fields, ui) = setup();
+        let scope = vec![
+            "task:01TASK".into(),
+            "column:todo".into(),
+            "board:my-board".into(),
+        ];
+        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
+
+        let cut_cmds: Vec<_> = cmds.iter().filter(|c| c.id == "entity.cut").collect();
+        assert_eq!(
+            cut_cmds.len(),
+            1,
+            "entity.cut should appear exactly once: {:?}",
+            cut_cmds
+        );
+        assert_eq!(
+            cut_cmds[0].name, "Cut Task",
+            "only task in scope → should show 'Cut Task'"
+        );
+        assert_eq!(
+            cut_cmds[0].target.as_deref(),
+            Some("task:01TASK"),
+            "cut target should be the task"
+        );
+    }
+
+    #[test]
+    fn dedup_by_id_applies_to_copy_and_inspect_too() {
+        // Verify that entity.copy and entity.inspect also follow dedup-by-id,
+        // showing only the innermost (tag) version when both tag and task are in scope.
+        let (registry, impls, fields, ui) = setup();
+        let scope = vec![
+            "tag:some-tag".into(),
+            "task:01TASK".into(),
+            "column:todo".into(),
+        ];
+        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
+
+        // entity.copy — only tag version
+        let copy_cmds: Vec<_> = cmds.iter().filter(|c| c.id == "entity.copy").collect();
+        assert_eq!(
+            copy_cmds.len(),
+            1,
+            "entity.copy should appear exactly once: {:?}",
+            copy_cmds.iter().map(|c| &c.name).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            copy_cmds[0].name, "Copy Tag",
+            "entity.copy should show 'Copy Tag'"
+        );
+
+        // ui.inspect — only tag version
+        let inspect_cmds: Vec<_> = cmds.iter().filter(|c| c.id == "ui.inspect").collect();
+        assert_eq!(
+            inspect_cmds.len(),
+            1,
+            "ui.inspect should appear exactly once: {:?}",
+            inspect_cmds.iter().map(|c| &c.name).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            inspect_cmds[0].name, "Inspect Tag",
+            "ui.inspect should show 'Inspect Tag'"
         );
     }
 }
