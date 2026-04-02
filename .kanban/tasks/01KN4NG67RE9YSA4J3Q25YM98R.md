@@ -5,7 +5,7 @@ depends_on:
 - 01KN4NEVT8AVMVWX4WTHJG15FJ
 position_column: todo
 position_ordinal: '8180'
-title: Perspective tab bar + default perspective
+title: 6. Perspective tab bar + default perspective
 ---
 ## What
 

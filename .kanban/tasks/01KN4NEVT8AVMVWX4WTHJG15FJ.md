@@ -2,10 +2,10 @@
 assignees:
 - claude-code
 depends_on:
-- 01KN4S8N9WSFS1ZYEX1BHTXAQG
+- 01KN79W9P97598SDQG02PSWWXE
 position_column: todo
 position_ordinal: '80'
-title: Perspective TS types + PerspectiveProvider context
+title: 5. Perspective TS types + PerspectiveProvider context
 ---
 ## What
 

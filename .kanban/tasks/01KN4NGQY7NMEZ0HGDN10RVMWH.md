@@ -5,7 +5,7 @@ depends_on:
 - 01KN4NEVT8AVMVWX4WTHJG15FJ
 position_column: todo
 position_ordinal: '8280'
-title: Perspective filter/sort/group evaluation + view integration
+title: 7. Perspective filter/sort/group evaluation + view integration
 ---
 ## What
 

@@ -6,7 +6,7 @@ depends_on:
 - 01KN4NG67RE9YSA4J3Q25YM98R
 position_column: todo
 position_ordinal: '8480'
-title: Perspective sort commands + scope chain wiring
+title: 9. Perspective sort commands + scope chain wiring
 ---
 ## What
 

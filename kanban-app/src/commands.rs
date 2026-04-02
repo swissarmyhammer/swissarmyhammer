@@ -1404,8 +1404,8 @@ pub async fn list_commands_for_scope(
 ///
 /// Routes change detection through `StoreContext.flush_all()` for entity files
 /// managed by stores, then falls back to the watcher's `flush_and_emit` for
-/// non-store files (attachments). Store events are converted to `WatchEvent`s
-/// via a bridge that reads through the entity context for enrichment.
+/// non-store files (attachments). Events are raw signals — the frontend
+/// always re-fetches entity state via `get_entity` on receipt.
 async fn flush_and_emit_for_handle(app: &AppHandle, handle: &BoardHandle) {
     let kanban_root = handle.ctx.root().to_path_buf();
 
@@ -1474,66 +1474,10 @@ async fn flush_and_emit_for_handle(app: &AppHandle, handle: &BoardHandle) {
         }
     }
 
-    // 5. Enrich entity events with computed fields via EntityContext.
-    let ectx_result = handle.ctx.entity_context().await;
-    if let Err(ref e) = ectx_result {
-        tracing::warn!(
-            path = %kanban_root.display(),
-            error = %e,
-            event_count = events.len(),
-            "failed to obtain EntityContext; skipping enrichment for all events"
-        );
-    }
-    if let Ok(ectx) = ectx_result {
-        for evt in &mut events {
-            match evt {
-                crate::watcher::WatchEvent::EntityCreated {
-                    entity_type,
-                    id,
-                    fields,
-                } => {
-                    if let Ok(entity) = ectx.read(&*entity_type, &*id).await {
-                        *fields = entity
-                            .fields
-                            .into_iter()
-                            .map(|(k, v)| (k.to_string(), v))
-                            .collect();
-                    } else {
-                        tracing::warn!(entity_type = %entity_type, id = %id, "enrichment failed for created entity");
-                    }
-                }
-                crate::watcher::WatchEvent::EntityFieldChanged {
-                    entity_type,
-                    id,
-                    fields,
-                    ..
-                } => {
-                    if let Ok(entity) = ectx.read(&*entity_type, &*id).await {
-                        *fields = Some(
-                            entity
-                                .fields
-                                .into_iter()
-                                .map(|(k, v)| (k.to_string(), v))
-                                .collect(),
-                        );
-                    } else {
-                        tracing::warn!(entity_type = %entity_type, id = %id, "enrichment failed for changed entity");
-                    }
-                }
-                crate::watcher::WatchEvent::EntityRemoved { .. } => {}
-                crate::watcher::WatchEvent::AttachmentChanged { .. } => {
-                    // Attachment file changes are forwarded directly to the frontend;
-                    // no entity enrichment needed.
-                }
-            }
-        }
-
-        // 6. Cascade: recompute aggregate fields that depend on changed entity types.
-        let cascade = cascade_aggregate_events(&ectx, &events).await;
-        events.extend(cascade);
-    }
-
-    // 7. Sync search index and emit to frontend (unchanged).
+    // 5. Sync search index and emit to frontend.
+    //
+    // Events are signals to re-fetch, not data carriers. The frontend always
+    // calls get_entity on any event — no enrichment or cascade needed here.
     {
         let board_path_str = kanban_root.display().to_string();
         let mut search_idx = handle.search_index.write().await;
@@ -1552,66 +1496,6 @@ async fn flush_and_emit_for_handle(app: &AppHandle, handle: &BoardHandle) {
             let _ = app.emit(event_name, &wrapped);
         }
     }
-}
-
-/// Check if any aggregate computed fields depend on the changed entity types,
-/// and if so, recompute them and produce additional `entity-field-changed` events.
-///
-/// Reads `depends_on` from field definitions — no hardcoded logic per command.
-async fn cascade_aggregate_events(
-    ectx: &swissarmyhammer_entity::EntityContext,
-    primary_events: &[crate::watcher::WatchEvent],
-) -> Vec<crate::watcher::WatchEvent> {
-    use std::collections::HashSet;
-
-    // Collect entity types that changed
-    let changed_types: HashSet<&str> = primary_events
-        .iter()
-        .map(|evt| match evt {
-            crate::watcher::WatchEvent::EntityCreated { entity_type, .. }
-            | crate::watcher::WatchEvent::EntityFieldChanged { entity_type, .. }
-            | crate::watcher::WatchEvent::EntityRemoved { entity_type, .. }
-            | crate::watcher::WatchEvent::AttachmentChanged { entity_type, .. } => {
-                entity_type.as_str()
-            }
-        })
-        .collect();
-
-    if changed_types.is_empty() {
-        return vec![];
-    }
-
-    let fields_ctx = ectx.fields();
-    let mut cascade_events = Vec::new();
-
-    // Find entity types with aggregate fields depending on the changed types
-    let mut dependent_types: HashSet<&str> = HashSet::new();
-    for trigger_type in &changed_types {
-        for dep_type in fields_ctx.entity_types_depending_on(trigger_type) {
-            dependent_types.insert(dep_type);
-        }
-    }
-
-    // Re-read dependent entities to trigger recomputation
-    for entity_type in dependent_types {
-        if let Ok(entities) = ectx.list(entity_type).await {
-            for entity in entities {
-                let all_fields: std::collections::HashMap<String, serde_json::Value> = entity
-                    .fields
-                    .into_iter()
-                    .map(|(k, v)| (k.to_string(), v))
-                    .collect();
-                cascade_events.push(crate::watcher::WatchEvent::EntityFieldChanged {
-                    entity_type: entity_type.to_string(),
-                    id: entity.id.to_string(),
-                    changes: vec![],
-                    fields: Some(all_fields),
-                });
-            }
-        }
-    }
-
-    cascade_events
 }
 
 /// A single item in a generic context menu.

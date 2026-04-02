@@ -6,7 +6,7 @@ depends_on:
 - 01KN4NJ21PSS15MAR0R542SYWF
 position_column: todo
 position_ordinal: '8580'
-title: Group-by selector + perspective scope command
+title: 10. Group-by selector + perspective scope command
 ---
 ## What
 

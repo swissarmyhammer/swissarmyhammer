@@ -434,8 +434,17 @@ fn classify_event(event: &Event, kanban_root: &Path) -> Vec<FsAction> {
         let is_att = is_attachment(path);
 
         if !is_entity && !is_att {
+            tracing::trace!(path = %path.display(), kind = ?event.kind, "classify_event: not entity/attachment, skipping");
             continue;
         }
+
+        tracing::info!(
+            path = %path.display(),
+            kind = ?event.kind,
+            is_entity,
+            is_att,
+            "classify_event: filesystem event received"
+        );
 
         // For removals, the file may not exist, so canonicalize the parent + filename
         let canonical = if path.exists() {
@@ -505,6 +514,11 @@ fn resolve_change(path: &Path, cache: &EntityCache, kanban_root: &Path) -> Optio
     match map.get(path) {
         Some(old) if old.hash == new_cached.hash => {
             // Same content — our own write or no real change
+            tracing::debug!(
+                entity_type = %entity_type,
+                id = %id,
+                "resolve_change: hash unchanged, suppressing event"
+            );
             None
         }
         Some(old) => {

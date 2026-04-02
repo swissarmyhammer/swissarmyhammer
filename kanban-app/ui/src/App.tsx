@@ -120,9 +120,6 @@ interface EntityFieldChangedEvent {
   entity_type: string;
   id: string;
   changes: Array<{ field: string; value: unknown }>;
-  /** Full entity state including computed fields. Present for own-command
-   *  events; absent for external file-watcher events. */
-  fields?: Record<string, unknown>;
   board_path?: string;
 }
 
@@ -297,16 +294,29 @@ function App() {
     const unlisteners = [
       listen<EntityCreatedEvent>("entity-created", (event) => {
         const { entity_type, id, board_path } = event.payload;
+        console.warn(
+          `[entity-created] received: ${entity_type}/${id} board_path=${board_path ?? "none"}`,
+        );
         if (
           board_path &&
           activeBoardPathRef.current &&
           board_path !== activeBoardPathRef.current
-        )
+        ) {
+          console.warn(
+            `[entity-created] SKIPPED: board_path mismatch (active=${activeBoardPathRef.current})`,
+          );
           return;
+        }
         if (entity_type === "column" || entity_type === "swimlane") {
+          console.warn(
+            `[entity-created] structural type → full refresh`,
+          );
           refresh();
           return;
         }
+        console.warn(
+          `[entity-created] fetching ${entity_type}/${id} via get_entity`,
+        );
         invoke<EntityBag>("get_entity", {
           entityType: entity_type,
           id,
@@ -316,6 +326,9 @@ function App() {
         })
           .then((bag) => {
             const entity = entityFromBag(bag);
+            console.warn(
+              `[entity-created] fetched ${entity_type}/${id}, fields: ${Object.keys(entity.fields).join(",")}`,
+            );
             setEntitiesFor(entity_type, (prev) => {
               if (prev.some((e) => e.id === id)) {
                 return prev.map((e) => (e.id === id ? entity : e));
@@ -332,12 +345,19 @@ function App() {
       }),
       listen<EntityRemovedEvent>("entity-removed", (event) => {
         const { entity_type, id, board_path } = event.payload;
+        console.warn(
+          `[entity-removed] received: ${entity_type}/${id} board_path=${board_path ?? "none"}`,
+        );
         if (
           board_path &&
           activeBoardPathRef.current &&
           board_path !== activeBoardPathRef.current
-        )
+        ) {
+          console.warn(
+            `[entity-removed] SKIPPED: board_path mismatch`,
+          );
           return;
+        }
         if (entity_type === "column" || entity_type === "swimlane") {
           refresh();
         } else {
@@ -347,58 +367,66 @@ function App() {
         }
       }),
       listen<EntityFieldChangedEvent>("entity-field-changed", (event) => {
-        const {
-          entity_type,
-          id,
-          fields: fullFields,
-          board_path,
-        } = event.payload;
+        const { entity_type, id, board_path } = event.payload;
+        console.warn(
+          `[entity-field-changed] received: ${entity_type}/${id} board_path=${board_path ?? "none"}`,
+        );
         if (
           board_path &&
           activeBoardPathRef.current &&
           board_path !== activeBoardPathRef.current
-        )
+        ) {
+          console.warn(
+            `[entity-field-changed] SKIPPED: board_path mismatch (active=${activeBoardPathRef.current})`,
+          );
           return;
-
-        const applyEntity = (entity: Entity) => {
-          const replaceById = (entities: Entity[]) =>
-            entities.map((e) => (e.id === id ? entity : e));
-
-          // Always update the entity store — all types live there now
-          setEntitiesFor(entity_type, replaceById);
-
-          // Also update board structural state for components that read it directly
-          if (entity_type === "board") {
-            setBoard((prev) => (prev ? { ...prev, board: entity } : prev));
-          } else if (entity_type === "column") {
-            setBoard((prev) =>
-              prev ? { ...prev, columns: replaceById(prev.columns) } : prev,
-            );
-          } else if (entity_type === "swimlane") {
-            setBoard((prev) =>
-              prev ? { ...prev, swimlanes: replaceById(prev.swimlanes) } : prev,
-            );
-          }
-        };
-
-        if (fullFields) {
-          applyEntity({ entity_type, id, fields: fullFields });
-        } else {
-          invoke<EntityBag>("get_entity", {
-            entityType: entity_type,
-            id,
-            ...(activeBoardPathRef.current
-              ? { boardPath: activeBoardPathRef.current }
-              : {}),
-          })
-            .then((bag) => applyEntity(entityFromBag(bag)))
-            .catch((err) => {
-              console.error(
-                `[entity-field-changed] Failed to fetch ${entity_type}/${id}:`,
-                err,
-              );
-            });
         }
+
+        // Events are signals to re-fetch, not data carriers. Always fetch
+        // fresh state from the backend so both command-path and watcher-path
+        // events behave identically.
+        console.warn(
+          `[entity-field-changed] fetching ${entity_type}/${id} via get_entity`,
+        );
+        invoke<EntityBag>("get_entity", {
+          entityType: entity_type,
+          id,
+          ...(activeBoardPathRef.current
+            ? { boardPath: activeBoardPathRef.current }
+            : {}),
+        })
+          .then((bag) => {
+            const entity = entityFromBag(bag);
+            console.warn(
+              `[entity-field-changed] fetched ${entity_type}/${id}, fields: ${Object.keys(entity.fields).join(",")}`,
+            );
+            const replaceById = (entities: Entity[]) =>
+              entities.map((e) => (e.id === id ? entity : e));
+
+            setEntitiesFor(entity_type, replaceById);
+
+            if (entity_type === "board") {
+              setBoard((prev) => (prev ? { ...prev, board: entity } : prev));
+            } else if (entity_type === "column") {
+              setBoard((prev) =>
+                prev
+                  ? { ...prev, columns: replaceById(prev.columns) }
+                  : prev,
+              );
+            } else if (entity_type === "swimlane") {
+              setBoard((prev) =>
+                prev
+                  ? { ...prev, swimlanes: replaceById(prev.swimlanes) }
+                  : prev,
+              );
+            }
+          })
+          .catch((err) => {
+            console.error(
+              `[entity-field-changed] Failed to fetch ${entity_type}/${id}:`,
+              err,
+            );
+          });
       }),
       // board-opened: emitted only to the window that initiated the open (via emit_to).
       // Use window-scoped listen for defense-in-depth.

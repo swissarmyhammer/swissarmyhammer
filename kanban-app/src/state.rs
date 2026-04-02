@@ -255,6 +255,12 @@ impl BoardHandle {
                 watcher::WatchEvent::EntityFieldChanged { .. } => "entity-field-changed",
                 watcher::WatchEvent::AttachmentChanged { .. } => "attachment-changed",
             };
+            tracing::info!(
+                event_name,
+                board_path = %board_path_str,
+                event = ?evt,
+                "watcher callback: emitting Tauri event to frontend"
+            );
             let wrapped = watcher::BoardWatchEvent {
                 event: evt,
                 board_path: board_path_str.clone(),

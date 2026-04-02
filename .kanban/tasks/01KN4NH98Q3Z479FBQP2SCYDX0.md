@@ -6,7 +6,7 @@ depends_on:
 - 01KN4NGQY7NMEZ0HGDN10RVMWH
 position_column: todo
 position_ordinal: '8380'
-title: CM6 inline JS filter expression editor
+title: 8. CM6 inline JS filter expression editor
 ---
 ## What
 
