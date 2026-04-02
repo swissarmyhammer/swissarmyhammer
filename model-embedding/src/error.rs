@@ -103,6 +103,20 @@ mod tests {
     }
 
     #[test]
+    fn test_text_encoding_error() {
+        let error = EmbeddingError::text_encoding("bad utf-8");
+        assert!(matches!(error, EmbeddingError::TextEncoding(_)));
+        assert_eq!(error.to_string(), "Text encoding error: bad utf-8");
+    }
+
+    #[test]
+    fn test_configuration_error() {
+        let error = EmbeddingError::configuration("invalid batch size");
+        assert!(matches!(error, EmbeddingError::Configuration(_)));
+        assert_eq!(error.to_string(), "Configuration error: invalid batch size");
+    }
+
+    #[test]
     fn test_backend_error() {
         let backend_err: Box<dyn std::error::Error + Send + Sync> = "onnx runtime failed".into();
         let error: EmbeddingError = backend_err.into();
