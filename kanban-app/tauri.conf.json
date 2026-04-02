@@ -19,14 +19,6 @@
     "macOSPrivateApi": true,
     "windows": [
       {
-        "title": "Kanban",
-        "width": 1200,
-        "height": 800,
-        "resizable": true,
-        "visible": false,
-        "dragDropEnabled": false
-      },
-      {
         "label": "quick-capture",
         "title": "",
         "url": "index.html?window=quick-capture",
