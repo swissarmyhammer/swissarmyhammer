@@ -1,5 +1,17 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useActiveBoardPath, backendDispatch } from "@/lib/command-scope";
+import {
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import {
+  useActiveBoardPath,
+  backendDispatch,
+  CommandScopeContext,
+  scopeChainFromScope,
+} from "@/lib/command-scope";
 import { useGrid } from "@/hooks/use-grid";
 import { useSchema } from "@/lib/schema-context";
 import { useEntityStore } from "@/lib/entity-store-context";
@@ -26,6 +38,8 @@ export function GridView({ view }: GridViewProps) {
   const boardPath = useActiveBoardPath();
   const boardPathRef = useRef(boardPath);
   boardPathRef.current = boardPath;
+  const scope = useContext(CommandScopeContext);
+  const scopeChain = useMemo(() => scopeChainFromScope(scope), [scope]);
   const { getEntities } = useEntityStore();
 
   // All hooks must be called unconditionally (React rules of hooks).
@@ -363,6 +377,7 @@ export function GridView({ view }: GridViewProps) {
               ...(boardPathRef.current
                 ? { boardPath: boardPathRef.current }
                 : {}),
+              scopeChain,
             }).catch((err) => console.error("Failed to delete row:", err));
           }
         },
@@ -378,6 +393,7 @@ export function GridView({ view }: GridViewProps) {
             ...(boardPathRef.current
               ? { boardPath: boardPathRef.current }
               : {}),
+            scopeChain,
           }).catch((err) => console.error("Failed to add row:", err));
         },
       },
@@ -392,6 +408,7 @@ export function GridView({ view }: GridViewProps) {
             ...(boardPathRef.current
               ? { boardPath: boardPathRef.current }
               : {}),
+            scopeChain,
           }).catch((err) => console.error("Failed to add row:", err));
         },
       },

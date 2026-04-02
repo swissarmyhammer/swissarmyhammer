@@ -159,39 +159,50 @@ function App() {
   const panelStackRef = useRef(panelStack);
   panelStackRef.current = panelStack;
 
+  // Scope chain for this window — used by direct backendDispatch calls
+  // so the backend knows which window's inspector stack to modify.
+  const windowScopeChain = useMemo(() => [`window:${WINDOW_LABEL}`], []);
+
   /** Open an inspector for any entity via the command architecture.
    *  Fire-and-forget — InspectorSyncBridge updates panelStack from UIState. */
-  const inspectEntity = useCallback((entityType: string, entityId: string) => {
-    backendDispatch({
-      cmd: "ui.inspect",
-      target: `${entityType}:${entityId}`,
-    }).catch((e) => console.error("ui.inspect failed:", e));
-  }, []);
+  const inspectEntity = useCallback(
+    (entityType: string, entityId: string) => {
+      backendDispatch({
+        cmd: "ui.inspect",
+        target: `${entityType}:${entityId}`,
+        scopeChain: windowScopeChain,
+      }).catch((e) => console.error("ui.inspect failed:", e));
+    },
+    [windowScopeChain],
+  );
 
   /** Close the topmost inspector panel via the command architecture.
    *  Fire-and-forget — InspectorSyncBridge updates panelStack from UIState. */
   const closeTopPanel = useCallback(() => {
-    backendDispatch({ cmd: "ui.inspector.close" }).catch((e) =>
-      console.error("ui.inspector.close failed:", e),
-    );
-  }, []);
+    backendDispatch({
+      cmd: "ui.inspector.close",
+      scopeChain: windowScopeChain,
+    }).catch((e) => console.error("ui.inspector.close failed:", e));
+  }, [windowScopeChain]);
 
   /** Close the topmost panel. Returns true if a panel was actually closed.
    *  Fire-and-forget — InspectorSyncBridge updates panelStack from UIState. */
   const dismissTopPanel = useCallback((): boolean => {
     if (panelStackRef.current.length === 0) return false;
-    backendDispatch({ cmd: "ui.inspector.close" }).catch((e) =>
-      console.error("ui.inspector.close failed:", e),
-    );
+    backendDispatch({
+      cmd: "ui.inspector.close",
+      scopeChain: windowScopeChain,
+    }).catch((e) => console.error("ui.inspector.close failed:", e));
     return true;
-  }, []);
+  }, [windowScopeChain]);
 
   /** Close all inspector panels via the command architecture.
    *  Fire-and-forget — InspectorSyncBridge updates panelStack from UIState. */
   const closeAll = useCallback(() => {
-    backendDispatch({ cmd: "ui.inspector.close_all" }).catch((e) =>
-      console.error("ui.inspector.close_all failed:", e),
-    );
+    backendDispatch({
+      cmd: "ui.inspector.close_all",
+      scopeChain: windowScopeChain,
+    }).catch((e) => console.error("ui.inspector.close_all failed:", e));
   }, []);
 
   // Intentional empty deps: reads activeBoardPathRef to avoid stale closure.
@@ -216,6 +227,7 @@ function App() {
       backendDispatch({
         cmd: "file.switchBoard",
         args: { windowLabel: WINDOW_LABEL, path: active.path },
+        scopeChain: windowScopeChain,
       }).catch(() => {});
     }
 
@@ -264,6 +276,7 @@ function App() {
           await backendDispatch({
             cmd: "file.switchBoard",
             args: { windowLabel: WINDOW_LABEL, path: winState.board_path },
+            scopeChain: windowScopeChain,
           });
           if (cancelled) return;
           setActiveBoardPath(winState.board_path);
@@ -410,6 +423,7 @@ function App() {
           backendDispatch({
             cmd: "file.switchBoard",
             args: { windowLabel: WINDOW_LABEL, path: newPath },
+            scopeChain: windowScopeChain,
           }).catch(() => {});
           setActiveBoardPath(newPath);
           activeBoardPathRef.current = newPath;
@@ -493,6 +507,7 @@ function App() {
         backendDispatch({
           cmd: "file.switchBoard",
           args: { windowLabel: WINDOW_LABEL, path: fallback.path },
+          scopeChain: windowScopeChain,
         }).catch(() => {});
         setLoading(true);
         const result = await refreshBoards(fallback.path);
@@ -517,6 +532,7 @@ function App() {
         await backendDispatch({
           cmd: "file.switchBoard",
           args: { windowLabel: WINDOW_LABEL, path },
+          scopeChain: windowScopeChain,
         });
       } catch {
         /* ignore */
@@ -547,99 +563,105 @@ function App() {
                           onDismiss={dismissTopPanel}
                         >
                           <FileDropProvider>
-                          <AppShell
-                            openBoards={openBoards}
-                            onSwitchBoard={handleSwitchBoard}
-                          >
-                            <DragSessionProvider>
-                              <ViewsProvider>
-                                <ViewCommandScope>
-                                  <div className="h-screen bg-background text-foreground flex flex-col">
-                                    <NavBar
-                                      board={board}
-                                      openBoards={openBoards}
-                                      activeBoardPath={activeBoardPath}
-                                      onSwitchBoard={handleSwitchBoard}
-                                    />
-                                    {board && activeBoardPath ? (
-                                      <>
-                                        <div className="flex-1 flex min-h-0">
-                                          <LeftNav />
-                                          <div className="flex-1 min-w-0 overflow-hidden flex flex-col">
-                                            <ActiveViewRenderer
-                                              board={board}
-                                              tasks={entitiesByType.task ?? []}
-                                              boardPath={activeBoardPath}
-                                            />
+                            <AppShell
+                              openBoards={openBoards}
+                              onSwitchBoard={handleSwitchBoard}
+                            >
+                              <DragSessionProvider>
+                                <ViewsProvider>
+                                  <ViewCommandScope>
+                                    <div className="h-screen bg-background text-foreground flex flex-col">
+                                      <NavBar
+                                        board={board}
+                                        openBoards={openBoards}
+                                        activeBoardPath={activeBoardPath}
+                                        onSwitchBoard={handleSwitchBoard}
+                                      />
+                                      {board && activeBoardPath ? (
+                                        <>
+                                          <div className="flex-1 flex min-h-0">
+                                            <LeftNav />
+                                            <div className="flex-1 min-w-0 overflow-hidden flex flex-col">
+                                              <ActiveViewRenderer
+                                                board={board}
+                                                tasks={
+                                                  entitiesByType.task ?? []
+                                                }
+                                                boardPath={activeBoardPath}
+                                              />
+                                            </div>
                                           </div>
-                                        </div>
 
-                                        {/* Backdrop — visible when any panel is open */}
-                                        <div
-                                          className={`fixed inset-0 z-20 bg-black/20 transition-opacity duration-200 ${
-                                            panelStack.length > 0
-                                              ? "opacity-100"
-                                              : "opacity-0 pointer-events-none"
-                                          }`}
-                                          onClick={() => {
-                                            dispatchCommand({
-                                              id: "ui.inspector.close_all",
-                                              name: "Close All Inspectors",
-                                              execute: closeAll,
-                                            });
-                                          }}
-                                        />
+                                          {/* Backdrop — visible when any panel is open */}
+                                          <div
+                                            className={`fixed inset-0 z-20 bg-black/20 transition-opacity duration-200 ${
+                                              panelStack.length > 0
+                                                ? "opacity-100"
+                                                : "opacity-0 pointer-events-none"
+                                            }`}
+                                            onClick={() => {
+                                              dispatchCommand(
+                                                {
+                                                  id: "ui.inspector.close_all",
+                                                  name: "Close All Inspectors",
+                                                  execute: closeAll,
+                                                },
+                                                undefined,
+                                                [],
+                                              );
+                                            }}
+                                          />
 
-                                        {/* Render inspector panels from the stack */}
-                                        {panelStack.map((entry, index) => {
-                                          const rightOffset =
-                                            (panelStack.length - 1 - index) *
-                                            PANEL_WIDTH;
-                                          return (
-                                            <InspectorPanel
-                                              key={`${entry.entityType}-${entry.entityId}`}
-                                              entry={entry}
-                                              entityStore={entityStore}
-                                              board={board}
-                                              onClose={closeTopPanel}
-                                              style={{ right: rightOffset }}
-                                            />
-                                          );
-                                        })}
-                                      </>
-                                    ) : loading ? (
-                                      <main className="flex-1 flex items-center justify-center">
-                                        <Loader2 className="h-8 w-8 text-muted-foreground/50 animate-spin [animation-delay:200ms] [animation-fill-mode:backwards]" />
-                                      </main>
-                                    ) : (
-                                      <main className="flex-1 flex items-center justify-center">
-                                        <div className="text-center space-y-3">
-                                          <p className="text-muted-foreground text-lg">
-                                            No board loaded
-                                          </p>
-                                          <div className="text-sm text-muted-foreground/70 space-y-1">
-                                            <p>
-                                              <kbd className="px-1.5 py-0.5 rounded bg-muted text-xs font-mono">
-                                                Cmd+N
-                                              </kbd>{" "}
-                                              New Board
+                                          {/* Render inspector panels from the stack */}
+                                          {panelStack.map((entry, index) => {
+                                            const rightOffset =
+                                              (panelStack.length - 1 - index) *
+                                              PANEL_WIDTH;
+                                            return (
+                                              <InspectorPanel
+                                                key={`${entry.entityType}-${entry.entityId}`}
+                                                entry={entry}
+                                                entityStore={entityStore}
+                                                board={board}
+                                                onClose={closeTopPanel}
+                                                style={{ right: rightOffset }}
+                                              />
+                                            );
+                                          })}
+                                        </>
+                                      ) : loading ? (
+                                        <main className="flex-1 flex items-center justify-center">
+                                          <Loader2 className="h-8 w-8 text-muted-foreground/50 animate-spin [animation-delay:200ms] [animation-fill-mode:backwards]" />
+                                        </main>
+                                      ) : (
+                                        <main className="flex-1 flex items-center justify-center">
+                                          <div className="text-center space-y-3">
+                                            <p className="text-muted-foreground text-lg">
+                                              No board loaded
                                             </p>
-                                            <p>
-                                              <kbd className="px-1.5 py-0.5 rounded bg-muted text-xs font-mono">
-                                                Cmd+O
-                                              </kbd>{" "}
-                                              Open Board
-                                            </p>
+                                            <div className="text-sm text-muted-foreground/70 space-y-1">
+                                              <p>
+                                                <kbd className="px-1.5 py-0.5 rounded bg-muted text-xs font-mono">
+                                                  Cmd+N
+                                                </kbd>{" "}
+                                                New Board
+                                              </p>
+                                              <p>
+                                                <kbd className="px-1.5 py-0.5 rounded bg-muted text-xs font-mono">
+                                                  Cmd+O
+                                                </kbd>{" "}
+                                                Open Board
+                                              </p>
+                                            </div>
                                           </div>
-                                        </div>
-                                      </main>
-                                    )}
-                                    <ModeIndicator />
-                                  </div>
-                                </ViewCommandScope>
-                              </ViewsProvider>
-                            </DragSessionProvider>
-                          </AppShell>
+                                        </main>
+                                      )}
+                                      <ModeIndicator />
+                                    </div>
+                                  </ViewCommandScope>
+                                </ViewsProvider>
+                              </DragSessionProvider>
+                            </AppShell>
                           </FileDropProvider>
                         </InspectProvider>
                       </UndoProvider>
@@ -670,6 +692,7 @@ function ViewCommandScope({ children }: { children: React.ReactNode }) {
       execute: () => {
         backendDispatch({
           cmd: `view.switch:${view.id}`,
+          scopeChain: [`window:${WINDOW_LABEL}`],
         }).catch(console.error);
       },
     }));

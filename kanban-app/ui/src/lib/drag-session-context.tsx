@@ -16,7 +16,12 @@ import {
 } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { useActiveBoardPath, backendDispatch } from "@/lib/command-scope";
+import {
+  useActiveBoardPath,
+  backendDispatch,
+  scopeChainFromScope,
+  CommandScopeContext,
+} from "@/lib/command-scope";
 
 /** Payload emitted by `drag-session-active`. */
 export interface DragSession {
@@ -67,6 +72,9 @@ export function useDragSession() {
 
 export function DragSessionProvider({ children }: { children: ReactNode }) {
   const boardPath = useActiveBoardPath();
+  const scope = useContext(CommandScopeContext);
+  const scopeChainRef = useRef(scopeChainFromScope(scope));
+  scopeChainRef.current = scopeChainFromScope(scope);
   const boardPathRef = useRef(boardPath);
   boardPathRef.current = boardPath;
 
@@ -120,6 +128,7 @@ export function DragSessionProvider({ children }: { children: ReactNode }) {
             sourceWindowLabel: getCurrentWindow().label,
             copyMode,
           },
+          scopeChain: scopeChainRef.current,
         });
         setIsSource(true);
       } catch (e) {
@@ -131,7 +140,7 @@ export function DragSessionProvider({ children }: { children: ReactNode }) {
 
   const cancelSession = useCallback(async () => {
     try {
-      await backendDispatch({ cmd: "drag.cancel" });
+      await backendDispatch({ cmd: "drag.cancel", scopeChain: [] }); // TODO: thread scopeChain from caller
     } catch (e) {
       console.error("Failed to cancel drag session:", e);
     }
@@ -160,6 +169,7 @@ export function DragSessionProvider({ children }: { children: ReactNode }) {
             afterId: options?.afterId ?? null,
             copyMode: options?.copyMode ?? false,
           },
+          scopeChain: scopeChainRef.current,
         });
       } catch (e) {
         console.error("Failed to complete drag session:", e);

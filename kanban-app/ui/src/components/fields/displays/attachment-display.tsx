@@ -10,7 +10,14 @@
  * No file content is loaded — this is purely metadata-driven.
  */
 
-import { useCallback, useContext, useEffect, useMemo, useRef, type ComponentType } from "react";
+import {
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  type ComponentType,
+} from "react";
 import {
   File,
   FileImage,
@@ -28,6 +35,7 @@ import {
   CommandScopeContext,
   resolveCommand,
   dispatchCommand,
+  scopeChainFromScope,
   useActiveBoardPath,
   type CommandDef,
 } from "@/lib/command-scope";
@@ -105,16 +113,49 @@ const CODE_MIME_TYPES = new Set([
 
 /** Code-related file extensions. */
 const CODE_EXTENSIONS = new Set([
-  "js", "jsx", "ts", "tsx", "py", "rs", "go", "java", "c", "cpp", "h",
-  "hpp", "cs", "rb", "php", "swift", "kt", "scala", "sh", "bash", "zsh",
-  "lua", "r", "json", "xml", "yaml", "yml", "toml",
+  "js",
+  "jsx",
+  "ts",
+  "tsx",
+  "py",
+  "rs",
+  "go",
+  "java",
+  "c",
+  "cpp",
+  "h",
+  "hpp",
+  "cs",
+  "rb",
+  "php",
+  "swift",
+  "kt",
+  "scala",
+  "sh",
+  "bash",
+  "zsh",
+  "lua",
+  "r",
+  "json",
+  "xml",
+  "yaml",
+  "yml",
+  "toml",
 ]);
 
 /** Spreadsheet file extensions. */
 const SPREADSHEET_EXTENSIONS = new Set(["csv", "xls", "xlsx", "ods"]);
 
 /** Archive file extensions. */
-const ARCHIVE_EXTENSIONS = new Set(["zip", "tar", "gz", "bz2", "7z", "rar", "xz"]);
+const ARCHIVE_EXTENSIONS = new Set([
+  "zip",
+  "tar",
+  "gz",
+  "bz2",
+  "7z",
+  "rar",
+  "xz",
+]);
 
 /**
  * Select the appropriate lucide icon component based on MIME type and file extension.
@@ -205,8 +246,15 @@ export function AttachmentItem({ attachment }: AttachmentItemProps) {
   );
 
   return (
-    <CommandScopeProvider commands={commands} moniker={`attachment:${attachment.path}`}>
-      <AttachmentItemInner attachment={attachment} scopeChain={scopeChain} Icon={Icon} />
+    <CommandScopeProvider
+      commands={commands}
+      moniker={`attachment:${attachment.path}`}
+    >
+      <AttachmentItemInner
+        attachment={attachment}
+        scopeChain={scopeChain}
+        Icon={Icon}
+      />
     </CommandScopeProvider>
   );
 }
@@ -225,12 +273,13 @@ function AttachmentItemInner({
   Icon,
 }: AttachmentItemInnerProps) {
   const scope = useContext(CommandScopeContext);
+  const boardPath = useActiveBoardPath();
   const onContextMenu = useContextMenu(scopeChain);
 
   const handleDoubleClick = useCallback(() => {
     const cmd = resolveCommand(scope, "attachment.open");
-    if (cmd) dispatchCommand(cmd);
-  }, [scope]);
+    if (cmd) dispatchCommand(cmd, boardPath, scopeChainFromScope(scope));
+  }, [scope, boardPath]);
 
   return (
     <div
@@ -254,8 +303,10 @@ export function AttachmentDisplay({
   onCommit,
 }: AttachmentDisplayProps) {
   const attachment = value as AttachmentMeta | null | undefined;
-  const hasAttachment = attachment && typeof attachment === "object" && "name" in attachment;
-  const { isDragging, registerDropTarget, unregisterDropTarget } = useFileDrop();
+  const hasAttachment =
+    attachment && typeof attachment === "object" && "name" in attachment;
+  const { isDragging, registerDropTarget, unregisterDropTarget } =
+    useFileDrop();
 
   const onCommitRef = useRef(onCommit);
   onCommitRef.current = onCommit;
@@ -305,7 +356,8 @@ export function AttachmentListDisplay({
   onCommit,
 }: AttachmentListDisplayProps) {
   const attachments = Array.isArray(value) ? (value as AttachmentMeta[]) : [];
-  const { isDragging, registerDropTarget, unregisterDropTarget } = useFileDrop();
+  const { isDragging, registerDropTarget, unregisterDropTarget } =
+    useFileDrop();
 
   const onCommitRef = useRef(onCommit);
   onCommitRef.current = onCommit;

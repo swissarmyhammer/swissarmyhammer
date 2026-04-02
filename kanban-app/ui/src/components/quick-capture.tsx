@@ -112,11 +112,15 @@ export function QuickCapture() {
   }, [loadBoards]);
 
   const hideWindow = useCallback(() => {
-    dispatchCommand({
-      id: "app.dismiss",
-      name: "Dismiss Quick Capture",
-      execute: () => getCurrentWindow().hide(),
-    });
+    dispatchCommand(
+      {
+        id: "app.dismiss",
+        name: "Dismiss Quick Capture",
+        execute: () => getCurrentWindow().hide(),
+      },
+      undefined,
+      [],
+    );
   }, []);
 
   const handleSubmit = useCallback(
@@ -137,32 +141,42 @@ export function QuickCapture() {
         const firstColumnId = columns[0]?.id;
         if (!firstColumnId) return;
 
-        await dispatchCommand({
-          id: "task.add",
-          name: "Quick Capture Add Task",
-          execute: () => {
-            backendDispatch({
-              cmd: "task.add",
-              args: { column: firstColumnId, title: text.trim() },
-              boardPath: selectedPath,
-            });
+        await dispatchCommand(
+          {
+            id: "task.add",
+            name: "Quick Capture Add Task",
+            execute: () => {
+              backendDispatch({
+                cmd: "task.add",
+                args: { column: firstColumnId, title: text.trim() },
+                boardPath: selectedPath,
+                scopeChain: [`window:${getCurrentWindow().label}`],
+              });
+            },
           },
-        });
+          undefined,
+          [],
+        );
 
         localStorage.setItem(STORAGE_KEY, selectedPath);
 
         // If we switched to a different board for the add, restore the previous active
         if (active && active.path !== selectedPath) {
-          await dispatchCommand({
-            id: "file.switchBoard",
-            name: "Restore Active Board",
-            execute: () => {
-              backendDispatch({
-                cmd: "file.switchBoard",
-                args: { path: active.path },
-              });
-          },
-          }).catch(() => {});
+          await dispatchCommand(
+            {
+              id: "file.switchBoard",
+              name: "Restore Active Board",
+              execute: () => {
+                backendDispatch({
+                  cmd: "file.switchBoard",
+                  args: { path: active.path },
+                  scopeChain: [`window:${getCurrentWindow().label}`],
+                });
+              },
+            },
+            undefined,
+            [],
+          ).catch(() => {});
         }
       } catch (err) {
         console.error("Quick capture failed:", err);

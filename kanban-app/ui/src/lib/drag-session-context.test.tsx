@@ -148,6 +148,7 @@ describe("DragSessionProvider", () => {
         sourceWindowLabel: "main",
         copyMode: false,
       },
+      scopeChain: [],
     });
   });
 
@@ -161,6 +162,7 @@ describe("DragSessionProvider", () => {
 
     expect(mockInvoke).toHaveBeenCalledWith("dispatch_command", {
       cmd: "drag.cancel",
+      scopeChain: [],
     });
   });
 
@@ -186,6 +188,7 @@ describe("DragSessionProvider", () => {
         afterId: null,
         copyMode: true,
       },
+      scopeChain: [],
     });
   });
 
@@ -207,6 +210,7 @@ describe("DragSessionProvider", () => {
         afterId: null,
         copyMode: false,
       },
+      scopeChain: [],
     });
   });
 

@@ -6,6 +6,8 @@ import {
   useExecuteCommand,
   resolveCommand,
   dispatchCommand,
+  scopeChainFromScope,
+  useActiveBoardPath,
   type CommandDef,
 } from "@/lib/command-scope";
 import { useFocusedScope, useEntityFocus } from "@/lib/entity-focus-context";
@@ -31,6 +33,7 @@ import { dispatchContextMenuCommand } from "@/lib/context-menu";
 function KeybindingHandler({ mode }: { mode: KeymapMode }) {
   const rootExecuteCommand = useExecuteCommand();
   const focusedScope = useFocusedScope();
+  const boardPath = useActiveBoardPath();
 
   // Store focused scope in a ref so the key handler callback always sees
   // the latest value without re-creating the handler on every focus change.
@@ -38,6 +41,8 @@ function KeybindingHandler({ mode }: { mode: KeymapMode }) {
   focusedScopeRef.current = focusedScope;
   const rootExecuteRef = useRef(rootExecuteCommand);
   rootExecuteRef.current = rootExecuteCommand;
+  const boardPathRef = useRef(boardPath);
+  boardPathRef.current = boardPath;
 
   /** Execute a command, preferring the focused scope when available. */
   const executeCommand = useCallback(async (id: string): Promise<boolean> => {
@@ -53,11 +58,12 @@ function KeybindingHandler({ mode }: { mode: KeymapMode }) {
     if (scope) {
       const cmd = resolveCommand(scope, id);
       if (cmd) {
-        await dispatchCommand(cmd);
+        const chain = scopeChainFromScope(scope);
+        await dispatchCommand(cmd, boardPathRef.current, chain);
         return true;
       }
     }
-    // Fall back to root scope
+    // Fall back to root scope (useExecuteCommand already passes scope chain)
     return rootExecuteRef.current(id);
   }, []);
 
@@ -299,7 +305,7 @@ export function AppShell({ children, onSwitchBoard }: AppShellProps) {
   /** Close the command palette (dispatch to backend) and return to normal mode. */
   const closePalette = useCallback(() => {
     // Dispatch app.dismiss to backend to close palette
-    dispatchCommand({ id: "app.dismiss", name: "Dismiss" });
+    dispatchCommand({ id: "app.dismiss", name: "Dismiss" }, undefined, []);
   }, []);
 
   return (

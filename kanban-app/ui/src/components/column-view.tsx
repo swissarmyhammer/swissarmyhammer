@@ -1,5 +1,17 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { backendDispatch } from "@/lib/command-scope";
+import {
+  memo,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import {
+  backendDispatch,
+  CommandScopeContext,
+  scopeChainFromScope,
+} from "@/lib/command-scope";
 import { Plus } from "lucide-react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { DropZone } from "@/components/drop-zone";
@@ -105,6 +117,8 @@ export const ColumnView = memo(function ColumnView({
 }: ColumnViewProps) {
   const columnMoniker = moniker("column", column.id);
   const columnNameMoniker = fieldMoniker("column", column.id, "name");
+  const scope = useContext(CommandScopeContext);
+  const scopeChain = useMemo(() => scopeChainFromScope(scope), [scope]);
   const { getFieldDef } = useSchema();
   const nameFieldDef = getFieldDef("column", "name");
   const [editingName, setEditingName] = useState(false);
@@ -183,6 +197,7 @@ export const ColumnView = memo(function ColumnView({
             cmd: "task.move",
             args,
             ...(boardPath ? { boardPath } : {}),
+            scopeChain,
           }).catch(console.error);
         },
       };
@@ -470,6 +485,7 @@ export const ColumnView = memo(function ColumnView({
                   cmd: "task.add",
                   args: { title: "New task", column: column.id },
                   ...(boardPath ? { boardPath } : {}),
+                  scopeChain,
                 });
               }}
               title={`Add task to ${getStr(column, "name")}`}

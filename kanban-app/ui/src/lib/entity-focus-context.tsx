@@ -79,11 +79,13 @@ function invokeFocusChange(
     backendDispatch({
       cmd: "ui.setFocus",
       args: { scope_chain: chain },
+      scopeChain: chain,
     }).catch((error) => console.error("ui.setFocus failed:", error));
   } else {
     backendDispatch({
       cmd: "ui.setFocus",
       args: { scope_chain: [] },
+      scopeChain: [],
     }).catch((error) => console.error("ui.setFocus failed:", error));
   }
 }

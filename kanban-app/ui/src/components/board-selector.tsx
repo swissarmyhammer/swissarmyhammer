@@ -92,11 +92,15 @@ export function BoardSelector({
       <Select
         value={selectedPath ?? undefined}
         onValueChange={(path) => {
-          dispatchCommand({
-            id: "file.switchBoard",
-            name: "Switch Board",
-            execute: () => onSelect(path),
-          });
+          dispatchCommand(
+            {
+              id: "file.switchBoard",
+              name: "Switch Board",
+              execute: () => onSelect(path),
+            },
+            undefined,
+            [],
+          );
         }}
       >
         <SelectTrigger
@@ -134,12 +138,16 @@ export function BoardSelector({
           className="h-6 w-6 text-muted-foreground/40"
           title="Open in new window"
           onClick={() => {
-            dispatchCommand({
-              id: "window.new",
-              name: "New Window",
-              execute: () =>
-                invoke("create_window", { boardPath: selectedPath }),
-            });
+            dispatchCommand(
+              {
+                id: "window.new",
+                name: "New Window",
+                execute: () =>
+                  invoke("create_window", { boardPath: selectedPath }),
+              },
+              undefined,
+              [],
+            );
           }}
         >
           <ExternalLink className="h-3.5 w-3.5" />

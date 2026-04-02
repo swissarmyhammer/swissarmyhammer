@@ -80,6 +80,22 @@ export interface CommandScope {
 
 export const CommandScopeContext = createContext<CommandScope | null>(null);
 
+/**
+ * Walk the scope chain from innermost to root, collecting monikers.
+ *
+ * Returns an array like `["task:abc", "column:todo", "window:board-2"]`.
+ * Scopes without monikers are skipped.
+ */
+export function scopeChainFromScope(scope: CommandScope | null): string[] {
+  const chain: string[] = [];
+  let current = scope;
+  while (current) {
+    if (current.moniker) chain.push(current.moniker);
+    current = current.parent;
+  }
+  return chain;
+}
+
 interface CommandScopeProviderProps {
   /** Commands to register in this scope. */
   commands: CommandDef[];
@@ -215,8 +231,14 @@ export function useAvailableCommands(): CommandAtDepth[] {
  * @param params - The parameters to pass to `dispatch_command`.
  * @returns The raw JSON value returned by the backend.
  */
+/**
+ * Dispatch a command to the Rust backend via Tauri IPC.
+ *
+ * Every call MUST include `scopeChain` so the backend knows which window
+ * the command originates from. This is enforced by the type signature.
+ */
 export async function backendDispatch(
-  params: Record<string, unknown>,
+  params: { scopeChain: string[] } & Record<string, unknown>,
 ): Promise<unknown> {
   return invoke("dispatch_command", params);
 }
@@ -231,7 +253,8 @@ export async function backendDispatch(
  */
 export async function dispatchCommand(
   cmd: CommandDef,
-  boardPath?: string,
+  boardPath: string | undefined,
+  scopeChain: string[],
 ): Promise<void> {
   if (cmd.execute) {
     // Log to Rust backend so every command appears in the unified log
@@ -245,6 +268,7 @@ export async function dispatchCommand(
       cmd: cmd.id,
       target: cmd.target,
       args: cmd.args,
+      scopeChain,
       ...(boardPath ? { boardPath } : {}),
     });
   }
@@ -270,7 +294,8 @@ export function useExecuteCommand(): (id: string) => Promise<boolean> {
     async (id: string): Promise<boolean> => {
       const cmd = resolveCommand(scope, id);
       if (cmd === null) return false;
-      await dispatchCommand(cmd, boardPathRef.current);
+      const chain = scopeChainFromScope(scope);
+      await dispatchCommand(cmd, boardPathRef.current, chain);
       return true;
     },
     [scope],

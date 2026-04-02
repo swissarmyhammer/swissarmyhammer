@@ -11,12 +11,17 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { backendDispatch } from "@/lib/command-scope";
+import {
+  backendDispatch,
+  scopeChainFromScope,
+  CommandScopeContext,
+} from "@/lib/command-scope";
 
 /** The shape of the undo state exposed to consumers. */
 interface UndoState {
@@ -67,6 +72,9 @@ async function fetchUndoState(): Promise<{
 export function UndoProvider({ children }: { children: ReactNode }) {
   const [canUndo, setCanUndo] = useState(false);
   const [canRedo, setCanRedo] = useState(false);
+  const scope = useContext(CommandScopeContext);
+  const scopeRef = useRef(scopeChainFromScope(scope));
+  scopeRef.current = scopeChainFromScope(scope);
 
   /** Refresh undo/redo availability from the backend. */
   const refreshState = useCallback(async () => {
@@ -96,12 +104,12 @@ export function UndoProvider({ children }: { children: ReactNode }) {
   }, [refreshState]);
 
   const undo = useCallback(async () => {
-    await backendDispatch({ cmd: "app.undo" });
+    await backendDispatch({ cmd: "app.undo", scopeChain: scopeRef.current });
     await refreshState();
   }, [refreshState]);
 
   const redo = useCallback(async () => {
-    await backendDispatch({ cmd: "app.redo" });
+    await backendDispatch({ cmd: "app.redo", scopeChain: scopeRef.current });
     await refreshState();
   }, [refreshState]);
 

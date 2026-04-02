@@ -20,6 +20,7 @@ import {
   useExecuteCommand,
   dispatchCommand,
   backendDispatch,
+  scopeChainFromScope,
   type CommandDef,
   type CommandScope,
 } from "./command-scope";
@@ -44,13 +45,16 @@ function cmd(id: string, overrides: Partial<CommandDef> = {}): CommandDef {
 /** Wrap children in one or more nested CommandScopeProviders. */
 function wrapper(
   layers: CommandDef[][],
+  monikers?: string[],
 ): ({ children }: { children: ReactNode }) => ReactNode {
   return ({ children }: { children: ReactNode }) => {
     let el = children;
     // Wrap from outermost (last) to innermost (first)
     for (let i = layers.length - 1; i >= 0; i--) {
       el = (
-        <CommandScopeProvider commands={layers[i]}>{el}</CommandScopeProvider>
+        <CommandScopeProvider commands={layers[i]} moniker={monikers?.[i]}>
+          {el}
+        </CommandScopeProvider>
       );
     }
     return el;
@@ -467,23 +471,28 @@ describe("collectAvailableCommands", () => {
 describe("dispatchCommand", () => {
   it("calls execute when set", async () => {
     const execute = vi.fn();
-    await dispatchCommand({ id: "test", name: "Test", execute });
+    await dispatchCommand({ id: "test", name: "Test", execute }, undefined, []);
     expect(execute).toHaveBeenCalledOnce();
   });
 
   it("dispatches to Rust by id when no execute is set", async () => {
     const { invoke } = await import("@tauri-apps/api/core");
     (invoke as ReturnType<typeof vi.fn>).mockResolvedValue({});
-    await dispatchCommand({
-      id: "entity.delete",
-      name: "Test",
-      target: "task:abc",
-      args: { moniker: "task:abc" },
-    });
+    await dispatchCommand(
+      {
+        id: "entity.delete",
+        name: "Test",
+        target: "task:abc",
+        args: { moniker: "task:abc" },
+      },
+      undefined,
+      [],
+    );
     expect(invoke).toHaveBeenCalledWith("dispatch_command", {
       cmd: "entity.delete",
       target: "task:abc",
       args: { moniker: "task:abc" },
+      scopeChain: [],
     });
   });
 
@@ -491,12 +500,16 @@ describe("dispatchCommand", () => {
     const execute = vi.fn();
     const { invoke } = await import("@tauri-apps/api/core");
     (invoke as ReturnType<typeof vi.fn>).mockClear();
-    await dispatchCommand({
-      id: "entity.delete",
-      name: "Test",
-      execute,
-      args: { moniker: "task:abc" },
-    });
+    await dispatchCommand(
+      {
+        id: "entity.delete",
+        name: "Test",
+        execute,
+        args: { moniker: "task:abc" },
+      },
+      undefined,
+      [],
+    );
     expect(execute).toHaveBeenCalledOnce();
     // invoke should NOT have been called for dispatch_command
     expect(invoke).not.toHaveBeenCalledWith(
@@ -511,23 +524,26 @@ describe("dispatchCommand", () => {
     await dispatchCommand(
       { id: "task.create", name: "Create", target: "task:new" },
       "/boards/my-board",
+      [],
     );
     expect(invoke).toHaveBeenCalledWith("dispatch_command", {
       cmd: "task.create",
       target: "task:new",
       args: undefined,
       boardPath: "/boards/my-board",
+      scopeChain: [],
     });
   });
 
   it("dispatches to Rust when no execute is set (no args)", async () => {
     const { invoke } = await import("@tauri-apps/api/core");
     (invoke as ReturnType<typeof vi.fn>).mockResolvedValue({});
-    await dispatchCommand({ id: "app.undo", name: "Undo" });
+    await dispatchCommand({ id: "app.undo", name: "Undo" }, undefined, []);
     expect(invoke).toHaveBeenCalledWith("dispatch_command", {
       cmd: "app.undo",
       target: undefined,
       args: undefined,
+      scopeChain: [],
     });
   });
 });
@@ -538,9 +554,10 @@ describe("backendDispatch", () => {
   it("does not include windowLabel in invoke args", async () => {
     const { invoke } = await import("@tauri-apps/api/core");
     (invoke as ReturnType<typeof vi.fn>).mockResolvedValue({});
-    await backendDispatch({ cmd: "app.undo" });
+    await backendDispatch({ cmd: "app.undo", scopeChain: [] });
     expect(invoke).toHaveBeenCalledWith("dispatch_command", {
       cmd: "app.undo",
+      scopeChain: [],
     });
   });
 
@@ -565,10 +582,142 @@ describe("backendDispatch", () => {
     const { invoke } = await import("@tauri-apps/api/core");
     (invoke as ReturnType<typeof vi.fn>).mockResolvedValue({});
     // backendDispatch is a thin wrapper — params go straight to invoke.
-    await backendDispatch({ cmd: "test", board_path: "/tmp/board" });
+    await backendDispatch({
+      cmd: "test",
+      board_path: "/tmp/board",
+      scopeChain: [],
+    });
     expect(invoke).toHaveBeenCalledWith("dispatch_command", {
       cmd: "test",
       board_path: "/tmp/board",
+      scopeChain: [],
     });
+  });
+});
+
+/* ---------- scopeChainFromScope ---------- */
+
+describe("scopeChainFromScope", () => {
+  it("returns empty array for null scope", () => {
+    expect(scopeChainFromScope(null)).toEqual([]);
+  });
+
+  it("returns monikers from innermost to root", () => {
+    const root = makeScope([], null);
+    root.moniker = "window:main";
+    const mid = makeScope([], root);
+    mid.moniker = "column:todo";
+    const inner = makeScope([], mid);
+    inner.moniker = "task:abc";
+    expect(scopeChainFromScope(inner)).toEqual([
+      "task:abc",
+      "column:todo",
+      "window:main",
+    ]);
+  });
+
+  it("skips scopes without monikers", () => {
+    const root = makeScope([], null);
+    root.moniker = "window:board-2";
+    const noMoniker = makeScope([], root);
+    // no moniker set
+    const inner = makeScope([], noMoniker);
+    inner.moniker = "task:xyz";
+    expect(scopeChainFromScope(inner)).toEqual(["task:xyz", "window:board-2"]);
+  });
+});
+
+/* ---------- dispatchCommand includes scopeChain ---------- */
+
+describe("dispatchCommand with scopeChain", () => {
+  it("includes scopeChain in backend dispatch when provided", async () => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    (invoke as ReturnType<typeof vi.fn>).mockResolvedValue({});
+
+    await dispatchCommand(
+      { id: "ui.inspect", name: "Inspect", target: "task:abc" },
+      "/boards/test",
+      ["task:abc", "column:todo", "window:board-2"],
+    );
+
+    expect(invoke).toHaveBeenCalledWith("dispatch_command", {
+      cmd: "ui.inspect",
+      target: "task:abc",
+      args: undefined,
+      boardPath: "/boards/test",
+      scopeChain: ["task:abc", "column:todo", "window:board-2"],
+    });
+  });
+
+  it("includes empty scopeChain when passed as empty array", async () => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    (invoke as ReturnType<typeof vi.fn>).mockResolvedValue({});
+
+    await dispatchCommand({ id: "app.undo", name: "Undo" }, undefined, []);
+
+    expect(invoke).toHaveBeenCalledWith("dispatch_command", {
+      cmd: "app.undo",
+      target: undefined,
+      args: undefined,
+      scopeChain: [],
+    });
+  });
+});
+
+/* ---------- useExecuteCommand passes scopeChain ---------- */
+
+describe("useExecuteCommand includes scopeChain", () => {
+  it("passes scope chain monikers when dispatching to backend", async () => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    (invoke as ReturnType<typeof vi.fn>).mockResolvedValue({});
+
+    // Build a scope tree: window:board-2 → column:todo → task commands
+    const { result } = renderHook(() => useExecuteCommand(), {
+      wrapper: wrapper(
+        [[cmd("ui.inspect", { execute: undefined })], [], []],
+        ["window:board-2", "column:todo", "task:abc"],
+      ),
+    });
+
+    await act(async () => {
+      await result.current("ui.inspect");
+    });
+
+    expect(invoke).toHaveBeenCalledWith(
+      "dispatch_command",
+      expect.objectContaining({
+        cmd: "ui.inspect",
+        scopeChain: ["task:abc", "column:todo", "window:board-2"],
+      }),
+    );
+  });
+
+  it("includes window moniker in scope chain for secondary window", async () => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    (invoke as ReturnType<typeof vi.fn>).mockClear();
+    (invoke as ReturnType<typeof vi.fn>).mockResolvedValue({});
+
+    // Backend-dispatched command (no execute function).
+    const inspectCmd: CommandDef = { id: "ui.inspect", name: "Inspect" };
+
+    const { result } = renderHook(() => useExecuteCommand(), {
+      wrapper: wrapper([[], [inspectCmd]], ["window:secondary-1", "task:t1"]),
+    });
+
+    let executed: boolean = false;
+    await act(async () => {
+      executed = await result.current("ui.inspect");
+    });
+
+    expect(executed).toBe(true);
+
+    // The scope chain must include the window moniker so the backend
+    // knows which window to open the inspector in.
+    const call = (invoke as ReturnType<typeof vi.fn>).mock.calls.find(
+      (c: unknown[]) => c[0] === "dispatch_command",
+    );
+    expect(call).toBeTruthy();
+    const params = call![1] as Record<string, unknown>;
+    expect(params.scopeChain).toContain("window:secondary-1");
   });
 });
