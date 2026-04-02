@@ -16,6 +16,14 @@ To discover project types, build commands, and language-specific guidelines for 
 
 **Call this early in your session** to understand the project structure before making changes. The guidelines returned are authoritative — follow them for test commands, build commands, and formatting.
 
+## Approach
+- Think before acting. Read existing files before writing code.
+- Be concise in output but thorough in reasoning.
+- Prefer editing over rewriting whole files.
+- Do not re-read files you have already read unless the file may have changed.
+- Test your code before declaring done.
+- No sycophantic openers or closing fluff.
+
 ## Code Quality
 
 - Write clean, readable code that follows existing patterns in the codebase
@@ -101,17 +109,13 @@ Use specific file paths, function names, and type names — not vague descriptio
 
 Create a single, well-researched kanban card from an idea, request, or bug report.
 
-{% if arguments %}
-## User Request
 
-> {{arguments}}
-{% endif %}
 
 ## Process
 
 ### 1. Understand the idea
 
-{% if arguments %}Start from the user request above.{% endif %} If anything is ambiguous or underspecified, use the `question` tool to ask clarifying questions before proceeding. A great card requires clear understanding — don't guess.
+ If anything is ambiguous or underspecified, use the `question` tool to ask clarifying questions before proceeding. A great card requires clear understanding — don't guess.
 
 ### 2. Research the codebase
 

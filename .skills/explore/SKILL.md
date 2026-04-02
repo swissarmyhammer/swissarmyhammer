@@ -3,7 +3,7 @@ name: explore
 description: Use this skill before planning or implementing when you need to understand code — how something works, why it behaves a certain way, or what a change would affect. Exploration is not done until you can articulate the test you would write. Use when the user says "explore", "investigate", "how does X work", "what would it take to change X", or when you need to understand code before acting.
 metadata:
   author: "swissarmyhammer"
-  version: "0.11.2"
+  version: "0.12.11"
 ---
 
 ## Project Detection
@@ -15,6 +15,14 @@ To discover project types, build commands, and language-specific guidelines for 
 ```
 
 **Call this early in your session** to understand the project structure before making changes. The guidelines returned are authoritative — follow them for test commands, build commands, and formatting.
+
+## Approach
+- Think before acting. Read existing files before writing code.
+- Be concise in output but thorough in reasoning.
+- Prefer editing over rewriting whole files.
+- Do not re-read files you have already read unless the file may have changed.
+- Test your code before declaring done.
+- No sycophantic openers or closing fluff.
 
 ## Test Driven Development
 

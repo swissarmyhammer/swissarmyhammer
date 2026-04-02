@@ -3,7 +3,7 @@ name: deduplicate
 description: Find and refactor duplicate code. Use this skill when the user wants to find near-duplicate code, check for copy-paste redundancy, or DRY up a codebase — optionally scoped to changed files. Automatically delegates to an implementer subagent.
 metadata:
   author: "swissarmyhammer"
-  version: "0.11.2"
+  version: "0.12.11"
 ---
 
 ## Project Detection
@@ -15,6 +15,14 @@ To discover project types, build commands, and language-specific guidelines for 
 ```
 
 **Call this early in your session** to understand the project structure before making changes. The guidelines returned are authoritative — follow them for test commands, build commands, and formatting.
+
+## Approach
+- Think before acting. Read existing files before writing code.
+- Be concise in output but thorough in reasoning.
+- Prefer editing over rewriting whole files.
+- Do not re-read files you have already read unless the file may have changed.
+- Test your code before declaring done.
+- No sycophantic openers or closing fluff.
 
 ## Code Quality
 
