@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KN79CSWG20HKJ9W86CTQ68XE
 position_column: todo
-position_ordinal: 9a80
+position_ordinal: '80'
 title: 2. Replace WATCHED_SUBDIRS with store-driven watching — stores watch themselves
 ---
 ## What

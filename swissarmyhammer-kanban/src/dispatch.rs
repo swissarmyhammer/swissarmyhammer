@@ -4,7 +4,6 @@
 //! This is the single source of truth for operation dispatch, used by both the MCP tool
 //! and the standalone kanban CLI.
 
-use crate::activity::ListActivity;
 use crate::actor::{AddActor, DeleteActor, GetActor, ListActors, UpdateActor};
 use crate::attachment::{
     AddAttachment, DeleteAttachment, GetAttachment, ListAttachments, UpdateAttachment,
@@ -369,15 +368,6 @@ pub async fn execute_operation(
             processor.process(&DeleteTag::new(id), ctx).await
         }
         (Verb::List, Noun::Tags) => processor.process(&ListTags::default(), ctx).await,
-
-        // Activity operations
-        (Verb::List, Noun::Activity) => {
-            let mut cmd = ListActivity::default();
-            if let Some(limit) = op.get_param("limit").and_then(|v| v.as_u64()) {
-                cmd = cmd.with_limit(limit as usize);
-            }
-            processor.process(&cmd, ctx).await
-        }
 
         // Attachment operations
         (Verb::Add, Noun::Attachment) => {
@@ -1661,21 +1651,6 @@ mod tests {
         });
         let result = execute_operation(&ctx, &op).await.unwrap();
         assert_eq!(result["deleted"], true);
-    }
-
-    // ── Activity operations ───────────────────────────────────────────
-
-    #[tokio::test]
-    async fn dispatch_list_activity() {
-        let (_temp, ctx) = setup().await;
-
-        // Add a task to generate activity
-        let ops = parse_input(json!({"op": "add task", "title": "Activity test"})).unwrap();
-        execute_operation(&ctx, &ops[0]).await.unwrap();
-
-        let ops = parse_input(json!({"op": "list activity", "limit": 5})).unwrap();
-        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
-        assert!(result["entries"].as_array().unwrap().len() > 0);
     }
 
     // ── Dispatch with actor context ───────────────────────────────────

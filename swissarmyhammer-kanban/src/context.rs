@@ -262,16 +262,6 @@ impl KanbanContext {
         self.root.join("perspectives")
     }
 
-    /// Path to the activity directory
-    pub fn activity_dir(&self) -> PathBuf {
-        self.root.join("activity")
-    }
-
-    /// Path to the current activity log
-    pub fn activity_path(&self) -> PathBuf {
-        self.root.join("activity").join("current.jsonl")
-    }
-
     /// Path to the lock file
     pub fn lock_path(&self) -> PathBuf {
         self.root.join(".lock")
@@ -297,7 +287,6 @@ impl KanbanContext {
             && self.tags_dir().exists()
             && self.columns_dir().exists()
             && self.swimlanes_dir().exists()
-            && self.activity_dir().exists()
             && self.perspectives_dir().exists()
     }
 
@@ -315,7 +304,6 @@ impl KanbanContext {
         fs::create_dir_all(self.tags_dir()).await?;
         fs::create_dir_all(self.columns_dir()).await?;
         fs::create_dir_all(self.swimlanes_dir()).await?;
-        fs::create_dir_all(self.activity_dir()).await?;
         fs::create_dir_all(self.perspectives_dir()).await?;
         Ok(())
     }
@@ -332,14 +320,6 @@ impl KanbanContext {
     }
 
     // =========================================================================
-    // Activity logging
-    // =========================================================================
-
-    /// Append a log entry to the global activity log
-    pub async fn append_activity(&self, entry: &LogEntry) -> Result<()> {
-        self.append_log(&self.activity_path(), entry).await
-    }
-
     /// Append a log entry to a task's log
     pub async fn append_task_log(&self, task_id: &TaskId, entry: &LogEntry) -> Result<()> {
         self.append_log(&self.task_log_path(task_id), entry).await
@@ -400,30 +380,6 @@ impl KanbanContext {
         file.flush().await?;
 
         Ok(())
-    }
-
-    /// Read activity log entries (from current.jsonl)
-    pub async fn read_activity(&self, limit: Option<usize>) -> Result<Vec<LogEntry>> {
-        let path = self.activity_path();
-        if !path.exists() {
-            return Ok(Vec::new());
-        }
-
-        let content = fs::read_to_string(&path).await?;
-        let mut entries: Vec<LogEntry> = content
-            .lines()
-            .filter(|line| !line.is_empty())
-            .filter_map(|line| serde_json::from_str(line).ok())
-            .collect();
-
-        // Reverse to get newest first
-        entries.reverse();
-
-        if let Some(limit) = limit {
-            entries.truncate(limit);
-        }
-
-        Ok(entries)
     }
 
     // =========================================================================
@@ -732,7 +688,7 @@ mod tests {
         assert!(ctx.tasks_dir().exists());
         assert!(ctx.actors_dir().exists());
         assert!(ctx.tags_dir().exists());
-        assert!(ctx.activity_dir().exists());
+        assert!(ctx.perspectives_dir().exists());
     }
 
     #[tokio::test]
@@ -1127,94 +1083,6 @@ type:
     }
 
     // =========================================================================
-    // Activity logging tests
-    // =========================================================================
-
-    #[tokio::test]
-    async fn test_append_activity_and_read_back() {
-        let (_temp, ctx) = setup().await;
-
-        let entry = LogEntry::new(
-            "add task",
-            serde_json::json!({"title": "Hello"}),
-            serde_json::json!({"id": "task1"}),
-            None,
-            10,
-        );
-        ctx.append_activity(&entry).await.unwrap();
-
-        let entries = ctx.read_activity(None).await.unwrap();
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].op, "add task");
-    }
-
-    #[tokio::test]
-    async fn test_read_activity_returns_newest_first() {
-        let (_temp, ctx) = setup().await;
-
-        let e1 = LogEntry::new(
-            "add task",
-            serde_json::json!({}),
-            serde_json::json!({}),
-            None,
-            1,
-        );
-        let e2 = LogEntry::new(
-            "move task",
-            serde_json::json!({}),
-            serde_json::json!({}),
-            None,
-            2,
-        );
-        let e3 = LogEntry::new(
-            "complete task",
-            serde_json::json!({}),
-            serde_json::json!({}),
-            None,
-            3,
-        );
-
-        ctx.append_activity(&e1).await.unwrap();
-        ctx.append_activity(&e2).await.unwrap();
-        ctx.append_activity(&e3).await.unwrap();
-
-        let entries = ctx.read_activity(None).await.unwrap();
-        assert_eq!(entries.len(), 3);
-        // Newest first (reversed order)
-        assert_eq!(entries[0].op, "complete task");
-        assert_eq!(entries[1].op, "move task");
-        assert_eq!(entries[2].op, "add task");
-    }
-
-    #[tokio::test]
-    async fn test_read_activity_with_limit() {
-        let (_temp, ctx) = setup().await;
-
-        for i in 0..5 {
-            let entry = LogEntry::new(
-                format!("op{}", i),
-                serde_json::json!({}),
-                serde_json::json!({}),
-                None,
-                1,
-            );
-            ctx.append_activity(&entry).await.unwrap();
-        }
-
-        let entries = ctx.read_activity(Some(2)).await.unwrap();
-        assert_eq!(entries.len(), 2);
-        // Should be the 2 newest
-        assert_eq!(entries[0].op, "op4");
-        assert_eq!(entries[1].op, "op3");
-    }
-
-    #[tokio::test]
-    async fn test_read_activity_empty_when_no_file() {
-        let (_temp, ctx) = setup().await;
-
-        let entries = ctx.read_activity(None).await.unwrap();
-        assert!(entries.is_empty());
-    }
 
     #[tokio::test]
     async fn test_append_task_log() {
@@ -1328,29 +1196,6 @@ type:
 
         let log_path = ctx.board_log_path();
         assert!(log_path.exists());
-    }
-
-    #[tokio::test]
-    async fn test_append_log_creates_file_and_appends() {
-        let (_temp, ctx) = setup().await;
-
-        let e1 = LogEntry::new("op1", serde_json::json!({}), serde_json::json!({}), None, 1);
-        let e2 = LogEntry::new("op2", serde_json::json!({}), serde_json::json!({}), None, 2);
-
-        ctx.append_activity(&e1).await.unwrap();
-        ctx.append_activity(&e2).await.unwrap();
-
-        // Both entries should be in the file, one per line
-        let content = tokio::fs::read_to_string(ctx.activity_path())
-            .await
-            .unwrap();
-        let lines: Vec<&str> = content.lines().filter(|l| !l.is_empty()).collect();
-        assert_eq!(lines.len(), 2);
-
-        let parsed1: LogEntry = serde_json::from_str(lines[0]).unwrap();
-        let parsed2: LogEntry = serde_json::from_str(lines[1]).unwrap();
-        assert_eq!(parsed1.op, "op1");
-        assert_eq!(parsed2.op, "op2");
     }
 
     // =========================================================================

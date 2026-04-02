@@ -988,7 +988,7 @@ mod tests {
         std::fs::create_dir_all(kanban_dir.join("tags")).unwrap();
         std::fs::create_dir_all(kanban_dir.join("actors")).unwrap();
         std::fs::create_dir_all(kanban_dir.join("swimlanes")).unwrap();
-        std::fs::create_dir_all(kanban_dir.join("activity")).unwrap();
+        std::fs::create_dir_all(kanban_dir.join("perspectives")).unwrap();
     }
 
     #[tokio::test]

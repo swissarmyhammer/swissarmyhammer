@@ -101,7 +101,6 @@ pub enum Noun {
     Attachments,
     Perspective,
     Perspectives,
-    Activity,
     Archived,
 }
 
@@ -126,7 +125,6 @@ impl Noun {
             Self::Attachments => "attachments",
             Self::Perspective => "perspective",
             Self::Perspectives => "perspectives",
-            Self::Activity => "activity",
             Self::Archived => "archived",
         }
     }
@@ -151,7 +149,6 @@ impl Noun {
             "attachments" => Some(Self::Attachments),
             "perspective" => Some(Self::Perspective),
             "perspectives" => Some(Self::Perspectives),
-            "activity" => Some(Self::Activity),
             "archived" => Some(Self::Archived),
             _ => None,
         }
@@ -280,9 +277,7 @@ pub fn is_valid_operation(verb: Verb, noun: Noun) -> bool {
         // Perspective operations
         (Verb::Add, Noun::Perspective) | (Verb::Get, Noun::Perspective) |
         (Verb::Update, Noun::Perspective) | (Verb::Delete, Noun::Perspective) |
-        (Verb::List, Noun::Perspectives) |
-        // Activity
-        (Verb::List, Noun::Activity)
+        (Verb::List, Noun::Perspectives)
     )
 }
 

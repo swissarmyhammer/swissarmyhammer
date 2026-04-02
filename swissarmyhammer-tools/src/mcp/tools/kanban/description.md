@@ -174,11 +174,6 @@ The tool accepts `op` as a "verb noun" string (e.g., "add task", "move task").
 - `list attachments` - List all attachments on a task
   - Required: `task_id`
 
-### Activity Operations
-
-- `list activity` - List recent operations (most recent first)
-  - Optional: `limit` (number of entries)
-
 ## Examples
 
 ### Initialize a board
@@ -384,14 +379,6 @@ The blocked task won't appear in ready tasks until the blocker is completed:
 }
 ```
 
-### View activity log
-
-```json
-{
-  "op": "list activity",
-  "limit": 10
-}
-```
 
 ## Complete Workflow Example
 

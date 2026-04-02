@@ -7,7 +7,6 @@ use serde_json::{json, Map, Value};
 use std::sync::LazyLock;
 use swissarmyhammer_operations::{generate_mcp_schema, Operation, SchemaConfig};
 
-use crate::activity::ListActivity;
 use crate::actor::{AddActor, DeleteActor, GetActor, ListActors, UpdateActor};
 use crate::attachment::{
     AddAttachment, DeleteAttachment, GetAttachment, ListAttachments, UpdateAttachment,
@@ -83,8 +82,6 @@ static KANBAN_OPERATIONS: LazyLock<Vec<&'static dyn Operation>> = LazyLock::new(
         Box::leak(Box::new(UpdatePerspective::new(""))) as &dyn Operation,
         Box::leak(Box::new(DeletePerspective::new(""))) as &dyn Operation,
         Box::leak(Box::new(ListPerspectives::new())) as &dyn Operation,
-        // Activity
-        Box::leak(Box::new(ListActivity::default())) as &dyn Operation,
     ]
 });
 
@@ -187,7 +184,6 @@ fn get_kanban_verb_aliases() -> Map<String, Value> {
 mod tests {
     use super::*;
     use crate::{
-        activity::ListActivity,
         actor::{AddActor, ListActors},
         board::InitBoard,
         task::{AddTask, AssignTask, ListTasks},
@@ -202,7 +198,6 @@ mod tests {
             Box::leak(Box::new(ListTasks::new())) as &dyn Operation,
             Box::leak(Box::new(AddActor::new("", ""))) as &dyn Operation,
             Box::leak(Box::new(ListActors)) as &dyn Operation,
-            Box::leak(Box::new(ListActivity::default())) as &dyn Operation,
         ]
     }
 

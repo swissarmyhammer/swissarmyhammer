@@ -1292,6 +1292,78 @@ mod tests {
         }
     }
 
+    /// A mock store with an explicit name, used to verify `store_name()` in event payloads.
+    struct NamedMockStore {
+        root: PathBuf,
+        name: String,
+    }
+
+    impl TrackedStore for NamedMockStore {
+        type Item = String;
+        type ItemId = String;
+
+        fn root(&self) -> &Path {
+            &self.root
+        }
+        fn item_id(&self, item: &String) -> String {
+            item.lines().next().unwrap_or("unknown").to_string()
+        }
+        fn serialize(&self, item: &String) -> Result<String> {
+            Ok(item.clone())
+        }
+        fn deserialize(&self, _id: &String, text: &str) -> Result<String> {
+            Ok(text.to_string())
+        }
+        fn extension(&self) -> &str {
+            "txt"
+        }
+        fn store_name(&self) -> &str {
+            &self.name
+        }
+    }
+
+    fn setup_named(dir: &Path, name: &str) -> StoreHandle<NamedMockStore> {
+        let store = Arc::new(NamedMockStore {
+            root: dir.to_path_buf(),
+            name: name.to_string(),
+        });
+        StoreHandle::new(store)
+    }
+
+    /// `flush_changes` events include the correct `store` name and item `id` in the payload.
+    #[tokio::test]
+    async fn flush_changes_event_payload_includes_store_name() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let handle = setup_named(dir.path(), "my-entities");
+
+        // Create
+        handle.write(&"item42\ncontent".to_string()).await.unwrap();
+        let events = handle.flush_changes().await;
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_name, "item-created");
+        assert_eq!(events[0].payload["store"], "my-entities");
+        assert_eq!(events[0].payload["id"], "item42");
+
+        // Update
+        handle
+            .write(&"item42\nupdated content".to_string())
+            .await
+            .unwrap();
+        let events = handle.flush_changes().await;
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_name, "item-changed");
+        assert_eq!(events[0].payload["store"], "my-entities");
+        assert_eq!(events[0].payload["id"], "item42");
+
+        // Delete
+        handle.delete(&"item42".to_string()).await.unwrap();
+        let events = handle.flush_changes().await;
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_name, "item-removed");
+        assert_eq!(events[0].payload["store"], "my-entities");
+        assert_eq!(events[0].payload["id"], "item42");
+    }
+
     #[tokio::test]
     async fn redo_update_with_non_overlapping_concurrent_edit_succeeds() {
         // Write v1, write v2, undo, externally modify, redo.

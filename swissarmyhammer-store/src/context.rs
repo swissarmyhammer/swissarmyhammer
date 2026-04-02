@@ -385,6 +385,56 @@ mod tests {
         assert!(!store1_dir.join("s1item.txt").exists());
     }
 
+    /// `flush_all()` event payloads include the correct `store` name and item `id` fields.
+    ///
+    /// This test verifies that the aggregated events from multiple stores carry the
+    /// store name and item ID in the payload — not just that the event count is correct.
+    #[tokio::test]
+    async fn flush_all_event_payloads_have_store_and_id() {
+        let dir = TempDir::new().unwrap();
+        // Use directory names that match the expected store_name (default impl returns basename)
+        let store1_dir = dir.path().join("widgets");
+        let store2_dir = dir.path().join("gadgets");
+        std::fs::create_dir_all(&store1_dir).unwrap();
+        std::fs::create_dir_all(&store2_dir).unwrap();
+
+        let handle1 = make_handle(&store1_dir);
+        let handle2 = make_handle(&store2_dir);
+
+        let ctx = StoreContext::new(dir.path().to_path_buf());
+        ctx.register(handle1.clone()).await;
+        ctx.register(handle2.clone()).await;
+
+        // Write through each handle so pending events are produced
+        handle1
+            .write(&"widget1\nsome content".to_string())
+            .await
+            .unwrap();
+        handle2
+            .write(&"gadget1\nother content".to_string())
+            .await
+            .unwrap();
+
+        let events = ctx.flush_all().await;
+        assert_eq!(events.len(), 2);
+
+        // Find the event for each store by `store` field
+        let widget_event = events
+            .iter()
+            .find(|e| e.payload["store"] == "widgets")
+            .expect("expected event with store=widgets");
+        let gadget_event = events
+            .iter()
+            .find(|e| e.payload["store"] == "gadgets")
+            .expect("expected event with store=gadgets");
+
+        assert_eq!(widget_event.event_name, "item-created");
+        assert_eq!(widget_event.payload["id"], "widget1");
+
+        assert_eq!(gadget_event.event_name, "item-created");
+        assert_eq!(gadget_event.payload["id"], "gadget1");
+    }
+
     #[tokio::test]
     async fn undo_with_no_provider_returns_error() {
         let dir = TempDir::new().unwrap();

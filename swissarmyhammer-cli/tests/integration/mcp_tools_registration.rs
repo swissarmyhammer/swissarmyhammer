@@ -216,8 +216,8 @@ async fn test_kanban_schema_has_all_operations() {
     let op_count = op_enum.as_array().expect("op enum should be array").len();
 
     assert_eq!(
-        op_count, 49,
-        "Expected 49 operations in op enum, got {}",
+        op_count, 48,
+        "Expected 48 operations in op enum, got {}",
         op_count
     );
 
@@ -229,8 +229,8 @@ async fn test_kanban_schema_has_all_operations() {
         .len();
 
     assert_eq!(
-        op_schemas_count, 49,
-        "Expected 49 operation schemas, got {}",
+        op_schemas_count, 48,
+        "Expected 48 operation schemas, got {}",
         op_schemas_count
     );
 
@@ -241,7 +241,6 @@ async fn test_kanban_schema_has_all_operations() {
         "add task",
         "assign task",
         "complete task",
-        "list activity",
         "archive task",
         "unarchive task",
         "list archived",

@@ -53,8 +53,8 @@
 //!     ├── actors/
 //!     │   ├── {id}.yaml        # Actor state
 //!     │   ├── {id}.jsonl       # Per-actor operation log
-//!     └── activity/
-//!         └── current.jsonl    # Global operation log
+//!     └── perspectives/
+//!         ├── {id}.yaml        # Perspective (saved view config)
 //! ```
 //!
 //! Entity state files use YAML (or YAML frontmatter + markdown for tasks).
@@ -82,7 +82,6 @@ pub mod perspective;
 pub mod commands;
 
 // Command modules
-pub mod activity;
 pub mod actor;
 pub mod attachment;
 pub mod board;

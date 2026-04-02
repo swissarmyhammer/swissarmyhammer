@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: '8980'
+position_column: done
+position_ordinal: ffffffffffffffffffa180
 title: Remove global activity log (current.jsonl) and list activity operation
 ---
 ## What

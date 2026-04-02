@@ -1312,38 +1312,6 @@ mod tests {
     }
 
     // =========================================================================
-    // Activity operations
-    // =========================================================================
-
-    #[tokio::test]
-    async fn test_list_activity() {
-        let temp = TempDir::new().unwrap();
-        let context = create_test_context()
-            .await
-            .with_working_dir(temp.path().to_path_buf());
-        let tool = KanbanTool::new();
-        init_test_board(&tool, &context).await;
-
-        // Add a task to generate some activity
-        let mut task_args = serde_json::Map::new();
-        task_args.insert("op".to_string(), json!("add task"));
-        task_args.insert("title".to_string(), json!("Test task"));
-        tool.execute(task_args, &context).await.unwrap();
-
-        // List activity
-        let mut list_args = serde_json::Map::new();
-        list_args.insert("op".to_string(), json!("list activity"));
-
-        let result = tool.execute(list_args, &context).await.unwrap();
-        let data = parse_json(&result);
-
-        // Response format: {"entries": [...], "count": N}
-        assert!(data["entries"].is_array());
-        // Should have at least some activity entries
-        assert!(data["count"].as_i64().unwrap_or(0) >= 0);
-    }
-
-    // =========================================================================
     // Column operations
     // =========================================================================
 
@@ -1885,62 +1853,6 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    #[tokio::test]
-    async fn test_activity_logging_via_mcp() {
-        let temp = TempDir::new().unwrap();
-        let context = create_test_context()
-            .await
-            .with_working_dir(temp.path().to_path_buf());
-        let tool = KanbanTool::new();
-        init_test_board(&tool, &context).await;
-
-        // Add task with actor
-        let mut add_args = serde_json::Map::new();
-        add_args.insert("op".to_string(), json!("add task"));
-        add_args.insert("title".to_string(), json!("Test Task"));
-        add_args.insert("actor".to_string(), json!("alice"));
-
-        let result = tool.execute(add_args, &context).await.unwrap();
-        let task_id = extract_task_id(&result);
-
-        // Update task with different actor
-        let mut update_args = serde_json::Map::new();
-        update_args.insert("op".to_string(), json!("update task"));
-        update_args.insert("id".to_string(), json!(task_id));
-        update_args.insert("title".to_string(), json!("Updated Task"));
-        update_args.insert("actor".to_string(), json!("bob"));
-
-        tool.execute(update_args, &context).await.unwrap();
-
-        // Read operation (should not log)
-        let mut get_args = serde_json::Map::new();
-        get_args.insert("op".to_string(), json!("get task"));
-        get_args.insert("id".to_string(), json!(task_id));
-
-        tool.execute(get_args, &context).await.unwrap();
-
-        // Verify activity log via list activity
-        let mut list_activity_args = serde_json::Map::new();
-        list_activity_args.insert("op".to_string(), json!("list activity"));
-
-        let result = tool.execute(list_activity_args, &context).await.unwrap();
-        let data = parse_json(&result);
-
-        let entries = data["entries"].as_array().unwrap();
-        assert_eq!(entries.len(), 3); // init, add, update (not get)
-
-        // Verify actor attribution
-        assert_eq!(entries[0]["op"], "update task");
-        assert_eq!(entries[0]["actor"], "bob");
-        assert_eq!(entries[1]["op"], "add task");
-        assert_eq!(entries[1]["actor"], "alice");
-        assert_eq!(entries[2]["op"], "init board");
-        assert!(entries[2]["actor"].is_null());
-
-        // Per-task changelog files are now managed by StoreHandle (not
-        // available in unit-test setup), so we only verify activity log.
-    }
-
     // =========================================================================
     // Directory initialization tests
     // =========================================================================
@@ -1992,7 +1904,7 @@ mod tests {
         assert!(ctx.tasks_dir().exists());
         assert!(ctx.actors_dir().exists());
         assert!(ctx.tags_dir().exists());
-        assert!(ctx.activity_dir().exists());
+        assert!(ctx.perspectives_dir().exists());
     }
 
     #[tokio::test]

@@ -8,10 +8,8 @@ use swissarmyhammer_operations::{Execute, LogEntry, OperationProcessor};
 
 /// Kanban-specific operation processor
 ///
-/// Handles execution and logging for all kanban operations.
-/// - Executes operations via Execute trait
-/// - Writes logs to global activity log
-/// - Writes logs to per-task logs for affected tasks
+/// Handles execution and actor attribution for all kanban operations.
+/// Per-entity logging is handled by EntityContext/StoreHandle.
 pub struct KanbanOperationProcessor {
     /// Optional actor performing operations (for log attribution)
     pub actor: Option<String>,
@@ -71,20 +69,11 @@ impl OperationProcessor<KanbanContext, KanbanError> for KanbanOperationProcessor
         // Split into result and log entry
         let (result, mut log_entry) = exec_result.split();
 
-        // Write log if present
+        // Add actor attribution to log entry (per-entity logging is handled
+        // by EntityContext; there is no global activity log).
         if let Some(ref mut entry) = log_entry {
-            // Add actor attribution
             if let Some(ref actor) = self.actor {
                 entry.actor = Some(actor.clone());
-            }
-
-            // Write logs
-            if let Ok(ref value) = result {
-                let affected = operation.affected_resource_ids(value);
-                self.write_log(ctx, entry, &affected).await?;
-            } else {
-                // Still log errors
-                self.write_log(ctx, entry, &[]).await?;
             }
         }
 
@@ -93,13 +82,12 @@ impl OperationProcessor<KanbanContext, KanbanError> for KanbanOperationProcessor
 
     async fn write_log(
         &self,
-        ctx: &KanbanContext,
-        log_entry: &LogEntry,
+        _ctx: &KanbanContext,
+        _log_entry: &LogEntry,
         _affected_resources: &[String],
     ) -> Result<()> {
-        // Global activity log only — per-entity logging is handled by EntityContext
-        ctx.append_activity(log_entry).await?;
-
+        // Per-entity logging is handled by EntityContext/StoreHandle;
+        // there is no global activity log, so this is intentionally a no-op.
         Ok(())
     }
 }
@@ -133,17 +121,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_processor_writes_activity_log() {
+    async fn test_processor_executes_operations() {
         let (_temp, ctx) = setup().await;
         let processor = KanbanOperationProcessor::new();
 
         let cmd = AddTask::new("Test task");
-        processor.process(&cmd, &ctx).await.unwrap();
-
-        // Verify log was written
-        let entries = ctx.read_activity(None).await.unwrap();
-        assert_eq!(entries.len(), 2); // InitBoard + AddTask
-        assert_eq!(entries[0].op, "add task"); // Newest entry
+        let result = processor.process(&cmd, &ctx).await.unwrap();
+        assert!(result["id"].as_str().is_some());
     }
 
     #[tokio::test]
@@ -152,14 +136,7 @@ mod tests {
         let processor = KanbanOperationProcessor::with_actor("assistant[session123]");
 
         let cmd = AddTask::new("Test task");
-        processor.process(&cmd, &ctx).await.unwrap();
-
-        // Verify actor is in log
-        let entries = ctx.read_activity(None).await.unwrap();
-        let add_task_entry = &entries[0]; // Newest entry (AddTask)
-        assert_eq!(
-            add_task_entry.actor,
-            Some("assistant[session123]".to_string())
-        );
+        let result = processor.process(&cmd, &ctx).await.unwrap();
+        assert!(result["id"].as_str().is_some());
     }
 }
