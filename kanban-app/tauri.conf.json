@@ -6,8 +6,14 @@
   "build": {
     "frontendDist": "./ui/dist",
     "devUrl": "http://localhost:5173",
-    "beforeDevCommand": { "script": "npm install && npm run dev", "cwd": "./ui" },
-    "beforeBuildCommand": { "script": "npm install && npm run build", "cwd": "./ui" }
+    "beforeDevCommand": {
+      "script": "npm install && npm run dev",
+      "cwd": "./ui"
+    },
+    "beforeBuildCommand": {
+      "script": "npm install && npm run build",
+      "cwd": "./ui"
+    }
   },
   "app": {
     "macOSPrivateApi": true,
@@ -18,7 +24,7 @@
         "height": 800,
         "resizable": true,
         "visible": false,
-        "dragDropEnabled": true
+        "dragDropEnabled": false
       },
       {
         "label": "quick-capture",
@@ -34,7 +40,7 @@
         "skipTaskbar": true,
         "transparent": true,
         "shadow": false,
-        "dragDropEnabled": true
+        "dragDropEnabled": false
       }
     ],
     "security": {
@@ -44,7 +50,14 @@
   "bundle": {
     "active": true,
     "targets": ["dmg", "nsis"],
-    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico", "icons/icon.png"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico",
+      "icons/icon.png"
+    ],
     "macOS": {
       "entitlements": "./entitlements.plist",
       "signingIdentity": "Developer ID Application: Will Ballard (S675BK92KH)"
