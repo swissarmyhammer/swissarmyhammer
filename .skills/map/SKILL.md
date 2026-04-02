@@ -227,5 +227,6 @@ Diagrams render on GitHub, VS Code, and Obsidian.
 - Focus on architecture, not implementation details. Show the forest, not the trees.
 - Use data from code-context, not guesses. Every claim should be backed by a query result.
 - If the codebase is a monorepo or workspace, show the workspace-level view first, then drill into key packages.
-- If the user provides a path or module name as an argument, scope the map to that area instead of the whole repo.
+{% if arguments %}- **Scoped mapping**: The user requested mapping of `{{ arguments }}`. Scope all queries and output to that subdirectory or module instead of the whole repo.
+{% endif %}- If the user provides a path or module name as an argument, scope the map to that area instead of the whole repo.
 - Keep the file under 500 lines. Be selective — map the important parts, not everything.

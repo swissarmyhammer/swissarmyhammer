@@ -46,7 +46,11 @@ Write tests first, then implementation. TDD, RED, GREEN, REFACTOR.
 
 Understand code well enough to write the first failing test. Exploration without a testable conclusion is tourism.
 
+{% if arguments %}
+## Focus
 
+> {{arguments}}
+{% endif %}
 
 ## Why This Skill Exists
 

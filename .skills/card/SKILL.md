@@ -109,13 +109,17 @@ Use specific file paths, function names, and type names — not vague descriptio
 
 Create a single, well-researched kanban card from an idea, request, or bug report.
 
+{% if arguments %}
+## User Request
 
+> {{arguments}}
+{% endif %}
 
 ## Process
 
 ### 1. Understand the idea
 
- If anything is ambiguous or underspecified, use the `question` tool to ask clarifying questions before proceeding. A great card requires clear understanding — don't guess.
+{% if arguments %}Start from the user request above.{% endif %} If anything is ambiguous or underspecified, use the `question` tool to ask clarifying questions before proceeding. A great card requires clear understanding — don't guess.
 
 ### 2. Research the codebase
 
