@@ -298,9 +298,9 @@ mod tests {
         ctx.register(handle1.clone()).await;
         ctx.register(handle2.clone()).await;
 
-        // Write files externally to both stores
-        std::fs::write(store1_dir.join("a.txt"), "a content").unwrap();
-        std::fs::write(store2_dir.join("b.txt"), "b content").unwrap();
+        // Write items through the handles so pending events are recorded
+        handle1.write(&"a\na content".to_string()).await.unwrap();
+        handle2.write(&"b\nb content".to_string()).await.unwrap();
 
         let events = ctx.flush_all().await;
         assert_eq!(events.len(), 2);

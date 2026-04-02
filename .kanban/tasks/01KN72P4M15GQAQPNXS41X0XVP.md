@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: '9780'
+position_column: done
+position_ordinal: ffffffffffffffffff9980
 title: Remove StoreHandle cache — disk is the source of truth
 ---
 ## What

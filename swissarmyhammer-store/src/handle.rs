@@ -1,11 +1,10 @@
 //! `StoreHandle` wraps any [`TrackedStore`] to provide write, delete,
 //! undo, redo, changelog, and change detection.
 //!
-//! This is the main workhorse of the crate. It maintains an in-memory cache
-//! of last-known file contents, an append-only changelog, and delegates
-//! serialization to the underlying store.
+//! This is the main workhorse of the crate. It maintains an append-only
+//! changelog and delegates serialization to the underlying store. Disk is
+//! the source of truth — there is no in-memory cache.
 
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -20,15 +19,16 @@ use crate::id::{StoredItemId, UndoEntryId};
 use crate::store::TrackedStore;
 use crate::trash;
 
-/// A handle wrapping a [`TrackedStore`] with changelog, cache, and undo support.
+/// A handle wrapping a [`TrackedStore`] with changelog and undo support.
 ///
 /// All mutations go through this handle, which records changes to per-item
-/// changelogs, maintains an in-memory cache for idempotency detection, and
-/// supports undo/redo via patch reversal. Each item gets its own `.jsonl`
-/// changelog file alongside its data file.
+/// changelogs and supports undo/redo via patch reversal. Each item gets its
+/// own `.jsonl` changelog file alongside its data file. Disk is the source
+/// of truth — writes and deletes record pending events that are drained by
+/// `flush_changes()`.
 pub struct StoreHandle<S: TrackedStore> {
     pub(crate) store: Arc<S>,
-    cache: RwLock<HashMap<String, String>>,
+    pending_events: RwLock<Vec<ChangeEvent>>,
 }
 
 impl<S: TrackedStore> StoreHandle<S> {
@@ -36,7 +36,7 @@ impl<S: TrackedStore> StoreHandle<S> {
     pub fn new(store: Arc<S>) -> Self {
         Self {
             store,
-            cache: RwLock::new(HashMap::new()),
+            pending_events: RwLock::new(Vec::new()),
         }
     }
 
@@ -68,33 +68,26 @@ impl<S: TrackedStore> StoreHandle<S> {
     /// Write an item to disk. Returns `None` if the text is unchanged (idempotent).
     ///
     /// On change, appends a changelog entry with before/after text and
-    /// updates the in-memory cache. Holds the cache write lock for the
-    /// entire operation to prevent TOCTOU races.
+    /// records a pending event. Disk is the source of truth.
     pub async fn write(&self, item: &S::Item) -> Result<Option<UndoEntryId>> {
         let id = self.store.item_id(item);
         let id_str = id.to_string();
         let stored_id = StoredItemId::from(id_str.clone());
         let new_text = self.store.serialize(item)?;
 
-        // Hold the cache write lock across the entire operation
-        let mut cache = self.cache.write().await;
-
-        // Read old text from cache or disk
-        let old_text = if let Some(text) = cache.get(&id_str) {
-            Some(text.clone())
-        } else {
-            self.read_text_from_disk(&id_str).await?
-        };
+        // Read old text from disk
+        let old_text = self.read_text_from_disk(&id_str).await?;
 
         // Idempotent: no change
         if old_text.as_deref() == Some(new_text.as_str()) {
             return Ok(None);
         }
 
-        let op = if old_text.is_some() {
-            ChangeOp::Update
-        } else {
+        let is_create = old_text.is_none();
+        let op = if is_create {
             ChangeOp::Create
+        } else {
+            ChangeOp::Update
         };
 
         let (forward_patch, reverse_patch) =
@@ -119,8 +112,16 @@ impl<S: TrackedStore> StoreHandle<S> {
         // Atomic write: temp file then rename
         self.atomic_write(&id_str, &new_text).await?;
 
-        // Update cache (lock already held)
-        cache.insert(id_str, new_text);
+        // Record pending event
+        let event_name = if is_create {
+            "item-created"
+        } else {
+            "item-changed"
+        };
+        self.pending_events.write().await.push(ChangeEvent {
+            event_name: event_name.to_string(),
+            payload: serde_json::json!({ "store": self.store.store_name(), "id": id_str }),
+        });
 
         Ok(Some(entry_id))
     }
@@ -128,22 +129,15 @@ impl<S: TrackedStore> StoreHandle<S> {
     /// Delete an item by moving it to trash.
     ///
     /// Records the deletion in the changelog so it can be undone.
-    /// Holds the cache write lock for the entire operation to prevent
-    /// TOCTOU races.
+    /// Reads current content from disk (the source of truth).
     pub async fn delete(&self, id: &S::ItemId) -> Result<UndoEntryId> {
         let id_str = id.to_string();
         let stored_id = StoredItemId::from(id_str.clone());
 
-        // Hold the cache write lock across the entire operation
-        let mut cache = self.cache.write().await;
-
-        let text = if let Some(text) = cache.get(&id_str) {
-            text.clone()
-        } else {
-            self.read_text_from_disk(&id_str)
-                .await?
-                .ok_or_else(|| StoreError::NotFound(id_str.clone()))?
-        };
+        let text = self
+            .read_text_from_disk(&id_str)
+            .await?
+            .ok_or_else(|| StoreError::NotFound(id_str.clone()))?;
 
         let (forward_patch, reverse_patch) = diff::create_patches(&text, "");
 
@@ -176,8 +170,11 @@ impl<S: TrackedStore> StoreHandle<S> {
         trash::trash_file(self.store.root(), &stored_id, "jsonl", &entry_id)
             .map_err(StoreError::Io)?;
 
-        // Update cache (lock already held)
-        cache.remove(&id_str);
+        // Record pending event
+        self.pending_events.write().await.push(ChangeEvent {
+            event_name: "item-removed".to_string(),
+            payload: serde_json::json!({ "store": self.store.store_name(), "id": id_str }),
+        });
 
         Ok(entry_id)
     }
@@ -190,16 +187,10 @@ impl<S: TrackedStore> StoreHandle<S> {
         let id_str = id.to_string();
         let stored_id = StoredItemId::from(id_str.clone());
 
-        // Hold the cache write lock across the entire operation
-        let mut cache = self.cache.write().await;
-
-        let text = if let Some(text) = cache.get(&id_str) {
-            text.clone()
-        } else {
-            self.read_text_from_disk(&id_str)
-                .await?
-                .ok_or_else(|| StoreError::NotFound(id_str.clone()))?
-        };
+        let text = self
+            .read_text_from_disk(&id_str)
+            .await?
+            .ok_or_else(|| StoreError::NotFound(id_str.clone()))?;
 
         let (forward_patch, reverse_patch) = diff::create_patches(&text, "");
 
@@ -232,8 +223,11 @@ impl<S: TrackedStore> StoreHandle<S> {
         trash::archive_file(self.store.root(), &stored_id, "jsonl", &entry_id)
             .map_err(StoreError::Io)?;
 
-        // Update cache (lock already held)
-        cache.remove(&id_str);
+        // Record pending event
+        self.pending_events.write().await.push(ChangeEvent {
+            event_name: "item-removed".to_string(),
+            payload: serde_json::json!({ "store": self.store.store_name(), "id": id_str }),
+        });
 
         Ok(entry_id)
     }
@@ -316,11 +310,11 @@ impl<S: TrackedStore> StoreHandle<S> {
             .await
             .map_err(StoreError::Io)?;
 
-        // Update cache
-        self.cache
-            .write()
-            .await
-            .insert(id_str.clone(), restored_text.clone());
+        // Record pending event
+        self.pending_events.write().await.push(ChangeEvent {
+            event_name: "item-created".to_string(),
+            payload: serde_json::json!({ "store": self.store.store_name(), "id": id_str }),
+        });
 
         let parsed_id = id_str
             .parse::<S::ItemId>()
@@ -367,7 +361,12 @@ impl<S: TrackedStore> StoreHandle<S> {
                 .map_err(StoreError::Io)?;
                 trash::trash_file(self.store.root(), &entry.item_id, "jsonl", &entry.id)
                     .map_err(StoreError::Io)?;
-                self.cache.write().await.remove(entry.item_id.as_str());
+
+                // Record pending event
+                self.pending_events.write().await.push(ChangeEvent {
+                    event_name: "item-removed".to_string(),
+                    payload: serde_json::json!({ "store": self.store.store_name(), "id": entry.item_id.as_str() }),
+                });
 
                 let id = entry
                     .item_id
@@ -393,10 +392,12 @@ impl<S: TrackedStore> StoreHandle<S> {
                 })?;
 
                 self.atomic_write(entry.item_id.as_str(), &target).await?;
-                self.cache
-                    .write()
-                    .await
-                    .insert(entry.item_id.to_string(), target.clone());
+
+                // Record pending event
+                self.pending_events.write().await.push(ChangeEvent {
+                    event_name: "item-changed".to_string(),
+                    payload: serde_json::json!({ "store": self.store.store_name(), "id": entry.item_id.as_str() }),
+                });
 
                 let id = entry
                     .item_id
@@ -418,10 +419,12 @@ impl<S: TrackedStore> StoreHandle<S> {
 
                 // Reconstruct the deleted content by applying reverse_patch to ""
                 let restored_text = diff::apply_patch("", &entry.reverse_patch)?;
-                self.cache
-                    .write()
-                    .await
-                    .insert(entry.item_id.to_string(), restored_text.clone());
+
+                // Record pending event
+                self.pending_events.write().await.push(ChangeEvent {
+                    event_name: "item-created".to_string(),
+                    payload: serde_json::json!({ "store": self.store.store_name(), "id": entry.item_id.as_str() }),
+                });
 
                 let id = entry
                     .item_id
@@ -443,10 +446,12 @@ impl<S: TrackedStore> StoreHandle<S> {
 
                 // Reconstruct the archived content by applying reverse_patch to ""
                 let restored_text = diff::apply_patch("", &entry.reverse_patch)?;
-                self.cache
-                    .write()
-                    .await
-                    .insert(entry.item_id.to_string(), restored_text.clone());
+
+                // Record pending event
+                self.pending_events.write().await.push(ChangeEvent {
+                    event_name: "item-created".to_string(),
+                    payload: serde_json::json!({ "store": self.store.store_name(), "id": entry.item_id.as_str() }),
+                });
 
                 let id = entry
                     .item_id
@@ -469,7 +474,12 @@ impl<S: TrackedStore> StoreHandle<S> {
                 .map_err(StoreError::Io)?;
                 trash::archive_file(self.store.root(), &entry.item_id, "jsonl", &entry.id)
                     .map_err(StoreError::Io)?;
-                self.cache.write().await.remove(entry.item_id.as_str());
+
+                // Record pending event
+                self.pending_events.write().await.push(ChangeEvent {
+                    event_name: "item-removed".to_string(),
+                    payload: serde_json::json!({ "store": self.store.store_name(), "id": entry.item_id.as_str() }),
+                });
 
                 let id = entry
                     .item_id
@@ -518,10 +528,12 @@ impl<S: TrackedStore> StoreHandle<S> {
 
                 // Reconstruct the created content by applying forward_patch to ""
                 let created_text = diff::apply_patch("", &entry.forward_patch)?;
-                self.cache
-                    .write()
-                    .await
-                    .insert(entry.item_id.to_string(), created_text.clone());
+
+                // Record pending event
+                self.pending_events.write().await.push(ChangeEvent {
+                    event_name: "item-created".to_string(),
+                    payload: serde_json::json!({ "store": self.store.store_name(), "id": entry.item_id.as_str() }),
+                });
 
                 let id = entry
                     .item_id
@@ -547,10 +559,12 @@ impl<S: TrackedStore> StoreHandle<S> {
                 })?;
 
                 self.atomic_write(entry.item_id.as_str(), &target).await?;
-                self.cache
-                    .write()
-                    .await
-                    .insert(entry.item_id.to_string(), target.clone());
+
+                // Record pending event
+                self.pending_events.write().await.push(ChangeEvent {
+                    event_name: "item-changed".to_string(),
+                    payload: serde_json::json!({ "store": self.store.store_name(), "id": entry.item_id.as_str() }),
+                });
 
                 let id = entry
                     .item_id
@@ -574,7 +588,12 @@ impl<S: TrackedStore> StoreHandle<S> {
                 .map_err(StoreError::Io)?;
                 trash::trash_file(self.store.root(), &entry.item_id, "jsonl", &entry.id)
                     .map_err(StoreError::Io)?;
-                self.cache.write().await.remove(entry.item_id.as_str());
+
+                // Record pending event
+                self.pending_events.write().await.push(ChangeEvent {
+                    event_name: "item-removed".to_string(),
+                    payload: serde_json::json!({ "store": self.store.store_name(), "id": entry.item_id.as_str() }),
+                });
 
                 let id = entry
                     .item_id
@@ -598,7 +617,12 @@ impl<S: TrackedStore> StoreHandle<S> {
                 .map_err(StoreError::Io)?;
                 trash::archive_file(self.store.root(), &entry.item_id, "jsonl", &entry.id)
                     .map_err(StoreError::Io)?;
-                self.cache.write().await.remove(entry.item_id.as_str());
+
+                // Record pending event
+                self.pending_events.write().await.push(ChangeEvent {
+                    event_name: "item-removed".to_string(),
+                    payload: serde_json::json!({ "store": self.store.store_name(), "id": entry.item_id.as_str() }),
+                });
 
                 let id = entry
                     .item_id
@@ -620,10 +644,12 @@ impl<S: TrackedStore> StoreHandle<S> {
 
                 // Reconstruct the unarchived content by applying forward_patch to ""
                 let restored_text = diff::apply_patch("", &entry.forward_patch)?;
-                self.cache
-                    .write()
-                    .await
-                    .insert(entry.item_id.to_string(), restored_text.clone());
+
+                // Record pending event
+                self.pending_events.write().await.push(ChangeEvent {
+                    event_name: "item-created".to_string(),
+                    payload: serde_json::json!({ "store": self.store.store_name(), "id": entry.item_id.as_str() }),
+                });
 
                 let id = entry
                     .item_id
@@ -655,74 +681,15 @@ impl<S: TrackedStore> StoreHandle<S> {
             || trash::is_archived(self.store.root(), item_id, "jsonl", id)
     }
 
-    /// Scan the store directory and detect changes since the last flush.
+    /// Drain pending change events produced by recent writes, deletes,
+    /// undo/redo operations.
     ///
-    /// Compares current files against the in-memory cache to produce
-    /// create/change/remove events. Updates the cache afterwards.
+    /// Each mutation records an event when it succeeds. This method returns
+    /// and clears those pending events. Disk is the source of truth — there
+    /// is no cache comparison.
     pub async fn flush_changes(&self) -> Vec<ChangeEvent> {
-        let ext = self.store.extension();
-        let root = self.store.root();
-        let store_name = self.store.store_name();
-        let mut events = Vec::new();
-        let mut cache = self.cache.write().await;
-
-        // Scan directory for current files using async I/O
-        let mut current_files: HashMap<String, String> = HashMap::new();
-        if let Ok(mut entries) = tokio::fs::read_dir(root).await {
-            while let Ok(Some(entry)) = entries.next_entry().await {
-                let path = entry.path();
-                if path.is_file() {
-                    if let Some(file_ext) = path.extension() {
-                        if file_ext == ext {
-                            if let Some(stem) = path.file_stem() {
-                                let name = stem.to_string_lossy().to_string();
-                                // Skip dot-prefixed files (e.g. .trash, .tmp_*)
-                                if name.starts_with('.') {
-                                    continue;
-                                }
-                                if let Ok(content) = tokio::fs::read_to_string(&path).await {
-                                    current_files.insert(name, content);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Detect new and changed files
-        for (id, content) in &current_files {
-            match cache.get(id) {
-                None => {
-                    events.push(ChangeEvent {
-                        event_name: "item-created".to_string(),
-                        payload: serde_json::json!({ "store": store_name, "id": id }),
-                    });
-                }
-                Some(cached) if cached != content => {
-                    events.push(ChangeEvent {
-                        event_name: "item-changed".to_string(),
-                        payload: serde_json::json!({ "store": store_name, "id": id }),
-                    });
-                }
-                _ => {}
-            }
-        }
-
-        // Detect removed files
-        for id in cache.keys() {
-            if !current_files.contains_key(id) {
-                events.push(ChangeEvent {
-                    event_name: "item-removed".to_string(),
-                    payload: serde_json::json!({ "store": store_name, "id": id }),
-                });
-            }
-        }
-
-        // Replace cache with current state
-        *cache = current_files;
-
-        events
+        let mut pending = self.pending_events.write().await;
+        std::mem::take(&mut *pending)
     }
 
     /// Construct the file path for an item by its string ID.
@@ -732,9 +699,9 @@ impl<S: TrackedStore> StoreHandle<S> {
             .join(format!("{}.{}", id, self.store.extension()))
     }
 
-    /// Read text directly from disk, bypassing the cache.
+    /// Read text directly from disk.
     ///
-    /// Used when the caller already holds the cache lock.
+    /// Returns `None` if the file does not exist.
     async fn read_text_from_disk(&self, id: &str) -> Result<Option<String>> {
         let path = self.item_path(id);
         match tokio::fs::read_to_string(&path).await {
@@ -954,11 +921,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn flush_changes_detects_external_create() {
+    async fn flush_changes_returns_write_create_event() {
         let (_dir, handle) = setup();
-
-        // Write a file externally (not through the handle)
-        std::fs::write(_dir.path().join("external.txt"), "external content").unwrap();
+        let item = "item1\ncontent".to_string();
+        handle.write(&item).await.unwrap();
 
         let events = handle.flush_changes().await;
         assert_eq!(events.len(), 1);
@@ -966,31 +932,48 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn flush_changes_detects_external_change() {
+    async fn flush_changes_returns_write_update_event() {
         let (_dir, handle) = setup();
-        let item = "item1\noriginal".to_string();
-        handle.write(&item).await.unwrap();
+        let v1 = "item1\noriginal".to_string();
+        let v2 = "item1\nmodified".to_string();
+        handle.write(&v1).await.unwrap();
 
-        // Modify externally
-        std::fs::write(_dir.path().join("item1.txt"), "item1\nmodified").unwrap();
+        // Drain the create event
+        handle.flush_changes().await;
 
+        handle.write(&v2).await.unwrap();
         let events = handle.flush_changes().await;
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].event_name, "item-changed");
     }
 
     #[tokio::test]
-    async fn flush_changes_detects_external_remove() {
+    async fn flush_changes_returns_delete_event() {
         let (_dir, handle) = setup();
         let item = "item1\ndata".to_string();
         handle.write(&item).await.unwrap();
 
-        // Remove externally
-        std::fs::remove_file(_dir.path().join("item1.txt")).unwrap();
+        // Drain the create event
+        handle.flush_changes().await;
 
+        handle.delete(&"item1".to_string()).await.unwrap();
         let events = handle.flush_changes().await;
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].event_name, "item-removed");
+    }
+
+    #[tokio::test]
+    async fn flush_changes_drains_pending_events() {
+        let (_dir, handle) = setup();
+        let item = "item1\ndata".to_string();
+        handle.write(&item).await.unwrap();
+
+        let events = handle.flush_changes().await;
+        assert_eq!(events.len(), 1);
+
+        // Second flush should be empty (events were drained)
+        let events = handle.flush_changes().await;
+        assert!(events.is_empty());
     }
 
     #[tokio::test]
@@ -1143,18 +1126,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn flush_changes_skips_dot_prefixed_files() {
+    async fn flush_changes_returns_no_events_for_idempotent_write() {
         let (_dir, handle) = setup();
+        let item = "item1\ncontent".to_string();
+        handle.write(&item).await.unwrap();
 
-        // Write a dot-prefixed file externally
-        std::fs::write(_dir.path().join(".hidden.txt"), "hidden content").unwrap();
-        // Write a normal file externally
-        std::fs::write(_dir.path().join("visible.txt"), "visible content").unwrap();
+        // Drain the create event
+        handle.flush_changes().await;
 
+        // Idempotent write should produce no new events
+        let result = handle.write(&item).await.unwrap();
+        assert!(result.is_none());
         let events = handle.flush_changes().await;
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].event_name, "item-created");
-        assert_eq!(events[0].payload["id"], "visible");
+        assert!(events.is_empty());
     }
 
     #[tokio::test]
@@ -1278,18 +1262,23 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn flush_changes_skips_wrong_extension_files() {
+    async fn flush_changes_returns_undo_event() {
         let (_dir, handle) = setup();
+        let v1 = "item1\nv1".to_string();
+        let v2 = "item1\nv2".to_string();
+        handle.write(&v1).await.unwrap();
+        let update_id = handle.write(&v2).await.unwrap().unwrap();
 
-        // Write a file with wrong extension
-        std::fs::write(_dir.path().join("item1.json"), r#"{"id": "item1"}"#).unwrap();
-        // Write a file with correct extension
-        std::fs::write(_dir.path().join("item2.txt"), "item2\ndata").unwrap();
+        // Drain create + update events
+        handle.flush_changes().await;
 
+        handle
+            .undo(&update_id, &StoredItemId::from("item1"))
+            .await
+            .unwrap();
         let events = handle.flush_changes().await;
         assert_eq!(events.len(), 1);
-        assert_eq!(events[0].event_name, "item-created");
-        assert_eq!(events[0].payload["id"], "item2");
+        assert_eq!(events[0].event_name, "item-changed");
     }
 
     #[tokio::test]
