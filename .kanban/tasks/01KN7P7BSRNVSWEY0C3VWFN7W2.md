@@ -3,6 +3,6 @@ assignees:
 - claude-code
 position_column: todo
 position_ordinal: '8380'
-title: Add tests for swissarmyhammer-git operations.rs
+title: '100% coverage: swissarmyhammer-git'
 ---
-swissarmyhammer-git/src/operations.rs:1-341\n\nCoverage: 58.9% (201/341 lines)\n\n140 uncovered lines in git operations — likely branch management, diff parsing, and edge cases in commit/push flows.
+Coverage: 67.8% (395/583 lines) — 188 lines to cover\n\nTop uncovered files:\n- src/operations.rs (140 uncov) — branch management, diff parsing, commit/push\n- src/repository.rs (33 uncov) — repository abstraction\n- src/git2_utils.rs (7 uncov) #coverage-gap

@@ -3,6 +3,6 @@ assignees:
 - claude-code
 position_column: todo
 position_ordinal: '8680'
-title: Add tests for swissarmyhammer-build
+title: '100% coverage: swissarmyhammer-build'
 ---
-swissarmyhammer-build/src/*.rs\n\nCoverage: 16.5% (16/97 lines)\n\n81 uncovered lines — build system utilities and configuration.
+Coverage: 16.5% (16/97 lines) — 81 lines to cover\n\nTop uncovered files:\n- src/lib.rs (81 uncov) — build system utilities and configuration #coverage-gap

@@ -3,6 +3,6 @@ assignees:
 - claude-code
 position_column: todo
 position_ordinal: '8180'
-title: Add tests for swissarmyhammer-prompts prompts.rs
+title: '100% coverage: swissarmyhammer-prompts'
 ---
-swissarmyhammer-prompts/src/prompts.rs:1-334\n\nCoverage: 48.5% (162/334 lines)\n\nPrompt construction and rendering. ~172 uncovered lines — likely prompt template assembly and edge cases in prompt formatting.
+Coverage: 64.2% (374/583 lines) — 209 lines to cover\n\nTop uncovered files:\n- src/prompts.rs (172 uncov) — prompt construction and rendering\n- src/storage.rs (17 uncov) — prompt storage\n- src/lib.rs (6 uncov) #coverage-gap

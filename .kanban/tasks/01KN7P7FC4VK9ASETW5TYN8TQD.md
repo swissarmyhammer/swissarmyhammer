@@ -3,6 +3,6 @@ assignees:
 - claude-code
 position_column: todo
 position_ordinal: '8480'
-title: Add tests for agent-client-protocol-extras recording.rs
+title: '100% coverage: agent-client-protocol-extras'
 ---
-agent-client-protocol-extras/src/recording.rs:1-148\n\nCoverage: 0% (0/148 lines)\n\nSession recording functionality — serialization of agent interactions for playback. Entirely untested.
+Coverage: 39.9% (436/1094 lines) — 658 lines to cover\n\nTop uncovered files:\n- src/hookable_agent.rs (150 uncov) — hookable agent wrapper\n- src/recording.rs (148 uncov) — session recording/playback\n- src/tracing_agent.rs (123 uncov) — tracing instrumentation #coverage-gap

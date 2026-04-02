@@ -3,6 +3,6 @@ assignees:
 - claude-code
 position_column: todo
 position_ordinal: '8280'
-title: Add tests for swissarmyhammer-agent lib.rs
+title: '100% coverage: swissarmyhammer-agent'
 ---
-swissarmyhammer-agent/src/lib.rs:1-193\n\nCoverage: 21.2% (41/193 lines)\n\n152 uncovered lines in the core agent module — agent lifecycle, message handling, and coordination logic.
+Coverage: 21.2% (41/193 lines) — 152 lines to cover\n\nTop uncovered files:\n- src/lib.rs (152 uncov) — agent lifecycle, message handling, coordination logic #coverage-gap
