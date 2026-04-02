@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: '8480'
+position_column: done
+position_ordinal: ffffffffffffffffce80
 title: 'Test: column reorder drag (dnd-kit)'
 ---
 ## What

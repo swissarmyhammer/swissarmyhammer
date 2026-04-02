@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: '8380'
+position_column: done
+position_ordinal: ffffffffffffffffcd80
 title: 'Test: task card cross-board drag (between windows)'
 ---
 ## What

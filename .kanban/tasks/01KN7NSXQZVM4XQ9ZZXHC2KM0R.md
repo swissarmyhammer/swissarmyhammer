@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: '8280'
+position_column: done
+position_ordinal: ffffffffffffffffcc80
 title: 'Test: task card drag between columns (cross-column move)'
 ---
 ## What

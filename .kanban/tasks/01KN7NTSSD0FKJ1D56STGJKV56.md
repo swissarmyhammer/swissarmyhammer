@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: '8580'
+position_column: done
+position_ordinal: ffffffffffffffffcf80
 title: 'Test: file drag from Finder to attachment field'
 ---
 ## What
