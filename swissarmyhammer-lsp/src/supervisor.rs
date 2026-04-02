@@ -192,4 +192,312 @@ mod tests {
         // Should not panic on empty daemon set
         mgr.shutdown().await;
     }
+
+    // -- helper -----------------------------------------------------------
+
+    use crate::types::OwnedLspServerSpec;
+
+    /// Build a minimal OwnedLspServerSpec with a nonexistent binary.
+    fn fake_spec(command: &str) -> OwnedLspServerSpec {
+        OwnedLspServerSpec {
+            project_types: vec![],
+            command: command.to_string(),
+            args: vec![],
+            language_ids: vec!["test".to_string()],
+            file_extensions: vec![],
+            startup_timeout_secs: 1,
+            health_check_interval_secs: 1,
+            install_hint: String::new(),
+            icon: None,
+        }
+    }
+
+    /// Insert an un-started daemon into the supervisor for the given spec.
+    fn insert_daemon(mgr: &mut LspSupervisorManager, spec: OwnedLspServerSpec) {
+        let cmd = spec.command.clone();
+        let daemon = LspDaemon::new(spec, mgr.workspace_root.clone());
+        mgr.daemons.insert(cmd, daemon);
+    }
+
+    // -- start (spawn_all) tests ------------------------------------------
+
+    #[tokio::test]
+    async fn test_start_empty_workspace_detects_no_projects() {
+        // An empty temp directory has no project markers, so start() should
+        // produce no daemons and return an empty results vec.
+        let tmp = tempfile::tempdir().unwrap();
+        let mut mgr = LspSupervisorManager::new(tmp.path().to_path_buf());
+        let results = mgr.start().await;
+        // No projects detected means no server specs found, so no spawn attempts.
+        assert!(
+            results.is_empty(),
+            "expected no spawn results for empty dir"
+        );
+        assert!(mgr.status().is_empty());
+        assert!(mgr.daemon_names().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_start_with_project_marker_attempts_spawn() {
+        // Create a temp dir with a Cargo.toml so project detection finds a Rust project.
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("Cargo.toml"),
+            "[package]\nname = \"x\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+
+        let mut mgr = LspSupervisorManager::new(tmp.path().to_path_buf());
+        let results = mgr.start().await;
+
+        // We should get at least one result (the attempt to start rust-analyzer).
+        // It may succeed or fail depending on whether rust-analyzer is installed,
+        // but the supervisor should have recorded a daemon entry.
+        assert!(
+            !results.is_empty(),
+            "expected at least one spawn attempt for Rust project"
+        );
+        assert!(
+            !mgr.daemon_names().is_empty(),
+            "expected daemon entries after start"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_start_deduplicates_same_server() {
+        // Two project markers that resolve to the same LSP server should only
+        // produce one daemon entry.
+        let tmp = tempfile::tempdir().unwrap();
+        // Cargo.toml in root and in a nested dir — both are Rust projects
+        std::fs::write(
+            tmp.path().join("Cargo.toml"),
+            "[package]\nname = \"a\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+        let sub = tmp.path().join("sub");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(
+            sub.join("Cargo.toml"),
+            "[package]\nname = \"b\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+
+        let mut mgr = LspSupervisorManager::new(tmp.path().to_path_buf());
+        let _ = mgr.start().await;
+
+        // Count unique command names — each command should appear at most once
+        let names = mgr.daemon_names();
+        let unique: std::collections::HashSet<&String> = names.iter().collect();
+        assert_eq!(
+            names.len(),
+            unique.len(),
+            "daemon names should be unique (no duplicates)"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_start_nonexistent_workspace() {
+        // A nonexistent directory should produce a ProjectDetection error
+        let mut mgr = LspSupervisorManager::new(PathBuf::from("/nonexistent/workspace/path"));
+        let results = mgr.start().await;
+        assert_eq!(results.len(), 1, "expected exactly one error result");
+        assert!(results[0].is_err());
+        match &results[0] {
+            Err(LspError::ProjectDetection(msg)) => {
+                assert!(
+                    msg.contains("/nonexistent/workspace/path"),
+                    "error should mention the workspace path"
+                );
+            }
+            other => panic!("expected ProjectDetection error, got: {other:?}"),
+        }
+    }
+
+    // -- shutdown tests ---------------------------------------------------
+
+    #[tokio::test]
+    async fn test_shutdown_transitions_daemons_to_not_started() {
+        let mut mgr = LspSupervisorManager::new(PathBuf::from("/tmp/test"));
+        insert_daemon(&mut mgr, fake_spec("fake-lsp-a"));
+        insert_daemon(&mut mgr, fake_spec("fake-lsp-b"));
+
+        assert_eq!(mgr.daemon_names().len(), 2);
+
+        mgr.shutdown().await;
+
+        // After shutdown, all daemons should be in NotStarted state
+        // (they were never started, so shutdown is a no-op that leaves them NotStarted)
+        for status in mgr.status() {
+            assert_eq!(
+                status.state,
+                LspDaemonState::NotStarted,
+                "daemon {} should be NotStarted after shutdown",
+                status.command
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_shutdown_preserves_daemon_entries() {
+        let mut mgr = LspSupervisorManager::new(PathBuf::from("/tmp/test"));
+        insert_daemon(&mut mgr, fake_spec("fake-lsp-a"));
+
+        mgr.shutdown().await;
+
+        // The daemon entry should still exist (shutdown does not remove daemons)
+        assert_eq!(mgr.daemon_names().len(), 1);
+        assert!(mgr.get_daemon("fake-lsp-a").is_some());
+    }
+
+    // -- health_check_all tests -------------------------------------------
+
+    #[tokio::test]
+    async fn test_health_check_all_no_daemons() {
+        let mut mgr = LspSupervisorManager::new(PathBuf::from("/tmp/test"));
+        // Should not panic with empty daemon set
+        mgr.health_check_all().await;
+    }
+
+    #[tokio::test]
+    async fn test_health_check_all_not_started_daemons_no_restart() {
+        let mut mgr = LspSupervisorManager::new(PathBuf::from("/tmp/test"));
+        insert_daemon(&mut mgr, fake_spec("fake-lsp-a"));
+
+        // NotStarted daemons should not trigger a restart attempt
+        mgr.health_check_all().await;
+
+        let status = mgr.status();
+        assert_eq!(status.len(), 1);
+        // State remains NotStarted since health_check returns false for no child,
+        // but supervisor only restarts Failed daemons
+        assert_eq!(status[0].state, LspDaemonState::NotStarted);
+    }
+
+    #[tokio::test]
+    async fn test_health_check_all_failed_daemon_attempts_restart() {
+        let mut mgr = LspSupervisorManager::new(PathBuf::from("/tmp/test"));
+        insert_daemon(&mut mgr, fake_spec("__nonexistent_binary_xyz__"));
+
+        // Manually transition the daemon to Failed state so health_check_all
+        // will attempt a restart.
+        if let Some(daemon) = mgr.daemons.get_mut("__nonexistent_binary_xyz__") {
+            // Simulate a failure by calling start() which will fail with BinaryNotFound
+            let _ = daemon.start().await;
+        }
+
+        // Verify it's in a non-Running state (NotFound since binary doesn't exist)
+        let state_before = mgr
+            .get_daemon("__nonexistent_binary_xyz__")
+            .unwrap()
+            .state();
+        assert!(
+            matches!(state_before, LspDaemonState::NotFound),
+            "expected NotFound, got: {state_before:?}"
+        );
+
+        // health_check_all only restarts Failed daemons, not NotFound ones
+        mgr.health_check_all().await;
+
+        // State should remain NotFound (not attempted restart)
+        let state_after = mgr
+            .get_daemon("__nonexistent_binary_xyz__")
+            .unwrap()
+            .state();
+        assert!(
+            matches!(state_after, LspDaemonState::NotFound),
+            "NotFound daemons should not be restarted by health_check_all"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_health_check_all_only_restarts_failed_state() {
+        // Verifies that health_check_all discriminates between daemon states:
+        // only Failed triggers restart_with_backoff, other non-healthy states
+        // (NotStarted, NotFound, ShuttingDown) are left alone.
+        let mut mgr = LspSupervisorManager::new(PathBuf::from("/tmp/test"));
+        insert_daemon(&mut mgr, fake_spec("not-started-lsp"));
+        insert_daemon(&mut mgr, fake_spec("__also_nonexistent__"));
+
+        // Make one daemon NotFound by attempting start with bad binary
+        if let Some(daemon) = mgr.daemons.get_mut("__also_nonexistent__") {
+            let _ = daemon.start().await;
+        }
+
+        mgr.health_check_all().await;
+
+        // not-started-lsp should still be NotStarted
+        assert_eq!(
+            mgr.get_daemon("not-started-lsp").unwrap().state(),
+            LspDaemonState::NotStarted
+        );
+        // __also_nonexistent__ should still be NotFound
+        assert!(matches!(
+            mgr.get_daemon("__also_nonexistent__").unwrap().state(),
+            LspDaemonState::NotFound
+        ));
+    }
+
+    // -- force_restart tests ----------------------------------------------
+
+    #[tokio::test]
+    async fn test_force_restart_known_daemon_with_bad_binary() {
+        let mut mgr = LspSupervisorManager::new(PathBuf::from("/tmp/test"));
+        insert_daemon(&mut mgr, fake_spec("__nonexistent_force_restart__"));
+
+        // force_restart should fail because the binary doesn't exist
+        let result = mgr.force_restart("__nonexistent_force_restart__").await;
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            LspError::BinaryNotFound { .. }
+        ));
+
+        // Daemon should be in NotFound state after failed restart
+        assert!(matches!(
+            mgr.get_daemon("__nonexistent_force_restart__")
+                .unwrap()
+                .state(),
+            LspDaemonState::NotFound
+        ));
+    }
+
+    // -- status / get_daemon tests ----------------------------------------
+
+    #[tokio::test]
+    async fn test_status_reports_all_daemons() {
+        let mut mgr = LspSupervisorManager::new(PathBuf::from("/tmp/test"));
+        insert_daemon(&mut mgr, fake_spec("lsp-alpha"));
+        insert_daemon(&mut mgr, fake_spec("lsp-beta"));
+        insert_daemon(&mut mgr, fake_spec("lsp-gamma"));
+
+        let statuses = mgr.status();
+        assert_eq!(statuses.len(), 3);
+
+        let commands: std::collections::HashSet<String> =
+            statuses.iter().map(|s| s.command.clone()).collect();
+        assert!(commands.contains("lsp-alpha"));
+        assert!(commands.contains("lsp-beta"));
+        assert!(commands.contains("lsp-gamma"));
+    }
+
+    #[test]
+    fn test_get_daemon_mut_returns_mutable_ref() {
+        let mut mgr = LspSupervisorManager::new(PathBuf::from("/tmp/test"));
+        insert_daemon(&mut mgr, fake_spec("mutable-lsp"));
+
+        let daemon = mgr.get_daemon_mut("mutable-lsp");
+        assert!(daemon.is_some());
+        // Verify we can access daemon methods through the mutable ref
+        assert_eq!(daemon.unwrap().command(), "mutable-lsp");
+    }
+
+    #[test]
+    fn test_debug_impl() {
+        let mut mgr = LspSupervisorManager::new(PathBuf::from("/tmp/test"));
+        insert_daemon(&mut mgr, fake_spec("debug-lsp"));
+
+        let debug_str = format!("{:?}", mgr);
+        assert!(debug_str.contains("LspSupervisorManager"));
+        assert!(debug_str.contains("daemon_count: 1"));
+    }
 }

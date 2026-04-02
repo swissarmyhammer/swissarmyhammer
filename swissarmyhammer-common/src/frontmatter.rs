@@ -291,4 +291,109 @@ This should have leading whitespace preserved.
             .content
             .contains("This should have leading whitespace"));
     }
+
+    #[test]
+    fn test_parse_frontmatter_with_expansion_no_includes() {
+        // Exercise parse_frontmatter_with_expansion with an empty expander
+        // (no @-references to expand). Covers the expansion function entry
+        // and the `if let Some(exp) = expander` branch with a pass-through.
+        let expander = YamlExpander::<swissarmyhammer_directory::SwissarmyhammerConfig>::new();
+
+        let content = r#"---
+title: Expanded Doc
+tags:
+  - rust
+  - test
+---
+
+Body content here.
+"#;
+
+        let result = parse_frontmatter_with_expansion(content, &expander).unwrap();
+        assert!(result.metadata.is_some());
+
+        let metadata = result.metadata.as_ref().unwrap();
+        assert_eq!(
+            metadata.get("title").and_then(|v| v.as_str()),
+            Some("Expanded Doc")
+        );
+        let tags = metadata.get("tags").and_then(|v| v.as_array()).unwrap();
+        assert_eq!(tags.len(), 2);
+        assert!(result.content.contains("Body content here."));
+    }
+
+    #[test]
+    fn test_parse_frontmatter_with_expansion_no_frontmatter() {
+        // Exercise parse_frontmatter_with_expansion on content without frontmatter
+        let expander = YamlExpander::<swissarmyhammer_directory::SwissarmyhammerConfig>::new();
+
+        let content = "Just plain content, no frontmatter.\n";
+
+        let result = parse_frontmatter_with_expansion(content, &expander).unwrap();
+        assert!(result.metadata.is_none());
+        assert_eq!(result.content, content);
+    }
+
+    #[test]
+    fn test_parse_frontmatter_with_expansion_malformed_yaml() {
+        // Exercise parse_frontmatter_with_expansion with invalid YAML
+        let expander = YamlExpander::<swissarmyhammer_directory::SwissarmyhammerConfig>::new();
+
+        let content = r#"---
+title: Test
+broken: [unclosed
+---
+
+Content
+"#;
+
+        let result = parse_frontmatter_with_expansion(content, &expander);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Invalid YAML frontmatter"));
+    }
+
+    #[test]
+    fn test_parse_frontmatter_with_expansion_empty_yaml() {
+        // Exercise parse_frontmatter_with_expansion with empty frontmatter block
+        let expander = YamlExpander::<swissarmyhammer_directory::SwissarmyhammerConfig>::new();
+
+        let content = r#"---
+---
+
+Content after empty frontmatter
+"#;
+
+        let result = parse_frontmatter_with_expansion(content, &expander).unwrap();
+        assert!(result.metadata.is_some());
+        let metadata = result.metadata.as_ref().unwrap();
+        assert!(metadata.is_null());
+        assert!(result.content.contains("Content after empty frontmatter"));
+    }
+
+    #[test]
+    fn test_parse_frontmatter_opening_delimiter_no_closing() {
+        // Content starts with --- but never has a closing --- delimiter.
+        // splitn(3, "---\n") yields fewer than 3 parts, so we fall through
+        // to the "no frontmatter" branch.
+        let content = "---\nkey: value\nno closing delimiter here\n";
+
+        let result = parse_frontmatter(content).unwrap();
+        assert!(result.metadata.is_none());
+        assert_eq!(result.content, content);
+    }
+
+    #[test]
+    fn test_parse_frontmatter_with_expansion_partial_marker() {
+        // Partial marker should short-circuit even with an expander provided
+        let expander = YamlExpander::<swissarmyhammer_directory::SwissarmyhammerConfig>::new();
+
+        let content = "{% partial %}\n<div>Hello</div>";
+
+        let result = parse_frontmatter_with_expansion(content, &expander).unwrap();
+        assert!(result.metadata.is_none());
+        assert_eq!(result.content, content);
+    }
 }

@@ -1539,4 +1539,167 @@ mod tests {
             error_msg.contains("workspace boundaries") || error_msg.contains("blocked pattern")
         );
     }
+
+    #[test]
+    fn test_secure_file_access_edit_multiple_matches_error() {
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("multi_match.txt");
+        fs::write(&test_file, "foo bar foo baz foo").unwrap();
+
+        let secure_access = SecureFileAccess::default_secure();
+
+        // Edit with multiple matches and replace_all=false should fail
+        let result = secure_access.edit(
+            &test_file.to_string_lossy(),
+            "foo",
+            "qux",
+            false, // replace_all = false
+        );
+        assert!(result.is_err());
+        let err = format!("{:?}", result.unwrap_err());
+        assert!(err.contains("appears") || err.contains("times") || err.contains("replace_all"));
+    }
+
+    #[test]
+    fn test_secure_file_access_edit_replace_all_success() {
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("replace_all.txt");
+        fs::write(&test_file, "foo bar foo baz foo").unwrap();
+
+        let secure_access = SecureFileAccess::default_secure();
+
+        // Edit with replace_all=true should succeed
+        let result = secure_access.edit(
+            &test_file.to_string_lossy(),
+            "foo",
+            "qux",
+            true, // replace_all = true
+        );
+        assert!(result.is_ok());
+
+        let content = fs::read_to_string(&test_file).unwrap();
+        assert_eq!(content, "qux bar qux baz qux");
+    }
+
+    #[test]
+    fn test_secure_file_access_edit_string_not_found_error() {
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("no_match.txt");
+        fs::write(&test_file, "hello world").unwrap();
+
+        let secure_access = SecureFileAccess::default_secure();
+
+        let result = secure_access.edit(
+            &test_file.to_string_lossy(),
+            "nonexistent_string",
+            "replacement",
+            false,
+        );
+        assert!(result.is_err());
+        let err = format!("{:?}", result.unwrap_err());
+        assert!(err.contains("not found") || err.contains("nonexistent_string"));
+    }
+
+    #[test]
+    fn test_handle_file_error_permission_denied() {
+        let path = std::path::Path::new("/some/path.txt");
+        let io_error = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+        let mcp_error = handle_file_error(io_error, "read", path);
+        let err_str = format!("{:?}", mcp_error);
+        assert!(err_str.contains("Permission denied") || err_str.contains("permission"));
+    }
+
+    #[test]
+    fn test_handle_file_error_already_exists() {
+        let path = std::path::Path::new("/some/path.txt");
+        let io_error = std::io::Error::from(std::io::ErrorKind::AlreadyExists);
+        let mcp_error = handle_file_error(io_error, "create", path);
+        let err_str = format!("{:?}", mcp_error);
+        assert!(err_str.contains("already exists") || err_str.contains("AlreadyExists"));
+    }
+
+    #[test]
+    fn test_handle_file_error_invalid_data() {
+        let path = std::path::Path::new("/some/path.txt");
+        let io_error = std::io::Error::from(std::io::ErrorKind::InvalidData);
+        let mcp_error = handle_file_error(io_error, "read", path);
+        let err_str = format!("{:?}", mcp_error);
+        assert!(err_str.contains("Invalid") || err_str.contains("data"));
+    }
+
+    #[test]
+    fn test_check_file_permissions_directory_path() {
+        let temp_dir = TempDir::new().unwrap();
+
+        // Passing a directory path to Read should fail (not a regular file)
+        let result = check_file_permissions(temp_dir.path(), FileOperation::Read);
+        assert!(result.is_err());
+        let err = format!("{:?}", result.unwrap_err());
+        assert!(err.contains("not a regular file") || err.contains("directory"));
+    }
+
+    #[test]
+    fn test_check_file_permissions_directory_operation() {
+        let temp_dir = TempDir::new().unwrap();
+
+        // Directory operation on an existing directory should succeed
+        let result = check_file_permissions(temp_dir.path(), FileOperation::Directory);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_check_file_permissions_directory_operation_file_exists() {
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("test.txt");
+        fs::write(&test_file, "content").unwrap();
+
+        // Directory operation on a file (not directory) should fail
+        let result = check_file_permissions(&test_file, FileOperation::Directory);
+        assert!(result.is_err());
+        let err = format!("{:?}", result.unwrap_err());
+        assert!(err.contains("not a directory") || err.contains("directory"));
+    }
+
+    #[test]
+    fn test_secure_file_access_read_with_limit_only() {
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("limit_only.txt");
+        fs::write(&test_file, "Line 1\nLine 2\nLine 3\nLine 4\nLine 5\n").unwrap();
+
+        let secure_access = SecureFileAccess::default_secure();
+
+        let result = secure_access.read(&test_file.to_string_lossy(), None, Some(2));
+        assert!(result.is_ok());
+        let content = result.unwrap();
+        assert!(content.contains("Line 1"));
+        assert!(content.contains("Line 2"));
+        assert!(!content.contains("Line 3"));
+    }
+
+    #[test]
+    fn test_secure_file_access_read_with_offset_only() {
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("offset_only.txt");
+        fs::write(&test_file, "Line 1\nLine 2\nLine 3\nLine 4\nLine 5\n").unwrap();
+
+        let secure_access = SecureFileAccess::default_secure();
+
+        let result = secure_access.read(&test_file.to_string_lossy(), Some(3), None);
+        assert!(result.is_ok());
+        let content = result.unwrap();
+        assert!(!content.contains("Line 1"));
+        assert!(!content.contains("Line 2"));
+        assert!(content.contains("Line 3"));
+    }
+
+    #[test]
+    fn test_file_path_validator_long_path() {
+        let validator = FilePathValidator::new();
+        let long_path = "/".to_string() + &"a".repeat(4097);
+
+        let result = validator.validate_path(&long_path);
+        assert!(result.is_err());
+        let err = format!("{:?}", result.unwrap_err());
+        assert!(err.contains("too long") || err.contains("Path too long") || err.contains("4096"));
+    }
 }

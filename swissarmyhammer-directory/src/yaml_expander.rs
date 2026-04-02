@@ -284,6 +284,9 @@ impl<C: DirectoryConfig> YamlExpander<C> {
 mod tests {
     use super::*;
     use crate::config::SwissarmyhammerConfig;
+    use serial_test::serial;
+    use std::fs;
+    use tempfile::TempDir;
 
     #[test]
     fn test_expander_new() {
@@ -489,6 +492,65 @@ files:
     }
 
     #[test]
+    fn test_default_creates_empty_expander() {
+        let expander = YamlExpander::<SwissarmyhammerConfig>::default();
+        assert!(expander.includes.is_empty());
+        assert_eq!(expander.list_names().len(), 0);
+    }
+
+    #[test]
+    fn test_list_names_returns_added_builtins() {
+        let mut expander = YamlExpander::<SwissarmyhammerConfig>::new();
+        expander
+            .add_builtin("file_groups/source_code", r#"["*.js"]"#)
+            .unwrap();
+        expander
+            .add_builtin("patterns/ignore", r#"["node_modules"]"#)
+            .unwrap();
+
+        let mut names: Vec<&String> = expander.list_names();
+        names.sort();
+        assert_eq!(names.len(), 2);
+        assert_eq!(names[0], "file_groups/source_code");
+        assert_eq!(names[1], "patterns/ignore");
+    }
+
+    #[test]
+    fn test_parse_and_expand_success() {
+        let mut expander = YamlExpander::<SwissarmyhammerConfig>::new();
+        expander
+            .add_builtin("patterns/js", r#"["*.js", "*.mjs"]"#)
+            .unwrap();
+
+        let result = expander
+            .parse_and_expand(
+                r#"
+files:
+  - "@patterns/js"
+  - "*.custom"
+"#,
+            )
+            .unwrap();
+
+        let files = result.get("files").and_then(|f| f.as_sequence()).unwrap();
+        assert_eq!(files.len(), 3);
+        assert_eq!(files[0].as_str(), Some("*.js"));
+        assert_eq!(files[1].as_str(), Some("*.mjs"));
+        assert_eq!(files[2].as_str(), Some("*.custom"));
+    }
+
+    #[test]
+    fn test_parse_and_expand_invalid_yaml() {
+        let expander = YamlExpander::<SwissarmyhammerConfig>::new();
+
+        let result = expander.parse_and_expand("{{invalid: yaml: [}}}");
+
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("Failed to parse YAML"));
+    }
+
+    #[test]
     fn test_non_reference_strings_unchanged() {
         let expander = YamlExpander::<SwissarmyhammerConfig>::new();
 
@@ -507,5 +569,357 @@ files:
         assert_eq!(seq[0].as_str(), Some("regular string"));
         assert_eq!(seq[1].as_str(), Some("email@example.com"));
         assert_eq!(seq[2].as_str(), Some("not @a reference"));
+    }
+
+    #[test]
+    fn test_circular_reference_in_sequence() {
+        // Tests cycle detection inside the sequence branch (lines 208-213).
+        // Include "a" contains a sequence with "@b", and "b" contains a
+        // sequence with "@a", forming a cycle when expanded inside a sequence.
+        let mut expander = YamlExpander::<SwissarmyhammerConfig>::new();
+        expander.add_builtin("a", r#"["@b", "x"]"#).unwrap();
+        expander.add_builtin("b", r#"["@a", "y"]"#).unwrap();
+
+        let input: serde_yaml_ng::Value = serde_yaml_ng::from_str(
+            r#"
+- "@a"
+- "other"
+"#,
+        )
+        .unwrap();
+
+        let result = expander.expand(input);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("Circular include"),
+            "Expected 'Circular include' error, got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_non_sequence_splice_in_sequence() {
+        // Tests that when an @include inside a sequence resolves to a scalar
+        // (not a sequence), the scalar is pushed as a single element rather
+        // than spliced. This exercises line 233.
+        let mut expander = YamlExpander::<SwissarmyhammerConfig>::new();
+        expander
+            .add_builtin("greeting", r#""hello world""#)
+            .unwrap();
+
+        let input: serde_yaml_ng::Value = serde_yaml_ng::from_str(
+            r#"
+- "@greeting"
+- "other"
+"#,
+        )
+        .unwrap();
+
+        let expanded = expander.expand(input).unwrap();
+        let seq = expanded.as_sequence().unwrap();
+        assert_eq!(seq.len(), 2);
+        assert_eq!(seq[0].as_str(), Some("hello world"));
+        assert_eq!(seq[1].as_str(), Some("other"));
+    }
+
+    /// Calling load_all on a fresh expander should succeed even when the
+    /// XDG data directory and local project directory do not exist.
+    #[test]
+    #[serial]
+    fn test_load_all_succeeds_with_empty_directories() {
+        let temp_dir = TempDir::new().unwrap();
+        // Point XDG_DATA_HOME at an empty temp dir so the VFS finds no files.
+        let old_xdg = std::env::var("XDG_DATA_HOME").ok();
+        std::env::set_var("XDG_DATA_HOME", temp_dir.path());
+
+        let mut expander = YamlExpander::<SwissarmyhammerConfig>::new();
+        let result = expander.load_all();
+
+        // Restore env
+        match old_xdg {
+            Some(v) => std::env::set_var("XDG_DATA_HOME", v),
+            None => std::env::remove_var("XDG_DATA_HOME"),
+        }
+
+        assert!(result.is_ok(), "load_all should succeed: {:?}", result);
+        // No YAML files means no includes loaded
+        assert!(
+            expander.includes.is_empty(),
+            "includes should be empty when no yaml files exist"
+        );
+    }
+
+    /// Verifies that load_all discovers .yaml files placed in the XDG data
+    /// directory and parses them into the includes map.
+    #[test]
+    #[serial]
+    fn test_load_all_loads_yaml_files_from_xdg_data() {
+        let temp_dir = TempDir::new().unwrap();
+        // VFS uses VirtualFileSystem::<C>::new("") with empty subdirectory,
+        // then calls ManagedDirectory::<C>::xdg_data() which resolves to
+        // $XDG_DATA_HOME/sah/. With empty subdirectory, load_directory
+        // joins base_path with "" so it reads from $XDG_DATA_HOME/sah/ directly.
+        let sah_dir = temp_dir.path().join("sah");
+        fs::create_dir_all(&sah_dir).unwrap();
+
+        // Write a valid YAML file
+        fs::write(sah_dir.join("colors.yaml"), "- red\n- green\n- blue\n").unwrap();
+
+        // Write a second YAML file using .yml extension
+        fs::write(sah_dir.join("sizes.yml"), "small: 1\nlarge: 10\n").unwrap();
+
+        let old_xdg = std::env::var("XDG_DATA_HOME").ok();
+        std::env::set_var("XDG_DATA_HOME", temp_dir.path());
+
+        let mut expander = YamlExpander::<SwissarmyhammerConfig>::new();
+        let result = expander.load_all();
+
+        // Restore env
+        match old_xdg {
+            Some(v) => std::env::set_var("XDG_DATA_HOME", v),
+            None => std::env::remove_var("XDG_DATA_HOME"),
+        }
+
+        assert!(result.is_ok(), "load_all should succeed: {:?}", result);
+
+        // Check that both files were loaded
+        let colors = expander.get("colors");
+        assert!(colors.is_some(), "colors.yaml should be loaded");
+        let colors_seq = colors.unwrap().as_sequence().unwrap();
+        assert_eq!(colors_seq.len(), 3);
+        assert_eq!(colors_seq[0].as_str(), Some("red"));
+
+        let sizes = expander.get("sizes");
+        assert!(sizes.is_some(), "sizes.yml should be loaded");
+        let sizes_map = sizes.unwrap().as_mapping().unwrap();
+        assert_eq!(
+            sizes_map
+                .get(serde_yaml_ng::Value::String("small".into()))
+                .and_then(|v| v.as_u64()),
+            Some(1)
+        );
+    }
+
+    /// Non-YAML files (e.g. .txt) in the data directory should be skipped
+    /// by load_all, leaving only .yaml/.yml files in the includes map.
+    #[test]
+    #[serial]
+    fn test_load_all_skips_non_yaml_files() {
+        let temp_dir = TempDir::new().unwrap();
+        let sah_dir = temp_dir.path().join("sah");
+        fs::create_dir_all(&sah_dir).unwrap();
+
+        fs::write(sah_dir.join("valid.yaml"), "- item\n").unwrap();
+        fs::write(sah_dir.join("readme.txt"), "not yaml").unwrap();
+        fs::write(sah_dir.join("data.json"), r#"{"key": "value"}"#).unwrap();
+
+        let old_xdg = std::env::var("XDG_DATA_HOME").ok();
+        std::env::set_var("XDG_DATA_HOME", temp_dir.path());
+
+        let mut expander = YamlExpander::<SwissarmyhammerConfig>::new();
+        let result = expander.load_all();
+
+        // Restore env
+        match old_xdg {
+            Some(v) => std::env::set_var("XDG_DATA_HOME", v),
+            None => std::env::remove_var("XDG_DATA_HOME"),
+        }
+
+        assert!(result.is_ok());
+        // Only the .yaml file should be loaded, not .txt or .json
+        assert!(
+            expander.get("valid").is_some(),
+            "valid.yaml should be loaded"
+        );
+        assert_eq!(
+            expander.includes.len(),
+            1,
+            "only .yaml files should be in includes, got: {:?}",
+            expander.list_names()
+        );
+    }
+
+    /// When load_all encounters a .yaml file with invalid YAML content, it
+    /// should warn and skip the file rather than returning an error.
+    #[test]
+    #[serial]
+    fn test_load_all_skips_invalid_yaml_files() {
+        let temp_dir = TempDir::new().unwrap();
+        let sah_dir = temp_dir.path().join("sah");
+        fs::create_dir_all(&sah_dir).unwrap();
+
+        // Valid YAML
+        fs::write(sah_dir.join("good.yaml"), "- one\n- two\n").unwrap();
+        // Invalid YAML (unclosed bracket)
+        fs::write(sah_dir.join("bad.yaml"), "{{invalid: yaml: [}}}").unwrap();
+
+        let old_xdg = std::env::var("XDG_DATA_HOME").ok();
+        std::env::set_var("XDG_DATA_HOME", temp_dir.path());
+
+        let mut expander = YamlExpander::<SwissarmyhammerConfig>::new();
+        let result = expander.load_all();
+
+        // Restore env
+        match old_xdg {
+            Some(v) => std::env::set_var("XDG_DATA_HOME", v),
+            None => std::env::remove_var("XDG_DATA_HOME"),
+        }
+
+        // load_all should succeed even with invalid YAML files
+        assert!(
+            result.is_ok(),
+            "load_all should not fail on bad yaml: {:?}",
+            result
+        );
+        // The good file should still be loaded
+        assert!(expander.get("good").is_some(), "good.yaml should be loaded");
+        // The bad file should be skipped
+        assert!(expander.get("bad").is_none(), "bad.yaml should be skipped");
+    }
+
+    /// Builtins added before load_all should be preserved alongside files
+    /// discovered from the filesystem.
+    #[test]
+    #[serial]
+    fn test_load_all_preserves_existing_builtins() {
+        let temp_dir = TempDir::new().unwrap();
+        let sah_dir = temp_dir.path().join("sah");
+        fs::create_dir_all(&sah_dir).unwrap();
+
+        fs::write(sah_dir.join("from_disk.yaml"), "- disk_item\n").unwrap();
+
+        let old_xdg = std::env::var("XDG_DATA_HOME").ok();
+        std::env::set_var("XDG_DATA_HOME", temp_dir.path());
+
+        let mut expander = YamlExpander::<SwissarmyhammerConfig>::new();
+        expander
+            .add_builtin("pre_existing", r#"["builtin_item"]"#)
+            .unwrap();
+        let result = expander.load_all();
+
+        // Restore env
+        match old_xdg {
+            Some(v) => std::env::set_var("XDG_DATA_HOME", v),
+            None => std::env::remove_var("XDG_DATA_HOME"),
+        }
+
+        assert!(result.is_ok());
+        // Both the builtin and disk file should be present
+        assert!(
+            expander.get("pre_existing").is_some(),
+            "builtin added before load_all should still be present"
+        );
+        assert!(
+            expander.get("from_disk").is_some(),
+            "file from disk should be loaded"
+        );
+    }
+
+    /// add_builtin should return an error when the YAML content is invalid,
+    /// covering the error path in the add_builtin method.
+    #[test]
+    fn test_add_builtin_invalid_yaml_returns_error() {
+        let mut expander = YamlExpander::<SwissarmyhammerConfig>::new();
+        let result = expander.add_builtin("bad", "{{invalid: yaml: [}}}");
+        assert!(result.is_err(), "add_builtin with invalid YAML should fail");
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("Failed to parse builtin YAML"),
+            "error should mention parse failure, got: {err}"
+        );
+    }
+
+    /// When a sequence contains an @include that references a nonexistent name,
+    /// expand_value should return an error (covers the include-not-found path
+    /// inside sequence processing).
+    #[test]
+    fn test_expand_sequence_with_missing_include_errors() {
+        let expander = YamlExpander::<SwissarmyhammerConfig>::new();
+
+        // A sequence that references a name that was never registered
+        let input: serde_yaml_ng::Value = serde_yaml_ng::from_str(
+            r#"
+- "@missing_group"
+- "*.custom"
+"#,
+        )
+        .unwrap();
+
+        let result = expander.expand(input);
+        assert!(
+            result.is_err(),
+            "expanding sequence with missing include should error"
+        );
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("Include not found"),
+            "error should mention include not found, got: {err}"
+        );
+    }
+
+    /// parse_yaml should return an error when the YAML structure does not match
+    /// the expected deserialization type.
+    #[test]
+    fn test_parse_yaml_type_mismatch_returns_error() {
+        let expander = YamlExpander::<SwissarmyhammerConfig>::new();
+
+        #[derive(serde::Deserialize, Debug)]
+        #[allow(dead_code)]
+        struct Specific {
+            name: String,
+        }
+
+        // YAML is a sequence, not a mapping — can't deserialize into Specific
+        let result: Result<Specific> = expander.parse_yaml("- item1\n- item2\n");
+        assert!(
+            result.is_err(),
+            "parse_yaml with wrong type should return error"
+        );
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("Failed to deserialize YAML"),
+            "error should mention deserialization failure, got: {err}"
+        );
+    }
+
+    /// load_all should skip non-yaml files (like .md) even when they are loaded
+    /// by the VFS (which loads .md files). This covers the `continue` branch
+    /// that checks for .yaml/.yml extension.
+    #[test]
+    #[serial]
+    fn test_load_all_skips_md_files() {
+        let temp_dir = TempDir::new().unwrap();
+        // VFS uses empty subdirectory, so it loads from $XDG_DATA_HOME/sah/
+        let sah_dir = temp_dir.path().join("sah");
+        fs::create_dir_all(&sah_dir).unwrap();
+
+        // Write a .md file (loaded by VFS but should be skipped by yaml filter)
+        fs::write(sah_dir.join("readme.md"), "# Hello World").unwrap();
+        // Write a valid .yaml file so we can confirm load_all ran
+        fs::write(sah_dir.join("valid.yaml"), "- item\n").unwrap();
+
+        let old_xdg = std::env::var("XDG_DATA_HOME").ok();
+        std::env::set_var("XDG_DATA_HOME", temp_dir.path());
+
+        let mut expander = YamlExpander::<SwissarmyhammerConfig>::new();
+        let result = expander.load_all();
+
+        match old_xdg {
+            Some(v) => std::env::set_var("XDG_DATA_HOME", v),
+            None => std::env::remove_var("XDG_DATA_HOME"),
+        }
+
+        assert!(result.is_ok(), "load_all should succeed: {:?}", result);
+        // .md file should not be in includes (was skipped by yaml extension check)
+        assert!(
+            expander.get("readme").is_none(),
+            ".md files should not be loaded into includes"
+        );
+        // .yaml file should be loaded
+        assert!(
+            expander.get("valid").is_some(),
+            ".yaml files should be loaded into includes"
+        );
     }
 }

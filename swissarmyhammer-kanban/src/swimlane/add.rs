@@ -161,4 +161,40 @@ mod tests {
             .into_result();
         assert!(matches!(result, Err(KanbanError::DuplicateId { .. })));
     }
+
+    #[tokio::test]
+    async fn test_add_swimlane_with_explicit_order() {
+        let (_temp, ctx) = setup().await;
+
+        let result = AddSwimlane::new("backend", "Backend")
+            .with_order(5)
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        assert_eq!(result["order"], 5);
+    }
+
+    #[tokio::test]
+    async fn test_add_swimlane_auto_order_increments() {
+        let (_temp, ctx) = setup().await;
+
+        let first = AddSwimlane::new("backend", "Backend")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        let second = AddSwimlane::new("frontend", "Frontend")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        // Auto-order: second should be one more than first
+        let first_order = first["order"].as_u64().unwrap();
+        let second_order = second["order"].as_u64().unwrap();
+        assert!(second_order > first_order);
+    }
 }

@@ -591,4 +591,122 @@ mod tests {
         let user_agent = manager.get_user_agent();
         assert!(user_agent.is_none());
     }
+
+    #[test]
+    fn test_instance_distributor_record_instance_use_caps_deque() {
+        let config = PrivacyConfig {
+            distribute_requests: true,
+            avoid_repeat_instances: 2,
+            ..Default::default()
+        };
+
+        let distributor = InstanceDistributor::new(&config);
+
+        // Record 3 instances with a cap of 2
+        distributor.record_instance_use("http://a.example.com");
+        distributor.record_instance_use("http://b.example.com");
+        distributor.record_instance_use("http://c.example.com");
+
+        let last_used = distributor.last_used_instances.lock().unwrap();
+        assert_eq!(
+            last_used.len(),
+            2,
+            "deque should be capped at avoid_repeat_count"
+        );
+        // Most recent entries kept (push_front, pop_back trims oldest)
+        assert_eq!(last_used[0], "http://c.example.com");
+        assert_eq!(last_used[1], "http://b.example.com");
+    }
+
+    #[test]
+    fn test_instance_distributor_record_instance_use_disabled() {
+        let config = PrivacyConfig {
+            distribute_requests: false,
+            avoid_repeat_instances: 2,
+            ..Default::default()
+        };
+
+        let distributor = InstanceDistributor::new(&config);
+        distributor.record_instance_use("http://a.example.com");
+
+        let last_used = distributor.last_used_instances.lock().unwrap();
+        assert_eq!(last_used.len(), 0, "should not record when disabled");
+    }
+
+    #[test]
+    fn test_privacy_manager_select_distributed_instance() {
+        let config = PrivacyConfig::default();
+        let manager = PrivacyManager::new(config);
+
+        let instances = vec![
+            "http://a.example.com".to_string(),
+            "http://b.example.com".to_string(),
+        ];
+
+        let selected = manager.select_distributed_instance(&instances);
+        assert!(
+            selected.is_some(),
+            "should select an instance from available list"
+        );
+        assert!(
+            instances.contains(&selected.unwrap()),
+            "selected instance should be from the available list"
+        );
+    }
+
+    #[test]
+    fn test_privacy_manager_record_instance_use() {
+        let config = PrivacyConfig {
+            avoid_repeat_instances: 2,
+            ..Default::default()
+        };
+        let manager = PrivacyManager::new(config);
+
+        // Exercise the delegation path — should not panic
+        manager.record_instance_use("http://a.example.com");
+        manager.record_instance_use("http://b.example.com");
+
+        // Verify the effect propagated through to the inner distributor
+        let last_used = manager
+            .instance_distributor
+            .last_used_instances
+            .lock()
+            .unwrap();
+        assert_eq!(last_used.len(), 2);
+    }
+
+    #[test]
+    fn test_privacy_manager_record_captcha_challenge() {
+        let config = PrivacyConfig {
+            enable_adaptive_rate_limiting: true,
+            captcha_backoff_initial_ms: 500,
+            captcha_backoff_max_ms: 5000,
+            captcha_backoff_multiplier: 2.0,
+            captcha_backoff_duration_mins: 1,
+            ..Default::default()
+        };
+        let manager = PrivacyManager::new(config);
+
+        // Exercise the delegation — should not panic and should propagate
+        manager.record_captcha_challenge();
+
+        let delay = manager.adaptive_rate_limiter.get_additional_delay();
+        assert_eq!(
+            delay.as_millis(),
+            500,
+            "captcha challenge should set initial backoff"
+        );
+    }
+
+    #[test]
+    fn test_privacy_manager_apply_privacy_headers() {
+        let config = PrivacyConfig::default();
+        let manager = PrivacyManager::new(config);
+
+        // Build a trivial request to exercise the delegation path
+        let client = reqwest::Client::new();
+        let request = client.get("http://example.com");
+        // Should return a RequestBuilder without panicking
+        let _result = manager.apply_privacy_headers(request);
+    }
 }

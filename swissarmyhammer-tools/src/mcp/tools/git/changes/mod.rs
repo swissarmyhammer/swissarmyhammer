@@ -994,6 +994,133 @@ mod tests {
         assert!(!parsed.files.contains(&"base.txt".to_string()));
     }
 
+    #[tokio::test]
+    async fn test_git_changes_tool_unknown_op_returns_error() {
+        let repo = TestGitRepo::new();
+        repo.commit_file("initial.txt", "initial", "Initial commit");
+
+        let git_ops = GitOperations::with_work_dir(repo.path()).unwrap();
+        let context = crate::test_utils::create_test_context().await;
+        *context.git_ops.lock().await = Some(git_ops);
+
+        let tool = GitChangesTool::new();
+        let mut arguments = serde_json::Map::new();
+        arguments.insert("op".to_string(), serde_json::json!("bogus op"));
+
+        let result = tool.execute(arguments, &context).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.message.contains("Unknown operation") || err.message.contains("bogus"),
+            "Expected unknown op error, got: {}",
+            err.message
+        );
+    }
+
+    #[tokio::test]
+    async fn test_git_diff_inline_text_mode() {
+        let repo = TestGitRepo::new();
+        repo.commit_file("initial.txt", "initial", "Initial commit");
+
+        let git_ops = GitOperations::with_work_dir(repo.path()).unwrap();
+        let context = crate::test_utils::create_test_context().await;
+        *context.git_ops.lock().await = Some(git_ops);
+
+        let tool = GitChangesTool::new();
+        let mut arguments = serde_json::Map::new();
+        arguments.insert("op".to_string(), serde_json::json!("get diff"));
+        arguments.insert("left_text".to_string(), serde_json::json!("fn foo() {}\n"));
+        arguments.insert(
+            "right_text".to_string(),
+            serde_json::json!("fn foo() { println!(\"hello\"); }\n"),
+        );
+        arguments.insert("language".to_string(), serde_json::json!("rust"));
+
+        let result = tool.execute(arguments, &context).await;
+        assert!(result.is_ok(), "Inline diff should succeed");
+    }
+
+    #[tokio::test]
+    async fn test_git_diff_inline_missing_right_text() {
+        let repo = TestGitRepo::new();
+        repo.commit_file("initial.txt", "initial", "Initial commit");
+
+        let git_ops = GitOperations::with_work_dir(repo.path()).unwrap();
+        let context = crate::test_utils::create_test_context().await;
+        *context.git_ops.lock().await = Some(git_ops);
+
+        let tool = GitChangesTool::new();
+        let mut arguments = serde_json::Map::new();
+        arguments.insert("op".to_string(), serde_json::json!("get diff"));
+        arguments.insert("left_text".to_string(), serde_json::json!("fn foo() {}"));
+        // Intentionally missing right_text and language
+
+        let result = tool.execute(arguments, &context).await;
+        assert!(result.is_err(), "Missing right_text should fail");
+    }
+
+    #[tokio::test]
+    async fn test_git_diff_inline_missing_language() {
+        let repo = TestGitRepo::new();
+        repo.commit_file("initial.txt", "initial", "Initial commit");
+
+        let git_ops = GitOperations::with_work_dir(repo.path()).unwrap();
+        let context = crate::test_utils::create_test_context().await;
+        *context.git_ops.lock().await = Some(git_ops);
+
+        let tool = GitChangesTool::new();
+        let mut arguments = serde_json::Map::new();
+        arguments.insert("op".to_string(), serde_json::json!("get diff"));
+        arguments.insert("left_text".to_string(), serde_json::json!("fn foo() {}"));
+        arguments.insert("right_text".to_string(), serde_json::json!("fn bar() {}"));
+        // Intentionally missing language
+
+        let result = tool.execute(arguments, &context).await;
+        assert!(result.is_err(), "Missing language should fail");
+    }
+
+    #[tokio::test]
+    async fn test_git_diff_file_missing_right() {
+        let repo = TestGitRepo::new();
+        repo.commit_file("initial.txt", "initial content", "Initial commit");
+
+        let git_ops = GitOperations::with_work_dir(repo.path()).unwrap();
+        let context = crate::test_utils::create_test_context().await;
+        *context.git_ops.lock().await = Some(git_ops);
+
+        let tool = GitChangesTool::new();
+        let mut arguments = serde_json::Map::new();
+        arguments.insert("op".to_string(), serde_json::json!("get diff"));
+        arguments.insert("left".to_string(), serde_json::json!("initial.txt"));
+        // Missing right
+
+        let result = tool.execute(arguments, &context).await;
+        assert!(result.is_err(), "Missing right should fail");
+    }
+
+    #[tokio::test]
+    async fn test_git_diff_auto_detect_mode() {
+        let repo = TestGitRepo::new();
+        repo.commit_file("initial.txt", "initial content", "Initial commit");
+
+        let git_ops = GitOperations::with_work_dir(repo.path()).unwrap();
+        let context = crate::test_utils::create_test_context().await;
+        *context.git_ops.lock().await = Some(git_ops);
+
+        let tool = GitChangesTool::new();
+        let mut arguments = serde_json::Map::new();
+        arguments.insert("op".to_string(), serde_json::json!("get diff"));
+        // No parameters = auto-detect mode
+
+        let result = tool.execute(arguments, &context).await;
+        // Auto-detect with no changes should succeed (empty diff)
+        assert!(
+            result.is_ok(),
+            "Auto-detect diff should succeed: {:?}",
+            result.err()
+        );
+    }
+
     // Note: Orphan branch test requires shell commands for git checkout --orphan
     // which libgit2 doesn't directly support. This edge case is left with shell commands.
     // In production code, orphan branches are extremely rare and handled correctly by

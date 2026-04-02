@@ -389,6 +389,169 @@ mod tests {
     }
 
     #[test]
+    fn test_for_cli_returns_valid_discovery_with_paths() {
+        // for_cli() should return Ok and expose paths via the accessor
+        let discovery = ConfigurationDiscovery::for_cli().unwrap();
+        // The returned discovery should have security validation disabled
+        assert!(!discovery.validate_security);
+        // paths() accessor should work and return the same DiscoveryPaths
+        let paths = discovery.paths();
+        // global_dir is either Some or None depending on the environment,
+        // but the accessor must not panic
+        let _ = paths.global_dir.as_ref();
+        let _ = paths.project_dirs.len();
+    }
+
+    #[test]
+    fn test_paths_accessor_returns_configured_paths() {
+        let global = PathBuf::from("/tmp/fake-global/.sah");
+        let project = PathBuf::from("/tmp/fake-project/.sah");
+        let discovery = ConfigurationDiscovery {
+            paths: DiscoveryPaths {
+                global_dir: Some(global.clone()),
+                project_dirs: vec![project.clone()],
+            },
+            validate_security: false,
+        };
+
+        let paths = discovery.paths();
+        assert_eq!(paths.global_dir.as_ref().unwrap(), &global);
+        assert_eq!(paths.project_dirs.len(), 1);
+        assert_eq!(paths.project_dirs[0], project);
+    }
+
+    #[test]
+    fn test_validate_file_security_rejects_readonly_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("readonly.toml");
+        fs::write(&file_path, "[test]\nkey = \"value\"\n").unwrap();
+
+        // Make the file readonly
+        let mut perms = fs::metadata(&file_path).unwrap().permissions();
+        perms.set_readonly(true);
+        fs::set_permissions(&file_path, perms).unwrap();
+
+        let discovery = ConfigurationDiscovery {
+            paths: DiscoveryPaths {
+                global_dir: None,
+                project_dirs: vec![],
+            },
+            validate_security: true,
+        };
+
+        let result = discovery.validate_file_security(&file_path);
+        assert!(
+            result.is_err(),
+            "readonly file should fail security validation"
+        );
+
+        // Restore writable so tempdir cleanup succeeds
+        let mut perms = fs::metadata(&file_path).unwrap().permissions();
+        perms.set_readonly(false);
+        fs::set_permissions(&file_path, perms).unwrap();
+    }
+
+    #[test]
+    fn test_validate_file_security_errors_on_nonexistent_file() {
+        let discovery = ConfigurationDiscovery {
+            paths: DiscoveryPaths {
+                global_dir: None,
+                project_dirs: vec![],
+            },
+            validate_security: true,
+        };
+
+        let result = discovery.validate_file_security(Path::new("/nonexistent/path/file.toml"));
+        assert!(
+            result.is_err(),
+            "nonexistent file should fail metadata read"
+        );
+    }
+
+    #[test]
+    fn test_discover_config_files_filters_readonly_when_security_enabled() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_dir = temp_dir.path().join(".sah");
+        fs::create_dir_all(&config_dir).unwrap();
+
+        // Create two config files -- one normal, one readonly
+        let normal_file = config_dir.join("sah.toml");
+        let readonly_file = config_dir.join("sah.yaml");
+        fs::write(&normal_file, "key = \"val\"").unwrap();
+        fs::write(&readonly_file, "key: val").unwrap();
+
+        let mut perms = fs::metadata(&readonly_file).unwrap().permissions();
+        perms.set_readonly(true);
+        fs::set_permissions(&readonly_file, perms).unwrap();
+
+        // With security validation ON, the readonly file should be filtered out
+        let discovery = ConfigurationDiscovery {
+            paths: DiscoveryPaths {
+                global_dir: None,
+                project_dirs: vec![config_dir.clone()],
+            },
+            validate_security: true,
+        };
+
+        let files = discovery.discover_config_files();
+        assert_eq!(files.len(), 1, "only the writable file should remain");
+        assert!(files[0].ends_with("sah.toml"));
+
+        // With security validation OFF, both files should appear
+        let discovery_no_sec = ConfigurationDiscovery {
+            paths: DiscoveryPaths {
+                global_dir: None,
+                project_dirs: vec![config_dir],
+            },
+            validate_security: false,
+        };
+
+        let files = discovery_no_sec.discover_config_files();
+        assert_eq!(
+            files.len(),
+            2,
+            "both files should appear without security validation"
+        );
+
+        // Cleanup: restore writable
+        let mut perms = fs::metadata(&readonly_file).unwrap().permissions();
+        perms.set_readonly(false);
+        fs::set_permissions(&readonly_file, perms).unwrap();
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn test_resolve_directories_debug_branch_with_both_dirs() {
+        // Exercise the debug logging branch where both global_dir and project_dirs exist.
+        let temp_dir = TempDir::new().unwrap();
+        let base = temp_dir.path().canonicalize().unwrap();
+
+        // Create a fake git root and global dir
+        fs::create_dir(base.join(".git")).unwrap();
+        let sah_dir = base.join(".sah");
+        fs::create_dir_all(&sah_dir).unwrap();
+
+        let original_dir = std::env::current_dir().unwrap();
+        let original_home = std::env::var("HOME").ok();
+
+        std::env::set_current_dir(&base).unwrap();
+        std::env::set_var("HOME", base.as_os_str());
+
+        let (global_dir, project_dirs) = ConfigurationDiscovery::resolve_directories();
+
+        // Restore environment
+        std::env::set_current_dir(&original_dir).unwrap();
+        match &original_home {
+            Some(home) => std::env::set_var("HOME", home),
+            None => std::env::remove_var("HOME"),
+        }
+
+        // Both should be populated, exercising the debug! branch at line 117
+        assert!(global_dir.is_some(), "global_dir should be Some");
+        assert!(!project_dirs.is_empty(), "project_dirs should not be empty");
+    }
+
+    #[test]
     #[serial_test::serial]
     fn test_resolve_project_dirs_walks_up_to_git_root() {
         let temp_dir = TempDir::new().unwrap();

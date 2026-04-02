@@ -243,3 +243,283 @@ pub async fn execute_read(
 
     Ok(BaseToolImpl::create_success_response(content))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_utils::create_test_context;
+    use std::fs;
+    use tempfile::TempDir;
+
+    #[tokio::test]
+    async fn test_read_basic_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("test.txt");
+        fs::write(&test_file, "Hello, world!\nLine 2\nLine 3\n").unwrap();
+
+        let context = create_test_context().await;
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "path".to_string(),
+            serde_json::json!(test_file.to_string_lossy()),
+        );
+
+        let result = execute_read(args, &context).await;
+        assert!(result.is_ok());
+        let call_result = result.unwrap();
+        assert_eq!(call_result.is_error, Some(false));
+        let text = match &call_result.content[0].raw {
+            rmcp::model::RawContent::Text(t) => t.text.clone(),
+            _ => panic!("Expected text content"),
+        };
+        assert!(text.contains("Hello, world!"));
+        assert!(text.contains("Line 2"));
+    }
+
+    #[tokio::test]
+    async fn test_read_with_offset() {
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("offset_test.txt");
+        fs::write(&test_file, "Line 1\nLine 2\nLine 3\nLine 4\nLine 5\n").unwrap();
+
+        let context = create_test_context().await;
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "path".to_string(),
+            serde_json::json!(test_file.to_string_lossy()),
+        );
+        args.insert("offset".to_string(), serde_json::json!(3));
+
+        let result = execute_read(args, &context).await;
+        assert!(result.is_ok());
+        let call_result = result.unwrap();
+        let text = match &call_result.content[0].raw {
+            rmcp::model::RawContent::Text(t) => t.text.clone(),
+            _ => panic!("Expected text content"),
+        };
+        // Offset 3 means skip lines 1 and 2 (1-based), start from line 3
+        assert!(!text.contains("Line 1"));
+        assert!(!text.contains("Line 2"));
+        assert!(text.contains("Line 3"));
+    }
+
+    #[tokio::test]
+    async fn test_read_with_limit() {
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("limit_test.txt");
+        fs::write(&test_file, "Line 1\nLine 2\nLine 3\nLine 4\nLine 5\n").unwrap();
+
+        let context = create_test_context().await;
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "path".to_string(),
+            serde_json::json!(test_file.to_string_lossy()),
+        );
+        args.insert("limit".to_string(), serde_json::json!(2));
+
+        let result = execute_read(args, &context).await;
+        assert!(result.is_ok());
+        let call_result = result.unwrap();
+        let text = match &call_result.content[0].raw {
+            rmcp::model::RawContent::Text(t) => t.text.clone(),
+            _ => panic!("Expected text content"),
+        };
+        assert!(text.contains("Line 1"));
+        assert!(text.contains("Line 2"));
+        assert!(!text.contains("Line 3"));
+    }
+
+    #[tokio::test]
+    async fn test_read_with_offset_and_limit() {
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("offset_limit_test.txt");
+        fs::write(&test_file, "Line 1\nLine 2\nLine 3\nLine 4\nLine 5\n").unwrap();
+
+        let context = create_test_context().await;
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "path".to_string(),
+            serde_json::json!(test_file.to_string_lossy()),
+        );
+        args.insert("offset".to_string(), serde_json::json!(2));
+        args.insert("limit".to_string(), serde_json::json!(2));
+
+        let result = execute_read(args, &context).await;
+        assert!(result.is_ok());
+        let call_result = result.unwrap();
+        let text = match &call_result.content[0].raw {
+            rmcp::model::RawContent::Text(t) => t.text.clone(),
+            _ => panic!("Expected text content"),
+        };
+        // Offset 2 means skip line 1, start from line 2, take 2 lines
+        assert!(!text.contains("Line 1"));
+        assert!(text.contains("Line 2"));
+        assert!(text.contains("Line 3"));
+        assert!(!text.contains("Line 4"));
+    }
+
+    #[tokio::test]
+    async fn test_read_empty_path_error() {
+        let context = create_test_context().await;
+        let mut args = serde_json::Map::new();
+        args.insert("path".to_string(), serde_json::json!(""));
+
+        let result = execute_read(args, &context).await;
+        assert!(result.is_err());
+        let err = format!("{:?}", result.unwrap_err());
+        assert!(err.contains("path cannot be empty") || err.contains("empty"));
+    }
+
+    #[tokio::test]
+    async fn test_read_nonexistent_file_error() {
+        let temp_dir = TempDir::new().unwrap();
+        let nonexistent = temp_dir.path().join("does_not_exist.txt");
+
+        let context = create_test_context().await;
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "path".to_string(),
+            serde_json::json!(nonexistent.to_string_lossy()),
+        );
+
+        let result = execute_read(args, &context).await;
+        assert!(result.is_err());
+        let err = format!("{:?}", result.unwrap_err());
+        assert!(
+            err.contains("not found") || err.contains("NotFound") || err.contains("does not exist")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_read_offset_exceeds_max() {
+        let context = create_test_context().await;
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("test.txt");
+        fs::write(&test_file, "content").unwrap();
+
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "path".to_string(),
+            serde_json::json!(test_file.to_string_lossy()),
+        );
+        args.insert("offset".to_string(), serde_json::json!(1_000_001));
+
+        let result = execute_read(args, &context).await;
+        assert!(result.is_err());
+        let err = format!("{:?}", result.unwrap_err());
+        assert!(err.contains("offset") || err.contains("1,000,000"));
+    }
+
+    #[tokio::test]
+    async fn test_read_limit_zero_error() {
+        let context = create_test_context().await;
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("test.txt");
+        fs::write(&test_file, "content").unwrap();
+
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "path".to_string(),
+            serde_json::json!(test_file.to_string_lossy()),
+        );
+        args.insert("limit".to_string(), serde_json::json!(0));
+
+        let result = execute_read(args, &context).await;
+        assert!(result.is_err());
+        let err = format!("{:?}", result.unwrap_err());
+        assert!(err.contains("limit") || err.contains("greater than 0"));
+    }
+
+    #[tokio::test]
+    async fn test_read_limit_exceeds_max() {
+        let context = create_test_context().await;
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("test.txt");
+        fs::write(&test_file, "content").unwrap();
+
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "path".to_string(),
+            serde_json::json!(test_file.to_string_lossy()),
+        );
+        args.insert("limit".to_string(), serde_json::json!(100_001));
+
+        let result = execute_read(args, &context).await;
+        assert!(result.is_err());
+        let err = format!("{:?}", result.unwrap_err());
+        assert!(err.contains("limit") || err.contains("100,000"));
+    }
+
+    #[tokio::test]
+    async fn test_read_file_path_alias() {
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("alias_test.txt");
+        fs::write(&test_file, "alias test content").unwrap();
+
+        let context = create_test_context().await;
+
+        // Test with file_path alias
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "file_path".to_string(),
+            serde_json::json!(test_file.to_string_lossy()),
+        );
+
+        let result = execute_read(args, &context).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_read_empty_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("empty.txt");
+        fs::write(&test_file, "").unwrap();
+
+        let context = create_test_context().await;
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "path".to_string(),
+            serde_json::json!(test_file.to_string_lossy()),
+        );
+
+        let result = execute_read(args, &context).await;
+        assert!(result.is_ok());
+        let call_result = result.unwrap();
+        assert_eq!(call_result.is_error, Some(false));
+    }
+
+    #[tokio::test]
+    async fn test_read_unicode_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("unicode.txt");
+        let content = "Hello 🌍!\nЗдравствуй мир!\n你好世界\n";
+        fs::write(&test_file, content).unwrap();
+
+        let context = create_test_context().await;
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "path".to_string(),
+            serde_json::json!(test_file.to_string_lossy()),
+        );
+
+        let result = execute_read(args, &context).await;
+        assert!(result.is_ok());
+        let call_result = result.unwrap();
+        let text = match &call_result.content[0].raw {
+            rmcp::model::RawContent::Text(t) => t.text.clone(),
+            _ => panic!("Expected text content"),
+        };
+        assert!(text.contains("🌍"));
+        assert!(text.contains("Здравствуй"));
+    }
+
+    #[tokio::test]
+    async fn test_read_missing_path_parameter() {
+        let context = create_test_context().await;
+        // No path field at all
+        let args = serde_json::Map::new();
+
+        let result = execute_read(args, &context).await;
+        assert!(result.is_err());
+    }
+}

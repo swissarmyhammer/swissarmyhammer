@@ -694,4 +694,73 @@ mod tests {
         // Just verify it doesn't panic — we can't easily test tracing output
         warn_legacy_paths();
     }
+
+    #[test]
+    #[serial]
+    #[allow(deprecated)]
+    fn test_from_user_home() {
+        // Exercise the deprecated from_user_home path to ensure it still works.
+        // It should create a managed directory under ~/.<DIR_NAME>.
+        let dir = ManagedDirectory::<SwissarmyhammerConfig>::from_user_home().unwrap();
+        assert!(dir.root().exists());
+        assert_eq!(*dir.root_type(), DirectoryRootType::UserHome);
+        // Root should end with the DIR_NAME component
+        assert!(
+            dir.root().ends_with(SwissarmyhammerConfig::DIR_NAME),
+            "root should end with DIR_NAME, got: {}",
+            dir.root().display()
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn test_from_git_root() {
+        // Create a temp dir with a .git directory to simulate a git repo,
+        // then set CWD so from_git_root() can find it.
+        let temp = TempDir::new().unwrap();
+        // Canonicalize to resolve macOS /var -> /private/var symlink
+        let temp_canonical = temp.path().canonicalize().unwrap();
+        let git_dir = temp_canonical.join(".git");
+        fs::create_dir_all(&git_dir).unwrap();
+
+        // Save and restore CWD to avoid affecting other tests.
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&temp_canonical).unwrap();
+
+        let result = ManagedDirectory::<SwissarmyhammerConfig>::from_git_root();
+
+        std::env::set_current_dir(&original_dir).unwrap();
+
+        let dir = result.unwrap();
+        assert!(dir.root().exists());
+        assert_eq!(*dir.root_type(), DirectoryRootType::GitRoot);
+        assert_eq!(
+            dir.root(),
+            temp_canonical.join(SwissarmyhammerConfig::DIR_NAME)
+        );
+    }
+
+    #[test]
+    fn test_gitignore_not_overwritten_if_exists() {
+        // If .gitignore already exists with custom content, ManagedDirectory
+        // should leave it untouched (line 118 branch).
+        let temp = TempDir::new().unwrap();
+        let managed_root = temp.path().join(SwissarmyhammerConfig::DIR_NAME);
+        fs::create_dir_all(&managed_root).unwrap();
+
+        let gitignore_path = managed_root.join(".gitignore");
+        let custom_content = "# my custom gitignore\nkeep-this\n";
+        fs::write(&gitignore_path, custom_content).unwrap();
+
+        // Now create the ManagedDirectory — it should NOT overwrite our file
+        let dir =
+            ManagedDirectory::<SwissarmyhammerConfig>::from_custom_root(temp.path().to_path_buf())
+                .unwrap();
+
+        let after_content = fs::read_to_string(dir.root().join(".gitignore")).unwrap();
+        assert_eq!(
+            after_content, custom_content,
+            "gitignore should be preserved when it already exists"
+        );
+    }
 }

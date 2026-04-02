@@ -302,4 +302,173 @@ mod tests {
         storage.clear().unwrap();
         assert_eq!(storage.count().unwrap(), 0);
     }
+
+    #[test]
+    fn test_memory_storage_list() {
+        let mut storage = MemoryStorage::new();
+        let prompt1 = Prompt::new("alpha", "Template alpha");
+        let prompt2 = Prompt::new("beta", "Template beta");
+
+        storage.store("alpha", &prompt1).unwrap();
+        storage.store("beta", &prompt2).unwrap();
+
+        let prompts = storage.list().unwrap();
+        assert_eq!(prompts.len(), 2);
+    }
+
+    #[test]
+    fn test_memory_storage_get_all_and_insert() {
+        let mut storage = MemoryStorage::new();
+
+        // Use insert() directly
+        storage.insert("direct".to_string(), Prompt::new("direct", "Direct insert"));
+
+        let all = storage.get_all();
+        assert!(all.contains_key("direct"));
+        assert_eq!(all["direct"].template, "Direct insert");
+    }
+
+    #[test]
+    fn test_file_storage_new_and_store() {
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let mut storage = FileStorage::new(temp_dir.path());
+
+        let prompt = Prompt::new("file-test", "File storage template");
+        storage.store("file-test", &prompt).unwrap();
+
+        // Verify the file was created
+        let file_path = temp_dir.path().join("file-test.md");
+        assert!(file_path.exists());
+    }
+
+    #[test]
+    fn test_file_storage_get() {
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let mut storage = FileStorage::new(temp_dir.path());
+
+        let prompt = Prompt::new("retrievable", "Get this template");
+        storage.store("retrievable", &prompt).unwrap();
+
+        let retrieved = storage.get("retrievable").unwrap();
+        assert!(retrieved.is_some());
+        assert_eq!(retrieved.unwrap().name, "retrievable");
+    }
+
+    #[test]
+    fn test_file_storage_get_nonexistent() {
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let storage = FileStorage::new(temp_dir.path());
+
+        let result = storage.get("nonexistent").unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_file_storage_list_keys() {
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let mut storage = FileStorage::new(temp_dir.path());
+
+        storage
+            .store("key1", &Prompt::new("key1", "Template 1"))
+            .unwrap();
+        storage
+            .store("key2", &Prompt::new("key2", "Template 2"))
+            .unwrap();
+
+        let mut keys = storage.list_keys().unwrap();
+        keys.sort();
+        assert_eq!(keys, vec!["key1", "key2"]);
+    }
+
+    #[test]
+    fn test_file_storage_list_keys_empty_dir() {
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let storage = FileStorage::new(temp_dir.path());
+
+        let keys = storage.list_keys().unwrap();
+        assert!(keys.is_empty());
+    }
+
+    #[test]
+    fn test_file_storage_list_keys_nonexistent_dir() {
+        let storage = FileStorage::new("/nonexistent/path/for/test");
+
+        let keys = storage.list_keys().unwrap();
+        assert!(keys.is_empty());
+    }
+
+    #[test]
+    fn test_file_storage_remove() {
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let mut storage = FileStorage::new(temp_dir.path());
+
+        storage
+            .store("removable", &Prompt::new("removable", "To be removed"))
+            .unwrap();
+        assert_eq!(storage.count().unwrap(), 1);
+
+        let removed = storage.remove("removable").unwrap();
+        assert!(removed);
+        assert_eq!(storage.count().unwrap(), 0);
+    }
+
+    #[test]
+    fn test_file_storage_remove_nonexistent() {
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let mut storage = FileStorage::new(temp_dir.path());
+
+        let removed = storage.remove("no-such-key").unwrap();
+        assert!(!removed);
+    }
+
+    #[test]
+    fn test_file_storage_clear() {
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let mut storage = FileStorage::new(temp_dir.path());
+
+        storage
+            .store("p1", &Prompt::new("p1", "Template 1"))
+            .unwrap();
+        storage
+            .store("p2", &Prompt::new("p2", "Template 2"))
+            .unwrap();
+        assert_eq!(storage.count().unwrap(), 2);
+
+        storage.clear().unwrap();
+        assert_eq!(storage.count().unwrap(), 0);
+    }
+
+    #[test]
+    fn test_file_storage_exists_and_count() {
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let mut storage = FileStorage::new(temp_dir.path());
+
+        assert!(!storage.exists("item").unwrap());
+        assert_eq!(storage.count().unwrap(), 0);
+
+        storage
+            .store("item", &Prompt::new("item", "Template"))
+            .unwrap();
+
+        assert!(storage.exists("item").unwrap());
+        assert_eq!(storage.count().unwrap(), 1);
+    }
 }

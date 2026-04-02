@@ -309,7 +309,7 @@ fn map_node_type(tree_sitter_type: &str) -> &str {
         "struct_item" | "struct_specifier" | "struct_declaration" => "struct",
         "union_specifier" => "union",
         "impl_item" => "impl",
-        "trait_item" => "trait",
+        "trait_item" | "trait_declaration" => "trait",
         "mod_item" | "module" | "namespace_definition" | "namespace_declaration" => "module",
         "export_statement" => "export",
         "lexical_declaration" | "variable_declaration" | "var_declaration" | "declaration" => {

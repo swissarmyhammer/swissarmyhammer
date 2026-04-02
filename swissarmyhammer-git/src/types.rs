@@ -401,4 +401,114 @@ mod tests {
         let all_modified = status.all_modified_files();
         assert_eq!(all_modified, vec!["file1.txt", "file2.txt"]);
     }
+
+    #[test]
+    fn test_status_summary_all_changed_files() {
+        // all_changed_files includes staged/unstaged modifications, staged new,
+        // staged deleted, unstaged deleted, and renamed — but NOT untracked.
+        let mut status = StatusSummary::new();
+        status.staged_modified.push("staged.txt".to_string());
+        status.unstaged_modified.push("unstaged.txt".to_string());
+        status.staged_new.push("new.txt".to_string());
+        status.staged_deleted.push("deleted_staged.txt".to_string());
+        status
+            .unstaged_deleted
+            .push("deleted_unstaged.txt".to_string());
+        status.renamed.push("renamed.txt".to_string());
+        // untracked should NOT appear in all_changed_files
+        status.untracked.push("untracked.txt".to_string());
+
+        let changed = status.all_changed_files();
+        assert!(changed.contains(&"staged.txt".to_string()));
+        assert!(changed.contains(&"unstaged.txt".to_string()));
+        assert!(changed.contains(&"new.txt".to_string()));
+        assert!(changed.contains(&"deleted_staged.txt".to_string()));
+        assert!(changed.contains(&"deleted_unstaged.txt".to_string()));
+        assert!(changed.contains(&"renamed.txt".to_string()));
+        assert!(!changed.contains(&"untracked.txt".to_string()));
+    }
+
+    #[test]
+    fn test_status_summary_all_changed_files_dedup() {
+        // Files appearing in multiple categories are deduplicated.
+        let mut status = StatusSummary::new();
+        status.staged_modified.push("file.txt".to_string());
+        status.unstaged_modified.push("file.txt".to_string());
+
+        let changed = status.all_changed_files();
+        assert_eq!(changed, vec!["file.txt".to_string()]);
+    }
+
+    #[test]
+    fn test_status_summary_has_conflicts() {
+        let mut status = StatusSummary::new();
+        assert!(!status.has_conflicts());
+
+        status.conflicted.push("conflict.txt".to_string());
+        assert!(status.has_conflicts());
+    }
+
+    #[test]
+    fn test_commit_info_short_hash_normal() {
+        // When hash is at least 8 characters, short_hash is the first 8.
+        let info = CommitInfo::new(
+            "abcdef1234567890".to_string(),
+            "Initial commit".to_string(),
+            "Alice".to_string(),
+            "alice@example.com".to_string(),
+            chrono::Utc::now(),
+        );
+        assert_eq!(info.short_hash, "abcdef12");
+        assert_eq!(info.hash, "abcdef1234567890");
+    }
+
+    #[test]
+    fn test_commit_info_short_hash_less_than_8_chars() {
+        // When hash is shorter than 8 characters, short_hash equals the full hash.
+        let short_hash = "abc".to_string();
+        let info = CommitInfo::new(
+            short_hash.clone(),
+            "Tiny hash commit".to_string(),
+            "Bob".to_string(),
+            "bob@example.com".to_string(),
+            chrono::Utc::now(),
+        );
+        assert_eq!(info.short_hash, short_hash);
+        assert_eq!(info.hash, short_hash);
+    }
+
+    #[test]
+    fn test_commit_info_short_hash_exactly_8_chars() {
+        // When hash is exactly 8 characters, short_hash equals the full hash.
+        let hash = "12345678".to_string();
+        let info = CommitInfo::new(
+            hash.clone(),
+            "Exact 8 commit".to_string(),
+            "Carol".to_string(),
+            "carol@example.com".to_string(),
+            chrono::Utc::now(),
+        );
+        assert_eq!(info.short_hash, hash);
+    }
+
+    #[test]
+    fn test_branch_name_from_str_valid() {
+        // FromStr should accept valid branch names.
+        let branch: Result<BranchName, _> = "feature/auth".parse();
+        assert!(branch.is_ok());
+        assert_eq!(branch.unwrap().as_str(), "feature/auth");
+    }
+
+    #[test]
+    fn test_branch_name_from_str_invalid() {
+        // FromStr should reject invalid branch names.
+        let result: Result<BranchName, _> = "branch with spaces".parse();
+        assert!(result.is_err());
+
+        let result: Result<BranchName, _> = "".parse();
+        assert!(result.is_err());
+
+        let result: Result<BranchName, _> = "-starts-with-dash".parse();
+        assert!(result.is_err());
+    }
 }

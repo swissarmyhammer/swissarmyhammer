@@ -234,23 +234,213 @@ mod tests {
         assert_eq!(config.http.max_redirects, 0);
     }
 
-    #[test]
-    fn test_categorize_error() {
-        let timeout_error =
-            std::io::Error::new(std::io::ErrorKind::TimedOut, "Connection timed out");
-        assert_eq!(WebFetcher::categorize_error(&timeout_error), "timeout");
+    /// Helper to build a minimal WebFetchRequest for a given URL.
+    fn request(url: &str) -> WebFetchRequest {
+        WebFetchRequest {
+            url: url.to_string(),
+            timeout: None,
+            follow_redirects: None,
+            max_content_length: None,
+            user_agent: None,
+        }
+    }
 
-        let network_error =
-            std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "Connection refused");
-        assert_eq!(
-            WebFetcher::categorize_error(&network_error),
-            "network_error"
+    #[tokio::test]
+    async fn test_validate_url_valid() {
+        let fetcher = WebFetcher::new();
+        let result = fetcher.validate_url(&request("https://example.com")).await;
+        assert!(result.is_ok(), "Expected Ok for valid URL, got: {result:?}");
+        assert_eq!(result.unwrap(), "https://example.com/");
+    }
+
+    #[tokio::test]
+    async fn test_validate_url_invalid() {
+        let fetcher = WebFetcher::new();
+        let result = fetcher.validate_url(&request("not-a-valid-url")).await;
+        assert!(
+            matches!(result, Err(FetchError::InvalidUrl(_))),
+            "Expected InvalidUrl for malformed URL, got: {result:?}"
         );
+    }
 
-        let ssl_error = std::io::Error::other("SSL certificate error");
-        assert_eq!(WebFetcher::categorize_error(&ssl_error), "ssl_error");
+    #[tokio::test]
+    async fn test_validate_url_unsupported_scheme() {
+        let fetcher = WebFetcher::new();
+        let result = fetcher
+            .validate_url(&request("ftp://example.com/file"))
+            .await;
+        match &result {
+            Err(FetchError::InvalidUrl(msg)) => {
+                assert!(
+                    msg.contains("protocol") || msg.contains("Unsupported"),
+                    "Error should mention unsupported protocol, got: {msg}"
+                );
+            }
+            other => panic!("Expected InvalidUrl for ftp scheme, got: {other:?}"),
+        }
+    }
 
-        let parse_error = std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid encoding");
-        assert_eq!(WebFetcher::categorize_error(&parse_error), "content_error");
+    #[tokio::test]
+    async fn test_validate_url_ssrf_loopback() {
+        let fetcher = WebFetcher::new();
+        let result = fetcher
+            .validate_url(&request("http://127.0.0.1/path"))
+            .await;
+        assert!(
+            matches!(result, Err(FetchError::SecurityViolation(_))),
+            "Expected SecurityViolation for loopback SSRF, got: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_validate_url_blocked_domain() {
+        let fetcher = WebFetcher::new();
+        // "metadata.google.internal" is on the default blocked-domains list
+        // and also matches the ".internal" blocked pattern — both map to
+        // SecurityError::BlockedDomain which falls through to SecurityViolation.
+        let result = fetcher
+            .validate_url(&request("https://metadata.google.internal/computeMetadata"))
+            .await;
+        assert!(
+            matches!(result, Err(FetchError::SecurityViolation(_))),
+            "Expected SecurityViolation for blocked domain, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_categorize_error_timeout() {
+        let err = std::io::Error::new(std::io::ErrorKind::TimedOut, "Connection timed out");
+        assert_eq!(WebFetcher::categorize_error(&err), "timeout");
+
+        let err = std::io::Error::other("request timeout exceeded");
+        assert_eq!(WebFetcher::categorize_error(&err), "timeout");
+    }
+
+    #[test]
+    fn test_categorize_error_network() {
+        let err = std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "Connection refused");
+        assert_eq!(WebFetcher::categorize_error(&err), "network_error");
+
+        let err = std::io::Error::other("network unreachable");
+        assert_eq!(WebFetcher::categorize_error(&err), "network_error");
+
+        let err = std::io::Error::other("dns lookup failed");
+        assert_eq!(WebFetcher::categorize_error(&err), "network_error");
+
+        let err = std::io::Error::other("could not resolve host");
+        assert_eq!(WebFetcher::categorize_error(&err), "network_error");
+    }
+
+    #[test]
+    fn test_categorize_error_ssl() {
+        let err = std::io::Error::other("SSL certificate error");
+        assert_eq!(WebFetcher::categorize_error(&err), "ssl_error");
+
+        let err = std::io::Error::other("TLS handshake failed");
+        assert_eq!(WebFetcher::categorize_error(&err), "ssl_error");
+
+        let err = std::io::Error::other("certificate verify failed");
+        assert_eq!(WebFetcher::categorize_error(&err), "ssl_error");
+    }
+
+    #[test]
+    fn test_categorize_error_redirect() {
+        let err = std::io::Error::other("too many redirect hops");
+        assert_eq!(WebFetcher::categorize_error(&err), "redirect_error");
+    }
+
+    #[test]
+    fn test_categorize_error_auth() {
+        let err = std::io::Error::other("server returned 401 unauthorized");
+        assert_eq!(WebFetcher::categorize_error(&err), "auth_error");
+
+        let err = std::io::Error::other("server returned 403 forbidden");
+        assert_eq!(WebFetcher::categorize_error(&err), "auth_error");
+    }
+
+    #[test]
+    fn test_categorize_error_not_found() {
+        let err = std::io::Error::other("server returned 404 not found");
+        assert_eq!(WebFetcher::categorize_error(&err), "not_found");
+    }
+
+    #[test]
+    fn test_categorize_error_client_error() {
+        let err = std::io::Error::other("server returned 400 bad request");
+        assert_eq!(WebFetcher::categorize_error(&err), "client_error");
+    }
+
+    #[test]
+    fn test_categorize_error_server_error() {
+        let err = std::io::Error::other("server returned 500 internal server error");
+        assert_eq!(WebFetcher::categorize_error(&err), "server_error");
+
+        let err = std::io::Error::other("502 bad gateway");
+        assert_eq!(WebFetcher::categorize_error(&err), "server_error");
+
+        let err = std::io::Error::other("503 service unavailable");
+        assert_eq!(WebFetcher::categorize_error(&err), "server_error");
+    }
+
+    #[test]
+    fn test_categorize_error_content_error() {
+        let err = std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid encoding");
+        assert_eq!(WebFetcher::categorize_error(&err), "content_error");
+
+        let err = std::io::Error::other("failed to parse HTML");
+        assert_eq!(WebFetcher::categorize_error(&err), "content_error");
+    }
+
+    #[test]
+    fn test_categorize_error_size_limit() {
+        let err = std::io::Error::other("response body too large");
+        assert_eq!(WebFetcher::categorize_error(&err), "size_limit_error");
+
+        let err = std::io::Error::other("content size exceeded limit");
+        assert_eq!(WebFetcher::categorize_error(&err), "size_limit_error");
+    }
+
+    #[test]
+    fn test_categorize_error_unknown() {
+        let err = std::io::Error::other("something completely unexpected happened");
+        assert_eq!(WebFetcher::categorize_error(&err), "unknown_error");
+    }
+
+    #[tokio::test]
+    async fn test_fetch_url_failure_path() {
+        // Use a URL that will pass validation but fail on actual fetch
+        // (non-routable address with a short timeout to fail quickly)
+        let fetcher = WebFetcher::new();
+        let req = WebFetchRequest {
+            url: "https://192.0.2.1/nonexistent".to_string(), // TEST-NET-1, non-routable
+            timeout: Some(1),
+            follow_redirects: None,
+            max_content_length: None,
+            user_agent: None,
+        };
+        // 192.0.2.1 is in a reserved test range that might be blocked by SSRF checks.
+        // If validation fails, try a domain that resolves but refuses connections.
+        let result = fetcher.fetch_url(&req).await;
+        assert!(
+            result.is_err(),
+            "Expected fetch to fail for unreachable host"
+        );
+        match result.unwrap_err() {
+            FetchError::FetchFailed {
+                error_type,
+                message,
+                response_time_ms: _,
+            } => {
+                // The error_type should be one of the categorized strings
+                assert!(
+                    !error_type.is_empty(),
+                    "error_type should not be empty, got message: {message}"
+                );
+            }
+            FetchError::SecurityViolation(_) => {
+                // Also acceptable — the SSRF guard may block this IP range
+            }
+            other => panic!("Expected FetchFailed or SecurityViolation, got: {other:?}"),
+        }
     }
 }

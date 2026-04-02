@@ -699,4 +699,72 @@ mod tests {
         let _cloned = Arc::clone(arc_ref);
         assert_eq!(Arc::strong_count(arc_ref), 2);
     }
+
+    #[test]
+    fn test_library_partial_adapter_names() {
+        let library = MockLibrary::new();
+        let adapter = LibraryPartialAdapter::new(Arc::new(library));
+
+        // PartialLoader::names should return all template names from the library
+        let names = PartialLoader::names(&adapter);
+        assert_eq!(names.len(), 3);
+        assert!(names.iter().any(|n| n == "header"));
+        assert!(names.iter().any(|n| n == "footer"));
+        assert!(names.iter().any(|n| n == "_partials/shared"));
+    }
+
+    #[test]
+    fn test_partial_tag_parse_and_render() {
+        // Verify PartialTag reflection
+        let tag = PartialTag::new();
+        assert_eq!(tag.tag(), "partial");
+        assert!(!tag.description().is_empty());
+        // reflection() must return self
+        let refl = tag.reflection();
+        assert_eq!(refl.tag(), "partial");
+
+        // Parse the tag with an empty token iterator and render the resulting renderable
+        let parser = crate::template::create_default_parser();
+        // A template containing {% partial %} should render as empty string (no-op)
+        let template = parser.parse("before{% partial %}after").unwrap();
+        let object = liquid::Object::new();
+        let rendered = template.render(&object).unwrap();
+        assert_eq!(rendered, "beforeafter");
+    }
+
+    #[test]
+    fn test_partial_renderable_render_to() {
+        // PartialRenderable is private; verify via the tag in a real template
+        let parser = crate::template::create_default_parser();
+        let template = parser.parse("{% partial %}").unwrap();
+        let object = liquid::Object::new();
+        let rendered = template.render(&object).unwrap();
+        assert_eq!(rendered, "");
+    }
+
+    #[test]
+    fn test_partial_loader_adapter_loader() {
+        let loader = TestPartialLoader::new();
+        let adapter = PartialLoaderAdapter::new(loader);
+
+        // loader() exposes the inner TestPartialLoader
+        let inner = adapter.loader();
+        assert!(inner.contains("header"));
+        assert_eq!(
+            inner.try_get("header").map(|c| c.into_owned()),
+            Some("# Header".to_string())
+        );
+    }
+
+    #[test]
+    fn test_hashmap_partial_loader_names() {
+        let mut partials = HashMap::new();
+        partials.insert("alpha".to_string(), "Alpha content".to_string());
+        partials.insert("beta".to_string(), "Beta content".to_string());
+
+        let loader = HashMapPartialLoader::new(partials);
+        let mut names = PartialLoader::names(&loader);
+        names.sort();
+        assert_eq!(names, vec!["alpha", "beta"]);
+    }
 }

@@ -315,4 +315,53 @@ mod tests {
         let list = Operation::new(Verb::List, Noun::Tasks, Map::new());
         assert!(!list.is_mutation());
     }
+
+    #[test]
+    fn test_with_note_sets_note() {
+        let op = Operation::new(Verb::Add, Noun::Task, Map::new());
+        assert!(op.note.is_none());
+
+        let op = op.with_note("this is a note");
+        assert_eq!(op.note.as_deref(), Some("this is a note"));
+    }
+
+    #[test]
+    fn test_with_note_accepts_string_types() {
+        // with_note accepts anything that implements Into<String>
+        let op = Operation::new(Verb::Add, Noun::Task, Map::new())
+            .with_note(String::from("owned string"));
+        assert_eq!(op.note.as_deref(), Some("owned string"));
+    }
+
+    #[test]
+    fn test_require_string_present() {
+        let mut params = Map::new();
+        params.insert(
+            "title".to_string(),
+            serde_json::Value::String("My Task".to_string()),
+        );
+        let op = Operation::new(Verb::Add, Noun::Task, params);
+
+        let result = op.require_string("title");
+        assert_eq!(result, Ok("My Task"));
+    }
+
+    #[test]
+    fn test_require_string_missing() {
+        let op = Operation::new(Verb::Add, Noun::Task, Map::new());
+        let result = op.require_string("title");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("title"));
+    }
+
+    #[test]
+    fn test_require_string_wrong_type() {
+        let mut params = Map::new();
+        params.insert("count".to_string(), serde_json::Value::Number(42.into()));
+        let op = Operation::new(Verb::Add, Noun::Task, params);
+
+        // Non-string value should return an error
+        let result = op.require_string("count");
+        assert!(result.is_err());
+    }
 }

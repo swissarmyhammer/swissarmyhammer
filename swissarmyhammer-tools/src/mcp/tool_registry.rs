@@ -223,7 +223,7 @@ use super::tool_handlers::ToolHandlers;
 use owo_colors::OwoColorize;
 use rmcp::model::{
     CallToolResult, Content, LoggingLevel, LoggingMessageNotification,
-    LoggingMessageNotificationParam, Tool,
+    LoggingMessageNotificationParam, Meta, Tool,
 };
 use rmcp::{ErrorData as McpError, Peer, RoleServer};
 use std::collections::{HashMap, HashSet};
@@ -1099,7 +1099,9 @@ impl ToolRegistry {
 
     /// Get all registered tools as Tool objects for MCP list_tools response.
     ///
-    /// Disabled tools are excluded from the result.
+    /// Disabled tools are excluded from the result. Every tool has `_meta` set
+    /// with `"anthropic/alwaysLoad": true` so Claude Code loads them eagerly
+    /// without requiring a ToolSearch round-trip.
     pub fn list_tools(&self) -> Vec<Tool> {
         self.tools
             .values()
@@ -1112,8 +1114,16 @@ impl ToolRegistry {
                     serde_json::Map::new()
                 };
 
-                Tool::new(McpTool::name(tool.as_ref()), tool.description(), schema_map)
-                    .with_title(McpTool::name(tool.as_ref()))
+                let mut mcp_tool =
+                    Tool::new(McpTool::name(tool.as_ref()), tool.description(), schema_map)
+                        .with_title(McpTool::name(tool.as_ref()));
+                let mut meta = Meta::new();
+                meta.0.insert(
+                    "anthropic/alwaysLoad".to_string(),
+                    serde_json::Value::Bool(true),
+                );
+                mcp_tool.meta = Some(meta);
+                mcp_tool
             })
             .collect()
     }
@@ -2700,5 +2710,331 @@ mod tests {
         assert!(names.contains(&"shell".to_string()));
         assert!(!names.contains(&"kanban".to_string()));
         assert_eq!(registry.list_tools().len(), 1);
+    }
+
+    #[test]
+    fn test_list_tools_always_load_meta() {
+        // Every tool returned by list_tools() must have _meta with
+        // "anthropic/alwaysLoad": true so Claude Code loads them eagerly.
+        let mut registry = ToolRegistry::new();
+        registry.register(MockTool {
+            name: "alpha",
+            description: "First tool",
+        });
+        registry.register(MockTool {
+            name: "beta",
+            description: "Second tool",
+        });
+
+        let tools = registry.list_tools();
+        assert!(!tools.is_empty(), "expected at least one tool");
+
+        for tool in &tools {
+            let meta = tool
+                .meta
+                .as_ref()
+                .unwrap_or_else(|| panic!("tool '{}' is missing _meta", tool.name));
+            let always_load = meta.0.get("anthropic/alwaysLoad").unwrap_or_else(|| {
+                panic!("tool '{}' _meta missing 'anthropic/alwaysLoad'", tool.name)
+            });
+            assert_eq!(
+                always_load,
+                &serde_json::Value::Bool(true),
+                "tool '{}' has wrong value for 'anthropic/alwaysLoad'",
+                tool.name
+            );
+        }
+    }
+
+    // --- ToolContext builder method tests ---
+
+    #[test]
+    fn test_tool_context_with_prompt_library() {
+        use swissarmyhammer_prompts::PromptLibrary;
+        use tokio::sync::RwLock;
+
+        let tool_handlers = Arc::new(ToolHandlers::new());
+        let git_ops = Arc::new(tokio::sync::Mutex::new(None));
+        let agent_config = Arc::new(swissarmyhammer_config::model::ModelConfig::default());
+        let ctx = ToolContext::new(tool_handlers, git_ops, agent_config);
+        assert!(ctx.prompt_library.is_none());
+
+        let library = Arc::new(RwLock::new(PromptLibrary::new()));
+        let ctx = ctx.with_prompt_library(library);
+        assert!(ctx.prompt_library.is_some());
+    }
+
+    #[test]
+    fn test_tool_context_with_plan_sender() {
+        use super::super::plan_notifications::{PlanNotification, PlanSender};
+        use tokio::sync::mpsc;
+
+        let tool_handlers = Arc::new(ToolHandlers::new());
+        let git_ops = Arc::new(tokio::sync::Mutex::new(None));
+        let agent_config = Arc::new(swissarmyhammer_config::model::ModelConfig::default());
+        let ctx = ToolContext::new(tool_handlers, git_ops, agent_config);
+        assert!(ctx.plan_sender.is_none());
+
+        let (tx, _rx) = mpsc::unbounded_channel::<PlanNotification>();
+        let sender = PlanSender::new(tx);
+        let ctx = ctx.with_plan_sender(sender);
+        assert!(ctx.plan_sender.is_some());
+    }
+
+    #[test]
+    fn test_tool_context_with_tool_registry() {
+        use tokio::sync::RwLock;
+
+        let tool_handlers = Arc::new(ToolHandlers::new());
+        let git_ops = Arc::new(tokio::sync::Mutex::new(None));
+        let agent_config = Arc::new(swissarmyhammer_config::model::ModelConfig::default());
+        let ctx = ToolContext::new(tool_handlers, git_ops, agent_config);
+        assert!(ctx.tool_registry.is_none());
+
+        let registry = Arc::new(RwLock::new(ToolRegistry::new()));
+        let ctx = ctx.with_tool_registry(registry);
+        assert!(ctx.tool_registry.is_some());
+    }
+
+    #[test]
+    fn test_tool_context_with_working_dir() {
+        let tool_handlers = Arc::new(ToolHandlers::new());
+        let git_ops = Arc::new(tokio::sync::Mutex::new(None));
+        let agent_config = Arc::new(swissarmyhammer_config::model::ModelConfig::default());
+        let ctx = ToolContext::new(tool_handlers, git_ops, agent_config);
+        assert!(ctx.working_dir.is_none());
+
+        let dir = std::path::PathBuf::from("/tmp/test");
+        let ctx = ctx.with_working_dir(dir.clone());
+        assert_eq!(ctx.working_dir, Some(dir));
+    }
+
+    #[tokio::test]
+    async fn test_tool_context_set_mcp_server() {
+        let tool_handlers = Arc::new(ToolHandlers::new());
+        let git_ops = Arc::new(tokio::sync::Mutex::new(None));
+        let agent_config = Arc::new(swissarmyhammer_config::model::ModelConfig::default());
+        let ctx = ToolContext::new(tool_handlers, git_ops, agent_config);
+
+        // Initially no server set
+        let guard = ctx.mcp_server.read().await;
+        assert!(guard.is_none());
+    }
+
+    // --- call_tool tests ---
+
+    #[tokio::test]
+    async fn test_call_tool_no_registry_returns_error() {
+        let tool_handlers = Arc::new(ToolHandlers::new());
+        let git_ops = Arc::new(tokio::sync::Mutex::new(None));
+        let agent_config = Arc::new(swissarmyhammer_config::model::ModelConfig::default());
+        let ctx = ToolContext::new(tool_handlers, git_ops, agent_config);
+
+        // No tool registry set — should return internal error
+        let result = ctx.call_tool("anything", serde_json::json!({})).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            format!("{:?}", err).contains("Tool registry not available"),
+            "expected 'Tool registry not available' in error, got: {:?}",
+            err
+        );
+    }
+
+    #[tokio::test]
+    async fn test_call_tool_missing_tool_returns_error() {
+        use tokio::sync::RwLock;
+
+        let tool_handlers = Arc::new(ToolHandlers::new());
+        let git_ops = Arc::new(tokio::sync::Mutex::new(None));
+        let agent_config = Arc::new(swissarmyhammer_config::model::ModelConfig::default());
+        let registry = Arc::new(RwLock::new(ToolRegistry::new()));
+        let ctx =
+            ToolContext::new(tool_handlers, git_ops, agent_config).with_tool_registry(registry);
+
+        let result = ctx
+            .call_tool("nonexistent_tool", serde_json::json!({}))
+            .await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        let msg = format!("{:?}", err);
+        assert!(
+            msg.contains("not found in registry"),
+            "expected 'not found in registry' in error, got: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_call_tool_non_object_params_returns_error() {
+        use tokio::sync::RwLock;
+
+        let mut inner = ToolRegistry::new();
+        inner.register(MockTool {
+            name: "echo_tool",
+            description: "Echoes input",
+        });
+        let tool_handlers = Arc::new(ToolHandlers::new());
+        let git_ops = Arc::new(tokio::sync::Mutex::new(None));
+        let agent_config = Arc::new(swissarmyhammer_config::model::ModelConfig::default());
+        let registry = Arc::new(RwLock::new(inner));
+        let ctx =
+            ToolContext::new(tool_handlers, git_ops, agent_config).with_tool_registry(registry);
+
+        // Pass an array instead of object — should fail
+        let result = ctx
+            .call_tool("echo_tool", serde_json::json!(["not", "an", "object"]))
+            .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_call_tool_success() {
+        use tokio::sync::RwLock;
+
+        let mut inner = ToolRegistry::new();
+        inner.register(MockTool {
+            name: "echo_tool",
+            description: "Echoes input",
+        });
+        let tool_handlers = Arc::new(ToolHandlers::new());
+        let git_ops = Arc::new(tokio::sync::Mutex::new(None));
+        let agent_config = Arc::new(swissarmyhammer_config::model::ModelConfig::default());
+        let registry = Arc::new(RwLock::new(inner));
+        let ctx =
+            ToolContext::new(tool_handlers, git_ops, agent_config).with_tool_registry(registry);
+
+        let result = ctx.call_tool("echo_tool", serde_json::json!({})).await;
+        assert!(result.is_ok());
+        let call_result = result.unwrap();
+        assert_eq!(call_result.is_error, Some(false));
+    }
+
+    // --- get_cli_categories / get_tools_for_category / get_cli_tools tests ---
+
+    #[test]
+    fn test_get_cli_categories_empty_registry() {
+        let registry = ToolRegistry::new();
+        let categories = registry.get_cli_categories();
+        assert!(categories.is_empty());
+    }
+
+    #[test]
+    fn test_get_cli_categories_returns_sorted_unique() {
+        let mut registry = ToolRegistry::new();
+        // KanbanTool → category "kanban"
+        // FilesTool → category "file"
+        // GitStatusTool → category "git"
+        registry.register(KanbanTool);
+        registry.register(FilesTool);
+        registry.register(GitStatusTool);
+
+        let categories = registry.get_cli_categories();
+        // Should be sorted
+        let mut sorted = categories.clone();
+        sorted.sort();
+        assert_eq!(categories, sorted);
+        assert!(categories.contains(&"kanban".to_string()));
+        assert!(categories.contains(&"file".to_string()));
+        assert!(categories.contains(&"git".to_string()));
+    }
+
+    #[test]
+    fn test_get_tools_for_category_returns_correct_tools() {
+        let mut registry = ToolRegistry::new();
+        registry.register(KanbanTool);
+        registry.register(FilesTool);
+        registry.register(GitStatusTool);
+
+        let kanban_tools = registry.get_tools_for_category("kanban");
+        assert_eq!(kanban_tools.len(), 1);
+        assert_eq!(<dyn McpTool as McpTool>::name(kanban_tools[0]), "kanban");
+
+        let file_tools = registry.get_tools_for_category("file");
+        assert_eq!(file_tools.len(), 1);
+        assert_eq!(<dyn McpTool as McpTool>::name(file_tools[0]), "files");
+    }
+
+    #[test]
+    fn test_get_tools_for_category_unknown_returns_empty() {
+        let mut registry = ToolRegistry::new();
+        registry.register(KanbanTool);
+
+        let tools = registry.get_tools_for_category("nonexistent_category");
+        assert!(tools.is_empty());
+    }
+
+    #[test]
+    fn test_get_cli_tools_excludes_unknown_category() {
+        let mut registry = ToolRegistry::new();
+        // KanbanTool has category, UnknownCategoryTool has no category
+        registry.register(KanbanTool);
+        registry.register(UnknownCategoryTool);
+
+        let cli_tools = registry.get_cli_tools();
+        let cli_names: Vec<&str> = cli_tools
+            .iter()
+            .map(|t| <dyn McpTool as McpTool>::name(*t))
+            .collect();
+        assert!(cli_names.contains(&"kanban"));
+        // UnknownCategoryTool has no cli_category — should be excluded
+        assert!(!cli_names.contains(&"unknown_something"));
+    }
+
+    #[test]
+    fn test_get_cli_tools_empty_when_all_hidden() {
+        // Tools without a cli_category won't appear in get_cli_tools
+        let mut registry = ToolRegistry::new();
+        registry.register(UnknownCategoryTool);
+        registry.register(NoUnderscoreTool);
+
+        let cli_tools = registry.get_cli_tools();
+        assert!(cli_tools.is_empty());
+    }
+
+    // --- send_mcp_log tests ---
+
+    #[tokio::test]
+    async fn test_send_mcp_log_no_peer_is_noop() {
+        use rmcp::model::LoggingLevel;
+
+        let tool_handlers = Arc::new(ToolHandlers::new());
+        let git_ops = Arc::new(tokio::sync::Mutex::new(None));
+        let agent_config = Arc::new(swissarmyhammer_config::model::ModelConfig::default());
+        let ctx = ToolContext::new(tool_handlers, git_ops, agent_config);
+        // No peer — send_mcp_log should be a no-op and not panic
+        send_mcp_log(&ctx, LoggingLevel::Info, "test", "hello".to_string()).await;
+    }
+
+    // --- create_fully_registered_tool_registry tests ---
+
+    #[tokio::test]
+    async fn test_create_fully_registered_tool_registry_is_non_empty() {
+        let registry = create_fully_registered_tool_registry().await;
+        assert!(
+            !registry.is_empty(),
+            "fully registered registry should not be empty"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_create_fully_registered_tool_registry_has_cli_tools() {
+        let registry = create_fully_registered_tool_registry().await;
+        let cli_tools = registry.get_cli_tools();
+        assert!(
+            !cli_tools.is_empty(),
+            "fully registered registry should have CLI tools"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_create_fully_registered_tool_registry_validation() {
+        let registry = create_fully_registered_tool_registry().await;
+        let report = registry.validate_all_tools();
+        // All registered tools should pass validation
+        assert!(
+            report.is_valid(),
+            "all tools in fully registered registry should be valid: {:?}",
+            report.errors
+        );
     }
 }

@@ -242,6 +242,136 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_update_task_swimlane_set() {
+        let (_temp, ctx) = setup().await;
+
+        use crate::swimlane::AddSwimlane;
+        AddSwimlane::new("feature", "Feature")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        let add_result = AddTask::new("Task")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let task_id = add_result["id"].as_str().unwrap();
+
+        // Set swimlane
+        let result = UpdateTask::new(task_id)
+            .with_swimlane(Some(SwimlaneId::from("feature")))
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        assert_eq!(result["position"]["swimlane"], "feature");
+    }
+
+    #[tokio::test]
+    async fn test_update_task_swimlane_clear() {
+        let (_temp, ctx) = setup().await;
+
+        use crate::swimlane::AddSwimlane;
+        use crate::task::MoveTask;
+        AddSwimlane::new("feature", "Feature")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        let add_result = AddTask::new("Task")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let task_id = add_result["id"].as_str().unwrap();
+
+        // Move to swimlane first
+        MoveTask::to_column_and_swimlane(task_id, "todo", "feature")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        // Clear swimlane
+        let result = UpdateTask::new(task_id)
+            .with_swimlane(None)
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        // swimlane should be null/absent
+        assert!(
+            result["position"]["swimlane"].is_null()
+                || result["position"].get("swimlane").is_none(),
+            "swimlane should be cleared, got: {:?}",
+            result["position"]["swimlane"]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_update_task_assignees_replace() {
+        let (_temp, ctx) = setup().await;
+
+        use crate::actor::AddActor;
+
+        AddActor::new("alice", "Alice")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        AddActor::new("bob", "Bob")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        let add_result = AddTask::new("Task")
+            .with_assignees(vec![ActorId::from("alice")])
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let task_id = add_result["id"].as_str().unwrap();
+
+        // Replace assignees — should only have bob now
+        let result = UpdateTask::new(task_id)
+            .with_assignees(vec![ActorId::from("bob")])
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        let assignees = result["assignees"].as_array().unwrap();
+        assert_eq!(assignees.len(), 1);
+        assert_eq!(assignees[0], "bob");
+    }
+
+    #[tokio::test]
+    async fn test_update_task_affected_resource_ids() {
+        let (_temp, ctx) = setup().await;
+
+        let add_result = AddTask::new("Task")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let task_id = add_result["id"].as_str().unwrap();
+
+        let op = UpdateTask::new(task_id).with_title("Updated");
+        let exec_result = op.execute(&ctx).await;
+        let value = exec_result.into_result().unwrap();
+
+        let ids = op.affected_resource_ids(&value);
+        assert_eq!(ids.len(), 1);
+        assert_eq!(ids[0], task_id);
+    }
+
+    #[tokio::test]
     async fn test_update_task_multiple_dependencies() {
         let (_temp, ctx) = setup().await;
 

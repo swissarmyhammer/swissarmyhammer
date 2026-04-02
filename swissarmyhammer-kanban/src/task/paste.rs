@@ -405,6 +405,107 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_paste_after_last_task_appends() {
+        let (_temp, ctx) = setup().await;
+
+        let id_a = add_task(&ctx, "A").await;
+        let id_b = add_task(&ctx, "B").await;
+
+        // Paste after B (the last task)
+        let fields = json!({"title": "After last"});
+        let clipboard_json = clipboard::serialize_to_clipboard("task", "01SRC", "copy", fields);
+
+        let result = PasteTask::new("todo", Some(TaskId::from_string(&id_b)), clipboard_json)
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        let pasted_ordinal = result["position"]["ordinal"].as_str().unwrap();
+
+        let ectx = ctx.entity_context().await.unwrap();
+        let b = ectx.read("task", &id_b).await.unwrap();
+        let ord_b = b
+            .get_str("position_ordinal")
+            .unwrap_or(Ordinal::DEFAULT_STR);
+
+        assert!(
+            pasted_ordinal > ord_b,
+            "pasted ({}) should be after B ({})",
+            pasted_ordinal,
+            ord_b
+        );
+
+        // A still exists and ordinal unchanged
+        let a = ectx.read("task", &id_a).await.unwrap();
+        assert!(a.get_str("title").is_some());
+    }
+
+    #[tokio::test]
+    async fn test_paste_copies_depends_on() {
+        let (_temp, ctx) = setup().await;
+
+        let dep_id = add_task(&ctx, "Dependency").await;
+
+        let fields = json!({
+            "title": "Dependent task",
+            "depends_on": [dep_id],
+        });
+        let clipboard_json = clipboard::serialize_to_clipboard("task", "01SRC", "copy", fields);
+
+        let result = PasteTask::new("todo", None, clipboard_json)
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        // depends_on should be preserved
+        let deps = result["depends_on"].as_array().unwrap();
+        assert_eq!(deps.len(), 1);
+        assert_eq!(deps[0], dep_id);
+    }
+
+    #[tokio::test]
+    async fn test_paste_affected_resource_ids() {
+        let (_temp, ctx) = setup().await;
+
+        let fields = json!({"title": "Paste me"});
+        let clipboard_json = clipboard::serialize_to_clipboard("task", "01SRC", "copy", fields);
+
+        let op = PasteTask::new("todo", None, clipboard_json);
+        let exec_result = op.execute(&ctx).await;
+        let value = exec_result.into_result().unwrap();
+
+        let ids = op.affected_resource_ids(&value);
+        assert_eq!(ids.len(), 1);
+        assert_eq!(ids[0], value["id"].as_str().unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_paste_after_id_not_found_appends() {
+        let (_temp, ctx) = setup().await;
+
+        let _id_a = add_task(&ctx, "A").await;
+
+        // Use a nonexistent after_id — should append at end
+        let fields = json!({"title": "Appended"});
+        let clipboard_json = clipboard::serialize_to_clipboard("task", "01SRC", "copy", fields);
+
+        let result = PasteTask::new(
+            "todo",
+            Some(TaskId::from_string("01NONEXISTENT")),
+            clipboard_json,
+        )
+        .execute(&ctx)
+        .await
+        .into_result()
+        .unwrap();
+
+        assert_eq!(result["title"], "Appended");
+        assert_eq!(result["position"]["column"], "todo");
+    }
+
+    #[tokio::test]
     async fn test_paste_multiple_times_creates_distinct_tasks() {
         let (_temp, ctx) = setup().await;
 

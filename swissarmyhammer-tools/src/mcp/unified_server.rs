@@ -1044,4 +1044,282 @@ mod tests {
     }
 
     // NOTE: Multiple concurrent server test removed to avoid port conflicts and timeouts
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_configure_mcp_logging_does_not_panic() {
+        // configure_mcp_logging uses Once internally; calling it multiple times should be safe.
+        // In tests the tracing subscriber may already be set, so this is a no-op, but must not panic.
+        configure_mcp_logging(None);
+        configure_mcp_logging(Some("debug"));
+        // If we reach this point, the function did not panic.
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_configure_mcp_logging_custom_filter() {
+        // Test that configure_mcp_logging accepts a custom filter string without panicking.
+        configure_mcp_logging(Some("error"));
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_ensure_log_directory_creates_nested_dirs() {
+        let dir = tempfile::tempdir().unwrap();
+        let nested = dir.path().join("a").join("b").join("c");
+        let result = ensure_log_directory(&nested);
+        assert!(result.is_ok(), "Should create nested directories");
+        assert!(nested.exists());
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_ensure_log_directory_existing_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        // Should succeed even if directory already exists
+        let result = ensure_log_directory(dir.path());
+        assert!(result.is_ok(), "Should succeed for existing directory");
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_create_log_file_in_temp_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let result = create_log_file(dir.path());
+        assert!(result.is_ok(), "Should create log file in temp dir");
+        let (_file, path) = result.unwrap();
+        assert!(path.starts_with(dir.path()));
+        assert!(path.exists());
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_create_log_file_custom_env_name() {
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var("SWISSARMYHAMMER_LOG_FILE", "custom_test.log");
+        let result = create_log_file(dir.path());
+        std::env::remove_var("SWISSARMYHAMMER_LOG_FILE");
+        assert!(result.is_ok());
+        let (_file, path) = result.unwrap();
+        assert_eq!(
+            path.file_name().unwrap().to_str().unwrap(),
+            "custom_test.log"
+        );
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_file_writer_guard_write() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("test_write.log");
+        let file = std::fs::File::create(&file_path).unwrap();
+        let shared = std::sync::Arc::new(std::sync::Mutex::new(file));
+        let mut guard = FileWriterGuard::new(shared);
+        let n = guard.write(b"hello world").unwrap();
+        assert_eq!(n, 11);
+        let contents = std::fs::read_to_string(&file_path).unwrap();
+        assert_eq!(contents, "hello world");
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_file_writer_guard_flush() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("test_flush.log");
+        let file = std::fs::File::create(&file_path).unwrap();
+        let shared = std::sync::Arc::new(std::sync::Mutex::new(file));
+        let mut guard = FileWriterGuard::new(shared);
+        write!(guard, "flush test").unwrap();
+        let result = guard.flush();
+        assert!(result.is_ok(), "Flush should succeed");
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_resolve_port_with_specified_port() {
+        // When a port is specified, resolve_port should return it directly
+        let port = resolve_port(Some(18090)).await.unwrap();
+        assert_eq!(port, 18090);
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_resolve_port_random() {
+        // When no port is specified, resolve_port should find a random available port
+        let port = resolve_port(None).await.unwrap();
+        assert!(port > 0, "Random port should be non-zero");
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_parse_socket_addr_valid() {
+        let addr = parse_socket_addr("127.0.0.1:8080").unwrap();
+        assert_eq!(addr.port(), 8080);
+        assert_eq!(addr.ip().to_string(), "127.0.0.1");
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_parse_socket_addr_invalid() {
+        let result = parse_socket_addr("not-an-address");
+        assert!(result.is_err(), "Invalid address should return error");
+        let err = format!("{}", result.unwrap_err());
+        assert!(
+            err.contains("Failed to parse bind address"),
+            "Error should mention parsing failure. Got: {}",
+            err
+        );
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_bind_tcp_listener_success() {
+        let addr: std::net::SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let listener = bind_tcp_listener(addr).await.unwrap();
+        let actual_port = listener.local_addr().unwrap().port();
+        assert!(actual_port > 0, "Should bind to a non-zero port");
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_bind_tcp_listener_port_in_use() {
+        // Bind to a port, then try to bind again - should fail
+        let addr: std::net::SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let listener1 = bind_tcp_listener(addr).await.unwrap();
+        let occupied_port = listener1.local_addr().unwrap().port();
+        let occupied_addr: std::net::SocketAddr =
+            format!("127.0.0.1:{}", occupied_port).parse().unwrap();
+        let result = bind_tcp_listener(occupied_addr).await;
+        assert!(result.is_err(), "Should fail when port is in use");
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_wait_for_server_ready_success() {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        tx.send(()).unwrap();
+        let result = wait_for_server_ready(rx).await;
+        assert!(result.is_ok(), "Should succeed when sender sends");
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_wait_for_server_ready_dropped_sender() {
+        let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+        drop(tx); // Drop sender without sending
+        let result = wait_for_server_ready(rx).await;
+        assert!(result.is_err(), "Should fail when sender is dropped");
+        let err = format!("{}", result.unwrap_err());
+        assert!(
+            err.contains("readiness") || err.contains("Server"),
+            "Error should mention readiness. Got: {}",
+            err
+        );
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    #[serial_test::serial(cwd)]
+    async fn test_start_mcp_server_with_options_agent_mode_false() {
+        // Test start_mcp_server_with_options with agent_mode=false (default path)
+        let mode = McpServerMode::Http { port: Some(18084) };
+        let mut server = start_mcp_server_with_options(mode, None, None, None, false)
+            .await
+            .unwrap();
+        assert_eq!(server.port().unwrap(), 18084);
+        server.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    #[serial_test::serial(cwd)]
+    async fn test_start_mcp_server_with_options_agent_mode_true() {
+        // Test start_mcp_server_with_options with agent_mode=true (agent tool registration)
+        let mode = McpServerMode::Http { port: Some(18085) };
+        let mut server = start_mcp_server_with_options(mode, None, None, None, true)
+            .await
+            .unwrap();
+        assert_eq!(server.port().unwrap(), 18085);
+        server.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_start_mcp_server_with_options_invalid_model_override_returns_error() {
+        // Test that an invalid model override returns an error rather than silently ignoring it.
+        // This exercises the model_override code path in start_mcp_server_with_options.
+        let mode = McpServerMode::Http { port: Some(18086) };
+        let result = start_mcp_server_with_options(
+            mode,
+            None,
+            Some("nonexistent-model-that-does-not-exist".to_string()),
+            None,
+            false,
+        )
+        .await;
+        assert!(
+            result.is_err(),
+            "Should return an error for an unknown model override"
+        );
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(
+            err_msg.contains("model")
+                || err_msg.contains("Model")
+                || err_msg.contains("invalid")
+                || err_msg.contains("Invalid"),
+            "Error should mention model. Got: {}",
+            err_msg
+        );
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    #[serial_test::serial(cwd)]
+    async fn test_start_mcp_server_with_options_working_dir() {
+        // Test that custom working directory is accepted
+        let temp_dir = tempfile::tempdir().unwrap();
+        let mode = McpServerMode::Http { port: Some(18087) };
+        let mut server = start_mcp_server_with_options(
+            mode,
+            None,
+            None,
+            Some(temp_dir.path().to_path_buf()),
+            false,
+        )
+        .await
+        .unwrap();
+        assert!(server.port().unwrap() > 0);
+        server.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    #[serial_test::serial(cwd)]
+    async fn test_start_mcp_server_cli_mode_skips_logging() {
+        // When SAH_CLI_MODE is set, configure_mcp_logging should be skipped
+        std::env::set_var("SAH_CLI_MODE", "1");
+        let mode = McpServerMode::Http { port: Some(18088) };
+        let result = start_mcp_server_with_options(mode, None, None, None, false).await;
+        std::env::remove_var("SAH_CLI_MODE");
+        let mut server = result.unwrap();
+        assert_eq!(server.port().unwrap(), 18088);
+        server.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    #[serial_test::serial(cwd)]
+    async fn test_server_handle_server_accessor() {
+        // Test that server() returns the MCP server instance
+        let mode = McpServerMode::Http { port: Some(18089) };
+        let mut server = start_mcp_server(mode, None, None, None).await.unwrap();
+        let server_instance = server.server();
+        assert!(
+            server_instance.is_some(),
+            "Server instance should be accessible"
+        );
+        server.shutdown().await.unwrap();
+    }
 }

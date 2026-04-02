@@ -2650,4 +2650,701 @@ mod tests {
             &serde_json::json!("/etc/mysql/ssl/cert.pem")
         );
     }
+
+    // ===== New coverage tests =====
+
+    #[test]
+    fn test_parameter_type_as_str() {
+        assert_eq!(ParameterType::String.as_str(), "string");
+        assert_eq!(ParameterType::Boolean.as_str(), "boolean");
+        assert_eq!(ParameterType::Number.as_str(), "number");
+        assert_eq!(ParameterType::Choice.as_str(), "choice");
+        assert_eq!(ParameterType::MultiChoice.as_str(), "multi_choice");
+    }
+
+    #[test]
+    fn test_parameter_type_from_str_aliases() {
+        // Test aliases not covered by existing tests
+        assert_eq!(
+            "numeric".parse::<ParameterType>().unwrap(),
+            ParameterType::Number
+        );
+        assert_eq!(
+            "int".parse::<ParameterType>().unwrap(),
+            ParameterType::Number
+        );
+        assert_eq!(
+            "integer".parse::<ParameterType>().unwrap(),
+            ParameterType::Number
+        );
+        assert_eq!(
+            "float".parse::<ParameterType>().unwrap(),
+            ParameterType::Number
+        );
+        assert_eq!(
+            "select".parse::<ParameterType>().unwrap(),
+            ParameterType::Choice
+        );
+        assert_eq!(
+            "multichoice".parse::<ParameterType>().unwrap(),
+            ParameterType::MultiChoice
+        );
+        assert_eq!(
+            "multiselect".parse::<ParameterType>().unwrap(),
+            ParameterType::MultiChoice
+        );
+    }
+
+    #[test]
+    fn test_examples_for_ipv4_pattern() {
+        let examples = CommonPatterns::examples_for_pattern(CommonPatterns::IPV4);
+        assert_eq!(examples.len(), 3);
+        assert!(examples.contains(&"192.168.1.1".to_string()));
+        assert!(examples.contains(&"127.0.0.1".to_string()));
+        assert!(examples.contains(&"10.0.0.1".to_string()));
+    }
+
+    #[test]
+    fn test_examples_for_uuid_pattern() {
+        let examples = CommonPatterns::examples_for_pattern(CommonPatterns::UUID);
+        assert_eq!(examples.len(), 2);
+        assert!(examples.iter().all(|e| e.len() == 36 && e.contains('-')));
+    }
+
+    #[test]
+    fn test_examples_for_ulid_pattern() {
+        let examples = CommonPatterns::examples_for_pattern(CommonPatterns::ULID);
+        assert_eq!(examples.len(), 2);
+        assert!(examples.iter().all(|e| e.len() == 26));
+    }
+
+    #[test]
+    fn test_examples_for_custom_pattern() {
+        let examples = CommonPatterns::examples_for_pattern("^custom$");
+        assert_eq!(examples, vec!["^custom$".to_string()]);
+    }
+
+    #[test]
+    fn test_hints_for_uuid_and_ulid() {
+        assert_eq!(
+            CommonPatterns::hint_for_pattern(CommonPatterns::UUID),
+            "550e8400-e29b-41d4-a716-446655440000"
+        );
+        assert_eq!(
+            CommonPatterns::hint_for_pattern(CommonPatterns::ULID),
+            "01ARZ3NDEKTSV4RRFFQ69G5FAV"
+        );
+    }
+
+    #[test]
+    fn test_descriptions_for_all_patterns() {
+        assert_eq!(
+            CommonPatterns::description_for_pattern(CommonPatterns::IPV4),
+            "Valid IPv4 address"
+        );
+        assert_eq!(
+            CommonPatterns::description_for_pattern(CommonPatterns::SEMVER),
+            "Semantic version (major.minor.patch)"
+        );
+        assert_eq!(
+            CommonPatterns::description_for_pattern(CommonPatterns::UUID),
+            "Valid UUID v4 identifier"
+        );
+        assert_eq!(
+            CommonPatterns::description_for_pattern(CommonPatterns::ULID),
+            "Valid ULID identifier"
+        );
+    }
+
+    #[test]
+    fn test_enhance_string_too_long_error() {
+        let enhancer = ErrorMessageEnhancer::new();
+
+        let error = ParameterError::StringTooLong {
+            name: "username".to_string(),
+            max_length: 10,
+            actual_length: 15,
+        };
+
+        let enhanced = enhancer.enhance_parameter_error(&error);
+
+        match enhanced {
+            ParameterError::ValidationFailedWithContext {
+                parameter,
+                details,
+                recoverable,
+            } => {
+                assert_eq!(parameter, "username");
+                assert_eq!(details.message, "Must be at most 10 characters long");
+                assert!(details.explanation.unwrap().contains("15 characters"));
+                let suggestion_text = details.suggestions.join(" ");
+                assert!(suggestion_text.contains("5 characters"));
+                assert!(recoverable);
+            }
+            _ => panic!("Expected ValidationFailedWithContext error"),
+        }
+    }
+
+    #[test]
+    fn test_enhance_out_of_range_error_both_bounds() {
+        let enhancer = ErrorMessageEnhancer::new();
+
+        let error = ParameterError::OutOfRange {
+            name: "port".to_string(),
+            value: 0.0,
+            min: Some(1.0),
+            max: Some(65535.0),
+        };
+
+        let enhanced = enhancer.enhance_parameter_error(&error);
+
+        match enhanced {
+            ParameterError::ValidationFailedWithContext {
+                parameter,
+                details,
+                recoverable,
+            } => {
+                assert_eq!(parameter, "port");
+                assert!(details.suggestions.iter().any(|s| s.contains(">= 1")));
+                assert!(recoverable);
+            }
+            _ => panic!("Expected ValidationFailedWithContext error"),
+        }
+    }
+
+    #[test]
+    fn test_enhance_out_of_range_error_above_max() {
+        let enhancer = ErrorMessageEnhancer::new();
+
+        let error = ParameterError::OutOfRange {
+            name: "port".to_string(),
+            value: 70000.0,
+            min: Some(1.0),
+            max: Some(65535.0),
+        };
+
+        let enhanced = enhancer.enhance_parameter_error(&error);
+
+        match enhanced {
+            ParameterError::ValidationFailedWithContext { details, .. } => {
+                assert!(details.suggestions.iter().any(|s| s.contains("<= 65535")));
+            }
+            _ => panic!("Expected ValidationFailedWithContext error"),
+        }
+    }
+
+    #[test]
+    fn test_enhance_out_of_range_error_min_only() {
+        let enhancer = ErrorMessageEnhancer::new();
+
+        let error = ParameterError::OutOfRange {
+            name: "count".to_string(),
+            value: -1.0,
+            min: Some(0.0),
+            max: None,
+        };
+
+        let enhanced = enhancer.enhance_parameter_error(&error);
+
+        match enhanced {
+            ParameterError::ValidationFailedWithContext { details, .. } => {
+                assert!(details.suggestions.iter().any(|s| s.contains(">= 0")));
+            }
+            _ => panic!("Expected ValidationFailedWithContext error"),
+        }
+    }
+
+    #[test]
+    fn test_enhance_out_of_range_error_max_only() {
+        let enhancer = ErrorMessageEnhancer::new();
+
+        let error = ParameterError::OutOfRange {
+            name: "count".to_string(),
+            value: 200.0,
+            min: None,
+            max: Some(100.0),
+        };
+
+        let enhanced = enhancer.enhance_parameter_error(&error);
+
+        match enhanced {
+            ParameterError::ValidationFailedWithContext { details, .. } => {
+                assert!(details.suggestions.iter().any(|s| s.contains("<= 100")));
+            }
+            _ => panic!("Expected ValidationFailedWithContext error"),
+        }
+    }
+
+    #[test]
+    fn test_enhance_out_of_range_error_no_bounds() {
+        let enhancer = ErrorMessageEnhancer::new();
+
+        let error = ParameterError::OutOfRange {
+            name: "val".to_string(),
+            value: 42.0,
+            min: None,
+            max: None,
+        };
+
+        let enhanced = enhancer.enhance_parameter_error(&error);
+
+        match enhanced {
+            ParameterError::ValidationFailedWithContext { details, .. } => {
+                assert!(details
+                    .explanation
+                    .as_ref()
+                    .unwrap()
+                    .contains("outside the allowed range"));
+            }
+            _ => panic!("Expected ValidationFailedWithContext error"),
+        }
+    }
+
+    #[test]
+    fn test_enhance_conditional_parameter_missing() {
+        let enhancer = ErrorMessageEnhancer::new();
+
+        let error = ParameterError::ConditionalParameterMissing {
+            parameter: "cert_path".to_string(),
+            condition: "enable_ssl == true".to_string(),
+        };
+
+        let enhanced = enhancer.enhance_parameter_error(&error);
+
+        match enhanced {
+            ParameterError::ValidationFailedWithContext {
+                parameter, details, ..
+            } => {
+                assert_eq!(parameter, "cert_path");
+                assert!(details
+                    .suggestions
+                    .iter()
+                    .any(|s| s.contains("--cert-path")));
+                assert!(details
+                    .suggestions
+                    .iter()
+                    .any(|s| s.contains("--interactive")));
+            }
+            _ => panic!("Expected ValidationFailedWithContext error"),
+        }
+    }
+
+    #[test]
+    fn test_enhance_fallback_validation_failed() {
+        let enhancer = ErrorMessageEnhancer::new();
+
+        let error = ParameterError::ValidationFailed {
+            message: "something broke".to_string(),
+        };
+
+        let enhanced = enhancer.enhance_parameter_error(&error);
+
+        match enhanced {
+            ParameterError::ValidationFailed { message } => {
+                assert_eq!(message, "something broke");
+            }
+            _ => panic!("Expected ValidationFailed error"),
+        }
+    }
+
+    #[test]
+    fn test_enhance_fallback_missing_required() {
+        let enhancer = ErrorMessageEnhancer::new();
+
+        let error = ParameterError::MissingRequired {
+            name: "foo".to_string(),
+        };
+
+        let enhanced = enhancer.enhance_parameter_error(&error);
+
+        match enhanced {
+            ParameterError::MissingRequired { name } => {
+                assert_eq!(name, "foo");
+            }
+            _ => panic!("Expected MissingRequired error"),
+        }
+    }
+
+    #[test]
+    fn test_enhance_fallback_type_mismatch() {
+        let enhancer = ErrorMessageEnhancer::new();
+
+        let error = ParameterError::TypeMismatch {
+            name: "bar".to_string(),
+            expected_type: "number".to_string(),
+            actual_type: "string".to_string(),
+        };
+
+        let enhanced = enhancer.enhance_parameter_error(&error);
+
+        match enhanced {
+            ParameterError::TypeMismatch {
+                name,
+                expected_type,
+                actual_type,
+            } => {
+                assert_eq!(name, "bar");
+                assert_eq!(expected_type, "number");
+                assert_eq!(actual_type, "string");
+            }
+            _ => panic!("Expected TypeMismatch error"),
+        }
+    }
+
+    #[test]
+    fn test_enhance_fallback_generic_error() {
+        // Test the catch-all _ => branch in the fallback match
+        let enhancer = ErrorMessageEnhancer::new();
+
+        let error = ParameterError::InvalidStep {
+            name: "val".to_string(),
+            value: 2.3,
+            step: 0.5,
+        };
+
+        let enhanced = enhancer.enhance_parameter_error(&error);
+
+        match enhanced {
+            ParameterError::ValidationFailed { message } => {
+                assert!(message.contains("Parameter validation failed"));
+            }
+            _ => panic!("Expected ValidationFailed error from fallback"),
+        }
+    }
+
+    #[test]
+    fn test_levenshtein_distance_empty_strings() {
+        let enhancer = ErrorMessageEnhancer::new();
+        assert_eq!(enhancer.levenshtein_distance("", "abc"), 3);
+        assert_eq!(enhancer.levenshtein_distance("abc", ""), 3);
+        assert_eq!(enhancer.levenshtein_distance("", ""), 0);
+    }
+
+    #[test]
+    fn test_suggest_closest_match_returns_none_for_distant_input() {
+        let enhancer = ErrorMessageEnhancer::new();
+        // Short input "z" (len=1) with long choices: max_distance = max(1+2, 6) = 6
+        // levenshtein("z", "production") = 10 > 6, so no choice passes the first filter.
+        // best_distance stays usize::MAX > max(1, 3) * 2 = 6, so we get None.
+        let choices = vec!["production".to_string(), "development".to_string()];
+        let result = enhancer.suggest_closest_match("z", &choices);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_error_message_enhancer_default() {
+        let enhancer = ErrorMessageEnhancer::default();
+        // Just confirm it works (exercises Default impl)
+        let error = ParameterError::ValidationFailed {
+            message: "test".to_string(),
+        };
+        let enhanced = enhancer.enhance_parameter_error(&error);
+        assert!(matches!(enhanced, ParameterError::ValidationFailed { .. }));
+    }
+
+    #[test]
+    fn test_parameter_with_validation_method() {
+        let rules = ValidationRules::new()
+            .with_pattern("^test")
+            .with_numeric_range(Some(0.0), Some(100.0));
+        let param = Parameter::new("test", "Test", ParameterType::String).with_validation(rules);
+        assert!(param.validation.is_some());
+        let v = param.validation.unwrap();
+        assert_eq!(v.pattern, Some("^test".to_string()));
+        assert_eq!(v.min, Some(0.0));
+    }
+
+    #[test]
+    fn test_parameter_validator_default() {
+        let validator = ParameterValidator::default();
+        let param = Parameter::new("t", "T", ParameterType::String);
+        let val = serde_json::json!("hello");
+        assert!(validator.validate_parameter(&param, &val).is_ok());
+    }
+
+    #[test]
+    fn test_default_parameter_resolver_default() {
+        let resolver = DefaultParameterResolver::default();
+        let params = vec![];
+        let cli_args = HashMap::new();
+        let result = resolver.resolve_parameters(&params, &cli_args, false);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_get_value_type_all_variants() {
+        let validator = ParameterValidator::new();
+        // object type
+        let param = Parameter::new("s", "S", ParameterType::String);
+        let obj_val = serde_json::json!({"key": "value"});
+        let result = validator.validate_parameter(&param, &obj_val);
+        match result {
+            Err(ParameterError::TypeMismatch { actual_type, .. }) => {
+                assert_eq!(actual_type, "object");
+            }
+            _ => panic!("Expected TypeMismatch with object type"),
+        }
+
+        // null type
+        let null_val = serde_json::json!(null);
+        let result = validator.validate_parameter(&param, &null_val);
+        match result {
+            Err(ParameterError::TypeMismatch { actual_type, .. }) => {
+                assert_eq!(actual_type, "null");
+            }
+            _ => panic!("Expected TypeMismatch with null type"),
+        }
+
+        // array type against String parameter
+        let arr_val = serde_json::json!(["a", "b"]);
+        let result = validator.validate_parameter(&param, &arr_val);
+        match result {
+            Err(ParameterError::TypeMismatch { actual_type, .. }) => {
+                assert_eq!(actual_type, "array");
+            }
+            _ => panic!("Expected TypeMismatch with array type"),
+        }
+    }
+
+    #[test]
+    fn test_validate_choice_type_mismatch() {
+        let validator = ParameterValidator::new();
+        let param = Parameter::new("choice", "Choice", ParameterType::Choice)
+            .with_choices(vec!["a".to_string(), "b".to_string()]);
+
+        // Passing a number to a Choice parameter should give TypeMismatch
+        let val = serde_json::json!(42);
+        let result = validator.validate_parameter(&param, &val);
+        match result {
+            Err(ParameterError::TypeMismatch {
+                expected_type,
+                actual_type,
+                ..
+            }) => {
+                assert_eq!(expected_type, "string");
+                assert_eq!(actual_type, "number");
+            }
+            _ => panic!("Expected TypeMismatch error"),
+        }
+    }
+
+    #[test]
+    fn test_validate_choice_invalid_value() {
+        let validator = ParameterValidator::new();
+        let param = Parameter::new("choice", "Choice", ParameterType::Choice)
+            .with_choices(vec!["a".to_string(), "b".to_string()]);
+
+        let val = serde_json::json!("c");
+        let result = validator.validate_parameter(&param, &val);
+        assert!(matches!(result, Err(ParameterError::InvalidChoice { .. })));
+    }
+
+    #[test]
+    fn test_validate_multichoice_type_mismatch() {
+        let validator = ParameterValidator::new();
+        let param = Parameter::new("multi", "Multi", ParameterType::MultiChoice)
+            .with_choices(vec!["a".to_string(), "b".to_string()]);
+
+        // Passing a string to a MultiChoice parameter should give TypeMismatch
+        let val = serde_json::json!("not_an_array");
+        let result = validator.validate_parameter(&param, &val);
+        match result {
+            Err(ParameterError::TypeMismatch {
+                expected_type,
+                actual_type,
+                ..
+            }) => {
+                assert_eq!(expected_type, "array");
+                assert_eq!(actual_type, "string");
+            }
+            _ => panic!("Expected TypeMismatch error"),
+        }
+    }
+
+    #[test]
+    fn test_validate_multichoice_invalid_item() {
+        let validator = ParameterValidator::new();
+        let param = Parameter::new("multi", "Multi", ParameterType::MultiChoice)
+            .with_choices(vec!["a".to_string(), "b".to_string()]);
+
+        let val = serde_json::json!(["a", "c"]);
+        let result = validator.validate_parameter(&param, &val);
+        assert!(matches!(result, Err(ParameterError::InvalidChoice { .. })));
+    }
+
+    #[test]
+    fn test_validate_multichoice_non_string_items() {
+        let validator = ParameterValidator::new();
+        let param = Parameter::new("multi", "Multi", ParameterType::MultiChoice)
+            .with_choices(vec!["a".to_string(), "b".to_string()]);
+
+        // Array with non-string items
+        let val = serde_json::json!([1, 2]);
+        let result = validator.validate_parameter(&param, &val);
+        match result {
+            Err(ParameterError::TypeMismatch {
+                expected_type,
+                actual_type,
+                ..
+            }) => {
+                assert_eq!(expected_type, "array of strings");
+                assert_eq!(actual_type, "array with non-string items");
+            }
+            _ => panic!("Expected TypeMismatch error for non-string array items"),
+        }
+    }
+
+    #[test]
+    fn test_validate_string_with_choices() {
+        let validator = ParameterValidator::new();
+        // String type with choices (not Choice type)
+        let param = Parameter::new("env", "Env", ParameterType::String)
+            .with_choices(vec!["dev".to_string(), "prod".to_string()]);
+
+        // Valid
+        let val = serde_json::json!("dev");
+        assert!(validator.validate_parameter(&param, &val).is_ok());
+
+        // Invalid choice
+        let val = serde_json::json!("staging");
+        let result = validator.validate_parameter(&param, &val);
+        assert!(matches!(result, Err(ParameterError::InvalidChoice { .. })));
+    }
+
+    #[test]
+    fn test_validate_parameters_optional_params_not_provided() {
+        let validator = ParameterValidator::new();
+        let params = vec![
+            Parameter::new("optional", "Optional param", ParameterType::String),
+            Parameter::new("also_optional", "Also optional", ParameterType::Number),
+        ];
+        let values = HashMap::new();
+        // Optional params with no values should pass
+        assert!(validator.validate_parameters(&params, &values).is_ok());
+    }
+
+    #[test]
+    fn test_validate_number_type_mismatch() {
+        let validator = ParameterValidator::new();
+        let param = Parameter::new("count", "Count", ParameterType::Number);
+        let val = serde_json::json!("not_a_number");
+        let result = validator.validate_parameter(&param, &val);
+        match result {
+            Err(ParameterError::TypeMismatch {
+                expected_type,
+                actual_type,
+                ..
+            }) => {
+                assert_eq!(expected_type, "number");
+                assert_eq!(actual_type, "string");
+            }
+            _ => panic!("Expected TypeMismatch error"),
+        }
+    }
+
+    #[test]
+    fn test_resolve_env_vars_in_defaults() {
+        // Set a test env var
+        std::env::set_var("SAH_TEST_VAR_PARAM", "resolved_value");
+
+        let resolver = DefaultParameterResolver::new();
+        let param = Parameter::new("test", "Test", ParameterType::String)
+            .with_default(serde_json::json!("prefix_${SAH_TEST_VAR_PARAM}_suffix"));
+
+        let parameters = vec![param];
+        let cli_args = HashMap::new();
+        let result = resolver
+            .resolve_parameters(&parameters, &cli_args, false)
+            .unwrap();
+
+        assert_eq!(
+            result.get("test").unwrap(),
+            &serde_json::json!("prefix_resolved_value_suffix")
+        );
+
+        std::env::remove_var("SAH_TEST_VAR_PARAM");
+    }
+
+    #[test]
+    fn test_resolve_env_vars_missing_var() {
+        // Ensure a var that does not exist
+        std::env::remove_var("SAH_NONEXISTENT_VAR_12345");
+
+        let resolver = DefaultParameterResolver::new();
+        let param = Parameter::new("test", "Test", ParameterType::String)
+            .with_default(serde_json::json!("${SAH_NONEXISTENT_VAR_12345}"));
+
+        let parameters = vec![param];
+        let cli_args = HashMap::new();
+        let result = resolver
+            .resolve_parameters(&parameters, &cli_args, false)
+            .unwrap();
+
+        // Should keep the original ${VAR} pattern when var doesn't exist
+        assert_eq!(
+            result.get("test").unwrap(),
+            &serde_json::json!("${SAH_NONEXISTENT_VAR_12345}")
+        );
+    }
+
+    #[test]
+    fn test_resolve_default_value_non_string() {
+        // Non-string defaults should pass through unchanged
+        let resolver = DefaultParameterResolver::new();
+        let param = Parameter::new("count", "Count", ParameterType::Number)
+            .with_default(serde_json::json!(42));
+
+        let parameters = vec![param];
+        let cli_args = HashMap::new();
+        let result = resolver
+            .resolve_parameters(&parameters, &cli_args, false)
+            .unwrap();
+
+        assert_eq!(result.get("count").unwrap(), &serde_json::json!(42));
+    }
+
+    #[test]
+    fn test_parameter_provider_trait() {
+        struct TestProvider {
+            params: Vec<Parameter>,
+        }
+        impl ParameterProvider for TestProvider {
+            fn get_parameters(&self) -> &[Parameter] {
+                &self.params
+            }
+        }
+
+        let provider = TestProvider {
+            params: vec![Parameter::new("name", "Name", ParameterType::String).required(true)],
+        };
+
+        // Missing required param
+        let empty_ctx = HashMap::new();
+        assert!(provider.validate_context(&empty_ctx).is_err());
+
+        // With required param
+        let mut ctx = HashMap::new();
+        ctx.insert("name".to_string(), serde_json::json!("hello"));
+        assert!(provider.validate_context(&ctx).is_ok());
+    }
+
+    #[test]
+    fn test_number_above_max_range() {
+        let validator = ParameterValidator::new();
+        let param =
+            Parameter::new("val", "Val", ParameterType::Number).with_range(Some(0.0), Some(100.0));
+
+        let val = serde_json::json!(150);
+        let result = validator.validate_parameter(&param, &val);
+        match result {
+            Err(ParameterError::OutOfRange {
+                value, min, max, ..
+            }) => {
+                assert_eq!(value, 150.0);
+                assert_eq!(min, Some(0.0));
+                assert_eq!(max, Some(100.0));
+            }
+            _ => panic!("Expected OutOfRange error"),
+        }
+    }
 }

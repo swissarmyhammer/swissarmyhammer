@@ -613,4 +613,499 @@ mod tests {
         let tasks = result["tasks"].as_array().unwrap();
         assert_eq!(tasks[0]["title"], "Will be archived");
     }
+
+    // ------------------------------------------------------------------
+    // Board operations
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn dispatch_update_board() {
+        let (_temp, ctx) = setup().await;
+
+        let ops = parse_input(
+            json!({"op": "update board", "name": "Updated Board", "description": "A description"}),
+        )
+        .unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(result["name"], "Updated Board");
+        assert_eq!(result["description"], "A description");
+    }
+
+    // ------------------------------------------------------------------
+    // Column operations
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn dispatch_add_column() {
+        let (_temp, ctx) = setup().await;
+
+        let ops =
+            parse_input(json!({"op": "add column", "id": "review", "name": "Review"})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(result["id"], "review");
+        assert_eq!(result["name"], "Review");
+    }
+
+    #[tokio::test]
+    async fn dispatch_get_column() {
+        let (_temp, ctx) = setup().await;
+
+        let ops = parse_input(json!({"op": "get column", "id": "todo"})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(result["id"], "todo");
+    }
+
+    #[tokio::test]
+    async fn dispatch_update_column() {
+        let (_temp, ctx) = setup().await;
+
+        let ops =
+            parse_input(json!({"op": "update column", "id": "todo", "name": "Backlog"})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(result["name"], "Backlog");
+    }
+
+    #[tokio::test]
+    async fn dispatch_delete_column() {
+        let (_temp, ctx) = setup().await;
+
+        // Add a new empty column then delete it
+        let ops = parse_input(json!({"op": "add column", "id": "temp", "name": "Temp"})).unwrap();
+        execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        let ops = parse_input(json!({"op": "delete column", "id": "temp"})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(result["deleted"], true);
+    }
+
+    #[tokio::test]
+    async fn dispatch_list_columns() {
+        let (_temp, ctx) = setup().await;
+
+        let ops = parse_input(json!({"op": "list columns"})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        let columns = result["columns"].as_array().unwrap();
+        // Default board has todo, doing, done
+        assert!(columns.len() >= 3);
+        let ids: Vec<&str> = columns.iter().filter_map(|c| c["id"].as_str()).collect();
+        assert!(ids.contains(&"todo"));
+        assert!(ids.contains(&"doing"));
+        assert!(ids.contains(&"done"));
+    }
+
+    // ------------------------------------------------------------------
+    // Swimlane operations
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn dispatch_add_swimlane() {
+        let (_temp, ctx) = setup().await;
+
+        let ops =
+            parse_input(json!({"op": "add swimlane", "id": "team-a", "name": "Team A"})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(result["id"], "team-a");
+        assert_eq!(result["name"], "Team A");
+    }
+
+    #[tokio::test]
+    async fn dispatch_get_swimlane() {
+        let (_temp, ctx) = setup().await;
+
+        // Add a swimlane first
+        let ops =
+            parse_input(json!({"op": "add swimlane", "id": "team-b", "name": "Team B"})).unwrap();
+        execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        let ops = parse_input(json!({"op": "get swimlane", "id": "team-b"})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(result["id"], "team-b");
+        assert_eq!(result["name"], "Team B");
+    }
+
+    #[tokio::test]
+    async fn dispatch_update_swimlane() {
+        let (_temp, ctx) = setup().await;
+
+        let ops =
+            parse_input(json!({"op": "add swimlane", "id": "lane", "name": "Original"})).unwrap();
+        execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        let ops =
+            parse_input(json!({"op": "update swimlane", "id": "lane", "name": "Updated"})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(result["name"], "Updated");
+    }
+
+    #[tokio::test]
+    async fn dispatch_delete_swimlane() {
+        let (_temp, ctx) = setup().await;
+
+        let ops =
+            parse_input(json!({"op": "add swimlane", "id": "to-delete", "name": "To Delete"}))
+                .unwrap();
+        execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        let ops = parse_input(json!({"op": "delete swimlane", "id": "to-delete"})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(result["deleted"], true);
+    }
+
+    #[tokio::test]
+    async fn dispatch_list_swimlanes() {
+        let (_temp, ctx) = setup().await;
+
+        let ops = parse_input(json!({"op": "add swimlane", "id": "s1", "name": "S1"})).unwrap();
+        execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        let ops = parse_input(json!({"op": "list swimlanes"})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        let swimlanes = result["swimlanes"].as_array().unwrap();
+        assert!(swimlanes.len() >= 1);
+        let ids: Vec<&str> = swimlanes.iter().filter_map(|s| s["id"].as_str()).collect();
+        assert!(ids.contains(&"s1"));
+    }
+
+    // ------------------------------------------------------------------
+    // Actor operations
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn dispatch_add_actor() {
+        let (_temp, ctx) = setup().await;
+
+        let ops = parse_input(
+            json!({"op": "add actor", "id": "alice", "name": "Alice Smith", "type": "human"}),
+        )
+        .unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        // AddActor wraps the actor under an "actor" key
+        assert_eq!(result["actor"]["id"], "alice");
+        assert_eq!(result["actor"]["name"], "Alice Smith");
+        assert_eq!(result["created"], true);
+    }
+
+    #[tokio::test]
+    async fn dispatch_get_actor() {
+        let (_temp, ctx) = setup().await;
+
+        let ops = parse_input(
+            json!({"op": "add actor", "id": "bob", "name": "Bob Jones", "type": "human"}),
+        )
+        .unwrap();
+        execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        let ops = parse_input(json!({"op": "get actor", "id": "bob"})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(result["id"], "bob");
+        assert_eq!(result["name"], "Bob Jones");
+    }
+
+    #[tokio::test]
+    async fn dispatch_update_actor() {
+        let (_temp, ctx) = setup().await;
+
+        let ops = parse_input(
+            json!({"op": "add actor", "id": "carol", "name": "Carol", "type": "human"}),
+        )
+        .unwrap();
+        execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        let ops =
+            parse_input(json!({"op": "update actor", "id": "carol", "name": "Carol Updated"}))
+                .unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(result["name"], "Carol Updated");
+    }
+
+    #[tokio::test]
+    async fn dispatch_delete_actor() {
+        let (_temp, ctx) = setup().await;
+
+        let ops =
+            parse_input(json!({"op": "add actor", "id": "dave", "name": "Dave", "type": "human"}))
+                .unwrap();
+        execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        let ops = parse_input(json!({"op": "delete actor", "id": "dave"})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(result["deleted"], true);
+    }
+
+    #[tokio::test]
+    async fn dispatch_list_actors() {
+        let (_temp, ctx) = setup().await;
+
+        let ops =
+            parse_input(json!({"op": "add actor", "id": "eve", "name": "Eve", "type": "human"}))
+                .unwrap();
+        execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        let ops = parse_input(json!({"op": "list actors"})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        let actors = result["actors"].as_array().unwrap();
+        let ids: Vec<&str> = actors.iter().filter_map(|a| a["id"].as_str()).collect();
+        assert!(ids.contains(&"eve"));
+    }
+
+    // ------------------------------------------------------------------
+    // Tag operations (board-level)
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn dispatch_add_tag() {
+        let (_temp, ctx) = setup().await;
+
+        let ops = parse_input(json!({"op": "add tag", "name": "urgent"})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(result["name"], "urgent");
+    }
+
+    #[tokio::test]
+    async fn dispatch_get_tag() {
+        let (_temp, ctx) = setup().await;
+
+        let ops = parse_input(json!({"op": "add tag", "name": "blocker"})).unwrap();
+        let r = execute_operation(&ctx, &ops[0]).await.unwrap();
+        let tag_id = r["id"].as_str().unwrap().to_string();
+
+        let ops = parse_input(json!({"op": "get tag", "id": tag_id})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(result["name"], "blocker");
+    }
+
+    #[tokio::test]
+    async fn dispatch_update_tag() {
+        let (_temp, ctx) = setup().await;
+
+        let ops = parse_input(json!({"op": "add tag", "name": "old-tag"})).unwrap();
+        let r = execute_operation(&ctx, &ops[0]).await.unwrap();
+        let tag_id = r["id"].as_str().unwrap().to_string();
+
+        let ops =
+            parse_input(json!({"op": "update tag", "id": tag_id, "name": "new-tag"})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(result["name"], "new-tag");
+    }
+
+    #[tokio::test]
+    async fn dispatch_delete_tag() {
+        let (_temp, ctx) = setup().await;
+
+        let ops = parse_input(json!({"op": "add tag", "name": "remove-me"})).unwrap();
+        let r = execute_operation(&ctx, &ops[0]).await.unwrap();
+        let tag_id = r["id"].as_str().unwrap().to_string();
+
+        let ops = parse_input(json!({"op": "delete tag", "id": tag_id})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(result["deleted"], true);
+    }
+
+    #[tokio::test]
+    async fn dispatch_list_tags() {
+        let (_temp, ctx) = setup().await;
+
+        let ops = parse_input(json!({"op": "add tag", "name": "mytag"})).unwrap();
+        execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        let ops = parse_input(json!({"op": "list tags"})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        let tags = result["tags"].as_array().unwrap();
+        let names: Vec<&str> = tags.iter().filter_map(|t| t["name"].as_str()).collect();
+        assert!(names.contains(&"mytag"));
+    }
+
+    // ------------------------------------------------------------------
+    // Task operations (additional)
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn dispatch_get_task() {
+        let (_temp, ctx) = setup().await;
+
+        let ops = parse_input(json!({"op": "add task", "title": "Get me"})).unwrap();
+        let r = execute_operation(&ctx, &ops[0]).await.unwrap();
+        let task_id = r["id"].as_str().unwrap().to_string();
+
+        let ops = parse_input(json!({"op": "get task", "id": task_id})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(result["title"], "Get me");
+        assert_eq!(result["id"].as_str().unwrap(), task_id);
+    }
+
+    #[tokio::test]
+    async fn dispatch_update_task() {
+        let (_temp, ctx) = setup().await;
+
+        let ops = parse_input(json!({"op": "add task", "title": "Original title"})).unwrap();
+        let r = execute_operation(&ctx, &ops[0]).await.unwrap();
+        let task_id = r["id"].as_str().unwrap().to_string();
+
+        let ops = parse_input(json!({"op": "update task", "id": task_id, "title": "Updated title", "description": "New desc"})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(result["title"], "Updated title");
+        assert_eq!(result["description"], "New desc");
+    }
+
+    #[tokio::test]
+    async fn dispatch_delete_task() {
+        let (_temp, ctx) = setup().await;
+
+        let ops = parse_input(json!({"op": "add task", "title": "Delete me"})).unwrap();
+        let r = execute_operation(&ctx, &ops[0]).await.unwrap();
+        let task_id = r["id"].as_str().unwrap().to_string();
+
+        let ops = parse_input(json!({"op": "delete task", "id": task_id})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(result["deleted"], true);
+    }
+
+    #[tokio::test]
+    async fn dispatch_complete_task() {
+        let (_temp, ctx) = setup().await;
+
+        let ops = parse_input(json!({"op": "add task", "title": "Complete me"})).unwrap();
+        let r = execute_operation(&ctx, &ops[0]).await.unwrap();
+        let task_id = r["id"].as_str().unwrap().to_string();
+
+        let ops = parse_input(json!({"op": "complete task", "id": task_id})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(result["position"]["column"], "done");
+    }
+
+    #[tokio::test]
+    async fn dispatch_move_task() {
+        let (_temp, ctx) = setup().await;
+
+        let ops = parse_input(json!({"op": "add task", "title": "Move me"})).unwrap();
+        let r = execute_operation(&ctx, &ops[0]).await.unwrap();
+        let task_id = r["id"].as_str().unwrap().to_string();
+        assert_eq!(r["position"]["column"], "todo");
+
+        let ops =
+            parse_input(json!({"op": "move task", "id": task_id, "column": "doing"})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(result["position"]["column"], "doing");
+    }
+
+    #[tokio::test]
+    async fn dispatch_assign_and_unassign_task() {
+        let (_temp, ctx) = setup().await;
+
+        // Create actor and task
+        let ops = parse_input(
+            json!({"op": "add actor", "id": "frank", "name": "Frank", "type": "human"}),
+        )
+        .unwrap();
+        execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        let ops = parse_input(json!({"op": "add task", "title": "Assign me"})).unwrap();
+        let r = execute_operation(&ctx, &ops[0]).await.unwrap();
+        let task_id = r["id"].as_str().unwrap().to_string();
+
+        // Assign — response has all_assignees, not assignees
+        let ops =
+            parse_input(json!({"op": "assign task", "id": task_id, "assignee": "frank"})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(result["assigned"], true);
+        let assignees = result["all_assignees"].as_array().unwrap();
+        assert!(
+            assignees.iter().any(|a| a == "frank"),
+            "frank should be assigned"
+        );
+
+        // Unassign
+        let ops = parse_input(json!({"op": "unassign task", "id": task_id, "assignee": "frank"}))
+            .unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(result["unassigned"], true);
+    }
+
+    #[tokio::test]
+    async fn dispatch_next_task() {
+        let (_temp, ctx) = setup().await;
+
+        let ops = parse_input(json!({"op": "add task", "title": "Next one"})).unwrap();
+        execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        let ops = parse_input(json!({"op": "next task"})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(result["title"], "Next one");
+    }
+
+    #[tokio::test]
+    async fn dispatch_tag_and_untag_task() {
+        let (_temp, ctx) = setup().await;
+
+        // Add task
+        let ops = parse_input(json!({"op": "add task", "title": "Tagged task"})).unwrap();
+        let r = execute_operation(&ctx, &ops[0]).await.unwrap();
+        let task_id = r["id"].as_str().unwrap().to_string();
+
+        // Tag the task — TagTask auto-creates the tag and returns {tagged, task_id, tag}
+        let ops = parse_input(json!({"op": "tag task", "id": task_id, "tag": "feature"})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(result["tagged"], true);
+        assert_eq!(result["tag"], "feature");
+
+        // Untag — UntagTask returns {untagged, task_id, tag}
+        let ops =
+            parse_input(json!({"op": "untag task", "id": task_id, "tag": "feature"})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(result["untagged"], true);
+        assert_eq!(result["tag"], "feature");
+    }
+
+    #[tokio::test]
+    async fn dispatch_list_tasks_with_filters() {
+        let (_temp, ctx) = setup().await;
+
+        // Add tasks in different columns
+        let ops = parse_input(json!({"op": "add task", "title": "Todo task"})).unwrap();
+        execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        let ops = parse_input(json!({"op": "add task", "title": "Doing task", "column": "doing"}))
+            .unwrap();
+        execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        // Filter by column
+        let ops = parse_input(json!({"op": "list tasks", "column": "doing"})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert_eq!(result["count"], 1);
+        assert_eq!(result["tasks"][0]["title"], "Doing task");
+    }
+
+    // ------------------------------------------------------------------
+    // Activity operations
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn dispatch_list_activity() {
+        let (_temp, ctx) = setup().await;
+
+        // Add a task to generate activity
+        let ops = parse_input(json!({"op": "add task", "title": "Activity task"})).unwrap();
+        execute_operation(&ctx, &ops[0]).await.unwrap();
+
+        let ops = parse_input(json!({"op": "list activity"})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        assert!(result["entries"].is_array(), "should return entries array");
+    }
+
+    #[tokio::test]
+    async fn dispatch_list_activity_with_limit() {
+        let (_temp, ctx) = setup().await;
+
+        // Generate multiple activity entries
+        for i in 0..5 {
+            let ops =
+                parse_input(json!({"op": "add task", "title": format!("Task {}", i)})).unwrap();
+            execute_operation(&ctx, &ops[0]).await.unwrap();
+        }
+
+        let ops = parse_input(json!({"op": "list activity", "limit": 2})).unwrap();
+        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
+        let entries = result["entries"].as_array().unwrap();
+        assert!(entries.len() <= 2, "limit should cap results at 2");
+    }
 }

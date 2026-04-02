@@ -299,4 +299,98 @@ mod tests {
             AgentSource::Local
         );
     }
+
+    #[test]
+    fn test_resolver_default_is_same_as_new() {
+        let resolver_new = AgentResolver::new();
+        let resolver_default = AgentResolver::default();
+
+        let agents_new = resolver_new.resolve_builtins();
+        let agents_default = resolver_default.resolve_builtins();
+
+        assert_eq!(agents_new.len(), agents_default.len());
+        for key in agents_new.keys() {
+            assert!(agents_default.contains_key(key));
+        }
+    }
+
+    #[test]
+    fn test_resolve_all_includes_builtins() {
+        let resolver = AgentResolver::new();
+        let agents = resolver.resolve_all();
+
+        // resolve_all should include all the same builtins
+        assert!(agents.contains_key("default"));
+        assert!(agents.contains_key("tester"));
+    }
+
+    #[test]
+    fn test_load_agents_from_directory_empty_dir() {
+        let temp_dir = TempDir::new().unwrap();
+        let mut agents = HashMap::new();
+
+        // An empty directory should not load any agents
+        load_agents_from_directory(temp_dir.path(), AgentSource::Local, &mut agents);
+        assert!(agents.is_empty());
+    }
+
+    #[test]
+    fn test_load_agents_from_nonexistent_directory() {
+        let mut agents = HashMap::new();
+
+        // A non-existent path should be silently skipped
+        load_agents_from_directory(
+            std::path::Path::new("/tmp/no_such_dir_xyz_12345"),
+            AgentSource::Local,
+            &mut agents,
+        );
+        assert!(agents.is_empty());
+    }
+
+    #[test]
+    fn test_load_agents_from_directory_skips_files() {
+        let temp_dir = TempDir::new().unwrap();
+
+        // Place a plain file (not a directory) in the agents dir
+        fs::write(temp_dir.path().join("not-an-agent.txt"), "hello").unwrap();
+
+        let mut agents = HashMap::new();
+        load_agents_from_directory(temp_dir.path(), AgentSource::Local, &mut agents);
+        // The file should be skipped, no agents loaded
+        assert!(agents.is_empty());
+    }
+
+    #[test]
+    fn test_load_agents_from_directory_skips_dir_without_agent_md() {
+        let temp_dir = TempDir::new().unwrap();
+
+        // Create a subdirectory with no AGENT.md
+        let sub_dir = temp_dir.path().join("not-an-agent");
+        fs::create_dir_all(&sub_dir).unwrap();
+        fs::write(sub_dir.join("README.md"), "readme").unwrap();
+
+        let mut agents = HashMap::new();
+        load_agents_from_directory(temp_dir.path(), AgentSource::Local, &mut agents);
+        // Should not load anything since no AGENT.md
+        assert!(agents.is_empty());
+    }
+
+    #[test]
+    fn test_add_search_path_is_used() {
+        let temp_dir = TempDir::new().unwrap();
+
+        // Create a new agent in the extra path
+        create_agent_dir(temp_dir.path(), "custom-agent", "My custom agent");
+
+        let mut resolver = AgentResolver::new();
+        resolver.add_search_path(temp_dir.path().to_path_buf());
+
+        let agents = resolver.resolve_all();
+        assert!(
+            agents.contains_key("custom-agent"),
+            "custom agent from extra path should be loaded"
+        );
+        let agent = agents.get("custom-agent").unwrap();
+        assert_eq!(agent.source, AgentSource::Local);
+    }
 }

@@ -3,8 +3,9 @@ fail-fast = false
 # Warn every 5s, hard-kill after 60 periods (5 minutes)
 slow-timeout = { period = "5s", terminate-after = 60 }
 # Exclude embedding integration tests — they require HuggingFace model files.
-# Run them with: cargo nextest run --profile embedding-models
-default-filter = "not package(swissarmyhammer-embedding)"
+# Unit tests (in src/) are fine; only integration tests in tests/ need real models.
+# Run full integration tests with: cargo nextest run --profile embedding-models
+default-filter = "not (package(swissarmyhammer-embedding) & test(/(qwen_embedding|unixcoder_)/))"
 
 # Limit concurrency for heavy LLM-based tests
 # Use test-threads to limit overall parallelism, or use test-groups for finer control

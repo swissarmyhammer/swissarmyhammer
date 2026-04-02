@@ -171,3 +171,85 @@ pub const SKIP_DIRECTORIES: &[&str] = &[
 pub fn should_skip_directory(dir_name: &str) -> bool {
     SKIP_DIRECTORIES.contains(&dir_name)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn project_symbols_default_loads_successfully() {
+        let symbols = ProjectSymbols::default();
+        // All fields should be non-empty after loading from builtin YAML
+        assert!(!symbols.rust.is_empty(), "rust symbol should not be empty");
+        assert!(
+            !symbols.nodejs.is_empty(),
+            "nodejs symbol should not be empty"
+        );
+        assert!(
+            !symbols.python.is_empty(),
+            "python symbol should not be empty"
+        );
+        assert!(!symbols.go.is_empty(), "go symbol should not be empty");
+        assert!(!symbols.java.is_empty(), "java symbol should not be empty");
+        assert!(
+            !symbols.csharp.is_empty(),
+            "csharp symbol should not be empty"
+        );
+        assert!(
+            !symbols.c_cpp.is_empty(),
+            "c_cpp symbol should not be empty"
+        );
+        assert!(!symbols.dart.is_empty(), "dart symbol should not be empty");
+        assert!(!symbols.php.is_empty(), "php symbol should not be empty");
+    }
+
+    #[test]
+    fn project_symbols_get_returns_nonempty_for_all_variants() {
+        let symbols = ProjectSymbols::default();
+
+        let variants = [
+            ProjectType::Rust,
+            ProjectType::NodeJs,
+            ProjectType::Python,
+            ProjectType::Go,
+            ProjectType::JavaMaven,
+            ProjectType::JavaGradle,
+            ProjectType::CSharp,
+            ProjectType::CMake,
+            ProjectType::Makefile,
+            ProjectType::Flutter,
+            ProjectType::Php,
+        ];
+
+        for variant in &variants {
+            let symbol = symbols.get(*variant);
+            assert!(
+                !symbol.is_empty(),
+                "symbol for {:?} should not be empty",
+                variant
+            );
+        }
+    }
+
+    #[test]
+    fn project_symbols_get_maps_variants_to_correct_fields() {
+        let symbols = ProjectSymbols::default();
+
+        // Direct 1:1 mappings
+        assert_eq!(symbols.get(ProjectType::Rust), &symbols.rust);
+        assert_eq!(symbols.get(ProjectType::NodeJs), &symbols.nodejs);
+        assert_eq!(symbols.get(ProjectType::Python), &symbols.python);
+        assert_eq!(symbols.get(ProjectType::Go), &symbols.go);
+        assert_eq!(symbols.get(ProjectType::CSharp), &symbols.csharp);
+        assert_eq!(symbols.get(ProjectType::Flutter), &symbols.dart);
+        assert_eq!(symbols.get(ProjectType::Php), &symbols.php);
+
+        // Shared mappings: Java variants both map to java
+        assert_eq!(symbols.get(ProjectType::JavaMaven), &symbols.java);
+        assert_eq!(symbols.get(ProjectType::JavaGradle), &symbols.java);
+
+        // Shared mappings: C/C++ variants both map to c_cpp
+        assert_eq!(symbols.get(ProjectType::CMake), &symbols.c_cpp);
+        assert_eq!(symbols.get(ProjectType::Makefile), &symbols.c_cpp);
+    }
+}

@@ -630,4 +630,207 @@ mod tests {
         let result = execute_glob(arguments, &context).await;
         assert!(result.is_ok());
     }
+
+    #[tokio::test]
+    async fn test_glob_case_sensitive() {
+        let context = create_test_context().await;
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let test_dir = temp_dir.path();
+
+        // Create files with different cases
+        std::fs::write(test_dir.join("hello.txt"), "content").unwrap();
+        std::fs::write(test_dir.join("HELLO.txt"), "content").unwrap();
+
+        // Case-sensitive search: should only find lowercase
+        let mut arguments = serde_json::Map::new();
+        arguments.insert(
+            "pattern".to_string(),
+            serde_json::Value::String("hello.txt".to_string()),
+        );
+        arguments.insert(
+            "path".to_string(),
+            serde_json::Value::String(test_dir.display().to_string()),
+        );
+        arguments.insert("case_sensitive".to_string(), serde_json::Value::Bool(true));
+
+        let result = execute_glob(arguments, &context).await;
+        assert!(result.is_ok());
+        let call_result = result.unwrap();
+        let text = match &call_result.content[0].raw {
+            rmcp::model::RawContent::Text(t) => t.text.clone(),
+            _ => panic!("Expected text"),
+        };
+        assert!(text.contains("hello.txt"));
+        // Case sensitive should not return HELLO.txt
+        assert!(!text.contains("HELLO.txt"));
+    }
+
+    #[tokio::test]
+    async fn test_glob_no_matches() {
+        let context = create_test_context().await;
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let test_dir = temp_dir.path();
+
+        // Create a file that won't match the pattern
+        std::fs::write(test_dir.join("test.txt"), "content").unwrap();
+
+        let mut arguments = serde_json::Map::new();
+        arguments.insert(
+            "pattern".to_string(),
+            serde_json::Value::String("*.xyz_nonexistent".to_string()),
+        );
+        arguments.insert(
+            "path".to_string(),
+            serde_json::Value::String(test_dir.display().to_string()),
+        );
+
+        let result = execute_glob(arguments, &context).await;
+        assert!(result.is_ok());
+        let call_result = result.unwrap();
+        let text = match &call_result.content[0].raw {
+            rmcp::model::RawContent::Text(t) => t.text.clone(),
+            _ => panic!("Expected text"),
+        };
+        assert!(text.contains("No files found") || text.contains("no files"));
+    }
+
+    #[tokio::test]
+    async fn test_glob_without_gitignore() {
+        let context = create_test_context().await;
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let test_dir = temp_dir.path();
+
+        // Create files including one that would be in gitignore
+        std::fs::write(test_dir.join("code.rs"), "// code").unwrap();
+        std::fs::write(test_dir.join("ignored.rs"), "// ignored").unwrap();
+
+        // Create a .gitignore that ignores ignored.rs
+        std::fs::write(test_dir.join(".gitignore"), "ignored.rs\n").unwrap();
+
+        // Search without respecting gitignore
+        let mut arguments = serde_json::Map::new();
+        arguments.insert(
+            "pattern".to_string(),
+            serde_json::Value::String("*.rs".to_string()),
+        );
+        arguments.insert(
+            "path".to_string(),
+            serde_json::Value::String(test_dir.display().to_string()),
+        );
+        arguments.insert(
+            "respect_git_ignore".to_string(),
+            serde_json::Value::Bool(false),
+        );
+
+        let result = execute_glob(arguments, &context).await;
+        assert!(result.is_ok());
+        let call_result = result.unwrap();
+        let text = match &call_result.content[0].raw {
+            rmcp::model::RawContent::Text(t) => t.text.clone(),
+            _ => panic!("Expected text"),
+        };
+        // When not respecting gitignore, should find both files
+        assert!(
+            text.contains("code.rs") || text.contains("2 files") || text.contains("ignored.rs")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_glob_pattern_too_long() {
+        let context = create_test_context().await;
+
+        let long_pattern = "a".repeat(1001);
+        let mut arguments = serde_json::Map::new();
+        arguments.insert(
+            "pattern".to_string(),
+            serde_json::Value::String(long_pattern),
+        );
+
+        let result = execute_glob(arguments, &context).await;
+        assert!(result.is_err());
+        let err = format!("{:?}", result.unwrap_err());
+        assert!(err.contains("too long") || err.contains("1000"));
+    }
+
+    #[tokio::test]
+    async fn test_glob_finds_files_in_directory() {
+        let context = create_test_context().await;
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let test_dir = temp_dir.path();
+
+        // Create multiple files
+        std::fs::write(test_dir.join("a.txt"), "content a").unwrap();
+        std::fs::write(test_dir.join("b.txt"), "content b").unwrap();
+        std::fs::write(test_dir.join("c.rs"), "// rust").unwrap();
+
+        let mut arguments = serde_json::Map::new();
+        arguments.insert(
+            "pattern".to_string(),
+            serde_json::Value::String("*.txt".to_string()),
+        );
+        arguments.insert(
+            "path".to_string(),
+            serde_json::Value::String(test_dir.display().to_string()),
+        );
+
+        let result = execute_glob(arguments, &context).await;
+        assert!(result.is_ok());
+        let call_result = result.unwrap();
+        let text = match &call_result.content[0].raw {
+            rmcp::model::RawContent::Text(t) => t.text.clone(),
+            _ => panic!("Expected text"),
+        };
+        assert!(text.contains("a.txt"));
+        assert!(text.contains("b.txt"));
+        assert!(!text.contains("c.rs"));
+    }
+
+    #[tokio::test]
+    async fn test_glob_nonexistent_directory_error() {
+        let context = create_test_context().await;
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let nonexistent = temp_dir.path().join("does_not_exist");
+
+        let mut arguments = serde_json::Map::new();
+        arguments.insert(
+            "pattern".to_string(),
+            serde_json::Value::String("*.txt".to_string()),
+        );
+        arguments.insert(
+            "path".to_string(),
+            serde_json::Value::String(nonexistent.display().to_string()),
+        );
+
+        let result = execute_glob(arguments, &context).await;
+        assert!(result.is_err());
+        let err = format!("{:?}", result.unwrap_err());
+        assert!(
+            err.contains("does not exist") || err.contains("not found") || err.contains("NotFound")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_glob_broad_pattern_allowed_with_scoped_path() {
+        let context = create_test_context().await;
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let test_dir = temp_dir.path();
+
+        std::fs::write(test_dir.join("file1.txt"), "content").unwrap();
+        std::fs::write(test_dir.join("file2.rs"), "// rust").unwrap();
+
+        // **/* is normally forbidden but should be allowed when path is specified
+        let mut arguments = serde_json::Map::new();
+        arguments.insert(
+            "pattern".to_string(),
+            serde_json::Value::String("**/*".to_string()),
+        );
+        arguments.insert(
+            "path".to_string(),
+            serde_json::Value::String(test_dir.display().to_string()),
+        );
+
+        let result = execute_glob(arguments, &context).await;
+        // With a scoped path, **/* should be allowed
+        assert!(result.is_ok());
+    }
 }

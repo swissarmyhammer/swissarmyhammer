@@ -250,4 +250,115 @@ mod tests {
         assert!(!schema.as_object().unwrap().contains_key("allOf"));
         assert!(!schema.as_object().unwrap().contains_key("anyOf"));
     }
+
+    #[test]
+    fn test_kanban_operations_returns_full_list() {
+        // Verify kanban_operations() returns the complete static operations list
+        let ops = kanban_operations();
+
+        // The list should be non-empty and contain all operation categories
+        assert!(
+            !ops.is_empty(),
+            "kanban_operations() should return a non-empty list"
+        );
+
+        // Verify the list covers all major operation groups by checking for expected op names
+        let op_names: Vec<String> = ops.iter().map(|op| op.op_string()).collect();
+        let op_names: Vec<&str> = op_names.iter().map(|s| s.as_str()).collect();
+
+        // Board operations
+        assert!(op_names.contains(&"init board"), "Missing 'init board'");
+        assert!(op_names.contains(&"get board"), "Missing 'get board'");
+        assert!(op_names.contains(&"update board"), "Missing 'update board'");
+
+        // Column operations
+        assert!(op_names.contains(&"add column"), "Missing 'add column'");
+        assert!(op_names.contains(&"list columns"), "Missing 'list columns'");
+
+        // Swimlane operations
+        assert!(op_names.contains(&"add swimlane"), "Missing 'add swimlane'");
+        assert!(
+            op_names.contains(&"list swimlanes"),
+            "Missing 'list swimlanes'"
+        );
+
+        // Actor operations
+        assert!(op_names.contains(&"add actor"), "Missing 'add actor'");
+        assert!(op_names.contains(&"list actors"), "Missing 'list actors'");
+
+        // Task operations
+        assert!(op_names.contains(&"add task"), "Missing 'add task'");
+        assert!(
+            op_names.contains(&"complete task"),
+            "Missing 'complete task'"
+        );
+        assert!(op_names.contains(&"move task"), "Missing 'move task'");
+        assert!(op_names.contains(&"next task"), "Missing 'next task'");
+        assert!(op_names.contains(&"list tasks"), "Missing 'list tasks'");
+
+        // Tag operations
+        assert!(op_names.contains(&"add tag"), "Missing 'add tag'");
+        assert!(op_names.contains(&"list tags"), "Missing 'list tags'");
+
+        // Activity operations
+        assert!(
+            op_names.contains(&"list activity"),
+            "Missing 'list activity'"
+        );
+    }
+
+    #[test]
+    fn test_kanban_operations_generates_valid_schema() {
+        // Verify the full operation list can be used to generate a valid schema
+        let ops = kanban_operations();
+        let schema = generate_kanban_mcp_schema(ops);
+
+        // Verify top-level schema structure
+        assert_eq!(schema["type"], "object");
+        assert_eq!(schema["additionalProperties"], true);
+        assert!(schema["description"].as_str().unwrap().contains("Kanban"));
+
+        // Verify the op enum contains all operation names
+        let op_enum = schema["properties"]["op"]["enum"].as_array().unwrap();
+        assert!(!op_enum.is_empty(), "op enum should not be empty");
+
+        let enum_strs: Vec<&str> = op_enum.iter().filter_map(|v| v.as_str()).collect();
+        assert!(enum_strs.contains(&"init board"));
+        assert!(enum_strs.contains(&"add task"));
+        assert!(enum_strs.contains(&"complete task"));
+        assert!(enum_strs.contains(&"list activity"));
+
+        // All operations in kanban_operations() should appear in the schema enum
+        for op in ops {
+            let op_name = op.op_string();
+            assert!(
+                enum_strs.contains(&op_name.as_str()),
+                "Operation '{}' missing from schema enum",
+                op_name
+            );
+        }
+
+        // Verify x-operation-schemas has one entry per operation
+        let op_schemas = schema["x-operation-schemas"].as_array().unwrap();
+        assert_eq!(
+            op_schemas.len(),
+            ops.len(),
+            "x-operation-schemas count should match number of operations"
+        );
+    }
+
+    #[test]
+    fn test_kanban_operations_is_static() {
+        // Verify kanban_operations() returns the same reference each call (lazy static)
+        let ops1 = kanban_operations();
+        let ops2 = kanban_operations();
+
+        // Both calls should return the same slice (same pointer)
+        assert_eq!(
+            ops1.as_ptr(),
+            ops2.as_ptr(),
+            "kanban_operations() should return the same static reference"
+        );
+        assert_eq!(ops1.len(), ops2.len());
+    }
 }

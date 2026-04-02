@@ -534,6 +534,470 @@ impl<'a, T: TextEmbedder> BatchProcessor<'a, T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::private::Sealed;
+    use crate::{EmbeddingError, EmbeddingResult, TextEmbedder};
+    use async_trait::async_trait;
+    use std::sync::{Arc, Mutex};
+
+    /// A mock embedder that returns fixed-dimension vectors and can simulate failures.
+    struct MockEmbedder {
+        dimension: usize,
+        loaded: bool,
+        /// Indices of embed_text calls (0-based) that should return an error.
+        fail_on_calls: Vec<usize>,
+        /// Shared counter for how many times embed_text was called.
+        call_count: Arc<Mutex<usize>>,
+    }
+
+    impl MockEmbedder {
+        /// Create a loaded mock that always succeeds.
+        fn new(dimension: usize) -> Self {
+            Self {
+                dimension,
+                loaded: true,
+                fail_on_calls: vec![],
+                call_count: Arc::new(Mutex::new(0)),
+            }
+        }
+
+        /// Create an unloaded mock.
+        fn unloaded(dimension: usize) -> Self {
+            Self {
+                loaded: false,
+                ..Self::new(dimension)
+            }
+        }
+
+        /// Create a mock that fails on the given call indices.
+        fn with_failures(dimension: usize, fail_on_calls: Vec<usize>) -> Self {
+            Self {
+                fail_on_calls,
+                ..Self::new(dimension)
+            }
+        }
+    }
+
+    // Required by the sealed trait pattern — only workspace crates can implement Sealed.
+    impl Sealed for MockEmbedder {}
+
+    #[async_trait]
+    impl TextEmbedder for MockEmbedder {
+        async fn load(&self) -> Result<(), EmbeddingError> {
+            Ok(())
+        }
+
+        async fn embed_text(&self, text: &str) -> Result<EmbeddingResult, EmbeddingError> {
+            let call_idx = {
+                let mut count = self.call_count.lock().unwrap();
+                let idx = *count;
+                *count += 1;
+                idx
+            };
+
+            if self.fail_on_calls.contains(&call_idx) {
+                return Err(EmbeddingError::TextProcessing(format!(
+                    "mock failure at call {}",
+                    call_idx
+                )));
+            }
+
+            let embedding = vec![0.1_f32; self.dimension];
+            Ok(EmbeddingResult::new(
+                text.to_string(),
+                embedding,
+                text.split_whitespace().count(),
+                1,
+            ))
+        }
+
+        fn embedding_dimension(&self) -> Option<usize> {
+            if self.loaded {
+                Some(self.dimension)
+            } else {
+                None
+            }
+        }
+
+        fn is_loaded(&self) -> bool {
+            self.loaded
+        }
+    }
+
+    // ──────────────────────────────────────────────────────────────
+    // BatchProcessor::new and with_config
+    // ──────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_processor_new() {
+        let embedder = MockEmbedder::new(4);
+        let processor = BatchProcessor::new(&embedder, 16);
+        assert_eq!(processor.batch_size(), 16);
+        assert_eq!(processor.stats().total_texts, 0);
+    }
+
+    #[test]
+    fn test_processor_with_config() {
+        let embedder = MockEmbedder::new(4);
+        let config = BatchConfig {
+            batch_size: 8,
+            continue_on_error: false,
+            ..Default::default()
+        };
+        let processor = BatchProcessor::with_config(&embedder, config);
+        assert_eq!(processor.batch_size(), 8);
+        assert!(!processor.config().continue_on_error);
+    }
+
+    #[test]
+    fn test_processor_set_batch_size() {
+        let embedder = MockEmbedder::new(4);
+        let mut processor = BatchProcessor::new(&embedder, 8);
+        processor.set_batch_size(16);
+        assert_eq!(processor.batch_size(), 16);
+        // Zero is ignored.
+        processor.set_batch_size(0);
+        assert_eq!(processor.batch_size(), 16);
+    }
+
+    #[test]
+    fn test_processor_get_model_info() {
+        let embedder = MockEmbedder::new(384);
+        let processor = BatchProcessor::new(&embedder, 32);
+        let info = processor.get_model_info();
+        assert_eq!(info, Some((384, true)));
+    }
+
+    #[test]
+    fn test_processor_get_model_info_unloaded() {
+        let embedder = MockEmbedder::unloaded(384);
+        let processor = BatchProcessor::new(&embedder, 32);
+        // Unloaded mock returns None for embedding_dimension.
+        assert_eq!(processor.get_model_info(), None);
+    }
+
+    // ──────────────────────────────────────────────────────────────
+    // process_batch
+    // ──────────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_process_batch_success() {
+        let embedder = MockEmbedder::new(4);
+        let mut processor = BatchProcessor::new(&embedder, 10);
+
+        let texts = vec!["hello".to_string(), "world".to_string(), "foo".to_string()];
+        let results = processor.process_batch(&texts).await.unwrap();
+
+        assert_eq!(results.len(), 3);
+        assert_eq!(processor.stats().total_texts, 3);
+        assert_eq!(processor.stats().successful_embeddings, 3);
+        assert_eq!(processor.stats().failed_embeddings, 0);
+    }
+
+    #[tokio::test]
+    async fn test_process_batch_model_not_loaded() {
+        let embedder = MockEmbedder::unloaded(4);
+        let mut processor = BatchProcessor::new(&embedder, 10);
+
+        let texts = vec!["hello".to_string()];
+        let err = processor.process_batch(&texts).await.unwrap_err();
+        assert!(matches!(err, EmbeddingError::ModelNotLoaded));
+    }
+
+    #[tokio::test]
+    async fn test_process_batch_continue_on_error() {
+        // Call 0 succeeds, call 1 fails, call 2 succeeds.
+        let embedder = MockEmbedder::with_failures(4, vec![1]);
+        let mut processor = BatchProcessor::new(&embedder, 10);
+        // continue_on_error is true by default.
+
+        let texts = vec!["ok1".to_string(), "fail".to_string(), "ok2".to_string()];
+        let results = processor.process_batch(&texts).await.unwrap();
+
+        assert_eq!(results.len(), 2, "should have 2 successful embeddings");
+        assert_eq!(processor.stats().successful_embeddings, 2);
+        assert_eq!(processor.stats().failed_embeddings, 1);
+        assert_eq!(processor.stats().failed_items.len(), 1);
+        assert_eq!(processor.stats().failed_items[0].index, 1);
+    }
+
+    #[tokio::test]
+    async fn test_process_batch_stop_on_error() {
+        let embedder = MockEmbedder::with_failures(4, vec![1]);
+        let config = BatchConfig {
+            batch_size: 10,
+            continue_on_error: false,
+            ..Default::default()
+        };
+        let mut processor = BatchProcessor::with_config(&embedder, config);
+
+        let texts = vec!["ok1".to_string(), "fail".to_string(), "ok2".to_string()];
+        let err = processor.process_batch(&texts).await.unwrap_err();
+        assert!(matches!(err, EmbeddingError::TextProcessing(_)));
+    }
+
+    #[tokio::test]
+    async fn test_process_batch_memory_limit_exceeded() {
+        let embedder = MockEmbedder::new(1024);
+        let config = BatchConfig {
+            batch_size: 10,
+            memory_limit_mb: Some(0), // 0 MB — any text will exceed this
+            enable_memory_monitoring: true,
+            ..Default::default()
+        };
+        let mut processor = BatchProcessor::with_config(&embedder, config);
+
+        let texts = vec!["hello world".to_string()];
+        let err = processor.process_batch(&texts).await.unwrap_err();
+        assert!(matches!(err, EmbeddingError::BatchProcessing(_)));
+    }
+
+    #[tokio::test]
+    async fn test_process_batch_memory_monitoring_disabled() {
+        // Even with a 0-MB limit, disabling monitoring should not block processing.
+        let embedder = MockEmbedder::new(4);
+        let config = BatchConfig {
+            batch_size: 10,
+            memory_limit_mb: Some(0),
+            enable_memory_monitoring: false,
+            ..Default::default()
+        };
+        let mut processor = BatchProcessor::with_config(&embedder, config);
+
+        let texts = vec!["hello".to_string()];
+        let results = processor.process_batch(&texts).await.unwrap();
+        assert_eq!(results.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_process_batch_updates_peak_memory() {
+        let embedder = MockEmbedder::new(4);
+        let config = BatchConfig {
+            batch_size: 10,
+            enable_memory_monitoring: true,
+            memory_limit_mb: None,
+            ..Default::default()
+        };
+        let mut processor = BatchProcessor::with_config(&embedder, config);
+
+        let texts = vec!["hello world test text".to_string()];
+        processor.process_batch(&texts).await.unwrap();
+
+        assert!(processor.stats().peak_memory_usage_bytes > 0);
+    }
+
+    #[tokio::test]
+    async fn test_process_batch_empty() {
+        let embedder = MockEmbedder::new(4);
+        let mut processor = BatchProcessor::new(&embedder, 10);
+
+        let results = processor.process_batch(&[]).await.unwrap();
+        // Empty batch: model is loaded, loop runs 0 times.
+        assert_eq!(results.len(), 0);
+        assert_eq!(processor.stats().batches_processed, 1);
+    }
+
+    // ──────────────────────────────────────────────────────────────
+    // process_texts (the "process_all" equivalent)
+    // ──────────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_process_texts_empty_input() {
+        let embedder = MockEmbedder::new(4);
+        let mut processor = BatchProcessor::new(&embedder, 2);
+
+        let results = processor.process_texts(vec![]).await.unwrap();
+        assert!(results.is_empty());
+        assert_eq!(processor.stats().batches_processed, 0);
+    }
+
+    #[tokio::test]
+    async fn test_process_texts_single_batch() {
+        let embedder = MockEmbedder::new(4);
+        let mut processor = BatchProcessor::new(&embedder, 10);
+
+        let texts: Vec<String> = (0..5).map(|i| format!("text {}", i)).collect();
+        let results = processor.process_texts(texts).await.unwrap();
+
+        assert_eq!(results.len(), 5);
+        assert_eq!(processor.stats().batches_processed, 1);
+        assert_eq!(processor.stats().total_texts, 5);
+    }
+
+    #[tokio::test]
+    async fn test_process_texts_multiple_batches() {
+        let embedder = MockEmbedder::new(4);
+        let mut processor = BatchProcessor::new(&embedder, 3);
+
+        let texts: Vec<String> = (0..7).map(|i| format!("text {}", i)).collect();
+        let results = processor.process_texts(texts).await.unwrap();
+
+        assert_eq!(results.len(), 7);
+        // 7 texts / batch_size 3 → 3 batches (3 + 3 + 1)
+        assert_eq!(processor.stats().batches_processed, 3);
+    }
+
+    #[tokio::test]
+    async fn test_process_texts_exact_batch_boundary() {
+        let embedder = MockEmbedder::new(4);
+        let mut processor = BatchProcessor::new(&embedder, 4);
+
+        let texts: Vec<String> = (0..8).map(|i| format!("text {}", i)).collect();
+        let results = processor.process_texts(texts).await.unwrap();
+
+        assert_eq!(results.len(), 8);
+        assert_eq!(processor.stats().batches_processed, 2);
+    }
+
+    #[tokio::test]
+    async fn test_process_texts_with_errors_continue() {
+        // Fail on the 3rd text overall (index 2, call index 2).
+        let embedder = MockEmbedder::with_failures(4, vec![2]);
+        let mut processor = BatchProcessor::new(&embedder, 5);
+
+        let texts: Vec<String> = (0..5).map(|i| format!("text {}", i)).collect();
+        // continue_on_error=true by default
+        let results = processor.process_texts(texts).await.unwrap();
+
+        assert_eq!(results.len(), 4);
+        assert_eq!(processor.stats().failed_embeddings, 1);
+    }
+
+    #[tokio::test]
+    async fn test_process_texts_stats_accumulate_across_batches() {
+        let embedder = MockEmbedder::new(4);
+        let mut processor = BatchProcessor::new(&embedder, 2);
+
+        let texts: Vec<String> = (0..6).map(|i| format!("item {}", i)).collect();
+        processor.process_texts(texts).await.unwrap();
+
+        assert_eq!(processor.stats().total_texts, 6);
+        assert_eq!(processor.stats().successful_embeddings, 6);
+        assert_eq!(processor.stats().batches_processed, 3);
+    }
+
+    // ──────────────────────────────────────────────────────────────
+    // set_progress_callback
+    // ──────────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_progress_callback_called() {
+        let embedder = MockEmbedder::new(4);
+        let config = BatchConfig {
+            batch_size: 2,
+            enable_progress_reporting: true,
+            progress_report_interval_batches: 1,
+            ..Default::default()
+        };
+        let mut processor = BatchProcessor::with_config(&embedder, config);
+
+        let call_count = Arc::new(Mutex::new(0_usize));
+        let call_count_clone = Arc::clone(&call_count);
+        processor.set_progress_callback(Box::new(move |_info| {
+            *call_count_clone.lock().unwrap() += 1;
+        }));
+
+        let texts: Vec<String> = (0..6).map(|i| format!("text {}", i)).collect();
+        processor.process_texts(texts).await.unwrap();
+
+        let count = *call_count.lock().unwrap();
+        assert!(count > 0, "progress callback should have been called");
+    }
+
+    #[tokio::test]
+    async fn test_clear_progress_callback() {
+        let embedder = MockEmbedder::new(4);
+        let config = BatchConfig {
+            batch_size: 2,
+            enable_progress_reporting: true,
+            progress_report_interval_batches: 1,
+            ..Default::default()
+        };
+        let mut processor = BatchProcessor::with_config(&embedder, config);
+
+        let called = Arc::new(Mutex::new(false));
+        let called_clone = Arc::clone(&called);
+        processor.set_progress_callback(Box::new(move |_| {
+            *called_clone.lock().unwrap() = true;
+        }));
+        processor.clear_progress_callback();
+
+        let texts: Vec<String> = (0..4).map(|i| format!("text {}", i)).collect();
+        processor.process_texts(texts).await.unwrap();
+
+        assert!(
+            !*called.lock().unwrap(),
+            "callback should not be called after clearing"
+        );
+    }
+
+    // ──────────────────────────────────────────────────────────────
+    // reset_stats and performance_report
+    // ──────────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_reset_stats() {
+        let embedder = MockEmbedder::new(4);
+        let mut processor = BatchProcessor::new(&embedder, 10);
+
+        let texts = vec!["a".to_string(), "b".to_string()];
+        processor.process_batch(&texts).await.unwrap();
+        assert!(processor.stats().total_texts > 0);
+
+        processor.reset_stats();
+        assert_eq!(processor.stats().total_texts, 0);
+        assert_eq!(processor.stats().batches_processed, 0);
+    }
+
+    #[tokio::test]
+    async fn test_get_performance_report() {
+        let embedder = MockEmbedder::new(4);
+        let mut processor = BatchProcessor::new(&embedder, 10);
+
+        let texts = vec!["hello".to_string(), "world".to_string()];
+        processor.process_batch(&texts).await.unwrap();
+
+        let report = processor.get_performance_report();
+        assert!(report.contains("Performance Report"));
+        assert!(report.contains("Total texts processed: 2"));
+        assert!(report.contains("Success rate: 100.0%"));
+    }
+
+    // ──────────────────────────────────────────────────────────────
+    // estimate_memory_usage (via process_batch with monitoring)
+    // ──────────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_estimate_memory_usage_scales_with_dimension() {
+        // Higher dimension → higher estimated memory usage.
+        let embedder_small = MockEmbedder::new(4);
+        let config = BatchConfig {
+            batch_size: 10,
+            enable_memory_monitoring: true,
+            memory_limit_mb: None,
+            ..Default::default()
+        };
+        let mut processor_small = BatchProcessor::with_config(&embedder_small, config.clone());
+        processor_small
+            .process_batch(&["hello world".to_string()])
+            .await
+            .unwrap();
+        let peak_small = processor_small.stats().peak_memory_usage_bytes;
+
+        let embedder_large = MockEmbedder::new(1024);
+        let mut processor_large = BatchProcessor::with_config(&embedder_large, config);
+        processor_large
+            .process_batch(&["hello world".to_string()])
+            .await
+            .unwrap();
+        let peak_large = processor_large.stats().peak_memory_usage_bytes;
+
+        assert!(
+            peak_large > peak_small,
+            "larger dimension should use more estimated memory: {} vs {}",
+            peak_large,
+            peak_small
+        );
+    }
 
     #[test]
     fn test_batch_stats_new() {

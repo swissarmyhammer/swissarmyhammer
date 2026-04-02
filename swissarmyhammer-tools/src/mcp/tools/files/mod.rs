@@ -562,4 +562,164 @@ mod tests {
         let result = tool.execute(args, &context).await;
         assert!(result.is_ok());
     }
+
+    // =========================================================================
+    // Operation inference tests (no explicit 'op' field)
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_infer_edit_from_old_string_key() {
+        let tool = FilesTool::new();
+        let context = crate::test_utils::create_test_context().await;
+
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("infer_edit.txt");
+        std::fs::write(&test_file, "hello world").unwrap();
+
+        // No "op" key, but has "old_string" - should infer edit
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "file_path".to_string(),
+            serde_json::json!(test_file.to_string_lossy()),
+        );
+        args.insert("old_string".to_string(), serde_json::json!("hello"));
+        args.insert("new_string".to_string(), serde_json::json!("goodbye"));
+
+        let result = tool.execute(args, &context).await;
+        assert!(result.is_ok());
+        assert_eq!(
+            std::fs::read_to_string(&test_file).unwrap(),
+            "goodbye world"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_infer_write_from_content_key() {
+        let tool = FilesTool::new();
+        let context = crate::test_utils::create_test_context().await;
+
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("infer_write.txt");
+
+        // No "op" key, but has "content" - should infer write
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "file_path".to_string(),
+            serde_json::json!(test_file.to_string_lossy()),
+        );
+        args.insert("content".to_string(), serde_json::json!("written content"));
+
+        let result = tool.execute(args, &context).await;
+        assert!(result.is_ok());
+        assert!(test_file.exists());
+    }
+
+    #[tokio::test]
+    async fn test_infer_glob_from_pattern_key() {
+        let tool = FilesTool::new();
+        let context = crate::test_utils::create_test_context().await;
+
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(temp_dir.path().join("test.txt"), "content").unwrap();
+
+        // No "op" key, has "pattern" but not "case_insensitive" - should infer glob
+        let mut args = serde_json::Map::new();
+        args.insert("pattern".to_string(), serde_json::json!("*.txt"));
+        args.insert(
+            "path".to_string(),
+            serde_json::json!(temp_dir.path().to_string_lossy()),
+        );
+
+        let result = tool.execute(args, &context).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_infer_grep_from_pattern_and_case_insensitive() {
+        let tool = FilesTool::new();
+        let context = crate::test_utils::create_test_context().await;
+
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(temp_dir.path().join("test.txt"), "Hello World").unwrap();
+
+        // No "op" key, has both "pattern" and "case_insensitive" - should infer grep
+        let mut args = serde_json::Map::new();
+        args.insert("pattern".to_string(), serde_json::json!("hello"));
+        args.insert("case_insensitive".to_string(), serde_json::json!(true));
+        args.insert(
+            "path".to_string(),
+            serde_json::json!(temp_dir.path().to_string_lossy()),
+        );
+
+        let result = tool.execute(args, &context).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_infer_read_from_path_key() {
+        let tool = FilesTool::new();
+        let context = crate::test_utils::create_test_context().await;
+
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("infer_read.txt");
+        std::fs::write(&test_file, "read content").unwrap();
+
+        // No "op" key, has "path" only - should infer read
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "path".to_string(),
+            serde_json::json!(test_file.to_string_lossy()),
+        );
+
+        let result = tool.execute(args, &context).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_read_only_infer_read_from_path() {
+        let tool = FilesTool::read_only();
+        let context = crate::test_utils::create_test_context().await;
+
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("test.txt");
+        std::fs::write(&test_file, "read only content").unwrap();
+
+        // No "op" key, read-only mode, has "path" - should infer read
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "path".to_string(),
+            serde_json::json!(test_file.to_string_lossy()),
+        );
+
+        let result = tool.execute(args, &context).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_read_only_unknown_op_error() {
+        let tool = FilesTool::read_only();
+        let context = crate::test_utils::create_test_context().await;
+
+        let mut args = serde_json::Map::new();
+        args.insert("op".to_string(), serde_json::json!("totally unknown"));
+
+        let result = tool.execute(args, &context).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("Unknown operation"));
+    }
+
+    #[tokio::test]
+    async fn test_read_only_no_keys_error() {
+        let tool = FilesTool::read_only();
+        let context = crate::test_utils::create_test_context().await;
+
+        // No keys - should fail with "Cannot determine operation"
+        let args = serde_json::Map::new();
+
+        let result = tool.execute(args, &context).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("Cannot determine operation"));
+    }
 }

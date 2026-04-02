@@ -87,3 +87,79 @@ impl Execute<KanbanContext, KanbanError> for DeleteSwimlane {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::board::InitBoard;
+    use crate::swimlane::AddSwimlane;
+    use crate::task::AddTask;
+    use tempfile::TempDir;
+
+    async fn setup() -> (TempDir, KanbanContext) {
+        let temp = TempDir::new().unwrap();
+        let kanban_dir = temp.path().join(".kanban");
+        let ctx = KanbanContext::new(kanban_dir);
+        InitBoard::new("Test")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        (temp, ctx)
+    }
+
+    #[tokio::test]
+    async fn test_delete_swimlane() {
+        let (_temp, ctx) = setup().await;
+
+        AddSwimlane::new("backend", "Backend")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        let result = DeleteSwimlane::new("backend")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        assert_eq!(result["deleted"], true);
+        assert_eq!(result["id"], "backend");
+    }
+
+    #[tokio::test]
+    async fn test_delete_swimlane_not_found() {
+        let (_temp, ctx) = setup().await;
+
+        let result = DeleteSwimlane::new("nonexistent")
+            .execute(&ctx)
+            .await
+            .into_result();
+
+        assert!(matches!(result, Err(KanbanError::SwimlaneNotFound { .. })));
+    }
+
+    #[tokio::test]
+    async fn test_delete_swimlane_fails_if_has_tasks() {
+        let (_temp, ctx) = setup().await;
+
+        AddSwimlane::new("backend", "Backend")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        // Add a task in this swimlane
+        let mut add_task = AddTask::new("Task in swimlane");
+        add_task.swimlane = Some("backend".to_string());
+        add_task.execute(&ctx).await.into_result().unwrap();
+
+        let result = DeleteSwimlane::new("backend")
+            .execute(&ctx)
+            .await
+            .into_result();
+
+        assert!(matches!(result, Err(KanbanError::SwimlaneNotEmpty { .. })));
+    }
+}

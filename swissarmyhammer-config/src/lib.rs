@@ -537,3 +537,239 @@ pub mod test_config {
         executors
     }
 }
+
+#[cfg(test)]
+mod test_config_tests {
+    use super::test_config::*;
+    use crate::model::{ModelExecutorConfig, ModelExecutorType, ModelSource};
+    use serial_test::serial;
+    use std::env;
+
+    /// Helper to clear all env vars that TestConfig reads, restoring a clean slate.
+    fn clear_test_env_vars() {
+        env::remove_var("SAH_TEST_CLAUDE");
+        env::remove_var("SAH_TEST_MODEL_REPO");
+        env::remove_var("SAH_TEST_MODEL_FILENAME");
+    }
+
+    #[test]
+    #[serial]
+    fn from_environment_defaults_when_no_env_vars_set() {
+        clear_test_env_vars();
+
+        let config = TestConfig::from_environment();
+
+        assert!(
+            config.enable_claude_tests,
+            "Claude tests should default to enabled"
+        );
+        assert_eq!(config.llama_model_repo, crate::DEFAULT_TEST_LLM_MODEL_REPO);
+        assert_eq!(
+            config.llama_model_filename,
+            crate::DEFAULT_TEST_LLM_MODEL_FILENAME
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn from_environment_reads_sah_test_claude_true() {
+        clear_test_env_vars();
+        env::set_var("SAH_TEST_CLAUDE", "true");
+
+        let config = TestConfig::from_environment();
+        assert!(config.enable_claude_tests);
+    }
+
+    #[test]
+    #[serial]
+    fn from_environment_reads_sah_test_claude_one() {
+        clear_test_env_vars();
+        env::set_var("SAH_TEST_CLAUDE", "1");
+
+        let config = TestConfig::from_environment();
+        assert!(config.enable_claude_tests);
+    }
+
+    #[test]
+    #[serial]
+    fn from_environment_reads_sah_test_claude_false() {
+        clear_test_env_vars();
+        env::set_var("SAH_TEST_CLAUDE", "false");
+
+        let config = TestConfig::from_environment();
+        assert!(
+            !config.enable_claude_tests,
+            "SAH_TEST_CLAUDE=false should disable Claude tests"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn from_environment_reads_sah_test_claude_zero() {
+        clear_test_env_vars();
+        env::set_var("SAH_TEST_CLAUDE", "0");
+
+        let config = TestConfig::from_environment();
+        assert!(
+            !config.enable_claude_tests,
+            "SAH_TEST_CLAUDE=0 should disable Claude tests"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn from_environment_reads_sah_test_claude_case_insensitive() {
+        clear_test_env_vars();
+        env::set_var("SAH_TEST_CLAUDE", "TRUE");
+
+        let config = TestConfig::from_environment();
+        assert!(
+            config.enable_claude_tests,
+            "SAH_TEST_CLAUDE=TRUE (uppercase) should enable"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn from_environment_custom_model_repo_and_filename() {
+        clear_test_env_vars();
+        env::set_var("SAH_TEST_MODEL_REPO", "custom/repo");
+        env::set_var("SAH_TEST_MODEL_FILENAME", "custom.gguf");
+
+        let config = TestConfig::from_environment();
+        assert_eq!(config.llama_model_repo, "custom/repo");
+        assert_eq!(config.llama_model_filename, "custom.gguf");
+    }
+
+    #[test]
+    #[serial]
+    fn create_llama_config_returns_expected_defaults() {
+        clear_test_env_vars();
+
+        let test_config = TestConfig::from_environment();
+        let llama_config = test_config.create_llama_config();
+
+        // Verify model source
+        match &llama_config.model.source {
+            ModelSource::HuggingFace {
+                repo,
+                filename,
+                folder,
+            } => {
+                assert_eq!(repo, crate::DEFAULT_TEST_LLM_MODEL_REPO);
+                assert_eq!(
+                    filename.as_deref(),
+                    Some(crate::DEFAULT_TEST_LLM_MODEL_FILENAME)
+                );
+                assert!(folder.is_none());
+            }
+            other => panic!("Expected HuggingFace source, got {:?}", other),
+        }
+
+        assert_eq!(
+            llama_config.model.batch_size,
+            crate::DEFAULT_TEST_BATCH_SIZE
+        );
+        assert_eq!(
+            llama_config.model.use_hf_params,
+            crate::DEFAULT_USE_HF_PARAMS
+        );
+        assert!(
+            llama_config.model.debug,
+            "Debug should be enabled for tests"
+        );
+        assert_eq!(llama_config.mcp_server.port, crate::DEFAULT_MCP_PORT);
+        assert_eq!(
+            llama_config.mcp_server.timeout_seconds,
+            crate::DEFAULT_TEST_MCP_TIMEOUT_SECONDS
+        );
+    }
+
+    #[test]
+    fn create_claude_config_returns_claude_code_executor() {
+        let model_config = TestConfig::create_claude_config();
+
+        assert_eq!(model_config.executors.len(), 1);
+        assert!(
+            matches!(
+                &model_config.executors[0].executor,
+                ModelExecutorConfig::ClaudeCode(_)
+            ),
+            "Expected ClaudeCode executor"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn create_llama_agent_config_returns_llama_agent_executor() {
+        clear_test_env_vars();
+
+        let test_config = TestConfig::from_environment();
+        let model_config = test_config.create_llama_agent_config();
+
+        assert_eq!(model_config.executors.len(), 1);
+        assert!(
+            matches!(
+                &model_config.executors[0].executor,
+                ModelExecutorConfig::LlamaAgent(_)
+            ),
+            "Expected LlamaAgent executor"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn is_claude_enabled_returns_true_by_default() {
+        clear_test_env_vars();
+
+        assert!(is_claude_enabled());
+    }
+
+    #[test]
+    #[serial]
+    fn is_claude_enabled_returns_false_when_disabled() {
+        clear_test_env_vars();
+        env::set_var("SAH_TEST_CLAUDE", "false");
+
+        assert!(!is_claude_enabled());
+    }
+
+    #[test]
+    fn is_llama_enabled_always_returns_true() {
+        assert!(is_llama_enabled());
+    }
+
+    #[test]
+    #[serial]
+    fn get_enabled_executors_includes_both_when_claude_enabled() {
+        clear_test_env_vars();
+
+        let executors = get_enabled_executors();
+        assert!(executors.contains(&ModelExecutorType::ClaudeCode));
+        assert!(executors.contains(&ModelExecutorType::LlamaAgent));
+        assert_eq!(executors.len(), 2);
+    }
+
+    #[test]
+    #[serial]
+    fn get_enabled_executors_excludes_claude_when_disabled() {
+        clear_test_env_vars();
+        env::set_var("SAH_TEST_CLAUDE", "false");
+
+        let executors = get_enabled_executors();
+        assert!(!executors.contains(&ModelExecutorType::ClaudeCode));
+        assert!(executors.contains(&ModelExecutorType::LlamaAgent));
+        assert_eq!(executors.len(), 1);
+    }
+
+    #[test]
+    #[serial]
+    fn skip_if_claude_disabled_does_not_panic() {
+        // Just verify the function doesn't panic in either state.
+        clear_test_env_vars();
+        skip_if_claude_disabled();
+
+        env::set_var("SAH_TEST_CLAUDE", "false");
+        skip_if_claude_disabled();
+    }
+}

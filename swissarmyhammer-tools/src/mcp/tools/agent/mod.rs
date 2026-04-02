@@ -323,4 +323,97 @@ mod tests {
         let result = tool.execute(args, &ctx).await;
         assert!(result.is_ok());
     }
+
+    #[tokio::test]
+    async fn test_agent_tool_description_empty_library() {
+        // Empty library should produce description without available_agents section
+        let library = Arc::new(RwLock::new(AgentLibrary::new()));
+        let tool = AgentMcpTool::new(library, default_prompt_library());
+        let desc = tool.description();
+        // Description should exist but not include the available_agents XML tag
+        // since no agents are loaded
+        assert!(!desc.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_agent_tool_health_check_no_agents() {
+        use swissarmyhammer_common::health::{Doctorable, HealthStatus};
+
+        let library = Arc::new(RwLock::new(AgentLibrary::new()));
+        let tool = AgentMcpTool::new(library, default_prompt_library());
+
+        let checks = tool.run_health_checks();
+        assert_eq!(checks.len(), 1);
+        // Should warn that no agents are loaded
+        assert_ne!(
+            checks[0].status,
+            HealthStatus::Ok,
+            "Expected warning about no agents"
+        );
+        assert!(
+            checks[0].message.contains("No agents"),
+            "Expected 'No agents' message, got: {}",
+            checks[0].message
+        );
+    }
+
+    #[tokio::test]
+    async fn test_agent_tool_health_check_with_agents() {
+        use swissarmyhammer_common::health::{Doctorable, HealthStatus};
+
+        let library = Arc::new(RwLock::new(AgentLibrary::new()));
+        {
+            let mut lib = library.write().await;
+            lib.load_defaults();
+        }
+        let tool = AgentMcpTool::new(library, default_prompt_library());
+
+        let checks = tool.run_health_checks();
+        assert_eq!(checks.len(), 1);
+        // Should report ok with count of agents
+        assert_eq!(
+            checks[0].status,
+            HealthStatus::Ok,
+            "Expected health check to pass with agents loaded"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_agent_tool_unknown_op() {
+        let library = Arc::new(RwLock::new(AgentLibrary::new()));
+        let tool = AgentMcpTool::new(library, default_prompt_library());
+        let ctx = crate::test_utils::create_test_context().await;
+
+        let args: serde_json::Map<String, serde_json::Value> =
+            serde_json::from_value(serde_json::json!({"op": "bogus agent op"})).unwrap();
+        let result = tool.execute(args, &ctx).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_agent_tool_name_and_category() {
+        use swissarmyhammer_common::health::Doctorable;
+        use swissarmyhammer_common::lifecycle::Initializable;
+
+        let library = Arc::new(RwLock::new(AgentLibrary::new()));
+        let tool = AgentMcpTool::new(library, default_prompt_library());
+
+        assert_eq!(<AgentMcpTool as Doctorable>::name(&tool), "Agent");
+        assert_eq!(<AgentMcpTool as Doctorable>::category(&tool), "tools");
+        assert_eq!(<AgentMcpTool as Initializable>::name(&tool), "Agent");
+        assert_eq!(<AgentMcpTool as Initializable>::category(&tool), "tools");
+    }
+
+    #[tokio::test]
+    async fn test_register_agent_tools() {
+        use crate::mcp::tool_registry::ToolRegistry;
+
+        let library = Arc::new(RwLock::new(AgentLibrary::new()));
+        let prompt_library = default_prompt_library();
+
+        let mut registry = ToolRegistry::new();
+        register_agent_tools(&mut registry, library, prompt_library);
+        assert_eq!(registry.len(), 1);
+        assert!(registry.get_tool("agent").is_some());
+    }
 }

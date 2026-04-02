@@ -577,4 +577,126 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn test_multicast_ipv4_blocked() {
+        let validator = SecurityValidator::new();
+
+        let result = validator.validate_url("http://224.0.0.1");
+        assert!(
+            matches!(result, Err(SecurityError::SsrfAttempt(_))),
+            "Multicast IPv4 224.0.0.1 should be blocked as SsrfAttempt, got: {result:?}"
+        );
+
+        let result = validator.validate_url("http://239.255.255.255");
+        assert!(
+            matches!(result, Err(SecurityError::SsrfAttempt(_))),
+            "Multicast IPv4 239.255.255.255 should be blocked as SsrfAttempt, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_broadcast_ipv4_blocked() {
+        let validator = SecurityValidator::new();
+
+        let result = validator.validate_url("http://255.255.255.255");
+        assert!(
+            matches!(result, Err(SecurityError::SsrfAttempt(_))),
+            "Broadcast IPv4 255.255.255.255 should be blocked as SsrfAttempt, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_link_local_ipv4_blocked() {
+        let validator = SecurityValidator::new();
+
+        // 169.254.1.1 is link-local (169.254.0.0/16) and should be caught
+        // by is_private_ipv4 or the link-local check
+        let result = validator.validate_url("http://169.254.1.1");
+        assert!(
+            matches!(result, Err(SecurityError::SsrfAttempt(_))),
+            "Link-local IPv4 169.254.1.1 should be blocked as SsrfAttempt, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_multicast_ipv6_blocked() {
+        let validator = SecurityValidator::new();
+
+        let result = validator.validate_url("http://[ff02::1]");
+        assert!(
+            matches!(result, Err(SecurityError::SsrfAttempt(_))),
+            "Multicast IPv6 ff02::1 should be blocked as SsrfAttempt, got: {result:?}"
+        );
+
+        let result = validator.validate_url("http://[ff05::1]");
+        assert!(
+            matches!(result, Err(SecurityError::SsrfAttempt(_))),
+            "Multicast IPv6 ff05::1 should be blocked as SsrfAttempt, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_invalid_host_patterns() {
+        let validator = SecurityValidator::new();
+
+        let invalid_hosts = [
+            ("http://host..name.com", "double dot"),
+            ("http://-host.com", "leading hyphen"),
+            ("http://host-.com", "trailing hyphen"),
+            ("http://host.-name.com", "dot-hyphen"),
+            ("http://host-.name.com", "hyphen-dot"),
+        ];
+
+        for (url_str, desc) in &invalid_hosts {
+            let result = validator.validate_url(url_str);
+            assert!(
+                matches!(result, Err(SecurityError::InvalidUrl(_))),
+                "Host with {desc} ({url_str}) should be InvalidUrl, got: {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_log_security_event_exercised() {
+        // Exercise the log_security_event code path to ensure it does not panic
+        let validator = SecurityValidator::new();
+        validator.log_security_event("test_event", "http://example.com", "unit test exercise");
+    }
+
+    #[test]
+    fn test_carrier_grade_nat_blocked() {
+        let validator = SecurityValidator::new();
+
+        // 100.64.0.0/10 — carrier-grade NAT
+        let result = validator.validate_url("http://100.100.0.1");
+        assert!(
+            matches!(result, Err(SecurityError::SsrfAttempt(_))),
+            "Carrier-grade NAT 100.100.0.1 should be blocked, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_test_network_blocked() {
+        let validator = SecurityValidator::new();
+
+        // 198.18.0.0/15 — test networks
+        let result = validator.validate_url("http://198.19.0.1");
+        assert!(
+            matches!(result, Err(SecurityError::SsrfAttempt(_))),
+            "Test network 198.19.0.1 should be blocked, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_reserved_range_blocked() {
+        let validator = SecurityValidator::new();
+
+        // 240.0.0.0/4 — reserved for future use
+        let result = validator.validate_url("http://241.0.0.1");
+        assert!(
+            matches!(result, Err(SecurityError::SsrfAttempt(_))),
+            "Reserved range 241.0.0.1 should be blocked, got: {result:?}"
+        );
+    }
 }

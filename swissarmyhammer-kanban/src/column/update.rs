@@ -94,3 +94,122 @@ impl Execute<KanbanContext, KanbanError> for UpdateColumn {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::board::InitBoard;
+    use crate::column::add::AddColumn;
+    use crate::column::get::GetColumn;
+    use crate::error::KanbanError;
+    use tempfile::TempDir;
+
+    /// Create a temporary kanban context with a board initialized.
+    async fn setup() -> (TempDir, KanbanContext) {
+        let temp = TempDir::new().unwrap();
+        let kanban_dir = temp.path().join(".kanban");
+        let ctx = KanbanContext::new(kanban_dir);
+        InitBoard::new("Test")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        (temp, ctx)
+    }
+
+    #[tokio::test]
+    async fn test_update_column_name() {
+        let (_temp, ctx) = setup().await;
+
+        let result = UpdateColumn::new("todo")
+            .with_name("Backlog")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        assert_eq!(result["id"], "todo");
+        assert_eq!(result["name"], "Backlog");
+
+        // Verify via get
+        let fetched = GetColumn::new("todo")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        assert_eq!(fetched["name"], "Backlog");
+    }
+
+    #[tokio::test]
+    async fn test_update_column_order() {
+        let (_temp, ctx) = setup().await;
+
+        let result = UpdateColumn::new("todo")
+            .with_order(42)
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        assert_eq!(result["id"], "todo");
+        assert_eq!(result["order"], 42);
+
+        // Verify via get
+        let fetched = GetColumn::new("todo")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        assert_eq!(fetched["order"], 42);
+    }
+
+    #[tokio::test]
+    async fn test_update_column_name_and_order() {
+        let (_temp, ctx) = setup().await;
+
+        AddColumn::new("review", "Review")
+            .with_order(5)
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        let result = UpdateColumn::new("review")
+            .with_name("Code Review")
+            .with_order(10)
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        assert_eq!(result["name"], "Code Review");
+        assert_eq!(result["order"], 10);
+    }
+
+    #[tokio::test]
+    async fn test_update_column_not_found() {
+        let (_temp, ctx) = setup().await;
+
+        let result = UpdateColumn::new("nonexistent")
+            .with_name("Whatever")
+            .execute(&ctx)
+            .await
+            .into_result();
+
+        assert!(matches!(result, Err(KanbanError::ColumnNotFound { .. })));
+    }
+
+    #[tokio::test]
+    async fn test_update_column_no_changes() {
+        let (_temp, ctx) = setup().await;
+
+        // Updating with no fields set should succeed and return current values
+        let result = UpdateColumn::new("todo")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        assert_eq!(result["id"], "todo");
+    }
+}

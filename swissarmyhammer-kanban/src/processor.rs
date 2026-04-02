@@ -183,6 +183,13 @@ mod tests {
         assert_eq!(lines.len(), 1);
     }
 
+    #[test]
+    fn test_processor_default() {
+        // Ensure the Default impl is covered — it delegates to new()
+        let processor = KanbanOperationProcessor::default();
+        assert!(processor.actor.is_none());
+    }
+
     #[tokio::test]
     async fn test_processor_with_actor() {
         let (_temp, ctx) = setup().await;

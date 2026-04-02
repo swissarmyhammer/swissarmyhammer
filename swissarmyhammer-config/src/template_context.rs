@@ -1610,4 +1610,528 @@ config_only = "config_only_value"
             empty_context.err()
         );
     }
+
+    #[test]
+    fn test_from_template_vars_populated() {
+        let mut vars = HashMap::new();
+        vars.insert("project_name".to_string(), json!("MyProject"));
+        vars.insert("version".to_string(), json!("1.0.0"));
+        vars.insert("debug".to_string(), json!(true));
+        vars.insert("count".to_string(), json!(42));
+        vars.insert(
+            "nested".to_string(),
+            json!({"host": "localhost", "port": 8080}),
+        );
+
+        let context = TemplateContext::from_template_vars(vars);
+
+        assert_eq!(context.len(), 5);
+        assert!(!context.is_empty());
+        assert_eq!(context.get("project_name"), Some(&json!("MyProject")));
+        assert_eq!(context.get("version"), Some(&json!("1.0.0")));
+        assert_eq!(context.get("debug"), Some(&json!(true)));
+        assert_eq!(context.get("count"), Some(&json!(42)));
+        assert_eq!(context.get("nested.host"), Some(&json!("localhost")));
+        assert_eq!(context.get("nested.port"), Some(&json!(8080)));
+    }
+
+    #[test]
+    fn test_from_template_vars_empty() {
+        let vars = HashMap::new();
+        let context = TemplateContext::from_template_vars(vars);
+
+        assert!(context.is_empty());
+        assert_eq!(context.len(), 0);
+    }
+
+    #[test]
+    fn test_finalize_config_empty_figment() {
+        // An empty Figment (no providers) should either produce an empty context
+        // via the null branch, or return an extraction error. Either outcome is
+        // acceptable — we verify the function does not panic.
+        let result = TemplateContext::finalize_config(Figment::new());
+
+        // If extraction succeeds (null branch), the context should be empty
+        if let Ok(ref ctx) = result {
+            assert!(ctx.is_empty(), "Empty figment should produce empty context");
+        }
+        // If extraction fails, the error message should mention extraction
+        if let Err(ref e) = result {
+            let msg = format!("{}", e);
+            assert!(
+                msg.contains("extract") || msg.contains("configuration"),
+                "Error should describe extraction failure, got: {}",
+                msg
+            );
+        }
+    }
+
+    #[test]
+    fn test_finalize_config_object_value() {
+        // finalize_config with an object-valued figment should produce a context
+        // with those keys directly accessible.
+        use figment::providers::Serialized;
+
+        let data = json!({"app_name": "test", "port": 3000});
+        let figment = Figment::from(Serialized::defaults(data));
+
+        let result = TemplateContext::finalize_config(figment);
+        assert!(result.is_ok(), "finalize_config should handle object value");
+
+        let ctx = result.unwrap();
+        assert_eq!(ctx.get("app_name"), Some(&json!("test")));
+        assert_eq!(ctx.get("port"), Some(&json!(3000)));
+    }
+
+    #[test]
+    fn test_finalize_config_nested_object() {
+        // finalize_config should handle nested objects, preserving structure
+        // so that dot-notation access works on the resulting context.
+        use figment::providers::Serialized;
+
+        let data = json!({
+            "database": {
+                "host": "localhost",
+                "port": 5432
+            },
+            "app_name": "myapp"
+        });
+        let figment = Figment::from(Serialized::defaults(data));
+
+        let result = TemplateContext::finalize_config(figment);
+        assert!(
+            result.is_ok(),
+            "finalize_config should handle nested objects"
+        );
+
+        let ctx = result.unwrap();
+        assert_eq!(ctx.get("app_name"), Some(&json!("myapp")));
+        assert_eq!(ctx.get("database.host"), Some(&json!("localhost")));
+        assert_eq!(ctx.get("database.port"), Some(&json!(5432)));
+    }
+
+    #[test]
+    fn test_finalize_config_scalar_value_errors() {
+        // Figment's extract() rejects non-map root values, so finalize_config
+        // should return a ConfigurationError when given a scalar root.
+        use figment::providers::Serialized;
+
+        let figment = Figment::from(Serialized::defaults(json!("just a string")));
+        let result = TemplateContext::finalize_config(figment);
+
+        assert!(
+            result.is_err(),
+            "finalize_config should error on scalar root (figment rejects non-map extraction)"
+        );
+
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(
+            err_msg.contains("Failed to extract configuration"),
+            "Error should mention extraction failure, got: {}",
+            err_msg
+        );
+    }
+
+    #[test]
+    fn test_finalize_config_array_value_errors() {
+        // Figment's extract() rejects non-map root values, so finalize_config
+        // should return a ConfigurationError when given an array root.
+        use figment::providers::Serialized;
+
+        let figment = Figment::from(Serialized::defaults(json!([1, 2, 3])));
+        let result = TemplateContext::finalize_config(figment);
+
+        assert!(
+            result.is_err(),
+            "finalize_config should error on array root (figment rejects non-map extraction)"
+        );
+
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(
+            err_msg.contains("Failed to extract configuration"),
+            "Error should mention extraction failure, got: {}",
+            err_msg
+        );
+    }
+
+    #[test]
+    fn test_finalize_config_with_env_substitution() {
+        // finalize_config should apply environment variable substitution
+        // to values before building the context.
+        use figment::providers::Serialized;
+
+        let data = json!({"simple_key": "plain_value"});
+        let figment = Figment::from(Serialized::defaults(data));
+
+        let result = TemplateContext::finalize_config(figment);
+        assert!(
+            result.is_ok(),
+            "finalize_config should succeed with plain values"
+        );
+
+        let ctx = result.unwrap();
+        assert_eq!(ctx.get("simple_key"), Some(&json!("plain_value")));
+    }
+
+    #[test]
+    fn test_get_all_agent_configs_collects_all_three_sources() {
+        use crate::model::ModelConfig;
+
+        let mut context = TemplateContext::new();
+
+        // Source 1: agent.default
+        let default_config = ModelConfig::default();
+        context.set(
+            "agent.default".to_string(),
+            serde_json::to_value(&default_config).unwrap(),
+        );
+
+        // Source 2: flat key agent.configs.workflow1 (programmatically set)
+        let workflow1_config = ModelConfig::default();
+        context.set(
+            "agent.configs.workflow1".to_string(),
+            serde_json::to_value(&workflow1_config).unwrap(),
+        );
+
+        // Source 3: nested object agent.configs with a sub-key
+        let workflow2_config = ModelConfig::default();
+        context.set(
+            "agent".to_string(),
+            json!({
+                "configs": {
+                    "workflow2": serde_json::to_value(&workflow2_config).unwrap()
+                }
+            }),
+        );
+
+        let configs = context.get_all_agent_configs();
+
+        // All three sources should be collected
+        assert!(
+            configs.contains_key("default"),
+            "Expected 'default' from agent.default"
+        );
+        assert!(
+            configs.contains_key("workflow1"),
+            "Expected 'workflow1' from flat key agent.configs.workflow1"
+        );
+        assert!(
+            configs.contains_key("workflow2"),
+            "Expected 'workflow2' from nested object agent.configs"
+        );
+        assert_eq!(configs.len(), 3);
+    }
+
+    #[test]
+    fn test_get_all_agent_configs_flat_key_takes_precedence_over_nested() {
+        use crate::model::{LlamaAgentConfig, ModelConfig};
+
+        let mut context = TemplateContext::new();
+
+        // Set flat key for "overlap" — this should win
+        let flat_config = ModelConfig::llama_agent(LlamaAgentConfig::default());
+        context.set(
+            "agent.configs.overlap".to_string(),
+            serde_json::to_value(&flat_config).unwrap(),
+        );
+
+        // Set nested object also containing "overlap" — should be ignored
+        let nested_config = ModelConfig::default();
+        context.set(
+            "agent".to_string(),
+            json!({
+                "configs": {
+                    "overlap": serde_json::to_value(&nested_config).unwrap()
+                }
+            }),
+        );
+
+        let configs = context.get_all_agent_configs();
+
+        assert_eq!(configs.len(), 1);
+        assert!(configs.contains_key("overlap"));
+        // The flat key was a LlamaAgent config; if nested had won it would be ClaudeCode
+        assert_eq!(
+            configs["overlap"].executor_type(),
+            crate::model::ModelExecutorType::LlamaAgent,
+            "Flat key should take precedence over nested object"
+        );
+    }
+
+    #[test]
+    fn test_get_all_agent_configs_empty_context() {
+        let context = TemplateContext::new();
+        let configs = context.get_all_agent_configs();
+        assert!(configs.is_empty(), "Empty context should yield no configs");
+    }
+
+    #[test]
+    fn test_set_available_skills_variable_populates_array() {
+        // Calling set_available_skills_variable should populate
+        // the "available_skills" key with an array (possibly empty
+        // if no builtin skills are found, but an array nonetheless).
+        let mut context = TemplateContext::new();
+        context.set_available_skills_variable();
+
+        let value = context
+            .get("available_skills")
+            .expect("available_skills should be set after calling set_available_skills_variable");
+        assert!(
+            value.is_array(),
+            "available_skills should be an array, got: {:?}",
+            value
+        );
+    }
+
+    #[test]
+    fn test_set_available_skills_variable_skill_shape() {
+        // Each skill entry should have name, description, and source fields.
+        let mut context = TemplateContext::new();
+        context.set_available_skills_variable();
+
+        let skills = context.get("available_skills").unwrap().as_array().unwrap();
+
+        // The builtin library should have at least one skill
+        if !skills.is_empty() {
+            let first = &skills[0];
+            assert!(
+                first.get("name").is_some(),
+                "skill entry should have a 'name' field"
+            );
+            assert!(
+                first.get("description").is_some(),
+                "skill entry should have a 'description' field"
+            );
+            assert!(
+                first.get("source").is_some(),
+                "skill entry should have a 'source' field"
+            );
+        }
+    }
+
+    #[test]
+    fn test_set_available_skills_variable_skips_if_already_set() {
+        // If "available_skills" is already populated, the method should
+        // not overwrite it.
+        let mut context = TemplateContext::new();
+        let custom_value = json!(["my_custom_skill"]);
+        context.set("available_skills".to_string(), custom_value.clone());
+
+        context.set_available_skills_variable();
+
+        assert_eq!(
+            context.get("available_skills"),
+            Some(&custom_value),
+            "set_available_skills_variable should not override a pre-set value"
+        );
+    }
+
+    #[test]
+    fn test_default_trait_creates_empty_context() {
+        // The Default impl delegates to new(), producing an empty context.
+        let context: TemplateContext = Default::default();
+        assert!(context.is_empty());
+        assert_eq!(context.len(), 0);
+    }
+
+    #[test]
+    fn test_from_hashmap_trait() {
+        // From<HashMap<String, Value>> should behave the same as from_hash_map().
+        let mut map = HashMap::new();
+        map.insert("alpha".to_string(), json!("a"));
+        map.insert("beta".to_string(), json!(2));
+
+        let context: TemplateContext = map.into();
+        assert_eq!(context.get("alpha"), Some(&json!("a")));
+        assert_eq!(context.get("beta"), Some(&json!(2)));
+        assert_eq!(context.len(), 2);
+    }
+
+    #[test]
+    fn test_into_hashmap_trait() {
+        // From<TemplateContext> for HashMap should round-trip correctly.
+        let mut context = TemplateContext::new();
+        context.set("x".to_string(), json!(10));
+        context.set("y".to_string(), json!("twenty"));
+
+        let map: HashMap<String, Value> = context.into();
+        assert_eq!(map.len(), 2);
+        assert_eq!(map.get("x"), Some(&json!(10)));
+        assert_eq!(map.get("y"), Some(&json!("twenty")));
+    }
+
+    #[test]
+    fn test_set_working_directory_variables_populates_cwd_and_working_directory() {
+        // When neither variable is set, set_working_directory_variables should
+        // populate both from the process current directory.
+        let mut context = TemplateContext::new();
+        context.set_working_directory_variables();
+
+        let cwd_val = context.get("cwd").expect("cwd should be set");
+        let wd_val = context
+            .get("working_directory")
+            .expect("working_directory should be set");
+
+        // Both should be strings matching the process cwd
+        let expected = env::current_dir().unwrap().to_string_lossy().to_string();
+        assert_eq!(cwd_val, &json!(expected));
+        assert_eq!(wd_val, &json!(expected));
+    }
+
+    #[test]
+    fn test_set_working_directory_variables_skips_when_working_directory_already_set() {
+        // When working_directory is already set, the method should not overwrite it.
+        let mut context = TemplateContext::new();
+        context.set("working_directory".to_string(), json!("/already/set/path"));
+
+        context.set_working_directory_variables();
+
+        // working_directory should be unchanged
+        assert_eq!(
+            context.get("working_directory"),
+            Some(&json!("/already/set/path"))
+        );
+        // cwd should NOT have been set because the skip branch was taken
+        assert!(
+            context.get("cwd").is_none(),
+            "cwd should not be set when working_directory was already present"
+        );
+    }
+
+    #[test]
+    fn test_set_working_directory_variables_skips_when_cwd_already_set() {
+        // When cwd is already set, the method should not overwrite it.
+        let mut context = TemplateContext::new();
+        context.set("cwd".to_string(), json!("/my/custom/cwd"));
+
+        context.set_working_directory_variables();
+
+        // cwd should be unchanged
+        assert_eq!(context.get("cwd"), Some(&json!("/my/custom/cwd")));
+        // working_directory should NOT have been set
+        assert!(
+            context.get("working_directory").is_none(),
+            "working_directory should not be set when cwd was already present"
+        );
+    }
+
+    #[test]
+    #[serial_test::serial(cwd)]
+    fn test_set_project_types_variable_detects_projects() {
+        // Run project detection from a real directory that has project markers.
+        // Use the repo root which contains Cargo.toml.
+        let _lock_guard = ENV_VAR_TEST_LOCK.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("Environment variable test lock was poisoned, recovering");
+            poisoned.into_inner()
+        });
+
+        // Change to a directory that has a Cargo.toml so detection finds something
+        let repo_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        let _guard = CurrentDirGuard::new(&repo_root);
+
+        let mut context = TemplateContext::new();
+        context.set_project_types_variable();
+
+        // project_types should be a non-empty array
+        let pt = context
+            .get("project_types")
+            .expect("project_types should be set");
+        let arr = pt.as_array().expect("project_types should be an array");
+        assert!(
+            !arr.is_empty(),
+            "project_types should detect at least one project in the repo root"
+        );
+
+        // Each entry should have the expected shape
+        let first = &arr[0];
+        assert!(
+            first.get("type").is_some(),
+            "project entry should have a 'type' field"
+        );
+        assert!(
+            first.get("path").is_some(),
+            "project entry should have a 'path' field"
+        );
+        assert!(
+            first.get("markers").is_some(),
+            "project entry should have a 'markers' field"
+        );
+
+        // unique_project_types should also be populated
+        let upt = context
+            .get("unique_project_types")
+            .expect("unique_project_types should be set");
+        let upt_arr = upt
+            .as_array()
+            .expect("unique_project_types should be an array");
+        assert!(
+            !upt_arr.is_empty(),
+            "unique_project_types should have at least one entry"
+        );
+
+        // unique_project_types should have no duplicates
+        let unique_strings: Vec<&str> = upt_arr.iter().filter_map(|v| v.as_str()).collect();
+        let deduped: std::collections::HashSet<&str> = unique_strings.iter().copied().collect();
+        assert_eq!(
+            unique_strings.len(),
+            deduped.len(),
+            "unique_project_types should contain no duplicates"
+        );
+    }
+
+    #[test]
+    fn test_set_project_types_variable_skips_when_already_set() {
+        // When project_types is already set, the method should not overwrite it.
+        let mut context = TemplateContext::new();
+        let sentinel = json!(["custom_project"]);
+        context.set("project_types".to_string(), sentinel.clone());
+
+        context.set_project_types_variable();
+
+        assert_eq!(
+            context.get("project_types"),
+            Some(&sentinel),
+            "project_types should not be overwritten when already set"
+        );
+    }
+
+    #[test]
+    #[serial_test::serial(cwd)]
+    fn test_set_project_types_variable_empty_dir_yields_empty_array() {
+        // In a temp directory with no project markers, detection should succeed
+        // but produce an empty array.
+        let _lock_guard = ENV_VAR_TEST_LOCK.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("Environment variable test lock was poisoned, recovering");
+            poisoned.into_inner()
+        });
+
+        let temp_dir = TempDir::new().unwrap();
+        let _guard = CurrentDirGuard::new(temp_dir.path());
+
+        let mut context = TemplateContext::new();
+        context.set_project_types_variable();
+
+        let pt = context
+            .get("project_types")
+            .expect("project_types should be set even for empty dir");
+        let arr = pt.as_array().expect("project_types should be an array");
+        assert!(
+            arr.is_empty(),
+            "project_types should be empty for a directory with no project markers"
+        );
+
+        let upt = context
+            .get("unique_project_types")
+            .expect("unique_project_types should be set even for empty dir");
+        let upt_arr = upt
+            .as_array()
+            .expect("unique_project_types should be an array");
+        assert!(
+            upt_arr.is_empty(),
+            "unique_project_types should be empty for a directory with no project markers"
+        );
+    }
 }

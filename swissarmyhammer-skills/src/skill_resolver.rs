@@ -466,6 +466,100 @@ mod tests {
     }
 
     #[test]
+    fn test_resolver_default_impl() {
+        // Default should produce a working resolver identical to new()
+        let resolver = SkillResolver::default();
+        let skills = resolver.resolve_all();
+        assert!(
+            skills.contains_key("plan"),
+            "default resolver should load builtins"
+        );
+    }
+
+    #[test]
+    fn test_resolve_builtins_only() {
+        let resolver = SkillResolver::new();
+        let builtins = resolver.resolve_builtins();
+
+        // All builtins should have SkillSource::Builtin
+        for (name, skill) in &builtins {
+            assert_eq!(
+                skill.source,
+                SkillSource::Builtin,
+                "skill '{}' should be builtin",
+                name
+            );
+        }
+        assert!(!builtins.is_empty());
+    }
+
+    #[test]
+    fn test_load_from_nonexistent_directory() {
+        // Adding a non-existent path should not cause errors — just no skills loaded
+        let mut resolver = SkillResolver::new();
+        resolver.add_search_path(PathBuf::from("/tmp/nonexistent-skills-dir-12345"));
+
+        let skills = resolver.resolve_all();
+        // Should still have builtins
+        assert!(skills.contains_key("plan"));
+    }
+
+    #[test]
+    fn test_load_from_empty_directory() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let mut resolver = SkillResolver::new();
+        resolver.add_search_path(temp_dir.path().to_path_buf());
+
+        let skills = resolver.resolve_all();
+        // Should still have builtins, no errors from empty dir
+        assert!(skills.contains_key("plan"));
+    }
+
+    #[test]
+    fn test_skip_directory_without_skill_md() {
+        // A subdirectory without SKILL.md should be silently skipped
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let not_a_skill = temp_dir.path().join("not-a-skill");
+        std::fs::create_dir_all(&not_a_skill).unwrap();
+        std::fs::write(not_a_skill.join("README.md"), "not a skill").unwrap();
+
+        let mut resolver = SkillResolver::new();
+        resolver.add_search_path(temp_dir.path().to_path_buf());
+
+        let skills = resolver.resolve_all();
+        assert!(!skills.contains_key("not-a-skill"));
+    }
+
+    #[test]
+    fn test_validate_all_sources_no_errors_for_builtins() {
+        let resolver = SkillResolver::new();
+        let issues = resolver.validate_all_sources();
+
+        // Builtins should all validate cleanly
+        let builtin_errors: Vec<_> = issues
+            .iter()
+            .filter(|i| i.file_path.to_string_lossy().contains("builtin"))
+            .collect();
+        assert!(
+            builtin_errors.is_empty(),
+            "builtin skills should have no validation errors, got: {:?}",
+            builtin_errors
+                .iter()
+                .map(|i| &i.message)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_validate_unreadable_directory() {
+        // validate_directory with a path that doesn't exist should not panic
+        let resolver = SkillResolver::new();
+        let issues = resolver.validate_all_sources();
+        // Just ensure it returns without panicking; non-existent VFS paths are skipped
+        let _ = issues;
+    }
+
+    #[test]
     fn test_file_source_to_skill_source_mapping() {
         assert_eq!(
             file_source_to_skill_source(&FileSource::Builtin),

@@ -270,10 +270,23 @@ fn extract_toml_array(content: &str, key: &str) -> Vec<String> {
             in_array = true;
             // Extract items on same line if any
             if let Some(items) = trimmed.strip_prefix(&format!("{} = [", key)) {
-                for item in items.split(',') {
+                // Check if the array closes on this same line
+                let (items_part, closed) = if let Some(before_close) = items.strip_suffix(']') {
+                    (before_close, true)
+                } else if items.contains(']') {
+                    // closing bracket somewhere in the middle — take everything before it
+                    let idx = items.rfind(']').unwrap();
+                    (&items[..idx], true)
+                } else {
+                    (items, false)
+                };
+                for item in items_part.split(',') {
                     if let Some(cleaned) = clean_toml_string(item) {
                         members.push(cleaned);
                     }
+                }
+                if closed {
+                    in_array = false;
                 }
             }
         } else if in_array {
@@ -392,6 +405,149 @@ mod tests {
             .any(|p| p.project_type == ProjectType::NodeJs);
         assert!(has_rust, "Should detect Rust project");
         assert!(has_nodejs, "Should detect Node.js project");
+    }
+
+    #[test]
+    fn test_detect_npm_workspace_array_form() {
+        let temp_dir = TempDir::new().unwrap();
+        let project_dir = temp_dir.path();
+
+        // Create package.json with workspaces as an array
+        fs::write(
+            project_dir.join("package.json"),
+            r#"{"name": "root", "workspaces": ["packages/*", "apps/*"]}"#,
+        )
+        .unwrap();
+
+        let result = detect_npm_workspace(project_dir).unwrap();
+        let info = result.expect("should detect workspace");
+        assert!(info.is_root);
+        assert_eq!(info.members, vec!["packages/*", "apps/*"]);
+    }
+
+    #[test]
+    fn test_detect_npm_workspace_string_form() {
+        let temp_dir = TempDir::new().unwrap();
+        let project_dir = temp_dir.path();
+
+        // Create package.json with workspaces as a single string
+        fs::write(
+            project_dir.join("package.json"),
+            r#"{"name": "root", "workspaces": "packages/*"}"#,
+        )
+        .unwrap();
+
+        let result = detect_npm_workspace(project_dir).unwrap();
+        let info = result.expect("should detect workspace");
+        assert!(info.is_root);
+        assert_eq!(info.members, vec!["packages/*"]);
+    }
+
+    #[test]
+    fn test_detect_npm_workspace_absent_key() {
+        let temp_dir = TempDir::new().unwrap();
+        let project_dir = temp_dir.path();
+
+        // Create package.json without workspaces key
+        fs::write(
+            project_dir.join("package.json"),
+            r#"{"name": "root", "version": "1.0.0"}"#,
+        )
+        .unwrap();
+
+        let result = detect_npm_workspace(project_dir).unwrap();
+        assert!(
+            result.is_none(),
+            "should return None when workspaces absent"
+        );
+    }
+
+    #[test]
+    fn test_detect_npm_workspace_no_package_json() {
+        let temp_dir = TempDir::new().unwrap();
+        let project_dir = temp_dir.path();
+
+        // No package.json present
+        let result = detect_npm_workspace(project_dir).unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_extract_toml_array_multiline() {
+        let content = r#"
+[workspace]
+members = [
+    "crate-a",
+    "crate-b",
+    "crate-c",
+]
+"#;
+        let members = extract_toml_array(content, "members");
+        assert_eq!(members, vec!["crate-a", "crate-b", "crate-c"]);
+    }
+
+    #[test]
+    fn test_extract_toml_array_inline() {
+        // All items on the same line as the opening bracket
+        let content = r#"members = ["crate-a", "crate-b"]"#;
+        let members = extract_toml_array(content, "members");
+        assert_eq!(members, vec!["crate-a", "crate-b"]);
+    }
+
+    #[test]
+    fn test_extract_toml_array_items_with_closing_bracket() {
+        // Items followed by closing bracket on the same line
+        let content = r#"
+members = [
+    "crate-a", "crate-b"]
+"#;
+        let members = extract_toml_array(content, "members");
+        assert!(
+            members.contains(&"crate-a".to_string()),
+            "should contain crate-a"
+        );
+        assert!(
+            members.contains(&"crate-b".to_string()),
+            "should contain crate-b"
+        );
+    }
+
+    #[test]
+    fn test_extract_toml_array_missing_key() {
+        let content = "[package]\nname = \"foo\"";
+        let members = extract_toml_array(content, "members");
+        assert!(members.is_empty());
+    }
+
+    #[test]
+    fn test_clean_toml_string_double_quotes() {
+        let result = clean_toml_string(r#""crate-a""#);
+        assert_eq!(result, Some("crate-a".to_string()));
+    }
+
+    #[test]
+    fn test_clean_toml_string_single_quotes() {
+        let result = clean_toml_string("'crate-a'");
+        assert_eq!(result, Some("crate-a".to_string()));
+    }
+
+    #[test]
+    fn test_clean_toml_string_with_comma() {
+        let result = clean_toml_string(r#""crate-a","#);
+        assert_eq!(result, Some("crate-a".to_string()));
+    }
+
+    #[test]
+    fn test_clean_toml_string_empty() {
+        let result = clean_toml_string("   ");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_clean_toml_string_empty_after_cleaning() {
+        // A string that is just quotes
+        let result = clean_toml_string(r#""""#);
+        assert!(result.is_none());
     }
 
     #[test]

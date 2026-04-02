@@ -284,7 +284,7 @@ pub struct CodeBlock {
 }
 
 /// Content type classification
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum ContentType {
     /// Article or blog post
@@ -529,5 +529,114 @@ mod tests {
 
         assert_eq!(response.metadata.query, deserialized.metadata.query);
         assert_eq!(response.results.len(), deserialized.results.len());
+    }
+
+    // ========================================================================
+    // WebFetchRequest deserialization tests
+    // ========================================================================
+
+    #[test]
+    fn test_web_fetch_request_deserialize_all_fields() {
+        let json = r#"{
+            "url": "https://example.com",
+            "timeout": 30,
+            "follow_redirects": true,
+            "max_content_length": 2097152,
+            "user_agent": "TestBot/1.0"
+        }"#;
+        let req: WebFetchRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.url, "https://example.com");
+        assert_eq!(req.timeout, Some(30));
+        assert_eq!(req.follow_redirects, Some(true));
+        assert_eq!(req.max_content_length, Some(2_097_152));
+        assert_eq!(req.user_agent.as_deref(), Some("TestBot/1.0"));
+    }
+
+    #[test]
+    fn test_web_fetch_request_deserialize_only_url() {
+        let json = r#"{"url": "https://example.com"}"#;
+        let req: WebFetchRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.url, "https://example.com");
+        assert!(req.timeout.is_none());
+        assert!(req.follow_redirects.is_none());
+        assert!(req.max_content_length.is_none());
+        assert!(req.user_agent.is_none());
+    }
+
+    #[test]
+    fn test_web_fetch_request_timeout_zero_rejected() {
+        let json = r#"{"url": "https://example.com", "timeout": 0}"#;
+        let result = serde_json::from_str::<WebFetchRequest>(json);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("Timeout must be between 1 and 120 seconds"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_web_fetch_request_timeout_above_max_rejected() {
+        let json = r#"{"url": "https://example.com", "timeout": 121}"#;
+        let result = serde_json::from_str::<WebFetchRequest>(json);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("Timeout must be between 1 and 120 seconds"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_web_fetch_request_timeout_min_edge() {
+        let json = r#"{"url": "https://example.com", "timeout": 1}"#;
+        let req: WebFetchRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.timeout, Some(1));
+    }
+
+    #[test]
+    fn test_web_fetch_request_timeout_max_edge() {
+        let json = r#"{"url": "https://example.com", "timeout": 120}"#;
+        let req: WebFetchRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.timeout, Some(120));
+    }
+
+    #[test]
+    fn test_web_fetch_request_max_content_length_zero_rejected() {
+        let json = r#"{"url": "https://example.com", "max_content_length": 0}"#;
+        let result = serde_json::from_str::<WebFetchRequest>(json);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("Maximum content length must be between 1024 and 10485760 bytes"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_web_fetch_request_max_content_length_above_max_rejected() {
+        // 11 MB = 11_534_336
+        let json = r#"{"url": "https://example.com", "max_content_length": 11534336}"#;
+        let result = serde_json::from_str::<WebFetchRequest>(json);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("Maximum content length must be between 1024 and 10485760 bytes"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_web_fetch_request_max_content_length_min_edge() {
+        let json = r#"{"url": "https://example.com", "max_content_length": 1024}"#;
+        let req: WebFetchRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.max_content_length, Some(1024));
+    }
+
+    #[test]
+    fn test_web_fetch_request_max_content_length_max_edge() {
+        let json = r#"{"url": "https://example.com", "max_content_length": 10485760}"#;
+        let req: WebFetchRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.max_content_length, Some(10_485_760));
     }
 }

@@ -525,6 +525,25 @@ mod tests {
     }
 
     #[test]
+    fn test_process_file_events_db_error_increments_error_count() {
+        // Create a DB without the indexed_files schema to force a SQL error.
+        let conn = Connection::open_in_memory().unwrap();
+        // No schema: indexed_files table does not exist.
+
+        let watcher = FanoutWatcher::new();
+        let events = vec![
+            FileEvent::Modified(PathBuf::from("src/main.rs")),
+            FileEvent::Deleted(PathBuf::from("src/lib.rs")),
+        ];
+        let result = process_file_events(&conn, &watcher, &events);
+
+        // Both events should fail since the table doesn't exist.
+        assert_eq!(result.error_count, 2);
+        assert_eq!(result.dirty_count, 0);
+        assert_eq!(result.deleted_count, 0);
+    }
+
+    #[test]
     fn test_modify_clears_both_index_flags() {
         let conn = test_db();
 

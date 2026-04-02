@@ -267,7 +267,7 @@ impl Embedder {
 
 /// Split text into chunks of approximately `chunk_size` characters with overlap.
 /// Splits on whitespace boundaries to avoid breaking words.
-fn chunk_text(text: &str, chunk_size: usize, overlap: usize) -> Vec<&str> {
+pub(crate) fn chunk_text(text: &str, chunk_size: usize, overlap: usize) -> Vec<&str> {
     if text.len() <= chunk_size {
         return vec![text];
     }
@@ -279,12 +279,21 @@ fn chunk_text(text: &str, chunk_size: usize, overlap: usize) -> Vec<&str> {
 
         // Find a whitespace boundary near the end
         let actual_end = if end < text.len() {
-            // Search backward from end for whitespace
-            let search_start = end.saturating_sub(chunk_size / 10);
-            text[search_start..end]
+            // Search backward from end for whitespace.
+            // Ensure search_start is at a valid char boundary.
+            let mut search_start = end.saturating_sub(chunk_size / 10);
+            while search_start < end && !text.is_char_boundary(search_start) {
+                search_start += 1;
+            }
+            // Ensure end is also at a valid char boundary for slicing.
+            let mut search_end = end;
+            while search_end < text.len() && !text.is_char_boundary(search_end) {
+                search_end += 1;
+            }
+            text[search_start..search_end]
                 .rfind(char::is_whitespace)
                 .map(|pos| search_start + pos + 1)
-                .unwrap_or(end)
+                .unwrap_or(search_end)
         } else {
             end
         };
@@ -443,4 +452,166 @@ async fn build_ane_model(cfg: &EmbeddingModelConfig) -> Result<AneEmbeddingModel
         debug: false,
     };
     Ok(AneEmbeddingModel::new(config))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // -------------------------------------------------------------------------
+    // chunk_text unit tests — pure function, no model required
+    // -------------------------------------------------------------------------
+
+    /// Short text fits in one chunk — returned as-is.
+    #[test]
+    fn chunk_text_short_returns_single_chunk() {
+        let text = "hello world";
+        let chunks = chunk_text(text, 100, 10);
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0], text);
+    }
+
+    /// Empty input produces a single empty chunk.
+    #[test]
+    fn chunk_text_empty_returns_empty_chunk() {
+        let chunks = chunk_text("", 100, 10);
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0], "");
+    }
+
+    /// Text longer than chunk_size is split into multiple chunks.
+    #[test]
+    fn chunk_text_long_text_splits_into_multiple_chunks() {
+        // 10 words × ~6 chars each = ~60 chars; chunk_size=20 forces multiple chunks
+        let text = "alpha beta gamma delta epsilon zeta eta theta iota kappa";
+        let chunks = chunk_text(text, 20, 5);
+        assert!(
+            chunks.len() > 1,
+            "Expected multiple chunks, got {}",
+            chunks.len()
+        );
+    }
+
+    /// All chunks together cover the whole input (no bytes dropped).
+    #[test]
+    fn chunk_text_covers_full_text() {
+        let words: Vec<String> = (0..50).map(|i| format!("word{i}")).collect();
+        let text = words.join(" ");
+        let chunks = chunk_text(&text, 30, 5);
+
+        // The last chunk must reach the end of the text.
+        let last = chunks.last().expect("at least one chunk");
+        assert!(
+            text.ends_with(last.trim_end()),
+            "Last chunk '{last}' is not a suffix of the text"
+        );
+    }
+
+    /// With overlap, the start of chunk N+1 overlaps with the end of chunk N.
+    #[test]
+    fn chunk_text_overlap_is_applied() {
+        let text = "aaa bbb ccc ddd eee fff ggg hhh iii jjj kkk lll mmm nnn ooo ppp";
+        let chunk_size = 20;
+        let overlap = 8;
+        let chunks = chunk_text(text, chunk_size, overlap);
+
+        if chunks.len() >= 2 {
+            // The tail of chunk[0] should appear somewhere near the start of chunk[1]
+            let c0_end = &chunks[0][chunks[0].len().saturating_sub(overlap)..];
+            let c1 = chunks[1];
+            // If overlap is working, chunk[1] starts before the raw advance point,
+            // i.e. it begins somewhere inside the tail of chunk[0].
+            assert!(
+                c1.starts_with(c0_end.split_whitespace().next().unwrap_or("")),
+                "Expected chunk[1] to begin near the end of chunk[0] (overlap={overlap})"
+            );
+        }
+    }
+
+    /// Chunk boundaries are always at valid UTF-8 char boundaries.
+    #[test]
+    fn chunk_text_unicode_boundaries() {
+        // String with multi-byte characters
+        let text = "日本語テスト abc def ghi jkl mno pqr stu vwx yz 日本語テスト 終了";
+        let chunks = chunk_text(text, 15, 5);
+        for chunk in &chunks {
+            // If this panics, the slice was not at a char boundary
+            let _ = chunk.chars().count();
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // from_model_name error path tests — no model download required
+    // -------------------------------------------------------------------------
+
+    fn rt() -> tokio::runtime::Runtime {
+        tokio::runtime::Runtime::new().unwrap()
+    }
+
+    /// An unknown model name returns `EmbedderError::ModelNotFound`.
+    #[test]
+    fn from_model_name_unknown_model_returns_not_found() {
+        let rt = rt();
+        rt.block_on(async {
+            let result = Embedder::from_model_name("this-model-does-not-exist-xyz").await;
+            assert!(
+                matches!(result, Err(EmbedderError::ModelNotFound(_))),
+                "Expected ModelNotFound, got: {}",
+                result.err().map(|e| e.to_string()).unwrap_or_default()
+            );
+        });
+    }
+
+    /// A known model that is not an embedding model returns `EmbedderError::NotAnEmbeddingModel`.
+    ///
+    /// `claude-code` ships as a `ClaudeCode` executor, so it should trigger this path.
+    #[test]
+    fn from_model_name_non_embedding_model_returns_not_an_embedding_model() {
+        let rt = rt();
+        rt.block_on(async {
+            let result = Embedder::from_model_name("claude-code").await;
+            assert!(
+                matches!(
+                    result,
+                    Err(EmbedderError::NotAnEmbeddingModel(_, _))
+                        | Err(EmbedderError::NoCompatibleExecutor(_))
+                ),
+                "Expected NotAnEmbeddingModel or NoCompatibleExecutor, got: {}",
+                result.err().map(|e| e.to_string()).unwrap_or_default()
+            );
+        });
+    }
+
+    // -------------------------------------------------------------------------
+    // DEFAULT_MODEL_NAME constant
+    // -------------------------------------------------------------------------
+
+    /// The default model name constant is the expected value.
+    #[test]
+    fn default_model_name_constant_is_correct() {
+        assert_eq!(DEFAULT_MODEL_NAME, "qwen-embedding");
+    }
+
+    // -------------------------------------------------------------------------
+    // EmbedderError display
+    // -------------------------------------------------------------------------
+
+    /// EmbedderError variants format without panicking.
+    #[test]
+    fn embedder_error_display() {
+        let e = EmbedderError::ModelNotFound("my-model".to_string());
+        assert!(e.to_string().contains("my-model"));
+
+        let e = EmbedderError::NoCompatibleExecutor("llm".to_string());
+        assert!(e.to_string().contains("llm"));
+
+        let e = EmbedderError::ConfigParse("bad yaml".to_string());
+        assert!(e.to_string().contains("bad yaml"));
+
+        let e = EmbedderError::NotAnEmbeddingModel(
+            "chat-model".to_string(),
+            swissarmyhammer_config::model::ModelExecutorType::ClaudeCode,
+        );
+        assert!(e.to_string().contains("chat-model"));
+    }
 }

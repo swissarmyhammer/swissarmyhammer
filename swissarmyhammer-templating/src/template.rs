@@ -527,4 +527,70 @@ mod tests {
 
         assert_eq!(template.raw(), template_str);
     }
+
+    #[test]
+    fn test_template_with_partials() {
+        use crate::partials::HashMapPartialLoader;
+
+        let mut partials_map = HashMap::new();
+        partials_map.insert("greeting".to_string(), "Hello, World!".to_string());
+        let loader = HashMapPartialLoader::new(partials_map);
+
+        // Create a template that uses a partial via {% render 'greeting' %}
+        // The HashMapPartialLoader exposes partials; a simple template with no include
+        // should at minimum construct and render without panicking.
+        let template = Template::with_partials("Static content", loader).unwrap();
+        let result = template.render(&HashMap::new()).unwrap();
+        assert_eq!(result, "Static content");
+    }
+
+    #[test]
+    fn test_template_with_partials_and_render() {
+        use crate::partials::HashMapPartialLoader;
+
+        let mut partials_map = HashMap::new();
+        partials_map.insert("snippet".to_string(), "SNIPPET".to_string());
+        let loader = HashMapPartialLoader::new(partials_map);
+
+        // Template with a variable; partial loader is available but not invoked here
+        let template = Template::with_partials("Value: {{ val }}", loader).unwrap();
+        let mut args = HashMap::new();
+        args.insert("val".to_string(), "42".to_string());
+        let result = template.render(&args).unwrap();
+        assert_eq!(result, "Value: 42");
+    }
+
+    #[test]
+    fn test_render_with_context_and_timeout() {
+        use serde_json::json;
+        use std::time::Duration;
+
+        let mut ctx = TemplateContext::new();
+        ctx.set("name".to_string(), json!("Timeout"));
+        ctx.set("count".to_string(), json!(7));
+
+        let template = Template::new("{{ name }} has {{ count }} items").unwrap();
+        let timeout = Duration::from_secs(5);
+        let result = template
+            .render_with_context_and_timeout(&ctx, timeout)
+            .unwrap();
+        assert_eq!(result, "Timeout has 7 items");
+    }
+
+    #[test]
+    fn test_create_parser_with_partials() {
+        use crate::partials::HashMapPartialLoader;
+
+        let mut partials_map = HashMap::new();
+        partials_map.insert("hello".to_string(), "Hello from partial".to_string());
+        let loader = HashMapPartialLoader::new(partials_map);
+        let adapter = crate::partials::PartialLoaderAdapter::new(loader);
+
+        // create_parser_with_partials should build a valid parser
+        let parser = create_parser_with_partials(adapter);
+        let template = parser.parse("plain text").unwrap();
+        let object = liquid::Object::new();
+        let result = template.render(&object).unwrap();
+        assert_eq!(result, "plain text");
+    }
 }

@@ -97,3 +97,56 @@ pub struct Agent {
     /// Additional resource files
     pub resources: AgentResources,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_agent_name_new_valid() {
+        let name = AgentName::new("my-agent").unwrap();
+        assert_eq!(name.as_str(), "my-agent");
+    }
+
+    #[test]
+    fn test_agent_name_new_empty_fails() {
+        assert!(AgentName::new("").is_err());
+    }
+
+    #[test]
+    fn test_agent_name_new_uppercase_fails() {
+        assert!(AgentName::new("MyAgent").is_err());
+    }
+
+    #[test]
+    fn test_agent_name_new_spaces_fail() {
+        assert!(AgentName::new("my agent").is_err());
+    }
+
+    #[test]
+    fn test_agent_name_display() {
+        let name = AgentName::new("my-agent").unwrap();
+        assert_eq!(format!("{}", name), "my-agent");
+    }
+
+    #[test]
+    fn test_agent_source_display_builtin() {
+        assert_eq!(format!("{}", AgentSource::Builtin), "builtin");
+    }
+
+    #[test]
+    fn test_agent_source_display_local() {
+        assert_eq!(format!("{}", AgentSource::Local), "local");
+    }
+
+    #[test]
+    fn test_agent_source_display_user() {
+        assert_eq!(format!("{}", AgentSource::User), "user");
+    }
+
+    #[test]
+    fn test_agent_name_with_digits() {
+        let name = AgentName::new("agent-42").unwrap();
+        assert_eq!(name.as_str(), "agent-42");
+    }
+}

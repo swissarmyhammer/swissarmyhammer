@@ -472,6 +472,18 @@ impl<M: BusMessage> FollowerGuard<M> {
     }
 }
 
+// Compile-time assertions: these types are held in Arc<Mutex<>> and sent
+// across tokio::spawn boundaries. Catch regressions if a non-Send field
+// is ever added.
+const _: () = {
+    fn _assert_send<T: Send>() {}
+    fn _checks() {
+        _assert_send::<LeaderElection>();
+        _assert_send::<LeaderGuard>();
+        _assert_send::<FollowerGuard>();
+    }
+};
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -708,15 +720,3 @@ mod tests {
         assert!(!election.lock_path().exists());
     }
 }
-
-// Compile-time assertions: these types are held in Arc<Mutex<>> and sent
-// across tokio::spawn boundaries. Catch regressions if a non-Send field
-// is ever added.
-const _: () = {
-    fn _assert_send<T: Send>() {}
-    fn _checks() {
-        _assert_send::<LeaderElection>();
-        _assert_send::<LeaderGuard>();
-        _assert_send::<FollowerGuard>();
-    }
-};

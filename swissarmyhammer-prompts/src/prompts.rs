@@ -1808,4 +1808,307 @@ This is another prompt.
         assert!(result.contains("App: MyApp"));
         // USER environment variable should be available too
     }
+
+    #[test]
+    fn test_prompt_library_with_storage() {
+        use crate::storage::MemoryStorage;
+
+        // Test that with_storage constructs a library using the provided backend
+        let storage = Box::new(MemoryStorage::new());
+        let mut library = PromptLibrary::with_storage(storage);
+
+        let prompt = Prompt::new("test-storage", "Storage backend test");
+        library.add(prompt).unwrap();
+
+        assert!(library.get("test-storage").is_ok());
+        assert_eq!(library.list_names().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_prompt_library_add_and_remove() {
+        let mut library = PromptLibrary::new();
+
+        // Add a prompt
+        let prompt = Prompt::new("to-remove", "This will be removed");
+        library.add(prompt).unwrap();
+
+        assert!(library.get("to-remove").is_ok());
+        assert_eq!(library.list().unwrap().len(), 1);
+
+        // Remove the prompt
+        library.remove("to-remove").unwrap();
+        assert!(library.get("to-remove").is_err());
+        assert_eq!(library.list().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn test_prompt_library_add_replaces_existing() {
+        let mut library = PromptLibrary::new();
+
+        library
+            .add(Prompt::new("replaceable", "Original content"))
+            .unwrap();
+        library
+            .add(Prompt::new("replaceable", "Updated content"))
+            .unwrap();
+
+        let prompt = library.get("replaceable").unwrap();
+        assert_eq!(prompt.template, "Updated content");
+        assert_eq!(library.list().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_prompt_library_add_directory() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+
+        // Write a valid prompt file
+        let prompt_path = temp_dir.path().join("hello.md");
+        fs::write(
+            &prompt_path,
+            "---\ntitle: Hello Prompt\ndescription: A greeting prompt\n---\n\nHello {{name}}!",
+        )
+        .unwrap();
+
+        let mut library = PromptLibrary::new();
+        let count = library.add_directory(temp_dir.path()).unwrap();
+
+        assert_eq!(count, 1);
+        assert!(library.get("hello").is_ok());
+        let prompt = library.get("hello").unwrap();
+        assert_eq!(prompt.description, Some("A greeting prompt".to_string()));
+    }
+
+    #[test]
+    fn test_prompt_library_add_directory_missing_path() {
+        let mut library = PromptLibrary::new();
+        let result = library.add_directory("/nonexistent/path/to/prompts");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_prompt_library_search() {
+        let mut library = PromptLibrary::new();
+
+        library
+            .add(
+                Prompt::new("debug-js", "Debug JavaScript code")
+                    .with_description("Helps debug JavaScript errors"),
+            )
+            .unwrap();
+        library
+            .add(Prompt::new("format-py", "Format Python code"))
+            .unwrap();
+        library
+            .add(
+                Prompt::new("review-code", "Code review prompt")
+                    .with_description("Reviews any code"),
+            )
+            .unwrap();
+
+        // Search by name
+        let results = library.search("debug").unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "debug-js");
+
+        // Search by description
+        let results = library.search("JavaScript").unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "debug-js");
+
+        // Search by template content
+        let results = library.search("Python").unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "format-py");
+
+        // Search matching nothing
+        let results = library.search("zzz_no_match_zzz").unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_prompt_library_search_by_tag() {
+        let mut library = PromptLibrary::new();
+
+        library
+            .add(
+                Prompt::new("tagged-prompt", "Tagged content")
+                    .with_tags(vec!["rust".to_string(), "code".to_string()]),
+            )
+            .unwrap();
+        library
+            .add(Prompt::new("untagged-prompt", "Untagged content"))
+            .unwrap();
+
+        let results = library.search("rust").unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "tagged-prompt");
+    }
+
+    #[test]
+    fn test_prompt_library_list_filtered() {
+        use crate::prompt_filter::PromptFilter;
+        use crate::PromptSource;
+        use std::collections::HashMap;
+
+        let mut library = PromptLibrary::new();
+        library
+            .add(Prompt::new("code-review", "Review code").with_category("development"))
+            .unwrap();
+        library
+            .add(Prompt::new("write-essay", "Write essay").with_category("writing"))
+            .unwrap();
+        library
+            .add(Prompt::new("debug-rust", "Debug Rust code").with_category("development"))
+            .unwrap();
+
+        let filter = PromptFilter::new().with_category("development");
+        let sources: HashMap<String, PromptSource> = HashMap::new();
+        let results = library.list_filtered(&filter, &sources).unwrap();
+
+        assert_eq!(results.len(), 2);
+        let names: Vec<&str> = results.iter().map(|p| p.name.as_str()).collect();
+        assert!(names.contains(&"code-review"));
+        assert!(names.contains(&"debug-rust"));
+        assert!(!names.contains(&"write-essay"));
+    }
+
+    #[test]
+    fn test_prompt_library_render_text() {
+        let mut library = PromptLibrary::new();
+        library
+            .add(Prompt::new("greeting", "Hello {{name}}!"))
+            .unwrap();
+
+        let mut context = TemplateContext::new();
+        context.set("name".to_string(), serde_json::json!("World"));
+
+        let result = library.render_text("Rendered: {{name}}", &context).unwrap();
+        assert_eq!(result, "Rendered: World");
+    }
+
+    #[test]
+    fn test_prompt_loader_load_file() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("my_prompt.md");
+        fs::write(
+            &file_path,
+            "---\ntitle: My Prompt\ndescription: Test prompt\ncategory: test\ntags:\n  - example\n---\n\nThis is {{subject}}.",
+        )
+        .unwrap();
+
+        let loader = PromptLoader::new();
+        let prompt = loader.load_file(&file_path).unwrap();
+
+        assert_eq!(prompt.name, "my_prompt");
+        assert_eq!(prompt.description, Some("Test prompt".to_string()));
+        assert_eq!(prompt.category, Some("test".to_string()));
+        assert_eq!(prompt.tags, vec!["example"]);
+        assert!(prompt.template.contains("{{subject}}"));
+    }
+
+    #[test]
+    fn test_prompt_loader_load_from_string_with_frontmatter() {
+        let content = r#"---
+title: String Prompt
+description: Loaded from a string
+category: test
+tags:
+  - tag1
+  - tag2
+parameters:
+  - name: topic
+    description: The topic to discuss
+    required: true
+---
+
+Discuss {{topic}} in detail."#;
+
+        let loader = PromptLoader::new();
+        let prompt = loader.load_from_string("string-prompt", content).unwrap();
+
+        assert_eq!(prompt.name, "string-prompt");
+        assert_eq!(prompt.description, Some("Loaded from a string".to_string()));
+        assert_eq!(prompt.category, Some("test".to_string()));
+        assert_eq!(prompt.tags, vec!["tag1", "tag2"]);
+        assert_eq!(prompt.parameters.len(), 1);
+        assert_eq!(prompt.parameters[0].name, "topic");
+        assert!(prompt.parameters[0].required);
+        assert!(prompt.template.contains("{{topic}}"));
+    }
+
+    #[test]
+    fn test_prompt_loader_load_from_string_no_frontmatter() {
+        let content = "Just template content with {{variable}}";
+        let loader = PromptLoader::new();
+        let prompt = loader.load_from_string("simple-prompt", content).unwrap();
+
+        assert_eq!(prompt.name, "simple-prompt");
+        // No frontmatter means it will be treated as a partial
+        assert_eq!(
+            prompt.description,
+            Some("Partial template for reuse in other prompts".to_string())
+        );
+        assert!(prompt.template.contains("{{variable}}"));
+    }
+
+    #[test]
+    fn test_prompt_loader_load_from_string_with_legacy_arguments() {
+        let content = r#"---
+title: Legacy Prompt
+description: Uses legacy arguments field
+arguments:
+  - name: arg1
+    description: First argument
+    required: false
+---
+
+Use {{arg1}}."#;
+
+        let loader = PromptLoader::new();
+        let prompt = loader.load_from_string("legacy-prompt", content).unwrap();
+
+        assert_eq!(prompt.parameters.len(), 1);
+        assert_eq!(prompt.parameters[0].name, "arg1");
+        assert!(!prompt.parameters[0].required);
+    }
+
+    #[test]
+    fn test_prompt_loader_load_from_string_parameter_with_default() {
+        let content = r#"---
+title: Default Param Prompt
+description: Test default param
+parameters:
+  - name: greeting
+    description: The greeting
+    required: false
+    default: "Hello"
+---
+
+{{greeting}} World!"#;
+
+        let loader = PromptLoader::new();
+        let prompt = loader.load_from_string("default-param", content).unwrap();
+
+        assert_eq!(prompt.parameters.len(), 1);
+        assert_eq!(prompt.parameters[0].name, "greeting");
+        assert!(prompt.parameters[0].default.is_some());
+    }
+
+    #[test]
+    fn test_prompt_loader_load_from_string_with_partial_marker() {
+        let content = "{% partial %}\nThis is a partial template with {{slot}}.";
+        let loader = PromptLoader::new();
+        let prompt = loader.load_from_string("_partial", content).unwrap();
+
+        assert_eq!(
+            prompt.description,
+            Some("Partial template for reuse in other prompts".to_string())
+        );
+    }
 }

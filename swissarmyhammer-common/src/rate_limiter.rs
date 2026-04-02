@@ -391,4 +391,185 @@ mod tests {
         // Should succeed with lower cost
         assert!(limiter.check_rate_limit("client1", "test_op", 2).is_ok());
     }
+
+    #[test]
+    fn test_rate_limiter_config_default() {
+        // Verify that RateLimiterConfig::default() produces the documented constants.
+        let config = RateLimiterConfig::default();
+        assert_eq!(config.global_limit, DEFAULT_GLOBAL_RATE_LIMIT);
+        assert_eq!(config.per_client_limit, DEFAULT_PER_CLIENT_RATE_LIMIT);
+        assert_eq!(
+            config.expensive_operation_limit,
+            DEFAULT_EXPENSIVE_OPERATION_LIMIT
+        );
+        assert_eq!(config.window_duration, Duration::from_secs(60));
+    }
+
+    #[test]
+    fn test_rate_limiter_new_uses_defaults() {
+        // RateLimiter::new() should create a limiter with default config values.
+        let limiter = RateLimiter::new();
+        assert_eq!(limiter.config.global_limit, DEFAULT_GLOBAL_RATE_LIMIT);
+        assert_eq!(
+            limiter.config.per_client_limit,
+            DEFAULT_PER_CLIENT_RATE_LIMIT
+        );
+    }
+
+    #[test]
+    fn test_rate_limiter_default_trait() {
+        // The Default impl for RateLimiter delegates to RateLimiter::new().
+        let limiter = RateLimiter::default();
+        assert_eq!(limiter.config.global_limit, DEFAULT_GLOBAL_RATE_LIMIT);
+        assert_eq!(
+            limiter.config.per_client_limit,
+            DEFAULT_PER_CLIENT_RATE_LIMIT
+        );
+    }
+
+    #[test]
+    fn test_rate_limit_checker_trait_impl() {
+        // The RateLimitChecker trait impl delegates to the inherent method.
+        let limiter = RateLimiter::with_config(RateLimiterConfig {
+            per_client_limit: 2,
+            global_limit: 10,
+            expensive_operation_limit: 5,
+            window_duration: Duration::from_secs(60),
+        });
+
+        // Use the trait method explicitly
+        let checker: &dyn RateLimitChecker = &limiter;
+        assert!(checker.check_rate_limit("c1", "op", 1).is_ok());
+        assert!(checker.check_rate_limit("c1", "op", 1).is_ok());
+        // Third call should exceed per-client limit
+        assert!(checker.check_rate_limit("c1", "op", 1).is_err());
+    }
+
+    #[test]
+    fn test_zero_cost_returns_error() {
+        // Passing cost=0 should return an error because NonZeroU32 rejects zero.
+        // This covers the error path at line 132 (global limiter) and line 157 (client limiter).
+        let limiter = RateLimiter::with_config(RateLimiterConfig {
+            per_client_limit: 10,
+            global_limit: 10,
+            expensive_operation_limit: 10,
+            window_duration: Duration::from_secs(60),
+        });
+
+        let result = limiter.check_rate_limit("client1", "test_op", 0);
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("Invalid cost value"),
+            "Expected 'Invalid cost value' error but got: {err_msg}"
+        );
+    }
+
+    #[test]
+    fn test_client_limiter_multi_cost_path() {
+        // Exercise the multi-cost (cost > 1) path through the client limiter
+        // by ensuring the global limiter passes first.
+        let limiter = RateLimiter::with_config(RateLimiterConfig {
+            per_client_limit: 5,
+            global_limit: 100,
+            expensive_operation_limit: 100,
+            window_duration: Duration::from_secs(60),
+        });
+
+        // Cost 3 should succeed on client with 5 tokens
+        assert!(limiter.check_rate_limit("c1", "op", 3).is_ok());
+        // Cost 3 again should fail — only 2 tokens remain on client
+        let result = limiter.check_rate_limit("c1", "op", 3);
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("Client rate limit exceeded"),
+            "Expected client rate limit error but got: {err_msg}"
+        );
+    }
+
+    #[test]
+    fn test_cleanup_old_entries_below_threshold() {
+        // When global_limiters has fewer than 1000 entries, cleanup is a no-op.
+        let limiter = RateLimiter::with_config(RateLimiterConfig {
+            per_client_limit: 10,
+            global_limit: 10,
+            expensive_operation_limit: 5,
+            window_duration: Duration::from_secs(60),
+        });
+
+        // Trigger some operations to populate global_limiters
+        let _ = limiter.check_rate_limit("c1", "op_a", 1);
+        let _ = limiter.check_rate_limit("c1", "op_b", 1);
+        assert!(limiter.global_limiters.len() >= 2);
+
+        // cleanup should NOT clear since we're well under 1000
+        limiter.cleanup_old_entries();
+        assert!(limiter.global_limiters.len() >= 2);
+    }
+
+    #[test]
+    fn test_cleanup_old_entries_above_threshold() {
+        // When global_limiters exceeds 1000 entries, cleanup clears the map.
+        let limiter = RateLimiter::with_config(RateLimiterConfig {
+            per_client_limit: 10000,
+            global_limit: 10000,
+            expensive_operation_limit: 10000,
+            window_duration: Duration::from_secs(60),
+        });
+
+        // Populate more than 1000 unique operation types
+        for i in 0..1001 {
+            let _ = limiter.check_rate_limit("c1", &format!("op_{i}"), 1);
+        }
+        assert!(limiter.global_limiters.len() > 1000);
+
+        limiter.cleanup_old_entries();
+        assert_eq!(
+            limiter.global_limiters.len(),
+            0,
+            "cleanup should clear map when > 1000 entries"
+        );
+    }
+
+    #[test]
+    fn test_all_expensive_operation_names() {
+        // Verify that all documented expensive operation names use the expensive limit.
+        let limiter = RateLimiter::with_config(RateLimiterConfig {
+            per_client_limit: 10000,
+            global_limit: 10000,
+            expensive_operation_limit: 500,
+            window_duration: Duration::from_secs(60),
+        });
+
+        for op in &[
+            "search",
+            "workflow_run",
+            "complex_query",
+            "file_glob",
+            "file_grep",
+        ] {
+            assert_eq!(
+                limiter.operation_limit(op),
+                500,
+                "Operation '{op}' should use the expensive limit"
+            );
+        }
+        // Standard operation should use the global limit
+        assert_eq!(limiter.operation_limit("anything_else"), 10000);
+    }
+
+    #[test]
+    fn test_get_retry_after_ms() {
+        // Verify retry-after calculation: window_ms / 10.
+        let limiter = RateLimiter::with_config(RateLimiterConfig {
+            per_client_limit: 10,
+            global_limit: 10,
+            expensive_operation_limit: 5,
+            window_duration: Duration::from_secs(60),
+        });
+
+        // 60_000ms / 10 = 6000ms
+        assert_eq!(limiter.get_retry_after_ms(), 6000);
+    }
 }

@@ -335,4 +335,131 @@ mod tests {
             "Showing 3 of 10 items"
         );
     }
+
+    #[test]
+    fn test_formatter_list_summary_total_one_partial() {
+        // When total == 1 but count < total (edge case: showing 0 of 1)
+        assert_eq!(
+            McpFormatter::format_list_summary("item", 0, 1),
+            "Showing 0 of 1 item"
+        );
+    }
+
+    #[test]
+    fn test_formatter_timestamp() {
+        use chrono::{TimeZone, Utc};
+        let dt = Utc.with_ymd_and_hms(2024, 1, 15, 10, 30, 45).unwrap();
+        let formatted = McpFormatter::format_timestamp(dt);
+        assert_eq!(formatted, "2024-01-15 10:30:45 UTC");
+    }
+
+    // --- validate_ulid tests ---
+
+    #[test]
+    fn test_validate_ulid_valid() {
+        // A valid ULID is 26 uppercase letters/digits
+        let valid = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+        assert!(McpValidation::validate_ulid(valid, "id").is_ok());
+    }
+
+    #[test]
+    fn test_validate_ulid_wrong_length() {
+        assert!(McpValidation::validate_ulid("TOOSHORT", "id").is_err());
+        assert!(McpValidation::validate_ulid("01ARZ3NDEKTSV4RRFFQ69G5FAVXX", "id").is_err());
+    }
+
+    #[test]
+    fn test_validate_ulid_lowercase_rejected() {
+        // Lowercase letters are not valid in ULID
+        let lowercase = "01arz3ndektsv4rrffq69g5fav";
+        assert!(McpValidation::validate_ulid(lowercase, "id").is_err());
+    }
+
+    #[test]
+    fn test_validate_ulid_special_chars_rejected() {
+        // 26 chars but contains a dash
+        let with_dash = "01ARZ3NDEKTSV4RRFFQ69G5F-V";
+        assert!(McpValidation::validate_ulid(with_dash, "id").is_err());
+    }
+
+    // --- McpErrorHandler::handle_error tests ---
+
+    #[test]
+    fn test_handle_error_file_not_found() {
+        let err = SwissArmyHammerError::FileNotFound {
+            path: "/tmp/missing.txt".to_string(),
+            suggestion: "Check the path".to_string(),
+        };
+        let mcp_err = McpErrorHandler::handle_error(err, "test_op");
+        let msg = format!("{:?}", mcp_err);
+        assert!(msg.contains("File not found") || msg.contains("missing.txt"));
+    }
+
+    #[test]
+    fn test_handle_error_permission_denied() {
+        let err = SwissArmyHammerError::PermissionDenied {
+            path: "/etc/passwd".to_string(),
+            error: "read denied".to_string(),
+            suggestion: "Run as root".to_string(),
+        };
+        let mcp_err = McpErrorHandler::handle_error(err, "test_op");
+        let msg = format!("{:?}", mcp_err);
+        assert!(msg.contains("Permission denied") || msg.contains("passwd"));
+    }
+
+    #[test]
+    fn test_handle_error_io_error() {
+        let err =
+            SwissArmyHammerError::Io(std::io::Error::new(std::io::ErrorKind::Other, "disk full"));
+        let mcp_err = McpErrorHandler::handle_error(err, "test_op");
+        let msg = format!("{:?}", mcp_err);
+        assert!(msg.contains("I/O error") || msg.contains("disk full"));
+    }
+
+    #[test]
+    fn test_handle_error_other_not_found_variant() {
+        let err = SwissArmyHammerError::Other {
+            message: "task not found".to_string(),
+        };
+        let mcp_err = McpErrorHandler::handle_error(err, "test_op");
+        let msg = format!("{:?}", mcp_err);
+        assert!(msg.contains("not found"));
+    }
+
+    #[test]
+    fn test_handle_error_other_generic_variant() {
+        let err = SwissArmyHammerError::Other {
+            message: "something went wrong".to_string(),
+        };
+        let mcp_err = McpErrorHandler::handle_error(err, "test_op");
+        let msg = format!("{:?}", mcp_err);
+        assert!(msg.contains("something went wrong"));
+    }
+
+    #[test]
+    fn test_handle_result_ok() {
+        let ok: Result<i32> = Ok(42);
+        let result = McpErrorHandler::handle_result(ok, "test_op");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 42);
+    }
+
+    #[test]
+    fn test_handle_result_err() {
+        let err: Result<i32> = Err(SwissArmyHammerError::Other {
+            message: "oops".to_string(),
+        });
+        let result = McpErrorHandler::handle_result(err, "test_op");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_mcp_response_success_with_data() {
+        let mut data = std::collections::HashMap::new();
+        data.insert("key".to_string(), serde_json::json!("value"));
+        let response = McpResponse::success_with_data("Done", data);
+        assert!(response.success);
+        assert!(response.data.is_some());
+        assert_eq!(response.data.unwrap()["key"], serde_json::json!("value"));
+    }
 }

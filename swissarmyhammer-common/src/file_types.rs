@@ -282,4 +282,81 @@ mod tests {
         );
         assert!(is_any_prompt_file(Path::new("my.config.file.yml")));
     }
+
+    #[test]
+    fn test_all_prompt_extensions_ordering() {
+        let exts = all_prompt_extensions();
+        // Compound extensions come first
+        assert!(exts[0].contains('.'));
+        // Simple extensions come after
+        assert!(!exts.last().unwrap().contains('.'));
+        // Contains all expected extensions
+        assert!(exts.contains(&"md.liquid"));
+        assert!(exts.contains(&"md"));
+        assert!(exts.contains(&"yaml"));
+        assert!(exts.contains(&"yml"));
+    }
+
+    #[test]
+    fn test_extract_base_name_no_extension() {
+        assert_eq!(extract_base_name(Path::new("Makefile")), "Makefile");
+        assert_eq!(extract_base_name(Path::new(".gitignore")), ".gitignore");
+    }
+
+    #[test]
+    fn test_extract_base_name_unrecognized_extension() {
+        assert_eq!(extract_base_name(Path::new("main.rs")), "main.rs");
+        assert_eq!(extract_base_name(Path::new("app.js")), "app.js");
+    }
+
+    #[test]
+    fn test_get_prompt_extension_no_filename() {
+        // Path that is just a directory
+        assert_eq!(get_prompt_extension(Path::new("/")), None);
+    }
+
+    #[test]
+    fn test_extension_matcher_compound_extensions() {
+        let matcher = ExtensionMatcher::new(&["md.liquid", "yaml"]);
+        assert!(matcher.matches(Path::new("test.md.liquid")));
+        assert!(matcher.matches(Path::new("test.yaml")));
+        assert!(!matcher.matches(Path::new("test.md")));
+        assert!(!matcher.matches(Path::new("test.liquid")));
+    }
+
+    #[test]
+    fn test_extension_matcher_no_extension() {
+        let matcher = ExtensionMatcher::new(&["md"]);
+        assert!(!matcher.matches(Path::new("README")));
+        assert!(!matcher.matches(Path::new(".hidden")));
+    }
+
+    #[test]
+    fn test_filter_files_empty() {
+        let matcher = ExtensionMatcher::new(&["md"]);
+        let paths: Vec<PathBuf> = vec![];
+        let filtered = matcher.filter_files(paths);
+        assert!(filtered.is_empty());
+    }
+
+    #[test]
+    fn test_filter_files_none_match() {
+        let matcher = ExtensionMatcher::new(&["md"]);
+        let paths = vec![PathBuf::from("test.rs"), PathBuf::from("test.txt")];
+        let filtered = matcher.filter_files(paths);
+        assert!(filtered.is_empty());
+    }
+
+    #[test]
+    fn test_case_insensitive_compound() {
+        // Compound extensions should be case-insensitive
+        assert!(has_compound_extension(Path::new("test.MD.LIQUID")));
+        assert!(has_compound_extension(Path::new("test.Yaml.Liquid")));
+    }
+
+    #[test]
+    fn test_is_prompt_file_empty_extension() {
+        // A file ending with just a dot
+        assert!(!is_prompt_file(Path::new("test.")));
+    }
 }

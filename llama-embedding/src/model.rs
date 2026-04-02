@@ -415,6 +415,7 @@ mod tests {
     use super::*;
     use model_loader::ModelSource;
     use serial_test::serial;
+    use std::path::PathBuf;
 
     #[tokio::test]
     #[serial]
@@ -492,6 +493,264 @@ mod tests {
     fn test_get_embedding_dimension_helper() {
         const { assert!(DEFAULT_EMBEDDING_DIMENSION > 0) };
         const { assert!(DEFAULT_EMBEDDING_DIMENSION <= 4096) };
+    }
+
+    #[test]
+    fn test_default_embedding_dimension_value() {
+        // Verifies the fallback dimension is a sensible default (384 for small models).
+        assert_eq!(DEFAULT_EMBEDDING_DIMENSION, 384);
+    }
+
+    // ── Error-path tests (no real model needed) ──────────────────────────
+
+    #[tokio::test]
+    #[serial]
+    async fn test_load_missing_local_file_returns_error() {
+        // Loading a model from a nonexistent local path should fail gracefully.
+        let config = EmbeddingConfig {
+            model_source: ModelSource::Local {
+                folder: PathBuf::from("/tmp/nonexistent-model-dir-sah-test"),
+                filename: Some("does_not_exist.gguf".to_string()),
+            },
+            normalize_embeddings: false,
+            max_sequence_length: None,
+            debug: false,
+        };
+        let model = EmbeddingModel::new(config).await.unwrap();
+        let result = model.load().await;
+        assert!(result.is_err(), "Loading a missing model file should fail");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_load_non_gguf_file_returns_error() {
+        // The loader should reject files that are not .gguf format.
+        let dir = tempfile::tempdir().unwrap();
+        let fake_model = dir.path().join("model.bin");
+        std::fs::write(&fake_model, b"not a real model").unwrap();
+
+        let config = EmbeddingConfig {
+            model_source: ModelSource::Local {
+                folder: dir.path().to_path_buf(),
+                filename: Some("model.bin".to_string()),
+            },
+            normalize_embeddings: false,
+            max_sequence_length: None,
+            debug: false,
+        };
+        let model = EmbeddingModel::new(config).await.unwrap();
+        let result = model.load().await;
+        assert!(result.is_err(), "Loading a non-GGUF file should fail");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_load_corrupt_gguf_returns_error() {
+        // A file with .gguf extension but garbage content should fail.
+        let dir = tempfile::tempdir().unwrap();
+        let fake_gguf = dir.path().join("corrupt.gguf");
+        std::fs::write(&fake_gguf, b"this is not valid gguf data").unwrap();
+
+        let config = EmbeddingConfig {
+            model_source: ModelSource::Local {
+                folder: dir.path().to_path_buf(),
+                filename: Some("corrupt.gguf".to_string()),
+            },
+            normalize_embeddings: false,
+            max_sequence_length: None,
+            debug: false,
+        };
+        let model = EmbeddingModel::new(config).await.unwrap();
+        let result = model.load().await;
+        assert!(result.is_err(), "Loading a corrupt GGUF file should fail");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_embed_text_before_load_returns_model_not_loaded() {
+        // embed_text should return a clear error when called without load().
+        let config = EmbeddingConfig::default();
+        let model = EmbeddingModel::new(config).await.unwrap();
+        let err = model.embed_text("hello world").await;
+        assert!(err.is_err());
+        let err_msg = format!("{}", err.unwrap_err());
+        assert!(
+            err_msg.contains("not loaded") || err_msg.contains("Not Loaded"),
+            "Error should mention model not loaded, got: {}",
+            err_msg
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_empty_text_error_message() {
+        // Empty text should produce a specific error, not a generic one.
+        let config = EmbeddingConfig::default();
+        let model = EmbeddingModel::new(config).await.unwrap();
+        let err = model.embed_text("").await;
+        assert!(err.is_err());
+        let err_msg = format!("{}", err.unwrap_err());
+        assert!(
+            err_msg.to_lowercase().contains("empty"),
+            "Error should mention empty text, got: {}",
+            err_msg
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_metadata_none_before_load() {
+        // Metadata should be None before any model is loaded.
+        let config = EmbeddingConfig::default();
+        let model = EmbeddingModel::new(config).await.unwrap();
+        assert!(model.metadata().is_none());
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_is_loaded_false_after_creation() {
+        // A freshly created model should report is_loaded = false.
+        let config = EmbeddingConfig::default();
+        let model = EmbeddingModel::new(config).await.unwrap();
+        assert!(!model.is_loaded_impl());
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_embedding_dimension_none_before_load() {
+        // embedding_dimension should return None when model is not loaded.
+        let config = EmbeddingConfig::default();
+        let model = EmbeddingModel::new(config).await.unwrap();
+        assert!(model.embedding_dimension_impl().is_none());
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_debug_mode_creation() {
+        // Creating a model with debug=true should succeed (enables logging).
+        let config = EmbeddingConfig {
+            debug: true,
+            ..EmbeddingConfig::default()
+        };
+        let model = EmbeddingModel::new(config).await;
+        assert!(model.is_ok());
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_custom_max_sequence_length_stored() {
+        // max_sequence_length from config should be carried through.
+        let config = EmbeddingConfig {
+            max_sequence_length: Some(256),
+            ..EmbeddingConfig::default()
+        };
+        let model = EmbeddingModel::new(config).await.unwrap();
+        assert_eq!(model.config.max_sequence_length, Some(256));
+    }
+
+    // ── Full lifecycle tests (require real GGUF model, skipped by default) ──
+
+    #[tokio::test]
+    #[serial]
+    #[ignore = "requires GGUF model downloaded locally"]
+    async fn test_full_load_embed_lifecycle() {
+        // Full lifecycle: create -> load -> embed -> verify dimensions.
+        // Run with: cargo test -p llama-embedding -- --ignored
+        let config = EmbeddingConfig::default();
+        let model = EmbeddingModel::new(config).await.unwrap();
+
+        // Before load
+        assert!(!model.is_loaded());
+        assert!(model.embedding_dimension().is_none());
+
+        // Load model
+        model.load().await.expect("Model load should succeed");
+
+        // After load
+        assert!(model.is_loaded());
+        assert!(model.embedding_dimension().is_some());
+        assert!(model.metadata().is_some());
+        let dim = model.embedding_dimension().unwrap();
+        assert!(dim > 0, "Embedding dimension should be positive");
+
+        // Embed text
+        let result = model
+            .embed_text("Hello, world!")
+            .await
+            .expect("Embedding should succeed");
+        assert_eq!(
+            result.embedding().len(),
+            dim,
+            "Embedding vector length should match reported dimension"
+        );
+        assert!(result.sequence_length() > 0);
+        assert!(result.processing_time_ms() < 60_000);
+    }
+
+    #[tokio::test]
+    #[serial]
+    #[ignore = "requires GGUF model downloaded locally"]
+    async fn test_load_is_idempotent() {
+        // Calling load() twice should succeed without error (early-return path).
+        let config = EmbeddingConfig::default();
+        let model = EmbeddingModel::new(config).await.unwrap();
+
+        model.load().await.expect("First load");
+        model
+            .load()
+            .await
+            .expect("Second load should be idempotent");
+        assert!(model.is_loaded());
+    }
+
+    #[tokio::test]
+    #[serial]
+    #[ignore = "requires GGUF model downloaded locally"]
+    async fn test_embed_multiple_texts() {
+        // Embedding multiple texts should produce consistent dimensions.
+        let config = EmbeddingConfig::default();
+        let model = EmbeddingModel::new(config).await.unwrap();
+        model.load().await.expect("Model load");
+
+        let dim = model.embedding_dimension().unwrap();
+
+        let texts = ["short", "a longer sentence with more words", "x"];
+        for text in &texts {
+            let result = model
+                .embed_text(text)
+                .await
+                .expect("Embedding should succeed");
+            assert_eq!(
+                result.embedding().len(),
+                dim,
+                "All embeddings should have same dimension"
+            );
+        }
+    }
+
+    #[tokio::test]
+    #[serial]
+    #[ignore = "requires GGUF model downloaded locally"]
+    async fn test_normalized_embeddings_are_unit_vectors() {
+        // With normalize_embeddings=true, output should be a unit vector.
+        let config = EmbeddingConfig {
+            normalize_embeddings: true,
+            ..EmbeddingConfig::default()
+        };
+        let model = EmbeddingModel::new(config).await.unwrap();
+        model.load().await.expect("Model load");
+
+        let result = model
+            .embed_text("test normalization")
+            .await
+            .expect("Embedding");
+
+        let magnitude: f32 = result.embedding().iter().map(|x| x * x).sum::<f32>().sqrt();
+        assert!(
+            (magnitude - 1.0).abs() < 1e-4,
+            "Normalized embedding should have magnitude ~1.0, got {}",
+            magnitude
+        );
     }
 
     #[test]

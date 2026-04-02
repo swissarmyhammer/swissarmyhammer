@@ -2428,4 +2428,427 @@ fn transform_items(values: &[i32]) -> Vec<i32> {
             "Lock should be released after background indexing completes"
         );
     }
+
+    // =========================================================================
+    // Tests for semantic_search_from_records
+    // =========================================================================
+
+    /// Build a simple EmbeddedChunkRecord with the given embedding vector.
+    fn make_embedded_chunk(
+        path: &str,
+        start_byte: usize,
+        end_byte: usize,
+        embedding: Vec<f32>,
+    ) -> EmbeddedChunkRecord {
+        EmbeddedChunkRecord {
+            path: PathBuf::from(path),
+            start_byte,
+            end_byte,
+            embedding,
+            symbol_path: format!("{}::chunk_{}", path, start_byte),
+        }
+    }
+
+    #[test]
+    fn test_semantic_search_from_records_empty_chunks() {
+        // When the database has no embedded chunks, result should be empty.
+        let chunks: Vec<EmbeddedChunkRecord> = vec![];
+        let query_embedding = vec![1.0_f32, 0.0, 0.0];
+        let results = semantic_search_from_records(&chunks, &query_embedding, 10, 0.0);
+        assert!(
+            results.is_empty(),
+            "semantic_search_from_records on empty chunks must return empty results"
+        );
+    }
+
+    #[test]
+    fn test_semantic_search_from_records_returns_similar_chunks() {
+        // Chunk pointing in the same direction as query → similarity ≈ 1.0
+        let chunk_similar = make_embedded_chunk("/a.rs", 0, 50, vec![1.0, 0.0, 0.0]);
+        // Chunk orthogonal to query → similarity = 0.0
+        let chunk_orthogonal = make_embedded_chunk("/b.rs", 0, 50, vec![0.0, 1.0, 0.0]);
+
+        let chunks = vec![chunk_similar, chunk_orthogonal];
+        let query_embedding = vec![1.0_f32, 0.0, 0.0];
+
+        let results = semantic_search_from_records(&chunks, &query_embedding, 10, 0.5);
+
+        // Only the similar chunk should be returned (orthogonal scores 0.0 < 0.5)
+        assert_eq!(
+            results.len(),
+            1,
+            "Only the similar chunk should be returned"
+        );
+        assert!(
+            (results[0].similarity - 1.0).abs() < 0.001,
+            "Similarity should be ~1.0 for identical direction"
+        );
+        assert_eq!(results[0].chunk.file, PathBuf::from("/a.rs"));
+    }
+
+    #[test]
+    fn test_semantic_search_from_records_respects_top_k() {
+        // Create three chunks all similar to the query
+        let chunks = vec![
+            make_embedded_chunk("/a.rs", 0, 50, vec![1.0, 0.0, 0.0]),
+            make_embedded_chunk("/b.rs", 0, 50, vec![0.9_f32, 0.1_f32.sqrt(), 0.0]),
+            make_embedded_chunk("/c.rs", 0, 50, vec![0.8_f32, 0.6_f32, 0.0]),
+        ];
+        let query_embedding = vec![1.0_f32, 0.0, 0.0];
+
+        let results = semantic_search_from_records(&chunks, &query_embedding, 2, 0.0);
+
+        // Only top 2 results should be returned
+        assert_eq!(results.len(), 2, "top_k=2 should limit results to 2");
+        // Results should be sorted by descending similarity
+        assert!(
+            results[0].similarity >= results[1].similarity,
+            "Results must be sorted by descending similarity"
+        );
+    }
+
+    #[test]
+    fn test_semantic_search_from_records_min_similarity_filters() {
+        // Chunk with high similarity
+        let chunk_high = make_embedded_chunk("/high.rs", 0, 50, vec![1.0, 0.0, 0.0]);
+        // Chunk with moderate similarity (~ cos(45°) ≈ 0.707)
+        let chunk_mod = make_embedded_chunk(
+            "/mod.rs",
+            0,
+            50,
+            vec![1.0_f32 / 2.0_f32.sqrt(), 1.0_f32 / 2.0_f32.sqrt(), 0.0],
+        );
+
+        let chunks = vec![chunk_high, chunk_mod];
+        let query_embedding = vec![1.0_f32, 0.0, 0.0];
+
+        // With a threshold of 0.9, only the high-similarity chunk should pass
+        let results = semantic_search_from_records(&chunks, &query_embedding, 10, 0.9);
+        assert_eq!(
+            results.len(),
+            1,
+            "min_similarity=0.9 should filter out moderate-similarity chunk"
+        );
+        assert_eq!(results[0].chunk.file, PathBuf::from("/high.rs"));
+    }
+
+    #[test]
+    fn test_semantic_search_from_records_results_sorted_descending() {
+        // Three vectors pointing in slightly different directions
+        let chunks = vec![
+            make_embedded_chunk("/low.rs", 0, 50, vec![0.6_f32, 0.8_f32, 0.0]),
+            make_embedded_chunk("/high.rs", 0, 50, vec![1.0, 0.0, 0.0]),
+            make_embedded_chunk("/mid.rs", 0, 50, vec![0.866_f32, 0.5_f32, 0.0]),
+        ];
+        let query_embedding = vec![1.0_f32, 0.0, 0.0];
+
+        let results = semantic_search_from_records(&chunks, &query_embedding, 10, 0.0);
+
+        assert!(
+            results.len() >= 2,
+            "Should return multiple results when all pass threshold"
+        );
+        // Verify descending order
+        for window in results.windows(2) {
+            assert!(
+                window[0].similarity >= window[1].similarity,
+                "Results must be sorted by descending similarity: {} < {}",
+                window[0].similarity,
+                window[1].similarity
+            );
+        }
+    }
+
+    // =========================================================================
+    // Tests for tree_sitter_query_impl
+    // =========================================================================
+
+    /// Build an IndexContext with a single in-memory Rust file and scan it synchronously.
+    async fn build_index_with_rust_source(
+        dir: &Path,
+        filename: &str,
+        source: &str,
+    ) -> crate::index::IndexContext {
+        let file_path = dir.join(filename);
+        std::fs::write(&file_path, source).unwrap();
+
+        let config = no_embedding_config();
+        let mut ctx = crate::index::IndexContext::new(dir).with_config(config);
+        ctx.scan().await.unwrap();
+        ctx
+    }
+
+    #[tokio::test]
+    async fn test_tree_sitter_query_impl_finds_function_names() {
+        let dir = TempDir::new().unwrap();
+        let source = "fn foo() {} fn bar() {}";
+        let ctx = build_index_with_rust_source(dir.path(), "test.rs", source).await;
+
+        let results =
+            tree_sitter_query_impl(&ctx, "(function_item name: (identifier) @name)", None, None)
+                .unwrap();
+
+        // Should find both functions
+        let captured_names: Vec<String> = results
+            .iter()
+            .flat_map(|m| m.captures.iter())
+            .filter(|c| c.name == "name")
+            .map(|c| c.text.clone())
+            .collect();
+
+        assert!(
+            captured_names.contains(&"foo".to_string()),
+            "Should capture 'foo', got: {:?}",
+            captured_names
+        );
+        assert!(
+            captured_names.contains(&"bar".to_string()),
+            "Should capture 'bar', got: {:?}",
+            captured_names
+        );
+    }
+
+    #[tokio::test]
+    async fn test_tree_sitter_query_impl_empty_result_for_no_match() {
+        let dir = TempDir::new().unwrap();
+        // Source has no struct definitions
+        let source = "fn foo() { let x = 1; }";
+        let ctx = build_index_with_rust_source(dir.path(), "test.rs", source).await;
+
+        let results = tree_sitter_query_impl(
+            &ctx,
+            "(struct_item name: (type_identifier) @name)",
+            None,
+            None,
+        )
+        .unwrap();
+
+        assert!(
+            results.is_empty(),
+            "Query for structs should return empty results when no structs exist"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_tree_sitter_query_impl_language_filter_excludes_files() {
+        let dir = TempDir::new().unwrap();
+
+        // Create a Rust source file
+        std::fs::write(dir.path().join("main.rs"), "fn foo() {}").unwrap();
+
+        let config = no_embedding_config();
+        let mut ctx = crate::index::IndexContext::new(dir.path()).with_config(config);
+        ctx.scan().await.unwrap();
+
+        // Query with language = "python" should find nothing in a Rust file
+        let results = tree_sitter_query_impl(
+            &ctx,
+            "(function_item name: (identifier) @name)",
+            None,
+            Some("python".to_string()),
+        )
+        .unwrap();
+
+        assert!(
+            results.is_empty(),
+            "Language filter 'python' should exclude .rs files"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_tree_sitter_query_impl_language_filter_rust_matches() {
+        let dir = TempDir::new().unwrap();
+        let source = "fn my_func() {}";
+        let ctx = build_index_with_rust_source(dir.path(), "test.rs", source).await;
+
+        // Query with language = "rust" should still find the function
+        let results = tree_sitter_query_impl(
+            &ctx,
+            "(function_item name: (identifier) @name)",
+            None,
+            Some("rust".to_string()),
+        )
+        .unwrap();
+
+        let captured: Vec<String> = results
+            .iter()
+            .flat_map(|m| m.captures.iter())
+            .filter(|c| c.name == "name")
+            .map(|c| c.text.clone())
+            .collect();
+
+        assert!(
+            captured.contains(&"my_func".to_string()),
+            "Language filter 'rust' should still match Rust files, got: {:?}",
+            captured
+        );
+    }
+
+    #[tokio::test]
+    async fn test_tree_sitter_query_impl_invalid_query_returns_error() {
+        let dir = TempDir::new().unwrap();
+        let source = "fn foo() {}";
+        let ctx = build_index_with_rust_source(dir.path(), "test.rs", source).await;
+
+        // An invalid S-expression query should return an error
+        let result = tree_sitter_query_impl(&ctx, "((( invalid syntax !!!", None, None);
+
+        assert!(
+            result.is_err(),
+            "Invalid tree-sitter query syntax should return an error"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_tree_sitter_query_impl_file_filter_limits_scope() {
+        let dir = TempDir::new().unwrap();
+
+        // Create two Rust files
+        std::fs::write(dir.path().join("a.rs"), "fn func_a() {}").unwrap();
+        std::fs::write(dir.path().join("b.rs"), "fn func_b() {}").unwrap();
+
+        let config = no_embedding_config();
+        let mut ctx = crate::index::IndexContext::new(dir.path()).with_config(config);
+        ctx.scan().await.unwrap();
+
+        // Query restricted to only a.rs
+        let file_a = dir.path().join("a.rs");
+        let results = tree_sitter_query_impl(
+            &ctx,
+            "(function_item name: (identifier) @name)",
+            Some(vec![file_a]),
+            None,
+        )
+        .unwrap();
+
+        let captured: Vec<String> = results
+            .iter()
+            .flat_map(|m| m.captures.iter())
+            .filter(|c| c.name == "name")
+            .map(|c| c.text.clone())
+            .collect();
+
+        assert!(
+            captured.contains(&"func_a".to_string()),
+            "Should find func_a in a.rs"
+        );
+        assert!(
+            !captured.contains(&"func_b".to_string()),
+            "Should NOT find func_b when scoped to a.rs only"
+        );
+    }
+
+    // =========================================================================
+    // Tests for semantic_search Workspace method (Reader-mode error path)
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_semantic_search_returns_error_in_reader_mode() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(dir.path().join("test.rs"), "fn main() {}").unwrap();
+
+        // open() always returns Reader mode
+        let workspace = open_and_wait(dir.path()).await;
+        assert!(!workspace.is_leader(), "Workspace should be in Reader mode");
+
+        let result = workspace
+            .semantic_search("fn main".to_string(), 10, 0.7)
+            .await;
+
+        assert!(
+            result.is_err(),
+            "semantic_search should return an error in Reader mode"
+        );
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("reader mode")
+                || err.to_string().contains("embedding")
+                || err.to_string().to_lowercase().contains("not available"),
+            "Error message should explain why semantic search is unavailable; got: {}",
+            err
+        );
+    }
+
+    // =========================================================================
+    // Tests for find_all_duplicates_from_records
+    // =========================================================================
+
+    #[test]
+    fn test_find_all_duplicates_from_records_empty() {
+        let chunks: Vec<EmbeddedChunkRecord> = vec![];
+        let result = find_all_duplicates_from_records(&chunks, 0.9, 10);
+        assert!(
+            result.is_empty(),
+            "find_all_duplicates_from_records on empty input should return empty"
+        );
+    }
+
+    #[test]
+    fn test_find_all_duplicates_from_records_no_cross_file_duplicates() {
+        // Two chunks in the same file with identical embeddings — should NOT cluster
+        let chunks = vec![
+            make_embedded_chunk("/same.rs", 0, 50, vec![1.0, 0.0, 0.0]),
+            make_embedded_chunk("/same.rs", 50, 100, vec![1.0, 0.0, 0.0]),
+        ];
+        let result = find_all_duplicates_from_records(&chunks, 0.9, 10);
+        // Same-file chunks are excluded from duplicate clustering
+        assert!(
+            result.is_empty(),
+            "Same-file chunks should not be reported as duplicates"
+        );
+    }
+
+    #[test]
+    fn test_find_all_duplicates_from_records_detects_cross_file_duplicates() {
+        // Two chunks from different files with identical embeddings → duplicate cluster
+        let chunks = vec![
+            make_embedded_chunk("/a.rs", 0, 100, vec![1.0, 0.0, 0.0]),
+            make_embedded_chunk("/b.rs", 0, 100, vec![1.0, 0.0, 0.0]),
+        ];
+        let result = find_all_duplicates_from_records(&chunks, 0.9, 10);
+        assert!(
+            !result.is_empty(),
+            "Identical chunks from different files should form a duplicate cluster"
+        );
+        // The cluster should contain both files
+        let cluster = &result[0];
+        let files: Vec<&PathBuf> = cluster.chunks.iter().map(|c| &c.file).collect();
+        assert!(
+            files.iter().any(|f| f.to_string_lossy().contains("a.rs")),
+            "Cluster should include a.rs"
+        );
+        assert!(
+            files.iter().any(|f| f.to_string_lossy().contains("b.rs")),
+            "Cluster should include b.rs"
+        );
+    }
+
+    #[test]
+    fn test_find_all_duplicates_from_records_min_chunk_bytes_filter() {
+        // Two cross-file identical chunks that are below the min_chunk_bytes threshold
+        let chunks = vec![
+            make_embedded_chunk("/a.rs", 0, 5, vec![1.0, 0.0, 0.0]),
+            make_embedded_chunk("/b.rs", 0, 5, vec![1.0, 0.0, 0.0]),
+        ];
+        // min_chunk_bytes = 10 → both chunks (5 bytes each) should be excluded
+        let result = find_all_duplicates_from_records(&chunks, 0.9, 10);
+        assert!(
+            result.is_empty(),
+            "Chunks below min_chunk_bytes should be excluded from duplicate detection"
+        );
+    }
+
+    #[test]
+    fn test_find_all_duplicates_from_records_orthogonal_not_duplicates() {
+        // Orthogonal embeddings from different files should not be reported as duplicates
+        let chunks = vec![
+            make_embedded_chunk("/a.rs", 0, 100, vec![1.0, 0.0, 0.0]),
+            make_embedded_chunk("/b.rs", 0, 100, vec![0.0, 1.0, 0.0]),
+        ];
+        let result = find_all_duplicates_from_records(&chunks, 0.9, 10);
+        assert!(
+            result.is_empty(),
+            "Orthogonal chunks should not be reported as duplicates"
+        );
+    }
 }

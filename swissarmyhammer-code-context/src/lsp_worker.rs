@@ -598,4 +598,298 @@ mod tests {
             .unwrap();
         assert_eq!(sym_count, 1);
     }
+
+    // -- new_shutdown_flag tests --
+
+    #[test]
+    fn test_new_shutdown_flag_starts_false() {
+        // The shutdown flag must start as false so workers don't exit immediately.
+        let flag = new_shutdown_flag();
+        assert!(!flag.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn test_shutdown_flag_can_be_set_true() {
+        // Verify the flag can be set to true via store.
+        let flag = new_shutdown_flag();
+        flag.store(true, Ordering::Relaxed);
+        assert!(flag.load(Ordering::Relaxed));
+    }
+
+    // -- run_lsp_indexing_loop shutdown tests --
+
+    /// Build a SharedDb wrapping an in-memory test database.
+    fn create_shared_test_db() -> SharedDb {
+        let conn = create_test_db();
+        Arc::new(Mutex::new(conn))
+    }
+
+    #[test]
+    fn test_loop_exits_immediately_when_shutdown_set() {
+        // Set the shutdown flag before calling the loop so the first iteration
+        // exits cleanly without touching the DB or client.
+        let workspace_root = std::env::temp_dir();
+        let db = create_shared_test_db();
+        let client: SharedLspClient = Arc::new(Mutex::new(None));
+        let config = LspWorkerConfig {
+            batch_size: 10,
+            client_unavailable_sleep: Duration::from_millis(1),
+            idle_sleep: Duration::from_millis(1),
+        };
+        let shutdown = new_shutdown_flag();
+        shutdown.store(true, Ordering::Relaxed);
+
+        let result = run_lsp_indexing_loop(
+            &workspace_root,
+            &db,
+            &client,
+            &config,
+            "rust-analyzer",
+            &shutdown,
+        );
+
+        assert!(result.is_ok(), "Loop should return Ok when shut down");
+    }
+
+    #[test]
+    fn test_loop_idles_and_shuts_down_with_no_dirty_files() {
+        // When there are no dirty files the loop sleeps (idle_sleep) then checks
+        // shutdown again. Setting shutdown after one iteration terminates cleanly.
+        let workspace_root = std::env::temp_dir();
+        let db = create_shared_test_db();
+        // No files inserted — dirty list will always be empty.
+        let client: SharedLspClient = Arc::new(Mutex::new(None));
+        let config = LspWorkerConfig {
+            batch_size: 10,
+            client_unavailable_sleep: Duration::from_millis(1),
+            idle_sleep: Duration::from_millis(1),
+        };
+        let shutdown = new_shutdown_flag();
+        let shutdown_clone = Arc::clone(&shutdown);
+
+        // Run the loop in a background thread; signal shutdown after a short delay.
+        let handle = thread::spawn(move || {
+            run_lsp_indexing_loop(
+                &workspace_root,
+                &db,
+                &client,
+                &config,
+                "rust-analyzer",
+                &shutdown,
+            )
+        });
+
+        thread::sleep(Duration::from_millis(20));
+        shutdown_clone.store(true, Ordering::Relaxed);
+
+        let result = handle.join().expect("Worker thread should not panic");
+        assert!(result.is_ok(), "Loop should return Ok on graceful shutdown");
+    }
+
+    #[test]
+    fn test_loop_sleeps_when_client_unavailable_then_shuts_down() {
+        // When dirty files exist but the LSP client is None (unavailable), the
+        // loop should sleep `client_unavailable_sleep` and retry. Setting shutdown
+        // after a short delay terminates the worker without processing any files.
+        let workspace_root = std::env::temp_dir();
+        let db = create_shared_test_db();
+
+        // Insert a dirty .rs file so the loop reaches the client-availability check.
+        {
+            let conn = db.lock().unwrap();
+            insert_test_file(&conn, "src/main.rs");
+        }
+
+        let client: SharedLspClient = Arc::new(Mutex::new(None)); // client unavailable
+        let config = LspWorkerConfig {
+            batch_size: 10,
+            client_unavailable_sleep: Duration::from_millis(5),
+            idle_sleep: Duration::from_millis(5),
+        };
+        let shutdown = new_shutdown_flag();
+        let shutdown_clone = Arc::clone(&shutdown);
+
+        let handle = thread::spawn(move || {
+            run_lsp_indexing_loop(
+                &workspace_root,
+                &db,
+                &client,
+                &config,
+                "rust-analyzer",
+                &shutdown,
+            )
+        });
+
+        // Give the loop time to enter the client-unavailable sleep at least once.
+        thread::sleep(Duration::from_millis(30));
+        shutdown_clone.store(true, Ordering::Relaxed);
+
+        let result = handle.join().expect("Worker thread should not panic");
+        assert!(result.is_ok(), "Loop should return Ok on graceful shutdown");
+    }
+
+    #[test]
+    fn test_loop_unknown_server_name_no_files_processed() {
+        // An unknown server name produces an empty extensions list.
+        // The loop should log a warning, then idle (no files match) and exit
+        // on shutdown without processing anything.
+        let workspace_root = std::env::temp_dir();
+        let db = create_shared_test_db();
+
+        // Insert a dirty .rs file — it should NOT be processed by an unknown server.
+        {
+            let conn = db.lock().unwrap();
+            insert_test_file(&conn, "src/main.rs");
+        }
+
+        let client: SharedLspClient = Arc::new(Mutex::new(None));
+        let config = LspWorkerConfig {
+            batch_size: 10,
+            client_unavailable_sleep: Duration::from_millis(1),
+            idle_sleep: Duration::from_millis(1),
+        };
+        let shutdown = new_shutdown_flag();
+        let shutdown_clone = Arc::clone(&shutdown);
+
+        let handle = thread::spawn(move || {
+            run_lsp_indexing_loop(
+                &workspace_root,
+                &db,
+                &client,
+                &config,
+                "unknown-server", // triggers empty extensions warning
+                &shutdown,
+            )
+        });
+
+        thread::sleep(Duration::from_millis(20));
+        shutdown_clone.store(true, Ordering::Relaxed);
+
+        let result = handle.join().expect("Worker thread should not panic");
+        assert!(
+            result.is_ok(),
+            "Loop should return Ok when unknown server idles out"
+        );
+    }
+
+    // -- spawn_lsp_indexing_worker tests --
+
+    #[test]
+    fn test_spawn_lsp_indexing_worker_shuts_down_cleanly() {
+        // Verify the public spawn function returns a JoinHandle that exits
+        // cleanly when the shutdown flag is set.
+        let workspace_root = std::env::temp_dir();
+        let db = create_shared_test_db();
+        let client: SharedLspClient = Arc::new(Mutex::new(None));
+        let config = LspWorkerConfig {
+            batch_size: 10,
+            client_unavailable_sleep: Duration::from_millis(1),
+            idle_sleep: Duration::from_millis(1),
+        };
+        let shutdown = new_shutdown_flag();
+        let shutdown_clone = Arc::clone(&shutdown);
+
+        let handle = spawn_lsp_indexing_worker(
+            workspace_root,
+            db,
+            client,
+            config,
+            "rust-analyzer".to_string(),
+            shutdown,
+        );
+
+        // Signal shutdown immediately.
+        shutdown_clone.store(true, Ordering::Relaxed);
+
+        // The join should succeed (no panic, clean exit).
+        handle.join().expect("Worker thread should not panic");
+    }
+
+    #[test]
+    fn test_spawn_lsp_indexing_worker_client_unavailable_then_shutdown() {
+        // Worker is spawned with a None client; dirty files exist so the worker
+        // reaches the client-unavailable branch. It should exit cleanly on shutdown.
+        let workspace_root = std::env::temp_dir();
+        let db = create_shared_test_db();
+        {
+            let conn = db.lock().unwrap();
+            insert_test_file(&conn, "src/lib.rs");
+        }
+
+        let client: SharedLspClient = Arc::new(Mutex::new(None));
+        let config = LspWorkerConfig {
+            batch_size: 10,
+            client_unavailable_sleep: Duration::from_millis(5),
+            idle_sleep: Duration::from_millis(5),
+        };
+        let shutdown = new_shutdown_flag();
+        let shutdown_clone = Arc::clone(&shutdown);
+
+        let handle = spawn_lsp_indexing_worker(
+            workspace_root,
+            db,
+            client,
+            config,
+            "rust-analyzer".to_string(),
+            shutdown,
+        );
+
+        thread::sleep(Duration::from_millis(30));
+        shutdown_clone.store(true, Ordering::Relaxed);
+
+        handle.join().expect("Worker thread should not panic");
+    }
+
+    #[test]
+    fn test_loop_client_unavailable_leaves_files_unindexed() {
+        // When the client is permanently unavailable (None), the worker should
+        // never mark any files as lsp_indexed — it only retries.
+        let workspace_root = std::env::temp_dir();
+        let db = create_shared_test_db();
+
+        {
+            let conn = db.lock().unwrap();
+            insert_test_file(&conn, "src/alpha.rs");
+            insert_test_file(&conn, "src/beta.rs");
+        }
+
+        let client: SharedLspClient = Arc::new(Mutex::new(None));
+        let config = LspWorkerConfig {
+            batch_size: 10,
+            client_unavailable_sleep: Duration::from_millis(5),
+            idle_sleep: Duration::from_millis(5),
+        };
+        let shutdown = new_shutdown_flag();
+        let shutdown_clone = Arc::clone(&shutdown);
+        let db_check = Arc::clone(&db);
+
+        let handle = thread::spawn(move || {
+            run_lsp_indexing_loop(
+                &workspace_root,
+                &db,
+                &client,
+                &config,
+                "rust-analyzer",
+                &shutdown,
+            )
+        });
+
+        thread::sleep(Duration::from_millis(30));
+        shutdown_clone.store(true, Ordering::Relaxed);
+        let _ = handle.join().expect("Worker thread should not panic");
+
+        // Files should still be unindexed because the client was never available.
+        let conn = db_check.lock().unwrap();
+        let unindexed: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM indexed_files WHERE lsp_indexed = 0",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            unindexed, 2,
+            "Files should remain unindexed when client is unavailable"
+        );
+    }
 }

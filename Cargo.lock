@@ -8296,6 +8296,7 @@ dependencies = [
  "serde_yaml_ng",
  "swissarmyhammer-code-context",
  "swissarmyhammer-project-detection",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -8603,6 +8604,7 @@ dependencies = [
  "tree-sitter",
  "ulid",
  "walkdir",
+ "wiremock",
 ]
 
 [[package]]
@@ -8700,6 +8702,7 @@ dependencies = [
  "tracing",
  "url",
  "urlencoding",
+ "wiremock",
 ]
 
 [[package]]

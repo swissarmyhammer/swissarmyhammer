@@ -485,4 +485,677 @@ export class Greeter {
         assert!(names.contains(&"hello"), "Should find hello function");
         assert!(names.contains(&"Greeter"), "Should find Greeter class");
     }
+
+    #[test]
+    fn test_typescript_class_with_methods() {
+        // Tests class/method extraction and nested parent_id assignment
+        let code = r#"
+class Animal {
+    name: string;
+
+    constructor(name: string) {
+        this.name = name;
+    }
+
+    speak(): string {
+        return `${this.name} makes a sound.`;
+    }
+
+    static create(name: string): Animal {
+        return new Animal(name);
+    }
+}
+"#;
+        let plugin = CodeParserPlugin;
+        let entities = plugin.extract_entities(code, "animal.ts");
+        let names: Vec<&str> = entities.iter().map(|e| e.name.as_str()).collect();
+        eprintln!(
+            "TS class+methods: {:?}",
+            entities
+                .iter()
+                .map(|e| (&e.name, &e.entity_type, &e.parent_id))
+                .collect::<Vec<_>>()
+        );
+
+        assert!(
+            names.contains(&"Animal"),
+            "Should find Animal class, got: {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"speak"),
+            "Should find speak method, got: {:?}",
+            names
+        );
+
+        // speak should have Animal as parent
+        let speak = entities.iter().find(|e| e.name == "speak").unwrap();
+        assert!(
+            speak.parent_id.is_some(),
+            "speak method should have a parent_id"
+        );
+    }
+
+    #[test]
+    fn test_typescript_interface_extraction() {
+        // Tests interface declaration and its body members
+        let code = r#"
+interface Shape {
+    area(): number;
+    perimeter(): number;
+    color: string;
+}
+
+interface Drawable extends Shape {
+    draw(): void;
+}
+"#;
+        let plugin = CodeParserPlugin;
+        let entities = plugin.extract_entities(code, "shapes.ts");
+        let names: Vec<&str> = entities.iter().map(|e| e.name.as_str()).collect();
+        let types: Vec<&str> = entities.iter().map(|e| e.entity_type.as_str()).collect();
+        eprintln!(
+            "TS interface: {:?}",
+            names.iter().zip(types.iter()).collect::<Vec<_>>()
+        );
+
+        assert!(
+            names.contains(&"Shape"),
+            "Should find Shape interface, got: {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"Drawable"),
+            "Should find Drawable interface, got: {:?}",
+            names
+        );
+
+        let shape = entities.iter().find(|e| e.name == "Shape").unwrap();
+        assert_eq!(
+            shape.entity_type, "interface",
+            "Shape should be an interface"
+        );
+    }
+
+    #[test]
+    fn test_rust_struct_and_trait_extraction() {
+        // Tests Rust struct_item, trait_item, impl_item, and nested function_item
+        let code = r#"
+pub struct Point {
+    pub x: f64,
+    pub y: f64,
+}
+
+pub trait Shape {
+    fn area(&self) -> f64;
+    fn perimeter(&self) -> f64;
+    fn name(&self) -> &str {
+        "shape"
+    }
+}
+
+pub struct Circle {
+    pub center: Point,
+    pub radius: f64,
+}
+
+impl Shape for Circle {
+    fn area(&self) -> f64 {
+        std::f64::consts::PI * self.radius * self.radius
+    }
+
+    fn perimeter(&self) -> f64 {
+        2.0 * std::f64::consts::PI * self.radius
+    }
+}
+
+impl Circle {
+    pub fn new(x: f64, y: f64, radius: f64) -> Self {
+        Circle {
+            center: Point { x, y },
+            radius,
+        }
+    }
+}
+"#;
+        let plugin = CodeParserPlugin;
+        let entities = plugin.extract_entities(code, "geometry.rs");
+        let names: Vec<&str> = entities.iter().map(|e| e.name.as_str()).collect();
+        let types: Vec<&str> = entities.iter().map(|e| e.entity_type.as_str()).collect();
+        eprintln!(
+            "Rust struct+trait: {:?}",
+            names.iter().zip(types.iter()).collect::<Vec<_>>()
+        );
+
+        assert!(
+            names.contains(&"Point"),
+            "Should find Point struct, got: {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"Shape"),
+            "Should find Shape trait, got: {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"Circle"),
+            "Should find Circle struct, got: {:?}",
+            names
+        );
+
+        // Verify entity types
+        let point = entities.iter().find(|e| e.name == "Point").unwrap();
+        assert_eq!(point.entity_type, "struct", "Point should be a struct");
+
+        let shape = entities.iter().find(|e| e.name == "Shape").unwrap();
+        assert_eq!(shape.entity_type, "trait", "Shape should be a trait");
+    }
+
+    #[test]
+    fn test_rust_impl_nested_methods() {
+        // Tests that methods inside impl blocks have parent_id set
+        let code = r#"
+pub struct Counter {
+    count: u32,
+}
+
+impl Counter {
+    pub fn new() -> Self {
+        Counter { count: 0 }
+    }
+
+    pub fn increment(&mut self) {
+        self.count += 1;
+    }
+
+    pub fn value(&self) -> u32 {
+        self.count
+    }
+}
+"#;
+        let plugin = CodeParserPlugin;
+        let entities = plugin.extract_entities(code, "counter.rs");
+        let names: Vec<&str> = entities.iter().map(|e| e.name.as_str()).collect();
+        eprintln!(
+            "Rust impl methods: {:?}",
+            entities
+                .iter()
+                .map(|e| (&e.name, &e.entity_type, &e.parent_id))
+                .collect::<Vec<_>>()
+        );
+
+        assert!(
+            names.contains(&"Counter"),
+            "Should find Counter struct, got: {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"new"),
+            "Should find new function, got: {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"increment"),
+            "Should find increment function, got: {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"value"),
+            "Should find value function, got: {:?}",
+            names
+        );
+
+        // Methods inside impl should have parent_id
+        let new_fn = entities.iter().find(|e| e.name == "new").unwrap();
+        assert!(
+            new_fn.parent_id.is_some(),
+            "new function should have parent_id (impl block)"
+        );
+    }
+
+    #[test]
+    fn test_python_class_with_methods() {
+        // Tests Python class_definition containing method_definition (function_definition in block)
+        let code = r#"
+class Animal:
+    def __init__(self, name: str):
+        self.name = name
+
+    def speak(self) -> str:
+        return f"{self.name} makes a sound"
+
+    def __repr__(self) -> str:
+        return f"Animal({self.name!r})"
+
+
+class Dog(Animal):
+    def speak(self) -> str:
+        return f"{self.name} barks"
+
+    @staticmethod
+    def species() -> str:
+        return "Canis lupus familiaris"
+
+
+def standalone_function(x: int) -> int:
+    return x * 2
+"#;
+        let plugin = CodeParserPlugin;
+        let entities = plugin.extract_entities(code, "animals.py");
+        let names: Vec<&str> = entities.iter().map(|e| e.name.as_str()).collect();
+        eprintln!(
+            "Python class+methods: {:?}",
+            entities
+                .iter()
+                .map(|e| (&e.name, &e.entity_type, &e.parent_id))
+                .collect::<Vec<_>>()
+        );
+
+        assert!(
+            names.contains(&"Animal"),
+            "Should find Animal class, got: {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"Dog"),
+            "Should find Dog class, got: {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"standalone_function"),
+            "Should find standalone_function, got: {:?}",
+            names
+        );
+
+        // Verify class type
+        let animal = entities.iter().find(|e| e.name == "Animal").unwrap();
+        assert_eq!(animal.entity_type, "class", "Animal should be a class");
+
+        // Methods should be nested
+        let speak_methods: Vec<_> = entities.iter().filter(|e| e.name == "speak").collect();
+        assert!(
+            !speak_methods.is_empty(),
+            "Should find speak methods, got: {:?}",
+            names
+        );
+
+        // At least one speak should have a parent
+        let has_parent = speak_methods.iter().any(|e| e.parent_id.is_some());
+        assert!(
+            has_parent,
+            "speak methods should have parent_id (the class)"
+        );
+    }
+
+    #[test]
+    fn test_python_decorated_class() {
+        // Tests decorated_definition for class (map_decorated_type returns "class")
+        let code = r#"
+import dataclasses
+
+@dataclasses.dataclass
+class Config:
+    host: str
+    port: int
+    debug: bool = False
+
+@staticmethod
+def helper():
+    pass
+"#;
+        let plugin = CodeParserPlugin;
+        let entities = plugin.extract_entities(code, "config.py");
+        let names: Vec<&str> = entities.iter().map(|e| e.name.as_str()).collect();
+        let types: Vec<&str> = entities.iter().map(|e| e.entity_type.as_str()).collect();
+        eprintln!(
+            "Python decorated: {:?}",
+            names.iter().zip(types.iter()).collect::<Vec<_>>()
+        );
+
+        assert!(
+            names.contains(&"Config"),
+            "Should find Config class, got: {:?}",
+            names
+        );
+
+        let config = entities.iter().find(|e| e.name == "Config").unwrap();
+        // decorated_definition with class_definition inside → should map to "class"
+        assert_eq!(
+            config.entity_type, "class",
+            "Decorated class should have entity_type 'class'"
+        );
+    }
+
+    #[test]
+    fn test_go_method_and_type_extraction() {
+        // Tests Go method_declaration and function_declaration extraction.
+        // Note: Go tree-sitter represents `type Rectangle struct { ... }` as a
+        // type_declaration containing a type_spec, so the name is not at the
+        // type_declaration level directly. Methods (func with receiver) use
+        // method_declaration which does have a name field.
+        let code = r#"
+package main
+
+import "fmt"
+
+type Rectangle struct {
+    Width  float64
+    Height float64
+}
+
+type Circle struct {
+    Radius float64
+}
+
+func (r Rectangle) Area() float64 {
+    return r.Width * r.Height
+}
+
+func (r Rectangle) Perimeter() float64 {
+    return 2 * (r.Width + r.Height)
+}
+
+func (c Circle) Area() float64 {
+    return 3.14159 * c.Radius * c.Radius
+}
+
+func main() {
+    r := Rectangle{Width: 3, Height: 4}
+    fmt.Println(r.Area())
+}
+"#;
+        let plugin = CodeParserPlugin;
+        let entities = plugin.extract_entities(code, "shapes.go");
+        let names: Vec<&str> = entities.iter().map(|e| e.name.as_str()).collect();
+        let _types: Vec<&str> = entities.iter().map(|e| e.entity_type.as_str()).collect();
+        eprintln!(
+            "Go method+type: {:?}",
+            entities
+                .iter()
+                .map(|e| (&e.name, &e.entity_type))
+                .collect::<Vec<_>>()
+        );
+
+        // Go methods (with receiver) should be found
+        let area_methods: Vec<_> = entities.iter().filter(|e| e.name == "Area").collect();
+        assert!(
+            !area_methods.is_empty(),
+            "Should find Area method declarations, got: {:?}",
+            names
+        );
+
+        // Verify method entity type
+        let area = area_methods[0];
+        assert_eq!(area.entity_type, "method", "Area should be a method");
+
+        // Regular function should be found
+        assert!(
+            names.contains(&"main"),
+            "Should find main function, got: {:?}",
+            names
+        );
+
+        let main_fn = entities.iter().find(|e| e.name == "main").unwrap();
+        assert_eq!(main_fn.entity_type, "function", "main should be a function");
+    }
+
+    #[test]
+    fn test_php_class_and_trait_extraction() {
+        // Tests PHP class_declaration, trait_declaration, method_declaration, interface_declaration
+        let code = r#"<?php
+
+namespace App\Models;
+
+interface Printable {
+    public function toString(): string;
+}
+
+trait Timestampable {
+    private \DateTime $createdAt;
+
+    public function getCreatedAt(): \DateTime {
+        return $this->createdAt;
+    }
+
+    public function setCreatedAt(\DateTime $dt): void {
+        $this->createdAt = $dt;
+    }
+}
+
+class User implements Printable {
+    use Timestampable;
+
+    private string $name;
+
+    public function __construct(string $name) {
+        $this->name = $name;
+    }
+
+    public function toString(): string {
+        return $this->name;
+    }
+}
+"#;
+        let plugin = CodeParserPlugin;
+        let entities = plugin.extract_entities(code, "User.php");
+        let names: Vec<&str> = entities.iter().map(|e| e.name.as_str()).collect();
+        let types: Vec<&str> = entities.iter().map(|e| e.entity_type.as_str()).collect();
+        eprintln!(
+            "PHP class+trait: {:?}",
+            names.iter().zip(types.iter()).collect::<Vec<_>>()
+        );
+
+        assert!(
+            names.contains(&"Printable"),
+            "Should find Printable interface, got: {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"Timestampable"),
+            "Should find Timestampable trait, got: {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"User"),
+            "Should find User class, got: {:?}",
+            names
+        );
+
+        // Verify entity types
+        let printable = entities.iter().find(|e| e.name == "Printable").unwrap();
+        assert_eq!(
+            printable.entity_type, "interface",
+            "Printable should be an interface"
+        );
+
+        let timestampable = entities.iter().find(|e| e.name == "Timestampable").unwrap();
+        assert_eq!(
+            timestampable.entity_type, "trait",
+            "Timestampable should be a trait"
+        );
+    }
+
+    #[test]
+    fn test_javascript_class_with_methods() {
+        // Tests JS class with method_definition inside class_body
+        let code = r#"
+class EventEmitter {
+    #listeners = new Map();
+
+    on(event, listener) {
+        if (!this.#listeners.has(event)) {
+            this.#listeners.set(event, []);
+        }
+        this.#listeners.get(event).push(listener);
+        return this;
+    }
+
+    emit(event, ...args) {
+        const listeners = this.#listeners.get(event) || [];
+        listeners.forEach(fn => fn(...args));
+        return this;
+    }
+
+    off(event, listener) {
+        const arr = this.#listeners.get(event);
+        if (arr) {
+            this.#listeners.set(event, arr.filter(l => l !== listener));
+        }
+        return this;
+    }
+}
+
+function createEmitter() {
+    return new EventEmitter();
+}
+"#;
+        let plugin = CodeParserPlugin;
+        let entities = plugin.extract_entities(code, "events.js");
+        let names: Vec<&str> = entities.iter().map(|e| e.name.as_str()).collect();
+        eprintln!(
+            "JS class+methods: {:?}",
+            entities
+                .iter()
+                .map(|e| (&e.name, &e.entity_type, &e.parent_id))
+                .collect::<Vec<_>>()
+        );
+
+        assert!(
+            names.contains(&"EventEmitter"),
+            "Should find EventEmitter class, got: {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"on"),
+            "Should find on method, got: {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"emit"),
+            "Should find emit method, got: {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"createEmitter"),
+            "Should find createEmitter function, got: {:?}",
+            names
+        );
+
+        // Methods should have EventEmitter as parent
+        let on_method = entities.iter().find(|e| e.name == "on").unwrap();
+        assert!(
+            on_method.parent_id.is_some(),
+            "on method should have parent_id"
+        );
+    }
+
+    #[test]
+    fn test_rust_trait_with_default_methods() {
+        // Tests trait_item with methods inside declaration_list
+        let code = r#"
+pub trait Greet {
+    fn name(&self) -> &str;
+
+    fn greeting(&self) -> String {
+        format!("Hello, {}!", self.name())
+    }
+
+    fn farewell(&self) -> String {
+        format!("Goodbye, {}!", self.name())
+    }
+}
+
+pub struct Person {
+    pub name: String,
+}
+
+impl Greet for Person {
+    fn name(&self) -> &str {
+        &self.name
+    }
+}
+"#;
+        let plugin = CodeParserPlugin;
+        let entities = plugin.extract_entities(code, "greet.rs");
+        let names: Vec<&str> = entities.iter().map(|e| e.name.as_str()).collect();
+        eprintln!(
+            "Rust trait methods: {:?}",
+            entities
+                .iter()
+                .map(|e| (&e.name, &e.entity_type, &e.parent_id))
+                .collect::<Vec<_>>()
+        );
+
+        assert!(
+            names.contains(&"Greet"),
+            "Should find Greet trait, got: {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"Person"),
+            "Should find Person struct, got: {:?}",
+            names
+        );
+
+        let greet = entities.iter().find(|e| e.name == "Greet").unwrap();
+        assert_eq!(greet.entity_type, "trait", "Greet should be a trait");
+
+        // Methods inside trait should have parent_id
+        let greeting = entities.iter().find(|e| e.name == "greeting");
+        if let Some(g) = greeting {
+            assert!(
+                g.parent_id.is_some(),
+                "greeting should have parent_id (trait)"
+            );
+        }
+    }
+
+    #[test]
+    fn test_typescript_enum_extraction() {
+        // Tests TypeScript enum_declaration
+        let code = r#"
+enum Direction {
+    Up = "UP",
+    Down = "DOWN",
+    Left = "LEFT",
+    Right = "RIGHT",
+}
+
+const enum Color {
+    Red,
+    Green,
+    Blue,
+}
+
+type Point = {
+    x: number;
+    y: number;
+};
+"#;
+        let plugin = CodeParserPlugin;
+        let entities = plugin.extract_entities(code, "types.ts");
+        let names: Vec<&str> = entities.iter().map(|e| e.name.as_str()).collect();
+        let types: Vec<&str> = entities.iter().map(|e| e.entity_type.as_str()).collect();
+        eprintln!(
+            "TS enum+type: {:?}",
+            names.iter().zip(types.iter()).collect::<Vec<_>>()
+        );
+
+        assert!(
+            names.contains(&"Direction"),
+            "Should find Direction enum, got: {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"Point"),
+            "Should find Point type alias, got: {:?}",
+            names
+        );
+
+        let direction = entities.iter().find(|e| e.name == "Direction").unwrap();
+        assert_eq!(direction.entity_type, "enum", "Direction should be an enum");
+
+        let point = entities.iter().find(|e| e.name == "Point").unwrap();
+        assert_eq!(point.entity_type, "type", "Point should be a type alias");
+    }
 }

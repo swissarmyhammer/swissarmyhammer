@@ -460,6 +460,93 @@ database:
     }
 
     #[test]
+    fn test_default_provider_metadata() {
+        let provider = DefaultProvider::empty();
+        let meta = provider.metadata();
+        assert_eq!(meta.name, "defaults");
+    }
+
+    #[test]
+    fn test_cli_provider_metadata() {
+        let provider = CliProvider::empty();
+        let meta = provider.metadata();
+        assert_eq!(meta.name, "cli");
+    }
+
+    #[test]
+    fn test_default_provider_empty() {
+        let provider = DefaultProvider::empty();
+        let figment = provider.load_into(Figment::new()).unwrap();
+
+        let config: Value = figment.extract().unwrap();
+        assert_eq!(config, json!({}));
+    }
+
+    #[test]
+    fn test_cli_provider_empty() {
+        let provider = CliProvider::empty();
+        let figment = provider.load_into(Figment::new()).unwrap();
+
+        let config: Value = figment.extract().unwrap();
+        assert_eq!(config, json!({}));
+    }
+
+    #[test]
+    fn test_file_provider_yaml_null_file() {
+        // An empty YAML file parses to null; the provider should skip it gracefully
+        let temp_dir = TempDir::new().unwrap();
+        let yaml_file = temp_dir.path().join("empty.yaml");
+        fs::write(&yaml_file, "").unwrap();
+
+        let provider = FileProvider::new(yaml_file);
+        let figment = provider.load_into(Figment::new()).unwrap();
+
+        // Figment should be unchanged (no config merged)
+        let config: Value = figment.extract().unwrap_or(json!({}));
+        assert_eq!(config, json!({}));
+    }
+
+    #[test]
+    fn test_file_provider_yaml_comment_only_null() {
+        // A YAML file with only comments also parses to null
+        let temp_dir = TempDir::new().unwrap();
+        let yaml_file = temp_dir.path().join("comments.yml");
+        fs::write(&yaml_file, "# just a comment\n").unwrap();
+
+        let provider = FileProvider::new(yaml_file);
+        let figment = provider.load_into(Figment::new()).unwrap();
+
+        let config: Value = figment.extract().unwrap_or(json!({}));
+        assert_eq!(config, json!({}));
+    }
+
+    #[test]
+    fn test_file_provider_unsupported_extension() {
+        // A file with an unsupported extension (e.g. .ini) should return an error
+        let temp_dir = TempDir::new().unwrap();
+        let ini_file = temp_dir.path().join("config.ini");
+        fs::write(&ini_file, "[section]\nkey=value\n").unwrap();
+
+        let provider = FileProvider::new(ini_file);
+        let result = provider.load_into(Figment::new());
+
+        assert!(result.is_err());
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(
+            err_msg.contains("Unsupported file extension"),
+            "Expected 'Unsupported file extension' in error, got: {}",
+            err_msg
+        );
+    }
+
+    #[test]
+    fn test_file_provider_metadata() {
+        let provider = FileProvider::new(PathBuf::from("/some/path/config.toml"));
+        let meta = provider.metadata();
+        assert_eq!(meta.name, "file: /some/path/config.toml");
+    }
+
+    #[test]
     fn test_provider_precedence() {
         // Test that providers merge correctly with proper precedence
         let defaults = json!({"key": "default", "only_default": "default_value"});

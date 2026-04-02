@@ -39,5 +39,8 @@ tempfile = { workspace = true }
 test-log = { workspace = true }
 tracing-subscriber = { workspace = true }
 tokio-util = { workspace = true }
+serde_json = { workspace = true }
+rmcp = { workspace = true }
+regex = { workspace = true }
 swissarmyhammer-tools = { path = "../swissarmyhammer-tools" }
 swissarmyhammer-prompts = { path = "../swissarmyhammer-prompts" }
