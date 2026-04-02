@@ -1,5 +1,17 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { backendDispatch } from "@/lib/command-scope";
+import {
+  memo,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import {
+  backendDispatch,
+  CommandScopeContext,
+  scopeChainFromScope,
+} from "@/lib/command-scope";
 import { Plus } from "lucide-react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { DropZone } from "@/components/drop-zone";
@@ -15,6 +27,7 @@ import {
   useEntityFocus,
   type ClaimPredicate,
 } from "@/lib/entity-focus-context";
+import type { CommandDef } from "@/lib/command-scope";
 import type { Entity } from "@/types/kanban";
 import { getStr } from "@/types/kanban";
 
@@ -33,6 +46,8 @@ interface ColumnViewProps {
   dragTaskId?: string | null;
   /** Board path — passed explicitly from BoardView, not pulled from context. */
   boardPath?: string;
+  /** ID of the first task in the todo column — used for "Do This Next" command. */
+  firstTodoTaskId?: string | null;
   /** Ref callback for the column container — used for cross-window hit-testing. */
   containerRef?: (el: HTMLDivElement | null) => void;
   /**
@@ -89,6 +104,7 @@ export const ColumnView = memo(function ColumnView({
   onDrop: onDropProp,
   dragTaskId,
   boardPath,
+  firstTodoTaskId,
   containerRef: containerRefProp,
   leftColumnTaskMonikers = [],
   leftColumnHeaderMoniker = null,
@@ -101,6 +117,8 @@ export const ColumnView = memo(function ColumnView({
 }: ColumnViewProps) {
   const columnMoniker = moniker("column", column.id);
   const columnNameMoniker = fieldMoniker("column", column.id, "name");
+  const scope = useContext(CommandScopeContext);
+  const scopeChain = useMemo(() => scopeChainFromScope(scope), [scope]);
   const { getFieldDef } = useSchema();
   const nameFieldDef = getFieldDef("column", "name");
   const [editingName, setEditingName] = useState(false);
@@ -162,6 +180,40 @@ export const ColumnView = memo(function ColumnView({
       ),
     [tasks, column.id, boardPath],
   );
+
+  /** Build a "Do This Next" command for a task, or null if the task is already first in todo. */
+  const buildDoThisNextCommand = useCallback(
+    (taskId: string): CommandDef | null => {
+      // Don't show if task is already the first item in todo
+      if (taskId === firstTodoTaskId) return null;
+      return {
+        id: "task.doThisNext",
+        name: "Do This Next",
+        contextMenu: true,
+        execute: () => {
+          const args: Record<string, unknown> = { id: taskId, column: "todo" };
+          if (firstTodoTaskId) args.before_id = firstTodoTaskId;
+          backendDispatch({
+            cmd: "task.move",
+            args,
+            ...(boardPath ? { boardPath } : {}),
+            scopeChain,
+          }).catch(console.error);
+        },
+      };
+    },
+    [firstTodoTaskId, boardPath],
+  );
+
+  /** Memoized extra commands per task — includes "Do This Next" when applicable. */
+  const taskExtraCommands = useMemo(() => {
+    const map = new Map<string, CommandDef[]>();
+    for (const task of tasks) {
+      const cmd = buildDoThisNextCommand(task.id);
+      if (cmd) map.set(task.id, [cmd]);
+    }
+    return map;
+  }, [tasks, buildDoThisNextCommand]);
 
   // --- Compute claimWhen predicates for header and each card ---
 
@@ -357,6 +409,8 @@ export const ColumnView = memo(function ColumnView({
   /** Allow drops in the column + auto-scroll near edges. */
   const handleContainerDragOver = useCallback(
     (e: React.DragEvent) => {
+      // Ignore file drags from Finder/Explorer — those go through FileDropProvider.
+      if (e.dataTransfer.types.includes("Files")) return;
       // preventDefault is REQUIRED — without it the browser rejects drops
       // on child DropZones inside this container.
       e.preventDefault();
@@ -431,6 +485,7 @@ export const ColumnView = memo(function ColumnView({
                   cmd: "task.add",
                   args: { title: "New task", column: column.id },
                   ...(boardPath ? { boardPath } : {}),
+                  scopeChain,
                 });
               }}
               title={`Add task to ${getStr(column, "name")}`}
@@ -447,6 +502,7 @@ export const ColumnView = memo(function ColumnView({
           onTaskDragStart={onTaskDragStart}
           onTaskDragEnd={onTaskDragEnd}
           cardClaimPredicates={cardClaimPredicates}
+          taskExtraCommands={taskExtraCommands}
           containerRef={setContainerRef}
           onDragOver={handleContainerDragOver}
         />
@@ -467,6 +523,7 @@ interface VirtualizedCardListProps {
   onTaskDragStart?: (entity: Entity) => void;
   onTaskDragEnd?: (entity: Entity, dropEffect: string) => void;
   cardClaimPredicates: ClaimPredicate[][];
+  taskExtraCommands: Map<string, CommandDef[]>;
   containerRef: (el: HTMLDivElement | null) => void;
   onDragOver: (e: React.DragEvent) => void;
 }
@@ -487,6 +544,7 @@ const VirtualizedCardList = memo(function VirtualizedCardList({
   onTaskDragStart,
   onTaskDragEnd,
   cardClaimPredicates,
+  taskExtraCommands,
   containerRef: containerRefProp,
   onDragOver,
 }: VirtualizedCardListProps) {
@@ -535,6 +593,7 @@ const VirtualizedCardList = memo(function VirtualizedCardList({
                 onDragStart={onTaskDragStart}
                 onDragEnd={onTaskDragEnd}
                 claimWhen={cardClaimPredicates[i]}
+                extraCommands={taskExtraCommands.get(entity.id)}
               />
             </div>
           </div>
@@ -558,6 +617,7 @@ const VirtualizedCardList = memo(function VirtualizedCardList({
       onTaskDragStart={onTaskDragStart}
       onTaskDragEnd={onTaskDragEnd}
       cardClaimPredicates={cardClaimPredicates}
+      taskExtraCommands={taskExtraCommands}
       scrollRef={scrollRef}
       setRef={setRef}
       containerClass={containerClass}
@@ -575,6 +635,7 @@ function VirtualColumn({
   onTaskDragStart,
   onTaskDragEnd,
   cardClaimPredicates,
+  taskExtraCommands,
   scrollRef,
   setRef,
   containerClass,
@@ -587,6 +648,7 @@ function VirtualColumn({
   onTaskDragStart?: (entity: Entity) => void;
   onTaskDragEnd?: (entity: Entity, dropEffect: string) => void;
   cardClaimPredicates: ClaimPredicate[][];
+  taskExtraCommands: Map<string, CommandDef[]>;
   scrollRef: React.RefObject<HTMLDivElement | null>;
   setRef: (el: HTMLDivElement | null) => void;
   containerClass: string;
@@ -662,6 +724,7 @@ function VirtualColumn({
                   onDragStart={onTaskDragStart}
                   onDragEnd={onTaskDragEnd}
                   claimWhen={cardClaimPredicates[index]}
+                  extraCommands={taskExtraCommands.get(entity.id)}
                 />
               </div>
             </div>

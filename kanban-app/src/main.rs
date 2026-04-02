@@ -71,6 +71,7 @@ fn main() {
             commands::list_views,
             commands::get_undo_state,
             commands::create_window,
+            commands::save_dropped_file,
         ])
         .setup(|app| {
             // Build native menu bar from the command registry.
@@ -118,33 +119,16 @@ fn main() {
             let state = app.state::<AppState>();
             tauri::async_runtime::block_on(state.start_watchers(app_handle));
 
-            // The window starts hidden (visible: false in tauri.conf.json).
-            // Restore saved geometry from UIState, then show.
-            if let Some(win) = app.get_webview_window("main") {
-                if let Some(main_state) = state.ui_state.get_window_state("main") {
-                    if let (Some(x), Some(y)) = (main_state.x, main_state.y) {
-                        let _ = win.set_position(tauri::PhysicalPosition::new(x, y));
-                    }
-                    if let (Some(w), Some(h)) = (main_state.width, main_state.height) {
-                        let _ = win.set_size(tauri::PhysicalSize::new(w, h));
-                    }
-                    if main_state.maximized {
-                        let _ = win.maximize();
-                    }
-                }
-                let _ = win.show();
-                let _ = win.set_focus();
-            }
-
-            // Restore secondary windows from persisted UIState.
-            // Uses the same create_window_impl path as window.new — no special
-            // cases, fully observable in logs.
+            // Restore ALL board windows from persisted UIState.
+            // Every board window is created dynamically via create_window_impl —
+            // no static "main" window, no primary/secondary distinction.
             {
                 let saved_windows = state.ui_state.all_windows();
                 let app_handle = app.handle().clone();
                 let restore_state = app.state::<AppState>();
+                let mut restored_any = false;
                 for (label, entry) in &saved_windows {
-                    if label == "main" || label == "quick-capture" {
+                    if label == "quick-capture" {
                         continue;
                     }
                     let board_path = match state.ui_state.window_board(label) {
@@ -170,8 +154,23 @@ fn main() {
                     )) {
                         tracing::warn!(
                             label = %label, error = %e,
-                            "setup: failed to restore secondary window"
+                            "setup: failed to restore window"
                         );
+                    } else {
+                        restored_any = true;
+                    }
+                }
+
+                // If no windows were restored, create one for the first open board.
+                if !restored_any {
+                    if let Err(e) = tauri::async_runtime::block_on(commands::create_window_impl(
+                        &app_handle,
+                        &restore_state,
+                        None, // create_window_impl resolves board from active/first-open
+                        None,
+                        None,
+                    )) {
+                        tracing::error!(error = %e, "setup: failed to create initial window");
                     }
                 }
             }
@@ -285,7 +284,7 @@ fn main() {
                 // ExitRequested sets shutting_down=true before CloseRequested
                 // fires, so entries are preserved for restore.
                 WindowEvent::CloseRequested { .. } => {
-                    if label == "main" || label == "quick-capture" {
+                    if label == "quick-capture" {
                         return;
                     }
                     let state = window.app_handle().state::<AppState>();
@@ -299,7 +298,7 @@ fn main() {
                 // Rebuild the Window menu when a secondary window is destroyed.
                 // Actual UIState cleanup happened in CloseRequested above.
                 WindowEvent::Destroyed => {
-                    if label == "main" || label == "quick-capture" {
+                    if label == "quick-capture" {
                         return;
                     }
                     // Don't rebuild menu during shutdown — the app is exiting.

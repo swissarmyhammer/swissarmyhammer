@@ -1,7 +1,12 @@
-import { useMemo } from "react";
+import { useContext, useMemo } from "react";
 import { useSchemaOptional } from "@/lib/schema-context";
 import { useInspectOptional } from "@/lib/inspect-context";
-import { useActiveBoardPath, backendDispatch } from "@/lib/command-scope";
+import {
+  useActiveBoardPath,
+  backendDispatch,
+  scopeChainFromScope,
+  CommandScopeContext,
+} from "@/lib/command-scope";
 import { moniker } from "@/lib/moniker";
 import type { CommandDef } from "@/lib/command-scope";
 import type { Entity, EntityCommand } from "@/types/kanban";
@@ -55,6 +60,7 @@ export function resolveCommandName(
  * @param inspectEntity - Callback to open the inspect panel for a moniker
  * @param boardPath - Optional board path for dispatch_command calls
  * @param entity - Optional entity instance for template resolution
+ * @param scopeChain - Scope chain monikers for window-scoped dispatch
  * @returns Array of CommandDefs scoped to the given entity
  */
 export function buildEntityCommandDefs(
@@ -64,6 +70,7 @@ export function buildEntityCommandDefs(
   inspectEntity: (moniker: string) => void,
   boardPath?: string | null,
   entity?: Entity,
+  scopeChain?: string[],
 ): CommandDef[] {
   const entityMoniker = moniker(entityType, entityId);
   return schemaCommands.map((cmd) => ({
@@ -87,6 +94,7 @@ export function buildEntityCommandDefs(
           cmd: cmd.id,
           target: entityMoniker,
           ...(boardPath ? { boardPath } : {}),
+          scopeChain: scopeChain ?? [],
         }).catch(console.error);
       }
     },
@@ -142,6 +150,8 @@ export function useEntityCommands(
   const { getEntityCommands } = useSchemaOptional();
   const inspect = useInspectOptional();
   const boardPath = useActiveBoardPath();
+  const scope = useContext(CommandScopeContext);
+  const scopeChain = useMemo(() => scopeChainFromScope(scope), [scope]);
   const entityMoniker = moniker(entityType, entityId);
   const schemaCommands = getEntityCommands(entityType);
 
@@ -161,6 +171,7 @@ export function useEntityCommands(
               cmd: cmd.id,
               target: entityMoniker,
               ...(boardPath ? { boardPath } : {}),
+              scopeChain,
             }).catch(console.error);
           }
         },

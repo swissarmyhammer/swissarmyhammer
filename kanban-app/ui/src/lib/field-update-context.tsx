@@ -6,7 +6,12 @@ import {
   type ReactNode,
 } from "react";
 import { error as logError } from "@/lib/log";
-import { useActiveBoardPath, backendDispatch } from "@/lib/command-scope";
+import {
+  useActiveBoardPath,
+  backendDispatch,
+  scopeChainFromScope,
+  CommandScopeContext,
+} from "@/lib/command-scope";
 
 /**
  * Signature for the centralized field update function.
@@ -46,6 +51,9 @@ export function FieldUpdateProvider({ children }: FieldUpdateProviderProps) {
   const boardPath = useActiveBoardPath();
   const boardPathRef = useRef(boardPath);
   boardPathRef.current = boardPath;
+  const scope = useContext(CommandScopeContext);
+  const scopeRef = useRef(scopeChainFromScope(scope));
+  scopeRef.current = scopeChainFromScope(scope);
 
   const updateField: UpdateFieldFn = useCallback(
     async (entityType, entityId, fieldName, value) => {
@@ -59,6 +67,7 @@ export function FieldUpdateProvider({ children }: FieldUpdateProviderProps) {
             value,
           },
           ...(boardPathRef.current ? { boardPath: boardPathRef.current } : {}),
+          scopeChain: scopeRef.current,
         });
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : String(e);

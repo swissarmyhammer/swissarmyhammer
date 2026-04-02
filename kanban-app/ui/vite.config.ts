@@ -2,7 +2,9 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
+import { playwright } from "@vitest/browser-playwright";
 import path from "path";
+import * as integrationCommands from "./src/test/integration-commands.ts";
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
@@ -23,7 +25,41 @@ export default defineConfig({
     sourcemap: !!process.env.TAURI_DEBUG,
   },
   test: {
-    environment: "jsdom",
     globals: true,
+    projects: [
+      {
+        plugins: [react()],
+        resolve: {
+          alias: { "@": path.resolve(__dirname, "./src") },
+        },
+        test: {
+          name: "unit",
+          include: ["src/**/*.test.{ts,tsx}"],
+          exclude: ["src/**/*.browser.test.{ts,tsx}"],
+          environment: "jsdom",
+          globals: true,
+        },
+      },
+      {
+        plugins: [react()],
+        resolve: {
+          alias: { "@": path.resolve(__dirname, "./src") },
+        },
+        optimizeDeps: {
+          entries: ["src/**/*.browser.test.{ts,tsx}"],
+        },
+        test: {
+          name: "browser",
+          include: ["src/**/*.browser.test.{ts,tsx}"],
+          globals: true,
+          browser: {
+            enabled: true,
+            provider: playwright(),
+            instances: [{ browser: "chromium" }],
+            commands: integrationCommands,
+          },
+        },
+      },
+    ],
   },
 });

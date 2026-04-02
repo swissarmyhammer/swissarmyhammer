@@ -17,6 +17,8 @@ import {
   CommandScopeContext,
   resolveCommand,
   dispatchCommand,
+  scopeChainFromScope,
+  useActiveBoardPath,
   type CommandAtDepth,
 } from "@/lib/command-scope";
 import { useUIState } from "@/lib/ui-state-context";
@@ -253,11 +255,15 @@ export function CommandPalette({
     }
     if (inspectEntity) {
       const entityMoniker = moniker(result.entity_type, result.entity_id);
-      dispatchCommand({
-        id: "entity.inspect",
-        name: "Inspect Entity",
-        execute: () => inspectEntity(entityMoniker),
-      });
+      dispatchCommand(
+        {
+          id: "entity.inspect",
+          name: "Inspect Entity",
+          execute: () => inspectEntity(entityMoniker),
+        },
+        undefined,
+        scopeChain ?? [],
+      );
     }
   }, [searchResults, selectedIndex, onClose, inspectEntity, onSwitchBoard]);
 
@@ -445,7 +451,7 @@ export function CommandPalette({
                       ${index === selectedIndex ? "bg-accent text-accent-foreground" : "hover:bg-accent/50"}`}
                   onClick={() => {
                     onClose();
-                    dispatchCommand(entry.command);
+                    dispatchCommand(entry.command, undefined, scopeChain ?? []);
                   }}
                   onMouseEnter={() => setSelectedIndex(index)}
                 >
@@ -571,6 +577,7 @@ function SearchResultRow({
   onHoverIndex: (index: number) => void;
 }) {
   const scope = useContext(CommandScopeContext);
+  const boardPath = useActiveBoardPath();
   return (
     <div
       role="option"
@@ -582,7 +589,7 @@ function SearchResultRow({
         const cmd = resolveCommand(scope, "entity.inspect");
         if (cmd) {
           onClose();
-          dispatchCommand(cmd);
+          dispatchCommand(cmd, boardPath, scopeChainFromScope(scope));
         }
       }}
       onMouseEnter={() => onHoverIndex(index)}

@@ -39,6 +39,7 @@ export function ViewsProvider({ children }: { children: ReactNode }) {
     backendDispatch({
       cmd: "ui.view.set",
       args: { view_id: id },
+      scopeChain: [`window:${WINDOW_LABEL}`],
     }).catch(console.error);
   }, []);
 

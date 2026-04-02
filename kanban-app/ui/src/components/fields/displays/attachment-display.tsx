@@ -35,6 +35,7 @@ import {
   CommandScopeContext,
   resolveCommand,
   dispatchCommand,
+  scopeChainFromScope,
   useActiveBoardPath,
   type CommandDef,
 } from "@/lib/command-scope";
@@ -272,12 +273,13 @@ function AttachmentItemInner({
   Icon,
 }: AttachmentItemInnerProps) {
   const scope = useContext(CommandScopeContext);
+  const boardPath = useActiveBoardPath();
   const onContextMenu = useContextMenu(scopeChain);
 
   const handleDoubleClick = useCallback(() => {
     const cmd = resolveCommand(scope, "attachment.open");
-    if (cmd) dispatchCommand(cmd);
-  }, [scope]);
+    if (cmd) dispatchCommand(cmd, boardPath, scopeChainFromScope(scope));
+  }, [scope, boardPath]);
 
   return (
     <div

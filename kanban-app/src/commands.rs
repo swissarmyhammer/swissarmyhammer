@@ -818,6 +818,24 @@ pub async fn log_command(cmd: String, target: Option<String>) {
 }
 
 // ---------------------------------------------------------------------------
+// save_dropped_file — write HTML5 drop bytes to a temp file
+// ---------------------------------------------------------------------------
+
+/// Receive file bytes from an HTML5 drop event and write to a temp file.
+/// Returns the absolute path so the frontend can pass it to attachment copy.
+#[tauri::command]
+pub async fn save_dropped_file(filename: String, data: Vec<u8>) -> Result<String, String> {
+    use std::io::Write;
+    let safe = filename.replace(['/', '\\', '\0'], "_");
+    let tmp_dir = std::env::temp_dir().join("kanban-drops");
+    std::fs::create_dir_all(&tmp_dir).map_err(|e| e.to_string())?;
+    let path = tmp_dir.join(format!("{}-{}", ulid::Ulid::new(), safe));
+    let mut f = std::fs::File::create(&path).map_err(|e| e.to_string())?;
+    f.write_all(&data).map_err(|e| e.to_string())?;
+    Ok(path.to_string_lossy().into_owned())
+}
+
+// ---------------------------------------------------------------------------
 // dispatch_command — unified command dispatcher via Command trait
 // ---------------------------------------------------------------------------
 

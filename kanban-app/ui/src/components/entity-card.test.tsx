@@ -247,6 +247,7 @@ describe("EntityCard", () => {
         field_name: "title",
         value: "defect",
       },
+      scopeChain: [],
     });
   });
 

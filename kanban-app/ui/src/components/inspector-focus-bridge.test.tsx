@@ -209,4 +209,14 @@ describe("InspectorFocusBridge", () => {
       container.querySelector('[data-testid="field-row-body"]'),
     ).toBeTruthy();
   });
+
+  it("renders entity FocusScope with the entity moniker", async () => {
+    const { container } = await renderBridge(
+      makeEntity({ title: "T", body: "B" }),
+    );
+    // FocusScope adds data-moniker attribute; the inspector's entity scope should be present
+    expect(
+      container.querySelector('[data-moniker="task:test-id"]'),
+    ).toBeTruthy();
+  });
 });

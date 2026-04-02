@@ -34,11 +34,15 @@ export function SlidePanel({
       <div className="flex items-center justify-end px-3 pt-3">
         <button
           onClick={() => {
-            dispatchCommand({
-              id: "ui.inspector.close",
-              name: "Close Inspector",
-              execute: onClose,
-            });
+            dispatchCommand(
+              {
+                id: "ui.inspector.close",
+                name: "Close Inspector",
+                execute: onClose,
+              },
+              undefined,
+              [],
+            );
           }}
           className="shrink-0 p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
         >

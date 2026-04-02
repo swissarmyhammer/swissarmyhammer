@@ -44,11 +44,15 @@ export function NavBar({
           className="p-1 rounded text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted transition-colors"
           onClick={() => {
             const target = moniker("board", "board");
-            dispatchCommand({
-              id: "entity.inspect",
-              name: "Inspect Board",
-              execute: () => inspectEntity(target),
-            });
+            dispatchCommand(
+              {
+                id: "entity.inspect",
+                name: "Inspect Board",
+                execute: () => inspectEntity(target),
+              },
+              undefined,
+              [],
+            );
           }}
           title="Inspect board"
         >

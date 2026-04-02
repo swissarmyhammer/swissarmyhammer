@@ -157,39 +157,50 @@ function App() {
   const panelStackRef = useRef(panelStack);
   panelStackRef.current = panelStack;
 
+  // Scope chain for this window — used by direct backendDispatch calls
+  // so the backend knows which window's inspector stack to modify.
+  const windowScopeChain = useMemo(() => [`window:${WINDOW_LABEL}`], []);
+
   /** Open an inspector for any entity via the command architecture.
    *  Fire-and-forget — InspectorSyncBridge updates panelStack from UIState. */
-  const inspectEntity = useCallback((entityType: string, entityId: string) => {
-    backendDispatch({
-      cmd: "ui.inspect",
-      target: `${entityType}:${entityId}`,
-    }).catch((e) => console.error("ui.inspect failed:", e));
-  }, []);
+  const inspectEntity = useCallback(
+    (entityType: string, entityId: string) => {
+      backendDispatch({
+        cmd: "ui.inspect",
+        target: `${entityType}:${entityId}`,
+        scopeChain: windowScopeChain,
+      }).catch((e) => console.error("ui.inspect failed:", e));
+    },
+    [windowScopeChain],
+  );
 
   /** Close the topmost inspector panel via the command architecture.
    *  Fire-and-forget — InspectorSyncBridge updates panelStack from UIState. */
   const closeTopPanel = useCallback(() => {
-    backendDispatch({ cmd: "ui.inspector.close" }).catch((e) =>
-      console.error("ui.inspector.close failed:", e),
-    );
-  }, []);
+    backendDispatch({
+      cmd: "ui.inspector.close",
+      scopeChain: windowScopeChain,
+    }).catch((e) => console.error("ui.inspector.close failed:", e));
+  }, [windowScopeChain]);
 
   /** Close the topmost panel. Returns true if a panel was actually closed.
    *  Fire-and-forget — InspectorSyncBridge updates panelStack from UIState. */
   const dismissTopPanel = useCallback((): boolean => {
     if (panelStackRef.current.length === 0) return false;
-    backendDispatch({ cmd: "ui.inspector.close" }).catch((e) =>
-      console.error("ui.inspector.close failed:", e),
-    );
+    backendDispatch({
+      cmd: "ui.inspector.close",
+      scopeChain: windowScopeChain,
+    }).catch((e) => console.error("ui.inspector.close failed:", e));
     return true;
-  }, []);
+  }, [windowScopeChain]);
 
   /** Close all inspector panels via the command architecture.
    *  Fire-and-forget — InspectorSyncBridge updates panelStack from UIState. */
   const closeAll = useCallback(() => {
-    backendDispatch({ cmd: "ui.inspector.close_all" }).catch((e) =>
-      console.error("ui.inspector.close_all failed:", e),
-    );
+    backendDispatch({
+      cmd: "ui.inspector.close_all",
+      scopeChain: windowScopeChain,
+    }).catch((e) => console.error("ui.inspector.close_all failed:", e));
   }, []);
 
   // Intentional empty deps: reads activeBoardPathRef to avoid stale closure.
@@ -214,6 +225,7 @@ function App() {
       backendDispatch({
         cmd: "file.switchBoard",
         args: { windowLabel: WINDOW_LABEL, path: active.path },
+        scopeChain: windowScopeChain,
       }).catch(() => {});
     }
 
@@ -262,6 +274,7 @@ function App() {
           await backendDispatch({
             cmd: "file.switchBoard",
             args: { windowLabel: WINDOW_LABEL, path: winState.board_path },
+            scopeChain: windowScopeChain,
           });
           if (cancelled) return;
           setActiveBoardPath(winState.board_path);
@@ -433,6 +446,7 @@ function App() {
           backendDispatch({
             cmd: "file.switchBoard",
             args: { windowLabel: WINDOW_LABEL, path: newPath },
+            scopeChain: windowScopeChain,
           }).catch(() => {});
           setActiveBoardPath(newPath);
           activeBoardPathRef.current = newPath;
@@ -516,6 +530,7 @@ function App() {
         backendDispatch({
           cmd: "file.switchBoard",
           args: { windowLabel: WINDOW_LABEL, path: fallback.path },
+          scopeChain: windowScopeChain,
         }).catch(() => {});
         setLoading(true);
         const result = await refreshBoards(fallback.path);
@@ -540,6 +555,7 @@ function App() {
         await backendDispatch({
           cmd: "file.switchBoard",
           args: { windowLabel: WINDOW_LABEL, path },
+          scopeChain: windowScopeChain,
         });
       } catch {
         /* ignore */
@@ -608,11 +624,15 @@ function App() {
                                                   : "opacity-0 pointer-events-none"
                                               }`}
                                               onClick={() => {
-                                                dispatchCommand({
-                                                  id: "ui.inspector.close_all",
-                                                  name: "Close All Inspectors",
-                                                  execute: closeAll,
-                                                });
+                                                dispatchCommand(
+                                                  {
+                                                    id: "ui.inspector.close_all",
+                                                    name: "Close All Inspectors",
+                                                    execute: closeAll,
+                                                  },
+                                                  undefined,
+                                                  [],
+                                                );
                                               }}
                                             />
 
@@ -699,6 +719,7 @@ function ViewCommandScope({ children }: { children: React.ReactNode }) {
       execute: () => {
         backendDispatch({
           cmd: `view.switch:${view.id}`,
+          scopeChain: [`window:${WINDOW_LABEL}`],
         }).catch(console.error);
       },
     }));

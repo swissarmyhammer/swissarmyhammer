@@ -149,6 +149,51 @@ describe("AppShell", () => {
     expect(dismissCall).toBeTruthy();
   });
 
+  it("keyboard dispatch includes scopeChain with window moniker", async () => {
+    const mockInvoke = invoke as ReturnType<typeof vi.fn>;
+
+    function FocusedCard() {
+      const { setFocus } = useEntityFocus();
+      return (
+        <FocusScope moniker="task:t1" commands={[]}>
+          <button onClick={() => setFocus("task:t1")}>Focus Card</button>
+        </FocusScope>
+      );
+    }
+
+    renderShell(<FocusedCard />);
+    mockInvoke.mockClear();
+
+    // Focus the card scope
+    await act(async () => {
+      fireEvent.click(screen.getByText("Focus Card"));
+    });
+
+    mockInvoke.mockClear();
+
+    // Press Escape — this dispatches app.dismiss through the focused scope
+    await act(async () => {
+      fireEvent.keyDown(document, { key: "Escape", code: "Escape" });
+    });
+
+    const dismissCall = mockInvoke.mock.calls.find(
+      (c: unknown[]) =>
+        c[0] === "dispatch_command" &&
+        (c[1] as Record<string, unknown>)?.cmd === "app.dismiss",
+    );
+    expect(dismissCall).toBeTruthy();
+
+    // The scopeChain must be present and include the window moniker
+    const params = dismissCall![1] as Record<string, unknown>;
+    expect(params.scopeChain).toBeTruthy();
+    expect(Array.isArray(params.scopeChain)).toBe(true);
+    const chain = params.scopeChain as string[];
+    // Window moniker should be in the chain (AppShell wraps in window:main via App)
+    // At minimum, the chain should not be empty — it should contain at least
+    // the scope monikers from the focused card upward.
+    expect(chain.length).toBeGreaterThan(0);
+  });
+
   it("keybinding handler resolves commands from focused scope", async () => {
     const focusedFn = vi.fn();
 

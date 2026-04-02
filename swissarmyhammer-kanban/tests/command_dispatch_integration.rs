@@ -452,6 +452,84 @@ async fn inspector_close_all() {
 }
 
 #[tokio::test]
+async fn inspect_uses_window_from_scope_chain() {
+    let engine = TestEngine::new().await;
+
+    // Dispatch inspect with a scope chain that includes window:board-2
+    // This simulates pressing (i) in a secondary window.
+    engine
+        .dispatch_simple(
+            "ui.inspect",
+            &["task:01XYZ", "column:todo", "window:board-2"],
+            Some("task:01XYZ"),
+        )
+        .await
+        .expect("ui.inspect should succeed");
+
+    // The inspector stack should be on window "board-2", NOT "main"
+    assert_eq!(
+        engine.ui_state.inspector_stack("board-2"),
+        vec!["task:01XYZ"],
+        "inspector should open in the window specified by scope chain"
+    );
+    assert!(
+        engine.ui_state.inspector_stack("main").is_empty(),
+        "main window inspector should be unaffected"
+    );
+}
+
+#[tokio::test]
+async fn inspector_close_uses_window_from_scope_chain() {
+    let engine = TestEngine::new().await;
+
+    // Open inspector in board-2
+    engine
+        .dispatch_simple(
+            "ui.inspect",
+            &["task:01XYZ", "window:board-2"],
+            Some("task:01XYZ"),
+        )
+        .await
+        .unwrap();
+
+    // Close inspector in board-2 (scope chain carries the window)
+    engine
+        .dispatch_simple(
+            "ui.inspector.close",
+            &["task:01XYZ", "window:board-2"],
+            None,
+        )
+        .await
+        .expect("ui.inspector.close should succeed");
+
+    assert!(
+        engine.ui_state.inspector_stack("board-2").is_empty(),
+        "board-2 inspector should be closed"
+    );
+}
+
+#[tokio::test]
+async fn inspect_without_window_in_scope_falls_back_to_main() {
+    let engine = TestEngine::new().await;
+
+    // No window: moniker in scope chain — should fall back to "main"
+    engine
+        .dispatch_simple(
+            "ui.inspect",
+            &["task:01XYZ", "column:todo"],
+            Some("task:01XYZ"),
+        )
+        .await
+        .expect("ui.inspect should succeed");
+
+    assert_eq!(
+        engine.ui_state.inspector_stack("main"),
+        vec!["task:01XYZ"],
+        "should fall back to main when no window in scope"
+    );
+}
+
+#[tokio::test]
 async fn keymap_mode_change() {
     let engine = TestEngine::new().await;
 

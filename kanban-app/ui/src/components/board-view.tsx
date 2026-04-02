@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   DndContext,
   DragOverlay,
@@ -17,8 +24,10 @@ import {
 import { emit } from "@tauri-apps/api/event";
 import type { DropZoneDescriptor } from "@/lib/drop-zones";
 import {
+  CommandScopeContext,
   CommandScopeProvider,
   backendDispatch,
+  scopeChainFromScope,
   type CommandDef,
 } from "@/lib/command-scope";
 import { ColumnView } from "@/components/column-view";
@@ -63,6 +72,8 @@ interface TaskDragState {
 export function BoardView({ board, tasks, boardPath }: BoardViewProps) {
   const boardPathRef = useRef(boardPath);
   boardPathRef.current = boardPath;
+  const scope = useContext(CommandScopeContext);
+  const scopeChain = useMemo(() => scopeChainFromScope(scope), [scope]);
   const { startSession, cancelSession, completeSession } = useDragSession();
   const boardMoniker = moniker("board", "board");
   const boardCommands = useEntityCommands("board", "board");
@@ -135,6 +146,14 @@ export function BoardView({ board, tasks, boardPath }: BoardViewProps) {
     }
     return map;
   }, [columns, baseLayout, taskMap]);
+
+  // The first task in the todo (first) column — used for "Do This Next" placement
+  const firstTodoTaskId = useMemo(() => {
+    if (columns.length === 0) return null;
+    const todoColId = columns[0].id;
+    const todoTaskIds = baseLayout.get(todoColId);
+    return todoTaskIds && todoTaskIds.length > 0 ? todoTaskIds[0] : null;
+  }, [columns, baseLayout]);
 
   // --- Cross-column moniker tables for claimWhen ---
 
@@ -358,6 +377,7 @@ export function BoardView({ board, tasks, boardPath }: BoardViewProps) {
           cmd: "column.reorder",
           args: { id: activeId, target_index: newIndex },
           ...(boardPathRef.current ? { boardPath: boardPathRef.current } : {}),
+          scopeChain,
         });
       } catch (e) {
         console.error("Failed to reorder columns:", e);
@@ -462,6 +482,7 @@ export function BoardView({ board, tasks, boardPath }: BoardViewProps) {
           cmd: "task.add",
           args: { title, column: columnId },
           ...(boardPathRef.current ? { boardPath: boardPathRef.current } : {}),
+          scopeChain,
         });
       } catch (e) {
         console.error("Failed to add task:", e);
@@ -520,6 +541,7 @@ export function BoardView({ board, tasks, boardPath }: BoardViewProps) {
                       onTaskDragEnd={handleTaskDragEnd}
                       onDrop={handleZoneDrop}
                       dragTaskId={taskDrag?.sourceTaskId ?? null}
+                      firstTodoTaskId={firstTodoTaskId}
                       boardPath={boardPath}
                       leftColumnTaskMonikers={
                         prevColId

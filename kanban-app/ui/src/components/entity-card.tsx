@@ -16,6 +16,8 @@ import {
   CommandScopeContext,
   resolveCommand,
   dispatchCommand,
+  scopeChainFromScope,
+  useActiveBoardPath,
   type CommandDef,
 } from "@/lib/command-scope";
 import type { ClaimPredicate } from "@/lib/entity-focus-context";
@@ -155,6 +157,8 @@ export const EntityCard = memo(
 /** Dispatches entity.inspect through the scope chain instead of calling inspectEntity directly. */
 function InspectButton() {
   const scope = useContext(CommandScopeContext);
+  const boardPath = useActiveBoardPath();
+  const chain = useMemo(() => scopeChainFromScope(scope), [scope]);
   return (
     <button
       type="button"
@@ -162,7 +166,7 @@ function InspectButton() {
       onClick={(e) => {
         e.stopPropagation();
         const cmd = resolveCommand(scope, "ui.inspect");
-        if (cmd) dispatchCommand(cmd);
+        if (cmd) dispatchCommand(cmd, boardPath, chain);
       }}
       title="Inspect"
     >

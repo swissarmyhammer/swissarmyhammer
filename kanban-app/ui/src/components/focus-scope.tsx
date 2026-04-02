@@ -10,6 +10,7 @@ import {
   CommandScopeContext,
   resolveCommand,
   dispatchCommand,
+  useActiveBoardPath,
   type CommandDef,
   type CommandScope,
 } from "@/lib/command-scope";
@@ -182,6 +183,8 @@ function FocusScopeInner({
     [moniker, setFocus, contextMenuHandler],
   );
 
+  const boardPath = useActiveBoardPath();
+
   const handleDoubleClick = useCallback(
     (e: React.MouseEvent) => {
       // Skip if target is an interactive element
@@ -196,10 +199,10 @@ function FocusScopeInner({
       // to the backend which pushes onto the inspector stack.
       const cmd = resolveCommand(scope, "ui.inspect");
       if (cmd) {
-        dispatchCommand(cmd);
+        dispatchCommand(cmd, boardPath, scopeChain);
       }
     },
-    [scope],
+    [scope, boardPath, scopeChain],
   );
 
   return (

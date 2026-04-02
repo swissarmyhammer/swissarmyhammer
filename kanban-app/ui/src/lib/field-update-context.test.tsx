@@ -53,6 +53,7 @@ describe("FieldUpdateProvider", () => {
         field_name: "title",
         value: "New Title",
       },
+      scopeChain: [],
     });
   });
 
@@ -97,6 +98,7 @@ describe("FieldUpdateProvider", () => {
         field_name: "color",
         value: "ff0000",
       },
+      scopeChain: [],
     });
   });
 
@@ -120,6 +122,7 @@ describe("FieldUpdateProvider", () => {
         field_name: "name",
         value: "In Progress",
       },
+      scopeChain: [],
     });
   });
 });
