@@ -22,6 +22,9 @@ vi.mock("@tauri-apps/api/webview", () => ({
     onDragDropEvent: vi.fn(() => Promise.resolve(() => {})),
   }),
 }));
+vi.mock("@tauri-apps/api/window", () => ({
+  getCurrentWindow: () => ({ label: "main" }),
+}));
 // ---------------------------------------------------------------------------
 
 import {
@@ -33,10 +36,15 @@ import {
   type AttachmentMeta,
 } from "./attachment-display";
 import { FileDropProvider } from "@/lib/file-drop-context";
+import { EntityFocusProvider } from "@/lib/entity-focus-context";
 
-/** Wraps component in FileDropProvider for display tests that use useFileDrop. */
+/** Wraps component in providers needed by hooks (useDispatchCommand, useFileDrop). */
 function Wrapper({ children }: { children: React.ReactNode }) {
-  return <FileDropProvider>{children}</FileDropProvider>;
+  return (
+    <EntityFocusProvider>
+      <FileDropProvider>{children}</FileDropProvider>
+    </EntityFocusProvider>
+  );
 }
 import {
   File,
@@ -171,31 +179,29 @@ describe("getFileIcon", () => {
 
 describe("AttachmentItem", () => {
   it("renders filename and size", () => {
-    render(<AttachmentItem attachment={imageAttachment} />);
+    render(<Wrapper><AttachmentItem attachment={imageAttachment} /></Wrapper>);
     expect(screen.getByText("screenshot.png")).toBeTruthy();
     expect(screen.getByText("12.1 KB")).toBeTruthy();
   });
 
   it("has cursor-pointer class for interactivity", () => {
     const { container } = render(
-      <AttachmentItem attachment={imageAttachment} />,
+      <Wrapper><AttachmentItem attachment={imageAttachment} /></Wrapper>,
     );
-    const item = container.firstElementChild;
-    expect(item?.className).toContain("cursor-pointer");
+    expect(container.querySelector(".cursor-pointer")).toBeTruthy();
   });
 
   it("calls dispatch_command on double-click", async () => {
     mockInvoke.mockClear();
     const { container } = render(
-      <AttachmentItem attachment={imageAttachment} />,
+      <Wrapper><AttachmentItem attachment={imageAttachment} /></Wrapper>,
     );
-    fireEvent.doubleClick(container.firstElementChild!);
-    // backendDispatch calls invoke("dispatch_command", ...) asynchronously
+    fireEvent.doubleClick(container.querySelector(".cursor-pointer")!);
     await vi.waitFor(() => {
-      expect(mockInvoke).toHaveBeenCalledWith("dispatch_command", {
-        cmd: "attachment.open",
-        scopeChain: [`attachment:${imageAttachment.path}`],
-      });
+      expect(mockInvoke).toHaveBeenCalledWith(
+        "dispatch_command",
+        expect.objectContaining({ cmd: "attachment.open" }),
+      );
     });
   });
 
@@ -225,21 +231,73 @@ describe("AttachmentItem", () => {
       return Promise.resolve("ok");
     });
     const { container } = render(
-      <AttachmentItem attachment={imageAttachment} />,
+      <Wrapper><AttachmentItem attachment={imageAttachment} /></Wrapper>,
     );
-    fireEvent.contextMenu(container.firstElementChild!);
+    fireEvent.contextMenu(container.querySelector(".cursor-pointer")!);
     await vi.waitFor(() => {
       expect(mockInvoke).toHaveBeenCalledWith("show_context_menu", {
         items: [
-          { id: `attachment.open:${imageAttachment.path}`, name: "Open" },
-          {
-            id: `attachment.reveal:${imageAttachment.path}`,
-            name: "Show in Finder",
-          },
+          expect.objectContaining({ cmd: "attachment.open", name: "Open", separator: false }),
+          expect.objectContaining({ cmd: "attachment.reveal", name: "Show in Finder", separator: false }),
         ],
       });
     });
     // Restore default mock
+    mockInvoke.mockImplementation(() => Promise.resolve("ok"));
+  });
+
+  it("scope chain includes attachment moniker on right-click", async () => {
+    mockInvoke.mockClear();
+    mockListen.mockResolvedValue(() => {});
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    mockInvoke.mockImplementation((cmd: any) => {
+      if (cmd === "list_commands_for_scope") return Promise.resolve([]);
+      return Promise.resolve("ok");
+    });
+    const { container } = render(
+      <Wrapper><AttachmentItem attachment={imageAttachment} /></Wrapper>,
+    );
+    fireEvent.contextMenu(container.querySelector(".cursor-pointer")!);
+    await vi.waitFor(() => {
+      const call = mockInvoke.mock.calls.find(
+        (c: unknown[]) => c[0] === "list_commands_for_scope",
+      );
+      expect(call).toBeDefined();
+      const { scopeChain } = call![1] as { scopeChain: string[] };
+      expect(scopeChain[0]).toBe(`attachment:${imageAttachment.path}`);
+    });
+    mockInvoke.mockImplementation(() => Promise.resolve("ok"));
+  });
+
+  it("nested inside parent FocusScope: right-click fires attachment scope, not parent", async () => {
+    mockInvoke.mockClear();
+    mockListen.mockResolvedValue(() => {});
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    mockInvoke.mockImplementation((cmd: any) => {
+      if (cmd === "list_commands_for_scope") return Promise.resolve([]);
+      return Promise.resolve("ok");
+    });
+    const FocusScope = (await import("@/components/focus-scope")).FocusScope;
+    const { container } = render(
+      <Wrapper>
+        <FocusScope moniker="task:01ABC" commands={[]}>
+          <AttachmentItem attachment={imageAttachment} />
+        </FocusScope>
+      </Wrapper>,
+    );
+    fireEvent.contextMenu(container.querySelector(".cursor-pointer")!);
+    await vi.waitFor(() => {
+      const calls = mockInvoke.mock.calls.filter(
+        (c: unknown[]) => c[0] === "list_commands_for_scope",
+      );
+      // Should be exactly one call — the attachment's, not the parent task's
+      expect(calls).toHaveLength(1);
+      const { scopeChain } = calls[0][1] as { scopeChain: string[] };
+      // Attachment moniker should be first (innermost)
+      expect(scopeChain[0]).toBe(`attachment:${imageAttachment.path}`);
+      // Parent task moniker should be second
+      expect(scopeChain[1]).toBe("task:01ABC");
+    });
     mockInvoke.mockImplementation(() => Promise.resolve("ok"));
   });
 });

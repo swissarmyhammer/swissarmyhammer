@@ -12,9 +12,7 @@
 
 import {
   useCallback,
-  useContext,
   useEffect,
-  useMemo,
   useRef,
   type ComponentType,
 } from "react";
@@ -29,18 +27,9 @@ import {
   FileArchive,
   Paperclip,
 } from "lucide-react";
-import {
-  backendDispatch,
-  CommandScopeProvider,
-  CommandScopeContext,
-  resolveCommand,
-  dispatchCommand,
-  scopeChainFromScope,
-  useActiveBoardPath,
-  type CommandDef,
-} from "@/lib/command-scope";
+import { useDispatchCommand } from "@/lib/command-scope";
+import { FocusScope } from "@/components/focus-scope";
 import { useFileDrop, type DropCallback } from "@/lib/file-drop-context";
-import { useContextMenu } from "@/lib/context-menu";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -203,107 +192,40 @@ export function getFileIcon(
  * through the command system — same pattern as entity cards.
  */
 export function AttachmentItem({ attachment }: AttachmentItemProps) {
-  const boardPath = useActiveBoardPath();
-  const isMalformed =
-    !attachment || typeof attachment !== "object" || !attachment.name;
-
-  const scopeChain = useMemo(
-    () => (isMalformed ? [] : [`attachment:${attachment.path}`]),
-    [isMalformed ? "" : attachment?.path],
-  );
-
-  // Register commands in the frontend scope so resolveCommand works
-  // for double-click, same as useEntityCommands does for entity cards.
-  // The execute callbacks dispatch to the backend with the scope chain
-  // so the Rust impls can resolve the path.
-  const commands = useMemo<CommandDef[]>(
-    () =>
-      isMalformed
-        ? []
-        : [
-            {
-              id: "attachment.open",
-              name: "Open",
-              contextMenu: true,
-              execute: () => {
-                backendDispatch({
-                  cmd: "attachment.open",
-                  scopeChain,
-                  ...(boardPath ? { boardPath } : {}),
-                }).catch(console.error);
-              },
-            },
-            {
-              id: "attachment.reveal",
-              name: "Show in Finder",
-              contextMenu: true,
-              execute: () => {
-                backendDispatch({
-                  cmd: "attachment.reveal",
-                  scopeChain,
-                  ...(boardPath ? { boardPath } : {}),
-                }).catch(console.error);
-              },
-            },
-          ],
-    [scopeChain, boardPath, isMalformed],
-  );
-
-  // Guard against malformed data (e.g. raw path strings instead of metadata objects)
-  if (isMalformed) {
-    const label =
-      typeof attachment === "string" ? (attachment as string) : "Unknown";
-    return (
-      <div className="flex items-center gap-2 min-w-0 text-sm text-muted-foreground">
-        <Paperclip className="shrink-0" size={16} />
-        <span className="truncate">{label}</span>
-      </div>
-    );
-  }
-
-  const Icon = getFileIcon(attachment.mime_type ?? "", attachment.name);
+  const Icon = getFileIcon(attachment.mime_type, attachment.name);
 
   return (
-    <CommandScopeProvider
-      commands={commands}
+    <FocusScope
       moniker={`attachment:${attachment.path}`}
+      commands={[]}
+      className="min-w-0"
     >
-      <AttachmentItemInner
-        attachment={attachment}
-        scopeChain={scopeChain}
-        Icon={Icon}
-      />
-    </CommandScopeProvider>
+      <AttachmentItemInner attachment={attachment} Icon={Icon} />
+    </FocusScope>
   );
 }
 
-/** Props for the inner attachment item that lives inside a CommandScopeProvider. */
+/** Props for the inner attachment item that lives inside the FocusScope. */
 interface AttachmentItemInnerProps {
   attachment: AttachmentMeta;
-  scopeChain: string[];
   Icon: ComponentType<{ className?: string; size?: number }>;
 }
 
-/** Inner component that has access to the command scope for resolving double-click. */
+/** Inner component — double-click opens the attachment. Context menu handled by FocusScope. */
 function AttachmentItemInner({
   attachment,
-  scopeChain,
   Icon,
 }: AttachmentItemInnerProps) {
-  const scope = useContext(CommandScopeContext);
-  const boardPath = useActiveBoardPath();
-  const onContextMenu = useContextMenu();
+  const dispatch = useDispatchCommand("attachment.open");
 
   const handleDoubleClick = useCallback(() => {
-    const cmd = resolveCommand(scope, "attachment.open");
-    if (cmd) dispatchCommand(cmd, boardPath, scopeChainFromScope(scope));
-  }, [scope, boardPath]);
+    dispatch().catch(console.error);
+  }, [dispatch]);
 
   return (
     <div
       className="flex items-center gap-2 min-w-0 cursor-pointer"
       onDoubleClick={handleDoubleClick}
-      onContextMenu={onContextMenu}
     >
       <Icon className="shrink-0 text-muted-foreground" size={16} />
       <span className="truncate text-sm">{attachment.name}</span>
@@ -408,8 +330,8 @@ export function AttachmentListDisplay({
     >
       {attachments.length > 0 ? (
         <div className="flex flex-col gap-1">
-          {attachments.map((att, i) => (
-            <AttachmentItem key={att?.id ?? i} attachment={att} />
+          {attachments.map((att) => (
+            <AttachmentItem key={att.id} attachment={att} />
           ))}
         </div>
       ) : (
