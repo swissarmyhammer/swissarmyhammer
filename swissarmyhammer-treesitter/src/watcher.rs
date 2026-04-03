@@ -533,11 +533,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_watcher_ignores_non_source_files() {
-        let dir = setup_minimal_test_dir();
+        // Use a plain TempDir with no pre-created source files to avoid
+        // stale filesystem events from setup leaking into the assertion window.
+        let dir = TempDir::new().unwrap();
         let callback = TestWatcherCallback::new();
         let mut watcher = WorkspaceWatcher::new();
 
         watcher.start(dir.path(), callback.clone()).await.unwrap();
+
+        // Let the watcher fully settle before creating the test file
+        tokio::time::sleep(std::time::Duration::from_millis(DEBOUNCE_DURATION_MS + 100)).await;
 
         // Create a non-source file (unsupported extension)
         std::fs::write(dir.path().join("notes.txt"), "some notes").unwrap();
