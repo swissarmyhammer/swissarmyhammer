@@ -12,7 +12,7 @@ use crate::style::Style;
 /// indexing is complete and no fixable LSPs are missing (unless
 /// `show_when_complete` is set).
 pub fn eval(ctx: &ModuleContext) -> ModuleOutput {
-    try_eval(ctx).unwrap_or_else(|| ModuleOutput::hidden())
+    try_eval(ctx).unwrap_or_else(ModuleOutput::hidden)
 }
 
 fn try_eval(ctx: &ModuleContext) -> Option<ModuleOutput> {

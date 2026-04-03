@@ -26,7 +26,7 @@ struct LangIcon {
 /// found in PATH. Deduplicates icons so that multiple servers for the same
 /// language (e.g. pyright and pylsp) only show one icon.
 pub fn eval(ctx: &ModuleContext) -> ModuleOutput {
-    try_eval(ctx).unwrap_or_else(|| ModuleOutput::hidden())
+    try_eval(ctx).unwrap_or_else(ModuleOutput::hidden)
 }
 
 fn try_eval(ctx: &ModuleContext) -> Option<ModuleOutput> {

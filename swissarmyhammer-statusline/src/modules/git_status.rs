@@ -10,7 +10,7 @@ use crate::style::Style;
 /// Uses git2 to count modified, staged, untracked, deleted, and conflicted files.
 /// Also shows ahead/behind counts relative to the upstream tracking branch.
 pub fn eval(ctx: &ModuleContext) -> ModuleOutput {
-    try_eval(ctx).unwrap_or_else(|| ModuleOutput::hidden())
+    try_eval(ctx).unwrap_or_else(ModuleOutput::hidden)
 }
 
 fn try_eval(ctx: &ModuleContext) -> Option<ModuleOutput> {
