@@ -64,7 +64,7 @@ function stripColumn(c: any) {
  */
 export const createTestBoard: BrowserCommand<
   [config: { name: string; tasks: { title: string; column?: string }[] }]
-> = ({ testPath }, config) => {
+> = ({ testPath: _testPath }, config) => {
   const dir = mkdtempSync(join(tmpdir(), "kanban-integration-"));
 
   kanban(dir, `board init --name "${config.name}"`);
@@ -97,7 +97,7 @@ export const createTestBoard: BrowserCommand<
  */
 export const readEntity: BrowserCommand<
   [config: { dir: string; noun: string; id: string }]
-> = ({ testPath }, config) => {
+> = ({ testPath: _testPath }, config) => {
   const raw = parseYaml(
     kanban(config.dir, `${config.noun} get --id ${config.id}`),
   );
@@ -111,7 +111,7 @@ export const readEntity: BrowserCommand<
  */
 export const moveTask: BrowserCommand<
   [config: { dir: string; taskId: string; column: string; beforeId?: string }]
-> = ({ testPath }, config) => {
+> = ({ testPath: _testPath }, config) => {
   let cmd = `task move --id ${config.taskId} --column ${config.column}`;
   if (config.beforeId) {
     cmd += ` --before_id ${config.beforeId}`;
@@ -125,7 +125,7 @@ export const moveTask: BrowserCommand<
  */
 export const listTasks: BrowserCommand<
   [config: { dir: string; column?: string }]
-> = ({ testPath }, config) => {
+> = ({ testPath: _testPath }, config) => {
   let cmd = "tasks list";
   if (config.column) {
     cmd += ` --column ${config.column}`;
@@ -142,7 +142,7 @@ export const listTasks: BrowserCommand<
  */
 export const createTempFile: BrowserCommand<
   [config: { dir: string; name: string; content: string }]
-> = ({ testPath }, config) => {
+> = ({ testPath: _testPath }, config) => {
   const filePath = join(config.dir, config.name);
   writeFileSync(filePath, config.content, "utf-8");
   return filePath;
@@ -152,7 +152,7 @@ export const createTempFile: BrowserCommand<
  * Clean up a temp directory.
  */
 export const cleanupTestBoard: BrowserCommand<[config: { dir: string }]> = (
-  { testPath },
+  { testPath: _testPath },
   config,
 ) => {
   try {

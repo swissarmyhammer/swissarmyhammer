@@ -8,7 +8,7 @@
  * until the fix is applied. This is intentional — TDD red/green.
  */
 
-import { describe, it, expect, vi, afterEach } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { render } from "vitest-browser-react";
 import type { ReactNode } from "react";
 

@@ -8,7 +8,7 @@
 
 import { describe, it, expect, vi } from "vitest";
 import { render } from "vitest-browser-react";
-import { useCallback, useRef } from "react";
+import { useCallback } from "react";
 
 const DRAG_MIME = "application/x-swissarmyhammer-task";
 
