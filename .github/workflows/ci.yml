@@ -49,7 +49,9 @@ jobs:
           node-version: 22
       - name: Install dependencies
         working-directory: ${{ matrix.app }}/ui
-        run: npm install
+        run: |
+          npm install
+          rm -rf node_modules/.vite
       - name: Install Playwright browsers
         working-directory: ${{ matrix.app }}/ui
         run: npx playwright install --with-deps chromium

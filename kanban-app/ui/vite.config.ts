@@ -53,6 +53,11 @@ export default defineConfig({
         },
         optimizeDeps: {
           entries: ["src/**/*.browser.test.{ts,tsx}"],
+          exclude: [
+            "@tauri-apps/api",
+            "@tauri-apps/plugin-dialog",
+            "@tauri-apps/plugin-log",
+          ],
         },
         test: {
           name: "browser",
