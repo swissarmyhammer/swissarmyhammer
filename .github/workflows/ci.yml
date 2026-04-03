@@ -50,6 +50,9 @@ jobs:
       - name: Install dependencies
         working-directory: ${{ matrix.app }}/ui
         run: npm install
+      - name: Install Playwright browsers
+        working-directory: ${{ matrix.app }}/ui
+        run: npx playwright install --with-deps chromium
       - name: Typecheck
         working-directory: ${{ matrix.app }}/ui
         run: npx tsc --noEmit

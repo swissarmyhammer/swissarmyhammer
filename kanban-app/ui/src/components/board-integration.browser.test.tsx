@@ -82,6 +82,9 @@ vi.mock("@tauri-apps/api/webview", () => ({
     onDragDropEvent: vi.fn(() => Promise.resolve(() => {})),
   }),
 }));
+vi.mock("@tauri-apps/plugin-dialog", () => ({
+  open: vi.fn(() => Promise.resolve(null)),
+}));
 vi.mock("@tauri-apps/plugin-log", () => ({
   error: vi.fn(),
   warn: vi.fn(),
