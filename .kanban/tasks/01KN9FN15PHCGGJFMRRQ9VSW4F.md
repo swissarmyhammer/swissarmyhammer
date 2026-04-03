@@ -1,0 +1,8 @@
+---
+assignees:
+- claude-code
+position_column: todo
+position_ordinal: '8780'
+title: 'Pattern divergence: name_index with duplicate names silently overwrites previous entry'
+---
+**Severity**: Medium (correctness)\n**Layer**: Correctness\n**Files**: `swissarmyhammer-perspectives/src/context.rs:96`, `swissarmyhammer-perspectives/src/context.rs:200`\n\nThe `name_index: HashMap<String, usize>` maps a name to a single index. When duplicate names are allowed (which the test `duplicate_names_allowed` confirms), inserting a second perspective with the same name silently overwrites the first in the name_index. This means:\n\n1. `get_by_name(\"Sprint\")` only returns the *last* perspective inserted with that name, not the first.\n2. After deleting the second \"Sprint\", `get_by_name(\"Sprint\")` returns `None` even though the first one still exists.\n\nThe `load_all()` method at line 200 has the same issue: whichever YAML file is enumerated last wins the name index.\n\nIf duplicate names are truly allowed, the name index should either be removed (it's now unreliable), changed to `HashMap<String, Vec<usize>>`, or documented as best-effort (returns an arbitrary match).\n\n**Fix**: Either (a) change `name_index` to `HashMap<String, Vec<usize>>` and update `get_by_name` to return the first match, or (b) keep the current behavior but document in `get_by_name`'s doc comment that it returns an arbitrary perspective when duplicates exist. Option (b) is cheaper if get_by_name is primarily used for UI convenience, not correctness." #review-finding

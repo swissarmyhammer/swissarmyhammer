@@ -24,6 +24,42 @@ async fn setup() -> (TempDir, KanbanContext) {
     (temp, ctx)
 }
 
+/// Create a temp KanbanContext with the perspective StoreHandle wired in.
+async fn setup_with_store() -> (
+    TempDir,
+    KanbanContext,
+    std::sync::Arc<
+        swissarmyhammer_store::StoreHandle<swissarmyhammer_perspectives::PerspectiveStore>,
+    >,
+) {
+    let temp = TempDir::new().unwrap();
+    let kanban_dir = temp.path().join(".kanban");
+    let ctx = KanbanContext::new(kanban_dir.clone());
+
+    InitBoard::new("Test")
+        .execute(&ctx)
+        .await
+        .into_result()
+        .unwrap();
+
+    // Create and wire in a StoreHandle for perspectives.
+    let perspectives_dir = kanban_dir.join("perspectives");
+    std::fs::create_dir_all(&perspectives_dir).unwrap();
+    let store = std::sync::Arc::new(swissarmyhammer_perspectives::PerspectiveStore::new(
+        &perspectives_dir,
+    ));
+    let handle = std::sync::Arc::new(swissarmyhammer_store::StoreHandle::new(store));
+
+    {
+        let pctx = ctx.perspective_context().await.unwrap();
+        pctx.write()
+            .await
+            .set_store_handle(std::sync::Arc::clone(&handle));
+    }
+
+    (temp, ctx, handle)
+}
+
 #[tokio::test]
 async fn test_add_perspective() {
     let (_temp, ctx) = setup().await;
@@ -273,7 +309,7 @@ async fn test_delete_not_found() {
 }
 
 #[tokio::test]
-async fn test_add_duplicate_name_rejected() {
+async fn test_add_duplicate_name_allowed() {
     let (_temp, ctx) = setup().await;
 
     AddPerspective::new("Sprint Board", "board")
@@ -282,70 +318,94 @@ async fn test_add_duplicate_name_rejected() {
         .into_result()
         .unwrap();
 
-    // Adding a second perspective with the same name should fail
-    let result = AddPerspective::new("Sprint Board", "grid")
+    // Same name, different ID — must succeed (multiple perspectives per view)
+    AddPerspective::new("Sprint Board", "grid")
         .execute(&ctx)
         .await
-        .into_result();
+        .into_result()
+        .unwrap();
 
-    assert!(
-        result.is_err(),
-        "Expected error for duplicate perspective name"
-    );
-    let err_msg = format!("{}", result.unwrap_err());
-    assert!(
-        err_msg.contains("Sprint Board") && err_msg.contains("already exists"),
-        "Error should mention the duplicate name, got: {err_msg}"
-    );
-
-    // Only one perspective should exist
     let list = ListPerspectives::new()
         .execute(&ctx)
         .await
         .into_result()
         .unwrap();
-    assert_eq!(list["count"], 1);
+    assert_eq!(list["count"], 2);
+}
+
+// =========================================================================
+// Event propagation tests — prove the store → flush_all() → event pipeline
+// =========================================================================
+
+#[tokio::test]
+async fn test_add_perspective_emits_item_created_event() {
+    let (_temp, ctx, handle) = setup_with_store().await;
+
+    let result = AddPerspective::new("Event Test", "board")
+        .execute(&ctx)
+        .await
+        .into_result()
+        .unwrap();
+    let id = result["id"].as_str().unwrap();
+
+    let events = handle.flush_changes().await;
+    assert_eq!(events.len(), 1, "expected exactly one event");
+    assert_eq!(events[0].event_name, "item-created");
+    assert_eq!(events[0].payload["store"], "perspective");
+    assert_eq!(events[0].payload["id"], id);
 }
 
 #[tokio::test]
-async fn test_update_rename_to_duplicate_rejected() {
-    let (_temp, ctx) = setup().await;
+async fn test_update_perspective_emits_item_changed_event() {
+    let (_temp, ctx, handle) = setup_with_store().await;
 
-    AddPerspective::new("View A", "board")
+    let result = AddPerspective::new("Before Update", "board")
+        .execute(&ctx)
+        .await
+        .into_result()
+        .unwrap();
+    let id = result["id"].as_str().unwrap().to_string();
+
+    // Drain the create event.
+    handle.flush_changes().await;
+
+    UpdatePerspective::new(&id)
+        .with_name("After Update")
         .execute(&ctx)
         .await
         .into_result()
         .unwrap();
 
-    let b_result = AddPerspective::new("View B", "grid")
+    let events = handle.flush_changes().await;
+    assert_eq!(events.len(), 1, "expected exactly one event");
+    assert_eq!(events[0].event_name, "item-changed");
+    assert_eq!(events[0].payload["store"], "perspective");
+    assert_eq!(events[0].payload["id"], id.as_str());
+}
+
+#[tokio::test]
+async fn test_delete_perspective_emits_item_removed_event() {
+    let (_temp, ctx, handle) = setup_with_store().await;
+
+    let result = AddPerspective::new("Doomed", "board")
         .execute(&ctx)
         .await
         .into_result()
         .unwrap();
-    let b_id = b_result["id"].as_str().unwrap().to_string();
+    let id = result["id"].as_str().unwrap().to_string();
 
-    // Renaming View B to View A should fail
-    let result = UpdatePerspective::new(&b_id)
-        .with_name("View A")
-        .execute(&ctx)
-        .await
-        .into_result();
+    // Drain the create event.
+    handle.flush_changes().await;
 
-    assert!(
-        result.is_err(),
-        "Expected error when renaming to an existing name"
-    );
-    let err_msg = format!("{}", result.unwrap_err());
-    assert!(
-        err_msg.contains("View A") && err_msg.contains("already exists"),
-        "Error should mention the duplicate name, got: {err_msg}"
-    );
-
-    // View B should still have its original name
-    let get_result = GetPerspective::new(&b_id)
+    DeletePerspective::new(&id)
         .execute(&ctx)
         .await
         .into_result()
         .unwrap();
-    assert_eq!(get_result["name"], "View B");
+
+    let events = handle.flush_changes().await;
+    assert_eq!(events.len(), 1, "expected exactly one event");
+    assert_eq!(events[0].event_name, "item-removed");
+    assert_eq!(events[0].payload["store"], "perspective");
+    assert_eq!(events[0].payload["id"], id.as_str());
 }

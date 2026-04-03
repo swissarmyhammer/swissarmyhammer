@@ -118,7 +118,8 @@ impl BoardHandle {
             }
         }
 
-        // Register perspective store for undo/redo changelog support.
+        // Register perspective store for undo/redo changelog support and
+        // wire the handle into PerspectiveContext so writes delegate to it.
         {
             let perspectives_dir = kanban_path.join("perspectives");
             let perspective_store =
@@ -126,7 +127,15 @@ impl BoardHandle {
             let handle = std::sync::Arc::new(swissarmyhammer_store::StoreHandle::new(
                 std::sync::Arc::new(perspective_store),
             ));
-            store_context.register(handle).await;
+            store_context.register(handle.clone()).await;
+
+            // Wire into PerspectiveContext so write/delete produce change
+            // events and push onto the shared undo stack.
+            if let Ok(pctx) = ctx.perspective_context().await {
+                let mut pctx = pctx.write().await;
+                pctx.set_store_handle(handle);
+                pctx.set_store_context(Arc::clone(&store_context));
+            }
         }
 
         // Collect store roots now that all stores are registered.

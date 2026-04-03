@@ -8,10 +8,6 @@ pub type Result<T> = std::result::Result<T, PerspectiveError>;
 /// Errors that can occur in perspective registry operations
 #[derive(Debug, Error)]
 pub enum PerspectiveError {
-    /// Duplicate name for a given item type
-    #[error("{item_type} with name '{name}' already exists")]
-    DuplicateName { item_type: String, name: String },
-
     /// Resource not found by id
     #[error("{resource} not found: {id}")]
     NotFound { resource: String, id: String },
@@ -27,6 +23,10 @@ pub enum PerspectiveError {
     /// JSON serialization error
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
+
+    /// Store layer error (from StoreHandle write/delete)
+    #[error("Store error: {0}")]
+    Store(#[from] swissarmyhammer_store::StoreError),
 }
 
 impl PerspectiveError {
@@ -35,14 +35,6 @@ impl PerspectiveError {
         Self::NotFound {
             resource: resource.into(),
             id: id.into(),
-        }
-    }
-
-    /// Create a DuplicateName error
-    pub fn duplicate_name(item_type: impl Into<String>, name: impl Into<String>) -> Self {
-        Self::DuplicateName {
-            item_type: item_type.into(),
-            name: name.into(),
         }
     }
 }
@@ -55,15 +47,6 @@ mod tests {
     fn not_found_display() {
         let err = PerspectiveError::not_found("perspective", "01ABC");
         assert_eq!(err.to_string(), "perspective not found: 01ABC");
-    }
-
-    #[test]
-    fn duplicate_name_display() {
-        let err = PerspectiveError::duplicate_name("perspective", "my-view");
-        assert_eq!(
-            err.to_string(),
-            "perspective with name 'my-view' already exists"
-        );
     }
 
     #[test]

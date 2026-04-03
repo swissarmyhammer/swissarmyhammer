@@ -11,24 +11,32 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, OnceLock};
 
 use tokio::fs;
 use tracing::debug;
 
 use crate::error::{PerspectiveError, Result};
+use crate::store::PerspectiveStore;
 use crate::types::Perspective;
+use crate::PerspectiveId;
+use swissarmyhammer_store::{StoreContext, StoreHandle, StoredItemId, UndoEntryId};
 
-/// Context for perspective definitions -- file-backed CRUD with in-memory indexes.
+/// Read cache and write coordinator for perspective definitions.
 ///
-/// Each perspective is stored as `{id}.yaml` in the root directory. On `open()`,
-/// all YAML files are loaded into memory. Mutations (`write`, `delete`) persist
-/// to disk immediately and update the in-memory indexes.
-#[derive(Debug)]
+/// On `open()`, loads all YAML files into memory for fast lookup. When a
+/// `StoreHandle` is wired in via `set_store_handle`, mutations delegate I/O
+/// to the store (which handles serialization, changelog, undo/redo, and
+/// change events). Without a store handle, falls back to direct file I/O.
 pub struct PerspectiveContext {
     root: PathBuf,
     perspectives: Vec<Perspective>,
     id_index: HashMap<String, usize>,
-    name_index: HashMap<String, usize>,
+    /// When set, write/delete delegate I/O to the store handle instead of
+    /// doing their own atomic_write / fs::remove_file.
+    store_handle: Option<Arc<StoreHandle<PerspectiveStore>>>,
+    /// Shared undo/redo stack. When set, write/delete push entries.
+    store_context: OnceLock<Arc<StoreContext>>,
 }
 
 impl PerspectiveContext {
@@ -44,7 +52,8 @@ impl PerspectiveContext {
             root,
             perspectives: Vec::new(),
             id_index: HashMap::new(),
-            name_index: HashMap::new(),
+            store_handle: None,
+            store_context: OnceLock::new(),
         };
 
         ctx.load_all().await?;
@@ -56,58 +65,46 @@ impl PerspectiveContext {
         Ok(ctx)
     }
 
-    /// Write (create or update) a perspective. Persists to YAML immediately.
+    /// Write (create or update) a perspective.
     ///
-    /// If a perspective with the same ID already exists, it is replaced.
-    /// The in-memory indexes are updated to reflect name changes.
+    /// When a `StoreHandle` is wired in, delegates file I/O to it (which
+    /// provides changelog, undo/redo, and change events). Otherwise falls
+    /// back to direct atomic file writes.
     ///
-    /// Returns `PerspectiveError::DuplicateName` if a *different* perspective already
-    /// uses the same name (names must be unique across perspectives).
-    pub async fn write(&mut self, perspective: &Perspective) -> Result<()> {
-        // Enforce name uniqueness *before* touching disk
-        if let Some(&idx) = self.id_index.get(&perspective.id) {
-            // Existing perspective being updated -- only check if the name changed
-            let old_name = &self.perspectives[idx].name;
-            if *old_name != perspective.name {
-                if let Some(&other_idx) = self.name_index.get(&perspective.name) {
-                    if self.perspectives[other_idx].id != perspective.id {
-                        return Err(PerspectiveError::duplicate_name(
-                            "perspective",
-                            &perspective.name,
-                        ));
-                    }
-                }
-            }
+    /// Returns `Ok(Some(entry_id))` when a store handle recorded the change,
+    /// or `Ok(None)` for idempotent writes or the legacy fallback path.
+    ///
+    /// Multiple perspectives may share the same name — only IDs are unique.
+    pub async fn write(&mut self, perspective: &Perspective) -> Result<Option<UndoEntryId>> {
+        // Persist to disk — delegate to StoreHandle when available.
+        let entry_id = if let Some(ref sh) = self.store_handle {
+            sh.write(perspective).await?
         } else {
-            // Brand-new perspective -- reject if name already taken
-            if self.name_index.contains_key(&perspective.name) {
-                return Err(PerspectiveError::duplicate_name(
-                    "perspective",
-                    &perspective.name,
-                ));
-            }
+            let yaml = serde_yaml_ng::to_string(perspective)?;
+            let path = self.perspective_path(&perspective.id);
+            atomic_write(&path, yaml.as_bytes()).await?;
+            None
+        };
+
+        // Push onto the shared undo stack if a StoreContext is available.
+        if let (Some(sc), Some(eid)) = (self.store_context.get(), &entry_id) {
+            let is_create = !self.id_index.contains_key(&perspective.id);
+            let op = if is_create { "create" } else { "update" };
+            let label = format!("{} perspective {}", op, perspective.id);
+            let item_id = StoredItemId::from(perspective.id.as_str());
+            sc.push(*eid, label, item_id).await;
         }
 
-        let yaml = serde_yaml_ng::to_string(perspective)?;
-        let path = self.perspective_path(&perspective.id);
-        atomic_write(&path, yaml.as_bytes()).await?;
-
-        // Update in-memory state (name uniqueness already validated above)
+        // Update in-memory cache.
         if let Some(&idx) = self.id_index.get(&perspective.id) {
-            let old_name = self.perspectives[idx].name.clone();
-            if old_name != perspective.name {
-                self.name_index.remove(&old_name);
-            }
             self.perspectives[idx] = perspective.clone();
-            self.name_index.insert(perspective.name.clone(), idx);
         } else {
             let idx = self.perspectives.len();
             self.perspectives.push(perspective.clone());
             self.id_index.insert(perspective.id.clone(), idx);
-            self.name_index.insert(perspective.name.clone(), idx);
         }
 
-        Ok(())
+        Ok(entry_id)
     }
 
     /// Look up a perspective by its ULID.
@@ -115,9 +112,11 @@ impl PerspectiveContext {
         self.id_index.get(id).map(|&i| &self.perspectives[i])
     }
 
-    /// Look up a perspective by its human-readable name.
+    /// Look up a perspective by name (linear scan, returns first match).
+    ///
+    /// Names are not unique — use `get_by_id` when possible.
     pub fn get_by_name(&self, name: &str) -> Option<&Perspective> {
-        self.name_index.get(name).map(|&i| &self.perspectives[i])
+        self.perspectives.iter().find(|p| p.name == name)
     }
 
     /// All loaded perspectives.
@@ -125,8 +124,11 @@ impl PerspectiveContext {
         &self.perspectives
     }
 
-    /// Delete a perspective by ID. Removes the YAML file and returns the
-    /// deleted perspective for changelog recording.
+    /// Delete a perspective by ID and return the deleted value.
+    ///
+    /// When a `StoreHandle` is wired in, delegates file removal to it (which
+    /// trashes the file for undo support and records a change event). Otherwise
+    /// falls back to direct `fs::remove_file`.
     ///
     /// Returns `PerspectiveError::NotFound` if no perspective with that ID exists.
     pub async fn delete(&mut self, id: &str) -> Result<Perspective> {
@@ -139,27 +141,54 @@ impl PerspectiveContext {
                 id: id.to_string(),
             })?;
 
-        let path = self.perspective_path(id);
-        match fs::remove_file(&path).await {
-            Ok(_) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => {
-                return Err(PerspectiveError::Io(e));
+        // Remove from disk — delegate to StoreHandle when available.
+        if let Some(ref sh) = self.store_handle {
+            let pid = PerspectiveId::from(id);
+            let entry_id = sh.delete(&pid).await?;
+            // Push onto the shared undo stack if a StoreContext is available.
+            if let Some(sc) = self.store_context.get() {
+                let label = format!("delete perspective {}", id);
+                let item_id = StoredItemId::from(id);
+                sc.push(entry_id, label, item_id).await;
+            }
+        } else {
+            let path = self.perspective_path(id);
+            match fs::remove_file(&path).await {
+                Ok(_) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => {
+                    return Err(PerspectiveError::Io(e));
+                }
             }
         }
 
+        // Update in-memory cache.
         let deleted = self.perspectives.swap_remove(idx);
         self.id_index.remove(&deleted.id);
-        self.name_index.remove(&deleted.name);
 
         // Fix the index of the element that was swapped into `idx`
         if idx < self.perspectives.len() {
             let moved = &self.perspectives[idx];
             self.id_index.insert(moved.id.clone(), idx);
-            self.name_index.insert(moved.name.clone(), idx);
         }
 
         Ok(deleted)
+    }
+
+    /// Wire in a `StoreHandle` for delegated I/O.
+    ///
+    /// When set, `write()` and `delete()` delegate file operations to the
+    /// store handle, which provides changelog, undo/redo, and change events.
+    pub fn set_store_handle(&mut self, handle: Arc<StoreHandle<PerspectiveStore>>) {
+        self.store_handle = Some(handle);
+    }
+
+    /// Set the shared undo/redo stack.
+    ///
+    /// When set, `write()` and `delete()` push entries onto the stack.
+    /// Can be called through a shared reference (uses `OnceLock`).
+    pub fn set_store_context(&self, ctx: Arc<StoreContext>) {
+        let _ = self.store_context.set(ctx);
     }
 
     /// The root directory path.
@@ -190,7 +219,6 @@ impl PerspectiveContext {
                 Ok(p) => {
                     let idx = self.perspectives.len();
                     self.id_index.insert(p.id.clone(), idx);
-                    self.name_index.insert(p.name.clone(), idx);
                     self.perspectives.push(p);
                 }
                 Err(e) => {
@@ -216,8 +244,44 @@ async fn atomic_write(path: &Path, data: &[u8]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::store::PerspectiveStore;
     use crate::types::{PerspectiveFieldEntry, SortDirection, SortEntry};
+    use std::sync::Arc;
+    use swissarmyhammer_store::StoreHandle;
     use tempfile::TempDir;
+
+    /// Create a PerspectiveContext wired to a StoreHandle (the production path).
+    async fn setup_with_store(
+        dir: &Path,
+    ) -> (PerspectiveContext, Arc<StoreHandle<PerspectiveStore>>) {
+        tokio::fs::create_dir_all(dir).await.unwrap();
+        let store = Arc::new(PerspectiveStore::new(dir));
+        let handle = Arc::new(StoreHandle::new(store));
+        let mut ctx = PerspectiveContext::open(dir).await.unwrap();
+        ctx.set_store_handle(Arc::clone(&handle));
+        (ctx, handle)
+    }
+
+    /// Create a PerspectiveContext with StoreHandle + StoreContext for undo tests.
+    async fn setup_with_undo(
+        dir: &Path,
+    ) -> (
+        PerspectiveContext,
+        Arc<StoreHandle<PerspectiveStore>>,
+        Arc<swissarmyhammer_store::StoreContext>,
+    ) {
+        tokio::fs::create_dir_all(dir).await.unwrap();
+        let store = Arc::new(PerspectiveStore::new(dir));
+        let handle = Arc::new(StoreHandle::new(store));
+        let store_context = Arc::new(swissarmyhammer_store::StoreContext::new(
+            dir.parent().unwrap().to_path_buf(),
+        ));
+        store_context.register(handle.clone()).await;
+        let mut ctx = PerspectiveContext::open(dir).await.unwrap();
+        ctx.set_store_handle(Arc::clone(&handle));
+        ctx.set_store_context(Arc::clone(&store_context));
+        (ctx, handle, store_context)
+    }
 
     /// Helper to create a test perspective with sensible defaults.
     fn make_perspective(id: &str, name: &str) -> Perspective {
@@ -426,71 +490,6 @@ mod tests {
         assert_eq!(
             ctx.get_by_id("01AAAAAAAAAAAAAAAAAAAAAAAA").unwrap().name,
             "Renamed"
-        );
-    }
-
-    #[tokio::test]
-    async fn duplicate_name_rejected_on_add() {
-        let tmp = TempDir::new().unwrap();
-        let mut ctx = PerspectiveContext::open(tmp.path().join("perspectives"))
-            .await
-            .unwrap();
-
-        ctx.write(&make_perspective(
-            "01AAAAAAAAAAAAAAAAAAAAAAAA",
-            "Sprint View",
-        ))
-        .await
-        .unwrap();
-
-        // Second perspective with a different ID but same name should fail
-        let err = ctx
-            .write(&make_perspective(
-                "01BBBBBBBBBBBBBBBBBBBBBBBB",
-                "Sprint View",
-            ))
-            .await;
-        assert!(err.is_err());
-        let msg = err.unwrap_err().to_string();
-        assert!(msg.contains("Sprint View"));
-        assert!(msg.contains("already exists"));
-
-        // Only one perspective should be in the store
-        assert_eq!(ctx.all().len(), 1);
-        // Name index should still point to the original
-        assert_eq!(
-            ctx.get_by_name("Sprint View").unwrap().id,
-            "01AAAAAAAAAAAAAAAAAAAAAAAA"
-        );
-    }
-
-    #[tokio::test]
-    async fn duplicate_name_rejected_on_rename() {
-        let tmp = TempDir::new().unwrap();
-        let mut ctx = PerspectiveContext::open(tmp.path().join("perspectives"))
-            .await
-            .unwrap();
-
-        ctx.write(&make_perspective("01AAAAAAAAAAAAAAAAAAAAAAAA", "Alpha"))
-            .await
-            .unwrap();
-        ctx.write(&make_perspective("01BBBBBBBBBBBBBBBBBBBBBBBB", "Beta"))
-            .await
-            .unwrap();
-
-        // Renaming Beta to Alpha should fail
-        let mut renamed = make_perspective("01BBBBBBBBBBBBBBBBBBBBBBBB", "Alpha");
-        renamed.view = "grid".to_string();
-        let err = ctx.write(&renamed).await;
-        assert!(err.is_err());
-        let msg = err.unwrap_err().to_string();
-        assert!(msg.contains("Alpha"));
-        assert!(msg.contains("already exists"));
-
-        // Beta should still have its original name
-        assert_eq!(
-            ctx.get_by_id("01BBBBBBBBBBBBBBBBBBBBBBBB").unwrap().name,
-            "Beta"
         );
     }
 
@@ -803,11 +802,172 @@ mod tests {
             root: dir,
             perspectives: Vec::new(),
             id_index: HashMap::new(),
-            name_index: HashMap::new(),
+            store_handle: None,
+            store_context: OnceLock::new(),
         };
 
         // load_all should return Ok with zero perspectives
         ctx.load_all().await.unwrap();
         assert!(ctx.all().is_empty());
+    }
+
+    // =========================================================================
+    // Store-delegated I/O tests
+    // =========================================================================
+
+    #[tokio::test]
+    async fn write_delegates_to_store_handle_and_produces_event() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().join("perspectives");
+        let (mut ctx, handle) = setup_with_store(&dir).await;
+
+        let p = make_perspective("01AAAAAAAAAAAAAAAAAAAAAAAA", "Board View");
+        ctx.write(&p).await.unwrap();
+
+        // File must exist on disk (written by StoreHandle)
+        assert!(dir.join("01AAAAAAAAAAAAAAAAAAAAAAAA.yaml").exists());
+
+        // In-memory cache must be updated
+        assert_eq!(
+            ctx.get_by_id("01AAAAAAAAAAAAAAAAAAAAAAAA").unwrap().name,
+            "Board View"
+        );
+
+        // StoreHandle must have a pending event
+        let events = handle.flush_changes().await;
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_name, "item-created");
+        assert_eq!(events[0].payload["store"], "perspective");
+        assert_eq!(events[0].payload["id"], "01AAAAAAAAAAAAAAAAAAAAAAAA");
+    }
+
+    #[tokio::test]
+    async fn update_via_store_handle_produces_changed_event() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().join("perspectives");
+        let (mut ctx, handle) = setup_with_store(&dir).await;
+
+        let p = make_perspective("01AAAAAAAAAAAAAAAAAAAAAAAA", "Original");
+        ctx.write(&p).await.unwrap();
+        handle.flush_changes().await; // drain create event
+
+        let mut updated = p.clone();
+        updated.name = "Renamed".to_string();
+        ctx.write(&updated).await.unwrap();
+
+        let events = handle.flush_changes().await;
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_name, "item-changed");
+        assert_eq!(events[0].payload["id"], "01AAAAAAAAAAAAAAAAAAAAAAAA");
+    }
+
+    #[tokio::test]
+    async fn delete_delegates_to_store_handle_and_produces_event() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().join("perspectives");
+        let (mut ctx, handle) = setup_with_store(&dir).await;
+
+        let p = make_perspective("01AAAAAAAAAAAAAAAAAAAAAAAA", "Doomed");
+        ctx.write(&p).await.unwrap();
+        handle.flush_changes().await; // drain create event
+
+        let deleted = ctx.delete("01AAAAAAAAAAAAAAAAAAAAAAAA").await.unwrap();
+        assert_eq!(deleted.name, "Doomed");
+
+        // File must be gone (trashed by StoreHandle)
+        assert!(!dir.join("01AAAAAAAAAAAAAAAAAAAAAAAA.yaml").exists());
+
+        // In-memory cache must be updated
+        assert!(ctx.get_by_id("01AAAAAAAAAAAAAAAAAAAAAAAA").is_none());
+
+        // StoreHandle must have a pending event
+        let events = handle.flush_changes().await;
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_name, "item-removed");
+        assert_eq!(events[0].payload["id"], "01AAAAAAAAAAAAAAAAAAAAAAAA");
+    }
+
+    // =========================================================================
+    // Undo/redo tests — matching EntityContext pattern
+    // =========================================================================
+
+    #[tokio::test]
+    async fn write_returns_undo_entry_id() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().join("perspectives");
+        let (mut ctx, _handle, _sc) = setup_with_undo(&dir).await;
+
+        let p = make_perspective("01AAAAAAAAAAAAAAAAAAAAAAAA", "Board View");
+        let entry_id = ctx.write(&p).await.unwrap();
+
+        // First write (create) must return Some
+        assert!(entry_id.is_some(), "create must return an UndoEntryId");
+    }
+
+    #[tokio::test]
+    async fn write_pushes_onto_undo_stack() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().join("perspectives");
+        let (mut ctx, _handle, sc) = setup_with_undo(&dir).await;
+
+        assert!(!sc.can_undo().await, "nothing to undo before any writes");
+
+        let p = make_perspective("01AAAAAAAAAAAAAAAAAAAAAAAA", "Board View");
+        ctx.write(&p).await.unwrap();
+
+        assert!(sc.can_undo().await, "undo must be available after write");
+    }
+
+    #[tokio::test]
+    async fn undo_reverts_perspective_create() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().join("perspectives");
+        let (mut ctx, _handle, sc) = setup_with_undo(&dir).await;
+
+        let p = make_perspective("01AAAAAAAAAAAAAAAAAAAAAAAA", "Undo Me");
+        ctx.write(&p).await.unwrap();
+        assert!(dir.join("01AAAAAAAAAAAAAAAAAAAAAAAA.yaml").exists());
+
+        sc.undo().await.unwrap();
+
+        // File must be gone after undo
+        assert!(!dir.join("01AAAAAAAAAAAAAAAAAAAAAAAA.yaml").exists());
+    }
+
+    #[tokio::test]
+    async fn delete_pushes_onto_undo_stack() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().join("perspectives");
+        let (mut ctx, _handle, sc) = setup_with_undo(&dir).await;
+
+        let p = make_perspective("01AAAAAAAAAAAAAAAAAAAAAAAA", "Delete Me");
+        ctx.write(&p).await.unwrap();
+
+        // Reset undo stack state by undoing+redoing (or just check after delete)
+        assert!(sc.can_undo().await);
+        // Now delete
+        ctx.delete("01AAAAAAAAAAAAAAAAAAAAAAAA").await.unwrap();
+        assert!(!dir.join("01AAAAAAAAAAAAAAAAAAAAAAAA.yaml").exists());
+
+        // Undo the delete — file must be restored
+        sc.undo().await.unwrap();
+        assert!(dir.join("01AAAAAAAAAAAAAAAAAAAAAAAA.yaml").exists());
+    }
+
+    #[tokio::test]
+    async fn duplicate_names_allowed() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().join("perspectives");
+        let (mut ctx, _handle) = setup_with_store(&dir).await;
+
+        ctx.write(&make_perspective("01AAAAAAAAAAAAAAAAAAAAAAAA", "Sprint"))
+            .await
+            .unwrap();
+        // Same name, different ID — must succeed
+        ctx.write(&make_perspective("01BBBBBBBBBBBBBBBBBBBBBBBB", "Sprint"))
+            .await
+            .unwrap();
+
+        assert_eq!(ctx.all().len(), 2);
     }
 }

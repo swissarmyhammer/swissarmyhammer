@@ -107,17 +107,6 @@ impl Execute<KanbanContext, KanbanError> for UpdatePerspective {
                 })?
                 .clone();
 
-            // If renaming, reject if the new name is taken by a different perspective
-            if let Some(new_name) = &self.name {
-                if *new_name != existing.name {
-                    if let Some(other) = pctx.get_by_name(new_name) {
-                        if other.id != self.id {
-                            return Err(KanbanError::duplicate_name("perspective", new_name));
-                        }
-                    }
-                }
-            }
-
             // Merge only provided fields
             let updated = crate::perspective::Perspective {
                 id: existing.id,

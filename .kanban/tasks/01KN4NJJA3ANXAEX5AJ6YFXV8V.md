@@ -4,8 +4,8 @@ assignees:
 depends_on:
 - 01KN4NH98Q3Z479FBQP2SCYDX0
 - 01KN4NJ21PSS15MAR0R542SYWF
-position_column: todo
-position_ordinal: '8580'
+position_column: done
+position_ordinal: ffffffffffffffffffaf80
 title: 10. Group-by selector + perspective scope command
 ---
 ## What

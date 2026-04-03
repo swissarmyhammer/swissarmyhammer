@@ -112,6 +112,10 @@ pub enum KanbanError {
     /// Entity I/O error
     #[error("entity error: {0}")]
     EntityError(#[from] swissarmyhammer_entity::EntityError),
+
+    /// Store layer error
+    #[error("store error: {0}")]
+    StoreError(String),
 }
 
 impl KanbanError {
@@ -199,12 +203,12 @@ impl From<swissarmyhammer_perspectives::PerspectiveError> for KanbanError {
             swissarmyhammer_perspectives::PerspectiveError::NotFound { resource, id } => {
                 KanbanError::NotFound { resource, id }
             }
-            swissarmyhammer_perspectives::PerspectiveError::DuplicateName { item_type, name } => {
-                KanbanError::DuplicateName { item_type, name }
-            }
             swissarmyhammer_perspectives::PerspectiveError::Io(inner) => KanbanError::Io(inner),
             swissarmyhammer_perspectives::PerspectiveError::Yaml(inner) => KanbanError::Yaml(inner),
             swissarmyhammer_perspectives::PerspectiveError::Json(inner) => KanbanError::Json(inner),
+            swissarmyhammer_perspectives::PerspectiveError::Store(inner) => {
+                KanbanError::StoreError(inner.to_string())
+            }
         }
     }
 }

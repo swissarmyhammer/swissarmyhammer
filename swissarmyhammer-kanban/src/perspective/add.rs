@@ -86,11 +86,6 @@ impl Execute<KanbanContext, KanbanError> for AddPerspective {
             let pctx = ctx.perspective_context().await?;
             let mut pctx = pctx.write().await;
 
-            // Reject duplicate names up-front with a clear error message
-            if pctx.get_by_name(&self.name).is_some() {
-                return Err(KanbanError::duplicate_name("perspective", &self.name));
-            }
-
             let id = ulid::Ulid::new().to_string();
             let perspective = Perspective {
                 id: id.clone(),
