@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: '8180'
+position_column: done
+position_ordinal: ffffffffffffffffd480
 title: File drag-drop silently fails on secondary windows (disable_drag_drop_handler)
 ---
 ## What
