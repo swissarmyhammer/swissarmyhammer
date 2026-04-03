@@ -525,7 +525,7 @@ fn check_claude_md_at(root: &std::path::Path, checks: &mut Vec<Check>) {
     };
 
     let first_non_empty = content.lines().find(|l| !l.trim().is_empty());
-    if first_non_empty.map_or(false, |line| line.contains(CLAUDE_MD_PREAMBLE)) {
+    if first_non_empty.is_some_and(|line| line.contains(CLAUDE_MD_PREAMBLE)) {
         checks.push(Check {
             name: check_names::CLAUDE_MD.to_string(),
             status: CheckStatus::Ok,

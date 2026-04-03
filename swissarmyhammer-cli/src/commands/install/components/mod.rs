@@ -1270,7 +1270,7 @@ fn claude_md_has_preamble(root: &std::path::Path) -> Option<bool> {
     }
     let content = std::fs::read_to_string(&path).ok()?;
     let first_non_empty = content.lines().find(|l| !l.trim().is_empty());
-    Some(first_non_empty.map_or(false, |line| line.contains(CLAUDE_MD_PREAMBLE)))
+    Some(first_non_empty.is_some_and(|line| line.contains(CLAUDE_MD_PREAMBLE)))
 }
 
 /// Ensure `CLAUDE.md` at the given root has the required preamble.
@@ -1287,7 +1287,7 @@ fn ensure_claude_md_preamble(root: &std::path::Path) -> Result<&'static str, Str
     let content =
         std::fs::read_to_string(&path).map_err(|e| format!("Failed to read CLAUDE.md: {}", e))?;
     let first_non_empty = content.lines().find(|l| !l.trim().is_empty());
-    if first_non_empty.map_or(false, |line| line.contains(CLAUDE_MD_PREAMBLE)) {
+    if first_non_empty.is_some_and(|line| line.contains(CLAUDE_MD_PREAMBLE)) {
         return Ok("already present");
     }
     let new_content = format!("{}\n\n{}", CLAUDE_MD_PREAMBLE, content);
@@ -1308,7 +1308,7 @@ fn remove_claude_md_preamble(root: &std::path::Path) -> Result<&'static str, Str
     let content =
         std::fs::read_to_string(&path).map_err(|e| format!("Failed to read CLAUDE.md: {}", e))?;
     let first_non_empty = content.lines().find(|l| !l.trim().is_empty());
-    if !first_non_empty.map_or(false, |line| line.contains(CLAUDE_MD_PREAMBLE)) {
+    if !first_non_empty.is_some_and(|line| line.contains(CLAUDE_MD_PREAMBLE)) {
         return Ok("no preamble");
     }
     // Remove the preamble line and any immediately following blank lines
@@ -1327,7 +1327,7 @@ fn remove_claude_md_preamble(root: &std::path::Path) -> Result<&'static str, Str
     // Trim leading blank lines after preamble removal
     while after_preamble
         .first()
-        .map_or(false, |l| l.trim().is_empty())
+        .is_some_and(|l| l.trim().is_empty())
     {
         after_preamble.remove(0);
     }
