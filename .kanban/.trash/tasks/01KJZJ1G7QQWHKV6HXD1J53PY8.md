@@ -1,6 +1,0 @@
----
-position_column: done
-position_ordinal: m7
-title: 'model-embedding: EmbeddingResult has public fields violating future-proofing guideline'
----
-**File:** model-embedding/src/types.rs:7-17\n\n**What:** `EmbeddingResult` is a public struct with all fields `pub`. Per Rust review guidelines, public fields are a permanent commitment. This is a new shared trait crate intended for multiple backends.\n\n**Why:** Since `model-embedding` is designed as a shared abstraction layer (sealed trait, multiple backends), changing any field on `EmbeddingResult` later is a breaking change for all consumers. The struct already has methods like `dimension()` and `normalize()`, suggesting the fields should be private with accessors.\n\n**Suggestion:** Make fields private (or `pub(crate)`) and expose getters. At minimum, `embedding` should not be directly mutable -- `normalize()` already exists as the controlled mutation path. Consider a builder or `new()` constructor pattern for creation. #review-finding #warning
