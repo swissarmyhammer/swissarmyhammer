@@ -56,7 +56,7 @@ const TASK_SCHEMA = {
   ],
 };
 
-const mockInvoke = vi.fn(async (cmd: string, args?: any) => {
+const mockInvoke = vi.fn(async (cmd: string, _args?: any) => {
   if (cmd === "list_entity_types") return ["task"];
   if (cmd === "get_entity_schema") return TASK_SCHEMA;
   if (cmd === "list_commands_for_scope") return { commands: [] };
@@ -65,7 +65,7 @@ const mockInvoke = vi.fn(async (cmd: string, args?: any) => {
 });
 
 vi.mock("@tauri-apps/api/core", () => ({
-  invoke: (...a: any[]) => mockInvoke(...a),
+  invoke: (...a: [string, any?]) => mockInvoke(...a),
 }));
 vi.mock("@tauri-apps/api/event", () => ({
   emit: vi.fn(() => Promise.resolve()),

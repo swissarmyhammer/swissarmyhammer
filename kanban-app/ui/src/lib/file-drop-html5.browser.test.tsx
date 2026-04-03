@@ -9,7 +9,7 @@
 
 import { describe, it, expect, vi } from "vitest";
 import { render } from "vitest-browser-react";
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback } from "react";
 
 /**
  * Minimal drop target that uses HTML5 drag events (not Tauri native).
@@ -18,7 +18,9 @@ import { useState, useCallback, useRef, useEffect } from "react";
 function HTML5DropTarget({
   onFilesReceived,
 }: {
-  onFilesReceived: (files: { name: string; size: number; type: string }[]) => void;
+  onFilesReceived: (
+    files: { name: string; size: number; type: string }[],
+  ) => void;
 }) {
   const [isOver, setIsOver] = useState(false);
 
@@ -162,18 +164,6 @@ describe("HTML5 file drop — dataTransfer.files", () => {
   });
 
   it("can read file content via FileReader after drop", async () => {
-    let resolveContent: (value: string) => void;
-    const contentPromise = new Promise<string>((r) => {
-      resolveContent = r;
-    });
-
-    const onFilesReceived = (
-      files: { name: string; size: number; type: string }[],
-    ) => {
-      // This test verifies the concept — in the real app we'd read
-      // the file or pass its path to the backend
-    };
-
     // Test that File objects from DataTransfer are readable
     const dataTransfer = new DataTransfer();
     const content = "file content here";
@@ -202,9 +192,7 @@ describe("HTML5 file drop — dataTransfer.files", () => {
           const files = Array.from(e.dataTransfer.files);
           fileHandler(files.map((f) => f.name));
         } else if (
-          e.dataTransfer.types.includes(
-            "application/x-swissarmyhammer-task",
-          )
+          e.dataTransfer.types.includes("application/x-swissarmyhammer-task")
         ) {
           taskHandler(
             e.dataTransfer.getData("application/x-swissarmyhammer-task"),
@@ -245,10 +233,7 @@ describe("HTML5 file drop — dataTransfer.files", () => {
 
     // Drop a task card
     const taskDT = new DataTransfer();
-    taskDT.setData(
-      "application/x-swissarmyhammer-task",
-      '{"id":"task-42"}',
-    );
+    taskDT.setData("application/x-swissarmyhammer-task", '{"id":"task-42"}');
     target.dispatchEvent(
       new DragEvent("drop", {
         bubbles: true,

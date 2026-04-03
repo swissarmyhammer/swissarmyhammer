@@ -1,6 +1,9 @@
 /**
  * Type declarations for custom vitest browser commands.
  * These augment the `commands` object available in browser tests.
+ *
+ * NOTE: This file must NOT share a basename with integration-commands.ts,
+ * otherwise TypeScript shadows the .d.ts with the .ts source file.
  */
 
 interface TestBoardConfig {
@@ -10,13 +13,14 @@ interface TestBoardConfig {
 
 interface TestBoardResult {
   dir: string;
-  boardData: any;
+  boardName: string;
+  summary: any;
   tasks: any[];
   columns: any[];
   taskIds: string[];
 }
 
-declare module "vitest/browser" {
+declare module "vitest/internal/browser" {
   interface BrowserCommands {
     createTestBoard: (config: TestBoardConfig) => Promise<TestBoardResult>;
     readEntity: (config: {
