@@ -185,63 +185,122 @@ pub fn commands_for_scope(
     let mut seen: HashSet<(String, Option<String>)> = HashSet::new();
 
     let clipboard_type = ui_state.clipboard_entity_type();
+    let all_registry_cmds = registry.available_commands(scope_chain);
 
-    // 1. Walk scope chain: for each entity moniker, get its schema commands
-    if let Some(fields) = fields {
-        for moniker in scope_chain {
-            let Some((entity_type, _entity_id)) = moniker.split_once(':') else {
-                continue;
-            };
-            let Some(entity_def) = fields.get_entity(entity_type) else {
-                continue;
-            };
+    // Walk scope chain in order (innermost first). For each moniker, emit
+    // entity schema commands then scoped registry commands. This ensures
+    // commands appear in scope order: attachment before task before global.
+    for moniker in scope_chain {
+        let Some((entity_type, _entity_id)) = moniker.split_once(':') else {
+            continue;
+        };
 
-            for cmd in &entity_def.commands {
-                let key = (cmd.id.clone(), Some(moniker.clone()));
-                if seen.contains(&key) {
-                    continue;
+        // Entity schema commands (from entity YAML definitions)
+        if let Some(fields) = fields {
+            if let Some(entity_def) = fields.get_entity(entity_type) {
+                for cmd in &entity_def.commands {
+                    let key = (cmd.id.clone(), Some(moniker.clone()));
+                    if seen.contains(&key) {
+                        continue;
+                    }
+                    seen.insert(key);
+
+                    let tpl = TemplateParams {
+                        entity_type: if cmd.id == "entity.paste" {
+                            clipboard_type.as_deref().unwrap_or("entity")
+                        } else {
+                            entity_type
+                        },
+                        ..Default::default()
+                    };
+                    let name = resolve_name_template(&cmd.name, &tpl);
+
+                    let keys = cmd.keys.as_ref().map(|k| KeysDef {
+                        vim: k.vim.clone(),
+                        cua: k.cua.clone(),
+                        emacs: k.emacs.clone(),
+                    });
+
+                    let available = check_available(
+                        &cmd.id,
+                        scope_chain,
+                        Some(moniker),
+                        command_impls,
+                        ui_state,
+                    );
+
+                    result.push(ResolvedCommand {
+                        id: cmd.id.clone(),
+                        name,
+                        menu_name: None,
+                        target: Some(moniker.clone()),
+                        group: entity_type.to_string(),
+                        context_menu: cmd.context_menu,
+                        keys,
+                        available,
+                    });
                 }
-                seen.insert(key);
-
-                // Resolve name template
-                let tpl = TemplateParams {
-                    entity_type: if cmd.id == "entity.paste" {
-                        clipboard_type.as_deref().unwrap_or("entity")
-                    } else {
-                        entity_type
-                    },
-                    ..Default::default()
-                };
-                let name = resolve_name_template(&cmd.name, &tpl);
-
-                // Convert entity command keys to registry KeysDef
-                let keys = cmd.keys.as_ref().map(|k| KeysDef {
-                    vim: k.vim.clone(),
-                    cua: k.cua.clone(),
-                    emacs: k.emacs.clone(),
-                });
-
-                let available =
-                    check_available(&cmd.id, scope_chain, Some(moniker), command_impls, ui_state);
-
-                result.push(ResolvedCommand {
-                    id: cmd.id.clone(),
-                    name,
-                    menu_name: None,
-                    target: Some(moniker.clone()),
-                    group: entity_type.to_string(),
-                    context_menu: cmd.context_menu,
-                    keys,
-                    available,
-                });
             }
+        }
+
+        // Registry commands scoped to this entity type (e.g. attachment.open
+        // with scope "attachment" or "entity:attachment"). These appear right
+        // after the entity schema commands for the same scope level.
+        let scope_bare = entity_type;
+        let scope_prefixed = format!("entity:{entity_type}");
+        for cmd_def in &all_registry_cmds {
+            if !cmd_def.visible {
+                continue;
+            }
+            // Only include commands whose scope mentions THIS specific type
+            let matches_this_type = cmd_def.scope.as_deref().is_some_and(|s| {
+                s.split(',').any(|r| {
+                    let r = r.trim();
+                    r == scope_bare || r == scope_prefixed
+                })
+            });
+            if !matches_this_type {
+                continue;
+            }
+
+            let key = (cmd_def.id.clone(), None);
+            if seen.contains(&key) {
+                continue;
+            }
+            seen.insert(key);
+
+            let tpl = TemplateParams {
+                entity_type: if cmd_def.id == "entity.paste" {
+                    clipboard_type.as_deref().unwrap_or("entity")
+                } else {
+                    entity_type
+                },
+                ..Default::default()
+            };
+            let name = resolve_name_template(&cmd_def.name, &tpl);
+            let menu_name = cmd_def
+                .menu_name
+                .as_ref()
+                .map(|mn| resolve_name_template(mn, &tpl));
+
+            let available =
+                check_available(&cmd_def.id, scope_chain, None, command_impls, ui_state);
+
+            result.push(ResolvedCommand {
+                id: cmd_def.id.clone(),
+                name,
+                menu_name,
+                target: None,
+                group: entity_type.to_string(),
+                context_menu: cmd_def.context_menu,
+                keys: cmd_def.keys.clone(),
+                available,
+            });
         }
     }
 
-    // 2. Add registry commands (global + scoped that match the current scope chain)
-    let available_from_registry = registry.available_commands(scope_chain);
-    for cmd_def in available_from_registry {
-        // Skip invisible commands
+    // Global (unscoped) registry commands — appear after all scoped commands.
+    for cmd_def in &all_registry_cmds {
         if !cmd_def.visible {
             continue;
         }
@@ -252,7 +311,6 @@ pub fn commands_for_scope(
         }
         seen.insert(key);
 
-        // Resolve name using innermost entity type from scope chain
         let innermost_type = scope_chain
             .first()
             .and_then(|m| m.split_once(':').map(|(t, _)| t))
@@ -271,8 +329,6 @@ pub fn commands_for_scope(
             .as_ref()
             .map(|mn| resolve_name_template(mn, &tpl));
 
-        let keys = cmd_def.keys.clone();
-
         let available = check_available(&cmd_def.id, scope_chain, None, command_impls, ui_state);
 
         result.push(ResolvedCommand {
@@ -282,7 +338,7 @@ pub fn commands_for_scope(
             target: None,
             group: "global".to_string(),
             context_menu: cmd_def.context_menu,
-            keys,
+            keys: cmd_def.keys.clone(),
             available,
         });
     }
@@ -1717,5 +1773,88 @@ mod tests {
             inspect_cmds[0].name, "Inspect Tag",
             "ui.inspect should show 'Inspect Tag'"
         );
+    }
+
+    // =========================================================================
+    // Scope ordering — innermost scope commands first
+    // =========================================================================
+
+    #[test]
+    fn attachment_commands_appear_before_task_commands() {
+        let (registry, impls, fields, ui) = setup();
+        let scope = vec![
+            "attachment:/path/to/file.png".into(),
+            "task:01X".into(),
+            "column:todo".into(),
+        ];
+        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, true, None);
+        let ids: Vec<&str> = cmds.iter().map(|c| c.id.as_str()).collect();
+
+        // attachment.open and attachment.reveal should be present
+        assert!(
+            ids.contains(&"attachment.open"),
+            "attachment.open should be in context menu"
+        );
+        assert!(
+            ids.contains(&"attachment.reveal"),
+            "attachment.reveal should be in context menu"
+        );
+
+        // They should appear before any task commands
+        let open_pos = ids.iter().position(|&id| id == "attachment.open").unwrap();
+        let reveal_pos = ids
+            .iter()
+            .position(|&id| id == "attachment.reveal")
+            .unwrap();
+
+        // Find the first task-level command
+        let first_task_pos = ids
+            .iter()
+            .position(|&id| id.starts_with("entity.") || id.starts_with("task."));
+
+        if let Some(task_pos) = first_task_pos {
+            assert!(
+                open_pos < task_pos,
+                "attachment.open (pos {open_pos}) should appear before first task command (pos {task_pos})"
+            );
+            assert!(
+                reveal_pos < task_pos,
+                "attachment.reveal (pos {reveal_pos}) should appear before first task command (pos {task_pos})"
+            );
+        }
+    }
+
+    #[test]
+    fn attachment_commands_grouped_as_attachment_not_global() {
+        let (registry, impls, fields, ui) = setup();
+        let scope = vec!["attachment:/path/to/file.png".into(), "task:01X".into()];
+        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
+
+        let open_cmd = cmds.iter().find(|c| c.id == "attachment.open");
+        assert!(open_cmd.is_some(), "attachment.open should exist");
+        assert_eq!(
+            open_cmd.unwrap().group,
+            "attachment",
+            "attachment.open should have group 'attachment', not 'global'"
+        );
+    }
+
+    #[test]
+    fn tag_commands_appear_before_task_commands_in_context_menu() {
+        let (registry, impls, fields, ui) = setup();
+        let scope = vec!["tag:bug".into(), "task:01X".into(), "column:todo".into()];
+        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, true, None);
+        let groups: Vec<&str> = cmds.iter().map(|c| c.group.as_str()).collect();
+
+        // First commands should be tag-grouped, then task-grouped
+        let first_tag = groups.iter().position(|&g| g == "tag");
+        let first_task = groups.iter().position(|&g| g == "task");
+
+        if let (Some(tag_pos), Some(task_pos)) = (first_tag, first_task) {
+            assert!(
+                tag_pos < task_pos,
+                "tag commands (pos {tag_pos}) should appear before task commands (pos {task_pos})"
+            );
+        }
     }
 }

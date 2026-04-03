@@ -1,9 +1,6 @@
 name: attachment
 icon: paperclip
-commands:
-  - id: ui.inspect
-    name: "Inspect {{entity.type}}"
-    context_menu: true
+commands: []
 fields:
   - attachment_name
   - attachment_path
