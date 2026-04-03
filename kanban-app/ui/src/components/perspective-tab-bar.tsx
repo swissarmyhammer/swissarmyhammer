@@ -1,5 +1,5 @@
 import { useCallback, useContext, useMemo, useRef, useState } from "react";
-import { Plus } from "lucide-react";
+import { Filter, Group, Plus } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { usePerspectives } from "@/lib/perspective-context";
 import { useViews } from "@/lib/views-context";
@@ -7,10 +7,20 @@ import {
   backendDispatch,
   CommandScopeProvider,
   CommandScopeContext,
+  scopeChainFromScope,
+  useActiveBoardPath,
   type CommandScope,
 } from "@/lib/command-scope";
 import { useContextMenu } from "@/lib/context-menu";
 import { moniker } from "@/lib/moniker";
+import {
+  Popover,
+  PopoverTrigger,
+  PopoverContent,
+} from "@/components/ui/popover";
+import { FilterEditor } from "@/components/filter-editor";
+import { GroupSelector } from "@/components/group-selector";
+import { useSchema } from "@/lib/schema-context";
 
 /**
  * A compact tab bar that shows perspectives for the current view kind.
@@ -26,10 +36,23 @@ export function PerspectiveTabBar() {
   const { perspectives, activePerspective, setActivePerspectiveId, refresh } =
     usePerspectives();
   const { activeView } = useViews();
+  const scope = useContext(CommandScopeContext);
+  const scopeChain = useMemo(() => scopeChainFromScope(scope), [scope]);
+  const boardPath = useActiveBoardPath();
 
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
+  const [filterOpen, setFilterOpen] = useState(false);
+  const [groupOpen, setGroupOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  // Get entity schema fields for the group-by selector.
+  const { getSchema } = useSchema();
+  const entityType = activeView?.entity_type ?? "";
+  const schemaFields = useMemo(
+    () => getSchema(entityType)?.fields ?? [],
+    [getSchema, entityType],
+  );
 
   // Filter perspectives to only those matching the active view kind.
   const viewKind = activeView?.kind ?? "board";
@@ -50,8 +73,10 @@ export function PerspectiveTabBar() {
     backendDispatch({
       cmd: "perspective.save",
       args: { name, view: viewKind },
+      scopeChain,
+      ...(boardPath ? { boardPath } : {}),
     }).catch(console.error);
-  }, [filteredPerspectives, viewKind]);
+  }, [filteredPerspectives, viewKind, scopeChain, boardPath]);
 
   /** Start inline rename for a perspective tab (triggered by double-click). */
   const startRename = useCallback((id: string, currentName: string) => {
@@ -76,10 +101,14 @@ export function PerspectiveTabBar() {
         await backendDispatch({
           cmd: "perspective.delete",
           args: { name: oldName },
+          scopeChain,
+          ...(boardPath ? { boardPath } : {}),
         });
         await backendDispatch({
           cmd: "perspective.save",
           args: { name: newName, view: perspective.view },
+          scopeChain,
+          ...(boardPath ? { boardPath } : {}),
         });
         await refresh();
       } catch (e) {
@@ -107,10 +136,21 @@ export function PerspectiveTabBar() {
             <PerspectiveTab
               id={p.id}
               name={p.name}
+              filter={p.filter}
+              group={p.group}
               isActive={isActive}
               isRenaming={isRenaming}
               renameValue={renameValue}
               inputRef={inputRef}
+              filterOpen={isActive && filterOpen}
+              onFilterOpenChange={(open) => {
+                if (isActive) setFilterOpen(open);
+              }}
+              groupOpen={isActive && groupOpen}
+              onGroupOpenChange={(open) => {
+                if (isActive) setGroupOpen(open);
+              }}
+              schemaFields={schemaFields}
               onSelect={() => setActivePerspectiveId(p.id)}
               onDoubleClick={() => startRename(p.id, p.name)}
               onRenameChange={setRenameValue}
@@ -124,6 +164,7 @@ export function PerspectiveTabBar() {
       {/* Add perspective button */}
       <button
         onClick={handleAdd}
+        title="New perspective"
         aria-label="Add perspective"
         className="inline-flex items-center justify-center h-7 w-7 text-muted-foreground hover:text-foreground hover:bg-muted/50 rounded-md transition-colors"
       >
@@ -141,10 +182,17 @@ export function PerspectiveTabBar() {
 interface PerspectiveTabProps {
   id: string;
   name: string;
+  filter?: string;
+  group?: string;
   isActive: boolean;
   isRenaming: boolean;
   renameValue: string;
   inputRef: React.RefObject<HTMLInputElement | null>;
+  filterOpen: boolean;
+  onFilterOpenChange: (open: boolean) => void;
+  groupOpen: boolean;
+  onGroupOpenChange: (open: boolean) => void;
+  schemaFields: import("@/types/kanban").FieldDef[];
   onSelect: () => void;
   onDoubleClick: () => void;
   onRenameChange: (value: string) => void;
@@ -158,11 +206,19 @@ interface PerspectiveTabProps {
  * perspective moniker so the scope chain is correct.
  */
 function PerspectiveTab({
+  id,
   name,
+  filter,
+  group,
   isActive,
   isRenaming,
   renameValue,
   inputRef,
+  filterOpen,
+  onFilterOpenChange,
+  groupOpen,
+  onGroupOpenChange,
+  schemaFields,
   onSelect,
   onDoubleClick,
   onRenameChange,
@@ -171,36 +227,107 @@ function PerspectiveTab({
 }: PerspectiveTabProps) {
   const scopeChain = useScopeChain();
   const handleContextMenu = useContextMenu(scopeChain);
+  const hasFilter = Boolean(filter);
+  const hasGroup = Boolean(group);
 
   return (
-    <button
-      onClick={onSelect}
-      onDoubleClick={onDoubleClick}
-      onContextMenu={handleContextMenu}
-      className={cn(
-        "inline-flex items-center px-2.5 h-7 text-xs font-medium rounded-t-md border-b-2 transition-colors whitespace-nowrap",
-        isActive
-          ? "border-primary text-foreground bg-background"
-          : "border-transparent text-muted-foreground hover:text-foreground hover:bg-muted/50",
+    <div className="inline-flex items-center">
+      <button
+        onClick={onSelect}
+        onDoubleClick={onDoubleClick}
+        onContextMenu={handleContextMenu}
+        className={cn(
+          "inline-flex items-center px-2.5 h-7 text-xs font-medium rounded-t-md border-b-2 transition-colors whitespace-nowrap",
+          isActive
+            ? "border-primary text-foreground bg-background"
+            : "border-transparent text-muted-foreground hover:text-foreground hover:bg-muted/50",
+        )}
+      >
+        {isRenaming ? (
+          <input
+            ref={inputRef}
+            value={renameValue}
+            onChange={(e) => onRenameChange(e.target.value)}
+            onBlur={onRenameCommit}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") onRenameCommit();
+              if (e.key === "Escape") onRenameCancel();
+            }}
+            className="bg-transparent border-none outline-none text-xs w-20 p-0"
+            onClick={(e) => e.stopPropagation()}
+          />
+        ) : (
+          name
+        )}
+      </button>
+      {isActive && (
+        <Popover open={filterOpen} onOpenChange={onFilterOpenChange}>
+          <PopoverTrigger asChild>
+            <button
+              aria-label="Filter"
+              className={cn(
+                "inline-flex items-center justify-center h-5 w-5 rounded transition-colors -ml-1",
+                hasFilter
+                  ? "text-primary"
+                  : "text-muted-foreground/50 hover:text-muted-foreground",
+              )}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <Filter
+                className="h-3 w-3"
+                fill={hasFilter ? "currentColor" : "none"}
+              />
+            </button>
+          </PopoverTrigger>
+          <PopoverContent
+            align="start"
+            sideOffset={4}
+            className="p-3 w-auto"
+            onOpenAutoFocus={(e) => e.preventDefault()}
+          >
+            <FilterEditor
+              filter={filter ?? ""}
+              perspectiveId={id}
+              onClose={() => onFilterOpenChange(false)}
+            />
+          </PopoverContent>
+        </Popover>
       )}
-    >
-      {isRenaming ? (
-        <input
-          ref={inputRef}
-          value={renameValue}
-          onChange={(e) => onRenameChange(e.target.value)}
-          onBlur={onRenameCommit}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") onRenameCommit();
-            if (e.key === "Escape") onRenameCancel();
-          }}
-          className="bg-transparent border-none outline-none text-xs w-20 p-0"
-          onClick={(e) => e.stopPropagation()}
-        />
-      ) : (
-        name
+      {isActive && (
+        <Popover open={groupOpen} onOpenChange={onGroupOpenChange}>
+          <PopoverTrigger asChild>
+            <button
+              aria-label="Group"
+              className={cn(
+                "inline-flex items-center justify-center h-5 w-5 rounded transition-colors -ml-0.5",
+                hasGroup
+                  ? "text-primary"
+                  : "text-muted-foreground/50 hover:text-muted-foreground",
+              )}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <Group
+                className="h-3 w-3"
+                fill={hasGroup ? "currentColor" : "none"}
+              />
+            </button>
+          </PopoverTrigger>
+          <PopoverContent
+            align="start"
+            sideOffset={4}
+            className="p-3 w-auto"
+            onOpenAutoFocus={(e) => e.preventDefault()}
+          >
+            <GroupSelector
+              group={group}
+              perspectiveId={id}
+              fields={schemaFields}
+              onClose={() => onGroupOpenChange(false)}
+            />
+          </PopoverContent>
+        </Popover>
       )}
-    </button>
+    </div>
   );
 }
 

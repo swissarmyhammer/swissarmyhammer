@@ -9,6 +9,7 @@
 interface TestBoardConfig {
   name: string;
   tasks: { title: string; column?: string }[];
+  perspectives?: { name: string; view: string }[];
 }
 
 interface TestBoardResult {
@@ -18,6 +19,7 @@ interface TestBoardResult {
   tasks: any[];
   columns: any[];
   taskIds: string[];
+  perspectiveIds: string[];
 }
 
 declare module "vitest/internal/browser" {
@@ -43,6 +45,12 @@ declare module "vitest/internal/browser" {
       name: string;
       content: string;
     }) => Promise<string>;
+    listPerspectives: (config: {
+      dir: string;
+    }) => Promise<{
+      count: number;
+      perspectives: { id: string; name: string; view: string }[];
+    }>;
     cleanupTestBoard: (config: { dir: string }) => Promise<void>;
   }
 }

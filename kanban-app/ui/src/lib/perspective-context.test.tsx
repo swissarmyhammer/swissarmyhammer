@@ -63,6 +63,10 @@ vi.mock("./views-context", () => ({
 }));
 
 import { PerspectiveProvider, usePerspectives } from "./perspective-context";
+import {
+  CommandScopeProvider,
+  ActiveBoardPathProvider,
+} from "@/lib/command-scope";
 import type { PerspectiveDef } from "@/types/kanban";
 
 /** Build a minimal PerspectiveDef for test use. */
@@ -70,9 +74,16 @@ function makePerspective(id: string, name: string): PerspectiveDef {
   return { id, name, view: "board" };
 }
 
-/** Wrapper that renders PerspectiveProvider for use with renderHook. */
+/** Wrapper that renders PerspectiveProvider inside a CommandScopeProvider
+ *  with a window moniker, matching the real App.tsx tree. */
 function wrapper({ children }: { children: ReactNode }) {
-  return <PerspectiveProvider>{children}</PerspectiveProvider>;
+  return (
+    <CommandScopeProvider commands={[]} moniker="window:main">
+      <ActiveBoardPathProvider value="/tmp/test/.kanban">
+        <PerspectiveProvider>{children}</PerspectiveProvider>
+      </ActiveBoardPathProvider>
+    </CommandScopeProvider>
+  );
 }
 
 describe("PerspectiveProvider", () => {
@@ -88,8 +99,11 @@ describe("PerspectiveProvider", () => {
       windows: {},
       recent_boards: [],
     };
-    // Default: perspective.list returns empty
-    mockInvoke.mockResolvedValue({ perspectives: [], count: 0 });
+    // Default: perspective.list returns empty (wrapped in dispatch envelope)
+    mockInvoke.mockResolvedValue({
+      result: { perspectives: [], count: 0 },
+      undoable: false,
+    });
   });
 
   it("provides empty perspectives list as default", async () => {
@@ -101,13 +115,18 @@ describe("PerspectiveProvider", () => {
 
   it("fetches perspectives on mount via perspective.list command", async () => {
     const ps = [makePerspective("p1", "Sprint View")];
-    mockInvoke.mockResolvedValue({ perspectives: ps, count: 1 });
+    mockInvoke.mockResolvedValue({
+      result: { perspectives: ps, count: 1 },
+      undoable: false,
+    });
 
     const { result } = renderHook(() => usePerspectives(), { wrapper });
     await act(async () => {});
 
     expect(mockInvoke).toHaveBeenCalledWith("dispatch_command", {
       cmd: "perspective.list",
+      scopeChain: ["window:main"],
+      boardPath: "/tmp/test/.kanban",
     });
     expect(result.current.perspectives).toHaveLength(1);
     expect(result.current.perspectives[0].name).toBe("Sprint View");
@@ -118,7 +137,10 @@ describe("PerspectiveProvider", () => {
       makePerspective("p1", "First"),
       makePerspective("p2", "Second"),
     ];
-    mockInvoke.mockResolvedValue({ perspectives: ps, count: 2 });
+    mockInvoke.mockResolvedValue({
+      result: { perspectives: ps, count: 2 },
+      undoable: false,
+    });
 
     const { result } = renderHook(() => usePerspectives(), { wrapper });
     await act(async () => {});
@@ -137,7 +159,10 @@ describe("PerspectiveProvider", () => {
       makePerspective("p1", "First"),
       makePerspective("p2", "Second"),
     ];
-    mockInvoke.mockResolvedValue({ perspectives: ps, count: 2 });
+    mockInvoke.mockResolvedValue({
+      result: { perspectives: ps, count: 2 },
+      undoable: false,
+    });
 
     const { result } = renderHook(() => usePerspectives(), { wrapper });
     await act(async () => {});
@@ -147,7 +172,10 @@ describe("PerspectiveProvider", () => {
   });
 
   it("setActivePerspectiveId dispatches ui.perspective.set to backend", async () => {
-    mockInvoke.mockResolvedValue({ perspectives: [], count: 0 });
+    mockInvoke.mockResolvedValue({
+      result: { perspectives: [], count: 0 },
+      undoable: false,
+    });
 
     const { result } = renderHook(() => usePerspectives(), { wrapper });
     await act(async () => {});
@@ -165,11 +193,16 @@ describe("PerspectiveProvider", () => {
     expect(mockInvoke).toHaveBeenCalledWith("dispatch_command", {
       cmd: "ui.perspective.set",
       args: { perspective_id: "p1" },
+      scopeChain: ["window:main"],
+      boardPath: "/tmp/test/.kanban",
     });
   });
 
   it("refresh re-fetches the perspectives list", async () => {
-    mockInvoke.mockResolvedValue({ perspectives: [], count: 0 });
+    mockInvoke.mockResolvedValue({
+      result: { perspectives: [], count: 0 },
+      undoable: false,
+    });
 
     const { result } = renderHook(() => usePerspectives(), { wrapper });
     await act(async () => {});
@@ -177,8 +210,8 @@ describe("PerspectiveProvider", () => {
 
     // Now return a perspective on next fetch
     mockInvoke.mockResolvedValue({
-      perspectives: [makePerspective("p1", "New")],
-      count: 1,
+      result: { perspectives: [makePerspective("p1", "New")], count: 1 },
+      undoable: false,
     });
 
     await act(async () => {
@@ -189,15 +222,18 @@ describe("PerspectiveProvider", () => {
   });
 
   it("refreshes on entity-field-changed event for perspective type", async () => {
-    mockInvoke.mockResolvedValue({ perspectives: [], count: 0 });
+    mockInvoke.mockResolvedValue({
+      result: { perspectives: [], count: 0 },
+      undoable: false,
+    });
 
     const { result } = renderHook(() => usePerspectives(), { wrapper });
     await act(async () => {});
 
     // Set up a perspective to be returned on next fetch
     mockInvoke.mockResolvedValue({
-      perspectives: [makePerspective("p1", "Updated")],
-      count: 1,
+      result: { perspectives: [makePerspective("p1", "Updated")], count: 1 },
+      undoable: false,
     });
 
     await act(async () => {
@@ -212,14 +248,17 @@ describe("PerspectiveProvider", () => {
   });
 
   it("refreshes on entity-created event for perspective type", async () => {
-    mockInvoke.mockResolvedValue({ perspectives: [], count: 0 });
+    mockInvoke.mockResolvedValue({
+      result: { perspectives: [], count: 0 },
+      undoable: false,
+    });
 
     const { result } = renderHook(() => usePerspectives(), { wrapper });
     await act(async () => {});
 
     mockInvoke.mockResolvedValue({
-      perspectives: [makePerspective("p2", "Brand New")],
-      count: 1,
+      result: { perspectives: [makePerspective("p2", "Brand New")], count: 1 },
+      undoable: false,
     });
 
     await act(async () => {
@@ -238,7 +277,10 @@ describe("PerspectiveProvider", () => {
       makePerspective("p1", "First"),
       makePerspective("p2", "Second"),
     ];
-    mockInvoke.mockResolvedValue({ perspectives: ps, count: 2 });
+    mockInvoke.mockResolvedValue({
+      result: { perspectives: ps, count: 2 },
+      undoable: false,
+    });
 
     const { result } = renderHook(() => usePerspectives(), { wrapper });
     await act(async () => {});
@@ -246,8 +288,8 @@ describe("PerspectiveProvider", () => {
 
     // After removal only one perspective remains
     mockInvoke.mockResolvedValue({
-      perspectives: [makePerspective("p1", "First")],
-      count: 1,
+      result: { perspectives: [makePerspective("p1", "First")], count: 1 },
+      undoable: false,
     });
 
     await act(async () => {
@@ -261,7 +303,10 @@ describe("PerspectiveProvider", () => {
   });
 
   it("ignores entity events for non-perspective types", async () => {
-    mockInvoke.mockResolvedValue({ perspectives: [], count: 0 });
+    mockInvoke.mockResolvedValue({
+      result: { perspectives: [], count: 0 },
+      undoable: false,
+    });
 
     const { result } = renderHook(() => usePerspectives(), { wrapper });
     await act(async () => {});
@@ -280,14 +325,20 @@ describe("PerspectiveProvider", () => {
   });
 
   it("refreshes on board-changed event", async () => {
-    mockInvoke.mockResolvedValue({ perspectives: [], count: 0 });
+    mockInvoke.mockResolvedValue({
+      result: { perspectives: [], count: 0 },
+      undoable: false,
+    });
 
     const { result } = renderHook(() => usePerspectives(), { wrapper });
     await act(async () => {});
 
     mockInvoke.mockResolvedValue({
-      perspectives: [makePerspective("p1", "After Board Change")],
-      count: 1,
+      result: {
+        perspectives: [makePerspective("p1", "After Board Change")],
+        count: 1,
+      },
+      undoable: false,
     });
 
     await act(async () => {

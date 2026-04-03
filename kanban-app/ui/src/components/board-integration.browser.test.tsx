@@ -238,6 +238,10 @@ describe("Board integration — real .kanban data", () => {
         { title: "Card Gamma" },
         { title: "Card Delta", column: "doing" },
       ],
+      perspectives: [
+        { name: "Sprint Board", view: "board" },
+        { name: "Grid Overview", view: "grid" },
+      ],
     });
     testBoardDir = result.dir;
     testBoardName = result.boardName;
@@ -267,6 +271,14 @@ describe("Board integration — real .kanban data", () => {
     });
     expect(task.title).toBe("Card Alpha");
     expect(task.position.column).toBe("todo");
+  });
+
+  it("creates perspectives on disk via CLI", async () => {
+    const result = await commands.listPerspectives({ dir: testBoardDir });
+    expect(result.count).toBe(2);
+    const names = result.perspectives.map((p) => p.name);
+    expect(names).toContain("Sprint Board");
+    expect(names).toContain("Grid Overview");
   });
 
   it("renders the board with all columns and task cards", async () => {

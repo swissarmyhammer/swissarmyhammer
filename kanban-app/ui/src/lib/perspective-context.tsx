@@ -10,7 +10,12 @@ import {
 } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { backendDispatch } from "@/lib/command-scope";
+import {
+  backendDispatch,
+  CommandScopeContext,
+  scopeChainFromScope,
+  useActiveBoardPath,
+} from "@/lib/command-scope";
 import type { PerspectiveDef } from "@/types/kanban";
 import { useUIState } from "./ui-state-context";
 import { useViews } from "./views-context";
@@ -49,26 +54,40 @@ export function PerspectiveProvider({ children }: { children: ReactNode }) {
   const { activeView } = useViews();
   const viewKind = activeView?.kind ?? "board";
 
+  // Read scope chain from the CommandScope tree so dispatch calls include the
+  // window moniker (e.g. "window:main"). Without this, secondary windows
+  // silently target the "main" window slot in UIState.
+  const scope = useContext(CommandScopeContext);
+  const scopeChain = useMemo(() => scopeChainFromScope(scope), [scope]);
+  const boardPath = useActiveBoardPath();
+
   /** Dispatch a perspective switch through the command system so UIState owns
    *  the change. */
-  const setActivePerspectiveId = useCallback((id: string) => {
-    backendDispatch({
-      cmd: "ui.perspective.set",
-      args: { perspective_id: id },
-    }).catch(console.error);
-  }, []);
+  const setActivePerspectiveId = useCallback(
+    (id: string) => {
+      backendDispatch({
+        cmd: "ui.perspective.set",
+        args: { perspective_id: id },
+        scopeChain,
+        ...(boardPath ? { boardPath } : {}),
+      }).catch(console.error);
+    },
+    [scopeChain, boardPath],
+  );
 
   const refresh = useCallback(async () => {
     try {
-      const result = (await backendDispatch({
+      const wrapped = (await backendDispatch({
         cmd: "perspective.list",
-      })) as { perspectives: PerspectiveDef[] };
-      setPerspectives(result?.perspectives ?? []);
+        scopeChain,
+        ...(boardPath ? { boardPath } : {}),
+      })) as { result?: { perspectives?: PerspectiveDef[] } };
+      setPerspectives(wrapped?.result?.perspectives ?? []);
       setLoaded(true);
     } catch (error) {
       console.error("Failed to load perspectives:", error);
     }
-  }, []);
+  }, [scopeChain, boardPath]);
 
   // On mount: load perspectives. UIState already provides active_perspective_id.
   useEffect(() => {
@@ -94,6 +113,8 @@ export function PerspectiveProvider({ children }: { children: ReactNode }) {
       backendDispatch({
         cmd: "perspective.save",
         args: { name: "Default", view: viewKind },
+        scopeChain,
+        ...(boardPath ? { boardPath } : {}),
       }).catch(console.error);
     }
   }, [loaded, perspectives, viewKind]);

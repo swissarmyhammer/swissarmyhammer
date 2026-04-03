@@ -1,0 +1,10 @@
+---
+assignees:
+- claude-code
+depends_on:
+- 01KN9KZH05YT847ZX8N3ZQT15Q
+position_column: todo
+position_ordinal: '9480'
+title: Migrate undo-context.tsx to useDispatchCommand
+---
+## What\nReplace `backendDispatch` (2 calls: app.undo, app.redo) with `useDispatchCommand` in `kanban-app/ui/src/lib/undo-context.tsx`.\n\n## Acceptance Criteria\n- [ ] No imports of `backendDispatch` or `dispatchCommand`\n- [ ] Scope chain automatic from context\n\n## Tests\n- [ ] `cd kanban-app/ui && pnpm test` — all unit tests pass

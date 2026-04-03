@@ -67,6 +67,44 @@
       from: args
   keys: {}
 
+- id: perspective.sort.set
+  name: Sort Field
+  scope: "entity:perspective"
+  undoable: true
+  context_menu: true
+  params:
+    - name: field
+      from: args
+    - name: direction
+      from: args
+    - name: perspective_id
+      from: args
+  keys: {}
+
+- id: perspective.sort.clear
+  name: Clear Sort
+  scope: "entity:perspective"
+  undoable: true
+  context_menu: true
+  params:
+    - name: field
+      from: args
+    - name: perspective_id
+      from: args
+  keys: {}
+
+- id: perspective.sort.toggle
+  name: Toggle Sort
+  scope: "entity:perspective"
+  undoable: true
+  context_menu: true
+  params:
+    - name: field
+      from: args
+    - name: perspective_id
+      from: args
+  keys: {}
+
 - id: perspective.list
   name: List Perspectives
   visible: false

@@ -436,6 +436,33 @@ mod tests {
     }
 
     #[test]
+    fn perspective_commands_all_registered() {
+        let sources = builtin_yaml_sources();
+        let sources_ref: Vec<(&str, &str)> = sources.iter().map(|(n, c)| (*n, *c)).collect();
+        let registry = CommandsRegistry::from_yaml_sources(&sources_ref);
+
+        let expected = [
+            "perspective.load",
+            "perspective.save",
+            "perspective.delete",
+            "perspective.filter",
+            "perspective.clearFilter",
+            "perspective.group",
+            "perspective.clearGroup",
+            "perspective.sort.set",
+            "perspective.sort.clear",
+            "perspective.sort.toggle",
+            "perspective.list",
+        ];
+        for cmd_id in &expected {
+            assert!(
+                registry.get(cmd_id).is_some(),
+                "perspective command '{cmd_id}' must be registered"
+            );
+        }
+    }
+
+    #[test]
     fn empty_registry() {
         let registry = CommandsRegistry::new();
         assert!(registry.all_commands().is_empty());
@@ -552,8 +579,8 @@ mod tests {
         let perspective = include_str!("../builtin/commands/perspective.yaml");
         let registry = CommandsRegistry::from_yaml_sources(&[("perspective", perspective)]);
 
-        // All 8 perspective commands should parse
-        assert_eq!(registry.all_commands().len(), 8);
+        // All 11 perspective commands should parse (8 original + 3 sort)
+        assert_eq!(registry.all_commands().len(), 11);
         assert!(registry.get("perspective.load").is_some());
         assert!(registry.get("perspective.save").is_some());
         assert!(registry.get("perspective.delete").is_some());
@@ -561,6 +588,9 @@ mod tests {
         assert!(registry.get("perspective.clearFilter").is_some());
         assert!(registry.get("perspective.group").is_some());
         assert!(registry.get("perspective.clearGroup").is_some());
+        assert!(registry.get("perspective.sort.set").is_some());
+        assert!(registry.get("perspective.sort.clear").is_some());
+        assert!(registry.get("perspective.sort.toggle").is_some());
         assert!(registry.get("perspective.list").is_some());
 
         // Load/save/delete should have a 'name' param

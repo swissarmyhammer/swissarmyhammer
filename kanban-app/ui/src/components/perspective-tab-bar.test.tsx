@@ -74,6 +74,17 @@ vi.mock("@/lib/context-menu", () => ({
   useContextMenu: () => mockContextMenuHandler,
 }));
 
+// Mock useSchema — returns empty schema by default.
+vi.mock("@/lib/schema-context", () => ({
+  useSchema: () => ({
+    getSchema: () => ({ entity: { name: "task", fields: [] }, fields: [] }),
+    getFieldDef: () => undefined,
+    getEntityCommands: () => [],
+    mentionableTypes: [],
+    loading: false,
+  }),
+}));
+
 import { PerspectiveTabBar } from "./perspective-tab-bar";
 
 describe("PerspectiveTabBar", () => {
