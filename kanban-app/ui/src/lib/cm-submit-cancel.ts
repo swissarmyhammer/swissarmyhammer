@@ -47,8 +47,11 @@ export interface SubmitCancelOptions {
 /**
  * Build CM6 extensions that route Escape and Enter to semantic callbacks.
  *
- * Vim Enter uses a capture-phase DOM listener on .cm-editor — fires before
- * vim, so we can check vim state and intercept when appropriate.
+ * Vim Enter uses one of two strategies:
+ *   - alwaysSubmitOnEnter: Prec.highest keymap binding that intercepts Enter
+ *     inside CM6's key dispatch, before vim can process it. No newlines ever.
+ *   - Default: capture-phase DOM listener that checks vim state — normal mode
+ *     submits, insert mode passes through to vim for newline insertion.
  *
  * Vim Escape uses a two-phase strategy:
  *   - Capture phase reads vim state and handles normal mode immediately
@@ -73,29 +76,60 @@ export function buildSubmitCancelExtensions(
 
   if (mode === "vim") {
     return [
-      // Enter: capture-phase DOM listener beats vim's event processing.
+      // Enter handling — two strategies depending on alwaysSubmitOnEnter:
+      //
+      // alwaysSubmitOnEnter: Use Prec.highest keymap binding. This runs inside
+      // CM6's key dispatch pipeline, intercepting Enter before vim's own
+      // keymap handler can insert a newline. Used by the command palette where
+      // newlines are never valid.
+      //
+      // Default: Use a capture-phase DOM listener that checks vim state.
+      // In normal mode, Enter submits; in insert mode, Enter is passed through
+      // to vim for newline insertion. Used by single-line editors that start
+      // in normal mode (e.g. filter-editor).
       ...(singleLine
-        ? [
-            ViewPlugin.define((view) => {
-              const handler = (event: KeyboardEvent) => {
-                if (event.key !== "Enter") return;
-                const cm = getCM(view);
-                if (cm?.state?.vim?.insertMode && !alwaysSubmitOnEnter) return; // let vim insert newline
-                const text = view.state.doc.toString();
-                if (text.length > 0) {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  onSubmitRef.current?.();
-                }
-              };
-              view.dom.addEventListener("keydown", handler, true);
-              return {
-                destroy() {
-                  view.dom.removeEventListener("keydown", handler, true);
-                },
-              };
-            }),
-          ]
+        ? alwaysSubmitOnEnter
+          ? [
+              Prec.highest(
+                keymap.of([
+                  {
+                    key: "Enter",
+                    run: (view) => {
+                      const text = view.state.doc.toString();
+                      if (text.length > 0) {
+                        // Defer so CM6's key dispatch finishes before the
+                        // callback unmounts the editor (destroying the view
+                        // mid-dispatch would crash).
+                        setTimeout(() => onSubmitRef.current?.(), 0);
+                      }
+                      // Always consume Enter — no newlines allowed.
+                      return true;
+                    },
+                  },
+                ]),
+              ),
+            ]
+          : [
+              ViewPlugin.define((view) => {
+                const handler = (event: KeyboardEvent) => {
+                  if (event.key !== "Enter") return;
+                  const cm = getCM(view);
+                  if (cm?.state?.vim?.insertMode) return; // let vim insert newline
+                  const text = view.state.doc.toString();
+                  if (text.length > 0) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    onSubmitRef.current?.();
+                  }
+                };
+                view.dom.addEventListener("keydown", handler, true);
+                return {
+                  destroy() {
+                    view.dom.removeEventListener("keydown", handler, true);
+                  },
+                };
+              }),
+            ]
         : []),
       // Escape: two-phase handler on .cm-editor (view.dom).
       //

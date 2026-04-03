@@ -212,7 +212,7 @@ describe("buildSubmitCancelExtensions", () => {
       expect(refs.onCancelRef.current).not.toHaveBeenCalled();
     });
 
-    it("Enter in insert mode calls onSubmitRef when alwaysSubmitOnEnter is true", () => {
+    it("Enter in insert mode calls onSubmitRef when alwaysSubmitOnEnter is true", async () => {
       const refs = makeRefs();
       const extensions = [
         vim(),
@@ -232,7 +232,19 @@ describe("buildSubmitCancelExtensions", () => {
         (cm as any).state.vim.insertMode = true;
       }
 
-      simulateKeydown(view.dom, "Enter");
+      // alwaysSubmitOnEnter uses Prec.highest keymap, which fires through
+      // CM6's key dispatch on contentDOM (not a capture-phase DOM listener).
+      view.contentDOM.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Enter",
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+
+      // Submit is deferred with setTimeout to avoid destroying the view
+      // mid-dispatch, so flush the microtask/timer queue.
+      await new Promise((r) => setTimeout(r, 0));
 
       expect(refs.onSubmitRef.current).toHaveBeenCalledOnce();
     });

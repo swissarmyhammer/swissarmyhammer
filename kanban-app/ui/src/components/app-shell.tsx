@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   CommandScopeProvider,
+  useDispatchCommand,
   useExecuteCommand,
   resolveCommand,
   dispatchCommand,
@@ -128,6 +129,7 @@ export function AppShell({ children, onSwitchBoard }: AppShellProps) {
       : "cua";
   const { setMode } = useAppMode();
   const { broadcastNavCommand } = useEntityFocus();
+  const dismiss = useDispatchCommand("app.dismiss");
   const broadcastRef = useRef(broadcastNavCommand);
   broadcastRef.current = broadcastNavCommand;
 
@@ -288,9 +290,8 @@ export function AppShell({ children, onSwitchBoard }: AppShellProps) {
 
   /** Close the command palette (dispatch to backend) and return to normal mode. */
   const closePalette = useCallback(() => {
-    // Dispatch app.dismiss to backend to close palette
-    dispatchCommand({ id: "app.dismiss", name: "Dismiss" }, undefined, []);
-  }, []);
+    dismiss();
+  }, [dismiss]);
 
   return (
     <CommandScopeProvider commands={globalCommands}>

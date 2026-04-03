@@ -1,22 +1,12 @@
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import CodeMirror, { type ReactCodeMirrorRef } from "@uiw/react-codemirror";
 import { keymap } from "@codemirror/view";
 import { Compartment } from "@codemirror/state";
 import { getCM, Vim } from "@replit/codemirror-vim";
 import { buildSubmitCancelExtensions } from "@/lib/cm-submit-cancel";
-import {
-  useDispatchCommand,
-  type CommandAtDepth,
-} from "@/lib/command-scope";
+import { useDispatchCommand, type CommandAtDepth } from "@/lib/command-scope";
 import { useUIState } from "@/lib/ui-state-context";
 import { shadcnTheme, keymapExtension } from "@/lib/cm-keymap";
 import { fuzzyMatch } from "@/lib/fuzzy-filter";
@@ -120,27 +110,13 @@ export function CommandPalette({
   // Inspect hook for search mode (only used in search mode)
   const inspectEntity = useInspectOptional();
 
-  // Reset state and claim OS window focus when palette opens.
+  // Reset state when palette opens.
   useEffect(() => {
     if (open) {
-      getCurrentWindow().setFocus();
       setFilter("");
       setDebouncedFilter("");
       setSelectedIndex(0);
       setSearchResults([]);
-      // Log focus state after a frame to diagnose ESC dismiss failures.
-      requestAnimationFrame(() => {
-        const active = document.activeElement;
-        console.warn("[palette] open — activeElement:", active?.tagName, active?.className?.slice(0, 60));
-        // If CM6 autoFocus failed, focus the backdrop so ESC still works.
-        if (!active?.closest(".cm-editor")) {
-          const backdrop = document.querySelector<HTMLElement>("[data-testid='command-palette-backdrop']");
-          if (backdrop) {
-            console.warn("[palette] CM6 autoFocus failed — focusing backdrop");
-            backdrop.focus();
-          }
-        }
-      });
     }
   }, [open]);
 
