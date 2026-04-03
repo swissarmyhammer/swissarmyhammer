@@ -2,16 +2,10 @@ import {
   createContext,
   useContext,
   useCallback,
-  useRef,
   type ReactNode,
 } from "react";
 import { error as logError } from "@/lib/log";
-import {
-  useActiveBoardPath,
-  backendDispatch,
-  scopeChainFromScope,
-  CommandScopeContext,
-} from "@/lib/command-scope";
+import { useDispatchCommand } from "@/lib/command-scope";
 
 /**
  * Signature for the centralized field update function.
@@ -48,26 +42,18 @@ interface FieldUpdateProviderProps {
  * `dispatch_command`.
  */
 export function FieldUpdateProvider({ children }: FieldUpdateProviderProps) {
-  const boardPath = useActiveBoardPath();
-  const boardPathRef = useRef(boardPath);
-  boardPathRef.current = boardPath;
-  const scope = useContext(CommandScopeContext);
-  const scopeRef = useRef(scopeChainFromScope(scope));
-  scopeRef.current = scopeChainFromScope(scope);
+  const dispatch = useDispatchCommand("entity.update_field");
 
   const updateField: UpdateFieldFn = useCallback(
     async (entityType, entityId, fieldName, value) => {
       try {
-        await backendDispatch({
-          cmd: "entity.update_field",
+        await dispatch({
           args: {
             entity_type: entityType,
             id: entityId,
             field_name: fieldName,
             value,
           },
-          ...(boardPathRef.current ? { boardPath: boardPathRef.current } : {}),
-          scopeChain: scopeRef.current,
         });
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : String(e);
@@ -77,7 +63,7 @@ export function FieldUpdateProvider({ children }: FieldUpdateProviderProps) {
         throw e;
       }
     },
-    [],
+    [dispatch],
   );
 
   return (

@@ -101,6 +101,9 @@ export function BoardView({ board, tasks, boardPath }: BoardViewProps) {
     [activePerspective?.filter, tasks],
   );
 
+  // Group field from the active perspective — used to cluster tasks within columns.
+  const groupField = activePerspective?.group;
+
   const taskMap = useMemo(() => {
     const map = new Map<string, Entity>();
     for (const task of filteredTasks) map.set(task.id, task);
@@ -125,13 +128,21 @@ export function BoardView({ board, tasks, boardPath }: BoardViewProps) {
       ids.sort((a, b) => {
         const ta = taskMap.get(a)!;
         const tb = taskMap.get(b)!;
+        // When a group field is active, cluster by group value first,
+        // then by ordinal within each group.
+        if (groupField) {
+          const ga = String(ta.fields[groupField] ?? "");
+          const gb = String(tb.fields[groupField] ?? "");
+          const groupCmp = ga.localeCompare(gb);
+          if (groupCmp !== 0) return groupCmp;
+        }
         return getStr(ta, "position_ordinal", "a0").localeCompare(
           getStr(tb, "position_ordinal", "a0"),
         );
       });
     }
     return map;
-  }, [columns, filteredTasks, taskMap]);
+  }, [columns, filteredTasks, taskMap, groupField]);
 
   // Pre-resolved task entity arrays per column — memoized so that React.memo
   // on ColumnView sees stable references and skips re-renders on cursor moves.

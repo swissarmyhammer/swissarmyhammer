@@ -62,6 +62,12 @@ export function GridView({ view }: GridViewProps) {
     return evaluateSort(activePerspective?.sort ?? [], filtered);
   }, [activePerspective?.filter, activePerspective?.sort, rawEntities]);
 
+  // Derive DataTable grouping from the active perspective's group field.
+  const grouping = useMemo<string[] | undefined>(
+    () => (activePerspective?.group ? [activePerspective.group] : undefined),
+    [activePerspective?.group],
+  );
+
   // Build columns from view's card_fields (or all visible fields)
   const columns = useMemo<DataTableColumn[]>(() => {
     const fieldNames = view.card_fields ?? [];
@@ -544,8 +550,11 @@ export function GridView({ view }: GridViewProps) {
           claimPredicates={claimPredicates}
           onCellClick={handleCellClick}
           renderEditor={renderEditor}
+          grouping={grouping}
           onVisibleRowCount={setVisibleRowCount}
           rowEntityCommands={buildRowEntityCommands}
+          perspectiveSort={activePerspective?.sort}
+          perspectiveId={activePerspective?.id}
         />
       </main>
     </CommandScopeProvider>

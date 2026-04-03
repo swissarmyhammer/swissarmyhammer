@@ -350,6 +350,91 @@ describe("CommandPalette vim insert mode", () => {
     );
   });
 
+  it("vim normal mode: Escape closes palette", async () => {
+    vi.mocked(invoke).mockImplementation((cmd: string) => {
+      if (cmd === "get_ui_state")
+        return Promise.resolve({
+          palette_open: false,
+          palette_mode: "command",
+          keymap_mode: "vim",
+          scope_chain: [],
+          open_boards: [],
+          windows: {},
+          recent_boards: [],
+        });
+      if (cmd === "list_commands_for_scope") return Promise.resolve([]);
+      return Promise.resolve(null);
+    });
+
+    // getCM returns normal mode (insertMode is falsy)
+    getCMMock.mockReturnValue({ state: { vim: {} } } as any);
+
+    const onClose = vi.fn();
+    await act(async () => {
+      renderPalette(true, onClose);
+    });
+    await act(async () => {
+      flushRAF(25);
+    });
+
+    // Find the .cm-editor element and dispatch Escape through the DOM
+    const cmEditor = document.querySelector(".cm-editor") as HTMLElement;
+    expect(cmEditor).toBeTruthy();
+
+    // The two-phase handler uses capture+bubble on .cm-editor's DOM element.
+    // Fire keydown on the cm-content (child) so it bubbles through cm-editor.
+    const cmContent = document.querySelector(".cm-content") as HTMLElement;
+    expect(cmContent).toBeTruthy();
+
+    await act(async () => {
+      cmContent.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+      );
+    });
+
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it("vim insert mode: Escape does NOT close palette", async () => {
+    vi.mocked(invoke).mockImplementation((cmd: string) => {
+      if (cmd === "get_ui_state")
+        return Promise.resolve({
+          palette_open: false,
+          palette_mode: "command",
+          keymap_mode: "vim",
+          scope_chain: [],
+          open_boards: [],
+          windows: {},
+          recent_boards: [],
+        });
+      if (cmd === "list_commands_for_scope") return Promise.resolve([]);
+      return Promise.resolve(null);
+    });
+
+    // getCM returns insert mode
+    getCMMock.mockReturnValue({ state: { vim: { insertMode: true } } } as any);
+
+    const onClose = vi.fn();
+    await act(async () => {
+      renderPalette(true, onClose);
+    });
+    await act(async () => {
+      flushRAF(25);
+    });
+
+    const cmContent = document.querySelector(".cm-content") as HTMLElement;
+    expect(cmContent).toBeTruthy();
+
+    await act(async () => {
+      cmContent.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+      );
+    });
+
+    // Should NOT close — Escape in insert mode just exits to normal mode
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
   it("stops retrying after cancellation (palette closes)", async () => {
     vi.mocked(invoke).mockImplementation((cmd: string) => {
       if (cmd === "get_ui_state")

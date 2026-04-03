@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: 8f80
+position_column: done
+position_ordinal: ffffffffffffffffffb880
 title: Create useDispatchCommand hook — unified command dispatch with automatic scope chain
 ---
 ## What

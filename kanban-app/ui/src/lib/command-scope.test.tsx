@@ -18,6 +18,7 @@ import {
   useAvailableCommands,
   collectAvailableCommands,
   useExecuteCommand,
+  useDispatchCommand,
   dispatchCommand,
   backendDispatch,
   scopeChainFromScope,
@@ -719,5 +720,146 @@ describe("useExecuteCommand includes scopeChain", () => {
     expect(call).toBeTruthy();
     const params = call![1] as Record<string, unknown>;
     expect(params.scopeChain).toContain("window:secondary-1");
+  });
+});
+
+/* ---------- useDispatchCommand ---------- */
+
+describe("useDispatchCommand", () => {
+  /** Wrapper that provides both CommandScopeProvider and ActiveBoardPathProvider. */
+  function boardWrapper(
+    layers: CommandDef[][],
+    boardPath: string,
+    monikers?: string[],
+  ): ({ children }: { children: ReactNode }) => ReactNode {
+    return ({ children }: { children: ReactNode }) => {
+      let el = children;
+      for (let i = layers.length - 1; i >= 0; i--) {
+        el = (
+          <CommandScopeProvider commands={layers[i]} moniker={monikers?.[i]}>
+            {el}
+          </CommandScopeProvider>
+        );
+      }
+      return (
+        <ActiveBoardPathProvider value={boardPath}>{el}</ActiveBoardPathProvider>
+      );
+    };
+  }
+
+  it("ad-hoc dispatch calls backend with scope chain and boardPath", async () => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    (invoke as ReturnType<typeof vi.fn>).mockClear();
+    (invoke as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: true });
+
+    const { result } = renderHook(() => useDispatchCommand(), {
+      wrapper: boardWrapper([[]], "/boards/my-board", ["window:main"]),
+    });
+
+    await act(async () => {
+      await result.current("test.cmd", { args: { foo: "bar" } });
+    });
+
+    expect(invoke).toHaveBeenCalledWith("dispatch_command", {
+      cmd: "test.cmd",
+      target: undefined,
+      args: { foo: "bar" },
+      scopeChain: ["window:main"],
+      boardPath: "/boards/my-board",
+    });
+  });
+
+  it("pre-bound dispatch calls backend with correct cmd", async () => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    (invoke as ReturnType<typeof vi.fn>).mockClear();
+    (invoke as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: true });
+
+    const { result } = renderHook(() => useDispatchCommand("test.cmd"), {
+      wrapper: boardWrapper([[]], "/boards/test"),
+    });
+
+    await act(async () => {
+      await result.current({ args: { x: 1 } });
+    });
+
+    expect(invoke).toHaveBeenCalledWith("dispatch_command", {
+      cmd: "test.cmd",
+      target: undefined,
+      args: { x: 1 },
+      scopeChain: [],
+      boardPath: "/boards/test",
+    });
+  });
+
+  it("frontend execute handler is called when command resolves in scope", async () => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    (invoke as ReturnType<typeof vi.fn>).mockClear();
+    (invoke as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+
+    const executeFn = vi.fn();
+    const cmds = [cmd("local.action", { execute: executeFn })];
+
+    const { result } = renderHook(() => useDispatchCommand(), {
+      wrapper: boardWrapper([cmds], "/boards/test"),
+    });
+
+    await act(async () => {
+      await result.current("local.action");
+    });
+
+    expect(executeFn).toHaveBeenCalledOnce();
+    // dispatch_command should NOT have been called
+    expect(invoke).not.toHaveBeenCalledWith(
+      "dispatch_command",
+      expect.anything(),
+    );
+  });
+
+  it("backend fallback when command not in scope", async () => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    (invoke as ReturnType<typeof vi.fn>).mockClear();
+    (invoke as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: true });
+
+    const { result } = renderHook(() => useDispatchCommand(), {
+      wrapper: boardWrapper([[cmd("other")]], "/boards/test"),
+    });
+
+    await act(async () => {
+      await result.current("unknown.cmd", { target: "task:abc" });
+    });
+
+    expect(invoke).toHaveBeenCalledWith("dispatch_command", {
+      cmd: "unknown.cmd",
+      target: "task:abc",
+      args: undefined,
+      scopeChain: [],
+      boardPath: "/boards/test",
+    });
+  });
+
+  it("scope chain is automatic from context", async () => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    (invoke as ReturnType<typeof vi.fn>).mockClear();
+    (invoke as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: true });
+
+    const { result } = renderHook(() => useDispatchCommand(), {
+      wrapper: boardWrapper(
+        [[], [], []],
+        "/boards/nested",
+        ["window:board-2", "column:todo", "task:abc"],
+      ),
+    });
+
+    await act(async () => {
+      await result.current("test.cmd");
+    });
+
+    expect(invoke).toHaveBeenCalledWith("dispatch_command", {
+      cmd: "test.cmd",
+      target: undefined,
+      args: undefined,
+      scopeChain: ["task:abc", "column:todo", "window:board-2"],
+      boardPath: "/boards/nested",
+    });
   });
 });

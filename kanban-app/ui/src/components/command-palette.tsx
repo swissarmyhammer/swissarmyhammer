@@ -9,9 +9,10 @@ import {
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import CodeMirror, { type ReactCodeMirrorRef } from "@uiw/react-codemirror";
-import { keymap, EditorView } from "@codemirror/view";
+import { keymap } from "@codemirror/view";
 import { Compartment } from "@codemirror/state";
 import { getCM, Vim } from "@replit/codemirror-vim";
+import { buildSubmitCancelExtensions } from "@/lib/cm-submit-cancel";
 import { backendDispatch } from "@/lib/command-scope";
 import {
   CommandScopeContext,
@@ -314,19 +315,20 @@ export function CommandPalette({
     prevModeRef.current = mode;
   }, [mode, open]);
 
-  // CM6 extensions for the single-line filter input
+  // CM6 extensions for the single-line filter input.
+  // Submit/cancel (Enter/Escape) is handled by the shared helper which
+  // correctly supports vim's two-phase Escape (insert → normal, normal → cancel).
   const extensions = useMemo(
     () => [
       keymapCompartment.current.of(keymapExtension(mode)),
-      // Navigation and execution keybindings (highest priority)
+      ...buildSubmitCancelExtensions({
+        mode,
+        onSubmitRef: executeSelectedRef,
+        onCancelRef: onCloseRef,
+        singleLine: true,
+      }),
+      // Arrow key navigation is palette-specific, not submit/cancel
       keymap.of([
-        {
-          key: "Enter",
-          run: () => {
-            executeSelectedRef.current();
-            return true;
-          },
-        },
         {
           key: "ArrowDown",
           run: () => {
@@ -342,30 +344,6 @@ export function CommandPalette({
           },
         },
       ]),
-      // Escape handling: in vim mode, check vim state — if in insert mode,
-      // let vim handle Escape (exits to normal mode). If already in normal
-      // mode, close the palette. In CUA/emacs, Escape always closes.
-      EditorView.domEventHandlers({
-        keydown(event, view) {
-          if (event.key === "Escape") {
-            if (mode !== "vim") {
-              onCloseRef.current();
-              return true;
-            }
-            // Check vim state: if in insert mode, let vim exit to normal
-            const cm = getCM(view);
-            const vimState = cm?.state?.vim;
-            if (vimState?.insertMode) {
-              // Let vim handle it — will exit insert mode
-              return false;
-            }
-            // Already in normal mode — close the palette
-            onCloseRef.current();
-            return true;
-          }
-          return false;
-        },
-      }),
     ],
     [mode],
   );

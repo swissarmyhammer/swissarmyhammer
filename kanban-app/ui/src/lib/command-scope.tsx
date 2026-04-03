@@ -219,23 +219,12 @@ export function useAvailableCommands(): CommandAtDepth[] {
 }
 
 /**
- * Dispatch a command to the Rust backend.
- *
- * This is the single path for all frontend → backend command dispatch.
- * Every call site that previously used `invoke("dispatch_command", ...)`
- * directly should use this helper instead.
- *
- * Window identity is determined by the `board_path` parameter that
- * `dispatchCommand` passes through to the backend.
- *
- * @param params - The parameters to pass to `dispatch_command`.
- * @returns The raw JSON value returned by the backend.
- */
-/**
  * Dispatch a command to the Rust backend via Tauri IPC.
  *
  * Every call MUST include `scopeChain` so the backend knows which window
  * the command originates from. This is enforced by the type signature.
+ *
+ * @deprecated Use useDispatchCommand instead.
  */
 export async function backendDispatch(
   params: { scopeChain: string[] } & Record<string, unknown>,
@@ -246,6 +235,8 @@ export async function backendDispatch(
 /**
  * Execute a command. If `execute` is set, calls it directly.
  * Otherwise dispatches to Rust by command id via backendDispatch().
+ *
+ * @deprecated Use useDispatchCommand instead.
  *
  * @param boardPath — optional per-window board path for multi-window dispatch.
  *   When provided, Rust routes the command to the correct board instead of the
@@ -278,6 +269,8 @@ export async function dispatchCommand(
  * Returns a function that resolves a command id through the current scope
  * chain and executes it.
  *
+ * @deprecated Use useDispatchCommand instead.
+ *
  * @returns An async function `(id: string) => Promise<boolean>`.
  *          Resolves to `true` if the command was found and executed,
  *          `false` otherwise.
@@ -299,5 +292,92 @@ export function useExecuteCommand(): (id: string) => Promise<boolean> {
       return true;
     },
     [scope],
+  );
+}
+
+// ---------------------------------------------------------------------------
+// useDispatchCommand — unified dispatch hook
+// ---------------------------------------------------------------------------
+
+/** Options for dispatching a command via useDispatchCommand. */
+export interface DispatchOptions {
+  /** Additional arguments to pass to the backend command handler. */
+  args?: Record<string, unknown>;
+  /** Target moniker (e.g. "task:abc") to associate with the dispatch. */
+  target?: string;
+}
+
+/**
+ * Unified hook for dispatching commands from React components.
+ *
+ * Automatically reads the scope chain and board path from context.
+ * Commands registered in scope with an `execute` handler run client-side;
+ * all others are forwarded to the Rust backend via `dispatch_command`.
+ *
+ * @overload Ad-hoc dispatch: returns a function that takes a command ID and options.
+ */
+export function useDispatchCommand(): (
+  cmd: string,
+  opts?: DispatchOptions,
+) => Promise<unknown>;
+/**
+ * @overload Pre-bound dispatch: returns a function that takes just options.
+ */
+export function useDispatchCommand(
+  cmd: string,
+): (opts?: DispatchOptions) => Promise<unknown>;
+export function useDispatchCommand(presetCmd?: string) {
+  const scope = useContext(CommandScopeContext);
+  const boardPath = useContext(ActiveBoardPathContext);
+
+  // Store in refs so the callback always sees the latest values without
+  // re-creating on every context change — keeps the returned function stable.
+  const scopeRef = useRef(scope);
+  scopeRef.current = scope;
+  const boardPathRef = useRef(boardPath);
+  boardPathRef.current = boardPath;
+
+  return useCallback(
+    async (
+      cmdOrOpts?: string | DispatchOptions,
+      maybeOpts?: DispatchOptions,
+    ): Promise<unknown> => {
+      let cmdId: string;
+      let opts: DispatchOptions;
+      if (presetCmd) {
+        cmdId = presetCmd;
+        opts = (cmdOrOpts as DispatchOptions) ?? {};
+      } else {
+        cmdId = cmdOrOpts as string;
+        opts = maybeOpts ?? {};
+      }
+
+      const chain = scopeChainFromScope(scopeRef.current);
+
+      // Try frontend execute handler first
+      const resolved = resolveCommand(scopeRef.current, cmdId);
+      if (resolved?.execute) {
+        Promise.resolve(
+          invoke("log_command", {
+            cmd: cmdId,
+            target: opts.target ?? resolved.target,
+          }),
+        ).catch(() => {});
+        await resolved.execute();
+        return;
+      }
+
+      // Backend dispatch
+      return backendDispatch({
+        cmd: cmdId,
+        target: opts.target,
+        args: opts.args,
+        scopeChain: chain,
+        ...(boardPathRef.current
+          ? { boardPath: boardPathRef.current }
+          : {}),
+      });
+    },
+    [presetCmd],
   );
 }

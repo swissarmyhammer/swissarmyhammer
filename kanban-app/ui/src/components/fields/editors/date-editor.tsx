@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as chrono from "chrono-node";
 import CodeMirror, { type ReactCodeMirrorRef } from "@uiw/react-codemirror";
-import { keymap, EditorView } from "@codemirror/view";
+import { EditorView } from "@codemirror/view";
 import { Compartment } from "@codemirror/state";
-import { getCM } from "@replit/codemirror-vim";
+import { buildSubmitCancelExtensions } from "@/lib/cm-submit-cancel";
 import {
   Popover,
   PopoverTrigger,
@@ -84,6 +84,24 @@ export function DateEditor({
   const resolvedRef = useRef(resolved);
   resolvedRef.current = resolved;
 
+  // Refs wired into buildSubmitCancelExtensions for Enter/Escape handling.
+  const submitRef = useRef<(() => void) | null>(null);
+  submitRef.current = () => {
+    const r = resolvedRef.current;
+    if (r) commitRef.current(r);
+    else cancelRef.current();
+  };
+
+  const escapeRef = useRef<(() => void) | null>(null);
+  escapeRef.current =
+    mode === "vim"
+      ? () => {
+          const r = resolvedRef.current;
+          if (r) commitRef.current(r);
+          else cancelRef.current();
+        }
+      : () => cancelRef.current();
+
   const commitResolved = useCallback(() => {
     const r = resolvedRef.current;
     if (r) commitRef.current(r);
@@ -112,49 +130,12 @@ export function DateEditor({
     () => [
       keymapCompartment.current.of(keymapExtension(mode)),
       EditorView.lineWrapping,
-      // Vim: Escape in normal mode commits, insert→normal saves
-      ...(mode === "vim"
-        ? [
-            EditorView.domEventHandlers({
-              keydown(event, view) {
-                if (event.key === "Escape") {
-                  const cm = getCM(view);
-                  if (cm?.state?.vim?.insertMode) return false;
-                  const r = resolvedRef.current;
-                  if (r) commitRef.current(r);
-                  else cancelRef.current();
-                  return true;
-                }
-                if (event.key === "Enter") {
-                  event.preventDefault();
-                  const r = resolvedRef.current;
-                  if (r) commitRef.current(r);
-                  return true;
-                }
-                return false;
-              },
-            }),
-          ]
-        : [
-            keymap.of([
-              {
-                key: "Escape",
-                run: () => {
-                  cancelRef.current();
-                  return true;
-                },
-              },
-              {
-                key: "Enter",
-                run: () => {
-                  const r = resolvedRef.current;
-                  if (r) commitRef.current(r);
-                  else cancelRef.current();
-                  return true;
-                },
-              },
-            ]),
-          ]),
+      ...buildSubmitCancelExtensions({
+        mode,
+        onSubmitRef: submitRef,
+        onCancelRef: escapeRef,
+        singleLine: true,
+      }),
     ],
     [mode],
   );

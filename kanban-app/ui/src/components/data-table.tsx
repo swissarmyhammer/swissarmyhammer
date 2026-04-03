@@ -32,6 +32,7 @@ import { useContextMenu } from "@/lib/context-menu";
 import {
   CommandScopeProvider,
   CommandScopeContext,
+  backendDispatch,
   type CommandDef,
 } from "@/lib/command-scope";
 import { FocusScope } from "@/components/focus-scope";
@@ -39,7 +40,7 @@ import { Field } from "@/components/fields/field";
 import type { UseGridReturn } from "@/hooks/use-grid";
 import type { ClaimPredicate } from "@/lib/entity-focus-context";
 import type { CommandScope } from "@/lib/command-scope";
-import type { Entity, FieldDef } from "@/types/kanban";
+import type { Entity, FieldDef, PerspectiveSortEntry } from "@/types/kanban";
 
 /** Build the moniker scope chain from the current CommandScopeContext to the root. */
 function useScopeChain(): string[] {
@@ -100,6 +101,13 @@ interface DataTableProps {
    * row that isn't the current cursor row.
    */
   rowEntityCommands?: (entity: Entity) => CommandDef[];
+  /**
+   * Active perspective sort entries. When provided, column headers show
+   * sort indicators and dispatch `perspective.sort.toggle` on click.
+   */
+  perspectiveSort?: readonly PerspectiveSortEntry[];
+  /** Active perspective ID — required for dispatching sort commands. */
+  perspectiveId?: string;
 }
 
 export function DataTable({
@@ -115,6 +123,8 @@ export function DataTable({
   onVisibleRowCount,
   showRowSelector = true,
   rowEntityCommands,
+  perspectiveSort,
+  perspectiveId,
 }: DataTableProps) {
   const tableContainerRef = useRef<HTMLDivElement>(null);
   const cursorRef = useRef<HTMLTableCellElement>(null);
@@ -128,6 +138,22 @@ export function DataTable({
   useEffect(() => {
     if (groupingProp) setGrouping(groupingProp);
   }, [groupingProp]);
+
+  // Build a lookup: field name → { direction, priority } from perspective sort entries.
+  const perspectiveSortMap = useMemo(() => {
+    const map = new Map<
+      string,
+      { direction: "asc" | "desc"; priority: number }
+    >();
+    if (!perspectiveSort) return map;
+    for (let i = 0; i < perspectiveSort.length; i++) {
+      map.set(perspectiveSort[i].field, {
+        direction: perspectiveSort[i].direction,
+        priority: i + 1,
+      });
+    }
+    return map;
+  }, [perspectiveSort]);
 
   // Build TanStack column definitions from our field-based columns
   const tanstackColumns = useMemo<ColumnDef<Entity>[]>(
@@ -251,11 +277,58 @@ export function DataTable({
                 />
               )}
               {headerGroup.headers.map((header, ci) => {
-                const isSorted = header.column.getIsSorted();
+                const columnId = header.column.id;
                 const isGrouped = header.column.getIsGrouped();
+                // Use perspective sort state when available, fall back to TanStack
+                const pSort = perspectiveSortMap.get(columnId);
+                const isSorted = pSort
+                  ? pSort.direction
+                  : header.column.getIsSorted();
+                const sortPriority = pSort?.priority;
+                const showPriority =
+                  sortPriority !== undefined &&
+                  perspectiveSortMap.size > 1;
+
+                const handleHeaderClick = perspectiveId
+                  ? (e: React.MouseEvent) => {
+                      // Shift+click appends to multi-sort via set; plain click toggles
+                      if (e.shiftKey) {
+                        // Shift+click: cycle this field independently (toggle)
+                        backendDispatch({
+                          cmd: "perspective.sort.toggle",
+                          args: {
+                            field: columnId,
+                            perspective_id: perspectiveId,
+                          },
+                        }).catch(console.error);
+                      } else {
+                        backendDispatch({
+                          cmd: "perspective.sort.toggle",
+                          args: {
+                            field: columnId,
+                            perspective_id: perspectiveId,
+                          },
+                        }).catch(console.error);
+                      }
+                    }
+                  : header.column.getToggleSortingHandler();
+
+                const handleHeaderContextMenu = perspectiveId
+                  ? (e: React.MouseEvent) => {
+                      e.preventDefault();
+                      // Context menu not wired to command palette yet —
+                      // for now toggle grouping as before.
+                      header.column.toggleGrouping();
+                    }
+                  : (e: React.MouseEvent) => {
+                      e.preventDefault();
+                      header.column.toggleGrouping();
+                    };
+
                 return (
                   <TableHead
                     key={header.id}
+                    data-testid={`column-header-${columnId}`}
                     className={cn(
                       "text-left px-3 py-1.5 text-xs font-medium text-muted-foreground uppercase tracking-wide select-none cursor-pointer hover:bg-muted/60 transition-colors h-auto",
                       ci === 0 && "pl-4",
@@ -265,11 +338,8 @@ export function DataTable({
                         ? { width: header.column.getSize() }
                         : undefined
                     }
-                    onClick={header.column.getToggleSortingHandler()}
-                    onContextMenu={(e) => {
-                      e.preventDefault();
-                      header.column.toggleGrouping();
-                    }}
+                    onClick={handleHeaderClick}
+                    onContextMenu={handleHeaderContextMenu}
                   >
                     <span className="flex items-center gap-1">
                       {isGrouped && (
@@ -279,8 +349,26 @@ export function DataTable({
                         header.column.columnDef.header,
                         header.getContext(),
                       )}
-                      {isSorted === "asc" && <ArrowUp className="h-3 w-3" />}
-                      {isSorted === "desc" && <ArrowDown className="h-3 w-3" />}
+                      {isSorted === "asc" && (
+                        <ArrowUp
+                          className="h-3 w-3"
+                          data-testid={`sort-indicator-${columnId}`}
+                        />
+                      )}
+                      {isSorted === "desc" && (
+                        <ArrowDown
+                          className="h-3 w-3"
+                          data-testid={`sort-indicator-${columnId}`}
+                        />
+                      )}
+                      {showPriority && (
+                        <span
+                          className="text-[9px] text-muted-foreground/70"
+                          data-testid={`sort-priority-${columnId}`}
+                        >
+                          {sortPriority}
+                        </span>
+                      )}
                     </span>
                   </TableHead>
                 );
