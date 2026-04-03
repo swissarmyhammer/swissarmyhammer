@@ -75,7 +75,7 @@ vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(() => Promise.resolve(() => {})),
 }));
 vi.mock("@tauri-apps/api/window", () => ({
-  getCurrentWindow: () => ({ label: "main" }),
+  getCurrentWindow: () => ({ label: "main", setFocus: vi.fn() }),
 }));
 
 // Mock codemirror-vim: getCM returns a cm object, Vim.handleKey is the spy

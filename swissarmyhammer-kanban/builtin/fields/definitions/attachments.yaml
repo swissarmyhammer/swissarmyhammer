@@ -2,9 +2,9 @@ id: "0000000000000000000000000S"
 name: attachments
 description: Attached files
 type:
-  kind: attachment
+  kind: reference
+  entity: attachment
   multiple: true
-  max_bytes: 104857600
 display: attachment-list
 editor: attachment
 icon: paperclip

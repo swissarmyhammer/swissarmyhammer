@@ -212,6 +212,31 @@ describe("buildSubmitCancelExtensions", () => {
       expect(refs.onCancelRef.current).not.toHaveBeenCalled();
     });
 
+    it("Enter in insert mode calls onSubmitRef when alwaysSubmitOnEnter is true", () => {
+      const refs = makeRefs();
+      const extensions = [
+        vim(),
+        ...buildSubmitCancelExtensions({
+          mode: "vim",
+          ...refs,
+          alwaysSubmitOnEnter: true,
+        }),
+      ];
+      const { view, cleanup: c } = createEditor(extensions, "hello");
+      cleanup = c;
+
+      // Enter insert mode
+      const cm = getCM(view);
+      if (cm) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (cm as any).state.vim.insertMode = true;
+      }
+
+      simulateKeydown(view.dom, "Enter");
+
+      expect(refs.onSubmitRef.current).toHaveBeenCalledOnce();
+    });
+
     it("singleLine=false skips Enter handler entirely", () => {
       const refs = makeRefs();
       const extensions = [

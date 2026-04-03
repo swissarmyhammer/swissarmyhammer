@@ -36,6 +36,12 @@ export interface SubmitCancelOptions {
    * Default: true.
    */
   singleLine?: boolean;
+  /**
+   * When true, Enter always fires onSubmitRef even in vim insert mode.
+   * Use for inputs where newlines are never valid (e.g. command palette).
+   * Default: false.
+   */
+  alwaysSubmitOnEnter?: boolean;
 }
 
 /**
@@ -62,6 +68,7 @@ export function buildSubmitCancelExtensions(
     onCancelRef,
     saveInPlaceRef,
     singleLine = true,
+    alwaysSubmitOnEnter = false,
   } = opts;
 
   if (mode === "vim") {
@@ -73,7 +80,7 @@ export function buildSubmitCancelExtensions(
               const handler = (event: KeyboardEvent) => {
                 if (event.key !== "Enter") return;
                 const cm = getCM(view);
-                if (cm?.state?.vim?.insertMode) return; // let vim insert newline
+                if (cm?.state?.vim?.insertMode && !alwaysSubmitOnEnter) return; // let vim insert newline
                 const text = view.state.doc.toString();
                 if (text.length > 0) {
                   event.preventDefault();

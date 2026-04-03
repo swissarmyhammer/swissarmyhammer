@@ -410,18 +410,19 @@ mod tests {
         let registry = CommandsRegistry::from_yaml_sources(&sources_ref);
 
         // app: about, help, quit, command, palette, search, dismiss, undo, redo = 9
-        // entity: task.add, task.move, task.delete, task.untag, entity.update_field,
-        //         entity.delete, entity.archive, entity.unarchive, tag.update,
-        //         column.reorder, attachment.delete,
-        //         entity.copy, entity.cut, entity.paste = 14
+        // entity: task.add, task.move, task.delete, task.untag, task.doThisNext,
+        //         entity.update_field, entity.delete, entity.archive, entity.unarchive,
+        //         tag.update, column.reorder, attachment.delete,
+        //         entity.copy, entity.cut, entity.paste = 15
         // ui: inspect, inspector.close, inspector.close_all, palette.open,
         //     palette.close, view.set, perspective.set, setFocus, window.new = 9
         // settings: keymap.vim, keymap.cua, keymap.emacs = 3
         // file: switchBoard, closeBoard, newBoard, openBoard = 4
         // drag: start, cancel, complete = 3
-        // perspective: load, save, delete, filter, clearFilter, group, clearGroup, list = 8
+        // perspective: load, save, delete, filter, clearFilter, group, clearGroup,
+        //             sort.set, sort.clear, sort.toggle, list = 11
         // attachment: open, reveal = 2
-        assert_eq!(registry.all_commands().len(), 52);
+        assert_eq!(registry.all_commands().len(), 56);
 
         // Spot checks
         assert!(registry.get("app.quit").is_some());

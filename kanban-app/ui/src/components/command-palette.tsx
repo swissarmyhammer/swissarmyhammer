@@ -7,6 +7,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import CodeMirror, { type ReactCodeMirrorRef } from "@uiw/react-codemirror";
 import { keymap } from "@codemirror/view";
 import { Compartment } from "@codemirror/state";
@@ -119,13 +120,27 @@ export function CommandPalette({
   // Inspect hook for search mode (only used in search mode)
   const inspectEntity = useInspectOptional();
 
-  // Reset state when palette opens
+  // Reset state and claim OS window focus when palette opens.
   useEffect(() => {
     if (open) {
+      getCurrentWindow().setFocus();
       setFilter("");
       setDebouncedFilter("");
       setSelectedIndex(0);
       setSearchResults([]);
+      // Log focus state after a frame to diagnose ESC dismiss failures.
+      requestAnimationFrame(() => {
+        const active = document.activeElement;
+        console.warn("[palette] open — activeElement:", active?.tagName, active?.className?.slice(0, 60));
+        // If CM6 autoFocus failed, focus the backdrop so ESC still works.
+        if (!active?.closest(".cm-editor")) {
+          const backdrop = document.querySelector<HTMLElement>("[data-testid='command-palette-backdrop']");
+          if (backdrop) {
+            console.warn("[palette] CM6 autoFocus failed — focusing backdrop");
+            backdrop.focus();
+          }
+        }
+      });
     }
   }, [open]);
 
@@ -311,6 +326,7 @@ export function CommandPalette({
         onSubmitRef: executeSelectedRef,
         onCancelRef: onCloseRef,
         singleLine: true,
+        alwaysSubmitOnEnter: true,
       }),
       // Arrow key navigation is palette-specific, not submit/cancel
       keymap.of([
@@ -350,9 +366,10 @@ export function CommandPalette({
       data-testid="command-palette-backdrop"
       className="fixed inset-0 z-50 bg-black/50"
       onClick={onClose}
+      tabIndex={-1}
       onKeyDown={(e) => {
-        // Catch Escape on the backdrop itself (e.g. when focus is outside CM6)
         if (e.key === "Escape") {
+          console.warn("[palette] ESC on backdrop — dismissing");
           onClose();
         }
       }}

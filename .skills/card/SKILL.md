@@ -2,85 +2,30 @@
 name: card
 description: Create a single, well-researched kanban card. Use when the user wants to add a task, track an idea, or capture work without entering full plan mode.
 metadata:
-  author: "swissarmyhammer"
-  version: "0.12.11"
+  author: swissarmyhammer
+  version: "{{version}}"
 ---
 
-## Code Quality
-
-- Write clean, readable code that follows existing patterns in the codebase
-- Prefer simple, obvious solutions over clever ones
-- Make minimal changes to achieve the goal - avoid unnecessary refactoring
-- Don't add features, abstractions, or "improvements" beyond what was asked
-
-## Style
-
-- Follow the project's existing conventions for naming, formatting, and structure
-- Match the indentation, quotes, and spacing style already in use
-- If the project has a formatter config (prettier, rustfmt, black), respect it
-
-## Documentation
-
-- Every function needs a docstring explaining what it does
-- Document parameters, return values, and errors
-- Update existing documentation if your changes make it stale
-- Inline comments explain "why", not "what"
-
-## Error Handling
-
-- Handle errors at appropriate boundaries
-- Don't add defensive code for scenarios that can't happen
-- Trust internal code and framework guarantees
-
-### Every card must be actionable
-
-Card descriptions MUST include:
-
-```
-## What
-<what to implement — full paths of files to create or modify, approach, context>
-
-## Acceptance Criteria
-- [ ] <observable outcome that proves the work is done>
-
-## Tests
-- [ ] <specific test to write or update, with file path>
-- [ ] <test command to run and expected result>
-```
-
-A card without acceptance criteria and tests is not a valid card. Include enough context that someone reading only the card (not the spec) can implement it.
-
-### Card sizing limits
-
-| Dimension | Target | Split when |
-|-----------|--------|------------|
-| Lines of code | 200–500 generated or modified | > 500 lines |
-| Files touched | 2–4 files | > 5 files |
-| Subtasks | 3–5 per card | > 5 subtasks |
-| Concerns | 1 per card | Multiple distinct concerns |
-
-The subtask cap is the most important constraint. More than 5 subtasks means the card bundles multiple concerns — split along natural seams (different files, layers, or concerns) and link with `depends_on`. Two small cards with a dependency beat one mega-card.
-
-### Subtasks are checklist items in the description
-
-Subtasks go in the card's `description` as GFM checklists (`- [ ]` items). There is no separate "add subtask" API.
-
-### Specificity
-
-Use specific file paths, function names, and type names — not vague descriptions. "Add Result return type to parse_config and propagate errors to callers in main.rs and cli.rs" not "improve error handling."
-
+{% include "_partials/detected-projects" %}
+{% include "_partials/coding-standards" %}
+{% include "_partials/test-driven-development" %}
+{% include "_partials/card-standards" %}
 
 # Card
 
 Create a single, well-researched kanban card from an idea, request, or bug report.
 
+{% if arguments %}
+## User Request
 
+> {{arguments}}
+{% endif %}
 
 ## Process
 
 ### 1. Understand the idea
 
- If anything is ambiguous or underspecified, use the `question` tool to ask clarifying questions before proceeding. A great card requires clear understanding — don't guess.
+{% if arguments %}Start from the user request above.{% endif %} If anything is ambiguous or underspecified, use the `question` tool to ask clarifying questions before proceeding. A great card requires clear understanding — don't guess.
 
 ### 2. Research the codebase
 
