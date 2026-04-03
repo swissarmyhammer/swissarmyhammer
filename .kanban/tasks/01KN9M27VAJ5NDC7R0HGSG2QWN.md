@@ -7,4 +7,4 @@ position_column: todo
 position_ordinal: '9580'
 title: Migrate entity-focus-context.tsx to useDispatchCommand
 ---
-## What\nReplace `backendDispatch` (2 calls: ui.setFocus) with `useDispatchCommand` in `kanban-app/ui/src/lib/entity-focus-context.tsx`. Update `entity-focus-context.test.tsx` if needed.\n\n## Acceptance Criteria\n- [ ] No imports of `backendDispatch` or `dispatchCommand`\n- [ ] Scope chain automatic from context\n\n## Tests\n- [ ] `cd kanban-app/ui && pnpm test` — all unit tests pass
+## What\nReplace `backendDispatch` (2 calls: ui.setFocus) with `useDispatchCommand` in `kanban-app/ui/src/lib/entity-focus-context.tsx`. Update `entity-focus-context.test.tsx` if needed.\n\n## Acceptance Criteria\n- [ ] No imports of `backendDispatch` or `dispatchCommand`\n- [ ] Scope chain automatic from context\n\n## Tests\n- [ ] `cd kanban-app/ui && pnpm test` — all unit tests pass\n\n## Critical Rule\nIf a module-level function calls `backendDispatch`/`dispatchCommand`, do NOT preserve it. Trace it to the component that calls it. The hook goes in that component. No module-level dispatch functions should exist. See feedback_no_module_level_dispatch.md.
