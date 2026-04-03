@@ -7,6 +7,5 @@ skills:
 
 You are an expert code reviewer. The `review` skill has been preloaded with your full process — follow it.
 
-{% include "_partials/detected-projects" %}
 {% include "_partials/coding-standards" %}
 {% include "_partials/tool_use" %}

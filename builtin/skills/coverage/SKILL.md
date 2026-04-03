@@ -8,7 +8,6 @@ metadata:
   version: "{{version}}"
 ---
 
-{% include "_partials/detected-projects" %}
 
 # Coverage
 
