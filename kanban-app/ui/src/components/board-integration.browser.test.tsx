@@ -107,6 +107,8 @@ import { ActiveBoardPathProvider } from "@/lib/command-scope";
 import { FileDropProvider } from "@/lib/file-drop-context";
 import { FieldUpdateProvider } from "@/lib/field-update-context";
 import { UIStateProvider } from "@/lib/ui-state-context";
+import { ViewsProvider } from "@/lib/views-context";
+import { PerspectiveProvider } from "@/lib/perspective-context";
 import { BoardView } from "./board-view";
 
 // ---------------------------------------------------------------------------
@@ -201,9 +203,13 @@ function renderIntegrationBoard() {
               <InspectProvider onInspect={vi.fn()} onDismiss={() => false}>
                 <FieldUpdateProvider>
                   <UIStateProvider>
-                    <DragSessionProvider>
-                      <BoardView board={board} tasks={tasks} />
-                    </DragSessionProvider>
+                    <ViewsProvider>
+                      <PerspectiveProvider>
+                        <DragSessionProvider>
+                          <BoardView board={board} tasks={tasks} />
+                        </DragSessionProvider>
+                      </PerspectiveProvider>
+                    </ViewsProvider>
                   </UIStateProvider>
                 </FieldUpdateProvider>
               </InspectProvider>
