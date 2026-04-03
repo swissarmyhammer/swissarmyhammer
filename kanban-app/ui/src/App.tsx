@@ -24,6 +24,7 @@ import { NavBar } from "@/components/nav-bar";
 import { LeftNav } from "@/components/left-nav";
 import { ModeIndicator } from "@/components/mode-indicator";
 import { Loader2 } from "lucide-react";
+import { ErrorBoundary } from "@/components/ui/error-boundary";
 import { BoardView } from "@/components/board-view";
 import { GridView } from "@/components/grid-view";
 import { InspectorFocusBridge } from "@/components/inspector-focus-bridge";
@@ -851,7 +852,9 @@ function InspectorPanel({
 
   return (
     <SlidePanel open={true} onClose={onClose} style={style}>
-      <InspectorFocusBridge entity={resolved} />
+      <ErrorBoundary>
+        <InspectorFocusBridge entity={resolved} />
+      </ErrorBoundary>
     </SlidePanel>
   );
 }

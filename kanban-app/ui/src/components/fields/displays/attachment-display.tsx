@@ -203,12 +203,13 @@ export function getFileIcon(
  * through the command system — same pattern as entity cards.
  */
 export function AttachmentItem({ attachment }: AttachmentItemProps) {
-  const Icon = getFileIcon(attachment.mime_type, attachment.name);
   const boardPath = useActiveBoardPath();
+  const isMalformed =
+    !attachment || typeof attachment !== "object" || !attachment.name;
 
   const scopeChain = useMemo(
-    () => [`attachment:${attachment.path}`],
-    [attachment.path],
+    () => (isMalformed ? [] : [`attachment:${attachment.path}`]),
+    [isMalformed ? "" : attachment?.path],
   );
 
   // Register commands in the frontend scope so resolveCommand works
@@ -216,34 +217,51 @@ export function AttachmentItem({ attachment }: AttachmentItemProps) {
   // The execute callbacks dispatch to the backend with the scope chain
   // so the Rust impls can resolve the path.
   const commands = useMemo<CommandDef[]>(
-    () => [
-      {
-        id: "attachment.open",
-        name: "Open",
-        contextMenu: true,
-        execute: () => {
-          backendDispatch({
-            cmd: "attachment.open",
-            scopeChain,
-            ...(boardPath ? { boardPath } : {}),
-          }).catch(console.error);
-        },
-      },
-      {
-        id: "attachment.reveal",
-        name: "Show in Finder",
-        contextMenu: true,
-        execute: () => {
-          backendDispatch({
-            cmd: "attachment.reveal",
-            scopeChain,
-            ...(boardPath ? { boardPath } : {}),
-          }).catch(console.error);
-        },
-      },
-    ],
-    [scopeChain, boardPath],
+    () =>
+      isMalformed
+        ? []
+        : [
+            {
+              id: "attachment.open",
+              name: "Open",
+              contextMenu: true,
+              execute: () => {
+                backendDispatch({
+                  cmd: "attachment.open",
+                  scopeChain,
+                  ...(boardPath ? { boardPath } : {}),
+                }).catch(console.error);
+              },
+            },
+            {
+              id: "attachment.reveal",
+              name: "Show in Finder",
+              contextMenu: true,
+              execute: () => {
+                backendDispatch({
+                  cmd: "attachment.reveal",
+                  scopeChain,
+                  ...(boardPath ? { boardPath } : {}),
+                }).catch(console.error);
+              },
+            },
+          ],
+    [scopeChain, boardPath, isMalformed],
   );
+
+  // Guard against malformed data (e.g. raw path strings instead of metadata objects)
+  if (isMalformed) {
+    const label =
+      typeof attachment === "string" ? (attachment as string) : "Unknown";
+    return (
+      <div className="flex items-center gap-2 min-w-0 text-sm text-muted-foreground">
+        <Paperclip className="shrink-0" size={16} />
+        <span className="truncate">{label}</span>
+      </div>
+    );
+  }
+
+  const Icon = getFileIcon(attachment.mime_type ?? "", attachment.name);
 
   return (
     <CommandScopeProvider
@@ -390,8 +408,8 @@ export function AttachmentListDisplay({
     >
       {attachments.length > 0 ? (
         <div className="flex flex-col gap-1">
-          {attachments.map((att) => (
-            <AttachmentItem key={att.id} attachment={att} />
+          {attachments.map((att, i) => (
+            <AttachmentItem key={att?.id ?? i} attachment={att} />
           ))}
         </div>
       ) : (
