@@ -229,7 +229,7 @@ describe("BadgeListDisplay pill navigation", () => {
       await new Promise((r) => setTimeout(r, 0));
     });
     expect(getByTestId("focus-monitor").textContent).toBe(
-      "field:tags/tag:tag-1",
+      "tag:tag-1",
     );
   });
 
@@ -252,7 +252,7 @@ describe("BadgeListDisplay pill navigation", () => {
       await new Promise((r) => setTimeout(r, 0));
     });
     expect(getByTestId("focus-monitor").textContent).toBe(
-      "field:tags/tag:tag-1",
+      "tag:tag-1",
     );
 
     await act(async () => {
@@ -260,7 +260,7 @@ describe("BadgeListDisplay pill navigation", () => {
       await new Promise((r) => setTimeout(r, 0));
     });
     expect(getByTestId("focus-monitor").textContent).toBe(
-      "field:tags/tag:tag-2",
+      "tag:tag-2",
     );
   });
 
@@ -291,7 +291,7 @@ describe("BadgeListDisplay pill navigation", () => {
       await new Promise((r) => setTimeout(r, 0));
     });
     expect(getByTestId("focus-monitor").textContent).toBe(
-      "field:tags/tag:tag-3",
+      "tag:tag-3",
     );
 
     // One more nav.right — should stay on last pill
@@ -300,7 +300,7 @@ describe("BadgeListDisplay pill navigation", () => {
       await new Promise((r) => setTimeout(r, 0));
     });
     expect(getByTestId("focus-monitor").textContent).toBe(
-      "field:tags/tag:tag-3",
+      "tag:tag-3",
     );
   });
 
@@ -327,7 +327,7 @@ describe("BadgeListDisplay pill navigation", () => {
       await new Promise((r) => setTimeout(r, 0));
     });
     expect(getByTestId("focus-monitor").textContent).toBe(
-      "field:tags/tag:tag-2",
+      "tag:tag-2",
     );
 
     // nav.left → first pill
@@ -336,7 +336,7 @@ describe("BadgeListDisplay pill navigation", () => {
       await new Promise((r) => setTimeout(r, 0));
     });
     expect(getByTestId("focus-monitor").textContent).toBe(
-      "field:tags/tag:tag-1",
+      "tag:tag-1",
     );
   });
 
@@ -359,7 +359,7 @@ describe("BadgeListDisplay pill navigation", () => {
       await new Promise((r) => setTimeout(r, 0));
     });
     expect(getByTestId("focus-monitor").textContent).toBe(
-      "field:tags/tag:tag-1",
+      "tag:tag-1",
     );
 
     // nav.left — first pill has no nav.left predicate, so focus stays
@@ -368,7 +368,7 @@ describe("BadgeListDisplay pill navigation", () => {
       await new Promise((r) => setTimeout(r, 0));
     });
     expect(getByTestId("focus-monitor").textContent).toBe(
-      "field:tags/tag:tag-1",
+      "tag:tag-1",
     );
   });
 });
@@ -396,7 +396,7 @@ describe("BadgeListDisplay reference-field pill navigation", () => {
       await new Promise((r) => setTimeout(r, 0));
     });
     expect(getByTestId("focus-monitor").textContent).toBe(
-      "field:depends_on/task:task-dep-A",
+      "task:task-dep-A",
     );
 
     // nav.right → second pill: task:task-dep-B
@@ -405,7 +405,7 @@ describe("BadgeListDisplay reference-field pill navigation", () => {
       await new Promise((r) => setTimeout(r, 0));
     });
     expect(getByTestId("focus-monitor").textContent).toBe(
-      "field:depends_on/task:task-dep-B",
+      "task:task-dep-B",
     );
 
     // nav.left → back to first pill
@@ -414,7 +414,7 @@ describe("BadgeListDisplay reference-field pill navigation", () => {
       await new Promise((r) => setTimeout(r, 0));
     });
     expect(getByTestId("focus-monitor").textContent).toBe(
-      "field:depends_on/task:task-dep-A",
+      "task:task-dep-A",
     );
   });
 });

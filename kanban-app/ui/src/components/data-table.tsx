@@ -42,19 +42,6 @@ import type { ClaimPredicate } from "@/lib/entity-focus-context";
 import type { CommandScope } from "@/lib/command-scope";
 import type { Entity, FieldDef, PerspectiveSortEntry } from "@/types/kanban";
 
-/** Build the moniker scope chain from the current CommandScopeContext to the root. */
-function useScopeChain(): string[] {
-  const scope = useContext(CommandScopeContext);
-  return useMemo(() => {
-    const chain: string[] = [];
-    let current: CommandScope | null = scope;
-    while (current) {
-      if (current.moniker) chain.push(current.moniker);
-      current = current.parent;
-    }
-    return chain;
-  }, [scope]);
-}
 
 export interface DataTableColumn {
   field: FieldDef;
@@ -129,8 +116,7 @@ export function DataTable({
   const tableContainerRef = useRef<HTMLDivElement>(null);
   const cursorRef = useRef<HTMLTableCellElement>(null);
   // Grid-level context menu handler -- used when rowEntityCommands is not set.
-  const gridScopeChain = useScopeChain();
-  const contextMenuHandler = useContextMenu(gridScopeChain);
+  const contextMenuHandler = useContextMenu();
   const [sorting, setSorting] = useState<SortingState>([]);
   const [grouping, setGrouping] = useState<GroupingState>(groupingProp ?? []);
 
@@ -667,8 +653,7 @@ function RowSelectorCell({
   onCellClick,
   onRowContextMenu,
 }: RowSelectorCellProps) {
-  const rowScopeChain = useScopeChain();
-  const contextMenuHandler = useContextMenu(rowScopeChain);
+  const contextMenuHandler = useContextMenu();
 
   const handleContextMenu = useCallback(
     (e: React.MouseEvent) => {

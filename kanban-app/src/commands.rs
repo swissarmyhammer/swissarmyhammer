@@ -1518,47 +1518,57 @@ async fn flush_and_emit_for_handle(app: &AppHandle, handle: &BoardHandle) {
 }
 
 /// A single item in a generic context menu.
-#[derive(serde::Deserialize)]
+///
+/// Each item is self-contained: it carries the command ID, target, and scope
+/// chain needed for dispatch. The frontend sends all dispatch info upfront;
+/// when the user selects an item, Rust dispatches directly — no round-trip.
+#[derive(serde::Deserialize, serde::Serialize, Clone)]
 pub struct ContextMenuItem {
-    pub id: String,
+    /// Display name shown in the menu.
     pub name: String,
+    /// Command ID to dispatch (e.g. "entity.copy"). Empty for separators.
+    #[serde(default)]
+    pub cmd: String,
+    /// Optional target moniker (e.g. "task:01ABC").
+    #[serde(default)]
+    pub target: Option<String>,
+    /// Scope chain from the right-click point.
+    #[serde(default)]
+    pub scope_chain: Vec<String>,
+    /// Whether this item is a separator.
+    #[serde(default)]
+    pub separator: bool,
 }
 
 /// Show a native context menu with the given items.
 ///
-/// Menu selections are emitted as `context-menu-command` events to the
-/// frontend. The item IDs are stored in AppState so `handle_menu_event`
-/// can distinguish them from regular menu bar commands.
+/// Each item carries its full dispatch info (cmd, target, scope_chain).
+/// When the user selects an item, `handle_menu_event` parses the JSON-encoded
+/// ID and dispatches directly via `dispatch_command_internal` — no round-trip
+/// to the frontend.
 #[tauri::command]
 pub async fn show_context_menu(
     app: AppHandle,
     window: Window,
-    state: State<'_, AppState>,
     items: Vec<ContextMenuItem>,
 ) -> Result<(), String> {
     if items.is_empty() {
         return Ok(());
     }
 
-    // Store IDs so handle_menu_event can route selections correctly.
-    // Separators are not selectable items — exclude them from the id set.
-    {
-        let ids: std::collections::HashSet<String> = items
-            .iter()
-            .filter(|item| item.id != "__separator__")
-            .map(|item| item.id.clone())
-            .collect();
-        state.ui_state.set_context_menu_ids(ids);
-    }
-
+    // Encode each item's dispatch info as JSON into the native menu item ID.
+    // When the user selects an item, handle_menu_event parses the JSON and
+    // dispatches directly — no lookup table needed.
     let mut builder = MenuBuilder::new(&app);
     for item in &items {
-        if item.id == "__separator__" {
+        if item.separator {
             builder = builder.separator();
         } else {
-            builder = builder.text(&item.id, &item.name);
+            let encoded = serde_json::to_string(&item).unwrap_or_default();
+            builder = builder.text(encoded, &item.name);
         }
     }
+
     let menu = builder.build().map_err(|e| e.to_string())?;
     menu.popup(window)
         .map_err(|e: tauri::Error| e.to_string())?;

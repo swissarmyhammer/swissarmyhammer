@@ -1,6 +1,9 @@
-import { useCallback } from "react";
+import { useCallback, useContext } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { backendDispatch } from "@/lib/command-scope";
+import {
+  CommandScopeContext,
+  scopeChainFromScope,
+} from "@/lib/command-scope";
 
 /** Shape returned by the backend `list_commands_for_scope`. */
 interface ResolvedCommand {
@@ -13,47 +16,28 @@ interface ResolvedCommand {
   available: boolean;
 }
 
-/**
- * Module-level map of pending context menu commands.
- * Only one context menu is open at a time, so this is safe.
- * Maps menu item key → { cmd id, target } for dispatch.
- */
-const pendingCommands = new Map<string, { id: string; target?: string }>();
-let pendingScopeChain: string[] = [];
-
-/**
- * Dispatch a context menu command by menu item key.
- * Called by the global event listener when the user selects a menu item.
- */
-export async function dispatchContextMenuCommand(
-  menuItemKey: string,
-): Promise<boolean> {
-  const cmd = pendingCommands.get(menuItemKey);
-  if (!cmd) return false;
-  try {
-    await backendDispatch({
-      cmd: cmd.id,
-      target: cmd.target,
-      scopeChain: pendingScopeChain,
-    });
-  } catch (e) {
-    console.error("context menu dispatch failed:", e);
-  }
-  return true;
+/** Shape sent to the backend `show_context_menu`. Self-contained dispatch info. */
+interface ContextMenuItem {
+  name: string;
+  cmd: string;
+  target?: string;
+  scope_chain: string[];
+  separator: boolean;
 }
 
 /**
  * Hook that returns an onContextMenu handler.
  *
- * The backend is the single source of truth — it computes available commands,
- * resolves names, checks clipboard state, and handles dedup. The frontend
- * just renders what it gets back and dispatches on click.
+ * Scope chain comes from CommandScopeContext. Each menu item sent to the
+ * backend carries its full dispatch info (cmd, target, scope_chain).
+ * When the user selects an item, Rust dispatches directly — no round-trip.
  *
- * @param scopeChain - Monikers from focused entity to root.
+ * @returns Event handler to attach to onContextMenu.
  */
-export function useContextMenu(
-  scopeChain: string[],
-): (e: React.MouseEvent) => void {
+export function useContextMenu(): (e: React.MouseEvent) => void {
+  const scope = useContext(CommandScopeContext);
+  const scopeChain = scopeChainFromScope(scope);
+
   return useCallback(
     (e: React.MouseEvent) => {
       e.preventDefault();
@@ -66,19 +50,25 @@ export function useContextMenu(
         .then((commands) => {
           if (commands.length === 0) return;
 
-          pendingCommands.clear();
-          pendingScopeChain = scopeChain;
-          const items: Array<{ id: string; name: string }> = [];
+          const items: ContextMenuItem[] = [];
           let lastGroup: string | null = null;
 
           for (const cmd of commands) {
-            // Insert separator between groups (e.g. tag commands vs task commands)
             if (lastGroup !== null && cmd.group !== lastGroup) {
-              items.push({ id: "__separator__", name: "" });
+              items.push({
+                name: "",
+                cmd: "",
+                separator: true,
+                scope_chain: [],
+              });
             }
-            const key = cmd.target ? `${cmd.id}:${cmd.target}` : cmd.id;
-            pendingCommands.set(key, { id: cmd.id, target: cmd.target });
-            items.push({ id: key, name: cmd.name });
+            items.push({
+              name: cmd.name,
+              cmd: cmd.id,
+              target: cmd.target,
+              scope_chain: scopeChain,
+              separator: false,
+            });
             lastGroup = cmd.group;
           }
 

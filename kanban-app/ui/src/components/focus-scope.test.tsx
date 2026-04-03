@@ -100,7 +100,7 @@ describe("FocusScope", () => {
     expect(getByTestId("focus-reader").textContent).toBe("task:abc");
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("show_context_menu", {
-        items: [{ id: "entity.inspect", name: "Inspect" }],
+        items: [expect.objectContaining({ cmd: "entity.inspect", name: "Inspect", separator: false })],
       });
     });
   });
@@ -187,10 +187,10 @@ describe("FocusScope", () => {
       // Inner scope should show both inner and outer commands (scope chain walks up on backend)
       const items = call[1].items;
       expect(
-        items.find((i: { id: string }) => i.id === "inner.cmd"),
+        items.find((i: { cmd: string }) => i.cmd === "inner.cmd"),
       ).toBeTruthy();
       expect(
-        items.find((i: { id: string }) => i.id === "outer.cmd"),
+        items.find((i: { cmd: string }) => i.cmd === "outer.cmd"),
       ).toBeTruthy();
     });
   });
@@ -246,7 +246,7 @@ describe("FocusScope", () => {
       const items = call[1].items;
       // No target -> shadow by id alone: inner "Inspect tag" shadows outer "Inspect task"
       expect(items).toHaveLength(1);
-      expect(items[0]).toEqual({ id: "entity.inspect", name: "Inspect tag" });
+      expect(items[0]).toEqual(expect.objectContaining({ cmd: "entity.inspect", name: "Inspect tag", separator: false }));
     });
   });
 
@@ -312,7 +312,7 @@ describe("FocusScope", () => {
       const items = call[1].items;
       // Different targets -> both accumulate
       const commandItems = items.filter(
-        (i: { id: string }) => i.id !== "__separator__",
+        (i: { separator: boolean }) => !i.separator,
       );
       expect(commandItems).toHaveLength(2);
       expect(
@@ -572,7 +572,7 @@ describe("FocusScope", () => {
     fireEvent.contextMenu(getByText("card"));
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("show_context_menu", {
-        items: [{ id: "entity.inspect", name: "Inspect" }],
+        items: [expect.objectContaining({ cmd: "entity.inspect", name: "Inspect", separator: false })],
       });
     });
   });

@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::RwLock;
 
@@ -151,9 +151,6 @@ struct UIStateInner {
     /// The entity type on the clipboard (e.g. "task", "tag"). Transient — not persisted.
     #[serde(skip)]
     clipboard_entity_type: Option<String>,
-    /// IDs of items in the most recently shown context menu. Transient — not persisted.
-    #[serde(skip)]
-    context_menu_ids: HashSet<String>,
     /// Whether the undo stack has entries that can be undone. Transient — not persisted.
     #[serde(skip)]
     can_undo: bool,
@@ -186,7 +183,6 @@ impl Default for UIStateInner {
             drag_session: None,
             has_clipboard: false,
             clipboard_entity_type: None,
-            context_menu_ids: HashSet::new(),
             can_undo: false,
             can_redo: false,
             open_boards: Vec::new(),
@@ -488,20 +484,6 @@ impl UIState {
     /// Set the context menu IDs for the current menu.
     ///
     /// Replaces any previous set. Transient — not persisted to the config file.
-    pub fn set_context_menu_ids(&self, ids: HashSet<String>) {
-        let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
-        inner.context_menu_ids = ids;
-        // No try_save() — transient state
-    }
-
-    /// Check if a menu ID belongs to the current context menu.
-    pub fn is_context_menu_id(&self, id: &str) -> bool {
-        self.inner
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .context_menu_ids
-            .contains(id)
-    }
 
     /// Add a board path to the open boards list.
     ///
@@ -1431,58 +1413,6 @@ mod tests {
     fn take_drag_on_empty_returns_none() {
         let state = UIState::new();
         assert!(state.take_drag().is_none());
-    }
-
-    // --- context menu tests ---
-
-    #[test]
-    fn set_context_menu_ids_and_check_membership() {
-        let state = UIState::new();
-        let ids: HashSet<String> = ["task:01A", "task:01B"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
-        state.set_context_menu_ids(ids);
-
-        assert!(state.is_context_menu_id("task:01A"));
-        assert!(state.is_context_menu_id("task:01B"));
-    }
-
-    #[test]
-    fn is_context_menu_id_returns_false_for_non_member() {
-        let state = UIState::new();
-        let ids: HashSet<String> = ["task:01A"].iter().map(|s| s.to_string()).collect();
-        state.set_context_menu_ids(ids);
-
-        assert!(!state.is_context_menu_id("task:01MISSING"));
-    }
-
-    #[test]
-    fn replacing_context_menu_ids_clears_previous() {
-        let state = UIState::new();
-
-        let first: HashSet<String> = ["task:01A", "task:01B"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
-        state.set_context_menu_ids(first);
-        assert!(state.is_context_menu_id("task:01A"));
-
-        let second: HashSet<String> = ["task:01C"].iter().map(|s| s.to_string()).collect();
-        state.set_context_menu_ids(second);
-
-        assert!(
-            !state.is_context_menu_id("task:01A"),
-            "old ID should be gone"
-        );
-        assert!(
-            !state.is_context_menu_id("task:01B"),
-            "old ID should be gone"
-        );
-        assert!(
-            state.is_context_menu_id("task:01C"),
-            "new ID should be present"
-        );
     }
 
     // --- open boards and window board management tests ---

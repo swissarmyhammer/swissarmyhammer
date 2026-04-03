@@ -8,9 +8,7 @@ import {
 } from "react";
 import {
   CommandScopeContext,
-  resolveCommand,
-  dispatchCommand,
-  useActiveBoardPath,
+  useDispatchCommand,
   type CommandDef,
   type CommandScope,
 } from "@/lib/command-scope";
@@ -157,20 +155,8 @@ function FocusScopeInner({
   children,
   ...htmlProps
 }: FocusScopeInnerProps) {
-  const scope = useContext(CommandScopeContext);
-
-  // Build scope chain (moniker walk from this scope to root) for context menu
-  const scopeChain = useMemo(() => {
-    const chain: string[] = [];
-    let current: typeof scope | null = scope;
-    while (current) {
-      if (current.moniker) chain.push(current.moniker);
-      current = current.parent;
-    }
-    return chain;
-  }, [scope]);
-
-  const contextMenuHandler = useContextMenu(scopeChain);
+  const contextMenuHandler = useContextMenu();
+  const dispatch = useDispatchCommand("ui.inspect");
   const { setFocus } = useEntityFocus();
 
   const handleContextMenu = useCallback(
@@ -183,8 +169,6 @@ function FocusScopeInner({
     [moniker, setFocus, contextMenuHandler],
   );
 
-  const boardPath = useActiveBoardPath();
-
   const handleDoubleClick = useCallback(
     (e: React.MouseEvent) => {
       // Skip if target is an interactive element
@@ -194,15 +178,9 @@ function FocusScopeInner({
       if (target.closest("[contenteditable]")) return;
 
       e.stopPropagation();
-
-      // ui.inspect opens the inspector panel. Double-click dispatches it
-      // to the backend which pushes onto the inspector stack.
-      const cmd = resolveCommand(scope, "ui.inspect");
-      if (cmd) {
-        dispatchCommand(cmd, boardPath, scopeChain);
-      }
+      dispatch({ target: moniker }).catch(console.error);
     },
-    [scope, boardPath, scopeChain],
+    [dispatch, moniker],
   );
 
   return (

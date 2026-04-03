@@ -81,6 +81,19 @@ export interface CommandScope {
 export const CommandScopeContext = createContext<CommandScope | null>(null);
 
 /**
+ * Context for the currently focused entity's scope.
+ *
+ * Defined here (in command-scope) so useDispatchCommand can read it without
+ * importing from entity-focus-context (which would create a circular dep).
+ * Provided by EntityFocusProvider in entity-focus-context.tsx.
+ *
+ * When populated, useDispatchCommand prefers this over CommandScopeContext
+ * for scope chain computation — ensuring dispatched commands carry the
+ * focused entity's full scope chain (e.g. task:abc → column:todo → window:main).
+ */
+export const FocusedScopeContext = createContext<CommandScope | null>(null);
+
+/**
  * Walk the scope chain from innermost to root, collecting monikers.
  *
  * Returns an array like `["task:abc", "column:todo", "window:board-2"]`.
@@ -327,15 +340,14 @@ export function useDispatchCommand(
   cmd: string,
 ): (opts?: DispatchOptions) => Promise<unknown>;
 export function useDispatchCommand(presetCmd?: string) {
-  const scope = useContext(CommandScopeContext);
+  const treeScope = useContext(CommandScopeContext);
+  const focusedScope = useContext(FocusedScopeContext);
   const boardPath = useContext(ActiveBoardPathContext);
 
-  // Store in refs so the callback always sees the latest values without
-  // re-creating on every context change — keeps the returned function stable.
-  const scopeRef = useRef(scope);
-  scopeRef.current = scope;
-  const boardPathRef = useRef(boardPath);
-  boardPathRef.current = boardPath;
+  // Prefer focused scope (includes entity + window monikers) over tree scope
+  // (just the component's position in the React tree). When nothing is focused,
+  // fall back to tree scope.
+  const effectiveScope = focusedScope ?? treeScope;
 
   return useCallback(
     async (
@@ -352,10 +364,10 @@ export function useDispatchCommand(presetCmd?: string) {
         opts = maybeOpts ?? {};
       }
 
-      const chain = scopeChainFromScope(scopeRef.current);
+      const chain = scopeChainFromScope(effectiveScope);
 
       // Try frontend execute handler first
-      const resolved = resolveCommand(scopeRef.current, cmdId);
+      const resolved = resolveCommand(effectiveScope, cmdId);
       if (resolved?.execute) {
         Promise.resolve(
           invoke("log_command", {
@@ -373,11 +385,9 @@ export function useDispatchCommand(presetCmd?: string) {
         target: opts.target,
         args: opts.args,
         scopeChain: chain,
-        ...(boardPathRef.current
-          ? { boardPath: boardPathRef.current }
-          : {}),
+        ...(boardPath ? { boardPath } : {}),
       });
     },
-    [presetCmd],
+    [presetCmd, effectiveScope, boardPath],
   );
 }

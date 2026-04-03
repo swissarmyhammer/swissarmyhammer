@@ -225,8 +225,7 @@ function PerspectiveTab({
   onRenameCommit,
   onRenameCancel,
 }: PerspectiveTabProps) {
-  const scopeChain = useScopeChain();
-  const handleContextMenu = useContextMenu(scopeChain);
+  const handleContextMenu = useContextMenu();
   const hasFilter = Boolean(filter);
   const hasGroup = Boolean(group);
 
@@ -331,19 +330,3 @@ function PerspectiveTab({
   );
 }
 
-/**
- * Build the scope chain from the current CommandScopeContext,
- * walking from innermost to root and collecting monikers.
- */
-function useScopeChain(): string[] {
-  const scope = useContext(CommandScopeContext);
-  return useMemo(() => {
-    const chain: string[] = [];
-    let current: CommandScope | null = scope;
-    while (current) {
-      if (current.moniker) chain.push(current.moniker);
-      current = current.parent;
-    }
-    return chain;
-  }, [scope]);
-}

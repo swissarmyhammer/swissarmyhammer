@@ -9,7 +9,7 @@ import {
   type ReactNode,
 } from "react";
 import type { CommandScope } from "./command-scope";
-import { backendDispatch } from "./command-scope";
+import { backendDispatch, FocusedScopeContext } from "./command-scope";
 
 /** A predicate that a FocusScope uses to claim focus when a nav command fires. */
 export interface ClaimPredicate {
@@ -217,9 +217,18 @@ export function EntityFocusProvider({ children }: { children: ReactNode }) {
     ],
   );
 
+  // Derive the focused CommandScope so useDispatchCommand can read it via
+  // FocusedScopeContext. Registry is a ref (not state), so we look up on
+  // each render triggered by focusedMoniker changes.
+  const focusedScope = focusedMoniker
+    ? (registryRef.current.get(focusedMoniker) ?? null)
+    : null;
+
   return (
     <EntityFocusContext.Provider value={value}>
-      {children}
+      <FocusedScopeContext.Provider value={focusedScope}>
+        {children}
+      </FocusedScopeContext.Provider>
     </EntityFocusContext.Provider>
   );
 }

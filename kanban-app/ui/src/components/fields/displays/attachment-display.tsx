@@ -274,7 +274,7 @@ function AttachmentItemInner({
 }: AttachmentItemInnerProps) {
   const scope = useContext(CommandScopeContext);
   const boardPath = useActiveBoardPath();
-  const onContextMenu = useContextMenu(scopeChain);
+  const onContextMenu = useContextMenu();
 
   const handleDoubleClick = useCallback(() => {
     const cmd = resolveCommand(scope, "attachment.open");

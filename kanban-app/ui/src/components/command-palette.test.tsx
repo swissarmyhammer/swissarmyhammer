@@ -186,19 +186,17 @@ describe("CommandPalette", () => {
   });
 
   it("executes a command when its item is clicked", async () => {
-    const invokeMock = vi.mocked(invoke);
     const onClose = vi.fn();
     await act(async () => {
       renderPalette(true, onClose);
     });
-    invokeMock.mockClear();
     fireEvent.click(screen.getByText("Save File"));
-    // Clicking a backend command dispatches via invoke, not a local execute fn
-    const dispatchCall = invokeMock.mock.calls.find(
-      ([cmd]) => cmd === "dispatch_command",
-    );
-    expect(dispatchCall).toBeDefined();
-    expect((dispatchCall![1] as Record<string, unknown>).cmd).toBe("save-file");
+    // The command resolves through the scope chain. Since TEST_COMMANDS
+    // register "save-file" with an execute handler, it runs client-side.
+    // In production, palette commands come from the backend without execute
+    // handlers, so they dispatch to Rust via IPC instead.
+    const saveCmd = TEST_COMMANDS.find((c) => c.id === "save-file")!;
+    expect(saveCmd.execute).toHaveBeenCalled();
     expect(onClose).toHaveBeenCalled();
   });
 
@@ -208,25 +206,36 @@ describe("CommandPalette", () => {
     expect(list.getAttribute("role")).toBe("listbox");
   });
 
-  it("does not pass windowLabel when dispatching a command via invoke", async () => {
+  it("dispatches to backend when command has no execute handler", async () => {
     const invokeMock = vi.mocked(invoke);
 
+    // Render with NO commands in scope — palette commands come from backend
+    // mock (list_commands_for_scope) and have no execute handlers.
     const onClose = vi.fn();
     await act(async () => {
-      renderPalette(true, onClose);
+      render(
+        <EntityFocusProvider>
+          <UIStateProvider>
+            <CommandScopeProvider commands={[]}>
+              <CommandPalette open={true} onClose={onClose} />
+            </CommandScopeProvider>
+          </UIStateProvider>
+        </EntityFocusProvider>,
+      );
     });
     invokeMock.mockClear();
-    // Click the first command ("Open File")
     fireEvent.click(screen.getByText("Open File"));
 
-    // Find the dispatch_command call
+    // Command not in React scope → dispatches to backend via invoke
     const dispatchCall = invokeMock.mock.calls.find(
       ([cmd]) => cmd === "dispatch_command",
     );
     expect(dispatchCall).toBeDefined();
     const [, args] = dispatchCall!;
+    expect((args as Record<string, unknown>).cmd).toBe("open-file");
     // windowLabel should NOT be present — scope chain carries window identity
     expect((args as Record<string, unknown>).windowLabel).toBeUndefined();
+    expect(onClose).toHaveBeenCalled();
   });
 });
 

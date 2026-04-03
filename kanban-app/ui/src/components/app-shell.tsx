@@ -19,7 +19,6 @@ import {
   type KeymapMode,
 } from "@/lib/keybindings";
 import { CommandPalette } from "@/components/command-palette";
-import { dispatchContextMenuCommand } from "@/lib/context-menu";
 
 /**
  * Internal component that attaches a global keydown listener.
@@ -92,21 +91,6 @@ function KeybindingHandler({ mode }: { mode: KeymapMode }) {
       unlisten.then((fn) => fn());
     };
   }, [executeCommand]);
-
-  // Listen for context-menu-command events from the native context menu
-  // and dispatch from the pending handlers map (populated by useContextMenu).
-  useEffect(() => {
-    const unlisten = listen<string>("context-menu-command", async (event) => {
-      const commandId = event.payload;
-      const dispatched = await dispatchContextMenuCommand(commandId);
-      if (!dispatched) {
-        console.warn(`Context menu command not found: ${commandId}`);
-      }
-    });
-    return () => {
-      unlisten.then((fn) => fn());
-    };
-  }, []);
 
   return null;
 }

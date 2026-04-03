@@ -1,6 +1,5 @@
 import {
   useCallback,
-  useContext,
   useEffect,
   useMemo,
   useRef,
@@ -13,13 +12,8 @@ import { keymap } from "@codemirror/view";
 import { Compartment } from "@codemirror/state";
 import { getCM, Vim } from "@replit/codemirror-vim";
 import { buildSubmitCancelExtensions } from "@/lib/cm-submit-cancel";
-import { backendDispatch } from "@/lib/command-scope";
 import {
-  CommandScopeContext,
-  resolveCommand,
-  dispatchCommand,
-  scopeChainFromScope,
-  useActiveBoardPath,
+  useDispatchCommand,
   type CommandAtDepth,
 } from "@/lib/command-scope";
 import { useUIState } from "@/lib/ui-state-context";
@@ -81,6 +75,7 @@ export function CommandPalette({
   const keymapCompartment = useRef(new Compartment());
   const listRef = useRef<HTMLDivElement>(null);
   const { keymap_mode: mode, scope_chain: scopeChain } = useUIState();
+  const dispatch = useDispatchCommand();
 
   /** Shape returned by the backend. */
   interface ResolvedCommand {
@@ -233,13 +228,11 @@ export function CommandPalette({
     const entry = filteredCommands[selectedIndex];
     if (entry) {
       onClose();
-      backendDispatch({
-        cmd: entry.command.id,
+      dispatch(entry.command.id, {
         target: entry.command.target,
-        scopeChain: scopeChain ?? [],
       }).catch(console.error);
     }
-  }, [filteredCommands, selectedIndex, onClose]);
+  }, [filteredCommands, selectedIndex, onClose, dispatch]);
 
   // Execute the selected entity result (search mode)
   const executeSelectedResult = useCallback(() => {
@@ -256,15 +249,7 @@ export function CommandPalette({
     }
     if (inspectEntity) {
       const entityMoniker = moniker(result.entity_type, result.entity_id);
-      dispatchCommand(
-        {
-          id: "entity.inspect",
-          name: "Inspect Entity",
-          execute: () => inspectEntity(entityMoniker),
-        },
-        undefined,
-        scopeChain ?? [],
-      );
+      inspectEntity(entityMoniker);
     }
   }, [searchResults, selectedIndex, onClose, inspectEntity, onSwitchBoard]);
 
@@ -429,7 +414,9 @@ export function CommandPalette({
                       ${index === selectedIndex ? "bg-accent text-accent-foreground" : "hover:bg-accent/50"}`}
                   onClick={() => {
                     onClose();
-                    dispatchCommand(entry.command, undefined, scopeChain ?? []);
+                    dispatch(entry.command.id, {
+                      target: entry.command.target,
+                    }).catch(console.error);
                   }}
                   onMouseEnter={() => setSelectedIndex(index)}
                 >
@@ -554,8 +541,7 @@ function SearchResultRow({
   onClose: () => void;
   onHoverIndex: (index: number) => void;
 }) {
-  const scope = useContext(CommandScopeContext);
-  const boardPath = useActiveBoardPath();
+  const dispatch = useDispatchCommand("entity.inspect");
   return (
     <div
       role="option"
@@ -564,11 +550,8 @@ function SearchResultRow({
       className={`flex cursor-pointer items-center gap-2 px-3 py-1.5 text-sm
         ${index === selectedIndex ? "bg-accent text-accent-foreground" : "hover:bg-accent/50"}`}
       onClick={() => {
-        const cmd = resolveCommand(scope, "entity.inspect");
-        if (cmd) {
-          onClose();
-          dispatchCommand(cmd, boardPath, scopeChainFromScope(scope));
-        }
+        onClose();
+        dispatch({ target: entityMoniker }).catch(console.error);
       }}
       onMouseEnter={() => onHoverIndex(index)}
     >
