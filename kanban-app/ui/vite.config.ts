@@ -43,7 +43,13 @@ export default defineConfig({
       {
         plugins: [react()],
         resolve: {
-          alias: { "@": path.resolve(__dirname, "./src") },
+          alias: {
+            "@": path.resolve(__dirname, "./src"),
+            "@tauri-apps/plugin-dialog": path.resolve(
+              __dirname,
+              "./src/test/stubs/tauri-plugin-dialog.ts",
+            ),
+          },
         },
         optimizeDeps: {
           entries: ["src/**/*.browser.test.{ts,tsx}"],
