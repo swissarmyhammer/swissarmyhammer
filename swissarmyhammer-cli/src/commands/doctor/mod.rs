@@ -127,6 +127,7 @@ impl Doctor {
 
     /// Run configuration checks
     fn run_configuration_checks(&mut self) -> Result<()> {
+        checks::check_claude_md(&mut self.checks)?;
         checks::check_claude_config(&mut self.checks)?;
         Ok(())
     }
