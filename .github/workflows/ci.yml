@@ -44,12 +44,18 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build kanban CLI (needed by browser integration tests)
+        run: cargo build -p kanban-cli
       - uses: actions/setup-node@v4
         with:
           node-version: 22
       - name: Install dependencies
         working-directory: ${{ matrix.app }}/ui
-        run: npm install
+        run: |
+          npm install
+          rm -rf node_modules/.vite
       - name: Install Playwright browsers
         working-directory: ${{ matrix.app }}/ui
         run: npx playwright install --with-deps chromium
