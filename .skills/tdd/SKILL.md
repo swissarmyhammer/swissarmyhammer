@@ -1,11 +1,10 @@
 ---
 name: tdd
-description: Use before writing any code, for any reason. Enforces strict test-driven development — RED, GREEN, REFACTOR.
+description: Use when implementing any feature or bugfix, before writing implementation code. Enforces strict test-driven development — RED, GREEN, REFACTOR with mandatory verification gates.
 metadata:
-  author: swissarmyhammer
-  version: "{{version}}"
+  author: "swissarmyhammer"
+  version: "0.12.11"
 ---
-
 
 # Test-Driven Development (TDD)
 
@@ -19,9 +18,16 @@ Write the test first. Watch it fail. Write minimal code to pass.
 
 ## When to Use
 
-**Always:** 
-- All code changes, no exceptions
-- If it is worth coding, it is worth testing
+**Always:**
+- New features
+- Bug fixes
+- Refactoring
+- Behavior changes
+
+**Exceptions (ask the user):**
+- Throwaway prototypes
+- Generated code
+- Configuration files
 
 Thinking "skip TDD just this once"? Stop. That's rationalization.
 
@@ -31,7 +37,7 @@ Thinking "skip TDD just this once"? Stop. That's rationalization.
 NO PRODUCTION CODE WITHOUT A FAILING TEST FIRST
 ```
 
-Did you write code before the test? Delete it. Start over. 
+Write code before the test? Delete it. Start over.
 
 **No exceptions:**
 - Don't keep it as "reference"
@@ -39,6 +45,7 @@ Did you write code before the test? Delete it. Start over.
 - Don't look at it
 - Delete means delete
 
+Implement fresh from tests. Period.
 
 ## Red-Green-Refactor
 

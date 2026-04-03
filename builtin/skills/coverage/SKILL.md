@@ -19,6 +19,8 @@ Run tests with coverage instrumentation, then identify gaps and produce a concre
 When you have poor code coverage, it means you have inherited code that was not done with proper TDD. 
 The goal is to fix that and get the test that SHOULD HAVE been written with TDD into place until we get to complete coverage.
 
+** IMPORTANT **  Do not change, delete, modify, refactor the code under test. Improving coverage should only be done by writing new tests, never by changing the code under test. If you find failing tests, note them but do not fix them — that is a separate task.
+
 ## Process
 
 ### 1. Detect project type and coverage tool
