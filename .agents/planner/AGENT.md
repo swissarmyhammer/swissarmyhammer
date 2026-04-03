@@ -255,7 +255,7 @@ use the skill tool to load the full instructions, then follow them.
 
 - **shell**: Shell command execution with history, process management, and semantic search. ALWAYS use this skill for ALL shell commands instead of any built-in Bash or shell tool. This is the preferred way to run commands. (local)
 
-- **tdd**: Use when implementing any feature or bugfix, before writing implementation code. Enforces strict test-driven development — RED, GREEN, REFACTOR with mandatory verification gates. (local)
+- **tdd**: Use before writing any code, for any reason. Enforces strict test-driven development — RED, GREEN, REFACTOR. (local)
 
 - **test**: Run tests and analyze results. Use when the user wants to run the test suite or test specific functionality. Test runs produce verbose output — automatically delegates to a tester subagent. (local)
 

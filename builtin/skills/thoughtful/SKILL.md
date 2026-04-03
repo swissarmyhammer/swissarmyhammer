@@ -3,13 +3,17 @@ name: thoughtful
 description: Use when starting any conversation - establishes how to find and use skills, requiring Skill tool invocation before ANY response including clarifying questions
 ---
 
-<EXTREMELY-IMPORTANT>
+
+## The Most Important Thinks
+
 If you think there is even a 1% chance a skill might apply to what you are doing, you ABSOLUTELY MUST invoke the skill.
 
 IF A SKILL APPLIES TO YOUR TASK, YOU DO NOT HAVE A CHOICE. YOU MUST USE IT.
 
+IF YOU THINK YOU NEED TO DEVIATE FROM WHAT WAS AGREED OR ASSIGNED -- YOU MUST ASK THE USER FOR PERMISSION OR STOP.
+
 This is not negotiable. This is not optional. You cannot rationalize your way out of this.
-</EXTREMELY-IMPORTANT>
+
 
 
 ## Approach
@@ -21,6 +25,8 @@ This is not negotiable. This is not optional. You cannot rationalize your way ou
 - Test your code before declaring done.
 - No sycophantic openers or closing fluff.
 - Keep solutions simple and direct.
+- Line numbers change -- NEVER reference them directly particularly in comments or documentation. 
+- You check the logs, not the user. If you need to know what happened, check the logs. Do not ask the user for information you can get from the logs.
 
 
 ## Using Skills

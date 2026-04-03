@@ -1325,10 +1325,7 @@ fn remove_claude_md_preamble(root: &std::path::Path) -> Result<&'static str, Str
         }
     }
     // Trim leading blank lines after preamble removal
-    while after_preamble
-        .first()
-        .is_some_and(|l| l.trim().is_empty())
-    {
+    while after_preamble.first().is_some_and(|l| l.trim().is_empty()) {
         after_preamble.remove(0);
     }
     if after_preamble.is_empty() {
