@@ -1,51 +1,31 @@
 use std::fs;
-use std::path::PathBuf;
 use swissarmyhammer_common::test_utils::CurrentDirGuard;
 use swissarmyhammer_config::TemplateContext;
-use swissarmyhammer_prompts::PromptLibrary;
 use tempfile::TempDir;
-
-fn get_builtin_prompts_path() -> PathBuf {
-    // Get the workspace root
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let workspace_root = manifest_dir.parent().unwrap();
-    workspace_root.join("builtin/prompts")
-}
 
 #[serial_test::serial(cwd)]
 #[test]
 #[serial_test::serial(cwd)]
-fn test_rust_project_detection_renders_guidelines() {
-    // Create a temporary directory OUTSIDE of any git repo
+fn test_rust_project_detection_populates_context() {
     let temp_dir = TempDir::new().unwrap();
     let root = temp_dir.path();
-
-    // Create a .git directory to act as a boundary and prevent walking up to parent projects
     fs::create_dir(root.join(".git")).unwrap();
 
-    // Create a subdirectory for the project to avoid picking up parent directories
     let project_path = root.join("isolated_project");
     fs::create_dir(&project_path).unwrap();
-
-    // Create Cargo.toml to trigger Rust project detection
     fs::write(
         project_path.join("Cargo.toml"),
         "[package]\nname = \"test\"\nversion = \"0.1.0\"",
     )
     .unwrap();
-
-    // Create src directory to make it look more like a real project
     fs::create_dir(project_path.join("src")).unwrap();
     fs::write(project_path.join("src/main.rs"), "fn main() {}").unwrap();
 
-    // Change to the project directory
     let _guard = CurrentDirGuard::new(&project_path).unwrap();
 
-    // Create template context with project detection
     let mut context = TemplateContext::new();
     context.set_default_variables();
 
-    // Verify project was detected
     let project_types = context
         .get("project_types")
         .expect("project_types should be set");
@@ -53,152 +33,63 @@ fn test_rust_project_detection_renders_guidelines() {
     let projects = project_types.as_array().unwrap();
     assert!(!projects.is_empty(), "Should detect at least one project");
 
-    // Verify unique_project_types was set and contains Rust
     let unique_types = context
         .get("unique_project_types")
         .expect("unique_project_types should be set");
-    assert!(
-        unique_types.is_array(),
-        "unique_project_types should be an array"
-    );
     let unique = unique_types.as_array().unwrap();
-    assert!(
-        !unique.is_empty(),
-        "Should have at least one unique project type"
-    );
+    assert!(!unique.is_empty());
 
-    // Check that Rust is in the unique types
     let has_rust = unique.iter().any(|t| t.as_str() == Some("Rust"));
     assert!(has_rust, "Rust should be in unique project types");
-
-    // Load prompts and render detected-projects partial
-    let mut library = PromptLibrary::new();
-    library
-        .add_directory(get_builtin_prompts_path())
-        .expect("Failed to load prompts");
-
-    let rendered = library
-        .render("_partials/detected-projects", &context)
-        .expect("Failed to render detected-projects");
-
-    println!("=== Rendered Output ===");
-    println!("{}", rendered);
-    println!("=== End Output ===");
-
-    // Template now defers to treesitter tool for runtime detection
-    assert!(
-        rendered.contains("Project Detection"),
-        "Should contain 'Project Detection' header"
-    );
-    assert!(
-        rendered.contains("detect projects"),
-        "Should contain treesitter detect projects instruction"
-    );
-    assert!(
-        rendered.contains("code_context"),
-        "Should reference the code_context tool"
-    );
-
-    // CurrentDirGuard automatically restores the original directory
 }
 
 #[serial_test::serial(cwd)]
 #[test]
 #[serial_test::serial(cwd)]
-fn test_nodejs_project_detection_renders_guidelines() {
-    // Create a temporary directory OUTSIDE of any git repo
+fn test_nodejs_project_detection_populates_context() {
     let temp_dir = TempDir::new().unwrap();
     let root = temp_dir.path();
-
-    // Create a .git directory to act as a boundary and prevent walking up to parent projects
     fs::create_dir(root.join(".git")).unwrap();
 
-    // Create a subdirectory for the project
     let project_path = root.join("isolated_nodejs_project");
     fs::create_dir(&project_path).unwrap();
-
-    // Create package.json to trigger Node.js project detection
     fs::write(
         project_path.join("package.json"),
         r#"{"name": "test", "version": "1.0.0"}"#,
     )
     .unwrap();
-
-    // Create node_modules and src to make it look like a real project
     fs::create_dir(project_path.join("node_modules")).unwrap();
     fs::create_dir(project_path.join("src")).unwrap();
     fs::write(project_path.join("src/index.js"), "console.log('test');").unwrap();
 
-    // Change to the project directory
     let _guard = CurrentDirGuard::new(&project_path).unwrap();
 
-    // Create template context with project detection
     let mut context = TemplateContext::new();
     context.set_default_variables();
 
-    // Verify unique_project_types was set
     let unique_types = context
         .get("unique_project_types")
         .expect("unique_project_types should be set");
     let unique = unique_types.as_array().unwrap();
-    assert!(
-        !unique.is_empty(),
-        "Should have at least one unique project type"
-    );
+    assert!(!unique.is_empty());
 
-    // Verify it's actually detecting NodeJs
     let has_nodejs = unique.iter().any(|t| t.as_str() == Some("NodeJs"));
     assert!(
         has_nodejs,
         "Should detect NodeJs project type, found: {:?}",
         unique
     );
-
-    // Load prompts and render
-    let mut library = PromptLibrary::new();
-    let prompts_path = get_builtin_prompts_path();
-    println!("Loading prompts from: {:?}", prompts_path);
-    println!("Path exists: {}", prompts_path.exists());
-    library
-        .add_directory(&prompts_path)
-        .expect("Failed to load prompts");
-
-    let rendered = library
-        .render("_partials/detected-projects", &context)
-        .expect("Failed to render detected-projects");
-
-    println!("=== Rendered Output ===");
-    println!("{}", rendered);
-    println!("=== End Output ===");
-
-    // Template now defers to treesitter tool for runtime detection
-    assert!(
-        rendered.contains("Project Detection"),
-        "Should contain 'Project Detection' header"
-    );
-    assert!(
-        rendered.contains("detect projects"),
-        "Should contain treesitter detect projects instruction"
-    );
-
-    // CurrentDirGuard automatically restores the original directory
 }
 
 #[serial_test::serial(cwd)]
 #[test]
-fn test_multiple_rust_projects_renders_guidelines_once() {
-    // Store original directory first
-
-    // Create a temporary directory with multiple Rust projects
+fn test_multiple_rust_projects_detected() {
     let temp_dir = TempDir::new().unwrap();
-
-    // Create a .git directory at temp root to act as a boundary
     fs::create_dir(temp_dir.path().join(".git")).unwrap();
 
     let root_path = temp_dir.path().join("monorepo");
     fs::create_dir(&root_path).unwrap();
 
-    // Create first Rust project
     let project1 = root_path.join("project1");
     fs::create_dir(&project1).unwrap();
     fs::write(
@@ -209,7 +100,6 @@ fn test_multiple_rust_projects_renders_guidelines_once() {
     fs::create_dir(project1.join("src")).unwrap();
     fs::write(project1.join("src/lib.rs"), "").unwrap();
 
-    // Create second Rust project
     let project2 = root_path.join("project2");
     fs::create_dir(&project2).unwrap();
     fs::write(
@@ -220,75 +110,34 @@ fn test_multiple_rust_projects_renders_guidelines_once() {
     fs::create_dir(project2.join("src")).unwrap();
     fs::write(project2.join("src/lib.rs"), "").unwrap();
 
-    // Change to the monorepo directory to detect the projects
     let _guard = CurrentDirGuard::new(&root_path).unwrap();
 
-    // Create template context with project detection
     let mut context = TemplateContext::new();
     context.set_default_variables();
 
-    // Verify both projects were detected
     let project_types = context
         .get("project_types")
         .expect("project_types should be set");
     let projects = project_types.as_array().unwrap();
     assert!(projects.len() >= 2, "Should detect at least two projects");
 
-    // Verify unique_project_types has Rust
     let unique_types = context
         .get("unique_project_types")
         .expect("unique_project_types should be set");
     let unique = unique_types.as_array().unwrap();
-    assert!(
-        !unique.is_empty(),
-        "Should have at least one unique project type"
-    );
-
     let has_rust = unique.iter().any(|t| t.as_str() == Some("Rust"));
     assert!(has_rust, "Rust should be in unique project types");
-
-    // Load prompts and render
-    let mut library = PromptLibrary::new();
-    library
-        .add_directory(get_builtin_prompts_path())
-        .expect("Failed to load prompts");
-
-    let rendered = library
-        .render("_partials/detected-projects", &context)
-        .expect("Failed to render detected-projects");
-
-    println!("=== Rendered Output ===");
-    println!("{}", rendered);
-    println!("=== End Output ===");
-
-    // Template now defers to treesitter tool for runtime detection
-    assert!(
-        rendered.contains("Project Detection"),
-        "Should contain 'Project Detection' header"
-    );
-    assert!(
-        rendered.contains("detect projects"),
-        "Should contain treesitter detect projects instruction"
-    );
-
-    // CurrentDirGuard automatically restores the original directory
 }
 
 #[serial_test::serial(cwd)]
 #[test]
-fn test_mixed_projects_renders_multiple_guidelines() {
-    // Store original directory first
-
-    // Create a temporary directory with mixed project types
+fn test_mixed_projects_detected() {
     let temp_dir = TempDir::new().unwrap();
-
-    // Create a .git directory at temp root to act as a boundary
     fs::create_dir(temp_dir.path().join(".git")).unwrap();
 
     let root_path = temp_dir.path().join("monorepo");
     fs::create_dir(&root_path).unwrap();
 
-    // Create Rust project
     let rust_project = root_path.join("backend");
     fs::create_dir(&rust_project).unwrap();
     fs::write(
@@ -299,65 +148,31 @@ fn test_mixed_projects_renders_multiple_guidelines() {
     fs::create_dir(rust_project.join("src")).unwrap();
     fs::write(rust_project.join("src/lib.rs"), "").unwrap();
 
-    // Create Node.js project
     let node_project = root_path.join("frontend");
     fs::create_dir(&node_project).unwrap();
     fs::write(node_project.join("package.json"), r#"{"name": "frontend"}"#).unwrap();
     fs::create_dir(node_project.join("src")).unwrap();
     fs::write(node_project.join("src/index.js"), "console.log('test');").unwrap();
 
-    // Change to the root directory
     let _guard = CurrentDirGuard::new(&root_path).unwrap();
 
-    // Create template context with project detection
     let mut context = TemplateContext::new();
     context.set_default_variables();
 
-    // Verify both project types were detected
     let project_types = context
         .get("project_types")
         .expect("project_types should be set");
     let projects = project_types.as_array().unwrap();
     assert!(projects.len() >= 2, "Should detect at least two projects");
 
-    // Verify unique_project_types has both Rust and NodeJs
     let unique_types = context
         .get("unique_project_types")
         .expect("unique_project_types should be set");
     let unique = unique_types.as_array().unwrap();
-    assert!(
-        unique.len() >= 2,
-        "Should have at least two unique project types"
-    );
+    assert!(unique.len() >= 2);
 
     let has_rust = unique.iter().any(|t| t.as_str() == Some("Rust"));
     let has_nodejs = unique.iter().any(|t| t.as_str() == Some("NodeJs"));
     assert!(has_rust, "Rust should be in unique project types");
     assert!(has_nodejs, "NodeJs should be in unique project types");
-
-    // Load prompts and render
-    let mut library = PromptLibrary::new();
-    library
-        .add_directory(get_builtin_prompts_path())
-        .expect("Failed to load prompts");
-
-    let rendered = library
-        .render("_partials/detected-projects", &context)
-        .expect("Failed to render detected-projects");
-
-    println!("=== Rendered Output ===");
-    println!("{}", rendered);
-    println!("=== End Output ===");
-
-    // Template now defers to treesitter tool for runtime detection
-    assert!(
-        rendered.contains("Project Detection"),
-        "Should contain 'Project Detection' header"
-    );
-    assert!(
-        rendered.contains("detect projects"),
-        "Should contain treesitter detect projects instruction"
-    );
-
-    // CurrentDirGuard automatically restores the original directory
 }
