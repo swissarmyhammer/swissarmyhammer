@@ -131,6 +131,7 @@ pub fn register_commands() -> HashMap<String, Arc<dyn Command>> {
         Arc::new(ui_commands::SetActivePerspectiveCmd),
     );
     map.insert("ui.setFocus".into(), Arc::new(ui_commands::SetFocusCmd));
+    map.insert("ui.mode.set".into(), Arc::new(ui_commands::SetAppModeCmd));
 
     // Drag session commands
     map.insert("drag.start".into(), Arc::new(drag_commands::DragStartCmd));
@@ -276,8 +277,9 @@ mod tests {
         //          dismiss, undo, redo, keymap.vim, keymap.cua, keymap.emacs)
         // + 5 file (switchBoard, closeBoard, newBoard, openBoard, window.new)
         // + 3 drag + 11 perspective (8 + 3 sort) + 2 attachment (open, reveal) = 55
+        // + 1 ui.mode.set = 56
         // Note: clipboard entries are duplicated in the source but HashMap deduplicates.
-        assert_eq!(cmds.len(), 55);
+        assert_eq!(cmds.len(), 56);
     }
 
     // =========================================================================

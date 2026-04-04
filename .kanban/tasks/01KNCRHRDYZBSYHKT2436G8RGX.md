@@ -3,9 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KNC7N6PKWCAXPXXT2CZ4228P
-position_column: todo
-position_ordinal: 8a80
-position_swimlane: container-refactor
+position_column: done
+position_ordinal: fffffffffffffffffff780
 title: Extract AppModeContainer as first child of WindowContainer
 ---
 ## What

@@ -422,7 +422,8 @@ mod tests {
         // perspective: load, save, delete, filter, clearFilter, group, clearGroup,
         //             sort.set, sort.clear, sort.toggle, list = 11
         // attachment: open, reveal = 2
-        assert_eq!(registry.all_commands().len(), 56);
+        // +1 for ui.mode.set
+        assert_eq!(registry.all_commands().len(), 57);
 
         // Spot checks
         assert!(registry.get("app.quit").is_some());

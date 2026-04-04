@@ -60,7 +60,6 @@ vi.mock("@tauri-apps/api/window", () => ({
 import { useEntityStore } from "@/lib/entity-store-context";
 import { useSchema } from "@/lib/schema-context";
 import { useUIState } from "@/lib/ui-state-context";
-import { useAppMode } from "@/lib/app-mode-context";
 import { useEntityFocus } from "@/lib/entity-focus-context";
 import {
   RustEngineContainer,
@@ -111,12 +110,6 @@ function UIStateProbe() {
   return <span data-testid="ui-state-ok">ui-state-ok</span>;
 }
 
-/** Renders "app-mode-ok" if AppModeProvider is present. */
-function AppModeProbe() {
-  useAppMode();
-  return <span data-testid="app-mode-ok">app-mode-ok</span>;
-}
-
 /** Probe for refreshEntities context. */
 function RefreshProbe() {
   const refreshEntities = useRefreshEntities();
@@ -138,7 +131,6 @@ function AllProbes() {
       <EntityStoreProbe />
       <EntityFocusProbe />
       <UIStateProbe />
-      <AppModeProbe />
       <RefreshProbe />
     </>
   );
@@ -167,7 +159,6 @@ describe("RustEngineContainer", () => {
     expect(screen.getByTestId("entity-store-ok")).toBeTruthy();
     expect(screen.getByTestId("entity-focus-ok")).toBeTruthy();
     expect(screen.getByTestId("ui-state-ok")).toBeTruthy();
-    expect(screen.getByTestId("app-mode-ok")).toBeTruthy();
   });
 
   it("exposes refreshEntities via context", async () => {

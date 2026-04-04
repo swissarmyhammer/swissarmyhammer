@@ -195,6 +195,30 @@ impl Command for SetActivePerspectiveCmd {
     }
 }
 
+/// Set the application interaction mode (normal, command, search).
+///
+/// Always available. Required arg: `mode`.
+pub struct SetAppModeCmd;
+
+#[async_trait]
+impl Command for SetAppModeCmd {
+    fn available(&self, _ctx: &CommandContext) -> bool {
+        true
+    }
+
+    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+        let ui = ctx
+            .ui_state
+            .as_ref()
+            .ok_or_else(|| CommandError::ExecutionFailed("UIState not available".into()))?;
+
+        let mode = ctx.require_arg_str("mode")?;
+        let window_label = ctx.window_label_from_scope().unwrap_or("main");
+        let change = ui.set_app_mode(window_label, mode);
+        Ok(serde_json::to_value(change).unwrap_or(Value::Null))
+    }
+}
+
 /// Set the active view by ID.
 ///
 /// Always available. Required arg: `view_id`.
@@ -216,5 +240,69 @@ impl Command for SetActiveViewCmd {
         let window_label = ctx.window_label_from_scope().unwrap_or("main");
         let change = ui.set_active_view(window_label, view_id);
         Ok(serde_json::to_value(change).unwrap_or(Value::Null))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    use swissarmyhammer_commands::{CommandContext, UIState};
+
+    /// Helper to build a CommandContext with UIState and a window scope chain.
+    fn ctx_with_mode_arg(mode: &str) -> CommandContext {
+        let ui = Arc::new(UIState::new());
+        let mut args = HashMap::new();
+        args.insert("mode".to_string(), serde_json::json!(mode));
+        CommandContext::new("ui.mode.set", vec!["window:main".to_string()], None, args)
+            .with_ui_state(ui)
+    }
+
+    #[tokio::test]
+    async fn set_app_mode_changes_ui_state() {
+        let ctx = ctx_with_mode_arg("command");
+        let cmd = SetAppModeCmd;
+
+        assert!(cmd.available(&ctx));
+
+        let result = cmd.execute(&ctx).await.unwrap();
+        // Should return the AppMode change
+        assert!(!result.is_null());
+
+        // Verify state was updated
+        let ui = ctx.ui_state.as_ref().unwrap();
+        assert_eq!(ui.app_mode("main"), "command");
+    }
+
+    #[tokio::test]
+    async fn set_app_mode_noop_returns_null() {
+        let ctx = ctx_with_mode_arg("normal");
+        let cmd = SetAppModeCmd;
+
+        // "normal" is the default — should be a no-op
+        let result = cmd.execute(&ctx).await.unwrap();
+        assert!(result.is_null());
+    }
+
+    #[tokio::test]
+    async fn set_app_mode_uses_window_from_scope() {
+        let ui = Arc::new(UIState::new());
+        let mut args = HashMap::new();
+        args.insert("mode".to_string(), serde_json::json!("search"));
+        let ctx = CommandContext::new(
+            "ui.mode.set",
+            vec!["window:secondary".to_string()],
+            None,
+            args,
+        )
+        .with_ui_state(ui.clone());
+
+        let cmd = SetAppModeCmd;
+        cmd.execute(&ctx).await.unwrap();
+
+        assert_eq!(ui.app_mode("secondary"), "search");
+        // Main window should still be "normal"
+        assert_eq!(ui.app_mode("main"), "normal");
     }
 }

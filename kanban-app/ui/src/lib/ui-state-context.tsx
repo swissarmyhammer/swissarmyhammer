@@ -21,6 +21,8 @@ export interface WindowStateSnapshot {
   palette_open: boolean;
   /** Palette mode for this window: "command" or "search". */
   palette_mode: "command" | "search";
+  /** Application interaction mode for this window. */
+  app_mode: "normal" | "command" | "search";
   x?: number;
   y?: number;
   width?: number;

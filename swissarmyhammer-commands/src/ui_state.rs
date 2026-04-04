@@ -51,6 +51,9 @@ pub struct WindowState {
     /// Palette mode for this window: "command" or "search". Transient — not persisted.
     #[serde(skip)]
     pub palette_mode: String,
+    /// Application interaction mode: "normal", "command", or "search". Transient — not persisted.
+    #[serde(skip)]
+    pub app_mode: String,
     /// Window x position (physical pixels).
     pub x: Option<i32>,
     /// Window y position (physical pixels).
@@ -72,6 +75,7 @@ impl Default for WindowState {
             active_perspective_id: String::new(),
             palette_open: false,
             palette_mode: "command".to_string(),
+            app_mode: "normal".to_string(),
             x: None,
             y: None,
             width: None,
@@ -113,6 +117,8 @@ pub enum UIStateChange {
     KeymapMode(String),
     /// The focus scope chain changed.
     ScopeChain(Vec<String>),
+    /// The application interaction mode changed (e.g. "normal", "command", "search").
+    AppMode(String),
 }
 
 /// Pure state machine for UI state: inspector stack, active view, palette, keymap.
@@ -818,6 +824,34 @@ impl UIState {
             .unwrap_or_else(|| "command".to_string())
     }
 
+    /// Get the application interaction mode for a specific window.
+    ///
+    /// Returns "normal" for unknown windows.
+    pub fn app_mode(&self, window_label: &str) -> String {
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .windows
+            .get(window_label)
+            .map(|ws| ws.app_mode.clone())
+            .unwrap_or_else(|| "normal".to_string())
+    }
+
+    /// Set the application interaction mode for a specific window.
+    ///
+    /// Valid modes: "normal", "command", "search". Returns `None` if unchanged.
+    /// Transient — not persisted to the config file.
+    pub fn set_app_mode(&self, window_label: &str, mode: &str) -> Option<UIStateChange> {
+        let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+        let ws = inner.windows.entry(window_label.to_string()).or_default();
+        if ws.app_mode == mode {
+            return None;
+        }
+        ws.app_mode = mode.to_string();
+        Some(UIStateChange::AppMode(ws.app_mode.clone()))
+        // No try_save — app_mode is transient (#[serde(skip)])
+    }
+
     /// Get whether the clipboard contains a copied/cut entity.
     pub fn has_clipboard(&self) -> bool {
         self.inner
@@ -922,6 +956,7 @@ impl UIState {
                         "palette_mode".to_string(),
                         serde_json::json!(ws.palette_mode),
                     );
+                    map.insert("app_mode".to_string(), serde_json::json!(ws.app_mode));
                 }
                 (label.clone(), obj)
             })
@@ -1114,6 +1149,39 @@ mod tests {
         state.set_palette_open_with_mode("secondary", true, "search");
         assert_eq!(state.palette_mode("main"), "command");
         assert_eq!(state.palette_mode("secondary"), "search");
+    }
+
+    #[test]
+    fn set_app_mode_changes() {
+        let state = UIState::new();
+        assert_eq!(state.app_mode("main"), "normal");
+
+        let change = state.set_app_mode("main", "command");
+        assert!(change.is_some());
+        assert_eq!(state.app_mode("main"), "command");
+
+        // Same value is a no-op
+        let change = state.set_app_mode("main", "command");
+        assert!(change.is_none());
+
+        let change = state.set_app_mode("main", "search");
+        assert!(change.is_some());
+        assert_eq!(state.app_mode("main"), "search");
+    }
+
+    #[test]
+    fn app_mode_per_window() {
+        let state = UIState::new();
+        state.set_app_mode("main", "command");
+        state.set_app_mode("secondary", "search");
+        assert_eq!(state.app_mode("main"), "command");
+        assert_eq!(state.app_mode("secondary"), "search");
+    }
+
+    #[test]
+    fn app_mode_defaults_normal_for_unknown_window() {
+        let state = UIState::new();
+        assert_eq!(state.app_mode("nonexistent"), "normal");
     }
 
     #[test]

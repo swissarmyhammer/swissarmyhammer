@@ -5,7 +5,7 @@
  * Owns:
  * - CommandScopeProvider with moniker "engine"
  * - SchemaProvider, EntityStoreProvider, EntityFocusProvider, FieldUpdateProvider,
- *   UIStateProvider, AppModeProvider, UndoProvider
+ *   UIStateProvider, UndoProvider
  * - entitiesByType state (managed internally)
  * - All entity Tauri event listeners (entity-created, entity-removed, entity-field-changed)
  * - refreshEntities(boardPath) exposed via context for parent to call on board switch
@@ -28,7 +28,6 @@ import { EntityStoreProvider } from "@/lib/entity-store-context";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
 import { FieldUpdateProvider } from "@/lib/field-update-context";
 import { UIStateProvider } from "@/lib/ui-state-context";
-import { AppModeProvider } from "@/lib/app-mode-context";
 import { UndoProvider } from "@/lib/undo-context";
 import { CommandScopeProvider } from "@/lib/command-scope";
 import type { Entity, EntityBag } from "@/types/kanban";
@@ -149,7 +148,7 @@ interface RustEngineContainerProps {
  *
  * Wraps children with CommandScopeProvider (moniker="engine"), SchemaProvider,
  * EntityStoreProvider, EntityFocusProvider, FieldUpdateProvider, UIStateProvider,
- * AppModeProvider, and UndoProvider.
+ * and UndoProvider.
  *
  * Manages entitiesByType state internally and listens for entity-created,
  * entity-removed, and entity-field-changed Tauri events to keep the store
@@ -336,15 +335,11 @@ export function RustEngineContainer({ children }: RustEngineContainerProps) {
                 <EntityFocusProvider>
                   <FieldUpdateProvider>
                     <UIStateProvider>
-                      <AppModeProvider>
-                        <UndoProvider>
-                          <EntitiesByTypeContext.Provider
-                            value={entitiesByType}
-                          >
-                            {children}
-                          </EntitiesByTypeContext.Provider>
-                        </UndoProvider>
-                      </AppModeProvider>
+                      <UndoProvider>
+                        <EntitiesByTypeContext.Provider value={entitiesByType}>
+                          {children}
+                        </EntitiesByTypeContext.Provider>
+                      </UndoProvider>
                     </UIStateProvider>
                   </FieldUpdateProvider>
                 </EntityFocusProvider>
