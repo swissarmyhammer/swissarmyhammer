@@ -5,9 +5,8 @@ depends_on:
 - 01KNC7QESP1X7G2SCPNXK6R64F
 - 01KNC7PWDAJEKEFECDX90Q1WJ2
 - 01KNCRHRDYZBSYHKT2436G8RGX
-position_column: todo
-position_ordinal: '8680'
-position_swimlane: container-refactor
+position_column: done
+position_ordinal: fffffffffffffffffffb80
 title: Slim App.tsx to pure container composition
 ---
 ## What

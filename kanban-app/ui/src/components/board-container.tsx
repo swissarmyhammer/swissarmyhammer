@@ -31,6 +31,7 @@ import { createContext, useContext, useMemo, type ReactNode } from "react";
 import { CommandScopeProvider } from "@/lib/command-scope";
 import { FileDropProvider } from "@/lib/file-drop-context";
 import { DragSessionProvider } from "@/lib/drag-session-context";
+import { StoreContainer } from "@/components/store-container";
 import {
   useBoardData,
   useWindowLoading,
@@ -128,16 +129,20 @@ export function BoardContainer({ children }: BoardContainerProps) {
     );
   }
 
-  // Board active — wrap children with providers and context
+  // Board active — wrap children with store scope and board providers.
+  // StoreContainer injects a store:{path} moniker so the backend can resolve
+  // the board handle from the scope chain.
   return (
-    <CommandScopeProvider commands={[]} moniker={moniker}>
-      <FileDropProvider>
-        <DragSessionProvider>
-          <BoardContext.Provider value={contextValue}>
-            {children}
-          </BoardContext.Provider>
-        </DragSessionProvider>
-      </FileDropProvider>
-    </CommandScopeProvider>
+    <StoreContainer path={activeBoardPath}>
+      <CommandScopeProvider commands={[]} moniker={moniker}>
+        <FileDropProvider>
+          <DragSessionProvider>
+            <BoardContext.Provider value={contextValue}>
+              {children}
+            </BoardContext.Provider>
+          </DragSessionProvider>
+        </FileDropProvider>
+      </CommandScopeProvider>
+    </StoreContainer>
   );
 }
