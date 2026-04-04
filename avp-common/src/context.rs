@@ -980,13 +980,13 @@ mod tests {
 
         // Test failed validator
         let failed_event = ValidatorEvent {
-            name: "safe-commands",
+            name: "input-validation",
             passed: false,
             message: "Dangerous command detected",
             hook_type: "PreToolUse",
         };
 
-        assert_eq!(failed_event.name, "safe-commands");
+        assert_eq!(failed_event.name, "input-validation");
         assert!(!failed_event.passed);
         assert_eq!(failed_event.message, "Dangerous command detected");
     }

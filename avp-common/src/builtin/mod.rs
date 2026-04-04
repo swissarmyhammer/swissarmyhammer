@@ -76,11 +76,11 @@ mod tests {
         let mut loader = ValidatorLoader::new();
         load_builtins(&mut loader);
 
-        // Should have loaded at least 4 RuleSets
-        // (security-rules, command-safety, code-quality, test-integrity)
+        // Should have loaded at least 3 RuleSets
+        // (security-rules, code-quality, test-integrity)
         assert!(
-            loader.ruleset_count() >= 4,
-            "Should have loaded at least 4 RuleSets, got {}",
+            loader.ruleset_count() >= 3,
+            "Should have loaded at least 3 RuleSets, got {}",
             loader.ruleset_count()
         );
 
@@ -88,10 +88,6 @@ mod tests {
         assert!(
             loader.get_ruleset("security-rules").is_some(),
             "Should have security-rules RuleSet"
-        );
-        assert!(
-            loader.get_ruleset("command-safety").is_some(),
-            "Should have command-safety RuleSet"
         );
         assert!(
             loader.get_ruleset("code-quality").is_some(),
@@ -116,21 +112,6 @@ mod tests {
         // Check for no-secrets rule
         let has_no_secrets = ruleset.rules.iter().any(|r| r.name == "no-secrets");
         assert!(has_no_secrets, "Should have no-secrets rule");
-    }
-
-    #[test]
-    fn test_command_safety_ruleset_loads() {
-        let mut loader = ValidatorLoader::new();
-        load_builtins(&mut loader);
-
-        let ruleset = loader
-            .get_ruleset("command-safety")
-            .expect("command-safety RuleSet should exist");
-        assert_eq!(ruleset.name(), "command-safety");
-
-        // Check for safe-commands rule
-        let has_safe_commands = ruleset.rules.iter().any(|r| r.name == "safe-commands");
-        assert!(has_safe_commands, "Should have safe-commands rule");
     }
 
     #[test]
@@ -275,22 +256,6 @@ mod tests {
             ruleset.trigger(),
             HookType::Stop,
             "test-integrity should trigger on Stop, not {:?}",
-            ruleset.trigger()
-        );
-    }
-
-    #[test]
-    fn test_command_safety_triggers_on_pre_tool_use() {
-        let mut loader = ValidatorLoader::new();
-        load_builtins(&mut loader);
-
-        let ruleset = loader
-            .get_ruleset("command-safety")
-            .expect("command-safety should be loaded");
-        assert_eq!(
-            ruleset.trigger(),
-            HookType::PreToolUse,
-            "command-safety should trigger on PreToolUse, not {:?}",
             ruleset.trigger()
         );
     }

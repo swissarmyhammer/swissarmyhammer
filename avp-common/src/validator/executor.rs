@@ -1005,7 +1005,7 @@ Here's my analysis:
     fn test_parse_validator_response_llm_confusion_fails_open() {
         // When the LLM returns a conversational response instead of JSON,
         // it should fail-open rather than blocking.
-        let response = "I understand the safe-commands rule. Let me check the command...";
+        let response = "I understand the input-validation rule. Let me check the command...";
         let result = parse_validator_response(response, &test_stop_reason());
         assert!(
             result.passed(),
@@ -1495,9 +1495,9 @@ Some text after
         };
 
         let rule = crate::validator::Rule {
-            name: "safe-commands".to_string(),
-            description: "Check command safety".to_string(),
-            body: "Validate the command is safe.".to_string(),
+            name: "input-validation".to_string(),
+            description: "Check input validity".to_string(),
+            body: "Validate the input is safe.".to_string(),
             severity: None,
             timeout: None,
         };
@@ -1538,8 +1538,8 @@ Some text after
         });
 
         let output = render_rule_prompt(
-            "safe-commands",
-            "Check command safety",
+            "input-validation",
+            "Check input validity",
             "error",
             "Validate the command is safe.",
             Some(&hook_context),

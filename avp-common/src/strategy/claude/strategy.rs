@@ -653,10 +653,10 @@ mod tests {
         let (_temp, strategy) = create_test_strategy();
 
         // Should have at least the builtin RuleSets
-        // (security-rules, command-safety, code-quality, test-integrity)
+        // (security-rules, code-quality, test-integrity)
         assert!(
-            strategy.validator_loader().ruleset_count() >= 4,
-            "Should have at least 4 builtin RuleSets, got {}",
+            strategy.validator_loader().ruleset_count() >= 3,
+            "Should have at least 3 builtin RuleSets, got {}",
             strategy.validator_loader().ruleset_count()
         );
         assert!(
@@ -665,35 +665,6 @@ mod tests {
                 .get_ruleset("security-rules")
                 .is_some(),
             "Should have security-rules"
-        );
-        assert!(
-            strategy
-                .validator_loader()
-                .get_ruleset("command-safety")
-                .is_some(),
-            "Should have command-safety"
-        );
-    }
-
-    #[test]
-    #[serial_test::serial(cwd)]
-    fn test_matching_rulesets_pre_tool_use() {
-        let (_temp, strategy) = create_test_strategy();
-
-        let input = serde_json::json!({
-            "hook_event_name": "PreToolUse",
-            "tool_name": "Bash",
-            "tool_input": {"command": "ls"}
-        });
-
-        let ctx = crate::validator::MatchContext::from_json(HookType::PreToolUse, &input);
-        let matching = strategy.validator_loader().matching_rulesets(&ctx);
-
-        // command-safety should match PreToolUse + Bash
-        let names: Vec<_> = matching.iter().map(|rs| rs.name()).collect();
-        assert!(
-            names.contains(&"command-safety"),
-            "command-safety should match PreToolUse + Bash"
         );
     }
 
