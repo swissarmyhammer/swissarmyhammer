@@ -481,10 +481,6 @@ impl UIState {
             .clone()
     }
 
-    /// Set the context menu IDs for the current menu.
-    ///
-    /// Replaces any previous set. Transient — not persisted to the config file.
-
     /// Add a board path to the open boards list.
     ///
     /// If the path is already in the list, this is a no-op.
