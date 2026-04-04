@@ -1769,10 +1769,16 @@ mod tests {
         assert_ne!(DEFAULT_INITIAL_RETRY_DELAY_MS, 0);
         // Backoff multiplier must exceed 1.0
         let multiplier = DEFAULT_BACKOFF_MULTIPLIER;
-        assert!(multiplier > 1.0, "backoff multiplier must be > 1.0, got {multiplier}");
+        assert!(
+            multiplier > 1.0,
+            "backoff multiplier must be > 1.0, got {multiplier}"
+        );
         // Max retry delay must be >= initial
         let (max_delay, init_delay) = (DEFAULT_MAX_RETRY_DELAY_MS, DEFAULT_INITIAL_RETRY_DELAY_MS);
-        assert!(max_delay >= init_delay, "max retry delay must be >= initial, got {max_delay} < {init_delay}");
+        assert!(
+            max_delay >= init_delay,
+            "max retry delay must be >= initial, got {max_delay} < {init_delay}"
+        );
         assert_ne!(DEFAULT_NUM_THREADS, 0);
         assert_ne!(DEFAULT_BATCH_THREADS, 0);
         assert_ne!(SSE_KEEP_ALIVE_SECONDS, 0);
