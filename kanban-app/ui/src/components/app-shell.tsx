@@ -4,11 +4,6 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   CommandScopeProvider,
   useDispatchCommand,
-  useExecuteCommand,
-  resolveCommand,
-  dispatchCommand,
-  scopeChainFromScope,
-  useActiveBoardPath,
   type CommandDef,
 } from "@/lib/command-scope";
 import { useFocusedScope, useEntityFocus } from "@/lib/entity-focus-context";
@@ -24,27 +19,22 @@ import { CommandPalette } from "@/components/command-palette";
 /**
  * Internal component that attaches a global keydown listener.
  *
- * Must be rendered inside a CommandScopeProvider so that useExecuteCommand
+ * Must be rendered inside a CommandScopeProvider so that useDispatchCommand
  * resolves commands from the scope AppShell just created.
  *
  * When a FocusScope is focused, commands resolve from the focused scope
  * first, falling back to the root scope (current context) if not found.
  */
 function KeybindingHandler({ mode }: { mode: KeymapMode }) {
-  const rootExecuteCommand = useExecuteCommand();
+  const dispatch = useDispatchCommand();
   const focusedScope = useFocusedScope();
-  const boardPath = useActiveBoardPath();
 
-  // Store focused scope in a ref so the key handler callback always sees
-  // the latest value without re-creating the handler on every focus change.
+  const dispatchRef = useRef(dispatch);
+  dispatchRef.current = dispatch;
   const focusedScopeRef = useRef(focusedScope);
   focusedScopeRef.current = focusedScope;
-  const rootExecuteRef = useRef(rootExecuteCommand);
-  rootExecuteRef.current = rootExecuteCommand;
-  const boardPathRef = useRef(boardPath);
-  boardPathRef.current = boardPath;
 
-  /** Execute a command, preferring the focused scope when available. */
+  /** Execute a command via useDispatchCommand (focused scope preferred). */
   const executeCommand = useCallback(async (id: string): Promise<boolean> => {
     // When a CM6 editor has focus, let it handle its own undo/redo
     if (
@@ -54,17 +44,8 @@ function KeybindingHandler({ mode }: { mode: KeymapMode }) {
       return false;
     }
 
-    const scope = focusedScopeRef.current;
-    if (scope) {
-      const cmd = resolveCommand(scope, id);
-      if (cmd) {
-        const chain = scopeChainFromScope(scope);
-        await dispatchCommand(cmd, boardPathRef.current, chain);
-        return true;
-      }
-    }
-    // Fall back to root scope (useExecuteCommand already passes scope chain)
-    return rootExecuteRef.current(id);
+    await dispatchRef.current(id);
+    return true;
   }, []);
 
   useEffect(() => {
