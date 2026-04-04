@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KNC7MKFPZNR9MN1D4PYWMG0B
-position_column: todo
-position_ordinal: '8180'
+position_column: done
+position_ordinal: fffffffffffffffffff380
 position_swimlane: container-refactor
 title: Extract WindowContainer from App.tsx
 ---

@@ -1,0 +1,3 @@
+color: d73a4a
+description: Replace HTML title= attribute with shadcn Tooltip component
+tag_name: tooltip

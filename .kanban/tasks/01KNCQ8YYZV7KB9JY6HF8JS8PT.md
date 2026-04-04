@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KNC7MKFPZNR9MN1D4PYWMG0B
-position_column: todo
-position_ordinal: '8980'
+position_column: done
+position_ordinal: fffffffffffffffffff480
 position_swimlane: container-refactor
 title: Extract StoreContainer — binds filesystem path to entity store
 ---

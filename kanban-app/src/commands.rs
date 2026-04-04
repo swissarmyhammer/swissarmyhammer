@@ -1012,7 +1012,11 @@ pub(crate) async fn dispatch_command_internal(
 
     // Set KanbanContext extension if board is open.
     // Uses effective_board_path when provided (multi-window) to avoid targeting the wrong board.
-    let active_handle = resolve_handle(state, effective_board_path).await.ok();
+    // Falls back to the `store:` moniker in the scope chain so StoreContainer
+    // can supply the board path without an explicit parameter.
+    let resolved_board_path =
+        effective_board_path.or_else(|| ctx.resolve_store_path().map(|s| s.to_string()));
+    let active_handle = resolve_handle(state, resolved_board_path).await.ok();
     if let Some(ref handle) = active_handle {
         ctx.set_extension(Arc::clone(&handle.ctx));
         // Set EntityContext extension for entity-layer commands.
