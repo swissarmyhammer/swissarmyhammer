@@ -222,10 +222,11 @@ describe("MentionPill", () => {
       expect(mockInvoke).toHaveBeenCalledWith("show_context_menu", {
         items: expect.arrayContaining([
           expect.objectContaining({
-            id: "ui.inspect:tag:tag-1",
+            cmd: "ui.inspect",
+            target: "tag:tag-1",
             name: "Inspect Tag",
           }),
-          expect.objectContaining({ id: "task.untag", name: "Remove Tag" }),
+          expect.objectContaining({ cmd: "task.untag", name: "Remove Tag" }),
         ]),
       });
     });
@@ -255,7 +256,8 @@ describe("MentionPill", () => {
       expect(mockInvoke).toHaveBeenCalledWith("show_context_menu", {
         items: expect.arrayContaining([
           expect.objectContaining({
-            id: "ui.inspect:tag:tag-1",
+            cmd: "ui.inspect",
+            target: "tag:tag-1",
             name: "Inspect Tag",
           }),
         ]),
@@ -265,8 +267,8 @@ describe("MentionPill", () => {
     const showCall = mockInvoke.mock.calls.find(
       (c: unknown[]) => c[0] === "show_context_menu",
     );
-    const items = (showCall![1] as { items: { id: string }[] }).items;
-    expect(items.find((i) => i.id === "task.untag")).toBeUndefined();
+    const items = (showCall![1] as { items: { cmd: string }[] }).items;
+    expect(items.find((i) => i.cmd === "task.untag")).toBeUndefined();
   });
 
   it("falls back to slug moniker when entity not found", () => {
