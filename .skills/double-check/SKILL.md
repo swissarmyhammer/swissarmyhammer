@@ -3,19 +3,8 @@ name: double-check
 description: Double check your work by reviewing changes, asking clarifying questions, and verifying correctness before proceeding. Use when the user says "double check", "verify", "sanity check", or wants validation of recent work.
 metadata:
   author: "swissarmyhammer"
-  version: "0.11.2"
+  version: "0.12.11"
 ---
-
-## Project Detection
-
-To discover project types, build commands, and language-specific guidelines for this workspace, call the code_context tool:
-
-```json
-{"op": "detect projects"}
-```
-
-**Call this early in your session** to understand the project structure before making changes. The guidelines returned are authoritative — follow them for test commands, build commands, and formatting.
-
 
 # Double Check
 

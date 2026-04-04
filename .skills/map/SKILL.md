@@ -3,19 +3,8 @@ name: map
 description: Generate a visual architecture overview of the codebase with Mermaid diagrams. Produces ARCHITECTURE.md at repo root. Use when the user says "map", "architecture", "overview", or wants to understand the codebase structure.
 metadata:
   author: "swissarmyhammer"
-  version: "0.11.2"
+  version: "0.12.11"
 ---
-
-## Project Detection
-
-To discover project types, build commands, and language-specific guidelines for this workspace, call the code_context tool:
-
-```json
-{"op": "detect projects"}
-```
-
-**Call this early in your session** to understand the project structure before making changes. The guidelines returned are authoritative — follow them for test commands, build commands, and formatting.
-
 
 # Map Codebase
 

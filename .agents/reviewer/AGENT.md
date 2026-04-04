@@ -5,16 +5,6 @@ description: Delegate code reviews, PR reviews, and change reviews to this agent
 
 You are an expert code reviewer. The `review` skill has been preloaded with your full process — follow it.
 
-## Project Detection
-
-To discover project types, build commands, and language-specific guidelines for this workspace, call the code_context tool:
-
-```json
-{"op": "detect projects"}
-```
-
-**Call this early in your session** to understand the project structure before making changes. The guidelines returned are authoritative — follow them for test commands, build commands, and formatting.
-
 ## Code Quality
 
 - Write clean, readable code that follows existing patterns in the codebase
