@@ -1,11 +1,4 @@
-import {
-  useRef,
-  useEffect,
-  useCallback,
-  useMemo,
-  useState,
-  useContext,
-} from "react";
+import { useRef, useEffect, useCallback, useMemo, useState } from "react";
 import { ArrowUp, ArrowDown, ChevronRight, ChevronDown } from "lucide-react";
 import {
   useReactTable,
@@ -29,17 +22,15 @@ import {
 } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
 import { useContextMenu } from "@/lib/context-menu";
-import {
-  CommandScopeProvider,
-  CommandScopeContext,
-  useDispatchCommand,
-  type CommandDef,
-} from "@/lib/command-scope";
+import { useDispatchCommand, type CommandDef } from "@/lib/command-scope";
 import { FocusScope } from "@/components/focus-scope";
+import { moniker } from "@/lib/moniker";
 import { Field } from "@/components/fields/field";
 import type { UseGridReturn } from "@/hooks/use-grid";
-import type { ClaimPredicate } from "@/lib/entity-focus-context";
-import type { CommandScope } from "@/lib/command-scope";
+import {
+  useEntityFocus,
+  type ClaimPredicate,
+} from "@/lib/entity-focus-context";
 import type { Entity, FieldDef, PerspectiveSortEntry } from "@/types/kanban";
 
 
@@ -78,14 +69,8 @@ interface DataTableProps {
   showRowSelector?: boolean;
   /**
    * Optional factory that returns entity-specific commands for a given row.
-   *
-   * When provided, each row's selector cell is wrapped in a per-row
-   * CommandScopeProvider so that right-clicking row N always resolves
-   * commands for row N's entity -- regardless of the grid cursor position.
-   *
-   * This eliminates the race between `grid.setCursor()` (async state update)
-   * and `contextMenuHandler(e)` (synchronous) when the user right-clicks a
-   * row that isn't the current cursor row.
+   * When provided, each row is wrapped in a FocusScope with these commands
+   * so right-click, inspect, and palette resolve for that row's entity.
    */
   rowEntityCommands?: (entity: Entity) => CommandDef[];
   /**
@@ -115,8 +100,6 @@ export function DataTable({
 }: DataTableProps) {
   const tableContainerRef = useRef<HTMLDivElement>(null);
   const cursorRef = useRef<HTMLTableCellElement>(null);
-  // Grid-level context menu handler -- used when rowEntityCommands is not set.
-  const contextMenuHandler = useContextMenu();
   const dispatchSortToggle = useDispatchCommand("perspective.sort.toggle");
   const [sorting, setSorting] = useState<SortingState>([]);
   const [grouping, setGrouping] = useState<GroupingState>(groupingProp ?? []);
@@ -398,51 +381,27 @@ export function DataTable({
             // Data row -- use data-row index (di) for grid cursor, not visual index (ri)
             const di = dataRowIndices[ri];
             const entity = row.original;
+            const entityMk = moniker(entity.entity_type, entity.id);
+            const rowCommands = rowEntityCommands?.(entity) ?? [];
             return (
-              <TableRow
+              <FocusScope
                 key={row.id}
-                className={cn(
-                  "border-b border-border/50 transition-colors",
-                  di === grid.cursor.row &&
-                    grid.mode !== "edit" &&
-                    "bg-accent/30",
-                )}
-                onContextMenu={(e) => {
-                  onCellClick?.(di, grid.cursor.col);
-                  onRowContextMenu?.(entity, e);
-                  contextMenuHandler(e);
-                }}
+                moniker={entityMk}
+                commands={rowCommands}
+                renderContainer={false}
               >
-                {showRowSelector &&
-                  (rowEntityCommands ? (
-                    <RowSelectorWithScope
-                      entity={entity}
-                      di={di}
-                      cursorRow={grid.cursor.row}
-                      cursorCol={grid.cursor.col}
-                      commands={rowEntityCommands(entity)}
-                      onCellClick={handleCellClick}
-                      onRowContextMenu={onRowContextMenu}
-                    />
-                  ) : (
-                    <TableCell
-                      data-testid="row-selector"
-                      data-active={di === grid.cursor.row ? "true" : "false"}
-                      className={cn(
-                        "w-10 px-0 py-1.5 text-center cursor-pointer select-none text-[10px] font-medium text-muted-foreground bg-muted/50 border-r border-border/50",
-                        di === grid.cursor.row && "bg-muted text-foreground",
-                      )}
-                      style={{ width: 40 }}
-                      onClick={() => handleCellClick(di, grid.cursor.col)}
-                      onContextMenu={(e) => {
-                        onCellClick?.(di, grid.cursor.col);
-                        onRowContextMenu?.(entity, e);
-                        contextMenuHandler(e);
-                      }}
-                    >
-                      {di + 1}
-                    </TableCell>
-                  ))}
+              <EntityRow
+                entityMk={entityMk}
+                isCursorRow={di === grid.cursor.row}
+                isEditing={grid.mode === "edit"}
+              >
+                {showRowSelector && (
+                  <RowSelector
+                    di={di}
+                    isCursorRow={di === grid.cursor.row}
+                    onClick={() => handleCellClick(di, grid.cursor.col)}
+                  />
+                )}
                 {columns.map((col, ci) => {
                   const isCursor =
                     di === grid.cursor.row && ci === grid.cursor.col;
@@ -522,7 +481,8 @@ export function DataTable({
                     </TableCell>
                   );
                 })}
-              </TableRow>
+              </EntityRow>
+              </FocusScope>
             );
           })}
         </TableBody>
@@ -586,94 +546,77 @@ function GridCellScope({
   );
 }
 
-interface RowSelectorWithScopeProps {
-  entity: Entity;
-  di: number;
-  cursorRow: number;
-  cursorCol: number;
-  commands: CommandDef[];
-  onCellClick: (row: number, col: number) => void;
-  onRowContextMenu?: (entity: Entity, e: React.MouseEvent) => void;
-}
-
 /**
- * Renders a row selector cell wrapped in a per-row CommandScopeProvider.
+ * Table row rendered inside a FocusScope(renderContainer=false).
  *
- * This component exists so that `useContextMenu()` is called from inside the
- * row-specific scope. When the user right-clicks this cell, the context menu
- * resolves commands from `commands` (built for this row's entity) rather than
- * from the grid-level scope -- eliminating the race between `grid.setCursor()`
- * (async state update) and the synchronous context menu open.
+ * Mirrors FocusScopeInner behavior on a <tr>: click sets entity focus,
+ * double-click dispatches ui.inspect, right-click opens context menu.
+ * All hooks read from the per-row FocusScope that wraps this component.
  */
-function RowSelectorWithScope({
-  entity,
-  di,
-  cursorRow,
-  cursorCol,
-  commands,
-  onCellClick,
-  onRowContextMenu,
-}: RowSelectorWithScopeProps) {
-  return (
-    <CommandScopeProvider commands={commands}>
-      <RowSelectorCell
-        entity={entity}
-        di={di}
-        cursorRow={cursorRow}
-        cursorCol={cursorCol}
-        onCellClick={onCellClick}
-        onRowContextMenu={onRowContextMenu}
-      />
-    </CommandScopeProvider>
-  );
-}
-
-interface RowSelectorCellProps {
-  entity: Entity;
-  di: number;
-  cursorRow: number;
-  cursorCol: number;
-  onCellClick: (row: number, col: number) => void;
-  onRowContextMenu?: (entity: Entity, e: React.MouseEvent) => void;
-}
-
-/**
- * The inner selector cell rendered inside the per-row CommandScopeProvider.
- *
- * Calls `useContextMenu()` here so the hook reads from the row-specific scope,
- * not the grid-level scope. The `data-row-entity-id` attribute on the wrapping
- * `<td>` enables tests to verify which entity's scope is active per row.
- */
-function RowSelectorCell({
-  entity,
-  di,
-  cursorRow,
-  cursorCol,
-  onCellClick,
-  onRowContextMenu,
-}: RowSelectorCellProps) {
+function EntityRow({
+  entityMk,
+  isCursorRow,
+  isEditing,
+  children,
+}: {
+  entityMk: string;
+  isCursorRow: boolean;
+  isEditing: boolean;
+  children: React.ReactNode;
+}) {
   const contextMenuHandler = useContextMenu();
+  const { setFocus } = useEntityFocus();
+  const dispatchInspect = useDispatchCommand("ui.inspect");
 
-  const handleContextMenu = useCallback(
-    (e: React.MouseEvent) => {
-      onRowContextMenu?.(entity, e);
-      contextMenuHandler(e);
-    },
-    [entity, onRowContextMenu, contextMenuHandler],
+  return (
+    <TableRow
+      data-moniker={entityMk}
+      className={cn(
+        "border-b border-border/50 transition-colors",
+        isCursorRow && !isEditing && "bg-accent/30",
+      )}
+      onClick={(e) => {
+        const tag = (e.target as HTMLElement).tagName;
+        if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+        setFocus(entityMk);
+      }}
+      onDoubleClick={(e) => {
+        const tag = (e.target as HTMLElement).tagName;
+        if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+        if ((e.target as HTMLElement).closest("[contenteditable]")) return;
+        e.stopPropagation();
+        dispatchInspect({ target: entityMk }).catch(console.error);
+      }}
+      onContextMenu={(e) => {
+        setFocus(entityMk);
+        contextMenuHandler(e);
+      }}
+    >
+      {children}
+    </TableRow>
   );
+}
 
+/** Row number selector cell. */
+function RowSelector({
+  di,
+  isCursorRow,
+  onClick,
+}: {
+  di: number;
+  isCursorRow: boolean;
+  onClick: () => void;
+}) {
   return (
     <TableCell
       data-testid="row-selector"
-      data-active={di === cursorRow ? "true" : "false"}
-      data-row-entity-id={entity.id}
+      data-active={isCursorRow ? "true" : "false"}
       className={cn(
         "w-10 px-0 py-1.5 text-center cursor-pointer select-none text-[10px] font-medium text-muted-foreground bg-muted/50 border-r border-border/50",
-        di === cursorRow && "bg-muted text-foreground",
+        isCursorRow && "bg-muted text-foreground",
       )}
       style={{ width: 40 }}
-      onClick={() => onCellClick(di, cursorCol)}
-      onContextMenu={handleContextMenu}
+      onClick={onClick}
     >
       {di + 1}
     </TableCell>

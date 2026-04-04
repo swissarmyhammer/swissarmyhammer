@@ -15,7 +15,6 @@ import {
   type ClaimPredicate,
 } from "@/lib/entity-focus-context";
 import {
-  useEntityCommands,
   buildEntityCommandDefs,
 } from "@/lib/entity-commands";
 import { CommandScopeProvider, type CommandDef } from "@/lib/command-scope";
@@ -243,13 +242,6 @@ export function GridView({ view }: GridViewProps) {
     );
   }, [cellMonikers, cellMonikerMap, columns.length]);
 
-  // Current entity and field from cursor position
-  const currentEntity =
-    grid.cursor.row >= 0 && grid.cursor.row < entities.length
-      ? entities[grid.cursor.row]
-      : null;
-  // currentField and monikers removed — not currently needed.
-  // Re-derive from grid.cursor.col + columns if needed in the future.
 
   // Grid-level commands: navigation broadcasts nav commands via claimWhen.
   // Non-navigation commands (edit, visual, delete, new row) remain push-based.
@@ -404,20 +396,6 @@ export function GridView({ view }: GridViewProps) {
     [entities, entityType],
   );
 
-  // Entity-level commands (depend on cursor row)
-  // Schema-driven: reads entity commands from YAML schema via useEntityCommands.
-  const entityCommands = useEntityCommands(
-    entityType,
-    currentEntity?.id ?? "",
-    currentEntity
-      ? {
-          entity_type: entityType,
-          id: currentEntity.id,
-          fields: currentEntity.fields ?? {},
-        }
-      : undefined,
-  );
-
   const handleCellClick = useCallback(
     (row: number, col: number) => {
       // On click, set focus to the clicked cell's moniker
@@ -487,47 +465,42 @@ export function GridView({ view }: GridViewProps) {
 
   return (
     <CommandScopeProvider commands={gridCommands}>
-      {/* Entity commands for the cursor row — wraps DataTable so
-          ui.inspect and other entity commands resolve with the correct
-          target moniker when dispatched via keybindings or palette. */}
-      <CommandScopeProvider commands={entityCommands}>
-        <PerspectiveTabBar />
-        <main className="flex-1 flex flex-col min-h-0">
-          <div className="flex items-center px-4 py-1.5 border-b border-border bg-muted/30 text-xs text-muted-foreground gap-3">
-            <span>{entities.length} rows</span>
-            <span className="text-muted-foreground/50">|</span>
-            <span>
-              {grid.mode === "edit"
-                ? "EDIT"
-                : grid.mode === "visual"
-                  ? "VISUAL"
-                  : "NORMAL"}
-            </span>
-            {entities.length > 0 && (
-              <>
-                <span className="text-muted-foreground/50">|</span>
-                <span>
-                  R{grid.cursor.row + 1}:C{grid.cursor.col + 1}
-                </span>
-              </>
-            )}
-          </div>
-          <DataTable
-            columns={columns}
-            rows={entities}
-            grid={grid}
-            cellMonikers={cellMonikers}
-            claimPredicates={claimPredicates}
-            onCellClick={handleCellClick}
-            renderEditor={renderEditor}
-            grouping={grouping}
-            onVisibleRowCount={setVisibleRowCount}
-            rowEntityCommands={buildRowEntityCommands}
-            perspectiveSort={activePerspective?.sort}
-            perspectiveId={activePerspective?.id}
-          />
-        </main>
-      </CommandScopeProvider>
+      <PerspectiveTabBar />
+      <main className="flex-1 flex flex-col min-h-0">
+        <div className="flex items-center px-4 py-1.5 border-b border-border bg-muted/30 text-xs text-muted-foreground gap-3">
+          <span>{entities.length} rows</span>
+          <span className="text-muted-foreground/50">|</span>
+          <span>
+            {grid.mode === "edit"
+              ? "EDIT"
+              : grid.mode === "visual"
+                ? "VISUAL"
+                : "NORMAL"}
+          </span>
+          {entities.length > 0 && (
+            <>
+              <span className="text-muted-foreground/50">|</span>
+              <span>
+                R{grid.cursor.row + 1}:C{grid.cursor.col + 1}
+              </span>
+            </>
+          )}
+        </div>
+        <DataTable
+          columns={columns}
+          rows={entities}
+          grid={grid}
+          cellMonikers={cellMonikers}
+          claimPredicates={claimPredicates}
+          onCellClick={handleCellClick}
+          renderEditor={renderEditor}
+          grouping={grouping}
+          onVisibleRowCount={setVisibleRowCount}
+          rowEntityCommands={buildRowEntityCommands}
+          perspectiveSort={activePerspective?.sort}
+          perspectiveId={activePerspective?.id}
+        />
+      </main>
     </CommandScopeProvider>
   );
 }

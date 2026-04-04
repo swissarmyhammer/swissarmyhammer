@@ -4,6 +4,7 @@ assignees:
 depends_on:
 - 01KNC7QESP1X7G2SCPNXK6R64F
 - 01KNC7PWDAJEKEFECDX90Q1WJ2
+- 01KNCRHRDYZBSYHKT2436G8RGX
 position_column: todo
 position_ordinal: '8680'
 position_swimlane: container-refactor
@@ -21,24 +22,26 @@ Final cleanup: reduce App.tsx to a pure composition of containers with no logic,
 function App() {
   return (
     <WindowContainer>
-      <RustEngineContainer>
-        <BoardContainer>
-          <div className="h-screen bg-background text-foreground flex flex-col">
-            <NavBar />
-            <ViewsContainer>
-              <ViewContainer>
-                <PerspectivesContainer>
-                  <PerspectiveContainer>
-                    {/* BoardView or GridView rendered by ViewContainer */}
-                  </PerspectiveContainer>
-                </PerspectivesContainer>
-              </ViewContainer>
-            </ViewsContainer>
-            <ModeIndicator />
-          </div>
-          <InspectorContainer />
-        </BoardContainer>
-      </RustEngineContainer>
+      <AppModeContainer>
+        <RustEngineContainer>
+          <BoardContainer>
+            <div className="h-screen bg-background text-foreground flex flex-col">
+              <NavBar />
+              <ViewsContainer>
+                <ViewContainer>
+                  <PerspectivesContainer>
+                    <PerspectiveContainer>
+                      {/* BoardView or GridView rendered by ViewContainer */}
+                    </PerspectiveContainer>
+                  </PerspectivesContainer>
+                </ViewContainer>
+              </ViewsContainer>
+              <ModeIndicator />
+            </div>
+            <InspectorContainer />
+          </BoardContainer>
+        </RustEngineContainer>
+      </AppModeContainer>
     </WindowContainer>
   );
 }
@@ -62,6 +65,7 @@ function App() {
 - [ ] No state management in App.tsx
 - [ ] No event listeners in App.tsx
 - [ ] Container tree is clearly readable as a hierarchy
+- [ ] AppModeContainer wraps immediately inside WindowContainer
 - [ ] QuickCaptureApp uses RustEngineContainer instead of duplicating providers
 - [ ] All functionality preserved — app works identically to before
 
