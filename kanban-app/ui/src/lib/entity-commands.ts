@@ -1,6 +1,5 @@
 import { useMemo } from "react";
 import { useSchemaOptional } from "@/lib/schema-context";
-import { useDispatchCommand } from "@/lib/command-scope";
 import { moniker } from "@/lib/moniker";
 import type { CommandDef } from "@/lib/command-scope";
 import type { Entity, EntityCommand } from "@/types/kanban";
@@ -42,17 +41,14 @@ export function resolveCommandName(
  * Build CommandDef[] from entity schema commands without using hooks.
  *
  * For use in callbacks or factories called outside a React render cycle
- * (e.g. per-row command factories in DataTable). Callers must provide the
- * dispatch function from useDispatchCommand.
+ * (e.g. per-row command factories in DataTable).
  *
- * All commands — including inspect — dispatch to the backend via the
- * standard command system. The backend handles side effects and emits
- * events (e.g. ui-state-changed) that the frontend reacts to.
+ * Commands carry a target moniker but no execute handler — dispatch goes
+ * through the backend which resolves the target from the scope chain.
  *
  * @param schemaCommands - Entity commands from the YAML schema
  * @param entityType - The entity type name (e.g. "task")
  * @param entityId - The entity ID
- * @param dispatch - Dispatch function from useDispatchCommand
  * @param entity - Optional entity instance for template resolution
  * @returns Array of CommandDefs scoped to the given entity
  */
@@ -60,7 +56,6 @@ export function buildEntityCommandDefs(
   schemaCommands: readonly EntityCommand[],
   entityType: string,
   entityId: string,
-  dispatch: (cmd: string, opts?: { target?: string }) => Promise<unknown>,
   entity?: Entity,
 ): CommandDef[] {
   const entityMoniker = moniker(entityType, entityId);
@@ -70,9 +65,6 @@ export function buildEntityCommandDefs(
     target: entityMoniker,
     contextMenu: cmd.context_menu ?? false,
     keys: cmd.keys,
-    execute: () => {
-      dispatch(cmd.id, { target: entityMoniker }).catch(console.error);
-    },
   }));
 }
 
@@ -81,9 +73,9 @@ export function buildEntityCommandDefs(
  *
  * Generic alias for `useEntityCommands` that works for any type string —
  * not just entity types. Reads the type's commands from the YAML-defined schema,
- * resolves name templates, and wires up execute handlers.
+ * resolves name templates, and sets target monikers.
  *
- * All commands dispatch to the backend via `useDispatchCommand`.
+ * Commands have no frontend execute handler — the backend resolves targets.
  *
  * @param type - The type name (e.g. "task", "perspective", "view")
  * @param id - The instance ID
@@ -104,11 +96,10 @@ export function useCommands(
  * Build CommandDefs from entity schema commands.
  *
  * Reads the entity type's commands from the YAML-defined schema,
- * resolves name templates, and wires up execute handlers.
+ * resolves name templates, and sets target monikers.
  *
- * All commands — including inspect — dispatch to the backend via
- * `useDispatchCommand`. The backend handles side effects (e.g. pushing
- * onto the inspector stack) and emits events that the frontend reacts to.
+ * Commands have no frontend execute handler — dispatch goes through the
+ * backend which uses the target moniker to resolve the correct entity.
  *
  * @param entityType - The entity type name (e.g. "task", "column", "board")
  * @param entityId - The entity ID
@@ -123,7 +114,6 @@ export function useEntityCommands(
   extraCommands?: CommandDef[],
 ): CommandDef[] {
   const { getEntityCommands } = useSchemaOptional();
-  const dispatch = useDispatchCommand();
   const entityMoniker = moniker(entityType, entityId);
   const schemaCommands = getEntityCommands(entityType);
 
@@ -134,9 +124,6 @@ export function useEntityCommands(
       target: entityMoniker,
       contextMenu: cmd.context_menu ?? false,
       keys: cmd.keys,
-      execute: () => {
-        dispatch(cmd.id, { target: entityMoniker }).catch(console.error);
-      },
     }));
 
     if (extraCommands) {
@@ -150,7 +137,6 @@ export function useEntityCommands(
     entityId,
     entity,
     entityMoniker,
-    dispatch,
     extraCommands,
   ]);
 }

@@ -36,6 +36,7 @@ vi.mock("@tauri-apps/plugin-log", () => ({
 
 import { AttachmentEditor } from "./attachment-editor";
 import { FileDropProvider } from "@/lib/file-drop-context";
+import { EntityFocusProvider } from "@/lib/entity-focus-context";
 import type { FieldDef } from "@/types/kanban";
 import type { AttachmentMeta } from "@/components/fields/displays/attachment-display";
 
@@ -86,16 +87,18 @@ function renderEditor(props: {
   onChange?: (val: unknown) => void;
 }) {
   return render(
-    <FileDropProvider>
-      <AttachmentEditor
-        field={props.field ?? ATTACHMENT_FIELD}
-        value={props.value ?? []}
-        onCommit={props.onCommit ?? vi.fn()}
-        onCancel={props.onCancel ?? vi.fn()}
-        onChange={props.onChange}
-        mode="compact"
-      />
-    </FileDropProvider>,
+    <EntityFocusProvider>
+      <FileDropProvider>
+        <AttachmentEditor
+          field={props.field ?? ATTACHMENT_FIELD}
+          value={props.value ?? []}
+          onCommit={props.onCommit ?? vi.fn()}
+          onCancel={props.onCancel ?? vi.fn()}
+          onChange={props.onChange}
+          mode="compact"
+        />
+      </FileDropProvider>
+    </EntityFocusProvider>,
   );
 }
 
@@ -111,9 +114,11 @@ function FileDropTestHarness({
   isDragging: boolean;
 }) {
   return (
-    <FileDropProvider _testOverride={{ isDragging }}>
-      {children}
-    </FileDropProvider>
+    <EntityFocusProvider>
+      <FileDropProvider _testOverride={{ isDragging }}>
+        {children}
+      </FileDropProvider>
+    </EntityFocusProvider>
   );
 }
 

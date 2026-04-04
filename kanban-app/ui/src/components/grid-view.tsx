@@ -8,7 +8,6 @@ import {
 } from "react";
 import {
   useActiveBoardPath,
-  useDispatchCommand,
   backendDispatch,
   CommandScopeContext,
   scopeChainFromScope,
@@ -43,7 +42,6 @@ export function GridView({ view }: GridViewProps) {
   boardPathRef.current = boardPath;
   const scope = useContext(CommandScopeContext);
   const scopeChain = useMemo(() => scopeChainFromScope(scope), [scope]);
-  const dispatch = useDispatchCommand();
   const { getEntities } = useEntityStore();
 
   // All hooks must be called unconditionally (React rules of hooks).
@@ -471,11 +469,10 @@ export function GridView({ view }: GridViewProps) {
         schemaCommands,
         entityType,
         entity.id,
-        dispatch,
         entity,
       );
     },
-    [schemaCommands, entityType, dispatch],
+    [schemaCommands, entityType],
   );
 
   const renderEditor = useCallback(
