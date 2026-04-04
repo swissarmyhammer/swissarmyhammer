@@ -1,17 +1,12 @@
 import {
   memo,
   useCallback,
-  useContext,
   useEffect,
   useMemo,
   useRef,
   useState,
 } from "react";
-import {
-  backendDispatch,
-  CommandScopeContext,
-  scopeChainFromScope,
-} from "@/lib/command-scope";
+import { useDispatchCommand } from "@/lib/command-scope";
 import { Plus } from "lucide-react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { DropZone } from "@/components/drop-zone";
@@ -117,8 +112,8 @@ export const ColumnView = memo(function ColumnView({
 }: ColumnViewProps) {
   const columnMoniker = moniker("column", column.id);
   const columnNameMoniker = fieldMoniker("column", column.id, "name");
-  const scope = useContext(CommandScopeContext);
-  const scopeChain = useMemo(() => scopeChainFromScope(scope), [scope]);
+  const dispatchTaskMove = useDispatchCommand("task.move");
+  const dispatchTaskAdd = useDispatchCommand("task.add");
   const { getFieldDef } = useSchema();
   const nameFieldDef = getFieldDef("column", "name");
   const [editingName, setEditingName] = useState(false);
@@ -193,16 +188,11 @@ export const ColumnView = memo(function ColumnView({
         execute: () => {
           const args: Record<string, unknown> = { id: taskId, column: "todo" };
           if (firstTodoTaskId) args.before_id = firstTodoTaskId;
-          backendDispatch({
-            cmd: "task.move",
-            args,
-            ...(boardPath ? { boardPath } : {}),
-            scopeChain,
-          }).catch(console.error);
+          dispatchTaskMove({ args }).catch(console.error);
         },
       };
     },
-    [firstTodoTaskId, boardPath],
+    [firstTodoTaskId, dispatchTaskMove],
   );
 
   /** Memoized extra commands per task — includes "Do This Next" when applicable. */
@@ -481,12 +471,9 @@ export const ColumnView = memo(function ColumnView({
                 // correct scope chain (column:todo → board:board) in UIState.
                 // The Rust resolve_entity_id reads the scope chain to find the column.
                 setFocus(columnMoniker);
-                backendDispatch({
-                  cmd: "task.add",
+                dispatchTaskAdd({
                   args: { title: "New task", column: column.id },
-                  ...(boardPath ? { boardPath } : {}),
-                  scopeChain,
-                });
+                }).catch(console.error);
               }}
               title={`Add task to ${getStr(column, "name")}`}
             >

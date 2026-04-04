@@ -1,25 +1,11 @@
-import {
-  forwardRef,
-  memo,
-  useCallback,
-  useContext,
-  useMemo,
-  useState,
-} from "react";
+import { forwardRef, memo, useCallback, useMemo, useState } from "react";
 import { GripVertical, Info, icons } from "lucide-react";
 import { FocusScope } from "@/components/focus-scope";
 import { Field } from "@/components/fields/field";
 import { useSchema } from "@/lib/schema-context";
 import { useEntityCommands } from "@/lib/entity-commands";
 import { moniker } from "@/lib/moniker";
-import {
-  CommandScopeContext,
-  resolveCommand,
-  dispatchCommand,
-  scopeChainFromScope,
-  useActiveBoardPath,
-  type CommandDef,
-} from "@/lib/command-scope";
+import { useDispatchCommand, type CommandDef } from "@/lib/command-scope";
 import type { ClaimPredicate } from "@/lib/entity-focus-context";
 import type { Entity, FieldDef } from "@/types/kanban";
 
@@ -154,19 +140,16 @@ export const EntityCard = memo(
   }),
 );
 
-/** Dispatches entity.inspect through the scope chain instead of calling inspectEntity directly. */
+/** Dispatches ui.inspect through the scope chain to the backend. */
 function InspectButton() {
-  const scope = useContext(CommandScopeContext);
-  const boardPath = useActiveBoardPath();
-  const chain = useMemo(() => scopeChainFromScope(scope), [scope]);
+  const dispatch = useDispatchCommand("ui.inspect");
   return (
     <button
       type="button"
       className="shrink-0 mt-0.5 p-0.5 rounded text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted transition-colors"
       onClick={(e) => {
         e.stopPropagation();
-        const cmd = resolveCommand(scope, "ui.inspect");
-        if (cmd) dispatchCommand(cmd, boardPath, chain);
+        dispatch().catch(console.error);
       }}
       title="Inspect"
     >

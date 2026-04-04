@@ -1,17 +1,11 @@
 import {
   useCallback,
-  useContext,
   useEffect,
   useMemo,
   useRef,
   useState,
 } from "react";
-import {
-  useActiveBoardPath,
-  backendDispatch,
-  CommandScopeContext,
-  scopeChainFromScope,
-} from "@/lib/command-scope";
+import { useDispatchCommand } from "@/lib/command-scope";
 import { useGrid } from "@/hooks/use-grid";
 import { useSchema } from "@/lib/schema-context";
 import { useEntityStore } from "@/lib/entity-store-context";
@@ -37,11 +31,7 @@ interface GridViewProps {
 }
 
 export function GridView({ view }: GridViewProps) {
-  const boardPath = useActiveBoardPath();
-  const boardPathRef = useRef(boardPath);
-  boardPathRef.current = boardPath;
-  const scope = useContext(CommandScopeContext);
-  const scopeChain = useMemo(() => scopeChainFromScope(scope), [scope]);
+  const dispatch = useDispatchCommand();
   const { getEntities } = useEntityStore();
 
   // All hooks must be called unconditionally (React rules of hooks).
@@ -384,13 +374,8 @@ export function GridView({ view }: GridViewProps) {
           const row = gridRef.current.cursor.row;
           if (row >= 0 && row < entities.length) {
             const entity = entities[row];
-            backendDispatch({
-              cmd: `${entityType}.archive`,
+            dispatch(`${entityType}.archive`, {
               args: { id: entity.id },
-              ...(boardPathRef.current
-                ? { boardPath: boardPathRef.current }
-                : {}),
-              scopeChain,
             }).catch((err) => console.error("Failed to delete row:", err));
           }
         },
@@ -400,13 +385,8 @@ export function GridView({ view }: GridViewProps) {
         name: "New Row Below",
         keys: { vim: "o", cua: "Mod+Enter" },
         execute: () => {
-          backendDispatch({
-            cmd: `${entityType}.add`,
+          dispatch(`${entityType}.add`, {
             args: { title: `New ${entityType}` },
-            ...(boardPathRef.current
-              ? { boardPath: boardPathRef.current }
-              : {}),
-            scopeChain,
           }).catch((err) => console.error("Failed to add row:", err));
         },
       },
@@ -415,13 +395,8 @@ export function GridView({ view }: GridViewProps) {
         name: "New Row Above",
         keys: { vim: "O", cua: "Mod+Shift+Enter" },
         execute: () => {
-          backendDispatch({
-            cmd: `${entityType}.add`,
+          dispatch(`${entityType}.add`, {
             args: { title: `New ${entityType}` },
-            ...(boardPathRef.current
-              ? { boardPath: boardPathRef.current }
-              : {}),
-            scopeChain,
           }).catch((err) => console.error("Failed to add row:", err));
         },
       },
@@ -512,46 +487,47 @@ export function GridView({ view }: GridViewProps) {
 
   return (
     <CommandScopeProvider commands={gridCommands}>
-      {/* Entity commands scope — navigation is pull-based via claimWhen */}
+      {/* Entity commands for the cursor row — wraps DataTable so
+          ui.inspect and other entity commands resolve with the correct
+          target moniker when dispatched via keybindings or palette. */}
       <CommandScopeProvider commands={entityCommands}>
-        <></>
+        <PerspectiveTabBar />
+        <main className="flex-1 flex flex-col min-h-0">
+          <div className="flex items-center px-4 py-1.5 border-b border-border bg-muted/30 text-xs text-muted-foreground gap-3">
+            <span>{entities.length} rows</span>
+            <span className="text-muted-foreground/50">|</span>
+            <span>
+              {grid.mode === "edit"
+                ? "EDIT"
+                : grid.mode === "visual"
+                  ? "VISUAL"
+                  : "NORMAL"}
+            </span>
+            {entities.length > 0 && (
+              <>
+                <span className="text-muted-foreground/50">|</span>
+                <span>
+                  R{grid.cursor.row + 1}:C{grid.cursor.col + 1}
+                </span>
+              </>
+            )}
+          </div>
+          <DataTable
+            columns={columns}
+            rows={entities}
+            grid={grid}
+            cellMonikers={cellMonikers}
+            claimPredicates={claimPredicates}
+            onCellClick={handleCellClick}
+            renderEditor={renderEditor}
+            grouping={grouping}
+            onVisibleRowCount={setVisibleRowCount}
+            rowEntityCommands={buildRowEntityCommands}
+            perspectiveSort={activePerspective?.sort}
+            perspectiveId={activePerspective?.id}
+          />
+        </main>
       </CommandScopeProvider>
-      <PerspectiveTabBar />
-      <main className="flex-1 flex flex-col min-h-0">
-        <div className="flex items-center px-4 py-1.5 border-b border-border bg-muted/30 text-xs text-muted-foreground gap-3">
-          <span>{entities.length} rows</span>
-          <span className="text-muted-foreground/50">|</span>
-          <span>
-            {grid.mode === "edit"
-              ? "EDIT"
-              : grid.mode === "visual"
-                ? "VISUAL"
-                : "NORMAL"}
-          </span>
-          {entities.length > 0 && (
-            <>
-              <span className="text-muted-foreground/50">|</span>
-              <span>
-                R{grid.cursor.row + 1}:C{grid.cursor.col + 1}
-              </span>
-            </>
-          )}
-        </div>
-        <DataTable
-          columns={columns}
-          rows={entities}
-          grid={grid}
-          cellMonikers={cellMonikers}
-          claimPredicates={claimPredicates}
-          onCellClick={handleCellClick}
-          renderEditor={renderEditor}
-          grouping={grouping}
-          onVisibleRowCount={setVisibleRowCount}
-          rowEntityCommands={buildRowEntityCommands}
-          perspectiveSort={activePerspective?.sort}
-          perspectiveId={activePerspective?.id}
-        />
-      </main>
     </CommandScopeProvider>
   );
 }

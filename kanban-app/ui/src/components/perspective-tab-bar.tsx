@@ -1,14 +1,11 @@
-import { useCallback, useContext, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { Filter, Group, Plus } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { usePerspectives } from "@/lib/perspective-context";
 import { useViews } from "@/lib/views-context";
 import {
-  backendDispatch,
+  useDispatchCommand,
   CommandScopeProvider,
-  CommandScopeContext,
-  scopeChainFromScope,
-  useActiveBoardPath,
   type CommandScope,
 } from "@/lib/command-scope";
 import { useContextMenu } from "@/lib/context-menu";
@@ -36,9 +33,8 @@ export function PerspectiveTabBar() {
   const { perspectives, activePerspective, setActivePerspectiveId, refresh } =
     usePerspectives();
   const { activeView } = useViews();
-  const scope = useContext(CommandScopeContext);
-  const scopeChain = useMemo(() => scopeChainFromScope(scope), [scope]);
-  const boardPath = useActiveBoardPath();
+  const dispatchPerspectiveSave = useDispatchCommand("perspective.save");
+  const dispatchPerspectiveDelete = useDispatchCommand("perspective.delete");
 
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
@@ -70,13 +66,10 @@ export function PerspectiveTabBar() {
     const name =
       untitledCount === 0 ? "Untitled" : `Untitled ${untitledCount + 1}`;
 
-    backendDispatch({
-      cmd: "perspective.save",
-      args: { name, view: viewKind },
-      scopeChain,
-      ...(boardPath ? { boardPath } : {}),
-    }).catch(console.error);
-  }, [filteredPerspectives, viewKind, scopeChain, boardPath]);
+    dispatchPerspectiveSave({ args: { name, view: viewKind } }).catch(
+      console.error,
+    );
+  }, [filteredPerspectives, viewKind, dispatchPerspectiveSave]);
 
   /** Start inline rename for a perspective tab (triggered by double-click). */
   const startRename = useCallback((id: string, currentName: string) => {
@@ -98,17 +91,9 @@ export function PerspectiveTabBar() {
       if (!perspective) return;
 
       try {
-        await backendDispatch({
-          cmd: "perspective.delete",
-          args: { name: oldName },
-          scopeChain,
-          ...(boardPath ? { boardPath } : {}),
-        });
-        await backendDispatch({
-          cmd: "perspective.save",
+        await dispatchPerspectiveDelete({ args: { name: oldName } });
+        await dispatchPerspectiveSave({
           args: { name: newName, view: perspective.view },
-          scopeChain,
-          ...(boardPath ? { boardPath } : {}),
         });
         await refresh();
       } catch (e) {

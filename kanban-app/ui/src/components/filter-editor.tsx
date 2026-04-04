@@ -20,7 +20,7 @@ import { X } from "lucide-react";
 import { useUIState } from "@/lib/ui-state-context";
 import { shadcnTheme, keymapExtension } from "@/lib/cm-keymap";
 import { buildSubmitCancelExtensions } from "@/lib/cm-submit-cancel";
-import { backendDispatch } from "@/lib/command-scope";
+import { useDispatchCommand } from "@/lib/command-scope";
 import { cn } from "@/lib/utils";
 
 /** Static basicSetup config — mirrors text-editor.tsx. */
@@ -109,6 +109,8 @@ export function FilterEditor({
   const editorRef = useRef<ReactCodeMirrorRef>(null);
   const keymapCompartment = useRef(new Compartment());
   const { keymap_mode: mode } = useUIState();
+  const dispatchFilter = useDispatchCommand("perspective.filter");
+  const dispatchClearFilter = useDispatchCommand("perspective.clearFilter");
 
   const [error, setError] = useState<string | null>(null);
 
@@ -132,8 +134,7 @@ export function FilterEditor({
     // Empty submit = clear filter
     if (!trimmed) {
       committedRef.current = true;
-      backendDispatch({
-        cmd: "perspective.clearFilter",
+      dispatchClearFilter({
         args: { perspective_id: perspectiveId },
       }).catch(console.error);
       onCloseRef.current();
@@ -148,8 +149,7 @@ export function FilterEditor({
     }
 
     committedRef.current = true;
-    backendDispatch({
-      cmd: "perspective.filter",
+    dispatchFilter({
       args: { filter: trimmed, perspective_id: perspectiveId },
     }).catch(console.error);
     onCloseRef.current();
@@ -166,8 +166,7 @@ export function FilterEditor({
   const handleClear = useCallback(() => {
     if (committedRef.current) return;
     committedRef.current = true;
-    backendDispatch({
-      cmd: "perspective.clearFilter",
+    dispatchClearFilter({
       args: { perspective_id: perspectiveId },
     }).catch(console.error);
     onCloseRef.current();

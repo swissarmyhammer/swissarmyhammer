@@ -11,7 +11,7 @@
 
 import { useCallback } from "react";
 import { X } from "lucide-react";
-import { backendDispatch } from "@/lib/command-scope";
+import { useDispatchCommand } from "@/lib/command-scope";
 import type { FieldDef } from "@/types/kanban";
 
 interface GroupSelectorProps {
@@ -38,26 +38,27 @@ export function GroupSelector({
   fields,
   onClose,
 }: GroupSelectorProps) {
+  const dispatchGroup = useDispatchCommand("perspective.group");
+  const dispatchClearGroup = useDispatchCommand("perspective.clearGroup");
+
   /** Set group to a field name. */
   const handleSelect = useCallback(
     (fieldName: string) => {
-      backendDispatch({
-        cmd: "perspective.group",
+      dispatchGroup({
         args: { group: fieldName, perspective_id: perspectiveId },
       }).catch(console.error);
       onClose();
     },
-    [perspectiveId, onClose],
+    [perspectiveId, onClose, dispatchGroup],
   );
 
   /** Clear the group expression. */
   const handleClear = useCallback(() => {
-    backendDispatch({
-      cmd: "perspective.clearGroup",
+    dispatchClearGroup({
       args: { perspective_id: perspectiveId },
     }).catch(console.error);
     onClose();
-  }, [perspectiveId, onClose]);
+  }, [perspectiveId, onClose, dispatchClearGroup]);
 
   // Filter to groupable fields — exclude hidden fields
   const groupableFields = fields.filter((f) => f.section !== "hidden");

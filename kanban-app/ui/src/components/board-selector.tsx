@@ -6,9 +6,8 @@
  */
 
 import { useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { ExternalLink } from "lucide-react";
-import { dispatchCommand } from "@/lib/command-scope";
+import { useDispatchCommand } from "@/lib/command-scope";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -56,6 +55,8 @@ export function BoardSelector({
     getSchema("board")?.entity.search_display_field ?? "name";
   const nameFieldDef = getFieldDef("board", displayFieldName);
   const [editingName, setEditingName] = useState(false);
+  const dispatchSwitchBoard = useDispatchCommand("file.switchBoard");
+  const dispatchNewWindow = useDispatchCommand("window.new");
   // Live board name from entity store — stays current across windows
   const boardName = useFieldValue(
     "board",
@@ -92,15 +93,7 @@ export function BoardSelector({
       <Select
         value={selectedPath ?? undefined}
         onValueChange={(path) => {
-          dispatchCommand(
-            {
-              id: "file.switchBoard",
-              name: "Switch Board",
-              execute: () => onSelect(path),
-            },
-            undefined,
-            [],
-          );
+          dispatchSwitchBoard({ args: { path } }).catch(console.error);
         }}
       >
         <SelectTrigger
@@ -138,15 +131,8 @@ export function BoardSelector({
           className="h-6 w-6 text-muted-foreground/40"
           title="Open in new window"
           onClick={() => {
-            dispatchCommand(
-              {
-                id: "window.new",
-                name: "New Window",
-                execute: () =>
-                  invoke("create_window", { boardPath: selectedPath }),
-              },
-              undefined,
-              [],
+            dispatchNewWindow({ args: { board_path: selectedPath } }).catch(
+              console.error,
             );
           }}
         >

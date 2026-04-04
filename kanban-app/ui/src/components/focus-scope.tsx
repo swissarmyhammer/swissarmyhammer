@@ -42,6 +42,11 @@ type FocusScopeOwnProps = {
   /** When false, suppresses the data-focused attribute (hides the focus bar).
    *  The scope still participates in focus/commands — only the visual indicator is hidden. */
   showFocusBar?: boolean;
+  /** When false, omits the wrapping FocusHighlight div — children render directly.
+   *  Use for table rows where a wrapping div breaks HTML structure.
+   *  The scope, moniker registration, and context still work; the caller
+   *  must attach onContextMenu etc. to their own element. */
+  renderContainer?: boolean;
 };
 
 type FocusScopeProps = FocusScopeOwnProps &
@@ -62,6 +67,7 @@ export function FocusScope({
   children,
   claimWhen,
   showFocusBar = true,
+  renderContainer = true,
   ...rest
 }: FocusScopeProps) {
   const {
@@ -123,14 +129,18 @@ export function FocusScope({
   return (
     <FocusScopeContext.Provider value={moniker}>
       <CommandScopeContext.Provider value={scope}>
-        <FocusScopeInner
-          moniker={moniker}
-          isDirectFocus={isDirectFocus}
-          onClick={handleClick}
-          {...rest}
-        >
-          {children}
-        </FocusScopeInner>
+        {renderContainer ? (
+          <FocusScopeInner
+            moniker={moniker}
+            isDirectFocus={isDirectFocus}
+            onClick={handleClick}
+            {...rest}
+          >
+            {children}
+          </FocusScopeInner>
+        ) : (
+          children
+        )}
       </CommandScopeContext.Provider>
     </FocusScopeContext.Provider>
   );
