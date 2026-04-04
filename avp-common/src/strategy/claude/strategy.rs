@@ -157,167 +157,12 @@ impl ClaudeCodeHookStrategy {
         }
     }
 
-    /// Transform agent-agnostic ChainOutput to Claude Code-specific HookOutput.
-    ///
-    /// This is where all Claude-specific formatting happens, based on the hook type:
-    /// - PreToolUse: hookSpecificOutput.permissionDecision: "deny"
-    /// - PermissionRequest: hookSpecificOutput.decision.behavior: "deny"
-    /// - PostToolUse/PostToolUseFailure: decision: "block", reason
-    /// - Stop/SubagentStop: decision: "block", reason, continue: true
-    /// - UserPromptSubmit: decision: "block", reason
-    /// - Other hooks: continue: false, stopReason
-    fn transform_to_claude_output(
-        chain_output: ChainOutput,
+    /// Route a hook event to its chain. Deserializes input and executes the chain.
+    async fn route_to_chain(
+        &self,
         hook_type: HookType,
-    ) -> (HookOutput, i32) {
-        // If no validator blocked, return success
-        if chain_output.validator_block.is_none() && chain_output.continue_execution {
-            return (
-                HookOutput {
-                    continue_execution: true,
-                    system_message: chain_output.system_message,
-                    suppress_output: chain_output.suppress_output,
-                    ..Default::default()
-                },
-                0,
-            );
-        }
-
-        // Get validator block info
-        let (validator_name, message) = if let Some(ref block) = chain_output.validator_block {
-            (block.validator_name.clone(), block.message.clone())
-        } else {
-            (
-                "unknown".to_string(),
-                chain_output
-                    .stop_reason
-                    .clone()
-                    .unwrap_or_else(|| "Unknown reason".to_string()),
-            )
-        };
-
-        let reason = format!("blocked by validator '{}': {}", validator_name, message);
-
-        // Transform based on hook type per Claude Code docs
-        match hook_type {
-            // PreToolUse: use hookSpecificOutput.permissionDecision: "deny"
-            HookType::PreToolUse => {
-                let output = HookOutput {
-                    continue_execution: true, // Exit 0 so JSON is parsed
-                    hook_specific_output: Some(HookSpecificOutput::PreToolUse(PreToolUseOutput {
-                        permission_decision: Some(PermissionDecision::Deny),
-                        permission_decision_reason: Some(reason),
-                        ..Default::default()
-                    })),
-                    system_message: chain_output.system_message,
-                    suppress_output: chain_output.suppress_output,
-                    ..Default::default()
-                };
-                (output, 0)
-            }
-
-            // PermissionRequest: use hookSpecificOutput.decision.behavior: "deny"
-            HookType::PermissionRequest => {
-                let output = HookOutput {
-                    continue_execution: true, // Exit 0 so JSON is parsed
-                    hook_specific_output: Some(HookSpecificOutput::PermissionRequest(
-                        PermissionRequestOutput {
-                            decision: Some(PermissionRequestDecision {
-                                behavior: PermissionBehavior::Deny,
-                                message: Some(reason),
-                                updated_input: None,
-                                interrupt: false,
-                            }),
-                        },
-                    )),
-                    system_message: chain_output.system_message,
-                    suppress_output: chain_output.suppress_output,
-                    ..Default::default()
-                };
-                (output, 0)
-            }
-
-            // PostToolUse/PostToolUseFailure: decision: "block" + reason
-            HookType::PostToolUse | HookType::PostToolUseFailure => {
-                let output = HookOutput {
-                    continue_execution: true, // Tool already ran
-                    decision: Some("block".to_string()),
-                    reason: Some(reason),
-                    system_message: chain_output.system_message,
-                    suppress_output: chain_output.suppress_output,
-                    ..Default::default()
-                };
-                (output, 0)
-            }
-
-            // Stop/SubagentStop: decision: "block" + reason, continue: true
-            HookType::Stop | HookType::SubagentStop => {
-                let output = HookOutput {
-                    continue_execution: true, // Claude MUST continue, can't stop
-                    stop_reason: Some(reason.clone()),
-                    decision: Some("block".to_string()),
-                    reason: Some(reason),
-                    system_message: chain_output.system_message,
-                    suppress_output: chain_output.suppress_output,
-                    ..Default::default()
-                };
-                (output, 0)
-            }
-
-            // UserPromptSubmit: decision: "block" + reason
-            HookType::UserPromptSubmit => {
-                let output = HookOutput {
-                    continue_execution: true, // Exit 0 so JSON is parsed
-                    decision: Some("block".to_string()),
-                    reason: Some(reason),
-                    system_message: chain_output.system_message,
-                    suppress_output: chain_output.suppress_output,
-                    ..Default::default()
-                };
-                (output, 0)
-            }
-
-            // Other hooks: use stderr format (exit code 2)
-            _ => {
-                let output = HookOutput {
-                    continue_execution: false,
-                    stop_reason: Some(reason),
-                    system_message: chain_output.system_message,
-                    suppress_output: chain_output.suppress_output,
-                    ..Default::default()
-                };
-                (output, 2)
-            }
-        }
-    }
-}
-
-#[async_trait(?Send)]
-impl AgentHookStrategy for ClaudeCodeHookStrategy {
-    fn name(&self) -> &'static str {
-        "ClaudeCode"
-    }
-
-    fn can_handle(&self, input: &serde_json::Value) -> bool {
-        input.get("hook_event_name").is_some()
-    }
-
-    async fn process(&self, input: serde_json::Value) -> Result<(HookOutput, i32), AvpError> {
-        let hook_type = self.extract_hook_type(&input)?;
-
-        // Extract details for logging
-        let tool_name: Option<String> = input
-            .get("tool_name")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
-
-        let prompt_len: Option<usize> = input
-            .get("prompt")
-            .and_then(|v| v.as_str())
-            .map(|p| p.len());
-
-        // Route to appropriate chain. Each arm: deserialize → pick chain → execute.
-        // Macro eliminates the repetitive boilerplate.
+        input: serde_json::Value,
+    ) -> Result<(ChainOutput, i32), AvpError> {
         macro_rules! run_chain {
             ($type:ty, $chain:expr, $input:expr) => {{
                 let typed: $type = serde_json::from_value($input).map_err(AvpError::Json)?;
@@ -325,7 +170,7 @@ impl AgentHookStrategy for ClaudeCodeHookStrategy {
             }};
         }
 
-        let chain_result = match hook_type {
+        match hook_type {
             // Chains with validators and/or file tracking
             HookType::SessionStart => run_chain!(
                 SessionStartInput,
@@ -378,7 +223,6 @@ impl AgentHookStrategy for ClaudeCodeHookStrategy {
                 self.chain_factory.task_completed_chain(),
                 input
             ),
-
             // Pass-through hooks — observe only, no validators
             HookType::UserPromptSubmit => {
                 run_chain!(UserPromptSubmitInput, Chain::success(), input)
@@ -399,14 +243,22 @@ impl AgentHookStrategy for ClaudeCodeHookStrategy {
                 run_chain!(InstructionsLoadedInput, Chain::success(), input)
             }
             HookType::WorktreeRemove => run_chain!(WorktreeRemoveInput, Chain::success(), input),
-        };
+        }
+    }
 
-        // Log the hook event based on chain result
+    /// Log the result of a chain execution.
+    fn log_chain_result(
+        &self,
+        hook_type: HookType,
+        tool_name: &Option<String>,
+        prompt_len: &Option<usize>,
+        chain_result: &Result<(ChainOutput, i32), AvpError>,
+    ) {
         let hook_type_str = format!("{}", hook_type);
-        match &chain_result {
+        match chain_result {
             Ok((chain_output, _)) => {
                 let details =
-                    self.extract_log_details(hook_type, &tool_name, &prompt_len, chain_output);
+                    self.extract_log_details(hook_type, tool_name, prompt_len, chain_output);
                 let decision =
                     if chain_output.continue_execution && chain_output.validator_block.is_none() {
                         Decision::Allow
@@ -427,8 +279,149 @@ impl AgentHookStrategy for ClaudeCodeHookStrategy {
                 });
             }
         }
+    }
 
-        // Transform ChainOutput to Claude-specific HookOutput
+    /// Transform a chain output to a Claude-specific hook output.
+    fn transform_to_claude_output(
+        chain_output: ChainOutput,
+        hook_type: HookType,
+    ) -> (HookOutput, i32) {
+        if chain_output.validator_block.is_none() && chain_output.continue_execution {
+            return (
+                HookOutput {
+                    continue_execution: true,
+                    system_message: chain_output.system_message,
+                    suppress_output: chain_output.suppress_output,
+                    ..Default::default()
+                },
+                0,
+            );
+        }
+        Self::transform_block_output(chain_output, hook_type)
+    }
+
+    /// Build the block output for a validator that blocked the chain.
+    fn transform_block_output(chain_output: ChainOutput, hook_type: HookType) -> (HookOutput, i32) {
+        let reason = Self::extract_block_reason(&chain_output);
+        let base = HookOutput {
+            continue_execution: true,
+            system_message: chain_output.system_message,
+            suppress_output: chain_output.suppress_output,
+            ..Default::default()
+        };
+
+        match hook_type {
+            HookType::PreToolUse => Self::block_pre_tool_use(base, reason),
+            HookType::PermissionRequest => Self::block_permission_request(base, reason),
+            HookType::PostToolUse | HookType::PostToolUseFailure => {
+                Self::block_with_decision(base, reason)
+            }
+            HookType::Stop | HookType::SubagentStop => Self::block_stop(base, reason),
+            HookType::UserPromptSubmit => Self::block_with_decision(base, reason),
+            _ => (
+                HookOutput {
+                    continue_execution: false,
+                    stop_reason: Some(reason),
+                    ..base
+                },
+                2,
+            ),
+        }
+    }
+
+    /// Extract a human-readable block reason from chain output.
+    fn extract_block_reason(chain_output: &ChainOutput) -> String {
+        let (name, message) = match &chain_output.validator_block {
+            Some(block) => (block.validator_name.as_str(), block.message.as_str()),
+            None => (
+                "unknown",
+                chain_output
+                    .stop_reason
+                    .as_deref()
+                    .unwrap_or("Unknown reason"),
+            ),
+        };
+        format!("blocked by validator '{}': {}", name, message)
+    }
+
+    fn block_pre_tool_use(base: HookOutput, reason: String) -> (HookOutput, i32) {
+        (
+            HookOutput {
+                hook_specific_output: Some(HookSpecificOutput::PreToolUse(PreToolUseOutput {
+                    permission_decision: Some(PermissionDecision::Deny),
+                    permission_decision_reason: Some(reason),
+                    ..Default::default()
+                })),
+                ..base
+            },
+            0,
+        )
+    }
+
+    fn block_permission_request(base: HookOutput, reason: String) -> (HookOutput, i32) {
+        (
+            HookOutput {
+                hook_specific_output: Some(HookSpecificOutput::PermissionRequest(
+                    PermissionRequestOutput {
+                        decision: Some(PermissionRequestDecision {
+                            behavior: PermissionBehavior::Deny,
+                            message: Some(reason),
+                            updated_input: None,
+                            interrupt: false,
+                        }),
+                    },
+                )),
+                ..base
+            },
+            0,
+        )
+    }
+
+    fn block_with_decision(base: HookOutput, reason: String) -> (HookOutput, i32) {
+        (
+            HookOutput {
+                decision: Some("block".to_string()),
+                reason: Some(reason),
+                ..base
+            },
+            0,
+        )
+    }
+
+    fn block_stop(base: HookOutput, reason: String) -> (HookOutput, i32) {
+        (
+            HookOutput {
+                stop_reason: Some(reason.clone()),
+                decision: Some("block".to_string()),
+                reason: Some(reason),
+                ..base
+            },
+            0,
+        )
+    }
+}
+
+#[async_trait(?Send)]
+impl AgentHookStrategy for ClaudeCodeHookStrategy {
+    fn name(&self) -> &'static str {
+        "ClaudeCode"
+    }
+
+    fn can_handle(&self, input: &serde_json::Value) -> bool {
+        input.get("hook_event_name").is_some()
+    }
+
+    async fn process(&self, input: serde_json::Value) -> Result<(HookOutput, i32), AvpError> {
+        let hook_type = self.extract_hook_type(&input)?;
+        let tool_name = input
+            .get("tool_name")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+        let prompt_len = input.get("prompt").and_then(|v| v.as_str()).map(str::len);
+
+        let chain_result = self.route_to_chain(hook_type, input).await;
+        self.log_chain_result(hook_type, &tool_name, &prompt_len, &chain_result);
+
         chain_result
             .map(|(chain_output, _)| Self::transform_to_claude_output(chain_output, hook_type))
     }
