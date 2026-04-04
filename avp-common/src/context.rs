@@ -389,27 +389,7 @@ impl AvpContext {
 
             tracing::debug!("Agent created in {:.2}s", start.elapsed().as_secs_f64());
 
-            // Bridge the broadcast::Receiver into a NotificationSender
-            // (NotificationSender provides per-session subscribe semantics)
-            let (notifier, _) =
-                claude_agent::NotificationSender::new(NOTIFICATION_CHANNEL_CAPACITY);
-            let notifier = Arc::new(notifier);
-            let notifier_clone = Arc::clone(&notifier);
-            tokio::spawn(async move {
-                let mut rx = handle.notification_rx;
-                loop {
-                    match rx.recv().await {
-                        Ok(notification) => {
-                            let _ = notifier_clone.send_update(notification).await;
-                        }
-                        Err(broadcast::error::RecvError::Lagged(n)) => {
-                            tracing::warn!(skipped = n, "agent notification forwarder lagged");
-                        }
-                        Err(broadcast::error::RecvError::Closed) => break,
-                    }
-                }
-            });
-
+            let notifier = Self::bridge_notifications(handle.notification_rx);
             *guard = Some(AgentHandle {
                 agent: handle.agent,
                 notifier,
@@ -418,6 +398,30 @@ impl AvpContext {
 
         let handle = guard.as_ref().unwrap();
         Ok((Arc::clone(&handle.agent), Arc::clone(&handle.notifier)))
+    }
+
+    /// Bridge a broadcast receiver into a NotificationSender with per-session subscribe.
+    fn bridge_notifications(
+        notification_rx: broadcast::Receiver<SessionNotification>,
+    ) -> Arc<claude_agent::NotificationSender> {
+        let (notifier, _) = claude_agent::NotificationSender::new(NOTIFICATION_CHANNEL_CAPACITY);
+        let notifier = Arc::new(notifier);
+        let notifier_clone = Arc::clone(&notifier);
+        tokio::spawn(async move {
+            let mut rx = notification_rx;
+            loop {
+                match rx.recv().await {
+                    Ok(notification) => {
+                        let _ = notifier_clone.send_update(notification).await;
+                    }
+                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!(skipped = n, "agent notification forwarder lagged");
+                    }
+                    Err(broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        });
+        notifier
     }
 
     /// Get the project AVP directory path.

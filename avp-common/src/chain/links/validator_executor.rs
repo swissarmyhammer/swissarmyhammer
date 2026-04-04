@@ -108,6 +108,33 @@ impl<I: ValidatorMatchInfo> ValidatorExecutorLink<I> {
         Some(diffs)
     }
 
+    /// Collect diffs from the appropriate source and prepare context for validators.
+    ///
+    /// PostToolUse: diffs from ChainContext (set by PostToolUseFileTracker), prepared inline.
+    /// Stop: diffs from sidecar files, passed raw for per-ruleset filtering in the runner.
+    fn prepare_diffs(
+        &self,
+        input: &I,
+        hook_type: HookType,
+        ctx: &mut ChainContext,
+        input_json: serde_json::Value,
+    ) -> (serde_json::Value, Option<Vec<crate::turn::FileDiff>>) {
+        let chain_diffs: Option<Vec<crate::turn::FileDiff>> = ctx.get(CTX_FILE_DIFFS);
+        let sidecar_diffs = if chain_diffs.is_none() && hook_type == HookType::Stop {
+            self.load_diffs_from_sidecar(input)
+        } else {
+            None
+        };
+        let effective_diffs = chain_diffs.as_deref().or(sidecar_diffs.as_deref());
+
+        if hook_type == HookType::Stop {
+            (input_json, effective_diffs.map(|d| d.to_vec()))
+        } else {
+            let prepared = crate::turn::prepare_validator_context(input_json, effective_diffs);
+            (prepared, None)
+        }
+    }
+
     /// Handle RuleSet results, returning appropriate ChainResult.
     ///
     /// This produces agent-agnostic output with validator block info.
@@ -291,24 +318,20 @@ where
 {
     async fn process(&self, input: &I, ctx: &mut ChainContext) -> ChainResult {
         let hook_type = input.hook_type();
-
-        // Load changed files before matching so Stop hooks can filter by file patterns
         let changed_files = self.load_changed_files_for_stop(input);
         let match_ctx = build_match_context(input, changed_files.clone());
-
-        // Use new RuleSet architecture
         let rulesets = self.loader.matching_rulesets(&match_ctx);
 
         if rulesets.is_empty() {
             tracing::trace!("ValidatorExecutorLink: No RuleSets for {:?}", hook_type);
             return ChainResult::continue_empty();
         }
-
         tracing::debug!(
             "ValidatorExecutorLink: Executing {} RuleSets for {:?}",
             rulesets.len(),
             hook_type
         );
+
         let input_json = match serde_json::to_value(input) {
             Ok(json) => json,
             Err(e) => {
@@ -317,28 +340,7 @@ where
             }
         };
 
-        // Collect diffs from the appropriate source.
-        // For PostToolUse: diffs come from ChainContext (set by PostToolUseFileTracker).
-        // For Stop: diffs come from sidecar files (accumulated across the turn).
-        let chain_diffs: Option<Vec<crate::turn::FileDiff>> = ctx.get(CTX_FILE_DIFFS);
-        let sidecar_diffs = if chain_diffs.is_none() && hook_type == HookType::Stop {
-            self.load_diffs_from_sidecar(input)
-        } else {
-            None
-        };
-        let effective_diffs = chain_diffs.as_deref().or(sidecar_diffs.as_deref());
-
-        // For PostToolUse hooks, diffs are already scoped to the current file
-        // so we prepare context once. For Stop hooks, raw diffs are passed to
-        // execute_rulesets which filters them per-ruleset file patterns.
-        let (context_value, raw_diffs_for_filtering) = if hook_type == HookType::Stop {
-            // Pass raw input JSON; per-ruleset diff filtering happens in the runner
-            (input_json, effective_diffs)
-        } else {
-            // Single-file context: prepare once with all diffs (typically just one)
-            let prepared = crate::turn::prepare_validator_context(input_json, effective_diffs);
-            (prepared, None)
-        };
+        let (context_value, raw_diffs) = self.prepare_diffs(input, hook_type, ctx, input_json);
 
         let results = self
             .context
@@ -347,7 +349,7 @@ where
                 hook_type,
                 &context_value,
                 changed_files.as_deref(),
-                raw_diffs_for_filtering,
+                raw_diffs.as_deref(),
             )
             .await;
 

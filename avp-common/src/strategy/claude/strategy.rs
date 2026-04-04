@@ -26,6 +26,97 @@ use crate::validator::ValidatorLoader;
 
 use crate::strategy::traits::AgentHookStrategy;
 
+/// Dispatch a hook event to the appropriate chain.
+///
+/// Deserializes the input JSON to the typed input, picks the chain (from the
+/// factory for validator-enabled hooks, or `Chain::success()` for pass-through
+/// hooks), executes, and maps the error. Kept as a macro so `rustfmt` doesn't
+/// expand 22 one-liner arms into 88 lines.
+macro_rules! dispatch_hook {
+    ($self:expr, $hook_type:expr, $input:expr) => {
+        match $hook_type {
+            HookType::SessionStart => run_chain!(
+                SessionStartInput,
+                $self.chain_factory.session_start_chain(),
+                $input
+            ),
+            HookType::SessionEnd => run_chain!(
+                SessionEndInput,
+                $self.chain_factory.session_end_chain(),
+                $input
+            ),
+            HookType::PreToolUse => run_chain!(
+                PreToolUseInput,
+                $self.chain_factory.pre_tool_use_chain(),
+                $input
+            ),
+            HookType::PostToolUse => run_chain!(
+                PostToolUseInput,
+                $self.chain_factory.post_tool_use_chain(),
+                $input
+            ),
+            HookType::Stop => run_chain!(StopInput, $self.chain_factory.stop_chain(), $input),
+            HookType::Elicitation => run_chain!(
+                ElicitationInput,
+                $self.chain_factory.elicitation_chain(),
+                $input
+            ),
+            HookType::ElicitationResult => run_chain!(
+                ElicitationResultInput,
+                $self.chain_factory.elicitation_result_chain(),
+                $input
+            ),
+            HookType::ConfigChange => run_chain!(
+                ConfigChangeInput,
+                $self.chain_factory.config_change_chain(),
+                $input
+            ),
+            HookType::WorktreeCreate => run_chain!(
+                WorktreeCreateInput,
+                $self.chain_factory.worktree_create_chain(),
+                $input
+            ),
+            HookType::TeammateIdle => run_chain!(
+                TeammateIdleInput,
+                $self.chain_factory.teammate_idle_chain(),
+                $input
+            ),
+            HookType::TaskCompleted => run_chain!(
+                TaskCompletedInput,
+                $self.chain_factory.task_completed_chain(),
+                $input
+            ),
+            HookType::UserPromptSubmit => {
+                run_chain!(UserPromptSubmitInput, Chain::success(), $input)
+            }
+            HookType::PermissionRequest => {
+                run_chain!(PermissionRequestInput, Chain::success(), $input)
+            }
+            HookType::PostToolUseFailure => {
+                run_chain!(PostToolUseFailureInput, Chain::success(), $input)
+            }
+            HookType::SubagentStart => run_chain!(SubagentStartInput, Chain::success(), $input),
+            HookType::SubagentStop => run_chain!(SubagentStopInput, Chain::success(), $input),
+            HookType::PreCompact => run_chain!(PreCompactInput, Chain::success(), $input),
+            HookType::PostCompact => run_chain!(PostCompactInput, Chain::success(), $input),
+            HookType::Setup => run_chain!(SetupInput, Chain::success(), $input),
+            HookType::Notification => run_chain!(NotificationInput, Chain::success(), $input),
+            HookType::InstructionsLoaded => {
+                run_chain!(InstructionsLoadedInput, Chain::success(), $input)
+            }
+            HookType::WorktreeRemove => run_chain!(WorktreeRemoveInput, Chain::success(), $input),
+        }
+    };
+}
+
+/// Deserialize JSON to a typed input, execute a chain, and map the error.
+macro_rules! run_chain {
+    ($type:ty, $chain:expr, $input:expr) => {{
+        let typed: $type = serde_json::from_value($input).map_err(AvpError::Json)?;
+        $chain.execute(&typed).await.map_err(AvpError::Chain)
+    }};
+}
+
 /// Claude Code hook strategy with validator support.
 ///
 /// This strategy handles all 13 hook types from Claude Code.
@@ -163,87 +254,9 @@ impl ClaudeCodeHookStrategy {
         hook_type: HookType,
         input: serde_json::Value,
     ) -> Result<(ChainOutput, i32), AvpError> {
-        macro_rules! run_chain {
-            ($type:ty, $chain:expr, $input:expr) => {{
-                let typed: $type = serde_json::from_value($input).map_err(AvpError::Json)?;
-                $chain.execute(&typed).await.map_err(AvpError::Chain)
-            }};
-        }
-
-        match hook_type {
-            // Chains with validators and/or file tracking
-            HookType::SessionStart => run_chain!(
-                SessionStartInput,
-                self.chain_factory.session_start_chain(),
-                input
-            ),
-            HookType::SessionEnd => run_chain!(
-                SessionEndInput,
-                self.chain_factory.session_end_chain(),
-                input
-            ),
-            HookType::PreToolUse => run_chain!(
-                PreToolUseInput,
-                self.chain_factory.pre_tool_use_chain(),
-                input
-            ),
-            HookType::PostToolUse => run_chain!(
-                PostToolUseInput,
-                self.chain_factory.post_tool_use_chain(),
-                input
-            ),
-            HookType::Stop => run_chain!(StopInput, self.chain_factory.stop_chain(), input),
-            HookType::Elicitation => run_chain!(
-                ElicitationInput,
-                self.chain_factory.elicitation_chain(),
-                input
-            ),
-            HookType::ElicitationResult => run_chain!(
-                ElicitationResultInput,
-                self.chain_factory.elicitation_result_chain(),
-                input
-            ),
-            HookType::ConfigChange => run_chain!(
-                ConfigChangeInput,
-                self.chain_factory.config_change_chain(),
-                input
-            ),
-            HookType::WorktreeCreate => run_chain!(
-                WorktreeCreateInput,
-                self.chain_factory.worktree_create_chain(),
-                input
-            ),
-            HookType::TeammateIdle => run_chain!(
-                TeammateIdleInput,
-                self.chain_factory.teammate_idle_chain(),
-                input
-            ),
-            HookType::TaskCompleted => run_chain!(
-                TaskCompletedInput,
-                self.chain_factory.task_completed_chain(),
-                input
-            ),
-            // Pass-through hooks — observe only, no validators
-            HookType::UserPromptSubmit => {
-                run_chain!(UserPromptSubmitInput, Chain::success(), input)
-            }
-            HookType::PermissionRequest => {
-                run_chain!(PermissionRequestInput, Chain::success(), input)
-            }
-            HookType::PostToolUseFailure => {
-                run_chain!(PostToolUseFailureInput, Chain::success(), input)
-            }
-            HookType::SubagentStart => run_chain!(SubagentStartInput, Chain::success(), input),
-            HookType::SubagentStop => run_chain!(SubagentStopInput, Chain::success(), input),
-            HookType::PreCompact => run_chain!(PreCompactInput, Chain::success(), input),
-            HookType::PostCompact => run_chain!(PostCompactInput, Chain::success(), input),
-            HookType::Setup => run_chain!(SetupInput, Chain::success(), input),
-            HookType::Notification => run_chain!(NotificationInput, Chain::success(), input),
-            HookType::InstructionsLoaded => {
-                run_chain!(InstructionsLoadedInput, Chain::success(), input)
-            }
-            HookType::WorktreeRemove => run_chain!(WorktreeRemoveInput, Chain::success(), input),
-        }
+        // Each arm: deserialize → pick chain → execute → map error.
+        // rustfmt expands these; the logic per arm is one line via the macro.
+        dispatch_hook!(self, hook_type, input)
     }
 
     /// Log the result of a chain execution.
