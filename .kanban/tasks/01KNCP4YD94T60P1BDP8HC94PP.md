@@ -25,14 +25,14 @@ Each `<TableRow>` should be wrapped in a `FocusScope` with `renderContainer={fal
 **Key constraint:** `FocusScope` normally renders a `<FocusHighlight>` div wrapper. In a `<table>`, a div between `<tbody>` and `<tr>` breaks HTML. `renderContainer={false}` (already added to `focus-scope.tsx`) skips the div but also skips click/doubleclick/contextmenu handlers. The row component must attach those handlers to `<TableRow>` itself.
 
 **Files to modify:**
-- `kanban-app/ui/src/components/data-table.tsx` — wrap each data `<TableRow>` in `FocusScope(renderContainer=false, moniker=entityMk, commands=rowCommands)`. Create an `EntityRow` component rendered inside the scope that calls `useContextMenu()`, `useIsFocused()`, `useEntityFocus().setFocus`, and `useDispatchCommand(\"ui.inspect\")` to mirror `FocusScopeInner` behavior on a `<tr>`. Remove `RowSelectorWithScope` and `RowSelectorCell` (the row-level scope subsumes them). The existing `handleCellClick`, `onRowContextMenu`, `onCellClick` props and the grid-level `contextMenuHandler` need careful audit — some become dead code.
+- `kanban-app/ui/src/components/data-table.tsx` — wrap each data `<TableRow>` in `FocusScope(renderContainer=false, moniker=entityMk, commands=rowCommands)`. Create an `EntityRow` component rendered inside the scope that calls `useContextMenu()`, `useIsFocused()`, `useEntityFocus().setFocus`, and `useDispatchCommand(\"ui.inspect\")` to mirror `FocusScopeInner` behavior on a `<tr>`. Remove `RowSelectorWithScope` and `RowSelectorCell` (the row-level scope subsumes them). Row selector picks up focused state from `useIsFocused(moniker)` via the wrapping FocusScope — no grid cursor comparison needed. The existing `handleCellClick`, `onRowContextMenu`, `onCellClick` props and the grid-level `contextMenuHandler` need careful audit — some become dead code.
 - `kanban-app/ui/src/components/grid-view.tsx` — remove the `entityCommands` `CommandScopeProvider` wrapping (line 493) since row-level scopes replace it
 
 ## Acceptance Criteria
 - [ ] Right-click any cell in a grid row shows entity context menu (\"Inspect Task\", \"Archive Task\", etc.)
 - [ ] Double-click a grid row opens the inspector for that row's entity
 - [ ] Palette inspect (Cmd+Shift+P → \"Inspect\") targets the focused row's entity
-- [ ] Row selector still shows row numbers with correct cursor highlight
+- [ ] Row selector reads focused state from `useIsFocused(moniker)` hook, not grid cursor index
 - [ ] Grid cell editing (click/double-click/Enter) still works
 - [ ] Grid cell navigation (arrow keys, vim hjkl) still works
 - [ ] `<table>` HTML structure valid — no `<div>` between `<tbody>` and `<tr>`
@@ -40,6 +40,6 @@ Each `<TableRow>` should be wrapped in a `FocusScope` with `renderContainer={fal
 
 ## Tests
 - [ ] `cd kanban-app/ui && pnpm vitest run` — all unit tests pass
-- [ ] Manual: grid view — right-click row → context menu with entity commands
+- [ ] Manual: grid view — right-click any cell → context menu with entity commands
 - [ ] Manual: grid view — double-click row → inspector opens for that entity
 - [ ] Manual: grid view — Cmd+Shift+P \"Inspect\" → inspects focused row entity
