@@ -566,7 +566,6 @@ function EntityRow({
 }) {
   const contextMenuHandler = useContextMenu();
   const { setFocus } = useEntityFocus();
-  const dispatchInspect = useDispatchCommand("ui.inspect");
 
   return (
     <TableRow
@@ -575,18 +574,6 @@ function EntityRow({
         "border-b border-border/50 transition-colors",
         isCursorRow && !isEditing && "bg-accent/30",
       )}
-      onClick={(e) => {
-        const tag = (e.target as HTMLElement).tagName;
-        if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
-        setFocus(entityMk);
-      }}
-      onDoubleClick={(e) => {
-        const tag = (e.target as HTMLElement).tagName;
-        if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
-        if ((e.target as HTMLElement).closest("[contenteditable]")) return;
-        e.stopPropagation();
-        dispatchInspect({ target: entityMk }).catch(console.error);
-      }}
       onContextMenu={(e) => {
         setFocus(entityMk);
         contextMenuHandler(e);

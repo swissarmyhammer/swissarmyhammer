@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: b680
+position_column: done
+position_ordinal: ffffffffffffffffffe580
 title: Fix grid cell click focus — EntityRow onClick overwrites cell focus
 ---
 ## What

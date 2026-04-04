@@ -133,6 +133,7 @@ export function FocusScope({
           <FocusScopeInner
             moniker={moniker}
             isDirectFocus={isDirectFocus}
+            showFocusBar={showFocusBar}
             onClick={handleClick}
             {...rest}
           >
@@ -153,6 +154,8 @@ interface FocusScopeInnerProps extends Omit<
 > {
   moniker: string;
   isDirectFocus: boolean;
+  /** When false, this scope is navigation-only — skip double-click inspect. */
+  showFocusBar: boolean;
   onClick: React.MouseEventHandler<HTMLElement>;
   children: ReactNode;
 }
@@ -161,6 +164,7 @@ interface FocusScopeInnerProps extends Omit<
 function FocusScopeInner({
   moniker,
   isDirectFocus,
+  showFocusBar,
   onClick,
   children,
   ...htmlProps
@@ -171,16 +175,24 @@ function FocusScopeInner({
 
   const handleContextMenu = useCallback(
     (e: React.MouseEvent) => {
+      // Navigation-only scopes (showFocusBar=false) don't handle context menu —
+      // let the event propagate to the parent entity scope (e.g. EntityRow).
+      if (!showFocusBar) return;
+
       e.preventDefault();
       e.stopPropagation();
       setFocus(moniker);
       contextMenuHandler(e);
     },
-    [moniker, setFocus, contextMenuHandler],
+    [moniker, setFocus, contextMenuHandler, showFocusBar],
   );
 
   const handleDoubleClick = useCallback(
     (e: React.MouseEvent) => {
+      // Navigation-only scopes (showFocusBar=false) don't dispatch inspect —
+      // let the event propagate to the parent entity scope (e.g. EntityRow).
+      if (!showFocusBar) return;
+
       // Skip if target is an interactive element
       const target = e.target as HTMLElement;
       const tag = target.tagName;
@@ -190,7 +202,7 @@ function FocusScopeInner({
       e.stopPropagation();
       dispatch({ target: moniker }).catch(console.error);
     },
-    [dispatch, moniker],
+    [dispatch, moniker, showFocusBar],
   );
 
   return (
