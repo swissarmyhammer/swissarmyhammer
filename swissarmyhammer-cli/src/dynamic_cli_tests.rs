@@ -609,3 +609,858 @@ fn test_command_descriptions_are_clean() {
         "Help text should not contain visual separators"
     );
 }
+
+// --- Tests for schema_has_type ---
+
+#[test]
+fn test_schema_has_type_string() {
+    let schema = json!({"type": "string"});
+    assert!(schema_has_type(&schema, "string"));
+    assert!(!schema_has_type(&schema, "boolean"));
+}
+
+#[test]
+fn test_schema_has_type_array_type() {
+    let schema = json!({"type": ["string", "null"]});
+    assert!(schema_has_type(&schema, "string"));
+    assert!(schema_has_type(&schema, "null"));
+    assert!(!schema_has_type(&schema, "boolean"));
+}
+
+#[test]
+fn test_schema_has_type_no_type_field() {
+    let schema = json!({"description": "no type"});
+    assert!(!schema_has_type(&schema, "string"));
+}
+
+#[test]
+fn test_schema_has_type_non_string_type() {
+    let schema = json!({"type": 42});
+    assert!(!schema_has_type(&schema, "string"));
+}
+
+// --- Tests for SchemaParser ---
+
+#[test]
+fn test_schema_parser_parse_string() {
+    let schema = json!({"description": "A field", "default": "hello"});
+    assert_eq!(
+        SchemaParser::parse_string(&schema, "description"),
+        Some("A field".to_string())
+    );
+    assert_eq!(
+        SchemaParser::parse_string(&schema, "default"),
+        Some("hello".to_string())
+    );
+    assert_eq!(SchemaParser::parse_string(&schema, "missing"), None);
+}
+
+#[test]
+fn test_schema_parser_parse_enum() {
+    let schema = json!({"enum": ["a", "b", "c"]});
+    let result = SchemaParser::parse_enum(&schema);
+    assert_eq!(
+        result,
+        Some(vec!["a".to_string(), "b".to_string(), "c".to_string()])
+    );
+}
+
+#[test]
+fn test_schema_parser_parse_enum_none() {
+    let schema = json!({"type": "string"});
+    assert_eq!(SchemaParser::parse_enum(&schema), None);
+}
+
+#[test]
+fn test_schema_parser_parse_description() {
+    let schema = json!({"description": "test desc"});
+    assert_eq!(
+        SchemaParser::parse_description(&schema),
+        Some("test desc".to_string())
+    );
+}
+
+#[test]
+fn test_schema_parser_parse_default() {
+    let schema = json!({"default": "mydefault"});
+    assert_eq!(
+        SchemaParser::parse_default(&schema),
+        Some("mydefault".to_string())
+    );
+}
+
+#[test]
+fn test_schema_parser_parse_type_boolean() {
+    let schema = json!({"type": "boolean"});
+    assert!(matches!(
+        SchemaParser::parse_type(&schema),
+        ArgType::Boolean
+    ));
+}
+
+#[test]
+fn test_schema_parser_parse_type_integer() {
+    let schema = json!({"type": "integer"});
+    assert!(matches!(
+        SchemaParser::parse_type(&schema),
+        ArgType::Integer
+    ));
+}
+
+#[test]
+fn test_schema_parser_parse_type_number() {
+    let schema = json!({"type": "number"});
+    assert!(matches!(SchemaParser::parse_type(&schema), ArgType::Float));
+}
+
+#[test]
+fn test_schema_parser_parse_type_array() {
+    let schema = json!({"type": "array"});
+    assert!(matches!(SchemaParser::parse_type(&schema), ArgType::Array));
+}
+
+#[test]
+fn test_schema_parser_parse_type_string() {
+    let schema = json!({"type": "string"});
+    assert!(matches!(SchemaParser::parse_type(&schema), ArgType::String));
+}
+
+#[test]
+fn test_schema_parser_parse_type_nullable_boolean() {
+    let schema = json!({"type": ["boolean", "null"]});
+    assert!(matches!(
+        SchemaParser::parse_type(&schema),
+        ArgType::NullableBoolean
+    ));
+}
+
+#[test]
+fn test_schema_parser_is_nullable_boolean() {
+    assert!(SchemaParser::is_nullable_boolean(
+        &json!({"type": ["boolean", "null"]})
+    ));
+    assert!(!SchemaParser::is_nullable_boolean(
+        &json!({"type": "boolean"})
+    ));
+    assert!(!SchemaParser::is_nullable_boolean(
+        &json!({"type": ["string", "null"]})
+    ));
+}
+
+#[test]
+fn test_schema_parser_get_primary_type_string() {
+    assert_eq!(
+        SchemaParser::get_primary_type(&json!({"type": "string"})),
+        Some("string")
+    );
+}
+
+#[test]
+fn test_schema_parser_get_primary_type_array_filters_null() {
+    assert_eq!(
+        SchemaParser::get_primary_type(&json!({"type": ["integer", "null"]})),
+        Some("integer")
+    );
+}
+
+#[test]
+fn test_schema_parser_get_primary_type_none() {
+    assert_eq!(SchemaParser::get_primary_type(&json!({"foo": "bar"})), None);
+}
+
+#[test]
+fn test_schema_parser_parse_arg_data() {
+    let schema = json!({
+        "type": "string",
+        "description": "A test field",
+        "default": "hello",
+        "enum": ["a", "b"]
+    });
+    let arg = SchemaParser::parse_arg_data("test_field", &schema, true);
+    assert_eq!(arg.name, "test_field");
+    assert_eq!(arg.help, Some("A test field".to_string()));
+    assert_eq!(arg.default_value, Some("hello".to_string()));
+    assert!(arg.is_required);
+    assert_eq!(
+        arg.possible_values,
+        Some(vec!["a".to_string(), "b".to_string()])
+    );
+}
+
+// --- Tests for ArgBuilder ---
+
+#[test]
+fn test_arg_builder_string_optional() {
+    let arg_data = ArgData {
+        name: "host".to_string(),
+        help: Some("Host name".to_string()),
+        is_required: false,
+        arg_type: ArgType::String,
+        default_value: Some("localhost".to_string()),
+        possible_values: None,
+    };
+    let arg = ArgBuilder::new(&arg_data).build();
+    assert_eq!(arg.get_id().as_str(), "host");
+}
+
+#[test]
+fn test_arg_builder_boolean() {
+    let arg_data = ArgData {
+        name: "verbose".to_string(),
+        help: Some("Verbose output".to_string()),
+        is_required: false,
+        arg_type: ArgType::Boolean,
+        default_value: None,
+        possible_values: None,
+    };
+    let arg = ArgBuilder::new(&arg_data).build();
+    assert_eq!(arg.get_id().as_str(), "verbose");
+}
+
+#[test]
+fn test_arg_builder_nullable_boolean() {
+    let arg_data = ArgData {
+        name: "flag".to_string(),
+        help: None,
+        is_required: false,
+        arg_type: ArgType::NullableBoolean,
+        default_value: None,
+        possible_values: None,
+    };
+    let arg = ArgBuilder::new(&arg_data).build();
+    assert_eq!(arg.get_id().as_str(), "flag");
+}
+
+#[test]
+fn test_arg_builder_integer_required() {
+    let arg_data = ArgData {
+        name: "port".to_string(),
+        help: Some("Port number".to_string()),
+        is_required: true,
+        arg_type: ArgType::Integer,
+        default_value: None,
+        possible_values: None,
+    };
+    let arg = ArgBuilder::new(&arg_data).build();
+    assert_eq!(arg.get_id().as_str(), "port");
+    assert!(arg.is_required_set());
+}
+
+#[test]
+fn test_arg_builder_float_optional() {
+    let arg_data = ArgData {
+        name: "threshold".to_string(),
+        help: None,
+        is_required: false,
+        arg_type: ArgType::Float,
+        default_value: None,
+        possible_values: None,
+    };
+    let arg = ArgBuilder::new(&arg_data).build();
+    assert_eq!(arg.get_id().as_str(), "threshold");
+}
+
+#[test]
+fn test_arg_builder_array() {
+    let arg_data = ArgData {
+        name: "items".to_string(),
+        help: Some("Items".to_string()),
+        is_required: false,
+        arg_type: ArgType::Array,
+        default_value: None,
+        possible_values: None,
+    };
+    let arg = ArgBuilder::new(&arg_data).build();
+    assert_eq!(arg.get_id().as_str(), "items");
+}
+
+#[test]
+fn test_arg_builder_with_possible_values() {
+    let arg_data = ArgData {
+        name: "color".to_string(),
+        help: Some("Color choice".to_string()),
+        is_required: false,
+        arg_type: ArgType::String,
+        default_value: None,
+        possible_values: Some(vec!["red".to_string(), "blue".to_string()]),
+    };
+    let arg = ArgBuilder::new(&arg_data).build();
+    assert_eq!(arg.get_id().as_str(), "color");
+}
+
+// --- Tests for CliValidationStats ---
+
+#[test]
+fn test_cli_validation_stats_new() {
+    let stats = CliValidationStats::new();
+    assert_eq!(stats.total_tools, 0);
+    assert_eq!(stats.valid_tools, 0);
+    assert_eq!(stats.invalid_tools, 0);
+    assert_eq!(stats.validation_errors, 0);
+}
+
+#[test]
+fn test_cli_validation_stats_has_no_tools() {
+    let stats = CliValidationStats::new();
+    assert!(stats.has_no_tools());
+
+    let stats = CliValidationStats {
+        total_tools: 1,
+        ..Default::default()
+    };
+    assert!(!stats.has_no_tools());
+}
+
+#[test]
+fn test_cli_validation_stats_is_all_valid() {
+    let stats = CliValidationStats {
+        total_tools: 5,
+        valid_tools: 5,
+        invalid_tools: 0,
+        validation_errors: 0,
+    };
+    assert!(stats.is_all_valid());
+
+    let stats = CliValidationStats {
+        total_tools: 5,
+        valid_tools: 4,
+        invalid_tools: 1,
+        validation_errors: 2,
+    };
+    assert!(!stats.is_all_valid());
+}
+
+#[test]
+fn test_cli_validation_stats_success_rate_no_tools() {
+    let stats = CliValidationStats::new();
+    assert_eq!(stats.success_rate(), 100.0);
+}
+
+#[test]
+fn test_cli_validation_stats_success_rate_partial() {
+    let stats = CliValidationStats {
+        total_tools: 4,
+        valid_tools: 3,
+        invalid_tools: 1,
+        validation_errors: 1,
+    };
+    assert_eq!(stats.success_rate(), 75.0);
+}
+
+#[test]
+fn test_cli_validation_stats_summary_all_valid() {
+    let stats = CliValidationStats {
+        total_tools: 5,
+        valid_tools: 5,
+        invalid_tools: 0,
+        validation_errors: 0,
+    };
+    let summary = stats.summary();
+    assert!(summary.contains("All 5 CLI tools are valid"));
+}
+
+#[test]
+fn test_cli_validation_stats_summary_has_warnings() {
+    let stats = CliValidationStats {
+        total_tools: 10,
+        valid_tools: 8,
+        invalid_tools: 2,
+        validation_errors: 3,
+    };
+    let summary = stats.summary();
+    assert!(summary.contains("8 of 10"));
+    assert!(summary.contains("80.0%"));
+    assert!(summary.contains("3 validation errors"));
+}
+
+// --- Tests for get_default_config ---
+
+#[test]
+fn test_get_default_config_fallback() {
+    // Use unique env var names that won't exist
+    let result = get_default_config(
+        "SAH_TEST_UNLIKELY_VAR_12345",
+        "SWISSARMYHAMMER_TEST_UNLIKELY_VAR_12345",
+        "default_val",
+    );
+    assert_eq!(result, "default_val");
+}
+
+#[test]
+fn test_get_default_http_port() {
+    let port = get_default_http_port();
+    // Should be either from env or default 8000
+    assert!(!port.is_empty());
+}
+
+#[test]
+fn test_get_default_http_host() {
+    let host = get_default_http_host();
+    assert!(!host.is_empty());
+}
+
+// --- Tests for ArgSpec builder ---
+
+#[test]
+fn test_arg_spec_new() {
+    let spec = ArgSpec::new("test", "Help text");
+    assert_eq!(spec.name, "test");
+    assert_eq!(spec.help, "Help text");
+    assert!(spec.long.is_none());
+    assert!(spec.short.is_none());
+    assert!(!spec.required);
+    assert!(!spec.hide);
+}
+
+#[test]
+fn test_arg_spec_builder_chain() {
+    let spec = ArgSpec::new("port", "Port number")
+        .long("port")
+        .short('p')
+        .required(true)
+        .value_name("PORT")
+        .default_value("8080".to_string())
+        .value_parser(ArgSpecValueParser::U16)
+        .action(ArgSpecAction::Set);
+
+    assert_eq!(spec.name, "port");
+    assert_eq!(spec.long, Some("port"));
+    assert_eq!(spec.short, Some('p'));
+    assert!(spec.required);
+    assert_eq!(spec.value_name, Some("PORT"));
+    assert_eq!(spec.default_value, Some("8080".to_string()));
+}
+
+#[test]
+fn test_arg_spec_build_set_true() {
+    let spec = ArgSpec::new("verbose", "Verbose output")
+        .long("verbose")
+        .action(ArgSpecAction::SetTrue);
+    let arg = spec.build();
+    assert_eq!(arg.get_id().as_str(), "verbose");
+}
+
+#[test]
+fn test_arg_spec_build_append() {
+    let spec = ArgSpec::new("files", "Input files")
+        .long("file")
+        .action(ArgSpecAction::Append);
+    let arg = spec.build();
+    assert_eq!(arg.get_id().as_str(), "files");
+}
+
+#[test]
+fn test_arg_spec_build_with_value_parser_strings() {
+    let spec = ArgSpec::new("format", "Format")
+        .long("format")
+        .value_parser(ArgSpecValueParser::Strings(vec!["json", "yaml", "table"]));
+    let arg = spec.build();
+    assert_eq!(arg.get_id().as_str(), "format");
+}
+
+#[test]
+fn test_arg_spec_build_with_value_parser_u64() {
+    let spec = ArgSpec::new("size", "Size")
+        .long("size")
+        .value_parser(ArgSpecValueParser::U64);
+    let arg = spec.build();
+    assert_eq!(arg.get_id().as_str(), "size");
+}
+
+#[test]
+fn test_arg_spec_build_with_value_parser_usize() {
+    let spec = ArgSpec::new("count", "Count")
+        .long("count")
+        .value_parser(ArgSpecValueParser::Usize);
+    let arg = spec.build();
+    assert_eq!(arg.get_id().as_str(), "count");
+}
+
+// --- Tests for SubcommandSpec ---
+
+#[test]
+fn test_subcommand_spec_new() {
+    let spec = SubcommandSpec::new("test", "About test");
+    assert_eq!(spec.name, "test");
+    assert_eq!(spec.about, "About test");
+    assert!(spec.long_about.is_none());
+    assert!(spec.args.is_empty());
+}
+
+#[test]
+fn test_subcommand_spec_build() {
+    let spec = SubcommandSpec::new("sub", "About sub")
+        .long_about("Long about sub")
+        .args(vec![ArgSpec::new("arg1", "Arg 1").long("arg1")]);
+    let cmd = spec.build();
+    assert_eq!(cmd.get_name(), "sub");
+    assert!(cmd.get_arguments().any(|a| a.get_id().as_str() == "arg1"));
+}
+
+#[test]
+fn test_subcommand_spec_clone() {
+    let spec = SubcommandSpec::new("test", "About")
+        .long_about("Long about")
+        .args(vec![ArgSpec::new("a", "help")]);
+    let cloned = spec.clone();
+    assert_eq!(cloned.name, "test");
+    assert_eq!(cloned.about, "About");
+    assert_eq!(cloned.long_about, Some("Long about"));
+    assert_eq!(cloned.args.len(), 1);
+}
+
+// --- Tests for CliBuilder static command builders ---
+
+#[test]
+fn test_build_serve_command() {
+    let cmd = CliBuilder::build_serve_command();
+    assert_eq!(cmd.get_name(), "serve");
+    // Should have http subcommand
+    assert!(cmd.get_subcommands().any(|sub| sub.get_name() == "http"));
+}
+
+#[test]
+fn test_build_init_command() {
+    let cmd = CliBuilder::build_init_command();
+    assert_eq!(cmd.get_name(), "init");
+    assert!(cmd.get_arguments().any(|a| a.get_id().as_str() == "target"));
+}
+
+#[test]
+fn test_build_deinit_command() {
+    let cmd = CliBuilder::build_deinit_command();
+    assert_eq!(cmd.get_name(), "deinit");
+    assert!(cmd.get_arguments().any(|a| a.get_id().as_str() == "target"));
+    assert!(cmd
+        .get_arguments()
+        .any(|a| a.get_id().as_str() == "remove-directory"));
+}
+
+#[test]
+fn test_build_doctor_command() {
+    let cmd = CliBuilder::build_doctor_command();
+    assert_eq!(cmd.get_name(), "doctor");
+}
+
+#[test]
+fn test_build_validate_command() {
+    let cmd = CliBuilder::build_validate_command();
+    assert_eq!(cmd.get_name(), "validate");
+    assert!(cmd.get_arguments().any(|a| a.get_id().as_str() == "quiet"));
+    assert!(cmd.get_arguments().any(|a| a.get_id().as_str() == "format"));
+}
+
+#[test]
+fn test_build_prompt_command() {
+    let cmd = CliBuilder::build_prompt_command();
+    assert_eq!(cmd.get_name(), "prompt");
+    let subcmd_names: Vec<&str> = cmd.get_subcommands().map(|s| s.get_name()).collect();
+    assert!(subcmd_names.contains(&"list"));
+    assert!(subcmd_names.contains(&"test"));
+    assert!(subcmd_names.contains(&"render"));
+    assert!(subcmd_names.contains(&"new"));
+    assert!(subcmd_names.contains(&"show"));
+    assert!(subcmd_names.contains(&"edit"));
+    assert!(subcmd_names.contains(&"validate"));
+}
+
+#[test]
+fn test_build_model_command() {
+    let cmd = CliBuilder::build_model_command();
+    assert_eq!(cmd.get_name(), "model");
+    let subcmd_names: Vec<&str> = cmd.get_subcommands().map(|s| s.get_name()).collect();
+    assert!(subcmd_names.contains(&"show"));
+    assert!(subcmd_names.contains(&"list"));
+    assert!(subcmd_names.contains(&"use"));
+}
+
+#[test]
+fn test_build_agent_command() {
+    let cmd = CliBuilder::build_agent_command();
+    assert_eq!(cmd.get_name(), "agent");
+    let subcmd_names: Vec<&str> = cmd.get_subcommands().map(|s| s.get_name()).collect();
+    assert!(subcmd_names.contains(&"acp"));
+}
+
+// --- Tests for CliBuilder methods ---
+
+#[test]
+fn test_cli_builder_build_args_from_specs() {
+    let specs = vec![
+        ArgSpec::new("arg1", "Help 1").long("arg1"),
+        ArgSpec::new("arg2", "Help 2").long("arg2"),
+    ];
+    let args = CliBuilder::build_args_from_specs(&specs);
+    assert_eq!(args.len(), 2);
+}
+
+#[test]
+fn test_cli_builder_build_subcommands_from_specs() {
+    let specs = vec![
+        SubcommandSpec::new("sub1", "About 1"),
+        SubcommandSpec::new("sub2", "About 2"),
+    ];
+    let cmds = CliBuilder::build_subcommands_from_specs(&specs);
+    assert_eq!(cmds.len(), 2);
+}
+
+#[test]
+fn test_cli_builder_build_command_with_docs() {
+    let cmd = CliBuilder::build_command_with_docs(CommandConfig {
+        name: "test",
+        about: "Short about",
+        long_about: "Long about text",
+    });
+    assert_eq!(cmd.get_name(), "test");
+}
+
+#[test]
+fn test_cli_builder_build_command_with_args() {
+    let cmd = CliBuilder::build_command_with_args(
+        CommandConfig {
+            name: "test",
+            about: "About",
+            long_about: "Long about",
+        },
+        vec![
+            ArgSpec::new("a", "Help A").long("aaa").build(),
+            ArgSpec::new("b", "Help B").long("bbb").build(),
+        ],
+    );
+    assert_eq!(cmd.get_name(), "test");
+    assert!(cmd.get_arguments().any(|a| a.get_id().as_str() == "a"));
+    assert!(cmd.get_arguments().any(|a| a.get_id().as_str() == "b"));
+}
+
+#[test]
+fn test_cli_builder_build_command_with_subcommands() {
+    let cmd = CliBuilder::build_command_with_subcommands(
+        CommandConfig {
+            name: "parent",
+            about: "Parent",
+            long_about: "Parent long",
+        },
+        vec![
+            Command::new("child1").about("Child 1"),
+            Command::new("child2").about("Child 2"),
+        ],
+    );
+    assert_eq!(cmd.get_name(), "parent");
+    let subcmds: Vec<&str> = cmd.get_subcommands().map(|s| s.get_name()).collect();
+    assert!(subcmds.contains(&"child1"));
+    assert!(subcmds.contains(&"child2"));
+}
+
+#[test]
+fn test_cli_builder_create_flag_arg_with_short() {
+    let arg = CliBuilder::create_flag_arg("verbose", "verbose", Some('v'), "Be verbose");
+    assert_eq!(arg.get_id().as_str(), "verbose");
+    assert_eq!(arg.get_short(), Some('v'));
+}
+
+#[test]
+fn test_cli_builder_create_flag_arg_without_short() {
+    let arg = CliBuilder::create_flag_arg("debug", "debug", None, "Debug mode");
+    assert_eq!(arg.get_id().as_str(), "debug");
+    assert_eq!(arg.get_short(), None);
+}
+
+// --- Tests for precompute_args ---
+
+#[test]
+fn test_precompute_args_no_properties() {
+    let schema = json!({});
+    let args = CliBuilder::precompute_args(&schema);
+    assert!(args.is_empty());
+}
+
+#[test]
+fn test_precompute_args_with_properties() {
+    let schema = json!({
+        "properties": {
+            "name": {"type": "string", "description": "Name"},
+            "count": {"type": "integer", "description": "Count"}
+        },
+        "required": ["name"]
+    });
+    let args = CliBuilder::precompute_args(&schema);
+    assert_eq!(args.len(), 2);
+    let name_arg = args.iter().find(|a| a.name == "name").unwrap();
+    assert!(name_arg.is_required);
+    let count_arg = args.iter().find(|a| a.name == "count").unwrap();
+    assert!(!count_arg.is_required);
+}
+
+#[test]
+fn test_extract_required_fields_empty() {
+    let schema = json!({"properties": {}});
+    let required = CliBuilder::extract_required_fields(&schema);
+    assert!(required.is_empty());
+}
+
+#[test]
+fn test_extract_required_fields_present() {
+    let schema = json!({"required": ["name", "id"]});
+    let required = CliBuilder::extract_required_fields(&schema);
+    assert!(required.contains("name"));
+    assert!(required.contains("id"));
+    assert_eq!(required.len(), 2);
+}
+
+// --- Tests for CliBuilder validation methods ---
+
+#[test]
+fn test_cli_builder_validate_all_tools_empty_registry() {
+    let (_registry, builder) = create_test_registry_and_builder();
+    let errors = builder.validate_all_tools();
+    assert!(errors.is_empty());
+}
+
+#[test]
+fn test_cli_builder_get_validation_warnings_empty_registry() {
+    let (_registry, builder) = create_test_registry_and_builder();
+    let warnings = builder.get_validation_warnings();
+    assert!(warnings.is_empty());
+}
+
+#[test]
+fn test_cli_builder_get_validation_stats_empty_registry() {
+    let (_registry, builder) = create_test_registry_and_builder();
+    let stats = builder.get_validation_stats();
+    assert_eq!(stats.total_tools, 0);
+    assert!(stats.is_all_valid());
+    assert_eq!(stats.success_rate(), 100.0);
+}
+
+// --- Tests for build_command_from_data ---
+
+#[test]
+fn test_build_command_from_data_with_subcommands() {
+    let data = CommandData {
+        name: "parent".to_string(),
+        about: Some("Parent cmd".to_string()),
+        long_about: Some("Detailed parent cmd".to_string()),
+        args: vec![ArgData {
+            name: "flag".to_string(),
+            help: Some("A flag".to_string()),
+            is_required: false,
+            arg_type: ArgType::Boolean,
+            default_value: None,
+            possible_values: None,
+        }],
+        subcommands: vec![CommandData {
+            name: "child".to_string(),
+            about: Some("Child cmd".to_string()),
+            long_about: None,
+            args: vec![],
+            subcommands: vec![],
+        }],
+    };
+    let cmd = CliBuilder::build_command_from_data(&data);
+    assert_eq!(cmd.get_name(), "parent");
+    assert!(cmd.get_subcommands().any(|s| s.get_name() == "child"));
+    assert!(cmd.get_arguments().any(|a| a.get_id().as_str() == "flag"));
+}
+
+#[test]
+fn test_build_tool_subcommand_from_data() {
+    let data = CommandData {
+        name: "tool_name".to_string(),
+        about: Some("Tool about".to_string()),
+        long_about: Some("Long tool about".to_string()),
+        args: vec![ArgData {
+            name: "input".to_string(),
+            help: Some("Input".to_string()),
+            is_required: true,
+            arg_type: ArgType::String,
+            default_value: None,
+            possible_values: None,
+        }],
+        subcommands: vec![],
+    };
+    let cmd = CliBuilder::build_tool_subcommand_from_data("my_tool", &data);
+    assert_eq!(cmd.get_name(), "my_tool");
+    assert!(cmd.get_arguments().any(|a| a.get_id().as_str() == "input"));
+}
+
+#[test]
+fn test_build_command_base() {
+    let data = CommandData {
+        name: "base".to_string(),
+        about: Some("About base".to_string()),
+        long_about: Some("Long about base".to_string()),
+        args: vec![],
+        subcommands: vec![],
+    };
+    let cmd = CliBuilder::build_command_base(&data);
+    assert_eq!(cmd.get_name(), "base");
+}
+
+#[test]
+fn test_build_command_base_no_about() {
+    let data = CommandData {
+        name: "minimal".to_string(),
+        about: None,
+        long_about: None,
+        args: vec![],
+        subcommands: vec![],
+    };
+    let cmd = CliBuilder::build_command_base(&data);
+    assert_eq!(cmd.get_name(), "minimal");
+}
+
+// --- Tests for intern_string deduplication ---
+
+#[test]
+fn test_intern_string_deduplication() {
+    let s1 = intern_string("unique_test_dedup_string".to_string());
+    let s2 = intern_string("unique_test_dedup_string".to_string());
+    // Same content should return same pointer
+    assert_eq!(s1 as *const str, s2 as *const str);
+    assert_eq!(s1, "unique_test_dedup_string");
+}
+
+// --- Tests for CommandData clone ---
+
+#[test]
+fn test_command_data_clone() {
+    let data = CommandData {
+        name: "test".to_string(),
+        about: Some("About".to_string()),
+        long_about: None,
+        args: vec![ArgData {
+            name: "a".to_string(),
+            help: None,
+            is_required: false,
+            arg_type: ArgType::String,
+            default_value: None,
+            possible_values: None,
+        }],
+        subcommands: vec![],
+    };
+    let cloned = data.clone();
+    assert_eq!(cloned.name, "test");
+    assert_eq!(cloned.args.len(), 1);
+}
+
+// --- Tests for RegistryIterType ---
+
+#[test]
+fn test_iter_registry_all_tools_empty() {
+    let registry = ToolRegistry::new();
+    let mut count = 0;
+    CliBuilder::iter_registry(&registry, RegistryIterType::AllTools, |_| {
+        count += 1;
+    });
+    assert_eq!(count, 0);
+}
+
+// --- Tests for HTTP subcommand args ---
+
+#[test]
+fn test_build_serve_http_subcommand() {
+    let cmd = CliBuilder::build_serve_http_subcommand();
+    assert_eq!(cmd.get_name(), "http");
+    assert!(cmd.get_arguments().any(|a| a.get_id().as_str() == "port"));
+    assert!(cmd.get_arguments().any(|a| a.get_id().as_str() == "host"));
+}

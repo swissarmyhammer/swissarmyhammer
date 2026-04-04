@@ -306,4 +306,210 @@ mod tests {
             _ => panic!("Expected progress notification"),
         }
     }
+
+    #[test]
+    fn test_capturing_client_handler_get_info() {
+        let (tx, _rx) = broadcast::channel(16);
+        let handler = CapturingClientHandler::new(tx);
+        let info = handler.get_info();
+
+        // Verify the client info has expected implementation name
+        let impl_info = info.client_info;
+        assert_eq!(impl_info.name, "mcp-proxy-client");
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_capturing_client_handler_on_progress() {
+        let (tx, mut rx) = broadcast::channel(16);
+        let handler = CapturingClientHandler::new(tx);
+
+        let params = ProgressNotificationParam {
+            progress_token: ProgressToken(NumberOrString::String("async-test".into())),
+            progress: 60.0,
+            total: Some(100.0),
+            message: Some("async progress".to_string()),
+        };
+
+        // Call on_progress directly (simulating rmcp calling our handler)
+        // We need a NotificationContext, but we can use the trait method through
+        // direct broadcast instead since creating a NotificationContext requires
+        // internal rmcp plumbing
+        let _ = handler
+            .notification_tx
+            .send(McpNotification::Progress(params));
+
+        match rx.try_recv() {
+            Ok(McpNotification::Progress(p)) => {
+                assert_eq!(p.progress, 60.0);
+                assert_eq!(p.message.as_deref(), Some("async progress"));
+            }
+            _ => panic!("Expected progress notification"),
+        }
+    }
+
+    #[test]
+    fn test_capturing_client_handler_log_notification() {
+        let (tx, mut rx) = broadcast::channel(16);
+        let handler = CapturingClientHandler::new(tx);
+
+        let params = LoggingMessageNotificationParam {
+            level: LoggingLevel::Warning,
+            logger: Some("test-logger".to_string()),
+            data: serde_json::json!("log message"),
+        };
+
+        let _ = handler.notification_tx.send(McpNotification::Log(params));
+
+        match rx.try_recv() {
+            Ok(McpNotification::Log(l)) => {
+                assert_eq!(l.logger.as_deref(), Some("test-logger"));
+            }
+            _ => panic!("Expected log notification"),
+        }
+    }
+
+    #[test]
+    fn test_mcp_proxy_handler_get_info() {
+        let (tx, _rx) = broadcast::channel(16);
+        let handler = McpProxyHandler::new("http://localhost:9999/mcp".to_string(), tx);
+        let info = handler.get_info();
+
+        // Verify capabilities include tools and prompts
+        assert!(info.capabilities.tools.is_some());
+        assert!(info.capabilities.prompts.is_some());
+
+        // Verify server info name
+        assert_eq!(info.server_info.name, "mcp-notification-proxy");
+
+        // Verify instructions
+        assert_eq!(
+            info.instructions.as_deref(),
+            Some("MCP proxy with notification capture")
+        );
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_mcp_proxy_handler_initialize() {
+        let (tx, _rx) = broadcast::channel(16);
+        let handler = McpProxyHandler::new("http://localhost:9999/mcp".to_string(), tx);
+
+        // Verify that get_info returns consistent results with what initialize would return
+        let info = handler.get_info();
+        assert!(info.capabilities.tools.is_some());
+        let tools_cap = info.capabilities.tools.unwrap();
+        assert_eq!(tools_cap.list_changed, Some(false));
+    }
+
+    #[test]
+    fn test_map_error() {
+        let err = rmcp::service::ServiceError::TransportClosed;
+        let mcp_err = McpProxyHandler::map_error("test_op", err);
+        let msg = format!("{:?}", mcp_err);
+        assert!(
+            msg.contains("test_op"),
+            "error should contain operation name: {}",
+            msg
+        );
+    }
+
+    #[test]
+    fn test_mcp_proxy_handler_clone() {
+        let (tx, _rx) = broadcast::channel(16);
+        let handler = McpProxyHandler::new("http://localhost:8080/mcp".to_string(), tx);
+        let cloned = handler.clone();
+
+        assert_eq!(cloned.upstream_url, "http://localhost:8080/mcp");
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_start_proxy_binds_and_provides_url() {
+        // start_proxy should bind to a local port even though upstream doesn't exist
+        // (connections will fail when actually used, but the proxy itself should start)
+        let proxy = start_proxy("http://127.0.0.1:19999/mcp")
+            .await
+            .expect("proxy should start");
+
+        assert!(
+            proxy.url().starts_with("http://127.0.0.1:"),
+            "URL should be localhost: {}",
+            proxy.url()
+        );
+        assert!(
+            proxy.url().ends_with("/mcp"),
+            "URL should end with /mcp: {}",
+            proxy.url()
+        );
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_mcp_proxy_notification_source_trait() {
+        let proxy = start_proxy("http://127.0.0.1:19998/mcp")
+            .await
+            .expect("proxy should start");
+
+        // Test McpNotificationSource trait implementation
+        let source: &dyn McpNotificationSource = &proxy;
+        assert_eq!(source.url(), proxy.url());
+
+        // subscribe() should return a working receiver
+        let _rx = source.subscribe();
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_mcp_proxy_subscribe_receives_notifications() {
+        let proxy = start_proxy("http://127.0.0.1:19997/mcp")
+            .await
+            .expect("proxy should start");
+
+        let mut rx = proxy.subscribe();
+
+        // Manually send a notification through the internal tx channel
+        // This simulates what happens when the proxy captures from upstream
+        let _ = proxy
+            .notification_tx
+            .send(McpNotification::Progress(ProgressNotificationParam {
+                progress_token: ProgressToken(NumberOrString::String("proxy-test".into())),
+                progress: 33.0,
+                total: Some(100.0),
+                message: Some("proxy notification".to_string()),
+            }));
+
+        match rx.try_recv() {
+            Ok(McpNotification::Progress(p)) => {
+                assert_eq!(p.progress, 33.0);
+                assert_eq!(p.message.as_deref(), Some("proxy notification"));
+            }
+            _ => panic!("Expected progress notification from proxy"),
+        }
+    }
+
+    #[test]
+    fn test_mcp_proxy_handler_new() {
+        let (tx, _rx) = broadcast::channel(16);
+        let handler = McpProxyHandler::new("http://example.com/mcp".to_string(), tx);
+        assert_eq!(handler.upstream_url, "http://example.com/mcp");
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_mcp_proxy_handler_get_peer_caches_connection() {
+        // We can't fully test get_peer without a real upstream, but we can verify
+        // the error case when upstream is unavailable
+        let (tx, _rx) = broadcast::channel(16);
+        let handler = McpProxyHandler::new("http://127.0.0.1:19996/mcp".to_string(), tx);
+
+        // First call should fail because upstream doesn't exist
+        let result = handler.get_peer().await;
+        assert!(
+            result.is_err(),
+            "get_peer should fail when upstream is unreachable"
+        );
+    }
+
+    #[test]
+    fn test_capturing_client_handler_clone() {
+        let (tx, _rx) = broadcast::channel(16);
+        let handler = CapturingClientHandler::new(tx);
+        let _cloned = handler.clone();
+        // Clone should work without panic
+    }
 }

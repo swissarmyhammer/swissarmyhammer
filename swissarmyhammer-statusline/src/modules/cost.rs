@@ -113,4 +113,58 @@ mod tests {
         let out = eval(&ctx);
         assert!(out.is_empty());
     }
+
+    #[test]
+    fn test_cost_render_output() {
+        let input = StatuslineInput {
+            cost: Some(CostInfo {
+                total_cost_usd: Some(5.99),
+            }),
+            ..Default::default()
+        };
+        let config = StatuslineConfig::default();
+        let ctx = ModuleContext {
+            input: &input,
+            config: &config,
+        };
+        let out = eval(&ctx);
+        let rendered = out.render();
+        assert!(rendered.contains("5.99"));
+    }
+
+    #[test]
+    fn test_cost_small_nonzero() {
+        let input = StatuslineInput {
+            cost: Some(CostInfo {
+                total_cost_usd: Some(0.01),
+            }),
+            ..Default::default()
+        };
+        let config = StatuslineConfig::default();
+        let ctx = ModuleContext {
+            input: &input,
+            config: &config,
+        };
+        let out = eval(&ctx);
+        assert!(!out.is_empty());
+        assert!(out.text.contains("0.01"));
+    }
+
+    #[test]
+    fn test_cost_near_zero_hidden() {
+        let input = StatuslineInput {
+            cost: Some(CostInfo {
+                total_cost_usd: Some(0.004),
+            }),
+            ..Default::default()
+        };
+        let config = StatuslineConfig::default();
+        let ctx = ModuleContext {
+            input: &input,
+            config: &config,
+        };
+        let out = eval(&ctx);
+        // 0.004 < 0.005 threshold with hide_zero = true
+        assert!(out.is_empty());
+    }
 }

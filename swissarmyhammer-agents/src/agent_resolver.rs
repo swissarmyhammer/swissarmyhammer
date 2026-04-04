@@ -376,6 +376,53 @@ mod tests {
     }
 
     #[test]
+    fn test_load_agents_from_directory_skips_malformed_agent() {
+        // A subdirectory with a malformed AGENT.md should be skipped (warn branch)
+        let temp_dir = TempDir::new().unwrap();
+        let bad_agent = temp_dir.path().join("bad-agent");
+        fs::create_dir_all(&bad_agent).unwrap();
+        // Write an AGENT.md with invalid frontmatter (missing closing ---)
+        fs::write(bad_agent.join("AGENT.md"), "---\nname: bad\n# no closing").unwrap();
+
+        let mut agents = HashMap::new();
+        load_agents_from_directory(temp_dir.path(), AgentSource::Local, &mut agents);
+        // The malformed agent should be skipped, not loaded
+        assert!(
+            !agents.contains_key("bad-agent"),
+            "malformed agent should not be loaded"
+        );
+    }
+
+    #[test]
+    fn test_load_agents_from_directory_loads_valid_alongside_invalid() {
+        let temp_dir = TempDir::new().unwrap();
+
+        // Create one valid agent
+        create_agent_dir(temp_dir.path(), "good-agent", "A valid agent");
+
+        // Create one malformed agent (missing description)
+        let bad_dir = temp_dir.path().join("bad-agent");
+        fs::create_dir_all(&bad_dir).unwrap();
+        fs::write(
+            bad_dir.join("AGENT.md"),
+            "---\nname: bad-agent\n---\nInstructions.\n",
+        )
+        .unwrap();
+
+        let mut agents = HashMap::new();
+        load_agents_from_directory(temp_dir.path(), AgentSource::Local, &mut agents);
+
+        assert!(
+            agents.contains_key("good-agent"),
+            "valid agent should be loaded"
+        );
+        assert!(
+            !agents.contains_key("bad-agent"),
+            "invalid agent should be skipped"
+        );
+    }
+
+    #[test]
     fn test_add_search_path_is_used() {
         let temp_dir = TempDir::new().unwrap();
 

@@ -1103,4 +1103,272 @@ mod tests {
         // Should not contain empty body content
         assert!(!markdown.contains("## Comments")); // No comments section if no comments
     }
+
+    #[test]
+    fn test_render_issue_body_whitespace_only() {
+        let (converter, issue) = setup_converter_and_issue(
+            "Whitespace Body",
+            Some("   \n\t  ".to_string()),
+            "open",
+            vec![],
+        );
+
+        let body = converter.render_issue_body(&issue);
+        // Whitespace-only body should be treated as empty
+        assert!(body.is_empty());
+    }
+
+    #[test]
+    fn test_render_comments_with_none_body() {
+        let converter = GitHubConverter::new();
+        let commenter = create_test_user("user1", 10);
+        let comments = vec![create_test_comment(
+            1,
+            None,
+            commenter,
+            "2023-01-15T10:00:00Z",
+        )];
+
+        let section = converter.render_comments_section(&comments);
+        assert!(section.contains("## Comments"));
+        assert!(section.contains("### Comment by @user1"));
+        // Should not contain any body content since it's None
+    }
+
+    #[test]
+    fn test_render_comments_with_whitespace_only_body() {
+        let converter = GitHubConverter::new();
+        let commenter = create_test_user("user1", 10);
+        let comments = vec![create_test_comment(
+            1,
+            Some("   \n  ".to_string()),
+            commenter,
+            "2023-01-15T10:00:00Z",
+        )];
+
+        let section = converter.render_comments_section(&comments);
+        assert!(section.contains("## Comments"));
+        // Whitespace-only body should not appear
+    }
+
+    #[test]
+    fn test_classify_api_error_403() {
+        let converter = GitHubConverter::new();
+        let error = converter.classify_api_error("HTTP 403 Forbidden".to_string());
+        match error {
+            MarkdownError::AuthError { message } => {
+                assert!(message.contains("rate limit"));
+            }
+            _ => panic!("Expected AuthError for 403"),
+        }
+    }
+
+    #[test]
+    fn test_classify_api_error_404() {
+        let converter = GitHubConverter::new();
+        let error = converter.classify_api_error("HTTP 404 Not Found".to_string());
+        match error {
+            MarkdownError::NetworkError { message } => {
+                assert!(message.contains("not found"));
+            }
+            _ => panic!("Expected NetworkError for 404"),
+        }
+    }
+
+    #[test]
+    fn test_classify_api_error_other() {
+        let converter = GitHubConverter::new();
+        let error = converter.classify_api_error("HTTP 500 Server Error".to_string());
+        match error {
+            MarkdownError::NetworkError { message } => {
+                assert_eq!(message, "HTTP 500 Server Error");
+            }
+            _ => panic!("Expected NetworkError for other errors"),
+        }
+    }
+
+    #[test]
+    fn test_from_env_no_token() {
+        // When GITHUB_TOKEN is not set, should create unauthenticated converter
+        let original = std::env::var("GITHUB_TOKEN").ok();
+        std::env::remove_var("GITHUB_TOKEN");
+
+        let converter = GitHubConverter::from_env();
+        assert!(converter.auth_token.is_none());
+
+        // Restore original value
+        if let Some(val) = original {
+            std::env::set_var("GITHUB_TOKEN", val);
+        }
+    }
+
+    #[test]
+    fn test_from_env_empty_token() {
+        let original = std::env::var("GITHUB_TOKEN").ok();
+        std::env::set_var("GITHUB_TOKEN", "   ");
+
+        let converter = GitHubConverter::from_env();
+        assert!(converter.auth_token.is_none());
+
+        // Restore original value
+        match original {
+            Some(val) => std::env::set_var("GITHUB_TOKEN", val),
+            None => std::env::remove_var("GITHUB_TOKEN"),
+        }
+    }
+
+    #[test]
+    fn test_new_with_config() {
+        let converter = GitHubConverter::new_with_config(
+            Some("test-token".to_string()),
+            "http://localhost:8080".to_string(),
+        );
+        assert_eq!(converter.auth_token, Some("test-token".to_string()));
+        assert_eq!(converter.api_base_url, "http://localhost:8080");
+    }
+
+    #[test]
+    fn test_new_with_config_no_token() {
+        let converter =
+            GitHubConverter::new_with_config(None, "http://custom-api.example.com".to_string());
+        assert!(converter.auth_token.is_none());
+        assert_eq!(converter.api_base_url, "http://custom-api.example.com");
+    }
+
+    #[test]
+    fn test_reaction_counts_all_emoji_types() {
+        let user = create_test_user("test", 1);
+
+        let emojis = [
+            "+1",
+            "-1",
+            "laugh",
+            "confused",
+            "heart",
+            "hooray",
+            "rocket",
+            "eyes",
+            "custom_emoji",
+        ];
+        let expected_displays = [
+            "👍",
+            "👎",
+            "😄",
+            "😕",
+            "❤️",
+            "🎉",
+            "🚀",
+            "👀",
+            "custom_emoji",
+        ];
+
+        for (emoji, expected) in emojis.iter().zip(expected_displays.iter()) {
+            let reactions = vec![Reaction {
+                content: emoji.to_string(),
+                user: user.clone(),
+            }];
+            let counts = ReactionCounts::from_reactions(&reactions);
+            let formatted = counts.format();
+            assert!(
+                formatted.contains(expected),
+                "Expected '{}' in formatted output '{}' for emoji '{}'",
+                expected,
+                formatted,
+                emoji
+            );
+        }
+    }
+
+    #[test]
+    fn test_reaction_counts_default() {
+        let counts = ReactionCounts::default();
+        assert!(counts.counts.is_empty());
+        assert_eq!(counts.format(), "");
+    }
+
+    #[test]
+    fn test_build_frontmatter() {
+        let converter = GitHubConverter::new();
+        let resource = GitHubResource {
+            owner: "testowner".to_string(),
+            repo: "testrepo".to_string(),
+            number: 42,
+            resource_type: ResourceType::Issue,
+            original_url: "https://github.com/testowner/testrepo/issues/42".to_string(),
+        };
+        let user = create_test_user("author", 1);
+        let issue = create_test_issue(
+            42,
+            "Test Issue Title",
+            Some("Body".to_string()),
+            "open",
+            user,
+            vec![create_test_label("bug", "d73a49")],
+        );
+
+        let frontmatter = converter.build_frontmatter(&resource, &issue).unwrap();
+        assert!(frontmatter.contains("github_issue_number: '42'"));
+        assert!(frontmatter.contains("github_repository: testowner/testrepo"));
+        assert!(frontmatter.contains("github_state: open"));
+        assert!(frontmatter.contains("github_author: author"));
+        assert!(frontmatter.contains("github_labels: bug"));
+        assert!(frontmatter.contains("resource_type: issue"));
+    }
+
+    #[test]
+    fn test_build_frontmatter_pull_request() {
+        let converter = GitHubConverter::new();
+        let resource = GitHubResource {
+            owner: "owner".to_string(),
+            repo: "repo".to_string(),
+            number: 99,
+            resource_type: ResourceType::PullRequest,
+            original_url: "https://github.com/owner/repo/pull/99".to_string(),
+        };
+        let user = create_test_user("prauthor", 2);
+        let issue = create_test_issue(99, "PR Title", None, "closed", user, vec![]);
+
+        let frontmatter = converter.build_frontmatter(&resource, &issue).unwrap();
+        assert!(frontmatter.contains("resource_type: pull_request"));
+        assert!(!frontmatter.contains("github_labels"));
+    }
+
+    #[test]
+    fn test_render_issue_header_structure() {
+        let converter = GitHubConverter::new();
+        let user = create_test_user("headeruser", 5);
+        let issue = create_test_issue(
+            1,
+            "Header Test",
+            None,
+            "closed",
+            user,
+            vec![
+                create_test_label("enhancement", "a2eeef"),
+                create_test_label("priority", "ff0000"),
+            ],
+        );
+
+        let header = converter.render_issue_header(&issue);
+        assert!(header.starts_with("# Header Test\n\n"));
+        assert!(header.contains("**Author:** @headeruser"));
+        assert!(header.contains("**State:** Closed"));
+        assert!(header.contains("**Labels:** enhancement, priority"));
+        assert!(header.contains("**Created:**"));
+    }
+
+    #[test]
+    fn test_parse_github_url_whitespace_trimmed() {
+        let converter = GitHubConverter::new();
+        let url = "  https://github.com/owner/repo/issues/1  ";
+        let result = converter.parse_github_url(url).unwrap();
+        assert_eq!(result.owner, "owner");
+        assert_eq!(result.number, 1);
+    }
+
+    #[test]
+    fn test_converter_trait_name() {
+        let converter = GitHubConverter::new();
+        assert_eq!(super::super::Converter::name(&converter), "GitHub Issue");
+    }
 }

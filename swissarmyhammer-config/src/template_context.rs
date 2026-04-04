@@ -2134,4 +2134,329 @@ config_only = "config_only_value"
             "unique_project_types should be empty for a directory with no project markers"
         );
     }
+
+    #[test]
+    fn test_variables_mut() {
+        // Exercises the `variables_mut()` accessor.
+        let mut context = TemplateContext::new();
+        context.set("key".to_string(), json!("value"));
+
+        let vars = context.variables_mut();
+        vars.insert("new_key".to_string(), json!("new_value"));
+
+        assert_eq!(context.get("new_key"), Some(&json!("new_value")));
+        assert_eq!(context.len(), 2);
+    }
+
+    #[test]
+    fn test_from_trait_hashmap_to_context() {
+        // Exercises the `From<HashMap<String, Value>>` trait impl.
+        let mut map = HashMap::new();
+        map.insert("k".to_string(), json!("v"));
+
+        let context: TemplateContext = map.into();
+        assert_eq!(context.get("k"), Some(&json!("v")));
+    }
+
+    #[test]
+    fn test_from_trait_context_to_hashmap() {
+        // Exercises the `From<TemplateContext>` for `HashMap` trait impl.
+        let mut context = TemplateContext::new();
+        context.set("k".to_string(), json!("v"));
+
+        let map: HashMap<String, Value> = context.into();
+        assert_eq!(map.get("k"), Some(&json!("v")));
+    }
+
+    #[test]
+    fn test_default_impl() {
+        // Exercises the `Default` impl for `TemplateContext`.
+        let context = TemplateContext::default();
+        assert!(context.is_empty());
+    }
+
+    #[test]
+    fn test_merge_into_workflow_context_no_existing_template_vars() {
+        // Exercises the branch where `_template_vars` is not present or not an object.
+        let mut template_context = TemplateContext::new();
+        template_context.set("config_var".to_string(), json!("config_value"));
+
+        // No _template_vars key at all
+        let mut workflow_context = HashMap::new();
+        template_context.merge_into_workflow_context(&mut workflow_context);
+
+        let template_vars = workflow_context
+            .get("_template_vars")
+            .unwrap()
+            .as_object()
+            .unwrap();
+        assert_eq!(
+            template_vars.get("config_var").unwrap(),
+            &json!("config_value")
+        );
+
+        // _template_vars is not an object (e.g., string)
+        let mut workflow_context2 = HashMap::new();
+        workflow_context2.insert("_template_vars".to_string(), json!("not_an_object"));
+        template_context.merge_into_workflow_context(&mut workflow_context2);
+
+        let template_vars2 = workflow_context2
+            .get("_template_vars")
+            .unwrap()
+            .as_object()
+            .unwrap();
+        assert_eq!(
+            template_vars2.get("config_var").unwrap(),
+            &json!("config_value")
+        );
+    }
+
+    #[test]
+    fn test_get_var_and_set_var_aliases() {
+        // Exercises the `get_var` and `set_var` compatibility aliases.
+        let mut context = TemplateContext::new();
+        context.set_var("alias_key".to_string(), json!("alias_value"));
+        assert_eq!(context.get_var("alias_key"), Some(&json!("alias_value")));
+    }
+
+    #[test]
+    fn test_navigate_nested_value_deep() {
+        // Exercises deep nested dot-notation access (3+ levels).
+        let mut context = TemplateContext::new();
+        context.set(
+            "a".to_string(),
+            json!({
+                "b": {
+                    "c": {
+                        "d": "deep_value"
+                    }
+                }
+            }),
+        );
+
+        assert_eq!(context.get("a.b.c.d"), Some(&json!("deep_value")));
+        assert_eq!(context.get("a.b.nonexistent"), None);
+        assert_eq!(context.get("a.b.c.d.too_deep"), None);
+    }
+
+    #[test]
+    fn test_navigate_nested_value_non_object_intermediate() {
+        // Exercises the branch where an intermediate value is not an object.
+        let mut context = TemplateContext::new();
+        context.set("flat".to_string(), json!("string_value"));
+
+        // Trying to navigate through a string should return None
+        assert_eq!(context.get("flat.nested"), None);
+    }
+
+    #[test]
+    fn test_get_agent_config_system_default() {
+        // Exercises the default fallback path of `get_agent_config`.
+        let context = TemplateContext::new();
+        let config = context.get_agent_config(None);
+        assert_eq!(
+            config.executor_type(),
+            crate::model::ModelExecutorType::ClaudeCode
+        );
+    }
+
+    #[test]
+    fn test_get_agent_config_with_workflow_name() {
+        // Exercises the workflow-specific path of `get_agent_config`.
+        let mut context = TemplateContext::new();
+        let llama_config =
+            crate::model::ModelConfig::llama_agent(crate::model::LlamaAgentConfig::for_testing());
+        context.set(
+            "agent.configs.my-workflow".to_string(),
+            serde_json::to_value(&llama_config).unwrap(),
+        );
+
+        let config = context.get_agent_config(Some("my-workflow"));
+        assert_eq!(
+            config.executor_type(),
+            crate::model::ModelExecutorType::LlamaAgent
+        );
+
+        // Non-existent workflow should fall to default
+        let config = context.get_agent_config(Some("nonexistent"));
+        assert_eq!(
+            config.executor_type(),
+            crate::model::ModelExecutorType::ClaudeCode
+        );
+    }
+
+    #[test]
+    fn test_get_agent_config_from_agent_key() {
+        // Exercises the `agent` key path in `get_agent_config`.
+        let mut context = TemplateContext::new();
+        let claude_config = crate::model::ModelConfig::claude_code();
+        context.set(
+            "agent".to_string(),
+            serde_json::to_value(&claude_config).unwrap(),
+        );
+
+        let config = context.get_agent_config(None);
+        assert_eq!(
+            config.executor_type(),
+            crate::model::ModelExecutorType::ClaudeCode
+        );
+    }
+
+    #[test]
+    fn test_get_all_agent_configs_empty() {
+        let context = TemplateContext::new();
+        let configs = context.get_all_agent_configs();
+        assert!(configs.is_empty());
+    }
+
+    #[test]
+    fn test_get_all_agent_configs_with_default() {
+        let mut context = TemplateContext::new();
+        let config = crate::model::ModelConfig::claude_code();
+        context.set(
+            "agent.default".to_string(),
+            serde_json::to_value(&config).unwrap(),
+        );
+
+        let configs = context.get_all_agent_configs();
+        assert!(configs.contains_key("default"));
+    }
+
+    #[test]
+    fn test_get_all_agent_configs_with_flat_workflow_keys() {
+        // Exercises the flat key scanning path in `get_all_agent_configs`.
+        let mut context = TemplateContext::new();
+        let config = crate::model::ModelConfig::claude_code();
+        context.set(
+            "agent.configs.workflow1".to_string(),
+            serde_json::to_value(&config).unwrap(),
+        );
+
+        let configs = context.get_all_agent_configs();
+        assert!(configs.contains_key("workflow1"));
+    }
+
+    #[test]
+    fn test_try_get_config_invalid_value() {
+        // Exercises the path where `try_get_config` can't deserialize.
+        let mut context = TemplateContext::new();
+        context.set("agent.default".to_string(), json!("not_a_config_object"));
+
+        // Should not find a valid config from an invalid value
+        let config = context.get_agent_config(None);
+        // Falls back to system default
+        assert_eq!(
+            config.executor_type(),
+            crate::model::ModelExecutorType::ClaudeCode
+        );
+    }
+
+    #[test]
+    fn test_resolve_model_name() {
+        // Exercises the `resolve_model_name` method (always returns "claude").
+        let context = TemplateContext::new();
+        let name = context.resolve_model_name();
+        assert_eq!(name, "claude");
+    }
+
+    #[test]
+    fn test_set_model_variable_when_already_set() {
+        // Exercises the branch where `model` is already set.
+        let mut context = TemplateContext::new();
+        context.set("model".to_string(), json!("my-custom-model"));
+        context.set_model_variable();
+        // Should not override
+        assert_eq!(context.get("model"), Some(&json!("my-custom-model")));
+    }
+
+    #[test]
+    fn test_set_model_variable_when_not_set() {
+        // Exercises the branch where `model` is not set and defaults to "claude".
+        let mut context = TemplateContext::new();
+        context.set_model_variable();
+        assert_eq!(context.get("model"), Some(&json!("claude")));
+    }
+
+    #[test]
+    fn test_set_working_directory_variables_when_already_set() {
+        // Exercises the branch where working_directory is already set.
+        let mut context = TemplateContext::new();
+        context.set("working_directory".to_string(), json!("/custom/dir"));
+        context.set_working_directory_variables();
+        // Should not override
+        assert_eq!(
+            context.get("working_directory"),
+            Some(&json!("/custom/dir"))
+        );
+    }
+
+    #[test]
+    fn test_set_working_directory_variables_cwd_already_set() {
+        // Exercises the branch where cwd is already set (but working_directory is not).
+        let mut context = TemplateContext::new();
+        context.set("cwd".to_string(), json!("/custom/cwd"));
+        context.set_working_directory_variables();
+        // Should not override since cwd is set
+        assert_eq!(context.get("cwd"), Some(&json!("/custom/cwd")));
+        assert_eq!(context.get("working_directory"), None);
+    }
+
+    #[test]
+    fn test_set_available_skills_variable_when_already_set() {
+        // Exercises the branch where available_skills is already set.
+        let mut context = TemplateContext::new();
+        context.set("available_skills".to_string(), json!(["existing"]));
+        context.set_available_skills_variable();
+        // Should not override
+        assert_eq!(context.get("available_skills"), Some(&json!(["existing"])));
+    }
+
+    #[test]
+    fn test_set_project_types_variable_when_already_set() {
+        // Exercises the branch where project_types is already set.
+        let mut context = TemplateContext::new();
+        context.set("project_types".to_string(), json!(["existing"]));
+        context.set_project_types_variable();
+        // Should not override
+        assert_eq!(context.get("project_types"), Some(&json!(["existing"])));
+    }
+
+    #[test]
+    fn test_from_template_vars() {
+        let mut vars = HashMap::new();
+        vars.insert("key1".to_string(), json!("value1"));
+        vars.insert("key2".to_string(), json!(42));
+
+        let context = TemplateContext::from_template_vars(vars);
+        assert_eq!(context.get("key1"), Some(&json!("value1")));
+        assert_eq!(context.get("key2"), Some(&json!(42)));
+        assert_eq!(context.len(), 2);
+    }
+
+    #[test]
+    fn test_to_liquid_context_coverage() {
+        // Exercises the `to_liquid_context` conversion.
+        let mut context = TemplateContext::new();
+        context.set("name".to_string(), json!("test"));
+        context.set("count".to_string(), json!(42));
+
+        let liquid_ctx = context.to_liquid_context();
+        // Verify keys exist by rendering a template
+        let parser = liquid::ParserBuilder::with_stdlib().build().unwrap();
+        let template = parser.parse("{{name}} {{count}}").unwrap();
+        let output = template.render(&liquid_ctx).unwrap();
+        assert_eq!(output, "test 42");
+    }
+
+    #[test]
+    fn test_serialization_roundtrip() {
+        // Exercises the Serialize/Deserialize derives on TemplateContext.
+        let mut context = TemplateContext::new();
+        context.set("key".to_string(), json!("value"));
+        context.set("number".to_string(), json!(42));
+
+        let json = serde_json::to_string(&context).unwrap();
+        let deserialized: TemplateContext = serde_json::from_str(&json).unwrap();
+        assert_eq!(context, deserialized);
+    }
 }

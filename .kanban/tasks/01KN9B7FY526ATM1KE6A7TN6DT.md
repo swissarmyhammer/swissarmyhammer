@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: b280
+position_column: done
+position_ordinal: ffffffffffffffffffb280
 title: 'llama-agent: preload skills from agent definition frontmatter'
 ---
 ## What

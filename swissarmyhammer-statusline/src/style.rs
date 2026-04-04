@@ -165,4 +165,57 @@ mod tests {
         let s = Style::default();
         assert_eq!(s.apply("x"), "x");
     }
+
+    #[test]
+    fn test_multiple_modifiers() {
+        let s = Style::parse("bold italic underline");
+        let result = s.apply("text");
+        assert!(result.contains("\x1b[1m"));
+        assert!(result.contains("\x1b[3m"));
+        assert!(result.contains("\x1b[4m"));
+    }
+
+    #[test]
+    fn test_case_insensitive() {
+        let s = Style::parse("GREEN BOLD");
+        let result = s.apply("x");
+        assert!(result.contains("\x1b[32m"));
+        assert!(result.contains("\x1b[1m"));
+    }
+
+    #[test]
+    fn test_dimmed_from_default() {
+        let s = Style::default();
+        let d = s.dimmed();
+        let result = d.apply("x");
+        assert!(result.contains("\x1b[2m"));
+    }
+
+    #[test]
+    fn test_multiple_unknown_tokens() {
+        let s = Style::parse("foo bar baz");
+        assert_eq!(s.apply("x"), "x");
+    }
+
+    #[test]
+    fn test_mixed_known_and_unknown() {
+        let s = Style::parse("red foo bold");
+        let result = s.apply("x");
+        assert!(result.contains("\x1b[31m"));
+        assert!(result.contains("\x1b[1m"));
+    }
+
+    #[test]
+    fn test_clone_style() {
+        let s = Style::parse("green bold");
+        let c = s.clone();
+        assert_eq!(s.apply("x"), c.apply("x"));
+    }
+
+    #[test]
+    fn test_debug_style() {
+        let s = Style::parse("red");
+        let debug = format!("{:?}", s);
+        assert!(debug.contains("31"));
+    }
 }

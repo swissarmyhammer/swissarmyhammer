@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: '9180'
+position_column: done
+position_ordinal: ffffffffffffffffffcf80
 title: '100% coverage: swissarmyhammer-cli'
 ---
-Coverage: 0% (0/221 lines) — 221 lines to cover\n\nTop uncovered files:\n- src/dynamic_cli.rs (41 uncov) — dynamic CLI construction\n- src/list.rs (34 uncov) — list commands\n- src/context.rs (31 uncov) — CLI context #coverage-gap
+Top uncovered files:\n- src/dynamic_cli.rs — dynamic CLI construction\n- src/list.rs — list commands\n- src/context.rs — CLI context #coverage-gap\n\n**CONSTRAINT: ONLY add tests. Do NOT modify, refactor, delete, or otherwise change the code under test. The production code must remain exactly as-is. Do NOT put line numbers or line counts in comments or ticket descriptions — lines change constantly and these go stale immediately. Run coverage to get current numbers.**

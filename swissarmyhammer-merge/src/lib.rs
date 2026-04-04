@@ -49,3 +49,42 @@ impl From<MergeConflict> for MergeError {
         MergeError::Conflict(c)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The `From<MergeConflict>` impl converts a conflict into `MergeError::Conflict`.
+    #[test]
+    fn merge_conflict_into_merge_error() {
+        let conflict = MergeConflict {
+            conflicting_ids: vec!["field_a".to_owned(), "field_b".to_owned()],
+        };
+        let error: MergeError = conflict.into();
+        assert!(
+            matches!(error, MergeError::Conflict(_)),
+            "From<MergeConflict> should produce MergeError::Conflict"
+        );
+        // Verify the Display impl propagates through.
+        let msg = error.to_string();
+        assert!(
+            msg.contains("field_a") && msg.contains("field_b"),
+            "error Display should contain conflicting ids: {msg}"
+        );
+    }
+
+    /// `MergeConflict` implements `std::error::Error` (source returns None by default).
+    #[test]
+    fn merge_conflict_is_std_error() {
+        let conflict = MergeConflict {
+            conflicting_ids: vec!["id1".to_owned()],
+        };
+        // Use the std::error::Error trait object to confirm it is implemented.
+        let err: &dyn std::error::Error = &conflict;
+        assert!(err.source().is_none(), "MergeConflict has no source error");
+        assert!(
+            err.to_string().contains("id1"),
+            "Display should contain the conflicting id"
+        );
+    }
+}

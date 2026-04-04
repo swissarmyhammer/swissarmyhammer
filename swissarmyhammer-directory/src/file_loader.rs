@@ -1661,4 +1661,637 @@ mod tests {
         );
         assert_eq!(file.unwrap().source, FileSource::Local);
     }
+
+    // ── Additional coverage tests ──────────────────────────────────────
+
+    /// FileSource::Dynamic display_emoji returns the same value as Builtin.
+    #[test]
+    fn test_file_source_dynamic_display_emoji() {
+        assert_eq!(FileSource::Dynamic.display_emoji(), "📦 Built-in");
+    }
+
+    /// FileSource::Dynamic has its own Display variant.
+    #[test]
+    fn test_file_source_dynamic_display() {
+        assert_eq!(FileSource::Dynamic.to_string(), "dynamic");
+    }
+
+    /// extract_name_from_path with nested subdirectory components joins them
+    /// with "/" separators. This exercises the branch where components has
+    /// more than one element after the pop.
+    #[test]
+    fn test_from_path_and_content_nested_under_subdir() {
+        let entry = FileEntry::from_path_and_content(
+            PathBuf::from("/home/user/.prompts/category/subcategory/deep.md"),
+            "deep content".to_string(),
+            FileSource::User,
+        );
+        assert_eq!(
+            entry.name, "category/subcategory/deep",
+            "nested path under known subdir should join with '/'"
+        );
+    }
+
+    /// remove_compound_extensions handles each supported compound extension.
+    #[test]
+    fn test_remove_compound_extensions_all_variants() {
+        assert_eq!(
+            FileEntry::remove_compound_extensions(Path::new("foo.md.liquid")),
+            "foo"
+        );
+        assert_eq!(
+            FileEntry::remove_compound_extensions(Path::new("foo.markdown.liquid")),
+            "foo"
+        );
+        assert_eq!(
+            FileEntry::remove_compound_extensions(Path::new("foo.liquid.md")),
+            "foo"
+        );
+        assert_eq!(
+            FileEntry::remove_compound_extensions(Path::new("foo.md")),
+            "foo"
+        );
+        assert_eq!(
+            FileEntry::remove_compound_extensions(Path::new("foo.markdown")),
+            "foo"
+        );
+        assert_eq!(
+            FileEntry::remove_compound_extensions(Path::new("foo.liquid")),
+            "foo"
+        );
+    }
+
+    /// remove_compound_extensions returns empty string for a path with no
+    /// file_name component.
+    #[test]
+    fn test_remove_compound_extensions_no_filename() {
+        // A path like "/" has no file_name → unwrap_or_default → ""
+        let stem = FileEntry::remove_compound_extensions(Path::new("/"));
+        assert_eq!(stem, "");
+    }
+
+    /// is_path_safe returns true when both paths can be canonicalized and
+    /// the file path is within the base directory.
+    #[test]
+    fn test_is_path_safe_canonical_path_within_base() {
+        let temp_dir = TempDir::new().unwrap();
+        let sub = temp_dir.path().join("sub");
+        fs::create_dir_all(&sub).unwrap();
+        let file = sub.join("file.md");
+        fs::write(&file, "test").unwrap();
+
+        assert!(
+            VirtualFileSystem::<SwissarmyhammerConfig>::is_path_safe(&file, temp_dir.path()),
+            "file within base should be safe via canonical comparison"
+        );
+    }
+
+    /// is_path_safe returns false when canonicalized path is outside the base.
+    #[test]
+    fn test_is_path_safe_canonical_path_outside_base() {
+        let temp_dir = TempDir::new().unwrap();
+        let base = temp_dir.path().join("base");
+        let outside = temp_dir.path().join("outside");
+        fs::create_dir_all(&base).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        let file = outside.join("secret.md");
+        fs::write(&file, "secret").unwrap();
+
+        assert!(
+            !VirtualFileSystem::<SwissarmyhammerConfig>::is_path_safe(&file, &base),
+            "file outside base should not be safe"
+        );
+    }
+
+    /// load_files_from_dir in a directory with a nested subdirectory walks
+    /// recursively and loads files from subdirectories.
+    #[test]
+    fn test_load_files_from_dir_recursive_walk() {
+        let temp_dir = TempDir::new().unwrap();
+        let dir = temp_dir.path().join("root");
+        let nested = dir.join("sub1").join("sub2");
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(nested.join("deep.md"), "deep").unwrap();
+        fs::write(dir.join("top.md"), "top").unwrap();
+
+        let mut vfs = VirtualFileSystem::<SwissarmyhammerConfig>::new("prompts");
+        vfs.load_files_from_dir(&dir, FileSource::Local).unwrap();
+
+        assert!(vfs.get("deep").is_some(), "nested file should be loaded");
+        assert!(vfs.get("top").is_some(), "top-level file should be loaded");
+    }
+
+    /// load_local_files_managed falls back to current directory when not in a git repo.
+    /// We test this indirectly by calling load_all in default managed mode from a
+    /// temp directory with no .git.
+    #[test]
+    #[serial]
+    fn test_load_all_managed_mode_fallback_to_current_dir() {
+        let temp_dir = TempDir::new().unwrap();
+        let temp_canonical = temp_dir.path().canonicalize().unwrap();
+
+        // Create a file in the managed directory structure
+        let managed = temp_canonical.join(".sah").join("prompts");
+        fs::create_dir_all(&managed).unwrap();
+        fs::write(managed.join("fallback.md"), "fallback content").unwrap();
+
+        // Point XDG_DATA_HOME to empty dir so user-level doesn't interfere
+        let empty_xdg = temp_canonical.join("empty_xdg");
+        fs::create_dir_all(&empty_xdg).unwrap();
+
+        let original_dir = std::env::current_dir().unwrap();
+        let original_xdg = std::env::var("XDG_DATA_HOME").ok();
+
+        std::env::set_current_dir(&temp_canonical).unwrap();
+        std::env::set_var("XDG_DATA_HOME", &empty_xdg);
+
+        let mut vfs = VirtualFileSystem::<SwissarmyhammerConfig>::new("prompts");
+        let result = vfs.load_all();
+
+        std::env::set_current_dir(&original_dir).unwrap();
+        match original_xdg {
+            Some(v) => std::env::set_var("XDG_DATA_HOME", v),
+            None => std::env::remove_var("XDG_DATA_HOME"),
+        }
+
+        assert!(result.is_ok());
+        let file = vfs.get("fallback");
+        assert!(
+            file.is_some(),
+            "should load file from current dir managed directory fallback"
+        );
+        assert_eq!(file.unwrap().content, "fallback content");
+    }
+
+    /// Dot-directory mode: exercises the current-directory fallback path
+    /// when not in a git repo. We chdir to a temp dir with no .git.
+    #[test]
+    #[serial]
+    fn test_dot_directory_fallback_to_current_dir() {
+        let temp_dir = TempDir::new().unwrap();
+        let temp_canonical = temp_dir.path().canonicalize().unwrap();
+
+        // Create .prompts directory in temp dir
+        let dot_prompts = temp_canonical.join(".prompts");
+        fs::create_dir_all(&dot_prompts).unwrap();
+        fs::write(dot_prompts.join("cwd_file.md"), "from cwd").unwrap();
+
+        let empty_xdg = temp_canonical.join("empty_xdg");
+        fs::create_dir_all(&empty_xdg).unwrap();
+
+        let original_dir = std::env::current_dir().unwrap();
+        let original_xdg = std::env::var("XDG_DATA_HOME").ok();
+
+        std::env::set_current_dir(&temp_canonical).unwrap();
+        std::env::set_var("XDG_DATA_HOME", &empty_xdg);
+
+        let mut vfs = VirtualFileSystem::<SwissarmyhammerConfig>::new("prompts");
+        vfs.use_dot_directory_paths();
+        let result = vfs.load_all();
+
+        std::env::set_current_dir(&original_dir).unwrap();
+        match original_xdg {
+            Some(v) => std::env::set_var("XDG_DATA_HOME", v),
+            None => std::env::remove_var("XDG_DATA_HOME"),
+        }
+
+        assert!(result.is_ok());
+        let file = vfs.get("cwd_file");
+        assert!(
+            file.is_some(),
+            "should load file from cwd .prompts fallback"
+        );
+        assert_eq!(file.unwrap().content, "from cwd");
+        assert_eq!(file.unwrap().source, FileSource::Local);
+    }
+
+    /// get_directories in dot-directory mode exercises the current-directory
+    /// fallback when not in a git repo.
+    #[test]
+    #[serial]
+    fn test_get_directories_dot_dir_mode_cwd_fallback() {
+        let temp_dir = TempDir::new().unwrap();
+        let temp_canonical = temp_dir.path().canonicalize().unwrap();
+
+        let dot_prompts = temp_canonical.join(".prompts");
+        fs::create_dir_all(&dot_prompts).unwrap();
+
+        let empty_xdg = temp_canonical.join("empty_xdg");
+        fs::create_dir_all(&empty_xdg).unwrap();
+
+        let original_dir = std::env::current_dir().unwrap();
+        let original_xdg = std::env::var("XDG_DATA_HOME").ok();
+
+        std::env::set_current_dir(&temp_canonical).unwrap();
+        std::env::set_var("XDG_DATA_HOME", &empty_xdg);
+
+        let mut vfs = VirtualFileSystem::<SwissarmyhammerConfig>::new("prompts");
+        vfs.use_dot_directory_paths();
+        let dirs = vfs.get_directories().unwrap();
+
+        std::env::set_current_dir(&original_dir).unwrap();
+        match original_xdg {
+            Some(v) => std::env::set_var("XDG_DATA_HOME", v),
+            None => std::env::remove_var("XDG_DATA_HOME"),
+        }
+
+        assert!(
+            dirs.contains(&dot_prompts),
+            "should include cwd .prompts dir: {dirs:?}"
+        );
+    }
+
+    /// get_search_paths in dot-directory mode exercises the current-directory
+    /// fallback branch and returns proper FileSource::Local.
+    #[test]
+    #[serial]
+    fn test_get_search_paths_dot_dir_mode_cwd_fallback() {
+        let temp_dir = TempDir::new().unwrap();
+        let temp_canonical = temp_dir.path().canonicalize().unwrap();
+
+        let dot_prompts = temp_canonical.join(".prompts");
+        fs::create_dir_all(&dot_prompts).unwrap();
+
+        let empty_xdg = temp_canonical.join("empty_xdg");
+        fs::create_dir_all(&empty_xdg).unwrap();
+
+        let original_dir = std::env::current_dir().unwrap();
+        let original_xdg = std::env::var("XDG_DATA_HOME").ok();
+
+        std::env::set_current_dir(&temp_canonical).unwrap();
+        std::env::set_var("XDG_DATA_HOME", &empty_xdg);
+
+        let mut vfs = VirtualFileSystem::<SwissarmyhammerConfig>::new("prompts");
+        vfs.use_dot_directory_paths();
+        let paths = vfs.get_search_paths();
+
+        std::env::set_current_dir(&original_dir).unwrap();
+        match original_xdg {
+            Some(v) => std::env::set_var("XDG_DATA_HOME", v),
+            None => std::env::remove_var("XDG_DATA_HOME"),
+        }
+
+        let local_entry = paths.iter().find(|sp| sp.path == dot_prompts);
+        assert!(
+            local_entry.is_some(),
+            "should include cwd .prompts in search paths: {paths:?}"
+        );
+        assert_eq!(local_entry.unwrap().source, FileSource::Local);
+    }
+
+    /// get_directories in default managed mode with a valid XDG_DATA_HOME
+    /// exercises the user XDG data subdirectory path.
+    #[test]
+    #[serial]
+    fn test_get_directories_default_mode_with_xdg_data() {
+        let temp_dir = TempDir::new().unwrap();
+        let xdg_data = temp_dir.path().join("xdg_data_gd2");
+        let user_dir = xdg_data.join("sah").join("prompts");
+        fs::create_dir_all(&user_dir).unwrap();
+
+        let original = std::env::var("XDG_DATA_HOME").ok();
+        std::env::set_var("XDG_DATA_HOME", &xdg_data);
+
+        let vfs = VirtualFileSystem::<SwissarmyhammerConfig>::new("prompts");
+        let dirs = vfs.get_directories().unwrap();
+
+        match original {
+            Some(v) => std::env::set_var("XDG_DATA_HOME", v),
+            None => std::env::remove_var("XDG_DATA_HOME"),
+        }
+
+        assert!(
+            dirs.contains(&user_dir),
+            "expected {user_dir:?} in {dirs:?}"
+        );
+    }
+
+    /// get_search_paths in default managed mode with a valid XDG_DATA_HOME
+    /// exercises the managed-directory resolution branch (non-dot, non-search-path).
+    #[test]
+    #[serial]
+    fn test_get_search_paths_default_mode_with_xdg_data() {
+        let temp_dir = TempDir::new().unwrap();
+        let xdg_data = temp_dir.path().join("xdg_data_gsp2");
+        let user_dir = xdg_data.join("sah").join("prompts");
+        fs::create_dir_all(&user_dir).unwrap();
+
+        let original = std::env::var("XDG_DATA_HOME").ok();
+        std::env::set_var("XDG_DATA_HOME", &xdg_data);
+
+        let vfs = VirtualFileSystem::<SwissarmyhammerConfig>::new("prompts");
+        let paths = vfs.get_search_paths();
+
+        match original {
+            Some(v) => std::env::set_var("XDG_DATA_HOME", v),
+            None => std::env::remove_var("XDG_DATA_HOME"),
+        }
+
+        let user_entry = paths.iter().find(|sp| sp.path == user_dir);
+        assert!(
+            user_entry.is_some(),
+            "expected {user_dir:?} in search paths: {paths:?}"
+        );
+        assert_eq!(user_entry.unwrap().source, FileSource::User);
+    }
+
+    /// get_directories in default managed mode exercises the git-root subdir path
+    /// when there is a valid git repository and the subdir exists.
+    #[test]
+    #[serial]
+    fn test_get_directories_default_mode_git_root_subdir() {
+        let git_root = crate::directory::find_git_repository_root();
+        if git_root.is_none() {
+            return;
+        }
+        let git_root = git_root.unwrap();
+
+        // Create a subdir under the managed directory at git root
+        let managed_dir = git_root
+            .join(SwissarmyhammerConfig::DIR_NAME)
+            .join("prompts");
+        let created_dir = !managed_dir.exists();
+        if created_dir {
+            fs::create_dir_all(&managed_dir).unwrap();
+        }
+
+        let vfs = VirtualFileSystem::<SwissarmyhammerConfig>::new("prompts");
+        let dirs = vfs.get_directories().unwrap();
+
+        if created_dir {
+            let _ = fs::remove_dir(&managed_dir);
+        }
+
+        assert!(
+            dirs.iter().any(|d| d.ends_with("prompts")),
+            "should include git-root managed prompts dir: {dirs:?}"
+        );
+    }
+
+    /// get_search_paths in default managed mode exercises the git-root subdir
+    /// branch when a valid git repo exists and the subdir is present.
+    #[test]
+    #[serial]
+    fn test_get_search_paths_default_mode_git_root_subdir() {
+        let git_root = crate::directory::find_git_repository_root();
+        if git_root.is_none() {
+            return;
+        }
+        let git_root = git_root.unwrap();
+
+        let managed_dir = git_root
+            .join(SwissarmyhammerConfig::DIR_NAME)
+            .join("prompts");
+        let created_dir = !managed_dir.exists();
+        if created_dir {
+            fs::create_dir_all(&managed_dir).unwrap();
+        }
+
+        let vfs = VirtualFileSystem::<SwissarmyhammerConfig>::new("prompts");
+        let paths = vfs.get_search_paths();
+
+        if created_dir {
+            let _ = fs::remove_dir(&managed_dir);
+        }
+
+        let local_entry = paths
+            .iter()
+            .find(|sp| sp.path.ends_with("prompts") && sp.source == FileSource::Local);
+        assert!(
+            local_entry.is_some(),
+            "should include git-root local prompts in search paths: {paths:?}"
+        );
+    }
+
+    /// get_directories and get_search_paths in default managed mode exercise
+    /// the current-directory fallback branch when not in a git repo.
+    #[test]
+    #[serial]
+    fn test_get_directories_default_mode_cwd_fallback() {
+        let temp_dir = TempDir::new().unwrap();
+        let temp_canonical = temp_dir.path().canonicalize().unwrap();
+
+        // Create managed directory structure in temp dir
+        let managed_prompts = temp_canonical.join(".sah").join("prompts");
+        fs::create_dir_all(&managed_prompts).unwrap();
+
+        let empty_xdg = temp_canonical.join("empty_xdg");
+        fs::create_dir_all(&empty_xdg).unwrap();
+
+        let original_dir = std::env::current_dir().unwrap();
+        let original_xdg = std::env::var("XDG_DATA_HOME").ok();
+
+        std::env::set_current_dir(&temp_canonical).unwrap();
+        std::env::set_var("XDG_DATA_HOME", &empty_xdg);
+
+        let vfs = VirtualFileSystem::<SwissarmyhammerConfig>::new("prompts");
+        let dirs = vfs.get_directories().unwrap();
+
+        std::env::set_current_dir(&original_dir).unwrap();
+        match original_xdg {
+            Some(v) => std::env::set_var("XDG_DATA_HOME", v),
+            None => std::env::remove_var("XDG_DATA_HOME"),
+        }
+
+        assert!(
+            dirs.iter().any(|d| d.ends_with("prompts")),
+            "should include cwd-managed prompts dir: {dirs:?}"
+        );
+    }
+
+    /// get_search_paths in default managed mode exercises the current-directory
+    /// fallback branch when not in a git repo.
+    #[test]
+    #[serial]
+    fn test_get_search_paths_default_mode_cwd_fallback() {
+        let temp_dir = TempDir::new().unwrap();
+        let temp_canonical = temp_dir.path().canonicalize().unwrap();
+
+        let managed_prompts = temp_canonical.join(".sah").join("prompts");
+        fs::create_dir_all(&managed_prompts).unwrap();
+
+        let empty_xdg = temp_canonical.join("empty_xdg");
+        fs::create_dir_all(&empty_xdg).unwrap();
+
+        let original_dir = std::env::current_dir().unwrap();
+        let original_xdg = std::env::var("XDG_DATA_HOME").ok();
+
+        std::env::set_current_dir(&temp_canonical).unwrap();
+        std::env::set_var("XDG_DATA_HOME", &empty_xdg);
+
+        let vfs = VirtualFileSystem::<SwissarmyhammerConfig>::new("prompts");
+        let paths = vfs.get_search_paths();
+
+        std::env::set_current_dir(&original_dir).unwrap();
+        match original_xdg {
+            Some(v) => std::env::set_var("XDG_DATA_HOME", v),
+            None => std::env::remove_var("XDG_DATA_HOME"),
+        }
+
+        let local_entry = paths
+            .iter()
+            .find(|sp| sp.path.ends_with("prompts") && sp.source == FileSource::Local);
+        assert!(
+            local_entry.is_some(),
+            "should include cwd-managed prompts in search paths: {paths:?}"
+        );
+    }
+
+    /// Dot-directory mode: get_directories and get_search_paths exercise
+    /// the git-root branch (not cwd fallback) when run inside a git repo.
+    #[test]
+    #[serial]
+    fn test_get_directories_dot_dir_mode_git_root() {
+        let git_root = crate::directory::find_git_repository_root();
+        if git_root.is_none() {
+            return;
+        }
+        let git_root = git_root.unwrap();
+
+        let dot_prompts = git_root.join(".prompts");
+        let created_dir = !dot_prompts.exists();
+        if created_dir {
+            fs::create_dir_all(&dot_prompts).unwrap();
+        }
+
+        let empty_xdg = TempDir::new().unwrap();
+        let original_xdg = std::env::var("XDG_DATA_HOME").ok();
+        std::env::set_var("XDG_DATA_HOME", empty_xdg.path());
+
+        let mut vfs = VirtualFileSystem::<SwissarmyhammerConfig>::new("prompts");
+        vfs.use_dot_directory_paths();
+        let dirs = vfs.get_directories().unwrap();
+
+        match original_xdg {
+            Some(v) => std::env::set_var("XDG_DATA_HOME", v),
+            None => std::env::remove_var("XDG_DATA_HOME"),
+        }
+        if created_dir {
+            let _ = fs::remove_dir(&dot_prompts);
+        }
+
+        assert!(
+            dirs.contains(&dot_prompts),
+            "should include git-root .prompts dir: {dirs:?}"
+        );
+    }
+
+    /// get_search_paths in dot-directory mode exercises the git-root path.
+    #[test]
+    #[serial]
+    fn test_get_search_paths_dot_dir_mode_git_root() {
+        let git_root = crate::directory::find_git_repository_root();
+        if git_root.is_none() {
+            return;
+        }
+        let git_root = git_root.unwrap();
+
+        let dot_prompts = git_root.join(".prompts");
+        let created_dir = !dot_prompts.exists();
+        if created_dir {
+            fs::create_dir_all(&dot_prompts).unwrap();
+        }
+
+        let empty_xdg = TempDir::new().unwrap();
+        let original_xdg = std::env::var("XDG_DATA_HOME").ok();
+        std::env::set_var("XDG_DATA_HOME", empty_xdg.path());
+
+        let mut vfs = VirtualFileSystem::<SwissarmyhammerConfig>::new("prompts");
+        vfs.use_dot_directory_paths();
+        let paths = vfs.get_search_paths();
+
+        match original_xdg {
+            Some(v) => std::env::set_var("XDG_DATA_HOME", v),
+            None => std::env::remove_var("XDG_DATA_HOME"),
+        }
+        if created_dir {
+            let _ = fs::remove_dir(&dot_prompts);
+        }
+
+        let local_entry = paths.iter().find(|sp| sp.path == dot_prompts);
+        assert!(
+            local_entry.is_some(),
+            "should include git-root .prompts in search paths: {paths:?}"
+        );
+        assert_eq!(local_entry.unwrap().source, FileSource::Local);
+    }
+
+    /// extract_name_from_path with managed directory path (e.g., .sah/prompts/category/file.md)
+    /// exercises the bare subdirectory name matching.
+    #[test]
+    fn test_from_path_and_content_managed_path_with_subdirs() {
+        let entry = FileEntry::from_path_and_content(
+            PathBuf::from("/project/.sah/prompts/category/file.md"),
+            "managed content".to_string(),
+            FileSource::Local,
+        );
+        assert_eq!(
+            entry.name, "category/file",
+            "managed path should extract subdirectory prefix"
+        );
+    }
+
+    /// extract_name_from_path for each known subdirectory variant.
+    #[test]
+    fn test_from_path_and_content_all_known_subdirs() {
+        let subdirs = [
+            "workflows",
+            "rules",
+            "validators",
+            "modes",
+            "docs",
+            ".workflows",
+            ".rules",
+            ".validators",
+            ".modes",
+            ".docs",
+        ];
+        for subdir in &subdirs {
+            let path = PathBuf::from(format!("/base/{}/file.md", subdir));
+            let entry =
+                FileEntry::from_path_and_content(path, "content".to_string(), FileSource::Local);
+            assert_eq!(
+                entry.name, "file",
+                "file directly under known subdir '{}' should use bare stem",
+                subdir
+            );
+        }
+    }
+
+    /// load_directory with an empty subdirectory joins correctly and loads files.
+    #[test]
+    fn test_load_directory_with_empty_subdirectory() {
+        let temp_dir = TempDir::new().unwrap();
+        fs::write(temp_dir.path().join("root.md"), "root content").unwrap();
+
+        let mut vfs = VirtualFileSystem::<SwissarmyhammerConfig>::new("");
+        vfs.load_directory(temp_dir.path(), FileSource::Local)
+            .unwrap();
+
+        let file = vfs.get("root");
+        assert!(
+            file.is_some(),
+            "should load file from root when subdirectory is empty"
+        );
+    }
+
+    /// add_file with Dynamic source correctly tracks the source.
+    #[test]
+    fn test_add_file_dynamic_source() {
+        let mut vfs = VirtualFileSystem::<SwissarmyhammerConfig>::new("prompts");
+        let entry = FileEntry::new(
+            "dynamic_file",
+            PathBuf::from("dynamic://generated"),
+            "generated content".to_string(),
+            FileSource::Dynamic,
+        );
+        vfs.add_file(entry);
+
+        let file = vfs.get("dynamic_file").unwrap();
+        assert_eq!(file.source, FileSource::Dynamic);
+        assert_eq!(
+            *vfs.get_source("dynamic_file").unwrap(),
+            FileSource::Dynamic
+        );
+    }
 }

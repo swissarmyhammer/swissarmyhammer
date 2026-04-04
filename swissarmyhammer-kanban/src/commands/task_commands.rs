@@ -310,3 +310,591 @@ impl Command for DeleteTaskCmd {
         run_op(&op, &kanban).await
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::board::InitBoard;
+    use crate::task::AddTask;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    use swissarmyhammer_commands::CommandContext;
+    use swissarmyhammer_operations::Execute;
+    use tempfile::TempDir;
+
+    /// Initialize a board and return a (TempDir, KanbanContext) pair.
+    async fn setup() -> (TempDir, KanbanContext) {
+        let temp = TempDir::new().unwrap();
+        let kanban_dir = temp.path().join(".kanban");
+        let ctx = KanbanContext::new(kanban_dir);
+        InitBoard::new("Test")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        (temp, ctx)
+    }
+
+    /// Build a CommandContext with scope, target, args, and a KanbanContext extension.
+    fn make_ctx(
+        kanban: Arc<KanbanContext>,
+        scope: Vec<String>,
+        target: Option<String>,
+        args: HashMap<String, serde_json::Value>,
+    ) -> CommandContext {
+        let mut ctx = CommandContext::new("test", scope, target, args);
+        ctx.set_extension(kanban);
+        ctx
+    }
+
+    // =========================================================================
+    // AddTaskCmd
+    // =========================================================================
+
+    #[tokio::test]
+    async fn add_task_cmd_execute_with_column_in_scope() {
+        let (_temp, kctx) = setup().await;
+        let kanban = Arc::new(kctx);
+        let cmd = AddTaskCmd;
+
+        let ctx = make_ctx(
+            Arc::clone(&kanban),
+            vec!["column:todo".into()],
+            None,
+            HashMap::new(),
+        );
+        let result = cmd.execute(&ctx).await.unwrap();
+        assert_eq!(result["position"]["column"], "todo");
+        // Default title
+        assert!(result["title"].as_str().is_some());
+    }
+
+    #[tokio::test]
+    async fn add_task_cmd_execute_with_title_arg() {
+        let (_temp, kctx) = setup().await;
+        let kanban = Arc::new(kctx);
+        let cmd = AddTaskCmd;
+
+        let mut args = HashMap::new();
+        args.insert("title".into(), serde_json::json!("Custom title"));
+        let ctx = make_ctx(Arc::clone(&kanban), vec!["column:doing".into()], None, args);
+        let result = cmd.execute(&ctx).await.unwrap();
+        assert_eq!(result["title"], "Custom title");
+        assert_eq!(result["position"]["column"], "doing");
+    }
+
+    #[tokio::test]
+    async fn add_task_cmd_execute_with_column_arg() {
+        let (_temp, kctx) = setup().await;
+        let kanban = Arc::new(kctx);
+        let cmd = AddTaskCmd;
+
+        let mut args = HashMap::new();
+        args.insert("column".into(), serde_json::json!("done"));
+        args.insert("title".into(), serde_json::json!("From arg"));
+        let ctx = make_ctx(Arc::clone(&kanban), vec![], None, args);
+        let result = cmd.execute(&ctx).await.unwrap();
+        assert_eq!(result["title"], "From arg");
+        assert_eq!(result["position"]["column"], "done");
+    }
+
+    #[tokio::test]
+    async fn add_task_cmd_fails_without_column() {
+        let (_temp, kctx) = setup().await;
+        let kanban = Arc::new(kctx);
+        let cmd = AddTaskCmd;
+
+        let ctx = make_ctx(Arc::clone(&kanban), vec![], None, HashMap::new());
+        let result = cmd.execute(&ctx).await;
+        assert!(result.is_err(), "should fail without column");
+    }
+
+    #[tokio::test]
+    async fn add_task_cmd_fails_without_kanban_context() {
+        let cmd = AddTaskCmd;
+        let ctx = CommandContext::new("task.add", vec!["column:todo".into()], None, HashMap::new());
+        let result = cmd.execute(&ctx).await;
+        assert!(result.is_err(), "should fail without KanbanContext");
+    }
+
+    // =========================================================================
+    // AddTaskCmd availability
+    // =========================================================================
+
+    #[test]
+    fn add_task_available_with_column_scope() {
+        let ctx = CommandContext::new("task.add", vec!["column:todo".into()], None, HashMap::new());
+        assert!(AddTaskCmd.available(&ctx));
+    }
+
+    #[test]
+    fn add_task_available_with_column_arg() {
+        let mut args = HashMap::new();
+        args.insert("column".into(), serde_json::json!("doing"));
+        let ctx = CommandContext::new("task.add", vec![], None, args);
+        assert!(AddTaskCmd.available(&ctx));
+    }
+
+    #[test]
+    fn add_task_not_available_without_column() {
+        let ctx = CommandContext::new("task.add", vec![], None, HashMap::new());
+        assert!(!AddTaskCmd.available(&ctx));
+    }
+
+    // =========================================================================
+    // MoveTaskCmd
+    // =========================================================================
+
+    #[tokio::test]
+    async fn move_task_cmd_execute_basic() {
+        let (_temp, kctx) = setup().await;
+        let add_result = AddTask::new("Movable")
+            .execute(&kctx)
+            .await
+            .into_result()
+            .unwrap();
+        let task_id = add_result["id"].as_str().unwrap().to_string();
+        let kanban = Arc::new(kctx);
+        let cmd = MoveTaskCmd;
+
+        let mut args = HashMap::new();
+        args.insert("column".into(), serde_json::json!("doing"));
+        let ctx = make_ctx(
+            Arc::clone(&kanban),
+            vec![format!("task:{task_id}")],
+            None,
+            args,
+        );
+        let result = cmd.execute(&ctx).await.unwrap();
+        assert_eq!(result["position"]["column"], "doing");
+    }
+
+    #[tokio::test]
+    async fn move_task_cmd_with_target_moniker() {
+        let (_temp, kctx) = setup().await;
+        let add_result = AddTask::new("Moniker move")
+            .execute(&kctx)
+            .await
+            .into_result()
+            .unwrap();
+        let task_id = add_result["id"].as_str().unwrap().to_string();
+        let kanban = Arc::new(kctx);
+        let cmd = MoveTaskCmd;
+
+        // Target moniker provides column
+        let ctx = make_ctx(
+            Arc::clone(&kanban),
+            vec![format!("task:{task_id}")],
+            Some("column:done".into()),
+            HashMap::new(),
+        );
+        let result = cmd.execute(&ctx).await.unwrap();
+        assert_eq!(result["position"]["column"], "done");
+    }
+
+    #[tokio::test]
+    async fn move_task_cmd_with_explicit_ordinal() {
+        let (_temp, kctx) = setup().await;
+        let add_result = AddTask::new("Ordinal move")
+            .execute(&kctx)
+            .await
+            .into_result()
+            .unwrap();
+        let task_id = add_result["id"].as_str().unwrap().to_string();
+        let kanban = Arc::new(kctx);
+        let cmd = MoveTaskCmd;
+
+        let mut args = HashMap::new();
+        args.insert("column".into(), serde_json::json!("doing"));
+        args.insert("ordinal".into(), serde_json::json!("m5"));
+        let ctx = make_ctx(
+            Arc::clone(&kanban),
+            vec![format!("task:{task_id}")],
+            None,
+            args,
+        );
+        let result = cmd.execute(&ctx).await.unwrap();
+        assert_eq!(result["position"]["column"], "doing");
+        // The ordinal is passed through to the MoveTask operation
+        assert!(result["position"]["ordinal"].as_str().is_some());
+    }
+
+    #[tokio::test]
+    async fn move_task_cmd_with_before_id() {
+        let (_temp, kctx) = setup().await;
+        // Add two tasks in doing
+        let mut doing_op = AddTask::new("First");
+        doing_op.column = Some("doing".into());
+        let r1 = doing_op.execute(&kctx).await.into_result().unwrap();
+        let first_id = r1["id"].as_str().unwrap().to_string();
+
+        let task_to_move = AddTask::new("Mover")
+            .execute(&kctx)
+            .await
+            .into_result()
+            .unwrap();
+        let mover_id = task_to_move["id"].as_str().unwrap().to_string();
+        let kanban = Arc::new(kctx);
+        let cmd = MoveTaskCmd;
+
+        let mut args = HashMap::new();
+        args.insert("column".into(), serde_json::json!("doing"));
+        args.insert("before_id".into(), serde_json::json!(first_id));
+        let ctx = make_ctx(
+            Arc::clone(&kanban),
+            vec![format!("task:{mover_id}")],
+            None,
+            args,
+        );
+        let result = cmd.execute(&ctx).await.unwrap();
+        assert_eq!(result["position"]["column"], "doing");
+    }
+
+    #[tokio::test]
+    async fn move_task_cmd_with_after_id() {
+        let (_temp, kctx) = setup().await;
+        let mut doing_op = AddTask::new("Anchor");
+        doing_op.column = Some("doing".into());
+        let r1 = doing_op.execute(&kctx).await.into_result().unwrap();
+        let anchor_id = r1["id"].as_str().unwrap().to_string();
+
+        let mover = AddTask::new("After mover")
+            .execute(&kctx)
+            .await
+            .into_result()
+            .unwrap();
+        let mover_id = mover["id"].as_str().unwrap().to_string();
+        let kanban = Arc::new(kctx);
+        let cmd = MoveTaskCmd;
+
+        let mut args = HashMap::new();
+        args.insert("column".into(), serde_json::json!("doing"));
+        args.insert("after_id".into(), serde_json::json!(anchor_id));
+        let ctx = make_ctx(
+            Arc::clone(&kanban),
+            vec![format!("task:{mover_id}")],
+            None,
+            args,
+        );
+        let result = cmd.execute(&ctx).await.unwrap();
+        assert_eq!(result["position"]["column"], "doing");
+    }
+
+    #[tokio::test]
+    async fn move_task_cmd_with_drop_index() {
+        let (_temp, kctx) = setup().await;
+        // Add two tasks in doing
+        let mut doing_op1 = AddTask::new("D1");
+        doing_op1.column = Some("doing".into());
+        doing_op1.execute(&kctx).await.into_result().unwrap();
+
+        let mut doing_op2 = AddTask::new("D2");
+        doing_op2.column = Some("doing".into());
+        doing_op2.execute(&kctx).await.into_result().unwrap();
+
+        let mover = AddTask::new("Drop mover")
+            .execute(&kctx)
+            .await
+            .into_result()
+            .unwrap();
+        let mover_id = mover["id"].as_str().unwrap().to_string();
+        let kanban = Arc::new(kctx);
+        let cmd = MoveTaskCmd;
+
+        let mut args = HashMap::new();
+        args.insert("column".into(), serde_json::json!("doing"));
+        args.insert("drop_index".into(), serde_json::json!(1));
+        let ctx = make_ctx(
+            Arc::clone(&kanban),
+            vec![format!("task:{mover_id}")],
+            None,
+            args,
+        );
+        let result = cmd.execute(&ctx).await.unwrap();
+        assert_eq!(result["position"]["column"], "doing");
+    }
+
+    #[tokio::test]
+    async fn move_task_cmd_with_swimlane() {
+        let (_temp, kctx) = setup().await;
+        // Create a swimlane
+        crate::swimlane::AddSwimlane::new("lane", "Lane")
+            .execute(&kctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        let add_result = AddTask::new("Lane move")
+            .execute(&kctx)
+            .await
+            .into_result()
+            .unwrap();
+        let task_id = add_result["id"].as_str().unwrap().to_string();
+        let kanban = Arc::new(kctx);
+        let cmd = MoveTaskCmd;
+
+        let mut args = HashMap::new();
+        args.insert("column".into(), serde_json::json!("doing"));
+        args.insert("swimlane".into(), serde_json::json!("lane"));
+        let ctx = make_ctx(
+            Arc::clone(&kanban),
+            vec![format!("task:{task_id}")],
+            None,
+            args,
+        );
+        let result = cmd.execute(&ctx).await.unwrap();
+        assert_eq!(result["position"]["column"], "doing");
+        assert_eq!(result["position"]["swimlane"], "lane");
+    }
+
+    #[tokio::test]
+    async fn move_task_cmd_with_id_arg() {
+        let (_temp, kctx) = setup().await;
+        let add_result = AddTask::new("Id arg move")
+            .execute(&kctx)
+            .await
+            .into_result()
+            .unwrap();
+        let task_id = add_result["id"].as_str().unwrap().to_string();
+        let kanban = Arc::new(kctx);
+        let cmd = MoveTaskCmd;
+
+        let mut args = HashMap::new();
+        args.insert("id".into(), serde_json::json!(task_id));
+        args.insert("column".into(), serde_json::json!("doing"));
+        // No task in scope — using id arg
+        let ctx = make_ctx(Arc::clone(&kanban), vec![], None, args);
+        let result = cmd.execute(&ctx).await.unwrap();
+        assert_eq!(result["position"]["column"], "doing");
+    }
+
+    #[tokio::test]
+    async fn move_task_cmd_fails_without_task() {
+        let (_temp, kctx) = setup().await;
+        let kanban = Arc::new(kctx);
+        let cmd = MoveTaskCmd;
+
+        let mut args = HashMap::new();
+        args.insert("column".into(), serde_json::json!("doing"));
+        let ctx = make_ctx(Arc::clone(&kanban), vec![], None, args);
+        let result = cmd.execute(&ctx).await;
+        assert!(result.is_err(), "should fail without task id");
+    }
+
+    #[tokio::test]
+    async fn move_task_cmd_fails_without_column() {
+        let (_temp, kctx) = setup().await;
+        let add_result = AddTask::new("No col")
+            .execute(&kctx)
+            .await
+            .into_result()
+            .unwrap();
+        let task_id = add_result["id"].as_str().unwrap().to_string();
+        let kanban = Arc::new(kctx);
+        let cmd = MoveTaskCmd;
+
+        let ctx = make_ctx(
+            Arc::clone(&kanban),
+            vec![format!("task:{task_id}")],
+            None,
+            HashMap::new(),
+        );
+        let result = cmd.execute(&ctx).await;
+        assert!(result.is_err(), "should fail without column");
+    }
+
+    // =========================================================================
+    // MoveTaskCmd availability
+    // =========================================================================
+
+    #[test]
+    fn move_task_available_with_task_scope() {
+        let ctx = CommandContext::new("task.move", vec!["task:01X".into()], None, HashMap::new());
+        assert!(MoveTaskCmd.available(&ctx));
+    }
+
+    #[test]
+    fn move_task_available_with_id_arg() {
+        let mut args = HashMap::new();
+        args.insert("id".into(), serde_json::json!("task-1"));
+        let ctx = CommandContext::new("task.move", vec![], None, args);
+        assert!(MoveTaskCmd.available(&ctx));
+    }
+
+    #[test]
+    fn move_task_not_available_without_task_or_id() {
+        let ctx = CommandContext::new("task.move", vec![], None, HashMap::new());
+        assert!(!MoveTaskCmd.available(&ctx));
+    }
+
+    // =========================================================================
+    // UntagTaskCmd
+    // =========================================================================
+
+    #[tokio::test]
+    async fn untag_task_cmd_execute() {
+        let (_temp, kctx) = setup().await;
+
+        // Add task with tag
+        let add_result = AddTask::new("Tagged")
+            .with_description("Has #bug")
+            .execute(&kctx)
+            .await
+            .into_result()
+            .unwrap();
+        let task_id = add_result["id"].as_str().unwrap().to_string();
+
+        let kanban = Arc::new(kctx);
+        let cmd = UntagTaskCmd;
+
+        // The scope chain uses the tag name (slug) as the ID part of the moniker,
+        // because UntagTask::new expects the tag name, not the ULID.
+        let ctx = make_ctx(
+            Arc::clone(&kanban),
+            vec!["tag:bug".into(), format!("task:{task_id}")],
+            None,
+            HashMap::new(),
+        );
+        let result = cmd.execute(&ctx).await.unwrap();
+        assert_eq!(result["untagged"], true);
+    }
+
+    #[tokio::test]
+    async fn untag_task_cmd_fails_without_task() {
+        let (_temp, kctx) = setup().await;
+        let kanban = Arc::new(kctx);
+        let cmd = UntagTaskCmd;
+
+        let ctx = make_ctx(
+            Arc::clone(&kanban),
+            vec!["tag:01X".into()],
+            None,
+            HashMap::new(),
+        );
+        let result = cmd.execute(&ctx).await;
+        assert!(result.is_err(), "should fail without task in scope");
+    }
+
+    #[tokio::test]
+    async fn untag_task_cmd_fails_without_tag() {
+        let (_temp, kctx) = setup().await;
+        let kanban = Arc::new(kctx);
+        let cmd = UntagTaskCmd;
+
+        let ctx = make_ctx(
+            Arc::clone(&kanban),
+            vec!["task:01X".into()],
+            None,
+            HashMap::new(),
+        );
+        let result = cmd.execute(&ctx).await;
+        assert!(result.is_err(), "should fail without tag in scope");
+    }
+
+    // =========================================================================
+    // UntagTaskCmd availability
+    // =========================================================================
+
+    #[test]
+    fn untag_available_with_both() {
+        let ctx = CommandContext::new(
+            "task.untag",
+            vec!["tag:01X".into(), "task:01Y".into()],
+            None,
+            HashMap::new(),
+        );
+        assert!(UntagTaskCmd.available(&ctx));
+    }
+
+    #[test]
+    fn untag_not_available_without_tag() {
+        let ctx = CommandContext::new("task.untag", vec!["task:01X".into()], None, HashMap::new());
+        assert!(!UntagTaskCmd.available(&ctx));
+    }
+
+    #[test]
+    fn untag_not_available_without_task() {
+        let ctx = CommandContext::new("task.untag", vec!["tag:01X".into()], None, HashMap::new());
+        assert!(!UntagTaskCmd.available(&ctx));
+    }
+
+    // =========================================================================
+    // DeleteTaskCmd
+    // =========================================================================
+
+    #[tokio::test]
+    async fn delete_task_cmd_execute_via_scope() {
+        let (_temp, kctx) = setup().await;
+        let add_result = AddTask::new("Deletable")
+            .execute(&kctx)
+            .await
+            .into_result()
+            .unwrap();
+        let task_id = add_result["id"].as_str().unwrap().to_string();
+        let kanban = Arc::new(kctx);
+        let cmd = DeleteTaskCmd;
+
+        let ctx = make_ctx(
+            Arc::clone(&kanban),
+            vec![format!("task:{task_id}")],
+            None,
+            HashMap::new(),
+        );
+        let result = cmd.execute(&ctx).await.unwrap();
+        assert_eq!(result["deleted"], true);
+    }
+
+    #[tokio::test]
+    async fn delete_task_cmd_execute_via_id_arg() {
+        let (_temp, kctx) = setup().await;
+        let add_result = AddTask::new("Deletable via arg")
+            .execute(&kctx)
+            .await
+            .into_result()
+            .unwrap();
+        let task_id = add_result["id"].as_str().unwrap().to_string();
+        let kanban = Arc::new(kctx);
+        let cmd = DeleteTaskCmd;
+
+        let mut args = HashMap::new();
+        args.insert("id".into(), serde_json::json!(task_id));
+        let ctx = make_ctx(Arc::clone(&kanban), vec![], None, args);
+        let result = cmd.execute(&ctx).await.unwrap();
+        assert_eq!(result["deleted"], true);
+    }
+
+    #[tokio::test]
+    async fn delete_task_cmd_fails_without_task() {
+        let (_temp, kctx) = setup().await;
+        let kanban = Arc::new(kctx);
+        let cmd = DeleteTaskCmd;
+
+        let ctx = make_ctx(Arc::clone(&kanban), vec![], None, HashMap::new());
+        let result = cmd.execute(&ctx).await;
+        assert!(result.is_err(), "should fail without task id");
+    }
+
+    // =========================================================================
+    // DeleteTaskCmd availability
+    // =========================================================================
+
+    #[test]
+    fn delete_task_available_with_task_scope() {
+        let ctx = CommandContext::new("task.delete", vec!["task:01X".into()], None, HashMap::new());
+        assert!(DeleteTaskCmd.available(&ctx));
+    }
+
+    #[test]
+    fn delete_task_available_with_id_arg() {
+        let mut args = HashMap::new();
+        args.insert("id".into(), serde_json::json!("task-1"));
+        let ctx = CommandContext::new("task.delete", vec![], None, args);
+        assert!(DeleteTaskCmd.available(&ctx));
+    }
+
+    #[test]
+    fn delete_task_not_available_without_task_or_id() {
+        let ctx = CommandContext::new("task.delete", vec![], None, HashMap::new());
+        assert!(!DeleteTaskCmd.available(&ctx));
+    }
+}

@@ -539,6 +539,28 @@ pub mod test_config {
 }
 
 #[cfg(test)]
+mod public_api_tests {
+    use super::*;
+
+    #[test]
+    fn test_load_configuration_returns_context() {
+        // Exercises the `load_configuration()` public function.
+        let result = load_configuration();
+        assert!(result.is_ok(), "load_configuration should succeed");
+        let context = result.unwrap();
+        // Should have at least default variables set
+        assert!(!context.is_empty());
+    }
+
+    #[test]
+    fn test_load_configuration_for_cli_returns_context() {
+        // Exercises the `load_configuration_for_cli()` public function.
+        let result = load_configuration_for_cli();
+        assert!(result.is_ok(), "load_configuration_for_cli should succeed");
+    }
+}
+
+#[cfg(test)]
 mod test_config_tests {
     use super::test_config::*;
     use crate::model::{ModelExecutorConfig, ModelExecutorType, ModelSource};

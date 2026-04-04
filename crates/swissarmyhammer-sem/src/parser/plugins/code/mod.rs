@@ -1110,6 +1110,380 @@ impl Greet for Person {
         }
     }
 
+    // ---------------------------------------------------------------
+    // entity_extractor coverage: extract_name edge cases
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_typescript_const_variable_declaration() {
+        // Tests lexical_declaration → variable_declarator → name extraction path
+        let code = "export const API_URL = \"https://example.com\";\n";
+        let plugin = CodeParserPlugin;
+        let entities = plugin.extract_entities(code, "config.ts");
+        let names: Vec<&str> = entities.iter().map(|e| e.name.as_str()).collect();
+        assert!(
+            names.contains(&"API_URL"),
+            "Should find const API_URL, got: {:?}",
+            names
+        );
+    }
+
+    #[test]
+    fn test_typescript_let_variable_declaration() {
+        // Tests variable_declaration path
+        let code = "let counter = 0;\n";
+        let plugin = CodeParserPlugin;
+        let entities = plugin.extract_entities(code, "test.ts");
+        let names: Vec<&str> = entities.iter().map(|e| e.name.as_str()).collect();
+        assert!(
+            names.contains(&"counter"),
+            "Should find let counter, got: {:?}",
+            names
+        );
+    }
+
+    #[test]
+    fn test_c_typedef_struct_extraction() {
+        // Tests type_definition → declarator name extraction (typedef struct)
+        let code = "typedef struct {\n    int x;\n    int y;\n} Point;\n";
+        let plugin = CodeParserPlugin;
+        let entities = plugin.extract_entities(code, "types.h");
+        let names: Vec<&str> = entities.iter().map(|e| e.name.as_str()).collect();
+        assert!(
+            names.contains(&"Point"),
+            "Should find typedef struct Point, got: {:?}",
+            names
+        );
+    }
+
+    #[test]
+    fn test_c_union_extraction() {
+        // Tests union_specifier → name extraction
+        let code = "union Data {\n    int i;\n    float f;\n};\n";
+        let plugin = CodeParserPlugin;
+        let entities = plugin.extract_entities(code, "data.c");
+        let names: Vec<&str> = entities.iter().map(|e| e.name.as_str()).collect();
+        assert!(
+            names.contains(&"Data"),
+            "Should find union Data, got: {:?}",
+            names
+        );
+    }
+
+    #[test]
+    fn test_c_function_pointer_declarator() {
+        // Tests pointer_declarator path in extract_declarator_name
+        let code = "int *get_pointer() {\n    return 0;\n}\n";
+        let plugin = CodeParserPlugin;
+        let entities = plugin.extract_entities(code, "ptr.c");
+        let names: Vec<&str> = entities.iter().map(|e| e.name.as_str()).collect();
+        assert!(
+            names.contains(&"get_pointer"),
+            "Should find function get_pointer, got: {:?}",
+            names
+        );
+    }
+
+    #[test]
+    fn test_cpp_template_class() {
+        // Tests template_declaration → inner class name extraction
+        let code = "template<typename T>\nclass Container {\npublic:\n    T value;\n};\n";
+        let plugin = CodeParserPlugin;
+        let entities = plugin.extract_entities(code, "container.hpp");
+        let names: Vec<&str> = entities.iter().map(|e| e.name.as_str()).collect();
+        assert!(
+            names.contains(&"Container"),
+            "Should find template class Container, got: {:?}",
+            names
+        );
+    }
+
+    #[test]
+    fn test_cpp_template_function() {
+        // Tests template_declaration → inner function with declarator name extraction
+        let code = "template<typename T>\nT maximum(T a, T b) {\n    return a > b ? a : b;\n}\n";
+        let plugin = CodeParserPlugin;
+        let entities = plugin.extract_entities(code, "util.cpp");
+        let names: Vec<&str> = entities.iter().map(|e| e.name.as_str()).collect();
+        assert!(
+            names.contains(&"maximum"),
+            "Should find template function maximum, got: {:?}",
+            names
+        );
+    }
+
+    #[test]
+    fn test_csharp_struct_extraction() {
+        // Tests C# struct_declaration → name extraction
+        let code = "public struct Point {\n    public int X;\n    public int Y;\n}\n";
+        let plugin = CodeParserPlugin;
+        let entities = plugin.extract_entities(code, "Point.cs");
+        let names: Vec<&str> = entities.iter().map(|e| e.name.as_str()).collect();
+        assert!(
+            names.contains(&"Point"),
+            "Should find struct Point, got: {:?}",
+            names
+        );
+    }
+
+    #[test]
+    fn test_csharp_property_extraction() {
+        // Tests C# property_declaration → name extraction
+        let code = "public class Person {\n    public string Name { get; set; }\n    public int Age { get; set; }\n}\n";
+        let plugin = CodeParserPlugin;
+        let entities = plugin.extract_entities(code, "Person.cs");
+        let names: Vec<&str> = entities.iter().map(|e| e.name.as_str()).collect();
+        assert!(
+            names.contains(&"Person"),
+            "Should find class Person, got: {:?}",
+            names
+        );
+    }
+
+    #[test]
+    fn test_csharp_namespace_extraction() {
+        // Tests C# namespace_declaration → name extraction
+        let code = "namespace MyApp.Models {\n    public class User { }\n}\n";
+        let plugin = CodeParserPlugin;
+        let entities = plugin.extract_entities(code, "User.cs");
+        let names: Vec<&str> = entities.iter().map(|e| e.name.as_str()).collect();
+        assert!(
+            names.contains(&"MyApp.Models"),
+            "Should find namespace MyApp.Models, got: {:?}",
+            names
+        );
+    }
+
+    #[test]
+    fn test_rust_const_and_static_extraction() {
+        // Tests const_item and static_item entity extraction
+        let code = "pub const MAX_SIZE: usize = 100;\npub static GLOBAL_COUNT: i32 = 0;\n";
+        let plugin = CodeParserPlugin;
+        let entities = plugin.extract_entities(code, "consts.rs");
+        let names: Vec<&str> = entities.iter().map(|e| e.name.as_str()).collect();
+        let types: Vec<&str> = entities.iter().map(|e| e.entity_type.as_str()).collect();
+        assert!(
+            names.contains(&"MAX_SIZE"),
+            "Should find const MAX_SIZE, got: {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"GLOBAL_COUNT"),
+            "Should find static GLOBAL_COUNT, got: {:?}",
+            names
+        );
+        let max_idx = names.iter().position(|n| *n == "MAX_SIZE").unwrap();
+        assert_eq!(types[max_idx], "constant");
+        let global_idx = names.iter().position(|n| *n == "GLOBAL_COUNT").unwrap();
+        assert_eq!(types[global_idx], "static");
+    }
+
+    #[test]
+    fn test_rust_type_alias_extraction() {
+        // Tests type_item extraction
+        let code = "pub type Result<T> = std::result::Result<T, Error>;\n";
+        let plugin = CodeParserPlugin;
+        let entities = plugin.extract_entities(code, "types.rs");
+        let names: Vec<&str> = entities.iter().map(|e| e.name.as_str()).collect();
+        assert!(
+            names.contains(&"Result"),
+            "Should find type alias Result, got: {:?}",
+            names
+        );
+    }
+
+    #[test]
+    fn test_rust_mod_extraction() {
+        // Tests mod_item extraction
+        let code = "pub mod helpers {\n    pub fn do_thing() {}\n}\n";
+        let plugin = CodeParserPlugin;
+        let entities = plugin.extract_entities(code, "lib.rs");
+        let names: Vec<&str> = entities.iter().map(|e| e.name.as_str()).collect();
+        assert!(
+            names.contains(&"helpers"),
+            "Should find mod helpers, got: {:?}",
+            names
+        );
+    }
+
+    #[test]
+    fn test_elixir_defstruct_extraction() {
+        // Tests defstruct entity extraction
+        let code = "defmodule User do\n  defstruct [:name, :age]\nend\n";
+        let plugin = CodeParserPlugin;
+        let entities = plugin.extract_entities(code, "user.ex");
+        let names: Vec<&str> = entities.iter().map(|e| e.name.as_str()).collect();
+        let types: Vec<&str> = entities.iter().map(|e| e.entity_type.as_str()).collect();
+        assert!(
+            names.contains(&"User"),
+            "Should find module User, got: {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"__struct__"),
+            "Should find defstruct as __struct__, got: {:?}",
+            names
+        );
+        let struct_idx = names.iter().position(|n| *n == "__struct__").unwrap();
+        assert_eq!(types[struct_idx], "struct");
+    }
+
+    #[test]
+    fn test_elixir_defexception_extraction() {
+        // Tests defexception entity extraction
+        let code = "defmodule MyError do\n  defexception message: \"error\"\nend\n";
+        let plugin = CodeParserPlugin;
+        let entities = plugin.extract_entities(code, "error.ex");
+        let names: Vec<&str> = entities.iter().map(|e| e.name.as_str()).collect();
+        assert!(
+            names.contains(&"__exception__"),
+            "Should find defexception as __exception__, got: {:?}",
+            names
+        );
+    }
+
+    #[test]
+    fn test_elixir_defimpl_with_for() {
+        // Tests defimpl with for: keyword
+        let code = "defimpl String.Chars, for: Integer do\n  def to_string(i), do: Integer.to_string(i)\nend\n";
+        let plugin = CodeParserPlugin;
+        let entities = plugin.extract_entities(code, "impl.ex");
+        let names: Vec<&str> = entities.iter().map(|e| e.name.as_str()).collect();
+        let types: Vec<&str> = entities.iter().map(|e| e.entity_type.as_str()).collect();
+        eprintln!(
+            "Elixir defimpl: {:?}",
+            names.iter().zip(types.iter()).collect::<Vec<_>>()
+        );
+        // Should find a defimpl entity
+        assert!(
+            types.contains(&"impl"),
+            "Should find defimpl entity, got types: {:?}",
+            types
+        );
+    }
+
+    #[test]
+    fn test_elixir_defguard_extraction() {
+        // Tests defguard with when clause (binary_operator path)
+        let code = "defmodule Guards do\n  defguard is_even(x) when rem(x, 2) == 0\nend\n";
+        let plugin = CodeParserPlugin;
+        let entities = plugin.extract_entities(code, "guards.ex");
+        let names: Vec<&str> = entities.iter().map(|e| e.name.as_str()).collect();
+        assert!(
+            names.contains(&"is_even"),
+            "Should find defguard is_even, got: {:?}",
+            names
+        );
+    }
+
+    #[test]
+    fn test_python_decorated_function() {
+        // Tests decorated_definition wrapping a function_definition
+        let code = "@app.route('/hello')\ndef hello():\n    return 'Hello, World!'\n";
+        let plugin = CodeParserPlugin;
+        let entities = plugin.extract_entities(code, "app.py");
+        let names: Vec<&str> = entities.iter().map(|e| e.name.as_str()).collect();
+        let types: Vec<&str> = entities.iter().map(|e| e.entity_type.as_str()).collect();
+        assert!(
+            names.contains(&"hello"),
+            "Should find decorated function hello, got: {:?}",
+            names
+        );
+        let idx = names.iter().position(|n| *n == "hello").unwrap();
+        assert_eq!(
+            types[idx], "function",
+            "decorated function_definition should map to 'function'"
+        );
+    }
+
+    #[test]
+    fn test_map_node_type_coverage() {
+        // Exercise map_node_type through real code extraction for various entity types
+        // Java constructor
+        let code = "public class Foo {\n    public Foo() {}\n}\n";
+        let plugin = CodeParserPlugin;
+        let entities = plugin.extract_entities(code, "Foo.java");
+        let types: Vec<&str> = entities.iter().map(|e| e.entity_type.as_str()).collect();
+        assert!(
+            types.contains(&"class"),
+            "Should map class_declaration to 'class', got: {:?}",
+            types
+        );
+    }
+
+    #[test]
+    fn test_javascript_export_statement() {
+        // Tests export_statement → declaration visit path
+        let code = "export function greet() { return 'hi'; }\n";
+        let plugin = CodeParserPlugin;
+        let entities = plugin.extract_entities(code, "greet.js");
+        let names: Vec<&str> = entities.iter().map(|e| e.name.as_str()).collect();
+        assert!(
+            names.contains(&"greet"),
+            "Should find exported function greet, got: {:?}",
+            names
+        );
+    }
+
+    #[test]
+    fn test_empty_source_returns_no_entities() {
+        let plugin = CodeParserPlugin;
+        let entities = plugin.extract_entities("", "empty.ts");
+        assert!(entities.is_empty());
+    }
+
+    #[test]
+    fn test_entity_has_structural_hash() {
+        // Code parser should produce structural_hash via tree-sitter
+        let code = "function hello() { return 1; }\n";
+        let plugin = CodeParserPlugin;
+        let entities = plugin.extract_entities(code, "test.ts");
+        assert!(!entities.is_empty());
+        assert!(
+            entities[0].structural_hash.is_some(),
+            "Code entities should have structural_hash"
+        );
+    }
+
+    #[test]
+    fn test_entity_line_numbers() {
+        let code = "\nfunction first() {}\n\nfunction second() {}\n";
+        let plugin = CodeParserPlugin;
+        let entities = plugin.extract_entities(code, "test.ts");
+        let first = entities.iter().find(|e| e.name == "first");
+        let second = entities.iter().find(|e| e.name == "second");
+        assert!(first.is_some(), "Should find first function");
+        assert!(second.is_some(), "Should find second function");
+        // second should start after first
+        if let (Some(f), Some(s)) = (first, second) {
+            assert!(
+                s.start_line > f.start_line,
+                "second should start after first"
+            );
+        }
+    }
+
+    #[test]
+    fn test_c_global_declaration() {
+        // Tests C declaration (not function_definition) → declarator name extraction
+        let code = "int global_counter;\nvoid func() {}\n";
+        let plugin = CodeParserPlugin;
+        let entities = plugin.extract_entities(code, "globals.c");
+        let names: Vec<&str> = entities.iter().map(|e| e.name.as_str()).collect();
+        assert!(
+            names.contains(&"global_counter"),
+            "Should find global declaration, got: {:?}",
+            names
+        );
+    }
+
+    #[test]
+    fn test_unknown_extension_returns_empty() {
+        let plugin = CodeParserPlugin;
+        let entities = plugin.extract_entities("some content", "file.unknown_ext");
+        assert!(entities.is_empty());
+    }
+
     #[test]
     fn test_typescript_enum_extraction() {
         // Tests TypeScript enum_declaration

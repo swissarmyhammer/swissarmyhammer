@@ -7,6 +7,9 @@ authors.workspace = true
 license.workspace = true
 description = "Shared embedding trait and types for text embedding backends"
 
+[features]
+test-support = []
+
 [dependencies]
 async-trait.workspace = true
 md5 = { workspace = true }
@@ -19,3 +22,4 @@ tracing.workspace = true
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
 tempfile = { workspace = true }
+tracing-subscriber = { workspace = true }

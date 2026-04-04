@@ -111,4 +111,146 @@ mod tests {
         assert!(rust_analyzer.startup_timeout_secs > 0);
         assert!(rust_analyzer.health_check_interval_secs > 0);
     }
+
+    #[test]
+    fn test_load_single_server_valid_yaml() {
+        let tmp = tempfile::tempdir().unwrap();
+        let yaml_path = tmp.path().join("test-server.yaml");
+        std::fs::write(
+            &yaml_path,
+            r#"
+project_types:
+  - rust
+command: "test-lsp"
+args: ["--stdio"]
+language_ids: ["test"]
+file_extensions: ["tst"]
+install_hint: "install test-lsp"
+icon: "T"
+"#,
+        )
+        .unwrap();
+
+        let spec = load_single_server(&yaml_path).unwrap();
+        assert_eq!(spec.command, "test-lsp");
+        assert_eq!(spec.args, vec!["--stdio"]);
+        assert_eq!(spec.language_ids, vec!["test"]);
+        assert_eq!(spec.file_extensions, vec!["tst"]);
+        assert_eq!(spec.install_hint, "install test-lsp");
+    }
+
+    #[test]
+    fn test_load_single_server_invalid_yaml() {
+        let tmp = tempfile::tempdir().unwrap();
+        let yaml_path = tmp.path().join("bad.yaml");
+        std::fs::write(&yaml_path, "not: valid: yaml: [[[").unwrap();
+
+        let result = load_single_server(&yaml_path);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_load_single_server_missing_fields() {
+        let tmp = tempfile::tempdir().unwrap();
+        let yaml_path = tmp.path().join("incomplete.yaml");
+        std::fs::write(&yaml_path, "command: test\n").unwrap();
+
+        let result = load_single_server(&yaml_path);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_load_single_server_nonexistent_file() {
+        let result = load_single_server(Path::new("/nonexistent/file.yaml"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_load_from_custom_directory_with_valid_yaml() {
+        // Create a temporary directory structure that mimics builtin/lsp
+        let tmp = tempfile::tempdir().unwrap();
+        let lsp_dir = tmp.path().join("builtin").join("lsp");
+        std::fs::create_dir_all(&lsp_dir).unwrap();
+
+        std::fs::write(
+            lsp_dir.join("custom.yaml"),
+            r#"
+project_types:
+  - python
+command: "custom-lsp"
+args: []
+language_ids: ["python"]
+file_extensions: ["py"]
+install_hint: "install custom-lsp"
+icon: "P"
+"#,
+        )
+        .unwrap();
+
+        // Also write a non-yaml file that should be skipped
+        std::fs::write(lsp_dir.join("readme.txt"), "not yaml").unwrap();
+
+        // load_single_server on the valid file should work
+        let spec = load_single_server(&lsp_dir.join("custom.yaml")).unwrap();
+        assert_eq!(spec.command, "custom-lsp");
+    }
+
+    #[test]
+    fn test_load_from_directory_with_bad_yaml_skips_invalid() {
+        // Create a dir with one good and one bad YAML file
+        let tmp = tempfile::tempdir().unwrap();
+        let lsp_dir = tmp.path().join("lsp");
+        std::fs::create_dir_all(&lsp_dir).unwrap();
+
+        // Good file
+        std::fs::write(
+            lsp_dir.join("good.yaml"),
+            r#"
+project_types:
+  - rust
+command: "good-lsp"
+args: []
+language_ids: ["rust"]
+file_extensions: ["rs"]
+install_hint: "install good-lsp"
+icon: "G"
+"#,
+        )
+        .unwrap();
+
+        // Bad file - invalid YAML structure for OwnedLspServerSpec
+        std::fs::write(lsp_dir.join("bad.yaml"), "invalid: yaml: structure: [[[").unwrap();
+
+        // Load the good one directly to verify it works
+        let spec = load_single_server(&lsp_dir.join("good.yaml")).unwrap();
+        assert_eq!(spec.command, "good-lsp");
+
+        // The bad one should fail
+        let result = load_single_server(&lsp_dir.join("bad.yaml"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_load_single_server_with_defaults() {
+        // Test that serde defaults are applied when optional fields are missing
+        let tmp = tempfile::tempdir().unwrap();
+        let yaml_path = tmp.path().join("defaults.yaml");
+        std::fs::write(
+            &yaml_path,
+            r#"
+project_types: []
+command: "default-lsp"
+args: []
+language_ids: ["test"]
+file_extensions: ["txt"]
+install_hint: "install it"
+"#,
+        )
+        .unwrap();
+
+        let spec = load_single_server(&yaml_path).unwrap();
+        assert_eq!(spec.startup_timeout_secs, 30);
+        assert_eq!(spec.health_check_interval_secs, 60);
+        assert!(spec.icon.is_none());
+    }
 }

@@ -130,4 +130,95 @@ mod tests {
         let out = eval(&ctx);
         assert!(out.text.contains("100%"));
     }
+
+    #[test]
+    fn test_context_bar_render_output() {
+        let input = StatuslineInput {
+            context_window: Some(ContextWindowInfo {
+                used_percentage: Some(50.0),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let config = StatuslineConfig::default();
+        let ctx = ModuleContext {
+            input: &input,
+            config: &config,
+        };
+        let out = eval(&ctx);
+        let rendered = out.render();
+        assert!(rendered.contains("50%"));
+    }
+
+    #[test]
+    fn test_context_bar_boundary_49() {
+        let input = StatuslineInput {
+            context_window: Some(ContextWindowInfo {
+                used_percentage: Some(49.0),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let config = StatuslineConfig::default();
+        let ctx = ModuleContext {
+            input: &input,
+            config: &config,
+        };
+        let out = eval(&ctx);
+        assert!(out.text.contains("49%"));
+    }
+
+    #[test]
+    fn test_context_bar_boundary_50() {
+        let input = StatuslineInput {
+            context_window: Some(ContextWindowInfo {
+                used_percentage: Some(50.0),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let config = StatuslineConfig::default();
+        let ctx = ModuleContext {
+            input: &input,
+            config: &config,
+        };
+        let out = eval(&ctx);
+        assert!(out.text.contains("50%"));
+    }
+
+    #[test]
+    fn test_context_bar_boundary_79() {
+        let input = StatuslineInput {
+            context_window: Some(ContextWindowInfo {
+                used_percentage: Some(79.0),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let config = StatuslineConfig::default();
+        let ctx = ModuleContext {
+            input: &input,
+            config: &config,
+        };
+        let out = eval(&ctx);
+        assert!(out.text.contains("79%"));
+    }
+
+    #[test]
+    fn test_context_bar_boundary_80() {
+        let input = StatuslineInput {
+            context_window: Some(ContextWindowInfo {
+                used_percentage: Some(80.0),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let config = StatuslineConfig::default();
+        let ctx = ModuleContext {
+            input: &input,
+            config: &config,
+        };
+        let out = eval(&ctx);
+        assert!(out.text.contains("80%"));
+    }
 }

@@ -314,4 +314,109 @@ mod tests {
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), Some(42)); // Should return Some(value) when succeeds
     }
+
+    #[tokio::test]
+    async fn test_with_timeout_action_operation_error() {
+        let operation = async { Err::<u32, _>(TestError::NonRetriable) };
+
+        let result = with_timeout_action(
+            operation,
+            Duration::from_millis(100),
+            TimeoutAction::LogWarning,
+            "test operation",
+        )
+        .await;
+
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), TestError::NonRetriable);
+    }
+
+    #[test]
+    fn test_timeout_error_display() {
+        let timeout_err: TimeoutError<TestError> = TimeoutError::Timeout {
+            duration: Duration::from_secs(5),
+        };
+        let msg = format!("{}", timeout_err);
+        assert!(msg.contains("timed out"));
+        assert!(msg.contains("5s"));
+
+        let op_err: TimeoutError<TestError> = TimeoutError::Operation(TestError::NonRetriable);
+        let msg = format!("{}", op_err);
+        assert!(msg.contains("Operation failed"));
+    }
+
+    #[test]
+    fn test_timeout_error_debug() {
+        let timeout_err: TimeoutError<TestError> = TimeoutError::Timeout {
+            duration: Duration::from_millis(100),
+        };
+        let debug = format!("{:?}", timeout_err);
+        assert!(debug.contains("Timeout"));
+
+        let op_err: TimeoutError<TestError> = TimeoutError::Operation(TestError::Retriable);
+        let debug = format!("{:?}", op_err);
+        assert!(debug.contains("Operation"));
+    }
+
+    #[test]
+    fn test_timeout_action_debug() {
+        let action: TimeoutAction<TestError> = TimeoutAction::ReturnError(TestError::Retriable);
+        let debug = format!("{:?}", action);
+        assert!(debug.contains("ReturnError"));
+
+        let action: TimeoutAction<TestError> = TimeoutAction::LogWarning;
+        let debug = format!("{:?}", action);
+        assert!(debug.contains("LogWarning"));
+    }
+
+    #[test]
+    fn test_retry_delay_bounded() {
+        let operation = TestOperation::new(0, true);
+
+        // High attempt number should not overflow
+        let delay = operation.retry_delay(10);
+        assert!(delay.as_millis() > 0);
+
+        // Very high attempt (capped at 10 in the impl)
+        let delay = operation.retry_delay(100);
+        // Should not panic; attempt is capped at 10
+        assert!(delay.as_millis() > 0);
+    }
+
+    #[test]
+    fn test_rand_produces_values() {
+        // Exercise the rand function indirectly through retry_delay
+        let operation = TestOperation::new(0, true);
+        // Call multiple times to exercise the LCG
+        for i in 0..10 {
+            let delay = operation.retry_delay(i);
+            assert!(delay.as_millis() > 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_retryable_execute_single_attempt_success() {
+        let mut operation = TestOperation::new(0, true);
+        let result = operation.execute_with_retry(1).await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_with_timeout_action_return_error_on_op_error() {
+        // Operation fails before timeout - the error goes through map(Some) path
+        let operation = async { Err::<u32, _>(TestError::Retriable) };
+
+        let result = with_timeout_action(
+            operation,
+            Duration::from_millis(100),
+            TimeoutAction::ReturnError(TestError::NonRetriable),
+            "test operation",
+        )
+        .await;
+
+        // The operation error takes precedence over the timeout action
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), TestError::Retriable);
+    }
 }

@@ -68,4 +68,52 @@ mod tests {
         let out = eval(&ctx);
         assert!(out.is_empty());
     }
+
+    #[test]
+    fn test_session_render_output() {
+        let input = StatuslineInput {
+            session_id: Some("abcdef1234567890".into()),
+            ..Default::default()
+        };
+        let config = StatuslineConfig::default();
+        let ctx = ModuleContext {
+            input: &input,
+            config: &config,
+        };
+        let out = eval(&ctx);
+        let rendered = out.render();
+        assert!(rendered.contains("abcdef12"));
+    }
+
+    #[test]
+    fn test_session_exact_8_chars() {
+        let input = StatuslineInput {
+            session_id: Some("12345678".into()),
+            ..Default::default()
+        };
+        let config = StatuslineConfig::default();
+        let ctx = ModuleContext {
+            input: &input,
+            config: &config,
+        };
+        let out = eval(&ctx);
+        assert!(out.text.contains("12345678"));
+    }
+
+    #[test]
+    fn test_session_empty_string() {
+        let input = StatuslineInput {
+            session_id: Some("".into()),
+            ..Default::default()
+        };
+        let config = StatuslineConfig::default();
+        let ctx = ModuleContext {
+            input: &input,
+            config: &config,
+        };
+        let out = eval(&ctx);
+        // Empty session_id truncated to "" which interpolates to empty format output
+        let _ = out.is_empty();
+        let _ = out.render();
+    }
 }

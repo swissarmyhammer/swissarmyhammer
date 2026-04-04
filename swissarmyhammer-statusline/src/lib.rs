@@ -119,8 +119,10 @@ mod tests {
     #[test]
     fn test_render_unknown_module_in_format() {
         let input = StatuslineInput::default();
-        let mut config = StatuslineConfig::default();
-        config.format = "$nonexistent_module".into();
+        let config = StatuslineConfig {
+            format: "$nonexistent_module".into(),
+            ..Default::default()
+        };
         let result = render(&input, &config);
         assert_eq!(result, "");
     }
@@ -128,9 +130,82 @@ mod tests {
     #[test]
     fn test_render_literal_format() {
         let input = StatuslineInput::default();
-        let mut config = StatuslineConfig::default();
-        config.format = "just text".into();
+        let config = StatuslineConfig {
+            format: "just text".into(),
+            ..Default::default()
+        };
         let result = render(&input, &config);
         assert_eq!(result, "just text");
+    }
+
+    #[test]
+    fn test_render_mixed_modules_and_literals() {
+        let input = StatuslineInput {
+            model: Some(input::ModelInfo {
+                display_name: Some("Claude".into()),
+                id: None,
+            }),
+            ..Default::default()
+        };
+        let config = StatuslineConfig {
+            format: "prefix $model suffix".into(),
+            ..Default::default()
+        };
+        let result = render(&input, &config);
+        assert!(result.contains("Claude"));
+    }
+
+    #[test]
+    fn test_render_trims_trailing_whitespace() {
+        let input = StatuslineInput::default();
+        let config = StatuslineConfig {
+            format: "text   ".into(),
+            ..Default::default()
+        };
+        let result = render(&input, &config);
+        assert_eq!(result, "text");
+    }
+
+    #[test]
+    fn test_run_with_all_fields() {
+        let json = r#"{
+            "workspace": {"current_dir": "/tmp/proj"},
+            "model": {"display_name": "Claude"},
+            "context_window": {"used_percentage": 30.0},
+            "cost": {"total_cost_usd": 0.50},
+            "session_id": "sess123",
+            "vim": {"mode": "INSERT"},
+            "agent": {"name": "tester"},
+            "worktree": {"branch": "dev"},
+            "version": "2.0.0",
+            "cwd": "/tmp/proj"
+        }"#;
+        let result = run(json);
+        assert!(result.contains("proj") || result.contains("Claude"));
+    }
+
+    #[test]
+    fn test_dump_config_contains_modules() {
+        let yaml = dump_config();
+        assert!(yaml.contains("git_branch:"));
+        assert!(yaml.contains("git_status:"));
+        assert!(yaml.contains("model:"));
+    }
+
+    #[test]
+    fn test_render_only_model_format() {
+        let input = StatuslineInput {
+            model: Some(input::ModelInfo {
+                display_name: Some("TestModel".into()),
+                id: None,
+            }),
+            ..Default::default()
+        };
+        let config = StatuslineConfig {
+            format: "$model".into(),
+            ..Default::default()
+        };
+        let result = render(&input, &config);
+        assert!(result.contains("TestModel"));
     }
 }

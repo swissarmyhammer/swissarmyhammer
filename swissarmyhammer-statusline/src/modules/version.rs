@@ -53,4 +53,35 @@ mod tests {
         let out = eval(&ctx);
         assert!(out.is_empty());
     }
+
+    #[test]
+    fn test_version_render_output() {
+        let input = StatuslineInput {
+            version: Some("1.2.3".into()),
+            ..Default::default()
+        };
+        let config = StatuslineConfig::default();
+        let ctx = ModuleContext {
+            input: &input,
+            config: &config,
+        };
+        let out = eval(&ctx);
+        let rendered = out.render();
+        assert!(rendered.contains("v1.2.3"));
+    }
+
+    #[test]
+    fn test_version_empty_string() {
+        let input = StatuslineInput {
+            version: Some("".into()),
+            ..Default::default()
+        };
+        let config = StatuslineConfig::default();
+        let ctx = ModuleContext {
+            input: &input,
+            config: &config,
+        };
+        let out = eval(&ctx);
+        assert!(out.text.contains("v"));
+    }
 }

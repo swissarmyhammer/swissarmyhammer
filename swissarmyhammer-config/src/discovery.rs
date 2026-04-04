@@ -447,6 +447,7 @@ mod tests {
 
         // Restore writable so tempdir cleanup succeeds
         let mut perms = fs::metadata(&file_path).unwrap().permissions();
+        #[allow(clippy::permissions_set_readonly_false)]
         perms.set_readonly(false);
         fs::set_permissions(&file_path, perms).unwrap();
     }
@@ -515,6 +516,7 @@ mod tests {
 
         // Cleanup: restore writable
         let mut perms = fs::metadata(&readonly_file).unwrap().permissions();
+        #[allow(clippy::permissions_set_readonly_false)]
         perms.set_readonly(false);
         fs::set_permissions(&readonly_file, perms).unwrap();
     }
@@ -603,5 +605,46 @@ mod tests {
             project_sah,
             "Last entry should be CWD-level .sah/"
         );
+    }
+
+    #[test]
+    fn test_default_impl() {
+        // Exercises the `Default` impl for `ConfigurationDiscovery`.
+        let discovery = ConfigurationDiscovery::default();
+        // Should not panic and should have paths
+        let _paths = discovery.paths();
+    }
+
+    #[test]
+    fn test_discover_config_files_with_global_dir() {
+        // Exercises the global_dir branch in `discover_config_files`.
+        let temp_dir = TempDir::new().unwrap();
+        let global_dir = temp_dir.path().join("global-sah");
+        fs::create_dir_all(&global_dir).unwrap();
+        fs::write(global_dir.join("sah.toml"), "key = \"val\"").unwrap();
+
+        let discovery = ConfigurationDiscovery {
+            paths: DiscoveryPaths {
+                global_dir: Some(global_dir),
+                project_dirs: vec![],
+            },
+            validate_security: false,
+        };
+
+        let files = discovery.discover_config_files();
+        assert_eq!(files.len(), 1);
+    }
+
+    #[test]
+    fn test_find_config_files_yml_extension() {
+        // Exercises the `.yml` extension detection.
+        let temp_dir = TempDir::new().unwrap();
+        let dir_path = temp_dir.path();
+
+        fs::write(dir_path.join("sah.yml"), "key: value\n").unwrap();
+
+        let files = ConfigurationDiscovery::find_config_files_in_dir(dir_path);
+        assert_eq!(files.len(), 1);
+        assert!(files[0].ends_with("sah.yml"));
     }
 }

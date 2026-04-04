@@ -289,4 +289,75 @@ mod tests {
         assert!(config.with_timestamps);
         assert!(!config.with_location);
     }
+
+    #[test]
+    fn test_log_level_to_level_filter() {
+        assert_eq!(LevelFilter::from(LogLevel::Error), LevelFilter::ERROR);
+        assert_eq!(LevelFilter::from(LogLevel::Warn), LevelFilter::WARN);
+        assert_eq!(LevelFilter::from(LogLevel::Info), LevelFilter::INFO);
+        assert_eq!(LevelFilter::from(LogLevel::Debug), LevelFilter::DEBUG);
+        assert_eq!(LevelFilter::from(LogLevel::Trace), LevelFilter::TRACE);
+    }
+
+    #[test]
+    fn test_log_level_all_conversions() {
+        // Cover Warn and Trace which were missing
+        assert_eq!(Level::from(LogLevel::Warn), Level::WARN);
+        assert_eq!(Level::from(LogLevel::Trace), Level::TRACE);
+    }
+
+    #[test]
+    fn test_log_level_traits() {
+        let level = LogLevel::Info;
+        let cloned = level;
+        assert_eq!(level, cloned);
+
+        let debug = format!("{:?}", LogLevel::Error);
+        assert!(debug.contains("Error"));
+    }
+
+    #[test]
+    fn test_pretty_display_serializable() {
+        let data = vec!["hello", "world"];
+        let pretty = Pretty(&data);
+        let output = format!("{}", pretty);
+        assert!(output.contains("hello"));
+        assert!(output.contains("world"));
+    }
+
+    #[test]
+    fn test_pretty_debug_serializable() {
+        let data = vec![1, 2, 3];
+        let pretty = Pretty(&data);
+        let output = format!("{:?}", pretty);
+        assert!(output.contains("1"));
+        assert!(output.contains("2"));
+        assert!(output.contains("3"));
+    }
+
+    #[test]
+    fn test_logging_config_with_timestamps() {
+        let config = LoggingConfig::new(LogLevel::Info).with_timestamps(false);
+        assert!(!config.with_timestamps);
+
+        let config = LoggingConfig::new(LogLevel::Info).with_timestamps(true);
+        assert!(config.with_timestamps);
+    }
+
+    #[test]
+    fn test_logging_config_chaining() {
+        let config = LoggingConfig::new(LogLevel::Warn)
+            .with_pretty(true)
+            .with_json(false)
+            .with_timestamps(true)
+            .with_location(false)
+            .with_module_filter("mymod=debug");
+
+        assert_eq!(config.level, LogLevel::Warn);
+        assert!(config.pretty);
+        assert!(!config.json);
+        assert!(config.with_timestamps);
+        assert!(!config.with_location);
+        assert_eq!(config.module_filters.len(), 1);
+    }
 }

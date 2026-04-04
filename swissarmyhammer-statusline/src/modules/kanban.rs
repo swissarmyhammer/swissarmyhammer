@@ -165,4 +165,58 @@ mod tests {
         assert_eq!(done, 0);
         assert_eq!(total, 0);
     }
+
+    #[test]
+    fn test_render_kanban_bar_one_of_one() {
+        let cfg = StatuslineConfig::default().kanban;
+        let out = render_kanban_bar(1, 1, &cfg);
+        assert!(!out.is_empty());
+        assert!(out.text.contains("1/1"));
+    }
+
+    #[test]
+    fn test_render_kanban_bar_large_counts() {
+        let cfg = StatuslineConfig::default().kanban;
+        let out = render_kanban_bar(50, 100, &cfg);
+        assert!(!out.is_empty());
+        assert!(out.text.contains("50"));
+        assert!(out.text.contains("100"));
+    }
+
+    #[test]
+    fn test_render_kanban_bar_render_output() {
+        let cfg = StatuslineConfig::default().kanban;
+        let out = render_kanban_bar(3, 10, &cfg);
+        let rendered = out.render();
+        assert!(rendered.contains("3"));
+        assert!(rendered.contains("10"));
+    }
+
+    #[test]
+    fn test_count_tasks_non_md_files_ignored() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("notes.txt"), "not a task").unwrap();
+        std::fs::write(dir.path().join("data.json"), "{}").unwrap();
+        let (done, total) = count_tasks_in_dir(dir.path());
+        assert_eq!(done, 0);
+        assert_eq!(total, 0);
+    }
+
+    #[test]
+    fn test_count_tasks_md_without_done() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("task1.md"),
+            "---\nposition_column: doing\n---\nIn progress\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("task2.md"),
+            "---\nposition_column: todo\n---\nPending\n",
+        )
+        .unwrap();
+        let (done, total) = count_tasks_in_dir(dir.path());
+        assert_eq!(total, 2);
+        assert_eq!(done, 0);
+    }
 }

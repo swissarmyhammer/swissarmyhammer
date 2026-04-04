@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: 8a80
+position_column: done
+position_ordinal: ffffffffffffffffffb580
 title: '100% coverage: swissarmyhammer-entity-search'
 ---
-Coverage: 51.7% (77/149 lines) — 72 lines to cover\n\nTop uncovered files:\n- src/index.rs (56 uncov) — search index operations\n- src/semantic.rs (15 uncov) — semantic search\n- src/fuzzy.rs (1 uncov) #coverage-gap
+Top uncovered files:\n- src/lib.rs — main library\n- src/types.rs — types #coverage-gap\n\n**CONSTRAINT: ONLY add tests. Do NOT modify, refactor, delete, or otherwise change the code under test. The production code must remain exactly as-is. Do NOT put line numbers or line counts in comments or ticket descriptions — lines change constantly and these go stale immediately. Run coverage to get current numbers.**

@@ -49,3 +49,87 @@ impl OperationProcessor<JsContext, JsError> for JsOperationProcessor {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::expression::get::GetExpression;
+    use crate::expression::set::SetExpression;
+
+    #[test]
+    fn test_new() {
+        let _processor = JsOperationProcessor::new();
+    }
+
+    #[test]
+    fn test_default() {
+        let _processor = JsOperationProcessor;
+    }
+
+    #[tokio::test]
+    async fn test_process_set_operation() {
+        let processor = JsOperationProcessor::new();
+        let ctx = JsContext::new();
+
+        let op = SetExpression {
+            name: Some("proc_test_x".to_string()),
+            expression: Some(serde_json::Value::String("42".to_string())),
+        };
+
+        let result = processor.process(&op, &ctx).await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), serde_json::json!(42));
+    }
+
+    #[tokio::test]
+    async fn test_process_get_operation() {
+        let processor = JsOperationProcessor::new();
+        let ctx = JsContext::new();
+
+        // First set a variable
+        let set_op = SetExpression {
+            name: Some("proc_get_var".to_string()),
+            expression: Some(serde_json::Value::String("'hello'".to_string())),
+        };
+        let _ = processor.process(&set_op, &ctx).await;
+
+        // Then get it
+        let get_op = GetExpression {
+            name: Some("proc_get_var".to_string()),
+        };
+        let result = processor.process(&get_op, &ctx).await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), serde_json::json!("hello"));
+    }
+
+    #[tokio::test]
+    async fn test_process_failed_operation() {
+        let processor = JsOperationProcessor::new();
+        let ctx = JsContext::new();
+
+        let op = SetExpression {
+            name: None,
+            expression: None,
+        };
+
+        let result = processor.process(&op, &ctx).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_write_log_is_noop() {
+        let processor = JsOperationProcessor::new();
+        let ctx = JsContext::new();
+
+        let log_entry = LogEntry::new(
+            "set expression",
+            serde_json::json!({"name": "x"}),
+            serde_json::json!(42),
+            None,
+            0,
+        );
+
+        let result = processor.write_log(&ctx, &log_entry, &[]).await;
+        assert!(result.is_ok());
+    }
+}

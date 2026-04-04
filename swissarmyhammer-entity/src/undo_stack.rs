@@ -315,6 +315,85 @@ mod tests {
     }
 
     #[test]
+    fn default_trait_matches_new() {
+        let default_stack = UndoStack::default();
+        let new_stack = UndoStack::new();
+        assert_eq!(default_stack.entries.len(), new_stack.entries.len());
+        assert_eq!(default_stack.pointer, new_stack.pointer);
+        assert_eq!(default_stack.max_size, new_stack.max_size);
+    }
+
+    #[test]
+    fn load_empty_file_returns_default() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("empty.yaml");
+        std::fs::write(&path, "").unwrap();
+        let stack = UndoStack::load(&path).unwrap();
+        assert_eq!(stack.entries.len(), 0);
+        assert_eq!(stack.pointer, 0);
+    }
+
+    #[test]
+    fn load_whitespace_only_file_returns_default() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("whitespace.yaml");
+        std::fs::write(&path, "   \n\n  ").unwrap();
+        let stack = UndoStack::load(&path).unwrap();
+        assert_eq!(stack.entries.len(), 0);
+        assert_eq!(stack.pointer, 0);
+    }
+
+    #[test]
+    fn load_over_capacity_trims_oldest() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("over_cap.yaml");
+
+        // Create a stack with 5 entries but max_size 3
+        let yaml = r#"entries:
+  - id: id1
+    label: op1
+  - id: id2
+    label: op2
+  - id: id3
+    label: op3
+  - id: id4
+    label: op4
+  - id: id5
+    label: op5
+pointer: 5
+max_size: 3
+"#;
+        std::fs::write(&path, yaml).unwrap();
+
+        let stack = UndoStack::load(&path).unwrap();
+        assert_eq!(stack.entries.len(), 3);
+        assert_eq!(stack.entries[0].id, "id3");
+        assert_eq!(stack.entries[1].id, "id4");
+        assert_eq!(stack.entries[2].id, "id5");
+        // pointer was 5, minus 2 excess = 3
+        assert_eq!(stack.pointer, 3);
+    }
+
+    #[test]
+    fn load_clamps_out_of_range_pointer() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("bad_pointer.yaml");
+
+        // Pointer beyond the entries length
+        let yaml = r#"entries:
+  - id: id1
+    label: op1
+pointer: 99
+max_size: 100
+"#;
+        std::fs::write(&path, yaml).unwrap();
+
+        let stack = UndoStack::load(&path).unwrap();
+        assert_eq!(stack.entries.len(), 1);
+        assert_eq!(stack.pointer, 1); // clamped to entries.len()
+    }
+
+    #[test]
     fn clear_resets_undo_and_redo() {
         let mut stack = UndoStack::new();
         stack.push("id1", "op1");

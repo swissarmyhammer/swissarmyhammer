@@ -720,7 +720,7 @@ mod tests {
 
     #[test]
     fn test_context_error_severity() {
-        let source = io::Error::new(io::ErrorKind::Other, "underlying");
+        let source = io::Error::other("underlying");
         let error = SwissArmyHammerError::Context {
             message: "wrapping context".to_string(),
             source: Box::new(source),
@@ -761,8 +761,7 @@ mod tests {
 
     #[test]
     fn test_error_with_context_err_wraps() {
-        let result: std::result::Result<i32, io::Error> =
-            Err(io::Error::new(io::ErrorKind::Other, "boom"));
+        let result: std::result::Result<i32, io::Error> = Err(io::Error::other("boom"));
         let wrapped = result.with_context(|| format!("failed to process item {}", 7));
         let err = wrapped.unwrap_err();
         match &err {

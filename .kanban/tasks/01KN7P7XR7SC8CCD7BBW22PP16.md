@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: '8880'
+position_column: done
+position_ordinal: ffffffffffffffffffbe80
 title: '100% coverage: model-context-protocol-extras'
 ---
-Coverage: 4.3% (6/139 lines) — 133 lines to cover\n\nTop uncovered files:\n- src/proxy.rs (80 uncov) — MCP proxy\n- src/notifying_server.rs (34 uncov) — notification server\n- src/notification.rs (19 uncov) — notification types #coverage-gap
+Top uncovered files:\n- src/proxy.rs — MCP proxy\n- src/notifying_server.rs — notification server\n- src/notification.rs — notification types #coverage-gap\n\n**CONSTRAINT: ONLY add tests. Do NOT modify, refactor, delete, or otherwise change the code under test. The production code must remain exactly as-is. Do NOT put line numbers or line counts in comments or ticket descriptions — lines change constantly and these go stale immediately. Run coverage to get current numbers.**

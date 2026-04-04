@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: '9080'
+position_column: done
+position_ordinal: ffffffffffffffffffca80
 title: '100% coverage: swissarmyhammer-tools'
 ---
-Coverage: 0% (0/258 lines) — 258 lines to cover\n\nTop uncovered files:\n- src/mcp/file_watcher.rs (93 uncov) — file watcher\n- src/mcp/tool_registry.rs (49 uncov) — tool registry\n- src/mcp/tools/shell/process.rs (28 uncov) — shell process management #coverage-gap
+Top uncovered files:\n- src/mcp/file_watcher.rs — file watcher\n- src/mcp/tool_registry.rs — tool registry\n- src/mcp/tools/shell/process.rs — shell process management #coverage-gap\n\n**CONSTRAINT: ONLY add tests. Do NOT modify, refactor, delete, or otherwise change the code under test. The production code must remain exactly as-is. Do NOT put line numbers or line counts in comments or ticket descriptions — lines change constantly and these go stale immediately. Run coverage to get current numbers.**

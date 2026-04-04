@@ -163,4 +163,79 @@ mod tests {
         let out = render_state(git2::RepositoryState::Clean, &ctx);
         assert!(out.is_empty());
     }
+
+    #[test]
+    fn test_render_state_merge() {
+        let input = StatuslineInput::default();
+        let config = StatuslineConfig::default();
+        let ctx = ModuleContext {
+            input: &input,
+            config: &config,
+        };
+        let out = render_state(git2::RepositoryState::Merge, &ctx);
+        assert!(!out.is_empty());
+        assert!(out.text.contains("MERGING"));
+    }
+
+    #[test]
+    fn test_render_state_cherry_pick() {
+        let input = StatuslineInput::default();
+        let config = StatuslineConfig::default();
+        let ctx = ModuleContext {
+            input: &input,
+            config: &config,
+        };
+        let out = render_state(git2::RepositoryState::CherryPick, &ctx);
+        assert!(out.text.contains("CHERRY-PICKING"));
+    }
+
+    #[test]
+    fn test_render_state_revert() {
+        let input = StatuslineInput::default();
+        let config = StatuslineConfig::default();
+        let ctx = ModuleContext {
+            input: &input,
+            config: &config,
+        };
+        let out = render_state(git2::RepositoryState::Revert, &ctx);
+        assert!(out.text.contains("REVERTING"));
+    }
+
+    #[test]
+    fn test_render_state_bisect() {
+        let input = StatuslineInput::default();
+        let config = StatuslineConfig::default();
+        let ctx = ModuleContext {
+            input: &input,
+            config: &config,
+        };
+        let out = render_state(git2::RepositoryState::Bisect, &ctx);
+        assert!(out.text.contains("BISECTING"));
+    }
+
+    #[test]
+    fn test_render_state_apply_mailbox() {
+        let input = StatuslineInput::default();
+        let config = StatuslineConfig::default();
+        let ctx = ModuleContext {
+            input: &input,
+            config: &config,
+        };
+        let out = render_state(git2::RepositoryState::ApplyMailbox, &ctx);
+        assert!(out.text.contains("APPLYING"));
+    }
+
+    #[test]
+    fn test_render_state_output_has_style() {
+        let input = StatuslineInput::default();
+        let config = StatuslineConfig::default();
+        let ctx = ModuleContext {
+            input: &input,
+            config: &config,
+        };
+        let out = render_state(git2::RepositoryState::Rebase, &ctx);
+        let rendered = out.render();
+        assert!(rendered.contains("\x1b["));
+        assert!(rendered.contains("REBASING"));
+    }
 }

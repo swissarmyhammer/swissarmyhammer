@@ -1236,4 +1236,251 @@ mod tests {
             other => panic!("expected Failed, got: {other:?}"),
         }
     }
+
+    // -- JSON-RPC edge case tests -------------------------------------------
+
+    #[tokio::test]
+    async fn test_jsonrpc_bad_content_length_value() {
+        let bad_input = b"Content-Length: abc\r\n\r\n";
+        let mut cursor = &bad_input[..];
+        let mut reader = BufReader::new(&mut cursor);
+        let result = read_jsonrpc_message(&mut reader).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("bad Content-Length"),
+            "expected bad Content-Length error, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_jsonrpc_ignores_non_content_length_headers() {
+        // Build a valid message with extra headers that should be ignored
+        let body = r#"{"jsonrpc":"2.0","id":1}"#;
+        let msg = format!(
+            "Content-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        let bytes = msg.as_bytes();
+        let mut cursor = bytes;
+        let mut reader = BufReader::new(&mut cursor);
+        let decoded = read_jsonrpc_message(&mut reader).await.unwrap();
+        assert_eq!(decoded["id"], 1);
+    }
+
+    #[tokio::test]
+    async fn test_jsonrpc_invalid_json_body() {
+        let body = "not valid json!!!";
+        let msg = format!("Content-Length: {}\r\n\r\n{}", body.len(), body);
+        let bytes = msg.as_bytes();
+        let mut cursor = bytes;
+        let mut reader = BufReader::new(&mut cursor);
+        let result = read_jsonrpc_message(&mut reader).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("json decode"),
+            "expected json decode error, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_jsonrpc_truncated_body() {
+        // Content-Length says 100 but only 5 bytes available
+        let msg = "Content-Length: 100\r\n\r\nhello";
+        let bytes = msg.as_bytes();
+        let mut cursor = bytes;
+        let mut reader = BufReader::new(&mut cursor);
+        let result = read_jsonrpc_message(&mut reader).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("read body"),
+            "expected read body error, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_send_jsonrpc_formats_content_length_correctly() {
+        let msg = json!({"jsonrpc": "2.0", "method": "test"});
+        let mut buf: Vec<u8> = Vec::new();
+        send_jsonrpc_message(&mut buf, &msg).await.unwrap();
+
+        let output = String::from_utf8(buf).unwrap();
+        assert!(output.starts_with("Content-Length: "));
+        assert!(output.contains("\r\n\r\n"));
+        // Verify the content-length value matches the actual body
+        let parts: Vec<&str> = output.splitn(2, "\r\n\r\n").collect();
+        let header = parts[0];
+        let body = parts[1];
+        let claimed_len: usize = header
+            .strip_prefix("Content-Length: ")
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert_eq!(claimed_len, body.len());
+    }
+
+    // -- LspError Display tests -----------------------------------------------
+
+    #[test]
+    fn test_lsp_error_display_variants() {
+        let err = LspError::BinaryNotFound {
+            command: "test-cmd".to_string(),
+            install_hint: "install it".to_string(),
+        };
+        assert!(err.to_string().contains("test-cmd"));
+
+        let err = LspError::HandshakeFailed("timeout".to_string());
+        assert!(err.to_string().contains("timeout"));
+
+        let err = LspError::Timeout(Duration::from_secs(30));
+        assert!(err.to_string().contains("30"));
+
+        let err = LspError::ShutdownFailed("crash".to_string());
+        assert!(err.to_string().contains("crash"));
+
+        let err = LspError::NotRunning;
+        assert!(err.to_string().contains("not running"));
+
+        let err = LspError::JsonRpc("bad frame".to_string());
+        assert!(err.to_string().contains("bad frame"));
+
+        let err = LspError::ProjectDetection("no projects".to_string());
+        assert!(err.to_string().contains("no projects"));
+
+        let err = LspError::DaemonNotFound("missing-cmd".to_string());
+        assert!(err.to_string().contains("missing-cmd"));
+    }
+
+    // -- start() timeout path via cat -----------------------------------------
+
+    #[tokio::test]
+    async fn test_start_cat_with_very_short_timeout() {
+        // cat keeps stdin/stdout open but doesn't respond with valid JSON-RPC.
+        // It actually echoes the request back as raw bytes, which happens to be
+        // valid framing. To trigger the timeout path, we need a command that
+        // keeps pipes open but doesn't echo. `/bin/sleep` does this.
+        let spec = OwnedLspServerSpec {
+            project_types: vec![],
+            command: "sleep".to_string(),
+            args: vec!["10".to_string()],
+            language_ids: vec!["test".to_string()],
+            file_extensions: vec!["txt".to_string()],
+            startup_timeout_secs: 1,
+            health_check_interval_secs: 60,
+            install_hint: "N/A".to_string(),
+            icon: None,
+        };
+        let workspace = tempfile::tempdir().expect("workspace tempdir");
+        let mut daemon = LspDaemon::new(spec, workspace.path().to_path_buf());
+
+        let result = daemon.start().await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        // sleep doesn't have stdin piped correctly for write, so it may fail
+        // with either Timeout, HandshakeFailed, or SpawnFailed depending on
+        // the OS behavior. The key is that it fails.
+        assert!(
+            matches!(
+                err,
+                LspError::Timeout(_)
+                    | LspError::HandshakeFailed(_)
+                    | LspError::SpawnFailed(_)
+                    | LspError::JsonRpc(_)
+            ),
+            "expected Timeout/HandshakeFailed/SpawnFailed/JsonRpc, got: {err:?}"
+        );
+    }
+
+    // -- shutdown with a real running child -----------------------------------
+
+    #[tokio::test]
+    async fn test_shutdown_kills_long_running_child() {
+        // Spawn a process that won't exit on its own
+        let workspace = tempfile::tempdir().expect("workspace tempdir");
+        let child = Command::new("sleep")
+            .args(["60"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .expect("spawn sleep");
+
+        let spec = test_spec("sleep");
+        let mut daemon = LspDaemon::new(spec, workspace.path().to_path_buf());
+        daemon.child = Some(child);
+
+        // Shutdown should complete within the grace period (kill_on_drop)
+        daemon.shutdown().await;
+        assert_eq!(daemon.state(), LspDaemonState::NotStarted);
+        assert!(daemon.child.is_none());
+    }
+
+    // -- restart_with_backoff delay test --------------------------------------
+
+    #[test]
+    fn test_client_recovers_from_poisoned_mutex_with_some_value() {
+        // This test covers the poisoned mutex path where the inner Option IS Some.
+        // We can't easily create a real LspJsonRpcClient without pipes, so we
+        // test via shared_client directly.
+        let spec = test_spec("some-server");
+        let daemon = LspDaemon::new(spec, PathBuf::from("/tmp"));
+        let shared = daemon.shared_client();
+
+        // Put a real client into the mutex
+        // We need stdin/stdout for LspJsonRpcClient::new
+        let stdin = std::process::Command::new("cat")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn();
+
+        if let Ok(mut child) = stdin {
+            let child_stdin = child.stdin.take().unwrap();
+            let child_stdout = child.stdout.take().unwrap();
+            {
+                let mut guard = shared.lock().unwrap();
+                *guard = Some(LspJsonRpcClient::new(child_stdin, child_stdout));
+            }
+
+            // Poison the mutex by panicking inside a lock
+            let shared_clone = Arc::clone(&shared);
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _guard = shared_clone.lock().unwrap();
+                panic!("intentional panic to poison mutex");
+            }));
+
+            // client() should recover from the poisoned mutex.
+            // The inner Option is Some, so it should return Some.
+            let result = daemon.client();
+            assert!(
+                result.is_some(),
+                "expected Some from poisoned mutex with client present"
+            );
+
+            let _ = child.kill();
+        }
+    }
+
+    #[tokio::test]
+    async fn test_restart_with_backoff_increments_failure_on_bad_binary() {
+        let spec = test_spec("nonexistent-lsp-binary-abc123xyz");
+        let mut daemon = LspDaemon::new(spec, PathBuf::from("/tmp"));
+        // Set to 1 failure (below MAX) so restart_with_backoff proceeds
+        daemon.consecutive_failures = 1;
+
+        let start = std::time::Instant::now();
+        let result = daemon.restart_with_backoff().await;
+        let elapsed = start.elapsed();
+
+        assert!(result.is_err());
+        // Should have waited at least ~2s backoff for attempt=1
+        assert!(
+            elapsed >= Duration::from_secs(1),
+            "expected at least 1s backoff delay, got: {elapsed:?}"
+        );
+        assert_eq!(daemon.state(), LspDaemonState::NotFound);
+    }
 }

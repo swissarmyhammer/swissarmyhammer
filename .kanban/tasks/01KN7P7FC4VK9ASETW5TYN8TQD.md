@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: '8480'
+position_column: done
+position_ordinal: ffffffffffffffffffd380
 title: '100% coverage: agent-client-protocol-extras'
 ---
-Coverage: 39.9% (436/1094 lines) — 658 lines to cover\n\nTop uncovered files:\n- src/hookable_agent.rs (150 uncov) — hookable agent wrapper\n- src/recording.rs (148 uncov) — session recording/playback\n- src/tracing_agent.rs (123 uncov) — tracing instrumentation #coverage-gap
+Top uncovered files:\n- src/hookable_agent.rs — hookable agent wrapper\n- src/recording.rs — session recording/playback\n- src/tracing_agent.rs — tracing instrumentation #coverage-gap\n\n**CONSTRAINT: ONLY add tests. Do NOT modify, refactor, delete, or otherwise change the code under test. The production code must remain exactly as-is. Do NOT put line numbers or line counts in comments or ticket descriptions — lines change constantly and these go stale immediately. Run coverage to get current numbers.**

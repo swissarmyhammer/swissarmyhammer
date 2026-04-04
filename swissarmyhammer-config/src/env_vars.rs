@@ -253,4 +253,27 @@ mod tests {
 
         env::remove_var("TEST_VALUE");
     }
+
+    #[test]
+    fn test_default_impl() {
+        // Exercises the `Default` impl for `EnvVarSubstitution`.
+        let sub = EnvVarSubstitution::default();
+        let result = sub.substitute_in_string("no vars here").unwrap();
+        assert_eq!(result, "no vars here");
+    }
+
+    #[test]
+    fn test_substitute_non_string_types_passthrough() {
+        // Exercises the passthrough paths for Number, Bool, and Null values.
+        let sub = EnvVarSubstitution::new().unwrap();
+
+        let num_result = sub.substitute_in_value(json!(42)).unwrap();
+        assert_eq!(num_result, json!(42));
+
+        let bool_result = sub.substitute_in_value(json!(true)).unwrap();
+        assert_eq!(bool_result, json!(true));
+
+        let null_result = sub.substitute_in_value(json!(null)).unwrap();
+        assert_eq!(null_result, json!(null));
+    }
 }

@@ -112,7 +112,7 @@ mod tests {
         assert_eq!(library.len(), 0);
 
         library.load_defaults();
-        assert!(library.len() > 0);
+        assert!(!library.is_empty());
     }
 
     #[test]

@@ -25,6 +25,8 @@ struct AgentFrontmatter {
     background: bool,
     #[serde(default)]
     metadata: HashMap<String, String>,
+    #[serde(default)]
+    skills: Vec<String>,
 }
 
 /// Parse an AGENT.md file content into an Agent
@@ -68,6 +70,7 @@ pub fn parse_agent_md_with_path(
         max_turns: fm.max_turns,
         background: fm.background,
         metadata: fm.metadata,
+        skills: fm.skills,
         instructions: body.trim().to_string(),
         source_path: source_path.map(|p| p.to_path_buf()),
         source,
@@ -397,5 +400,34 @@ Instructions.
         let agent = parse_agent_md(content, AgentSource::Builtin).unwrap();
         assert_eq!(agent.metadata.get("version"), Some(&"1.0".to_string()));
         assert_eq!(agent.metadata.get("author"), Some(&"test".to_string()));
+    }
+
+    #[test]
+    fn test_parse_agent_md_with_skills() {
+        let content = r#"---
+name: skilled-agent
+description: Agent with preloaded skills
+skills:
+  - test
+  - implement
+---
+
+Instructions with skills.
+"#;
+        let agent = parse_agent_md(content, AgentSource::Builtin).unwrap();
+        assert_eq!(agent.skills, vec!["test", "implement"]);
+    }
+
+    #[test]
+    fn test_parse_agent_md_without_skills() {
+        let content = r#"---
+name: no-skills-agent
+description: Agent without skills field
+---
+
+Instructions without skills.
+"#;
+        let agent = parse_agent_md(content, AgentSource::Builtin).unwrap();
+        assert!(agent.skills.is_empty());
     }
 }

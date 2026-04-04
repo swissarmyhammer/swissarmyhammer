@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: a680
+position_column: done
+position_ordinal: ffffffffffffffffffc880
 title: '100% coverage: swissarmyhammer-web'
 ---
-Coverage: 83.7% (674/805 lines) — 131 lines to cover\n\nTop uncovered files:\n- src/search/mod.rs (43 uncov) — search module\n- src/privacy.rs (29 uncov) — privacy filtering\n- src/security.rs (18 uncov) — security validation #coverage-gap
+Top uncovered files:\n- src/search/mod.rs — search module\n- src/privacy.rs — privacy filtering\n- src/security.rs — security validation #coverage-gap\n\n**CONSTRAINT: ONLY add tests. Do NOT modify, refactor, delete, or otherwise change the code under test. The production code must remain exactly as-is. Do NOT put line numbers or line counts in comments or ticket descriptions — lines change constantly and these go stale immediately. Run coverage to get current numbers.**

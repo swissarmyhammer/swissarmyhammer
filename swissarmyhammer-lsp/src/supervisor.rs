@@ -500,4 +500,71 @@ mod tests {
         assert!(debug_str.contains("LspSupervisorManager"));
         assert!(debug_str.contains("daemon_count: 1"));
     }
+
+    #[tokio::test]
+    async fn test_start_skip_already_running_daemon() {
+        // If a daemon is already inserted for a command, start() should skip it
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("Cargo.toml"),
+            "[package]\nname = \"x\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+
+        let mut mgr = LspSupervisorManager::new(tmp.path().to_path_buf());
+
+        // Pre-insert a daemon for rust-analyzer
+        insert_daemon(&mut mgr, fake_spec("rust-analyzer"));
+
+        // start() should detect Rust project and find rust-analyzer server,
+        // but skip spawning because it's already in the daemons map
+        let results = mgr.start().await;
+
+        // Should get no results because the existing daemon was skipped
+        assert!(
+            results.is_empty(),
+            "expected no spawn results when daemon already exists, got {} results",
+            results.len()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_health_check_all_with_failed_daemon_attempts_restart() {
+        let mut mgr = LspSupervisorManager::new(PathBuf::from("/tmp/test"));
+
+        // Use "true" which exists but exits immediately, causing handshake failure
+        let spec = OwnedLspServerSpec {
+            project_types: vec![],
+            command: "true".to_string(),
+            args: vec![],
+            language_ids: vec!["test".to_string()],
+            file_extensions: vec![],
+            startup_timeout_secs: 1,
+            health_check_interval_secs: 1,
+            install_hint: String::new(),
+            icon: None,
+        };
+        let cmd = spec.command.clone();
+        let mut daemon = LspDaemon::new(spec, mgr.workspace_root.clone());
+
+        // Start the daemon - it will fail because "true" exits immediately
+        // and produces no LSP handshake, putting it in Failed state
+        let _ = daemon.start().await;
+        assert!(
+            matches!(daemon.state(), LspDaemonState::Failed { .. }),
+            "expected Failed state, got: {:?}",
+            daemon.state()
+        );
+        mgr.daemons.insert(cmd, daemon);
+
+        // health_check_all should attempt restart_with_backoff on Failed daemons
+        mgr.health_check_all().await;
+
+        // After restart attempt, state should be Failed again (another handshake failure)
+        let state = mgr.get_daemon("true").unwrap().state();
+        assert!(
+            matches!(state, LspDaemonState::Failed { .. }),
+            "expected Failed after restart attempt, got: {state:?}"
+        );
+    }
 }

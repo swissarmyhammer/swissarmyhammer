@@ -57,6 +57,86 @@ impl Operation for FetchUrl {
     }
 }
 
+/// Execute a fetch operation using swissarmyhammer-web fetch pipeline
+pub async fn execute_fetch(
+    arguments: serde_json::Map<String, serde_json::Value>,
+    context: &ToolContext,
+) -> Result<CallToolResult, McpError> {
+    let request: WebFetchRequest = BaseToolImpl::parse_arguments(arguments)?;
+
+    tracing::debug!("Fetching web content from URL: {}", request.url);
+
+    send_mcp_log(
+        context,
+        LoggingLevel::Info,
+        "web_fetch",
+        format!("Fetching: {}", request.url),
+    )
+    .await;
+
+    let fetcher = WebFetcher::new();
+
+    match fetcher.fetch_url(&request).await {
+        Ok(result) => {
+            send_mcp_log(
+                context,
+                LoggingLevel::Info,
+                "web_fetch",
+                format!("Complete: {} chars", result.markdown.len()),
+            )
+            .await;
+
+            Ok(CallToolResult::success(vec![rmcp::model::Content::text(
+                result.markdown,
+            )]))
+        }
+        Err(e) => {
+            let (error_type, response_time_ms) = match &e {
+                FetchError::InvalidUrl(_) => {
+                    return Err(McpError::invalid_params(e.to_string(), None))
+                }
+                FetchError::SecurityViolation(_) => {
+                    return Err(McpError::invalid_params(e.to_string(), None))
+                }
+                FetchError::FetchFailed {
+                    error_type,
+                    response_time_ms,
+                    ..
+                } => (error_type.clone(), *response_time_ms),
+            };
+
+            send_mcp_log(
+                context,
+                LoggingLevel::Error,
+                "web_fetch",
+                format!("Failed: {}", e),
+            )
+            .await;
+
+            let metadata = json!({
+                "url": request.url,
+                "error_type": error_type,
+                "error_details": e.to_string(),
+                "response_time_ms": response_time_ms,
+                "performance_impact": if response_time_ms > 10000 { "high" } else { "low" },
+            });
+
+            let response = json!({
+                "content": [{
+                    "type": "text",
+                    "text": format!("Failed to fetch content: {e}")
+                }],
+                "is_error": true,
+                "metadata": metadata
+            });
+
+            Ok(CallToolResult::error(vec![rmcp::model::Content::text(
+                serde_json::to_string_pretty(&response).unwrap_or_default(),
+            )]))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -228,85 +308,5 @@ mod tests {
         use swissarmyhammer_operations::Operation;
         let op = FetchUrl::default();
         assert_eq!(op.op_string(), "fetch url");
-    }
-}
-
-/// Execute a fetch operation using swissarmyhammer-web fetch pipeline
-pub async fn execute_fetch(
-    arguments: serde_json::Map<String, serde_json::Value>,
-    context: &ToolContext,
-) -> Result<CallToolResult, McpError> {
-    let request: WebFetchRequest = BaseToolImpl::parse_arguments(arguments)?;
-
-    tracing::debug!("Fetching web content from URL: {}", request.url);
-
-    send_mcp_log(
-        context,
-        LoggingLevel::Info,
-        "web_fetch",
-        format!("Fetching: {}", request.url),
-    )
-    .await;
-
-    let fetcher = WebFetcher::new();
-
-    match fetcher.fetch_url(&request).await {
-        Ok(result) => {
-            send_mcp_log(
-                context,
-                LoggingLevel::Info,
-                "web_fetch",
-                format!("Complete: {} chars", result.markdown.len()),
-            )
-            .await;
-
-            Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-                result.markdown,
-            )]))
-        }
-        Err(e) => {
-            let (error_type, response_time_ms) = match &e {
-                FetchError::InvalidUrl(_) => {
-                    return Err(McpError::invalid_params(e.to_string(), None))
-                }
-                FetchError::SecurityViolation(_) => {
-                    return Err(McpError::invalid_params(e.to_string(), None))
-                }
-                FetchError::FetchFailed {
-                    error_type,
-                    response_time_ms,
-                    ..
-                } => (error_type.clone(), *response_time_ms),
-            };
-
-            send_mcp_log(
-                context,
-                LoggingLevel::Error,
-                "web_fetch",
-                format!("Failed: {}", e),
-            )
-            .await;
-
-            let metadata = json!({
-                "url": request.url,
-                "error_type": error_type,
-                "error_details": e.to_string(),
-                "response_time_ms": response_time_ms,
-                "performance_impact": if response_time_ms > 10000 { "high" } else { "low" },
-            });
-
-            let response = json!({
-                "content": [{
-                    "type": "text",
-                    "text": format!("Failed to fetch content: {e}")
-                }],
-                "is_error": true,
-                "metadata": metadata
-            });
-
-            Ok(CallToolResult::error(vec![rmcp::model::Content::text(
-                serde_json::to_string_pretty(&response).unwrap_or_default(),
-            )]))
-        }
     }
 }

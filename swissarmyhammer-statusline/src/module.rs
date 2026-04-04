@@ -211,4 +211,126 @@ mod tests {
         vars.insert("b".into(), "2".into());
         assert_eq!(interpolate("$a+$b", &vars), "1+2");
     }
+
+    #[test]
+    fn test_module_output_hidden_render_is_empty() {
+        let out = ModuleOutput::hidden();
+        assert_eq!(out.render(), "");
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn test_module_output_new_with_default_style() {
+        let out = ModuleOutput::new("text", Style::default());
+        assert_eq!(out.text, "text");
+        assert!(!out.is_empty());
+        // Default style has no codes, so render returns raw text
+        assert_eq!(out.render(), "text");
+    }
+
+    #[test]
+    fn test_module_output_render_non_empty_with_style() {
+        let out = ModuleOutput::new("styled", Style::parse("bold red"));
+        let rendered = out.render();
+        assert!(rendered.contains("styled"));
+        assert!(rendered.contains("\x1b[1m"));
+        assert!(rendered.contains("\x1b[31m"));
+        assert!(rendered.ends_with("\x1b[0m"));
+    }
+
+    #[test]
+    fn test_module_registry_has_all_modules() {
+        let reg = ModuleRegistry::new();
+        let expected = [
+            "directory",
+            "model",
+            "context_bar",
+            "cost",
+            "session",
+            "vim_mode",
+            "agent",
+            "worktree",
+            "version",
+            "git_branch",
+            "git_status",
+            "git_state",
+            "kanban",
+            "index",
+            "languages",
+        ];
+        for name in &expected {
+            assert!(reg.get(name).is_some(), "missing module: {}", name);
+        }
+    }
+
+    #[test]
+    fn test_module_registry_eval_functions_callable() {
+        let reg = ModuleRegistry::new();
+        let input = crate::input::StatuslineInput::default();
+        let config = crate::config::StatuslineConfig::default();
+        let ctx = ModuleContext {
+            input: &input,
+            config: &config,
+        };
+        // Call each module's eval function to ensure they don't panic
+        for name in [
+            "directory",
+            "model",
+            "context_bar",
+            "cost",
+            "session",
+            "vim_mode",
+            "agent",
+            "worktree",
+            "version",
+        ] {
+            let eval_fn = reg.get(name).unwrap();
+            let out = eval_fn(&ctx);
+            // Just ensure it doesn't panic; output may be empty or not
+            let _ = out.render();
+        }
+    }
+
+    #[test]
+    fn test_interpolate_empty_format() {
+        let vars = HashMap::new();
+        assert_eq!(interpolate("", &vars), "");
+    }
+
+    #[test]
+    fn test_interpolate_only_variable() {
+        let mut vars = HashMap::new();
+        vars.insert("x".into(), "value".into());
+        assert_eq!(interpolate("$x", &vars), "value");
+    }
+
+    #[test]
+    fn test_interpolate_adjacent_vars() {
+        let mut vars = HashMap::new();
+        vars.insert("a".into(), "X".into());
+        vars.insert("b".into(), "Y".into());
+        assert_eq!(interpolate("$a$b", &vars), "XY");
+    }
+
+    #[test]
+    fn test_interpolate_with_brackets() {
+        let mut vars = HashMap::new();
+        vars.insert("bar".into(), "###".into());
+        assert_eq!(interpolate("[$bar]", &vars), "[###]");
+    }
+
+    #[test]
+    fn test_module_output_clone() {
+        let out = ModuleOutput::new("hello", Style::parse("green"));
+        let cloned = out.clone();
+        assert_eq!(cloned.text, out.text);
+        assert_eq!(cloned.render(), out.render());
+    }
+
+    #[test]
+    fn test_module_output_debug() {
+        let out = ModuleOutput::new("test", Style::parse("red"));
+        let debug = format!("{:?}", out);
+        assert!(debug.contains("test"));
+    }
 }

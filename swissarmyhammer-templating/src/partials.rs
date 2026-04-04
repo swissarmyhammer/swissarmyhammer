@@ -767,4 +767,80 @@ mod tests {
         names.sort();
         assert_eq!(names, vec!["alpha", "beta"]);
     }
+
+    #[test]
+    fn test_library_partial_adapter_try_get_not_found() {
+        // Exercise the PartialLoader::try_get not-found path (lines 158-159)
+        let library = MockLibrary::new();
+        let adapter = LibraryPartialAdapter::new(Arc::new(library));
+
+        let result = PartialLoader::try_get(&adapter, "completely_missing_name");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_library_partial_adapter_partial_source_not_found() {
+        // Exercise the PartialSource impl not-found paths (lines 170-172, 187-189)
+        let library = MockLibrary::new();
+        let adapter = LibraryPartialAdapter::new(Arc::new(library));
+
+        assert!(!PartialSource::contains(&adapter, "nonexistent_partial"));
+        assert!(PartialSource::try_get(&adapter, "nonexistent_partial").is_none());
+    }
+
+    #[test]
+    fn test_library_partial_adapter_partial_source_names() {
+        // Exercise the PartialSource::names returning empty vec (lines 175-179)
+        let library = MockLibrary::new();
+        let adapter = LibraryPartialAdapter::new(Arc::new(library));
+
+        let names = PartialSource::names(&adapter);
+        assert!(names.is_empty());
+    }
+
+    #[test]
+    fn test_normalize_partial_name_liquid_suffix() {
+        // Exercise the .liquid suffix stripping path (lines 274-281)
+        let candidates = normalize_partial_name("header.liquid");
+        assert!(candidates.contains(&"header.liquid".to_string()));
+        assert!(candidates.contains(&"header".to_string()));
+        // Should also try header.md, header.markdown, header.md.liquid etc.
+        assert!(candidates.contains(&"header.md".to_string()));
+        assert!(candidates.contains(&"header.markdown".to_string()));
+        assert!(candidates.contains(&"header.md.liquid".to_string()));
+    }
+
+    #[test]
+    fn test_hashmap_partial_loader_try_get_normalized_fallback() {
+        // Exercise the HashMapPartialLoader::try_get normalized fallback path (lines 451-458)
+        // The exact-match fails, then it goes through normalize_partial_name candidates
+        let mut partials = HashMap::new();
+        partials.insert("page.md".to_string(), "Page content".to_string());
+
+        let loader = HashMapPartialLoader::new(partials);
+
+        // Look up "page" -- exact match fails, but normalize_partial_name("page")
+        // produces "page.md" as a candidate, which should find it
+        let content = PartialLoader::try_get(&loader, "page");
+        assert_eq!(
+            content.map(|c| c.into_owned()),
+            Some("Page content".to_string())
+        );
+    }
+
+    #[test]
+    fn test_hashmap_partial_loader_try_get_no_match() {
+        // Exercise the HashMapPartialLoader::try_get returning None (line 458)
+        let loader = HashMapPartialLoader::empty();
+        assert!(PartialLoader::try_get(&loader, "anything").is_none());
+    }
+
+    #[test]
+    fn test_partial_loader_get_not_found() {
+        // Exercise the default PartialLoader::get error path (line 208)
+        let loader = HashMapPartialLoader::empty();
+        let result = PartialLoader::get(&loader, "missing");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not found"));
+    }
 }

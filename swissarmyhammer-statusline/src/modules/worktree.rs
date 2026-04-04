@@ -75,4 +75,23 @@ mod tests {
         let out = eval(&ctx);
         assert!(out.is_empty());
     }
+
+    #[test]
+    fn test_worktree_render_output() {
+        let input = StatuslineInput {
+            worktree: Some(WorktreeInfo {
+                branch: Some("develop".into()),
+            }),
+            ..Default::default()
+        };
+        let config = StatuslineConfig::default();
+        let ctx = ModuleContext {
+            input: &input,
+            config: &config,
+        };
+        let out = eval(&ctx);
+        let rendered = out.render();
+        assert!(rendered.contains("develop"));
+        assert!(rendered.contains("\x1b["));
+    }
 }

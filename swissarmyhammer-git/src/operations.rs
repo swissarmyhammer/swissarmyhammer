@@ -1852,4 +1852,502 @@ mod tests {
         // issue/1 should be skipped (same prefix), so merge target should be main
         assert_eq!(target, "main");
     }
+
+    #[test]
+    fn test_accessors_and_is_git_repository() {
+        let (temp_dir, git_ops) = setup_test_repo();
+        // repository() returns a reference to the inner GitRepository
+        let repo_ref = git_ops.repository();
+        assert!(repo_ref.is_valid());
+        // work_dir() returns the working directory
+        assert_eq!(git_ops.work_dir(), temp_dir.path());
+        // is_git_repository() should be true for a valid repo
+        assert!(git_ops.is_git_repository());
+    }
+
+    #[test]
+    fn test_get_current_branch() {
+        let (_temp_dir, git_ops) = setup_test_repo();
+        // After setup_test_repo, there should be a current branch
+        let branch = git_ops.get_current_branch().unwrap();
+        assert!(branch.is_some());
+    }
+
+    #[test]
+    fn test_get_current_branch_empty_repo() {
+        // An empty repo (no commits) should return None for current branch
+        let temp_dir = TempDir::new().unwrap();
+        let _repo = Repository::init(temp_dir.path()).unwrap();
+        let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
+        let branch = git_ops.get_current_branch().unwrap();
+        assert!(branch.is_none());
+    }
+
+    #[test]
+    fn test_list_local_branches() {
+        let (temp_dir, git_ops) = setup_test_repo();
+        let repo = Repository::open(temp_dir.path()).unwrap();
+        create_branch_from_head(&repo, "branch-a");
+        create_branch_from_head(&repo, "branch-b");
+
+        let branches = git_ops.list_local_branches().unwrap();
+        let names: Vec<String> = branches.iter().map(|b| b.as_str().to_string()).collect();
+        assert!(names.contains(&"branch-a".to_string()));
+        assert!(names.contains(&"branch-b".to_string()));
+    }
+
+    #[test]
+    fn test_current_branch_string() {
+        let (_temp_dir, git_ops) = setup_test_repo();
+        let branch = git_ops.current_branch().unwrap();
+        // Should be a non-empty string
+        assert!(!branch.is_empty());
+    }
+
+    #[test]
+    fn test_current_branch_error_on_empty_repo() {
+        let temp_dir = TempDir::new().unwrap();
+        let _repo = Repository::init(temp_dir.path()).unwrap();
+        let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
+        // current_branch() should error on empty repo (no HEAD)
+        let result = git_ops.current_branch();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_main_branch_detection() {
+        let (temp_dir, git_ops) = setup_test_repo();
+        let repo = Repository::open(temp_dir.path()).unwrap();
+        // Ensure we have a "main" branch
+        rename_default_branch_to_main(&repo);
+
+        let main = git_ops.main_branch().unwrap();
+        assert!(main == "main" || main == "master");
+    }
+
+    #[test]
+    fn test_main_branch_falls_back_to_master() {
+        let temp_dir = TempDir::new().unwrap();
+        let repo_path = temp_dir.path();
+        let repo = Repository::init(repo_path).unwrap();
+        let mut config = repo.config().unwrap();
+        config.set_str("user.name", "Test User").unwrap();
+        config.set_str("user.email", "test@example.com").unwrap();
+
+        // Create initial commit on "master" branch explicitly
+        raw_commit(&repo, "Initial commit", vec![("README.md", "# Repo")]);
+        // Ensure the branch is named "master" (not "main")
+        let head = repo.head().unwrap();
+        let head_commit = head.peel_to_commit().unwrap();
+        repo.branch("master", &head_commit, true).unwrap();
+        repo.set_head("refs/heads/master").unwrap();
+
+        // Delete "main" branch if it exists
+        if let Ok(mut main_branch) = repo.find_branch("main", BranchType::Local) {
+            main_branch.delete().ok();
+        }
+
+        let git_ops = GitOperations::with_work_dir(repo_path.to_path_buf()).unwrap();
+        let main = git_ops.main_branch().unwrap();
+        assert_eq!(main, "master");
+    }
+
+    #[test]
+    fn test_main_branch_neither_exists() {
+        let temp_dir = TempDir::new().unwrap();
+        let repo_path = temp_dir.path();
+        let repo = Repository::init(repo_path).unwrap();
+        let mut config = repo.config().unwrap();
+        config.set_str("user.name", "Test User").unwrap();
+        config.set_str("user.email", "test@example.com").unwrap();
+
+        // Create initial commit on a branch that's not main or master
+        raw_commit(&repo, "Initial commit", vec![("README.md", "# Repo")]);
+        let head_commit = repo.head().unwrap().peel_to_commit().unwrap();
+        repo.branch("develop", &head_commit, true).unwrap();
+        repo.set_head("refs/heads/develop").unwrap();
+
+        // Delete main and master if they exist
+        if let Ok(mut b) = repo.find_branch("main", BranchType::Local) {
+            b.delete().ok();
+        }
+        if let Ok(mut b) = repo.find_branch("master", BranchType::Local) {
+            b.delete().ok();
+        }
+        // Also delete the default branch created by git init
+        let head = repo.head().unwrap();
+        let default_name = head.shorthand().unwrap_or("").to_string();
+        if default_name != "develop" && default_name != "main" && default_name != "master" {
+            if let Ok(mut b) = repo.find_branch(&default_name, BranchType::Local) {
+                b.delete().ok();
+            }
+        }
+
+        let git_ops = GitOperations::with_work_dir(repo_path.to_path_buf()).unwrap();
+        let result = git_ops.main_branch();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_commit_initial_no_parent() {
+        // Test the commit() method on a repo with no prior commits (first commit path)
+        let temp_dir = TempDir::new().unwrap();
+        let repo_path = temp_dir.path();
+        let repo = Repository::init(repo_path).unwrap();
+        let mut config = repo.config().unwrap();
+        config.set_str("user.name", "Test User").unwrap();
+        config.set_str("user.email", "test@example.com").unwrap();
+
+        // Write and stage a file
+        std::fs::write(repo_path.join("file.txt"), "content").unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(std::path::Path::new("file.txt")).unwrap();
+        index.write().unwrap();
+
+        let git_ops = GitOperations::with_work_dir(repo_path.to_path_buf()).unwrap();
+        let hash = git_ops.commit("Initial commit via commit()").unwrap();
+        assert!(!hash.is_empty());
+
+        // Verify it's accessible
+        let latest = git_ops.get_latest_commit().unwrap();
+        assert_eq!(latest.message.trim(), "Initial commit via commit()");
+    }
+
+    #[test]
+    fn test_get_status_with_various_changes() {
+        let (temp_dir, git_ops) = setup_test_repo();
+        let repo_path = temp_dir.path();
+        let repo = Repository::open(repo_path).unwrap();
+
+        // Create an untracked file
+        std::fs::write(repo_path.join("untracked.txt"), "untracked").unwrap();
+
+        // Stage a new file (INDEX_NEW)
+        std::fs::write(repo_path.join("staged_new.txt"), "new").unwrap();
+        let mut index = repo.index().unwrap();
+        index
+            .add_path(std::path::Path::new("staged_new.txt"))
+            .unwrap();
+        index.write().unwrap();
+
+        // Modify a tracked file without staging (WT_MODIFIED)
+        std::fs::write(repo_path.join("README.md"), "modified content").unwrap();
+
+        let status = git_ops.get_status().unwrap();
+        assert!(!status.is_clean());
+        assert!(status.untracked.contains(&"untracked.txt".to_string()));
+        assert!(status.staged_new.contains(&"staged_new.txt".to_string()));
+        assert!(status.unstaged_modified.contains(&"README.md".to_string()));
+    }
+
+    #[test]
+    fn test_get_status_staged_modified() {
+        let (temp_dir, git_ops) = setup_test_repo();
+        let repo_path = temp_dir.path();
+        let repo = Repository::open(repo_path).unwrap();
+
+        // Stage a modification of the tracked README.md (INDEX_MODIFIED)
+        std::fs::write(repo_path.join("README.md"), "staged modification").unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(std::path::Path::new("README.md")).unwrap();
+        index.write().unwrap();
+
+        let status = git_ops.get_status().unwrap();
+        assert!(status.staged_modified.contains(&"README.md".to_string()));
+        assert!(status.has_staged_changes());
+    }
+
+    #[test]
+    fn test_get_status_staged_deleted() {
+        let (temp_dir, git_ops) = setup_test_repo();
+        let repo_path = temp_dir.path();
+        let repo = Repository::open(repo_path).unwrap();
+
+        // Stage deletion of README.md (INDEX_DELETED)
+        let mut index = repo.index().unwrap();
+        index
+            .remove_path(std::path::Path::new("README.md"))
+            .unwrap();
+        index.write().unwrap();
+
+        let status = git_ops.get_status().unwrap();
+        assert!(status.staged_deleted.contains(&"README.md".to_string()));
+    }
+
+    #[test]
+    fn test_get_status_unstaged_deleted() {
+        let (temp_dir, git_ops) = setup_test_repo();
+        let repo_path = temp_dir.path();
+
+        // Delete the tracked README.md without staging (WT_DELETED)
+        std::fs::remove_file(repo_path.join("README.md")).unwrap();
+
+        let status = git_ops.get_status().unwrap();
+        assert!(status.unstaged_deleted.contains(&"README.md".to_string()));
+    }
+
+    #[test]
+    fn test_validate_branch_creation_none_base() {
+        // When base_branch is None, it should use the current branch
+        let (_temp_dir, git_ops) = setup_test_repo();
+        // Current branch is not an issue/ branch, so this should succeed
+        let result = git_ops.validate_branch_creation("new-issue", None);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_branch_creation_none_base_on_issue_branch() {
+        let (temp_dir, git_ops) = setup_test_repo();
+        let repo = Repository::open(temp_dir.path()).unwrap();
+
+        // Create and checkout an issue branch
+        create_branch_from_head(&repo, "issue/123");
+        checkout_branch_raw(&repo, "issue/123");
+
+        // Now validate_branch_creation with None base should fail
+        // because current branch starts with "issue/"
+        let result = git_ops.validate_branch_creation("new-branch", None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_find_merge_target_main_branch_is_self() {
+        let temp_dir = TempDir::new().unwrap();
+        let repo_path = temp_dir.path();
+        let repo = Repository::init(repo_path).unwrap();
+        let mut config = repo.config().unwrap();
+        config.set_str("user.name", "Test User").unwrap();
+        config.set_str("user.email", "test@example.com").unwrap();
+
+        raw_commit(&repo, "Initial commit", vec![("README.md", "# Repo")]);
+        rename_default_branch_to_main(&repo);
+
+        let git_ops = GitOperations::with_work_dir(repo_path.to_path_buf()).unwrap();
+        let main_branch = BranchName::new("main").unwrap();
+        // Finding merge target for main itself should error
+        let result = git_ops.find_merge_target_for_issue(&main_branch);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_find_merge_target_orphan_branch() {
+        let temp_dir = TempDir::new().unwrap();
+        let repo_path = temp_dir.path();
+        let repo = Repository::init(repo_path).unwrap();
+        let mut config = repo.config().unwrap();
+        config.set_str("user.name", "Test User").unwrap();
+        config.set_str("user.email", "test@example.com").unwrap();
+
+        // Create initial commit on main
+        raw_commit(&repo, "Initial commit", vec![("README.md", "# Repo")]);
+        rename_default_branch_to_main(&repo);
+
+        // Create an orphan branch with completely separate history
+        // We do this by creating a commit with no parent on a new branch
+        let sig = git2::Signature::now("Test User", "test@example.com").unwrap();
+        std::fs::write(repo_path.join("orphan.txt"), "orphan content").unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(std::path::Path::new("orphan.txt")).unwrap();
+        index.write().unwrap();
+        let tree_id = index.write_tree().unwrap();
+        let tree = repo.find_tree(tree_id).unwrap();
+        // Commit with NO parents -> orphan commit
+        let orphan_oid = repo
+            .commit(None, &sig, &sig, "Orphan commit", &tree, &[])
+            .unwrap();
+        // Point a branch at the orphan commit
+        let orphan_commit = repo.find_commit(orphan_oid).unwrap();
+        repo.branch("orphan-branch", &orphan_commit, false).unwrap();
+
+        let git_ops = GitOperations::with_work_dir(repo_path.to_path_buf()).unwrap();
+        let orphan = BranchName::new("orphan-branch").unwrap();
+        let result = git_ops.find_merge_target_for_issue(&orphan);
+        // Should error because no merge base exists with main
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_merge_branch_conflict_cleanup() {
+        let temp_dir = TempDir::new().unwrap();
+        let repo_path = temp_dir.path();
+        let repo = Repository::init(repo_path).unwrap();
+        let mut config = repo.config().unwrap();
+        config.set_str("user.name", "Test User").unwrap();
+        config.set_str("user.email", "test@example.com").unwrap();
+
+        // Initial commit with a shared file
+        raw_commit(
+            &repo,
+            "Initial commit",
+            vec![("shared.txt", "original content")],
+        );
+        rename_default_branch_to_main(&repo);
+
+        // Create a feature branch and modify the shared file
+        create_branch_from_head(&repo, "conflict-branch");
+        checkout_branch_raw(&repo, "conflict-branch");
+        raw_commit(
+            &repo,
+            "Conflict commit",
+            vec![(
+                "shared.txt",
+                "conflict branch content - line 1\nline 2\nline 3",
+            )],
+        );
+
+        // Go back to main and make a conflicting change
+        checkout_branch_raw(&repo, "main");
+        raw_commit(
+            &repo,
+            "Main diverge",
+            vec![("shared.txt", "main branch content - line A\nline B\nline C")],
+        );
+
+        let git_ops = GitOperations::with_work_dir(repo_path.to_path_buf()).unwrap();
+        let conflict_branch = BranchName::new("conflict-branch").unwrap();
+        let result = git_ops.merge_branch(&conflict_branch);
+
+        // Should fail due to conflicts
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("conflict") || err_msg.contains("Merge"),
+            "Expected conflict error, got: {}",
+            err_msg
+        );
+
+        // Repository should be back in clean state after conflict cleanup
+        assert!(git_ops.repository().is_in_normal_state());
+    }
+
+    #[test]
+    fn test_get_latest_commit() {
+        let (_temp_dir, git_ops) = setup_test_repo();
+        let commit = git_ops.get_latest_commit().unwrap();
+        assert_eq!(commit.message.trim(), "Initial commit");
+        assert!(!commit.hash.is_empty());
+        assert!(!commit.short_hash.is_empty());
+        assert_eq!(commit.author, "Test User");
+        assert_eq!(commit.author_email, "test@example.com");
+    }
+
+    #[test]
+    fn test_new_from_current_dir() {
+        // GitOperations::new() uses current dir. Since tests run in the repo,
+        // this should either succeed (we're in a git repo) or fail gracefully.
+        let result = GitOperations::new();
+        // We're running inside the swissarmyhammer repo, so this should succeed.
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_get_current_branch_detached_head() {
+        let temp_dir = TempDir::new().unwrap();
+        let repo_path = temp_dir.path();
+        let repo = Repository::init(repo_path).unwrap();
+        let mut config = repo.config().unwrap();
+        config.set_str("user.name", "Test User").unwrap();
+        config.set_str("user.email", "test@example.com").unwrap();
+
+        // Create initial commit
+        raw_commit(&repo, "Initial commit", vec![("README.md", "# Repo")]);
+
+        // Detach HEAD by pointing it directly at a commit
+        let head_commit = repo.head().unwrap().peel_to_commit().unwrap();
+        repo.set_head_detached(head_commit.id()).unwrap();
+
+        let git_ops = GitOperations::with_work_dir(repo_path.to_path_buf()).unwrap();
+        // In detached HEAD, shorthand() returns "HEAD" rather than None,
+        // so get_current_branch returns Some("HEAD") as an unchecked branch name.
+        let branch = git_ops.get_current_branch().unwrap();
+        // The important thing is it doesn't error
+        let _ = branch;
+    }
+
+    #[test]
+    fn test_get_status_renamed_file() {
+        let (temp_dir, git_ops) = setup_test_repo();
+        let repo_path = temp_dir.path();
+        let repo = Repository::open(repo_path).unwrap();
+
+        // Create a file with enough content for rename detection
+        let content = "This is a test file with enough content for rename detection.\n\
+                       It needs multiple lines so git can detect the rename.\n\
+                       Line 3 of content.\nLine 4 of content.\nLine 5 of content.\n";
+        std::fs::write(repo_path.join("original.txt"), content).unwrap();
+        let mut index = repo.index().unwrap();
+        index
+            .add_path(std::path::Path::new("original.txt"))
+            .unwrap();
+        index.write().unwrap();
+
+        // Commit it
+        let sig = git2::Signature::now("Test User", "test@example.com").unwrap();
+        let tree_id = index.write_tree().unwrap();
+        let tree = repo.find_tree(tree_id).unwrap();
+        let parent = repo.head().unwrap().peel_to_commit().unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "Add file", &tree, &[&parent])
+            .unwrap();
+
+        // Now rename: remove from index, add new path, remove old file
+        let mut index = repo.index().unwrap();
+        index
+            .remove_path(std::path::Path::new("original.txt"))
+            .unwrap();
+        std::fs::rename(
+            repo_path.join("original.txt"),
+            repo_path.join("renamed.txt"),
+        )
+        .unwrap();
+        index.add_path(std::path::Path::new("renamed.txt")).unwrap();
+        index.write().unwrap();
+
+        // Check status - note that INDEX_RENAMED requires git2 rename detection
+        // which uses similarity-based detection. The status may or may not detect it
+        // as a rename depending on content. We just verify no errors.
+        let status = git_ops.get_status().unwrap();
+        // At minimum, we should see something changed
+        assert!(!status.is_clean());
+    }
+
+    #[test]
+    fn test_delete_branch_maps_not_found_error() {
+        let (_temp_dir, git_ops) = setup_test_repo();
+        let branch = BranchName::new("nonexistent").unwrap();
+        let result = git_ops.delete_branch(&branch);
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("not found") || err_msg.contains("nonexistent"),
+            "Expected not-found error, got: {}",
+            err_msg
+        );
+    }
+
+    #[test]
+    fn test_find_merge_target_no_candidates_not_main() {
+        // Test the path where there are no candidate branches
+        // and the branch is not the main branch itself.
+        // This requires only two branches: main and the issue branch (no prefix filtering).
+        let temp_dir = TempDir::new().unwrap();
+        let repo_path = temp_dir.path();
+        let repo = Repository::init(repo_path).unwrap();
+        let mut config = repo.config().unwrap();
+        config.set_str("user.name", "Test User").unwrap();
+        config.set_str("user.email", "test@example.com").unwrap();
+
+        raw_commit(&repo, "Initial commit", vec![("README.md", "# Repo")]);
+        rename_default_branch_to_main(&repo);
+
+        // Create a simple branch (no prefix/) from main
+        create_branch_from_head(&repo, "solo-branch");
+        checkout_branch_raw(&repo, "solo-branch");
+        raw_commit(&repo, "Solo commit", vec![("solo.txt", "solo")]);
+
+        let git_ops = GitOperations::with_work_dir(repo_path.to_path_buf()).unwrap();
+        let branch = BranchName::new("solo-branch").unwrap();
+        let target = git_ops.find_merge_target_for_issue(&branch).unwrap();
+        // Should find main as the merge target
+        assert_eq!(target, "main");
+    }
 }

@@ -1966,4 +1966,208 @@ mod tests {
         assert_eq!(processed.len(), 1, "Result should still be returned");
         let _ = stats.successful + stats.failed; // just assert no panic
     }
+
+    // ── fetch_single_result with disabled processing options ────────
+
+    #[tokio::test]
+    async fn test_fetch_single_result_no_summaries_no_code_no_metadata() {
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let mock_server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string(quality_html_body())
+                    .append_header("content-type", "text/html"),
+            )
+            .mount(&mock_server)
+            .await;
+
+        let url = format!("{}/page", mock_server.uri());
+        let results = vec![make_search_result(&url)];
+
+        let config = ContentFetchConfig {
+            default_domain_delay: Duration::from_millis(0),
+            processing_config: ContentProcessingConfig {
+                generate_summaries: false,
+                extract_code_blocks: false,
+                extract_metadata: false,
+                ..ContentProcessingConfig::default()
+            },
+            ..ContentFetchConfig::default()
+        };
+        let fetcher = ContentFetcher::new(config);
+        let (processed, stats) = fetcher.fetch_search_results(results).await;
+
+        assert_eq!(stats.successful, 1);
+        let content = processed[0].content.as_ref().unwrap();
+        assert!(
+            content.summary.is_empty(),
+            "Summary should be empty when disabled"
+        );
+        assert!(
+            content.code_blocks.is_empty(),
+            "Code blocks should be empty when disabled"
+        );
+        // When metadata extraction is disabled, we get ContentMetadata::default()
+        assert!(content.metadata.title.is_none());
+        assert!(content.metadata.reading_time_minutes.is_none());
+    }
+
+    // ── extract_domain edge cases ──────────────────────────────────
+
+    #[test]
+    fn test_extract_domain_no_host() {
+        let fetcher = ContentFetcher::with_defaults();
+        // data: URIs have no host
+        let result = fetcher.extract_domain("data:text/plain,hello");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_extract_domain_with_port() {
+        let fetcher = ContentFetcher::with_defaults();
+        let domain = fetcher
+            .extract_domain("https://example.com:8080/path")
+            .unwrap();
+        assert_eq!(domain, "example.com");
+    }
+
+    // ── quality assessment edge cases ──────────────────────────────
+
+    #[test]
+    fn test_quality_assessment_max_word_count_exceeded() {
+        let fetcher = ContentFetcher::with_defaults();
+        // Default max is 50,000 words
+        let huge_content = "word ".repeat(50_001);
+        assert!(
+            !fetcher.is_quality_content(&huge_content, 50_001),
+            "Content exceeding max_content_length should fail quality check"
+        );
+    }
+
+    #[test]
+    fn test_quality_assessment_paywall_indicators() {
+        let fetcher = ContentFetcher::with_defaults();
+        let indicators = [
+            "subscribe to continue",
+            "sign up for free",
+            "paywall detected",
+            "subscription required",
+            "login to view",
+        ];
+        for indicator in &indicators {
+            let content = format!(
+                "This is a long article with enough words to pass the length check. {} The rest of the article continues with more meaningful content here. ",
+                indicator
+            ).repeat(3);
+            let word_count = content.split_whitespace().count();
+            assert!(
+                !fetcher.is_quality_content(&content, word_count),
+                "Content with '{}' should fail paywall check",
+                indicator
+            );
+        }
+    }
+
+    #[test]
+    fn test_quality_assessment_spam_indicators() {
+        let fetcher = ContentFetcher::with_defaults();
+        let indicators = [
+            "click here to continue",
+            "advertisement",
+            "sponsored content",
+            "this site uses cookies",
+        ];
+        for indicator in &indicators {
+            let content = format!(
+                "This is a meaningful article with enough words to pass. {} More text follows to ensure word count. ",
+                indicator
+            ).repeat(3);
+            let word_count = content.split_whitespace().count();
+            assert!(
+                !fetcher.is_quality_content(&content, word_count),
+                "Content with '{}' should fail spam check",
+                indicator
+            );
+        }
+    }
+
+    // ── extract_title edge case ────────────────────────────────────
+
+    #[test]
+    fn test_extract_title_very_long_heading_ignored() {
+        let fetcher = ContentFetcher::with_defaults();
+        let long_title = "A".repeat(201);
+        let content = format!("# {}\n\nBody text.", long_title);
+        assert_eq!(
+            fetcher.extract_title_from_content(&content),
+            None,
+            "Titles longer than 200 chars should be ignored"
+        );
+    }
+
+    #[test]
+    fn test_extract_title_no_heading_at_all() {
+        let fetcher = ContentFetcher::with_defaults();
+        let content = "Just plain text.\n\nNo headings here.";
+        assert_eq!(fetcher.extract_title_from_content(content), None);
+    }
+
+    // ── clone_for_concurrent_use ───────────────────────────────────
+
+    #[test]
+    fn test_clone_for_concurrent_use_shares_domain_trackers() {
+        let fetcher = ContentFetcher::with_defaults();
+        fetcher.update_domain_tracking("shared.com");
+
+        let cloned = fetcher.clone_for_concurrent_use();
+        assert!(
+            cloned.domain_trackers.contains_key("shared.com"),
+            "Cloned fetcher should share domain trackers"
+        );
+    }
+
+    // ── ContentFetchError display ──────────────────────────────────
+
+    #[test]
+    fn test_content_fetch_error_display() {
+        let err = ContentFetchError::HttpError {
+            status: 404,
+            message: "Not Found".to_string(),
+        };
+        assert_eq!(err.to_string(), "HTTP error 404: Not Found");
+
+        let err = ContentFetchError::NetworkError {
+            message: "Connection refused".to_string(),
+        };
+        assert_eq!(err.to_string(), "Network error: Connection refused");
+
+        let err = ContentFetchError::ProcessingError {
+            message: "Bad data".to_string(),
+        };
+        assert_eq!(err.to_string(), "Content processing error: Bad data");
+
+        let err = ContentFetchError::RateLimited {
+            domain: "example.com".to_string(),
+        };
+        assert_eq!(
+            err.to_string(),
+            "Rate limit exceeded for domain: example.com"
+        );
+
+        let err = ContentFetchError::QualityCheckFailed {
+            reason: "Too short".to_string(),
+        };
+        assert_eq!(err.to_string(), "Content quality check failed: Too short");
+
+        let err = ContentFetchError::Timeout { seconds: 30 };
+        assert_eq!(err.to_string(), "Timeout after 30s");
+
+        let err = ContentFetchError::InvalidUrl {
+            url: "bad".to_string(),
+        };
+        assert_eq!(err.to_string(), "Invalid URL: bad");
+    }
 }

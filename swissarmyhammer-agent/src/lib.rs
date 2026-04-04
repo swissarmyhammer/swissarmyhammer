@@ -1064,4 +1064,737 @@ mod tests {
     // in the swissarmyhammer-cli crate where the agents are available in the test environment.
     // The helper functions they use (extract_response_from_metadata,
     // build_agent_response, etc.) are tested above to ensure correctness of the core logic.
+
+    // ========================================================================
+    // convert_model_source tests
+    // ========================================================================
+
+    #[test]
+    fn test_convert_model_source_local_with_folder() {
+        let source = swissarmyhammer_config::model::ModelSource::Local {
+            filename: std::path::PathBuf::from("/models/my-model.gguf"),
+            folder: Some(std::path::PathBuf::from("/models")),
+        };
+        let converted = convert_model_source(&source);
+        match converted {
+            llama_agent::types::ModelSource::Local { folder, filename } => {
+                assert_eq!(folder, std::path::PathBuf::from("/models"));
+                assert_eq!(filename, Some("my-model.gguf".to_string()));
+            }
+            _ => panic!("Expected Local variant"),
+        }
+    }
+
+    #[test]
+    fn test_convert_model_source_local_without_folder() {
+        let source = swissarmyhammer_config::model::ModelSource::Local {
+            filename: std::path::PathBuf::from("/models/my-model.gguf"),
+            folder: None,
+        };
+        let converted = convert_model_source(&source);
+        match converted {
+            llama_agent::types::ModelSource::Local { folder, filename } => {
+                assert_eq!(folder, std::path::PathBuf::from("/models"));
+                assert_eq!(filename, Some("my-model.gguf".to_string()));
+            }
+            _ => panic!("Expected Local variant"),
+        }
+    }
+
+    #[test]
+    fn test_convert_model_source_local_bare_filename() {
+        // When filename has no parent directory component, parent() returns Some("")
+        let source = swissarmyhammer_config::model::ModelSource::Local {
+            filename: std::path::PathBuf::from("model.gguf"),
+            folder: None,
+        };
+        let converted = convert_model_source(&source);
+        match converted {
+            llama_agent::types::ModelSource::Local { folder, filename } => {
+                // "model.gguf".parent() returns Some(""), not None
+                assert_eq!(folder, std::path::PathBuf::from(""));
+                assert_eq!(filename, Some("model.gguf".to_string()));
+            }
+            _ => panic!("Expected Local variant"),
+        }
+    }
+
+    #[test]
+    fn test_convert_model_source_huggingface_with_filename() {
+        let source = swissarmyhammer_config::model::ModelSource::HuggingFace {
+            repo: "TheBloke/Llama-2-7B-GGUF".to_string(),
+            filename: Some("llama-2-7b.Q4_K_M.gguf".to_string()),
+            folder: None,
+        };
+        let converted = convert_model_source(&source);
+        match converted {
+            llama_agent::types::ModelSource::HuggingFace {
+                repo,
+                filename,
+                folder,
+            } => {
+                assert_eq!(repo, "TheBloke/Llama-2-7B-GGUF");
+                assert_eq!(filename, Some("llama-2-7b.Q4_K_M.gguf".to_string()));
+                assert_eq!(folder, None);
+            }
+            _ => panic!("Expected HuggingFace variant"),
+        }
+    }
+
+    #[test]
+    fn test_convert_model_source_huggingface_with_folder() {
+        // When folder is Some, filename should be None regardless of input
+        let source = swissarmyhammer_config::model::ModelSource::HuggingFace {
+            repo: "org/model".to_string(),
+            filename: Some("model.gguf".to_string()),
+            folder: Some("subfolder".to_string()),
+        };
+        let converted = convert_model_source(&source);
+        match converted {
+            llama_agent::types::ModelSource::HuggingFace {
+                repo,
+                filename,
+                folder,
+            } => {
+                assert_eq!(repo, "org/model");
+                assert_eq!(filename, None);
+                assert_eq!(folder, Some("subfolder".to_string()));
+            }
+            _ => panic!("Expected HuggingFace variant"),
+        }
+    }
+
+    #[test]
+    fn test_convert_model_source_huggingface_no_filename_no_folder() {
+        let source = swissarmyhammer_config::model::ModelSource::HuggingFace {
+            repo: "org/model".to_string(),
+            filename: None,
+            folder: None,
+        };
+        let converted = convert_model_source(&source);
+        match converted {
+            llama_agent::types::ModelSource::HuggingFace {
+                repo,
+                filename,
+                folder,
+            } => {
+                assert_eq!(repo, "org/model");
+                assert_eq!(filename, None);
+                assert_eq!(folder, None);
+            }
+            _ => panic!("Expected HuggingFace variant"),
+        }
+    }
+
+    // ========================================================================
+    // build_llama_model_config tests
+    // ========================================================================
+
+    #[test]
+    fn test_build_llama_model_config_defaults() {
+        let llama_config = swissarmyhammer_config::model::LlamaAgentConfig::default();
+        let model_config = build_llama_model_config(&llama_config);
+
+        assert_eq!(model_config.retry_config.max_retries, DEFAULT_MAX_RETRIES);
+        assert_eq!(
+            model_config.retry_config.initial_delay_ms,
+            DEFAULT_INITIAL_RETRY_DELAY_MS
+        );
+        assert!(
+            (model_config.retry_config.backoff_multiplier - DEFAULT_BACKOFF_MULTIPLIER).abs()
+                < f64::EPSILON
+        );
+        assert_eq!(
+            model_config.retry_config.max_delay_ms,
+            DEFAULT_MAX_RETRY_DELAY_MS
+        );
+        assert!(!model_config.debug);
+        assert_eq!(model_config.n_seq_max, 1);
+        assert_eq!(model_config.n_threads, DEFAULT_NUM_THREADS);
+        assert_eq!(model_config.n_threads_batch, DEFAULT_BATCH_THREADS);
+    }
+
+    #[test]
+    fn test_build_llama_model_config_preserves_model_params() {
+        let mut llama_config = swissarmyhammer_config::model::LlamaAgentConfig::default();
+        llama_config.model.batch_size = 128;
+        llama_config.model.use_hf_params = true;
+
+        let model_config = build_llama_model_config(&llama_config);
+        assert_eq!(model_config.batch_size, 128);
+        assert!(model_config.use_hf_params);
+    }
+
+    // ========================================================================
+    // build_llama_mcp_servers tests
+    // ========================================================================
+
+    #[test]
+    fn test_build_llama_mcp_servers_with_config() {
+        let mcp = McpServerConfig::from_port(9090);
+        let servers = build_llama_mcp_servers(Some(&mcp), 120);
+
+        assert_eq!(servers.len(), 1);
+        match &servers[0] {
+            llama_agent::types::MCPServerConfig::Http(http) => {
+                assert_eq!(http.name, "swissarmyhammer");
+                assert_eq!(http.url, "http://localhost:9090/mcp");
+                assert_eq!(http.timeout_secs, Some(120));
+                assert_eq!(http.sse_keep_alive_secs, Some(SSE_KEEP_ALIVE_SECONDS));
+                assert!(!http.stateful_mode);
+            }
+            _ => panic!("Expected Http variant"),
+        }
+    }
+
+    #[test]
+    fn test_build_llama_mcp_servers_without_config() {
+        let servers = build_llama_mcp_servers(None, 60);
+        assert!(servers.is_empty());
+    }
+
+    // ========================================================================
+    // convert_mcp_servers_to_acp tests
+    // ========================================================================
+
+    #[test]
+    fn test_convert_mcp_servers_to_acp_http() {
+        let servers = vec![llama_agent::types::MCPServerConfig::Http(
+            llama_agent::types::HttpServerConfig {
+                name: "test-http".to_string(),
+                url: "http://localhost:8080/mcp".to_string(),
+                timeout_secs: Some(30),
+                sse_keep_alive_secs: Some(15),
+                stateful_mode: false,
+            },
+        )];
+        let acp_servers = convert_mcp_servers_to_acp(&servers);
+
+        assert_eq!(acp_servers.len(), 1);
+        match &acp_servers[0] {
+            agent_client_protocol::McpServer::Http(http) => {
+                assert_eq!(http.name, "test-http");
+                assert_eq!(http.url, "http://localhost:8080/mcp");
+            }
+            other => panic!("Expected Http variant, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_convert_mcp_servers_to_acp_in_process() {
+        let servers = vec![llama_agent::types::MCPServerConfig::InProcess(
+            llama_agent::types::ProcessServerConfig {
+                name: "test-stdio".to_string(),
+                command: "echo".to_string(),
+                args: vec!["hello".to_string(), "world".to_string()],
+                timeout_secs: None,
+            },
+        )];
+        let acp_servers = convert_mcp_servers_to_acp(&servers);
+
+        assert_eq!(acp_servers.len(), 1);
+        match &acp_servers[0] {
+            agent_client_protocol::McpServer::Stdio(stdio) => {
+                assert_eq!(stdio.name, "test-stdio");
+                assert_eq!(stdio.args, vec!["hello".to_string(), "world".to_string()]);
+            }
+            other => panic!("Expected Stdio variant, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_convert_mcp_servers_to_acp_empty() {
+        let servers: Vec<llama_agent::types::MCPServerConfig> = vec![];
+        let acp_servers = convert_mcp_servers_to_acp(&servers);
+        assert!(acp_servers.is_empty());
+    }
+
+    #[test]
+    fn test_convert_mcp_servers_to_acp_mixed() {
+        let servers = vec![
+            llama_agent::types::MCPServerConfig::Http(llama_agent::types::HttpServerConfig {
+                name: "http-server".to_string(),
+                url: "http://localhost:8080/mcp".to_string(),
+                timeout_secs: None,
+                sse_keep_alive_secs: None,
+                stateful_mode: false,
+            }),
+            llama_agent::types::MCPServerConfig::InProcess(
+                llama_agent::types::ProcessServerConfig {
+                    name: "stdio-server".to_string(),
+                    command: "node".to_string(),
+                    args: vec!["server.js".to_string()],
+                    timeout_secs: None,
+                },
+            ),
+        ];
+        let acp_servers = convert_mcp_servers_to_acp(&servers);
+        assert_eq!(acp_servers.len(), 2);
+        assert!(matches!(
+            &acp_servers[0],
+            agent_client_protocol::McpServer::Http(_)
+        ));
+        assert!(matches!(
+            &acp_servers[1],
+            agent_client_protocol::McpServer::Stdio(_)
+        ));
+    }
+
+    // ========================================================================
+    // extract_text_from_notification tests
+    // ========================================================================
+
+    /// Helper to create a text notification for a given session
+    fn make_text_notification(
+        session_id: &agent_client_protocol::SessionId,
+        text: &str,
+    ) -> SessionNotification {
+        SessionNotification::new(
+            session_id.clone(),
+            SessionUpdate::AgentMessageChunk(agent_client_protocol::ContentChunk::new(
+                ContentBlock::Text(TextContent::new(text)),
+            )),
+        )
+    }
+
+    #[test]
+    fn test_extract_text_from_notification_matching_session() {
+        let session_id = agent_client_protocol::SessionId::new("test-session".to_string());
+        let notification = make_text_notification(&session_id, "Hello, world!");
+
+        let result = extract_text_from_notification(&notification, &session_id);
+        assert_eq!(result, Some("Hello, world!"));
+    }
+
+    #[test]
+    fn test_extract_text_from_notification_wrong_session() {
+        let session_id = agent_client_protocol::SessionId::new("session-1".to_string());
+        let other_session = agent_client_protocol::SessionId::new("session-2".to_string());
+        let notification = make_text_notification(&other_session, "Hello");
+
+        let result = extract_text_from_notification(&notification, &session_id);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_extract_text_from_notification_non_text_content() {
+        let session_id = agent_client_protocol::SessionId::new("test-session".to_string());
+        // Use Image content block as a non-Text variant
+        let image =
+            agent_client_protocol::ImageContent::new("data".to_string(), "image/png".to_string());
+        let notification = SessionNotification::new(
+            session_id.clone(),
+            SessionUpdate::AgentMessageChunk(agent_client_protocol::ContentChunk::new(
+                ContentBlock::Image(image),
+            )),
+        );
+
+        let result = extract_text_from_notification(&notification, &session_id);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_extract_text_from_notification_non_chunk_update() {
+        let session_id = agent_client_protocol::SessionId::new("test-session".to_string());
+        // Use ToolCall update as a non-AgentMessageChunk variant
+        let tool_call = agent_client_protocol::ToolCall::new(
+            agent_client_protocol::ToolCallId::new("tc-1".to_string()),
+            "test-tool".to_string(),
+        );
+        let notification =
+            SessionNotification::new(session_id.clone(), SessionUpdate::ToolCall(tool_call));
+
+        let result = extract_text_from_notification(&notification, &session_id);
+        assert_eq!(result, None);
+    }
+
+    // ========================================================================
+    // build_agent_response - additional stop reasons
+    // ========================================================================
+
+    #[test]
+    fn test_build_agent_response_cancelled() {
+        let prompt_result = agent_client_protocol::PromptResponse::new(StopReason::Cancelled);
+        let response = build_agent_response(prompt_result, "Cancelled content".to_string(), 0);
+        assert!(response.is_error());
+        assert_eq!(response.content, "Cancelled content");
+    }
+
+    #[test]
+    fn test_build_agent_response_max_turn_requests() {
+        let prompt_result = agent_client_protocol::PromptResponse::new(StopReason::MaxTurnRequests);
+        let response = build_agent_response(prompt_result, "Turn limit".to_string(), 0);
+        assert!(matches!(response.response_type, AgentResponseType::Partial));
+    }
+
+    #[test]
+    fn test_build_agent_response_with_messages_lost() {
+        let prompt_result = agent_client_protocol::PromptResponse::new(StopReason::EndTurn);
+        let response = build_agent_response(prompt_result, "Some content".to_string(), 5);
+        // Even with messages lost, response is still built based on stop reason
+        assert!(response.is_success());
+        assert_eq!(response.content, "Some content");
+    }
+
+    #[test]
+    fn test_build_agent_response_with_metadata() {
+        let mut meta = serde_json::Map::new();
+        meta.insert("key".to_string(), serde_json::json!("value"));
+        let prompt_result =
+            agent_client_protocol::PromptResponse::new(StopReason::EndTurn).meta(meta);
+        let response = build_agent_response(prompt_result, "Content".to_string(), 0);
+        assert!(response.metadata.is_some());
+        let metadata = response.metadata.unwrap();
+        assert_eq!(metadata.get("key").and_then(|v| v.as_str()), Some("value"));
+    }
+
+    #[test]
+    fn test_build_agent_response_empty_text_uses_metadata() {
+        let mut meta = serde_json::Map::new();
+        meta.insert(
+            "llama_response".to_string(),
+            serde_json::json!("From llama metadata"),
+        );
+        let prompt_result =
+            agent_client_protocol::PromptResponse::new(StopReason::EndTurn).meta(meta);
+        let response = build_agent_response(prompt_result, "".to_string(), 0);
+        assert_eq!(response.content, "From llama metadata");
+    }
+
+    #[test]
+    fn test_build_agent_response_no_metadata_empty_text() {
+        let prompt_result = agent_client_protocol::PromptResponse::new(StopReason::EndTurn);
+        let response = build_agent_response(prompt_result, "".to_string(), 0);
+        assert_eq!(response.content, "");
+    }
+
+    // ========================================================================
+    // extract_response_from_metadata - non-string values
+    // ========================================================================
+
+    #[test]
+    fn test_extract_response_from_metadata_numeric_value() {
+        let metadata = Some(serde_json::json!({
+            "claude_response": 42
+        }));
+        // Non-string values should return empty string
+        let result = extract_response_from_metadata(&metadata);
+        assert_eq!(result, "");
+    }
+
+    // ========================================================================
+    // AgentResponse serialization
+    // ========================================================================
+
+    #[test]
+    fn test_agent_response_serialization_roundtrip() {
+        let response = AgentResponse::success("test content".to_string());
+        let json = serde_json::to_string(&response).unwrap();
+        let deserialized: AgentResponse = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.content, "test content");
+        assert!(deserialized.is_success());
+        assert!(deserialized.metadata.is_none());
+    }
+
+    #[test]
+    fn test_agent_response_serialization_with_metadata() {
+        let response = AgentResponse::success_with_metadata(
+            "content".to_string(),
+            serde_json::json!({"model": "test"}),
+        );
+        let json = serde_json::to_string(&response).unwrap();
+        let deserialized: AgentResponse = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.content, "content");
+        assert!(deserialized.metadata.is_some());
+    }
+
+    #[test]
+    fn test_agent_response_camel_case_serialization() {
+        let response = AgentResponse::success("test".to_string());
+        let json = serde_json::to_string(&response).unwrap();
+        // Verify camelCase field names
+        assert!(json.contains("responseType"));
+        assert!(!json.contains("response_type"));
+    }
+
+    // ========================================================================
+    // CreateAgentOptions tests
+    // ========================================================================
+
+    #[test]
+    fn test_create_agent_options_tools_override_none_by_default() {
+        let options = CreateAgentOptions::default();
+        assert!(options.tools_override.is_none());
+    }
+
+    #[test]
+    fn test_create_agent_options_tools_override_empty_string() {
+        let options = CreateAgentOptions {
+            ephemeral: false,
+            tools_override: Some("".to_string()),
+        };
+        assert_eq!(options.tools_override, Some("".to_string()));
+    }
+
+    #[test]
+    fn test_create_agent_options_debug() {
+        let options = CreateAgentOptions {
+            ephemeral: true,
+            tools_override: Some("custom".to_string()),
+        };
+        let debug = format!("{:?}", options);
+        assert!(debug.contains("ephemeral: true"));
+        assert!(debug.contains("custom"));
+    }
+
+    #[test]
+    fn test_create_agent_options_clone() {
+        let options = CreateAgentOptions {
+            ephemeral: true,
+            tools_override: Some("tools".to_string()),
+        };
+        let cloned = options.clone();
+        assert!(cloned.ephemeral);
+        assert_eq!(cloned.tools_override, Some("tools".to_string()));
+    }
+
+    // ========================================================================
+    // McpServerConfig tests
+    // ========================================================================
+
+    #[test]
+    fn test_mcp_server_config_debug() {
+        let config = McpServerConfig::new("http://example.com/mcp");
+        let debug = format!("{:?}", config);
+        assert!(debug.contains("http://example.com/mcp"));
+    }
+
+    #[test]
+    fn test_mcp_server_config_clone() {
+        let config = McpServerConfig::from_port(3000);
+        let cloned = config.clone();
+        assert_eq!(cloned.url, "http://localhost:3000/mcp");
+    }
+
+    #[test]
+    fn test_mcp_server_config_various_ports() {
+        for port in [0, 80, 443, 8080, 65535] {
+            let config = McpServerConfig::from_port(port);
+            assert_eq!(config.url, format!("http://localhost:{}/mcp", port));
+        }
+    }
+
+    // ========================================================================
+    // AcpError Debug/Display tests
+    // ========================================================================
+
+    #[test]
+    fn test_acp_error_debug_format() {
+        let err = AcpError::RateLimit {
+            message: "slow down".to_string(),
+            wait_time: Duration::from_secs(30),
+        };
+        let debug = format!("{:?}", err);
+        assert!(debug.contains("RateLimit"));
+        assert!(debug.contains("slow down"));
+    }
+
+    // ========================================================================
+    // AcpResult type alias tests
+    // ========================================================================
+
+    #[test]
+    fn test_acp_result_ok() {
+        let result: AcpResult<i32> = Ok(42);
+        assert!(matches!(result, Ok(42)));
+    }
+
+    #[test]
+    fn test_acp_result_err() {
+        let result: AcpResult<i32> = Err(AcpError::PromptError("fail".to_string()));
+        assert!(result.is_err());
+    }
+
+    // ========================================================================
+    // Notification collector async tests
+    // ========================================================================
+
+    #[tokio::test]
+    async fn test_spawn_notification_collector_receives_text() {
+        let (tx, rx) = broadcast::channel::<SessionNotification>(16);
+        let session_id = agent_client_protocol::SessionId::new("test-session".to_string());
+        let cancel_token = CancellationToken::new();
+        let local_set = tokio::task::LocalSet::new();
+
+        let collector_handle =
+            spawn_notification_collector(&local_set, rx, session_id.clone(), cancel_token.clone());
+
+        let cancel_clone = cancel_token.clone();
+        let session_clone = session_id.clone();
+        local_set
+            .run_until(async move {
+                // Send a few text notifications
+                tx.send(make_text_notification(&session_clone, "Hello "))
+                    .unwrap();
+                tx.send(make_text_notification(&session_clone, "World"))
+                    .unwrap();
+
+                // Give the collector time to process
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                cancel_clone.cancel();
+
+                let (text, lost) = collector_handle.await.unwrap();
+                assert_eq!(text, "Hello World");
+                assert_eq!(lost, 0);
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn test_spawn_notification_collector_ignores_other_sessions() {
+        let (tx, rx) = broadcast::channel::<SessionNotification>(16);
+        let session_id = agent_client_protocol::SessionId::new("my-session".to_string());
+        let other_session = agent_client_protocol::SessionId::new("other-session".to_string());
+        let cancel_token = CancellationToken::new();
+        let local_set = tokio::task::LocalSet::new();
+
+        let collector_handle =
+            spawn_notification_collector(&local_set, rx, session_id.clone(), cancel_token.clone());
+
+        let cancel_clone = cancel_token.clone();
+        local_set
+            .run_until(async move {
+                // Send notification for different session
+                tx.send(make_text_notification(&other_session, "Should be ignored"))
+                    .unwrap();
+
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                cancel_clone.cancel();
+
+                let (text, lost) = collector_handle.await.unwrap();
+                assert_eq!(text, "");
+                assert_eq!(lost, 0);
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn test_spawn_notification_collector_channel_closed() {
+        let (tx, rx) = broadcast::channel::<SessionNotification>(16);
+        let session_id = agent_client_protocol::SessionId::new("test".to_string());
+        let cancel_token = CancellationToken::new();
+        let local_set = tokio::task::LocalSet::new();
+
+        let collector_handle =
+            spawn_notification_collector(&local_set, rx, session_id, cancel_token.clone());
+
+        local_set
+            .run_until(async move {
+                // Drop the sender to close the channel
+                drop(tx);
+
+                let (text, lost) = collector_handle.await.unwrap();
+                assert_eq!(text, "");
+                assert_eq!(lost, 0);
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn test_spawn_notification_collector_ignores_non_text_updates() {
+        let (tx, rx) = broadcast::channel::<SessionNotification>(16);
+        let session_id = agent_client_protocol::SessionId::new("test".to_string());
+        let cancel_token = CancellationToken::new();
+        let local_set = tokio::task::LocalSet::new();
+
+        let collector_handle =
+            spawn_notification_collector(&local_set, rx, session_id.clone(), cancel_token.clone());
+
+        let cancel_clone = cancel_token.clone();
+        let session_clone = session_id.clone();
+        local_set
+            .run_until(async move {
+                // Send non-chunk update (ToolCall, not AgentMessageChunk)
+                let tool_call = agent_client_protocol::ToolCall::new(
+                    agent_client_protocol::ToolCallId::new("tc-1".to_string()),
+                    "test-tool".to_string(),
+                );
+                tx.send(SessionNotification::new(
+                    session_clone.clone(),
+                    SessionUpdate::ToolCall(tool_call),
+                ))
+                .unwrap();
+
+                // Send text
+                tx.send(make_text_notification(&session_clone, "Only this"))
+                    .unwrap();
+
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                cancel_clone.cancel();
+
+                let (text, _) = collector_handle.await.unwrap();
+                assert_eq!(text, "Only this");
+            })
+            .await;
+    }
+
+    // ========================================================================
+    // await_collector tests
+    // ========================================================================
+
+    #[tokio::test]
+    async fn test_await_collector_success() {
+        let local_set = tokio::task::LocalSet::new();
+        let cancel_token = CancellationToken::new();
+
+        let handle = local_set.spawn_local(async { ("collected text".to_string(), 2u64) });
+
+        local_set
+            .run_until(async {
+                let (text, lost) = await_collector(handle, &cancel_token).await;
+                assert_eq!(text, "collected text");
+                assert_eq!(lost, 2);
+            })
+            .await;
+    }
+
+    // ========================================================================
+    // Constants verification tests
+    // ========================================================================
+
+    #[test]
+    fn test_constants_have_sane_values() {
+        assert_ne!(MAX_PROMPT_LENGTH_BYTES, 0);
+        assert_ne!(DEFAULT_MAX_RETRIES, 0);
+        assert_ne!(DEFAULT_INITIAL_RETRY_DELAY_MS, 0);
+        // Backoff multiplier must exceed 1.0
+        let multiplier = DEFAULT_BACKOFF_MULTIPLIER;
+        assert!(multiplier > 1.0, "backoff multiplier must be > 1.0, got {multiplier}");
+        // Max retry delay must be >= initial
+        let (max_delay, init_delay) = (DEFAULT_MAX_RETRY_DELAY_MS, DEFAULT_INITIAL_RETRY_DELAY_MS);
+        assert!(max_delay >= init_delay, "max retry delay must be >= initial, got {max_delay} < {init_delay}");
+        assert_ne!(DEFAULT_NUM_THREADS, 0);
+        assert_ne!(DEFAULT_BATCH_THREADS, 0);
+        assert_ne!(SSE_KEEP_ALIVE_SECONDS, 0);
+        assert_ne!(DEFAULT_MAX_QUEUE_SIZE, 0);
+        assert_ne!(NOTIFICATION_COLLECTION_DELAY_MS, 0);
+    }
+
+    // ========================================================================
+    // AgentResponseType discrimination tests
+    // ========================================================================
+
+    #[test]
+    fn test_agent_response_type_debug() {
+        assert!(format!("{:?}", AgentResponseType::Success).contains("Success"));
+        assert!(format!("{:?}", AgentResponseType::Partial).contains("Partial"));
+        assert!(format!("{:?}", AgentResponseType::Error).contains("Error"));
+    }
+
+    #[test]
+    fn test_agent_response_type_clone() {
+        let t = AgentResponseType::Partial;
+        let cloned = t.clone();
+        assert!(matches!(cloned, AgentResponseType::Partial));
+    }
 }

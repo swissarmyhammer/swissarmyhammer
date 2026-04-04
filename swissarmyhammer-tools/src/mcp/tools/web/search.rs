@@ -72,6 +72,166 @@ impl Operation for SearchUrl {
     }
 }
 
+/// Execute a search operation using the existing web_search pipeline
+pub async fn execute_search(
+    arguments: serde_json::Map<String, serde_json::Value>,
+    context: &ToolContext,
+) -> Result<CallToolResult, McpError> {
+    let request: WebSearchRequest = BaseToolImpl::parse_arguments(arguments)?;
+
+    tracing::info!(
+        "Starting web search: '{}', results_count: {:?}, fetch_content: {:?}",
+        request.query,
+        request.results_count,
+        request.fetch_content
+    );
+
+    // Comprehensive parameter validation
+    if let Err(validation_error) = WebSearcher::validate_request(&request) {
+        return Err(McpError::invalid_request(validation_error, None));
+    }
+
+    let start_time = Instant::now();
+
+    send_mcp_log(
+        context,
+        LoggingLevel::Info,
+        "web_search",
+        format!("Starting search: {}", request.query),
+    )
+    .await;
+
+    // Create a fresh search tool instance
+    let mut search_tool = WebSearcher::new();
+
+    send_mcp_log(
+        context,
+        LoggingLevel::Info,
+        "web_search",
+        "Executing search...".into(),
+    )
+    .await;
+
+    // Perform search using Brave Search (direct HTTP, no browser needed)
+    let search_client = search_tool.get_search_client();
+    let mut results = match search_client.search(&request).await {
+        Ok(results) => results,
+        Err(BraveSearchError::NoResults) => {
+            send_mcp_log(
+                context,
+                LoggingLevel::Warning,
+                "web_search",
+                "No results found".into(),
+            )
+            .await;
+
+            let error = WebSearchError {
+                error_type: "no_results".to_string(),
+                error_details: format!(
+                    "No web search results found for '{}'. The search may be too specific or the terms may not match any web pages.",
+                    request.query
+                ),
+                attempted_instances: vec!["https://search.brave.com".to_string()],
+                retry_after: None,
+            };
+
+            return Err(McpError::invalid_request(
+                serde_json::to_string_pretty(&error)
+                    .unwrap_or_else(|_| "No results found".to_string()),
+                None,
+            ));
+        }
+        Err(e) => {
+            send_mcp_log(
+                context,
+                LoggingLevel::Error,
+                "web_search",
+                format!("Failed: {}", e),
+            )
+            .await;
+
+            let error = WebSearchError {
+                error_type: "search_failed".to_string(),
+                error_details: format!("Brave web search failed: {e}"),
+                attempted_instances: vec!["https://search.brave.com".to_string()],
+                retry_after: Some(10),
+            };
+
+            return Err(McpError::internal_error(
+                serde_json::to_string_pretty(&error)
+                    .unwrap_or_else(|_| "Search failed".to_string()),
+                None,
+            ));
+        }
+    };
+
+    let search_time = start_time.elapsed();
+
+    send_mcp_log(
+        context,
+        LoggingLevel::Info,
+        "web_search",
+        "Processing results...".into(),
+    )
+    .await;
+
+    // Optionally fetch content from each result
+    let mut content_fetch_stats = None;
+
+    if request.fetch_content.unwrap_or(true) {
+        let content_config = WebSearcher::load_content_fetch_config();
+        let content_fetcher = ContentFetcher::new(content_config);
+
+        let (processed_results, stats) = content_fetcher.fetch_search_results(results).await;
+
+        results = processed_results;
+
+        content_fetch_stats = Some(ContentFetchStats {
+            attempted: stats.attempted,
+            successful: stats.successful,
+            failed: stats.failed,
+            total_time_ms: stats.total_time_ms,
+        });
+    }
+
+    let response = WebSearchResponse {
+        results: results.clone(),
+        metadata: SearchMetadata {
+            query: request.query.clone(),
+            category: request.category.unwrap_or_default(),
+            language: request.language.unwrap_or_else(|| "en".to_string()),
+            results_count: results.len(),
+            search_time_ms: search_time.as_millis() as u64,
+            instance_used: "https://search.brave.com".to_string(),
+            total_results: results.len(),
+            engines_used: vec!["brave".to_string()],
+            content_fetch_stats,
+            fetch_content: request.fetch_content.unwrap_or(true),
+        },
+    };
+
+    tracing::info!(
+        "Web search completed: found {} results for '{}' in {:?}",
+        response.results.len(),
+        response.metadata.query,
+        search_time
+    );
+
+    send_mcp_log(
+        context,
+        LoggingLevel::Info,
+        "web_search",
+        format!("Complete: {} results", response.results.len()),
+    )
+    .await;
+
+    Ok(BaseToolImpl::create_success_response(
+        serde_json::to_string_pretty(&response).map_err(|e| {
+            McpError::internal_error(format!("Failed to serialize response: {e}"), None)
+        })?,
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -249,164 +409,4 @@ mod tests {
         let op = SearchUrl::default();
         assert_eq!(op.op_string(), "search url");
     }
-}
-
-/// Execute a search operation using the existing web_search pipeline
-pub async fn execute_search(
-    arguments: serde_json::Map<String, serde_json::Value>,
-    context: &ToolContext,
-) -> Result<CallToolResult, McpError> {
-    let request: WebSearchRequest = BaseToolImpl::parse_arguments(arguments)?;
-
-    tracing::info!(
-        "Starting web search: '{}', results_count: {:?}, fetch_content: {:?}",
-        request.query,
-        request.results_count,
-        request.fetch_content
-    );
-
-    // Comprehensive parameter validation
-    if let Err(validation_error) = WebSearcher::validate_request(&request) {
-        return Err(McpError::invalid_request(validation_error, None));
-    }
-
-    let start_time = Instant::now();
-
-    send_mcp_log(
-        context,
-        LoggingLevel::Info,
-        "web_search",
-        format!("Starting search: {}", request.query),
-    )
-    .await;
-
-    // Create a fresh search tool instance
-    let mut search_tool = WebSearcher::new();
-
-    send_mcp_log(
-        context,
-        LoggingLevel::Info,
-        "web_search",
-        "Executing search...".into(),
-    )
-    .await;
-
-    // Perform search using Brave Search (direct HTTP, no browser needed)
-    let search_client = search_tool.get_search_client();
-    let mut results = match search_client.search(&request).await {
-        Ok(results) => results,
-        Err(BraveSearchError::NoResults) => {
-            send_mcp_log(
-                context,
-                LoggingLevel::Warning,
-                "web_search",
-                "No results found".into(),
-            )
-            .await;
-
-            let error = WebSearchError {
-                error_type: "no_results".to_string(),
-                error_details: format!(
-                    "No web search results found for '{}'. The search may be too specific or the terms may not match any web pages.",
-                    request.query
-                ),
-                attempted_instances: vec!["https://search.brave.com".to_string()],
-                retry_after: None,
-            };
-
-            return Err(McpError::invalid_request(
-                serde_json::to_string_pretty(&error)
-                    .unwrap_or_else(|_| "No results found".to_string()),
-                None,
-            ));
-        }
-        Err(e) => {
-            send_mcp_log(
-                context,
-                LoggingLevel::Error,
-                "web_search",
-                format!("Failed: {}", e),
-            )
-            .await;
-
-            let error = WebSearchError {
-                error_type: "search_failed".to_string(),
-                error_details: format!("Brave web search failed: {e}"),
-                attempted_instances: vec!["https://search.brave.com".to_string()],
-                retry_after: Some(10),
-            };
-
-            return Err(McpError::internal_error(
-                serde_json::to_string_pretty(&error)
-                    .unwrap_or_else(|_| "Search failed".to_string()),
-                None,
-            ));
-        }
-    };
-
-    let search_time = start_time.elapsed();
-
-    send_mcp_log(
-        context,
-        LoggingLevel::Info,
-        "web_search",
-        "Processing results...".into(),
-    )
-    .await;
-
-    // Optionally fetch content from each result
-    let mut content_fetch_stats = None;
-
-    if request.fetch_content.unwrap_or(true) {
-        let content_config = WebSearcher::load_content_fetch_config();
-        let content_fetcher = ContentFetcher::new(content_config);
-
-        let (processed_results, stats) = content_fetcher.fetch_search_results(results).await;
-
-        results = processed_results;
-
-        content_fetch_stats = Some(ContentFetchStats {
-            attempted: stats.attempted,
-            successful: stats.successful,
-            failed: stats.failed,
-            total_time_ms: stats.total_time_ms,
-        });
-    }
-
-    let response = WebSearchResponse {
-        results: results.clone(),
-        metadata: SearchMetadata {
-            query: request.query.clone(),
-            category: request.category.unwrap_or_default(),
-            language: request.language.unwrap_or_else(|| "en".to_string()),
-            results_count: results.len(),
-            search_time_ms: search_time.as_millis() as u64,
-            instance_used: "https://search.brave.com".to_string(),
-            total_results: results.len(),
-            engines_used: vec!["brave".to_string()],
-            content_fetch_stats,
-            fetch_content: request.fetch_content.unwrap_or(true),
-        },
-    };
-
-    tracing::info!(
-        "Web search completed: found {} results for '{}' in {:?}",
-        response.results.len(),
-        response.metadata.query,
-        search_time
-    );
-
-    send_mcp_log(
-        context,
-        LoggingLevel::Info,
-        "web_search",
-        format!("Complete: {} results", response.results.len()),
-    )
-    .await;
-
-    Ok(BaseToolImpl::create_success_response(
-        serde_json::to_string_pretty(&response).map_err(|e| {
-            McpError::internal_error(format!("Failed to serialize response: {e}"), None)
-        })?,
-    ))
 }

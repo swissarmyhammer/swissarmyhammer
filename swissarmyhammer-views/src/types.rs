@@ -157,6 +157,88 @@ kind: list
     }
 
     #[test]
+    fn all_view_kinds_round_trip() {
+        for (yaml_str, expected) in [
+            ("list", ViewKind::List),
+            ("calendar", ViewKind::Calendar),
+            ("timeline", ViewKind::Timeline),
+        ] {
+            let full_yaml = format!("id: '01TEST'\nname: Test\nkind: {}\n", yaml_str);
+            let def: ViewDef = serde_yaml_ng::from_str(&full_yaml).unwrap();
+            assert_eq!(
+                def.kind, expected,
+                "kind '{}' should parse correctly",
+                yaml_str
+            );
+
+            // Round-trip
+            let serialized = serde_yaml_ng::to_string(&def).unwrap();
+            let reparsed: ViewDef = serde_yaml_ng::from_str(&serialized).unwrap();
+            assert_eq!(reparsed.kind, expected);
+        }
+    }
+
+    #[test]
+    fn view_command_with_all_keys() {
+        let yaml = r#"
+id: "01TEST"
+name: Test
+kind: board
+commands:
+  - id: cmd.test
+    name: Test Command
+    description: A test command
+    keys:
+      vim: ":test"
+      cua: Mod+T
+      emacs: C-t
+"#;
+        let def: ViewDef = serde_yaml_ng::from_str(yaml).unwrap();
+        let cmd = &def.commands[0];
+        assert_eq!(cmd.id, "cmd.test");
+        assert_eq!(cmd.description.as_deref(), Some("A test command"));
+        let keys = cmd.keys.as_ref().unwrap();
+        assert_eq!(keys.vim.as_deref(), Some(":test"));
+        assert_eq!(keys.cua.as_deref(), Some("Mod+T"));
+        assert_eq!(keys.emacs.as_deref(), Some("C-t"));
+    }
+
+    #[test]
+    fn view_command_minimal_no_keys_no_description() {
+        let yaml = r#"
+id: "01TEST"
+name: Test
+kind: board
+commands:
+  - id: cmd.simple
+    name: Simple Command
+"#;
+        let def: ViewDef = serde_yaml_ng::from_str(yaml).unwrap();
+        let cmd = &def.commands[0];
+        assert!(cmd.description.is_none());
+        assert!(cmd.keys.is_none());
+    }
+
+    #[test]
+    fn view_def_with_entity_type_and_card_fields() {
+        let def = ViewDef {
+            id: "01TEST".into(),
+            name: "Test".into(),
+            icon: Some("icon".into()),
+            kind: ViewKind::Grid,
+            entity_type: Some("task".into()),
+            card_fields: vec!["title".into(), "status".into()],
+            commands: Vec::new(),
+        };
+
+        let yaml = serde_yaml_ng::to_string(&def).unwrap();
+        let parsed: ViewDef = serde_yaml_ng::from_str(&yaml).unwrap();
+        assert_eq!(parsed.entity_type.as_deref(), Some("task"));
+        assert_eq!(parsed.card_fields, vec!["title", "status"]);
+        assert_eq!(parsed.icon.as_deref(), Some("icon"));
+    }
+
+    #[test]
     fn unknown_kind_deserializes() {
         let yaml = r#"
 id: "01ABC"

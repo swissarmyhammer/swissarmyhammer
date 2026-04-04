@@ -57,3 +57,77 @@ impl LogEntry {
         self
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_new_creates_entry_with_fields() {
+        let entry = LogEntry::new(
+            "add task",
+            json!({"title": "t"}),
+            json!({"id": "1"}),
+            None,
+            42,
+        );
+        assert_eq!(entry.op, "add task");
+        assert_eq!(entry.input, json!({"title": "t"}));
+        assert_eq!(entry.output, json!({"id": "1"}));
+        assert!(entry.actor.is_none());
+        assert_eq!(entry.duration_ms, 42);
+        assert!(!entry.id.is_empty());
+    }
+
+    #[test]
+    fn test_new_with_actor_param() {
+        let entry = LogEntry::new(
+            "move task",
+            json!({}),
+            json!({}),
+            Some("alice".to_string()),
+            10,
+        );
+        assert_eq!(entry.actor, Some("alice".to_string()));
+    }
+
+    #[test]
+    fn test_with_actor_sets_actor() {
+        let entry = LogEntry::new("get task", json!({}), json!({}), None, 0).with_actor("bob");
+        assert_eq!(entry.actor, Some("bob".to_string()));
+    }
+
+    #[test]
+    fn test_with_actor_overrides_none() {
+        let entry = LogEntry::new("list tasks", json!({}), json!({}), None, 5)
+            .with_actor("agent[session123]");
+        assert_eq!(entry.actor, Some("agent[session123]".to_string()));
+        assert_eq!(entry.duration_ms, 5);
+    }
+
+    #[test]
+    fn test_serialize_roundtrip() {
+        let entry = LogEntry::new("add task", json!({"x": 1}), json!({"y": 2}), None, 100);
+        let serialized = serde_json::to_string(&entry).unwrap();
+        let deserialized: LogEntry = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(deserialized.op, entry.op);
+        assert_eq!(deserialized.input, entry.input);
+        assert_eq!(deserialized.output, entry.output);
+        assert!(deserialized.actor.is_none());
+    }
+
+    #[test]
+    fn test_serialize_skips_none_actor() {
+        let entry = LogEntry::new("test", json!({}), json!({}), None, 0);
+        let serialized = serde_json::to_string(&entry).unwrap();
+        assert!(!serialized.contains("actor"));
+    }
+
+    #[test]
+    fn test_serialize_includes_some_actor() {
+        let entry = LogEntry::new("test", json!({}), json!({}), Some("user1".into()), 0);
+        let serialized = serde_json::to_string(&entry).unwrap();
+        assert!(serialized.contains("\"actor\":\"user1\""));
+    }
+}

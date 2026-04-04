@@ -162,4 +162,34 @@ mod tests {
         };
         assert!(!result.should_log());
     }
+
+    #[test]
+    fn test_debug_logged() {
+        let result: ExecutionResult<i32, String> = ExecutionResult::Logged {
+            value: 42,
+            log_entry: make_log_entry(),
+        };
+        let debug = format!("{:?}", result);
+        assert!(debug.contains("Logged"));
+        assert!(debug.contains("42"));
+    }
+
+    #[test]
+    fn test_debug_unlogged() {
+        let result: ExecutionResult<i32, String> = ExecutionResult::Unlogged { value: 99 };
+        let debug = format!("{:?}", result);
+        assert!(debug.contains("Unlogged"));
+        assert!(debug.contains("99"));
+    }
+
+    #[test]
+    fn test_debug_failed() {
+        let result: ExecutionResult<i32, String> = ExecutionResult::Failed {
+            error: "boom".to_string(),
+            log_entry: None,
+        };
+        let debug = format!("{:?}", result);
+        assert!(debug.contains("Failed"));
+        assert!(debug.contains("boom"));
+    }
 }

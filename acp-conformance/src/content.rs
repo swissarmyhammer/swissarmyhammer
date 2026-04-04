@@ -422,9 +422,162 @@ pub fn verify_content_fixture_with_prompts(
 
 #[cfg(test)]
 mod tests {
-    // Basic smoke test to ensure module compiles
+    use super::*;
+    use agent_client_protocol::{
+        AuthenticateRequest, AuthenticateResponse, CancelNotification, ExtNotification, ExtRequest,
+        ExtResponse, InitializeResponse, LoadSessionRequest, LoadSessionResponse,
+        NewSessionResponse, PromptResponse, SetSessionModeRequest, SetSessionModeResponse,
+        StopReason,
+    };
+
+    /// Mock agent that accepts all content types
+    struct ContentMockAgent;
+
+    #[async_trait::async_trait(?Send)]
+    impl Agent for ContentMockAgent {
+        async fn initialize(
+            &self,
+            _request: InitializeRequest,
+        ) -> agent_client_protocol::Result<InitializeResponse> {
+            Ok(InitializeResponse::new(ProtocolVersion::V1))
+        }
+
+        async fn authenticate(
+            &self,
+            _request: AuthenticateRequest,
+        ) -> agent_client_protocol::Result<AuthenticateResponse> {
+            Ok(AuthenticateResponse::new())
+        }
+
+        async fn new_session(
+            &self,
+            _request: agent_client_protocol::NewSessionRequest,
+        ) -> agent_client_protocol::Result<NewSessionResponse> {
+            Ok(NewSessionResponse::new("content-test-session"))
+        }
+
+        async fn prompt(
+            &self,
+            _request: PromptRequest,
+        ) -> agent_client_protocol::Result<PromptResponse> {
+            Ok(PromptResponse::new(StopReason::EndTurn))
+        }
+
+        async fn cancel(&self, _request: CancelNotification) -> agent_client_protocol::Result<()> {
+            Ok(())
+        }
+
+        async fn load_session(
+            &self,
+            _request: LoadSessionRequest,
+        ) -> agent_client_protocol::Result<LoadSessionResponse> {
+            Ok(LoadSessionResponse::new())
+        }
+
+        async fn set_session_mode(
+            &self,
+            _request: SetSessionModeRequest,
+        ) -> agent_client_protocol::Result<SetSessionModeResponse> {
+            Ok(SetSessionModeResponse::new())
+        }
+
+        async fn ext_method(
+            &self,
+            _request: ExtRequest,
+        ) -> agent_client_protocol::Result<ExtResponse> {
+            Err(agent_client_protocol::Error::method_not_found())
+        }
+
+        async fn ext_notification(
+            &self,
+            _notification: ExtNotification,
+        ) -> agent_client_protocol::Result<()> {
+            Ok(())
+        }
+    }
+
     #[test]
     fn test_module_compiles() {
         // Module compiles successfully
+    }
+
+    #[test]
+    fn test_content_stats_default() {
+        let stats = ContentStats::default();
+        assert_eq!(stats.initialize_calls, 0);
+        assert_eq!(stats.new_session_calls, 0);
+        assert_eq!(stats.prompt_calls, 0);
+    }
+
+    #[test]
+    fn test_content_stats_debug_and_serialize() {
+        let stats = ContentStats {
+            initialize_calls: 1,
+            new_session_calls: 1,
+            prompt_calls: 2,
+        };
+        let debug = format!("{:?}", stats);
+        assert!(debug.contains("ContentStats"));
+
+        let json = serde_json::to_value(&stats).unwrap();
+        assert_eq!(json["prompt_calls"], 2);
+    }
+
+    #[tokio::test]
+    async fn test_text_content_support_mock() {
+        let agent = ContentMockAgent;
+        let result = test_text_content_support(&agent).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_image_content_with_capability_mock() {
+        let agent = ContentMockAgent;
+        // Agent doesn't advertise image capability, so test should skip gracefully
+        let result = test_image_content_with_capability(&agent).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_audio_content_with_capability_mock() {
+        let agent = ContentMockAgent;
+        // Agent doesn't advertise audio capability, so test should skip gracefully
+        let result = test_audio_content_with_capability(&agent).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_embedded_resource_with_capability_mock() {
+        let agent = ContentMockAgent;
+        // Agent doesn't advertise embedded context capability, so test should skip
+        let result = test_embedded_resource_with_capability(&agent).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_resource_link_content_mock() {
+        let agent = ContentMockAgent;
+        let result = test_resource_link_content(&agent).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_content_validation_mock() {
+        let agent = ContentMockAgent;
+        let result = test_content_validation(&agent).await;
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_verify_content_fixture_not_found() {
+        let result = verify_content_fixture("nonexistent-agent", "nonexistent-test");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_verify_content_fixture_with_prompts_not_found() {
+        let result =
+            verify_content_fixture_with_prompts("nonexistent-agent", "nonexistent-test", 1);
+        assert!(result.is_err());
     }
 }

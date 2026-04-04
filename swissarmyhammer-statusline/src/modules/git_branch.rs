@@ -129,4 +129,49 @@ mod tests {
         let out = format_branch("main", &ctx);
         assert!(out.text.contains("main"));
     }
+
+    #[test]
+    fn test_format_branch_render_output() {
+        let input = StatuslineInput::default();
+        let config = StatuslineConfig::default();
+        let ctx = ModuleContext {
+            input: &input,
+            config: &config,
+        };
+        let out = format_branch("main", &ctx);
+        let rendered = out.render();
+        assert!(rendered.contains("main"));
+        assert!(rendered.contains("\x1b["));
+    }
+
+    #[test]
+    fn test_format_branch_exact_length() {
+        let input = StatuslineInput::default();
+        let mut config = StatuslineConfig::default();
+        config.git_branch.truncation_length = 4;
+        let ctx = ModuleContext {
+            input: &input,
+            config: &config,
+        };
+        // Branch name exactly at truncation length
+        let out = format_branch("main", &ctx);
+        assert!(out.text.contains("main"));
+        // Should not contain truncation symbol since len == truncation_length
+        assert!(!out.text.contains(&config.git_branch.truncation_symbol));
+    }
+
+    #[test]
+    fn test_format_branch_one_over_truncation() {
+        let input = StatuslineInput::default();
+        let mut config = StatuslineConfig::default();
+        config.git_branch.truncation_length = 4;
+        config.git_branch.truncation_symbol = "...".into();
+        let ctx = ModuleContext {
+            input: &input,
+            config: &config,
+        };
+        let out = format_branch("mains", &ctx);
+        assert!(out.text.contains("main"));
+        assert!(out.text.contains("..."));
+    }
 }

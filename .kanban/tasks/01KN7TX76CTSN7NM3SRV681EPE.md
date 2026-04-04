@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: a380
+position_column: done
+position_ordinal: ffffffffffffffffffce80
 title: '100% coverage: swissarmyhammer-common'
 ---
-Coverage: 81.5% (1696/2080 lines) — 384 lines to cover\n\nTop uncovered files:\n- src/test_utils.rs (114 uncov) — test utilities\n- src/interactive_prompts.rs (60 uncov) — interactive prompt helpers\n- src/test_organization.rs (49 uncov) — test organization #coverage-gap
+Top uncovered files:\n- src/test_utils.rs — test utilities\n- src/interactive_prompts.rs — interactive prompt helpers\n- src/test_organization.rs — test organization #coverage-gap\n\n**CONSTRAINT: ONLY add tests. Do NOT modify, refactor, delete, or otherwise change the code under test. The production code must remain exactly as-is. Do NOT put line numbers or line counts in comments or ticket descriptions — lines change constantly and these go stale immediately. Run coverage to get current numbers.**

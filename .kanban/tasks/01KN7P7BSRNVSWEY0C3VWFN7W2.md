@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: '8380'
+position_column: done
+position_ordinal: ffffffffffffffffffc780
 title: '100% coverage: swissarmyhammer-git'
 ---
-Coverage: 67.8% (395/583 lines) — 188 lines to cover\n\nTop uncovered files:\n- src/operations.rs (140 uncov) — branch management, diff parsing, commit/push\n- src/repository.rs (33 uncov) — repository abstraction\n- src/git2_utils.rs (7 uncov) #coverage-gap
+Top uncovered files:\n- src/operations.rs — branch management, diff parsing, commit/push\n- src/repository.rs — repository abstraction\n- src/git2_utils.rs — git2 utilities #coverage-gap\n\n**CONSTRAINT: ONLY add tests. Do NOT modify, refactor, delete, or otherwise change the code under test. The production code must remain exactly as-is. Do NOT put line numbers or line counts in comments or ticket descriptions — lines change constantly and these go stale immediately. Run coverage to get current numbers.**

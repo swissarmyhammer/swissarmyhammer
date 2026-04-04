@@ -593,4 +593,39 @@ mod tests {
         let result = template.render(&object).unwrap();
         assert_eq!(result, "plain text");
     }
+
+    #[test]
+    fn test_render_with_config_uses_provided_args() {
+        // Exercise render_with_config — the config loading path (line 285-291)
+        // Whether config load succeeds or fails, provided args should take precedence
+        let template = Template::new("Hello {{ greeting }}!").unwrap();
+        let mut args = HashMap::new();
+        args.insert("greeting".to_string(), "ConfigTest".to_string());
+
+        let result = template.render_with_config(&args).unwrap();
+        assert_eq!(result, "Hello ConfigTest!");
+    }
+
+    #[test]
+    fn test_render_with_config_well_known_variables() {
+        // Exercise the well-known variables path in render_with_config
+        let template = Template::new("Dir: {{ issues_directory }}").unwrap();
+        let args = HashMap::new();
+
+        let result = template.render_with_config(&args).unwrap();
+        // issues_directory should be populated from well-known variables
+        assert!(result.starts_with("Dir: "));
+        assert!(result.contains("issues"));
+    }
+
+    #[test]
+    fn test_render_with_config_default_filter() {
+        // Exercise render_with_config with default filter and missing variable
+        // This covers the nil-initialization path for variables not in config/well-known
+        let template = Template::new("{{ missing_var | default: 'fallback' }}").unwrap();
+        let args = HashMap::new();
+
+        let result = template.render_with_config(&args).unwrap();
+        assert_eq!(result, "fallback");
+    }
 }

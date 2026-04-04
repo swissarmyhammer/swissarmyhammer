@@ -471,4 +471,158 @@ mod tests {
         assert!(storage.exists("item").unwrap());
         assert_eq!(storage.count().unwrap(), 1);
     }
+
+    #[test]
+    fn test_memory_storage_search_by_name() {
+        let mut storage = MemoryStorage::new();
+        storage
+            .store(
+                "debug-js",
+                &Prompt::new("debug-js", "Debug JavaScript code"),
+            )
+            .unwrap();
+        storage
+            .store("format-py", &Prompt::new("format-py", "Format Python code"))
+            .unwrap();
+
+        let results = storage.search("debug").unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "debug-js");
+    }
+
+    #[test]
+    fn test_memory_storage_search_by_description() {
+        let mut storage = MemoryStorage::new();
+        let mut prompt = Prompt::new("test", "Template");
+        prompt.description = Some("Helps debug JavaScript errors".to_string());
+        storage.store("test", &prompt).unwrap();
+
+        let results = storage.search("JavaScript").unwrap();
+        assert_eq!(results.len(), 1);
+    }
+
+    #[test]
+    fn test_memory_storage_search_by_template() {
+        let mut storage = MemoryStorage::new();
+        storage
+            .store("test", &Prompt::new("test", "Process the Python code"))
+            .unwrap();
+
+        let results = storage.search("Python").unwrap();
+        assert_eq!(results.len(), 1);
+    }
+
+    #[test]
+    fn test_memory_storage_search_by_tag() {
+        let mut storage = MemoryStorage::new();
+        let prompt =
+            Prompt::new("test", "Template").with_tags(vec!["rust".to_string(), "code".to_string()]);
+        storage.store("test", &prompt).unwrap();
+
+        let results = storage.search("rust").unwrap();
+        assert_eq!(results.len(), 1);
+
+        let results = storage.search("nonexistent").unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_memory_storage_search_case_insensitive() {
+        let mut storage = MemoryStorage::new();
+        storage
+            .store("TEST", &Prompt::new("TEST", "UPPERCASE template"))
+            .unwrap();
+
+        let results = storage.search("uppercase").unwrap();
+        assert_eq!(results.len(), 1);
+
+        let results = storage.search("test").unwrap();
+        assert_eq!(results.len(), 1);
+    }
+
+    #[test]
+    fn test_memory_storage_remove_nonexistent() {
+        let mut storage = MemoryStorage::new();
+        let result = storage.remove("nonexistent").unwrap();
+        assert!(!result);
+    }
+
+    #[test]
+    fn test_file_storage_store_with_metadata() {
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let mut storage = FileStorage::new(temp_dir.path());
+
+        let prompt = Prompt::new("metadata-test", "Hello {{name}}!")
+            .with_description("A test prompt")
+            .with_category("test")
+            .with_tags(vec!["greeting".to_string()]);
+
+        storage.store("metadata-test", &prompt).unwrap();
+
+        // Verify the file content includes YAML front matter
+        let file_path = temp_dir.path().join("metadata-test.md");
+        let content = std::fs::read_to_string(&file_path).unwrap();
+        assert!(content.starts_with("---\n"));
+        assert!(content.contains("Hello {{name}}!"));
+    }
+
+    #[test]
+    fn test_file_storage_store_creates_nested_dirs() {
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let nested_path = temp_dir.path().join("deep").join("nested").join("dir");
+        let mut storage = FileStorage::new(&nested_path);
+
+        let prompt = Prompt::new("test", "Template");
+        storage.store("test", &prompt).unwrap();
+
+        assert!(nested_path.join("test.md").exists());
+    }
+
+    #[test]
+    fn test_file_storage_get_file_path() {
+        let storage = FileStorage::new("/base/path");
+        let path = storage.get_file_path("my-prompt");
+        assert_eq!(path, std::path::PathBuf::from("/base/path/my-prompt.md"));
+    }
+
+    #[test]
+    fn test_file_storage_list() {
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let mut storage = FileStorage::new(temp_dir.path());
+
+        storage
+            .store("p1", &Prompt::new("p1", "Template 1"))
+            .unwrap();
+        storage
+            .store("p2", &Prompt::new("p2", "Template 2"))
+            .unwrap();
+
+        let prompts = storage.list().unwrap();
+        assert_eq!(prompts.len(), 2);
+    }
+
+    #[test]
+    fn test_file_storage_search() {
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let mut storage = FileStorage::new(temp_dir.path());
+
+        storage
+            .store("debug-tool", &Prompt::new("debug-tool", "Debug content"))
+            .unwrap();
+        storage
+            .store("format-tool", &Prompt::new("format-tool", "Format content"))
+            .unwrap();
+
+        let results = storage.search("debug").unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "debug-tool");
+    }
 }

@@ -575,4 +575,196 @@ members = [
         // Both paths are now canonicalized, so they should match exactly
         assert_eq!(projects[0].path, root);
     }
+
+    #[test]
+    fn test_detect_projects_default_max_depth() {
+        // Exercise the `None` path for max_depth (uses MAX_DEPTH constant)
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path().canonicalize().unwrap();
+
+        fs::write(root.join("Cargo.toml"), "[package]\nname = \"test\"").unwrap();
+
+        let projects = detect_projects(&root, None).unwrap();
+        assert_eq!(projects.len(), 1);
+        assert_eq!(projects[0].project_type, ProjectType::Rust);
+    }
+
+    #[test]
+    fn test_detect_projects_max_depth_zero_stops_recursion() {
+        // With max_depth=0, only the root directory itself is checked.
+        // Subdirectories should not be visited.
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path().canonicalize().unwrap();
+
+        // Root has no project marker
+        // But a subdirectory does
+        let sub = root.join("child");
+        fs::create_dir(&sub).unwrap();
+        fs::write(sub.join("Cargo.toml"), "[package]\nname = \"child\"").unwrap();
+
+        let projects = detect_projects(&root, Some(0)).unwrap();
+        // depth 0 processes root only; recursion into child is at depth 1 which exceeds max_depth=0
+        assert!(
+            projects.is_empty(),
+            "max_depth=0 should not recurse into subdirectories, found {:?}",
+            projects
+        );
+    }
+
+    #[test]
+    fn test_detect_projects_canonicalize_error() {
+        // Passing a nonexistent path should trigger the canonicalize error branch
+        let result = detect_projects(Path::new("/nonexistent/path/that/does/not/exist"), Some(1));
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .contains("Failed to canonicalize root path"));
+    }
+
+    #[test]
+    fn test_detect_csharp_project_wildcard() {
+        // Exercise the wildcard matching branch in check_project_type
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path().canonicalize().unwrap();
+
+        fs::write(root.join("MyApp.csproj"), "<Project></Project>").unwrap();
+
+        let projects = detect_projects(&root, Some(1)).unwrap();
+        assert!(
+            projects
+                .iter()
+                .any(|p| p.project_type == ProjectType::CSharp),
+            "Should detect C# project via *.csproj wildcard"
+        );
+        let csharp = projects
+            .iter()
+            .find(|p| p.project_type == ProjectType::CSharp)
+            .unwrap();
+        assert!(
+            csharp.marker_files.iter().any(|f| f.ends_with(".csproj")),
+            "marker_files should contain the .csproj file"
+        );
+    }
+
+    #[test]
+    fn test_detect_npm_workspace_object_form() {
+        // workspaces value that is neither array nor string (e.g. an object)
+        // should produce an empty members vec
+        let temp_dir = TempDir::new().unwrap();
+        let project_dir = temp_dir.path();
+
+        fs::write(
+            project_dir.join("package.json"),
+            r#"{"name": "root", "workspaces": {"packages": ["a", "b"]}}"#,
+        )
+        .unwrap();
+
+        let result = detect_npm_workspace(project_dir).unwrap();
+        let info = result.expect("should detect workspace even with object form");
+        assert!(info.is_root);
+        assert!(
+            info.members.is_empty(),
+            "object-form workspaces should yield empty members, got {:?}",
+            info.members
+        );
+    }
+
+    #[test]
+    fn test_extract_toml_array_bracket_in_middle_of_line() {
+        // The closing bracket is in the middle of the line (not a suffix),
+        // exercising the rfind(']') branch
+        let content = "members = [\"a\", \"b\"] # some comment\n";
+        let members = extract_toml_array(content, "members");
+        assert_eq!(members, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn test_extract_toml_array_multiline_closing_bracket_suffix() {
+        // Multiline array where the closing line ends exactly with `]`
+        // and has items on the same line — exercises the strip_suffix(']') branch
+        let content = r#"
+[workspace]
+members = [
+    "crate-a",
+    "crate-b", "crate-c"]
+"#;
+        let members = extract_toml_array(content, "members");
+        assert!(
+            members.contains(&"crate-a".to_string()),
+            "should contain crate-a"
+        );
+        assert!(
+            members.contains(&"crate-b".to_string()),
+            "should contain crate-b"
+        );
+        assert!(
+            members.contains(&"crate-c".to_string()),
+            "should contain crate-c"
+        );
+    }
+
+    #[test]
+    fn test_extract_toml_array_multiline_bracket_not_suffix() {
+        // When the closing `]` is present but NOT the last char on the line,
+        // strip_suffix fails and the parser breaks out without extracting
+        // items on that line. This tests the current behavior.
+        let content = r#"
+[workspace]
+members = [
+    "crate-a",
+    "crate-b"] # trailing comment
+"#;
+        let members = extract_toml_array(content, "members");
+        // crate-a is on its own line and gets extracted
+        assert!(
+            members.contains(&"crate-a".to_string()),
+            "should contain crate-a"
+        );
+        // crate-b is on the line with ']' but not as suffix — not extracted
+        assert_eq!(members.len(), 1, "only crate-a should be extracted");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_detect_projects_visited_dirs_skips_symlink_loop() {
+        // Exercise the already-visited early return by creating a symlink cycle
+        use std::os::unix::fs::symlink;
+
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path().canonicalize().unwrap();
+
+        fs::write(root.join("Cargo.toml"), "[package]\nname = \"root\"").unwrap();
+
+        // Create a subdirectory with a symlink back to root
+        let sub = root.join("subdir");
+        fs::create_dir(&sub).unwrap();
+        symlink(&root, sub.join("loop_back")).unwrap();
+
+        // Should not infinite loop; the visited set prevents re-visiting root
+        let projects = detect_projects(&root, Some(5)).unwrap();
+        // Should find at least the root project without getting stuck
+        assert!(
+            !projects.is_empty(),
+            "should detect at least the root project"
+        );
+    }
+
+    #[test]
+    fn test_find_wildcard_match_no_match() {
+        // A directory with no matching files should return None
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path();
+
+        fs::write(root.join("readme.md"), "hello").unwrap();
+
+        let result = find_wildcard_match(root, "*.csproj").unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_find_wildcard_match_unreadable_dir() {
+        // A nonexistent directory should return Ok(None)
+        let result = find_wildcard_match(Path::new("/nonexistent/dir"), "*.csproj").unwrap();
+        assert!(result.is_none());
+    }
 }

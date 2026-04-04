@@ -70,4 +70,23 @@ mod tests {
         let out = eval(&ctx);
         assert!(out.is_empty());
     }
+
+    #[test]
+    fn test_agent_render_output() {
+        let input = StatuslineInput {
+            agent: Some(AgentInfo {
+                name: Some("tester".into()),
+            }),
+            ..Default::default()
+        };
+        let config = StatuslineConfig::default();
+        let ctx = ModuleContext {
+            input: &input,
+            config: &config,
+        };
+        let out = eval(&ctx);
+        let rendered = out.render();
+        assert!(rendered.contains("tester"));
+        assert!(rendered.contains("\x1b["));
+    }
 }

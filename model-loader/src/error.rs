@@ -183,4 +183,249 @@ mod tests {
         assert!(friendly.contains("🔧"));
         assert!(friendly.contains("test error"));
     }
+
+    #[test]
+    fn test_error_display_all_variants() {
+        // Verify Display output for each variant
+        let cases: Vec<(ModelError, &str)> = vec![
+            (
+                ModelError::LoadingFailed("load err".into()),
+                "model loading failed: load err",
+            ),
+            (
+                ModelError::NotFound("not found err".into()),
+                "model not found: not found err",
+            ),
+            (
+                ModelError::InvalidConfig("config err".into()),
+                "invalid model config: config err",
+            ),
+            (
+                ModelError::InferenceFailed("infer err".into()),
+                "model inference failed: infer err",
+            ),
+            (
+                ModelError::Network("net err".into()),
+                "network error: net err",
+            ),
+            (
+                ModelError::Cache("cache err".into()),
+                "cache error: cache err",
+            ),
+        ];
+
+        for (err, expected) in cases {
+            let display = format!("{}", err);
+            assert_eq!(display, expected, "Display mismatch for {:?}", err);
+        }
+
+        // Io variant wraps std::io::Error
+        let io_err = ModelError::Io(io::Error::other("disk full"));
+        let display = format!("{}", io_err);
+        assert!(display.contains("disk full"));
+        assert!(display.starts_with("i/o error:"));
+    }
+
+    #[test]
+    fn test_error_retriability_all_variants() {
+        // Retriable: Network, Io, LoadingFailed
+        assert!(ModelError::Network("n".into()).is_retriable());
+        assert!(ModelError::LoadingFailed("l".into()).is_retriable());
+        assert!(ModelError::Io(io::Error::other("x")).is_retriable());
+
+        // Not retriable: NotFound, InvalidConfig, InferenceFailed, Cache
+        assert!(!ModelError::NotFound("n".into()).is_retriable());
+        assert!(!ModelError::InvalidConfig("c".into()).is_retriable());
+        assert!(!ModelError::InferenceFailed("i".into()).is_retriable());
+        assert!(!ModelError::Cache("c".into()).is_retriable());
+    }
+
+    #[test]
+    fn test_category_all_variants() {
+        assert_eq!(
+            ModelError::LoadingFailed("x".into()).category(),
+            ErrorCategory::System
+        );
+        assert_eq!(
+            ModelError::NotFound("x".into()).category(),
+            ErrorCategory::User
+        );
+        assert_eq!(
+            ModelError::InvalidConfig("x".into()).category(),
+            ErrorCategory::User
+        );
+        assert_eq!(
+            ModelError::InferenceFailed("x".into()).category(),
+            ErrorCategory::System
+        );
+        assert_eq!(
+            ModelError::Network("x".into()).category(),
+            ErrorCategory::External
+        );
+        assert_eq!(
+            ModelError::Io(io::Error::other("x")).category(),
+            ErrorCategory::System
+        );
+        assert_eq!(
+            ModelError::Cache("x".into()).category(),
+            ErrorCategory::System
+        );
+    }
+
+    #[test]
+    fn test_error_code_all_variants() {
+        assert_eq!(
+            ModelError::LoadingFailed("x".into()).error_code(),
+            "MODEL_LOADING_FAILED"
+        );
+        assert_eq!(
+            ModelError::NotFound("x".into()).error_code(),
+            "MODEL_NOT_FOUND"
+        );
+        assert_eq!(
+            ModelError::InvalidConfig("x".into()).error_code(),
+            "MODEL_INVALID_CONFIG"
+        );
+        assert_eq!(
+            ModelError::InferenceFailed("x".into()).error_code(),
+            "MODEL_INFERENCE_FAILED"
+        );
+        assert_eq!(
+            ModelError::Network("x".into()).error_code(),
+            "MODEL_NETWORK_ERROR"
+        );
+        assert_eq!(
+            ModelError::Io(io::Error::other("x")).error_code(),
+            "MODEL_IO_ERROR"
+        );
+        assert_eq!(
+            ModelError::Cache("x".into()).error_code(),
+            "MODEL_CACHE_ERROR"
+        );
+    }
+
+    #[test]
+    fn test_user_friendly_message_all_variants() {
+        let loading = ModelError::LoadingFailed("bad load".into()).user_friendly_message();
+        assert!(loading.contains("bad load"));
+        assert!(loading.contains("🔧"));
+
+        let not_found = ModelError::NotFound("missing".into()).user_friendly_message();
+        assert!(not_found.contains("missing"));
+        assert!(not_found.contains("📁"));
+
+        let config = ModelError::InvalidConfig("bad cfg".into()).user_friendly_message();
+        assert!(config.contains("bad cfg"));
+        assert!(config.contains("⚙️"));
+
+        let inference = ModelError::InferenceFailed("inf err".into()).user_friendly_message();
+        assert!(inference.contains("inf err"));
+        assert!(inference.contains("🦾"));
+
+        let network = ModelError::Network("net err".into()).user_friendly_message();
+        assert!(network.contains("net err"));
+        assert!(network.contains("🌐"));
+
+        let io_msg = ModelError::Io(io::Error::other("io err")).user_friendly_message();
+        assert!(io_msg.contains("io err"));
+        assert!(io_msg.contains("💾"));
+
+        let cache = ModelError::Cache("cache err".into()).user_friendly_message();
+        assert!(cache.contains("cache err"));
+        assert!(cache.contains("💽"));
+    }
+
+    #[test]
+    fn test_custom_retry_delay_rate_limit() {
+        // Rate-limited network error should get custom delay
+        let rate_err = ModelError::Network("429 rate limit exceeded".into());
+        let delay = rate_err.custom_retry_delay(0);
+        assert_eq!(delay, Some(Duration::from_secs(60))); // 1 minute for attempt 0
+
+        let delay = rate_err.custom_retry_delay(1);
+        assert_eq!(delay, Some(Duration::from_secs(120))); // 2 minutes for attempt 1
+
+        let delay = rate_err.custom_retry_delay(2);
+        assert_eq!(delay, Some(Duration::from_secs(180))); // 3 minutes for attempt 2
+    }
+
+    #[test]
+    fn test_custom_retry_delay_non_rate_limit() {
+        // Non-rate-limit errors should return None (use default backoff)
+        assert_eq!(
+            ModelError::Network("500 server error".into()).custom_retry_delay(0),
+            None
+        );
+        assert_eq!(
+            ModelError::LoadingFailed("x".into()).custom_retry_delay(0),
+            None
+        );
+        assert_eq!(ModelError::NotFound("x".into()).custom_retry_delay(0), None);
+        assert_eq!(
+            ModelError::InvalidConfig("x".into()).custom_retry_delay(0),
+            None
+        );
+        assert_eq!(
+            ModelError::InferenceFailed("x".into()).custom_retry_delay(0),
+            None
+        );
+        assert_eq!(
+            ModelError::Io(io::Error::other("x")).custom_retry_delay(0),
+            None
+        );
+        assert_eq!(ModelError::Cache("x".into()).custom_retry_delay(0), None);
+    }
+
+    #[test]
+    fn test_should_stop_retrying_network_auth_errors() {
+        // 401 Unauthorized
+        assert!(ModelError::Network("401 unauthorized".into()).should_stop_retrying(0));
+        // 403 Forbidden
+        assert!(ModelError::Network("403 forbidden".into()).should_stop_retrying(0));
+        // Normal network error should not stop
+        assert!(!ModelError::Network("500 server error".into()).should_stop_retrying(0));
+        assert!(!ModelError::Network("connection timeout".into()).should_stop_retrying(0));
+    }
+
+    #[test]
+    fn test_should_stop_retrying_all_variants() {
+        // NotFound always stops
+        assert!(ModelError::NotFound("x".into()).should_stop_retrying(0));
+        // InvalidConfig always stops
+        assert!(ModelError::InvalidConfig("x".into()).should_stop_retrying(0));
+        // Others don't stop
+        assert!(!ModelError::LoadingFailed("x".into()).should_stop_retrying(0));
+        assert!(!ModelError::InferenceFailed("x".into()).should_stop_retrying(0));
+        assert!(!ModelError::Io(io::Error::other("x")).should_stop_retrying(0));
+        assert!(!ModelError::Cache("x".into()).should_stop_retrying(0));
+    }
+
+    #[test]
+    fn test_model_error_new() {
+        // Test with &str
+        let err = ModelError::new("hello");
+        assert!(matches!(err, ModelError::LoadingFailed(ref s) if s == "hello"));
+
+        // Test with String
+        let err = ModelError::new(String::from("world"));
+        assert!(matches!(err, ModelError::LoadingFailed(ref s) if s == "world"));
+    }
+
+    #[test]
+    fn test_model_error_debug() {
+        // Ensure Debug is implemented for all variants
+        let errors: Vec<ModelError> = vec![
+            ModelError::LoadingFailed("a".into()),
+            ModelError::NotFound("b".into()),
+            ModelError::InvalidConfig("c".into()),
+            ModelError::InferenceFailed("d".into()),
+            ModelError::Network("e".into()),
+            ModelError::Io(io::Error::other("f")),
+            ModelError::Cache("g".into()),
+        ];
+        for err in errors {
+            let debug_str = format!("{:?}", err);
+            assert!(!debug_str.is_empty());
+        }
+    }
 }

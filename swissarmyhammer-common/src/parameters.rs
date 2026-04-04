@@ -3033,7 +3033,7 @@ mod tests {
 
     #[test]
     fn test_error_message_enhancer_default() {
-        let enhancer = ErrorMessageEnhancer::default();
+        let enhancer = ErrorMessageEnhancer;
         // Just confirm it works (exercises Default impl)
         let error = ParameterError::ValidationFailed {
             message: "test".to_string(),
@@ -3056,7 +3056,7 @@ mod tests {
 
     #[test]
     fn test_parameter_validator_default() {
-        let validator = ParameterValidator::default();
+        let validator = ParameterValidator;
         let param = Parameter::new("t", "T", ParameterType::String);
         let val = serde_json::json!("hello");
         assert!(validator.validate_parameter(&param, &val).is_ok());
@@ -3064,7 +3064,7 @@ mod tests {
 
     #[test]
     fn test_default_parameter_resolver_default() {
-        let resolver = DefaultParameterResolver::default();
+        let resolver = DefaultParameterResolver;
         let params = vec![];
         let cli_args = HashMap::new();
         let result = resolver.resolve_parameters(&params, &cli_args, false);

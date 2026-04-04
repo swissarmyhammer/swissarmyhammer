@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: '9280'
+position_column: done
+position_ordinal: ffffffffffffffffffb780
 title: '100% coverage: llama-common'
 ---
-Coverage: 0% (0/186 lines) — 186 lines to cover\n\nTop uncovered files:\n- src/retry.rs (91 uncov) — retry logic\n- src/error.rs (37 uncov) — error types\n- src/async_utils.rs (29 uncov) — async utilities #coverage-gap
+Top uncovered files:\n- src/lib.rs — main library\n- src/types.rs — types #coverage-gap\n\n**CONSTRAINT: ONLY add tests. Do NOT modify, refactor, delete, or otherwise change the code under test. The production code must remain exactly as-is. Do NOT put line numbers or line counts in comments or ticket descriptions — lines change constantly and these go stale immediately. Run coverage to get current numbers.**

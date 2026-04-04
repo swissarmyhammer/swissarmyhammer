@@ -2156,15 +2156,12 @@ mod tests {
             )
             .await;
         // The call should not return "Unknown tool" error
-        match &result {
-            Err(e) => {
-                let msg = format!("{:?}", e);
-                assert!(
-                    !msg.contains("Unknown tool"),
-                    "files tool should be available on validator"
-                );
-            }
-            Ok(_) => {} // any ok result is fine
+        if let Err(e) = &result {
+            let msg = format!("{:?}", e);
+            assert!(
+                !msg.contains("Unknown tool"),
+                "files tool should be available on validator"
+            );
         }
 
         // Should NOT be able to execute non-validator tools
@@ -2372,6 +2369,6 @@ mod tests {
         let server = McpServer::new(PromptLibrary::default()).await.unwrap();
         let registry = server.get_tool_registry();
         let tools = registry.read().await;
-        assert!(tools.len() > 0, "Registry should have tools");
+        assert!(!tools.is_empty(), "Registry should have tools");
     }
 }

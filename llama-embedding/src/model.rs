@@ -755,4 +755,272 @@ mod tests {
 
     #[test]
     fn test_integration_coverage_documented() {}
+
+    // ── ensure_context error paths ──────────────────────────────────────
+
+    #[tokio::test]
+    #[serial]
+    async fn test_ensure_context_no_model() {
+        // ensure_context should fail when model is None.
+        let backend = get_global_backend().expect("Backend init");
+        let config = EmbeddingConfig::default();
+        let mut inner = Inner {
+            model: None,
+            context: None,
+            metadata: None,
+            context_size: 0,
+        };
+        let result = ensure_context(&backend, &config, &mut inner);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, EmbeddingError::ModelNotLoaded));
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_ensure_context_already_set() {
+        // When context is already Some, ensure_context should return Ok immediately.
+        // We can't create a real LlamaContext, but we test the early-return branch
+        // indirectly: calling embed_text twice would reuse context on second call.
+        // The explicit check: inner.context.is_some() returns Ok.
+        // Since we can't mock LlamaContext, we verify through embed_impl behavior.
+        let config = EmbeddingConfig::default();
+        let model = EmbeddingModel::new(config).await.unwrap();
+        // Without load, context is None and model is None -> error
+        let result = model.embed_impl("test").await;
+        assert!(result.is_err());
+    }
+
+    // ── default_model_params tests ──────────────────────────────────────
+
+    #[test]
+    fn test_default_model_params_no_env() {
+        // Without LLAMA_N_GPU_LAYERS, should use i32::MAX as default.
+        std::env::remove_var("LLAMA_N_GPU_LAYERS");
+        let _params = EmbeddingModel::default_model_params();
+        // If we get here without panic, params were created successfully.
+    }
+
+    #[test]
+    fn test_default_model_params_with_env() {
+        // With LLAMA_N_GPU_LAYERS set, should parse the value.
+        std::env::set_var("LLAMA_N_GPU_LAYERS", "16");
+        let _params = EmbeddingModel::default_model_params();
+        std::env::remove_var("LLAMA_N_GPU_LAYERS");
+    }
+
+    #[test]
+    fn test_default_model_params_invalid_env() {
+        // With invalid LLAMA_N_GPU_LAYERS, should fall back to default.
+        std::env::set_var("LLAMA_N_GPU_LAYERS", "not_a_number");
+        let _params = EmbeddingModel::default_model_params();
+        std::env::remove_var("LLAMA_N_GPU_LAYERS");
+    }
+
+    // ── set_logging_suppression tests ────────────────────────────────────
+
+    #[test]
+    #[serial]
+    fn test_set_logging_suppression_enabled() {
+        // Suppressing logging should not panic.
+        set_logging_suppression(true);
+    }
+
+    #[test]
+    #[serial]
+    fn test_set_logging_suppression_disabled() {
+        // Restoring default logging should not panic.
+        set_logging_suppression(false);
+    }
+
+    #[test]
+    #[serial]
+    fn test_set_logging_suppression_roundtrip() {
+        // Toggling suppression back and forth should be safe.
+        set_logging_suppression(true);
+        set_logging_suppression(false);
+        set_logging_suppression(true);
+    }
+
+    // ── get_global_backend tests ─────────────────────────────────────────
+
+    #[tokio::test]
+    #[serial]
+    async fn test_global_backend_returns_same_instance() {
+        // get_global_backend should return the same Arc each call.
+        let b1 = get_global_backend().expect("Backend init");
+        let b2 = get_global_backend().expect("Backend init");
+        assert!(Arc::ptr_eq(&b1, &b2));
+    }
+
+    // ── null_log_callback test ──────────────────────────────────────────
+
+    #[test]
+    fn test_null_log_callback_does_not_panic() {
+        // The null log callback should silently ignore all inputs.
+        null_log_callback(0, std::ptr::null(), std::ptr::null_mut());
+        null_log_callback(3, std::ptr::null(), std::ptr::null_mut());
+    }
+
+    // ── EmbeddingModel trait method delegation ──────────────────────────
+
+    #[tokio::test]
+    #[serial]
+    async fn test_trait_load_without_model_returns_error() {
+        // TextEmbedder::load should propagate the internal error.
+        let config = EmbeddingConfig::default();
+        let model = EmbeddingModel::new(config).await.unwrap();
+        // Load with default HuggingFace source will fail in test env (no network/model)
+        // but should not panic.
+        let _result = model.load().await;
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_trait_embed_text_empty_string() {
+        // TextEmbedder::embed_text with empty string should return error.
+        let config = EmbeddingConfig::default();
+        let model = EmbeddingModel::new(config).await.unwrap();
+        let result = model.embed_text("").await;
+        assert!(result.is_err());
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(
+            err_msg.to_lowercase().contains("empty"),
+            "Expected empty text error, got: {}",
+            err_msg
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_trait_is_loaded_delegates() {
+        // TextEmbedder::is_loaded should delegate to is_loaded_impl.
+        let config = EmbeddingConfig::default();
+        let model = EmbeddingModel::new(config).await.unwrap();
+        let embedder: &dyn TextEmbedder = &model;
+        assert_eq!(embedder.is_loaded(), model.is_loaded_impl());
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_trait_embedding_dimension_delegates() {
+        // TextEmbedder::embedding_dimension should delegate to embedding_dimension_impl.
+        let config = EmbeddingConfig::default();
+        let model = EmbeddingModel::new(config).await.unwrap();
+        let embedder: &dyn TextEmbedder = &model;
+        assert_eq!(
+            embedder.embedding_dimension(),
+            model.embedding_dimension_impl()
+        );
+    }
+
+    // ── Config stored on model ──────────────────────────────────────────
+
+    #[tokio::test]
+    #[serial]
+    async fn test_config_normalize_embeddings_stored() {
+        // The normalize_embeddings flag should be preserved on the model.
+        let config = EmbeddingConfig {
+            normalize_embeddings: true,
+            ..EmbeddingConfig::default()
+        };
+        let model = EmbeddingModel::new(config).await.unwrap();
+        assert!(model.config.normalize_embeddings);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_config_debug_stored() {
+        // The debug flag should be preserved on the model.
+        let config = EmbeddingConfig {
+            debug: true,
+            ..EmbeddingConfig::default()
+        };
+        let model = EmbeddingModel::new(config).await.unwrap();
+        assert!(model.config.debug);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_model_source_huggingface_stored() {
+        // HuggingFace source should be preserved on the model config.
+        let config = EmbeddingConfig {
+            model_source: ModelSource::HuggingFace {
+                repo: "custom/model".to_string(),
+                filename: Some("custom.gguf".to_string()),
+                folder: None,
+            },
+            ..EmbeddingConfig::default()
+        };
+        let model = EmbeddingModel::new(config).await.unwrap();
+        match &model.config.model_source {
+            ModelSource::HuggingFace { repo, filename, .. } => {
+                assert_eq!(repo, "custom/model");
+                assert_eq!(filename.as_deref(), Some("custom.gguf"));
+            }
+            _ => panic!("Expected HuggingFace source"),
+        }
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_model_source_local_stored() {
+        // Local source should be preserved on the model config.
+        let config = EmbeddingConfig {
+            model_source: ModelSource::Local {
+                folder: PathBuf::from("/tmp/models"),
+                filename: Some("test.gguf".to_string()),
+            },
+            ..EmbeddingConfig::default()
+        };
+        let model = EmbeddingModel::new(config).await.unwrap();
+        match &model.config.model_source {
+            ModelSource::Local { folder, filename } => {
+                assert_eq!(folder, &PathBuf::from("/tmp/models"));
+                assert_eq!(filename.as_deref(), Some("test.gguf"));
+            }
+            _ => panic!("Expected Local source"),
+        }
+    }
+
+    // ── Inner struct default state ──────────────────────────────────────
+
+    #[test]
+    fn test_inner_default_state() {
+        // Inner should be constructed with all None/zero values.
+        let inner = Inner {
+            model: None,
+            context: None,
+            metadata: None,
+            context_size: 0,
+        };
+        assert!(inner.model.is_none());
+        assert!(inner.context.is_none());
+        assert!(inner.metadata.is_none());
+        assert_eq!(inner.context_size, 0);
+    }
+
+    // ── embed_impl error paths ──────────────────────────────────────────
+
+    #[tokio::test]
+    #[serial]
+    async fn test_embed_impl_empty_text() {
+        // embed_impl should reject empty text before touching the model.
+        let config = EmbeddingConfig::default();
+        let model = EmbeddingModel::new(config).await.unwrap();
+        let result = model.embed_impl("").await;
+        assert!(result.is_err());
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(err_msg.to_lowercase().contains("empty"));
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_embed_impl_no_model_loaded() {
+        // embed_impl should fail when model is not loaded.
+        let config = EmbeddingConfig::default();
+        let model = EmbeddingModel::new(config).await.unwrap();
+        let result = model.embed_impl("some text").await;
+        assert!(result.is_err());
+    }
 }

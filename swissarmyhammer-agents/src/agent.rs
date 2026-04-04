@@ -88,6 +88,8 @@ pub struct Agent {
     pub background: bool,
     /// Arbitrary metadata key-value pairs
     pub metadata: HashMap<String, String>,
+    /// Skills to preload when this agent is activated
+    pub skills: Vec<String>,
     /// The full AGENT.md body (system prompt instructions)
     pub instructions: String,
     /// Source path on disk (None for builtin)

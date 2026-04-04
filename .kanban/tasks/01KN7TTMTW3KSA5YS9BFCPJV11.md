@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: 8f80
+position_column: done
+position_ordinal: ffffffffffffffffffd280
 title: '100% coverage: avp-common'
 ---
-Coverage: 0% (0/585 lines) — 585 lines to cover\n\nTop uncovered files:\n- src/strategy/claude/input.rs (116 uncov) — Claude strategy input\n- src/validator/parser.rs (112 uncov) — validation parser\n- src/validator/executor.rs (90 uncov) — validation executor\n- src/chain/links/validator_executor.rs (76 uncov)\n- src/chain/executor.rs (54 uncov) #coverage-gap
+Top uncovered files:\n- src/strategy/claude/input.rs — Claude strategy input\n- src/validator/parser.rs — validation parser\n- src/validator/executor.rs — validation executor\n- src/chain/links/validator_executor.rs — validator executor link\n- src/chain/executor.rs — chain executor #coverage-gap\n\n**CONSTRAINT: ONLY add tests. Do NOT modify, refactor, delete, or otherwise change the code under test. The production code must remain exactly as-is. Do NOT put line numbers or line counts in comments or ticket descriptions — lines change constantly and these go stale immediately. Run coverage to get current numbers.**

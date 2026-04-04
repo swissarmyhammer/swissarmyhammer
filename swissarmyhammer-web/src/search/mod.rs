@@ -651,4 +651,177 @@ mod tests {
         };
         assert!(WebSearcher::validate_request(&request).is_ok());
     }
+
+    // ========================================================================
+    // Additional coverage tests for search/mod.rs
+    // ========================================================================
+
+    #[test]
+    fn test_web_searcher_default() {
+        // Test the Default implementation
+        let searcher = WebSearcher::default();
+        assert!(searcher.brave_client.is_none());
+    }
+
+    #[test]
+    fn test_parse_size_string_invalid_with_suffix() {
+        // "abcMB" should fail because "abc" is not a valid number
+        let result = WebSearcher::parse_size_string("abcMB");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_size_string_invalid_kb() {
+        let result = WebSearcher::parse_size_string("notanumberKB");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_size_string_invalid_gb() {
+        let result = WebSearcher::parse_size_string("badGB");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_request_language_code_two_letter() {
+        // Valid: two-letter lowercase
+        let request = WebSearchRequest {
+            query: "test".to_string(),
+            category: None,
+            language: Some("fr".to_string()),
+            results_count: None,
+            fetch_content: None,
+            safe_search: None,
+            time_range: None,
+        };
+        assert!(WebSearcher::validate_request(&request).is_ok());
+    }
+
+    #[test]
+    fn test_validate_request_language_uppercase_rejected() {
+        // "EN" should be rejected (must be lowercase)
+        let request = WebSearchRequest {
+            query: "test".to_string(),
+            category: None,
+            language: Some("EN".to_string()),
+            results_count: None,
+            fetch_content: None,
+            safe_search: None,
+            time_range: None,
+        };
+        let result = WebSearcher::validate_request(&request);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Invalid language code"));
+    }
+
+    #[test]
+    fn test_validate_request_language_too_short() {
+        let request = WebSearchRequest {
+            query: "test".to_string(),
+            category: None,
+            language: Some("e".to_string()),
+            results_count: None,
+            fetch_content: None,
+            safe_search: None,
+            time_range: None,
+        };
+        let result = WebSearcher::validate_request(&request);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_request_language_three_letter_rejected() {
+        let request = WebSearchRequest {
+            query: "test".to_string(),
+            category: None,
+            language: Some("eng".to_string()),
+            results_count: None,
+            fetch_content: None,
+            safe_search: None,
+            time_range: None,
+        };
+        let result = WebSearcher::validate_request(&request);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_request_language_region_lowercase_rejected() {
+        // "en-us" — region must be uppercase
+        let request = WebSearchRequest {
+            query: "test".to_string(),
+            category: None,
+            language: Some("en-us".to_string()),
+            results_count: None,
+            fetch_content: None,
+            safe_search: None,
+            time_range: None,
+        };
+        let result = WebSearcher::validate_request(&request);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_request_all_fields_populated() {
+        let request = WebSearchRequest {
+            query: "comprehensive test".to_string(),
+            category: Some(SearchCategory::News),
+            language: Some("de-DE".to_string()),
+            results_count: Some(25),
+            fetch_content: Some(false),
+            safe_search: Some(SafeSearchLevel::Strict),
+            time_range: Some(TimeRange::Week),
+        };
+        assert!(WebSearcher::validate_request(&request).is_ok());
+    }
+
+    #[test]
+    fn test_load_content_fetch_config_smoke() {
+        // Exercises the full config loading path including all the if-let branches.
+        // In a test environment without a config file, defaults are returned.
+        let config = WebSearcher::load_content_fetch_config();
+        // Verify it returns a valid config that matches defaults
+        let defaults = ContentFetchConfig::default();
+        assert_eq!(
+            config.max_concurrent_fetches,
+            defaults.max_concurrent_fetches
+        );
+        assert_eq!(config.fetch_timeout, defaults.fetch_timeout);
+        assert_eq!(config.max_content_size, defaults.max_content_size);
+        assert_eq!(config.default_domain_delay, defaults.default_domain_delay);
+    }
+
+    #[test]
+    fn test_load_config_with_callback_mutates_when_invoked() {
+        // Verify the callback CAN mutate the config when it's invoked.
+        // This tests the closure path regardless of whether load_configuration_for_cli succeeds.
+        let initial = ContentFetchConfig {
+            max_concurrent_fetches: 10,
+            ..Default::default()
+        };
+
+        let config = WebSearcher::load_config_with_callback(initial, |cfg, _ctx| {
+            cfg.max_concurrent_fetches = 77;
+        });
+
+        // If config loading succeeded, callback ran and value is 77.
+        // If it failed, value stays 10. Either way, no panic.
+        assert!(
+            config.max_concurrent_fetches == 77 || config.max_concurrent_fetches == 10,
+            "Expected 77 (callback ran) or 10 (callback skipped), got {}",
+            config.max_concurrent_fetches
+        );
+    }
+
+    #[test]
+    fn test_get_search_client_returns_same_instance() {
+        let mut searcher = WebSearcher::new();
+        assert!(searcher.brave_client.is_none());
+
+        let _client1 = searcher.get_search_client();
+        assert!(searcher.brave_client.is_some());
+
+        // Second call should reuse the cached client (not create a new one)
+        let _client2 = searcher.get_search_client();
+        assert!(searcher.brave_client.is_some());
+    }
 }

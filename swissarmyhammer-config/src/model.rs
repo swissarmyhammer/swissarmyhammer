@@ -4619,7 +4619,7 @@ quiet: false
         assert!(value.is_mapping());
         let map = value.as_mapping().unwrap();
         assert_eq!(
-            map.get(&serde_yaml_ng::Value::String("model".to_string())),
+            map.get(serde_yaml_ng::Value::String("model".to_string())),
             Some(&serde_yaml_ng::Value::String("claude-code".to_string()))
         );
     }
@@ -4741,7 +4741,7 @@ quiet: false
 
         let map = config.as_mapping().unwrap();
         assert_eq!(
-            map.get(&serde_yaml_ng::Value::String("model".to_string())),
+            map.get(serde_yaml_ng::Value::String("model".to_string())),
             Some(&serde_yaml_ng::Value::String("llama-agent".to_string()))
         );
     }
@@ -4755,7 +4755,7 @@ quiet: false
 
         let map = config.as_mapping().unwrap();
         assert_eq!(
-            map.get(&serde_yaml_ng::Value::String("model".to_string())),
+            map.get(serde_yaml_ng::Value::String("model".to_string())),
             Some(&serde_yaml_ng::Value::String("second-agent".to_string()))
         );
     }
@@ -4788,11 +4788,11 @@ quiet: false
 
         let loaded_map = loaded_value.as_mapping().unwrap();
         assert_eq!(
-            loaded_map.get(&serde_yaml_ng::Value::String("model".to_string())),
+            loaded_map.get(serde_yaml_ng::Value::String("model".to_string())),
             Some(&serde_yaml_ng::Value::String("claude-code".to_string()))
         );
         assert_eq!(
-            loaded_map.get(&serde_yaml_ng::Value::String("quiet".to_string())),
+            loaded_map.get(serde_yaml_ng::Value::String("quiet".to_string())),
             Some(&serde_yaml_ng::Value::Bool(true))
         );
     }
@@ -5043,5 +5043,524 @@ quiet: false
             Some(std::ffi::OsStr::new("sah.yaml")),
             "Should prefer YAML config over TOML"
         );
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn test_for_small_model_deprecated_alias() {
+        // Exercises the deprecated `for_small_model()` alias for coverage.
+        let config = LlamaAgentConfig::for_small_model();
+        let testing_config = LlamaAgentConfig::for_testing();
+        // Both should produce equivalent configurations
+        assert_eq!(config.model.batch_size, testing_config.model.batch_size);
+        assert_eq!(
+            config.mcp_server.timeout_seconds,
+            testing_config.mcp_server.timeout_seconds
+        );
+    }
+
+    #[test]
+    fn test_gitroot_display_emoji() {
+        assert_eq!(ModelConfigSource::GitRoot.display_emoji(), "🔧 GitRoot");
+    }
+
+    #[test]
+    fn test_gitroot_source_serialization() {
+        let gitroot = ModelConfigSource::GitRoot;
+        let json = serde_json::to_string(&gitroot).expect("Failed to serialize GitRoot");
+        assert_eq!(json, "\"git-root\"");
+
+        let deserialized: ModelConfigSource =
+            serde_json::from_str(&json).expect("Failed to deserialize GitRoot");
+        assert_eq!(deserialized, ModelConfigSource::GitRoot);
+    }
+
+    #[test]
+    fn test_model_config_deserialize_missing_executor_field() {
+        // Exercises the error path when neither `executor` nor `executors` is present.
+        let yaml = "quiet: true\n";
+        let result = serde_yaml_ng::from_str::<ModelConfig>(yaml);
+        assert!(result.is_err(), "Should fail when no executor field");
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(
+            err_msg.contains("executor"),
+            "Error should mention executor: {}",
+            err_msg
+        );
+    }
+
+    #[test]
+    fn test_model_config_deserialize_executors_list() {
+        // Exercises the `executors` list deserialization path.
+        let yaml = r#"
+executors:
+  - platform: macos-arm64
+    executor:
+      type: claude-code
+      config: {}
+  - executor:
+      type: claude-code
+      config: {}
+quiet: true
+"#;
+        let config: ModelConfig =
+            serde_yaml_ng::from_str(yaml).expect("Should parse executors list");
+        assert_eq!(config.executors.len(), 2);
+        assert!(config.quiet);
+        assert_eq!(config.executors[0].platform, Some(Platform::MacosArm64));
+        assert_eq!(config.executors[1].platform, None);
+    }
+
+    #[test]
+    fn test_model_config_deserialize_unknown_fields_ignored() {
+        // Exercises the `_: IgnoredAny` path in the custom deserializer.
+        let yaml = r#"
+executor:
+  type: claude-code
+  config: {}
+quiet: false
+unknown_field: "should be ignored"
+another_unknown: 42
+"#;
+        let config: ModelConfig =
+            serde_yaml_ng::from_str(yaml).expect("Should parse despite unknown fields");
+        assert_eq!(config.executor_type(), ModelExecutorType::ClaudeCode);
+        assert!(!config.quiet);
+    }
+
+    #[test]
+    fn test_model_config_select_executor_no_match() {
+        // Exercises `select_executor()` returning `None` when all entries have
+        // non-matching platform constraints.
+        let config = ModelConfig {
+            executors: vec![ExecutorEntry {
+                // Use a platform that definitely doesn't match current
+                platform: Some(Platform::LinuxX86_64),
+                executor: ModelExecutorConfig::ClaudeCode(ClaudeCodeConfig::default()),
+            }],
+            quiet: false,
+        };
+        // On macOS ARM this won't match LinuxX86_64
+        // We can't guarantee which platform we're on, so just test the method works
+        let _result = config.select_executor();
+    }
+
+    #[test]
+    fn test_platform_serialization_roundtrip() {
+        // Exercises Platform serialization/deserialization for all variants.
+        let platforms = vec![
+            Platform::MacosArm64,
+            Platform::MacosX86_64,
+            Platform::LinuxX86_64,
+            Platform::LinuxAarch64,
+        ];
+        for platform in platforms {
+            let json = serde_json::to_string(&platform)
+                .unwrap_or_else(|_| panic!("Failed to serialize {:?}", platform));
+            let deserialized: Platform = serde_json::from_str(&json)
+                .unwrap_or_else(|_| panic!("Failed to deserialize {:?}", platform));
+            assert_eq!(platform, deserialized);
+        }
+    }
+
+    #[test]
+    fn test_platform_current() {
+        // Exercises `Platform::current()` — just verifies it doesn't panic.
+        let _current = Platform::current();
+    }
+
+    #[test]
+    fn test_repetition_detection_config_default() {
+        let config = RepetitionDetectionConfig::default();
+        assert!(config.enabled);
+        assert!(
+            (config.repetition_penalty - crate::DEFAULT_REPETITION_PENALTY).abs() < f64::EPSILON
+        );
+        assert_eq!(
+            config.repetition_threshold,
+            crate::DEFAULT_REPETITION_THRESHOLD
+        );
+        assert_eq!(config.repetition_window, crate::DEFAULT_REPETITION_WINDOW);
+    }
+
+    #[test]
+    fn test_embedding_model_config_deserialization() {
+        let yaml = r#"
+source: !HuggingFace
+  repo: "test/embedding-model"
+  filename: "model.gguf"
+normalize: true
+max_sequence_length: 512
+"#;
+        let config: EmbeddingModelConfig =
+            serde_yaml_ng::from_str(yaml).expect("Should parse embedding config");
+        assert!(config.normalize);
+        assert_eq!(config.max_sequence_length, Some(512));
+    }
+
+    #[test]
+    fn test_model_error_severity() {
+        use swissarmyhammer_common::{ErrorSeverity, Severity};
+
+        let parse_err = serde_yaml_ng::from_str::<ModelConfig>("invalid: yaml: [unclosed")
+            .expect_err("Should fail to parse");
+        let model_parse_err = ModelError::ParseError(parse_err);
+        assert_eq!(model_parse_err.severity(), ErrorSeverity::Critical);
+
+        let config_err = ModelError::ConfigError("test".to_string());
+        assert_eq!(config_err.severity(), ErrorSeverity::Critical);
+
+        let not_found = ModelError::NotFound("test".to_string());
+        assert_eq!(not_found.severity(), ErrorSeverity::Error);
+
+        let invalid_path = ModelError::InvalidPath(PathBuf::from("/test"));
+        assert_eq!(invalid_path.severity(), ErrorSeverity::Error);
+
+        let io_err = ModelError::IoError(std::io::Error::new(std::io::ErrorKind::NotFound, "test"));
+        assert_eq!(io_err.severity(), ErrorSeverity::Error);
+    }
+
+    #[test]
+    fn test_model_paths_avp() {
+        let paths = ModelPaths::avp();
+        assert_eq!(paths.dir_name, ".avp");
+        assert_eq!(paths.config_filename, "avp.yaml");
+    }
+
+    #[test]
+    fn test_model_paths_sah() {
+        let paths = ModelPaths::sah();
+        assert_eq!(paths.dir_name, ".sah");
+        assert_eq!(paths.config_filename, "sah.yaml");
+    }
+
+    #[test]
+    fn test_executor_type_all_variants() {
+        // Exercises `executor_type()` for all executor types.
+        let claude = ModelConfig::claude_code();
+        assert_eq!(claude.executor_type(), ModelExecutorType::ClaudeCode);
+
+        let llama = ModelConfig::llama_agent(LlamaAgentConfig::for_testing());
+        assert_eq!(llama.executor_type(), ModelExecutorType::LlamaAgent);
+
+        // Test LlamaEmbedding
+        let embedding_config = ModelConfig {
+            executors: vec![ExecutorEntry {
+                platform: None,
+                executor: ModelExecutorConfig::LlamaEmbedding(EmbeddingModelConfig {
+                    source: ModelSource::HuggingFace {
+                        repo: "test/repo".to_string(),
+                        filename: Some("model.gguf".to_string()),
+                        folder: None,
+                    },
+                    normalize: false,
+                    max_sequence_length: None,
+                }),
+            }],
+            quiet: false,
+        };
+        assert_eq!(
+            embedding_config.executor_type(),
+            ModelExecutorType::LlamaEmbedding
+        );
+
+        // Test AneEmbedding
+        let ane_config = ModelConfig {
+            executors: vec![ExecutorEntry {
+                platform: None,
+                executor: ModelExecutorConfig::AneEmbedding(EmbeddingModelConfig {
+                    source: ModelSource::HuggingFace {
+                        repo: "test/repo".to_string(),
+                        filename: Some("model.gguf".to_string()),
+                        folder: None,
+                    },
+                    normalize: true,
+                    max_sequence_length: Some(256),
+                }),
+            }],
+            quiet: false,
+        };
+        assert_eq!(ane_config.executor_type(), ModelExecutorType::AneEmbedding);
+    }
+
+    #[test]
+    fn test_validate_directory_path_empty_coverage() {
+        let result = ModelManager::validate_directory_path(Path::new(""));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_directory_path_too_long_coverage() {
+        let long_path = "a".repeat(5000);
+        let result = ModelManager::validate_directory_path(Path::new(&long_path));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_is_yaml_file() {
+        use tempfile::TempDir;
+        let temp_dir = TempDir::new().unwrap();
+
+        let yaml_file = temp_dir.path().join("test.yaml");
+        std::fs::write(&yaml_file, "key: val").unwrap();
+        assert!(ModelManager::is_yaml_file(&yaml_file));
+
+        let txt_file = temp_dir.path().join("test.txt");
+        std::fs::write(&txt_file, "text").unwrap();
+        assert!(!ModelManager::is_yaml_file(&txt_file));
+
+        // Directory should not count
+        assert!(!ModelManager::is_yaml_file(temp_dir.path()));
+    }
+
+    #[test]
+    fn test_extract_model_name() {
+        let path = PathBuf::from("/some/dir/my-model.yaml");
+        let name = ModelManager::extract_model_name(&path).unwrap();
+        assert_eq!(name, "my-model");
+    }
+
+    #[test]
+    fn test_check_suspicious_patterns_clean() {
+        assert!(ModelManager::check_suspicious_patterns("/normal/path").is_ok());
+    }
+
+    #[test]
+    fn test_is_valid_directory_nonexistent() {
+        assert!(!ModelManager::is_valid_directory(Path::new(
+            "/nonexistent/dir"
+        )));
+    }
+
+    #[test]
+    fn test_is_valid_directory_file() {
+        use tempfile::TempDir;
+        let temp_dir = TempDir::new().unwrap();
+        let file = temp_dir.path().join("afile");
+        std::fs::write(&file, "content").unwrap();
+        assert!(!ModelManager::is_valid_directory(&file));
+    }
+
+    #[test]
+    fn test_check_file_readable_nonexistent() {
+        let result = ModelManager::check_file_readable(Path::new("/nonexistent/file.yaml"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_check_file_readable_directory() {
+        use tempfile::TempDir;
+        let temp_dir = TempDir::new().unwrap();
+        let result = ModelManager::check_file_readable(temp_dir.path());
+        assert!(
+            result.is_err(),
+            "Directory should not be readable as a file"
+        );
+    }
+
+    #[test]
+    fn test_validate_config_file_path_empty() {
+        let result = ModelManager::validate_config_file_path(Path::new(""));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_config_file_path_too_long_coverage() {
+        let long_path = "a".repeat(5000);
+        let result = ModelManager::validate_config_file_path(Path::new(&long_path));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_config_file_path_nonexistent() {
+        // Exercises the non-existent file path branch (just returns the path).
+        let result =
+            ModelManager::validate_config_file_path(Path::new("/tmp/nonexistent_config.yaml"));
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_config_file_path_existing_file() {
+        use tempfile::TempDir;
+        let temp_dir = TempDir::new().unwrap();
+        let file = temp_dir.path().join("config.yaml");
+        std::fs::write(&file, "key: val").unwrap();
+        let result = ModelManager::validate_config_file_path(&file);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_config_file_path_existing_directory() {
+        /// Exercises the branch where an existing path is not a file.
+        use tempfile::TempDir;
+        let temp_dir = TempDir::new().unwrap();
+        let dir = temp_dir.path().join("subdir");
+        std::fs::create_dir(&dir).unwrap();
+        let result = ModelManager::validate_config_file_path(&dir);
+        assert!(
+            result.is_err(),
+            "Directory should fail validation as config file"
+        );
+    }
+
+    #[test]
+    fn test_load_or_create_config_nonexistent() {
+        let result = ModelManager::load_or_create_config(Path::new("/nonexistent/config.yaml"));
+        assert!(result.is_ok());
+        let value = result.unwrap();
+        assert!(
+            value.is_mapping(),
+            "Should return empty mapping for nonexistent file"
+        );
+    }
+
+    #[test]
+    fn test_load_or_create_config_empty_yaml() {
+        /// Exercises the branch where YAML content parses to null.
+        use tempfile::TempDir;
+        let temp_dir = TempDir::new().unwrap();
+        let file = temp_dir.path().join("empty.yaml");
+        std::fs::write(&file, "").unwrap();
+        let result = ModelManager::load_or_create_config(&file);
+        assert!(result.is_ok());
+        let value = result.unwrap();
+        assert!(
+            value.is_mapping(),
+            "Null YAML should be normalized to empty mapping"
+        );
+    }
+
+    #[test]
+    fn test_load_or_create_config_valid_yaml_coverage() {
+        use tempfile::TempDir;
+        let temp_dir = TempDir::new().unwrap();
+        let file = temp_dir.path().join("valid.yaml");
+        std::fs::write(&file, "model: claude-code\n").unwrap();
+        let result = ModelManager::load_or_create_config(&file);
+        assert!(result.is_ok());
+        let value = result.unwrap();
+        assert!(value.is_mapping());
+    }
+
+    #[test]
+    fn test_update_config_with_agent_coverage() {
+        let mut config = serde_yaml_ng::Value::Mapping(Default::default());
+        ModelManager::update_config_with_agent(&mut config, "test-agent").unwrap();
+        let map = config.as_mapping().unwrap();
+        let model_key = serde_yaml_ng::Value::String("model".to_string());
+        assert_eq!(
+            map.get(&model_key),
+            Some(&serde_yaml_ng::Value::String("test-agent".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_save_config_and_round_trip() {
+        use tempfile::TempDir;
+        let temp_dir = TempDir::new().unwrap();
+        let file = temp_dir.path().join("out.yaml");
+
+        let mut mapping = serde_yaml_ng::Mapping::new();
+        mapping.insert(
+            serde_yaml_ng::Value::String("model".to_string()),
+            serde_yaml_ng::Value::String("claude-code".to_string()),
+        );
+        let config = serde_yaml_ng::Value::Mapping(mapping);
+
+        ModelManager::save_config(&file, &config).unwrap();
+        assert!(file.exists());
+
+        let content = std::fs::read_to_string(&file).unwrap();
+        assert!(content.contains("claude-code"));
+    }
+
+    #[test]
+    fn test_check_directory_writable_valid() {
+        use tempfile::TempDir;
+        let temp_dir = TempDir::new().unwrap();
+        assert!(ModelManager::check_directory_writable(temp_dir.path()).is_ok());
+    }
+
+    #[test]
+    fn test_check_directory_writable_file() {
+        /// Exercises the branch where path is not a directory.
+        use tempfile::TempDir;
+        let temp_dir = TempDir::new().unwrap();
+        let file = temp_dir.path().join("afile");
+        std::fs::write(&file, "content").unwrap();
+        let result = ModelManager::check_directory_writable(&file);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_check_directory_writable_nonexistent() {
+        let result = ModelManager::check_directory_writable(Path::new("/nonexistent/dir"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_check_directory_permissions_not_a_directory() {
+        use tempfile::TempDir;
+        let temp_dir = TempDir::new().unwrap();
+        let file = temp_dir.path().join("afile");
+        std::fs::write(&file, "content").unwrap();
+        let result = ModelManager::check_directory_permissions(&file);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_check_directory_permissions_nonexistent() {
+        let result = ModelManager::check_directory_permissions(Path::new("/nonexistent/dir"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_agent_name_security_valid() {
+        assert!(ModelManager::validate_agent_name_security("claude-code").is_ok());
+        assert!(ModelManager::validate_agent_name_security("my-agent-v2").is_ok());
+    }
+
+    #[test]
+    fn test_validate_agent_name_security_empty() {
+        assert!(ModelManager::validate_agent_name_security("").is_err());
+        assert!(ModelManager::validate_agent_name_security("   ").is_err());
+    }
+
+    #[test]
+    fn test_validate_agent_name_security_too_long() {
+        let long_name = "a".repeat(257);
+        assert!(ModelManager::validate_agent_name_security(&long_name).is_err());
+    }
+
+    #[test]
+    fn test_validate_agent_name_security_null_byte() {
+        assert!(ModelManager::validate_agent_name_security("test\0agent").is_err());
+    }
+
+    #[test]
+    fn test_validate_agent_name_security_path_traversal() {
+        assert!(ModelManager::validate_agent_name_security("../etc/passwd").is_err());
+        assert!(ModelManager::validate_agent_name_security("..\\windows").is_err());
+        assert!(ModelManager::validate_agent_name_security("test/slash").is_err());
+        assert!(ModelManager::validate_agent_name_security("test\\backslash").is_err());
+    }
+
+    #[test]
+    fn test_validate_agent_name_security_control_chars() {
+        assert!(ModelManager::validate_agent_name_security("test\nagent").is_err());
+        assert!(ModelManager::validate_agent_name_security("test\tagent").is_err());
+    }
+
+    #[test]
+    fn test_model_config_source_debug_variants() {
+        assert_eq!(format!("{:?}", ModelConfigSource::GitRoot), "GitRoot");
+    }
+
+    #[test]
+    fn test_model_config_source_equality_gitroot() {
+        assert_eq!(ModelConfigSource::GitRoot, ModelConfigSource::GitRoot);
+        assert_ne!(ModelConfigSource::GitRoot, ModelConfigSource::Builtin);
+        assert_ne!(ModelConfigSource::GitRoot, ModelConfigSource::Project);
+        assert_ne!(ModelConfigSource::GitRoot, ModelConfigSource::User);
     }
 }

@@ -497,8 +497,229 @@ pub fn verify_file_system_fixture(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use agent_client_protocol::{
+        AuthenticateRequest, AuthenticateResponse, CancelNotification, ExtNotification,
+        ExtResponse, InitializeResponse, LoadSessionRequest, LoadSessionResponse,
+        NewSessionResponse, PromptRequest, PromptResponse, SetSessionModeRequest,
+        SetSessionModeResponse, StopReason,
+    };
+    use serde_json::json;
+
+    /// Mock agent that supports file system operations via ext_method
+    struct FsMockAgent {
+        /// Whether fs read capability was declared
+        read_enabled: std::sync::atomic::AtomicBool,
+        /// Whether fs write capability was declared
+        write_enabled: std::sync::atomic::AtomicBool,
+        /// Written files (path -> content)
+        written_files: std::sync::Mutex<std::collections::HashMap<String, String>>,
+    }
+
+    impl FsMockAgent {
+        fn new() -> Self {
+            Self {
+                read_enabled: std::sync::atomic::AtomicBool::new(false),
+                write_enabled: std::sync::atomic::AtomicBool::new(false),
+                written_files: std::sync::Mutex::new(std::collections::HashMap::new()),
+            }
+        }
+    }
+
+    #[async_trait::async_trait(?Send)]
+    impl Agent for FsMockAgent {
+        async fn initialize(
+            &self,
+            request: InitializeRequest,
+        ) -> agent_client_protocol::Result<InitializeResponse> {
+            self.read_enabled.store(
+                request.client_capabilities.fs.read_text_file,
+                std::sync::atomic::Ordering::SeqCst,
+            );
+            self.write_enabled.store(
+                request.client_capabilities.fs.write_text_file,
+                std::sync::atomic::Ordering::SeqCst,
+            );
+            Ok(InitializeResponse::new(ProtocolVersion::V1))
+        }
+
+        async fn authenticate(
+            &self,
+            _request: AuthenticateRequest,
+        ) -> agent_client_protocol::Result<AuthenticateResponse> {
+            Ok(AuthenticateResponse::new())
+        }
+
+        async fn new_session(
+            &self,
+            _request: agent_client_protocol::NewSessionRequest,
+        ) -> agent_client_protocol::Result<NewSessionResponse> {
+            Ok(NewSessionResponse::new("fs-test-session"))
+        }
+
+        async fn prompt(
+            &self,
+            _request: PromptRequest,
+        ) -> agent_client_protocol::Result<PromptResponse> {
+            Ok(PromptResponse::new(StopReason::EndTurn))
+        }
+
+        async fn cancel(&self, _request: CancelNotification) -> agent_client_protocol::Result<()> {
+            Ok(())
+        }
+
+        async fn load_session(
+            &self,
+            _request: LoadSessionRequest,
+        ) -> agent_client_protocol::Result<LoadSessionResponse> {
+            Ok(LoadSessionResponse::new())
+        }
+
+        async fn set_session_mode(
+            &self,
+            _request: SetSessionModeRequest,
+        ) -> agent_client_protocol::Result<SetSessionModeResponse> {
+            Ok(SetSessionModeResponse::new())
+        }
+
+        async fn ext_method(
+            &self,
+            request: ExtRequest,
+        ) -> agent_client_protocol::Result<ExtResponse> {
+            let params: serde_json::Value =
+                serde_json::from_str(request.params.get()).unwrap_or_default();
+
+            match &*request.method {
+                "fs/read_text_file" => {
+                    if !self.read_enabled.load(std::sync::atomic::Ordering::SeqCst) {
+                        return Err(agent_client_protocol::Error::invalid_params());
+                    }
+                    let path = params.get("path").and_then(|v| v.as_str()).unwrap_or("");
+                    // Check written files first, then read from disk
+                    let content = {
+                        let files = self.written_files.lock().unwrap();
+                        if let Some(c) = files.get(path) {
+                            c.clone()
+                        } else {
+                            std::fs::read_to_string(path).unwrap_or_default()
+                        }
+                    };
+                    let resp = json!({"content": content});
+                    Ok(ExtResponse::new(Arc::from(
+                        serde_json::value::to_raw_value(&resp).unwrap(),
+                    )))
+                }
+                "fs/write_text_file" => {
+                    if !self.write_enabled.load(std::sync::atomic::Ordering::SeqCst) {
+                        return Err(agent_client_protocol::Error::invalid_params());
+                    }
+                    let path = params
+                        .get("path")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let content = params
+                        .get("content")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    self.written_files.lock().unwrap().insert(path, content);
+                    let resp = json!(null);
+                    Ok(ExtResponse::new(Arc::from(
+                        serde_json::value::to_raw_value(&resp).unwrap(),
+                    )))
+                }
+                _ => Err(agent_client_protocol::Error::method_not_found()),
+            }
+        }
+
+        async fn ext_notification(
+            &self,
+            _notification: ExtNotification,
+        ) -> agent_client_protocol::Result<()> {
+            Ok(())
+        }
+    }
+
     #[test]
     fn test_module_compiles() {
         // Module compiles successfully
+    }
+
+    #[test]
+    fn test_file_system_stats_default() {
+        let stats = FileSystemStats::default();
+        assert_eq!(stats.initialize_calls, 0);
+        assert_eq!(stats.new_session_calls, 0);
+        assert_eq!(stats.ext_method_calls, 0);
+    }
+
+    #[test]
+    fn test_file_system_stats_debug_and_serialize() {
+        let stats = FileSystemStats {
+            initialize_calls: 1,
+            new_session_calls: 1,
+            ext_method_calls: 3,
+        };
+        let debug = format!("{:?}", stats);
+        assert!(debug.contains("FileSystemStats"));
+
+        let json = serde_json::to_value(&stats).unwrap();
+        assert_eq!(json["ext_method_calls"], 3);
+    }
+
+    #[tokio::test]
+    async fn test_read_text_file_capability_check_mock() {
+        let agent = FsMockAgent::new();
+        let result = test_read_text_file_capability_check(&agent).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_write_text_file_capability_check_mock() {
+        let agent = FsMockAgent::new();
+        let result = test_write_text_file_capability_check(&agent).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_read_text_file_basic_mock() {
+        let agent = FsMockAgent::new();
+        let result = test_read_text_file_basic(&agent).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_read_text_file_with_range_mock() {
+        let agent = FsMockAgent::new();
+        let result = test_read_text_file_with_range(&agent).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_write_text_file_basic_mock() {
+        let agent = FsMockAgent::new();
+        let result = test_write_text_file_basic(&agent).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_write_text_file_creates_new_mock() {
+        let agent = FsMockAgent::new();
+        let result = test_write_text_file_creates_new(&agent).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_read_write_integration_mock() {
+        let agent = FsMockAgent::new();
+        let result = test_read_write_integration(&agent).await;
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_verify_file_system_fixture_not_found() {
+        let result = verify_file_system_fixture("nonexistent-agent", "nonexistent-test");
+        assert!(result.is_err());
     }
 }

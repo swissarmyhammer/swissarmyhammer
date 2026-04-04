@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: '8580'
+position_column: done
+position_ordinal: ffffffffffffffffffc980
 title: '100% coverage: swissarmyhammer-statusline'
 ---
-Coverage: 25.0% (140/559 lines) — 419 lines to cover\n\nTop uncovered files:\n- src/modules/git_status.rs (86 uncov) — git status display\n- src/modules/index.rs (45 uncov) — module index\n- src/module.rs (42 uncov) — module trait/rendering #coverage-gap
+Top uncovered files:\n- src/modules/git_status.rs — git status display\n- src/modules/index.rs — module index\n- src/module.rs — module trait/rendering #coverage-gap\n\n**CONSTRAINT: ONLY add tests. Do NOT modify, refactor, delete, or otherwise change the code under test. The production code must remain exactly as-is. Do NOT put line numbers or line counts in comments or ticket descriptions — lines change constantly and these go stale immediately. Run coverage to get current numbers.**

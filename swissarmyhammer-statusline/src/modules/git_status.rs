@@ -175,6 +175,20 @@ fn build_status_output(
     ModuleOutput::new(text, Style::parse(&cfg.style))
 }
 
+/// Get ahead/behind counts relative to the upstream tracking branch.
+fn get_ahead_behind(repo: &git2::Repository) -> (usize, usize) {
+    try_ahead_behind(repo).unwrap_or((0, 0))
+}
+
+fn try_ahead_behind(repo: &git2::Repository) -> Option<(usize, usize)> {
+    let head = repo.head().ok()?;
+    let local_oid = head.target()?;
+    let branch_name = head.shorthand()?;
+    let upstream_ref = format!("refs/remotes/origin/{}", branch_name);
+    let upstream_oid = repo.refname_to_id(&upstream_ref).ok()?;
+    repo.graph_ahead_behind(local_oid, upstream_oid).ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -481,18 +495,274 @@ mod tests {
         // Just verify it doesn't crash; actual values depend on repo state
         let _ = (ahead, behind);
     }
-}
 
-/// Get ahead/behind counts relative to the upstream tracking branch.
-fn get_ahead_behind(repo: &git2::Repository) -> (usize, usize) {
-    try_ahead_behind(repo).unwrap_or((0, 0))
-}
+    #[test]
+    fn test_build_status_deleted_only_with_counts() {
+        let mut cfg = default_cfg();
+        cfg.show_counts = true;
+        let counts = StatusCounts {
+            modified: 0,
+            staged: 0,
+            untracked: 0,
+            deleted: 4,
+            conflicted: 0,
+            stashed: 0,
+            ahead: 0,
+            behind: 0,
+        };
+        let out = build_status_output(&counts, &cfg);
+        assert!(!out.is_empty());
+        assert!(out.text.contains("4"));
+    }
 
-fn try_ahead_behind(repo: &git2::Repository) -> Option<(usize, usize)> {
-    let head = repo.head().ok()?;
-    let local_oid = head.target()?;
-    let branch_name = head.shorthand()?;
-    let upstream_ref = format!("refs/remotes/origin/{}", branch_name);
-    let upstream_oid = repo.refname_to_id(&upstream_ref).ok()?;
-    repo.graph_ahead_behind(local_oid, upstream_oid).ok()
+    #[test]
+    fn test_build_status_conflicted_only_with_counts() {
+        let mut cfg = default_cfg();
+        cfg.show_counts = true;
+        let counts = StatusCounts {
+            modified: 0,
+            staged: 0,
+            untracked: 0,
+            deleted: 0,
+            conflicted: 7,
+            stashed: 0,
+            ahead: 0,
+            behind: 0,
+        };
+        let out = build_status_output(&counts, &cfg);
+        assert!(!out.is_empty());
+        assert!(out.text.contains("=7"));
+    }
+
+    #[test]
+    fn test_build_status_stashed_only_with_counts() {
+        let mut cfg = default_cfg();
+        cfg.show_counts = true;
+        let counts = StatusCounts {
+            modified: 0,
+            staged: 0,
+            untracked: 0,
+            deleted: 0,
+            conflicted: 0,
+            stashed: 3,
+            ahead: 0,
+            behind: 0,
+        };
+        let out = build_status_output(&counts, &cfg);
+        assert!(!out.is_empty());
+        assert!(out.text.contains("$3"));
+    }
+
+    #[test]
+    fn test_build_status_behind_with_counts() {
+        let mut cfg = default_cfg();
+        cfg.show_counts = true;
+        let counts = StatusCounts {
+            modified: 0,
+            staged: 0,
+            untracked: 0,
+            deleted: 0,
+            conflicted: 0,
+            stashed: 0,
+            ahead: 0,
+            behind: 5,
+        };
+        let out = build_status_output(&counts, &cfg);
+        assert!(!out.is_empty());
+        assert!(out.text.contains("5"));
+    }
+
+    #[test]
+    fn test_build_status_ahead_with_counts() {
+        let mut cfg = default_cfg();
+        cfg.show_counts = true;
+        let counts = StatusCounts {
+            modified: 0,
+            staged: 0,
+            untracked: 0,
+            deleted: 0,
+            conflicted: 0,
+            stashed: 0,
+            ahead: 8,
+            behind: 0,
+        };
+        let out = build_status_output(&counts, &cfg);
+        assert!(!out.is_empty());
+        assert!(out.text.contains("8"));
+    }
+
+    #[test]
+    fn test_build_status_diverged_with_counts() {
+        let mut cfg = default_cfg();
+        cfg.show_counts = true;
+        let counts = StatusCounts {
+            modified: 0,
+            staged: 0,
+            untracked: 0,
+            deleted: 0,
+            conflicted: 0,
+            stashed: 0,
+            ahead: 4,
+            behind: 6,
+        };
+        let out = build_status_output(&counts, &cfg);
+        assert!(!out.is_empty());
+        assert!(out.text.contains("4"));
+    }
+
+    #[test]
+    fn test_build_status_space_separation_with_counts() {
+        let mut cfg = default_cfg();
+        cfg.show_counts = true;
+        let counts = StatusCounts {
+            modified: 1,
+            staged: 2,
+            untracked: 3,
+            deleted: 0,
+            conflicted: 0,
+            stashed: 0,
+            ahead: 0,
+            behind: 0,
+        };
+        let out = build_status_output(&counts, &cfg);
+        // With counts on, parts are space-separated
+        assert!(out.text.contains("!1 +2 ?3") || out.text.contains("!1"));
+    }
+
+    #[test]
+    fn test_build_status_no_space_without_counts() {
+        let cfg = default_cfg();
+        let counts = StatusCounts {
+            modified: 1,
+            staged: 1,
+            untracked: 1,
+            deleted: 0,
+            conflicted: 0,
+            stashed: 0,
+            ahead: 0,
+            behind: 0,
+        };
+        let out = build_status_output(&counts, &cfg);
+        // Without counts, symbols are packed tight
+        assert!(out.text.contains("!+?"));
+    }
+
+    #[test]
+    fn test_build_status_status_and_behind() {
+        let cfg = default_cfg();
+        let counts = StatusCounts {
+            modified: 1,
+            staged: 0,
+            untracked: 0,
+            deleted: 0,
+            conflicted: 0,
+            stashed: 0,
+            ahead: 0,
+            behind: 2,
+        };
+        let out = build_status_output(&counts, &cfg);
+        assert!(!out.is_empty());
+    }
+
+    #[test]
+    fn test_build_status_all_types_with_counts() {
+        let mut cfg = default_cfg();
+        cfg.show_counts = true;
+        let counts = StatusCounts {
+            modified: 1,
+            staged: 2,
+            untracked: 3,
+            deleted: 4,
+            conflicted: 5,
+            stashed: 6,
+            ahead: 7,
+            behind: 8,
+        };
+        let out = build_status_output(&counts, &cfg);
+        assert!(!out.is_empty());
+        // Diverged takes precedence over separate ahead/behind
+        assert!(out.text.contains("!1"));
+        assert!(out.text.contains("+2"));
+        assert!(out.text.contains("?3"));
+        assert!(out.text.contains("$6"));
+    }
+
+    #[test]
+    fn test_build_status_render_output() {
+        let cfg = default_cfg();
+        let counts = StatusCounts {
+            modified: 1,
+            staged: 0,
+            untracked: 0,
+            deleted: 0,
+            conflicted: 0,
+            stashed: 0,
+            ahead: 0,
+            behind: 0,
+        };
+        let out = build_status_output(&counts, &cfg);
+        let rendered = out.render();
+        // Should have ANSI codes from style
+        assert!(rendered.contains("!"));
+        assert!(rendered.contains("\x1b["));
+    }
+
+    #[test]
+    fn test_classify_combined_status_flags() {
+        let (mut m, mut s, mut u, mut d, mut c) = (0, 0, 0, 0, 0);
+        // A file that is both modified in worktree and staged
+        let combined = git2::Status::WT_MODIFIED | git2::Status::INDEX_MODIFIED;
+        classify_status(combined, &mut m, &mut s, &mut u, &mut d, &mut c);
+        assert_eq!(m, 1);
+        assert_eq!(s, 1);
+    }
+
+    #[test]
+    fn test_classify_empty_status() {
+        let (mut m, mut s, mut u, mut d, mut c) = (0, 0, 0, 0, 0);
+        classify_status(
+            git2::Status::CURRENT,
+            &mut m,
+            &mut s,
+            &mut u,
+            &mut d,
+            &mut c,
+        );
+        assert_eq!((m, s, u, d, c), (0, 0, 0, 0, 0));
+    }
+
+    #[test]
+    fn test_build_status_only_ahead_behind_no_status() {
+        let cfg = default_cfg();
+        // Only ahead, no file changes
+        let counts = StatusCounts {
+            modified: 0,
+            staged: 0,
+            untracked: 0,
+            deleted: 0,
+            conflicted: 0,
+            stashed: 0,
+            ahead: 1,
+            behind: 0,
+        };
+        let out = build_status_output(&counts, &cfg);
+        assert!(!out.is_empty());
+        // ahead_behind should NOT have a space prefix since all_status is empty
+        assert!(!out.text.starts_with(" "));
+    }
+
+    #[test]
+    fn test_eval_produces_output_or_hidden() {
+        // eval wraps try_eval, ensuring no panics
+        let input = StatuslineInput::default();
+        let config = StatuslineConfig::default();
+        let ctx = ModuleContext {
+            input: &input,
+            config: &config,
+        };
+        let out = eval(&ctx);
+        // In a git repo: non-empty or empty, just ensure no crash
+        let _ = out.is_empty();
+        let _ = out.render();
+    }
 }

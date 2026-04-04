@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: '8e80'
+position_column: done
+position_ordinal: ffffffffffffffffffd580
 title: '100% coverage: llama-agent'
 ---
-Coverage: 0% (0/5969 lines) — 5969 lines to cover\n\nTop uncovered files:\n- src/chat_template.rs (910 uncov) — chat template rendering\n- src/generation/generator.rs (544 uncov) — text generation\n- src/acp/server.rs (472 uncov) — ACP server\n- src/agent.rs (398 uncov) — agent loop\n- src/acp/translation.rs (349 uncov) #coverage-gap
+Top uncovered files:\n- src/chat_template.rs — chat template rendering\n- src/generation/generator.rs — text generation\n- src/acp/server.rs — ACP server\n- src/agent.rs — agent loop\n- src/acp/translation.rs — ACP translation #coverage-gap\n\n**CONSTRAINT: ONLY add tests. Do NOT modify, refactor, delete, or otherwise change the code under test. The production code must remain exactly as-is. Do NOT put line numbers or line counts in comments or ticket descriptions — lines change constantly and these go stale immediately. Run coverage to get current numbers.**

@@ -31,3 +31,29 @@ impl Default for JsContext {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_new_creates_context() {
+        let ctx = JsContext::new();
+        // Verify state is accessible
+        let _state = ctx.state();
+    }
+
+    #[test]
+    fn test_default_creates_context() {
+        let ctx = JsContext::default();
+        let _state = ctx.state();
+    }
+
+    #[tokio::test]
+    async fn test_context_state_can_evaluate() {
+        let ctx = JsContext::new();
+        let result = ctx.state().get("1 + 1").await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), serde_json::json!(2));
+    }
+}

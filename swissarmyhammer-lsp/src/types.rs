@@ -173,4 +173,149 @@ mod tests {
         let spec = make_spec("unknown-server", &[]);
         assert_eq!(spec.to_string(), "unknown-server (languages: )");
     }
+
+    #[test]
+    fn test_health_check_interval_returns_duration() {
+        let spec = make_spec("test-server", &["test"]);
+        assert_eq!(spec.health_check_interval(), Duration::from_secs(60));
+    }
+
+    #[test]
+    fn test_startup_timeout_returns_duration() {
+        let spec = make_spec("test-server", &["test"]);
+        assert_eq!(spec.startup_timeout(), Duration::from_secs(30));
+    }
+
+    #[test]
+    fn test_default_startup_timeout_via_serde() {
+        // Deserialize YAML without startup_timeout_secs to trigger the default fn
+        let yaml = r#"
+project_types: []
+command: "test"
+args: []
+language_ids: ["test"]
+file_extensions: ["txt"]
+install_hint: "install test"
+"#;
+        let spec: OwnedLspServerSpec = serde_yaml_ng::from_str(yaml).unwrap();
+        assert_eq!(spec.startup_timeout_secs, 30);
+    }
+
+    #[test]
+    fn test_default_health_check_interval_via_serde() {
+        // Deserialize YAML without health_check_interval_secs to trigger the default fn
+        let yaml = r#"
+project_types: []
+command: "test"
+args: []
+language_ids: ["test"]
+file_extensions: ["txt"]
+install_hint: "install test"
+"#;
+        let spec: OwnedLspServerSpec = serde_yaml_ng::from_str(yaml).unwrap();
+        assert_eq!(spec.health_check_interval_secs, 60);
+    }
+
+    #[test]
+    fn test_lsp_server_spec_debug_without_init_options() {
+        let spec = LspServerSpec {
+            project_types: &[ProjectType::Rust],
+            command: "rust-analyzer",
+            args: &["--stdio"],
+            language_ids: &["rust"],
+            file_extensions: &["rs"],
+            initialization_options: None,
+            startup_timeout: Duration::from_secs(30),
+            health_check_interval: Duration::from_secs(60),
+            install_hint: "install rust-analyzer",
+        };
+        let debug = format!("{:?}", spec);
+        assert!(debug.contains("rust-analyzer"));
+        assert!(debug.contains("None"));
+        assert!(debug.contains("rust"));
+    }
+
+    #[test]
+    fn test_lsp_server_spec_debug_with_init_options() {
+        let spec = LspServerSpec {
+            project_types: &[ProjectType::Rust],
+            command: "rust-analyzer",
+            args: &[],
+            language_ids: &["rust"],
+            file_extensions: &["rs"],
+            initialization_options: Some(|| serde_json::json!({})),
+            startup_timeout: Duration::from_secs(30),
+            health_check_interval: Duration::from_secs(60),
+            install_hint: "install rust-analyzer",
+        };
+        let debug = format!("{:?}", spec);
+        assert!(debug.contains("Some(...)"));
+    }
+
+    #[test]
+    fn test_daemon_state_not_started_serialization() {
+        let state = LspDaemonState::NotStarted;
+        let json = serde_json::to_string(&state).unwrap();
+        let deser: LspDaemonState = serde_json::from_str(&json).unwrap();
+        assert_eq!(state, deser);
+    }
+
+    #[test]
+    fn test_daemon_state_starting_serialization() {
+        let state = LspDaemonState::Starting;
+        let json = serde_json::to_string(&state).unwrap();
+        let deser: LspDaemonState = serde_json::from_str(&json).unwrap();
+        assert_eq!(state, deser);
+    }
+
+    #[test]
+    fn test_daemon_state_not_found_serialization() {
+        let state = LspDaemonState::NotFound;
+        let json = serde_json::to_string(&state).unwrap();
+        let deser: LspDaemonState = serde_json::from_str(&json).unwrap();
+        assert_eq!(state, deser);
+    }
+
+    #[test]
+    fn test_daemon_state_shutting_down_serialization() {
+        let state = LspDaemonState::ShuttingDown;
+        let json = serde_json::to_string(&state).unwrap();
+        let deser: LspDaemonState = serde_json::from_str(&json).unwrap();
+        assert_eq!(state, deser);
+    }
+
+    #[test]
+    fn test_daemon_status_serialization() {
+        let status = DaemonStatus {
+            command: "rust-analyzer".to_string(),
+            state: LspDaemonState::Running {
+                pid: 1234,
+                since_epoch_ms: 1700000000000,
+            },
+        };
+        let json = serde_json::to_string(&status).unwrap();
+        let deser: DaemonStatus = serde_json::from_str(&json).unwrap();
+        assert_eq!(deser.command, "rust-analyzer");
+        assert!(matches!(
+            deser.state,
+            LspDaemonState::Running { pid: 1234, .. }
+        ));
+    }
+
+    #[test]
+    fn test_owned_spec_custom_timeouts() {
+        let spec = OwnedLspServerSpec {
+            project_types: vec![],
+            command: "test".to_string(),
+            args: vec![],
+            language_ids: vec![],
+            file_extensions: vec![],
+            startup_timeout_secs: 10,
+            health_check_interval_secs: 120,
+            install_hint: String::new(),
+            icon: None,
+        };
+        assert_eq!(spec.startup_timeout(), Duration::from_secs(10));
+        assert_eq!(spec.health_check_interval(), Duration::from_secs(120));
+    }
 }

@@ -782,4 +782,375 @@ mod tests {
         let input: HookInput = serde_json::from_str(json).unwrap();
         assert_eq!(input.hook_type(), HookType::Stop);
     }
+
+    /// Exhaustive test: every HookInput variant deserializes, returns correct
+    /// hook_type(), and common() extracts session_id.
+    #[test]
+    fn test_hook_input_all_variants_deserialize_and_dispatch() {
+        // Variants that need only common fields
+        let simple_variants = vec![
+            "SessionStart",
+            "PreCompact",
+            "Setup",
+            "SessionEnd",
+            "PostCompact",
+        ];
+        for name in &simple_variants {
+            let json = format!(
+                r#"{{"session_id":"s1","transcript_path":"/t","cwd":"/c","permission_mode":"default","hook_event_name":"{}"}}"#,
+                name
+            );
+            let input: HookInput = serde_json::from_str(&json)
+                .unwrap_or_else(|e| panic!("Failed to deserialize HookInput for {}: {}", name, e));
+            assert_eq!(input.hook_type().to_string(), *name);
+            assert_eq!(input.common().session_id.as_deref(), Some("s1"));
+        }
+
+        // Variants that need a prompt field
+        let json = r#"{"session_id":"s1","transcript_path":"/t","cwd":"/c","permission_mode":"default","hook_event_name":"UserPromptSubmit","prompt":"hello"}"#;
+        let input: HookInput = serde_json::from_str(json).unwrap();
+        assert_eq!(input.hook_type(), HookType::UserPromptSubmit);
+
+        // Variants with tool_name + tool_input
+        for name in &[
+            "PreToolUse",
+            "PostToolUse",
+            "PostToolUseFailure",
+            "PermissionRequest",
+        ] {
+            let json = format!(
+                r#"{{"session_id":"s1","transcript_path":"/t","cwd":"/c","permission_mode":"default","hook_event_name":"{}","tool_name":"Bash","tool_input":{{"command":"ls"}}}}"#,
+                name
+            );
+            let input: HookInput = serde_json::from_str(&json)
+                .unwrap_or_else(|e| panic!("Failed for {}: {}", name, e));
+            assert_eq!(input.hook_type().to_string(), *name);
+        }
+
+        // SubagentStart / SubagentStop
+        let json = r#"{"session_id":"s1","transcript_path":"/t","cwd":"/c","permission_mode":"default","hook_event_name":"SubagentStart"}"#;
+        let input: HookInput = serde_json::from_str(json).unwrap();
+        assert_eq!(input.hook_type(), HookType::SubagentStart);
+
+        let json = r#"{"session_id":"s1","transcript_path":"/t","cwd":"/c","permission_mode":"default","hook_event_name":"SubagentStop","stop_hook_active":false}"#;
+        let input: HookInput = serde_json::from_str(json).unwrap();
+        assert_eq!(input.hook_type(), HookType::SubagentStop);
+
+        // Notification
+        let json = r#"{"session_id":"s1","transcript_path":"/t","cwd":"/c","permission_mode":"default","hook_event_name":"Notification","message":"hi","notification_type":"info"}"#;
+        let input: HookInput = serde_json::from_str(json).unwrap();
+        assert_eq!(input.hook_type(), HookType::Notification);
+
+        // InstructionsLoaded with all optional fields
+        let json = r#"{"session_id":"s1","transcript_path":"/t","cwd":"/c","permission_mode":"default","hook_event_name":"InstructionsLoaded","file_path":"/f","load_reason":"startup","glob_patterns":["*.md"],"memory_type":"project"}"#;
+        let input: HookInput = serde_json::from_str(json).unwrap();
+        assert_eq!(input.hook_type(), HookType::InstructionsLoaded);
+
+        // WorktreeCreate with all optional fields
+        let json = r#"{"session_id":"s1","transcript_path":"/t","cwd":"/c","permission_mode":"default","hook_event_name":"WorktreeCreate","worktree_path":"/wt","branch_name":"feature"}"#;
+        let input: HookInput = serde_json::from_str(json).unwrap();
+        assert_eq!(input.hook_type(), HookType::WorktreeCreate);
+
+        // WorktreeRemove
+        let json = r#"{"session_id":"s1","transcript_path":"/t","cwd":"/c","permission_mode":"default","hook_event_name":"WorktreeRemove","worktree_path":"/wt"}"#;
+        let input: HookInput = serde_json::from_str(json).unwrap();
+        assert_eq!(input.hook_type(), HookType::WorktreeRemove);
+
+        // TaskCompleted
+        let json = r#"{"session_id":"s1","transcript_path":"/t","cwd":"/c","permission_mode":"default","hook_event_name":"TaskCompleted","task_id":"t1","task_title":"done"}"#;
+        let input: HookInput = serde_json::from_str(json).unwrap();
+        assert_eq!(input.hook_type(), HookType::TaskCompleted);
+
+        // TeammateIdle
+        let json = r#"{"session_id":"s1","transcript_path":"/t","cwd":"/c","permission_mode":"default","hook_event_name":"TeammateIdle","teammate_id":"tm1"}"#;
+        let input: HookInput = serde_json::from_str(json).unwrap();
+        assert_eq!(input.hook_type(), HookType::TeammateIdle);
+
+        // ConfigChange
+        let json = r#"{"session_id":"s1","transcript_path":"/t","cwd":"/c","permission_mode":"default","hook_event_name":"ConfigChange","source":"user_settings"}"#;
+        let input: HookInput = serde_json::from_str(json).unwrap();
+        assert_eq!(input.hook_type(), HookType::ConfigChange);
+    }
+
+    #[test]
+    fn test_hook_input_unknown_variant_error() {
+        let json = r#"{"session_id":"s","transcript_path":"/t","cwd":"/c","permission_mode":"default","hook_event_name":"UnknownHook"}"#;
+        let result = serde_json::from_str::<HookInput>(json);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("unknown variant"),
+            "Error should mention unknown variant: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_hook_input_missing_hook_event_name_error() {
+        let json =
+            r#"{"session_id":"s","transcript_path":"/t","cwd":"/c","permission_mode":"default"}"#;
+        let result = serde_json::from_str::<HookInput>(json);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("hook_event_name"),
+            "Error should mention missing field: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_hook_input_serialize_round_trip() {
+        // HookInput is Serialize - test that serialized output is valid JSON
+        let json = r#"{"session_id":"s","transcript_path":"/t","cwd":"/c","permission_mode":"default","hook_event_name":"Stop","stop_hook_active":true}"#;
+        let input: HookInput = serde_json::from_str(json).unwrap();
+        let serialized = serde_json::to_string(&input).unwrap();
+        assert!(serialized.contains("stop_hook_active"));
+    }
+
+    #[test]
+    fn test_session_start_input_optional_fields() {
+        let json = r#"{
+            "session_id": "abc",
+            "transcript_path": "/t",
+            "cwd": "/c",
+            "permission_mode": "default",
+            "hook_event_name": "SessionStart",
+            "source": "startup",
+            "model": "claude-sonnet"
+        }"#;
+        let input: SessionStartInput = serde_json::from_str(json).unwrap();
+        assert_eq!(input.source.as_deref(), Some("startup"));
+        assert_eq!(input.model.as_deref(), Some("claude-sonnet"));
+    }
+
+    #[test]
+    fn test_post_tool_use_input_aliases() {
+        // tool_result can be named tool_output or tool_response
+        let json = r#"{
+            "session_id": "s",
+            "transcript_path": "/t",
+            "cwd": "/c",
+            "permission_mode": "default",
+            "hook_event_name": "PostToolUse",
+            "tool_name": "Read",
+            "tool_input": {},
+            "tool_output": "file contents"
+        }"#;
+        let input: PostToolUseInput = serde_json::from_str(json).unwrap();
+        assert!(input.tool_result.is_some());
+
+        let json2 = r#"{
+            "session_id": "s",
+            "transcript_path": "/t",
+            "cwd": "/c",
+            "permission_mode": "default",
+            "hook_event_name": "PostToolUse",
+            "tool_name": "Read",
+            "tool_input": {},
+            "tool_response": "file contents"
+        }"#;
+        let input2: PostToolUseInput = serde_json::from_str(json2).unwrap();
+        assert!(input2.tool_result.is_some());
+    }
+
+    #[test]
+    fn test_post_tool_use_failure_input() {
+        let json = r#"{
+            "session_id": "s",
+            "transcript_path": "/t",
+            "cwd": "/c",
+            "permission_mode": "default",
+            "hook_event_name": "PostToolUseFailure",
+            "tool_name": "Write",
+            "tool_input": {"file_path": "/x"},
+            "error": {"message": "Permission denied"},
+            "tool_use_id": "tu_456"
+        }"#;
+        let input: PostToolUseFailureInput = serde_json::from_str(json).unwrap();
+        assert_eq!(input.tool_name, "Write");
+        assert!(input.error.is_some());
+        assert_eq!(input.tool_use_id.as_deref(), Some("tu_456"));
+    }
+
+    #[test]
+    fn test_permission_request_input() {
+        let json = r#"{
+            "session_id": "s",
+            "transcript_path": "/t",
+            "cwd": "/c",
+            "permission_mode": "default",
+            "hook_event_name": "PermissionRequest",
+            "tool_name": "Bash",
+            "tool_input": {"command": "rm -rf /"},
+            "permission": "dangerous_command"
+        }"#;
+        let input: PermissionRequestInput = serde_json::from_str(json).unwrap();
+        assert_eq!(input.tool_name, "Bash");
+        assert_eq!(input.permission.as_deref(), Some("dangerous_command"));
+    }
+
+    #[test]
+    fn test_subagent_start_input() {
+        let json = r#"{
+            "session_id": "s",
+            "transcript_path": "/t",
+            "cwd": "/c",
+            "permission_mode": "default",
+            "hook_event_name": "SubagentStart",
+            "subagent_type": "task_runner",
+            "subagent_prompt": "run tests"
+        }"#;
+        let input: SubagentStartInput = serde_json::from_str(json).unwrap();
+        assert_eq!(input.subagent_type.as_deref(), Some("task_runner"));
+        assert_eq!(input.subagent_prompt.as_deref(), Some("run tests"));
+    }
+
+    #[test]
+    fn test_subagent_stop_input() {
+        let json = r#"{
+            "session_id": "s",
+            "transcript_path": "/t",
+            "cwd": "/c",
+            "permission_mode": "default",
+            "hook_event_name": "SubagentStop",
+            "stop_hook_active": true,
+            "subagent_type": "task_runner"
+        }"#;
+        let input: SubagentStopInput = serde_json::from_str(json).unwrap();
+        assert!(input.stop_hook_active);
+        assert_eq!(input.subagent_type.as_deref(), Some("task_runner"));
+    }
+
+    #[test]
+    fn test_stop_input() {
+        let json = r#"{
+            "session_id": "s",
+            "transcript_path": "/t",
+            "cwd": "/c",
+            "permission_mode": "default",
+            "hook_event_name": "Stop",
+            "stop_hook_active": false
+        }"#;
+        let input: StopInput = serde_json::from_str(json).unwrap();
+        assert!(!input.stop_hook_active);
+    }
+
+    #[test]
+    fn test_notification_input() {
+        let json = r#"{
+            "session_id": "s",
+            "transcript_path": "/t",
+            "cwd": "/c",
+            "permission_mode": "default",
+            "hook_event_name": "Notification",
+            "message": "Build complete",
+            "notification_type": "success"
+        }"#;
+        let input: NotificationInput = serde_json::from_str(json).unwrap();
+        assert_eq!(input.message.as_deref(), Some("Build complete"));
+        assert_eq!(input.notification_type.as_deref(), Some("success"));
+    }
+
+    #[test]
+    fn test_instructions_loaded_input() {
+        let json = r#"{
+            "session_id": "s",
+            "transcript_path": "/t",
+            "cwd": "/c",
+            "permission_mode": "default",
+            "hook_event_name": "InstructionsLoaded",
+            "file_path": "/project/CLAUDE.md",
+            "load_reason": "project_init",
+            "glob_patterns": ["*.md", ".claude/*"],
+            "memory_type": "project"
+        }"#;
+        let input: InstructionsLoadedInput = serde_json::from_str(json).unwrap();
+        assert_eq!(input.file_path.as_deref(), Some("/project/CLAUDE.md"));
+        assert_eq!(input.load_reason.as_deref(), Some("project_init"));
+        assert_eq!(input.glob_patterns.as_ref().unwrap().len(), 2);
+        assert_eq!(input.memory_type.as_deref(), Some("project"));
+    }
+
+    #[test]
+    fn test_config_change_input() {
+        let json = r#"{
+            "session_id": "s",
+            "transcript_path": "/t",
+            "cwd": "/c",
+            "permission_mode": "default",
+            "hook_event_name": "ConfigChange",
+            "source": "project_settings"
+        }"#;
+        let input: ConfigChangeInput = serde_json::from_str(json).unwrap();
+        assert_eq!(input.source.as_deref(), Some("project_settings"));
+    }
+
+    #[test]
+    fn test_worktree_create_input() {
+        let json = r#"{
+            "session_id": "s",
+            "transcript_path": "/t",
+            "cwd": "/c",
+            "permission_mode": "default",
+            "hook_event_name": "WorktreeCreate",
+            "worktree_path": "/tmp/wt-1",
+            "branch_name": "feature-abc"
+        }"#;
+        let input: WorktreeCreateInput = serde_json::from_str(json).unwrap();
+        assert_eq!(input.worktree_path.as_deref(), Some("/tmp/wt-1"));
+        assert_eq!(input.branch_name.as_deref(), Some("feature-abc"));
+    }
+
+    #[test]
+    fn test_worktree_remove_input() {
+        let json = r#"{
+            "session_id": "s",
+            "transcript_path": "/t",
+            "cwd": "/c",
+            "permission_mode": "default",
+            "hook_event_name": "WorktreeRemove",
+            "worktree_path": "/tmp/wt-1"
+        }"#;
+        let input: WorktreeRemoveInput = serde_json::from_str(json).unwrap();
+        assert_eq!(input.worktree_path.as_deref(), Some("/tmp/wt-1"));
+    }
+
+    #[test]
+    fn test_teammate_idle_input() {
+        let json = r#"{
+            "session_id": "s",
+            "transcript_path": "/t",
+            "cwd": "/c",
+            "permission_mode": "default",
+            "hook_event_name": "TeammateIdle",
+            "teammate_id": "agent-007"
+        }"#;
+        let input: TeammateIdleInput = serde_json::from_str(json).unwrap();
+        assert_eq!(input.teammate_id.as_deref(), Some("agent-007"));
+    }
+
+    #[test]
+    fn test_task_completed_input() {
+        let json = r#"{
+            "session_id": "s",
+            "transcript_path": "/t",
+            "cwd": "/c",
+            "permission_mode": "default",
+            "hook_event_name": "TaskCompleted",
+            "task_id": "task-123",
+            "task_title": "Fix the bug"
+        }"#;
+        let input: TaskCompletedInput = serde_json::from_str(json).unwrap();
+        assert_eq!(input.task_id.as_deref(), Some("task-123"));
+        assert_eq!(input.task_title.as_deref(), Some("Fix the bug"));
+    }
+
+    #[test]
+    fn test_hook_input_common_returns_cwd() {
+        let json = r#"{"session_id":"s","transcript_path":"/t","cwd":"/my/project","permission_mode":"plan","hook_event_name":"Stop","stop_hook_active":false}"#;
+        let input: HookInput = serde_json::from_str(json).unwrap();
+        assert_eq!(input.common().cwd, "/my/project");
+        assert_eq!(input.common().permission_mode, "plan");
+    }
 }

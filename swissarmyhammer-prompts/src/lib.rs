@@ -99,4 +99,53 @@ mod tests {
         // Note: get_source is not available in this simplified API
         // assert_eq!(library.get_source("test"), Some(&PromptSource::Local));
     }
+
+    #[test]
+    fn test_prompt_source_from_builtin() {
+        let source: PromptSource = swissarmyhammer_common::FileSource::Builtin.into();
+        assert_eq!(source, PromptSource::Builtin);
+    }
+
+    #[test]
+    fn test_prompt_source_from_user() {
+        let source: PromptSource = swissarmyhammer_common::FileSource::User.into();
+        assert_eq!(source, PromptSource::User);
+    }
+
+    #[test]
+    fn test_prompt_source_from_local() {
+        let source: PromptSource = swissarmyhammer_common::FileSource::Local.into();
+        assert_eq!(source, PromptSource::Local);
+    }
+
+    #[test]
+    fn test_prompt_source_from_dynamic() {
+        let source: PromptSource = swissarmyhammer_common::FileSource::Dynamic.into();
+        assert_eq!(source, PromptSource::User); // Dynamic maps to User
+    }
+
+    #[test]
+    fn test_prompt_source_debug_and_clone() {
+        let source = PromptSource::Builtin;
+        let cloned = source.clone();
+        assert_eq!(source, cloned);
+        let debug = format!("{:?}", source);
+        assert_eq!(debug, "Builtin");
+    }
+
+    #[test]
+    fn test_prompt_source_serialize_deserialize() {
+        let source = PromptSource::User;
+        let json = serde_json::to_string(&source).unwrap();
+        let deserialized: PromptSource = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, source);
+    }
+
+    #[test]
+    fn test_prompt_source_all_variants() {
+        // Ensure all three variants exist and are distinct
+        assert_ne!(PromptSource::Builtin, PromptSource::User);
+        assert_ne!(PromptSource::User, PromptSource::Local);
+        assert_ne!(PromptSource::Builtin, PromptSource::Local);
+    }
 }

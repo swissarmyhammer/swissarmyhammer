@@ -410,4 +410,321 @@ mod tests {
         let files = load_changed_files_as_strings(&turn_state, "test-session");
         assert!(files.is_empty(), "Should be empty after clear");
     }
+
+    #[test]
+    fn test_validator_match_info_post_tool_use() {
+        let input: crate::types::PostToolUseInput = serde_json::from_value(serde_json::json!({
+            "session_id": "s",
+            "transcript_path": "/p",
+            "cwd": "/c",
+            "permission_mode": "default",
+            "hook_event_name": "PostToolUse",
+            "tool_name": "Write",
+            "tool_input": {"file_path": "/src/main.rs"}
+        }))
+        .unwrap();
+
+        assert_eq!(input.hook_type(), HookType::PostToolUse);
+        assert_eq!(input.tool_name(), Some("Write"));
+        assert_eq!(input.file_path(), Some("/src/main.rs"));
+        assert_eq!(input.session_id(), "s");
+    }
+
+    #[test]
+    fn test_validator_match_info_post_tool_use_failure() {
+        let input: crate::types::PostToolUseFailureInput =
+            serde_json::from_value(serde_json::json!({
+                "session_id": "s",
+                "transcript_path": "/p",
+                "cwd": "/c",
+                "permission_mode": "default",
+                "hook_event_name": "PostToolUseFailure",
+                "tool_name": "Bash",
+                "tool_input": {"command": "ls"}
+            }))
+            .unwrap();
+
+        assert_eq!(input.hook_type(), HookType::PostToolUseFailure);
+        assert_eq!(input.tool_name(), Some("Bash"));
+        assert_eq!(input.session_id(), "s");
+    }
+
+    #[test]
+    fn test_validator_match_info_permission_request() {
+        let input: crate::types::PermissionRequestInput =
+            serde_json::from_value(serde_json::json!({
+                "session_id": "s",
+                "transcript_path": "/p",
+                "cwd": "/c",
+                "permission_mode": "default",
+                "hook_event_name": "PermissionRequest",
+                "tool_name": "Bash",
+                "tool_input": {"command": "rm -rf /"}
+            }))
+            .unwrap();
+
+        assert_eq!(input.hook_type(), HookType::PermissionRequest);
+        assert_eq!(input.tool_name(), Some("Bash"));
+    }
+
+    #[test]
+    fn test_validator_match_info_session_start() {
+        let input: crate::types::SessionStartInput = serde_json::from_value(serde_json::json!({
+            "session_id": "s",
+            "transcript_path": "/p",
+            "cwd": "/c",
+            "permission_mode": "default",
+            "hook_event_name": "SessionStart"
+        }))
+        .unwrap();
+
+        assert_eq!(input.hook_type(), HookType::SessionStart);
+        assert_eq!(input.tool_name(), None);
+        assert_eq!(input.file_path(), None);
+    }
+
+    #[test]
+    fn test_validator_match_info_session_end() {
+        let input: crate::types::SessionEndInput = serde_json::from_value(serde_json::json!({
+            "session_id": "s",
+            "transcript_path": "/p",
+            "cwd": "/c",
+            "permission_mode": "default",
+            "hook_event_name": "SessionEnd"
+        }))
+        .unwrap();
+
+        assert_eq!(input.hook_type(), HookType::SessionEnd);
+        assert_eq!(input.tool_name(), None);
+    }
+
+    #[test]
+    fn test_validator_match_info_user_prompt_submit() {
+        let input: crate::types::UserPromptSubmitInput =
+            serde_json::from_value(serde_json::json!({
+                "session_id": "s",
+                "transcript_path": "/p",
+                "cwd": "/c",
+                "permission_mode": "default",
+                "hook_event_name": "UserPromptSubmit",
+                "prompt": "hello"
+            }))
+            .unwrap();
+
+        assert_eq!(input.hook_type(), HookType::UserPromptSubmit);
+        assert_eq!(input.tool_name(), None);
+    }
+
+    #[test]
+    fn test_validator_match_info_notification() {
+        let input: crate::types::NotificationInput = serde_json::from_value(serde_json::json!({
+            "session_id": "s",
+            "transcript_path": "/p",
+            "cwd": "/c",
+            "permission_mode": "default",
+            "hook_event_name": "Notification"
+        }))
+        .unwrap();
+
+        assert_eq!(input.hook_type(), HookType::Notification);
+    }
+
+    #[test]
+    fn test_validator_match_info_subagent_start() {
+        let input: crate::types::SubagentStartInput = serde_json::from_value(serde_json::json!({
+            "session_id": "s",
+            "transcript_path": "/p",
+            "cwd": "/c",
+            "permission_mode": "default",
+            "hook_event_name": "SubagentStart"
+        }))
+        .unwrap();
+
+        assert_eq!(input.hook_type(), HookType::SubagentStart);
+    }
+
+    #[test]
+    fn test_validator_match_info_subagent_stop() {
+        let input: crate::types::SubagentStopInput = serde_json::from_value(serde_json::json!({
+            "session_id": "s",
+            "transcript_path": "/p",
+            "cwd": "/c",
+            "permission_mode": "default",
+            "hook_event_name": "SubagentStop"
+        }))
+        .unwrap();
+
+        assert_eq!(input.hook_type(), HookType::SubagentStop);
+    }
+
+    #[test]
+    fn test_validator_match_info_pre_compact() {
+        let input: crate::types::PreCompactInput = serde_json::from_value(serde_json::json!({
+            "session_id": "s",
+            "transcript_path": "/p",
+            "cwd": "/c",
+            "permission_mode": "default",
+            "hook_event_name": "PreCompact"
+        }))
+        .unwrap();
+
+        assert_eq!(input.hook_type(), HookType::PreCompact);
+    }
+
+    #[test]
+    fn test_validator_match_info_setup() {
+        let input: crate::types::SetupInput = serde_json::from_value(serde_json::json!({
+            "session_id": "s",
+            "transcript_path": "/p",
+            "cwd": "/c",
+            "permission_mode": "default",
+            "hook_event_name": "Setup"
+        }))
+        .unwrap();
+
+        assert_eq!(input.hook_type(), HookType::Setup);
+    }
+
+    // New hook types with ValidatorMatchInfo
+
+    #[test]
+    fn test_validator_match_info_elicitation() {
+        let input: crate::strategy::claude::input::ElicitationInput =
+            serde_json::from_value(serde_json::json!({
+                "session_id": "s",
+                "transcript_path": "/p",
+                "cwd": "/c",
+                "permission_mode": "default",
+                "hook_event_name": "Elicitation"
+            }))
+            .unwrap();
+
+        assert_eq!(input.hook_type(), HookType::Elicitation);
+        assert_eq!(input.tool_name(), None);
+        assert_eq!(input.file_path(), None);
+    }
+
+    #[test]
+    fn test_validator_match_info_elicitation_result() {
+        let input: crate::strategy::claude::input::ElicitationResultInput =
+            serde_json::from_value(serde_json::json!({
+                "session_id": "s",
+                "transcript_path": "/p",
+                "cwd": "/c",
+                "permission_mode": "default",
+                "hook_event_name": "ElicitationResult"
+            }))
+            .unwrap();
+
+        assert_eq!(input.hook_type(), HookType::ElicitationResult);
+    }
+
+    #[test]
+    fn test_validator_match_info_config_change() {
+        let input: crate::strategy::claude::input::ConfigChangeInput =
+            serde_json::from_value(serde_json::json!({
+                "session_id": "s",
+                "transcript_path": "/p",
+                "cwd": "/c",
+                "permission_mode": "default",
+                "hook_event_name": "ConfigChange"
+            }))
+            .unwrap();
+
+        assert_eq!(input.hook_type(), HookType::ConfigChange);
+    }
+
+    #[test]
+    fn test_validator_match_info_worktree_create() {
+        let input: crate::strategy::claude::input::WorktreeCreateInput =
+            serde_json::from_value(serde_json::json!({
+                "session_id": "s",
+                "transcript_path": "/p",
+                "cwd": "/c",
+                "permission_mode": "default",
+                "hook_event_name": "WorktreeCreate"
+            }))
+            .unwrap();
+
+        assert_eq!(input.hook_type(), HookType::WorktreeCreate);
+    }
+
+    #[test]
+    fn test_validator_match_info_teammate_idle() {
+        let input: crate::strategy::claude::input::TeammateIdleInput =
+            serde_json::from_value(serde_json::json!({
+                "session_id": "s",
+                "transcript_path": "/p",
+                "cwd": "/c",
+                "permission_mode": "default",
+                "hook_event_name": "TeammateIdle"
+            }))
+            .unwrap();
+
+        assert_eq!(input.hook_type(), HookType::TeammateIdle);
+    }
+
+    #[test]
+    fn test_validator_match_info_task_completed() {
+        let input: crate::strategy::claude::input::TaskCompletedInput =
+            serde_json::from_value(serde_json::json!({
+                "session_id": "s",
+                "transcript_path": "/p",
+                "cwd": "/c",
+                "permission_mode": "default",
+                "hook_event_name": "TaskCompleted"
+            }))
+            .unwrap();
+
+        assert_eq!(input.hook_type(), HookType::TaskCompleted);
+    }
+
+    #[test]
+    fn test_validator_match_info_no_session_id() {
+        // When session_id is None, session_id() should return ""
+        let input: crate::types::StopInput = serde_json::from_value(serde_json::json!({
+            "cwd": "/c",
+            "permission_mode": "default",
+            "hook_event_name": "Stop"
+        }))
+        .unwrap();
+
+        assert_eq!(input.session_id(), "");
+    }
+
+    #[test]
+    fn test_build_match_context_with_tool() {
+        let input: crate::types::PreToolUseInput = serde_json::from_value(serde_json::json!({
+            "session_id": "s",
+            "transcript_path": "/p",
+            "cwd": "/c",
+            "permission_mode": "default",
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Write",
+            "tool_input": {"file_path": "/src/lib.rs"}
+        }))
+        .unwrap();
+
+        let ctx = build_match_context(&input);
+        assert_eq!(ctx.hook_type, HookType::PreToolUse);
+        assert_eq!(ctx.tool_name.as_deref(), Some("Write"));
+        assert_eq!(ctx.file_path.as_deref(), Some("/src/lib.rs"));
+    }
+
+    #[test]
+    fn test_build_match_context_without_tool() {
+        let input: crate::types::StopInput = serde_json::from_value(serde_json::json!({
+            "session_id": "s",
+            "transcript_path": "/p",
+            "cwd": "/c",
+            "permission_mode": "default",
+            "hook_event_name": "Stop"
+        }))
+        .unwrap();
+
+        let ctx = build_match_context(&input);
+        assert_eq!(ctx.hook_type, HookType::Stop);
+        assert!(ctx.tool_name.is_none());
+        assert!(ctx.file_path.is_none());
+    }
 }

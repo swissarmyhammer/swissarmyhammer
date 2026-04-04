@@ -1437,4 +1437,209 @@ mod tests {
         assert!(summary.contains("BatchStats"));
         assert!(summary.contains("10/10"));
     }
+
+    // ──────────────────────────────────────────────────────────────
+    // Tracing-enabled tests: exercise debug!/info!/warn! format args
+    // ──────────────────────────────────────────────────────────────
+
+    /// Initialize a tracing subscriber that evaluates format arguments.
+    /// Returns a guard; the subscriber is active while it lives.
+    fn init_tracing() -> tracing::subscriber::DefaultGuard {
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::TRACE)
+            .with_writer(std::io::sink)
+            .finish();
+        tracing::subscriber::set_default(subscriber)
+    }
+
+    #[tokio::test]
+    async fn test_process_batch_tracing_debug_lines() {
+        let _guard = init_tracing();
+        let embedder = MockEmbedder::new(4);
+        let mut processor = BatchProcessor::new(&embedder, 10);
+
+        let texts = vec!["alpha".to_string(), "beta".to_string()];
+        let results = processor.process_batch(&texts).await.unwrap();
+        assert_eq!(results.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_process_texts_tracing_info_lines() {
+        let _guard = init_tracing();
+        let embedder = MockEmbedder::new(4);
+        let mut processor = BatchProcessor::new(&embedder, 3);
+
+        let texts: Vec<String> = (0..5).map(|i| format!("item {}", i)).collect();
+        let results = processor.process_texts(texts).await.unwrap();
+        assert_eq!(results.len(), 5);
+    }
+
+    #[tokio::test]
+    async fn test_process_batch_warn_on_failure_with_tracing() {
+        let _guard = init_tracing();
+        let embedder = MockEmbedder::with_failures(4, vec![0]);
+        let mut processor = BatchProcessor::new(&embedder, 10);
+
+        let texts = vec!["will fail".to_string(), "ok".to_string()];
+        let results = processor.process_batch(&texts).await.unwrap();
+        assert_eq!(results.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_process_batch_memory_limit_warn_with_tracing() {
+        let _guard = init_tracing();
+        let embedder = MockEmbedder::new(1024);
+        let config = BatchConfig {
+            batch_size: 10,
+            memory_limit_mb: Some(0),
+            enable_memory_monitoring: true,
+            ..Default::default()
+        };
+        let mut processor = BatchProcessor::with_config(&embedder, config);
+
+        let texts = vec!["hello world".to_string()];
+        let err = processor.process_batch(&texts).await.unwrap_err();
+        assert!(matches!(err, EmbeddingError::BatchProcessing(_)));
+    }
+
+    #[tokio::test]
+    async fn test_process_file_tracing_info_lines() {
+        let _guard = init_tracing();
+        let embedder = MockEmbedder::new(4);
+        let mut processor = BatchProcessor::new(&embedder, 2);
+
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("traced.txt");
+        std::fs::write(&file_path, "line1\nline2\nline3\n").unwrap();
+
+        let results = processor.process_file(&file_path).await.unwrap();
+        assert_eq!(results.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn test_process_file_streaming_tracing_info_lines() {
+        let _guard = init_tracing();
+        let embedder = MockEmbedder::new(4);
+        let mut processor = BatchProcessor::new(&embedder, 2);
+
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("traced_stream.txt");
+        std::fs::write(&file_path, "a\nb\nc\n").unwrap();
+
+        let collected = Arc::new(Mutex::new(Vec::new()));
+        let collected_clone = Arc::clone(&collected);
+        processor
+            .process_file_streaming(&file_path, move |batch| {
+                collected_clone.lock().unwrap().extend(batch);
+                Ok(())
+            })
+            .await
+            .unwrap();
+        assert_eq!(collected.lock().unwrap().len(), 3);
+    }
+
+    // ──────────────────────────────────────────────────────────────
+    // BatchStats edge cases: zero totals in update_with_details
+    // ──────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_batch_stats_update_with_details_all_failures() {
+        let mut stats = BatchStats::new();
+        // No successful results, only failures — hits the else branches
+        // where total_texts > 0 is false on first call with empty results.
+        stats.update_with_details(&[], 100, 0);
+        // batch_size = 0 + 0 = 0, so total_texts stays 0
+        assert_eq!(stats.total_texts, 0);
+        assert_eq!(stats.average_time_per_text_ms, 0.0);
+        assert_eq!(stats.average_tokens_per_text, 0.0);
+    }
+
+    #[test]
+    fn test_batch_stats_update_with_details_no_successes() {
+        let mut stats = BatchStats::new();
+        // 3 failures, 0 successful results
+        stats.update_with_details(&[], 200, 3);
+        assert_eq!(stats.total_texts, 3);
+        assert_eq!(stats.successful_embeddings, 0);
+        assert_eq!(stats.failed_embeddings, 3);
+        // average_tokens_per_text should stay 0 because no successes
+        assert_eq!(stats.average_tokens_per_text, 0.0);
+    }
+
+    #[test]
+    fn test_batch_failure_debug_and_clone() {
+        let failure = BatchFailure {
+            index: 5,
+            text_preview: "some text that failed".to_string(),
+            error: "mock error".to_string(),
+        };
+        let cloned = failure.clone();
+        assert_eq!(cloned.index, 5);
+        assert_eq!(cloned.text_preview, "some text that failed");
+        assert_eq!(cloned.error, "mock error");
+        // Exercise Debug
+        let debug_str = format!("{:?}", failure);
+        assert!(debug_str.contains("BatchFailure"));
+    }
+
+    #[test]
+    fn test_progress_info_debug_and_clone() {
+        let info = ProgressInfo {
+            current_batch: 1,
+            total_batches: 5,
+            texts_processed: 10,
+            total_texts: 50,
+            successful_embeddings: 10,
+            failed_embeddings: 0,
+            elapsed_time_ms: 1000,
+            estimated_remaining_ms: 4000,
+            current_throughput_texts_per_second: 10.0,
+        };
+        let cloned = info.clone();
+        assert_eq!(cloned.texts_processed, 10);
+        let debug_str = format!("{:?}", info);
+        assert!(debug_str.contains("ProgressInfo"));
+    }
+
+    #[test]
+    fn test_batch_stats_debug_and_clone() {
+        let mut stats = BatchStats::new();
+        stats.update(5, 500, 1);
+        let cloned = stats.clone();
+        assert_eq!(cloned.total_texts, 5);
+        let debug_str = format!("{:?}", stats);
+        assert!(debug_str.contains("BatchStats"));
+    }
+
+    #[test]
+    fn test_batch_config_debug_and_clone() {
+        let config = BatchConfig::default();
+        let cloned = config.clone();
+        assert_eq!(cloned.batch_size, 32);
+        let debug_str = format!("{:?}", config);
+        assert!(debug_str.contains("BatchConfig"));
+    }
+
+    #[test]
+    fn test_batch_stats_update_zero_total_texts() {
+        let mut stats = BatchStats::new();
+        // update with batch_size 0 — total_texts stays 0
+        stats.update(0, 100, 0);
+        assert_eq!(stats.total_texts, 0);
+        // average_time_per_text should remain 0 since total_texts == 0
+        assert_eq!(stats.average_time_per_text_ms, 0.0);
+    }
+
+    #[test]
+    fn test_batch_stats_update_zero_batches_impossible() {
+        // batches_processed is always > 0 after update(), so the else branch
+        // of the batches_processed check can never be hit in normal use.
+        // But we can verify the function works correctly.
+        let mut stats = BatchStats::new();
+        assert_eq!(stats.batches_processed, 0);
+        assert_eq!(stats.average_batch_time_ms, 0.0);
+        stats.update(5, 1000, 0);
+        assert_eq!(stats.batches_processed, 1);
+        assert_eq!(stats.average_batch_time_ms, 1000.0);
+    }
 }

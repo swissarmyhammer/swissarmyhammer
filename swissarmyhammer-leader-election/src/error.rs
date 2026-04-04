@@ -75,4 +75,62 @@ mod tests {
         let acquisition = ElectionError::LockAcquisition(io_err);
         assert!(format!("{}", acquisition).contains("acquire lock"));
     }
+
+    #[test]
+    fn test_discovery_error_display() {
+        let io_err = io::Error::new(io::ErrorKind::PermissionDenied, "no access");
+        let err = ElectionError::Discovery(io_err);
+        assert!(format!("{}", err).contains("discovery file error"));
+    }
+
+    #[test]
+    fn test_discovery_error_source() {
+        let io_err = io::Error::new(io::ErrorKind::PermissionDenied, "no access");
+        let err = ElectionError::Discovery(io_err);
+        assert!(err.source().is_some());
+    }
+
+    #[test]
+    fn test_bus_error_display() {
+        // zmq::Error doesn't have a public constructor, but we can test via the ZMQ API
+        // by creating a known error condition. Instead, test the Message variant.
+        let err = ElectionError::Message("test message".to_string());
+        assert!(format!("{}", err).contains("test message"));
+    }
+
+    #[test]
+    fn test_message_error_source() {
+        let err = ElectionError::Message("test".to_string());
+        // Message variant has no source
+        assert!(err.source().is_none());
+    }
+
+    #[test]
+    fn test_serialization_error_display() {
+        // Create a serde_json error by parsing invalid JSON
+        let json_err = serde_json::from_str::<serde_json::Value>("invalid").unwrap_err();
+        let err = ElectionError::Serialization(json_err);
+        assert!(format!("{}", err).contains("serialization error"));
+    }
+
+    #[test]
+    fn test_serialization_error_source() {
+        let json_err = serde_json::from_str::<serde_json::Value>("invalid").unwrap_err();
+        let err = ElectionError::Serialization(json_err);
+        assert!(err.source().is_some());
+    }
+
+    #[test]
+    fn test_error_debug() {
+        let err = ElectionError::LockHeld;
+        let debug = format!("{:?}", err);
+        assert!(debug.contains("LockHeld"));
+    }
+
+    #[test]
+    fn test_lock_acquisition_error_source() {
+        let io_err = io::Error::other("lock fail");
+        let err = ElectionError::LockAcquisition(io_err);
+        assert!(err.source().is_some());
+    }
 }

@@ -154,6 +154,6 @@ mod tests {
     #[test]
     fn test_list_skills_default() {
         // ListSkills implements Default
-        let _op = ListSkills::default();
+        let _op = ListSkills;
     }
 }

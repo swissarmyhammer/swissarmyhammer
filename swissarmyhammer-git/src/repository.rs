@@ -352,6 +352,14 @@ mod tests {
     }
 
     #[test]
+    fn test_debug_impl() {
+        let (_temp_dir, repo) = setup_test_repo();
+        let debug_str = format!("{:?}", repo);
+        assert!(debug_str.contains("GitRepository"));
+        assert!(debug_str.contains("path"));
+    }
+
+    #[test]
     fn test_find_from_current_dir_in_non_repo() {
         // Change to a temp directory that is not a git repository and verify
         // find_from_current_dir returns an error.

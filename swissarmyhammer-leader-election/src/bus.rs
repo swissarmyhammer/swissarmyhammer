@@ -280,4 +280,209 @@ mod tests {
         let pub_handle: Publisher<NullMessage> = Publisher::noop();
         assert!(pub_handle.send(&NullMessage).is_ok());
     }
+
+    #[test]
+    fn test_publisher_connected_send() {
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        let addrs = crate::discovery::ipc_addresses(dir.path(), "test", "pubconn");
+
+        // Start a proxy so the publisher has something to connect to
+        let proxy = crate::proxy::ProxyHandle::start(&addrs).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+
+        let publisher: Publisher<NullMessage> =
+            Publisher::connected(proxy.zmq_context(), &addrs.frontend).unwrap();
+
+        // Send should succeed (message goes to proxy)
+        assert!(publisher.send(&NullMessage).is_ok());
+
+        drop(publisher);
+        drop(proxy);
+    }
+
+    #[test]
+    fn test_publisher_send_with_real_message() {
+        use tempfile::TempDir;
+
+        /// A test message type with actual content.
+        #[derive(Debug, Clone)]
+        struct TestMsg {
+            data: String,
+        }
+
+        impl BusMessage for TestMsg {
+            fn topic(&self) -> &[u8] {
+                b"test"
+            }
+            fn to_frames(&self) -> Result<Vec<Vec<u8>>> {
+                Ok(vec![self.data.as_bytes().to_vec()])
+            }
+            fn from_frames(_topic: &[u8], frames: &[Vec<u8>]) -> Result<Self> {
+                Ok(TestMsg {
+                    data: String::from_utf8_lossy(&frames[0]).to_string(),
+                })
+            }
+        }
+
+        let dir = TempDir::new().unwrap();
+        let addrs = crate::discovery::ipc_addresses(dir.path(), "test", "realmsg");
+
+        let proxy = crate::proxy::ProxyHandle::start(&addrs).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+
+        let publisher: Publisher<TestMsg> =
+            Publisher::connected(proxy.zmq_context(), &addrs.frontend).unwrap();
+
+        let msg = TestMsg {
+            data: "hello".to_string(),
+        };
+        assert!(publisher.send(&msg).is_ok());
+
+        drop(publisher);
+        drop(proxy);
+    }
+
+    #[test]
+    fn test_subscriber_connected_recv_timeout() {
+        use std::time::Duration;
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        let addrs = crate::discovery::ipc_addresses(dir.path(), "test", "subconn");
+
+        let proxy = crate::proxy::ProxyHandle::start(&addrs).unwrap();
+        std::thread::sleep(Duration::from_millis(50));
+
+        let subscriber: Subscriber<NullMessage> =
+            Subscriber::connected(proxy.zmq_context(), &addrs.backend, &[]).unwrap();
+
+        // No messages published, so recv_timeout should return None
+        let result = subscriber.recv_timeout(Duration::from_millis(200));
+        assert!(result.is_none());
+
+        drop(subscriber);
+        drop(proxy);
+    }
+
+    #[test]
+    fn test_subscriber_with_topic_filter() {
+        use std::time::Duration;
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        let addrs = crate::discovery::ipc_addresses(dir.path(), "test", "subtopic");
+
+        let proxy = crate::proxy::ProxyHandle::start(&addrs).unwrap();
+        std::thread::sleep(Duration::from_millis(50));
+
+        // Subscribe to specific topics
+        let subscriber: Subscriber<NullMessage> =
+            Subscriber::connected(proxy.zmq_context(), &addrs.backend, &[b"events"]).unwrap();
+
+        // No matching messages, recv_timeout returns None
+        let result = subscriber.recv_timeout(Duration::from_millis(200));
+        assert!(result.is_none());
+
+        drop(subscriber);
+        drop(proxy);
+    }
+
+    #[test]
+    fn test_publisher_subscriber_end_to_end() {
+        use std::time::Duration;
+        use tempfile::TempDir;
+
+        /// A test message for end-to-end pub/sub.
+        #[derive(Debug, Clone, PartialEq)]
+        struct E2EMsg {
+            payload: String,
+        }
+
+        impl BusMessage for E2EMsg {
+            fn topic(&self) -> &[u8] {
+                b"e2e"
+            }
+            fn to_frames(&self) -> Result<Vec<Vec<u8>>> {
+                Ok(vec![self.payload.as_bytes().to_vec()])
+            }
+            fn from_frames(_topic: &[u8], frames: &[Vec<u8>]) -> Result<Self> {
+                Ok(E2EMsg {
+                    payload: String::from_utf8_lossy(&frames[0]).to_string(),
+                })
+            }
+        }
+
+        let dir = TempDir::new().unwrap();
+        let addrs = crate::discovery::ipc_addresses(dir.path(), "test", "e2ebus");
+
+        let proxy = crate::proxy::ProxyHandle::start(&addrs).unwrap();
+        std::thread::sleep(Duration::from_millis(100));
+
+        let ctx = proxy.zmq_context();
+
+        let publisher: Publisher<E2EMsg> = Publisher::connected(ctx, &addrs.frontend).unwrap();
+        let subscriber: Subscriber<E2EMsg> =
+            Subscriber::connected(ctx, &addrs.backend, &[b"e2e"]).unwrap();
+
+        // Let subscriptions propagate
+        std::thread::sleep(Duration::from_millis(300));
+
+        let msg = E2EMsg {
+            payload: "hello world".to_string(),
+        };
+        publisher.send(&msg).unwrap();
+
+        // Subscriber should receive the message
+        let received = subscriber.recv_timeout(Duration::from_millis(2000));
+        assert!(received.is_some());
+        let received_msg = received.unwrap().unwrap();
+        assert_eq!(received_msg.payload, "hello world");
+
+        drop(subscriber);
+        drop(publisher);
+        drop(proxy);
+    }
+
+    #[test]
+    fn test_subscriber_recv_timeout_no_messages() {
+        use std::time::Duration;
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        let addrs = crate::discovery::ipc_addresses(dir.path(), "test", "recvtm");
+
+        let proxy = crate::proxy::ProxyHandle::start(&addrs).unwrap();
+        std::thread::sleep(Duration::from_millis(50));
+
+        let subscriber: Subscriber<NullMessage> =
+            Subscriber::connected(proxy.zmq_context(), &addrs.backend, &[]).unwrap();
+
+        // No messages published — recv_timeout returns None
+        let result = subscriber.recv_timeout(Duration::from_millis(200));
+        assert!(result.is_none());
+
+        drop(subscriber);
+        drop(proxy);
+    }
+
+    #[test]
+    fn test_publisher_drop_closes_channel() {
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        let addrs = crate::discovery::ipc_addresses(dir.path(), "test", "pubdrop");
+
+        let proxy = crate::proxy::ProxyHandle::start(&addrs).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+
+        let publisher: Publisher<NullMessage> =
+            Publisher::connected(proxy.zmq_context(), &addrs.frontend).unwrap();
+
+        // Drop publisher — its thread should exit cleanly
+        drop(publisher);
+        // If we get here without hanging, the test passes
+        drop(proxy);
+    }
 }

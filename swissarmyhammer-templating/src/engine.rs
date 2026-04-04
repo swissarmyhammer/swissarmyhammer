@@ -404,4 +404,13 @@ mod tests {
         let result = template.render(&HashMap::new()).unwrap();
         assert_eq!(result, "No partials here");
     }
+
+    #[test]
+    fn test_dummy_partial_loader_contains_and_try_get() {
+        // Directly exercise DummyPartialLoader::contains and try_get (lines 154-164)
+        let loader = DummyPartialLoader::new();
+        assert!(!loader.contains("anything"));
+        assert!(loader.try_get("anything").is_none());
+        assert!(loader.names().is_empty());
+    }
 }

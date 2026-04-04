@@ -114,6 +114,17 @@ mod tests {
     }
 
     #[test]
+    fn fuzzy_matches_non_string_field_values() {
+        // Tests the Cow::Owned path for non-string JSON values
+        let mut e = Entity::new("task", "t1");
+        e.set("title", json!("Something"));
+        e.set("count", json!(42));
+        let entities: Vec<(String, &Entity)> = vec![("t1".to_string(), &e)];
+        let results = fuzzy_search(&entities, "42", 10);
+        assert!(!results.is_empty());
+    }
+
+    #[test]
     fn fuzzy_picks_best_field() {
         let (id, entity) = make_entity(
             "t1",

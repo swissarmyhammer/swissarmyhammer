@@ -1421,4 +1421,264 @@ mod tests {
             panic!("Expected ValidationFailed error about empty choices");
         }
     }
+
+    #[test]
+    fn test_prompt_with_error_recovery_non_interactive_boolean() {
+        let prompts = InteractivePrompts::new(true);
+        let param = Parameter::new("flag", "A flag", ParameterType::Boolean).required(true);
+
+        let result = prompts.prompt_for_parameter(&param);
+        assert!(matches!(
+            result.unwrap_err(),
+            ParameterError::MissingRequired { .. }
+        ));
+    }
+
+    #[test]
+    fn test_prompt_with_error_recovery_non_interactive_number() {
+        let prompts = InteractivePrompts::new(true);
+        let param = Parameter::new("count", "A count", ParameterType::Number).required(true);
+
+        let result = prompts.prompt_for_parameter(&param);
+        assert!(matches!(
+            result.unwrap_err(),
+            ParameterError::MissingRequired { .. }
+        ));
+    }
+
+    #[test]
+    fn test_prompt_with_error_recovery_non_interactive_choice() {
+        let prompts = InteractivePrompts::new(true);
+        let param = Parameter::new("pick", "Pick one", ParameterType::Choice)
+            .with_choices(vec!["a".to_string(), "b".to_string()])
+            .required(true);
+
+        let result = prompts.prompt_for_parameter(&param);
+        assert!(matches!(
+            result.unwrap_err(),
+            ParameterError::MissingRequired { .. }
+        ));
+    }
+
+    #[test]
+    fn test_prompt_with_error_recovery_non_interactive_multi_choice() {
+        let prompts = InteractivePrompts::new(true);
+        let param = Parameter::new("multi", "Multi pick", ParameterType::MultiChoice)
+            .with_choices(vec!["x".to_string(), "y".to_string()])
+            .required(true);
+
+        let result = prompts.prompt_for_parameter(&param);
+        assert!(matches!(
+            result.unwrap_err(),
+            ParameterError::MissingRequired { .. }
+        ));
+    }
+
+    #[test]
+    fn test_prompt_conditional_with_unresolvable_condition() {
+        use crate::parameter_conditions::ParameterCondition;
+
+        let prompts = InteractivePrompts::new(true);
+
+        // A parameter whose condition references another parameter that never gets resolved
+        let conditional = Parameter::new("dependent", "Depends on missing", ParameterType::String)
+            .required(true)
+            .with_condition(ParameterCondition::new("nonexistent_param == 'yes'"));
+
+        let parameters = vec![conditional];
+        let existing = HashMap::new();
+
+        // The condition references a parameter we don't have; should skip it
+        let result = prompts
+            .prompt_for_parameters(&parameters, &existing)
+            .unwrap();
+
+        // Should be empty since the condition can't be evaluated
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_format_condition_explanation_with_description() {
+        use crate::parameter_conditions::ParameterCondition;
+
+        let prompts = InteractivePrompts::new(true);
+
+        let condition = ParameterCondition::new("x == 1").with_description("when x equals one");
+        assert_eq!(
+            prompts.format_condition_explanation(&condition),
+            "when x equals one"
+        );
+    }
+
+    #[test]
+    fn test_format_condition_explanation_without_description() {
+        use crate::parameter_conditions::ParameterCondition;
+
+        let prompts = InteractivePrompts::new(true);
+
+        let condition = ParameterCondition::new("x == 1");
+        assert_eq!(
+            prompts.format_condition_explanation(&condition),
+            "condition 'x == 1' is met"
+        );
+    }
+
+    #[test]
+    fn test_prompt_for_parameters_mixed_existing_and_defaults() {
+        let prompts = InteractivePrompts::new(true);
+
+        let param1 = Parameter::new("existing_p", "Already exists", ParameterType::String)
+            .with_default(serde_json::json!("should_not_use"));
+        let param2 = Parameter::new("default_p", "Has default", ParameterType::String)
+            .with_default(serde_json::json!("use_this"));
+        let param3 = Parameter::new("optional_p", "Optional no default", ParameterType::String);
+
+        let parameters = vec![param1, param2, param3];
+
+        let mut existing = HashMap::new();
+        existing.insert("existing_p".to_string(), serde_json::json!("my_value"));
+
+        let result = prompts
+            .prompt_for_parameters(&parameters, &existing)
+            .unwrap();
+
+        assert_eq!(result.len(), 2);
+        assert_eq!(
+            result.get("existing_p").unwrap(),
+            &serde_json::json!("my_value")
+        );
+        assert_eq!(
+            result.get("default_p").unwrap(),
+            &serde_json::json!("use_this")
+        );
+        assert!(!result.contains_key("optional_p"));
+    }
+
+    #[test]
+    fn test_display_enhanced_error_fallback_string_too_short() {
+        let prompts = InteractivePrompts::new(true);
+
+        let error = ParameterError::StringTooShort {
+            name: "short".to_string(),
+            min_length: 5,
+            actual_length: 2,
+        };
+        // Should call display_enhanced_error fallback branch then print_validation_hints_for_error
+        prompts.display_enhanced_error(&error);
+    }
+
+    #[test]
+    fn test_display_enhanced_error_fallback_string_too_long() {
+        let prompts = InteractivePrompts::new(true);
+
+        let error = ParameterError::StringTooLong {
+            name: "long".to_string(),
+            max_length: 10,
+            actual_length: 20,
+        };
+        prompts.display_enhanced_error(&error);
+    }
+
+    #[test]
+    fn test_display_enhanced_error_fallback_out_of_range() {
+        let prompts = InteractivePrompts::new(true);
+
+        let error = ParameterError::OutOfRange {
+            name: "val".to_string(),
+            value: 999.0,
+            min: Some(0.0),
+            max: Some(100.0),
+        };
+        prompts.display_enhanced_error(&error);
+    }
+
+    #[test]
+    fn test_print_validation_hints_out_of_range_no_bounds() {
+        let prompts = InteractivePrompts::new(true);
+
+        let error = ParameterError::OutOfRange {
+            name: "unbounded".to_string(),
+            value: 50.0,
+            min: None,
+            max: None,
+        };
+        // Should not print any specific hint (no bounds)
+        prompts.print_validation_hints_for_error(&error);
+    }
+
+    #[test]
+    fn test_prompt_parameters_by_groups_with_multiple_params() {
+        use crate::parameters::ParameterProvider;
+
+        struct MultiProvider {
+            params: Vec<Parameter>,
+        }
+
+        impl ParameterProvider for MultiProvider {
+            fn get_parameters(&self) -> &[Parameter] {
+                &self.params
+            }
+        }
+
+        let prompts = InteractivePrompts::new(true);
+        let provider = MultiProvider {
+            params: vec![
+                Parameter::new("x", "X param", ParameterType::String)
+                    .with_default(serde_json::json!("x_val")),
+                Parameter::new("y", "Y param", ParameterType::Number)
+                    .with_default(serde_json::json!(42)),
+            ],
+        };
+
+        let existing = HashMap::new();
+        let result = prompts
+            .prompt_parameters_by_groups(&provider, &existing)
+            .unwrap();
+
+        assert_eq!(result.len(), 2);
+        assert_eq!(result.get("x").unwrap(), &serde_json::json!("x_val"));
+        assert_eq!(result.get("y").unwrap(), &serde_json::json!(42));
+    }
+
+    #[test]
+    fn test_prompt_parameters_by_groups_with_existing_values() {
+        use crate::parameters::ParameterProvider;
+
+        struct SimpleProvider {
+            params: Vec<Parameter>,
+        }
+
+        impl ParameterProvider for SimpleProvider {
+            fn get_parameters(&self) -> &[Parameter] {
+                &self.params
+            }
+        }
+
+        let prompts = InteractivePrompts::new(true);
+        let provider = SimpleProvider {
+            params: vec![
+                Parameter::new("provided", "Provided param", ParameterType::String).required(true),
+            ],
+        };
+
+        let mut existing = HashMap::new();
+        existing.insert("provided".to_string(), serde_json::json!("given_value"));
+
+        let result = prompts
+            .prompt_parameters_by_groups(&provider, &existing)
+            .unwrap();
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(
+            result.get("provided").unwrap(),
+            &serde_json::json!("given_value")
+        );
+    }
+
+    #[test]
+    fn test_with_max_attempts_one() {
+        let prompts = InteractivePrompts::with_max_attempts(true, 1);
+        assert_eq!(prompts.max_attempts, 1);
+        assert!(prompts.non_interactive);
+    }
 }

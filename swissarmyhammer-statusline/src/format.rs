@@ -137,4 +137,72 @@ mod tests {
         let segs = parse_format("$!bang");
         assert_eq!(segs, vec![FormatSegment::Literal("$!bang".into())]);
     }
+
+    #[test]
+    fn test_multiple_escaped_dollars() {
+        let segs = parse_format("$$a $$b");
+        assert_eq!(
+            segs,
+            vec![
+                FormatSegment::Literal("$".into()),
+                FormatSegment::Variable("a".into()),
+                FormatSegment::Literal(" $".into()),
+                FormatSegment::Variable("b".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_variable_with_underscores() {
+        let segs = parse_format("$my_var_name");
+        assert_eq!(segs, vec![FormatSegment::Variable("my_var_name".into())]);
+    }
+
+    #[test]
+    fn test_variable_with_numbers() {
+        let segs = parse_format("$var123");
+        assert_eq!(segs, vec![FormatSegment::Variable("var123".into())]);
+    }
+
+    #[test]
+    fn test_literal_with_special_chars() {
+        let segs = parse_format("[hello] (world) {test}");
+        assert_eq!(
+            segs,
+            vec![FormatSegment::Literal("[hello] (world) {test}".into())]
+        );
+    }
+
+    #[test]
+    fn test_variable_then_literal() {
+        let segs = parse_format("$var%");
+        assert_eq!(
+            segs,
+            vec![
+                FormatSegment::Variable("var".into()),
+                FormatSegment::Literal("%".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_format_segment_clone_and_debug() {
+        let seg = FormatSegment::Literal("test".into());
+        let cloned = seg.clone();
+        assert_eq!(seg, cloned);
+        let debug = format!("{:?}", seg);
+        assert!(debug.contains("test"));
+    }
+
+    #[test]
+    fn test_only_dollar_sign() {
+        let segs = parse_format("$");
+        assert_eq!(segs, vec![FormatSegment::Literal("$".into())]);
+    }
+
+    #[test]
+    fn test_dollar_space() {
+        let segs = parse_format("$ text");
+        assert_eq!(segs, vec![FormatSegment::Literal("$ text".into())]);
+    }
 }

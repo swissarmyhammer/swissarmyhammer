@@ -317,7 +317,7 @@ mod tests {
         let filter = PromptFilter::new();
         let sources = HashMap::new();
 
-        let prompts = vec![
+        let prompts = [
             create_test_prompt("one", Some("cat1"), vec!["tag1"]),
             create_test_prompt("two", None, vec![]),
             create_test_prompt("three", Some("cat2"), vec!["tag2", "tag3"]),

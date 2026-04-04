@@ -511,4 +511,48 @@ mod tests {
         let result: Result<BranchName, _> = "-starts-with-dash".parse();
         assert!(result.is_err());
     }
+
+    #[test]
+    fn test_branch_name_invalid_tab() {
+        let result = BranchName::new("branch\tname");
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("whitespace"),
+            "Expected whitespace error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_branch_name_invalid_newline() {
+        let result = BranchName::new("branch\nname");
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("whitespace"),
+            "Expected whitespace error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_branch_name_as_ref() {
+        let branch = BranchName::new("feature/test").unwrap();
+        let s: &str = branch.as_ref();
+        assert_eq!(s, "feature/test");
+    }
+
+    #[test]
+    fn test_branch_name_sanitize_tab() {
+        assert_eq!(BranchName::sanitize("branch\tname"), "branch_name");
+    }
+
+    #[test]
+    fn test_branch_name_sanitize_carriage_return() {
+        assert_eq!(BranchName::sanitize("branch\rname"), "branchname");
+    }
+
+    #[test]
+    fn test_branch_name_sanitize_backslash() {
+        assert_eq!(BranchName::sanitize("branch\\name"), "branch_name");
+    }
 }

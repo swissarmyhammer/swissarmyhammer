@@ -391,6 +391,163 @@ mod tests {
     }
 
     #[test]
+    fn test_display_table_dynamic_source() {
+        use colored::control;
+
+        let prompt_infos = vec![PromptInfo {
+            name: "test_dynamic".to_string(),
+            title: Some("Dynamic Test".to_string()),
+            description: Some("A dynamic prompt".to_string()),
+            source: PromptSource::Dynamic,
+            category: Some("test".to_string()),
+            arguments: vec![],
+        }];
+
+        // Test with TTY (colors enabled)
+        control::set_override(true);
+        let mut output = Vec::new();
+        let result = display_table_to_writer(&prompt_infos, false, &mut output, true);
+        assert!(result.is_ok());
+        let output_str = String::from_utf8(output).unwrap();
+        assert!(output_str.contains("test_dynamic"));
+        assert!(output_str.contains("Dynamic Test"));
+
+        // Verify magenta color codes for dynamic source
+        let has_magenta = output_str.contains("\u{1b}[35m")
+            || output_str.contains("\u{1b}[0;35m")
+            || output_str.contains("\u{1b}[38;5;5m");
+        assert!(has_magenta, "Expected magenta color codes for dynamic");
+
+        control::unset_override();
+    }
+
+    #[test]
+    fn test_display_table_empty_prompt_infos() {
+        let prompt_infos: Vec<PromptInfo> = vec![];
+        let mut output = Vec::new();
+        let result = display_table_to_writer(&prompt_infos, false, &mut output, false);
+        assert!(result.is_ok());
+        let output_str = String::from_utf8(output).unwrap();
+        assert!(output_str.contains("No prompts found"));
+    }
+
+    #[test]
+    fn test_display_table_no_description() {
+        let prompt_infos = vec![PromptInfo {
+            name: "test_no_desc".to_string(),
+            title: None,
+            description: None,
+            source: PromptSource::Builtin,
+            category: None,
+            arguments: vec![],
+        }];
+
+        let mut output = Vec::new();
+        let result = display_table_to_writer(&prompt_infos, false, &mut output, false);
+        assert!(result.is_ok());
+        let output_str = String::from_utf8(output).unwrap();
+        assert!(output_str.contains("(no description)"));
+    }
+
+    #[test]
+    fn test_display_table_no_title() {
+        let prompt_infos = vec![PromptInfo {
+            name: "test_no_title".to_string(),
+            title: None,
+            description: Some("Has a description".to_string()),
+            source: PromptSource::User,
+            category: None,
+            arguments: vec![],
+        }];
+
+        let mut output = Vec::new();
+        let result = display_table_to_writer(&prompt_infos, false, &mut output, false);
+        assert!(result.is_ok());
+        let output_str = String::from_utf8(output).unwrap();
+        // Title should be empty string when None
+        assert!(output_str.contains("test_no_title |"));
+        assert!(output_str.contains("Has a description"));
+    }
+
+    #[test]
+    fn test_display_table_legend_not_shown_for_non_tty() {
+        let prompt_infos = vec![PromptInfo {
+            name: "test".to_string(),
+            title: Some("Test".to_string()),
+            description: Some("Test".to_string()),
+            source: PromptSource::Builtin,
+            category: None,
+            arguments: vec![],
+        }];
+
+        let mut output = Vec::new();
+        let result = display_table_to_writer(&prompt_infos, false, &mut output, false);
+        assert!(result.is_ok());
+        let output_str = String::from_utf8(output).unwrap();
+        assert!(
+            !output_str.contains("Legend:"),
+            "Legend should not appear for non-TTY"
+        );
+    }
+
+    #[test]
+    fn test_display_table_legend_shown_for_tty() {
+        use colored::control;
+        control::set_override(true);
+
+        let prompt_infos = vec![PromptInfo {
+            name: "test".to_string(),
+            title: Some("Test".to_string()),
+            description: Some("Test".to_string()),
+            source: PromptSource::Builtin,
+            category: None,
+            arguments: vec![],
+        }];
+
+        let mut output = Vec::new();
+        let result = display_table_to_writer(&prompt_infos, false, &mut output, true);
+        assert!(result.is_ok());
+        let output_str = String::from_utf8(output).unwrap();
+        assert!(output_str.contains("Built-in prompts"));
+        assert!(output_str.contains("User prompts"));
+        assert!(output_str.contains("Local prompts"));
+        assert!(output_str.contains("Dynamic prompts"));
+
+        control::unset_override();
+    }
+
+    #[test]
+    fn test_prompt_argument_creation() {
+        let arg = PromptArgument {
+            name: "topic".to_string(),
+            description: Some("The topic to discuss".to_string()),
+            required: true,
+            default: Some("general".to_string()),
+        };
+        assert_eq!(arg.name, "topic");
+        assert!(arg.required);
+        assert_eq!(arg.default, Some("general".to_string()));
+    }
+
+    #[test]
+    fn test_list_command_with_category_filter() {
+        let result = run_list_command(
+            OutputFormat::Table,
+            false,
+            None,
+            Some("test-nonexistent-category".to_string()),
+            None,
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_list_command_verbose() {
+        let result = run_list_command(OutputFormat::Table, true, None, None, None);
+        assert!(result.is_ok());
+    }
+
+    #[test]
     fn test_title_extraction_logic() {
         // Test that title extraction from metadata works correctly
         use serde_json::Value;

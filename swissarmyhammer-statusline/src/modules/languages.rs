@@ -194,4 +194,78 @@ mod tests {
         // Should only show the icon once (first occurrence wins)
         assert_eq!(out.text.matches("\u{e7a8}").count(), 1);
     }
+
+    #[test]
+    fn test_render_language_icons_missing_lsp_indicator() {
+        let mut cfg = StatuslineConfig::default().languages;
+        cfg.missing_lsp_indicator = "X".into();
+        cfg.dim_without_lsp = false;
+        let icons = vec![LangIcon {
+            icon: "P".into(),
+            has_lsp: false,
+        }];
+        let out = render_language_icons(&icons, &cfg);
+        assert!(out.text.contains("PX"));
+    }
+
+    #[test]
+    fn test_render_language_icons_missing_lsp_indicator_dimmed() {
+        let mut cfg = StatuslineConfig::default().languages;
+        cfg.missing_lsp_indicator = "!".into();
+        cfg.dim_without_lsp = true;
+        let icons = vec![LangIcon {
+            icon: "T".into(),
+            has_lsp: false,
+        }];
+        let out = render_language_icons(&icons, &cfg);
+        assert!(out.text.contains("T!"));
+        assert!(out.text.contains("\x1b[2m"));
+        assert!(out.text.contains("\x1b[22m"));
+    }
+
+    #[test]
+    fn test_render_language_icons_multiple_with_lsp() {
+        let cfg = StatuslineConfig::default().languages;
+        let icons = vec![
+            LangIcon {
+                icon: "A".into(),
+                has_lsp: true,
+            },
+            LangIcon {
+                icon: "B".into(),
+                has_lsp: true,
+            },
+            LangIcon {
+                icon: "C".into(),
+                has_lsp: true,
+            },
+        ];
+        let out = render_language_icons(&icons, &cfg);
+        assert_eq!(out.text, "A B C");
+    }
+
+    #[test]
+    fn test_render_language_icons_render_output() {
+        let cfg = StatuslineConfig::default().languages;
+        let icons = vec![LangIcon {
+            icon: "R".into(),
+            has_lsp: true,
+        }];
+        let out = render_language_icons(&icons, &cfg);
+        let rendered = out.render();
+        assert!(rendered.contains("R"));
+    }
+
+    #[test]
+    fn test_eval_produces_output_or_hidden() {
+        let input = StatuslineInput::default();
+        let config = StatuslineConfig::default();
+        let ctx = ModuleContext {
+            input: &input,
+            config: &config,
+        };
+        let out = eval(&ctx);
+        let _ = out.is_empty();
+        let _ = out.render();
+    }
 }

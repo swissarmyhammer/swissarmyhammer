@@ -816,4 +816,251 @@ mod tests {
         mcp_watcher.stop_file_watching().await;
         mcp_watcher.stop_file_watching().await; // Second call should not panic
     }
+
+    // ---------------------------------------------------------------------------
+    // Extension detection edge cases
+    // ---------------------------------------------------------------------------
+
+    /// Test case-insensitive extension matching for prompt files.
+    #[test]
+    fn test_is_prompt_file_case_insensitive() {
+        assert!(is_prompt_file(std::path::Path::new("prompt.MD")));
+        assert!(is_prompt_file(std::path::Path::new("prompt.Yaml")));
+        assert!(is_prompt_file(std::path::Path::new("prompt.YML")));
+        assert!(is_prompt_file(std::path::Path::new("prompt.MARKDOWN")));
+    }
+
+    /// Test case-insensitive compound extension matching.
+    #[test]
+    fn test_has_compound_extension_case_insensitive() {
+        assert!(has_compound_extension(std::path::Path::new(
+            "prompt.MD.Liquid"
+        )));
+        assert!(has_compound_extension(std::path::Path::new(
+            "PROMPT.YAML.LIQUID"
+        )));
+    }
+
+    /// Test that `is_prompt_file` handles paths with directories.
+    #[test]
+    fn test_is_prompt_file_with_directory_path() {
+        assert!(is_prompt_file(std::path::Path::new("/some/dir/prompt.md")));
+        assert!(is_prompt_file(std::path::Path::new(
+            "relative/path/to/file.yaml"
+        )));
+        assert!(!is_prompt_file(std::path::Path::new("/some/dir/file.txt")));
+    }
+
+    /// Test that `has_compound_extension` handles paths with directories.
+    #[test]
+    fn test_has_compound_extension_with_directory_path() {
+        assert!(has_compound_extension(std::path::Path::new(
+            "/some/dir/prompt.md.liquid"
+        )));
+        assert!(!has_compound_extension(std::path::Path::new(
+            "/some/dir/prompt.md"
+        )));
+    }
+
+    /// Test `is_any_prompt_file` with compound extensions takes priority.
+    #[test]
+    fn test_is_any_prompt_file_compound_priority() {
+        // Compound extension files should match (even though .liquid is not a simple prompt ext)
+        assert!(is_any_prompt_file(std::path::Path::new("a.yml.liquid")));
+        assert!(is_any_prompt_file(std::path::Path::new(
+            "a.markdown.liquid"
+        )));
+    }
+
+    /// Test `is_prompt_file` with empty path.
+    #[test]
+    fn test_is_prompt_file_empty_path() {
+        assert!(!is_prompt_file(std::path::Path::new("")));
+    }
+
+    /// Test `has_compound_extension` with empty path.
+    #[test]
+    fn test_has_compound_extension_empty_path() {
+        assert!(!has_compound_extension(std::path::Path::new("")));
+    }
+
+    /// Test `is_any_prompt_file` with a dotfile (no real extension).
+    #[test]
+    fn test_is_any_prompt_file_dotfile() {
+        assert!(!is_any_prompt_file(std::path::Path::new(".hidden")));
+    }
+
+    // ---------------------------------------------------------------------------
+    // FileWatcher start_watching with callback
+    // ---------------------------------------------------------------------------
+
+    /// Test that `start_watching` succeeds with a mock callback and sets up the debouncer.
+    #[tokio::test]
+    async fn test_file_watcher_start_watching_sets_up_debouncer() {
+        let cb = MockCallback::new();
+        let mut watcher = FileWatcher::new();
+
+        // start_watching may succeed or fail depending on the environment's
+        // prompt directories. We test both code paths.
+        let result = watcher.start_watching(cb).await;
+        if result.is_ok() {
+            // If it succeeded, the debouncer should be set
+            assert!(watcher.debouncer.is_some());
+            assert!(watcher.event_handle.is_some());
+        }
+        // Either way, stop_watching should be safe
+        watcher.stop_watching();
+        assert!(watcher.debouncer.is_none());
+        assert!(watcher.event_handle.is_none());
+    }
+
+    /// Test that calling `start_watching` twice replaces the previous watcher.
+    #[tokio::test]
+    async fn test_file_watcher_start_watching_replaces_previous() {
+        let cb = MockCallback::new();
+        let mut watcher = FileWatcher::new();
+
+        let _ = watcher.start_watching(cb.clone()).await;
+        // Start again — should replace previous
+        let _ = watcher.start_watching(cb).await;
+        // Should not panic; stop should clean up
+        watcher.stop_watching();
+    }
+
+    // ---------------------------------------------------------------------------
+    // retry_with_backoff edge cases
+    // ---------------------------------------------------------------------------
+
+    /// Test that `retry_with_backoff` with max_retries=1 tries exactly once.
+    #[tokio::test]
+    async fn test_retry_with_backoff_single_attempt() {
+        let call_count = Arc::new(AtomicUsize::new(0));
+        let count_clone = call_count.clone();
+
+        let result: std::result::Result<u32, String> = retry_with_backoff(
+            1,
+            1,
+            |_e: &String| true,
+            move || {
+                let count = count_clone.clone();
+                async move {
+                    count.fetch_add(1, Ordering::SeqCst);
+                    Err("only attempt".to_string())
+                }
+            },
+        )
+        .await;
+
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), "only attempt");
+        assert_eq!(call_count.load(Ordering::SeqCst), 1);
+    }
+
+    /// Test that backoff increases exponentially by checking timing is fast.
+    #[tokio::test]
+    async fn test_retry_with_backoff_completes_in_reasonable_time() {
+        let call_count = Arc::new(AtomicUsize::new(0));
+        let count_clone = call_count.clone();
+
+        let start = std::time::Instant::now();
+        let _result: std::result::Result<u32, String> = retry_with_backoff(
+            3,
+            1,
+            |_e: &String| true,
+            move || {
+                let count = count_clone.clone();
+                async move {
+                    count.fetch_add(1, Ordering::SeqCst);
+                    Err("fail".to_string())
+                }
+            },
+        )
+        .await;
+
+        let elapsed = start.elapsed();
+        // With 1ms initial backoff: 1ms + 2ms = 3ms total backoff
+        // Should complete well within 1 second
+        assert!(
+            elapsed < std::time::Duration::from_secs(1),
+            "Retry took too long: {:?}",
+            elapsed
+        );
+        assert_eq!(call_count.load(Ordering::SeqCst), 3);
+    }
+
+    // ---------------------------------------------------------------------------
+    // McpFileWatcher constructor variations
+    // ---------------------------------------------------------------------------
+
+    /// Test that `McpFileWatcher` wraps a shared file watcher.
+    #[tokio::test]
+    async fn test_mcp_file_watcher_shared_state() {
+        let inner = Arc::new(tokio::sync::Mutex::new(FileWatcher::new()));
+        let inner_clone = inner.clone();
+        let _mcp_watcher = McpFileWatcher::new(inner);
+
+        // The inner watcher should still be accessible
+        let guard = inner_clone.lock().await;
+        assert!(guard.debouncer.is_none());
+    }
+
+    // ---------------------------------------------------------------------------
+    // McpFileWatcher::is_retryable_fs_error additional edge cases
+    // ---------------------------------------------------------------------------
+
+    /// Test that mixed-case message matching works for retryable errors.
+    #[test]
+    fn test_is_retryable_fs_error_case_insensitive_message() {
+        let err = SwissArmyHammerError::Other {
+            message: "RESOURCE TEMPORARILY UNAVAILABLE".to_string(),
+        };
+        assert!(McpFileWatcher::is_retryable_fs_error(&err));
+
+        let err = SwissArmyHammerError::Other {
+            message: "File Is Locked By Another Process".to_string(),
+        };
+        assert!(McpFileWatcher::is_retryable_fs_error(&err));
+    }
+
+    /// Test that PermissionDenied IO errors are NOT retryable.
+    #[test]
+    fn test_is_retryable_fs_error_permission_denied_not_retryable() {
+        let err = SwissArmyHammerError::Io(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "permission denied",
+        ));
+        assert!(!McpFileWatcher::is_retryable_fs_error(&err));
+    }
+
+    /// Test that ConnectionRefused IO errors are NOT retryable.
+    #[test]
+    fn test_is_retryable_fs_error_connection_refused_not_retryable() {
+        let err = SwissArmyHammerError::Io(std::io::Error::new(
+            std::io::ErrorKind::ConnectionRefused,
+            "connection refused",
+        ));
+        assert!(!McpFileWatcher::is_retryable_fs_error(&err));
+    }
+
+    // ---------------------------------------------------------------------------
+    // PROMPT_EXTENSIONS / COMPOUND_PROMPT_EXTENSIONS constant tests
+    // ---------------------------------------------------------------------------
+
+    /// Verify that the expected prompt extensions are all present.
+    #[test]
+    fn test_prompt_extensions_contains_expected() {
+        assert!(PROMPT_EXTENSIONS.contains(&"md"));
+        assert!(PROMPT_EXTENSIONS.contains(&"yaml"));
+        assert!(PROMPT_EXTENSIONS.contains(&"yml"));
+        assert!(PROMPT_EXTENSIONS.contains(&"markdown"));
+    }
+
+    /// Verify that the expected compound extensions are all present.
+    #[test]
+    fn test_compound_prompt_extensions_contains_expected() {
+        assert!(COMPOUND_PROMPT_EXTENSIONS.contains(&"md.liquid"));
+        assert!(COMPOUND_PROMPT_EXTENSIONS.contains(&"markdown.liquid"));
+        assert!(COMPOUND_PROMPT_EXTENSIONS.contains(&"yaml.liquid"));
+        assert!(COMPOUND_PROMPT_EXTENSIONS.contains(&"yml.liquid"));
+    }
 }

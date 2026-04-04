@@ -763,4 +763,158 @@ mod tests {
             "gitignore should be preserved when it already exists"
         );
     }
+
+    // ── Additional coverage tests ──────────────────────────────────────
+
+    /// find_git_repository_root (without _from) uses the actual current directory.
+    /// Since we run tests inside the repo, it should return Some.
+    #[test]
+    fn test_find_git_repository_root_current_dir() {
+        // We are running inside the swissarmyhammer git repo.
+        let result = find_git_repository_root();
+        assert!(
+            result.is_some(),
+            "find_git_repository_root should find the repo root"
+        );
+        // The root should contain a .git entry.
+        let root = result.unwrap();
+        assert!(root.join(".git").exists());
+    }
+
+    /// contains_path with non-canonical paths that cannot be canonicalized
+    /// uses the string-based fallback.
+    #[test]
+    fn test_contains_path_fallback_string_comparison() {
+        let temp = TempDir::new().unwrap();
+        let dir =
+            ManagedDirectory::<SwissarmyhammerConfig>::from_custom_root(temp.path().to_path_buf())
+                .unwrap();
+
+        // Create a path that looks like it's inside but doesn't actually exist
+        // on disk — canonicalize will fail, triggering the fallback.
+        let fake_inside = dir.root().join("nonexistent_subdir").join("file.txt");
+        assert!(
+            dir.contains_path(&fake_inside),
+            "fallback string comparison should accept path starting with root"
+        );
+
+        // A path that doesn't start with root should be rejected.
+        let fake_outside = PathBuf::from("/completely/unrelated/path");
+        assert!(
+            !dir.contains_path(&fake_outside),
+            "fallback string comparison should reject unrelated path"
+        );
+    }
+
+    /// ManagedDirectory::new creates all init_subdirs specified by the config.
+    /// Test with a custom config that has multiple init subdirs.
+    #[test]
+    fn test_from_custom_root_creates_init_subdirs() {
+        let temp = TempDir::new().unwrap();
+        let dir =
+            ManagedDirectory::<SwissarmyhammerConfig>::from_custom_root(temp.path().to_path_buf())
+                .unwrap();
+
+        // SwissarmyhammerConfig specifies "tmp" as init subdir.
+        for subdir in SwissarmyhammerConfig::init_subdirs() {
+            let path = dir.subdir(subdir);
+            assert!(path.exists(), "init subdir '{}' should exist", subdir);
+            assert!(
+                path.is_dir(),
+                "init subdir '{}' should be a directory",
+                subdir
+            );
+        }
+    }
+
+    /// ensure_subdir is idempotent — calling it twice doesn't fail.
+    #[test]
+    fn test_ensure_subdir_idempotent() {
+        let temp = TempDir::new().unwrap();
+        let dir =
+            ManagedDirectory::<SwissarmyhammerConfig>::from_custom_root(temp.path().to_path_buf())
+                .unwrap();
+
+        let path1 = dir.ensure_subdir("repeated").unwrap();
+        let path2 = dir.ensure_subdir("repeated").unwrap();
+        assert_eq!(path1, path2);
+        assert!(path1.exists());
+    }
+
+    /// ManagedDirectory created from a path that already exists should succeed
+    /// without error (the create_dir_all should be a no-op).
+    #[test]
+    fn test_from_custom_root_existing_directory() {
+        let temp = TempDir::new().unwrap();
+        // Create the managed directory beforehand.
+        let managed_root = temp.path().join(SwissarmyhammerConfig::DIR_NAME);
+        fs::create_dir_all(&managed_root).unwrap();
+
+        let dir =
+            ManagedDirectory::<SwissarmyhammerConfig>::from_custom_root(temp.path().to_path_buf())
+                .unwrap();
+        assert!(dir.root().exists());
+    }
+
+    /// xdg_config with a different config type (RalphConfig) to exercise
+    /// the XDG path with a different XDG_NAME.
+    #[test]
+    #[serial]
+    fn test_xdg_config_ralph() {
+        let temp = TempDir::new().unwrap();
+        let xdg_config = temp.path().join("config");
+
+        std::env::set_var("XDG_CONFIG_HOME", &xdg_config);
+        let dir = ManagedDirectory::<crate::config::RalphConfig>::xdg_config().unwrap();
+        std::env::remove_var("XDG_CONFIG_HOME");
+
+        assert_eq!(dir.root(), xdg_config.join("ralph"));
+        assert_eq!(*dir.root_type(), DirectoryRootType::XdgConfig);
+    }
+
+    /// xdg_data with ShellConfig to exercise that config type.
+    #[test]
+    #[serial]
+    fn test_xdg_data_shell() {
+        let temp = TempDir::new().unwrap();
+        let xdg_data = temp.path().join("data");
+
+        std::env::set_var("XDG_DATA_HOME", &xdg_data);
+        let dir = ManagedDirectory::<crate::config::ShellConfig>::xdg_data().unwrap();
+        std::env::remove_var("XDG_DATA_HOME");
+
+        assert_eq!(dir.root(), xdg_data.join("shell"));
+    }
+
+    /// xdg_cache with AvpConfig to exercise that config path.
+    #[test]
+    #[serial]
+    fn test_xdg_cache_avp() {
+        let temp = TempDir::new().unwrap();
+        let xdg_cache = temp.path().join("cache");
+
+        std::env::set_var("XDG_CACHE_HOME", &xdg_cache);
+        let dir = ManagedDirectory::<crate::config::AvpConfig>::xdg_cache().unwrap();
+        std::env::remove_var("XDG_CACHE_HOME");
+
+        assert_eq!(dir.root(), xdg_cache.join("avp"));
+        assert_eq!(*dir.root_type(), DirectoryRootType::XdgCache);
+    }
+
+    /// find_git_repository_root_from with max depth exceeded returns None.
+    /// Create a deeply nested structure with no .git anywhere.
+    #[test]
+    fn test_find_git_root_from_max_depth_exceeded() {
+        let temp = TempDir::new().unwrap();
+        // Create a path 25 levels deep (max_depth is 20)
+        let mut deep = temp.path().to_path_buf();
+        for i in 0..25 {
+            deep = deep.join(format!("d{}", i));
+        }
+        fs::create_dir_all(&deep).unwrap();
+
+        // No .git anywhere, should return None
+        let result = find_git_repository_root_from(&deep);
+        assert_eq!(result, None, "should return None when max depth exceeded");
+    }
 }

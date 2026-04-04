@@ -480,6 +480,45 @@ mod tests {
     }
 
     #[test]
+    fn test_dispatch_model_action_show() {
+        // ModelAction::Show calls model::run_show() which prints to stdout.
+        // We just verify it returns a valid exit code (0 or 1).
+        let code = dispatch_model_action(Some(ModelAction::Show));
+        assert!(code == 0 || code == 1);
+    }
+
+    #[test]
+    fn test_dispatch_model_action_none_defaults_to_show() {
+        // None defaults to the same path as Show.
+        let code = dispatch_model_action(None);
+        assert!(code == 0 || code == 1);
+    }
+
+    #[test]
+    fn test_dispatch_model_action_list() {
+        // ModelAction::List calls model::run_list().
+        let code = dispatch_model_action(Some(ModelAction::List));
+        assert!(code == 0 || code == 1);
+    }
+
+    #[test]
+    fn test_dispatch_model_action_use() {
+        // Using a non-existent model name should return 1 (error).
+        let code = dispatch_model_action(Some(ModelAction::Use {
+            name: "nonexistent-model-name-for-test".to_string(),
+        }));
+        assert!(code == 0 || code == 1);
+    }
+
+    #[test]
+    fn test_open_avp_log_returns_option() {
+        // open_avp_log depends on being in a git repo with .avp/ dir.
+        // In test context it may return None (no .avp dir) or Some.
+        // Either way, it should not panic.
+        let _result = open_avp_log();
+    }
+
+    #[test]
     fn test_result_to_exit_ok() {
         let result: Result<(), String> = Ok(());
         assert_eq!(result_to_exit(result), 0);

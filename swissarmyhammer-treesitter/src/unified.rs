@@ -2851,4 +2851,386 @@ fn transform_items(values: &[i32]) -> Vec<i32> {
             "Orthogonal chunks should not be reported as duplicates"
         );
     }
+
+    // =========================================================================
+    // Additional coverage tests
+    // =========================================================================
+
+    impl ToChunkResult for TestClusterable {
+        fn to_chunk_result(&self) -> ChunkResult {
+            ChunkResult {
+                file: self.path.clone(),
+                text: String::new(),
+                start_byte: 0,
+                end_byte: self.size,
+                start_line: 0,
+                end_line: 0,
+            }
+        }
+    }
+
+    #[test]
+    fn test_find_all_duplicates_generic_empty() {
+        let items: Vec<&TestClusterable> = vec![];
+        let result = find_all_duplicates_generic(items, 0.9);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_find_duplicates_in_file_from_records_file_not_found() {
+        let chunks = vec![make_embedded_chunk("/a.rs", 0, 50, vec![1.0, 0.0, 0.0])];
+        let result =
+            find_duplicates_in_file_from_records(&chunks, Path::new("/nonexistent.rs"), 0.5);
+        assert!(result.is_err(), "Should error when file not in records");
+    }
+
+    #[test]
+    fn test_find_duplicates_in_file_from_records_no_other_files() {
+        let chunks = vec![
+            make_embedded_chunk("/a.rs", 0, 50, vec![1.0, 0.0, 0.0]),
+            make_embedded_chunk("/a.rs", 50, 100, vec![0.9, 0.1, 0.0]),
+        ];
+        let result =
+            find_duplicates_in_file_from_records(&chunks, Path::new("/a.rs"), 0.5).unwrap();
+        assert!(
+            result.is_empty(),
+            "No duplicates when only one file in records"
+        );
+    }
+
+    #[test]
+    fn test_find_duplicates_in_file_from_records_finds_similar() {
+        let chunks = vec![
+            make_embedded_chunk("/target.rs", 0, 50, vec![1.0, 0.0, 0.0]),
+            make_embedded_chunk("/other.rs", 0, 50, vec![1.0, 0.0, 0.0]), // identical
+            make_embedded_chunk("/other.rs", 50, 100, vec![0.0, 1.0, 0.0]), // orthogonal
+        ];
+        let result =
+            find_duplicates_in_file_from_records(&chunks, Path::new("/target.rs"), 0.5).unwrap();
+        assert_eq!(result.len(), 1, "Should find one similar chunk");
+        assert!(
+            (result[0].similarity - 1.0).abs() < 0.001,
+            "Identical chunks should have similarity ~1.0"
+        );
+    }
+
+    #[test]
+    fn test_find_duplicates_in_file_from_records_sorted_by_similarity() {
+        let chunks = vec![
+            make_embedded_chunk("/target.rs", 0, 50, vec![1.0, 0.0, 0.0]),
+            make_embedded_chunk("/high.rs", 0, 50, vec![1.0, 0.0, 0.0]),
+            make_embedded_chunk("/mid.rs", 0, 50, vec![0.8, 0.6, 0.0]),
+        ];
+        let result =
+            find_duplicates_in_file_from_records(&chunks, Path::new("/target.rs"), 0.5).unwrap();
+        assert!(result.len() >= 2);
+        // Should be sorted descending
+        for window in result.windows(2) {
+            assert!(window[0].similarity >= window[1].similarity);
+        }
+    }
+
+    #[test]
+    fn test_semantic_search_from_records_zero_query_embedding() {
+        let chunks = vec![make_embedded_chunk("/a.rs", 0, 50, vec![1.0, 0.0, 0.0])];
+        // Zero vector query embedding - cosine similarity should be 0 or NaN
+        let query = vec![0.0_f32, 0.0, 0.0];
+        let results = semantic_search_from_records(&chunks, &query, 10, 0.5);
+        // Zero vector has no direction, so similarity should be below threshold
+        assert!(
+            results.is_empty(),
+            "Zero query embedding should return no results above threshold"
+        );
+    }
+
+    #[test]
+    fn test_compute_cluster_similarity_no_embeddings() {
+        // TestClusterable always has embeddings, but test the count=0 path
+        // by using a cluster with a single item (returns 1.0)
+        let item = TestClusterable {
+            embedding: vec![1.0, 0.0],
+            path: PathBuf::from("/a.rs"),
+            size: 50,
+        };
+        let items: Vec<&TestClusterable> = vec![&item];
+        assert_eq!(compute_cluster_similarity(&items), 1.0);
+    }
+
+    #[test]
+    fn test_compute_cluster_similarity_three_items() {
+        let item1 = TestClusterable {
+            embedding: vec![1.0, 0.0, 0.0],
+            path: PathBuf::from("/a.rs"),
+            size: 50,
+        };
+        let item2 = TestClusterable {
+            embedding: vec![1.0, 0.0, 0.0],
+            path: PathBuf::from("/b.rs"),
+            size: 50,
+        };
+        let item3 = TestClusterable {
+            embedding: vec![0.0, 1.0, 0.0],
+            path: PathBuf::from("/c.rs"),
+            size: 50,
+        };
+        let items = vec![&item1, &item2, &item3];
+        let sim = compute_cluster_similarity(&items);
+        // 3 pairs: (1,2)=1.0, (1,3)=0.0, (2,3)=0.0 → avg = 1/3
+        assert!((sim - 1.0 / 3.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_find_all_duplicates_from_records_multi_file_cluster() {
+        // Three chunks from different files, all identical
+        let chunks = vec![
+            make_embedded_chunk("/a.rs", 0, 100, vec![1.0, 0.0, 0.0]),
+            make_embedded_chunk("/b.rs", 0, 100, vec![1.0, 0.0, 0.0]),
+            make_embedded_chunk("/c.rs", 0, 100, vec![1.0, 0.0, 0.0]),
+        ];
+        let result = find_all_duplicates_from_records(&chunks, 0.9, 10);
+        assert_eq!(result.len(), 1, "Should form one cluster");
+        assert_eq!(
+            result[0].chunks.len(),
+            3,
+            "Cluster should contain all three files"
+        );
+        assert!(
+            (result[0].avg_similarity - 1.0).abs() < 0.001,
+            "Identical embeddings should have avg similarity ~1.0"
+        );
+    }
+
+    #[test]
+    fn test_workspace_builder_with_election_config() {
+        let builder = WorkspaceBuilder::new("/tmp/test")
+            .with_election_config(swissarmyhammer_leader_election::ElectionConfig::default());
+        // Verify builder accepts election config without error
+        assert_eq!(builder.workspace_root, PathBuf::from("/tmp/test"));
+    }
+
+    #[test]
+    fn test_workspace_builder_with_index_config() {
+        let config = crate::index::IndexConfig {
+            max_file_size: 42,
+            embedding_enabled: false,
+            ..Default::default()
+        };
+        let builder = WorkspaceBuilder::new("/tmp/test").with_index_config(config);
+        assert_eq!(builder.index_config.max_file_size, 42);
+        assert!(!builder.index_config.embedding_enabled);
+    }
+
+    #[tokio::test]
+    async fn test_open_with_config() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(dir.path().join("test.rs"), "fn main() {}").unwrap();
+
+        let election_config = swissarmyhammer_leader_election::ElectionConfig::default();
+        let index_config = crate::index::IndexConfig {
+            embedding_enabled: false,
+            ..Default::default()
+        };
+
+        let workspace =
+            Workspace::open_with_config(dir.path(), election_config, Some(index_config))
+                .await
+                .unwrap();
+
+        assert!(!workspace.is_leader());
+        assert_eq!(workspace.workspace_root(), dir.path());
+    }
+
+    #[tokio::test]
+    async fn test_open_with_config_none_index_config() {
+        let dir = TempDir::new().unwrap();
+
+        let election_config = swissarmyhammer_leader_election::ElectionConfig::default();
+        let workspace = Workspace::open_with_config(dir.path(), election_config, None)
+            .await
+            .unwrap();
+
+        assert_eq!(workspace.workspace_root(), dir.path());
+    }
+
+    #[tokio::test]
+    async fn test_is_built_initially_false() {
+        let dir = TempDir::new().unwrap();
+        let workspace = open_no_embedding(dir.path()).await;
+        assert!(!workspace.is_built());
+    }
+
+    #[tokio::test]
+    async fn test_find_all_duplicates_no_embedding_workspace() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(dir.path().join("test.rs"), "fn main() {}").unwrap();
+
+        let workspace = open_and_wait(dir.path()).await;
+
+        // No embeddings → should return empty result, not error
+        let result = workspace.find_all_duplicates(0.9, 10).await.unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_find_duplicates_in_file_no_embedding_workspace() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(dir.path().join("test.rs"), "fn main() {}").unwrap();
+
+        let workspace = open_and_wait(dir.path()).await;
+
+        // No embeddings → file has no embedded chunks → file_not_found error
+        let result = workspace
+            .find_duplicates_in_file(PathBuf::from("/nonexistent.rs"), 0.9)
+            .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_status_indexing_not_in_progress_after_completion() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(dir.path().join("test.rs"), "fn main() {}").unwrap();
+
+        let workspace = open_and_wait(dir.path()).await;
+
+        let status = workspace.status().await.unwrap();
+        // After background indexing completes and lock is released, is_ready should be true
+        assert!(status.is_ready);
+        assert!(status.files_total > 0);
+    }
+
+    #[test]
+    fn test_semantic_chunk_clusterable_impl() {
+        let chunk = SemanticChunk::from_text("hello world");
+        // SemanticChunk::from_text has no embedding
+        assert!(chunk.embedding().is_none());
+        // But should have a path (None for text chunks)
+        let _ = chunk.file_path();
+        assert!(chunk.byte_len() > 0);
+    }
+
+    #[test]
+    fn test_finalize_similarity_results_empty() {
+        let mut results: Vec<SimilarChunkResult> = vec![];
+        finalize_similarity_results(&mut results, Some(10));
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_finalize_similarity_results_no_limit() {
+        let mut results = vec![
+            SimilarChunkResult {
+                chunk: ChunkResult {
+                    file: PathBuf::from("/a.rs"),
+                    text: String::new(),
+                    start_byte: 0,
+                    end_byte: 10,
+                    start_line: 0,
+                    end_line: 0,
+                },
+                similarity: 0.5,
+            },
+            SimilarChunkResult {
+                chunk: ChunkResult {
+                    file: PathBuf::from("/b.rs"),
+                    text: String::new(),
+                    start_byte: 0,
+                    end_byte: 10,
+                    start_line: 0,
+                    end_line: 0,
+                },
+                similarity: 0.9,
+            },
+        ];
+        finalize_similarity_results(&mut results, None);
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].similarity, 0.9);
+    }
+
+    #[test]
+    fn test_filter_records_for_file_empty() {
+        let records: Vec<EmbeddedChunkRecord> = vec![];
+        let filtered = filter_records_for_file(&records, Path::new("/a.rs"));
+        assert!(filtered.is_empty());
+    }
+
+    #[test]
+    fn test_filter_records_excluding_file_empty() {
+        let records: Vec<EmbeddedChunkRecord> = vec![];
+        let filtered = filter_records_excluding_file(&records, Path::new("/a.rs"));
+        assert!(filtered.is_empty());
+    }
+
+    #[test]
+    fn test_union_find_chain_of_three() {
+        let mut parent = vec![1, 2, 2]; // 0->1->2
+        union_find_merge(&mut parent, 0, 2);
+        // All should be in the same set
+        assert_eq!(
+            union_find_root(&mut parent, 0),
+            union_find_root(&mut parent, 2)
+        );
+    }
+
+    #[test]
+    fn test_check_index_ready_complete_with_zero_files() {
+        let mut status = crate::index::IndexStatus::new(PathBuf::from("/test"));
+        status.phase = crate::index::IndexPhase::Complete;
+        status.files_total = 0;
+        // 0 files is considered ready (empty workspace)
+        assert!(check_index_ready(&status).is_ok());
+    }
+
+    #[test]
+    fn test_sort_by_similarity_desc_nan_handling() {
+        let mut results = vec![
+            SimilarChunkResult {
+                chunk: ChunkResult {
+                    file: PathBuf::from("/a.rs"),
+                    text: String::new(),
+                    start_byte: 0,
+                    end_byte: 10,
+                    start_line: 0,
+                    end_line: 0,
+                },
+                similarity: f32::NAN,
+            },
+            SimilarChunkResult {
+                chunk: ChunkResult {
+                    file: PathBuf::from("/b.rs"),
+                    text: String::new(),
+                    start_byte: 0,
+                    end_byte: 10,
+                    start_line: 0,
+                    end_line: 0,
+                },
+                similarity: 0.5,
+            },
+        ];
+        // Should not panic with NaN values
+        sort_by_similarity_desc(&mut results);
+        assert_eq!(results.len(), 2);
+    }
+
+    #[test]
+    fn test_db_to_query_error_formats_message() {
+        let err = db_to_query_error(42);
+        assert!(err.to_string().contains("42"));
+    }
+
+    #[test]
+    fn test_cluster_by_similarity_large_cluster() {
+        // 4 items from different files, all identical embeddings
+        let items_data: Vec<TestClusterable> = (0..4)
+            .map(|i| TestClusterable {
+                embedding: vec![1.0, 0.0, 0.0],
+                path: PathBuf::from(format!("/file{}.rs", i)),
+                size: 50,
+            })
+            .collect();
+        let items: Vec<&TestClusterable> = items_data.iter().collect();
+        let clusters = cluster_by_similarity(&items, 0.9);
+        // All 4 should be in one cluster
+        assert_eq!(clusters.len(), 1);
+        assert_eq!(clusters[0].len(), 4);
+    }
 }

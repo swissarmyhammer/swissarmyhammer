@@ -958,4 +958,509 @@ mod tests {
         let result = guard.terminate_gracefully(Duration::from_millis(100)).await;
         assert!(result.is_ok());
     }
+
+    // -----------------------------------------------------------------------
+    // prepare_working_directory tests
+    // -----------------------------------------------------------------------
+
+    /// Test that `prepare_working_directory` uses the provided directory when it exists.
+    #[test]
+    fn test_prepare_working_directory_with_existing_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let result = prepare_working_directory(Some(tmp.path().to_path_buf()));
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), tmp.path());
+    }
+
+    /// Test that `prepare_working_directory` returns an error for a non-existent directory.
+    #[test]
+    fn test_prepare_working_directory_nonexistent_dir() {
+        let result =
+            prepare_working_directory(Some(PathBuf::from("/nonexistent/path/that/does/not/exist")));
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, ShellError::WorkingDirectoryError { .. }));
+    }
+
+    /// Test that `prepare_working_directory` falls back to current dir when None.
+    #[test]
+    fn test_prepare_working_directory_none_uses_current_dir() {
+        let result = prepare_working_directory(None);
+        assert!(result.is_ok());
+        // Should return some existing directory (cwd or ".")
+        assert!(result.unwrap().exists());
+    }
+
+    // -----------------------------------------------------------------------
+    // prepare_shell_command tests
+    // -----------------------------------------------------------------------
+
+    /// Test that `prepare_shell_command` creates a command with correct working directory.
+    #[test]
+    fn test_prepare_shell_command_sets_working_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cmd = prepare_shell_command("echo hello", tmp.path(), None);
+        // We can't inspect Command internals easily, but the command should not panic
+        // and should be constructable. The test validates the code path runs.
+        let _ = cmd;
+    }
+
+    /// Test that `prepare_shell_command` applies environment variables.
+    #[test]
+    fn test_prepare_shell_command_with_environment() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut env = std::collections::HashMap::new();
+        env.insert("MY_VAR".to_string(), "my_value".to_string());
+        let cmd = prepare_shell_command("echo $MY_VAR", tmp.path(), Some(&env));
+        let _ = cmd;
+    }
+
+    // -----------------------------------------------------------------------
+    // spawn_command_process tests
+    // -----------------------------------------------------------------------
+
+    /// Test that `spawn_command_process` spawns a valid child process.
+    #[tokio::test]
+    async fn test_spawn_command_process_success() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cmd = prepare_shell_command("echo spawn_test", tmp.path(), None);
+        let result = spawn_command_process(cmd, "echo spawn_test", tmp.path());
+        assert!(result.is_ok());
+        let mut child = result.unwrap();
+        let status = child.wait().await.unwrap();
+        assert!(status.success());
+    }
+
+    /// Test that `spawn_command_process` returns an error for an invalid command.
+    #[test]
+    fn test_spawn_command_process_invalid_binary() {
+        let tmp = tempfile::tempdir().unwrap();
+        // Create a Command with an invalid program directly
+        let cmd = Command::new("/nonexistent/binary/that/does/not/exist");
+        let result = spawn_command_process(cmd, "nonexistent", tmp.path());
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            ShellError::CommandSpawnError { .. }
+        ));
+    }
+
+    // -----------------------------------------------------------------------
+    // spawn_shell_command tests
+    // -----------------------------------------------------------------------
+
+    /// Test that `spawn_shell_command` returns a guard and working directory.
+    #[tokio::test]
+    async fn test_spawn_shell_command_success() {
+        let tmp = tempfile::tempdir().unwrap();
+        let result = spawn_shell_command("echo hello", Some(tmp.path().to_path_buf()), None);
+        assert!(result.is_ok());
+        let (mut guard, work_dir) = result.unwrap();
+        assert_eq!(work_dir, tmp.path());
+        // Clean up the process
+        let _ = guard.force_kill().await;
+    }
+
+    /// Test that `spawn_shell_command` with environment variables works.
+    #[tokio::test]
+    async fn test_spawn_shell_command_with_env() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut env = std::collections::HashMap::new();
+        env.insert("TEST_KEY".to_string(), "test_value".to_string());
+        let result =
+            spawn_shell_command("echo $TEST_KEY", Some(tmp.path().to_path_buf()), Some(&env));
+        assert!(result.is_ok());
+        let (mut guard, _) = result.unwrap();
+        let _ = guard.force_kill().await;
+    }
+
+    /// Test that `spawn_shell_command` fails for a non-existent working directory.
+    #[test]
+    fn test_spawn_shell_command_bad_working_dir() {
+        let result =
+            spawn_shell_command("echo hello", Some(PathBuf::from("/nonexistent/dir")), None);
+        assert!(result.is_err());
+    }
+
+    // -----------------------------------------------------------------------
+    // format_execution_result tests
+    // -----------------------------------------------------------------------
+
+    /// Test that `format_execution_result` produces correct fields for a successful command.
+    #[test]
+    fn test_format_execution_result_success() {
+        let limits = OutputLimits::default();
+        let buffer = OutputBuffer::new(limits.max_output_size);
+        let status = std::process::Command::new("true")
+            .status()
+            .expect("failed to run `true`");
+
+        let result = format_execution_result(
+            42,
+            "echo test".to_string(),
+            PathBuf::from("/tmp"),
+            status,
+            buffer,
+            150,
+            &limits,
+        );
+
+        assert_eq!(result.command_id, 42);
+        assert_eq!(result.command, "echo test");
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.execution_time_ms, 150);
+        assert_eq!(result.working_directory, PathBuf::from("/tmp"));
+        assert!(!result.output_truncated);
+        assert!(!result.binary_output_detected);
+    }
+
+    /// Test that `format_execution_result` reports truncation correctly.
+    #[test]
+    fn test_format_execution_result_with_truncation() {
+        let limits = OutputLimits {
+            max_output_size: 10,
+            max_line_length: 100,
+            enable_streaming: false,
+        };
+        let mut buffer = OutputBuffer::new(10);
+        // Fill buffer beyond capacity to trigger truncation
+        buffer.append_stdout(b"12345678901234567890");
+        buffer.add_truncation_marker();
+
+        let status = std::process::Command::new("true")
+            .status()
+            .expect("failed to run `true`");
+
+        let result = format_execution_result(
+            1,
+            "big_output".to_string(),
+            PathBuf::from("/tmp"),
+            status,
+            buffer,
+            50,
+            &limits,
+        );
+
+        assert!(result.output_truncated);
+    }
+
+    /// Test that `format_execution_result` reports binary content detection.
+    #[test]
+    fn test_format_execution_result_with_binary() {
+        let limits = OutputLimits::default();
+        let mut buffer = OutputBuffer::new(limits.max_output_size);
+        // Write binary data (null bytes trigger binary detection)
+        buffer.append_stdout(&[0x00, 0x01, 0x02, 0xFF]);
+
+        let status = std::process::Command::new("true")
+            .status()
+            .expect("failed to run `true`");
+
+        let result = format_execution_result(
+            2,
+            "binary_cmd".to_string(),
+            PathBuf::from("/tmp"),
+            status,
+            buffer,
+            10,
+            &limits,
+        );
+
+        assert!(result.binary_output_detected);
+    }
+
+    // -----------------------------------------------------------------------
+    // execute_with_guard tests
+    // -----------------------------------------------------------------------
+
+    /// Test that `execute_with_guard` captures output from a simple echo command.
+    #[tokio::test]
+    async fn test_execute_with_guard_captures_output() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (mut guard, work_dir) =
+            spawn_shell_command("echo guard_test", Some(tmp.path().to_path_buf()), None)
+                .expect("spawn failed");
+
+        let result =
+            execute_with_guard(&mut guard, 99, "echo guard_test".to_string(), work_dir).await;
+
+        assert!(result.is_ok());
+        let exec_result = result.unwrap();
+        assert_eq!(exec_result.command_id, 99);
+        assert_eq!(exec_result.exit_code, 0);
+        assert!(exec_result.stdout.contains("guard_test"));
+    }
+
+    /// Test that `execute_with_guard` captures stderr.
+    #[tokio::test]
+    async fn test_execute_with_guard_captures_stderr() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (mut guard, work_dir) = spawn_shell_command(
+            "echo error_output >&2",
+            Some(tmp.path().to_path_buf()),
+            None,
+        )
+        .expect("spawn failed");
+
+        let result = execute_with_guard(
+            &mut guard,
+            100,
+            "echo error_output >&2".to_string(),
+            work_dir,
+        )
+        .await;
+
+        assert!(result.is_ok());
+        let exec_result = result.unwrap();
+        assert!(exec_result.stderr.contains("error_output"));
+    }
+
+    /// Test that `execute_with_guard` reports non-zero exit codes.
+    #[tokio::test]
+    async fn test_execute_with_guard_nonzero_exit() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (mut guard, work_dir) =
+            spawn_shell_command("exit 42", Some(tmp.path().to_path_buf()), None)
+                .expect("spawn failed");
+
+        let result = execute_with_guard(&mut guard, 101, "exit 42".to_string(), work_dir).await;
+
+        assert!(result.is_ok());
+        let exec_result = result.unwrap();
+        assert_eq!(exec_result.exit_code, 42);
+    }
+
+    /// Test that `execute_with_guard` errors when guard has no child.
+    #[tokio::test]
+    async fn test_execute_with_guard_no_child() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (mut guard, work_dir) =
+            spawn_shell_command("echo hello", Some(tmp.path().to_path_buf()), None)
+                .expect("spawn failed");
+
+        // Take the child away so the guard is empty
+        let _ = guard.take_child();
+
+        let result = execute_with_guard(&mut guard, 102, "echo hello".to_string(), work_dir).await;
+
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            ShellError::SystemError { .. }
+        ));
+    }
+
+    // -----------------------------------------------------------------------
+    // process_child_output_with_limits tests
+    // -----------------------------------------------------------------------
+
+    /// Test that `process_child_output_with_limits` captures both stdout and stderr.
+    #[tokio::test]
+    async fn test_process_child_output_with_limits_captures_both_streams() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cmd =
+            prepare_shell_command("echo stdout_data && echo stderr_data >&2", tmp.path(), None);
+        let mut child =
+            spawn_command_process(cmd, "echo stdout_data && echo stderr_data >&2", tmp.path())
+                .unwrap();
+
+        let limits = OutputLimits::with_defaults().unwrap();
+        let (status, buffer, line_count) = process_child_output_with_limits(&mut child, &limits)
+            .await
+            .unwrap();
+
+        assert!(status.success());
+        assert!(line_count >= 2);
+        let stdout = buffer.get_stdout();
+        let stderr = buffer.get_stderr();
+        assert!(stdout.contains("stdout_data"));
+        assert!(stderr.contains("stderr_data"));
+    }
+
+    // -----------------------------------------------------------------------
+    // setup_output_capture tests
+    // -----------------------------------------------------------------------
+
+    /// Test that `setup_output_capture` fails when stdout is already taken.
+    #[tokio::test]
+    async fn test_setup_output_capture_no_stdout() {
+        let mut cmd = Command::new("echo");
+        cmd.arg("test");
+        // Don't pipe stdout — leave it as null
+        cmd.stdout(std::process::Stdio::null());
+        cmd.stderr(std::process::Stdio::piped());
+
+        let mut child = cmd.spawn().expect("Failed to spawn");
+        let limits = OutputLimits::default();
+        let result = setup_output_capture(&mut child, &limits);
+        assert!(result.is_err());
+    }
+
+    /// Test that `setup_output_capture` fails when stderr is already taken.
+    #[tokio::test]
+    async fn test_setup_output_capture_no_stderr() {
+        let mut cmd = Command::new("echo");
+        cmd.arg("test");
+        cmd.stdout(std::process::Stdio::piped());
+        // Don't pipe stderr — leave it as null
+        cmd.stderr(std::process::Stdio::null());
+
+        let mut child = cmd.spawn().expect("Failed to spawn");
+        let limits = OutputLimits::default();
+        let result = setup_output_capture(&mut child, &limits);
+        assert!(result.is_err());
+    }
+
+    // -----------------------------------------------------------------------
+    // process_output_line / process_stream_line_result tests
+    // -----------------------------------------------------------------------
+
+    /// Test that `process_output_line` increments line count and writes to buffer.
+    #[test]
+    fn test_process_output_line_basic() {
+        let mut line_count: u32 = 0;
+        let mut buffer = OutputBuffer::new(1024);
+        let mut binary_notified = false;
+
+        let mut ctx = OutputLineContext {
+            line_count: &mut line_count,
+            output_buffer: &mut buffer,
+            binary_notified: &mut binary_notified,
+        };
+
+        let bytes = process_output_line("hello world".to_string(), &mut ctx, |buf, data| {
+            buf.append_stdout(data)
+        });
+
+        assert_eq!(line_count, 1);
+        assert!(bytes > 0);
+        assert!(buffer.get_stdout().contains("hello world"));
+    }
+
+    /// Test that `process_output_line` detects binary content.
+    #[test]
+    fn test_process_output_line_binary_detection() {
+        let mut line_count: u32 = 0;
+        let mut buffer = OutputBuffer::new(1024);
+        let mut binary_notified = false;
+
+        // First, write some binary content to trigger detection
+        buffer.append_stdout(&[0x00, 0x01, 0x02]);
+
+        let mut ctx = OutputLineContext {
+            line_count: &mut line_count,
+            output_buffer: &mut buffer,
+            binary_notified: &mut binary_notified,
+        };
+
+        let _ = process_output_line("after binary".to_string(), &mut ctx, |buf, data| {
+            buf.append_stdout(data)
+        });
+
+        assert!(binary_notified);
+    }
+
+    /// Test that `process_stream_line_result` handles Ok(Some(line)) correctly.
+    #[test]
+    fn test_process_stream_line_result_ok_some() {
+        let mut line_count: u32 = 0;
+        let mut buffer = OutputBuffer::new(1024);
+        let mut binary_notified = false;
+
+        let mut ctx = OutputLineContext {
+            line_count: &mut line_count,
+            output_buffer: &mut buffer,
+            binary_notified: &mut binary_notified,
+        };
+
+        let should_continue = process_stream_line_result(
+            Ok(Some("test line".to_string())),
+            &mut ctx,
+            |buf, data| buf.append_stdout(data),
+            "stdout",
+        );
+
+        assert!(should_continue);
+        assert_eq!(line_count, 1);
+    }
+
+    /// Test that `process_stream_line_result` handles Ok(None) (EOF) correctly.
+    #[test]
+    fn test_process_stream_line_result_eof() {
+        let mut line_count: u32 = 0;
+        let mut buffer = OutputBuffer::new(1024);
+        let mut binary_notified = false;
+
+        let mut ctx = OutputLineContext {
+            line_count: &mut line_count,
+            output_buffer: &mut buffer,
+            binary_notified: &mut binary_notified,
+        };
+
+        let should_continue = process_stream_line_result(
+            Ok(None),
+            &mut ctx,
+            |buf, data| buf.append_stdout(data),
+            "stdout",
+        );
+
+        // EOF returns true (continue processing other streams)
+        assert!(should_continue);
+        assert_eq!(line_count, 0);
+    }
+
+    /// Test that `process_stream_line_result` handles Err correctly.
+    #[test]
+    fn test_process_stream_line_result_error() {
+        let mut line_count: u32 = 0;
+        let mut buffer = OutputBuffer::new(1024);
+        let mut binary_notified = false;
+
+        let mut ctx = OutputLineContext {
+            line_count: &mut line_count,
+            output_buffer: &mut buffer,
+            binary_notified: &mut binary_notified,
+        };
+
+        let should_continue = process_stream_line_result(
+            Err(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "pipe broken",
+            )),
+            &mut ctx,
+            |buf, data| buf.append_stdout(data),
+            "stdout",
+        );
+
+        // Error returns false (stop processing)
+        assert!(!should_continue);
+    }
+
+    /// Test that `process_stream_line_result` stops when buffer limit reached.
+    #[test]
+    fn test_process_stream_line_result_buffer_limit() {
+        let mut line_count: u32 = 0;
+        // Tiny buffer that will fill quickly
+        let mut buffer = OutputBuffer::new(5);
+        let mut binary_notified = false;
+
+        // Fill the buffer first
+        buffer.append_stdout(b"12345");
+
+        let mut ctx = OutputLineContext {
+            line_count: &mut line_count,
+            output_buffer: &mut buffer,
+            binary_notified: &mut binary_notified,
+        };
+
+        let should_continue = process_stream_line_result(
+            Ok(Some("overflow data".to_string())),
+            &mut ctx,
+            |buf, data| buf.append_stdout(data),
+            "stdout",
+        );
+
+        // Should stop because buffer is at limit
+        assert!(!should_continue);
+    }
 }

@@ -681,6 +681,161 @@ fn hello() {
     }
 
     #[test]
+    fn test_indexing_config_default() {
+        // Verify the Default impl produces expected values.
+        let config = IndexingConfig::default();
+        assert_eq!(config.max_parallel_tasks, 4);
+        assert_eq!(config.batch_size, 100);
+    }
+
+    #[test]
+    fn test_indexing_config_custom() {
+        // Verify custom configuration works.
+        let config = IndexingConfig {
+            max_parallel_tasks: 8,
+            batch_size: 50,
+        };
+        assert_eq!(config.max_parallel_tasks, 8);
+        assert_eq!(config.batch_size, 50);
+    }
+
+    #[test]
+    fn test_query_dirty_files_respects_limit() {
+        // When more dirty files exist than the limit, only limit files are returned.
+        let db = create_test_db();
+        insert_test_file(&db, "a.rs");
+        insert_test_file(&db, "b.rs");
+        insert_test_file(&db, "c.rs");
+
+        let dirty = query_dirty_files(&db, 2).unwrap();
+        assert_eq!(dirty.len(), 2, "Should respect limit of 2");
+    }
+
+    #[test]
+    fn test_query_dirty_files_empty_when_all_indexed() {
+        // When all files are already indexed, query_dirty_files returns empty.
+        let db = create_test_db();
+        insert_test_file(&db, "done.rs");
+        {
+            let conn = db.lock().unwrap();
+            conn.execute(
+                "UPDATE indexed_files SET ts_indexed = 1 WHERE file_path = 'done.rs'",
+                [],
+            )
+            .unwrap();
+        }
+
+        let dirty = query_dirty_files(&db, 10).unwrap();
+        assert!(dirty.is_empty(), "No dirty files should remain");
+    }
+
+    #[test]
+    fn test_query_dirty_files_empty_db() {
+        // An empty database should return an empty list without error.
+        let db = create_test_db();
+        let dirty = query_dirty_files(&db, 10).unwrap();
+        assert!(dirty.is_empty(), "Empty DB should return no dirty files");
+    }
+
+    #[test]
+    fn test_write_ts_chunks_empty_input() {
+        // Writing zero chunks should succeed (deletes old, inserts nothing).
+        let db = create_test_db();
+        insert_test_file(&db, "empty_chunks.rs");
+
+        let result = write_ts_chunks(&db, "empty_chunks.rs", &[]);
+        assert!(result.is_ok(), "Empty chunks should succeed");
+
+        let conn = db.lock().unwrap();
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM ts_chunks WHERE file_path = 'empty_chunks.rs'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn test_mark_ts_indexed_idempotent() {
+        // Marking the same file as indexed twice should succeed both times.
+        let db = create_test_db();
+        insert_test_file(&db, "idem.rs");
+
+        mark_ts_indexed(&db, "idem.rs").unwrap();
+        mark_ts_indexed(&db, "idem.rs").unwrap();
+
+        let conn = db.lock().unwrap();
+        let indexed: i64 = conn
+            .query_row(
+                "SELECT ts_indexed FROM indexed_files WHERE file_path = 'idem.rs'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(indexed, 1);
+    }
+
+    #[test]
+    fn test_mark_ts_indexed_nonexistent_file_succeeds() {
+        // Marking a file that doesn't exist in the DB should succeed
+        // (UPDATE on zero rows is not an error).
+        let db = create_test_db();
+        let result = mark_ts_indexed(&db, "nonexistent.rs");
+        assert!(result.is_ok(), "Marking nonexistent file should not error");
+    }
+
+    #[test]
+    fn test_parse_and_extract_chunks_binary_file() {
+        // A file with invalid UTF-8 should return an error.
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("binary.bin");
+        fs::write(&file_path, [0xFF, 0xFE, 0x00, 0x01]).unwrap();
+
+        let result = parse_and_extract_chunks(&file_path);
+        assert!(
+            result.is_err(),
+            "Binary file with invalid UTF-8 should return error"
+        );
+    }
+
+    #[test]
+    fn test_parse_and_extract_chunks_single_line() {
+        // A file with a single line (no newline) should produce one chunk.
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("oneline.rs");
+        let content = "fn one() {}";
+        fs::write(&file_path, content).unwrap();
+
+        let result = parse_and_extract_chunks(&file_path).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].1, content);
+    }
+
+    #[test]
+    fn test_write_ts_chunks_records_line_counts() {
+        // Verify that write_ts_chunks correctly records end_line.
+        let db = create_test_db();
+        insert_test_file(&db, "lines.rs");
+
+        let content = "line1\nline2\nline3\n";
+        let chunks = vec![(0usize, content.to_string())];
+        write_ts_chunks(&db, "lines.rs", &chunks).unwrap();
+
+        let conn = db.lock().unwrap();
+        let end_line: i64 = conn
+            .query_row(
+                "SELECT end_line FROM ts_chunks WHERE file_path = 'lines.rs'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        // 3 lines + start at 1 = end_line of 4
+        assert_eq!(end_line, 4, "end_line should be 1 + line count");
+    }
+
+    #[test]
     fn test_worker_chunk_write_failure_still_marks_indexed() {
         // When writing chunks fails the worker must still mark the file as indexed
         // so it does not stay in the dirty queue forever.

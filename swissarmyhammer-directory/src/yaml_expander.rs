@@ -922,4 +922,141 @@ files:
             ".yaml files should be loaded into includes"
         );
     }
+
+    // ── Additional coverage tests ──────────────────────────────────────
+
+    /// Expand a mapping where the value is an @reference that resolves to a
+    /// non-sequence value. This exercises the mapping expansion branch.
+    #[test]
+    fn test_expand_mapping_value_reference() {
+        let mut expander = YamlExpander::<SwissarmyhammerConfig>::new();
+        expander.add_builtin("greeting", r#""hello""#).unwrap();
+
+        let input: serde_yaml_ng::Value = serde_yaml_ng::from_str(
+            r#"
+message: "@greeting"
+"#,
+        )
+        .unwrap();
+
+        let expanded = expander.expand(input).unwrap();
+        let msg = expanded.get("message").and_then(|v| v.as_str());
+        assert_eq!(msg, Some("hello"));
+    }
+
+    /// Expand a mapping where the key is an @reference. This exercises
+    /// the expand_value call on the key side of mapping iteration.
+    #[test]
+    fn test_expand_mapping_key_reference() {
+        let mut expander = YamlExpander::<SwissarmyhammerConfig>::new();
+        expander
+            .add_builtin("key_name", r#""resolved_key""#)
+            .unwrap();
+
+        let mut map = serde_yaml_ng::Mapping::new();
+        map.insert(
+            serde_yaml_ng::Value::String("@key_name".to_string()),
+            serde_yaml_ng::Value::String("value".to_string()),
+        );
+        let input = serde_yaml_ng::Value::Mapping(map);
+
+        let expanded = expander.expand(input).unwrap();
+        let val = expanded.get("resolved_key").and_then(|v| v.as_str());
+        assert_eq!(val, Some("value"));
+    }
+
+    /// Expand passes through non-string, non-sequence, non-mapping values
+    /// unchanged (numbers, booleans, null).
+    #[test]
+    fn test_expand_passthrough_values() {
+        let expander = YamlExpander::<SwissarmyhammerConfig>::new();
+
+        // Number
+        let num = serde_yaml_ng::Value::Number(serde_yaml_ng::Number::from(42));
+        let expanded = expander.expand(num.clone()).unwrap();
+        assert_eq!(expanded, num);
+
+        // Boolean
+        let b = serde_yaml_ng::Value::Bool(true);
+        let expanded = expander.expand(b.clone()).unwrap();
+        assert_eq!(expanded, b);
+
+        // Null
+        let n = serde_yaml_ng::Value::Null;
+        let expanded = expander.expand(n.clone()).unwrap();
+        assert_eq!(expanded, n);
+    }
+
+    /// parse_and_expand with a string that is not an @reference passes through.
+    #[test]
+    fn test_parse_and_expand_plain_string() {
+        let expander = YamlExpander::<SwissarmyhammerConfig>::new();
+        let result = expander.parse_and_expand(r#""just a string""#).unwrap();
+        assert_eq!(result.as_str(), Some("just a string"));
+    }
+
+    /// Nested includes through a mapping value exercise recursive expansion
+    /// across value types.
+    #[test]
+    fn test_expand_nested_mapping_with_reference() {
+        let mut expander = YamlExpander::<SwissarmyhammerConfig>::new();
+        expander.add_builtin("inner", r#"["a", "b"]"#).unwrap();
+
+        let input: serde_yaml_ng::Value = serde_yaml_ng::from_str(
+            r#"
+outer:
+  items: "@inner"
+"#,
+        )
+        .unwrap();
+
+        let expanded = expander.expand(input).unwrap();
+        let items = expanded
+            .get("outer")
+            .and_then(|v| v.get("items"))
+            .and_then(|v| v.as_sequence())
+            .unwrap();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].as_str(), Some("a"));
+    }
+
+    /// get returns None for a name that was never added.
+    #[test]
+    fn test_get_returns_none_for_missing() {
+        let expander = YamlExpander::<SwissarmyhammerConfig>::new();
+        assert!(expander.get("nonexistent").is_none());
+    }
+
+    /// parse_yaml successfully deserializes into a type when YAML matches.
+    #[test]
+    fn test_parse_yaml_success_no_includes() {
+        let expander = YamlExpander::<SwissarmyhammerConfig>::new();
+
+        #[derive(serde::Deserialize, Debug, PartialEq)]
+        struct Simple {
+            name: String,
+            count: u32,
+        }
+
+        let result: Simple = expander.parse_yaml("name: test\ncount: 5\n").unwrap();
+        assert_eq!(result.name, "test");
+        assert_eq!(result.count, 5);
+    }
+
+    /// parse_yaml returns error when the YAML is invalid (not parseable).
+    #[test]
+    fn test_parse_yaml_invalid_yaml_returns_error() {
+        let expander = YamlExpander::<SwissarmyhammerConfig>::new();
+
+        #[derive(serde::Deserialize, Debug)]
+        #[allow(dead_code)]
+        struct Dummy {
+            x: String,
+        }
+
+        let result: crate::error::Result<Dummy> = expander.parse_yaml("{{invalid yaml}}}");
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("Failed to parse YAML"));
+    }
 }

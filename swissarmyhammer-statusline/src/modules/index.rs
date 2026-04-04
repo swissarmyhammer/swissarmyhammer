@@ -82,6 +82,31 @@ fn render_index(
     ModuleOutput::new(text, Style::parse(&cfg.style))
 }
 
+/// Check whether any LSP servers with install hints are missing for present file extensions.
+///
+/// Returns `true` if at least one LSP server needed by the indexed files is not
+/// installed and has a non-empty `install_hint`.
+fn has_fixable_missing_lsps(conn: &swissarmyhammer_code_context::DbRef<'_>) -> bool {
+    check_fixable_lsps(conn).unwrap_or(false)
+}
+
+fn check_fixable_lsps(
+    conn: &swissarmyhammer_code_context::DbRef<'_>,
+) -> Result<bool, Box<dyn std::error::Error>> {
+    let present_exts = swissarmyhammer_code_context::distinct_extensions(conn)?;
+    if present_exts.is_empty() {
+        return Ok(false);
+    }
+
+    let ext_refs: Vec<&str> = present_exts.iter().map(|s| s.as_str()).collect();
+    let matching_servers = swissarmyhammer_lsp::servers_for_extensions(&ext_refs);
+
+    Ok(matching_servers.iter().any(|spec| {
+        !spec.install_hint.is_empty()
+            && swissarmyhammer_code_context::find_executable(&spec.command).is_none()
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -150,29 +175,58 @@ mod tests {
         assert!(out.text.contains("50"));
         assert!(out.text.contains("/lsp to fix"));
     }
-}
 
-/// Check whether any LSP servers with install hints are missing for present file extensions.
-///
-/// Returns `true` if at least one LSP server needed by the indexed files is not
-/// installed and has a non-empty `install_hint`.
-fn has_fixable_missing_lsps(conn: &swissarmyhammer_code_context::DbRef<'_>) -> bool {
-    check_fixable_lsps(conn).unwrap_or(false)
-}
-
-fn check_fixable_lsps(
-    conn: &swissarmyhammer_code_context::DbRef<'_>,
-) -> Result<bool, Box<dyn std::error::Error>> {
-    let present_exts = swissarmyhammer_code_context::distinct_extensions(conn)?;
-    if present_exts.is_empty() {
-        return Ok(false);
+    #[test]
+    fn test_render_index_complete_with_show_when_complete_and_fixable() {
+        let mut cfg = StatuslineConfig::default().index;
+        cfg.show_when_complete = true;
+        let out = render_index(100, 100, 0, 500, 200, true, &cfg);
+        assert!(!out.is_empty());
+        assert!(out.text.contains("/lsp to fix"));
     }
 
-    let ext_refs: Vec<&str> = present_exts.iter().map(|s| s.as_str()).collect();
-    let matching_servers = swissarmyhammer_lsp::servers_for_extensions(&ext_refs);
+    #[test]
+    fn test_render_index_zero_percent() {
+        let cfg = StatuslineConfig::default().index;
+        let out = render_index(0, 100, 100, 0, 0, false, &cfg);
+        assert!(!out.is_empty());
+        assert!(out.text.contains("0"));
+    }
 
-    Ok(matching_servers.iter().any(|spec| {
-        !spec.install_hint.is_empty()
-            && swissarmyhammer_code_context::find_executable(&spec.command).is_none()
-    }))
+    #[test]
+    fn test_render_index_99_percent() {
+        let cfg = StatuslineConfig::default().index;
+        let out = render_index(99, 500, 5, 1000, 400, false, &cfg);
+        assert!(!out.is_empty());
+        assert!(out.text.contains("99"));
+    }
+
+    #[test]
+    fn test_render_index_render_output() {
+        let cfg = StatuslineConfig::default().index;
+        let out = render_index(50, 100, 50, 200, 100, false, &cfg);
+        let rendered = out.render();
+        assert!(rendered.contains("50"));
+    }
+
+    #[test]
+    fn test_render_index_complete_not_shown_not_fixable() {
+        let mut cfg = StatuslineConfig::default().index;
+        cfg.show_when_complete = false;
+        let out = render_index(100, 100, 0, 500, 200, false, &cfg);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn test_eval_produces_output_or_hidden() {
+        let input = StatuslineInput::default();
+        let config = StatuslineConfig::default();
+        let ctx = ModuleContext {
+            input: &input,
+            config: &config,
+        };
+        let out = eval(&ctx);
+        let _ = out.is_empty();
+        let _ = out.render();
+    }
 }

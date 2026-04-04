@@ -471,4 +471,239 @@ kind: board
         let entries = load_yaml_dir(Path::new("/nonexistent/path"));
         assert!(entries.is_empty());
     }
+
+    /// Cover load_views path that skips non-YAML files on disk.
+    #[tokio::test]
+    async fn load_views_skips_non_yaml_files() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().join("views");
+        std::fs::create_dir_all(&root).unwrap();
+
+        // Write a valid YAML view file
+        std::fs::write(
+            root.join("board.yaml"),
+            "id: 01B\nname: Board\nkind: board\n",
+        )
+        .unwrap();
+        // Write a non-YAML file that should be skipped
+        std::fs::write(root.join("readme.md"), "# ignore me").unwrap();
+        // Write a file with no extension that should be skipped
+        std::fs::write(root.join("Makefile"), "all: build").unwrap();
+
+        let ctx = ViewsContext::open(&root).build().await.unwrap();
+        assert_eq!(ctx.all_views().len(), 1);
+        assert!(ctx.get_by_id("01B").is_some());
+    }
+
+    /// Cover load_views path that warns on invalid YAML files on disk.
+    #[tokio::test]
+    async fn load_views_skips_invalid_yaml_on_disk() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().join("views");
+        std::fs::create_dir_all(&root).unwrap();
+
+        // Write a valid view
+        std::fs::write(
+            root.join("good.yaml"),
+            "id: 01GOOD\nname: Good\nkind: board\n",
+        )
+        .unwrap();
+        // Write an invalid YAML file (should be skipped with warning)
+        std::fs::write(root.join("bad.yaml"), "not valid: [[[").unwrap();
+
+        let ctx = ViewsContext::open(&root).build().await.unwrap();
+        assert_eq!(ctx.all_views().len(), 1);
+        assert!(ctx.get_by_id("01GOOD").is_some());
+    }
+
+    /// Cover write_view update path where name stays the same (no name_index removal).
+    #[tokio::test]
+    async fn write_view_update_same_name() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().join("views");
+        let mut ctx = ViewsContext::open(&root).build().await.unwrap();
+
+        let view = make_test_view("01ABC", "Test");
+        ctx.write_view(&view).await.unwrap();
+
+        // Update the same view with the same name but different kind
+        let mut updated = view.clone();
+        updated.kind = ViewKind::Grid;
+        ctx.write_view(&updated).await.unwrap();
+
+        assert_eq!(ctx.all_views().len(), 1);
+        assert_eq!(ctx.get_by_id("01ABC").unwrap().kind, ViewKind::Grid);
+        // Name lookup still works
+        assert!(ctx.get_by_name("Test").is_some());
+    }
+
+    /// Cover load_yaml_dir when directory exists but read_dir fails
+    /// (e.g., a file where a directory is expected).
+    #[test]
+    fn load_yaml_dir_file_instead_of_dir() {
+        let tmp = TempDir::new().unwrap();
+        let file_path = tmp.path().join("not_a_dir");
+        // Create a file instead of a directory
+        std::fs::write(&file_path, "I am a file").unwrap();
+
+        let entries = load_yaml_dir(&file_path);
+        assert!(entries.is_empty());
+    }
+
+    /// Cover get_by_id returning None for unknown ID.
+    #[test]
+    fn get_by_id_returns_none_for_unknown() {
+        let ctx = ViewsContext::from_yaml_sources(PathBuf::from("/tmp/test"), &[]).unwrap();
+        assert!(ctx.get_by_id("nonexistent").is_none());
+    }
+
+    /// Cover get_by_name returning None for unknown name.
+    #[test]
+    fn get_by_name_returns_none_for_unknown() {
+        let ctx = ViewsContext::from_yaml_sources(PathBuf::from("/tmp/test"), &[]).unwrap();
+        assert!(ctx.get_by_name("nonexistent").is_none());
+    }
+
+    /// Cover root() accessor.
+    #[tokio::test]
+    async fn root_returns_expected_path() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().join("views");
+        let ctx = ViewsContext::open(&root).build().await.unwrap();
+        assert_eq!(ctx.root(), root.as_path());
+    }
+
+    /// Cover from_yaml_sources with empty sources list.
+    #[test]
+    fn from_yaml_sources_empty_sources() {
+        let ctx = ViewsContext::from_yaml_sources(PathBuf::from("/tmp/test"), &[]).unwrap();
+        assert!(ctx.all_views().is_empty());
+    }
+
+    /// Cover delete_view when the deleted element is the last in the vec
+    /// (swap_remove with idx == views.len(), so no index fixup needed).
+    #[tokio::test]
+    async fn delete_last_view_no_index_fixup() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().join("views");
+        let mut ctx = ViewsContext::open(&root).build().await.unwrap();
+
+        ctx.write_view(&make_test_view("01A", "A")).await.unwrap();
+        ctx.write_view(&make_test_view("01B", "B")).await.unwrap();
+
+        // Delete the last element -- swap_remove won't need to fix indexes
+        ctx.delete_view("01B").await.unwrap();
+
+        assert_eq!(ctx.all_views().len(), 1);
+        assert!(ctx.get_by_id("01A").is_some());
+        assert!(ctx.get_by_id("01B").is_none());
+        assert!(ctx.get_by_name("B").is_none());
+    }
+
+    /// Cover delete_view removing the file from disk even if it doesn't exist
+    /// (the `let _ = fs::remove_file` path that ignores errors).
+    #[tokio::test]
+    async fn delete_view_missing_file_still_removes_from_memory() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().join("views");
+        let mut ctx = ViewsContext::open(&root).build().await.unwrap();
+
+        let view = make_test_view("01ABC", "Test");
+        ctx.write_view(&view).await.unwrap();
+
+        // Manually remove the file before calling delete_view
+        let path = root.join("01ABC.yaml");
+        std::fs::remove_file(&path).unwrap();
+
+        // delete_view should still succeed (ignores file removal error)
+        ctx.delete_view("01ABC").await.unwrap();
+        assert!(ctx.all_views().is_empty());
+    }
+
+    /// Cover write_view adding a new view to a context built via from_yaml_sources.
+    #[tokio::test]
+    async fn write_view_new_on_yaml_sources_context() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().join("views");
+
+        let board_yaml = r#"
+id: "01BOARD"
+name: Board
+kind: board
+"#;
+        let mut ctx = ViewsContext::from_yaml_sources(&root, &[("board", board_yaml)]).unwrap();
+
+        // Write a brand new view (not an update)
+        let new_view = make_test_view("01NEW", "New View");
+        ctx.write_view(&new_view).await.unwrap();
+
+        assert_eq!(ctx.all_views().len(), 2);
+        assert!(ctx.get_by_id("01BOARD").is_some());
+        assert!(ctx.get_by_id("01NEW").is_some());
+        assert!(ctx.get_by_name("New View").is_some());
+
+        // Verify it was persisted to disk
+        assert!(root.join("01NEW.yaml").exists());
+    }
+
+    /// Cover write_view updating an existing view loaded from from_yaml_sources.
+    #[tokio::test]
+    async fn write_view_update_on_yaml_sources_context() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().join("views");
+
+        let board_yaml = r#"
+id: "01BOARD"
+name: Board
+kind: board
+"#;
+        let mut ctx = ViewsContext::from_yaml_sources(&root, &[("board", board_yaml)]).unwrap();
+
+        // Update the existing view with a new name
+        let mut updated = ctx.get_by_id("01BOARD").unwrap().clone();
+        updated.name = "Updated Board".into();
+        ctx.write_view(&updated).await.unwrap();
+
+        assert_eq!(ctx.all_views().len(), 1);
+        assert_eq!(ctx.get_by_id("01BOARD").unwrap().name, "Updated Board");
+        assert!(ctx.get_by_name("Board").is_none());
+        assert!(ctx.get_by_name("Updated Board").is_some());
+    }
+
+    /// Cover delete_view on a from_yaml_sources context with swap-remove index fixup.
+    #[tokio::test]
+    async fn delete_from_yaml_sources_fixes_indexes() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().join("views");
+
+        let yaml_a = "id: 01A\nname: A\nkind: board\n";
+        let yaml_b = "id: 01B\nname: B\nkind: list\n";
+        let yaml_c = "id: 01C\nname: C\nkind: grid\n";
+        let mut ctx =
+            ViewsContext::from_yaml_sources(&root, &[("a", yaml_a), ("b", yaml_b), ("c", yaml_c)])
+                .unwrap();
+
+        // Delete the first element (swap_remove replaces it with last)
+        ctx.delete_view("01A").await.unwrap();
+
+        assert_eq!(ctx.all_views().len(), 2);
+        assert!(ctx.get_by_id("01A").is_none());
+        assert!(ctx.get_by_name("A").is_none());
+        assert!(ctx.get_by_id("01B").is_some());
+        assert!(ctx.get_by_id("01C").is_some());
+    }
+
+    /// Cover load_yaml_dir skipping non-YAML files (exercises the extension filter).
+    #[test]
+    fn load_yaml_dir_skips_non_yaml() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path();
+        std::fs::write(dir.join("view.yaml"), "id: 01V\nname: View\nkind: board\n").unwrap();
+        std::fs::write(dir.join("notes.txt"), "some notes").unwrap();
+        std::fs::write(dir.join("data.json"), "{}").unwrap();
+
+        let entries = load_yaml_dir(dir);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].0, "view");
+    }
 }

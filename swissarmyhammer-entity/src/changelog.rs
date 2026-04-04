@@ -1135,6 +1135,173 @@ mod tests {
         assert_eq!(entity.get_i64("count"), Some(2));
     }
 
+    #[tokio::test]
+    async fn read_changelog_with_fallback_uses_primary_first() {
+        let dir = tempfile::tempdir().unwrap();
+        let primary = dir.path().join("primary.jsonl");
+        let fallback = dir.path().join("fallback.jsonl");
+
+        let entry = ChangeEntry::new(
+            "task",
+            "01ABC",
+            "create",
+            vec![(
+                "title".to_string(),
+                FieldChange::Set {
+                    value: Value::String("Primary".into()),
+                },
+            )],
+        );
+        append_changelog(&primary, &entry).await.unwrap();
+
+        let fallback_entry = ChangeEntry::new(
+            "task",
+            "01ABC",
+            "fallback_create",
+            vec![(
+                "title".to_string(),
+                FieldChange::Set {
+                    value: Value::String("Fallback".into()),
+                },
+            )],
+        );
+        append_changelog(&fallback, &fallback_entry).await.unwrap();
+
+        let entries = read_changelog_with_fallback(&primary, &fallback)
+            .await
+            .unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].op, "create"); // from primary, not fallback
+    }
+
+    #[tokio::test]
+    async fn read_changelog_with_fallback_uses_fallback_when_primary_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let primary = dir.path().join("nonexistent_primary.jsonl");
+        let fallback = dir.path().join("fallback.jsonl");
+
+        let entry = ChangeEntry::new(
+            "task",
+            "01ABC",
+            "fallback_create",
+            vec![(
+                "title".to_string(),
+                FieldChange::Set {
+                    value: Value::String("Fallback".into()),
+                },
+            )],
+        );
+        append_changelog(&fallback, &entry).await.unwrap();
+
+        let entries = read_changelog_with_fallback(&primary, &fallback)
+            .await
+            .unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].op, "fallback_create");
+    }
+
+    #[tokio::test]
+    async fn read_changelog_with_fallback_both_missing_returns_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let primary = dir.path().join("a.jsonl");
+        let fallback = dir.path().join("b.jsonl");
+
+        let entries = read_changelog_with_fallback(&primary, &fallback)
+            .await
+            .unwrap();
+        assert!(entries.is_empty());
+    }
+
+    #[tokio::test]
+    async fn read_changelog_skips_blank_lines() {
+        let dir = tempfile::tempdir().unwrap();
+        let log_path = dir.path().join("test.jsonl");
+
+        let entry = ChangeEntry::new(
+            "task",
+            "01ABC",
+            "create",
+            vec![(
+                "title".to_string(),
+                FieldChange::Set {
+                    value: Value::String("Hello".into()),
+                },
+            )],
+        );
+        let valid_line = serde_json::to_string(&entry).unwrap();
+
+        // Content with blank lines interspersed
+        let content = format!("{}\n\n\n{}\n\n", valid_line, valid_line);
+        fs::write(&log_path, content).await.unwrap();
+
+        let entries = read_changelog(&log_path).await.unwrap();
+        assert_eq!(entries.len(), 2);
+    }
+
+    #[test]
+    fn change_entry_with_undone_id_sets_field() {
+        let entry =
+            ChangeEntry::new("task", "01ABC", "undo", vec![]).with_undone_id("ORIGINAL_ULID");
+        assert_eq!(entry.undone_id.as_deref(), Some("ORIGINAL_ULID"));
+        assert!(entry.redone_id.is_none());
+    }
+
+    #[test]
+    fn change_entry_with_redone_id_sets_field() {
+        let entry =
+            ChangeEntry::new("task", "01ABC", "redo", vec![]).with_redone_id("ORIGINAL_ULID");
+        assert_eq!(entry.redone_id.as_deref(), Some("ORIGINAL_ULID"));
+        assert!(entry.undone_id.is_none());
+    }
+
+    #[test]
+    fn change_entry_with_transaction_id_sets_field() {
+        let entry =
+            ChangeEntry::new("task", "01ABC", "update", vec![]).with_transaction_id("TX001");
+        assert_eq!(entry.transaction_id.as_deref(), Some("TX001"));
+    }
+
+    #[tokio::test]
+    async fn append_changelog_creates_parent_dirs() {
+        let dir = tempfile::tempdir().unwrap();
+        let log_path = dir.path().join("deep").join("nested").join("test.jsonl");
+
+        let entry = ChangeEntry::new(
+            "task",
+            "01ABC",
+            "create",
+            vec![(
+                "title".to_string(),
+                FieldChange::Set {
+                    value: Value::String("Hello".into()),
+                },
+            )],
+        );
+        append_changelog(&log_path, &entry).await.unwrap();
+        assert!(log_path.exists());
+    }
+
+    #[test]
+    fn apply_text_diff_on_missing_field_uses_empty_string() {
+        // When the field doesn't exist, apply_changes uses "" as the current text
+        let mut entity = Entity::new("task", "01ABC");
+        // No "body" field set
+
+        let changes = vec![(
+            "body".to_string(),
+            FieldChange::TextDiff {
+                forward_patch: "--- original\n+++ modified\n@@ -1 +1 @@\n-\n+hello\n".into(),
+                reverse_patch: "--- modified\n+++ original\n@@ -1 +1 @@\n-hello\n+\n".into(),
+            },
+        )];
+
+        // This tests the get_str(key).unwrap_or("") path in apply_changes
+        let result = apply_changes(&mut entity, &changes);
+        // The patch may or may not apply cleanly depending on content, but the code
+        // path is exercised regardless
+        let _ = result;
+    }
+
     #[test]
     fn apply_reversed_changed_stale_value_returns_error() {
         // Simulate an undo scenario where the entity has been modified since

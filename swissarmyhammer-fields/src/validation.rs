@@ -735,4 +735,36 @@ mod tests {
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), numeric_value);
     }
+
+    /// Non-array, non-null value for a multiple reference should pass through unchanged.
+    #[tokio::test]
+    async fn reference_non_array_for_multiple_returns_unchanged() {
+        let lookup = MockLookup::new().with_entities(
+            "task",
+            vec![serde_json::json!({"id": "task_001", "title": "First"})],
+        );
+        let engine = ValidationEngine::new().with_lookup(lookup);
+
+        let field = make_field(
+            "depends_on",
+            FieldType::Reference {
+                entity: "task".into(),
+                multiple: true,
+            },
+        );
+
+        // A plain number is neither array nor null — should pass through
+        let numeric_value = serde_json::json!(99);
+        let result = engine
+            .validate(&field, numeric_value.clone(), &HashMap::new())
+            .await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), numeric_value);
+    }
+
+    #[test]
+    fn validation_engine_default_creates_empty() {
+        // The default engine has no lookup, but should be constructible
+        let _engine = ValidationEngine::default();
+    }
 }

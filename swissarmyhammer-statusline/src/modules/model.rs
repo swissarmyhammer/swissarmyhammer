@@ -99,4 +99,43 @@ mod tests {
         let out = eval(&ctx);
         assert!(out.is_empty());
     }
+
+    #[test]
+    fn test_model_render_output() {
+        let input = StatuslineInput {
+            model: Some(ModelInfo {
+                display_name: Some("Claude".into()),
+                id: None,
+            }),
+            ..Default::default()
+        };
+        let config = StatuslineConfig::default();
+        let ctx = ModuleContext {
+            input: &input,
+            config: &config,
+        };
+        let out = eval(&ctx);
+        let rendered = out.render();
+        assert!(rendered.contains("Claude"));
+        assert!(rendered.contains("\x1b["));
+    }
+
+    #[test]
+    fn test_model_prefers_display_name_over_id() {
+        let input = StatuslineInput {
+            model: Some(ModelInfo {
+                display_name: Some("Display".into()),
+                id: Some("model-id".into()),
+            }),
+            ..Default::default()
+        };
+        let config = StatuslineConfig::default();
+        let ctx = ModuleContext {
+            input: &input,
+            config: &config,
+        };
+        let out = eval(&ctx);
+        assert!(out.text.contains("Display"));
+        assert!(!out.text.contains("model-id"));
+    }
 }

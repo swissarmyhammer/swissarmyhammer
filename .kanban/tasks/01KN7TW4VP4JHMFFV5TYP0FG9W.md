@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: 9a80
+position_column: done
+position_ordinal: ffffffffffffffffffc680
 title: '100% coverage: model-loader'
 ---
-Coverage: 23.5% (122/520 lines) — 398 lines to cover\n\nTop uncovered files:\n- src/retry.rs (67 uncov) — retry logic\n- src/types.rs (64 uncov) — model types\n- src/error.rs (60 uncov) — error handling #coverage-gap
+Top uncovered files:\n- src/retry.rs — retry logic\n- src/types.rs — model types\n- src/error.rs — error handling #coverage-gap\n\n**CONSTRAINT: ONLY add tests. Do NOT modify, refactor, delete, or otherwise change the code under test. The production code must remain exactly as-is. Do NOT put line numbers or line counts in comments or ticket descriptions — lines change constantly and these go stale immediately. Run coverage to get current numbers.**

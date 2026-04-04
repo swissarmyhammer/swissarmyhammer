@@ -1685,4 +1685,478 @@ Some text after
         state.changed.push(std::path::PathBuf::from("/test.rs"));
         assert!(state.has_changes());
     }
+
+    // =========================================================================
+    // Additional Response Parsing Tests
+    // =========================================================================
+
+    #[test]
+    fn test_parse_validator_response_alternative_pass_format() {
+        // "pass": true with "reason" field
+        let response = r#"{"pass": true, "reason": "Code looks clean"}"#;
+        let result = parse_validator_response(response, &test_stop_reason());
+        assert!(result.passed());
+        assert_eq!(result.message(), "Code looks clean");
+    }
+
+    #[test]
+    fn test_parse_validator_response_alternative_fail_format() {
+        // "pass": false with "reason" field
+        let response = r#"{"pass": false, "reason": "Secret found"}"#;
+        let result = parse_validator_response(response, &test_stop_reason());
+        assert!(!result.passed());
+        assert_eq!(result.message(), "Secret found");
+    }
+
+    #[test]
+    fn test_parse_validator_response_alternative_pass_no_spaces() {
+        let response = r#"{"pass":true,"reason":"ok"}"#;
+        let result = parse_validator_response(response, &test_stop_reason());
+        assert!(result.passed());
+    }
+
+    #[test]
+    fn test_parse_validator_response_alternative_fail_no_spaces() {
+        let response = r#"{"pass":false,"reason":"bad"}"#;
+        let result = parse_validator_response(response, &test_stop_reason());
+        assert!(!result.passed());
+    }
+
+    #[test]
+    fn test_parse_validator_response_plain_text_pass() {
+        let result = parse_validator_response("PASS", &test_stop_reason());
+        assert!(result.passed());
+        assert_eq!(result.message(), "Validation passed");
+    }
+
+    #[test]
+    fn test_parse_validator_response_plain_text_pass_with_message() {
+        let result = parse_validator_response("PASS All checks passed", &test_stop_reason());
+        assert!(result.passed());
+        assert_eq!(result.message(), "All checks passed");
+    }
+
+    #[test]
+    fn test_parse_validator_response_plain_text_fail() {
+        let result = parse_validator_response("FAIL", &test_stop_reason());
+        assert!(!result.passed());
+        assert_eq!(result.message(), "Validation failed");
+    }
+
+    #[test]
+    fn test_parse_validator_response_plain_text_fail_with_message() {
+        let result =
+            parse_validator_response("FAIL Secret detected on line 5", &test_stop_reason());
+        assert!(!result.passed());
+        assert_eq!(result.message(), "Secret detected on line 5");
+    }
+
+    #[test]
+    fn test_parse_validator_response_status_no_spaces() {
+        let response = r#"{"status":"passed","message":"ok"}"#;
+        let result = parse_validator_response(response, &test_stop_reason());
+        assert!(result.passed());
+    }
+
+    #[test]
+    fn test_parse_validator_response_status_failed_no_spaces() {
+        let response = r#"{"status":"failed","message":"bad"}"#;
+        let result = parse_validator_response(response, &test_stop_reason());
+        assert!(!result.passed());
+    }
+
+    #[test]
+    fn test_parse_validator_response_bare_code_block() {
+        let response =
+            "Here is my result:\n```\n{\"status\": \"passed\", \"message\": \"OK\"}\n```\n";
+        let result = parse_validator_response(response, &test_stop_reason());
+        assert!(result.passed());
+    }
+
+    #[test]
+    fn test_parse_validator_response_duplicate_json_objects() {
+        // Streaming duplicates - first valid JSON object wins
+        let response =
+            r#"{"status": "failed", "message": "Bad"}{"status": "passed", "message": "OK"}"#;
+        let result = parse_validator_response(response, &test_stop_reason());
+        assert!(!result.passed(), "First JSON object should win");
+    }
+
+    #[test]
+    fn test_parse_validator_response_json_with_surrounding_text() {
+        let response = r#"After analysis, my conclusion is: {"status": "passed", "message": "No issues"} That's my finding."#;
+        let result = parse_validator_response(response, &test_stop_reason());
+        assert!(result.passed());
+    }
+
+    #[test]
+    fn test_extract_json_no_braces() {
+        let input = "just plain text";
+        let result = extract_json(input);
+        assert_eq!(result, "just plain text");
+    }
+
+    #[test]
+    fn test_extract_json_mismatched_braces() {
+        // Last resort: find first { and last }
+        let input = "text { inner } more text";
+        let result = extract_json(input);
+        assert!(result.contains("inner"));
+    }
+
+    #[test]
+    fn test_find_json_object_end_basic() {
+        assert_eq!(find_json_object_end("{}"), Some(1));
+        assert_eq!(find_json_object_end(r#"{"a":"b"}"#), Some(8));
+    }
+
+    #[test]
+    fn test_find_json_object_end_nested() {
+        assert_eq!(find_json_object_end(r#"{"a":{"b":"c"}}"#), Some(14));
+    }
+
+    #[test]
+    fn test_find_json_object_end_with_escaped_quotes() {
+        let s = r#"{"a":"val\"ue"}"#;
+        let end = find_json_object_end(s);
+        assert!(end.is_some());
+    }
+
+    #[test]
+    fn test_find_json_object_end_no_closing() {
+        assert_eq!(find_json_object_end("{"), None);
+        assert_eq!(find_json_object_end(r#"{"a":"b""#), None);
+    }
+
+    #[test]
+    fn test_extract_message_from_response() {
+        let response = r#"{"status": "failed", "message": "Found a bug"}"#;
+        let msg = extract_message_from_response(response);
+        assert_eq!(msg, Some("Found a bug".to_string()));
+    }
+
+    #[test]
+    fn test_extract_message_no_spaces() {
+        let response = r#"{"status":"failed","message":"problem here"}"#;
+        let msg = extract_message_from_response(response);
+        assert_eq!(msg, Some("problem here".to_string()));
+    }
+
+    #[test]
+    fn test_extract_message_not_present() {
+        let response = r#"{"status": "failed"}"#;
+        let msg = extract_message_from_response(response);
+        assert_eq!(msg, None);
+    }
+
+    #[test]
+    fn test_extract_reason_from_response() {
+        let response = r#"{"pass": false, "reason": "Security issue"}"#;
+        let reason = extract_reason_from_response(response);
+        assert_eq!(reason, Some("Security issue".to_string()));
+    }
+
+    #[test]
+    fn test_extract_reason_not_present() {
+        let response = r#"{"pass": false}"#;
+        let reason = extract_reason_from_response(response);
+        assert_eq!(reason, None);
+    }
+
+    #[test]
+    fn test_is_partial_by_name() {
+        assert!(is_partial("_partials/common", "Any content"));
+        assert!(is_partial("_partials/checks", "Regular body"));
+    }
+
+    #[test]
+    fn test_is_partial_by_content() {
+        assert!(is_partial("any-name", "{% partial %}\nPartial body"));
+        assert!(is_partial(
+            "any-name",
+            "  {% partial %}\nWith leading space"
+        ));
+    }
+
+    #[test]
+    fn test_is_partial_neither() {
+        assert!(!is_partial("normal-validator", "Regular validator body"));
+    }
+
+    #[test]
+    fn test_add_partial_with_aliases_with_prefix() {
+        let mut loader = HashMapPartialLoader::empty();
+        add_partial_with_aliases(&mut loader, "_partials/common", "Common content");
+        assert!(swissarmyhammer_templating::PartialLoader::contains(
+            &loader,
+            "_partials/common"
+        ));
+        assert!(swissarmyhammer_templating::PartialLoader::contains(
+            &loader, "common"
+        ));
+    }
+
+    #[test]
+    fn test_add_partial_with_aliases_without_prefix() {
+        let mut loader = HashMapPartialLoader::empty();
+        add_partial_with_aliases(&mut loader, "no-prefix", "Content");
+        assert!(swissarmyhammer_templating::PartialLoader::contains(
+            &loader,
+            "no-prefix"
+        ));
+    }
+
+    // =========================================================================
+    // RuleSetSessionContext Tests
+    // =========================================================================
+
+    #[test]
+    fn test_ruleset_session_context_render() {
+        use crate::validator::{RuleSetManifest, RuleSetMetadata, ValidatorSource};
+
+        let prompt_library = create_prompt_library();
+        let ruleset = RuleSet {
+            manifest: RuleSetManifest {
+                name: "test-ruleset".to_string(),
+                description: "Test RuleSet for session context".to_string(),
+                metadata: RuleSetMetadata {
+                    version: "1.0.0".to_string(),
+                },
+                trigger: HookType::PreToolUse,
+                match_criteria: None,
+                trigger_matcher: None,
+                tags: vec![],
+                severity: Severity::Error,
+                timeout: 30,
+                once: false,
+            },
+            rules: vec![
+                crate::validator::Rule {
+                    name: "rule-1".to_string(),
+                    description: "First rule".to_string(),
+                    body: "Check first thing.".to_string(),
+                    severity: None,
+                    timeout: None,
+                },
+                crate::validator::Rule {
+                    name: "rule-2".to_string(),
+                    description: "Second rule".to_string(),
+                    body: "Check second thing.".to_string(),
+                    severity: None,
+                    timeout: None,
+                },
+            ],
+            source: ValidatorSource::Builtin,
+            base_path: PathBuf::from("/test"),
+        };
+
+        let context = serde_json::json!({"tool_name": "Write"});
+
+        let session_ctx =
+            RuleSetSessionContext::new(&prompt_library, &ruleset, HookType::PreToolUse, &context);
+        let result = session_ctx.render_session_init();
+        assert!(
+            result.is_ok(),
+            "RuleSet session init should render: {:?}",
+            result.err()
+        );
+        let rendered = result.unwrap();
+        assert!(
+            rendered.contains("test-ruleset") || rendered.contains("Test RuleSet"),
+            "Should contain ruleset info: {}",
+            rendered
+        );
+    }
+
+    #[test]
+    fn test_ruleset_session_context_with_changed_files() {
+        use crate::validator::{RuleSetManifest, RuleSetMetadata, ValidatorSource};
+
+        let prompt_library = create_prompt_library();
+        let ruleset = RuleSet {
+            manifest: RuleSetManifest {
+                name: "stop-ruleset".to_string(),
+                description: "Stop RuleSet".to_string(),
+                metadata: RuleSetMetadata {
+                    version: "1.0.0".to_string(),
+                },
+                trigger: HookType::Stop,
+                match_criteria: None,
+                trigger_matcher: None,
+                tags: vec![],
+                severity: Severity::Warn,
+                timeout: 30,
+                once: false,
+            },
+            rules: vec![],
+            source: ValidatorSource::Builtin,
+            base_path: PathBuf::from("/test"),
+        };
+
+        let context = serde_json::json!({"session_id": "sess"});
+        let changed = vec!["src/main.rs".to_string()];
+
+        let session_ctx =
+            RuleSetSessionContext::new(&prompt_library, &ruleset, HookType::Stop, &context)
+                .with_changed_files(Some(&changed));
+        let result = session_ctx.render_session_init();
+        assert!(result.is_ok());
+    }
+
+    // =========================================================================
+    // create_executed_ruleset Tests
+    // =========================================================================
+
+    #[test]
+    fn test_create_executed_ruleset() {
+        use crate::validator::{RuleSetManifest, RuleSetMetadata, ValidatorSource};
+
+        let ruleset = RuleSet {
+            manifest: RuleSetManifest {
+                name: "test".to_string(),
+                description: "Test".to_string(),
+                metadata: RuleSetMetadata {
+                    version: "1.0.0".to_string(),
+                },
+                trigger: HookType::PreToolUse,
+                match_criteria: None,
+                trigger_matcher: None,
+                tags: vec![],
+                severity: Severity::Error,
+                timeout: 30,
+                once: false,
+            },
+            rules: vec![],
+            source: ValidatorSource::Builtin,
+            base_path: PathBuf::from("/test"),
+        };
+
+        let rule_results = vec![
+            crate::validator::RuleResult {
+                rule_name: "rule-1".to_string(),
+                severity: Severity::Error,
+                result: ValidatorResult::pass("ok".to_string()),
+            },
+            crate::validator::RuleResult {
+                rule_name: "rule-2".to_string(),
+                severity: Severity::Error,
+                result: ValidatorResult::fail("bad".to_string()),
+            },
+        ];
+
+        let executed = create_executed_ruleset(&ruleset, rule_results);
+        assert_eq!(executed.ruleset_name, "test");
+        assert_eq!(executed.rule_results.len(), 2);
+        assert!(!executed.passed());
+        assert!(executed.has_blocking_failure());
+    }
+
+    #[test]
+    fn test_log_ruleset_result() {
+        use crate::validator::{ExecutedRuleSet, RuleResult};
+
+        let executed = ExecutedRuleSet {
+            ruleset_name: "test-set".to_string(),
+            rule_results: vec![
+                RuleResult {
+                    rule_name: "r1".to_string(),
+                    severity: Severity::Warn,
+                    result: ValidatorResult::pass("ok".to_string()),
+                },
+                RuleResult {
+                    rule_name: "r2".to_string(),
+                    severity: Severity::Error,
+                    result: ValidatorResult::fail("bad".to_string()),
+                },
+            ],
+        };
+        // Should not panic
+        log_ruleset_result("test-set", &executed);
+    }
+
+    // =========================================================================
+    // render_validator_prompt convenience functions
+    // =========================================================================
+
+    #[test]
+    fn test_render_validator_prompt_with_partials_fn() {
+        let prompt_library = create_prompt_library();
+        let validator = create_test_validator("test", HookType::PreToolUse, Severity::Warn);
+        let context = serde_json::json!({"tool_name": "Read"});
+        let partials = HashMapPartialLoader::empty();
+
+        let result = render_validator_prompt_with_partials(
+            &prompt_library,
+            &validator,
+            HookType::PreToolUse,
+            &context,
+            Some(&partials),
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_render_validator_prompt_with_partials_and_changed_files_fn() {
+        let prompt_library = create_prompt_library();
+        let validator = create_test_validator("test", HookType::Stop, Severity::Warn);
+        let context = serde_json::json!({"session_id": "s"});
+        let partials = HashMapPartialLoader::empty();
+        let changed = vec!["src/lib.rs".to_string()];
+
+        let result = render_validator_prompt_with_partials_and_changed_files(
+            &prompt_library,
+            &validator,
+            HookType::Stop,
+            &context,
+            Some(&partials),
+            Some(&changed),
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_render_validator_prompt_with_none_partials() {
+        let prompt_library = create_prompt_library();
+        let validator = create_test_validator("test", HookType::PreToolUse, Severity::Warn);
+        let context = serde_json::json!({"tool_name": "Read"});
+
+        let result = render_validator_prompt_with_partials::<HashMapPartialLoader>(
+            &prompt_library,
+            &validator,
+            HookType::PreToolUse,
+            &context,
+            None,
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_handle_empty_response_includes_stop_reason() {
+        let result = handle_empty_response(&StopReason::EndTurn);
+        assert!(!result.passed());
+        assert!(result.message().contains("empty response"));
+        assert!(result.message().contains("EndTurn"));
+    }
+
+    #[test]
+    fn test_extract_from_json_code_block_malformed() {
+        // No closing backticks
+        let s = "```json\n{\"a\":1}";
+        assert!(extract_from_json_code_block(s).is_none());
+
+        // Content is not JSON object
+        let s = "```json\nnot json\n```";
+        assert!(extract_from_json_code_block(s).is_none());
+    }
+
+    #[test]
+    fn test_extract_from_bare_code_block_malformed() {
+        // No closing backticks
+        let s = "```\n{\"a\":1}";
+        assert!(extract_from_bare_code_block(s).is_none());
+
+        // Not JSON
+        let s = "```\njust text\n```";
+        assert!(extract_from_bare_code_block(s).is_none());
+    }
 }

@@ -409,8 +409,7 @@ mod tests {
 
     #[test]
     fn test_handle_error_io_error() {
-        let err =
-            SwissArmyHammerError::Io(std::io::Error::new(std::io::ErrorKind::Other, "disk full"));
+        let err = SwissArmyHammerError::Io(std::io::Error::other("disk full"));
         let mcp_err = McpErrorHandler::handle_error(err, "test_op");
         let msg = format!("{:?}", mcp_err);
         assert!(msg.contains("I/O error") || msg.contains("disk full"));

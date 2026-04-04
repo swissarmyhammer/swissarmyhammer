@@ -334,4 +334,191 @@ mod tests {
         assert!(MODEL_EXTENSIONS.contains(&"mlmodel"));
         assert!(MODEL_EXTENSIONS.contains(&"bin"));
     }
+
+    #[test]
+    fn test_model_resolver_default() {
+        // Verify default() and new() both work without panicking
+        let _resolver = ModelResolver;
+        let _resolver2 = ModelResolver::new();
+    }
+
+    #[tokio::test]
+    async fn test_resolve_local_with_filename() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let model_file = temp_dir.path().join("model.gguf");
+        std::fs::write(&model_file, "fake model data").unwrap();
+
+        let resolver = ModelResolver::new();
+        let config = ModelConfig {
+            source: ModelSource::Local {
+                folder: temp_dir.path().to_path_buf(),
+                filename: Some("model.gguf".to_string()),
+            },
+            retry_config: crate::types::RetryConfig::default(),
+            debug: false,
+        };
+
+        let result = resolver.resolve(&config).await;
+        assert!(result.is_ok());
+        let resolved = result.unwrap();
+        assert_eq!(resolved.path, model_file);
+        assert_eq!(resolved.metadata.filename, "model.gguf");
+        assert!(!resolved.metadata.cache_hit);
+        assert!(resolved.metadata.size_bytes > 0);
+    }
+
+    #[tokio::test]
+    async fn test_resolve_local_file_not_found() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let resolver = ModelResolver::new();
+        let config = ModelConfig {
+            source: ModelSource::Local {
+                folder: temp_dir.path().to_path_buf(),
+                filename: Some("nonexistent.gguf".to_string()),
+            },
+            retry_config: crate::types::RetryConfig::default(),
+            debug: false,
+        };
+
+        let result = resolver.resolve(&config).await;
+        assert!(result.is_err());
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(err_msg.contains("does not exist"));
+    }
+
+    #[tokio::test]
+    async fn test_resolve_local_auto_detect() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let model_file = temp_dir.path().join("mymodel.gguf");
+        std::fs::write(&model_file, "fake model").unwrap();
+        // Also create a non-model file
+        std::fs::write(temp_dir.path().join("readme.txt"), "not a model").unwrap();
+
+        let resolver = ModelResolver::new();
+        let config = ModelConfig {
+            source: ModelSource::Local {
+                folder: temp_dir.path().to_path_buf(),
+                filename: None,
+            },
+            retry_config: crate::types::RetryConfig::default(),
+            debug: false,
+        };
+
+        let result = resolver.resolve(&config).await;
+        assert!(result.is_ok());
+        let resolved = result.unwrap();
+        assert!(resolved.path.to_string_lossy().contains("mymodel.gguf"));
+    }
+
+    #[tokio::test]
+    async fn test_resolve_local_auto_detect_bf16_preferred() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(temp_dir.path().join("model.gguf"), "regular").unwrap();
+        std::fs::write(temp_dir.path().join("model-bf16.gguf"), "bf16").unwrap();
+
+        let resolver = ModelResolver::new();
+        let config = ModelConfig {
+            source: ModelSource::Local {
+                folder: temp_dir.path().to_path_buf(),
+                filename: None,
+            },
+            retry_config: crate::types::RetryConfig::default(),
+            debug: false,
+        };
+
+        let result = resolver.resolve(&config).await;
+        assert!(result.is_ok());
+        let resolved = result.unwrap();
+        assert!(
+            resolved.path.to_string_lossy().contains("bf16"),
+            "BF16 model should be preferred"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_resolve_local_auto_detect_no_model_files() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(temp_dir.path().join("readme.txt"), "not a model").unwrap();
+        std::fs::write(temp_dir.path().join("config.json"), "{}").unwrap();
+
+        let resolver = ModelResolver::new();
+        let config = ModelConfig {
+            source: ModelSource::Local {
+                folder: temp_dir.path().to_path_buf(),
+                filename: None,
+            },
+            retry_config: crate::types::RetryConfig::default(),
+            debug: false,
+        };
+
+        let result = resolver.resolve(&config).await;
+        assert!(result.is_err());
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(err_msg.contains("No model files found"));
+    }
+
+    #[tokio::test]
+    async fn test_resolve_local_auto_detect_various_extensions() {
+        for ext in MODEL_EXTENSIONS {
+            let temp_dir = tempfile::TempDir::new().unwrap();
+            let filename = format!("model.{}", ext);
+            std::fs::write(temp_dir.path().join(&filename), "data").unwrap();
+
+            let resolver = ModelResolver::new();
+            let config = ModelConfig {
+                source: ModelSource::Local {
+                    folder: temp_dir.path().to_path_buf(),
+                    filename: None,
+                },
+                retry_config: crate::types::RetryConfig::default(),
+                debug: false,
+            };
+
+            let result = resolver.resolve(&config).await;
+            assert!(result.is_ok(), "Should auto-detect .{} files", ext);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_resolve_invalid_config() {
+        let resolver = ModelResolver::new();
+        let config = ModelConfig {
+            source: ModelSource::HuggingFace {
+                repo: "".to_string(),
+                filename: None,
+                folder: None,
+            },
+            retry_config: crate::types::RetryConfig::default(),
+            debug: false,
+        };
+
+        let result = resolver.resolve(&config).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_resolve_local_metadata_source_is_local() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let model_file = temp_dir.path().join("model.onnx");
+        std::fs::write(&model_file, "onnx data").unwrap();
+
+        let resolver = ModelResolver::new();
+        let config = ModelConfig {
+            source: ModelSource::Local {
+                folder: temp_dir.path().to_path_buf(),
+                filename: Some("model.onnx".to_string()),
+            },
+            retry_config: crate::types::RetryConfig::default(),
+            debug: false,
+        };
+
+        let resolved = resolver.resolve(&config).await.unwrap();
+        match &resolved.metadata.source {
+            ModelSource::Local { folder, filename } => {
+                assert_eq!(folder, temp_dir.path());
+                assert_eq!(filename.as_deref(), Some("model.onnx"));
+            }
+            _ => panic!("Expected Local source in metadata"),
+        }
+    }
 }

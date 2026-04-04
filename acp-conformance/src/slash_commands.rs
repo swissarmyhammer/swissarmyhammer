@@ -409,4 +409,130 @@ mod tests {
     fn test_module_compiles() {
         // This ensures the module compiles correctly
     }
+
+    // --- Async tests using mock agent ---
+
+    use agent_client_protocol::{
+        Agent, AuthenticateRequest, AuthenticateResponse, CancelNotification, ExtNotification,
+        ExtRequest, ExtResponse, InitializeRequest, InitializeResponse, LoadSessionRequest,
+        LoadSessionResponse, NewSessionResponse, PromptResponse, SetSessionModeRequest,
+        SetSessionModeResponse, StopReason,
+    };
+
+    /// Mock agent for slash command tests
+    struct SlashCmdMockAgent;
+
+    #[async_trait::async_trait(?Send)]
+    impl Agent for SlashCmdMockAgent {
+        async fn initialize(
+            &self,
+            _request: InitializeRequest,
+        ) -> agent_client_protocol::Result<InitializeResponse> {
+            Ok(InitializeResponse::new(
+                agent_client_protocol::ProtocolVersion::V1,
+            ))
+        }
+
+        async fn authenticate(
+            &self,
+            _request: AuthenticateRequest,
+        ) -> agent_client_protocol::Result<AuthenticateResponse> {
+            Ok(AuthenticateResponse::new())
+        }
+
+        async fn new_session(
+            &self,
+            _request: NewSessionRequest,
+        ) -> agent_client_protocol::Result<NewSessionResponse> {
+            Ok(NewSessionResponse::new("slash-cmd-test-session"))
+        }
+
+        async fn prompt(
+            &self,
+            _request: PromptRequest,
+        ) -> agent_client_protocol::Result<PromptResponse> {
+            Ok(PromptResponse::new(StopReason::EndTurn))
+        }
+
+        async fn cancel(&self, _request: CancelNotification) -> agent_client_protocol::Result<()> {
+            Ok(())
+        }
+
+        async fn load_session(
+            &self,
+            _request: LoadSessionRequest,
+        ) -> agent_client_protocol::Result<LoadSessionResponse> {
+            Ok(LoadSessionResponse::new())
+        }
+
+        async fn set_session_mode(
+            &self,
+            _request: SetSessionModeRequest,
+        ) -> agent_client_protocol::Result<SetSessionModeResponse> {
+            Ok(SetSessionModeResponse::new())
+        }
+
+        async fn ext_method(
+            &self,
+            _request: ExtRequest,
+        ) -> agent_client_protocol::Result<ExtResponse> {
+            Err(agent_client_protocol::Error::method_not_found())
+        }
+
+        async fn ext_notification(
+            &self,
+            _notification: ExtNotification,
+        ) -> agent_client_protocol::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn test_command_structure_validation_mock() {
+        let agent = SlashCmdMockAgent;
+        let result = test_command_structure_validation(&agent).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_advertise_commands_mock() {
+        let agent = SlashCmdMockAgent;
+        let result = test_advertise_commands(&agent).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_run_command_mock() {
+        let agent = SlashCmdMockAgent;
+        let result = test_run_command(&agent).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_command_field_validation_mock() {
+        let agent = SlashCmdMockAgent;
+        let result = test_command_field_validation(&agent).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_command_input_hint_mock() {
+        let agent = SlashCmdMockAgent;
+        let result = test_command_input_hint(&agent).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_command_with_input_mock() {
+        let agent = SlashCmdMockAgent;
+        let result = test_command_with_input(&agent).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_command_with_mixed_content_mock() {
+        let agent = SlashCmdMockAgent;
+        let result = test_command_with_mixed_content(&agent).await;
+        assert!(result.is_ok());
+    }
 }

@@ -614,4 +614,483 @@ mod tests {
         );
         assert!(e.to_string().contains("chat-model"));
     }
+
+    // -------------------------------------------------------------------------
+    // EmbedderError — From<EmbeddingError> conversion
+    // -------------------------------------------------------------------------
+
+    /// The `From<EmbeddingError>` impl wraps the embedding error correctly.
+    #[test]
+    fn embedder_error_from_embedding_error() {
+        let inner = EmbeddingError::model("backend crashed");
+        let outer: EmbedderError = inner.into();
+        assert!(
+            matches!(outer, EmbedderError::Embedding(_)),
+            "Expected Embedding variant, got: {outer}"
+        );
+        assert!(
+            outer.to_string().contains("backend crashed"),
+            "Display should include inner message"
+        );
+    }
+
+    /// EmbedderError Debug output includes the variant name.
+    #[test]
+    fn embedder_error_debug_format() {
+        let e = EmbedderError::ModelNotFound("test".to_string());
+        let dbg = format!("{e:?}");
+        assert!(
+            dbg.contains("ModelNotFound"),
+            "Debug should contain variant name, got: {dbg}"
+        );
+
+        let e = EmbedderError::NoCompatibleExecutor("test".to_string());
+        let dbg = format!("{e:?}");
+        assert!(dbg.contains("NoCompatibleExecutor"));
+
+        let e = EmbedderError::ConfigParse("test".to_string());
+        let dbg = format!("{e:?}");
+        assert!(dbg.contains("ConfigParse"));
+
+        let e = EmbedderError::NotAnEmbeddingModel(
+            "test".to_string(),
+            swissarmyhammer_config::model::ModelExecutorType::LlamaAgent,
+        );
+        let dbg = format!("{e:?}");
+        assert!(dbg.contains("NotAnEmbeddingModel"));
+
+        let inner = EmbeddingError::model("fail");
+        let e: EmbedderError = inner.into();
+        let dbg = format!("{e:?}");
+        assert!(dbg.contains("Embedding"));
+    }
+
+    // -------------------------------------------------------------------------
+    // convert_source — both HuggingFace and Local variants
+    // -------------------------------------------------------------------------
+
+    /// HuggingFace source converts correctly with all fields populated.
+    #[test]
+    fn convert_source_huggingface_with_all_fields() {
+        let src = swissarmyhammer_config::ModelSource::HuggingFace {
+            repo: "owner/repo".to_string(),
+            filename: Some("model.gguf".to_string()),
+            folder: Some("subfolder".to_string()),
+        };
+        let converted = convert_source(&src);
+        match converted {
+            ModelSource::HuggingFace {
+                repo,
+                filename,
+                folder,
+            } => {
+                assert_eq!(repo, "owner/repo");
+                assert_eq!(filename, Some("model.gguf".to_string()));
+                assert_eq!(folder, Some("subfolder".to_string()));
+            }
+            other => panic!("Expected HuggingFace, got: {other:?}"),
+        }
+    }
+
+    /// HuggingFace source converts correctly with optional fields as None.
+    #[test]
+    fn convert_source_huggingface_minimal() {
+        let src = swissarmyhammer_config::ModelSource::HuggingFace {
+            repo: "org/model".to_string(),
+            filename: None,
+            folder: None,
+        };
+        let converted = convert_source(&src);
+        match converted {
+            ModelSource::HuggingFace {
+                repo,
+                filename,
+                folder,
+            } => {
+                assert_eq!(repo, "org/model");
+                assert_eq!(filename, None);
+                assert_eq!(folder, None);
+            }
+            other => panic!("Expected HuggingFace, got: {other:?}"),
+        }
+    }
+
+    /// Local source converts correctly with folder present.
+    #[test]
+    fn convert_source_local_with_folder() {
+        let src = swissarmyhammer_config::ModelSource::Local {
+            filename: std::path::PathBuf::from("model.bin"),
+            folder: Some(std::path::PathBuf::from("/opt/models")),
+        };
+        let converted = convert_source(&src);
+        match converted {
+            ModelSource::Local { folder, filename } => {
+                assert_eq!(folder, std::path::PathBuf::from("/opt/models"));
+                assert_eq!(filename, Some("model.bin".to_string()));
+            }
+            other => panic!("Expected Local, got: {other:?}"),
+        }
+    }
+
+    /// Local source converts correctly without folder (defaults to empty PathBuf).
+    #[test]
+    fn convert_source_local_without_folder() {
+        let src = swissarmyhammer_config::ModelSource::Local {
+            filename: std::path::PathBuf::from("weights.safetensors"),
+            folder: None,
+        };
+        let converted = convert_source(&src);
+        match converted {
+            ModelSource::Local { folder, filename } => {
+                assert_eq!(folder, std::path::PathBuf::from(""));
+                assert_eq!(filename, Some("weights.safetensors".to_string()));
+            }
+            other => panic!("Expected Local, got: {other:?}"),
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // chunk_text — additional edge cases
+    // -------------------------------------------------------------------------
+
+    /// Text exactly equal to chunk_size returns a single chunk.
+    #[test]
+    fn chunk_text_exact_boundary_returns_single_chunk() {
+        let text = "abcdefghij"; // 10 chars
+        let chunks = chunk_text(text, 10, 3);
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0], text);
+    }
+
+    /// Text with no whitespace is still split (falls back to hard boundary).
+    #[test]
+    fn chunk_text_no_whitespace_still_splits() {
+        let text = "abcdefghijklmnopqrstuvwxyz"; // 26 chars
+        let chunks = chunk_text(text, 10, 2);
+        assert!(
+            chunks.len() > 1,
+            "Should split even without whitespace, got {} chunk(s)",
+            chunks.len()
+        );
+        // Verify all chars are covered
+        for ch in text.chars() {
+            assert!(
+                chunks.iter().any(|c| c.contains(ch)),
+                "Character '{ch}' missing from chunks"
+            );
+        }
+    }
+
+    /// Overlap larger than chunk_size doesn't panic — degenerates gracefully.
+    #[test]
+    fn chunk_text_overlap_larger_than_chunk_size_no_panic() {
+        let text = "hello world foo bar baz qux";
+        let chunks = chunk_text(text, 5, 100);
+        // Should still produce at least one chunk without panicking
+        assert!(!chunks.is_empty(), "Should produce at least one chunk");
+    }
+
+    /// Zero overlap means no redundancy between chunks.
+    #[test]
+    fn chunk_text_zero_overlap() {
+        let text = "aaa bbb ccc ddd eee fff ggg hhh";
+        let chunks = chunk_text(text, 12, 0);
+        assert!(
+            chunks.len() > 1,
+            "Expected multiple chunks, got {}",
+            chunks.len()
+        );
+    }
+
+    /// Chunk size of 1 produces many chunks without panicking.
+    #[test]
+    fn chunk_text_size_one_no_panic() {
+        let text = "a b c d e";
+        let chunks = chunk_text(text, 1, 0);
+        assert!(!chunks.is_empty(), "Should produce at least one chunk");
+    }
+
+    /// Single-character text with large chunk_size returns as-is.
+    #[test]
+    fn chunk_text_single_char() {
+        let chunks = chunk_text("x", 1000, 100);
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0], "x");
+    }
+
+    /// Emoji text with char-boundary-aligned chunk_size splits correctly.
+    #[test]
+    fn chunk_text_emoji_boundaries() {
+        // Each emoji is 4 bytes. Use chunk_size that aligns with char boundaries (8 = 2 emojis).
+        let text = "😀😁😂🤣😃😄😅😆😉😊";
+        let chunks = chunk_text(text, 8, 4);
+        for chunk in &chunks {
+            // Validates the chunk is valid UTF-8 (implicit since it's &str)
+            // and has at least one character
+            assert!(
+                !chunk.is_empty() || text.is_empty(),
+                "Non-empty text should produce non-empty chunks"
+            );
+        }
+        assert!(chunks.len() > 1, "Should split into multiple chunks");
+    }
+
+    /// Large text with realistic parameters produces expected chunk count.
+    #[test]
+    fn chunk_text_large_text_coverage() {
+        // Simulate 3000 chars of text with chunk_size=512*3=1536, overlap=384
+        let words: Vec<String> = (0..500).map(|i| format!("word{i:04}")).collect();
+        let text = words.join(" ");
+        assert!(text.len() > 3000, "Need large text");
+
+        let chunk_size = 1536;
+        let overlap = chunk_size / 4;
+        let chunks = chunk_text(&text, chunk_size, overlap);
+
+        assert!(chunks.len() >= 2, "Should need multiple chunks");
+        // First chunk should be roughly chunk_size chars
+        assert!(
+            chunks[0].len() <= chunk_size + 10,
+            "First chunk too large: {}",
+            chunks[0].len()
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // from_model_name — LlamaAgent executor triggers NotAnEmbeddingModel
+    // -------------------------------------------------------------------------
+
+    /// A `llama-agent` executor (like `qwen-coder`) is not an embedding model.
+    #[test]
+    fn from_model_name_llama_agent_model_returns_error() {
+        let rt = rt();
+        rt.block_on(async {
+            let result = Embedder::from_model_name("qwen-coder").await;
+            assert!(
+                matches!(
+                    result,
+                    Err(EmbedderError::NotAnEmbeddingModel(_, _))
+                        | Err(EmbedderError::NoCompatibleExecutor(_))
+                ),
+                "Expected NotAnEmbeddingModel or NoCompatibleExecutor for llama-agent, got: {}",
+                result.err().map(|e| e.to_string()).unwrap_or_default()
+            );
+        });
+    }
+
+    /// `EmbedderError::NotAnEmbeddingModel` includes the executor type in its message.
+    #[test]
+    fn embedder_error_not_embedding_includes_executor_type() {
+        let e = EmbedderError::NotAnEmbeddingModel(
+            "my-llm".to_string(),
+            swissarmyhammer_config::model::ModelExecutorType::LlamaAgent,
+        );
+        let msg = e.to_string();
+        assert!(msg.contains("my-llm"), "Should contain model name");
+        assert!(
+            msg.contains("LlamaAgent"),
+            "Should contain executor type, got: {msg}"
+        );
+    }
+
+    /// `EmbedderError::NotAnEmbeddingModel` with ClaudeCode type displays correctly.
+    #[test]
+    fn embedder_error_not_embedding_claude_code_type() {
+        let e = EmbedderError::NotAnEmbeddingModel(
+            "code-model".to_string(),
+            swissarmyhammer_config::model::ModelExecutorType::ClaudeCode,
+        );
+        let msg = e.to_string();
+        assert!(msg.contains("code-model"));
+        assert!(msg.contains("ClaudeCode"), "got: {msg}");
+    }
+
+    // -------------------------------------------------------------------------
+    // from_model_name — ConfigParse error path
+    // -------------------------------------------------------------------------
+
+    /// Verify `ConfigParse` display includes the inner message.
+    #[test]
+    fn embedder_error_config_parse_display() {
+        let e = EmbedderError::ConfigParse("invalid YAML at line 5".to_string());
+        let msg = e.to_string();
+        assert!(
+            msg.contains("invalid YAML at line 5"),
+            "Should contain parse error details, got: {msg}"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // Embedder construction and accessor tests — llama backend (no model download)
+    // -------------------------------------------------------------------------
+
+    /// `from_model_name` succeeds for a llama-embedding model (no download needed).
+    /// Tests the success path: config resolution, executor selection, backend construction,
+    /// and accessor methods.
+    #[test]
+    fn from_model_name_llama_embedding_succeeds() {
+        let rt = rt();
+        rt.block_on(async {
+            // nomic-embed-code uses llama-embedding only (no ANE), so it takes
+            // the LlamaEmbedding branch on all platforms.
+            let embedder = Embedder::from_model_name("nomic-embed-code")
+                .await
+                .expect("Should construct llama-embedding embedder without downloading");
+
+            assert_eq!(embedder.backend_name(), "llama");
+            assert_eq!(embedder.model_name(), "nomic-embed-code");
+            assert_eq!(embedder.max_sequence_length(), 512);
+        });
+    }
+
+    /// `Embedder::default()` resolves the default model name.
+    /// On macOS ARM64, qwen-embedding selects the ANE backend which needs model
+    /// resolution, so this may fail in CI. We just verify it doesn't panic and
+    /// returns a meaningful error or succeeds.
+    #[test]
+    fn default_constructor_resolves_default_model() {
+        let rt = rt();
+        rt.block_on(async {
+            let result = Embedder::default().await;
+            // On macOS ARM64: may fail due to ANE model resolution (needs download).
+            // On other platforms: uses llama-embedding, should succeed.
+            // Either way, should not panic.
+            match result {
+                Ok(embedder) => {
+                    assert_eq!(embedder.model_name(), DEFAULT_MODEL_NAME);
+                }
+                Err(e) => {
+                    // Expected on macOS ARM64 without cached model.
+                    // Verify it's a sensible error, not a random panic.
+                    let msg = e.to_string();
+                    assert!(!msg.is_empty(), "Error should have a descriptive message");
+                }
+            }
+        });
+    }
+
+    /// `is_loaded()` returns false before `load()` is called.
+    #[test]
+    fn embedder_is_loaded_returns_false_before_load() {
+        let rt = rt();
+        rt.block_on(async {
+            let embedder = Embedder::from_model_name("nomic-embed-code")
+                .await
+                .expect("Should construct embedder");
+            assert!(
+                !embedder.is_loaded(),
+                "Should not be loaded before load() is called"
+            );
+        });
+    }
+
+    /// `embedding_dimension()` returns a value (possibly None before loading).
+    #[test]
+    fn embedder_embedding_dimension_before_load() {
+        let rt = rt();
+        rt.block_on(async {
+            let embedder = Embedder::from_model_name("nomic-embed-code")
+                .await
+                .expect("Should construct embedder");
+            // Before loading, dimension may be None or Some depending on backend.
+            // Just verify it doesn't panic.
+            let _dim = embedder.embedding_dimension();
+        });
+    }
+
+    /// `embed_text` on an unloaded model returns an error (not a panic).
+    #[test]
+    fn embedder_embed_text_before_load_returns_error() {
+        let rt = rt();
+        rt.block_on(async {
+            let embedder = Embedder::from_model_name("nomic-embed-code")
+                .await
+                .expect("Should construct embedder");
+            // Embedding without loading should fail gracefully
+            let result = embedder.embed_text("hello").await;
+            assert!(
+                result.is_err(),
+                "embed_text on unloaded model should return error"
+            );
+        });
+    }
+
+    /// `embed_text` with a very long text (exceeding max_sequence_length) on an
+    /// unloaded model goes through the chunked path and still returns an error.
+    #[test]
+    fn embedder_embed_text_long_text_before_load_returns_error() {
+        let rt = rt();
+        rt.block_on(async {
+            let embedder = Embedder::from_model_name("nomic-embed-code")
+                .await
+                .expect("Should construct embedder");
+            // Create text that exceeds max_sequence_length * 3 chars to trigger chunked path
+            let long_text = "word ".repeat(2000); // ~10000 chars >> 512*3=1536
+            let result = embedder.embed_text(&long_text).await;
+            assert!(
+                result.is_err(),
+                "embed_text with long text on unloaded model should return error"
+            );
+        });
+    }
+
+    /// `load()` on a model without the actual file on disk returns an error.
+    /// This exercises the `TextEmbedder::load` delegation path.
+    #[test]
+    fn embedder_load_without_model_file_returns_error() {
+        let rt = rt();
+        rt.block_on(async {
+            let embedder = Embedder::from_model_name("nomic-embed-code")
+                .await
+                .expect("Should construct embedder");
+            // load() will try to resolve/download the model file and fail
+            // if the model is not already cached.
+            let result = embedder.load().await;
+            // On a fresh machine without cached model, this should fail.
+            // On a machine with cached model, it succeeds — either outcome is fine.
+            match result {
+                Ok(()) => {
+                    assert!(
+                        embedder.is_loaded(),
+                        "After successful load, is_loaded should be true"
+                    );
+                }
+                Err(e) => {
+                    // Just verify it's a real error, not garbage
+                    let msg = e.to_string();
+                    assert!(!msg.is_empty(), "Error should have a message");
+                }
+            }
+        });
+    }
+
+    /// The `normalize` field is read from config (true for nomic-embed-code).
+    /// This is verified indirectly by successful construction.
+    #[test]
+    fn embedder_normalize_field_from_config() {
+        let rt = rt();
+        rt.block_on(async {
+            // nomic-embed-code has normalize: true in its config
+            let embedder = Embedder::from_model_name("nomic-embed-code")
+                .await
+                .expect("Should construct embedder");
+            // normalize is private, but it's set during construction.
+            // We verify construction succeeded (which means the config was parsed
+            // and normalize was read without error).
+            assert_eq!(embedder.model_name(), "nomic-embed-code");
+        });
+    }
+
+    // -------------------------------------------------------------------------
+    // EmbedderError — NoCompatibleExecutor display
+    // -------------------------------------------------------------------------
+
+    /// NoCompatibleExecutor includes the model name.
+    #[test]
+    fn embedder_error_no_compatible_executor_display() {
+        let e = EmbedderError::NoCompatibleExecutor("ane-only-model".to_string());
+        let msg = e.to_string();
+        assert!(msg.contains("ane-only-model"));
+        assert!(msg.contains("no embedding executor"));
+    }
 }

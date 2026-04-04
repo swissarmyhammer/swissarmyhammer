@@ -142,4 +142,70 @@ mod tests {
         let out = eval(&ctx);
         assert!(!out.is_empty());
     }
+
+    #[test]
+    fn test_directory_render_output() {
+        let input = StatuslineInput {
+            cwd: Some("/home/user/project".into()),
+            ..Default::default()
+        };
+        let config = StatuslineConfig::default();
+        let ctx = ModuleContext {
+            input: &input,
+            config: &config,
+        };
+        let out = eval(&ctx);
+        let rendered = out.render();
+        assert!(rendered.contains("project"));
+        assert!(rendered.contains("\x1b["));
+    }
+
+    #[test]
+    fn test_directory_workspace_takes_precedence_over_cwd() {
+        let input = StatuslineInput {
+            workspace: Some(WorkspaceInfo {
+                current_dir: Some("/ws/path".into()),
+            }),
+            cwd: Some("/cwd/path".into()),
+            ..Default::default()
+        };
+        let config = StatuslineConfig::default();
+        let ctx = ModuleContext {
+            input: &input,
+            config: &config,
+        };
+        let out = eval(&ctx);
+        assert!(out.text.contains("path"));
+    }
+
+    #[test]
+    fn test_directory_truncation_length_3() {
+        let input = StatuslineInput {
+            cwd: Some("/a/b/c/d/e".into()),
+            ..Default::default()
+        };
+        let mut config = StatuslineConfig::default();
+        config.directory.truncation_length = 3;
+        let ctx = ModuleContext {
+            input: &input,
+            config: &config,
+        };
+        let out = eval(&ctx);
+        assert!(out.text.contains("c/d/e"));
+    }
+
+    #[test]
+    fn test_directory_single_component() {
+        let input = StatuslineInput {
+            cwd: Some("/project".into()),
+            ..Default::default()
+        };
+        let config = StatuslineConfig::default();
+        let ctx = ModuleContext {
+            input: &input,
+            config: &config,
+        };
+        let out = eval(&ctx);
+        assert!(out.text.contains("project"));
+    }
 }
