@@ -61,6 +61,16 @@ const mockInvoke = vi.fn(async (cmd: string, _args?: any) => {
   if (cmd === "get_entity_schema") return TASK_SCHEMA;
   if (cmd === "list_commands_for_scope") return { commands: [] };
   if (cmd === "list_views") return [];
+  if (cmd === "get_ui_state")
+    return {
+      palette_open: false,
+      palette_mode: "command",
+      keymap_mode: "cua",
+      scope_chain: [],
+      open_boards: [],
+      windows: {},
+      recent_boards: [],
+    };
   return null;
 });
 
