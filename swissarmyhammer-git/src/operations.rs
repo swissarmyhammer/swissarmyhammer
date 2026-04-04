@@ -1512,13 +1512,17 @@ mod tests {
     /// Must be called after at least one commit exists on the default branch.
     fn rename_default_branch_to_main(repo: &Repository) {
         let head = repo.head().unwrap();
-        let current_branch = head.shorthand().unwrap_or("");
+        let current_branch = head.shorthand().unwrap_or("").to_string();
         if current_branch == "main" {
             return; // Already on main, nothing to do
         }
         let head_commit = head.peel_to_commit().unwrap();
         repo.branch("main", &head_commit, true).unwrap();
         repo.set_head("refs/heads/main").unwrap();
+        // Delete the old default branch so only "main" remains
+        if let Ok(mut old_branch) = repo.find_branch(&current_branch, BranchType::Local) {
+            old_branch.delete().ok();
+        }
     }
 
     fn raw_commit(repo: &Repository, message: &str, files: Vec<(&str, &str)>) -> git2::Oid {
@@ -1934,17 +1938,23 @@ mod tests {
         config.set_str("user.name", "Test User").unwrap();
         config.set_str("user.email", "test@example.com").unwrap();
 
-        // Create initial commit on "master" branch explicitly
+        // Create initial commit on whatever the default branch is
         raw_commit(&repo, "Initial commit", vec![("README.md", "# Repo")]);
-        // Ensure the branch is named "master" (not "main")
         let head = repo.head().unwrap();
+        let default_branch = head.shorthand().unwrap_or("").to_string();
         let head_commit = head.peel_to_commit().unwrap();
-        repo.branch("master", &head_commit, true).unwrap();
-        repo.set_head("refs/heads/master").unwrap();
 
-        // Delete "main" branch if it exists
-        if let Ok(mut main_branch) = repo.find_branch("main", BranchType::Local) {
-            main_branch.delete().ok();
+        // If we're not already on master, create it and switch
+        if default_branch != "master" {
+            repo.branch("master", &head_commit, true).unwrap();
+            repo.set_head("refs/heads/master").unwrap();
+        }
+
+        // Delete any non-master branches (e.g. "main" from git init default)
+        if default_branch != "master" {
+            if let Ok(mut branch) = repo.find_branch(&default_branch, BranchType::Local) {
+                branch.delete().ok();
+            }
         }
 
         let git_ops = GitOperations::with_work_dir(repo_path.to_path_buf()).unwrap();
