@@ -316,208 +316,89 @@ impl AgentHookStrategy for ClaudeCodeHookStrategy {
             .and_then(|v| v.as_str())
             .map(|p| p.len());
 
-        // Route to appropriate chain - the chain handles everything:
-        // file tracking, validator execution, etc.
-        // Chain returns ChainOutput (agent-agnostic), which we transform to HookOutput (Claude-specific)
+        // Route to appropriate chain. Each arm: deserialize → pick chain → execute.
+        // Macro eliminates the repetitive boilerplate.
+        macro_rules! run_chain {
+            ($type:ty, $chain:expr, $input:expr) => {{
+                let typed: $type = serde_json::from_value($input).map_err(AvpError::Json)?;
+                $chain.execute(&typed).await.map_err(AvpError::Chain)
+            }};
+        }
+
         let chain_result = match hook_type {
-            HookType::SessionStart => {
-                let typed: SessionStartInput =
-                    serde_json::from_value(input).map_err(AvpError::Json)?;
-                self.chain_factory
-                    .session_start_chain()
-                    .execute(&typed)
-                    .await
-                    .map_err(AvpError::Chain)
-            }
-            HookType::SessionEnd => {
-                let typed: SessionEndInput =
-                    serde_json::from_value(input).map_err(AvpError::Json)?;
-                self.chain_factory
-                    .session_end_chain()
-                    .execute(&typed)
-                    .await
-                    .map_err(AvpError::Chain)
-            }
-            HookType::PreToolUse => {
-                let typed: PreToolUseInput =
-                    serde_json::from_value(input).map_err(AvpError::Json)?;
-                self.chain_factory
-                    .pre_tool_use_chain()
-                    .execute(&typed)
-                    .await
-                    .map_err(AvpError::Chain)
-            }
-            HookType::PostToolUse => {
-                let typed: PostToolUseInput =
-                    serde_json::from_value(input).map_err(AvpError::Json)?;
-                self.chain_factory
-                    .post_tool_use_chain()
-                    .execute(&typed)
-                    .await
-                    .map_err(AvpError::Chain)
-            }
-            HookType::Stop => {
-                let typed: StopInput = serde_json::from_value(input).map_err(AvpError::Json)?;
-                self.chain_factory
-                    .stop_chain()
-                    .execute(&typed)
-                    .await
-                    .map_err(AvpError::Chain)
-            }
-            // Pass-through hooks - no file tracking or validators, just allow
+            // Chains with validators and/or file tracking
+            HookType::SessionStart => run_chain!(
+                SessionStartInput,
+                self.chain_factory.session_start_chain(),
+                input
+            ),
+            HookType::SessionEnd => run_chain!(
+                SessionEndInput,
+                self.chain_factory.session_end_chain(),
+                input
+            ),
+            HookType::PreToolUse => run_chain!(
+                PreToolUseInput,
+                self.chain_factory.pre_tool_use_chain(),
+                input
+            ),
+            HookType::PostToolUse => run_chain!(
+                PostToolUseInput,
+                self.chain_factory.post_tool_use_chain(),
+                input
+            ),
+            HookType::Stop => run_chain!(StopInput, self.chain_factory.stop_chain(), input),
+            HookType::Elicitation => run_chain!(
+                ElicitationInput,
+                self.chain_factory.elicitation_chain(),
+                input
+            ),
+            HookType::ElicitationResult => run_chain!(
+                ElicitationResultInput,
+                self.chain_factory.elicitation_result_chain(),
+                input
+            ),
+            HookType::ConfigChange => run_chain!(
+                ConfigChangeInput,
+                self.chain_factory.config_change_chain(),
+                input
+            ),
+            HookType::WorktreeCreate => run_chain!(
+                WorktreeCreateInput,
+                self.chain_factory.worktree_create_chain(),
+                input
+            ),
+            HookType::TeammateIdle => run_chain!(
+                TeammateIdleInput,
+                self.chain_factory.teammate_idle_chain(),
+                input
+            ),
+            HookType::TaskCompleted => run_chain!(
+                TaskCompletedInput,
+                self.chain_factory.task_completed_chain(),
+                input
+            ),
+
+            // Pass-through hooks — observe only, no validators
             HookType::UserPromptSubmit => {
-                let typed: UserPromptSubmitInput =
-                    serde_json::from_value(input).map_err(AvpError::Json)?;
-                Chain::success()
-                    .execute(&typed)
-                    .await
-                    .map_err(AvpError::Chain)
+                run_chain!(UserPromptSubmitInput, Chain::success(), input)
             }
             HookType::PermissionRequest => {
-                let typed: PermissionRequestInput =
-                    serde_json::from_value(input).map_err(AvpError::Json)?;
-                Chain::success()
-                    .execute(&typed)
-                    .await
-                    .map_err(AvpError::Chain)
+                run_chain!(PermissionRequestInput, Chain::success(), input)
             }
             HookType::PostToolUseFailure => {
-                let typed: PostToolUseFailureInput =
-                    serde_json::from_value(input).map_err(AvpError::Json)?;
-                Chain::success()
-                    .execute(&typed)
-                    .await
-                    .map_err(AvpError::Chain)
+                run_chain!(PostToolUseFailureInput, Chain::success(), input)
             }
-            HookType::SubagentStart => {
-                let typed: SubagentStartInput =
-                    serde_json::from_value(input).map_err(AvpError::Json)?;
-                Chain::success()
-                    .execute(&typed)
-                    .await
-                    .map_err(AvpError::Chain)
-            }
-            HookType::SubagentStop => {
-                let typed: SubagentStopInput =
-                    serde_json::from_value(input).map_err(AvpError::Json)?;
-                Chain::success()
-                    .execute(&typed)
-                    .await
-                    .map_err(AvpError::Chain)
-            }
-            HookType::PreCompact => {
-                let typed: PreCompactInput =
-                    serde_json::from_value(input).map_err(AvpError::Json)?;
-                Chain::success()
-                    .execute(&typed)
-                    .await
-                    .map_err(AvpError::Chain)
-            }
-            HookType::Setup => {
-                let typed: SetupInput = serde_json::from_value(input).map_err(AvpError::Json)?;
-                Chain::success()
-                    .execute(&typed)
-                    .await
-                    .map_err(AvpError::Chain)
-            }
-            HookType::Notification => {
-                let typed: NotificationInput =
-                    serde_json::from_value(input).map_err(AvpError::Json)?;
-                Chain::success()
-                    .execute(&typed)
-                    .await
-                    .map_err(AvpError::Chain)
-            }
-            // Elicitation: an MCP server is requesting user input — validators can block/deny
-            HookType::Elicitation => {
-                let typed: ElicitationInput =
-                    serde_json::from_value(input).map_err(AvpError::Json)?;
-                self.chain_factory
-                    .elicitation_chain()
-                    .execute(&typed)
-                    .await
-                    .map_err(AvpError::Chain)
-            }
-            // ElicitationResult: user responded to MCP elicitation — validators can block/deny
-            HookType::ElicitationResult => {
-                let typed: ElicitationResultInput =
-                    serde_json::from_value(input).map_err(AvpError::Json)?;
-                self.chain_factory
-                    .elicitation_result_chain()
-                    .execute(&typed)
-                    .await
-                    .map_err(AvpError::Chain)
-            }
-            // InstructionsLoaded: observe-only — CLAUDE.md files have already been read,
-            // nothing to block; validators receive the event for informational purposes only.
+            HookType::SubagentStart => run_chain!(SubagentStartInput, Chain::success(), input),
+            HookType::SubagentStop => run_chain!(SubagentStopInput, Chain::success(), input),
+            HookType::PreCompact => run_chain!(PreCompactInput, Chain::success(), input),
+            HookType::PostCompact => run_chain!(PostCompactInput, Chain::success(), input),
+            HookType::Setup => run_chain!(SetupInput, Chain::success(), input),
+            HookType::Notification => run_chain!(NotificationInput, Chain::success(), input),
             HookType::InstructionsLoaded => {
-                let typed: InstructionsLoadedInput =
-                    serde_json::from_value(input).map_err(AvpError::Json)?;
-                Chain::success()
-                    .execute(&typed)
-                    .await
-                    .map_err(AvpError::Chain)
+                run_chain!(InstructionsLoadedInput, Chain::success(), input)
             }
-            // ConfigChange: config file changed — validators can block/deny
-            HookType::ConfigChange => {
-                let typed: ConfigChangeInput =
-                    serde_json::from_value(input).map_err(AvpError::Json)?;
-                self.chain_factory
-                    .config_change_chain()
-                    .execute(&typed)
-                    .await
-                    .map_err(AvpError::Chain)
-            }
-            // WorktreeCreate: a git worktree is being created — validators can block/deny
-            HookType::WorktreeCreate => {
-                let typed: WorktreeCreateInput =
-                    serde_json::from_value(input).map_err(AvpError::Json)?;
-                self.chain_factory
-                    .worktree_create_chain()
-                    .execute(&typed)
-                    .await
-                    .map_err(AvpError::Chain)
-            }
-            // WorktreeRemove: observe-only — the worktree is already being removed by the time
-            // this hook fires; validators cannot prevent removal, only observe it.
-            HookType::WorktreeRemove => {
-                let typed: WorktreeRemoveInput =
-                    serde_json::from_value(input).map_err(AvpError::Json)?;
-                Chain::success()
-                    .execute(&typed)
-                    .await
-                    .map_err(AvpError::Chain)
-            }
-            // PostCompact: observe-only — context compaction has already completed;
-            // validators cannot undo it, only observe the post-compaction state.
-            HookType::PostCompact => {
-                let typed: PostCompactInput =
-                    serde_json::from_value(input).map_err(AvpError::Json)?;
-                Chain::success()
-                    .execute(&typed)
-                    .await
-                    .map_err(AvpError::Chain)
-            }
-            // TeammateIdle: an agent teammate went idle — validators can block/deny further action
-            HookType::TeammateIdle => {
-                let typed: TeammateIdleInput =
-                    serde_json::from_value(input).map_err(AvpError::Json)?;
-                self.chain_factory
-                    .teammate_idle_chain()
-                    .execute(&typed)
-                    .await
-                    .map_err(AvpError::Chain)
-            }
-            // TaskCompleted: a task was marked complete — validators can block/deny
-            HookType::TaskCompleted => {
-                let typed: TaskCompletedInput =
-                    serde_json::from_value(input).map_err(AvpError::Json)?;
-                self.chain_factory
-                    .task_completed_chain()
-                    .execute(&typed)
-                    .await
-                    .map_err(AvpError::Chain)
-            }
+            HookType::WorktreeRemove => run_chain!(WorktreeRemoveInput, Chain::success(), input),
         };
 
         // Log the hook event based on chain result
