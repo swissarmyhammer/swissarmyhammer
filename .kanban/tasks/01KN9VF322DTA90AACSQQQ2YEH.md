@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: aa80
+position_column: done
+position_ordinal: ffffffffffffffffffe880
 title: Fix command palette dismiss targeting wrong window — empty scope chain in closePalette
 ---
 ## What

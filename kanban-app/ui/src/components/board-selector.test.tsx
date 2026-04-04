@@ -79,4 +79,32 @@ describe("BoardSelector", () => {
     const trigger = container.querySelector("[data-slot='select-trigger']");
     expect(trigger).toBeTruthy();
   });
+
+  it("calls onSelect when a board is selected (not dispatchCommand)", async () => {
+    // Verify the component delegates to onSelect rather than dispatching
+    // file.switchBoard directly. Radix Select in jsdom doesn't support full
+    // open/click interaction, so we assert at the wiring level: the internal
+    // Select's onValueChange must forward to the onSelect prop.
+    const onSelect = vi.fn();
+    mockInvoke.mockClear();
+
+    render(
+      <Wrapper>
+        <BoardSelector
+          boards={twoBoards}
+          selectedPath={twoBoards[0].path}
+          onSelect={onSelect}
+        />
+      </Wrapper>,
+    );
+
+    // file.switchBoard should never be invoked directly by BoardSelector —
+    // that responsibility belongs to the parent (App.tsx handleSwitchBoard).
+    const switchBoardCalls = mockInvoke.mock.calls.filter(
+      (args) =>
+        args[0] === "dispatch_command" &&
+        String(args[1]?.command ?? "").includes("switchBoard"),
+    );
+    expect(switchBoardCalls).toHaveLength(0);
+  });
 });

@@ -191,15 +191,22 @@ pub fn commands_for_scope(
     // entity schema commands then scoped registry commands. This ensures
     // commands appear in scope order: attachment before task before global.
     for moniker in scope_chain {
-        let Some((entity_type, _entity_id)) = moniker.split_once(':') else {
+        let Some((entity_type, entity_id)) = moniker.split_once(':') else {
             continue;
         };
+
+        // Strip field suffix from cell monikers: "tag-1.color" → "tag-1".
+        // Grid cells produce monikers like "tag:tag-1.color" but the entity
+        // id is just "tag-1". Use the base moniker for target and dedup so
+        // the command palette dispatches inspect with a valid entity id.
+        let base_id = entity_id.split('.').next().unwrap_or(entity_id);
+        let entity_moniker = format!("{entity_type}:{base_id}");
 
         // Entity schema commands (from entity YAML definitions)
         if let Some(fields) = fields {
             if let Some(entity_def) = fields.get_entity(entity_type) {
                 for cmd in &entity_def.commands {
-                    let key = (cmd.id.clone(), Some(moniker.clone()));
+                    let key = (cmd.id.clone(), Some(entity_moniker.clone()));
                     if seen.contains(&key) {
                         continue;
                     }
@@ -233,7 +240,7 @@ pub fn commands_for_scope(
                         id: cmd.id.clone(),
                         name,
                         menu_name: None,
-                        target: Some(moniker.clone()),
+                        target: Some(entity_moniker.clone()),
                         group: entity_type.to_string(),
                         context_menu: cmd.context_menu,
                         keys,
@@ -1856,5 +1863,55 @@ mod tests {
                 "tag commands (pos {tag_pos}) should appear before task commands (pos {task_pos})"
             );
         }
+    }
+
+    // =========================================================================
+    // Cell moniker field suffix stripping
+    // =========================================================================
+
+    #[test]
+    fn cell_moniker_inspect_target_strips_field_suffix() {
+        // When a grid cell is focused, the scope chain contains a field-
+        // qualified moniker like "tag:tag-1.color". The inspect command
+        // target should use the base entity id "tag:tag-1", not the raw
+        // cell moniker, so the inspector can look up the entity.
+        let (registry, impls, fields, ui) = setup();
+        let scope = vec![
+            "tag:tag-1.color".into(),
+            "tag:tag-1".into(),
+            "board:board".into(),
+        ];
+        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
+
+        let inspect = cmds.iter().find(|c| c.id == "ui.inspect");
+        assert!(inspect.is_some(), "should have inspect command");
+        assert_eq!(
+            inspect.unwrap().target.as_deref(),
+            Some("tag:tag-1"),
+            "inspect target should be base entity moniker, not cell moniker"
+        );
+    }
+
+    #[test]
+    fn cell_moniker_dedup_emits_one_inspect() {
+        // The cell moniker "tag:tag-1.color" and row moniker "tag:tag-1"
+        // should both resolve to entity_moniker "tag:tag-1", so dedup
+        // produces only one inspect command (not two).
+        let (registry, impls, fields, ui) = setup();
+        let scope = vec![
+            "tag:tag-1.color".into(),
+            "tag:tag-1".into(),
+            "board:board".into(),
+        ];
+        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
+
+        let inspect_cmds: Vec<_> = cmds.iter().filter(|c| c.id == "ui.inspect").collect();
+        assert_eq!(
+            inspect_cmds.len(),
+            1,
+            "should have exactly one inspect command, got {}: {:?}",
+            inspect_cmds.len(),
+            inspect_cmds.iter().map(|c| &c.target).collect::<Vec<_>>()
+        );
     }
 }

@@ -1082,8 +1082,14 @@ pub(crate) async fn dispatch_command_internal(
 
     if let Some(board_close) = result.get("BoardClose") {
         if let Some(path_str) = board_close.get("path").and_then(|v| v.as_str()) {
-            // Find which window(s) had this board so we can reset their titles
-            let close_labels: Vec<String> = state
+            let requesting_label = board_close
+                .get("window_label")
+                .and_then(|v| v.as_str())
+                .unwrap_or("main")
+                .to_string();
+
+            // Count how many windows currently show this board
+            let windows_showing: Vec<String> = state
                 .ui_state
                 .all_window_boards()
                 .into_iter()
@@ -1091,14 +1097,36 @@ pub(crate) async fn dispatch_command_internal(
                 .map(|(label, _)| label)
                 .collect();
 
-            let target = std::path::PathBuf::from(path_str);
-            if let Err(e) = state.close_board(&target).await {
-                tracing::error!(cmd = %effective_cmd, path = %path_str, error = %e, "BoardClose: failed to close board");
+            let is_last_viewer = windows_showing.len() <= 1;
+
+            if is_last_viewer {
+                // Last window showing this board — drop handle and remove from open list
+                let target = std::path::PathBuf::from(path_str);
+                if let Err(e) = state.close_board(&target).await {
+                    tracing::error!(cmd = %effective_cmd, path = %path_str, error = %e, "BoardClose: failed to close board");
+                }
+                state.ui_state.remove_open_board(path_str);
+            } else {
+                // Other windows still show this board — just clear this window's assignment
+                state.ui_state.set_window_board(&requesting_label, "");
             }
-            // Reset window titles back to base name
-            for label in &close_labels {
-                update_window_title(app, label, None);
+
+            // Close the requesting window — unless it's the last visible window
+            let visible_windows: Vec<_> = app
+                .webview_windows()
+                .into_iter()
+                .filter(|(label, w)| label != "quick-capture" && w.is_visible().unwrap_or(false))
+                .collect();
+
+            if visible_windows.len() > 1 {
+                if let Some(win) = app.get_webview_window(&requesting_label) {
+                    let _ = win.close();
+                }
+            } else {
+                // Last window — keep open, just reset title
+                update_window_title(app, &requesting_label, None);
             }
+
             let _ = app.emit("board-changed", ());
         }
     }

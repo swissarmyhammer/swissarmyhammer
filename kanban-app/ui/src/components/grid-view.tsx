@@ -1,10 +1,4 @@
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useDispatchCommand } from "@/lib/command-scope";
 import { useGrid } from "@/hooks/use-grid";
 import { useSchema } from "@/lib/schema-context";
@@ -14,9 +8,7 @@ import {
   useEntityFocus,
   type ClaimPredicate,
 } from "@/lib/entity-focus-context";
-import {
-  buildEntityCommandDefs,
-} from "@/lib/entity-commands";
+import { buildEntityCommandDefs } from "@/lib/entity-commands";
 import { CommandScopeProvider, type CommandDef } from "@/lib/command-scope";
 import { PerspectiveTabBar } from "@/components/perspective-tab-bar";
 import { usePerspectives } from "@/lib/perspective-context";
@@ -129,16 +121,20 @@ export function GridView({ view }: GridViewProps) {
   const gridRef = useRef(grid);
   gridRef.current = grid;
 
-  // Focus the first cell on mount if no grid cell is focused
+  // Focus the first cell on initial mount if no grid cell is focused.
+  // Guarded by a ref so it only fires once — without this, entity changes
+  // after a cell edit rebuild cellMonikers, which changes firstCellMoniker's
+  // reference, re-fires the effect, and snaps the cursor back to (0,0).
   const firstCellMoniker = cellMonikers[0]?.[0] ?? null;
+  const hasInitialFocusRef = useRef(false);
   useEffect(() => {
     if (!firstCellMoniker) return;
-    // Only focus if nothing in this grid is currently focused
+    if (hasInitialFocusRef.current) return;
     if (!derivedCursor) {
       setFocus(firstCellMoniker);
+      hasInitialFocusRef.current = true;
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [firstCellMoniker, setFocus]);
+  }, [firstCellMoniker, setFocus, derivedCursor]);
 
   /**
    * Build claimWhen predicates for each cell in the grid.
@@ -241,7 +237,6 @@ export function GridView({ view }: GridViewProps) {
       }),
     );
   }, [cellMonikers, cellMonikerMap, columns.length]);
-
 
   // Grid-level commands: navigation broadcasts nav commands via claimWhen.
   // Non-navigation commands (edit, visual, delete, new row) remain push-based.

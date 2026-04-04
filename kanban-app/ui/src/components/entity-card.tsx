@@ -1,11 +1,24 @@
-import { forwardRef, memo, useCallback, useMemo, useState } from "react";
+import {
+  forwardRef,
+  memo,
+  useCallback,
+  useContext,
+  useMemo,
+  useState,
+} from "react";
 import { GripVertical, Info, icons } from "lucide-react";
 import { FocusScope } from "@/components/focus-scope";
 import { Field } from "@/components/fields/field";
 import { useSchema } from "@/lib/schema-context";
 import { useEntityCommands } from "@/lib/entity-commands";
 import { moniker } from "@/lib/moniker";
-import { useDispatchCommand, type CommandDef } from "@/lib/command-scope";
+import {
+  backendDispatch,
+  CommandScopeContext,
+  scopeChainFromScope,
+  useActiveBoardPath,
+  type CommandDef,
+} from "@/lib/command-scope";
 import type { ClaimPredicate } from "@/lib/entity-focus-context";
 import type { Entity, FieldDef } from "@/types/kanban";
 
@@ -140,16 +153,29 @@ export const EntityCard = memo(
   }),
 );
 
-/** Dispatches ui.inspect through the scope chain to the backend. */
+/**
+ * Dispatches ui.inspect directly to the backend, bypassing the frontend
+ * scope-chain resolution that would escalate to the board-level handler.
+ *
+ * The scope chain from CommandScopeContext already includes the entity
+ * moniker (e.g. ["task:abc", "column:todo", "board:board", "window:main"]),
+ * so the backend's first_inspectable() finds the correct entity.
+ */
 function InspectButton() {
-  const dispatch = useDispatchCommand("ui.inspect");
+  const scope = useContext(CommandScopeContext);
+  const boardPath = useActiveBoardPath();
+  const chain = useMemo(() => scopeChainFromScope(scope), [scope]);
   return (
     <button
       type="button"
       className="shrink-0 mt-0.5 p-0.5 rounded text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted transition-colors"
       onClick={(e) => {
         e.stopPropagation();
-        dispatch().catch(console.error);
+        backendDispatch({
+          cmd: "ui.inspect",
+          scopeChain: chain,
+          ...(boardPath ? { boardPath } : {}),
+        }).catch(console.error);
       }}
       title="Inspect"
     >

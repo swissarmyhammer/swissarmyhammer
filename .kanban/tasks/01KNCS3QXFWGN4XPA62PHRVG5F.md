@@ -2,8 +2,8 @@
 assignees:
 - claude-code
 depends_on: []
-position_column: todo
-position_ordinal: b780
+position_column: done
+position_ordinal: ffffffffffffffffffec80
 title: Fix grid cursor reset to (0,0) after committing color picker edit
 ---
 ## What

@@ -55,7 +55,6 @@ export function BoardSelector({
     getSchema("board")?.entity.search_display_field ?? "name";
   const nameFieldDef = getFieldDef("board", displayFieldName);
   const [editingName, setEditingName] = useState(false);
-  const dispatchSwitchBoard = useDispatchCommand("file.switchBoard");
   const dispatchNewWindow = useDispatchCommand("window.new");
   // Live board name from entity store — stays current across windows
   const boardName = useFieldValue(
@@ -93,7 +92,7 @@ export function BoardSelector({
       <Select
         value={selectedPath ?? undefined}
         onValueChange={(path) => {
-          dispatchSwitchBoard({ args: { path } }).catch(console.error);
+          onSelect(path);
         }}
       >
         <SelectTrigger

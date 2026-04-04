@@ -146,15 +146,13 @@ impl Command for CloseBoardCmd {
             .unwrap_or_else(|_| std::path::PathBuf::from(&raw_path));
         let path = canonical.display().to_string();
 
-        ui.remove_open_board(&path);
-        // Also remove the raw form in case the stored path wasn't canonical
-        if path != raw_path {
-            ui.remove_open_board(&raw_path);
-        }
+        // Do NOT call ui.remove_open_board() here — the Tauri handler
+        // decides based on whether other windows still show this board.
 
         Ok(json!({
             "BoardClose": {
                 "path": path,
+                "window_label": window_label,
             }
         }))
     }
@@ -303,13 +301,14 @@ mod tests {
 
         let result = CloseBoardCmd.execute(&ctx).await.unwrap();
 
-        // Returns BoardClose with the path
+        // Returns BoardClose with path and window_label
         assert!(result["BoardClose"]["path"].as_str().is_some());
+        assert_eq!(result["BoardClose"]["window_label"], "main");
 
-        // Board should be removed from open list
+        // Board should NOT be removed from open list — Tauri handler decides
         assert!(
-            !ui.open_boards().contains(&"/tmp/board/.kanban".to_string()),
-            "board should have been removed from open_boards"
+            ui.open_boards().contains(&"/tmp/board/.kanban".to_string()),
+            "board should still be in open_boards (Tauri handler removes it)"
         );
     }
 
@@ -324,6 +323,7 @@ mod tests {
 
         let result = CloseBoardCmd.execute(&ctx).await.unwrap();
         assert!(result["BoardClose"]["path"].as_str().is_some());
+        assert_eq!(result["BoardClose"]["window_label"], "main");
     }
 
     #[tokio::test]
