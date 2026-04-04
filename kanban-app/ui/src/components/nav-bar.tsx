@@ -2,8 +2,7 @@ import { Info, Search } from "lucide-react";
 import { BoardSelector } from "@/components/board-selector";
 import { Field } from "@/components/fields/field";
 import { useSchema } from "@/lib/schema-context";
-import { useInspect } from "@/lib/inspect-context";
-import { dispatchCommand, useExecuteCommand } from "@/lib/command-scope";
+import { useDispatchCommand, useExecuteCommand } from "@/lib/command-scope";
 import { moniker } from "@/lib/moniker";
 import type { BoardData, OpenBoard } from "@/types/kanban";
 
@@ -23,7 +22,7 @@ export function NavBar({
   onSwitchBoard,
 }: NavBarProps) {
   const executeCommand = useExecuteCommand();
-  const inspectEntity = useInspect();
+  const dispatchInspect = useDispatchCommand("ui.inspect");
   const { getFieldDef } = useSchema();
   const percentFieldDef = getFieldDef("board", "percent_complete");
 
@@ -43,15 +42,8 @@ export function NavBar({
           type="button"
           className="p-1 rounded text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted transition-colors"
           onClick={() => {
-            const target = moniker("board", "board");
-            dispatchCommand(
-              {
-                id: "entity.inspect",
-                name: "Inspect Board",
-                execute: () => inspectEntity(target),
-              },
-              undefined,
-              [],
+            dispatchInspect({ target: moniker("board", "board") }).catch(
+              console.error,
             );
           }}
           title="Inspect board"

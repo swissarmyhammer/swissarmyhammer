@@ -5,7 +5,6 @@ import {
   EntityFocusProvider,
   useEntityFocus,
 } from "@/lib/entity-focus-context";
-import { InspectProvider } from "@/lib/inspect-context";
 import { DragSessionProvider } from "@/lib/drag-session-context";
 import { SchemaProvider } from "@/lib/schema-context";
 import { EntityStoreProvider } from "@/lib/entity-store-context";
@@ -103,28 +102,23 @@ const tasks: Entity[] = [
 ];
 
 function renderBoard(overrides?: { board?: BoardData; tasks?: Entity[] }) {
-  const onInspect = vi.fn();
-  const onDismiss = vi.fn(() => false);
-
   const result = render(
     <EntityFocusProvider>
       <SchemaProvider>
         <EntityStoreProvider entities={{}}>
           <ActiveBoardPathProvider value="/test/board">
-            <InspectProvider onInspect={onInspect} onDismiss={onDismiss}>
-              <DragSessionProvider>
-                <BoardView
-                  board={overrides?.board ?? board}
-                  tasks={overrides?.tasks ?? tasks}
-                />
-              </DragSessionProvider>
-            </InspectProvider>
+            <DragSessionProvider>
+              <BoardView
+                board={overrides?.board ?? board}
+                tasks={overrides?.tasks ?? tasks}
+              />
+            </DragSessionProvider>
           </ActiveBoardPathProvider>
         </EntityStoreProvider>
       </SchemaProvider>
     </EntityFocusProvider>,
   );
-  return { ...result, onInspect };
+  return result;
 }
 
 describe("BoardView navigation commands", () => {
@@ -154,16 +148,14 @@ describe("BoardView navigation commands", () => {
         <SchemaProvider>
           <EntityStoreProvider entities={{}}>
             <ActiveBoardPathProvider value="/test/board">
-              <InspectProvider onInspect={vi.fn()} onDismiss={() => false}>
-                <DragSessionProvider>
-                  <ScopeProbe
-                    onScope={(fn) => {
-                      getScope = fn;
-                    }}
-                  />
-                  <BoardView board={board} tasks={tasks} />
-                </DragSessionProvider>
-              </InspectProvider>
+              <DragSessionProvider>
+                <ScopeProbe
+                  onScope={(fn) => {
+                    getScope = fn;
+                  }}
+                />
+                <BoardView board={board} tasks={tasks} />
+              </DragSessionProvider>
             </ActiveBoardPathProvider>
           </EntityStoreProvider>
         </SchemaProvider>

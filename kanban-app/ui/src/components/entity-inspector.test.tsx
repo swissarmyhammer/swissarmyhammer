@@ -200,7 +200,7 @@ import { UIStateProvider } from "@/lib/ui-state-context";
 import { SchemaProvider } from "@/lib/schema-context";
 import { EntityStoreProvider } from "@/lib/entity-store-context";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
-import { InspectProvider } from "@/lib/inspect-context";
+
 import { FieldUpdateProvider } from "@/lib/field-update-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { CommandScopeProvider } from "@/lib/command-scope";
@@ -216,15 +216,13 @@ async function renderInspector(entity: Entity, tagEntities: Entity[] = []) {
       <SchemaProvider>
         <EntityStoreProvider entities={{ task: [entity], tag: tagEntities }}>
           <EntityFocusProvider>
-            <InspectProvider onInspect={() => {}} onDismiss={() => false}>
-              <FieldUpdateProvider>
-                <UIStateProvider>
-                  <CommandScopeProvider commands={[]}>
-                    <EntityInspector entity={entity} />
-                  </CommandScopeProvider>
-                </UIStateProvider>
-              </FieldUpdateProvider>
-            </InspectProvider>
+            <FieldUpdateProvider>
+              <UIStateProvider>
+                <CommandScopeProvider commands={[]}>
+                  <EntityInspector entity={entity} />
+                </CommandScopeProvider>
+              </UIStateProvider>
+            </FieldUpdateProvider>
           </EntityFocusProvider>
         </EntityStoreProvider>
       </SchemaProvider>
@@ -246,13 +244,11 @@ async function renderViaInspectorBridge(
       <SchemaProvider>
         <EntityStoreProvider entities={{ task: [entity], tag: tagEntities }}>
           <EntityFocusProvider>
-            <InspectProvider onInspect={() => {}} onDismiss={() => false}>
-              <FieldUpdateProvider>
-                <UIStateProvider>
-                  <InspectorFocusBridge entity={entity} />
-                </UIStateProvider>
-              </FieldUpdateProvider>
-            </InspectProvider>
+            <FieldUpdateProvider>
+              <UIStateProvider>
+                <InspectorFocusBridge entity={entity} />
+              </UIStateProvider>
+            </FieldUpdateProvider>
           </EntityFocusProvider>
         </EntityStoreProvider>
       </SchemaProvider>

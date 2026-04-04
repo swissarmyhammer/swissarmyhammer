@@ -96,7 +96,6 @@ import { CommandPalette } from "./command-palette";
 import { CommandScopeProvider, type CommandDef } from "@/lib/command-scope";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
 import { UIStateProvider } from "@/lib/ui-state-context";
-import { InspectProvider } from "@/lib/inspect-context";
 
 const getCMMock = vi.mocked(getCM);
 const handleKeyMock = vi.mocked(Vim.handleKey);
@@ -487,19 +486,13 @@ describe("CommandPalette vim insert mode", () => {
 // Search mode tests
 // ---------------------------------------------------------------------------
 
-function renderSearchPalette(
-  open: boolean,
-  onClose = vi.fn(),
-  onInspect = vi.fn(),
-) {
+function renderSearchPalette(open: boolean, onClose = vi.fn()) {
   return render(
     <EntityFocusProvider>
       <UIStateProvider>
-        <InspectProvider onInspect={onInspect} onDismiss={() => false}>
-          <CommandScopeProvider commands={[]}>
-            <CommandPalette open={open} onClose={onClose} mode="search" />
-          </CommandScopeProvider>
-        </InspectProvider>
+        <CommandScopeProvider commands={[]}>
+          <CommandPalette open={open} onClose={onClose} mode="search" />
+        </CommandScopeProvider>
       </UIStateProvider>
     </EntityFocusProvider>,
   );

@@ -34,7 +34,6 @@ import {
   useEntityFocus,
 } from "@/lib/entity-focus-context";
 import { useAvailableCommands } from "@/lib/command-scope";
-import { InspectProvider } from "@/lib/inspect-context";
 import { invoke } from "@tauri-apps/api/core";
 
 /**
@@ -61,9 +60,7 @@ function renderShell(children?: React.ReactNode) {
       <UIStateProvider>
         <AppModeProvider>
           <UndoProvider>
-            <InspectProvider onInspect={() => {}} onDismiss={() => false}>
-              <AppShell>{children ?? <CommandInspector />}</AppShell>
-            </InspectProvider>
+            <AppShell>{children ?? <CommandInspector />}</AppShell>
           </UndoProvider>
         </AppModeProvider>
       </UIStateProvider>
@@ -274,11 +271,9 @@ describe("AppShell", () => {
         <UIStateProvider>
           <AppModeProvider>
             <UndoProvider>
-              <InspectProvider onInspect={() => {}} onDismiss={() => false}>
-                <AppShell>
-                  <CommandInspector />
-                </AppShell>
-              </InspectProvider>
+              <AppShell>
+                <CommandInspector />
+              </AppShell>
             </UndoProvider>
           </AppModeProvider>
         </UIStateProvider>

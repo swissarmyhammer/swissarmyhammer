@@ -8,6 +8,7 @@ import {
 } from "react";
 import {
   useActiveBoardPath,
+  useDispatchCommand,
   backendDispatch,
   CommandScopeContext,
   scopeChainFromScope,
@@ -15,7 +16,6 @@ import {
 import { useGrid } from "@/hooks/use-grid";
 import { useSchema } from "@/lib/schema-context";
 import { useEntityStore } from "@/lib/entity-store-context";
-import { useInspect } from "@/lib/inspect-context";
 import { fieldMoniker } from "@/lib/moniker";
 import {
   useEntityFocus,
@@ -43,6 +43,7 @@ export function GridView({ view }: GridViewProps) {
   boardPathRef.current = boardPath;
   const scope = useContext(CommandScopeContext);
   const scopeChain = useMemo(() => scopeChainFromScope(scope), [scope]);
+  const dispatch = useDispatchCommand();
   const { getEntities } = useEntityStore();
 
   // All hooks must be called unconditionally (React rules of hooks).
@@ -253,8 +254,6 @@ export function GridView({ view }: GridViewProps) {
       }),
     );
   }, [cellMonikers, cellMonikerMap, columns.length]);
-
-  const inspectEntity = useInspect();
 
   // Current entity and field from cursor position
   const currentEntity =
@@ -472,12 +471,11 @@ export function GridView({ view }: GridViewProps) {
         schemaCommands,
         entityType,
         entity.id,
-        inspectEntity,
-        boardPathRef.current,
+        dispatch,
         entity,
       );
     },
-    [schemaCommands, entityType, inspectEntity],
+    [schemaCommands, entityType, dispatch],
   );
 
   const renderEditor = useCallback(

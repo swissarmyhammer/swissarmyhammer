@@ -175,7 +175,7 @@ import { UIStateProvider } from "@/lib/ui-state-context";
 import { SchemaProvider } from "@/lib/schema-context";
 import { EntityStoreProvider } from "@/lib/entity-store-context";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
-import { InspectProvider } from "@/lib/inspect-context";
+
 import { FieldUpdateProvider } from "@/lib/field-update-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Field } from "@/components/fields/field";
@@ -255,22 +255,20 @@ function renderField(
         <SchemaProvider>
           <EntityStoreProvider entities={TEST_ENTITIES}>
             <EntityFocusProvider>
-              <InspectProvider onInspect={() => {}} onDismiss={() => false}>
-                <FieldUpdateProvider>
-                  <UIStateProvider>
-                    <Field
-                      fieldDef={fieldDef}
-                      entityType="task"
-                      entityId="test-task-1"
-                      mode={mode}
-                      editing={editing}
-                      onEdit={onEdit}
-                      onDone={onDone}
-                      onCancel={onCancel}
-                    />
-                  </UIStateProvider>
-                </FieldUpdateProvider>
-              </InspectProvider>
+              <FieldUpdateProvider>
+                <UIStateProvider>
+                  <Field
+                    fieldDef={fieldDef}
+                    entityType="task"
+                    entityId="test-task-1"
+                    mode={mode}
+                    editing={editing}
+                    onEdit={onEdit}
+                    onDone={onDone}
+                    onCancel={onCancel}
+                  />
+                </UIStateProvider>
+              </FieldUpdateProvider>
             </EntityFocusProvider>
           </EntityStoreProvider>
         </SchemaProvider>

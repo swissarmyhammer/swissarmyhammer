@@ -42,14 +42,18 @@ vi.mock("@tauri-apps/plugin-log", () => ({
 
 import { EditorView } from "@codemirror/view";
 import { EditorState } from "@codemirror/state";
-import { vim as vimExt, getCM as getCMVim, Vim as VimApi } from "@replit/codemirror-vim";
+import {
+  vim as vimExt,
+  getCM as getCMVim,
+  Vim as VimApi,
+} from "@replit/codemirror-vim";
 import { buildSubmitCancelExtensions } from "@/lib/cm-submit-cancel";
 import { MultiSelectEditor } from "./multi-select-editor";
 import { UIStateProvider } from "@/lib/ui-state-context";
 import { SchemaProvider } from "@/lib/schema-context";
 import { EntityStoreProvider } from "@/lib/entity-store-context";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
-import { InspectProvider } from "@/lib/inspect-context";
+
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { Entity, FieldDef } from "@/types/kanban";
 
@@ -175,18 +179,16 @@ function renderMultiSelect(
       <SchemaProvider>
         <EntityStoreProvider entities={entities}>
           <EntityFocusProvider>
-            <InspectProvider onInspect={() => {}} onDismiss={() => false}>
-              <UIStateProvider>
-                <MultiSelectEditor
-                  field={props.field}
-                  value={props.value}
-                  onCommit={props.onCommit}
-                  onCancel={props.onCancel}
-                  entity={props.entity}
-                  mode="compact"
-                />
-              </UIStateProvider>
-            </InspectProvider>
+            <UIStateProvider>
+              <MultiSelectEditor
+                field={props.field}
+                value={props.value}
+                onCommit={props.onCommit}
+                onCancel={props.onCancel}
+                entity={props.entity}
+                mode="compact"
+              />
+            </UIStateProvider>
           </EntityFocusProvider>
         </EntityStoreProvider>
       </SchemaProvider>

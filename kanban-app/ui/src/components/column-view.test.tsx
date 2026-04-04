@@ -26,7 +26,6 @@ import { EntityFocusProvider } from "@/lib/entity-focus-context";
 import { SchemaProvider } from "@/lib/schema-context";
 import { EntityStoreProvider } from "@/lib/entity-store-context";
 import { ActiveBoardPathProvider } from "@/lib/command-scope";
-import { InspectProvider } from "@/lib/inspect-context";
 import type { Entity } from "@/types/kanban";
 
 /** Create a minimal column entity. */
@@ -54,9 +53,7 @@ function renderColumn(ui: React.ReactElement) {
       <SchemaProvider>
         <EntityStoreProvider entities={{}}>
           <ActiveBoardPathProvider value="/test/board">
-            <InspectProvider onInspect={vi.fn()} onDismiss={() => false}>
-              {ui}
-            </InspectProvider>
+            {ui}
           </ActiveBoardPathProvider>
         </EntityStoreProvider>
       </SchemaProvider>

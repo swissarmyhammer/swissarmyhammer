@@ -1,12 +1,6 @@
-import { useContext, useMemo } from "react";
+import { useMemo } from "react";
 import { useSchemaOptional } from "@/lib/schema-context";
-import { useInspectOptional } from "@/lib/inspect-context";
-import {
-  useActiveBoardPath,
-  backendDispatch,
-  scopeChainFromScope,
-  CommandScopeContext,
-} from "@/lib/command-scope";
+import { useDispatchCommand } from "@/lib/command-scope";
 import { moniker } from "@/lib/moniker";
 import type { CommandDef } from "@/lib/command-scope";
 import type { Entity, EntityCommand } from "@/types/kanban";
@@ -49,28 +43,25 @@ export function resolveCommandName(
  *
  * For use in callbacks or factories called outside a React render cycle
  * (e.g. per-row command factories in DataTable). Callers must provide the
- * schema commands and inspect function directly.
+ * dispatch function from useDispatchCommand.
  *
- * - `entity.inspect` → calls the provided inspectEntity function
- * - All other commands → dispatched to Rust via `dispatch_command`
+ * All commands — including inspect — dispatch to the backend via the
+ * standard command system. The backend handles side effects and emits
+ * events (e.g. ui-state-changed) that the frontend reacts to.
  *
  * @param schemaCommands - Entity commands from the YAML schema
  * @param entityType - The entity type name (e.g. "task")
  * @param entityId - The entity ID
- * @param inspectEntity - Callback to open the inspect panel for a moniker
- * @param boardPath - Optional board path for dispatch_command calls
+ * @param dispatch - Dispatch function from useDispatchCommand
  * @param entity - Optional entity instance for template resolution
- * @param scopeChain - Scope chain monikers for window-scoped dispatch
  * @returns Array of CommandDefs scoped to the given entity
  */
 export function buildEntityCommandDefs(
   schemaCommands: readonly EntityCommand[],
   entityType: string,
   entityId: string,
-  inspectEntity: (moniker: string) => void,
-  boardPath?: string | null,
+  dispatch: (cmd: string, opts?: { target?: string }) => Promise<unknown>,
   entity?: Entity,
-  scopeChain?: string[],
 ): CommandDef[] {
   const entityMoniker = moniker(entityType, entityId);
   return schemaCommands.map((cmd) => ({
@@ -80,23 +71,7 @@ export function buildEntityCommandDefs(
     contextMenu: cmd.context_menu ?? false,
     keys: cmd.keys,
     execute: () => {
-      // entity.inspect is the ONE command handled client-side by design:
-      // it opens the inspector panel, which is purely a UI concern with no
-      // backend state change. All other commands dispatch to Rust via IPC.
-      // This is intentional, not a field-special-case — the command's
-      // execution mode (client vs backend) is an inherent property of the
-      // inspect action. See also focus-scope.tsx which resolves
-      // entity.inspect for the double-click gesture.
-      if (cmd.id === "ui.inspect" || cmd.id === "entity.inspect") {
-        inspectEntity(entityMoniker);
-      } else {
-        backendDispatch({
-          cmd: cmd.id,
-          target: entityMoniker,
-          ...(boardPath ? { boardPath } : {}),
-          scopeChain: scopeChain ?? [],
-        }).catch(console.error);
-      }
+      dispatch(cmd.id, { target: entityMoniker }).catch(console.error);
     },
   }));
 }
@@ -108,8 +83,7 @@ export function buildEntityCommandDefs(
  * not just entity types. Reads the type's commands from the YAML-defined schema,
  * resolves name templates, and wires up execute handlers.
  *
- * - `entity.inspect` → calls the inspect function from InspectContext
- * - All other commands → dispatched to Rust via `dispatch_command`
+ * All commands dispatch to the backend via `useDispatchCommand`.
  *
  * @param type - The type name (e.g. "task", "perspective", "view")
  * @param id - The instance ID
@@ -132,8 +106,9 @@ export function useCommands(
  * Reads the entity type's commands from the YAML-defined schema,
  * resolves name templates, and wires up execute handlers.
  *
- * - `entity.inspect` → calls the inspect function from InspectContext
- * - All other commands → dispatched to Rust via `dispatch_command`
+ * All commands — including inspect — dispatch to the backend via
+ * `useDispatchCommand`. The backend handles side effects (e.g. pushing
+ * onto the inspector stack) and emits events that the frontend reacts to.
  *
  * @param entityType - The entity type name (e.g. "task", "column", "board")
  * @param entityId - The entity ID
@@ -148,36 +123,21 @@ export function useEntityCommands(
   extraCommands?: CommandDef[],
 ): CommandDef[] {
   const { getEntityCommands } = useSchemaOptional();
-  const inspect = useInspectOptional();
-  const boardPath = useActiveBoardPath();
-  const scope = useContext(CommandScopeContext);
-  const scopeChain = useMemo(() => scopeChainFromScope(scope), [scope]);
+  const dispatch = useDispatchCommand();
   const entityMoniker = moniker(entityType, entityId);
   const schemaCommands = getEntityCommands(entityType);
 
   return useMemo(() => {
-    const cmds: CommandDef[] = schemaCommands.map((cmd) => {
-      const resolved: CommandDef = {
-        id: cmd.id,
-        name: resolveCommandName(cmd.name, entityType, entity),
-        target: entityMoniker,
-        contextMenu: cmd.context_menu ?? false,
-        keys: cmd.keys,
-        execute: () => {
-          if (cmd.id === "ui.inspect" || cmd.id === "entity.inspect") {
-            inspect?.(entityMoniker);
-          } else {
-            backendDispatch({
-              cmd: cmd.id,
-              target: entityMoniker,
-              ...(boardPath ? { boardPath } : {}),
-              scopeChain,
-            }).catch(console.error);
-          }
-        },
-      };
-      return resolved;
-    });
+    const cmds: CommandDef[] = schemaCommands.map((cmd) => ({
+      id: cmd.id,
+      name: resolveCommandName(cmd.name, entityType, entity),
+      target: entityMoniker,
+      contextMenu: cmd.context_menu ?? false,
+      keys: cmd.keys,
+      execute: () => {
+        dispatch(cmd.id, { target: entityMoniker }).catch(console.error);
+      },
+    }));
 
     if (extraCommands) {
       cmds.push(...extraCommands);
@@ -190,8 +150,7 @@ export function useEntityCommands(
     entityId,
     entity,
     entityMoniker,
-    inspect,
-    boardPath,
+    dispatch,
     extraCommands,
   ]);
 }

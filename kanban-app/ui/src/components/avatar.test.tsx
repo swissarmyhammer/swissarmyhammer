@@ -20,7 +20,7 @@ import { Avatar } from "./avatar";
 import { SchemaProvider } from "@/lib/schema-context";
 import { EntityStoreProvider } from "@/lib/entity-store-context";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
-import { InspectProvider } from "@/lib/inspect-context";
+
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { Entity } from "@/types/kanban";
 
@@ -35,9 +35,7 @@ function renderAvatar(
       <SchemaProvider>
         <EntityStoreProvider entities={{ actor: actors }}>
           <EntityFocusProvider>
-            <InspectProvider onInspect={() => {}} onDismiss={() => false}>
-              <Avatar actorId={actorId} size={size} />
-            </InspectProvider>
+            <Avatar actorId={actorId} size={size} />
           </EntityFocusProvider>
         </EntityStoreProvider>
       </SchemaProvider>

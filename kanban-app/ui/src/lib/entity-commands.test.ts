@@ -49,20 +49,11 @@ vi.mock("@tauri-apps/api/event", () => ({
 
 // Import providers after mocks are set up
 import { SchemaProvider } from "@/lib/schema-context";
-import { InspectProvider } from "@/lib/inspect-context";
 
-/** Render a hook inside SchemaProvider + InspectProvider. */
-function makeWrapper(onInspect = vi.fn()) {
+/** Render a hook inside SchemaProvider. */
+function makeWrapper() {
   return function Wrapper({ children }: { children: ReactNode }) {
-    return createElement(
-      SchemaProvider,
-      null,
-      createElement(InspectProvider, {
-        onInspect,
-        onDismiss: () => false,
-        children,
-      }),
-    );
+    return createElement(SchemaProvider, null, children);
   };
 }
 
@@ -194,10 +185,9 @@ describe("useEntityCommands", () => {
     expect(result.current[0].id).toBe("entity.inspect");
   });
 
-  it("entity.inspect execute calls the inspect function", async () => {
-    const onInspect = vi.fn();
+  it("entity.inspect execute dispatches to backend like any other command", async () => {
     const { result } = renderHook(() => useEntityCommands("task", "task-42"), {
-      wrapper: makeWrapper(onInspect),
+      wrapper: makeWrapper(),
     });
 
     await act(async () => {
@@ -206,8 +196,15 @@ describe("useEntityCommands", () => {
 
     const inspectCmd = result.current.find((c) => c.id === "entity.inspect");
     expect(inspectCmd).toBeDefined();
+    // execute should call dispatch — which invokes the Tauri backend.
+    // The mock invoke resolves to null, so this should not throw.
     inspectCmd!.execute!();
-    expect(onInspect).toHaveBeenCalledWith("task", "task-42");
+    // Verify invoke was called with dispatch_command for entity.inspect
+    const { invoke: mockInvoke } = await import("@tauri-apps/api/core");
+    expect(mockInvoke).toHaveBeenCalledWith(
+      "dispatch_command",
+      expect.objectContaining({ cmd: "entity.inspect" }),
+    );
   });
 });
 

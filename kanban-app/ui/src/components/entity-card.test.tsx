@@ -108,7 +108,7 @@ import { SchemaProvider } from "@/lib/schema-context";
 import { EntityStoreProvider } from "@/lib/entity-store-context";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
 import { FieldUpdateProvider } from "@/lib/field-update-context";
-import { InspectProvider } from "@/lib/inspect-context";
+
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { Entity } from "@/types/kanban";
 
@@ -130,8 +130,6 @@ function makeEntity(fieldOverrides: Record<string, unknown> = {}): Entity {
   };
 }
 
-const mockOnInspect = vi.fn();
-
 /** Track the current entity so the store can find it via useFieldValue. */
 let currentEntity: Entity = makeEntity();
 
@@ -141,11 +139,9 @@ function renderCard(ui: React.ReactElement) {
       <SchemaProvider>
         <EntityStoreProvider entities={{ task: [currentEntity], tag: [] }}>
           <EntityFocusProvider>
-            <InspectProvider onInspect={mockOnInspect} onDismiss={() => false}>
-              <FieldUpdateProvider>
-                <UIStateProvider>{ui}</UIStateProvider>
-              </FieldUpdateProvider>
-            </InspectProvider>
+            <FieldUpdateProvider>
+              <UIStateProvider>{ui}</UIStateProvider>
+            </FieldUpdateProvider>
           </EntityFocusProvider>
         </EntityStoreProvider>
       </SchemaProvider>
@@ -165,7 +161,6 @@ async function renderWithProvider(ui: React.ReactElement) {
 describe("EntityCard", () => {
   beforeEach(() => {
     mockInvoke.mockClear();
-    mockOnInspect.mockClear();
   });
 
   it("renders title as text via Field display", async () => {
@@ -175,14 +170,20 @@ describe("EntityCard", () => {
     expect(screen.getByText("Hello **world**")).toBeTruthy();
   });
 
-  it("(i) button calls inspectEntity with correct moniker", async () => {
+  it("(i) button dispatches ui.inspect to the backend", async () => {
     currentEntity = makeEntity();
     const { container } = await renderWithProvider(
       <EntityCard entity={currentEntity} />,
     );
     const inspectBtn = container.querySelector("button[title='Inspect']")!;
     fireEvent.click(inspectBtn);
-    expect(mockOnInspect).toHaveBeenCalledWith("task", "task-1");
+    // Inspect now dispatches to the backend via the standard command system.
+    const inspectCall = mockInvoke.mock.calls.find(
+      (c: unknown[]) =>
+        c[0] === "dispatch_command" &&
+        (c[1] as Record<string, unknown>)?.cmd === "ui.inspect",
+    );
+    expect(inspectCall).toBeTruthy();
   });
 
   it("(i) button always renders", async () => {
@@ -276,10 +277,16 @@ describe("EntityCard", () => {
     const { container } = await renderWithProvider(
       <EntityCard entity={currentEntity} />,
     );
+    mockInvoke.mockClear();
     const card = container.querySelector(".rounded-md")!;
     fireEvent.click(card);
-    // Click on card body should not call inspect — only the (i) button does
-    expect(mockOnInspect).not.toHaveBeenCalled();
+    // Click on card body should not dispatch ui.inspect — only the (i) button does
+    const inspectCall = mockInvoke.mock.calls.find(
+      (c: unknown[]) =>
+        c[0] === "dispatch_command" &&
+        (c[1] as Record<string, unknown>)?.cmd === "ui.inspect",
+    );
+    expect(inspectCall).toBeUndefined();
   });
 
   describe("progress bar", () => {

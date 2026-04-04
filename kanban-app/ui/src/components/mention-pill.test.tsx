@@ -120,7 +120,6 @@ vi.mock("@/lib/schema-context", () => ({
 
 import { MentionPill } from "./mention-pill";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
-import { InspectProvider } from "@/lib/inspect-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { FocusScope } from "@/components/focus-scope";
 import type { Entity } from "@/types/kanban";
@@ -143,19 +142,13 @@ function renderPill(props: {
   prefix: string;
   taskId?: string;
 }) {
-  const onInspect = vi.fn();
-  return {
-    onInspect,
-    ...render(
-      <TooltipProvider>
-        <EntityFocusProvider>
-          <InspectProvider onInspect={onInspect} onDismiss={() => false}>
-            <MentionPill {...props} />
-          </InspectProvider>
-        </EntityFocusProvider>
-      </TooltipProvider>,
-    ),
-  };
+  return render(
+    <TooltipProvider>
+      <EntityFocusProvider>
+        <MentionPill {...props} />
+      </EntityFocusProvider>
+    </TooltipProvider>,
+  );
 }
 
 describe("MentionPill", () => {
@@ -326,25 +319,22 @@ describe("MentionPill", () => {
         available: true,
       },
     ]);
-    const onInspect = vi.fn();
     const { container } = render(
       <TooltipProvider>
         <EntityFocusProvider>
-          <InspectProvider onInspect={onInspect} onDismiss={() => false}>
-            <FocusScope
-              moniker="task:parent"
-              commands={[
-                {
-                  id: "ui.inspect",
-                  name: "Inspect task",
-                  target: "task:parent",
-                  contextMenu: true,
-                },
-              ]}
-            >
-              <MentionPill entityType="tag" slug="unknown-tag" prefix="#" />
-            </FocusScope>
-          </InspectProvider>
+          <FocusScope
+            moniker="task:parent"
+            commands={[
+              {
+                id: "ui.inspect",
+                name: "Inspect task",
+                target: "task:parent",
+                contextMenu: true,
+              },
+            ]}
+          >
+            <MentionPill entityType="tag" slug="unknown-tag" prefix="#" />
+          </FocusScope>
         </EntityFocusProvider>
       </TooltipProvider>,
     );

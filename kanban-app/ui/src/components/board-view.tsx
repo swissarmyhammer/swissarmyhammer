@@ -26,6 +26,7 @@ import type { DropZoneDescriptor } from "@/lib/drop-zones";
 import {
   CommandScopeContext,
   CommandScopeProvider,
+  useDispatchCommand,
   backendDispatch,
   scopeChainFromScope,
   type CommandDef,
@@ -33,7 +34,6 @@ import {
 import { ColumnView } from "@/components/column-view";
 import { SortableColumn } from "@/components/sortable-column";
 import { FocusScope } from "@/components/focus-scope";
-import { useInspect } from "@/lib/inspect-context";
 import { useEntityFocus } from "@/lib/entity-focus-context";
 /** Default title for new tasks — the Rust side also uses this as fallback. */
 function defaultTaskTitle(_columnName: string): string {
@@ -77,7 +77,7 @@ export function BoardView({ board, tasks, boardPath }: BoardViewProps) {
   const { startSession, cancelSession, completeSession } = useDragSession();
   const boardMoniker = moniker("board", "board");
   const boardCommands = useEntityCommands("board", "board");
-  const inspectEntity = useInspect();
+  const dispatchInspect = useDispatchCommand("ui.inspect");
   const { focusedMoniker, broadcastNavCommand, setFocus } = useEntityFocus();
   const broadcastRef = useRef(broadcastNavCommand);
   broadcastRef.current = broadcastNavCommand;
@@ -270,7 +270,7 @@ export function BoardView({ board, tasks, boardPath }: BoardViewProps) {
         keys: { vim: "Enter", cua: "Enter" },
         execute: () => {
           const fm = focusedMonikerRef.current;
-          if (fm) inspectEntity(fm);
+          if (fm) dispatchInspect({ target: fm }).catch(console.error);
         },
       },
       {
@@ -304,7 +304,7 @@ export function BoardView({ board, tasks, boardPath }: BoardViewProps) {
         },
       },
     ];
-  }, [columns, taskMap, inspectEntity]);
+  }, [columns, taskMap, dispatchInspect]);
 
   // --- Column drag state (managed by @dnd-kit) ---
   const [activeColumn, setActiveColumn] = useState<Entity | null>(null);

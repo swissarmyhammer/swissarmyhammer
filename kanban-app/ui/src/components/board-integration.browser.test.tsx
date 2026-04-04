@@ -99,7 +99,7 @@ vi.mock("@tauri-apps/plugin-log", () => ({
 import "@/components/fields/registrations";
 
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
-import { InspectProvider } from "@/lib/inspect-context";
+
 import { DragSessionProvider } from "@/lib/drag-session-context";
 import { SchemaProvider } from "@/lib/schema-context";
 import { EntityStoreProvider } from "@/lib/entity-store-context";
@@ -200,19 +200,17 @@ function renderIntegrationBoard() {
         <SchemaProvider>
           <EntityStoreProvider entities={{ task: tasks, tag: [] }}>
             <ActiveBoardPathProvider value={testBoardDir + "/.kanban"}>
-              <InspectProvider onInspect={vi.fn()} onDismiss={() => false}>
-                <FieldUpdateProvider>
-                  <UIStateProvider>
-                    <ViewsProvider>
-                      <PerspectiveProvider>
-                        <DragSessionProvider>
-                          <BoardView board={board} tasks={tasks} />
-                        </DragSessionProvider>
-                      </PerspectiveProvider>
-                    </ViewsProvider>
-                  </UIStateProvider>
-                </FieldUpdateProvider>
-              </InspectProvider>
+              <FieldUpdateProvider>
+                <UIStateProvider>
+                  <ViewsProvider>
+                    <PerspectiveProvider>
+                      <DragSessionProvider>
+                        <BoardView board={board} tasks={tasks} />
+                      </DragSessionProvider>
+                    </PerspectiveProvider>
+                  </ViewsProvider>
+                </UIStateProvider>
+              </FieldUpdateProvider>
             </ActiveBoardPathProvider>
           </EntityStoreProvider>
         </SchemaProvider>

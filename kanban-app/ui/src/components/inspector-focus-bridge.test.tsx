@@ -72,7 +72,7 @@ import {
   EntityFocusProvider,
   useEntityFocus,
 } from "@/lib/entity-focus-context";
-import { InspectProvider } from "@/lib/inspect-context";
+
 import { FieldUpdateProvider } from "@/lib/field-update-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { Entity } from "@/types/kanban";
@@ -114,11 +114,9 @@ function Providers({ children }: { children: React.ReactNode }) {
           entities={{ task: [makeEntity({ title: "T", body: "B" })] }}
         >
           <EntityFocusProvider>
-            <InspectProvider onInspect={() => {}} onDismiss={() => false}>
-              <FieldUpdateProvider>
-                <UIStateProvider>{children}</UIStateProvider>
-              </FieldUpdateProvider>
-            </InspectProvider>
+            <FieldUpdateProvider>
+              <UIStateProvider>{children}</UIStateProvider>
+            </FieldUpdateProvider>
           </EntityFocusProvider>
         </EntityStoreProvider>
       </SchemaProvider>

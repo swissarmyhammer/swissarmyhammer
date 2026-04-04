@@ -53,7 +53,7 @@ vi.mock("@/lib/entity-store-context", () => ({
 
 import { MarkdownDisplay } from "@/components/fields/displays/markdown-display";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
-import { InspectProvider } from "@/lib/inspect-context";
+
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { DisplayProps } from "@/components/fields/displays/text-display";
 
@@ -80,9 +80,7 @@ function renderMarkdown(value: string) {
   return render(
     <TooltipProvider>
       <EntityFocusProvider>
-        <InspectProvider onInspect={vi.fn()} onDismiss={() => false}>
-          <MarkdownDisplay {...makeProps(value, "full")} />
-        </InspectProvider>
+        <MarkdownDisplay {...makeProps(value, "full")} />
       </EntityFocusProvider>
     </TooltipProvider>,
   );

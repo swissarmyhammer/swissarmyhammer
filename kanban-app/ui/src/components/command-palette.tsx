@@ -10,7 +10,6 @@ import { useDispatchCommand, type CommandAtDepth } from "@/lib/command-scope";
 import { useUIState } from "@/lib/ui-state-context";
 import { shadcnTheme, keymapExtension } from "@/lib/cm-keymap";
 import { fuzzyMatch } from "@/lib/fuzzy-filter";
-import { useInspectOptional } from "@/lib/inspect-context";
 import { moniker } from "@/lib/moniker";
 import { useEntityCommands } from "@/lib/entity-commands";
 import { FocusScope } from "@/components/focus-scope";
@@ -107,8 +106,9 @@ export function CommandPalette({
     [backendCommands],
   );
 
-  // Inspect hook for search mode (only used in search mode)
-  const inspectEntity = useInspectOptional();
+  // Dispatch inspect for search mode — dispatches to the backend via
+  // the standard command system, which updates UIState inspector_stack.
+  const dispatchInspect = useDispatchCommand("ui.inspect");
 
   // Reset state when palette opens.
   useEffect(() => {
@@ -238,11 +238,9 @@ export function CommandPalette({
     if (result.entity_type === "board" && onSwitchBoard) {
       onSwitchBoard(result.entity_id);
     }
-    if (inspectEntity) {
-      const entityMoniker = moniker(result.entity_type, result.entity_id);
-      inspectEntity(entityMoniker);
-    }
-  }, [searchResults, selectedIndex, onClose, inspectEntity, onSwitchBoard]);
+    const entityMoniker = moniker(result.entity_type, result.entity_id);
+    dispatchInspect({ target: entityMoniker }).catch(console.error);
+  }, [searchResults, selectedIndex, onClose, dispatchInspect, onSwitchBoard]);
 
   const executeSelected =
     paletteMode === "search" ? executeSelectedResult : executeSelectedCommand;

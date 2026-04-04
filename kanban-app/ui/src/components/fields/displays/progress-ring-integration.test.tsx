@@ -124,7 +124,7 @@ import { UIStateProvider } from "@/lib/ui-state-context";
 import { SchemaProvider } from "@/lib/schema-context";
 import { EntityStoreProvider } from "@/lib/entity-store-context";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
-import { InspectProvider } from "@/lib/inspect-context";
+
 import { FieldUpdateProvider } from "@/lib/field-update-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { Entity } from "@/types/kanban";
@@ -141,11 +141,9 @@ function Providers({
       <SchemaProvider>
         <EntityStoreProvider entities={entities}>
           <EntityFocusProvider>
-            <InspectProvider onInspect={() => {}} onDismiss={() => false}>
-              <FieldUpdateProvider>
-                <UIStateProvider>{children}</UIStateProvider>
-              </FieldUpdateProvider>
-            </InspectProvider>
+            <FieldUpdateProvider>
+              <UIStateProvider>{children}</UIStateProvider>
+            </FieldUpdateProvider>
           </EntityFocusProvider>
         </EntityStoreProvider>
       </SchemaProvider>
