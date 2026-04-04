@@ -10,4 +10,7 @@ turn_state/
 # Session-scoped sidecar diff files (ephemeral, per-turn)
 turn_diffs/
 
+# Session-scoped pre-content sidecar files (ephemeral, per-tool-use)
+turn_pre/
+
 # Keep validators/ directory (should be committed)

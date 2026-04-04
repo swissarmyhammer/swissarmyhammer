@@ -57,15 +57,24 @@ impl ChainLink<PreToolUseInput> for PreToolUseFileTracker {
 
         let session_id = input.common.session_id.as_deref().unwrap_or_default();
 
-        // Read each file once, hash the bytes, and stash the same bytes.
+        // Read each file once, hash the bytes, and persist the content to disk.
         // This avoids reading each file twice (once for hashing, once for stashing).
+        // Content is written to sidecar files so it survives across process boundaries.
         let mut hashes = std::collections::HashMap::new();
         for path in &paths {
             let content = std::fs::read(path).ok();
             let hash = content.as_deref().map(hash_bytes);
             hashes.insert(path.clone(), hash);
-            self.turn_state
-                .stash_content(session_id, tool_use_id, path.clone(), content);
+            if let Err(e) =
+                self.turn_state
+                    .write_pre_content(session_id, tool_use_id, path, content.as_deref())
+            {
+                tracing::warn!(
+                    "PreToolUseFileTracker: Failed to write pre-content for {}: {}",
+                    path.display(),
+                    e
+                );
+            }
         }
 
         // Store hashes in turn state on disk
@@ -110,8 +119,8 @@ impl ChainLink<PostToolUseInput> for PostToolUseFileTracker {
 
         let session_id = input.common.session_id.as_deref().unwrap_or_default();
 
-        // Take pre-content from in-memory cache (always, to clean up)
-        let pre_contents = self.turn_state.take_content(session_id, tool_use_id);
+        // Take pre-content from disk sidecar files (persisted across process boundaries)
+        let pre_contents = self.turn_state.take_pre_content(session_id, tool_use_id);
         let mut state = match self.turn_state.load(session_id) {
             Ok(state) => state,
             Err(e) => {
@@ -235,6 +244,11 @@ impl ChainLink<SessionStartInput> for SessionStartCleanup {
         // Clear sidecar diff files for this session
         if let Err(e) = self.turn_state.clear_diffs(session_id) {
             tracing::warn!("SessionStartCleanup: Failed to clear diffs: {}", e);
+        }
+
+        // Clear sidecar pre-content files for this session
+        if let Err(e) = self.turn_state.clear_pre_content(session_id) {
+            tracing::warn!("SessionStartCleanup: Failed to clear pre-content: {}", e);
         }
 
         ChainResult::continue_empty()

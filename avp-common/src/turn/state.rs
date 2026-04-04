@@ -16,16 +16,17 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 
 /// Subdirectory under `.avp/` for session-scoped sidecar diff files.
 const TURN_DIFFS_DIR: &str = "turn_diffs";
 
-/// Pre-execution file content cache: (session_id, tool_use_id) -> (path -> optional content).
-/// `None` content means the file did not exist before the tool ran.
-/// Keyed by `(session_id, tool_use_id)` so that clearing one session's state
-/// does not destroy another session's in-flight pre-content cache.
-type ContentCache = HashMap<(String, String), HashMap<PathBuf, Option<Vec<u8>>>>;
+/// Subdirectory under `.avp/` for session-scoped pre-content sidecar files.
+/// Layout: `turn_pre/<session_id>/<tool_use_id>/<encoded_path>.pre`
+///
+/// A sentinel file `<encoded_path>.none` marks files that did not exist
+/// before the tool ran (new-file case). When a `.pre` file is present the
+/// content is the raw bytes of the file before the tool modified it.
+const TURN_PRE_DIR: &str = "turn_pre";
 
 /// State tracked during a turn for file change detection.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -72,68 +73,33 @@ const TURN_STATE_DIR: &str = "turn_state";
 pub struct TurnStateManager {
     /// Directory for turn state file (.avp/).
     state_dir: PathBuf,
-    /// In-memory content cache for pre-tool file contents.
-    /// This cache is never serialized to disk.
-    content_cache: Mutex<ContentCache>,
 }
 
 impl TurnStateManager {
+    /// Sanitize an identifier (session_id or tool_use_id) to prevent path traversal.
+    ///
+    /// Replaces any character that is not alphanumeric, hyphen, or underscore
+    /// with an underscore. This ensures the value is safe to use as a single
+    /// path component and cannot contain `..`, `/`, or absolute path prefixes.
+    fn sanitize_id(id: &str) -> String {
+        id.chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect()
+    }
+
     /// Create a new TurnStateManager.
     ///
     /// # Arguments
     /// * `cwd` - The current working directory (project root).
     pub fn new(cwd: &Path) -> Self {
         let state_dir = cwd.join(".avp");
-        Self {
-            state_dir,
-            content_cache: Mutex::new(HashMap::new()),
-        }
-    }
-
-    /// Stash pre-execution file content for a session/tool_use_id and path.
-    ///
-    /// Content of `None` means the file did not exist before the tool ran.
-    pub fn stash_content(
-        &self,
-        session_id: &str,
-        tool_use_id: &str,
-        path: PathBuf,
-        content: Option<Vec<u8>>,
-    ) {
-        match self.content_cache.lock() {
-            Ok(mut cache) => {
-                cache
-                    .entry((session_id.to_string(), tool_use_id.to_string()))
-                    .or_default()
-                    .insert(path, content);
-            }
-            Err(e) => {
-                tracing::warn!(
-                    tool_use_id,
-                    "Content cache mutex poisoned in stash_content, content dropped: {e}"
-                );
-            }
-        }
-    }
-
-    /// Take (remove) all stashed content for a session/tool_use_id.
-    ///
-    /// Returns the map of path -> pre-content, or `None` if no content was stashed.
-    pub fn take_content(
-        &self,
-        session_id: &str,
-        tool_use_id: &str,
-    ) -> Option<HashMap<PathBuf, Option<Vec<u8>>>> {
-        match self.content_cache.lock() {
-            Ok(mut cache) => cache.remove(&(session_id.to_string(), tool_use_id.to_string())),
-            Err(e) => {
-                tracing::warn!(
-                    tool_use_id,
-                    "Content cache mutex poisoned in take_content, returning None: {e}"
-                );
-                None
-            }
-        }
+        Self { state_dir }
     }
 
     /// Load turn state for a session, creating empty state if none exists.
@@ -214,17 +180,8 @@ impl TurnStateManager {
 
     /// Clear turn state for a session.
     ///
-    /// Removes only the specified session's state file and its in-memory cache
-    /// entries; other sessions are untouched.
+    /// Removes only the specified session's state file; other sessions are untouched.
     pub fn clear(&self, session_id: &str) -> Result<(), AvpError> {
-        // Clear only this session's entries from the in-memory content cache
-        match self.content_cache.lock() {
-            Ok(mut cache) => cache.retain(|(sid, _), _| sid != session_id),
-            Err(e) => {
-                tracing::warn!("Content cache mutex poisoned in clear, cache not cleared: {e}");
-            }
-        }
-
         let state_path = self.state_path(session_id);
         let lock_path = self.lock_path(session_id);
 
@@ -260,7 +217,9 @@ impl TurnStateManager {
 
     /// Get the directory for a session's sidecar diff files.
     fn diffs_dir(&self, session_id: &str) -> PathBuf {
-        self.state_dir.join(TURN_DIFFS_DIR).join(session_id)
+        self.state_dir
+            .join(TURN_DIFFS_DIR)
+            .join(Self::sanitize_id(session_id))
     }
 
     /// Encode a file path as a sidecar diff filename.
@@ -383,20 +342,192 @@ impl TurnStateManager {
         Ok(())
     }
 
+    // ── Sidecar pre-content file methods ──────────────────────────────
+
+    /// Get the directory for a session/tool_use_id's pre-content sidecar files.
+    fn pre_content_dir(&self, session_id: &str, tool_use_id: &str) -> PathBuf {
+        self.state_dir
+            .join(TURN_PRE_DIR)
+            .join(Self::sanitize_id(session_id))
+            .join(Self::sanitize_id(tool_use_id))
+    }
+
+    /// Encode a file path as a pre-content sidecar filename.
+    ///
+    /// Reuses the same percent-encoding as diffs but with a `.pre` suffix.
+    fn encode_pre_filename(path: &Path) -> String {
+        let s = path.display().to_string();
+        let encoded = s.replace('%', "%25").replace('/', "%2F");
+        format!("{encoded}.pre")
+    }
+
+    /// Encode a path as a sentinel filename for "file did not exist" (new-file case).
+    fn encode_pre_none_filename(path: &Path) -> String {
+        let s = path.display().to_string();
+        let encoded = s.replace('%', "%25").replace('/', "%2F");
+        format!("{encoded}.none")
+    }
+
+    /// Decode a pre-content sidecar filename back to a file path.
+    ///
+    /// Accepts both `.pre` and `.none` suffixes.
+    fn decode_pre_filename(filename: &str) -> Option<(String, bool)> {
+        if let Some(stem) = filename.strip_suffix(".pre") {
+            let decoded = stem.replace("%2F", "/").replace("%25", "%");
+            Some((decoded, false))
+        } else if let Some(stem) = filename.strip_suffix(".none") {
+            let decoded = stem.replace("%2F", "/").replace("%25", "%");
+            Some((decoded, true))
+        } else {
+            None
+        }
+    }
+
+    /// Write pre-execution file content for a path to a sidecar file on disk.
+    ///
+    /// Content of `None` means the file did not exist before the tool ran;
+    /// a `.none` sentinel is written instead of a `.pre` data file.
+    ///
+    /// This persists across process boundaries so that PostToolUse (which
+    /// runs in a different process) can read content that PreToolUse stashed.
+    pub fn write_pre_content(
+        &self,
+        session_id: &str,
+        tool_use_id: &str,
+        path: &Path,
+        content: Option<&[u8]>,
+    ) -> Result<(), AvpError> {
+        let dir = self.pre_content_dir(session_id, tool_use_id);
+        fs::create_dir_all(&dir).map_err(|e| {
+            AvpError::Io(std::io::Error::new(
+                e.kind(),
+                format!(
+                    "Failed to create pre-content directory '{}': {}",
+                    dir.display(),
+                    e
+                ),
+            ))
+        })?;
+
+        match content {
+            Some(bytes) => {
+                let filename = Self::encode_pre_filename(path);
+                let file_path = dir.join(&filename);
+                fs::write(&file_path, bytes).map_err(|e| {
+                    AvpError::Io(std::io::Error::new(
+                        e.kind(),
+                        format!(
+                            "Failed to write pre-content '{}': {}",
+                            file_path.display(),
+                            e
+                        ),
+                    ))
+                })?;
+                tracing::trace!("Wrote pre-content sidecar: {}", file_path.display());
+            }
+            None => {
+                let filename = Self::encode_pre_none_filename(path);
+                let file_path = dir.join(&filename);
+                fs::write(&file_path, b"").map_err(|e| {
+                    AvpError::Io(std::io::Error::new(
+                        e.kind(),
+                        format!(
+                            "Failed to write pre-content sentinel '{}': {}",
+                            file_path.display(),
+                            e
+                        ),
+                    ))
+                })?;
+                tracing::trace!("Wrote pre-content sentinel: {}", file_path.display());
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Take (read and remove) all pre-content for a session/tool_use_id.
+    ///
+    /// Returns a map of path -> `Option<Vec<u8>>` where `None` means the file
+    /// did not exist before the tool ran. Removes the sidecar directory after
+    /// reading so the data is consumed exactly once.
+    ///
+    /// Returns `None` if no pre-content was stashed for this tool_use_id.
+    pub fn take_pre_content(
+        &self,
+        session_id: &str,
+        tool_use_id: &str,
+    ) -> Option<HashMap<PathBuf, Option<Vec<u8>>>> {
+        let dir = self.pre_content_dir(session_id, tool_use_id);
+        let entries = match fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(_) => return None,
+        };
+
+        let mut result = HashMap::new();
+        for entry in entries.flatten() {
+            let filename = entry.file_name();
+            let filename_str = filename.to_string_lossy();
+            if let Some((decoded_path, is_none)) = Self::decode_pre_filename(&filename_str) {
+                let path = PathBuf::from(decoded_path);
+                if is_none {
+                    result.insert(path, None);
+                } else {
+                    let content = fs::read(entry.path()).ok();
+                    result.insert(path, content);
+                }
+            }
+        }
+
+        // Clean up the tool_use_id directory
+        let _ = fs::remove_dir_all(&dir);
+
+        if result.is_empty() {
+            None
+        } else {
+            Some(result)
+        }
+    }
+
+    /// Clear all pre-content sidecar files for a session.
+    ///
+    /// Removes the entire `turn_pre/<session_id>/` directory.
+    pub fn clear_pre_content(&self, session_id: &str) -> Result<(), AvpError> {
+        let dir = self
+            .state_dir
+            .join(TURN_PRE_DIR)
+            .join(Self::sanitize_id(session_id));
+        if dir.exists() {
+            fs::remove_dir_all(&dir).map_err(|e| {
+                AvpError::Io(std::io::Error::new(
+                    e.kind(),
+                    format!(
+                        "Failed to remove pre-content directory '{}': {}",
+                        dir.display(),
+                        e
+                    ),
+                ))
+            })?;
+            tracing::debug!("Cleared pre-content for session {}", session_id);
+        }
+        Ok(())
+    }
+
     // ── Turn state file methods ─────────────────────────────────────
 
     /// Get the path to a session's state file.
     fn state_path(&self, session_id: &str) -> PathBuf {
+        let safe_id = Self::sanitize_id(session_id);
         self.state_dir
             .join(TURN_STATE_DIR)
-            .join(format!("{}.yaml", session_id))
+            .join(format!("{}.yaml", safe_id))
     }
 
     /// Get the path to a session's lock file.
     fn lock_path(&self, session_id: &str) -> PathBuf {
+        let safe_id = Self::sanitize_id(session_id);
         self.state_dir
             .join(TURN_STATE_DIR)
-            .join(format!("{}.yaml.lock", session_id))
+            .join(format!("{}.yaml.lock", safe_id))
     }
 
     /// Acquire an exclusive lock for a session's state file.
@@ -579,72 +710,175 @@ mod tests {
         assert_eq!(loaded_b.changed[0], PathBuf::from("/file2.rs"));
     }
 
+    // ── Sidecar pre-content tests ────────────────────────────────────
+
     #[test]
-    fn test_stash_and_take_content() {
+    fn test_write_and_take_pre_content_roundtrip() {
         let (manager, _temp_dir) = setup_test_manager();
 
         let path = PathBuf::from("/test/file.rs");
-        let content = b"fn main() {}".to_vec();
+        let content = b"fn main() {}";
 
-        manager.stash_content("session-1", "tool-1", path.clone(), Some(content.clone()));
+        manager
+            .write_pre_content("session-1", "tool-1", &path, Some(content))
+            .unwrap();
 
-        let taken = manager.take_content("session-1", "tool-1");
+        let taken = manager.take_pre_content("session-1", "tool-1");
         assert!(taken.is_some());
         let map = taken.unwrap();
-        assert_eq!(map.get(&path).unwrap().as_ref().unwrap(), &content);
+        assert_eq!(map.get(&path).unwrap().as_ref().unwrap(), content);
 
-        // Second take returns None (consumed)
-        assert!(manager.take_content("session-1", "tool-1").is_none());
+        // Second take returns None (consumed / directory removed)
+        assert!(manager.take_pre_content("session-1", "tool-1").is_none());
     }
 
     #[test]
-    fn test_stash_content_none_for_new_file() {
+    fn test_take_pre_content_none_for_new_file() {
         let (manager, _temp_dir) = setup_test_manager();
 
         let path = PathBuf::from("/test/new_file.rs");
-        manager.stash_content("session-1", "tool-1", path.clone(), None);
+        manager
+            .write_pre_content("session-1", "tool-1", &path, None)
+            .unwrap();
 
-        let taken = manager.take_content("session-1", "tool-1").unwrap();
+        let taken = manager.take_pre_content("session-1", "tool-1").unwrap();
         assert!(taken.get(&path).unwrap().is_none());
     }
 
     #[test]
-    fn test_clear_clears_content_cache_for_session() {
+    fn test_take_pre_content_cleans_up_sidecar_files() {
         let (manager, _temp_dir) = setup_test_manager();
 
-        manager.stash_content(
-            "session-1",
-            "tool-1",
-            PathBuf::from("/file.rs"),
-            Some(vec![1, 2, 3]),
-        );
-        manager.clear("session-1").unwrap();
+        let path = PathBuf::from("/test/file.rs");
+        manager
+            .write_pre_content("session-1", "tool-1", &path, Some(b"data"))
+            .unwrap();
 
-        assert!(manager.take_content("session-1", "tool-1").is_none());
+        // Verify directory exists before take
+        let dir = manager.pre_content_dir("session-1", "tool-1");
+        assert!(dir.exists());
+
+        let _ = manager.take_pre_content("session-1", "tool-1");
+
+        // Directory should be gone after take
+        assert!(!dir.exists());
     }
 
     #[test]
-    fn test_clear_does_not_wipe_other_sessions_cache() {
+    fn test_clear_pre_content_removes_session_dir() {
         let (manager, _temp_dir) = setup_test_manager();
 
-        // Stash content for two different sessions
-        manager.stash_content("session-a", "tool-1", PathBuf::from("/a.rs"), Some(vec![1]));
-        manager.stash_content("session-b", "tool-2", PathBuf::from("/b.rs"), Some(vec![2]));
+        manager
+            .write_pre_content("session-1", "tool-1", &PathBuf::from("/a.rs"), Some(b"a"))
+            .unwrap();
+        manager
+            .write_pre_content("session-1", "tool-2", &PathBuf::from("/b.rs"), Some(b"b"))
+            .unwrap();
 
-        // Clear session-a
-        manager.clear("session-a").unwrap();
+        manager.clear_pre_content("session-1").unwrap();
 
-        // session-a's cache is gone
-        assert!(manager.take_content("session-a", "tool-1").is_none());
+        // Both tool_use_ids are gone
+        assert!(manager.take_pre_content("session-1", "tool-1").is_none());
+        assert!(manager.take_pre_content("session-1", "tool-2").is_none());
+    }
 
-        // session-b's cache is untouched
-        let taken = manager.take_content("session-b", "tool-2");
+    #[test]
+    fn test_clear_pre_content_does_not_affect_other_session() {
+        let (manager, _temp_dir) = setup_test_manager();
+
+        manager
+            .write_pre_content("session-a", "tool-1", &PathBuf::from("/a.rs"), Some(b"a"))
+            .unwrap();
+        manager
+            .write_pre_content("session-b", "tool-2", &PathBuf::from("/b.rs"), Some(b"b"))
+            .unwrap();
+
+        manager.clear_pre_content("session-a").unwrap();
+
+        // session-a is gone
+        assert!(manager.take_pre_content("session-a", "tool-1").is_none());
+
+        // session-b is untouched
+        let taken = manager.take_pre_content("session-b", "tool-2");
         assert!(taken.is_some());
         let map = taken.unwrap();
         assert_eq!(
             map.get(&PathBuf::from("/b.rs")).unwrap().as_ref().unwrap(),
-            &vec![2]
+            b"b"
         );
+    }
+
+    #[test]
+    fn test_pre_content_survives_across_manager_instances() {
+        // Simulates separate processes: process A writes, process B reads.
+        let temp_dir = TempDir::new().unwrap();
+
+        // Process A: PreToolUse writes pre-content
+        let manager_a = TurnStateManager::new(temp_dir.path());
+        let path = PathBuf::from("/test/file.rs");
+        let content = b"original content";
+        manager_a
+            .write_pre_content("session-1", "tool-1", &path, Some(content))
+            .unwrap();
+
+        // Process B: PostToolUse reads pre-content from a NEW manager instance
+        let manager_b = TurnStateManager::new(temp_dir.path());
+        let taken = manager_b.take_pre_content("session-1", "tool-1");
+        assert!(taken.is_some());
+        let map = taken.unwrap();
+        assert_eq!(map.get(&path).unwrap().as_ref().unwrap(), content);
+    }
+
+    #[test]
+    fn test_pre_content_multiple_files_per_tool() {
+        let (manager, _temp_dir) = setup_test_manager();
+
+        let path1 = PathBuf::from("/test/a.rs");
+        let path2 = PathBuf::from("/test/b.rs");
+        manager
+            .write_pre_content("s1", "t1", &path1, Some(b"content-a"))
+            .unwrap();
+        manager
+            .write_pre_content("s1", "t1", &path2, Some(b"content-b"))
+            .unwrap();
+
+        let taken = manager.take_pre_content("s1", "t1").unwrap();
+        assert_eq!(taken.len(), 2);
+        assert_eq!(
+            taken.get(&path1).unwrap().as_ref().unwrap(),
+            &b"content-a"[..]
+        );
+        assert_eq!(
+            taken.get(&path2).unwrap().as_ref().unwrap(),
+            &b"content-b"[..]
+        );
+    }
+
+    #[test]
+    fn test_encode_decode_pre_filename() {
+        let path = Path::new("/src/lib/foo.rs");
+        let encoded = TurnStateManager::encode_pre_filename(path);
+        assert_eq!(encoded, "%2Fsrc%2Flib%2Ffoo.rs.pre");
+
+        let (decoded, is_none) = TurnStateManager::decode_pre_filename(&encoded).unwrap();
+        assert_eq!(decoded, "/src/lib/foo.rs");
+        assert!(!is_none);
+    }
+
+    #[test]
+    fn test_encode_decode_pre_none_filename() {
+        let path = Path::new("/src/new_file.rs");
+        let encoded = TurnStateManager::encode_pre_none_filename(path);
+        assert_eq!(encoded, "%2Fsrc%2Fnew_file.rs.none");
+
+        let (decoded, is_none) = TurnStateManager::decode_pre_filename(&encoded).unwrap();
+        assert_eq!(decoded, "/src/new_file.rs");
+        assert!(is_none);
+    }
+
+    #[test]
+    fn test_decode_pre_filename_rejects_no_suffix() {
+        assert!(TurnStateManager::decode_pre_filename("no_suffix").is_none());
     }
 
     // ── Sidecar diff tests ──────────────────────────────────────────
