@@ -42,9 +42,7 @@ function defaultTaskTitle(_columnName: string): string {
 import { moniker, fieldMoniker } from "@/lib/moniker";
 import { useEntityCommands } from "@/lib/entity-commands";
 import { useDragSession } from "@/lib/drag-session-context";
-import { PerspectiveTabBar } from "@/components/perspective-tab-bar";
-import { usePerspectives } from "@/lib/perspective-context";
-import { evaluateFilter } from "@/lib/perspective-eval";
+import { useActivePerspective } from "@/components/perspective-container";
 import type { BoardData, Entity } from "@/types/kanban";
 import { getStr, getNum } from "@/types/kanban";
 
@@ -94,15 +92,9 @@ export function BoardView({ board, tasks, boardPath }: BoardViewProps) {
 
   const columnIdList = useMemo(() => columns.map((c) => c.id), [columns]);
 
-  // Filter tasks through the active perspective's filter expression.
-  const { activePerspective } = usePerspectives();
-  const filteredTasks = useMemo(
-    () => evaluateFilter(activePerspective?.filter, tasks),
-    [activePerspective?.filter, tasks],
-  );
-
-  // Group field from the active perspective — used to cluster tasks within columns.
-  const groupField = activePerspective?.group;
+  // Filter tasks and get grouping from the active perspective container.
+  const { applyFilter, groupField } = useActivePerspective();
+  const filteredTasks = useMemo(() => applyFilter(tasks), [applyFilter, tasks]);
 
   const taskMap = useMemo(() => {
     const map = new Map<string, Entity>();
@@ -510,7 +502,6 @@ export function BoardView({ board, tasks, boardPath }: BoardViewProps) {
       className="flex flex-col flex-1 min-h-0 relative"
     >
       <CommandScopeProvider commands={boardActionCommands}>
-        <PerspectiveTabBar />
         {/* @dnd-kit context for column reordering only */}
         <DndContext
           sensors={sensors}

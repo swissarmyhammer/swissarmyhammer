@@ -9,16 +9,14 @@ import { FieldUpdateProvider } from "@/lib/field-update-context";
 import { UIStateProvider } from "@/lib/ui-state-context";
 import { NavBar } from "@/components/nav-bar";
 import { ModeIndicator } from "@/components/mode-indicator";
-import { PerspectiveProvider } from "@/lib/perspective-context";
+import { PerspectivesContainer } from "@/components/perspectives-container";
+import { PerspectiveContainer } from "@/components/perspective-container";
 import { QuickCapture } from "@/components/quick-capture";
 import { StoreContainer } from "@/components/store-container";
 import { RustEngineContainer } from "@/components/rust-engine-container";
 import {
   WindowContainer,
-  useBoardData,
   useActiveBoardPath,
-  useOpenBoards,
-  useHandleSwitchBoard,
 } from "@/components/window-container";
 import { BoardContainer } from "@/components/board-container";
 import { AppModeContainer } from "@/components/app-mode-container";
@@ -99,33 +97,26 @@ function App() {
  * - InspectorContainer as a sibling overlay
  */
 function AppContent() {
-  const board = useBoardData();
   const activeBoardPath = useActiveBoardPath();
-  const openBoards = useOpenBoards();
-  const handleSwitchBoard = useHandleSwitchBoard();
 
   return (
     <MaybeStoreScope path={activeBoardPath}>
       <BoardContainer>
-        <PerspectiveProvider>
-          <div className="h-screen bg-background text-foreground flex flex-col">
-            <NavBar
-              board={board}
-              openBoards={openBoards}
-              activeBoardPath={activeBoardPath}
-              onSwitchBoard={handleSwitchBoard}
-            />
-            <div className="flex-1 flex min-h-0">
-              <ViewsContainer>
-                <div className="flex-1 min-w-0 overflow-hidden flex flex-col">
-                  <ViewContainer />
-                </div>
-              </ViewsContainer>
-            </div>
-
-            <ModeIndicator />
-          </div>
-        </PerspectiveProvider>
+        <div className="h-screen bg-background text-foreground flex flex-col">
+          <NavBar />
+          <PerspectivesContainer>
+            <PerspectiveContainer>
+              <div className="flex-1 flex min-h-0">
+                <ViewsContainer>
+                  <div className="flex-1 min-w-0 overflow-hidden flex flex-col">
+                    <ViewContainer />
+                  </div>
+                </ViewsContainer>
+              </div>
+            </PerspectiveContainer>
+          </PerspectivesContainer>
+          <ModeIndicator />
+        </div>
       </BoardContainer>
       <InspectorContainer />
     </MaybeStoreScope>

@@ -4,23 +4,22 @@ import { Field } from "@/components/fields/field";
 import { useSchema } from "@/lib/schema-context";
 import { useDispatchCommand } from "@/lib/command-scope";
 import { moniker } from "@/lib/moniker";
-import type { BoardData, OpenBoard } from "@/types/kanban";
+import {
+  useBoardData,
+  useOpenBoards,
+  useActiveBoardPath,
+  useHandleSwitchBoard,
+} from "@/components/window-container";
 
-interface NavBarProps {
-  board: BoardData | null;
-  openBoards: OpenBoard[];
-  /** Currently active board path for this window. */
-  activeBoardPath?: string;
-  /** Switch this window to a different board. */
-  onSwitchBoard: (path: string) => void;
-}
-
-export function NavBar({
-  board,
-  openBoards,
-  activeBoardPath,
-  onSwitchBoard,
-}: NavBarProps) {
+/**
+ * Top-level navigation bar. Reads board data, open boards, active path,
+ * and switch-board handler from WindowContainer context -- takes no props.
+ */
+export function NavBar() {
+  const board = useBoardData();
+  const openBoards = useOpenBoards();
+  const activeBoardPath = useActiveBoardPath();
+  const onSwitchBoard = useHandleSwitchBoard();
   const dispatchInspect = useDispatchCommand("ui.inspect");
   const dispatchSearch = useDispatchCommand("app.search");
   const { getFieldDef } = useSchema();

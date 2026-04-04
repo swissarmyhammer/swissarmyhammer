@@ -10,9 +10,7 @@ import {
 } from "@/lib/entity-focus-context";
 import { buildEntityCommandDefs } from "@/lib/entity-commands";
 import { CommandScopeProvider, type CommandDef } from "@/lib/command-scope";
-import { PerspectiveTabBar } from "@/components/perspective-tab-bar";
-import { usePerspectives } from "@/lib/perspective-context";
-import { evaluateFilter, evaluateSort } from "@/lib/perspective-eval";
+import { useActivePerspective } from "@/components/perspective-container";
 import { DataTable, type DataTableColumn } from "@/components/data-table";
 import { Field } from "@/components/fields/field";
 import type { ViewDef, Entity, FieldDef } from "@/types/kanban";
@@ -35,17 +33,17 @@ export function GridView({ view }: GridViewProps) {
   // Schema-driven entity commands for per-row context menus
   const schemaCommands = getEntityCommands(entityType);
 
-  // Filter and sort entities through the active perspective's expressions.
-  const { activePerspective } = usePerspectives();
+  // Filter and sort entities through the active perspective container.
+  const { applyFilter, applySort, groupField } = useActivePerspective();
   const entities = useMemo(() => {
-    const filtered = evaluateFilter(activePerspective?.filter, rawEntities);
-    return evaluateSort(activePerspective?.sort ?? [], filtered);
-  }, [activePerspective?.filter, activePerspective?.sort, rawEntities]);
+    const filtered = applyFilter(rawEntities);
+    return applySort(filtered);
+  }, [applyFilter, applySort, rawEntities]);
 
   // Derive DataTable grouping from the active perspective's group field.
   const grouping = useMemo<string[] | undefined>(
-    () => (activePerspective?.group ? [activePerspective.group] : undefined),
-    [activePerspective?.group],
+    () => (groupField ? [groupField] : undefined),
+    [groupField],
   );
 
   // Build columns from view's card_fields (or all visible fields)
@@ -460,7 +458,6 @@ export function GridView({ view }: GridViewProps) {
 
   return (
     <CommandScopeProvider commands={gridCommands}>
-      <PerspectiveTabBar />
       <main className="flex-1 flex flex-col min-h-0">
         <div className="flex items-center px-4 py-1.5 border-b border-border bg-muted/30 text-xs text-muted-foreground gap-3">
           <span>{entities.length} rows</span>

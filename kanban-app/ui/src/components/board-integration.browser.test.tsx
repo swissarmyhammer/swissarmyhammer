@@ -119,6 +119,7 @@ import { FieldUpdateProvider } from "@/lib/field-update-context";
 import { UIStateProvider } from "@/lib/ui-state-context";
 import { ViewsProvider } from "@/lib/views-context";
 import { PerspectiveProvider } from "@/lib/perspective-context";
+import { PerspectiveContainer } from "@/components/perspective-container";
 import { BoardView } from "./board-view";
 
 // ---------------------------------------------------------------------------
@@ -214,9 +215,11 @@ function renderIntegrationBoard() {
                 <UIStateProvider>
                   <ViewsProvider>
                     <PerspectiveProvider>
-                      <DragSessionProvider>
-                        <BoardView board={board} tasks={tasks} />
-                      </DragSessionProvider>
+                      <PerspectiveContainer>
+                        <DragSessionProvider>
+                          <BoardView board={board} tasks={tasks} />
+                        </DragSessionProvider>
+                      </PerspectiveContainer>
                     </PerspectiveProvider>
                   </ViewsProvider>
                 </UIStateProvider>

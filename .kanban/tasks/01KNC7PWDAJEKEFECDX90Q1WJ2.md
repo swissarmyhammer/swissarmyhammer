@@ -3,9 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KNC7PAJ6XHPHNMFM23KSDGZM
-position_column: todo
-position_ordinal: '8480'
-position_swimlane: container-refactor
+position_column: done
+position_ordinal: fffffffffffffffffffa80
 title: Extract PerspectivesContainer and PerspectiveContainer
 ---
 ## What
