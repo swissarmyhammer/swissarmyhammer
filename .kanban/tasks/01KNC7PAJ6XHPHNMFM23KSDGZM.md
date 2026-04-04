@@ -3,9 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KNC7NQA00AZNR027JPJTQKWD
-position_column: todo
-position_ordinal: '8380'
-position_swimlane: container-refactor
+position_column: done
+position_ordinal: fffffffffffffffffff880
 title: Extract ViewsContainer and ViewContainer
 ---
 ## What

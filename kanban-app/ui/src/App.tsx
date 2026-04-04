@@ -1,31 +1,18 @@
 // Field type registrations — must be imported before any Field renders
 import "@/components/fields/registrations";
 
-import { useEffect, useMemo } from "react";
+import { useEffect } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { SchemaProvider } from "@/lib/schema-context";
 import { EntityStoreProvider } from "@/lib/entity-store-context";
 import { FieldUpdateProvider } from "@/lib/field-update-context";
 import { UIStateProvider } from "@/lib/ui-state-context";
 import { NavBar } from "@/components/nav-bar";
-import { LeftNav } from "@/components/left-nav";
 import { ModeIndicator } from "@/components/mode-indicator";
-import { BoardView } from "@/components/board-view";
-import { GridView } from "@/components/grid-view";
-import { ViewsProvider, useViews } from "@/lib/views-context";
 import { PerspectiveProvider } from "@/lib/perspective-context";
-import {
-  CommandScopeProvider,
-  backendDispatch,
-  type CommandDef,
-} from "@/lib/command-scope";
-import type { BoardData, Entity } from "@/types/kanban";
 import { QuickCapture } from "@/components/quick-capture";
 import { StoreContainer } from "@/components/store-container";
-import {
-  RustEngineContainer,
-  useEntitiesByType,
-} from "@/components/rust-engine-container";
+import { RustEngineContainer } from "@/components/rust-engine-container";
 import {
   WindowContainer,
   useBoardData,
@@ -36,6 +23,8 @@ import {
 import { BoardContainer } from "@/components/board-container";
 import { AppModeContainer } from "@/components/app-mode-container";
 import { InspectorContainer } from "@/components/inspector-container";
+import { ViewsContainer } from "@/components/views-container";
+import { ViewContainer } from "@/components/view-container";
 
 /** Parse URL params once at module level. */
 const URL_PARAMS = new URLSearchParams(window.location.search);
@@ -114,99 +103,32 @@ function AppContent() {
   const activeBoardPath = useActiveBoardPath();
   const openBoards = useOpenBoards();
   const handleSwitchBoard = useHandleSwitchBoard();
-  const entitiesByType = useEntitiesByType();
 
   return (
     <MaybeStoreScope path={activeBoardPath}>
       <BoardContainer>
-        <ViewsProvider>
-          <PerspectiveProvider>
-            <ViewCommandScope>
-              <div className="h-screen bg-background text-foreground flex flex-col">
-                <NavBar
-                  board={board}
-                  openBoards={openBoards}
-                  activeBoardPath={activeBoardPath}
-                  onSwitchBoard={handleSwitchBoard}
-                />
-                <div className="flex-1 flex min-h-0">
-                  <LeftNav />
-                  <div className="flex-1 min-w-0 overflow-hidden flex flex-col">
-                    <ActiveViewRenderer
-                      board={board!}
-                      tasks={entitiesByType.task ?? []}
-                      boardPath={activeBoardPath}
-                    />
-                  </div>
+        <PerspectiveProvider>
+          <div className="h-screen bg-background text-foreground flex flex-col">
+            <NavBar
+              board={board}
+              openBoards={openBoards}
+              activeBoardPath={activeBoardPath}
+              onSwitchBoard={handleSwitchBoard}
+            />
+            <div className="flex-1 flex min-h-0">
+              <ViewsContainer>
+                <div className="flex-1 min-w-0 overflow-hidden flex flex-col">
+                  <ViewContainer />
                 </div>
+              </ViewsContainer>
+            </div>
 
-                <ModeIndicator />
-              </div>
-            </ViewCommandScope>
-          </PerspectiveProvider>
-        </ViewsProvider>
+            <ModeIndicator />
+          </div>
+        </PerspectiveProvider>
       </BoardContainer>
       <InspectorContainer />
     </MaybeStoreScope>
-  );
-}
-
-/**
- * Provides view.switch commands generated from the views registry.
- * Each view gets a `view.switch:<id>` command that dispatches through
- * the backend command system (which redirects to `ui.view.set`).
- */
-function ViewCommandScope({ children }: { children: React.ReactNode }) {
-  const { views } = useViews();
-
-  const viewCommands: CommandDef[] = useMemo(() => {
-    return views.map((view) => ({
-      id: `view.switch:${view.id}`,
-      name: `View: ${view.name}`,
-      execute: () => {
-        backendDispatch({
-          cmd: `view.switch:${view.id}`,
-          scopeChain: [`window:${WINDOW_LABEL}`],
-        }).catch(console.error);
-      },
-    }));
-  }, [views]);
-
-  return (
-    <CommandScopeProvider commands={viewCommands}>
-      {children}
-    </CommandScopeProvider>
-  );
-}
-
-/** Props for the ActiveViewRenderer component. */
-interface ViewRouterProps {
-  board: BoardData;
-  tasks: Entity[];
-  boardPath?: string;
-}
-
-/**
- * Renders the currently active view based on its kind.
- * For "board" kind, renders the BoardView. Other kinds show a placeholder.
- */
-function ActiveViewRenderer({ board, tasks, boardPath }: ViewRouterProps) {
-  const { activeView } = useViews();
-
-  if (!activeView || activeView.kind === "board") {
-    return <BoardView board={board} tasks={tasks} boardPath={boardPath} />;
-  }
-
-  if (activeView.kind === "grid") {
-    return <GridView view={activeView} />;
-  }
-
-  return (
-    <main className="flex-1 flex items-center justify-center">
-      <p className="text-muted-foreground">
-        {activeView.name} view ({activeView.kind}) is not yet implemented.
-      </p>
-    </main>
   );
 }
 
