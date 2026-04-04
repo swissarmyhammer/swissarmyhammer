@@ -32,7 +32,7 @@ import { useContextMenu } from "@/lib/context-menu";
 import {
   CommandScopeProvider,
   CommandScopeContext,
-  backendDispatch,
+  useDispatchCommand,
   type CommandDef,
 } from "@/lib/command-scope";
 import { FocusScope } from "@/components/focus-scope";
@@ -117,6 +117,7 @@ export function DataTable({
   const cursorRef = useRef<HTMLTableCellElement>(null);
   // Grid-level context menu handler -- used when rowEntityCommands is not set.
   const contextMenuHandler = useContextMenu();
+  const dispatchSortToggle = useDispatchCommand("perspective.sort.toggle");
   const [sorting, setSorting] = useState<SortingState>([]);
   const [grouping, setGrouping] = useState<GroupingState>(groupingProp ?? []);
 
@@ -280,16 +281,14 @@ export function DataTable({
                       // Shift+click appends to multi-sort via set; plain click toggles
                       if (e.shiftKey) {
                         // Shift+click: cycle this field independently (toggle)
-                        backendDispatch({
-                          cmd: "perspective.sort.toggle",
+                        dispatchSortToggle({
                           args: {
                             field: columnId,
                             perspective_id: perspectiveId,
                           },
                         }).catch(console.error);
                       } else {
-                        backendDispatch({
-                          cmd: "perspective.sort.toggle",
+                        dispatchSortToggle({
                           args: {
                             field: columnId,
                             perspective_id: perspectiveId,
