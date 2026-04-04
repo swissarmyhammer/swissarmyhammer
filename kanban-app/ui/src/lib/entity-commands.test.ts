@@ -185,7 +185,7 @@ describe("useEntityCommands", () => {
     expect(result.current[0].id).toBe("entity.inspect");
   });
 
-  it("entity.inspect execute dispatches to backend like any other command", async () => {
+  it("entity.inspect has no frontend execute handler — dispatch goes through the backend scope chain", async () => {
     const { result } = renderHook(() => useEntityCommands("task", "task-42"), {
       wrapper: makeWrapper(),
     });
@@ -196,15 +196,10 @@ describe("useEntityCommands", () => {
 
     const inspectCmd = result.current.find((c) => c.id === "entity.inspect");
     expect(inspectCmd).toBeDefined();
-    // execute should call dispatch — which invokes the Tauri backend.
-    // The mock invoke resolves to null, so this should not throw.
-    inspectCmd!.execute!();
-    // Verify invoke was called with dispatch_command for entity.inspect
-    const { invoke: mockInvoke } = await import("@tauri-apps/api/core");
-    expect(mockInvoke).toHaveBeenCalledWith(
-      "dispatch_command",
-      expect.objectContaining({ cmd: "entity.inspect" }),
-    );
+    // No frontend execute handler: the backend resolves the command via the
+    // scope chain and target moniker. See no-client-side-inspect principle.
+    expect(inspectCmd!.execute).toBeUndefined();
+    expect(inspectCmd!.target).toBe("task:task-42");
   });
 });
 

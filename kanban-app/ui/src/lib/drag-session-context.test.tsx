@@ -28,7 +28,6 @@ vi.mock("@/lib/command-scope", async () => {
   const actual = await vi.importActual("@/lib/command-scope");
   return {
     ...actual,
-    useActiveBoardPath: () => "/board/a/.kanban",
   };
 });
 
@@ -144,7 +143,6 @@ describe("DragSessionProvider", () => {
       args: {
         taskId: "task-42",
         taskFields: { title: "My task" },
-        boardPath: "/board/a/.kanban",
         sourceWindowLabel: "main",
         copyMode: false,
       },
@@ -181,7 +179,6 @@ describe("DragSessionProvider", () => {
     expect(mockInvoke).toHaveBeenCalledWith("dispatch_command", {
       cmd: "drag.complete",
       args: {
-        targetBoardPath: "/board/a/.kanban",
         targetColumn: "done",
         dropIndex: 3,
         beforeId: "task-5",
@@ -203,7 +200,6 @@ describe("DragSessionProvider", () => {
     expect(mockInvoke).toHaveBeenCalledWith("dispatch_command", {
       cmd: "drag.complete",
       args: {
-        targetBoardPath: "/board/a/.kanban",
         targetColumn: "todo",
         dropIndex: null,
         beforeId: null,

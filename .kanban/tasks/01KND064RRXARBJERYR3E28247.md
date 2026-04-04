@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: bf80
+position_column: done
+position_ordinal: ffffffffffffffffffff8e80
 title: Replace title= with shadcn Tooltip in column-view.tsx
 ---
 ## What

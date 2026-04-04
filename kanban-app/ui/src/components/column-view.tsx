@@ -8,6 +8,11 @@ import { Field } from "@/components/fields/field";
 import { DraggableTaskCard } from "@/components/sortable-task-card";
 import { FocusScope } from "@/components/focus-scope";
 import { Badge } from "@/components/ui/badge";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { moniker, fieldMoniker } from "@/lib/moniker";
 import { useEntityCommands } from "@/lib/entity-commands";
 import { useSchema } from "@/lib/schema-context";
@@ -32,8 +37,6 @@ interface ColumnViewProps {
   onDrop?: (descriptor: DropZoneDescriptor, taskData: string) => void;
   /** ID of the task currently being dragged (for no-op zone suppression). */
   dragTaskId?: string | null;
-  /** Board path — passed explicitly from BoardView, not pulled from context. */
-  boardPath?: string;
   /** ID of the first task in the todo column — used for "Do This Next" command. */
   firstTodoTaskId?: string | null;
   /** Ref callback for the column container — used for cross-window hit-testing. */
@@ -91,7 +94,6 @@ export const ColumnView = memo(function ColumnView({
   onTaskDragEnd,
   onDrop: onDropProp,
   dragTaskId,
-  boardPath,
   firstTodoTaskId,
   containerRef: containerRefProp,
   leftColumnTaskMonikers = [],
@@ -158,15 +160,15 @@ export const ColumnView = memo(function ColumnView({
   );
 
   const commands = useEntityCommands("column", column.id, column);
-  // Compute drop zones at render time — each zone carries preconfigured placement data
+  // Compute drop zones at render time — each zone carries preconfigured placement data.
+  // Board identity comes from the scope chain at dispatch time, not the descriptor.
   const zones = useMemo(
     () =>
       computeDropZones(
         tasks.map((t) => t.id),
         column.id,
-        boardPath ?? "",
       ),
-    [tasks, column.id, boardPath],
+    [tasks, column.id],
   );
 
   /** Build a "Do This Next" command for a task, or null if the task is already first in todo. */
@@ -456,22 +458,28 @@ export const ColumnView = memo(function ColumnView({
           <Badge variant="secondary">{tasks.length}</Badge>
           <div className="flex-1" />
           {onAddTask && (
-            <button
-              type="button"
-              className="p-0.5 rounded text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted transition-colors"
-              onClick={() => {
-                // Set focus to the column so invokeFocusChange builds the
-                // correct scope chain (column:todo → board:board) in UIState.
-                // The Rust resolve_entity_id reads the scope chain to find the column.
-                setFocus(columnMoniker);
-                dispatchTaskAdd({
-                  args: { title: "New task", column: column.id },
-                }).catch(console.error);
-              }}
-              title={`Add task to ${getStr(column, "name")}`}
-            >
-              <Plus className="h-4 w-4" />
-            </button>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  className="p-0.5 rounded text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted transition-colors"
+                  onClick={() => {
+                    // Set focus to the column so invokeFocusChange builds the
+                    // correct scope chain (column:todo → board:board) in UIState.
+                    // The Rust resolve_entity_id reads the scope chain to find the column.
+                    setFocus(columnMoniker);
+                    dispatchTaskAdd({
+                      args: { title: "New task", column: column.id },
+                    }).catch(console.error);
+                  }}
+                >
+                  <Plus className="h-4 w-4" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent>
+                {`Add task to ${getStr(column, "name")}`}
+              </TooltipContent>
+            </Tooltip>
           )}
         </div>
         <VirtualizedCardList

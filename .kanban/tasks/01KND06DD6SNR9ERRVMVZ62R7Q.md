@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: c180
+position_column: done
+position_ordinal: ffffffffffffffffffff8c80
 title: Replace title= with shadcn Tooltip in board-selector.tsx
 ---
 ## What

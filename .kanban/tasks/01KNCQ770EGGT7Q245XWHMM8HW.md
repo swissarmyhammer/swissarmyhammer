@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KNC7R0H7DXWBDFZ7CZDVDN3E
-position_column: todo
-position_ordinal: b580
+position_column: done
+position_ordinal: ffffffffffffffffffff8f80
 title: 'Drag-drop: resolve source and target boards from scope chain'
 ---
 ## What

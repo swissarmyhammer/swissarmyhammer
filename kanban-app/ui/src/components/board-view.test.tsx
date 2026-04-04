@@ -9,6 +9,7 @@ import { DragSessionProvider } from "@/lib/drag-session-context";
 import { SchemaProvider } from "@/lib/schema-context";
 import { EntityStoreProvider } from "@/lib/entity-store-context";
 import { ActiveBoardPathProvider } from "@/lib/command-scope";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { BoardView } from "./board-view";
 import type { BoardData, Entity } from "@/types/kanban";
 
@@ -102,14 +103,16 @@ function renderBoard(overrides?: { board?: BoardData; tasks?: Entity[] }) {
     <EntityFocusProvider>
       <SchemaProvider>
         <EntityStoreProvider entities={{}}>
-          <ActiveBoardPathProvider value="/test/board">
-            <DragSessionProvider>
-              <BoardView
-                board={overrides?.board ?? board}
-                tasks={overrides?.tasks ?? tasks}
-              />
-            </DragSessionProvider>
-          </ActiveBoardPathProvider>
+          <TooltipProvider>
+            <ActiveBoardPathProvider value="/test/board">
+              <DragSessionProvider>
+                <BoardView
+                  board={overrides?.board ?? board}
+                  tasks={overrides?.tasks ?? tasks}
+                />
+              </DragSessionProvider>
+            </ActiveBoardPathProvider>
+          </TooltipProvider>
         </EntityStoreProvider>
       </SchemaProvider>
     </EntityFocusProvider>,
@@ -143,16 +146,18 @@ describe("BoardView navigation commands", () => {
       <EntityFocusProvider>
         <SchemaProvider>
           <EntityStoreProvider entities={{}}>
-            <ActiveBoardPathProvider value="/test/board">
-              <DragSessionProvider>
-                <ScopeProbe
-                  onScope={(fn) => {
-                    getScope = fn;
-                  }}
-                />
-                <BoardView board={board} tasks={tasks} />
-              </DragSessionProvider>
-            </ActiveBoardPathProvider>
+            <TooltipProvider>
+              <ActiveBoardPathProvider value="/test/board">
+                <DragSessionProvider>
+                  <ScopeProbe
+                    onScope={(fn) => {
+                      getScope = fn;
+                    }}
+                  />
+                  <BoardView board={board} tasks={tasks} />
+                </DragSessionProvider>
+              </ActiveBoardPathProvider>
+            </TooltipProvider>
           </EntityStoreProvider>
         </SchemaProvider>
       </EntityFocusProvider>,

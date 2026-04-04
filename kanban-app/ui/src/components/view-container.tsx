@@ -21,10 +21,7 @@ import { useViews } from "@/lib/views-context";
 import { CommandScopeProvider } from "@/lib/command-scope";
 import { BoardView } from "@/components/board-view";
 import { GridView } from "@/components/grid-view";
-import {
-  useBoardData,
-  useActiveBoardPath,
-} from "@/components/window-container";
+import { useBoardData } from "@/components/window-container";
 import { useEntitiesByType } from "@/components/rust-engine-container";
 import type { BoardData, Entity } from "@/types/kanban";
 
@@ -47,7 +44,6 @@ interface ViewContainerProps {
 export function ViewContainer({ children }: ViewContainerProps) {
   const { activeView } = useViews();
   const board = useBoardData();
-  const activeBoardPath = useActiveBoardPath();
   const entitiesByType = useEntitiesByType();
 
   const viewId = activeView?.id ?? "default";
@@ -59,7 +55,6 @@ export function ViewContainer({ children }: ViewContainerProps) {
         activeView={activeView}
         board={board!}
         tasks={entitiesByType.task ?? []}
-        boardPath={activeBoardPath}
       />
       {children}
     </CommandScopeProvider>
@@ -74,13 +69,12 @@ interface ActiveViewRendererProps {
   activeView: import("@/types/kanban").ViewDef | null;
   board: BoardData;
   tasks: Entity[];
-  boardPath?: string;
 }
 
 /**
  * Renders the currently active view based on its kind.
  *
- * - null or "board" kind: renders BoardView
+ * - null or "board" kind: renders BoardView (board path from scope chain)
  * - "grid" kind: renders GridView
  * - anything else: renders a placeholder message
  */
@@ -88,10 +82,9 @@ function ActiveViewRenderer({
   activeView,
   board,
   tasks,
-  boardPath,
 }: ActiveViewRendererProps) {
   if (!activeView || activeView.kind === "board") {
-    return <BoardView board={board} tasks={tasks} boardPath={boardPath} />;
+    return <BoardView board={board} tasks={tasks} />;
   }
 
   if (activeView.kind === "grid") {

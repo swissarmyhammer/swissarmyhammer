@@ -26,6 +26,7 @@ import { EntityFocusProvider } from "@/lib/entity-focus-context";
 import { SchemaProvider } from "@/lib/schema-context";
 import { EntityStoreProvider } from "@/lib/entity-store-context";
 import { ActiveBoardPathProvider } from "@/lib/command-scope";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import type { Entity } from "@/types/kanban";
 
 /** Create a minimal column entity. */
@@ -52,9 +53,11 @@ function renderColumn(ui: React.ReactElement) {
     <EntityFocusProvider>
       <SchemaProvider>
         <EntityStoreProvider entities={{}}>
-          <ActiveBoardPathProvider value="/test/board">
-            {ui}
-          </ActiveBoardPathProvider>
+          <TooltipProvider>
+            <ActiveBoardPathProvider value="/test/board">
+              {ui}
+            </ActiveBoardPathProvider>
+          </TooltipProvider>
         </EntityStoreProvider>
       </SchemaProvider>
     </EntityFocusProvider>,

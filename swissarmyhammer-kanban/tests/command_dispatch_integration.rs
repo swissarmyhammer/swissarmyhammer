@@ -1100,24 +1100,29 @@ async fn drag_complete_same_board_moves_task() {
         .expect("task.add should succeed");
     let task_id = add_result["id"].as_str().unwrap();
 
-    // Start a drag session
+    // Start a drag session — board path derived from scope chain's store: moniker
     let board_path = engine.kanban.root().to_string_lossy().to_string();
+    let store_moniker = format!("store:{}", board_path);
     let mut start_args = HashMap::new();
     start_args.insert("taskId".to_string(), json!(task_id));
-    start_args.insert("boardPath".to_string(), json!(&board_path));
 
     engine
-        .dispatch("drag.start", &[], None, start_args)
+        .dispatch("drag.start", &[store_moniker.as_str()], None, start_args)
         .await
         .expect("drag.start should succeed");
 
     // Complete the drag on the same board, targeting "doing" column
+    // Target board path also from scope chain
     let mut complete_args = HashMap::new();
-    complete_args.insert("targetBoardPath".to_string(), json!(&board_path));
     complete_args.insert("targetColumn".to_string(), json!("doing"));
 
     let result = engine
-        .dispatch("drag.complete", &[], None, complete_args)
+        .dispatch(
+            "drag.complete",
+            &[store_moniker.as_str()],
+            None,
+            complete_args,
+        )
         .await
         .expect("drag.complete should succeed");
 
@@ -1169,26 +1174,31 @@ async fn drag_complete_cross_board_returns_transfer_params() {
         .expect("task.add should succeed");
     let task_id = add_result["id"].as_str().unwrap();
 
-    // Start a drag session with source board path
+    // Start a drag session — source board path from scope chain store: moniker
     let source_board_path = "/boards/source/.kanban";
+    let source_store = format!("store:{}", source_board_path);
     let mut start_args = HashMap::new();
     start_args.insert("taskId".to_string(), json!(task_id));
-    start_args.insert("boardPath".to_string(), json!(source_board_path));
 
     engine
-        .dispatch("drag.start", &[], None, start_args)
+        .dispatch("drag.start", &[source_store.as_str()], None, start_args)
         .await
         .expect("drag.start should succeed");
 
-    // Complete the drag targeting a DIFFERENT board path
+    // Complete the drag targeting a DIFFERENT board path via scope chain
     let target_board_path = "/boards/target/.kanban";
+    let target_store = format!("store:{}", target_board_path);
     let mut complete_args = HashMap::new();
-    complete_args.insert("targetBoardPath".to_string(), json!(target_board_path));
     complete_args.insert("targetColumn".to_string(), json!("done"));
     complete_args.insert("dropIndex".to_string(), json!(0));
 
     let result = engine
-        .dispatch("drag.complete", &[], None, complete_args)
+        .dispatch(
+            "drag.complete",
+            &[target_store.as_str()],
+            None,
+            complete_args,
+        )
         .await
         .expect("drag.complete should succeed");
 

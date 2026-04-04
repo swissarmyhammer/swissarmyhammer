@@ -120,6 +120,7 @@ import { UIStateProvider } from "@/lib/ui-state-context";
 import { ViewsProvider } from "@/lib/views-context";
 import { PerspectiveProvider } from "@/lib/perspective-context";
 import { PerspectiveContainer } from "@/components/perspective-container";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { BoardView } from "./board-view";
 
 // ---------------------------------------------------------------------------
@@ -210,21 +211,23 @@ function renderIntegrationBoard() {
       <EntityFocusProvider>
         <SchemaProvider>
           <EntityStoreProvider entities={{ task: tasks, tag: [] }}>
-            <ActiveBoardPathProvider value={testBoardDir + "/.kanban"}>
-              <FieldUpdateProvider>
-                <UIStateProvider>
-                  <ViewsProvider>
-                    <PerspectiveProvider>
-                      <PerspectiveContainer>
-                        <DragSessionProvider>
-                          <BoardView board={board} tasks={tasks} />
-                        </DragSessionProvider>
-                      </PerspectiveContainer>
-                    </PerspectiveProvider>
-                  </ViewsProvider>
-                </UIStateProvider>
-              </FieldUpdateProvider>
-            </ActiveBoardPathProvider>
+            <TooltipProvider>
+              <ActiveBoardPathProvider value={testBoardDir + "/.kanban"}>
+                <FieldUpdateProvider>
+                  <UIStateProvider>
+                    <ViewsProvider>
+                      <PerspectiveProvider>
+                        <PerspectiveContainer>
+                          <DragSessionProvider>
+                            <BoardView board={board} tasks={tasks} />
+                          </DragSessionProvider>
+                        </PerspectiveContainer>
+                      </PerspectiveProvider>
+                    </ViewsProvider>
+                  </UIStateProvider>
+                </FieldUpdateProvider>
+              </ActiveBoardPathProvider>
+            </TooltipProvider>
           </EntityStoreProvider>
         </SchemaProvider>
       </EntityFocusProvider>

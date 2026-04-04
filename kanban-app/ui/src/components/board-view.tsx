@@ -39,7 +39,6 @@ import { getStr, getNum } from "@/types/kanban";
 interface BoardViewProps {
   board: BoardData;
   tasks: Entity[];
-  boardPath?: string;
 }
 
 type ColumnLayout = Map<string, string[]>;
@@ -57,9 +56,7 @@ interface TaskDragState {
  * left/right/first/last, and each predicate evaluates whether it should claim
  * focus. No push-based cursor state is needed.
  */
-export function BoardView({ board, tasks, boardPath }: BoardViewProps) {
-  const boardPathRef = useRef(boardPath);
-  boardPathRef.current = boardPath;
+export function BoardView({ board, tasks }: BoardViewProps) {
   const { startSession, cancelSession, completeSession } = useDragSession();
   const boardMoniker = moniker("board", "board");
   const boardCommands = useEntityCommands("board", "board");
@@ -388,7 +385,8 @@ export function BoardView({ board, tasks, boardPath }: BoardViewProps) {
         };
         if (descriptor.beforeId) args.before_id = descriptor.beforeId;
         if (descriptor.afterId) args.after_id = descriptor.afterId;
-        const boardPath = descriptor.boardPath || boardPathRef.current;
+        // Board identity is resolved from the scope chain by useDispatchCommand —
+        // no explicit boardPath needed.
         await dispatch("task.move", {
           args,
           target: `task:${taskId}`,
@@ -525,7 +523,6 @@ export function BoardView({ board, tasks, boardPath }: BoardViewProps) {
                       onDrop={handleZoneDrop}
                       dragTaskId={taskDrag?.sourceTaskId ?? null}
                       firstTodoTaskId={firstTodoTaskId}
-                      boardPath={boardPath}
                       leftColumnTaskMonikers={
                         prevColId
                           ? (columnTaskMonikers.get(prevColId) ?? [])

@@ -14,19 +14,16 @@
 import { describe, it, expect } from "vitest";
 import { computeDropZones, type DropZoneDescriptor } from "@/lib/drop-zones";
 
-const BOARD = "/tmp/test-board";
-
 // ---------------------------------------------------------------------------
 // computeDropZones — zone count and descriptor shape
 // ---------------------------------------------------------------------------
 
 describe("computeDropZones", () => {
   it("empty column produces a single zone with no anchors", () => {
-    const zones = computeDropZones([], "doing", BOARD);
+    const zones = computeDropZones([], "doing");
     expect(zones).toHaveLength(1);
     expect(zones[0]).toEqual({
       key: "empty",
-      boardPath: BOARD,
       columnId: "doing",
     });
     // No beforeId or afterId — backend interprets this as "append"
@@ -35,21 +32,20 @@ describe("computeDropZones", () => {
   });
 
   it("single card produces 2 zones: before-A and after-A", () => {
-    const zones = computeDropZones(["A"], "todo", BOARD);
+    const zones = computeDropZones(["A"], "todo");
     expect(zones).toHaveLength(2);
     expect(zones[0]).toMatchObject({ key: "before-A", beforeId: "A" });
     expect(zones[1]).toMatchObject({ key: "after-A", afterId: "A" });
   });
 
   it("N cards produce N+1 zones", () => {
-    const zones = computeDropZones(["A", "B", "C"], "todo", BOARD);
+    const zones = computeDropZones(["A", "B", "C"], "todo");
     expect(zones).toHaveLength(4);
   });
 
-  it("all zones carry the board path and column ID", () => {
-    const zones = computeDropZones(["A", "B"], "doing", BOARD);
+  it("all zones carry the column ID", () => {
+    const zones = computeDropZones(["A", "B"], "doing");
     for (const z of zones) {
-      expect(z.boardPath).toBe(BOARD);
       expect(z.columnId).toBe("doing");
     }
   });
@@ -61,7 +57,7 @@ describe("computeDropZones", () => {
 
 describe("move 3rd card to 2nd position", () => {
   // Board has [A, B, C] in "todo". User drags C and drops on zone before-B.
-  const zones = computeDropZones(["A", "B", "C"], "todo", BOARD);
+  const zones = computeDropZones(["A", "B", "C"], "todo");
 
   it("zone at index 1 targets before-B", () => {
     const zone = zones[1];
@@ -88,7 +84,7 @@ describe("move 3rd card to 2nd position", () => {
 // ---------------------------------------------------------------------------
 
 describe("move 1st card to last position", () => {
-  const zones = computeDropZones(["A", "B", "C"], "todo", BOARD);
+  const zones = computeDropZones(["A", "B", "C"], "todo");
 
   it("zone at index 3 (after-C) is the trailing zone", () => {
     const zone = zones[3];
@@ -114,7 +110,7 @@ describe("move 1st card to last position", () => {
 // ---------------------------------------------------------------------------
 
 describe("move card to empty column", () => {
-  const zones = computeDropZones([], "doing", BOARD);
+  const zones = computeDropZones([], "doing");
 
   it("empty column zone produces move args with column only", () => {
     const zone = zones[0];
@@ -133,7 +129,7 @@ describe("move card to empty column", () => {
 
 describe("cross-column move to non-empty column", () => {
   // "doing" column already has [X, Y]. User drops A before X.
-  const zones = computeDropZones(["X", "Y"], "doing", BOARD);
+  const zones = computeDropZones(["X", "Y"], "doing");
 
   it("dropping on zone before-X includes target column and before_id", () => {
     const zone = zones[0];
