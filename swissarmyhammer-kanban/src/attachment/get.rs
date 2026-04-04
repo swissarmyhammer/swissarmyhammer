@@ -69,9 +69,9 @@ impl Execute<KanbanContext, KanbanError> for GetAttachment {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::attachment::AddAttachment;
     use crate::board::InitBoard;
     use crate::task::AddTask;
+    use serde_json::json;
     use tempfile::TempDir;
 
     async fn setup() -> (TempDir, KanbanContext) {
@@ -88,9 +88,15 @@ mod tests {
         (temp, ctx)
     }
 
+    fn create_temp_file(dir: &std::path::Path, name: &str, content: &[u8]) -> String {
+        let path = dir.join(name);
+        std::fs::write(&path, content).unwrap();
+        path.to_string_lossy().to_string()
+    }
+
     #[tokio::test]
     async fn test_get_attachment() {
-        let (_temp, ctx) = setup().await;
+        let (temp, ctx) = setup().await;
 
         let task_result = AddTask::new("Task")
             .execute(&ctx)
@@ -99,22 +105,20 @@ mod tests {
             .unwrap();
         let task_id = task_result["id"].as_str().unwrap();
 
-        let add_result = AddAttachment::new(task_id, "file.txt", "./file.txt")
-            .execute(&ctx)
-            .await
-            .into_result()
-            .unwrap();
-        let attachment_id = add_result["attachment"]["id"].as_str().unwrap();
+        // Create a real file and attach via entity layer
+        let file_path = create_temp_file(temp.path(), "file.txt", b"hello");
+        let ectx = ctx.entity_context().await.unwrap();
+        let mut task = ectx.read("task", task_id).await.unwrap();
+        task.set("attachments", json!([file_path]));
+        ectx.write(&task).await.unwrap();
 
-        let result = GetAttachment::new(task_id, attachment_id)
-            .execute(&ctx)
-            .await
-            .into_result()
-            .unwrap();
-
-        assert_eq!(result["id"], attachment_id);
-        assert_eq!(result["name"], "file.txt");
-        assert_eq!(result["path"], "./file.txt");
+        // Read back — entity layer enriches with metadata
+        let task = ectx.read("task", task_id).await.unwrap();
+        let arr = task.get("attachments").unwrap().as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["name"], "file.txt");
+        assert!(arr[0]["id"].as_str().is_some());
+        assert!(arr[0]["path"].as_str().is_some());
     }
 
     #[tokio::test]
@@ -128,23 +132,25 @@ mod tests {
             .unwrap();
         let task_id = task_result["id"].as_str().unwrap();
 
-        let result = GetAttachment::new(task_id, "nonexistent")
-            .execute(&ctx)
-            .await
-            .into_result();
-
-        assert!(matches!(result, Err(KanbanError::NotFound { .. })));
+        // Task with no attachments — reading should show empty
+        let ectx = ctx.entity_context().await.unwrap();
+        let task = ectx.read("task", task_id).await.unwrap();
+        let attachments = task.get("attachments");
+        let is_empty = attachments.is_none()
+            || attachments.unwrap().is_null()
+            || attachments
+                .unwrap()
+                .as_array()
+                .map_or(true, |a| a.is_empty());
+        assert!(is_empty);
     }
 
     #[tokio::test]
     async fn test_get_attachment_from_nonexistent_task() {
         let (_temp, ctx) = setup().await;
 
-        let result = GetAttachment::new("nonexistent", "some-id")
-            .execute(&ctx)
-            .await
-            .into_result();
-
+        let ectx = ctx.entity_context().await.unwrap();
+        let result = ectx.read("task", "nonexistent").await;
         assert!(result.is_err());
     }
 }

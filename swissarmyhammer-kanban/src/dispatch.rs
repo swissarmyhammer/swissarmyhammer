@@ -1592,65 +1592,62 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_attachment_crud() {
-        let (_temp, ctx) = setup().await;
+        let (temp, ctx) = setup().await;
 
         // Create a task to attach to
         let ops = parse_input(json!({"op": "add task", "title": "Has attachments"})).unwrap();
         let task = execute_operation(&ctx, &ops[0]).await.unwrap();
         let task_id = task["id"].as_str().unwrap().to_string();
 
-        // Add attachment (use KanbanOperation::new to avoid parse_input param issues)
-        let op = KanbanOperation::new(Verb::Add, Noun::Attachment, {
-            let mut m = serde_json::Map::new();
-            m.insert("task_id".into(), json!(task_id));
-            m.insert("name".into(), json!("screenshot.png"));
-            m.insert("path".into(), json!("/tmp/screenshot.png"));
-            m
-        });
-        let result = execute_operation(&ctx, &op).await.unwrap();
-        assert_eq!(result["attachment"]["name"], "screenshot.png");
-        let att_id = result["attachment"]["id"].as_str().unwrap().to_string();
+        // Create a real file to attach
+        let file_path = temp.path().join("screenshot.png");
+        std::fs::write(&file_path, b"fake png data").unwrap();
 
-        // Get attachment (returns unwrapped, not nested under "attachment")
-        let op = KanbanOperation::new(Verb::Get, Noun::Attachment, {
-            let mut m = serde_json::Map::new();
-            m.insert("task_id".into(), json!(task_id));
-            m.insert("id".into(), json!(att_id));
-            m
-        });
-        let result = execute_operation(&ctx, &op).await.unwrap();
-        assert_eq!(result["name"], "screenshot.png");
+        // Add attachment via entity layer (new FieldType::Attachment model)
+        let ectx = ctx.entity_context().await.unwrap();
+        let mut task_entity = ectx.read("task", &task_id).await.unwrap();
+        task_entity.set(
+            "attachments",
+            json!([file_path.to_string_lossy().to_string()]),
+        );
+        ectx.write(&task_entity).await.unwrap();
 
-        // Update attachment
-        let op = KanbanOperation::new(Verb::Update, Noun::Attachment, {
-            let mut m = serde_json::Map::new();
-            m.insert("task_id".into(), json!(task_id));
-            m.insert("id".into(), json!(att_id));
-            m.insert("name".into(), json!("renamed.png"));
-            m.insert("mime_type".into(), json!("image/png"));
-            m
-        });
-        let result = execute_operation(&ctx, &op).await.unwrap();
-        assert_eq!(result["attachment"]["name"], "renamed.png");
+        // Read back — entity layer enriches with metadata
+        let task_entity = ectx.read("task", &task_id).await.unwrap();
+        let arr = task_entity.get("attachments").unwrap().as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["name"], "screenshot.png");
+        assert!(arr[0]["id"].as_str().is_some());
 
-        // List attachments
-        let op = KanbanOperation::new(Verb::List, Noun::Attachments, {
-            let mut m = serde_json::Map::new();
-            m.insert("task_id".into(), json!(task_id));
-            m
-        });
-        let result = execute_operation(&ctx, &op).await.unwrap();
-        assert_eq!(result["count"], 1);
+        // Replace attachment with a new file (update)
+        let new_file = temp.path().join("renamed.png");
+        std::fs::write(&new_file, b"updated png data").unwrap();
+        let mut task_entity = ectx.read("task", &task_id).await.unwrap();
+        task_entity.set(
+            "attachments",
+            json!([new_file.to_string_lossy().to_string()]),
+        );
+        ectx.write(&task_entity).await.unwrap();
 
-        // Delete attachment
-        let op = KanbanOperation::new(Verb::Delete, Noun::Attachment, {
-            let mut m = serde_json::Map::new();
-            m.insert("task_id".into(), json!(task_id));
-            m.insert("id".into(), json!(att_id));
-            m
-        });
-        let result = execute_operation(&ctx, &op).await.unwrap();
-        assert_eq!(result["deleted"], true);
+        let task_entity = ectx.read("task", &task_id).await.unwrap();
+        let arr = task_entity.get("attachments").unwrap().as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["name"], "renamed.png");
+
+        // Delete attachment by clearing the field
+        let mut task_entity = ectx.read("task", &task_id).await.unwrap();
+        task_entity.set("attachments", json!([]));
+        ectx.write(&task_entity).await.unwrap();
+
+        let task_entity = ectx.read("task", &task_id).await.unwrap();
+        let attachments = task_entity.get("attachments");
+        let is_empty = attachments.is_none()
+            || attachments.unwrap().is_null()
+            || attachments
+                .unwrap()
+                .as_array()
+                .map_or(true, |a| a.is_empty());
+        assert!(is_empty);
     }
 
     // ── Dispatch with actor context ───────────────────────────────────

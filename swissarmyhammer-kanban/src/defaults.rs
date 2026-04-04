@@ -425,15 +425,17 @@ mod tests {
             .expect("builtin 'attachments' field should exist in FieldsContext");
 
         match &field.type_ {
-            swissarmyhammer_fields::FieldType::Reference { entity, multiple } => {
+            swissarmyhammer_fields::FieldType::Attachment {
+                max_bytes,
+                multiple,
+            } => {
                 assert!(multiple, "attachments field should have multiple: true");
                 assert_eq!(
-                    entity.as_str(),
-                    "attachment",
-                    "attachments should reference the attachment entity"
+                    *max_bytes, 104_857_600,
+                    "attachments max_bytes should be 100 MiB"
                 );
             }
-            other => panic!("expected FieldType::Reference, got {:?}", other),
+            other => panic!("expected FieldType::Attachment, got {:?}", other),
         }
     }
 

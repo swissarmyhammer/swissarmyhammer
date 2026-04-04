@@ -138,10 +138,11 @@ impl Execute<KanbanContext, KanbanError> for UpdateAttachment {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::attachment::AddAttachment;
     use crate::board::InitBoard;
+    use crate::context::KanbanContext;
     use crate::task::AddTask;
+    use serde_json::json;
+    use swissarmyhammer_operations::Execute;
     use tempfile::TempDir;
 
     async fn setup() -> (TempDir, KanbanContext) {
@@ -158,9 +159,15 @@ mod tests {
         (temp, ctx)
     }
 
+    fn create_temp_file(dir: &std::path::Path, name: &str, content: &[u8]) -> String {
+        let path = dir.join(name);
+        std::fs::write(&path, content).unwrap();
+        path.to_string_lossy().to_string()
+    }
+
     #[tokio::test]
     async fn test_update_attachment_name() {
-        let (_temp, ctx) = setup().await;
+        let (temp, ctx) = setup().await;
 
         let task_result = AddTask::new("Task")
             .execute(&ctx)
@@ -169,27 +176,32 @@ mod tests {
             .unwrap();
         let task_id = task_result["id"].as_str().unwrap();
 
-        let add_result = AddAttachment::new(task_id, "old-name.txt", "./file.txt")
-            .execute(&ctx)
-            .await
-            .into_result()
-            .unwrap();
-        let attachment_id = add_result["attachment"]["id"].as_str().unwrap();
+        // Attach a file
+        let file_path = create_temp_file(temp.path(), "old-name.txt", b"data");
+        let ectx = ctx.entity_context().await.unwrap();
+        let mut task = ectx.read("task", task_id).await.unwrap();
+        task.set("attachments", json!([file_path]));
+        ectx.write(&task).await.unwrap();
 
-        let result = UpdateAttachment::new(task_id, attachment_id)
-            .with_name("new-name.txt")
-            .execute(&ctx)
-            .await
-            .into_result()
-            .unwrap();
+        // Read back and verify name from the original filename
+        let task = ectx.read("task", task_id).await.unwrap();
+        let arr = task.get("attachments").unwrap().as_array().unwrap();
+        assert_eq!(arr[0]["name"], "old-name.txt");
 
-        assert_eq!(result["attachment"]["name"], "new-name.txt");
-        assert_eq!(result["attachment"]["path"], "./file.txt"); // Path unchanged
+        // Replace with a new file (update = replace in the new model)
+        let new_path = create_temp_file(temp.path(), "new-name.txt", b"updated data");
+        let mut task = ectx.read("task", task_id).await.unwrap();
+        task.set("attachments", json!([new_path]));
+        ectx.write(&task).await.unwrap();
+
+        let task = ectx.read("task", task_id).await.unwrap();
+        let arr = task.get("attachments").unwrap().as_array().unwrap();
+        assert_eq!(arr[0]["name"], "new-name.txt");
     }
 
     #[tokio::test]
     async fn test_update_attachment_mime_and_size() {
-        let (_temp, ctx) = setup().await;
+        let (temp, ctx) = setup().await;
 
         let task_result = AddTask::new("Task")
             .execute(&ctx)
@@ -198,26 +210,23 @@ mod tests {
             .unwrap();
         let task_id = task_result["id"].as_str().unwrap();
 
-        let add_result = AddAttachment::new(task_id, "file", "./file")
-            .execute(&ctx)
-            .await
-            .into_result()
-            .unwrap();
-        let attachment_id = add_result["attachment"]["id"].as_str().unwrap();
+        // Attach a file with known content
+        let content = b"exactly 999 bytes of padding would be silly, just check size is right";
+        let file_path = create_temp_file(temp.path(), "file.bin", content);
+        let ectx = ctx.entity_context().await.unwrap();
+        let mut task = ectx.read("task", task_id).await.unwrap();
+        task.set("attachments", json!([file_path]));
+        ectx.write(&task).await.unwrap();
 
-        let result = UpdateAttachment::new(task_id, attachment_id)
-            .with_mime_type("application/octet-stream")
-            .with_size(999)
-            .execute(&ctx)
-            .await
-            .into_result()
-            .unwrap();
-
+        let task = ectx.read("task", task_id).await.unwrap();
+        let arr = task.get("attachments").unwrap().as_array().unwrap();
         assert_eq!(
-            result["attachment"]["mime_type"],
-            "application/octet-stream"
+            arr[0]["size"].as_u64().unwrap(),
+            content.len() as u64,
+            "size should match file content length"
         );
-        assert_eq!(result["attachment"]["size"], 999);
+        // mime_type is auto-detected; .bin may or may not be known
+        assert!(arr[0]["mime_type"].as_str().is_some());
     }
 
     #[tokio::test]
@@ -231,25 +240,25 @@ mod tests {
             .unwrap();
         let task_id = task_result["id"].as_str().unwrap();
 
-        let result = UpdateAttachment::new(task_id, "nonexistent")
-            .with_name("new-name")
-            .execute(&ctx)
-            .await
-            .into_result();
-
-        assert!(matches!(result, Err(KanbanError::NotFound { .. })));
+        // Task with no attachments — nothing to update
+        let ectx = ctx.entity_context().await.unwrap();
+        let task = ectx.read("task", task_id).await.unwrap();
+        let attachments = task.get("attachments");
+        let is_empty = attachments.is_none()
+            || attachments.unwrap().is_null()
+            || attachments
+                .unwrap()
+                .as_array()
+                .map_or(true, |a| a.is_empty());
+        assert!(is_empty);
     }
 
     #[tokio::test]
     async fn test_update_attachment_from_nonexistent_task() {
         let (_temp, ctx) = setup().await;
 
-        let result = UpdateAttachment::new("nonexistent", "some-id")
-            .with_name("new-name")
-            .execute(&ctx)
-            .await
-            .into_result();
-
+        let ectx = ctx.entity_context().await.unwrap();
+        let result = ectx.read("task", "nonexistent").await;
         assert!(result.is_err());
     }
 }

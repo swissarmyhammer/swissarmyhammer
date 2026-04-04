@@ -188,7 +188,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_delete_task_removes_attachments() {
-        let (_temp, ctx) = setup().await;
+        let (temp, ctx) = setup().await;
 
         let add_result = AddTask::new("Task with attachment")
             .execute(&ctx)
@@ -197,21 +197,27 @@ mod tests {
             .unwrap();
         let task_id = add_result["id"].as_str().unwrap();
 
-        // Add an attachment via the kanban attachment operations
-        let att_result =
-            crate::attachment::AddAttachment::new(task_id, "file.txt", "/tmp/file.txt")
-                .execute(&ctx)
-                .await
-                .into_result()
-                .unwrap();
-        let att_id = att_result["attachment"]["id"].as_str().unwrap();
+        // Create a real file and attach via entity layer
+        let file_path = temp.path().join("file.txt");
+        std::fs::write(&file_path, b"hello").unwrap();
 
-        // Verify the task's attachments list contains the ID
         let ectx = ctx.entity_context().await.unwrap();
+        let mut task = ectx.read("task", task_id).await.unwrap();
+        task.set(
+            "attachments",
+            serde_json::json!([file_path.to_string_lossy().to_string()]),
+        );
+        ectx.write(&task).await.unwrap();
+
+        // Verify the task has an attachment
         let task = ectx.read("task", task_id).await.unwrap();
-        let ids = task.get_string_list("attachments");
-        assert_eq!(ids.len(), 1);
-        assert_eq!(ids[0], att_id);
+        let arr = task.get("attachments").unwrap().as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+
+        // Get stored filename for later verification
+        let stored_id = arr[0]["id"].as_str().unwrap();
+        let stored_name = arr[0]["name"].as_str().unwrap();
+        let stored_filename = format!("{}-{}", stored_id, stored_name);
 
         // Delete the task
         DeleteTask::new(task_id)
@@ -222,5 +228,17 @@ mod tests {
 
         // Verify the task is gone
         assert!(ectx.read("task", task_id).await.is_err());
+
+        // Verify the attachment file was trashed
+        let att_file = temp
+            .path()
+            .join(".kanban")
+            .join("tasks")
+            .join(".attachments")
+            .join(&stored_filename);
+        assert!(
+            !att_file.exists(),
+            "Attachment file should be removed after task deletion"
+        );
     }
 }

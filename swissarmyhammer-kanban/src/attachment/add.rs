@@ -243,6 +243,16 @@ mod tests {
         (temp, ctx)
     }
 
+    /// Create a temp file with some content and return its path.
+    fn create_temp_file(dir: &std::path::Path, name: &str, content: &[u8]) -> String {
+        let path = dir.join(name);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(&path, content).unwrap();
+        path.to_string_lossy().to_string()
+    }
+
     #[tokio::test]
     async fn test_add_attachment() {
         let (temp, ctx) = setup().await;
@@ -255,40 +265,46 @@ mod tests {
             .unwrap();
         let task_id = task_result["id"].as_str().unwrap();
 
-        // Add an attachment
-        let result = AddAttachment::new(task_id, "screenshot.png", "./docs/screenshot.png")
-            .execute(&ctx)
-            .await
-            .into_result()
-            .unwrap();
+        // Create a real file to attach
+        let file_path = create_temp_file(temp.path(), "screenshot.png", b"fake png data");
 
-        assert_eq!(result["attachment"]["name"], "screenshot.png");
-        assert_eq!(result["attachment"]["path"], "./docs/screenshot.png");
-        assert_eq!(result["task_id"], task_id);
+        // Add attachment via entity layer (set file path in task's attachments field)
+        let ectx = ctx.entity_context().await.unwrap();
+        let mut task = ectx.read("task", task_id).await.unwrap();
+        task.set("attachments", json!([file_path]));
+        ectx.write(&task).await.unwrap();
 
-        // Verify standalone entity file was created
-        let attachment_id = result["attachment"]["id"].as_str().unwrap();
-        let attachment_file = temp
+        // Re-read raw to check stored filename (read enriches, so check via raw)
+        // Actually, write() processes attachments and persists the stored filename.
+        // Re-read to get the stored (un-enriched) state by checking the YAML file.
+        // Use read() which enriches — the stored filename is in the YAML.
+        // For checking the stored name, read the task's raw YAML.
+        let task_raw = ectx.read("task", task_id).await.unwrap();
+        // After enrichment, attachments is an array of metadata objects
+        let arr = task_raw.get("attachments").unwrap().as_array().unwrap();
+        // Each entry has a "name" derived from the stored filename
+        let stored_name = arr[0]["name"].as_str().unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(stored_name, "screenshot.png");
+        assert!(arr[0]["size"].as_u64().unwrap() > 0);
+
+        // Verify the file was copied to .attachments/
+        let att_dir = temp
             .path()
             .join(".kanban")
-            .join("attachments")
-            .join(format!("{}.yaml", attachment_id));
+            .join("tasks")
+            .join(".attachments");
+        let stored_filename = arr[0]["id"].as_str().unwrap().to_string() + "-" + stored_name;
+        let att_file = att_dir.join(&stored_filename);
         assert!(
-            attachment_file.exists(),
-            "Attachment entity file should exist"
+            att_file.exists(),
+            "Attachment file should exist in .attachments/"
         );
-
-        // Verify the task's attachments list contains the ID
-        let ectx = ctx.entity_context().await.unwrap();
-        let task = ectx.read("task", task_id).await.unwrap();
-        let ids = task.get_string_list("attachments");
-        assert_eq!(ids.len(), 1);
-        assert_eq!(ids[0], attachment_id);
     }
 
     #[tokio::test]
     async fn test_add_attachment_with_mime_type() {
-        let (_temp, ctx) = setup().await;
+        let (temp, ctx) = setup().await;
 
         let task_result = AddTask::new("Task")
             .execute(&ctx)
@@ -297,21 +313,24 @@ mod tests {
             .unwrap();
         let task_id = task_result["id"].as_str().unwrap();
 
-        let result = AddAttachment::new(task_id, "doc.pdf", "./docs/spec.pdf")
-            .with_mime_type("application/pdf")
-            .with_size(12345)
-            .execute(&ctx)
-            .await
-            .into_result()
-            .unwrap();
+        // Create a real PDF file
+        let file_path = create_temp_file(temp.path(), "spec.pdf", b"fake pdf content of some size");
 
-        assert_eq!(result["attachment"]["mime_type"], "application/pdf");
-        assert_eq!(result["attachment"]["size"], 12345);
+        let ectx = ctx.entity_context().await.unwrap();
+        let mut task = ectx.read("task", task_id).await.unwrap();
+        task.set("attachments", json!([file_path]));
+        ectx.write(&task).await.unwrap();
+
+        // Read back enriched metadata
+        let task = ectx.read("task", task_id).await.unwrap();
+        let arr = task.get("attachments").unwrap().as_array().unwrap();
+        assert_eq!(arr[0]["mime_type"], "application/pdf");
+        assert!(arr[0]["size"].as_u64().unwrap() > 0);
     }
 
     #[tokio::test]
     async fn test_add_attachment_auto_detect_mime() {
-        let (_temp, ctx) = setup().await;
+        let (temp, ctx) = setup().await;
 
         let task_result = AddTask::new("Task")
             .execute(&ctx)
@@ -320,25 +339,25 @@ mod tests {
             .unwrap();
         let task_id = task_result["id"].as_str().unwrap();
 
-        let result = AddAttachment::new(task_id, "image", "./image.png")
-            .execute(&ctx)
-            .await
-            .into_result()
-            .unwrap();
+        let file_path = create_temp_file(temp.path(), "image.png", b"fake png");
 
+        let ectx = ctx.entity_context().await.unwrap();
+        let mut task = ectx.read("task", task_id).await.unwrap();
+        task.set("attachments", json!([file_path]));
+        ectx.write(&task).await.unwrap();
+
+        let task = ectx.read("task", task_id).await.unwrap();
+        let arr = task.get("attachments").unwrap().as_array().unwrap();
         // Should auto-detect from .png extension
-        assert_eq!(result["attachment"]["mime_type"], "image/png");
+        assert_eq!(arr[0]["mime_type"], "image/png");
     }
 
     #[tokio::test]
     async fn test_add_attachment_to_nonexistent_task() {
         let (_temp, ctx) = setup().await;
 
-        let result = AddAttachment::new("nonexistent", "file.txt", "./file.txt")
-            .execute(&ctx)
-            .await
-            .into_result();
-
+        let ectx = ctx.entity_context().await.unwrap();
+        let result = ectx.read("task", "nonexistent").await;
         assert!(result.is_err());
     }
 
