@@ -311,7 +311,11 @@ async fn test_skill_test_returns_body_content() {
 }
 
 #[tokio::test]
+#[serial_test::serial(cwd)]
 async fn test_use_skill_with_arguments_renders_in_output() {
+    let temp = tempfile::TempDir::new().expect("Failed to create temp dir");
+    let _guard = swissarmyhammer_common::test_utils::CurrentDirGuard::new(temp.path())
+        .expect("Failed to change CWD");
     let (server, client, _temp) = setup(true).await;
 
     // Invoke the card skill with arguments — the card skill uses {% if arguments %}

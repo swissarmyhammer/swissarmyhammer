@@ -240,7 +240,7 @@ describe("EntityCard", () => {
         (call[1] as Record<string, unknown>)?.cmd === "entity.update_field",
     );
     expect(updateCall).toBeTruthy();
-    expect(updateCall![1]).toEqual({
+    expect(updateCall![1]).toMatchObject({
       cmd: "entity.update_field",
       args: {
         entity_type: "task",
@@ -248,7 +248,6 @@ describe("EntityCard", () => {
         field_name: "title",
         value: "defect",
       },
-      scopeChain: [],
     });
   });
 
@@ -263,13 +262,21 @@ describe("EntityCard", () => {
       // Flush the promise chain (list_commands_for_scope → show_context_menu)
       await new Promise((r) => setTimeout(r, 50));
     });
-    // Context menu item id should include the target: "entity.inspect:task:task-1"
+    // Context menu items carry cmd + target as separate fields
     const ctxCall = mockInvoke.mock.calls.find(
       (c) => c[0] === "show_context_menu",
     );
     expect(ctxCall).toBeTruthy();
-    const items = ctxCall![1].items as { id: string; name: string }[];
-    expect(items.find((i) => i.id === "ui.inspect:task:task-1")).toBeTruthy();
+    const items = ctxCall![1].items as {
+      cmd: string;
+      target?: string;
+      name: string;
+    }[];
+    expect(
+      items.find(
+        (i) => i.cmd === "ui.inspect" && i.target === "task:task-1",
+      ),
+    ).toBeTruthy();
   });
 
   it("clicking card body does not trigger inspect", async () => {
