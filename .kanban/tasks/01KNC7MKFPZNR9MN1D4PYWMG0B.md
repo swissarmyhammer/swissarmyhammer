@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: '80'
+position_column: done
+position_ordinal: ffffffffffffffffffff8180
 position_swimlane: container-refactor
 title: Extract RustEngineContainer from App.tsx
 ---

@@ -4,7 +4,6 @@ import {
   useMemo,
   useCallback,
   type ReactNode,
-  useRef,
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
@@ -231,83 +230,6 @@ export function useAvailableCommands(): CommandAtDepth[] {
   return useMemo(() => collectAvailableCommands(scope), [scope]);
 }
 
-/**
- * Dispatch a command to the Rust backend via Tauri IPC.
- *
- * Every call MUST include `scopeChain` so the backend knows which window
- * the command originates from. This is enforced by the type signature.
- *
- * @deprecated Use useDispatchCommand instead.
- */
-export async function backendDispatch(
-  params: { scopeChain: string[] } & Record<string, unknown>,
-): Promise<unknown> {
-  return invoke("dispatch_command", params);
-}
-
-/**
- * Execute a command. If `execute` is set, calls it directly.
- * Otherwise dispatches to Rust by command id via backendDispatch().
- *
- * @deprecated Use useDispatchCommand instead.
- *
- * @param boardPath — optional per-window board path for multi-window dispatch.
- *   When provided, Rust routes the command to the correct board instead of the
- *   global "last-used" active board.
- */
-export async function dispatchCommand(
-  cmd: CommandDef,
-  boardPath: string | undefined,
-  scopeChain: string[],
-): Promise<void> {
-  if (cmd.execute) {
-    // Log to Rust backend so every command appears in the unified log
-    Promise.resolve(
-      invoke("log_command", { cmd: cmd.id, target: cmd.target }),
-    ).catch(() => {});
-    await cmd.execute();
-  } else {
-    // Dispatch to Rust by command ID (dispatch_command logs internally)
-    await backendDispatch({
-      cmd: cmd.id,
-      target: cmd.target,
-      args: cmd.args,
-      scopeChain,
-      ...(boardPath ? { boardPath } : {}),
-    });
-  }
-}
-
-/**
- * Returns a function that resolves a command id through the current scope
- * chain and executes it.
- *
- * @deprecated Use useDispatchCommand instead.
- *
- * @returns An async function `(id: string) => Promise<boolean>`.
- *          Resolves to `true` if the command was found and executed,
- *          `false` otherwise.
- */
-export function useExecuteCommand(): (id: string) => Promise<boolean> {
-  const scope = useContext(CommandScopeContext);
-  const boardPath = useContext(ActiveBoardPathContext);
-  // Store in ref so the callback always sees the latest value without
-  // re-creating on every board path change.
-  const boardPathRef = useRef(boardPath);
-  boardPathRef.current = boardPath;
-
-  return useCallback(
-    async (id: string): Promise<boolean> => {
-      const cmd = resolveCommand(scope, id);
-      if (cmd === null) return false;
-      const chain = scopeChainFromScope(scope);
-      await dispatchCommand(cmd, boardPathRef.current, chain);
-      return true;
-    },
-    [scope],
-  );
-}
-
 // ---------------------------------------------------------------------------
 // useDispatchCommand — unified dispatch hook
 // ---------------------------------------------------------------------------
@@ -379,8 +301,8 @@ export function useDispatchCommand(presetCmd?: string) {
         return;
       }
 
-      // Backend dispatch
-      return backendDispatch({
+      // Backend dispatch — invoke Tauri IPC directly
+      return invoke("dispatch_command", {
         cmd: cmdId,
         target: opts.target,
         args: opts.args,

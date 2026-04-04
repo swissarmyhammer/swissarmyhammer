@@ -37,9 +37,12 @@ export function ViewsProvider({ children }: { children: ReactNode }) {
   const dispatch = useDispatchCommand("ui.view.set");
 
   /** Dispatch a view switch through the command system so UIState owns the change. */
-  const setActiveViewId = useCallback((id: string) => {
-    dispatch({ args: { view_id: id } }).catch(console.error);
-  }, [dispatch]);
+  const setActiveViewId = useCallback(
+    (id: string) => {
+      dispatch({ args: { view_id: id } }).catch(console.error);
+    },
+    [dispatch],
+  );
 
   const refresh = useCallback(async () => {
     try {

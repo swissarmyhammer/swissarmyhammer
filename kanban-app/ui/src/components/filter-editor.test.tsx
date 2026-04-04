@@ -31,16 +31,6 @@ vi.mock("@/lib/ui-state-context", () => ({
   useUIState: () => ({ keymap_mode: "cua" }),
 }));
 
-// Mock backendDispatch to capture commands.
-const mockBackendDispatch = vi.fn(() => Promise.resolve(null));
-vi.mock("@/lib/command-scope", async (importOriginal) => {
-  const original = await importOriginal<typeof import("@/lib/command-scope")>();
-  return {
-    ...original,
-    backendDispatch: (...args: unknown[]) => mockBackendDispatch(...args),
-  };
-});
-
 import { FilterEditor } from "./filter-editor";
 
 describe("FilterEditor", () => {
@@ -64,9 +54,7 @@ describe("FilterEditor", () => {
   it("renders help text", () => {
     render(<FilterEditor {...defaultProps} />);
 
-    expect(
-      screen.getByText("Enter to save, Escape to cancel"),
-    ).toBeDefined();
+    expect(screen.getByText("Enter to save, Escape to cancel")).toBeDefined();
   });
 
   it("does not show clear button when filter is empty", () => {
@@ -93,10 +81,13 @@ describe("FilterEditor", () => {
 
     fireEvent.click(screen.getByLabelText("Clear filter"));
 
-    expect(mockBackendDispatch).toHaveBeenCalledWith({
-      cmd: "perspective.clearFilter",
-      args: { perspective_id: "p1" },
-    });
+    expect(mockInvoke).toHaveBeenCalledWith(
+      "dispatch_command",
+      expect.objectContaining({
+        cmd: "perspective.clearFilter",
+        args: { perspective_id: "p1" },
+      }),
+    );
     expect(onClose).toHaveBeenCalled();
   });
 

@@ -1,9 +1,6 @@
 import { useCallback, useContext } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import {
-  CommandScopeContext,
-  scopeChainFromScope,
-} from "@/lib/command-scope";
+import { CommandScopeContext, scopeChainFromScope } from "@/lib/command-scope";
 
 /** Shape returned by the backend `list_commands_for_scope`. */
 interface ResolvedCommand {

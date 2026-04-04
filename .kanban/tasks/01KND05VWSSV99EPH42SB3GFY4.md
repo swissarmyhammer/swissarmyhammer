@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: bd80
+position_column: done
+position_ordinal: ffffffffffffffffffff8980
 title: Replace title= with shadcn Tooltip in nav-bar.tsx
 ---
 ## What

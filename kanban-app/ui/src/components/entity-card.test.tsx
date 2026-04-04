@@ -176,7 +176,7 @@ describe("EntityCard", () => {
       <EntityCard entity={currentEntity} />,
     );
     mockInvoke.mockClear();
-    const inspectBtn = container.querySelector("button[title='Inspect']")!;
+    const inspectBtn = container.querySelector("button[aria-label='Inspect']")!;
     await act(async () => {
       fireEvent.click(inspectBtn);
     });
@@ -200,7 +200,9 @@ describe("EntityCard", () => {
     const { container } = await renderWithProvider(
       <EntityCard entity={currentEntity} />,
     );
-    expect(container.querySelector("button[title='Inspect']")).not.toBeNull();
+    expect(
+      container.querySelector("button[aria-label='Inspect']"),
+    ).not.toBeNull();
   });
 
   it("enters edit mode when title is clicked", async () => {

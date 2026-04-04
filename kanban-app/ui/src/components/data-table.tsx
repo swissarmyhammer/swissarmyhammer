@@ -33,7 +33,6 @@ import {
 } from "@/lib/entity-focus-context";
 import type { Entity, FieldDef, PerspectiveSortEntry } from "@/types/kanban";
 
-
 export interface DataTableColumn {
   field: FieldDef;
   width?: number;
@@ -256,8 +255,7 @@ export function DataTable({
                   : header.column.getIsSorted();
                 const sortPriority = pSort?.priority;
                 const showPriority =
-                  sortPriority !== undefined &&
-                  perspectiveSortMap.size > 1;
+                  sortPriority !== undefined && perspectiveSortMap.size > 1;
 
                 const handleHeaderClick = perspectiveId
                   ? (e: React.MouseEvent) => {
@@ -390,98 +388,98 @@ export function DataTable({
                 commands={rowCommands}
                 renderContainer={false}
               >
-              <EntityRow
-                entityMk={entityMk}
-                isCursorRow={di === grid.cursor.row}
-                isEditing={grid.mode === "edit"}
-              >
-                {showRowSelector && (
-                  <RowSelector
-                    di={di}
-                    isCursorRow={di === grid.cursor.row}
-                    onClick={() => handleCellClick(di, grid.cursor.col)}
-                  />
-                )}
-                {columns.map((col, ci) => {
-                  const isCursor =
-                    di === grid.cursor.row && ci === grid.cursor.col;
-                  const isSel = isSelected(di, ci);
-                  const isEditing =
-                    isCursor && grid.mode === "edit" && renderEditor;
-
-                  const cellContent = isEditing ? (
-                    renderEditor(
-                      entity,
-                      col.field,
-                      () => grid.exitEdit(),
-                      () => grid.exitEdit(),
-                    )
-                  ) : (
-                    <Field
-                      fieldDef={col.field}
-                      entityType={entity.entity_type}
-                      entityId={entity.id}
-                      mode="compact"
-                      editing={false}
+                <EntityRow
+                  entityMk={entityMk}
+                  isCursorRow={di === grid.cursor.row}
+                  isEditing={grid.mode === "edit"}
+                >
+                  {showRowSelector && (
+                    <RowSelector
+                      di={di}
+                      isCursorRow={di === grid.cursor.row}
+                      onClick={() => handleCellClick(di, grid.cursor.col)}
                     />
-                  );
+                  )}
+                  {columns.map((col, ci) => {
+                    const isCursor =
+                      di === grid.cursor.row && ci === grid.cursor.col;
+                    const isSel = isSelected(di, ci);
+                    const isEditing =
+                      isCursor && grid.mode === "edit" && renderEditor;
 
-                  const cellClasses = cn(
-                    "px-3 py-1.5 align-middle max-w-[300px]",
-                    ci === 0 && "pl-4",
-                    isCursor && "ring-2 ring-primary ring-inset",
-                    isSel && !isCursor && "bg-primary/10",
-                    // Strip cell padding during editing for editors that
-                    // fill the entire cell.
-                    isEditing &&
-                      col.field.editor !== "color-palette" &&
-                      col.field.editor !== "select" &&
-                      col.field.editor !== "multi-select" &&
-                      "p-0",
-                  );
+                    const cellContent = isEditing ? (
+                      renderEditor(
+                        entity,
+                        col.field,
+                        () => grid.exitEdit(),
+                        () => grid.exitEdit(),
+                      )
+                    ) : (
+                      <Field
+                        fieldDef={col.field}
+                        entityType={entity.entity_type}
+                        entityId={entity.id}
+                        mode="compact"
+                        editing={false}
+                      />
+                    );
 
-                  // Wrap in FocusScope when claimWhen navigation is active
-                  if (useClaimNav) {
-                    const mk = cellMonikers[di]?.[ci];
-                    const preds = claimPredicates[di]?.[ci];
-                    if (mk && preds) {
-                      return (
-                        <GridCellScope
-                          key={col.field.id}
-                          moniker={mk}
-                          claimWhen={preds}
-                          isCursor={isCursor}
-                          cursorRef={isCursor ? cursorRef : undefined}
-                          className={cellClasses}
-                          onClick={() => handleCellClick(di, ci)}
-                          onDoubleClick={() => {
-                            onCellClick?.(di, ci);
-                            grid.enterEdit();
-                          }}
-                        >
-                          {cellContent}
-                        </GridCellScope>
-                      );
+                    const cellClasses = cn(
+                      "px-3 py-1.5 align-middle max-w-[300px]",
+                      ci === 0 && "pl-4",
+                      isCursor && "ring-2 ring-primary ring-inset",
+                      isSel && !isCursor && "bg-primary/10",
+                      // Strip cell padding during editing for editors that
+                      // fill the entire cell.
+                      isEditing &&
+                        col.field.editor !== "color-palette" &&
+                        col.field.editor !== "select" &&
+                        col.field.editor !== "multi-select" &&
+                        "p-0",
+                    );
+
+                    // Wrap in FocusScope when claimWhen navigation is active
+                    if (useClaimNav) {
+                      const mk = cellMonikers[di]?.[ci];
+                      const preds = claimPredicates[di]?.[ci];
+                      if (mk && preds) {
+                        return (
+                          <GridCellScope
+                            key={col.field.id}
+                            moniker={mk}
+                            claimWhen={preds}
+                            isCursor={isCursor}
+                            cursorRef={isCursor ? cursorRef : undefined}
+                            className={cellClasses}
+                            onClick={() => handleCellClick(di, ci)}
+                            onDoubleClick={() => {
+                              onCellClick?.(di, ci);
+                              grid.enterEdit();
+                            }}
+                          >
+                            {cellContent}
+                          </GridCellScope>
+                        );
+                      }
                     }
-                  }
 
-                  // Fallback: plain TableCell (no claimWhen)
-                  return (
-                    <TableCell
-                      key={col.field.id}
-                      ref={isCursor ? cursorRef : undefined}
-                      className={cellClasses}
-                      onClick={() => handleCellClick(di, ci)}
-                      onDoubleClick={() => {
-                        onCellClick?.(di, ci);
-                        grid.enterEdit();
-                      }}
-                    >
-                      {cellContent}
-                    </TableCell>
-                  );
-                })}
-              </EntityRow>
+                    // Fallback: plain TableCell (no claimWhen)
+                    return (
+                      <TableCell
+                        key={col.field.id}
+                        ref={isCursor ? cursorRef : undefined}
+                        className={cellClasses}
+                        onClick={() => handleCellClick(di, ci)}
+                        onDoubleClick={() => {
+                          onCellClick?.(di, ci);
+                          grid.enterEdit();
+                        }}
+                      >
+                        {cellContent}
+                      </TableCell>
+                    );
+                  })}
+                </EntityRow>
               </FocusScope>
             );
           })}

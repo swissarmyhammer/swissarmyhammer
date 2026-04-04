@@ -26,16 +26,6 @@ vi.mock("@tauri-apps/plugin-log", () => ({
   attachConsole: vi.fn(() => Promise.resolve()),
 }));
 
-// Mock backendDispatch to capture commands.
-const mockBackendDispatch = vi.fn(() => Promise.resolve(null));
-vi.mock("@/lib/command-scope", async (importOriginal) => {
-  const original = await importOriginal<typeof import("@/lib/command-scope")>();
-  return {
-    ...original,
-    backendDispatch: (...args: unknown[]) => mockBackendDispatch(...args),
-  };
-});
-
 import { GroupSelector } from "./group-selector";
 import type { FieldDef } from "@/types/kanban";
 
@@ -96,16 +86,17 @@ describe("GroupSelector", () => {
 
   it("dispatches perspective.group when a field is selected", () => {
     const onClose = vi.fn();
-    render(
-      <GroupSelector {...defaultProps} onClose={onClose} />,
-    );
+    render(<GroupSelector {...defaultProps} onClose={onClose} />);
 
     fireEvent.click(screen.getByTestId("group-field-Status"));
 
-    expect(mockBackendDispatch).toHaveBeenCalledWith({
-      cmd: "perspective.group",
-      args: { group: "Status", perspective_id: "p1" },
-    });
+    expect(mockInvoke).toHaveBeenCalledWith(
+      "dispatch_command",
+      expect.objectContaining({
+        cmd: "perspective.group",
+        args: { group: "Status", perspective_id: "p1" },
+      }),
+    );
     expect(onClose).toHaveBeenCalled();
   });
 
@@ -117,10 +108,13 @@ describe("GroupSelector", () => {
 
     fireEvent.click(screen.getByTestId("group-none"));
 
-    expect(mockBackendDispatch).toHaveBeenCalledWith({
-      cmd: "perspective.clearGroup",
-      args: { perspective_id: "p1" },
-    });
+    expect(mockInvoke).toHaveBeenCalledWith(
+      "dispatch_command",
+      expect.objectContaining({
+        cmd: "perspective.clearGroup",
+        args: { perspective_id: "p1" },
+      }),
+    );
     expect(onClose).toHaveBeenCalled();
   });
 
@@ -144,10 +138,13 @@ describe("GroupSelector", () => {
 
     fireEvent.click(screen.getByLabelText("Clear group"));
 
-    expect(mockBackendDispatch).toHaveBeenCalledWith({
-      cmd: "perspective.clearGroup",
-      args: { perspective_id: "p1" },
-    });
+    expect(mockInvoke).toHaveBeenCalledWith(
+      "dispatch_command",
+      expect.objectContaining({
+        cmd: "perspective.clearGroup",
+        args: { perspective_id: "p1" },
+      }),
+    );
     expect(onClose).toHaveBeenCalled();
   });
 });

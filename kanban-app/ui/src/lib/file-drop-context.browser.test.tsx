@@ -15,7 +15,11 @@ vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(() => Promise.resolve("/tmp/kanban-drops/test-file.txt")),
 }));
 
-import { FileDropProvider, useFileDrop, type DropCallback } from "./file-drop-context";
+import {
+  FileDropProvider,
+  useFileDrop,
+  type DropCallback,
+} from "./file-drop-context";
 
 /** Test component that exposes FileDropProvider state and registration. */
 function DropProbe({
@@ -66,7 +70,11 @@ function emitFileDrop(filenames: string[] = ["test.txt"]) {
     dt.items.add(new File(["content"], name, { type: "text/plain" }));
   }
   document.dispatchEvent(
-    new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: dt }),
+    new DragEvent("drop", {
+      bubbles: true,
+      cancelable: true,
+      dataTransfer: dt,
+    }),
   );
 }
 
@@ -171,7 +179,11 @@ describe("FileDropProvider — HTML5 drag events", () => {
     const dt = new DataTransfer();
     dt.setData("application/x-swissarmyhammer-task", '{"id":"task-1"}');
     document.dispatchEvent(
-      new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: dt }),
+      new DragEvent("drop", {
+        bubbles: true,
+        cancelable: true,
+        dataTransfer: dt,
+      }),
     );
     await tick(100);
 

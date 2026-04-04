@@ -89,6 +89,8 @@ import {
   useOpenBoards,
   useActiveBoardPath,
   useHandleSwitchBoard,
+  useWindowLoading,
+  useBoardData,
 } from "./window-container";
 
 // ---------------------------------------------------------------------------
@@ -139,6 +141,18 @@ function SwitchBoardProbe() {
     >
       switch
     </button>
+  );
+}
+
+/** Renders loading state and whether board data is present. */
+function LoadingProbe() {
+  const loading = useWindowLoading();
+  const board = useBoardData();
+  return (
+    <>
+      <span data-testid="loading-state">{loading ? "loading" : "ready"}</span>
+      <span data-testid="board-state">{board ? "has-board" : "no-board"}</span>
+    </>
   );
 }
 
@@ -415,5 +429,92 @@ describe("WindowContainer", () => {
       return args.cmd === "file.switchBoard";
     });
     expect(switchCall).toBeTruthy();
+  });
+
+  it("handleSwitchBoard clears board data so loading spinner shows", async () => {
+    // Start with a board loaded so we can verify it gets cleared on switch.
+    const boardData = {
+      board: { entity_type: "board", id: "b1", name: "Board" },
+      columns: [],
+      swimlanes: [],
+      tags: [],
+      summary: {
+        total_tasks: 0,
+        total_actors: 0,
+        ready_tasks: 0,
+        blocked_tasks: 0,
+        done_tasks: 0,
+        percent_complete: 0,
+      },
+    };
+
+    // Use a deferred promise for dispatch_command so we can observe the
+    // intermediate state between handleSwitchBoard clearing the board and
+    // the refresh completing.
+    let resolveDispatch: (v: unknown) => void = () => {};
+    const dispatchPromise = new Promise((resolve) => {
+      resolveDispatch = resolve;
+    });
+
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === "get_ui_state")
+        return Promise.resolve({
+          palette_open: false,
+          palette_mode: "command",
+          keymap_mode: "cua",
+          scope_chain: [],
+          open_boards: [],
+          windows: {},
+          recent_boards: [],
+        });
+      if (cmd === "list_schemas") return Promise.resolve([]);
+      if (cmd === "list_open_boards")
+        return Promise.resolve([
+          { path: "/board/a", name: "Board A", is_active: true },
+        ]);
+      if (cmd === "get_board_data") return Promise.resolve(boardData);
+      if (cmd === "list_entities") return Promise.resolve({ entities: [] });
+      if (cmd === "dispatch_command") return dispatchPromise;
+      return Promise.resolve(null);
+    });
+
+    await act(async () => {
+      render(
+        <RustEngineContainer>
+          <WindowContainer>
+            <LoadingProbe />
+            <SwitchBoardProbe />
+          </WindowContainer>
+        </RustEngineContainer>,
+      );
+    });
+
+    // Board should be loaded after initial render.
+    await waitFor(() => {
+      expect(screen.getByTestId("board-state").textContent).toBe("has-board");
+      expect(screen.getByTestId("loading-state").textContent).toBe("ready");
+    });
+
+    // Trigger board switch — dispatch_command is blocked so we can inspect
+    // intermediate state.
+    act(() => {
+      screen.getByTestId("switch-board-btn").click();
+    });
+
+    // Board should be cleared immediately (before dispatch resolves).
+    await waitFor(() => {
+      expect(screen.getByTestId("board-state").textContent).toBe("no-board");
+    });
+
+    // Resolve the dispatch and let refresh complete.
+    await act(async () => {
+      resolveDispatch(null);
+    });
+
+    // After refresh, board should be loaded again.
+    await waitFor(() => {
+      expect(screen.getByTestId("board-state").textContent).toBe("has-board");
+      expect(screen.getByTestId("loading-state").textContent).toBe("ready");
+    });
   });
 });

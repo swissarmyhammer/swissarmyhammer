@@ -61,6 +61,8 @@ interface EntityFieldChangedEvent {
   entity_type: string;
   id: string;
   changes: Array<{ field: string; value: unknown }>;
+  /** Full entity fields when the backend enriches the event (command dispatch path). */
+  fields?: Record<string, unknown>;
   board_path?: string;
 }
 
@@ -275,9 +277,9 @@ export function RustEngineContainer({ children }: RustEngineContainerProps) {
         }
       }),
       listen<EntityFieldChangedEvent>("entity-field-changed", (event) => {
-        const { entity_type, id, board_path } = event.payload;
+        const { entity_type, id, changes, fields, board_path } = event.payload;
         console.warn(
-          `[entity-field-changed] received: ${entity_type}/${id} board_path=${board_path ?? "none"}`,
+          `[entity-field-changed] received: ${entity_type}/${id} board_path=${board_path ?? "none"} fields=${fields ? "yes" : "no"} changes=${changes?.length ?? 0}`,
         );
         if (
           board_path &&
@@ -289,31 +291,31 @@ export function RustEngineContainer({ children }: RustEngineContainerProps) {
           );
           return;
         }
-        console.warn(
-          `[entity-field-changed] fetching ${entity_type}/${id} via get_entity`,
+
+        // Patch the entity in place from the event payload instead of
+        // re-fetching via get_entity. This avoids replacing the entire
+        // entity array reference on every field change, which would cause
+        // derived state (cellMonikers, etc.) to rebuild and reset the
+        // grid cursor.
+        setEntitiesFor(entity_type, (prev) =>
+          prev.map((e) => {
+            if (e.id !== id) return e;
+            // When the backend provides full fields, use them directly.
+            // Otherwise fall back to patching individual changes.
+            if (fields) {
+              return { ...e, fields: { ...fields } };
+            }
+            if (changes && changes.length > 0) {
+              const patched = { ...e.fields };
+              for (const { field, value } of changes) {
+                patched[field] = value;
+              }
+              return { ...e, fields: patched };
+            }
+            // No fields and no changes — nothing to patch, return as-is.
+            return e;
+          }),
         );
-        invoke<EntityBag>("get_entity", {
-          entityType: entity_type,
-          id,
-          ...(activeBoardPathRef.current
-            ? { boardPath: activeBoardPathRef.current }
-            : {}),
-        })
-          .then((bag) => {
-            const entity = entityFromBag(bag);
-            console.warn(
-              `[entity-field-changed] fetched ${entity_type}/${id}, fields: ${Object.keys(entity.fields).join(",")}`,
-            );
-            setEntitiesFor(entity_type, (prev) =>
-              prev.map((e) => (e.id === id ? entity : e)),
-            );
-          })
-          .catch((err) => {
-            console.error(
-              `[entity-field-changed] Failed to fetch ${entity_type}/${id}:`,
-              err,
-            );
-          });
       }),
     ];
     return () => {

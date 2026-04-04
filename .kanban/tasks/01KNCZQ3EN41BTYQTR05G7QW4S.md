@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: bc80
+position_column: done
+position_ordinal: ffffffffffffffffffff8a80
 title: Show loading spinner when switching boards
 ---
 ## What

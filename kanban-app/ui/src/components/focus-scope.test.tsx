@@ -100,7 +100,13 @@ describe("FocusScope", () => {
     expect(getByTestId("focus-reader").textContent).toBe("task:abc");
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("show_context_menu", {
-        items: [expect.objectContaining({ cmd: "entity.inspect", name: "Inspect", separator: false })],
+        items: [
+          expect.objectContaining({
+            cmd: "entity.inspect",
+            name: "Inspect",
+            separator: false,
+          }),
+        ],
       });
     });
   });
@@ -246,7 +252,13 @@ describe("FocusScope", () => {
       const items = call[1].items;
       // No target -> shadow by id alone: inner "Inspect tag" shadows outer "Inspect task"
       expect(items).toHaveLength(1);
-      expect(items[0]).toEqual(expect.objectContaining({ cmd: "entity.inspect", name: "Inspect tag", separator: false }));
+      expect(items[0]).toEqual(
+        expect.objectContaining({
+          cmd: "entity.inspect",
+          name: "Inspect tag",
+          separator: false,
+        }),
+      );
     });
   });
 
@@ -572,7 +584,13 @@ describe("FocusScope", () => {
     fireEvent.contextMenu(getByText("card"));
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("show_context_menu", {
-        items: [expect.objectContaining({ cmd: "entity.inspect", name: "Inspect", separator: false })],
+        items: [
+          expect.objectContaining({
+            cmd: "entity.inspect",
+            name: "Inspect",
+            separator: false,
+          }),
+        ],
       });
     });
   });

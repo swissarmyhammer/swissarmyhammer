@@ -86,14 +86,20 @@ export function EntityFocusProvider({ children }: { children: ReactNode }) {
   // Scope registry: ref so registrations don't cause re-renders
   const registryRef = useRef<Map<string, CommandScope>>(new Map());
 
-  const setFocus = useCallback((moniker: string | null) => {
-    focusedMonikerRef.current = moniker;
-    setFocusedMoniker(moniker);
-    console.warn(`[FocusScope] focus → ${moniker ?? "(none)"}`);
-    const chain = moniker ? buildScopeChain(moniker, registryRef.current) : [];
-    dispatch({ args: { scope_chain: chain } })
-      .catch((error) => console.error("ui.setFocus failed:", error));
-  }, [dispatch]);
+  const setFocus = useCallback(
+    (moniker: string | null) => {
+      focusedMonikerRef.current = moniker;
+      setFocusedMoniker(moniker);
+      console.warn(`[FocusScope] focus → ${moniker ?? "(none)"}`);
+      const chain = moniker
+        ? buildScopeChain(moniker, registryRef.current)
+        : [];
+      dispatch({ args: { scope_chain: chain } }).catch((error) =>
+        console.error("ui.setFocus failed:", error),
+      );
+    },
+    [dispatch],
+  );
 
   const registerScope = useCallback((moniker: string, scope: CommandScope) => {
     registryRef.current.set(moniker, scope);

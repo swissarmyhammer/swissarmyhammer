@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: bb80
+position_column: done
+position_ordinal: ffffffffffffffffffff8380
 title: Close window when its board is closed via file.closeBoard
 ---
 ## What

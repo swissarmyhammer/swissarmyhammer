@@ -314,4 +314,3 @@ function PerspectiveTab({
     </div>
   );
 }
-

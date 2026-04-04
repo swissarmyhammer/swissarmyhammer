@@ -72,9 +72,21 @@ const FIELD_DEFS: FieldDef[] = [
 const COLUMNS: DataTableColumn[] = FIELD_DEFS.map((f) => ({ field: f }));
 
 const ENTITIES: Entity[] = [
-  { entity_type: "task", id: "t1", fields: { title: "Task 1", status: "todo" } },
-  { entity_type: "task", id: "t2", fields: { title: "Task 2", status: "done" } },
-  { entity_type: "task", id: "t3", fields: { title: "Task 3", status: "todo" } },
+  {
+    entity_type: "task",
+    id: "t1",
+    fields: { title: "Task 1", status: "todo" },
+  },
+  {
+    entity_type: "task",
+    id: "t2",
+    fields: { title: "Task 2", status: "done" },
+  },
+  {
+    entity_type: "task",
+    id: "t3",
+    fields: { title: "Task 3", status: "todo" },
+  },
 ];
 
 /** Minimal grid state — no editing, cursor at 0,0. */
@@ -105,7 +117,9 @@ function stubRowCommands(entity: Entity): CommandDef[] {
   ];
 }
 
-function renderTable(props: Partial<React.ComponentProps<typeof DataTable>> = {}) {
+function renderTable(
+  props: Partial<React.ComponentProps<typeof DataTable>> = {},
+) {
   return render(
     <EntityFocusProvider>
       <DataTable
@@ -140,7 +154,9 @@ describe("DataTable row structure", () => {
 
   it("selector cell shows row number", () => {
     const { container } = renderTable();
-    const selectors = container.querySelectorAll("[data-testid='row-selector']");
+    const selectors = container.querySelectorAll(
+      "[data-testid='row-selector']",
+    );
     expect(selectors.length).toBe(ENTITIES.length);
     expect(selectors[0].textContent).toBe("1");
     expect(selectors[1].textContent).toBe("2");

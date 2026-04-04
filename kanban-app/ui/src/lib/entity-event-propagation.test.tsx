@@ -5,10 +5,11 @@
  * `entity-field-changed` events correctly update the entity store state.
  *
  * Strategy: render a minimal React component that:
- *   1. Registers entity event listeners via `listen` (same as App.tsx)
- *   2. On each event, calls `invoke("get_entity")` to fetch fresh state
- *   3. Updates a React state map keyed by entity type
- *   4. Exposes that state via `EntityStoreProvider` for inspection
+ *   1. Registers entity event listeners via `listen` (same as RustEngineContainer)
+ *   2. On `entity-created`, calls `invoke("get_entity")` to fetch fresh state
+ *   3. On `entity-field-changed`, patches fields from the event payload (no round-trip)
+ *   4. Updates a React state map keyed by entity type
+ *   5. Exposes that state via `EntityStoreProvider` for inspection
  *
  * The `listen` mock captures event handler callbacks so tests can fire them
  * directly without a running Tauri backend.
@@ -79,17 +80,17 @@ async function fireEvent(eventName: string, payload: Record<string, any>) {
 }
 
 /**
- * Minimal hook that replicates App.tsx's entity event listener logic.
+ * Minimal hook that replicates RustEngineContainer's entity event listener logic.
  *
  * - Registers listeners for `entity-created`, `entity-removed`, and
- *   `entity-field-changed` using `listen` (same as App.tsx).
- * - On `entity-created` and `entity-field-changed`, calls
- *   `invoke("get_entity")` to fetch fresh entity state.
+ *   `entity-field-changed` using `listen`.
+ * - On `entity-created`, calls `invoke("get_entity")` to fetch fresh entity state.
+ * - On `entity-field-changed`, patches fields from the event payload (no round-trip).
  * - On `entity-removed`, directly removes the entity from state.
  * - Returns the current entity map and a `setEntitiesFor` setter.
  *
  * This is a test-only hook; production code uses the same pattern in
- * App.tsx. Keeping it here avoids rendering the full App component tree.
+ * RustEngineContainer. Keeping it here avoids rendering the full component tree.
  */
 function useEntityEventListeners() {
   const [entitiesByType, setEntitiesByType] = useState<
@@ -155,25 +156,31 @@ function useEntityEventListeners() {
         entity_type: string;
         id: string;
         changes: Array<{ field: string; value: unknown }>;
+        fields?: Record<string, unknown>;
         board_path?: string;
       }>("entity-field-changed", (event) => {
-        const { entity_type, id, board_path } = event.payload;
+        const { entity_type, id, changes, fields, board_path } = event.payload;
         if (board_path && activeBoardPath && board_path !== activeBoardPath) {
           return;
         }
-        invoke<EntityBag>("get_entity", {
-          entityType: entity_type,
-          id,
-        })
-          .then((bag) => {
-            const entity = entityFromBag(bag);
-            setEntitiesFor(entity_type, (prev) =>
-              prev.map((e) => (e.id === id ? entity : e)),
-            );
-          })
-          .catch(() => {
-            // Ignore fetch errors in tests
-          });
+        // Patch the entity in place from the event payload instead of
+        // re-fetching via get_entity.
+        setEntitiesFor(entity_type, (prev) =>
+          prev.map((e) => {
+            if (e.id !== id) return e;
+            if (fields) {
+              return { ...e, fields: { ...fields } };
+            }
+            if (changes && changes.length > 0) {
+              const patched = { ...e.fields };
+              for (const { field, value } of changes) {
+                patched[field] = value;
+              }
+              return { ...e, fields: patched };
+            }
+            return e;
+          }),
+        );
       }),
     ];
 
@@ -303,7 +310,7 @@ describe("entity event propagation", () => {
     expect(result.current.getEntities("tag")).toHaveLength(0);
   });
 
-  it("entity-field-changed event: fetches entity and updates it in the store", async () => {
+  it("entity-field-changed event: patches entity fields from event payload", async () => {
     // Pre-populate via entity-created
     mockInvoke.mockImplementation(
       (cmd: string, args: Record<string, string>) => {
@@ -338,22 +345,10 @@ describe("entity event propagation", () => {
       "ff0000",
     );
 
-    // Now the field changes on disk — update the mock to return new color
-    mockInvoke.mockImplementation(
-      (cmd: string, args: Record<string, string>) => {
-        if (cmd === "get_entity" && args.id === "tag-bug") {
-          return Promise.resolve({
-            entity_type: "tag",
-            id: "tag-bug",
-            tag_name: "bug",
-            color: "00ff00", // changed
-          });
-        }
-        return Promise.resolve({});
-      },
-    );
+    // Clear mock call history so we can verify no get_entity round-trip
+    mockInvoke.mockClear();
 
-    // Fire the entity-field-changed event
+    // Fire the entity-field-changed event with changes in the payload
     await fireEvent("entity-field-changed", {
       kind: "entity-field-changed",
       entity_type: "tag",
@@ -362,17 +357,17 @@ describe("entity event propagation", () => {
     });
     await act(async () => {});
 
-    // Verify get_entity was called for the updated entity
+    // Verify get_entity was NOT called — patching from event payload only
     const getEntityCalls = mockInvoke.mock.calls.filter(
-      (c) =>
-        c[0] === "get_entity" &&
-        (c[1] as Record<string, string>).id === "tag-bug",
+      (c) => c[0] === "get_entity",
     );
-    expect(getEntityCalls.length).toBeGreaterThanOrEqual(1);
+    expect(getEntityCalls).toHaveLength(0);
 
     // Verify the entity store has the updated field value
     const updated = result.current.getEntity("tag", "tag-bug");
     expect(updated?.fields.color).toBe("00ff00");
+    // Verify other fields are preserved
+    expect(updated?.fields.tag_name).toBe("bug");
   });
 
   it("entity-created event for existing id: replaces rather than duplicates", async () => {

@@ -23,7 +23,6 @@ import {
   useCallback,
   useContext,
   useEffect,
-  useMemo,
   useRef,
   useState,
   type ReactNode,
@@ -38,7 +37,7 @@ import { AppShell } from "@/components/app-shell";
 import {
   CommandScopeProvider,
   ActiveBoardPathProvider,
-  backendDispatch,
+  useDispatchCommand,
 } from "@/lib/command-scope";
 import {
   useRefreshEntities,
@@ -127,10 +126,27 @@ interface WindowContainerProps {
  * Top-level window container that owns the window command scope,
  * board lifecycle state, and global UI shell.
  *
+ * Renders the CommandScopeProvider for the window moniker first, then
+ * delegates to WindowContainerInner which can use useDispatchCommand
+ * within that scope.
+ *
  * Must render inside RustEngineContainer so it can access refreshEntities,
  * setEntitiesByType, and setEngineActiveBoardPath.
  */
 export function WindowContainer({ children }: WindowContainerProps) {
+  return (
+    <CommandScopeProvider commands={[]} moniker={`window:${WINDOW_LABEL}`}>
+      <WindowContainerInner>{children}</WindowContainerInner>
+    </CommandScopeProvider>
+  );
+}
+
+/**
+ * Inner implementation of WindowContainer. Renders inside the window-scoped
+ * CommandScopeProvider so useDispatchCommand picks up the correct scope chain
+ * including the window moniker.
+ */
+function WindowContainerInner({ children }: WindowContainerProps) {
   const refreshEntities = useRefreshEntities();
   const setEntitiesByType = useSetEntitiesByType();
   const setEngineActiveBoardPath = useEngineSetActiveBoardPath();
@@ -145,9 +161,10 @@ export function WindowContainer({ children }: WindowContainerProps) {
   const activeBoardPathRef = useRef(activeBoardPath);
   activeBoardPathRef.current = activeBoardPath;
 
-  // Scope chain for this window -- used by direct backendDispatch calls
-  // so the backend knows which window's inspector stack to modify.
-  const windowScopeChain = useMemo(() => [`window:${WINDOW_LABEL}`], []);
+  /** Ad-hoc dispatch for file.switchBoard in event handlers. */
+  const dispatch = useDispatchCommand();
+  const dispatchRef = useRef(dispatch);
+  dispatchRef.current = dispatch;
 
   // Intentional empty deps: reads activeBoardPathRef to avoid stale closure.
   // Uses refreshEntities from the container to update entities internally.
@@ -174,11 +191,11 @@ export function WindowContainer({ children }: WindowContainerProps) {
       activeBoardPathRef.current = active.path;
       setEngineActiveBoardPath(active.path);
       // Persist the fallback selection so it survives hot reload
-      backendDispatch({
-        cmd: "file.switchBoard",
-        args: { windowLabel: WINDOW_LABEL, path: active.path },
-        scopeChain: windowScopeChain,
-      }).catch(() => {});
+      dispatchRef
+        .current("file.switchBoard", {
+          args: { windowLabel: WINDOW_LABEL, path: active.path },
+        })
+        .catch(() => {});
       // Re-fetch with the correct path if we fell back
       if (active.path !== currentPath) {
         const corrected = await refreshEntities(active.path);
@@ -223,10 +240,8 @@ export function WindowContainer({ children }: WindowContainerProps) {
 
         // Restore board path from backend config (main window only -- secondary gets it from URL)
         if (!INITIAL_BOARD_PATH && winState?.board_path) {
-          await backendDispatch({
-            cmd: "file.switchBoard",
+          await dispatchRef.current("file.switchBoard", {
             args: { windowLabel: WINDOW_LABEL, path: winState.board_path },
-            scopeChain: windowScopeChain,
           });
           if (cancelled) return;
           setActiveBoardPath(winState.board_path);
@@ -258,11 +273,11 @@ export function WindowContainer({ children }: WindowContainerProps) {
         async (event: { payload: { path: string } }) => {
           const newPath = event.payload.path;
           // Persist window->board mapping so it survives hot reload / restart
-          backendDispatch({
-            cmd: "file.switchBoard",
-            args: { windowLabel: WINDOW_LABEL, path: newPath },
-            scopeChain: windowScopeChain,
-          }).catch(() => {});
+          dispatchRef
+            .current("file.switchBoard", {
+              args: { windowLabel: WINDOW_LABEL, path: newPath },
+            })
+            .catch(() => {});
           setActiveBoardPath(newPath);
           activeBoardPathRef.current = newPath;
           setEngineActiveBoardPath(newPath);
@@ -340,11 +355,11 @@ export function WindowContainer({ children }: WindowContainerProps) {
         setActiveBoardPath(fallback.path);
         activeBoardPathRef.current = fallback.path;
         setEngineActiveBoardPath(fallback.path);
-        backendDispatch({
-          cmd: "file.switchBoard",
-          args: { windowLabel: WINDOW_LABEL, path: fallback.path },
-          scopeChain: windowScopeChain,
-        }).catch(() => {});
+        dispatchRef
+          .current("file.switchBoard", {
+            args: { windowLabel: WINDOW_LABEL, path: fallback.path },
+          })
+          .catch(() => {});
         setLoading(true);
         const result = await refreshEntities(fallback.path);
         setBoard(result.boardData);
@@ -364,44 +379,44 @@ export function WindowContainer({ children }: WindowContainerProps) {
       setActiveBoardPath(path);
       activeBoardPathRef.current = path;
       setEngineActiveBoardPath(path);
+      // Clear stale board data so the loading spinner shows immediately
+      // instead of rendering the previous board's content during the switch.
+      setBoard(null);
+      setEntitiesByType({});
       try {
-        await backendDispatch({
-          cmd: "file.switchBoard",
+        await dispatch("file.switchBoard", {
           args: { windowLabel: WINDOW_LABEL, path },
-          scopeChain: windowScopeChain,
         });
       } catch {
         /* ignore */
       }
       refresh();
     },
-    [refresh, setEngineActiveBoardPath],
+    [refresh, dispatch, setEngineActiveBoardPath, setEntitiesByType],
   );
 
   return (
-    <CommandScopeProvider commands={[]} moniker={`window:${WINDOW_LABEL}`}>
-      <TooltipProvider delayDuration={400}>
-        <Toaster position="bottom-right" richColors />
-        <InitProgressListener />
-        <ActiveBoardPathProvider value={activeBoardPath}>
-          <OpenBoardsContext.Provider value={openBoards}>
-            <ActiveBoardPathContext.Provider value={activeBoardPath}>
-              <HandleSwitchBoardContext.Provider value={handleSwitchBoard}>
-                <BoardDataContext.Provider value={board}>
-                  <LoadingContext.Provider value={loading}>
-                    <AppShell
-                      openBoards={openBoards}
-                      onSwitchBoard={handleSwitchBoard}
-                    >
-                      {children}
-                    </AppShell>
-                  </LoadingContext.Provider>
-                </BoardDataContext.Provider>
-              </HandleSwitchBoardContext.Provider>
-            </ActiveBoardPathContext.Provider>
-          </OpenBoardsContext.Provider>
-        </ActiveBoardPathProvider>
-      </TooltipProvider>
-    </CommandScopeProvider>
+    <TooltipProvider delayDuration={400}>
+      <Toaster position="bottom-right" richColors />
+      <InitProgressListener />
+      <ActiveBoardPathProvider value={activeBoardPath}>
+        <OpenBoardsContext.Provider value={openBoards}>
+          <ActiveBoardPathContext.Provider value={activeBoardPath}>
+            <HandleSwitchBoardContext.Provider value={handleSwitchBoard}>
+              <BoardDataContext.Provider value={board}>
+                <LoadingContext.Provider value={loading}>
+                  <AppShell
+                    openBoards={openBoards}
+                    onSwitchBoard={handleSwitchBoard}
+                  >
+                    {children}
+                  </AppShell>
+                </LoadingContext.Provider>
+              </BoardDataContext.Provider>
+            </HandleSwitchBoardContext.Provider>
+          </ActiveBoardPathContext.Provider>
+        </OpenBoardsContext.Provider>
+      </ActiveBoardPathProvider>
+    </TooltipProvider>
   );
 }

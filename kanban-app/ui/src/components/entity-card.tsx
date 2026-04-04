@@ -1,24 +1,16 @@
-import {
-  forwardRef,
-  memo,
-  useCallback,
-  useContext,
-  useMemo,
-  useState,
-} from "react";
+import { forwardRef, memo, useCallback, useMemo, useState } from "react";
 import { GripVertical, Info, icons } from "lucide-react";
 import { FocusScope } from "@/components/focus-scope";
 import { Field } from "@/components/fields/field";
 import { useSchema } from "@/lib/schema-context";
 import { useEntityCommands } from "@/lib/entity-commands";
 import { moniker } from "@/lib/moniker";
+import { useDispatchCommand, type CommandDef } from "@/lib/command-scope";
 import {
-  backendDispatch,
-  CommandScopeContext,
-  scopeChainFromScope,
-  useActiveBoardPath,
-  type CommandDef,
-} from "@/lib/command-scope";
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import type { ClaimPredicate } from "@/lib/entity-focus-context";
 import type { Entity, FieldDef } from "@/types/kanban";
 
@@ -154,32 +146,30 @@ export const EntityCard = memo(
 );
 
 /**
- * Dispatches ui.inspect directly to the backend, bypassing the frontend
- * scope-chain resolution that would escalate to the board-level handler.
+ * Dispatches ui.inspect to the backend via the unified dispatch hook.
  *
- * The scope chain from CommandScopeContext already includes the entity
- * moniker (e.g. ["task:abc", "column:todo", "board:board", "window:main"]),
+ * The scope chain from context already includes the entity moniker
+ * (e.g. ["task:abc", "column:todo", "board:board", "window:main"]),
  * so the backend's first_inspectable() finds the correct entity.
  */
 function InspectButton() {
-  const scope = useContext(CommandScopeContext);
-  const boardPath = useActiveBoardPath();
-  const chain = useMemo(() => scopeChainFromScope(scope), [scope]);
+  const dispatch = useDispatchCommand("ui.inspect");
   return (
-    <button
-      type="button"
-      className="shrink-0 mt-0.5 p-0.5 rounded text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted transition-colors"
-      onClick={(e) => {
-        e.stopPropagation();
-        backendDispatch({
-          cmd: "ui.inspect",
-          scopeChain: chain,
-          ...(boardPath ? { boardPath } : {}),
-        }).catch(console.error);
-      }}
-      title="Inspect"
-    >
-      <Info className="h-3.5 w-3.5" />
-    </button>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          aria-label="Inspect"
+          className="shrink-0 mt-0.5 p-0.5 rounded text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted transition-colors"
+          onClick={(e) => {
+            e.stopPropagation();
+            dispatch().catch(console.error);
+          }}
+        >
+          <Info className="h-3.5 w-3.5" />
+        </button>
+      </TooltipTrigger>
+      <TooltipContent>Inspect</TooltipContent>
+    </Tooltip>
   );
 }

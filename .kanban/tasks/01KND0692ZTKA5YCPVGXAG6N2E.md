@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: c080
+position_column: done
+position_ordinal: ffffffffffffffffffff8780
 title: Replace title= with shadcn Tooltip in perspective-tab-bar.tsx
 ---
 ## What

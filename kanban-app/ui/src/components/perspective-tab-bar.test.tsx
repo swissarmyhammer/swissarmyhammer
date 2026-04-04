@@ -58,16 +58,6 @@ vi.mock("@/lib/views-context", () => ({
   useViews: () => mockViewsValue,
 }));
 
-// Mock backendDispatch for the "+" button and rename actions.
-const mockBackendDispatch = vi.fn(() => Promise.resolve(null));
-vi.mock("@/lib/command-scope", async (importOriginal) => {
-  const original = await importOriginal<typeof import("@/lib/command-scope")>();
-  return {
-    ...original,
-    backendDispatch: (...args: unknown[]) => mockBackendDispatch(...args),
-  };
-});
-
 // Mock useContextMenu — returns a handler that records calls.
 const mockContextMenuHandler = vi.fn();
 vi.mock("@/lib/context-menu", () => ({
@@ -176,7 +166,8 @@ describe("PerspectiveTabBar", () => {
     const addButton = screen.getByRole("button", { name: /add perspective/i });
     fireEvent.click(addButton);
 
-    expect(mockBackendDispatch).toHaveBeenCalledWith(
+    expect(mockInvoke).toHaveBeenCalledWith(
+      "dispatch_command",
       expect.objectContaining({
         cmd: "perspective.save",
         args: expect.objectContaining({

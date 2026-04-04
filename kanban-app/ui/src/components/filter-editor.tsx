@@ -263,10 +263,7 @@ export function FilterEditor({
         />
       </div>
       {error && (
-        <p
-          className="text-xs text-destructive mt-1"
-          data-testid="filter-error"
-        >
+        <p className="text-xs text-destructive mt-1" data-testid="filter-error">
           {error}
         </p>
       )}

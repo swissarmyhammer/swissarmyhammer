@@ -1,11 +1,4 @@
-import {
-  useCallback,
-  useContext,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   DndContext,
   DragOverlay,
@@ -24,11 +17,8 @@ import {
 import { emit } from "@tauri-apps/api/event";
 import type { DropZoneDescriptor } from "@/lib/drop-zones";
 import {
-  CommandScopeContext,
   CommandScopeProvider,
   useDispatchCommand,
-  backendDispatch,
-  scopeChainFromScope,
   type CommandDef,
 } from "@/lib/command-scope";
 import { ColumnView } from "@/components/column-view";
@@ -70,11 +60,10 @@ interface TaskDragState {
 export function BoardView({ board, tasks, boardPath }: BoardViewProps) {
   const boardPathRef = useRef(boardPath);
   boardPathRef.current = boardPath;
-  const scope = useContext(CommandScopeContext);
-  const scopeChain = useMemo(() => scopeChainFromScope(scope), [scope]);
   const { startSession, cancelSession, completeSession } = useDragSession();
   const boardMoniker = moniker("board", "board");
   const boardCommands = useEntityCommands("board", "board");
+  const dispatch = useDispatchCommand();
   const dispatchInspect = useDispatchCommand("ui.inspect");
   const { focusedMoniker, broadcastNavCommand, setFocus } = useEntityFocus();
   const broadcastRef = useRef(broadcastNavCommand);
@@ -376,11 +365,8 @@ export function BoardView({ board, tasks, boardPath }: BoardViewProps) {
       }
 
       try {
-        await backendDispatch({
-          cmd: "column.reorder",
+        await dispatch("column.reorder", {
           args: { id: activeId, target_index: newIndex },
-          ...(boardPathRef.current ? { boardPath: boardPathRef.current } : {}),
-          scopeChain,
         });
       } catch (e) {
         console.error("Failed to reorder columns:", e);
@@ -403,11 +389,9 @@ export function BoardView({ board, tasks, boardPath }: BoardViewProps) {
         if (descriptor.beforeId) args.before_id = descriptor.beforeId;
         if (descriptor.afterId) args.after_id = descriptor.afterId;
         const boardPath = descriptor.boardPath || boardPathRef.current;
-        await backendDispatch({
-          cmd: "task.move",
+        await dispatch("task.move", {
           args,
-          scopeChain: [`task:${taskId}`],
-          ...(boardPath ? { boardPath } : {}),
+          target: `task:${taskId}`,
         });
       } catch (e) {
         console.error("Failed to move task:", e);
@@ -481,11 +465,8 @@ export function BoardView({ board, tasks, boardPath }: BoardViewProps) {
       const col = columnMap.get(columnId);
       const title = defaultTaskTitle(col ? getStr(col, "name") : "");
       try {
-        await backendDispatch({
-          cmd: "task.add",
+        await dispatch("task.add", {
           args: { title, column: columnId },
-          ...(boardPathRef.current ? { boardPath: boardPathRef.current } : {}),
-          scopeChain,
         });
       } catch (e) {
         console.error("Failed to add task:", e);

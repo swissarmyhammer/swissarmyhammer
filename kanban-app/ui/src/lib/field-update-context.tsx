@@ -1,9 +1,4 @@
-import {
-  createContext,
-  useContext,
-  useCallback,
-  type ReactNode,
-} from "react";
+import { createContext, useContext, useCallback, type ReactNode } from "react";
 import { error as logError } from "@/lib/log";
 import { useDispatchCommand } from "@/lib/command-scope";
 

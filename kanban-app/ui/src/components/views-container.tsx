@@ -17,17 +17,13 @@
  */
 
 import { useMemo, type ReactNode } from "react";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ViewsProvider, useViews } from "@/lib/views-context";
 import { LeftNav } from "@/components/left-nav";
 import {
   CommandScopeProvider,
-  backendDispatch,
+  useDispatchCommand,
   type CommandDef,
 } from "@/lib/command-scope";
-
-/** Window label for scope chain references. */
-const WINDOW_LABEL = getCurrentWindow().label;
 
 // ---------------------------------------------------------------------------
 // Inner component that reads views context (must be inside ViewsProvider)
@@ -39,19 +35,17 @@ const WINDOW_LABEL = getCurrentWindow().label;
  */
 function ViewsCommandScope({ children }: { children: ReactNode }) {
   const { views } = useViews();
+  const dispatch = useDispatchCommand();
 
   const viewCommands: CommandDef[] = useMemo(() => {
     return views.map((view) => ({
       id: `view.switch:${view.id}`,
       name: `View: ${view.name}`,
       execute: () => {
-        backendDispatch({
-          cmd: `view.switch:${view.id}`,
-          scopeChain: [`window:${WINDOW_LABEL}`],
-        }).catch(console.error);
+        dispatch(`view.switch:${view.id}`).catch(console.error);
       },
     }));
-  }, [views]);
+  }, [views, dispatch]);
 
   return (
     <CommandScopeProvider commands={viewCommands}>

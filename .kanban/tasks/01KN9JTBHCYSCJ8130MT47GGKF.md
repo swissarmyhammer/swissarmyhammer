@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: '8e80'
+position_column: done
+position_ordinal: ffffffffffffffffffff80
 title: Replace native `title` tooltip on perspective + button with shadcn Tooltip
 ---
 ## What

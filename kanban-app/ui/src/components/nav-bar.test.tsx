@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import type { BoardData, OpenBoard } from "@/types/kanban";
 
 // ---------------------------------------------------------------------------
@@ -92,6 +93,15 @@ vi.mock("@/components/fields/field", () => ({
 // Import after mocks
 import { NavBar } from "./nav-bar";
 
+/** Renders NavBar inside the required TooltipProvider. */
+function renderNavBar() {
+  return render(
+    <TooltipProvider>
+      <NavBar />
+    </TooltipProvider>,
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Test data
 // ---------------------------------------------------------------------------
@@ -133,16 +143,16 @@ describe("NavBar", () => {
   });
 
   it("renders without props", () => {
-    render(<NavBar />);
+    renderNavBar();
     // Should render the search button at minimum
-    expect(screen.getByTitle("Search")).toBeTruthy();
+    expect(screen.getByLabelText("Search")).toBeTruthy();
   });
 
   it("renders board selector with open boards from context", () => {
     mockOpenBoards.mockReturnValue(MOCK_OPEN_BOARDS);
     mockActiveBoardPath.mockReturnValue("/boards/a/.kanban");
 
-    render(<NavBar />);
+    renderNavBar();
     // BoardSelector renders board names -- the active one should be visible
     expect(screen.getByText("Board A")).toBeTruthy();
   });
@@ -150,35 +160,35 @@ describe("NavBar", () => {
   it("renders inspect button when board is loaded", () => {
     mockBoardData.mockReturnValue(MOCK_BOARD);
 
-    render(<NavBar />);
-    expect(screen.getByTitle("Inspect board")).toBeTruthy();
+    renderNavBar();
+    expect(screen.getByLabelText("Inspect board")).toBeTruthy();
   });
 
   it("does not render inspect button when no board is loaded", () => {
     mockBoardData.mockReturnValue(null);
 
-    render(<NavBar />);
-    expect(screen.queryByTitle("Inspect board")).toBeNull();
+    renderNavBar();
+    expect(screen.queryByLabelText("Inspect board")).toBeNull();
   });
 
   it("dispatches ui.inspect on inspect button click", () => {
     mockBoardData.mockReturnValue(MOCK_BOARD);
 
-    render(<NavBar />);
-    fireEvent.click(screen.getByTitle("Inspect board"));
+    renderNavBar();
+    fireEvent.click(screen.getByLabelText("Inspect board"));
     expect(mockDispatchInspect).toHaveBeenCalled();
   });
 
   it("dispatches app.search on search button click", () => {
-    render(<NavBar />);
-    fireEvent.click(screen.getByTitle("Search"));
+    renderNavBar();
+    fireEvent.click(screen.getByLabelText("Search"));
     expect(mockDispatchSearch).toHaveBeenCalled();
   });
 
   it("renders percent complete field when board is loaded", () => {
     mockBoardData.mockReturnValue(MOCK_BOARD);
 
-    render(<NavBar />);
+    renderNavBar();
     expect(screen.getByTestId("field-percent")).toBeTruthy();
     expect(screen.getByTestId("field-percent").textContent).toBe("b1");
   });
@@ -186,7 +196,7 @@ describe("NavBar", () => {
   it("does not render percent complete field when no board", () => {
     mockBoardData.mockReturnValue(null);
 
-    render(<NavBar />);
+    renderNavBar();
     expect(screen.queryByTestId("field-percent")).toBeNull();
   });
 });
