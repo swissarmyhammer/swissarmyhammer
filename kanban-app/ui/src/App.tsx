@@ -3,26 +3,16 @@ import "@/components/fields/registrations";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { UIStateProvider, useUIState } from "@/lib/ui-state-context";
-import { AppModeProvider } from "@/lib/app-mode-context";
-import { UndoProvider } from "@/lib/undo-context";
-import {
-  EntityFocusProvider,
-  useRestoreFocus,
-} from "@/lib/entity-focus-context";
+import { useUIState } from "@/lib/ui-state-context";
+import { useRestoreFocus } from "@/lib/entity-focus-context";
 import { SchemaProvider, useSchema } from "@/lib/schema-context";
-import { FieldUpdateProvider } from "@/lib/field-update-context";
 import { EntityStoreProvider } from "@/lib/entity-store-context";
-import { TooltipProvider } from "@/components/ui/tooltip";
-import { Toaster } from "sonner";
-import { InitProgressListener } from "@/components/init-progress-listener";
-import { AppShell } from "@/components/app-shell";
+import { FieldUpdateProvider } from "@/lib/field-update-context";
+import { UIStateProvider } from "@/lib/ui-state-context";
 import { NavBar } from "@/components/nav-bar";
 import { LeftNav } from "@/components/left-nav";
 import { ModeIndicator } from "@/components/mode-indicator";
-import { Loader2 } from "lucide-react";
 import { ErrorBoundary } from "@/components/ui/error-boundary";
 import { BoardView } from "@/components/board-view";
 import { GridView } from "@/components/grid-view";
@@ -32,27 +22,33 @@ import { ViewsProvider, useViews } from "@/lib/views-context";
 import { PerspectiveProvider } from "@/lib/perspective-context";
 import {
   CommandScopeProvider,
-  ActiveBoardPathProvider,
   useDispatchCommand,
   backendDispatch,
   type CommandDef,
 } from "@/lib/command-scope";
-import { DragSessionProvider } from "@/lib/drag-session-context";
-import { FileDropProvider } from "@/lib/file-drop-context";
-import type { BoardData, OpenBoard, Entity, EntityBag } from "@/types/kanban";
+import type { BoardData, Entity, EntityBag } from "@/types/kanban";
 import { entityFromBag, getStr } from "@/types/kanban";
-import { refreshBoards } from "@/lib/refresh";
 import { QuickCapture } from "@/components/quick-capture";
 import { StoreContainer } from "@/components/store-container";
+import {
+  RustEngineContainer,
+  useEntitiesByType,
+} from "@/components/rust-engine-container";
+import {
+  WindowContainer,
+  useBoardData,
+  useWindowLoading,
+  useActiveBoardPath,
+  useOpenBoards,
+  useHandleSwitchBoard,
+} from "@/components/window-container";
+import { BoardContainer } from "@/components/board-container";
 
 /** Parse URL params once at module level. */
 const URL_PARAMS = new URLSearchParams(window.location.search);
 
 /** Detect if this window instance is the quick-capture popup. */
 const IS_QUICK_CAPTURE = URL_PARAMS.get("window") === "quick-capture";
-
-/** Initial board path from URL (set when opening a new window for a specific board). */
-const INITIAL_BOARD_PATH = URL_PARAMS.get("board") ?? undefined;
 
 /** Window label for per-window state persistence. */
 const WINDOW_LABEL = getCurrentWindow().label;
@@ -63,6 +59,12 @@ if (IS_QUICK_CAPTURE) {
 }
 
 const PANEL_WIDTH = 420;
+
+/** A panel entry is just an entity reference — entity type + id. */
+interface PanelEntry {
+  entityType: string;
+  entityId: string;
+}
 
 /**
  * Bridge component that syncs the backend UIState inspector_stack to the
@@ -99,38 +101,6 @@ function InspectorSyncBridge({
   return null;
 }
 
-/** Payload for entity-created Tauri event. */
-interface EntityCreatedEvent {
-  kind: "entity-created";
-  entity_type: string;
-  id: string;
-  fields: Record<string, unknown>;
-  board_path?: string;
-}
-
-/** Payload for entity-removed Tauri event. */
-interface EntityRemovedEvent {
-  kind: "entity-removed";
-  entity_type: string;
-  id: string;
-  board_path?: string;
-}
-
-/** Payload for entity-field-changed Tauri event. */
-interface EntityFieldChangedEvent {
-  kind: "entity-field-changed";
-  entity_type: string;
-  id: string;
-  changes: Array<{ field: string; value: unknown }>;
-  board_path?: string;
-}
-
-/** A panel entry is just an entity reference — entity type + id. */
-interface PanelEntry {
-  entityType: string;
-  entityId: string;
-}
-
 /**
  * Conditionally wraps children in a StoreContainer when a board path is
  * active. Injects a `store:{path}` moniker into the scope chain so the
@@ -152,36 +122,49 @@ function MaybeStoreScope({
   return <>{children}</>;
 }
 
+/**
+ * Main application shell: RustEngineContainer > WindowContainer > AppContent.
+ *
+ * RustEngineContainer owns entity state, entity event listeners, and all
+ * Rust-bridge providers (Schema, EntityStore, EntityFocus, FieldUpdate,
+ * UIState, AppMode, Undo).
+ *
+ * WindowContainer owns the window scope, board lifecycle, AppShell, and
+ * board switching.
+ *
+ * AppContent (below) owns the inspector panel state and uses BoardContainer
+ * for conditional board rendering.
+ */
 function App() {
-  const [board, setBoard] = useState<BoardData | null>(null);
-  const [loading, setLoading] = useState(true);
-  /** All list-type entities keyed by type (task, tag, actor, ...). */
-  const [entitiesByType, setEntitiesByType] = useState<
-    Record<string, Entity[]>
-  >({});
-  const setEntitiesFor = useCallback(
-    (type: string, updater: (prev: Entity[]) => Entity[]) =>
-      setEntitiesByType((prev) => ({
-        ...prev,
-        [type]: updater(prev[type] ?? []),
-      })),
-    [],
+  return (
+    <RustEngineContainer>
+      <WindowContainer>
+        <AppContent />
+      </WindowContainer>
+    </RustEngineContainer>
   );
-  const [openBoards, setOpenBoards] = useState<OpenBoard[]>([]);
-  /** Per-window active board path. Secondary windows get it from URL; main restores from backend. */
-  const [activeBoardPath, setActiveBoardPath] = useState<string | undefined>(
-    INITIAL_BOARD_PATH,
-  );
-  const activeBoardPathRef = useRef(activeBoardPath);
-  activeBoardPathRef.current = activeBoardPath;
+}
+
+/**
+ * Main content area that reads board state from container contexts and
+ * renders the board or loading/placeholder states via BoardContainer.
+ *
+ * Owns:
+ * - Inspector panel state (panelStack, InspectorSyncBridge)
+ * - MaybeStoreScope for the active board path
+ * - BoardContainer for conditional board rendering
+ */
+function AppContent() {
+  const board = useBoardData();
+  const loading = useWindowLoading();
+  const activeBoardPath = useActiveBoardPath();
+  const openBoards = useOpenBoards();
+  const handleSwitchBoard = useHandleSwitchBoard();
+  const entitiesByType = useEntitiesByType();
 
   const [panelStack, setPanelStack] = useState<PanelEntry[]>([]);
-  const panelStackRef = useRef(panelStack);
-  panelStackRef.current = panelStack;
 
-  // Scope chain for this window — used by direct backendDispatch calls
-  // so the backend knows which window's inspector stack to modify.
-  const windowScopeChain = useMemo(() => [`window:${WINDOW_LABEL}`], []);
+  const entityStore = useMemo(() => entitiesByType, [entitiesByType]);
 
   /** Close the topmost inspector panel via the command architecture.
    *  Fire-and-forget — InspectorSyncBridge updates panelStack from UIState. */
@@ -203,491 +186,64 @@ function App() {
     );
   }, [dispatchInspectorCloseAll]);
 
-  // Intentional empty deps: reads activeBoardPathRef to avoid stale closure.
-  // The ref is kept in sync with state inside the callback.
-  const refresh = useCallback(async () => {
-    setLoading(true);
-    const result = await refreshBoards(activeBoardPathRef.current);
-    // Open boards always update — even if board data failed.
-    setOpenBoards(result.openBoards);
-
-    // Pick or fall back to a valid active board path. Handles both initial
-    // mount (no path yet) and board-closed (path no longer in open list).
-    const currentPath = activeBoardPathRef.current;
-    const pathStillOpen =
-      currentPath && result.openBoards.some((b) => b.path === currentPath);
-    if ((!currentPath || !pathStillOpen) && result.openBoards.length > 0) {
-      const active =
-        result.openBoards.find((b) => b.is_active) ?? result.openBoards[0];
-      setActiveBoardPath(active.path);
-      activeBoardPathRef.current = active.path;
-      // Persist the fallback selection so it survives hot reload
-      backendDispatch({
-        cmd: "file.switchBoard",
-        args: { windowLabel: WINDOW_LABEL, path: active.path },
-        scopeChain: windowScopeChain,
-      }).catch(() => {});
-    }
-
-    if (result.openBoards.length === 0) {
-      // All boards closed — clear stale state so the placeholder shows.
-      setBoard(null);
-      setEntitiesByType({});
-      setActiveBoardPath(undefined);
-      setLoading(false);
-      return;
-    }
-    // Update board data and entities atomically. If board data arrives
-    // but entities fail, clear entities rather than leaving stale data
-    // from a previous board.
-    setBoard(result.boardData);
-    setEntitiesByType(result.entitiesByType ?? {});
-    setLoading(false);
-  }, []);
-
-  // Restore window state from backend on mount.
-  // For main window: reads board_path + inspector_stack from config.
-  // For secondary windows: board comes from URL param, this restores inspector.
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      // Restore window state from UIState (board path + inspector stack).
-      // UIState.windows[windowLabel] holds all per-window state; no need for a
-      // separate get_ui_context command.
-      try {
-        const uiState = await invoke<{
-          windows: Record<
-            string,
-            {
-              board_path?: string;
-              inspector_stack?: string[];
-              active_view_id?: string;
-            }
-          >;
-        }>("get_ui_state");
-        if (cancelled) return;
-        const winState = uiState.windows?.[WINDOW_LABEL];
-
-        // Restore board path from backend config (main window only — secondary gets it from URL)
-        if (!INITIAL_BOARD_PATH && winState?.board_path) {
-          // Open board idempotently and persist window→board mapping
-          await backendDispatch({
-            cmd: "file.switchBoard",
-            args: { windowLabel: WINDOW_LABEL, path: winState.board_path },
-            scopeChain: windowScopeChain,
-          });
-          if (cancelled) return;
-          setActiveBoardPath(winState.board_path);
-          activeBoardPathRef.current = winState.board_path;
-        }
-
-        // Inspector stack restore is handled by InspectorSyncBridge
-        // reading UIState after UIStateProvider mounts.
-      } catch {
-        // No saved state — will fall through to refresh below
-      }
-      if (cancelled) return;
-      await refresh();
-      if (cancelled) return;
-
-      // Secondary windows are restored by the Rust backend in setup() —
-      // no frontend invoke needed. Each restore goes through the same
-      // create_window_impl path as window.new.
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [refresh]);
-
-  // ---------------------------------------------------------------------------
-  // Granular entity event listeners — patch local state surgically instead
-  // of doing a full refresh.
-  // ---------------------------------------------------------------------------
-
-  useEffect(() => {
-    const unlisteners = [
-      listen<EntityCreatedEvent>("entity-created", (event) => {
-        const { entity_type, id, board_path } = event.payload;
-        console.warn(
-          `[entity-created] received: ${entity_type}/${id} board_path=${board_path ?? "none"}`,
-        );
-        if (
-          board_path &&
-          activeBoardPathRef.current &&
-          board_path !== activeBoardPathRef.current
-        ) {
-          console.warn(
-            `[entity-created] SKIPPED: board_path mismatch (active=${activeBoardPathRef.current})`,
-          );
-          return;
-        }
-        if (entity_type === "column" || entity_type === "swimlane") {
-          console.warn(`[entity-created] structural type → full refresh`);
-          refresh();
-          return;
-        }
-        console.warn(
-          `[entity-created] fetching ${entity_type}/${id} via get_entity`,
-        );
-        invoke<EntityBag>("get_entity", {
-          entityType: entity_type,
-          id,
-          ...(activeBoardPathRef.current
-            ? { boardPath: activeBoardPathRef.current }
-            : {}),
-        })
-          .then((bag) => {
-            const entity = entityFromBag(bag);
-            console.warn(
-              `[entity-created] fetched ${entity_type}/${id}, fields: ${Object.keys(entity.fields).join(",")}`,
-            );
-            setEntitiesFor(entity_type, (prev) => {
-              if (prev.some((e) => e.id === id)) {
-                return prev.map((e) => (e.id === id ? entity : e));
-              }
-              return [...prev, entity];
-            });
-          })
-          .catch((err) => {
-            console.error(
-              `[entity-created] Failed to fetch ${entity_type}/${id}:`,
-              err,
-            );
-          });
-      }),
-      listen<EntityRemovedEvent>("entity-removed", (event) => {
-        const { entity_type, id, board_path } = event.payload;
-        console.warn(
-          `[entity-removed] received: ${entity_type}/${id} board_path=${board_path ?? "none"}`,
-        );
-        if (
-          board_path &&
-          activeBoardPathRef.current &&
-          board_path !== activeBoardPathRef.current
-        ) {
-          console.warn(`[entity-removed] SKIPPED: board_path mismatch`);
-          return;
-        }
-        if (entity_type === "column" || entity_type === "swimlane") {
-          refresh();
-        } else {
-          setEntitiesFor(entity_type, (prev) =>
-            prev.filter((e) => e.id !== id),
-          );
-        }
-      }),
-      listen<EntityFieldChangedEvent>("entity-field-changed", (event) => {
-        const { entity_type, id, board_path } = event.payload;
-        console.warn(
-          `[entity-field-changed] received: ${entity_type}/${id} board_path=${board_path ?? "none"}`,
-        );
-        if (
-          board_path &&
-          activeBoardPathRef.current &&
-          board_path !== activeBoardPathRef.current
-        ) {
-          console.warn(
-            `[entity-field-changed] SKIPPED: board_path mismatch (active=${activeBoardPathRef.current})`,
-          );
-          return;
-        }
-
-        // Events are signals to re-fetch, not data carriers. Always fetch
-        // fresh state from the backend so both command-path and watcher-path
-        // events behave identically.
-        console.warn(
-          `[entity-field-changed] fetching ${entity_type}/${id} via get_entity`,
-        );
-        invoke<EntityBag>("get_entity", {
-          entityType: entity_type,
-          id,
-          ...(activeBoardPathRef.current
-            ? { boardPath: activeBoardPathRef.current }
-            : {}),
-        })
-          .then((bag) => {
-            const entity = entityFromBag(bag);
-            console.warn(
-              `[entity-field-changed] fetched ${entity_type}/${id}, fields: ${Object.keys(entity.fields).join(",")}`,
-            );
-            const replaceById = (entities: Entity[]) =>
-              entities.map((e) => (e.id === id ? entity : e));
-
-            setEntitiesFor(entity_type, replaceById);
-
-            if (entity_type === "board") {
-              setBoard((prev) => (prev ? { ...prev, board: entity } : prev));
-            } else if (entity_type === "column") {
-              setBoard((prev) =>
-                prev ? { ...prev, columns: replaceById(prev.columns) } : prev,
-              );
-            } else if (entity_type === "swimlane") {
-              setBoard((prev) =>
-                prev
-                  ? { ...prev, swimlanes: replaceById(prev.swimlanes) }
-                  : prev,
-              );
-            }
-          })
-          .catch((err) => {
-            console.error(
-              `[entity-field-changed] Failed to fetch ${entity_type}/${id}:`,
-              err,
-            );
-          });
-      }),
-      // board-opened: emitted only to the window that initiated the open (via emit_to).
-      // Use window-scoped listen for defense-in-depth.
-      getCurrentWindow().listen<{ path: string }>(
-        "board-opened",
-        async (event: { payload: { path: string } }) => {
-          const newPath = event.payload.path;
-          // Persist window→board mapping so it survives hot reload / restart
-          backendDispatch({
-            cmd: "file.switchBoard",
-            args: { windowLabel: WINDOW_LABEL, path: newPath },
-            scopeChain: windowScopeChain,
-          }).catch(() => {});
-          setActiveBoardPath(newPath);
-          activeBoardPathRef.current = newPath;
-          setLoading(true);
-          const result = await refreshBoards(newPath);
-          setOpenBoards(result.openBoards);
-          setBoard(result.boardData);
-          setEntitiesByType(result.entitiesByType ?? {});
-          setLoading(false);
-        },
-      ),
-      // board-changed: structural change (open/close/switch). All windows
-      // refresh their open boards list. If this window's board was closed,
-      // fall back to another open board. Also checks UIState for board
-      // assignment changes (e.g. Open Board dialog switched this window's
-      // board but board-opened was not received).
-      listen("board-changed", async () => {
-        let boards: OpenBoard[] = [];
-        try {
-          boards = await invoke<OpenBoard[]>("list_open_boards");
-        } catch {
-          /* ignore */
-        }
-        setOpenBoards(boards);
-
-        if (boards.length === 0) {
-          setBoard(null);
-          setEntitiesByType({});
-          setActiveBoardPath(undefined);
-          setLoading(false);
-          return;
-        }
-
-        // Check if UIState says this window should show a different board
-        // (e.g. file.switchBoard ran but board-opened was not delivered).
-        let assignedPath: string | undefined;
-        try {
-          const uiState = await invoke<{
-            windows: Record<string, { board_path?: string }>;
-          }>("get_ui_state");
-          assignedPath = uiState.windows?.[WINDOW_LABEL]?.board_path;
-        } catch {
-          /* ignore */
-        }
-
-        const currentPath = activeBoardPathRef.current;
-
-        // If the backend assigned a different board to this window, switch.
-        if (
-          assignedPath &&
-          assignedPath !== currentPath &&
-          boards.some((b) => b.path === assignedPath)
-        ) {
-          setActiveBoardPath(assignedPath);
-          activeBoardPathRef.current = assignedPath;
-          setLoading(true);
-          const result = await refreshBoards(assignedPath);
-          setOpenBoards(result.openBoards);
-          setBoard(result.boardData);
-          setEntitiesByType(result.entitiesByType ?? {});
-          setLoading(false);
-          return;
-        }
-
-        // If this window's board is still open, keep it and refresh data
-        const stillOpen =
-          currentPath && boards.some((b) => b.path === currentPath);
-        if (stillOpen) {
-          setLoading(true);
-          const result = await refreshBoards(currentPath);
-          setBoard(result.boardData);
-          setEntitiesByType(result.entitiesByType ?? {});
-          setLoading(false);
-          return;
-        }
-
-        // Board was closed — fall back to another open board and persist
-        const fallback = boards.find((b) => b.is_active) ?? boards[0];
-        setActiveBoardPath(fallback.path);
-        activeBoardPathRef.current = fallback.path;
-        backendDispatch({
-          cmd: "file.switchBoard",
-          args: { windowLabel: WINDOW_LABEL, path: fallback.path },
-          scopeChain: windowScopeChain,
-        }).catch(() => {});
-        setLoading(true);
-        const result = await refreshBoards(fallback.path);
-        setBoard(result.boardData);
-        setEntitiesByType(result.entitiesByType ?? {});
-        setLoading(false);
-      }),
-    ];
-    return () => {
-      for (const p of unlisteners) {
-        p.then((fn: () => void) => fn());
-      }
-    };
-  }, [refresh]);
-
-  /** Switch this window's active board. Persists via backend file.switchBoard command. */
-  const handleSwitchBoard = useCallback(
-    async (path: string) => {
-      setActiveBoardPath(path);
-      activeBoardPathRef.current = path;
-      try {
-        await backendDispatch({
-          cmd: "file.switchBoard",
-          args: { windowLabel: WINDOW_LABEL, path },
-          scopeChain: windowScopeChain,
-        });
-      } catch {
-        /* ignore */
-      }
-      refresh();
-    },
-    [refresh],
-  );
-
-  const entityStore = useMemo(() => entitiesByType, [entitiesByType]);
-
   return (
-    <CommandScopeProvider commands={[]} moniker={`window:${WINDOW_LABEL}`}>
-      <TooltipProvider delayDuration={400}>
-        <Toaster position="bottom-right" richColors />
-        <InitProgressListener />
-        <ActiveBoardPathProvider value={activeBoardPath}>
-          <SchemaProvider>
-            <EntityStoreProvider entities={entityStore}>
-              <EntityFocusProvider>
-                <MaybeStoreScope path={activeBoardPath}>
-                  <FieldUpdateProvider>
-                    <UIStateProvider>
-                      <InspectorSyncBridge setPanelStack={setPanelStack} />
-                      <AppModeProvider>
-                        <UndoProvider>
-                          <FileDropProvider>
-                            <AppShell
-                              openBoards={openBoards}
-                              onSwitchBoard={handleSwitchBoard}
-                            >
-                              <DragSessionProvider>
-                                <ViewsProvider>
-                                  <PerspectiveProvider>
-                                    <ViewCommandScope>
-                                      <div className="h-screen bg-background text-foreground flex flex-col">
-                                        <NavBar
-                                          board={board}
-                                          openBoards={openBoards}
-                                          activeBoardPath={activeBoardPath}
-                                          onSwitchBoard={handleSwitchBoard}
-                                        />
-                                        {board && activeBoardPath ? (
-                                          <>
-                                            <div className="flex-1 flex min-h-0">
-                                              <LeftNav />
-                                              <div className="flex-1 min-w-0 overflow-hidden flex flex-col">
-                                                <ActiveViewRenderer
-                                                  board={board}
-                                                  tasks={
-                                                    entitiesByType.task ?? []
-                                                  }
-                                                  boardPath={activeBoardPath}
-                                                />
-                                              </div>
-                                            </div>
+    <MaybeStoreScope path={activeBoardPath}>
+      <InspectorSyncBridge setPanelStack={setPanelStack} />
+      <BoardContainer>
+        <ViewsProvider>
+          <PerspectiveProvider>
+            <ViewCommandScope>
+              <div className="h-screen bg-background text-foreground flex flex-col">
+                <NavBar
+                  board={board}
+                  openBoards={openBoards}
+                  activeBoardPath={activeBoardPath}
+                  onSwitchBoard={handleSwitchBoard}
+                />
+                <div className="flex-1 flex min-h-0">
+                  <LeftNav />
+                  <div className="flex-1 min-w-0 overflow-hidden flex flex-col">
+                    <ActiveViewRenderer
+                      board={board!}
+                      tasks={entitiesByType.task ?? []}
+                      boardPath={activeBoardPath}
+                    />
+                  </div>
+                </div>
 
-                                            {/* Backdrop — visible when any panel is open */}
-                                            <div
-                                              className={`fixed inset-0 z-20 bg-black/20 transition-opacity duration-200 ${
-                                                panelStack.length > 0
-                                                  ? "opacity-100"
-                                                  : "opacity-0 pointer-events-none"
-                                              }`}
-                                              onClick={closeAll}
-                                            />
+                {/* Backdrop — visible when any panel is open */}
+                <div
+                  className={`fixed inset-0 z-20 bg-black/20 transition-opacity duration-200 ${
+                    panelStack.length > 0
+                      ? "opacity-100"
+                      : "opacity-0 pointer-events-none"
+                  }`}
+                  onClick={closeAll}
+                />
 
-                                            {/* Render inspector panels from the stack */}
-                                            {panelStack.map((entry, index) => {
-                                              const rightOffset =
-                                                (panelStack.length -
-                                                  1 -
-                                                  index) *
-                                                PANEL_WIDTH;
-                                              return (
-                                                <InspectorPanel
-                                                  key={`${entry.entityType}-${entry.entityId}`}
-                                                  entry={entry}
-                                                  entityStore={entityStore}
-                                                  board={board}
-                                                  onClose={closeTopPanel}
-                                                  style={{ right: rightOffset }}
-                                                />
-                                              );
-                                            })}
-                                          </>
-                                        ) : loading ? (
-                                          <main className="flex-1 flex items-center justify-center">
-                                            <Loader2 className="h-8 w-8 text-muted-foreground/50 animate-spin [animation-delay:200ms] [animation-fill-mode:backwards]" />
-                                          </main>
-                                        ) : (
-                                          <main className="flex-1 flex items-center justify-center">
-                                            <div className="text-center space-y-3">
-                                              <p className="text-muted-foreground text-lg">
-                                                No board loaded
-                                              </p>
-                                              <div className="text-sm text-muted-foreground/70 space-y-1">
-                                                <p>
-                                                  <kbd className="px-1.5 py-0.5 rounded bg-muted text-xs font-mono">
-                                                    Cmd+N
-                                                  </kbd>{" "}
-                                                  New Board
-                                                </p>
-                                                <p>
-                                                  <kbd className="px-1.5 py-0.5 rounded bg-muted text-xs font-mono">
-                                                    Cmd+O
-                                                  </kbd>{" "}
-                                                  Open Board
-                                                </p>
-                                              </div>
-                                            </div>
-                                          </main>
-                                        )}
-                                        <ModeIndicator />
-                                      </div>
-                                    </ViewCommandScope>
-                                  </PerspectiveProvider>
-                                </ViewsProvider>
-                              </DragSessionProvider>
-                            </AppShell>
-                          </FileDropProvider>
-                        </UndoProvider>
-                      </AppModeProvider>
-                    </UIStateProvider>
-                  </FieldUpdateProvider>
-                </MaybeStoreScope>
-              </EntityFocusProvider>
-            </EntityStoreProvider>
-          </SchemaProvider>
-        </ActiveBoardPathProvider>
-      </TooltipProvider>
-    </CommandScopeProvider>
+                {/* Render inspector panels from the stack */}
+                {panelStack.map((entry, index) => {
+                  const rightOffset =
+                    (panelStack.length - 1 - index) * PANEL_WIDTH;
+                  return (
+                    <InspectorPanel
+                      key={`${entry.entityType}-${entry.entityId}`}
+                      entry={entry}
+                      entityStore={entityStore}
+                      board={board}
+                      onClose={closeTopPanel}
+                      style={{ right: rightOffset }}
+                    />
+                  );
+                })}
+
+                <ModeIndicator />
+              </div>
+            </ViewCommandScope>
+          </PerspectiveProvider>
+        </ViewsProvider>
+      </BoardContainer>
+    </MaybeStoreScope>
   );
 }
 
@@ -830,7 +386,7 @@ function InspectorPanel({
     return (
       <SlidePanel open={true} onClose={onClose} style={style}>
         <p className="text-sm text-muted-foreground">
-          {fetchError ? `Entity not found` : "Loading…"}
+          {fetchError ? `Entity not found` : "Loading\u2026"}
         </p>
       </SlidePanel>
     );

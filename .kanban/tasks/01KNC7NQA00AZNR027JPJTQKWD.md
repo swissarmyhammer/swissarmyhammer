@@ -4,9 +4,8 @@ assignees:
 depends_on:
 - 01KNC7N6PKWCAXPXXT2CZ4228P
 - 01KNCQ8YYZV7KB9JY6HF8JS8PT
-position_column: todo
-position_ordinal: '8280'
-position_swimlane: container-refactor
+position_column: done
+position_ordinal: fffffffffffffffffff580
 title: Extract BoardContainer from App.tsx
 ---
 ## What
