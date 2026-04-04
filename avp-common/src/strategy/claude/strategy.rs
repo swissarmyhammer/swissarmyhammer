@@ -117,6 +117,9 @@ macro_rules! run_chain {
     }};
 }
 
+/// Exit code that tells Claude Code to treat output as stderr (non-JSON block).
+const EXIT_CODE_STDERR: i32 = 2;
+
 /// Claude Code hook strategy with validator support.
 ///
 /// This strategy handles all 13 hook types from Claude Code.
@@ -337,7 +340,7 @@ impl ClaudeCodeHookStrategy {
                     stop_reason: Some(reason),
                     ..base
                 },
-                2,
+                EXIT_CODE_STDERR, // non-zero tells Claude Code to treat output as stderr
             ),
         }
     }
