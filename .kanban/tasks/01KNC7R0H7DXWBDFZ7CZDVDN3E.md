@@ -44,20 +44,29 @@ function App() {
 }
 ```
 
+**QuickCaptureApp** should also be simplified to use `<RustEngineContainer>` instead of duplicating the provider tree.
+
 **What to verify:**
 - No `useState`, `useEffect`, `useCallback`, `useMemo` remain in App.tsx
 - No Tauri `invoke`, `listen`, or `emit` imports
 - No inline component definitions (InspectorSyncBridge, ViewCommandScope, ActiveViewRenderer, InspectorPanel all gone)
 - Only container imports + composition
 
+## TDD Process
+1. Write/update `App.test.tsx` FIRST — test that App renders the container tree in correct order, no state hooks present
+2. Implement until tests pass
+3. Refactor
+
 ## Acceptance Criteria
 - [ ] App.tsx is under 80 lines total (including QuickCaptureApp)
 - [ ] No state management in App.tsx
 - [ ] No event listeners in App.tsx
 - [ ] Container tree is clearly readable as a hierarchy
+- [ ] QuickCaptureApp uses RustEngineContainer instead of duplicating providers
 - [ ] All functionality preserved — app works identically to before
 
 ## Tests
+- [ ] App-level test verifies container tree composition (written first, RED → GREEN)
 - [ ] Run `cd kanban-app && pnpm vitest run` — all tests pass
 - [ ] Run `cd kanban-app && pnpm tsc --noEmit` — no type errors
 - [ ] Manual: full smoke test (open board, switch views, switch perspectives, inspect entities, drag tasks, undo/redo)

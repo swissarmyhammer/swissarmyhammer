@@ -38,4 +38,4 @@ Add unit tests for the UI command implementations in Rust that currently have ze
 
 ## Tests
 - [ ] `cargo test -p swissarmyhammer-kanban -- ui_commands::tests` — all pass
-- [ ] `cargo test -p swissarmyhammer-kanban` — full suite still passes
+- [ ] `cargo test -p swissarmyhammer-kanban` — full suite still passes #container-refactor

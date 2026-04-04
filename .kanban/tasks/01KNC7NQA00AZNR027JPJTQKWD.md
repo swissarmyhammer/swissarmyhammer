@@ -14,27 +14,35 @@ Extract a `BoardContainer` component that owns board-level context and commands.
 
 **Files to create/modify:**
 - `kanban-app/ui/src/components/board-container.tsx` (NEW) — owns `CommandScopeProvider moniker="board:{boardId}"`, `FileDropProvider`, `DragSessionProvider`
+- `kanban-app/ui/src/components/board-container.test.tsx` (NEW) — TDD: tests written first
 - `kanban-app/ui/src/App.tsx` — replace inline board-loading / no-board-loaded conditional with `<BoardContainer>`
 
-**Current state:** App.tsx lines 578-646 contain the board/no-board conditional rendering: board + activeBoardPath renders the main UI; otherwise shows a loading spinner or "No board loaded" placeholder. `FileDropProvider` and `DragSessionProvider` wrap the board content. `AppShell` also lives at this level.
+**Important:** `AppShell` must NOT live in BoardContainer. It belongs in WindowContainer.
 
 **Target:** `BoardContainer` owns:
 1. `CommandScopeProvider moniker="board:{boardId}"`
-2. `AppShell` (global commands + keybindings)
-3. `FileDropProvider`
-4. `DragSessionProvider`
-5. Conditional rendering: loading → spinner, no board → placeholder, board → children
-6. Provides board data to children via a `BoardContext` (new context, or props)
+2. `FileDropProvider`
+3. `DragSessionProvider`
+4. Conditional rendering: loading → spinner, no board → placeholder, board → children
+5. Provides board data to children via a `BoardContext` (new context)
 
 **Pattern:** One file, one container, one CommandScopeProvider, wraps children.
 
+## TDD Process
+1. Write `board-container.test.tsx` FIRST with failing tests
+2. Tests verify: renders spinner when loading, renders placeholder when no board, renders children when board loaded, BoardContext provides board data to descendants, CommandScopeProvider has correct moniker
+3. Implement until tests pass
+4. Refactor
+
 ## Acceptance Criteria
 - [ ] `BoardContainer` exists as a standalone component file
+- [ ] `board-container.test.tsx` exists with tests written before implementation
 - [ ] Board loading/empty/active states render correctly
-- [ ] `AppShell` global keybindings still work (Cmd+Z, Cmd+Shift+Z, Cmd+K, etc.)
+- [ ] `AppShell` is NOT inside BoardContainer (it's in WindowContainer)
 - [ ] File drop still works
 - [ ] Drag-and-drop still works within board view
 
 ## Tests
+- [ ] `board-container.test.tsx` — all pass (written first, RED → GREEN)
 - [ ] Run `cd kanban-app && pnpm vitest run` — all tests pass
 - [ ] Manual: open app with no boards, see placeholder; open a board, see content
