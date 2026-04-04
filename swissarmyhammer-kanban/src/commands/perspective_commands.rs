@@ -37,10 +37,10 @@ impl Command for LoadPerspectiveCmd {
     }
 }
 
-/// Save a new perspective with the given name.
+/// Creates a new perspective with the given name.
 ///
+/// Multiple perspectives may share the same name.
 /// Requires `name` arg. Optional args: `view`, `filter`, `group`.
-/// Always creates a new perspective (names are not unique).
 pub struct SavePerspectiveCmd;
 
 #[async_trait]

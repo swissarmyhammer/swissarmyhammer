@@ -114,7 +114,10 @@ impl PerspectiveContext {
 
     /// Look up a perspective by name (linear scan, returns first match).
     ///
-    /// Names are not unique — use `get_by_id` when possible.
+    /// Names are **not unique** — multiple perspectives may share the same name.
+    /// When duplicates exist this returns an arbitrary match (whichever appears
+    /// first in insertion order). For reliable lookup, use [`get_by_id`](Self::get_by_id)
+    /// with the perspective's ULID instead.
     pub fn get_by_name(&self, name: &str) -> Option<&Perspective> {
         self.perspectives.iter().find(|p| p.name == name)
     }
@@ -124,14 +127,18 @@ impl PerspectiveContext {
         &self.perspectives
     }
 
-    /// Delete a perspective by ID and return the deleted value.
+    /// Delete a perspective by ID and return the deleted value plus undo entry.
     ///
     /// When a `StoreHandle` is wired in, delegates file removal to it (which
     /// trashes the file for undo support and records a change event). Otherwise
     /// falls back to direct `fs::remove_file`.
     ///
+    /// Returns `(deleted_perspective, Some(entry_id))` when a store handle
+    /// recorded the deletion, or `(deleted_perspective, None)` for the legacy
+    /// fallback path.
+    ///
     /// Returns `PerspectiveError::NotFound` if no perspective with that ID exists.
-    pub async fn delete(&mut self, id: &str) -> Result<Perspective> {
+    pub async fn delete(&mut self, id: &str) -> Result<(Perspective, Option<UndoEntryId>)> {
         let idx = self
             .id_index
             .get(id)
@@ -142,7 +149,7 @@ impl PerspectiveContext {
             })?;
 
         // Remove from disk — delegate to StoreHandle when available.
-        if let Some(ref sh) = self.store_handle {
+        let entry_id = if let Some(ref sh) = self.store_handle {
             let pid = PerspectiveId::from(id);
             let entry_id = sh.delete(&pid).await?;
             // Push onto the shared undo stack if a StoreContext is available.
@@ -151,6 +158,7 @@ impl PerspectiveContext {
                 let item_id = StoredItemId::from(id);
                 sc.push(entry_id, label, item_id).await;
             }
+            Some(entry_id)
         } else {
             let path = self.perspective_path(id);
             match fs::remove_file(&path).await {
@@ -160,7 +168,8 @@ impl PerspectiveContext {
                     return Err(PerspectiveError::Io(e));
                 }
             }
-        }
+            None
+        };
 
         // Update in-memory cache.
         let deleted = self.perspectives.swap_remove(idx);
@@ -172,7 +181,7 @@ impl PerspectiveContext {
             self.id_index.insert(moved.id.clone(), idx);
         }
 
-        Ok(deleted)
+        Ok((deleted, entry_id))
     }
 
     /// Wire in a `StoreHandle` for delegated I/O.
@@ -386,8 +395,9 @@ mod tests {
         ctx.write(&p).await.unwrap();
         assert_eq!(ctx.all().len(), 1);
 
-        let deleted = ctx.delete("01AAAAAAAAAAAAAAAAAAAAAAAA").await.unwrap();
+        let (deleted, entry_id) = ctx.delete("01AAAAAAAAAAAAAAAAAAAAAAAA").await.unwrap();
         assert_eq!(deleted.name, "Doomed");
+        assert!(entry_id.is_none(), "no store handle means no undo entry");
         assert!(ctx.all().is_empty());
         assert!(ctx.get_by_id("01AAAAAAAAAAAAAAAAAAAAAAAA").is_none());
         assert!(ctx.get_by_name("Doomed").is_none());
@@ -419,7 +429,7 @@ mod tests {
         assert!(!file.exists());
 
         // delete should still succeed (NotFound is tolerated)
-        let deleted = ctx.delete("01AAAAAAAAAAAAAAAAAAAAAAAA").await.unwrap();
+        let (deleted, _) = ctx.delete("01AAAAAAAAAAAAAAAAAAAAAAAA").await.unwrap();
         assert_eq!(deleted.name, "Ghost");
         assert!(ctx.all().is_empty());
     }
@@ -531,7 +541,7 @@ mod tests {
         assert_eq!(ctx.all().len(), 3);
 
         // Delete the FIRST perspective -- swap_remove swaps last element into idx 0
-        let deleted = ctx.delete("01AAAAAAAAAAAAAAAAAAAAAAAA").await.unwrap();
+        let (deleted, _) = ctx.delete("01AAAAAAAAAAAAAAAAAAAAAAAA").await.unwrap();
         assert_eq!(deleted.name, "Alpha");
         assert_eq!(ctx.all().len(), 2);
 
@@ -577,7 +587,7 @@ mod tests {
             .unwrap();
 
         // Delete the middle element
-        let deleted = ctx.delete("01BBBBBBBBBBBBBBBBBBBBBBBB").await.unwrap();
+        let (deleted, _) = ctx.delete("01BBBBBBBBBBBBBBBBBBBBBBBB").await.unwrap();
         assert_eq!(deleted.name, "Beta");
         assert_eq!(ctx.all().len(), 2);
 
@@ -871,8 +881,12 @@ mod tests {
         ctx.write(&p).await.unwrap();
         handle.flush_changes().await; // drain create event
 
-        let deleted = ctx.delete("01AAAAAAAAAAAAAAAAAAAAAAAA").await.unwrap();
+        let (deleted, entry_id) = ctx.delete("01AAAAAAAAAAAAAAAAAAAAAAAA").await.unwrap();
         assert_eq!(deleted.name, "Doomed");
+        assert!(
+            entry_id.is_some(),
+            "store handle delete must return entry ID"
+        );
 
         // File must be gone (trashed by StoreHandle)
         assert!(!dir.join("01AAAAAAAAAAAAAAAAAAAAAAAA.yaml").exists());
@@ -946,7 +960,11 @@ mod tests {
         // Reset undo stack state by undoing+redoing (or just check after delete)
         assert!(sc.can_undo().await);
         // Now delete
-        ctx.delete("01AAAAAAAAAAAAAAAAAAAAAAAA").await.unwrap();
+        let (_deleted, entry_id) = ctx.delete("01AAAAAAAAAAAAAAAAAAAAAAAA").await.unwrap();
+        assert!(
+            entry_id.is_some(),
+            "delete with store handle must return entry ID"
+        );
         assert!(!dir.join("01AAAAAAAAAAAAAAAAAAAAAAAA.yaml").exists());
 
         // Undo the delete — file must be restored

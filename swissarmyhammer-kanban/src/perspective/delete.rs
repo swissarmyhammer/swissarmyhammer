@@ -40,8 +40,8 @@ impl Execute<KanbanContext, KanbanError> for DeletePerspective {
             let pctx = ctx.perspective_context().await?;
             let mut pctx = pctx.write().await;
 
-            // Delete returns the removed perspective
-            let deleted = pctx.delete(&self.id).await?;
+            // Delete returns the removed perspective and optional undo entry ID
+            let (deleted, _entry_id) = pctx.delete(&self.id).await?;
 
             Ok(serde_json::json!({
                 "deleted": true,

@@ -1,0 +1,63 @@
+---
+assignees:
+- claude-code
+depends_on:
+- 01KNC7QESP1X7G2SCPNXK6R64F
+- 01KNC7PWDAJEKEFECDX90Q1WJ2
+position_column: todo
+position_ordinal: '8680'
+position_swimlane: container-refactor
+title: Slim App.tsx to pure container composition
+---
+## What
+
+Final cleanup: reduce App.tsx to a pure composition of containers with no logic, no state, no event handlers. This is the capstone card after all containers are extracted.
+
+**Files to modify:**
+- `kanban-app/ui/src/App.tsx` — should become ~50 lines: imports + container tree + QuickCaptureApp
+
+**Target App.tsx:**
+```tsx
+function App() {
+  return (
+    <WindowContainer>
+      <RustEngineContainer>
+        <BoardContainer>
+          <div className="h-screen bg-background text-foreground flex flex-col">
+            <NavBar />
+            <ViewsContainer>
+              <ViewContainer>
+                <PerspectivesContainer>
+                  <PerspectiveContainer>
+                    {/* BoardView or GridView rendered by ViewContainer */}
+                  </PerspectiveContainer>
+                </PerspectivesContainer>
+              </ViewContainer>
+            </ViewsContainer>
+            <ModeIndicator />
+          </div>
+          <InspectorContainer />
+        </BoardContainer>
+      </RustEngineContainer>
+    </WindowContainer>
+  );
+}
+```
+
+**What to verify:**
+- No `useState`, `useEffect`, `useCallback`, `useMemo` remain in App.tsx
+- No Tauri `invoke`, `listen`, or `emit` imports
+- No inline component definitions (InspectorSyncBridge, ViewCommandScope, ActiveViewRenderer, InspectorPanel all gone)
+- Only container imports + composition
+
+## Acceptance Criteria
+- [ ] App.tsx is under 80 lines total (including QuickCaptureApp)
+- [ ] No state management in App.tsx
+- [ ] No event listeners in App.tsx
+- [ ] Container tree is clearly readable as a hierarchy
+- [ ] All functionality preserved — app works identically to before
+
+## Tests
+- [ ] Run `cd kanban-app && pnpm vitest run` — all tests pass
+- [ ] Run `cd kanban-app && pnpm tsc --noEmit` — no type errors
+- [ ] Manual: full smoke test (open board, switch views, switch perspectives, inspect entities, drag tasks, undo/redo)

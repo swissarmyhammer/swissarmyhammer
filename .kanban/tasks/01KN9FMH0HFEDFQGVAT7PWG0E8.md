@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: '8580'
+position_column: done
+position_ordinal: ffffffffffffffffffd080
 title: 'Pattern divergence: PerspectiveContext.write() does not return UndoEntryId like EntityContext.write()'
 ---
 **Severity**: Medium (pattern consistency, future undo support)\n**Layer**: Design / Pattern following\n**Files**: `swissarmyhammer-perspectives/src/context.rs:74`, `swissarmyhammer-entity/src/context.rs:192`\n\n`EntityContext::write()` returns `Result<Option<UndoEntryId>>`, threading the undo entry from StoreHandle through to callers. This lets callers push onto the shared undo stack.\n\n`PerspectiveContext::write()` returns `Result<()>`, discarding the `Option<UndoEntryId>` from `StoreHandle::write()`. This means:\n1. Perspective writes cannot participate in the shared undo stack.\n2. Callers have no way to know if the write was a no-op (returned `None`).\n\nIn `state.rs:130-135`, the perspective StoreHandle is registered with `store_context.register(handle)` for undo/redo, but because PerspectiveContext discards the entry ID, nobody pushes onto the undo stack. The entity path at line 220-225 does push. This is a semantic gap.\n\n**Fix**: Change `PerspectiveContext::write()` to return `Result<Option<UndoEntryId>>` and thread the entry ID. Callers that need undo support should push onto StoreContext. Alternatively, if undo for perspectives is intentionally deferred, add a comment documenting that decision." #review-finding

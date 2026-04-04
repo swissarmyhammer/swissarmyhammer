@@ -57,10 +57,6 @@ pub enum KanbanError {
     #[error("duplicate {item_type} ID: {id}")]
     DuplicateId { item_type: String, id: String },
 
-    /// Duplicate name (e.g. perspective with the same name already exists)
-    #[error("{item_type} with name '{name}' already exists")]
-    DuplicateName { item_type: String, name: String },
-
     /// Dependency cycle detected
     #[error("dependency cycle detected: {path}")]
     DependencyCycle { path: String },
@@ -146,14 +142,6 @@ impl KanbanError {
         Self::DuplicateId {
             item_type: item_type.into(),
             id: id.into(),
-        }
-    }
-
-    /// Create a duplicate name error
-    pub fn duplicate_name(item_type: impl Into<String>, name: impl Into<String>) -> Self {
-        Self::DuplicateName {
-            item_type: item_type.into(),
-            name: name.into(),
         }
     }
 
