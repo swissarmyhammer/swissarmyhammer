@@ -657,6 +657,7 @@ impl AvpContext {
         hook_type: HookType,
         input: &serde_json::Value,
         changed_files: Option<&[String]>,
+        raw_diffs: Option<&[crate::turn::FileDiff]>,
     ) -> Vec<ExecutedRuleSet> {
         if rulesets.is_empty() {
             return Vec::new();
@@ -667,7 +668,7 @@ impl AvpContext {
         }
 
         let results = self
-            .run_rulesets_with_fallback(rulesets, hook_type, input, changed_files)
+            .run_rulesets_with_fallback(rulesets, hook_type, input, changed_files, raw_diffs)
             .await;
 
         self.log_ruleset_results(&results, hook_type);
@@ -681,9 +682,16 @@ impl AvpContext {
         hook_type: HookType,
         input: &serde_json::Value,
         changed_files: Option<&[String]>,
+        raw_diffs: Option<&[crate::turn::FileDiff]>,
     ) -> Vec<ExecutedRuleSet> {
         match self
-            .execute_rulesets_with_cached_runner(rulesets, hook_type, input, changed_files)
+            .execute_rulesets_with_cached_runner(
+                rulesets,
+                hook_type,
+                input,
+                changed_files,
+                raw_diffs,
+            )
             .await
         {
             Ok(results) => results,
@@ -716,6 +724,7 @@ impl AvpContext {
         hook_type: HookType,
         input: &serde_json::Value,
         changed_files: Option<&[String]>,
+        raw_diffs: Option<&[crate::turn::FileDiff]>,
     ) -> Result<Vec<ExecutedRuleSet>, AvpError> {
         let mut guard = self.runner_cache.lock().await;
 
@@ -736,7 +745,7 @@ impl AvpContext {
             hook_type
         );
         Ok(runner
-            .execute_rulesets(rulesets, hook_type, input, changed_files)
+            .execute_rulesets(rulesets, hook_type, input, changed_files, raw_diffs)
             .await)
     }
 

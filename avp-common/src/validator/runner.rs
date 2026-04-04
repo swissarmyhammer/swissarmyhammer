@@ -34,6 +34,7 @@ use tokio::sync::{broadcast, Semaphore};
 
 use crate::error::AvpError;
 use crate::types::HookType;
+use crate::validator::types::{compile_glob_patterns, matches_any_pattern};
 use crate::validator::{
     create_executed_ruleset, create_executed_validator, is_rate_limit_error, log_ruleset_result,
     log_validator_result, parse_validator_response,
@@ -1041,6 +1042,7 @@ impl ValidatorRunner {
         hook_type: HookType,
         context: &serde_json::Value,
         changed_files: Option<&[String]>,
+        raw_diffs: Option<&[crate::turn::FileDiff]>,
     ) -> Vec<ExecutedRuleSet> {
         if rulesets.is_empty() {
             return Vec::new();
@@ -1059,8 +1061,20 @@ impl ValidatorRunner {
         for (idx, ruleset) in rulesets.iter().enumerate() {
             let ruleset_clone = (*ruleset).clone();
             let hook_type_clone = hook_type;
-            let context_clone = context.clone();
-            let changed_files_clone = changed_files_owned.clone();
+            // Filter changed_files per-ruleset: if the ruleset has match.files
+            // patterns, only pass through files matching those patterns.
+            let changed_files_clone =
+                filter_changed_files_for_ruleset(changed_files_owned.as_deref(), ruleset);
+
+            // Filter diffs per-ruleset and prepare context with filtered diffs.
+            // This ensures each ruleset only sees diffs for files matching its
+            // file patterns (e.g., a *.rs ruleset won't see .py diffs).
+            let context_clone = if raw_diffs.is_some() {
+                let filtered_diffs = filter_diffs_for_ruleset(raw_diffs, ruleset);
+                crate::turn::prepare_validator_context(context.clone(), filtered_diffs.as_deref())
+            } else {
+                context.clone()
+            };
 
             // Create a task that executes this RuleSet
             let runner = self.clone_for_task();
@@ -1101,6 +1115,77 @@ impl ValidatorRunner {
             concurrency: Arc::clone(&self.concurrency),
         }
     }
+}
+
+/// Filter changed files for a specific RuleSet based on its match.files patterns.
+///
+/// When a RuleSet has `match.files` glob patterns, only the changed files matching
+/// those patterns are returned. This gives each validator focused context instead
+/// of every file changed in the turn.
+///
+/// If the RuleSet has no file patterns, all changed files are passed through unchanged.
+/// If `changed_files` is `None`, returns `None`.
+///
+/// # Arguments
+///
+/// * `changed_files` - The full list of changed files for the turn
+/// * `ruleset` - The RuleSet whose match.files patterns determine the filter
+///
+/// # Returns
+///
+/// Filtered list of changed files, or `None` if input was `None`.
+pub fn filter_changed_files_for_ruleset(
+    changed_files: Option<&[String]>,
+    ruleset: &RuleSet,
+) -> Option<Vec<String>> {
+    let files = changed_files?;
+
+    let patterns = match &ruleset.manifest.match_criteria {
+        Some(mc) if !mc.files.is_empty() => &mc.files,
+        _ => return Some(files.to_vec()),
+    };
+
+    let compiled = compile_glob_patterns(patterns);
+    let filtered: Vec<String> = files
+        .iter()
+        .filter(|file| matches_any_pattern(file, &compiled))
+        .cloned()
+        .collect();
+
+    Some(filtered)
+}
+
+/// Filter diffs for a specific RuleSet based on its match.files patterns.
+///
+/// Analogous to [`filter_changed_files_for_ruleset`] but operates on `FileDiff`
+/// structs. When a RuleSet has `match.files` glob patterns, only diffs for files
+/// matching those patterns are returned. This gives each validator focused diff
+/// context instead of every file changed in the turn.
+///
+/// If the RuleSet has no file patterns, all diffs are passed through unchanged.
+/// If `diffs` is `None`, returns `None`.
+pub fn filter_diffs_for_ruleset(
+    diffs: Option<&[crate::turn::FileDiff]>,
+    ruleset: &RuleSet,
+) -> Option<Vec<crate::turn::FileDiff>> {
+    let diffs = diffs?;
+
+    let patterns = match &ruleset.manifest.match_criteria {
+        Some(mc) if !mc.files.is_empty() => &mc.files,
+        _ => return Some(diffs.to_vec()),
+    };
+
+    let compiled = compile_glob_patterns(patterns);
+    let filtered: Vec<crate::turn::FileDiff> = diffs
+        .iter()
+        .filter(|diff| {
+            let path_str = diff.path.display().to_string();
+            matches_any_pattern(&path_str, &compiled)
+        })
+        .cloned()
+        .collect();
+
+    Some(filtered)
 }
 
 #[cfg(test)]
@@ -1559,5 +1644,215 @@ mod tests {
 
         assert!(!is_rate_limited, "Should not be rate limited");
         assert_eq!(result.name, "test-validator");
+    }
+
+    // =========================================================================
+    // filter_changed_files_for_ruleset tests
+    // =========================================================================
+
+    /// Helper to create a RuleSet with given file patterns in match criteria.
+    fn create_ruleset_with_file_patterns(patterns: Vec<String>) -> RuleSet {
+        use crate::validator::{
+            RuleSetManifest, RuleSetMetadata, Severity, ValidatorMatch, ValidatorSource,
+        };
+
+        let match_criteria = if patterns.is_empty() {
+            None
+        } else {
+            Some(ValidatorMatch {
+                tools: vec![],
+                files: patterns,
+            })
+        };
+
+        RuleSet {
+            manifest: RuleSetManifest {
+                name: "test-ruleset".to_string(),
+                description: "Test RuleSet".to_string(),
+                metadata: RuleSetMetadata {
+                    version: "1.0.0".to_string(),
+                },
+                trigger: HookType::Stop,
+                match_criteria,
+                trigger_matcher: None,
+                tags: vec![],
+                severity: Severity::Error,
+                timeout: 30,
+                once: false,
+            },
+            rules: vec![],
+            source: ValidatorSource::Project,
+            base_path: PathBuf::from("/tmp/test-ruleset"),
+        }
+    }
+
+    #[test]
+    fn test_filter_changed_files_with_rs_pattern() {
+        let ruleset = create_ruleset_with_file_patterns(vec!["*.rs".to_string()]);
+        let files = vec![
+            "a.rs".to_string(),
+            "b.py".to_string(),
+            "src/lib.rs".to_string(),
+        ];
+
+        let result = filter_changed_files_for_ruleset(Some(&files), &ruleset);
+        // glob "*.rs" matches any file ending in .rs (case-insensitive, no literal separator requirement)
+        assert_eq!(
+            result,
+            Some(vec!["a.rs".to_string(), "src/lib.rs".to_string()])
+        );
+    }
+
+    #[test]
+    fn test_filter_changed_files_with_recursive_pattern() {
+        let ruleset = create_ruleset_with_file_patterns(vec!["**/*.rs".to_string()]);
+        let files = vec![
+            "a.rs".to_string(),
+            "b.py".to_string(),
+            "src/lib.rs".to_string(),
+        ];
+
+        let result = filter_changed_files_for_ruleset(Some(&files), &ruleset);
+        assert_eq!(
+            result,
+            Some(vec!["a.rs".to_string(), "src/lib.rs".to_string()])
+        );
+    }
+
+    #[test]
+    fn test_filter_changed_files_empty_patterns_returns_all() {
+        let ruleset = create_ruleset_with_file_patterns(vec![]);
+        let files = vec!["a.rs".to_string(), "b.py".to_string()];
+
+        let result = filter_changed_files_for_ruleset(Some(&files), &ruleset);
+        assert_eq!(result, Some(vec!["a.rs".to_string(), "b.py".to_string()]));
+    }
+
+    #[test]
+    fn test_filter_changed_files_no_match_criteria_returns_all() {
+        // RuleSet with no match_criteria at all
+        let ruleset = create_ruleset_with_file_patterns(vec![]);
+        // Ensure match_criteria is None
+        let mut ruleset = ruleset;
+        ruleset.manifest.match_criteria = None;
+
+        let files = vec!["a.rs".to_string(), "b.py".to_string()];
+        let result = filter_changed_files_for_ruleset(Some(&files), &ruleset);
+        assert_eq!(result, Some(vec!["a.rs".to_string(), "b.py".to_string()]));
+    }
+
+    #[test]
+    fn test_filter_changed_files_none_input_returns_none() {
+        let ruleset = create_ruleset_with_file_patterns(vec!["*.rs".to_string()]);
+        let result = filter_changed_files_for_ruleset(None, &ruleset);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_filter_changed_files_no_matches_returns_empty() {
+        let ruleset = create_ruleset_with_file_patterns(vec!["*.rs".to_string()]);
+        let files = vec!["a.py".to_string(), "b.ts".to_string()];
+
+        let result = filter_changed_files_for_ruleset(Some(&files), &ruleset);
+        assert_eq!(result, Some(vec![]));
+    }
+
+    #[test]
+    fn test_filter_changed_files_multiple_patterns() {
+        let ruleset =
+            create_ruleset_with_file_patterns(vec!["*.rs".to_string(), "*.toml".to_string()]);
+        let files = vec![
+            "main.rs".to_string(),
+            "Cargo.toml".to_string(),
+            "README.md".to_string(),
+        ];
+
+        let result = filter_changed_files_for_ruleset(Some(&files), &ruleset);
+        assert_eq!(
+            result,
+            Some(vec!["main.rs".to_string(), "Cargo.toml".to_string()])
+        );
+    }
+
+    // =========================================================================
+    // filter_diffs_for_ruleset tests
+    // =========================================================================
+
+    /// Helper to create a FileDiff with the given path and diff text.
+    fn make_file_diff(path: &str, diff_text: &str) -> crate::turn::FileDiff {
+        crate::turn::FileDiff {
+            path: PathBuf::from(path),
+            diff_text: diff_text.to_string(),
+            is_new_file: false,
+            is_binary: false,
+        }
+    }
+
+    #[test]
+    fn test_filter_diffs_with_rs_pattern() {
+        let ruleset = create_ruleset_with_file_patterns(vec!["*.rs".to_string()]);
+        let diffs = vec![
+            make_file_diff("a.rs", "--- a.rs\n+++ a.rs\n@@ -1 +1 @@\n-old\n+new\n"),
+            make_file_diff("b.py", "--- b.py\n+++ b.py\n@@ -1 +1 @@\n-old\n+new\n"),
+            make_file_diff("c.rs", "--- c.rs\n+++ c.rs\n@@ -1 +1 @@\n-old\n+new\n"),
+        ];
+
+        let result = filter_diffs_for_ruleset(Some(&diffs), &ruleset);
+        let paths: Vec<String> = result
+            .unwrap()
+            .iter()
+            .map(|d| d.path.display().to_string())
+            .collect();
+        assert_eq!(paths, vec!["a.rs", "c.rs"]);
+    }
+
+    #[test]
+    fn test_filter_diffs_no_patterns_returns_all() {
+        let ruleset = create_ruleset_with_file_patterns(vec![]);
+        let diffs = vec![
+            make_file_diff("a.rs", "diff a"),
+            make_file_diff("b.py", "diff b"),
+        ];
+
+        let result = filter_diffs_for_ruleset(Some(&diffs), &ruleset);
+        assert_eq!(result.as_ref().map(|v| v.len()), Some(2));
+    }
+
+    #[test]
+    fn test_filter_diffs_none_input_returns_none() {
+        let ruleset = create_ruleset_with_file_patterns(vec!["*.rs".to_string()]);
+        let result = filter_diffs_for_ruleset(None, &ruleset);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_filter_diffs_no_matches_returns_empty() {
+        let ruleset = create_ruleset_with_file_patterns(vec!["*.rs".to_string()]);
+        let diffs = vec![
+            make_file_diff("a.py", "diff a"),
+            make_file_diff("b.ts", "diff b"),
+        ];
+
+        let result = filter_diffs_for_ruleset(Some(&diffs), &ruleset);
+        assert_eq!(result.unwrap().len(), 0);
+    }
+
+    #[test]
+    fn test_filter_diffs_multiple_patterns() {
+        let ruleset =
+            create_ruleset_with_file_patterns(vec!["*.rs".to_string(), "*.toml".to_string()]);
+        let diffs = vec![
+            make_file_diff("main.rs", "diff rs"),
+            make_file_diff("Cargo.toml", "diff toml"),
+            make_file_diff("README.md", "diff md"),
+        ];
+
+        let result = filter_diffs_for_ruleset(Some(&diffs), &ruleset);
+        let paths: Vec<String> = result
+            .unwrap()
+            .iter()
+            .map(|d| d.path.display().to_string())
+            .collect();
+        assert_eq!(paths, vec!["main.rs", "Cargo.toml"]);
     }
 }

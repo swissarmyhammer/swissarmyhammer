@@ -69,6 +69,7 @@ pub fn includes_raw() -> Vec<(&'static str, &'static str)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::HookType;
 
     #[test]
     fn test_load_builtins() {
@@ -239,6 +240,154 @@ mod tests {
                 .iter()
                 .any(|f| f.contains("test") || f.contains("spec")),
             "Should contain test file patterns after expansion"
+        );
+    }
+
+    // ========================================================================
+    // Trigger Type Assertions
+    // ========================================================================
+
+    #[test]
+    fn test_code_quality_triggers_on_stop() {
+        let mut loader = ValidatorLoader::new();
+        load_builtins(&mut loader);
+
+        let ruleset = loader
+            .get_ruleset("code-quality")
+            .expect("code-quality should be loaded");
+        assert_eq!(
+            ruleset.trigger(),
+            HookType::Stop,
+            "code-quality should trigger on Stop, not {:?}",
+            ruleset.trigger()
+        );
+    }
+
+    #[test]
+    fn test_test_integrity_triggers_on_stop() {
+        let mut loader = ValidatorLoader::new();
+        load_builtins(&mut loader);
+
+        let ruleset = loader
+            .get_ruleset("test-integrity")
+            .expect("test-integrity should be loaded");
+        assert_eq!(
+            ruleset.trigger(),
+            HookType::Stop,
+            "test-integrity should trigger on Stop, not {:?}",
+            ruleset.trigger()
+        );
+    }
+
+    #[test]
+    fn test_command_safety_triggers_on_pre_tool_use() {
+        let mut loader = ValidatorLoader::new();
+        load_builtins(&mut loader);
+
+        let ruleset = loader
+            .get_ruleset("command-safety")
+            .expect("command-safety should be loaded");
+        assert_eq!(
+            ruleset.trigger(),
+            HookType::PreToolUse,
+            "command-safety should trigger on PreToolUse, not {:?}",
+            ruleset.trigger()
+        );
+    }
+
+    #[test]
+    fn test_security_rules_triggers_on_post_tool_use() {
+        let mut loader = ValidatorLoader::new();
+        load_builtins(&mut loader);
+
+        let ruleset = loader
+            .get_ruleset("security-rules")
+            .expect("security-rules should be loaded");
+        assert_eq!(
+            ruleset.trigger(),
+            HookType::PostToolUse,
+            "security-rules should trigger on PostToolUse, not {:?}",
+            ruleset.trigger()
+        );
+    }
+
+    #[test]
+    fn test_code_quality_has_no_tool_match() {
+        let mut loader = ValidatorLoader::new();
+        load_builtins(&mut loader);
+
+        let ruleset = loader
+            .get_ruleset("code-quality")
+            .expect("code-quality should be loaded");
+
+        // Stop validators should not have tool patterns (Stop hooks have no tool_name)
+        if let Some(match_criteria) = &ruleset.manifest.match_criteria {
+            assert!(
+                match_criteria.tools.is_empty(),
+                "code-quality (Stop trigger) should not have tool match patterns, but has: {:?}",
+                match_criteria.tools
+            );
+        }
+    }
+
+    #[test]
+    fn test_test_integrity_has_no_tool_match() {
+        let mut loader = ValidatorLoader::new();
+        load_builtins(&mut loader);
+
+        let ruleset = loader
+            .get_ruleset("test-integrity")
+            .expect("test-integrity should be loaded");
+
+        // Stop validators should not have tool patterns (Stop hooks have no tool_name)
+        if let Some(match_criteria) = &ruleset.manifest.match_criteria {
+            assert!(
+                match_criteria.tools.is_empty(),
+                "test-integrity (Stop trigger) should not have tool match patterns, but has: {:?}",
+                match_criteria.tools
+            );
+        }
+    }
+
+    #[test]
+    fn test_code_quality_retains_file_patterns() {
+        let mut loader = ValidatorLoader::new();
+        load_builtins(&mut loader);
+
+        let ruleset = loader
+            .get_ruleset("code-quality")
+            .expect("code-quality should be loaded");
+
+        let match_criteria = ruleset
+            .manifest
+            .match_criteria
+            .as_ref()
+            .expect("code-quality should have match criteria with file patterns");
+
+        assert!(
+            !match_criteria.files.is_empty(),
+            "code-quality should retain file patterns for filtering changed files"
+        );
+    }
+
+    #[test]
+    fn test_test_integrity_retains_file_patterns() {
+        let mut loader = ValidatorLoader::new();
+        load_builtins(&mut loader);
+
+        let ruleset = loader
+            .get_ruleset("test-integrity")
+            .expect("test-integrity should be loaded");
+
+        let match_criteria = ruleset
+            .manifest
+            .match_criteria
+            .as_ref()
+            .expect("test-integrity should have match criteria with file patterns");
+
+        assert!(
+            !match_criteria.files.is_empty(),
+            "test-integrity should retain file patterns for filtering changed files"
         );
     }
 }

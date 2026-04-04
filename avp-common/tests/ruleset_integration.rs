@@ -317,18 +317,22 @@ fn test_ruleset_matching() {
     );
 
     let matching = loader.matching_rulesets(&ctx);
-
-    // Should match security-rules, code-quality, test-integrity
-    // (rust-conventions removed, replaced by dtolnay project validator)
     let names: Vec<&str> = matching.iter().map(|rs| rs.name()).collect();
 
+    // security-rules stays PostToolUse and should match
     assert!(
         names.contains(&"security-rules"),
         "security-rules should match PostToolUse + Write + .rs"
     );
+
+    // code-quality and test-integrity are now Stop triggers and should NOT match PostToolUse
     assert!(
-        names.contains(&"code-quality"),
-        "code-quality should match PostToolUse + Write + .rs"
+        !names.contains(&"code-quality"),
+        "code-quality should NOT match PostToolUse (migrated to Stop)"
+    );
+    assert!(
+        !names.contains(&"test-integrity"),
+        "test-integrity should NOT match PostToolUse (migrated to Stop)"
     );
     assert!(
         !names.contains(&"rust-conventions"),

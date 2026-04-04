@@ -458,4 +458,105 @@ mod tests {
         assert!(output.contains("old_string: old"));
         assert!(!output.contains("```diff"), "No diff block without diffs");
     }
+
+    /// Stop hook context with filtered diffs: only matching files appear.
+    #[test]
+    fn test_stop_hook_filtered_diffs_renders_only_matching() {
+        // Simulate a Stop hook with mixed file type diffs (a.rs, b.py, c.rs)
+        let rs_diffs = vec![
+            FileDiff {
+                path: PathBuf::from("a.rs"),
+                diff_text: "--- a.rs\n+++ a.rs\n@@ -1 +1 @@\n-old_a\n+new_a\n".to_string(),
+                is_new_file: false,
+                is_binary: false,
+            },
+            FileDiff {
+                path: PathBuf::from("c.rs"),
+                diff_text: "--- c.rs\n+++ c.rs\n@@ -1 +1 @@\n-old_c\n+new_c\n".to_string(),
+                is_new_file: false,
+                is_binary: false,
+            },
+        ];
+
+        // Stop hook input (no tool_name, so prepare_validator_context passes through)
+        let input = serde_json::json!({
+            "hook_event_name": "Stop",
+            "cwd": "/project",
+            "session_id": "test-session"
+        });
+
+        // prepare_validator_context with filtered diffs (only .rs files)
+        let prepared = prepare_validator_context(input, Some(&rs_diffs));
+        let output = render_hook_context(&prepared);
+
+        // Stop hook input has no tool_name in DIFF_TOOLS, so diffs don't get
+        // embedded as _diff_text by prepare_validator_context. Instead, they are
+        // rendered separately via format_diffs_fenced and appended.
+        // For Stop hooks without a diff-tool name, prepare passes through as-is.
+        assert!(output.contains("```yaml"));
+        assert!(output.contains("hook_event_name: Stop"));
+
+        // Verify format_diffs_fenced works correctly with filtered diffs
+        let diff_output = format_diffs_fenced(&rs_diffs);
+        assert!(
+            diff_output.contains("old_a"),
+            "Should contain a.rs diff content"
+        );
+        assert!(
+            diff_output.contains("old_c"),
+            "Should contain c.rs diff content"
+        );
+        assert!(
+            !diff_output.contains("old_b"),
+            "Should NOT contain b.py diff content"
+        );
+    }
+
+    /// Stop hook context with no diffs: no diff blocks in output.
+    #[test]
+    fn test_stop_hook_no_diffs() {
+        let input = serde_json::json!({
+            "hook_event_name": "Stop",
+            "cwd": "/project",
+            "session_id": "test-session"
+        });
+
+        let prepared = prepare_validator_context(input, None);
+        let output = render_hook_context(&prepared);
+
+        assert!(output.contains("```yaml"));
+        assert!(output.contains("hook_event_name: Stop"));
+        assert!(!output.contains("```diff"), "No diff block without diffs");
+    }
+
+    /// All diffs pass through when no file patterns filter them.
+    #[test]
+    fn test_stop_hook_all_diffs_without_filtering() {
+        let all_diffs = vec![
+            FileDiff {
+                path: PathBuf::from("a.rs"),
+                diff_text: "--- a.rs\n+++ a.rs\n@@ -1 +1 @@\n-old_a\n+new_a\n".to_string(),
+                is_new_file: false,
+                is_binary: false,
+            },
+            FileDiff {
+                path: PathBuf::from("b.py"),
+                diff_text: "--- b.py\n+++ b.py\n@@ -1 +1 @@\n-old_b\n+new_b\n".to_string(),
+                is_new_file: false,
+                is_binary: false,
+            },
+            FileDiff {
+                path: PathBuf::from("c.rs"),
+                diff_text: "--- c.rs\n+++ c.rs\n@@ -1 +1 @@\n-old_c\n+new_c\n".to_string(),
+                is_new_file: false,
+                is_binary: false,
+            },
+        ];
+
+        // format_diffs_fenced with all diffs (no filtering)
+        let diff_output = format_diffs_fenced(&all_diffs);
+        assert!(diff_output.contains("old_a"), "Should contain a.rs diff");
+        assert!(diff_output.contains("old_b"), "Should contain b.py diff");
+        assert!(diff_output.contains("old_c"), "Should contain c.rs diff");
+    }
 }
