@@ -454,15 +454,18 @@ Each level of the scope hierarchy uses a Container component:
 
 ```
 WindowContainer          window:{label}     — window scope, board switching, AppShell
-  RustEngineContainer    engine             — schema, entities, UIState, undo, events
-    BoardContainer       board:{id}         — board data, file-drop, drag
-      ViewsContainer     (view commands)    — ViewsProvider, LeftNav, view.switch:*
-        ViewContainer    view:{id}          — active view routing
-          PerspectivesContainer             — PerspectiveProvider, tab bar
-            PerspectiveContainer persp:{id} — filter/sort/group applied
-              [BoardView | GridView]        — the actual content
-      InspectorContainer                    — panel stack overlay
+  AppModeContainer       mode:{mode}        — interaction mode (normal/command/search)
+    RustEngineContainer  engine             — schema, entities, UIState, undo, events
+      BoardContainer     board:{id}         — board data, file-drop, drag
+        ViewsContainer   (view commands)    — ViewsProvider, LeftNav, view.switch:*
+          ViewContainer  view:{id}          — active view routing
+            PerspectivesContainer           — PerspectiveProvider, tab bar
+              PerspectiveContainer p:{id}   — filter/sort/group applied
+                [BoardView | GridView]      — the actual content
+        InspectorContainer                  — panel stack overlay
 ```
+
+`AppModeContainer` is the first container inside the window because the interaction mode governs the entire UI surface — which keybindings are active, whether the toolbar shows a search field, which commands are available. It wraps NavBar, the content area, and everything else. Mode transitions (normal → command → search) are command-driven through Rust UIState.
 
 ##### Command Invocation Surfaces
 
@@ -484,8 +487,8 @@ The **scope chain** is an ordered list of monikers representing the current cont
 For example, when a user right-clicks a task card in the "To Do" column of the main window, the scope chain is:
 
 ```
-["task:01XYZ", "column:todo", "view:board", "board:01ABC", "engine", "window:main"]
-  ↑ innermost                                                        outermost ↑
+["task:01XYZ", "column:todo", "view:board", "board:01ABC", "engine", "mode:normal", "window:main"]
+  ↑ innermost                                                                      outermost ↑
 ```
 
 The key innovation: **a command knows _where_ in the app it is being invoked**, not just what arguments it was given. The same `"ui.inspect"` command behaves differently when invoked from a task card (inspects the task) versus from a column header (inspects the column) — because the scope chain tells it the context. Commands don't need explicit arguments for information that's implicit in the user's focus. The scope chain, an explicit target moniker, and explicit params combine to give every command full situational awareness.
@@ -506,18 +509,20 @@ Commands use the scope chain in three ways:
 The container tree directly produces the scope chain:
 
 ```tsx
-<WindowContainer moniker="window:main">          // outermost
-  <RustEngineContainer moniker="engine">
-    <BoardContainer moniker="board:01ABC">
-      <ViewContainer moniker="view:board">
-        <ColumnView moniker="column:todo">
-          <TaskCard moniker="task:01XYZ">         // innermost — focused element
-            {/* right-click here builds the chain above */}
-          </TaskCard>
-        </ColumnView>
-      </ViewContainer>
-    </BoardContainer>
-  </RustEngineContainer>
+<WindowContainer moniker="window:main">           // outermost
+  <AppModeContainer moniker="mode:normal">        // wraps everything incl. toolbar
+    <RustEngineContainer moniker="engine">
+      <BoardContainer moniker="board:01ABC">
+        <ViewContainer moniker="view:board">
+          <ColumnView moniker="column:todo">
+            <TaskCard moniker="task:01XYZ">       // innermost — focused element
+              {/* right-click here builds the chain above */}
+            </TaskCard>
+          </ColumnView>
+        </ViewContainer>
+      </BoardContainer>
+    </RustEngineContainer>
+  </AppModeContainer>
 </WindowContainer>
 ```
 
