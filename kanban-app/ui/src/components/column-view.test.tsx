@@ -126,3 +126,20 @@ describe("ColumnView drop zones", () => {
     expect(screen.getByText("2")).toBeTruthy();
   });
 });
+
+describe("ColumnView add-task button", () => {
+  it("has aria-label with column name and no title attribute", () => {
+    renderColumn(
+      <ColumnView
+        column={makeColumn("col-1", "To Do")}
+        tasks={[]}
+        onAddTask={vi.fn()}
+        onDrop={vi.fn()}
+      />,
+    );
+
+    const btn = screen.getByRole("button", { name: /add task to to do/i });
+    expect(btn).toBeTruthy();
+    expect(btn.getAttribute("title")).toBeNull();
+  });
+});

@@ -450,20 +450,7 @@ This separation means Containers are testable for state management without rende
 
 ##### Container Architecture
 
-Each level of the scope hierarchy uses a Container component:
-
-```
-RustEngineContainer  engine             — schema, entities, UIState, undo, events
-  WindowContainer    window:{label}     — window scope, board switching, AppShell
-    AppModeContainer mode:{mode}        — interaction mode (normal/command/search)
-      BoardContainer board:{id}         — board data, file-drop, drag (StoreContainer inside)
-        ViewsContainer (view commands)  — ViewsProvider, LeftNav, view.switch:*
-          PerspectivesContainer         — PerspectiveProvider, tab bar
-            PerspectiveContainer p:{id} — filter/sort/group applied
-              ViewContainer view:{id}   — active view routing
-                [BoardView | GridView]  — the actual content
-        InspectorsContainer              — panel stack overlay (inside BoardContainer for FileDropProvider)
-```
+Each level of the scope hierarchy uses a Container component. The authoritative container tree is defined in `kanban-app/ui/src/App.tsx`, where each container has inline comments explaining its placement and dependencies. Refer to App.tsx for the current hierarchy rather than duplicating it here.
 
 `AppModeContainer` is the first container inside the window because the interaction mode governs the entire UI surface — which keybindings are active, whether the toolbar shows a search field, which commands are available. It wraps NavBar, the content area, and everything else. Mode transitions (normal → command → search) are command-driven through Rust UIState.
 

@@ -462,6 +462,7 @@ export const ColumnView = memo(function ColumnView({
               <TooltipTrigger asChild>
                 <button
                   type="button"
+                  aria-label={`Add task to ${getStr(column, "name")}`}
                   className="p-0.5 rounded text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted transition-colors"
                   onClick={() => {
                     // Set focus to the column so invokeFocusChange builds the

@@ -179,14 +179,20 @@ describe("getFileIcon", () => {
 
 describe("AttachmentItem", () => {
   it("renders filename and size", () => {
-    render(<Wrapper><AttachmentItem attachment={imageAttachment} /></Wrapper>);
+    render(
+      <Wrapper>
+        <AttachmentItem attachment={imageAttachment} />
+      </Wrapper>,
+    );
     expect(screen.getByText("screenshot.png")).toBeTruthy();
     expect(screen.getByText("12.1 KB")).toBeTruthy();
   });
 
   it("has cursor-pointer class for interactivity", () => {
     const { container } = render(
-      <Wrapper><AttachmentItem attachment={imageAttachment} /></Wrapper>,
+      <Wrapper>
+        <AttachmentItem attachment={imageAttachment} />
+      </Wrapper>,
     );
     expect(container.querySelector(".cursor-pointer")).toBeTruthy();
   });
@@ -194,7 +200,9 @@ describe("AttachmentItem", () => {
   it("calls dispatch_command on double-click", async () => {
     mockInvoke.mockClear();
     const { container } = render(
-      <Wrapper><AttachmentItem attachment={imageAttachment} /></Wrapper>,
+      <Wrapper>
+        <AttachmentItem attachment={imageAttachment} />
+      </Wrapper>,
     );
     fireEvent.doubleClick(container.querySelector(".cursor-pointer")!);
     await vi.waitFor(() => {
@@ -231,14 +239,24 @@ describe("AttachmentItem", () => {
       return Promise.resolve("ok");
     });
     const { container } = render(
-      <Wrapper><AttachmentItem attachment={imageAttachment} /></Wrapper>,
+      <Wrapper>
+        <AttachmentItem attachment={imageAttachment} />
+      </Wrapper>,
     );
     fireEvent.contextMenu(container.querySelector(".cursor-pointer")!);
     await vi.waitFor(() => {
       expect(mockInvoke).toHaveBeenCalledWith("show_context_menu", {
         items: [
-          expect.objectContaining({ cmd: "attachment.open", name: "Open", separator: false }),
-          expect.objectContaining({ cmd: "attachment.reveal", name: "Show in Finder", separator: false }),
+          expect.objectContaining({
+            cmd: "attachment.open",
+            name: "Open",
+            separator: false,
+          }),
+          expect.objectContaining({
+            cmd: "attachment.reveal",
+            name: "Show in Finder",
+            separator: false,
+          }),
         ],
       });
     });
@@ -255,7 +273,9 @@ describe("AttachmentItem", () => {
       return Promise.resolve("ok");
     });
     const { container } = render(
-      <Wrapper><AttachmentItem attachment={imageAttachment} /></Wrapper>,
+      <Wrapper>
+        <AttachmentItem attachment={imageAttachment} />
+      </Wrapper>,
     );
     fireEvent.contextMenu(container.querySelector(".cursor-pointer")!);
     await vi.waitFor(() => {
@@ -396,5 +416,45 @@ describe("AttachmentListDisplay", () => {
     );
     const zone = container.querySelector(".border-primary\\/60");
     expect(zone).toBeTruthy();
+  });
+
+  it("renders full enriched metadata shape with filenames and sizes", () => {
+    const enrichedAttachments: AttachmentMeta[] = [
+      {
+        id: "01ENRICH1",
+        name: "document.pdf",
+        size: 51200,
+        mime_type: "application/pdf",
+        path: "/data/.kanban/tasks/.attachments/01ENRICH1-document.pdf",
+      },
+      {
+        id: "01ENRICH2",
+        name: "photo.jpg",
+        size: 2097152,
+        mime_type: "image/jpeg",
+        path: "/data/.kanban/tasks/.attachments/01ENRICH2-photo.jpg",
+      },
+      {
+        id: "01ENRICH3",
+        name: "tiny.txt",
+        size: 42,
+        mime_type: "text/plain",
+        path: "/data/.kanban/tasks/.attachments/01ENRICH3-tiny.txt",
+      },
+    ];
+
+    render(<AttachmentListDisplay value={enrichedAttachments} mode="full" />, {
+      wrapper: Wrapper,
+    });
+
+    // Verify all filenames render
+    expect(screen.getByText("document.pdf")).toBeTruthy();
+    expect(screen.getByText("photo.jpg")).toBeTruthy();
+    expect(screen.getByText("tiny.txt")).toBeTruthy();
+
+    // Verify formatted sizes render
+    expect(screen.getByText("50.0 KB")).toBeTruthy();
+    expect(screen.getByText("2.0 MB")).toBeTruthy();
+    expect(screen.getByText("42 B")).toBeTruthy();
   });
 });

@@ -65,10 +65,12 @@ export function Avatar({ actorId, size = "md", className }: AvatarProps) {
     <img
       src={avatar}
       alt={name}
+      aria-label={name}
       className={`${sizeClass} rounded-full object-cover shrink-0 ${className ?? ""}`}
     />
   ) : (
     <span
+      aria-label={name}
       className={`${sizeClass} rounded-full shrink-0 inline-flex items-center justify-center font-medium leading-none ${className ?? ""}`}
       style={{
         backgroundColor: `#${color}`,

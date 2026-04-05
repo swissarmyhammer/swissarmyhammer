@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, act } from "@testing-library/react";
+import { TooltipProvider } from "@/components/ui/tooltip";
 
 // Mock Tauri APIs before importing any modules that use them.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -77,6 +78,15 @@ vi.mock("@/lib/schema-context", () => ({
 
 import { PerspectiveTabBar } from "./perspective-tab-bar";
 
+/** Renders PerspectiveTabBar inside the required TooltipProvider. */
+function renderTabBar(delayDuration = 100) {
+  return render(
+    <TooltipProvider delayDuration={delayDuration}>
+      <PerspectiveTabBar />
+    </TooltipProvider>,
+  );
+}
+
 describe("PerspectiveTabBar", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -110,7 +120,7 @@ describe("PerspectiveTabBar", () => {
       activePerspective: { id: "p1", name: "Sprint View", view: "board" },
     };
 
-    render(<PerspectiveTabBar />);
+    renderTabBar();
 
     // Should show board perspectives only (not grid)
     expect(screen.getByText("Sprint View")).toBeDefined();
@@ -128,7 +138,7 @@ describe("PerspectiveTabBar", () => {
       activePerspective: { id: "p2", name: "Second", view: "board" },
     };
 
-    render(<PerspectiveTabBar />);
+    renderTabBar();
 
     const activeTab = screen.getByText("Second").closest("button");
     const inactiveTab = screen.getByText("First").closest("button");
@@ -148,7 +158,7 @@ describe("PerspectiveTabBar", () => {
       activePerspective: { id: "p1", name: "First", view: "board" },
     };
 
-    render(<PerspectiveTabBar />);
+    renderTabBar();
 
     fireEvent.click(screen.getByText("Second"));
     expect(mockSetActivePerspectiveId).toHaveBeenCalledWith("p2");
@@ -161,7 +171,7 @@ describe("PerspectiveTabBar", () => {
       activePerspective: { id: "p1", name: "Default", view: "board" },
     };
 
-    render(<PerspectiveTabBar />);
+    renderTabBar();
 
     const addButton = screen.getByRole("button", { name: /add perspective/i });
     fireEvent.click(addButton);
@@ -179,7 +189,7 @@ describe("PerspectiveTabBar", () => {
   });
 
   it("renders the '+' button", () => {
-    render(<PerspectiveTabBar />);
+    renderTabBar();
 
     const addButton = screen.getByRole("button", { name: /add perspective/i });
     expect(addButton).toBeDefined();
@@ -191,8 +201,9 @@ describe("PerspectiveTabBar", () => {
       activeView: null as unknown as typeof mockViewsValue.activeView,
     };
 
-    const { container } = render(<PerspectiveTabBar />);
-    expect(container.innerHTML).toBe("");
+    const { container } = renderTabBar();
+    // PerspectiveTabBar returns null; TooltipProvider adds no visible DOM.
+    expect(container.querySelector("[class]")).toBeNull();
   });
 
   it("calls useContextMenu handler on right-click", () => {
@@ -202,7 +213,7 @@ describe("PerspectiveTabBar", () => {
       activePerspective: { id: "p1", name: "Sprint View", view: "board" },
     };
 
-    render(<PerspectiveTabBar />);
+    renderTabBar();
 
     const tab = screen.getByText("Sprint View");
     fireEvent.contextMenu(tab);
@@ -218,7 +229,7 @@ describe("PerspectiveTabBar", () => {
       activePerspective: { id: "p1", name: "Sprint View", view: "board" },
     };
 
-    render(<PerspectiveTabBar />);
+    renderTabBar();
 
     const tab = screen.getByText("Sprint View");
     fireEvent.contextMenu(tab);
@@ -235,7 +246,7 @@ describe("PerspectiveTabBar", () => {
       activePerspective: { id: "p1", name: "Sprint View", view: "board" },
     };
 
-    render(<PerspectiveTabBar />);
+    renderTabBar();
 
     const tab = screen.getByText("Sprint View");
     fireEvent.doubleClick(tab);
@@ -244,5 +255,31 @@ describe("PerspectiveTabBar", () => {
     const input = screen.getByDisplayValue("Sprint View");
     expect(input).toBeDefined();
     expect(input.tagName).toBe("INPUT");
+  });
+
+  it("shows a tooltip on hover of the add-perspective button", async () => {
+    renderTabBar(0);
+
+    const addButton = screen.getByRole("button", { name: /add perspective/i });
+
+    // Hover the button to trigger the Radix tooltip.
+    await act(async () => {
+      fireEvent.pointerMove(addButton, { clientX: 10, clientY: 10 });
+      fireEvent.mouseEnter(addButton);
+      // Allow Radix tooltip to open (even with 0 delay it schedules async).
+      await new Promise((r) => setTimeout(r, 100));
+    });
+
+    // The tooltip content should be visible.
+    const tooltip = screen.getByRole("tooltip");
+    expect(tooltip).toBeDefined();
+    expect(tooltip.textContent).toBe("New perspective");
+  });
+
+  it("does not have an HTML title attribute on the add-perspective button", () => {
+    renderTabBar();
+
+    const addButton = screen.getByRole("button", { name: /add perspective/i });
+    expect(addButton.getAttribute("title")).toBeNull();
   });
 });

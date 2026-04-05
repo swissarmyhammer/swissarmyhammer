@@ -24,6 +24,8 @@ This is not negotiable. This is not optional. You cannot rationalize your way ou
 - Test your code before declaring done.
 - No sycophantic openers or closing fluff.
 - Keep solutions simple and direct.
+- Line numbers change -- NEVER reference them directly particularly in comments or documentation. 
+- You check the logs, not the user. If you need to know what happened, check the logs. Do not ask the user for information you can get from the logs.
 
 
 ## Using Skills

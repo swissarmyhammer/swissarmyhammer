@@ -14,13 +14,16 @@ import { BoardSelector, pathStem } from "./board-selector";
 import { FieldUpdateProvider } from "@/lib/field-update-context";
 import { SchemaProvider } from "@/lib/schema-context";
 import { EntityStoreProvider } from "@/lib/entity-store-context";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import type { OpenBoard } from "@/types/kanban";
 
 function Wrapper({ children }: { children: React.ReactNode }) {
   return (
     <SchemaProvider>
       <EntityStoreProvider entities={{}}>
-        <FieldUpdateProvider>{children}</FieldUpdateProvider>
+        <FieldUpdateProvider>
+          <TooltipProvider>{children}</TooltipProvider>
+        </FieldUpdateProvider>
       </EntityStoreProvider>
     </SchemaProvider>
   );
@@ -106,5 +109,34 @@ describe("BoardSelector", () => {
         String(args[1]?.command ?? "").includes("switchBoard"),
     );
     expect(switchBoardCalls).toHaveLength(0);
+  });
+
+  it("renders tear-off button with aria-label when showTearOff is true", () => {
+    render(
+      <Wrapper>
+        <BoardSelector
+          boards={twoBoards}
+          selectedPath={twoBoards[0].path}
+          onSelect={() => {}}
+          showTearOff
+        />
+      </Wrapper>,
+    );
+    const btn = screen.getByRole("button", { name: "Open in new window" });
+    expect(btn).toBeTruthy();
+  });
+
+  it("does not render tear-off button when showTearOff is false", () => {
+    render(
+      <Wrapper>
+        <BoardSelector
+          boards={twoBoards}
+          selectedPath={twoBoards[0].path}
+          onSelect={() => {}}
+        />
+      </Wrapper>,
+    );
+    const btn = screen.queryByRole("button", { name: "Open in new window" });
+    expect(btn).toBeNull();
   });
 });

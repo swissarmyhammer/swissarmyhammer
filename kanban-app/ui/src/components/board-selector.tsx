@@ -134,6 +134,7 @@ export function BoardSelector({
             <Button
               variant="ghost"
               size="icon"
+              aria-label="Open in new window"
               className="h-6 w-6 text-muted-foreground/40"
               onClick={() => {
                 dispatchNewWindow({ args: { board_path: selectedPath } }).catch(
