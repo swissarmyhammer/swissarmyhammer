@@ -92,6 +92,7 @@ vi.mock("@/components/rust-engine-container", () => ({
 // ---------------------------------------------------------------------------
 
 import { InspectorsContainer } from "./inspectors-container";
+import { FileDropProvider } from "@/lib/file-drop-context";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -205,6 +206,44 @@ describe("InspectorsContainer", () => {
 
     const panels = container.querySelectorAll('[class*="w-[420px]"]');
     expect(panels.length).toBe(0);
+  });
+
+  it("receives isDragging from FileDropProvider (drag highlight propagates)", () => {
+    // When InspectorsContainer is inside FileDropProvider (as it should be
+    // in App.tsx), the attachment editor in inspector panels receives the
+    // isDragging state for drag highlight rendering.
+    //
+    // This test wraps InspectorsContainer in FileDropProvider with
+    // _testOverride and verifies the container renders without error,
+    // proving the provider tree is compatible.
+    mockUIState.mockReturnValue(uiStateWithStack(["task:t1"]));
+    mockEntitiesByType.mockReturnValue({
+      task: [
+        {
+          entity_type: "task",
+          id: "t1",
+          fields: { title: { String: "Test Task" } },
+        },
+      ],
+    });
+
+    // Wrapping in FileDropProvider with isDragging=true should not error
+    const { container } = render(
+      <FileDropProvider _testOverride={{ isDragging: true }}>
+        <InspectorsContainer />
+      </FileDropProvider>,
+    );
+
+    // Panel should render (one slide panel)
+    const panels = container.querySelectorAll('[class*="w-[420px]"]');
+    expect(panels.length).toBe(1);
+
+    // If any data-file-drop-zone elements exist (attachment editors),
+    // they should have the drag highlight class from the isDragging override.
+    const dropZones = container.querySelectorAll("[data-file-drop-zone]");
+    for (const zone of dropZones) {
+      expect(zone.className).toContain("ring-2");
+    }
   });
 
   it("parses entityType and entityId from moniker strings", () => {

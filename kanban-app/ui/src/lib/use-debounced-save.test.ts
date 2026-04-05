@@ -146,7 +146,7 @@ describe("useDebouncedSave", () => {
     expect(opts.updateField).not.toHaveBeenCalled();
   });
 
-  it("cleans up the timer on unmount", () => {
+  it("flushes pending save on unmount", () => {
     const opts = makeOpts();
     const { result, unmount } = renderHook(() => useDebouncedSave(opts));
 
@@ -154,13 +154,23 @@ describe("useDebouncedSave", () => {
       result.current.onChange("will-unmount");
     });
 
+    expect(opts.updateField).not.toHaveBeenCalled();
+
     unmount();
 
-    // Advance past delay — should not fire (timer cleared on unmount)
-    act(() => {
-      vi.advanceTimersByTime(1000);
-    });
+    // Unmount should have flushed the pending save
+    expect(opts.updateField).toHaveBeenCalledOnce();
+    expect(opts.updateField).toHaveBeenCalledWith(
+      "task",
+      "t1",
+      "title",
+      "will-unmount",
+    );
+  });
 
+  it("unmount with no pending save does not fire", () => {
+    const opts = makeOpts();
+    renderHook(() => useDebouncedSave(opts)).unmount();
     expect(opts.updateField).not.toHaveBeenCalled();
   });
 

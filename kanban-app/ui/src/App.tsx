@@ -33,7 +33,8 @@ if (IS_QUICK_CAPTURE) {
  *   BoardContainer → ViewsContainer → ViewContainer →
  *   PerspectivesContainer → PerspectiveContainer
  *
- * InspectorsContainer is a sibling overlay alongside the board layout.
+ * InspectorsContainer is inside BoardContainer (for FileDropProvider access)
+ * but renders as a fixed overlay alongside the board layout.
  */
 function App() {
   return (
@@ -54,8 +55,10 @@ function App() {
               </ViewsContainer>
               <ModeIndicator />
             </div>
+            {/* Inspector overlay lives inside BoardContainer so it has access
+                to FileDropProvider — attachment fields need drag-drop context. */}
+            <InspectorsContainer />
           </BoardContainer>
-          <InspectorsContainer />
         </AppModeContainer>
       </WindowContainer>
     </RustEngineContainer>

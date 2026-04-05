@@ -181,10 +181,35 @@ impl Execute<KanbanContext, KanbanError> for AddAttachment {
             // rather than a dangling reference in the task (harder to detect).
             ectx.write(&attachment).await?;
 
-            // Add attachment ID to the task's attachments reference list
-            let mut attachment_ids = task.get_string_list("attachments");
-            attachment_ids.push(attachment_id.clone());
-            task.set("attachments", json!(attachment_ids));
+            // Build the new attachments list preserving existing entries.
+            // After ectx.read(), attachments are enriched to objects with
+            // {id, name, ...}. We reconstruct stored filenames ({id}-{name})
+            // from enriched objects so ectx.write() can validate them.
+            let existing: Vec<String> = task
+                .get("attachments")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| {
+                            // Enriched object: reconstruct stored filename
+                            if let Some(obj) = v.as_object() {
+                                let id = obj.get("id")?.as_str()?;
+                                let name = obj.get("name")?.as_str()?;
+                                Some(format!("{}-{}", id, name))
+                            } else {
+                                // Raw string (stored filename or source path)
+                                v.as_str().map(String::from)
+                            }
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            // Append the source path for the new attachment so
+            // process_attachment_field copies the file on write.
+            let mut attachment_paths = existing;
+            attachment_paths.push(self.path.clone());
+            task.set("attachments", json!(attachment_paths));
             ectx.write(&task).await?;
 
             Ok(json!({
@@ -359,6 +384,50 @@ mod tests {
         let ectx = ctx.entity_context().await.unwrap();
         let result = ectx.read("task", "nonexistent").await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_add_attachment_preserves_existing() {
+        let (temp, ctx) = setup().await;
+
+        // Create a task
+        let task_result = AddTask::new("Task with attachments")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let task_id = task_result["id"].as_str().unwrap();
+
+        // Create two files to attach
+        let file1 = create_temp_file(temp.path(), "first.png", b"first file data");
+        let file2 = create_temp_file(temp.path(), "second.pdf", b"second file data");
+
+        // Add first attachment via AddAttachment command
+        let result1 = AddAttachment::new(task_id, "first.png", &file1)
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        assert!(result1["attachment"]["name"].as_str().unwrap() == "first.png");
+
+        // Add second attachment — must preserve the first
+        let result2 = AddAttachment::new(task_id, "second.pdf", &file2)
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        assert!(result2["attachment"]["name"].as_str().unwrap() == "second.pdf");
+
+        // Read the task back — should have BOTH attachments
+        let ectx = ctx.entity_context().await.unwrap();
+        let task = ectx.read("task", task_id).await.unwrap();
+        let arr = task.get("attachments").unwrap().as_array().unwrap();
+        assert_eq!(
+            arr.len(),
+            2,
+            "Task should have 2 attachments after adding two, got: {:?}",
+            arr
+        );
     }
 
     #[test]

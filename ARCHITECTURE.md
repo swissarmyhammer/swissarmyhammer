@@ -462,7 +462,7 @@ RustEngineContainer  engine             — schema, entities, UIState, undo, eve
             PerspectiveContainer p:{id} — filter/sort/group applied
               ViewContainer view:{id}   — active view routing
                 [BoardView | GridView]  — the actual content
-        InspectorsContainer              — panel stack overlay (peer of ViewsContainer)
+        InspectorsContainer              — panel stack overlay (inside BoardContainer for FileDropProvider)
 ```
 
 `AppModeContainer` is the first container inside the window because the interaction mode governs the entire UI surface — which keybindings are active, whether the toolbar shows a search field, which commands are available. It wraps NavBar, the content area, and everything else. Mode transitions (normal → command → search) are command-driven through Rust UIState.
