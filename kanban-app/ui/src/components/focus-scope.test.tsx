@@ -620,6 +620,83 @@ describe("FocusScope", () => {
     expect(probeGetScope!("task:abc")).toBeNull();
   });
 
+  it("showFocusBar=false still fires context menu (handleEvents defaults true)", async () => {
+    mockListCommands([
+      {
+        id: "tag.inspect",
+        name: "Inspect tag",
+        group: "tag",
+        context_menu: true,
+        available: true,
+      },
+    ]);
+    const execute = vi.fn();
+    const { getByText } = renderWithFocus(
+      <FocusScope
+        moniker="tag:xyz"
+        showFocusBar={false}
+        commands={[
+          {
+            id: "tag.inspect",
+            name: "Inspect tag",
+            contextMenu: true,
+            execute,
+          },
+        ]}
+      >
+        <span>tag pill</span>
+      </FocusScope>,
+    );
+    fireEvent.contextMenu(getByText("tag pill"));
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("show_context_menu", {
+        items: [
+          expect.objectContaining({
+            cmd: "tag.inspect",
+            name: "Inspect tag",
+          }),
+        ],
+      });
+    });
+  });
+
+  it("handleEvents=false suppresses context menu even with showFocusBar=true", async () => {
+    mockListCommands([
+      {
+        id: "tag.inspect",
+        name: "Inspect tag",
+        group: "tag",
+        context_menu: true,
+        available: true,
+      },
+    ]);
+    const execute = vi.fn();
+    const { getByText } = renderWithFocus(
+      <FocusScope
+        moniker="tag:xyz"
+        showFocusBar={true}
+        handleEvents={false}
+        commands={[
+          {
+            id: "tag.inspect",
+            name: "Inspect tag",
+            contextMenu: true,
+            execute,
+          },
+        ]}
+      >
+        <span>tag pill</span>
+      </FocusScope>,
+    );
+    fireEvent.contextMenu(getByText("tag pill"));
+    // Give time for any async calls to settle
+    await new Promise((r) => setTimeout(r, 50));
+    expect(invoke).not.toHaveBeenCalledWith(
+      "show_context_menu",
+      expect.anything(),
+    );
+  });
+
   describe("useParentFocusScope", () => {
     /** Helper that reads useParentFocusScope and renders the value. */
     function ParentScopeReader() {

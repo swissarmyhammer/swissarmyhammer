@@ -200,3 +200,51 @@ describe("DataTable row structure", () => {
     }
   });
 });
+
+describe("DataTable grouping sync", () => {
+  it("clearing grouping prop returns to flat layout", () => {
+    // Render grouped by status — should show group header rows
+    const { container, rerender } = render(
+      <EntityFocusProvider>
+        <DataTable
+          columns={COLUMNS}
+          rows={ENTITIES}
+          grid={makeGrid()}
+          showRowSelector={true}
+          rowEntityCommands={stubRowCommands}
+          grouping={["status"]}
+        />
+      </EntityFocusProvider>,
+    );
+
+    // With grouping, there should be group header rows (fewer data rows visible at top level)
+    const groupedRows = container.querySelectorAll("tbody tr");
+    const hasGroupHeaders = Array.from(groupedRows).some(
+      (row) => row.querySelector("[data-group-header]") !== null,
+    );
+
+    // Re-render with grouping cleared
+    rerender(
+      <EntityFocusProvider>
+        <DataTable
+          columns={COLUMNS}
+          rows={ENTITIES}
+          grid={makeGrid()}
+          showRowSelector={true}
+          rowEntityCommands={stubRowCommands}
+          grouping={undefined}
+        />
+      </EntityFocusProvider>,
+    );
+
+    // After clearing, all rows should be flat data rows with entity monikers
+    const flatRows = container.querySelectorAll("tbody tr[data-moniker]");
+    expect(flatRows.length).toBe(ENTITIES.length);
+  });
+
+  it("renders flat layout when no grouping prop is provided", () => {
+    const { container } = renderTable();
+    const rows = container.querySelectorAll("tbody tr[data-moniker]");
+    expect(rows.length).toBe(ENTITIES.length);
+  });
+});

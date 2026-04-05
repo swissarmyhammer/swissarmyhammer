@@ -34,7 +34,8 @@ export function GridView({ view }: GridViewProps) {
   const schemaCommands = getEntityCommands(entityType);
 
   // Filter and sort entities through the active perspective container.
-  const { applyFilter, applySort, groupField } = useActivePerspective();
+  const { activePerspective, applyFilter, applySort, groupField } =
+    useActivePerspective();
   const entities = useMemo(() => {
     const filtered = applyFilter(rawEntities);
     return applySort(filtered);

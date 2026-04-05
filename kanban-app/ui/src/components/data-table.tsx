@@ -103,9 +103,10 @@ export function DataTable({
   const [sorting, setSorting] = useState<SortingState>([]);
   const [grouping, setGrouping] = useState<GroupingState>(groupingProp ?? []);
 
-  // Sync external grouping prop
+  // Sync external grouping prop — reset to [] when cleared so the grid
+  // reverts to a flat layout instead of retaining stale grouping state.
   useEffect(() => {
-    if (groupingProp) setGrouping(groupingProp);
+    setGrouping(groupingProp ?? []);
   }, [groupingProp]);
 
   // Build a lookup: field name → { direction, priority } from perspective sort entries.

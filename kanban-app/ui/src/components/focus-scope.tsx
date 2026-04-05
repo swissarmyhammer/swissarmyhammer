@@ -42,6 +42,10 @@ type FocusScopeOwnProps = {
   /** When false, suppresses the data-focused attribute (hides the focus bar).
    *  The scope still participates in focus/commands — only the visual indicator is hidden. */
   showFocusBar?: boolean;
+  /** When false, suppresses click/right-click/double-click event handling.
+   *  Independent of showFocusBar — a scope can handle events without showing the focus bar.
+   *  Defaults to true. */
+  handleEvents?: boolean;
   /** When false, omits the wrapping FocusHighlight div — children render directly.
    *  Use for table rows where a wrapping div breaks HTML structure.
    *  The scope, moniker registration, and context still work; the caller
@@ -67,6 +71,7 @@ export function FocusScope({
   children,
   claimWhen,
   showFocusBar = true,
+  handleEvents = true,
   renderContainer = true,
   ...rest
 }: FocusScopeProps) {
@@ -107,9 +112,9 @@ export function FocusScope({
 
   const handleClick = useCallback(
     (e: React.MouseEvent) => {
-      // When showFocusBar is false, don't claim focus on click — let the
+      // When handleEvents is false, don't claim focus on click — let the
       // event propagate to the parent FocusScope (e.g. grid cell, card).
-      if (!showFocusBar) return;
+      if (!handleEvents) return;
 
       // Don't change entity focus when clicking inputs/textareas/selects
       const target = e.target as HTMLElement;
@@ -121,7 +126,7 @@ export function FocusScope({
       e.stopPropagation();
       setFocus(moniker);
     },
-    [moniker, setFocus, showFocusBar],
+    [moniker, setFocus, handleEvents],
   );
 
   // Provide the scope via CommandScopeContext directly (not CommandScopeProvider)
@@ -134,6 +139,7 @@ export function FocusScope({
             moniker={moniker}
             isDirectFocus={isDirectFocus}
             showFocusBar={showFocusBar}
+            handleEvents={handleEvents}
             onClick={handleClick}
             {...rest}
           >
@@ -154,8 +160,10 @@ interface FocusScopeInnerProps extends Omit<
 > {
   moniker: string;
   isDirectFocus: boolean;
-  /** When false, this scope is navigation-only — skip double-click inspect. */
+  /** When false, hides the focus bar visual indicator. */
   showFocusBar: boolean;
+  /** When false, suppresses click/right-click/double-click event handling. */
+  handleEvents: boolean;
   onClick: React.MouseEventHandler<HTMLElement>;
   children: ReactNode;
 }
@@ -165,6 +173,7 @@ function FocusScopeInner({
   moniker,
   isDirectFocus,
   showFocusBar,
+  handleEvents,
   onClick,
   children,
   ...htmlProps
@@ -175,23 +184,23 @@ function FocusScopeInner({
 
   const handleContextMenu = useCallback(
     (e: React.MouseEvent) => {
-      // Navigation-only scopes (showFocusBar=false) don't handle context menu —
-      // let the event propagate to the parent entity scope (e.g. EntityRow).
-      if (!showFocusBar) return;
+      // When handleEvents is false, let the event propagate to the parent
+      // entity scope (e.g. EntityRow).
+      if (!handleEvents) return;
 
       e.preventDefault();
       e.stopPropagation();
       setFocus(moniker);
       contextMenuHandler(e);
     },
-    [moniker, setFocus, contextMenuHandler, showFocusBar],
+    [moniker, setFocus, contextMenuHandler, handleEvents],
   );
 
   const handleDoubleClick = useCallback(
     (e: React.MouseEvent) => {
-      // Navigation-only scopes (showFocusBar=false) don't dispatch inspect —
-      // let the event propagate to the parent entity scope (e.g. EntityRow).
-      if (!showFocusBar) return;
+      // When handleEvents is false, let the event propagate to the parent
+      // entity scope (e.g. EntityRow).
+      if (!handleEvents) return;
 
       // Skip if target is an interactive element
       const target = e.target as HTMLElement;
@@ -202,7 +211,7 @@ function FocusScopeInner({
       e.stopPropagation();
       dispatch({ target: moniker }).catch(console.error);
     },
-    [dispatch, moniker, showFocusBar],
+    [dispatch, moniker, handleEvents],
   );
 
   return (
