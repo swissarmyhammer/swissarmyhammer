@@ -454,7 +454,13 @@ impl GitOperations {
         if analysis.0.is_fast_forward() {
             self.fast_forward_merge(repo, &source_commit, source_branch)?;
         } else {
-            self.three_way_merge(repo, &annotated_commit, &head_commit, &source_commit, source_branch)?;
+            self.three_way_merge(
+                repo,
+                &annotated_commit,
+                &head_commit,
+                &source_commit,
+                source_branch,
+            )?;
         }
 
         Ok(())
@@ -501,8 +507,12 @@ impl GitOperations {
         let mut merge_opts = git2::MergeOptions::new();
         merge_opts.file_favor(git2::FileFavor::Normal);
 
-        repo.merge(&[annotated_commit], Some(&mut merge_opts), Some(&mut checkout_opts))
-            .map_err(|e| convert_git2_error("perform_merge", e))?;
+        repo.merge(
+            &[annotated_commit],
+            Some(&mut merge_opts),
+            Some(&mut checkout_opts),
+        )
+        .map_err(|e| convert_git2_error("perform_merge", e))?;
 
         let mut index = repo
             .index()
@@ -525,7 +535,10 @@ impl GitOperations {
         repo: &git2::Repository,
         source_branch: &BranchName,
     ) -> GitResult<()> {
-        info!("CONFLICT DETECTED: Cleaning up merge state for branch {}", source_branch);
+        info!(
+            "CONFLICT DETECTED: Cleaning up merge state for branch {}",
+            source_branch
+        );
 
         repo.cleanup_state()
             .map_err(|e| convert_git2_error("cleanup_after_conflict", e))?;
@@ -543,8 +556,12 @@ impl GitOperations {
         let mut fresh_index = repo
             .index()
             .map_err(|e| convert_git2_error("get_fresh_index", e))?;
-        fresh_index.read_tree(&tree).map_err(|e| convert_git2_error("reset_index", e))?;
-        fresh_index.write().map_err(|e| convert_git2_error("write_reset_index", e))?;
+        fresh_index
+            .read_tree(&tree)
+            .map_err(|e| convert_git2_error("reset_index", e))?;
+        fresh_index
+            .write()
+            .map_err(|e| convert_git2_error("write_reset_index", e))?;
 
         // Force checkout HEAD to reset working directory
         let mut checkout_opts = git2::build::CheckoutBuilder::new();
@@ -580,7 +597,11 @@ impl GitOperations {
             .map_err(|e| convert_git2_error("find_merge_tree", e))?;
 
         repo.commit(
-            Some("HEAD"), &signature, &signature, &message, &tree,
+            Some("HEAD"),
+            &signature,
+            &signature,
+            &message,
+            &tree,
             &[head_commit, source_commit],
         )
         .map_err(|e| convert_git2_error("create_merge_commit", e))?;
@@ -715,7 +736,10 @@ impl GitOperations {
             if name == issue_branch.as_str() {
                 continue;
             }
-            if branch_prefix.as_deref().is_some_and(|p| name.starts_with(p)) {
+            if branch_prefix
+                .as_deref()
+                .is_some_and(|p| name.starts_with(p))
+            {
                 continue;
             }
 
@@ -781,11 +805,7 @@ impl GitOperations {
 
     /// Find the merge base between two commits and return it with its timestamp.
     /// Returns `None` if there is no common history or the commit cannot be read.
-    fn find_merge_base_with_time(
-        &self,
-        a: git2::Oid,
-        b: git2::Oid,
-    ) -> Option<(git2::Oid, i64)> {
+    fn find_merge_base_with_time(&self, a: git2::Oid, b: git2::Oid) -> Option<(git2::Oid, i64)> {
         let merge_base = self.repo.inner().merge_base(a, b).ok()?;
         let commit = self.repo.inner().find_commit(merge_base).ok()?;
         Some((merge_base, commit.time().seconds()))
@@ -800,7 +820,11 @@ impl GitOperations {
         const RECENCY_DIVISOR: i64 = 1000; // Scale epoch seconds to a minor scoring component
 
         let distance_score = (MAX_DISTANCE - distance as i64).max(0) * DISTANCE_WEIGHT;
-        let perfect_bonus = if is_perfect_match { PERFECT_MATCH_BONUS } else { 0 };
+        let perfect_bonus = if is_perfect_match {
+            PERFECT_MATCH_BONUS
+        } else {
+            0
+        };
         let recency_score = merge_base_time / RECENCY_DIVISOR;
 
         distance_score + perfect_bonus + recency_score
@@ -838,9 +862,7 @@ impl GitOperations {
             .inner()
             .find_commit(oid)
             .map_err(|e| convert_git2_error("find_commit", e))?;
-        commit
-            .tree()
-            .map_err(|e| convert_git2_error("get_tree", e))
+        commit.tree().map_err(|e| convert_git2_error("get_tree", e))
     }
 
     /// Diff two trees and return sorted, deduplicated file paths.
