@@ -3,11 +3,8 @@ name: code-quality
 description: Code quality and maintainability checks for best practices
 metadata:
   version: "{{version}}"
-trigger: PostToolUse
+trigger: Stop
 match:
-  tools:
-    - .*write.*
-    - .*edit.*
   files:
     - "@file_groups/source_code"
 tags:

@@ -1514,12 +1514,12 @@ mod tests {
         let head = repo.head().unwrap();
         let current_branch = head.shorthand().unwrap_or("").to_string();
         if current_branch == "main" {
-            return; // Already on main, nothing to do
+            return;
         }
         let head_commit = head.peel_to_commit().unwrap();
-        repo.branch("main", &head_commit, true).unwrap();
+        repo.branch("main", &head_commit, false).unwrap();
         repo.set_head("refs/heads/main").unwrap();
-        // Delete the old default branch so only "main" remains
+        // Delete the old default branch (e.g. "master")
         if let Ok(mut old_branch) = repo.find_branch(&current_branch, BranchType::Local) {
             old_branch.delete().ok();
         }
@@ -1938,22 +1938,17 @@ mod tests {
         config.set_str("user.name", "Test User").unwrap();
         config.set_str("user.email", "test@example.com").unwrap();
 
-        // Create initial commit on whatever the default branch is
+        // Create initial commit, then ensure we're on "master" (not "main")
         raw_commit(&repo, "Initial commit", vec![("README.md", "# Repo")]);
         let head = repo.head().unwrap();
-        let default_branch = head.shorthand().unwrap_or("").to_string();
-        let head_commit = head.peel_to_commit().unwrap();
-
-        // If we're not already on master, create it and switch
-        if default_branch != "master" {
-            repo.branch("master", &head_commit, true).unwrap();
+        let current_branch = head.shorthand().unwrap_or("");
+        if current_branch != "master" {
+            let head_commit = head.peel_to_commit().unwrap();
+            repo.branch("master", &head_commit, false).unwrap();
             repo.set_head("refs/heads/master").unwrap();
-        }
-
-        // Delete any non-master branches (e.g. "main" from git init default)
-        if default_branch != "master" {
-            if let Ok(mut branch) = repo.find_branch(&default_branch, BranchType::Local) {
-                branch.delete().ok();
+            // Delete the old default branch
+            if let Ok(mut old_branch) = repo.find_branch(current_branch, BranchType::Local) {
+                old_branch.delete().ok();
             }
         }
 

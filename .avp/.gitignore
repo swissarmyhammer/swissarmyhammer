@@ -4,4 +4,10 @@
 # Log files
 *.log
 
+# Turn state (ephemeral, per-session)
+turn_state/
+
+# Session-scoped sidecar diff files (ephemeral, per-turn)
+turn_diffs/
+
 # Keep validators/ directory (should be committed)

@@ -3,64 +3,15 @@
 //! These links work together to detect which files actually changed:
 //! - `PreToolUseFileTracker`: Extracts paths from tool input and hashes files before execution
 //! - `PostToolUseFileTracker`: Hashes files after execution and records changes
-//! - `SessionStartCleanup` / `SessionEndCleanup`: Clear turn state at session boundaries
+//! - `SessionStartCleanup`: Clears turn state at session start
 
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 
 use crate::chain::{ChainContext, ChainLink, ChainResult, CTX_FILE_DIFFS};
 use crate::turn::{compute_diff, extract_tool_paths, hash_bytes, FileDiff, TurnStateManager};
-use crate::types::{
-    PostToolUseInput, PreToolUseInput, SessionEndInput, SessionStartInput, StopInput,
-};
-
-/// Macro to generate cleanup chain links that clear turn state.
-///
-/// This eliminates code duplication across SessionStartCleanup, SessionEndCleanup,
-/// and StopCleanup which all have identical behavior: clear turn state for a session.
-macro_rules! cleanup_chain_link {
-    (
-        $(#[$meta:meta])*
-        $struct_name:ident,
-        $input_type:ty,
-        $link_name:literal,
-        $log_msg:literal
-    ) => {
-        $(#[$meta])*
-        pub struct $struct_name {
-            turn_state: Arc<TurnStateManager>,
-        }
-
-        impl $struct_name {
-            /// Create a new cleanup link.
-            pub fn new(turn_state: Arc<TurnStateManager>) -> Self {
-                Self { turn_state }
-            }
-        }
-
-        #[async_trait(?Send)]
-        impl ChainLink<$input_type> for $struct_name {
-            async fn process(&self, input: &$input_type, _ctx: &mut ChainContext) -> ChainResult {
-                tracing::debug!(
-                    concat!($link_name, ": ", $log_msg, " {}"),
-                    input.common.session_id.as_deref().unwrap_or_default()
-                );
-
-                if let Err(e) = self.turn_state.clear(input.common.session_id.as_deref().unwrap_or_default()) {
-                    tracing::warn!(concat!($link_name, ": Failed to clear turn state: {}"), e);
-                }
-
-                ChainResult::continue_empty()
-            }
-
-            fn name(&self) -> &'static str {
-                $link_name
-            }
-        }
-    };
-}
+use crate::types::{PostToolUseInput, PreToolUseInput, SessionStartInput};
 
 /// Chain link that extracts file paths from tool input and hashes them before execution.
 pub struct PreToolUseFileTracker {
@@ -104,19 +55,29 @@ impl ChainLink<PreToolUseInput> for PreToolUseFileTracker {
             tool_use_id
         );
 
-        // Read each file once, hash the bytes, and stash the same bytes.
+        let session_id = input.common.session_id.as_deref().unwrap_or_default();
+
+        // Read each file once, hash the bytes, and persist the content to disk.
         // This avoids reading each file twice (once for hashing, once for stashing).
+        // Content is written to sidecar files so it survives across process boundaries.
         let mut hashes = std::collections::HashMap::new();
         for path in &paths {
             let content = std::fs::read(path).ok();
             let hash = content.as_deref().map(hash_bytes);
             hashes.insert(path.clone(), hash);
-            self.turn_state
-                .stash_content(tool_use_id, path.clone(), content);
+            if let Err(e) =
+                self.turn_state
+                    .write_pre_content(session_id, tool_use_id, path, content.as_deref())
+            {
+                tracing::warn!(
+                    "PreToolUseFileTracker: Failed to write pre-content for {}: {}",
+                    path.display(),
+                    e
+                );
+            }
         }
 
         // Store hashes in turn state on disk
-        let session_id = input.common.session_id.as_deref().unwrap_or_default();
         match self.turn_state.load(session_id) {
             Ok(mut state) => {
                 state.pending.insert(tool_use_id.clone(), hashes);
@@ -156,10 +117,10 @@ impl ChainLink<PostToolUseInput> for PostToolUseFileTracker {
             return ChainResult::continue_empty();
         };
 
-        // Take pre-content from in-memory cache (always, to clean up)
-        let pre_contents = self.turn_state.take_content(tool_use_id);
-
         let session_id = input.common.session_id.as_deref().unwrap_or_default();
+
+        // Take pre-content from disk sidecar files (persisted across process boundaries)
+        let pre_contents = self.turn_state.take_pre_content(session_id, tool_use_id);
         let mut state = match self.turn_state.load(session_id) {
             Ok(state) => state,
             Err(e) => {
@@ -218,6 +179,22 @@ impl ChainLink<PostToolUseInput> for PostToolUseFileTracker {
             );
         }
 
+        // Write diffs to sidecar files (persisted for Stop validators)
+        for diff in &diffs {
+            if !diff.diff_text.is_empty() {
+                if let Err(e) = self
+                    .turn_state
+                    .write_diff(session_id, &diff.path, &diff.diff_text)
+                {
+                    tracing::warn!(
+                        "PostToolUseFileTracker: Failed to write sidecar diff for {}: {}",
+                        diff.path.display(),
+                        e
+                    );
+                }
+            }
+        }
+
         // Put diffs into ChainContext for PostToolUse validators
         if !diffs.is_empty() {
             ctx.set(CTX_FILE_DIFFS, &diffs);
@@ -236,52 +213,49 @@ impl ChainLink<PostToolUseInput> for PostToolUseFileTracker {
     }
 }
 
-cleanup_chain_link!(
-    /// Chain link that clears turn state on session start.
-    SessionStartCleanup,
-    SessionStartInput,
-    "SessionStartCleanup",
-    "Clearing turn state for session"
-);
-
-cleanup_chain_link!(
-    /// Chain link that clears turn state on session end.
-    SessionEndCleanup,
-    SessionEndInput,
-    "SessionEndCleanup",
-    "Clearing turn state for session"
-);
-
-cleanup_chain_link!(
-    /// Chain link that clears turn state AFTER Stop validators have run.
-    ///
-    /// This is the proper cleanup point:
-    /// 1. File changes accumulate during PreToolUse/PostToolUse
-    /// 2. Stop hook fires, validators see all accumulated changes
-    /// 3. This link clears state for the next turn
-    ///
-    /// We don't clear at SessionStart/SessionEnd because subagents would
-    /// clear the main session's tracked changes.
-    StopCleanup,
-    StopInput,
-    "StopCleanup",
-    "Clearing turn state after Stop validators for session"
-);
-
-/// Load changed files for a session from turn state.
+/// Chain link that clears turn state and diff sidecars on session start.
 ///
-/// This is a utility function for use by the Stop hook handler.
-pub fn load_changed_files(turn_state: &TurnStateManager, session_id: &str) -> Vec<PathBuf> {
-    match turn_state.load(session_id) {
-        Ok(state) => state.changed,
-        Err(e) => {
-            tracing::warn!(
-                "Failed to load changed files for session {}: {}",
-                session_id,
-                e
-            );
-            Vec::new()
+/// This is the natural reset point for a fresh turn. Diffs from the previous
+/// turn survive Stop (for post-mortem debugging) and are cleaned here.
+pub struct SessionStartCleanup {
+    turn_state: Arc<TurnStateManager>,
+}
+
+impl SessionStartCleanup {
+    /// Create a new session start cleanup link.
+    pub fn new(turn_state: Arc<TurnStateManager>) -> Self {
+        Self { turn_state }
+    }
+}
+
+#[async_trait(?Send)]
+impl ChainLink<SessionStartInput> for SessionStartCleanup {
+    async fn process(&self, input: &SessionStartInput, _ctx: &mut ChainContext) -> ChainResult {
+        let session_id = input.common.session_id.as_deref().unwrap_or_default();
+        tracing::debug!(
+            "SessionStartCleanup: Clearing turn state for session {}",
+            session_id
+        );
+
+        if let Err(e) = self.turn_state.clear(session_id) {
+            tracing::warn!("SessionStartCleanup: Failed to clear turn state: {}", e);
         }
+
+        // Clear sidecar diff files for this session
+        if let Err(e) = self.turn_state.clear_diffs(session_id) {
+            tracing::warn!("SessionStartCleanup: Failed to clear diffs: {}", e);
+        }
+
+        // Clear sidecar pre-content files for this session
+        if let Err(e) = self.turn_state.clear_pre_content(session_id) {
+            tracing::warn!("SessionStartCleanup: Failed to clear pre-content: {}", e);
+        }
+
+        ChainResult::continue_empty()
+    }
+
+    fn name(&self) -> &'static str {
+        "SessionStartCleanup"
     }
 }
 
@@ -289,6 +263,7 @@ pub fn load_changed_files(turn_state: &TurnStateManager, session_id: &str) -> Ve
 mod tests {
     use super::*;
     use crate::types::CommonInput;
+    use std::path::PathBuf;
     use tempfile::TempDir;
 
     fn create_test_turn_state() -> (Arc<TurnStateManager>, TempDir) {

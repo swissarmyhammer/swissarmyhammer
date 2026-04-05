@@ -19,7 +19,7 @@ use crate::validator::ValidatorLoader;
 
 use super::executor::Chain;
 use super::links::{
-    PostToolUseFileTracker, PreToolUseFileTracker, StopCleanup, ValidatorExecutorLink,
+    PostToolUseFileTracker, PreToolUseFileTracker, SessionStartCleanup, ValidatorExecutorLink,
 };
 use super::starters::ValidatorContextStarter;
 
@@ -63,11 +63,17 @@ impl ChainFactory {
 
     /// Create a chain for SessionStart hooks.
     ///
-    /// Note: We do NOT clear turn state on session start because subagents
-    /// would clear the main session's tracked file changes. Turn state
-    /// persists across sessions within a project.
+    /// The chain includes:
+    /// - SessionStartCleanup: Clears turn state and sidecar diffs for this session
+    /// - ValidatorExecutorLink: Runs matching validators
+    ///
+    /// SessionStart is the natural reset point for a fresh turn. Diffs from
+    /// the previous turn survive Stop (for post-mortem debugging) and are
+    /// cleaned here. Each session clears only its own scoped directory.
     pub fn session_start_chain(&self) -> Chain<SessionStartInput> {
-        Chain::new(ValidatorContextStarter::new()).add_link(self.validator_link())
+        Chain::new(ValidatorContextStarter::new())
+            .add_link(SessionStartCleanup::new(self.turn_state.clone()))
+            .add_link(self.validator_link())
     }
 
     /// Create a chain for SessionEnd hooks.
@@ -104,19 +110,13 @@ impl ChainFactory {
     ///
     /// The chain includes:
     /// - ValidatorExecutorLink: Runs matching validators (with changed files)
-    /// - StopCleanup: Clears turn state AFTER validators have seen the changes
     ///
     /// Note: Stop hook validators receive the list of changed files
-    /// accumulated during the turn via the turn state. After validators run,
-    /// the state is cleared for the next turn.
-    ///
-    /// Important: When CLAUDE_ACP is set (subagent context),
-    /// we exit early in main.rs before any chain processing, so this
-    /// cleanup won't incorrectly clear the main session's state.
+    /// accumulated during the turn via the turn state. State is NOT cleared
+    /// here -- it survives past Stop for post-mortem debugging and is cleaned
+    /// at SessionStart instead (by `SessionStartCleanup`).
     pub fn stop_chain(&self) -> Chain<StopInput> {
-        Chain::new(ValidatorContextStarter::new())
-            .add_link(self.validator_link())
-            .add_link(StopCleanup::new(self.turn_state.clone()))
+        Chain::new(ValidatorContextStarter::new()).add_link(self.validator_link())
     }
 
     /// Create a chain for Elicitation hooks.
@@ -210,10 +210,10 @@ mod tests {
         let (_temp, factory) = create_test_factory();
         let chain = factory.session_start_chain();
 
-        // SessionStart chain only has ValidatorExecutor - no cleanup link
-        // because subagents would clear the main session's turn state
-        assert_eq!(chain.len(), 1);
+        // SessionStart chain has cleanup (turn state + diffs) + ValidatorExecutor
+        assert_eq!(chain.len(), 2);
         let names = chain.link_names();
+        assert!(names.contains(&"SessionStartCleanup"));
         assert!(names.contains(&"ValidatorExecutor"));
     }
 
@@ -243,15 +243,14 @@ mod tests {
 
     #[test]
     #[serial(cwd)]
-    fn test_stop_chain_has_validator_and_cleanup_links() {
+    fn test_stop_chain_has_validator_only() {
         let (_temp, factory) = create_test_factory();
         let chain = factory.stop_chain();
 
-        // Stop chain has ValidatorExecutor followed by StopCleanup
-        assert_eq!(chain.len(), 2);
+        // Stop chain has only ValidatorExecutor (no cleanup -- state survives for debugging)
+        assert_eq!(chain.len(), 1);
         let names = chain.link_names();
         assert!(names.contains(&"ValidatorExecutor"));
-        assert!(names.contains(&"StopCleanup"));
     }
 
     #[tokio::test]

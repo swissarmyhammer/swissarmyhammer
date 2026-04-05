@@ -113,6 +113,12 @@ impl DirectoryConfig for AvpConfig {
 # Log files
 *.log
 
+# Turn state (ephemeral, per-session)
+turn_state/
+
+# Session-scoped sidecar diff files (ephemeral, per-turn)
+turn_diffs/
+
 # Keep validators/ directory (should be committed)
 "#;
 
@@ -207,6 +213,9 @@ mod tests {
         assert_eq!(AvpConfig::DIR_NAME, ".avp");
         assert_eq!(AvpConfig::XDG_NAME, "avp");
         assert!(AvpConfig::GITIGNORE_CONTENT.contains("*.log"));
+        assert!(AvpConfig::GITIGNORE_CONTENT.contains("turn_state/"));
+        assert!(AvpConfig::GITIGNORE_CONTENT.contains("turn_diffs/"));
+        assert!(!AvpConfig::GITIGNORE_CONTENT.contains("turn_state.yaml"));
         assert!(AvpConfig::init_subdirs().is_empty());
     }
 
