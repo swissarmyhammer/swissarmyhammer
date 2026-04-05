@@ -10,3 +10,4 @@ editor: multi-select
 display: avatar
 width: 150
 section: body
+groupable: true

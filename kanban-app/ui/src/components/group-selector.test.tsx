@@ -36,18 +36,27 @@ const testFields: FieldDef[] = [
     name: "Status",
     type: { kind: "select" },
     section: "body",
+    groupable: true,
   },
   {
     id: "priority",
     name: "Priority",
     type: { kind: "select" },
     section: "body",
+    groupable: true,
   },
   {
     id: "internal_id",
     name: "internal_id",
     type: { kind: "text" },
     section: "hidden",
+  },
+  {
+    id: "title",
+    name: "Title",
+    type: { kind: "text" },
+    section: "header",
+    groupable: false,
   },
 ];
 
@@ -78,10 +87,35 @@ describe("GroupSelector", () => {
     expect(screen.getByTestId("group-field-Priority")).toBeDefined();
   });
 
-  it("excludes hidden fields from the list", () => {
+  it("only shows fields where groupable is true", () => {
     render(<GroupSelector {...defaultProps} />);
 
+    // groupable: true fields appear
+    expect(screen.getByTestId("group-field-Status")).toBeDefined();
+    expect(screen.getByTestId("group-field-Priority")).toBeDefined();
+    // groupable: undefined (hidden) excluded
     expect(screen.queryByTestId("group-field-internal_id")).toBeNull();
+    // groupable: false excluded
+    expect(screen.queryByTestId("group-field-Title")).toBeNull();
+  });
+
+  it("renders only None when no fields are groupable", () => {
+    const nonGroupableFields: FieldDef[] = [
+      { id: "title", name: "Title", type: { kind: "text" }, section: "header" },
+      {
+        id: "body",
+        name: "Body",
+        type: { kind: "text" },
+        section: "body",
+        groupable: false,
+      },
+    ];
+    render(<GroupSelector {...defaultProps} fields={nonGroupableFields} />);
+
+    expect(screen.getByTestId("group-none")).toBeDefined();
+    // No field buttons rendered
+    expect(screen.queryByTestId("group-field-Title")).toBeNull();
+    expect(screen.queryByTestId("group-field-Body")).toBeNull();
   });
 
   it("dispatches perspective.group when a field is selected", () => {
@@ -118,33 +152,13 @@ describe("GroupSelector", () => {
     expect(onClose).toHaveBeenCalled();
   });
 
-  it("does not show clear button when group is empty", () => {
-    render(<GroupSelector {...defaultProps} group={undefined} />);
-
+  it("does not render a Clear button regardless of group state", () => {
+    const { rerender } = render(
+      <GroupSelector {...defaultProps} group={undefined} />,
+    );
     expect(screen.queryByLabelText("Clear group")).toBeNull();
-  });
 
-  it("shows clear button when group is active", () => {
-    render(<GroupSelector {...defaultProps} group="Status" />);
-
-    expect(screen.getByLabelText("Clear group")).toBeDefined();
-  });
-
-  it("dispatches clearGroup when clear button is clicked", () => {
-    const onClose = vi.fn();
-    render(
-      <GroupSelector {...defaultProps} group="Priority" onClose={onClose} />,
-    );
-
-    fireEvent.click(screen.getByLabelText("Clear group"));
-
-    expect(mockInvoke).toHaveBeenCalledWith(
-      "dispatch_command",
-      expect.objectContaining({
-        cmd: "perspective.clearGroup",
-        args: { perspective_id: "p1" },
-      }),
-    );
-    expect(onClose).toHaveBeenCalled();
+    rerender(<GroupSelector {...defaultProps} group="Status" />);
+    expect(screen.queryByLabelText("Clear group")).toBeNull();
   });
 });

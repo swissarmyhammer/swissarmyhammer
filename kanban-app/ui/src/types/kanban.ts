@@ -124,6 +124,8 @@ export interface FieldDef {
   sort?: string;
   filter?: string;
   group?: string;
+  /** Whether this field can be used as a group-by target in perspectives. */
+  groupable?: boolean;
   validate?: string;
 }
 

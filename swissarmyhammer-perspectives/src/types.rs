@@ -71,7 +71,7 @@ pub struct Perspective {
     /// Opaque filter function string (JS expression). Stored, not evaluated.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub filter: Option<String>,
-    /// Opaque group function string (JS expression). Stored, not evaluated.
+    /// Group-by field name. Stored as a plain field name string, consumed by the UI as a TanStack Table grouping column ID.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub group: Option<String>,
     /// Sort entries, applied in order.

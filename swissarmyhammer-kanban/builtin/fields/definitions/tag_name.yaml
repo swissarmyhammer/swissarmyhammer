@@ -14,3 +14,4 @@ validate: |
   if (v.length === 0) throw new Error("tag_name cannot be empty");
   return v;
 width: 200
+groupable: true

@@ -1916,8 +1916,6 @@ mod tests {
     // Additional tests from main
     // ===========================================================================
 
-
-
     #[tokio::test]
     async fn archive_dir_correct() {
         let dir = TempDir::new().unwrap();
@@ -1933,9 +1931,6 @@ mod tests {
             dir.path().join("tasks").join(".archive")
         );
     }
-
-
-
 
     #[tokio::test]
     async fn list_archived_returns_archived_only() {
@@ -2041,8 +2036,6 @@ mod tests {
         assert!(ctx.fields().get_entity("tag").is_some());
         assert!(ctx.fields().get_entity("task").is_some());
     }
-
-
 
     #[tokio::test]
     async fn list_archived_with_compute_engine() {
@@ -2363,8 +2356,6 @@ mod tests {
         let result = ctx.read_changelog_with_trash_fallback("unicorn", "x").await;
         assert!(result.is_err());
     }
-
-
 
     #[tokio::test]
     async fn enrich_attachment_fields_without_compute_engine() {

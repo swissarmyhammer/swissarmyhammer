@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KNEZZ0PDQZHTGRY56Z2JCTBY
-position_column: todo
-position_ordinal: b280
+position_column: done
+position_ordinal: ffffffffffffffffffffa280
 title: Filter GroupSelector to only show `groupable` fields
 ---
 ## What

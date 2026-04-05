@@ -10,7 +10,6 @@
  */
 
 import { useCallback } from "react";
-import { X } from "lucide-react";
 import { useDispatchCommand } from "@/lib/command-scope";
 import type { FieldDef } from "@/types/kanban";
 
@@ -60,25 +59,15 @@ export function GroupSelector({
     onClose();
   }, [perspectiveId, onClose, dispatchClearGroup]);
 
-  // Filter to groupable fields — exclude hidden fields
-  const groupableFields = fields.filter((f) => f.section !== "hidden");
+  // Only show fields explicitly marked as groupable
+  const groupableFields = fields.filter((f) => f.groupable === true);
 
   return (
     <div className="w-48" data-testid="group-selector">
-      <div className="flex items-center justify-between mb-1.5">
+      <div className="mb-1.5">
         <span className="text-xs font-medium text-muted-foreground">
           Group By
         </span>
-        {group && (
-          <button
-            onClick={handleClear}
-            className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
-            aria-label="Clear group"
-          >
-            <X className="h-3 w-3" />
-            Clear
-          </button>
-        )}
       </div>
       <div className="flex flex-col gap-0.5">
         <button

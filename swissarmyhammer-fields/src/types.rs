@@ -133,6 +133,9 @@ pub struct FieldDef {
     pub section: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub validate: Option<String>,
+    /// Whether this field can be used as a group-by column in grid views.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub groupable: Option<bool>,
 }
 
 impl FieldDef {
@@ -362,6 +365,77 @@ editor: custom-widget
     }
 
     #[test]
+    fn groupable_deserializes_when_present() {
+        let yaml_input = r#"
+id: 00000000000000000000000001
+name: tags
+type:
+  kind: text
+  single_line: true
+groupable: true
+"#;
+        let field: FieldDef = serde_yaml_ng::from_str(yaml_input).unwrap();
+        assert_eq!(field.groupable, Some(true));
+    }
+
+    #[test]
+    fn groupable_defaults_to_none_when_absent() {
+        let yaml_input = r#"
+id: 00000000000000000000000001
+name: title
+type:
+  kind: text
+  single_line: true
+"#;
+        let field: FieldDef = serde_yaml_ng::from_str(yaml_input).unwrap();
+        assert_eq!(field.groupable, None);
+    }
+
+    #[test]
+    fn groupable_round_trips_through_yaml() {
+        let field = FieldDef {
+            id: FieldDefId::new(),
+            name: "tags".into(),
+            description: None,
+            type_: FieldType::Text { single_line: true },
+            default: None,
+            editor: None,
+            display: None,
+            sort: None,
+            width: None,
+            icon: None,
+            section: None,
+            validate: None,
+            groupable: Some(true),
+        };
+        let yaml = serde_yaml_ng::to_string(&field).unwrap();
+        assert!(yaml.contains("groupable: true"));
+        let parsed: FieldDef = serde_yaml_ng::from_str(&yaml).unwrap();
+        assert_eq!(field, parsed);
+    }
+
+    #[test]
+    fn groupable_none_omitted_from_yaml() {
+        let field = FieldDef {
+            id: FieldDefId::new(),
+            name: "title".into(),
+            description: None,
+            type_: FieldType::Text { single_line: true },
+            default: None,
+            editor: None,
+            display: None,
+            sort: None,
+            width: None,
+            icon: None,
+            section: None,
+            validate: None,
+            groupable: None,
+        };
+        let yaml = serde_yaml_ng::to_string(&field).unwrap();
+        assert!(!yaml.contains("groupable"));
+    }
+
+    #[test]
     fn field_def_yaml_round_trip() {
         let field = FieldDef {
             id: FieldDefId::new(),
@@ -393,6 +467,7 @@ editor: custom-widget
             icon: None,
             section: None,
             validate: None,
+            groupable: None,
         };
         let yaml = serde_yaml_ng::to_string(&field).unwrap();
         let parsed: FieldDef = serde_yaml_ng::from_str(&yaml).unwrap();
@@ -414,6 +489,7 @@ editor: custom-widget
             icon: None,
             section: None,
             validate: None,
+            groupable: None,
         };
         let yaml = serde_yaml_ng::to_string(&field).unwrap();
         assert!(yaml.contains("type:"));
@@ -481,6 +557,7 @@ editor: custom-widget
             icon: None,
             section: None,
             validate: None,
+            groupable: None,
         };
         assert_eq!(field.effective_editor(), "date");
         assert_eq!(field.effective_display(), "date");
@@ -501,6 +578,7 @@ editor: custom-widget
             icon: None,
             section: None,
             validate: None,
+            groupable: None,
         };
         assert_eq!(field.effective_editor(), "none");
         assert_eq!(field.effective_display(), "badge");
@@ -526,6 +604,7 @@ editor: custom-widget
             icon: None,
             section: None,
             validate: None,
+            groupable: None,
         };
         assert_eq!(field.effective_editor(), "none");
         assert_eq!(field.effective_display(), "text");
@@ -549,6 +628,7 @@ editor: custom-widget
             icon: None,
             section: None,
             validate: None,
+            groupable: None,
         };
         assert_eq!(single.effective_editor(), "select");
         assert_eq!(single.effective_display(), "badge");
@@ -569,6 +649,7 @@ editor: custom-widget
             icon: None,
             section: None,
             validate: None,
+            groupable: None,
         };
         assert_eq!(multi.effective_editor(), "multi-select");
         assert_eq!(multi.effective_display(), "badge-list");
@@ -595,6 +676,7 @@ editor: custom-widget
             icon: None,
             section: None,
             validate: None,
+            groupable: None,
         };
         assert_eq!(field.effective_editor(), "number");
         assert_eq!(field.effective_display(), "number");
@@ -798,6 +880,7 @@ fields:
             icon: None,
             section: None,
             validate: None,
+            groupable: None,
         };
         assert_eq!(field.effective_sort(), SortKind::Lexical);
     }
@@ -817,6 +900,7 @@ fields:
             icon: None,
             section: None,
             validate: None,
+            groupable: None,
         };
         assert_eq!(field.effective_sort(), SortKind::Datetime);
     }
@@ -836,6 +920,7 @@ fields:
             icon: None,
             section: None,
             validate: None,
+            groupable: None,
         };
         assert_eq!(field.effective_sort(), SortKind::Datetime);
     }
@@ -858,6 +943,7 @@ fields:
             icon: None,
             section: None,
             validate: None,
+            groupable: None,
         };
         assert_eq!(field.effective_sort(), SortKind::Numeric);
     }
@@ -885,6 +971,7 @@ fields:
             icon: None,
             section: None,
             validate: None,
+            groupable: None,
         };
         assert_eq!(field.effective_sort(), SortKind::OptionOrder);
 
@@ -910,6 +997,7 @@ fields:
             icon: None,
             section: None,
             validate: None,
+            groupable: None,
         };
         assert_eq!(multi.effective_sort(), SortKind::OptionOrder);
     }
@@ -929,6 +1017,7 @@ fields:
             icon: None,
             section: None,
             validate: None,
+            groupable: None,
         };
         assert_eq!(field.effective_sort(), SortKind::Lexical);
     }
@@ -949,6 +1038,7 @@ fields:
             icon: None,
             section: None,
             validate: None,
+            groupable: None,
         };
         assert_eq!(field.effective_sort(), SortKind::Lexical);
     }
@@ -1059,6 +1149,7 @@ fields:
             icon: None,
             section: None,
             validate: None,
+            groupable: None,
         }
     }
 
@@ -1221,6 +1312,7 @@ fields:
             icon: None,
             section: None,
             validate: None,
+            groupable: None,
         }
     }
 

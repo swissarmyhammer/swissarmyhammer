@@ -263,6 +263,7 @@ mod tests {
             icon: None,
             section: None,
             validate: None,
+            groupable: None,
         }
     }
 
@@ -286,6 +287,7 @@ mod tests {
             icon: None,
             section: None,
             validate: None,
+            groupable: None,
         }
     }
 

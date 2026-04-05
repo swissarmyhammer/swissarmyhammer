@@ -512,6 +512,7 @@ mod tests {
             icon: None,
             section: None,
             validate: None,
+            groupable: None,
         };
 
         let mut fields = HashMap::new();
@@ -547,6 +548,7 @@ mod tests {
             icon: None,
             section: None,
             validate: None,
+            groupable: None,
         };
 
         let mut fields = HashMap::new();
@@ -584,6 +586,7 @@ mod tests {
             icon: None,
             section: None,
             validate: None,
+            groupable: None,
         };
 
         let mut fields = HashMap::new();
@@ -638,6 +641,7 @@ mod tests {
             icon: None,
             section: None,
             validate: None,
+            groupable: None,
         };
 
         let fields = HashMap::new(); // No body field

@@ -7,3 +7,4 @@ icon: palette
 editor: color-palette
 display: color-swatch
 width: 80
+groupable: true

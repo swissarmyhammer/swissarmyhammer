@@ -453,6 +453,7 @@ mod tests {
             icon: None,
             section: None,
             validate: None,
+            groupable: None,
         }
     }
 
@@ -915,6 +916,7 @@ type:
                 icon: None,
                 section: None,
                 validate: None,
+                groupable: None,
             })
             .collect();
 
