@@ -1,0 +1,1 @@
+{"id":"01KNESC6WSKH69WDMQV6K67DA8","timestamp":"2026-04-05T12:20:11.801155Z","entity_type":"tag","entity_id":"01KNESC6WNPEZZMFV13Z56P56Q","op":"create","changes":[["color",{"kind":"set","value":"3b82f6"}],["description",{"kind":"set","value":"Live LSP operations for code-context"}],["tag_name",{"kind":"set","value":"lsp-live"}]],"transaction_id":"01KNESC6W9ASNZ0N30K9GBPNW8"}
