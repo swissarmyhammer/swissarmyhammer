@@ -9,7 +9,7 @@ description = "Local LLM agent using llama.cpp"
 
 [dependencies]
 # Fixture support
-agent-client-protocol-extras = { path = "../agent-client-protocol-extras" }
+agent-client-protocol-extras = { workspace = true }
 
 # Core inference
 llama-cpp-2 = { workspace = true }
@@ -71,23 +71,23 @@ md5 = { workspace = true }
 # Agent Client Protocol (always enabled)
 agent-client-protocol = { workspace = true }
 
-swissarmyhammer-common = { path = "../swissarmyhammer-common" }
-swissarmyhammer-kanban = { path = "../swissarmyhammer-kanban" }
+swissarmyhammer-common = { workspace = true }
+swissarmyhammer-kanban = { workspace = true }
 
 # Modes system for ACP session modes
-swissarmyhammer-modes = { path = "../swissarmyhammer-modes" }
+swissarmyhammer-modes = { workspace = true }
 
 # Agents (subagents) for mode system prompt resolution
-swissarmyhammer-agents = { path = "../swissarmyhammer-agents" }
+swissarmyhammer-agents = { workspace = true }
 
 # Prompt library for Liquid template rendering
-swissarmyhammer-prompts = { path = "../swissarmyhammer-prompts" }
+swissarmyhammer-prompts = { workspace = true }
 
 # Template context for Liquid rendering
-swissarmyhammer-config = { path = "../swissarmyhammer-config" }
+swissarmyhammer-config = { workspace = true }
 
 # Skills for ACP command discovery
-swissarmyhammer-skills = { path = "../swissarmyhammer-skills" }
+swissarmyhammer-skills = { workspace = true }
 
 chrono = { workspace = true }
 

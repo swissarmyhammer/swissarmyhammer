@@ -24,10 +24,10 @@ anyhow = { workspace = true }
 thiserror = { workspace = true }
 
 # Common functionality
-swissarmyhammer-common = { path = "../swissarmyhammer-common" }
+swissarmyhammer-common = { workspace = true }
 
 # Configuration integration
-swissarmyhammer-config = { path = "../swissarmyhammer-config" }
+swissarmyhammer-config = { workspace = true }
 
 # Text processing
 regex = { workspace = true }

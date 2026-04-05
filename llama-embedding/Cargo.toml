@@ -13,11 +13,11 @@ name = "llama_embedding"
 crate-type = ["lib"]
 
 [dependencies]
-model-embedding = { path = "../model-embedding" }
+model-embedding = { workspace = true }
 llama-common = { workspace = true }
 model-loader = { workspace = true }
 llama-cpp-2 = { workspace = true }
-swissarmyhammer-common = { path = "../swissarmyhammer-common" }
+swissarmyhammer-common = { workspace = true }
 async-trait.workspace = true
 tokio = { workspace = true, features = ["sync"] }
 md5 = { workspace = true }

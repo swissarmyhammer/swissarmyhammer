@@ -15,13 +15,13 @@ name = "shelltool"
 path = "src/main.rs"
 
 [dependencies]
-swissarmyhammer-tools = { path = "../swissarmyhammer-tools" }
-swissarmyhammer-shell = { path = "../swissarmyhammer-shell" }
-swissarmyhammer-common = { path = "../swissarmyhammer-common" }
-swissarmyhammer-directory = { path = "../swissarmyhammer-directory" }
-swissarmyhammer-doctor = { path = "../swissarmyhammer-doctor" }
-swissarmyhammer-config = { path = "../swissarmyhammer-config" }
-mirdan = { path = "../mirdan" }
+swissarmyhammer-tools = { workspace = true }
+swissarmyhammer-shell = { workspace = true }
+swissarmyhammer-common = { workspace = true }
+swissarmyhammer-directory = { workspace = true }
+swissarmyhammer-doctor = { workspace = true }
+swissarmyhammer-config = { workspace = true }
+mirdan = { workspace = true }
 
 rmcp = { workspace = true }
 clap = { workspace = true }

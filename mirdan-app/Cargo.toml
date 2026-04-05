@@ -14,7 +14,7 @@ name = "mirdan-app"
 path = "src/main.rs"
 
 [dependencies]
-mirdan = { path = "../mirdan" }
+mirdan = { workspace = true }
 tauri = { version = "2", features = ["devtools", "tray-icon"] }
 tauri-plugin-deep-link = "2"
 clap = { workspace = true }

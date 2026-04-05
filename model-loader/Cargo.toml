@@ -10,7 +10,7 @@ description = "Generic model source resolution, download, and caching — runtim
 
 [dependencies]
 llama-common = { workspace = true }
-swissarmyhammer-common = { path = "../swissarmyhammer-common" }
+swissarmyhammer-common = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["fs"] }
 hf-hub = { workspace = true }

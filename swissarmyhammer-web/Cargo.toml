@@ -9,8 +9,8 @@ description = "Core web search and fetch functionality for SwissArmyHammer"
 
 [dependencies]
 # Local workspace dependencies
-swissarmyhammer-common = { path = "../swissarmyhammer-common" }
-swissarmyhammer-config = { path = "../swissarmyhammer-config" }
+swissarmyhammer-common = { workspace = true }
+swissarmyhammer-config = { workspace = true }
 
 # Workspace dependencies
 serde = { workspace = true }
