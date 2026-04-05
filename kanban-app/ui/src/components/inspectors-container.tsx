@@ -55,7 +55,7 @@ function parsePanelStack(inspectorStack: string[] | undefined): PanelEntry[] {
  * - Panel stack rendering with offset
  * - InspectorPanel component (entity resolution + SlidePanel)
  */
-export function InspectorContainer() {
+export function InspectorsContainer() {
   const uiState = useUIState();
   const entitiesByType = useEntitiesByType();
   const entityStore = useMemo(() => entitiesByType, [entitiesByType]);

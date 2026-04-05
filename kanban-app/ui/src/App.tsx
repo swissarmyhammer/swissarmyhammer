@@ -10,7 +10,7 @@ import { RustEngineContainer } from "@/components/rust-engine-container";
 import { WindowContainer } from "@/components/window-container";
 import { BoardContainer } from "@/components/board-container";
 import { AppModeContainer } from "@/components/app-mode-container";
-import { InspectorContainer } from "@/components/inspector-container";
+import { InspectorsContainer } from "@/components/inspectors-container";
 import { ViewsContainer } from "@/components/views-container";
 import { ViewContainer } from "@/components/view-container";
 
@@ -33,7 +33,7 @@ if (IS_QUICK_CAPTURE) {
  *   BoardContainer → ViewsContainer → ViewContainer →
  *   PerspectivesContainer → PerspectiveContainer
  *
- * InspectorContainer is a sibling overlay alongside the board layout.
+ * InspectorsContainer is a sibling overlay alongside the board layout.
  */
 function App() {
   return (
@@ -55,7 +55,7 @@ function App() {
               <ModeIndicator />
             </div>
           </BoardContainer>
-          <InspectorContainer />
+          <InspectorsContainer />
         </AppModeContainer>
       </WindowContainer>
     </RustEngineContainer>

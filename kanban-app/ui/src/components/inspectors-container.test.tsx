@@ -91,7 +91,7 @@ vi.mock("@/components/rust-engine-container", () => ({
 // Import component under test after mocks.
 // ---------------------------------------------------------------------------
 
-import { InspectorContainer } from "./inspector-container";
+import { InspectorsContainer } from "./inspectors-container";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -123,7 +123,7 @@ function uiStateWithStack(stack: string[]) {
 // Tests
 // ---------------------------------------------------------------------------
 
-describe("InspectorContainer", () => {
+describe("InspectorsContainer", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockUIState.mockReturnValue({
@@ -141,7 +141,7 @@ describe("InspectorContainer", () => {
   it("renders nothing when inspector_stack is empty", () => {
     mockUIState.mockReturnValue(uiStateWithStack([]));
 
-    const { container } = render(<InspectorContainer />);
+    const { container } = render(<InspectorsContainer />);
 
     // Backdrop should have pointer-events-none (invisible)
     const backdrop = container.querySelector(".fixed.inset-0");
@@ -153,7 +153,7 @@ describe("InspectorContainer", () => {
   it("renders a panel for each inspector_stack entry", () => {
     mockUIState.mockReturnValue(uiStateWithStack(["task:t1", "task:t2"]));
 
-    const { container } = render(<InspectorContainer />);
+    const { container } = render(<InspectorsContainer />);
 
     // Two slide panels should be rendered
     const panels = container.querySelectorAll('[class*="w-[420px]"]');
@@ -163,7 +163,7 @@ describe("InspectorContainer", () => {
   it("renders backdrop as visible when panels are open", () => {
     mockUIState.mockReturnValue(uiStateWithStack(["task:t1"]));
 
-    const { container } = render(<InspectorContainer />);
+    const { container } = render(<InspectorsContainer />);
 
     const backdrop = container.querySelector(".fixed.inset-0");
     expect(backdrop?.className).toContain("opacity-100");
@@ -173,7 +173,7 @@ describe("InspectorContainer", () => {
   it("dispatches ui.inspector.close_all when backdrop is clicked", () => {
     mockUIState.mockReturnValue(uiStateWithStack(["task:t1"]));
 
-    const { container } = render(<InspectorContainer />);
+    const { container } = render(<InspectorsContainer />);
 
     const backdrop = container.querySelector(".fixed.inset-0");
     fireEvent.click(backdrop!);
@@ -186,7 +186,7 @@ describe("InspectorContainer", () => {
       uiStateWithStack(["task:t1", "task:t2", "task:t3"]),
     );
 
-    const { container } = render(<InspectorContainer />);
+    const { container } = render(<InspectorsContainer />);
 
     const panels = container.querySelectorAll('[class*="w-[420px]"]');
     expect(panels.length).toBe(3);
@@ -201,7 +201,7 @@ describe("InspectorContainer", () => {
 
   it("renders nothing when window state does not exist", () => {
     // Default mock has no windows entry for "main"
-    const { container } = render(<InspectorContainer />);
+    const { container } = render(<InspectorsContainer />);
 
     const panels = container.querySelectorAll('[class*="w-[420px]"]');
     expect(panels.length).toBe(0);
@@ -219,7 +219,7 @@ describe("InspectorContainer", () => {
       ],
     });
 
-    const { container } = render(<InspectorContainer />);
+    const { container } = render(<InspectorsContainer />);
 
     // Panel should render (one slide panel)
     const panels = container.querySelectorAll('[class*="w-[420px]"]');
