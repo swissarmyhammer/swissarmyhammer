@@ -428,27 +428,20 @@ impl GitOperations {
 
         let repo = self.repo.inner();
 
-        // Get the source branch commit
         let source_ref = repo
             .find_reference(&format!("refs/heads/{}", source_branch.as_str()))
             .map_err(|e| convert_git2_error("find_source_reference", e))?;
-
         let source_commit = source_ref
             .peel_to_commit()
             .map_err(|e| convert_git2_error("peel_source_commit", e))?;
-
-        // Get the current HEAD commit
         let head_commit = repo
             .head()
             .and_then(|head| head.peel_to_commit())
             .map_err(|e| convert_git2_error("get_head_commit", e))?;
 
-        // Create an AnnotatedCommit from the source commit for merge analysis
         let annotated_commit = repo
             .find_annotated_commit(source_commit.id())
             .map_err(|e| convert_git2_error("find_annotated_commit", e))?;
-
-        // Perform the merge analysis
         let analysis = repo
             .merge_analysis(&[&annotated_commit])
             .map_err(|e| convert_git2_error("merge_analysis", e))?;
@@ -459,142 +452,157 @@ impl GitOperations {
         }
 
         if analysis.0.is_fast_forward() {
-            // Fast-forward merge
-            debug!("Performing fast-forward merge for branch {}", source_branch);
-            let mut head_ref = repo
-                .head()
-                .map_err(|e| convert_git2_error("get_head_ref", e))?;
-
-            head_ref
-                .set_target(source_commit.id(), "Fast-forward merge")
-                .map_err(|e| convert_git2_error("fast_forward", e))?;
-
-            let mut checkout_opts = git2::build::CheckoutBuilder::new();
-            checkout_opts.force();
-            repo.checkout_head(Some(&mut checkout_opts))
-                .map_err(|e| convert_git2_error("checkout_after_merge", e))?;
-
-            info!("Fast-forward merged branch {}", source_branch);
+            self.fast_forward_merge(repo, &source_commit, source_branch)?;
         } else {
-            // Perform actual merge operation
-            debug!("Performing three-way merge for branch {}", source_branch);
-            let mut checkout_opts = git2::build::CheckoutBuilder::new();
-            checkout_opts.conflict_style_merge(true);
-
-            let mut merge_opts = git2::MergeOptions::new();
-            merge_opts.file_favor(git2::FileFavor::Normal);
-
-            // Perform the merge
-            repo.merge(
-                &[&annotated_commit],
-                Some(&mut merge_opts),
-                Some(&mut checkout_opts),
-            )
-            .map_err(|e| convert_git2_error("perform_merge", e))?;
-
-            debug!("Merge operation completed, checking for conflicts");
-
-            // Check if there are conflicts
-            let mut index = repo
-                .index()
-                .map_err(|e| convert_git2_error("get_index_after_merge", e))?;
-
-            if index.has_conflicts() {
-                // Critical: Clean up merge state before returning error
-                // This ensures no partial merge state is left in the repository
-
-                info!(
-                    "CONFLICT DETECTED: Cleaning up merge state for branch {}",
-                    source_branch
-                );
-
-                // Step 1: Clean up merge state first
-                repo.cleanup_state()
-                    .map_err(|e| convert_git2_error("cleanup_after_conflict", e))?;
-
-                // Step 2: Reset index to HEAD to clear any conflicted entries
-                let head_commit = repo
-                    .head()
-                    .map_err(|e| convert_git2_error("get_head_for_reset", e))?
-                    .peel_to_commit()
-                    .map_err(|e| convert_git2_error("peel_head_for_reset", e))?;
-
-                let tree = head_commit
-                    .tree()
-                    .map_err(|e| convert_git2_error("get_head_tree", e))?;
-
-                // Get a fresh index handle and reset it
-                let mut fresh_index = repo
-                    .index()
-                    .map_err(|e| convert_git2_error("get_fresh_index", e))?;
-                fresh_index
-                    .read_tree(&tree)
-                    .map_err(|e| convert_git2_error("reset_index", e))?;
-                fresh_index
-                    .write()
-                    .map_err(|e| convert_git2_error("write_reset_index", e))?;
-
-                // Step 3: Force checkout HEAD to reset working directory
-                let mut checkout_opts = git2::build::CheckoutBuilder::new();
-                checkout_opts.force();
-                checkout_opts.remove_untracked(true);
-                repo.checkout_head(Some(&mut checkout_opts))
-                    .map_err(|e| convert_git2_error("reset_after_conflict", e))?;
-
-                debug!("Conflict cleanup completed");
-
-                return Err(GitError::from_string(format!(
-                    "Merge conflicts detected when merging branch '{}'. Please resolve conflicts manually.",
-                    source_branch
-                )));
-            }
-
-            // Create merge commit
-            let signature = repo
-                .signature()
-                .map_err(|e| convert_git2_error("get_signature", e))?;
-
-            let message = format!("Merge branch '{}'", source_branch);
-            let tree_id = index
-                .write_tree()
-                .map_err(|e| convert_git2_error("write_merge_tree", e))?;
-
-            let tree = repo
-                .find_tree(tree_id)
-                .map_err(|e| convert_git2_error("find_merge_tree", e))?;
-
-            repo.commit(
-                Some("HEAD"),
-                &signature,
-                &signature,
-                &message,
-                &tree,
-                &[&head_commit, &source_commit],
-            )
-            .map_err(|e| convert_git2_error("create_merge_commit", e))?;
-
-            // Clean up merge state
-            repo.cleanup_state()
-                .map_err(|e| convert_git2_error("cleanup_merge_state", e))?;
-
-            // Force checkout to update working directory with merged content
-            // After a merge commit, we need to checkout the new commit to update working directory
-            let head_commit = repo
-                .head()
-                .map_err(|e| convert_git2_error("get_head_after_merge", e))?
-                .peel_to_commit()
-                .map_err(|e| convert_git2_error("peel_head_after_merge", e))?;
-
-            let mut checkout_opts = git2::build::CheckoutBuilder::new();
-            checkout_opts.force();
-            checkout_opts.remove_untracked(false);
-
-            repo.checkout_tree(head_commit.as_object(), Some(&mut checkout_opts))
-                .map_err(|e| convert_git2_error("checkout_tree_after_merge", e))?;
-
-            info!("Created merge commit for branch {}", source_branch);
+            self.three_way_merge(repo, &annotated_commit, &head_commit, &source_commit, source_branch)?;
         }
 
+        Ok(())
+    }
+
+    /// Perform a fast-forward merge by advancing HEAD to the source commit.
+    fn fast_forward_merge(
+        &self,
+        repo: &git2::Repository,
+        source_commit: &git2::Commit<'_>,
+        source_branch: &BranchName,
+    ) -> GitResult<()> {
+        debug!("Performing fast-forward merge for branch {}", source_branch);
+
+        let mut head_ref = repo
+            .head()
+            .map_err(|e| convert_git2_error("get_head_ref", e))?;
+        head_ref
+            .set_target(source_commit.id(), "Fast-forward merge")
+            .map_err(|e| convert_git2_error("fast_forward", e))?;
+
+        let mut checkout_opts = git2::build::CheckoutBuilder::new();
+        checkout_opts.force();
+        repo.checkout_head(Some(&mut checkout_opts))
+            .map_err(|e| convert_git2_error("checkout_after_merge", e))?;
+
+        info!("Fast-forward merged branch {}", source_branch);
+        Ok(())
+    }
+
+    /// Perform a three-way merge, handling conflicts and creating the merge commit.
+    fn three_way_merge(
+        &self,
+        repo: &git2::Repository,
+        annotated_commit: &git2::AnnotatedCommit<'_>,
+        head_commit: &git2::Commit<'_>,
+        source_commit: &git2::Commit<'_>,
+        source_branch: &BranchName,
+    ) -> GitResult<()> {
+        debug!("Performing three-way merge for branch {}", source_branch);
+
+        let mut checkout_opts = git2::build::CheckoutBuilder::new();
+        checkout_opts.conflict_style_merge(true);
+        let mut merge_opts = git2::MergeOptions::new();
+        merge_opts.file_favor(git2::FileFavor::Normal);
+
+        repo.merge(&[annotated_commit], Some(&mut merge_opts), Some(&mut checkout_opts))
+            .map_err(|e| convert_git2_error("perform_merge", e))?;
+
+        let mut index = repo
+            .index()
+            .map_err(|e| convert_git2_error("get_index_after_merge", e))?;
+
+        if index.has_conflicts() {
+            return self.abort_conflicted_merge(repo, source_branch);
+        }
+
+        self.create_merge_commit(repo, &mut index, head_commit, source_commit, source_branch)?;
+        self.checkout_after_merge(repo)?;
+
+        info!("Created merge commit for branch {}", source_branch);
+        Ok(())
+    }
+
+    /// Clean up merge state and reset working directory after a conflict.
+    fn abort_conflicted_merge(
+        &self,
+        repo: &git2::Repository,
+        source_branch: &BranchName,
+    ) -> GitResult<()> {
+        info!("CONFLICT DETECTED: Cleaning up merge state for branch {}", source_branch);
+
+        repo.cleanup_state()
+            .map_err(|e| convert_git2_error("cleanup_after_conflict", e))?;
+
+        // Reset index to HEAD to clear conflicted entries
+        let head_commit = repo
+            .head()
+            .map_err(|e| convert_git2_error("get_head_for_reset", e))?
+            .peel_to_commit()
+            .map_err(|e| convert_git2_error("peel_head_for_reset", e))?;
+        let tree = head_commit
+            .tree()
+            .map_err(|e| convert_git2_error("get_head_tree", e))?;
+
+        let mut fresh_index = repo
+            .index()
+            .map_err(|e| convert_git2_error("get_fresh_index", e))?;
+        fresh_index.read_tree(&tree).map_err(|e| convert_git2_error("reset_index", e))?;
+        fresh_index.write().map_err(|e| convert_git2_error("write_reset_index", e))?;
+
+        // Force checkout HEAD to reset working directory
+        let mut checkout_opts = git2::build::CheckoutBuilder::new();
+        checkout_opts.force();
+        checkout_opts.remove_untracked(true);
+        repo.checkout_head(Some(&mut checkout_opts))
+            .map_err(|e| convert_git2_error("reset_after_conflict", e))?;
+
+        Err(GitError::from_string(format!(
+            "Merge conflicts detected when merging branch '{}'. Please resolve conflicts manually.",
+            source_branch
+        )))
+    }
+
+    /// Create a merge commit from the current index state.
+    fn create_merge_commit(
+        &self,
+        repo: &git2::Repository,
+        index: &mut git2::Index,
+        head_commit: &git2::Commit<'_>,
+        source_commit: &git2::Commit<'_>,
+        source_branch: &BranchName,
+    ) -> GitResult<()> {
+        let signature = repo
+            .signature()
+            .map_err(|e| convert_git2_error("get_signature", e))?;
+        let message = format!("Merge branch '{}'", source_branch);
+        let tree_id = index
+            .write_tree()
+            .map_err(|e| convert_git2_error("write_merge_tree", e))?;
+        let tree = repo
+            .find_tree(tree_id)
+            .map_err(|e| convert_git2_error("find_merge_tree", e))?;
+
+        repo.commit(
+            Some("HEAD"), &signature, &signature, &message, &tree,
+            &[head_commit, source_commit],
+        )
+        .map_err(|e| convert_git2_error("create_merge_commit", e))?;
+
+        repo.cleanup_state()
+            .map_err(|e| convert_git2_error("cleanup_merge_state", e))?;
+        Ok(())
+    }
+
+    /// Force-checkout HEAD to update the working directory after a merge commit.
+    fn checkout_after_merge(&self, repo: &git2::Repository) -> GitResult<()> {
+        let head_commit = repo
+            .head()
+            .map_err(|e| convert_git2_error("get_head_after_merge", e))?
+            .peel_to_commit()
+            .map_err(|e| convert_git2_error("peel_head_after_merge", e))?;
+
+        let mut checkout_opts = git2::build::CheckoutBuilder::new();
+        checkout_opts.force();
+        checkout_opts.remove_untracked(false);
+        repo.checkout_tree(head_commit.as_object(), Some(&mut checkout_opts))
+            .map_err(|e| convert_git2_error("checkout_tree_after_merge", e))?;
         Ok(())
     }
 
