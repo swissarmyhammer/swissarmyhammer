@@ -456,13 +456,16 @@ mod tests {
     use crate::defaults::{builtin_entity_definitions, builtin_field_definitions};
     use swissarmyhammer_commands::builtin_yaml_sources;
 
-    /// Build a test harness with registry, command impls, and fields context.
-    fn setup() -> (
+    /// Test harness tuple: registry, command impls, fields context, and UI state.
+    type TestHarness = (
         CommandsRegistry,
         HashMap<String, Arc<dyn Command>>,
         FieldsContext,
         Arc<UIState>,
-    ) {
+    );
+
+    /// Build a test harness with registry, command impls, and fields context.
+    fn setup() -> TestHarness {
         let registry = CommandsRegistry::from_yaml_sources(&builtin_yaml_sources());
         let command_impls = crate::commands::register_commands();
         let defs = builtin_field_definitions();
@@ -825,7 +828,7 @@ mod tests {
         // This is 2 because column and board both pass.
         // We accept this — the frontend dedup isn't our concern here.
         // The backend returns all available instances.
-        assert!(paste_cmds.len() >= 1, "at least one paste should appear");
+        assert!(!paste_cmds.is_empty(), "at least one paste should appear");
     }
 
     // =========================================================================

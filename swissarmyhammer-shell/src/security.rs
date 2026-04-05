@@ -1040,4 +1040,274 @@ mod tests {
         assert!(logs_contain("unusual exit code"));
         assert!(logs_contain("killed_proc"));
     }
+
+    #[test]
+    fn test_with_default_policy() {
+        // Exercises ShellSecurityValidator::with_default_policy (line 229-231)
+        let validator = ShellSecurityValidator::with_default_policy();
+        assert!(validator.is_ok());
+        let v = validator.unwrap();
+        assert!(v.policy().enable_validation);
+    }
+
+    #[test]
+    fn test_policy_getter() {
+        // Exercises policy() getter (lines 389-391)
+        let policy = ShellSecurityPolicy {
+            max_command_length: 999,
+            ..Default::default()
+        };
+        let validator = ShellSecurityValidator::new(policy).unwrap();
+        assert_eq!(validator.policy().max_command_length, 999);
+    }
+
+    #[test]
+    fn test_from_config() {
+        // Exercises from_config path (line 205-226)
+        let config = crate::config::ShellSecurityConfig {
+            permit: vec![],
+            deny: vec![crate::config::PatternRule {
+                pattern: r"test_pattern".to_string(),
+                reason: "test reason".to_string(),
+            }],
+            settings: crate::config::ShellSettings::default(),
+        };
+        let validator = ShellSecurityValidator::from_config(&config);
+        assert!(validator.is_ok());
+        let v = validator.unwrap();
+        // The blocked_commands in the legacy policy should contain our pattern
+        assert!(v
+            .policy()
+            .blocked_commands
+            .iter()
+            .any(|p| p == "test_pattern"));
+    }
+
+    #[test]
+    fn test_new_with_invalid_regex_pattern() {
+        // Exercises error path in new() (lines 193-196)
+        let policy = ShellSecurityPolicy {
+            blocked_commands: vec![r"[invalid(regex".to_string()],
+            ..Default::default()
+        };
+        let result = ShellSecurityValidator::new(policy);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_from_config_with_invalid_regex_pattern() {
+        // Exercises error path in from_config() (lines 207-210)
+        let config = crate::config::ShellSecurityConfig {
+            permit: vec![],
+            deny: vec![crate::config::PatternRule {
+                pattern: r"[invalid(regex".to_string(),
+                reason: "bad pattern".to_string(),
+            }],
+            settings: crate::config::ShellSettings::default(),
+        };
+        let result = ShellSecurityValidator::from_config(&config);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_directory_access_backslash_traversal() {
+        // Exercises the ..\ path traversal check (line 255-258)
+        let path = Path::new("some\\..\\parent");
+        let result = ShellSecurityValidator::validate_directory_access_static(path);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_directory_access_canonicalize_error() {
+        // Exercises the canonicalize error path (lines 263-268)
+        let temp_dir = TempDir::new().unwrap();
+        let policy = ShellSecurityPolicy {
+            allowed_directories: Some(vec![temp_dir.path().to_path_buf()]),
+            ..Default::default()
+        };
+        let validator = ShellSecurityValidator::new(policy).unwrap();
+        // A non-existent directory can't be canonicalized
+        let result = validator.validate_directory_access(Path::new("/nonexistent/path/12345"));
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            ShellSecurityError::InvalidDirectory { .. }
+        ));
+    }
+
+    #[test]
+    fn test_static_env_var_validation_invalid_name() {
+        // Exercises validate_environment_variables_with_settings invalid name (line 355)
+        let mut env = HashMap::new();
+        env.insert("123BAD".to_string(), "value".to_string());
+        let result =
+            ShellSecurityValidator::validate_environment_variables_with_settings(&env, 1024);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            ShellSecurityError::InvalidEnvironmentVariable { .. }
+        ));
+    }
+
+    #[test]
+    fn test_static_env_var_validation_value_too_long() {
+        // Exercises validate_environment_variables_with_settings value too long (lines 358-365)
+        let mut env = HashMap::new();
+        env.insert("MY_VAR".to_string(), "a".repeat(20));
+        let result = ShellSecurityValidator::validate_environment_variables_with_settings(&env, 10);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            ShellSecurityError::InvalidEnvironmentVariableValue { .. }
+        ));
+    }
+
+    #[test]
+    fn test_static_env_var_validation_null_byte() {
+        // Exercises validate_environment_variables_with_settings null byte (lines 370-373)
+        let mut env = HashMap::new();
+        env.insert("MY_VAR".to_string(), "hello\0world".to_string());
+        let result =
+            ShellSecurityValidator::validate_environment_variables_with_settings(&env, 1024);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            ShellSecurityError::InvalidEnvironmentVariableValue { .. }
+        ));
+    }
+
+    #[test]
+    fn test_static_env_var_validation_newline() {
+        // Exercises validate_environment_variables_with_settings newline (lines 377-380)
+        let mut env = HashMap::new();
+        env.insert("MY_VAR".to_string(), "hello\nworld".to_string());
+        let result =
+            ShellSecurityValidator::validate_environment_variables_with_settings(&env, 1024);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            ShellSecurityError::InvalidEnvironmentVariableValue { .. }
+        ));
+    }
+
+    #[test]
+    fn test_static_env_var_validation_carriage_return() {
+        // Exercises the \r branch in validate_environment_variables_with_settings
+        let mut env = HashMap::new();
+        env.insert("MY_VAR".to_string(), "hello\rworld".to_string());
+        let result =
+            ShellSecurityValidator::validate_environment_variables_with_settings(&env, 1024);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_static_env_var_validation_success() {
+        // Exercises the happy path in validate_environment_variables_with_settings
+        let mut env = HashMap::new();
+        env.insert("GOOD_VAR".to_string(), "good_value".to_string());
+        let result =
+            ShellSecurityValidator::validate_environment_variables_with_settings(&env, 1024);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    #[traced_test]
+    fn test_warn_if_protected_env_var() {
+        // Exercises warn_if_protected_env_var (lines 420-438) through instance method
+        let policy = ShellSecurityPolicy::default();
+        let validator = ShellSecurityValidator::new(policy).unwrap();
+
+        let mut env = HashMap::new();
+        env.insert("PATH".to_string(), "/usr/bin".to_string());
+        // This triggers the warning path; validation still passes
+        assert!(validator.validate_environment_variables(&env).is_ok());
+        assert!(logs_contain("Modifying protected environment variable"));
+    }
+
+    #[test]
+    #[traced_test]
+    fn test_warn_if_protected_env_var_static() {
+        // Exercises warn_if_protected_env_var through static method path
+        let mut env = HashMap::new();
+        env.insert("HOME".to_string(), "/tmp".to_string());
+        let result =
+            ShellSecurityValidator::validate_environment_variables_with_settings(&env, 1024);
+        assert!(result.is_ok());
+        assert!(logs_contain("Modifying protected environment variable"));
+    }
+
+    #[test]
+    fn test_load_validator_returns_validator() {
+        // Exercises load_validator (lines 506-516)
+        let validator = load_validator();
+        // Should return a working validator
+        assert!(validator.validate_command("echo hello").is_ok());
+    }
+
+    #[test]
+    fn test_validate_environment_variables_security_fn() {
+        // Exercises validate_environment_variables_security (lines 596-603)
+        let mut env = HashMap::new();
+        env.insert("GOOD".to_string(), "value".to_string());
+        assert!(validate_environment_variables_security(&env).is_ok());
+
+        let mut bad_env = HashMap::new();
+        bad_env.insert("123BAD".to_string(), "value".to_string());
+        assert!(validate_environment_variables_security(&bad_env).is_err());
+    }
+
+    #[test]
+    fn test_directory_access_instance_backslash_traversal() {
+        // Exercises the ..\ path in validate_directory_access (instance method, lines 255-258)
+        let policy = ShellSecurityPolicy::default();
+        let validator = ShellSecurityValidator::new(policy).unwrap();
+        let path = Path::new("foo\\..\\bar");
+        let result = validator.validate_directory_access(path);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            ShellSecurityError::DirectoryAccessDenied { .. }
+        ));
+    }
+
+    #[test]
+    fn test_directory_access_instance_forward_traversal() {
+        // Exercises the ../ path in validate_directory_access (instance method)
+        let policy = ShellSecurityPolicy::default();
+        let validator = ShellSecurityValidator::new(policy).unwrap();
+        let path = Path::new("../parent");
+        let result = validator.validate_directory_access(path);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            ShellSecurityError::DirectoryAccessDenied { .. }
+        ));
+    }
+
+    #[test]
+    #[traced_test]
+    fn test_log_shell_execution_with_audit_enabled() {
+        // Exercises log_shell_execution info log path (lines 532-539)
+        let env_vars = HashMap::new();
+        log_shell_execution("echo coverage", Some(Path::new("/tmp")), &env_vars);
+        assert!(logs_contain("Shell command execution started"));
+        assert!(logs_contain("echo coverage"));
+    }
+
+    #[test]
+    #[traced_test]
+    fn test_log_shell_completion_with_audit_enabled() {
+        // Exercises log_shell_completion info log path (lines 550-558)
+        log_shell_completion("echo coverage", 0, 42);
+        assert!(logs_contain("Shell command execution completed"));
+        assert!(logs_contain("echo coverage"));
+    }
+
+    #[test]
+    #[traced_test]
+    fn test_log_shell_completion_suspicious_exit_code() {
+        // Exercises the suspicious exit code warn path (lines 560-567)
+        log_shell_completion("suspicious_cmd", 139, 100);
+        assert!(logs_contain("unusual exit code"));
+    }
 }

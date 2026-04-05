@@ -1815,6 +1815,151 @@ mod tests {
         let _ = fs::remove_file(&path);
     }
 
+    // --- clipboard tests ---
+
+    #[test]
+    fn has_clipboard_defaults_to_false() {
+        let state = UIState::new();
+        assert!(!state.has_clipboard());
+    }
+
+    #[test]
+    fn set_has_clipboard_true_and_false() {
+        let state = UIState::new();
+        state.set_has_clipboard(true);
+        assert!(state.has_clipboard());
+
+        state.set_has_clipboard(false);
+        assert!(!state.has_clipboard());
+    }
+
+    #[test]
+    fn set_has_clipboard_false_clears_entity_type() {
+        let state = UIState::new();
+        state.set_clipboard_entity_type("task");
+        assert!(state.has_clipboard());
+        assert_eq!(state.clipboard_entity_type(), Some("task".to_string()));
+
+        state.set_has_clipboard(false);
+        assert!(!state.has_clipboard());
+        assert!(state.clipboard_entity_type().is_none());
+    }
+
+    #[test]
+    fn set_clipboard_entity_type_sets_both_fields() {
+        let state = UIState::new();
+        state.set_clipboard_entity_type("tag");
+        assert!(state.has_clipboard());
+        assert_eq!(state.clipboard_entity_type(), Some("tag".to_string()));
+    }
+
+    #[test]
+    fn clipboard_entity_type_defaults_to_none() {
+        let state = UIState::new();
+        assert!(state.clipboard_entity_type().is_none());
+    }
+
+    // --- undo/redo state tests ---
+
+    #[test]
+    fn can_undo_defaults_to_false() {
+        let state = UIState::new();
+        assert!(!state.can_undo());
+    }
+
+    #[test]
+    fn can_redo_defaults_to_false() {
+        let state = UIState::new();
+        assert!(!state.can_redo());
+    }
+
+    #[test]
+    fn set_undo_redo_state_updates_both() {
+        let state = UIState::new();
+        state.set_undo_redo_state(true, false);
+        assert!(state.can_undo());
+        assert!(!state.can_redo());
+
+        state.set_undo_redo_state(false, true);
+        assert!(!state.can_undo());
+        assert!(state.can_redo());
+
+        state.set_undo_redo_state(true, true);
+        assert!(state.can_undo());
+        assert!(state.can_redo());
+    }
+
+    // --- Debug impl tests ---
+
+    #[test]
+    fn ui_state_debug_impl_includes_key_fields() {
+        let state = UIState::new();
+        state.set_keymap_mode("vim");
+        state.set_scope_chain(vec!["task:01ABC".into()]);
+        let debug_str = format!("{:?}", state);
+        assert!(debug_str.contains("UIState"));
+        assert!(debug_str.contains("vim"));
+        assert!(debug_str.contains("task:01ABC"));
+    }
+
+    // --- to_json with windows tests ---
+
+    #[test]
+    fn to_json_includes_window_palette_fields() {
+        let state = UIState::new();
+        state.set_palette_open_with_mode("main", true, "search");
+        state.set_window_board("main", "/boards/a");
+        let json = state.to_json();
+        let windows = json["windows"]
+            .as_object()
+            .expect("windows should be an object");
+        let main_win = windows.get("main").expect("main window should be in JSON");
+        assert_eq!(main_win["palette_open"], true);
+        assert_eq!(main_win["palette_mode"], "search");
+    }
+
+    #[test]
+    fn palette_open_returns_false_for_unknown_window() {
+        let state = UIState::new();
+        assert!(!state.palette_open("unknown-window"));
+    }
+
+    #[test]
+    fn palette_mode_returns_command_for_unknown_window() {
+        let state = UIState::new();
+        assert_eq!(state.palette_mode("unknown-window"), "command");
+    }
+
+    #[test]
+    fn set_palette_open_same_value_returns_none() {
+        let state = UIState::new();
+        // palette_open defaults to false, so setting to false should be no-op
+        let change = state.set_palette_open("main", false);
+        assert!(change.is_none());
+    }
+
+    #[test]
+    fn set_palette_open_with_mode_same_value_returns_none() {
+        let state = UIState::new();
+        // Default: palette_open=false, palette_mode="command"
+        // Setting the same values should return None
+        state.set_palette_open_with_mode("main", false, "command");
+        // Now set it again with the same values (window already exists)
+        let change = state.set_palette_open_with_mode("main", false, "command");
+        assert!(change.is_none());
+    }
+
+    #[test]
+    fn to_json_includes_clipboard_and_scope() {
+        let state = UIState::new();
+        state.set_clipboard_entity_type("task");
+        state.set_scope_chain(vec!["board:main".into()]);
+        let json = state.to_json();
+        assert_eq!(json["has_clipboard"], true);
+        assert_eq!(json["clipboard_entity_type"], "task");
+        assert_eq!(json["scope_chain"], serde_json::json!(["board:main"]));
+    }
+
     #[test]
     fn update_window_geometry_persisted_by_explicit_save() {
         let path = temp_yaml_path("update_then_save");

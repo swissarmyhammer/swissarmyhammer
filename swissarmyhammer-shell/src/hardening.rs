@@ -901,4 +901,307 @@ mod tests {
         assert_eq!(stats.high_frequency_commands, 1);
         assert!(stats.threat_detection_enabled);
     }
+
+    #[test]
+    fn test_threat_detector_default_impl() {
+        // Exercises Default impl for ThreatDetector (lines 248-250)
+        let detector: ThreatDetector = Default::default();
+        assert!(!detector.malicious_patterns.is_empty());
+        assert!(!detector.suspicious_patterns.is_empty());
+    }
+
+    #[test]
+    fn test_suspicious_pattern_detection() {
+        // Exercises suspicious pattern branch (lines 318-335)
+        let mut detector = ThreatDetector::new();
+        let context = CommandContext::default();
+
+        // "base64" matches the suspicious pattern for encoding tools
+        let assessment = detector.analyze_command("base64 secret.txt", &context);
+        assert!(assessment.threat_level >= ThreatLevel::Medium);
+        assert!(assessment
+            .threats
+            .iter()
+            .any(|t| matches!(t.threat_type, ThreatType::Generic)));
+        assert!(!assessment.required_measures.is_empty());
+    }
+
+    #[test]
+    fn test_suspicious_pattern_ssh() {
+        // Exercises another suspicious pattern (network file transfer)
+        let mut detector = ThreatDetector::new();
+        let context = CommandContext::default();
+
+        let assessment = detector.analyze_command("scp file.txt remote:", &context);
+        assert!(assessment.threat_level >= ThreatLevel::Medium);
+        assert!(assessment
+            .threats
+            .iter()
+            .any(|t| matches!(t.threat_type, ThreatType::Generic)));
+    }
+
+    #[test]
+    fn test_suspicious_pattern_find_exec() {
+        // Exercises "find ... -exec" suspicious pattern
+        let mut detector = ThreatDetector::new();
+        let context = CommandContext::default();
+
+        let assessment = detector.analyze_command("find / -name '*.log' -exec rm {} +", &context);
+        assert!(assessment.threat_level >= ThreatLevel::Medium);
+    }
+
+    #[test]
+    fn test_frequency_anomaly_not_triggered_below_threshold() {
+        // Exercises check_frequency_anomalies returning None (line 440)
+        let mut detector = ThreatDetector::new();
+        let context = CommandContext::default();
+
+        // Run just a few times — below threshold
+        for _ in 0..3 {
+            let assessment = detector.analyze_command("echo safe", &context);
+            assert!(
+                !assessment
+                    .threats
+                    .iter()
+                    .any(|t| matches!(t.threat_type, ThreatType::AnomalousFrequency)),
+                "Should not trigger frequency anomaly with few executions"
+            );
+        }
+    }
+
+    #[test]
+    fn test_hardened_validator_get_security_statistics() {
+        // Exercises HardenedSecurityValidator::get_security_statistics (lines 646-648)
+        let policy = ShellSecurityPolicy::default();
+        let config = SecurityHardeningConfig::default();
+        let validator = HardenedSecurityValidator::new(policy, config);
+
+        let stats = validator.get_security_statistics();
+        assert_eq!(stats.total_commands_analyzed, 0);
+        assert_eq!(stats.unique_commands, 0);
+        assert!(stats.threat_detection_enabled);
+    }
+
+    #[test]
+    fn test_validate_comprehensive_medium_threat_level_log() {
+        // Exercises the Medium threat level log branch (line 604)
+        // and the PASSED audit event path (line 622)
+        let policy = ShellSecurityPolicy::default();
+        let config = SecurityHardeningConfig::default();
+        let mut validator = HardenedSecurityValidator::new(policy, config);
+
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let env = HashMap::new();
+        let context = CommandContext::default();
+
+        // "base64" triggers suspicious (Medium) pattern but not malicious ones strongly
+        // enough to block. It also won't match blocked commands in base validator.
+        let result = validator.validate_command_comprehensive(
+            "base64 file.txt",
+            tmp_dir.path(),
+            &env,
+            context,
+        );
+
+        let assessment = result.expect("base64 should pass base validation");
+        assert!(assessment.threat_level >= ThreatLevel::Medium);
+        assert!(assessment.allow_execution);
+    }
+
+    #[test]
+    fn test_validate_comprehensive_high_threat_with_assessment() {
+        // Exercises the High threat level warn branch (line 600)
+        // and the PASSED audit event path
+        let policy = ShellSecurityPolicy::default();
+        let config = SecurityHardeningConfig::default();
+        let mut validator = HardenedSecurityValidator::new(policy, config);
+
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let env = HashMap::new();
+        let context = CommandContext::default();
+
+        // "ls; echo injected" has semicolon (malicious pattern) but passes base validation
+        let result = validator.validate_command_comprehensive(
+            "ls; echo injected",
+            tmp_dir.path(),
+            &env,
+            context,
+        );
+
+        let assessment = result.expect("should pass base validation");
+        assert!(assessment.threat_level >= ThreatLevel::High);
+    }
+
+    #[test]
+    fn test_command_context_default() {
+        // Exercises CommandContext::default() fields
+        let ctx = CommandContext::default();
+        assert!(ctx.source_ip.is_none());
+        assert!(ctx.user_id.is_none());
+        assert_eq!(ctx.working_directory, PathBuf::from("."));
+        assert!(ctx.environment.is_empty());
+        assert!(ctx.parent_pid.is_none());
+    }
+
+    #[test]
+    fn test_threat_level_ordering() {
+        // Verify ThreatLevel ordering is correct (used by .max() in analyze_command)
+        assert!(ThreatLevel::None < ThreatLevel::Low);
+        assert!(ThreatLevel::Low < ThreatLevel::Medium);
+        assert!(ThreatLevel::Medium < ThreatLevel::High);
+        assert!(ThreatLevel::High < ThreatLevel::Critical);
+    }
+
+    #[test]
+    fn test_security_hardening_config_default() {
+        // Exercises SecurityHardeningConfig::default()
+        let config = SecurityHardeningConfig::default();
+        assert!(config.enable_threat_detection);
+        assert!(config.enable_behavior_monitoring);
+        assert!(!config.enable_network_monitoring);
+        assert!(config.enable_filesystem_monitoring);
+        assert_eq!(config.max_process_count, 10);
+        assert!(!config.enable_sandboxing);
+        assert!(!config.forbidden_directories.is_empty());
+        assert!(!config.forbidden_extensions.is_empty());
+        assert!(!config.high_risk_commands.is_empty());
+    }
+
+    #[test]
+    fn test_threat_detection_config_default() {
+        // Exercises ThreatDetectionConfig::default()
+        let config = ThreatDetectionConfig::default();
+        assert_eq!(config.max_history_size, 1000);
+        assert_eq!(config.suspicious_frequency_threshold, 50);
+        assert!(!config.enable_ml_detection);
+    }
+
+    #[test]
+    fn test_detect_resource_exhaustion_patterns() {
+        // Exercises detect_resource_exhaustion (lines 464-477)
+        let detector = ThreatDetector::new();
+
+        assert!(detector.detect_resource_exhaustion("/dev/zero"));
+        assert!(detector.detect_resource_exhaustion("dd if=/dev/zero of=output"));
+        assert!(detector.detect_resource_exhaustion("while true; do echo spam; done"));
+        assert!(detector.detect_resource_exhaustion("cat /dev/urandom > file"));
+        assert!(!detector.detect_resource_exhaustion("echo hello"));
+    }
+
+    #[test]
+    fn test_detect_privilege_escalation_patterns() {
+        // Exercises detect_privilege_escalation (lines 445-461)
+        let detector = ThreatDetector::new();
+
+        assert!(detector.detect_privilege_escalation("sudo rm file"));
+        assert!(detector.detect_privilege_escalation("su - root"));
+        assert!(detector.detect_privilege_escalation("doas apt install"));
+        assert!(detector.detect_privilege_escalation("pkexec command"));
+        assert!(detector.detect_privilege_escalation("chmod +s /bin/sh"));
+        assert!(detector.detect_privilege_escalation("chown root file"));
+        assert!(!detector.detect_privilege_escalation("echo hello"));
+    }
+
+    #[test]
+    fn test_validate_comprehensive_critical_threat_level() {
+        // Exercises the Critical threat level error! log branch (line 598)
+        // and the FAILED audit event branch (line 624).
+        // We need a command that passes base validation but gets Critical from
+        // threat detector. The threat detector doesn't produce Critical directly
+        // (max is High from malicious patterns + privilege escalation).
+        // But we can verify High is logged by checking assessment.
+        let policy = ShellSecurityPolicy::default();
+        let config = SecurityHardeningConfig::default();
+        let mut validator = HardenedSecurityValidator::new(policy, config);
+
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let env = HashMap::new();
+        let context = CommandContext::default();
+
+        // Command with privilege escalation pattern ("su") + malicious semicolon
+        // "su" alone won't match base deny patterns (base has "sudo\s+" not "su\s+")
+        let result = validator.validate_command_comprehensive(
+            "echo test; su - root",
+            tmp_dir.path(),
+            &env,
+            context,
+        );
+
+        let assessment = result.expect("should pass base validation");
+        assert!(assessment.threat_level >= ThreatLevel::High);
+    }
+
+    #[test]
+    fn test_validate_comprehensive_low_threat_not_triggered() {
+        // The ThreatDetector doesn't produce Low threats in current implementation,
+        // but exercises the None/Low boundary logic. A completely clean command
+        // yields ThreatLevel::None.
+        let policy = ShellSecurityPolicy::default();
+        let config = SecurityHardeningConfig::default();
+        let mut validator = HardenedSecurityValidator::new(policy, config);
+
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let env = HashMap::new();
+        let context = CommandContext::default();
+
+        let result = validator.validate_command_comprehensive(
+            "echo hello world",
+            tmp_dir.path(),
+            &env,
+            context,
+        );
+
+        let assessment = result.expect("clean command should pass");
+        assert_eq!(assessment.threat_level, ThreatLevel::None);
+        assert!(assessment.allow_execution);
+        assert!(assessment.threats.is_empty());
+    }
+
+    #[test]
+    fn test_with_config_custom_thresholds() {
+        // Exercises ThreatDetector::with_config with custom settings
+        let config = ThreatDetectionConfig {
+            max_history_size: 10,
+            frequency_window: Duration::from_secs(30),
+            suspicious_frequency_threshold: 5,
+            enable_ml_detection: false,
+        };
+        let mut detector = ThreatDetector::with_config(config);
+        let context = CommandContext::default();
+
+        // With threshold of 5, run 6 times to trigger frequency anomaly
+        for _ in 0..6 {
+            detector.analyze_command("echo spam", &context);
+        }
+        let assessment = detector.analyze_command("echo spam", &context);
+        assert!(assessment
+            .threats
+            .iter()
+            .any(|t| matches!(t.threat_type, ThreatType::AnomalousFrequency)));
+    }
+
+    #[test]
+    fn test_security_hardening_config_serialization() {
+        // Exercises serialization of SecurityHardeningConfig
+        let config = SecurityHardeningConfig::default();
+        let json = serde_json::to_string(&config).unwrap();
+        let deserialized: SecurityHardeningConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.max_process_count, config.max_process_count);
+        assert_eq!(deserialized.enable_sandboxing, config.enable_sandboxing);
+    }
+
+    #[test]
+    fn test_security_statistics_serialization() {
+        let stats = SecurityStatistics {
+            total_commands_analyzed: 42,
+            unique_commands: 10,
+            high_frequency_commands: 1,
+            threat_detection_enabled: true,
+            last_analysis_time: SystemTime::now(),
+        };
+        let json = serde_json::to_string(&stats).unwrap();
+        let deserialized: SecurityStatistics = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.total_commands_analyzed, 42);
+        assert_eq!(deserialized.unique_commands, 10);
+    }
 }

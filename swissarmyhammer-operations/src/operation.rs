@@ -115,6 +115,44 @@ mod tests {
         assert_eq!(op.op_string(), "add task");
     }
 
+    #[test]
+    fn test_parameters_default_empty() {
+        let op = AddTask {
+            title: "Test".to_string(),
+            description: None,
+        };
+        assert!(op.parameters().is_empty());
+    }
+
+    #[test]
+    fn test_examples_default_empty() {
+        let op = AddTask {
+            title: "Test".to_string(),
+            description: None,
+        };
+        assert!(op.examples().is_empty());
+    }
+
+    #[test]
+    fn test_op_string_format() {
+        let op = AddTask {
+            title: "Test".to_string(),
+            description: None,
+        };
+        assert_eq!(op.op_string(), format!("{} {}", op.verb(), op.noun()));
+    }
+
+    #[test]
+    fn test_affected_resource_ids_default_empty() {
+        let op = AddTask {
+            title: "Test".to_string(),
+            description: None,
+        };
+        let result = serde_json::json!({});
+        let ids = op.affected_resource_ids(&result);
+        assert!(ids.is_empty());
+    }
+
     #[tokio::test]
     async fn test_execute() {
         let op = AddTask {

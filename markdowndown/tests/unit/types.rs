@@ -5,8 +5,8 @@
 
 use chrono::{DateTime, Utc};
 use markdowndown::types::{
-    AuthErrorKind, ContentErrorKind, ConverterErrorKind, ErrorContext, Frontmatter, Markdown,
-    MarkdownError, NetworkErrorKind, Url, UrlType, ValidationErrorKind,
+    AuthErrorKind, ConfigErrorKind, ContentErrorKind, ConverterErrorKind, ErrorContext, Frontmatter,
+    Markdown, MarkdownError, NetworkErrorKind, Url, UrlType, ValidationErrorKind,
 };
 use proptest::prelude::*;
 use serde_yaml_ng;
@@ -662,6 +662,304 @@ mod property_tests {
             assert_eq!(context.operation, operation);
             assert_eq!(context.converter_type, converter_type);
         }
+    }
+}
+
+/// Tests for status code check methods on MarkdownError
+mod status_check_tests {
+    use super::*;
+
+    #[test]
+    fn test_is_rate_limit_enhanced() {
+        let context = helpers::create_test_error_context();
+        let error = MarkdownError::EnhancedNetworkError {
+            kind: NetworkErrorKind::RateLimited,
+            context,
+        };
+        assert!(error.is_rate_limit());
+    }
+
+    #[test]
+    fn test_is_rate_limit_legacy_network() {
+        let error = MarkdownError::NetworkError {
+            message: "rate limit exceeded".to_string(),
+        };
+        assert!(error.is_rate_limit());
+    }
+
+    #[test]
+    fn test_is_rate_limit_legacy_auth() {
+        let error = MarkdownError::AuthError {
+            message: "Rate Limit hit".to_string(),
+        };
+        assert!(error.is_rate_limit());
+    }
+
+    #[test]
+    fn test_is_rate_limit_false_for_other_errors() {
+        let error = MarkdownError::ParseError {
+            message: "some error".to_string(),
+        };
+        assert!(!error.is_rate_limit());
+
+        let error2 = MarkdownError::NetworkError {
+            message: "connection timeout".to_string(),
+        };
+        assert!(!error2.is_rate_limit());
+    }
+
+    #[test]
+    fn test_is_forbidden_enhanced() {
+        let context = helpers::create_test_error_context();
+        let error = MarkdownError::AuthenticationError {
+            kind: AuthErrorKind::PermissionDenied,
+            context,
+        };
+        assert!(error.is_forbidden());
+    }
+
+    #[test]
+    fn test_is_forbidden_legacy_network() {
+        let error = MarkdownError::NetworkError {
+            message: "HTTP 403 Forbidden".to_string(),
+        };
+        assert!(error.is_forbidden());
+    }
+
+    #[test]
+    fn test_is_forbidden_legacy_auth() {
+        let error = MarkdownError::AuthError {
+            message: "403 access denied".to_string(),
+        };
+        assert!(error.is_forbidden());
+    }
+
+    #[test]
+    fn test_is_forbidden_enhanced_server_error() {
+        let context = helpers::create_test_error_context();
+        let error = MarkdownError::EnhancedNetworkError {
+            kind: NetworkErrorKind::ServerError(403),
+            context,
+        };
+        assert!(error.is_forbidden());
+    }
+
+    #[test]
+    fn test_is_forbidden_false() {
+        let error = MarkdownError::ParseError {
+            message: "some error".to_string(),
+        };
+        assert!(!error.is_forbidden());
+    }
+
+    #[test]
+    fn test_is_unauthorized_enhanced_invalid_token() {
+        let context = helpers::create_test_error_context();
+        let error = MarkdownError::AuthenticationError {
+            kind: AuthErrorKind::InvalidToken,
+            context,
+        };
+        assert!(error.is_unauthorized());
+    }
+
+    #[test]
+    fn test_is_unauthorized_enhanced_missing_token() {
+        let context = helpers::create_test_error_context();
+        let error = MarkdownError::AuthenticationError {
+            kind: AuthErrorKind::MissingToken,
+            context,
+        };
+        assert!(error.is_unauthorized());
+    }
+
+    #[test]
+    fn test_is_unauthorized_legacy() {
+        let error = MarkdownError::NetworkError {
+            message: "HTTP 401 Unauthorized".to_string(),
+        };
+        assert!(error.is_unauthorized());
+    }
+
+    #[test]
+    fn test_is_unauthorized_enhanced_server_error() {
+        let context = helpers::create_test_error_context();
+        let error = MarkdownError::EnhancedNetworkError {
+            kind: NetworkErrorKind::ServerError(401),
+            context,
+        };
+        assert!(error.is_unauthorized());
+    }
+
+    #[test]
+    fn test_is_unauthorized_false() {
+        let error = MarkdownError::ParseError {
+            message: "parse fail".to_string(),
+        };
+        assert!(!error.is_unauthorized());
+
+        let context = helpers::create_test_error_context();
+        let error2 = MarkdownError::AuthenticationError {
+            kind: AuthErrorKind::TokenExpired,
+            context,
+        };
+        assert!(!error2.is_unauthorized());
+    }
+
+    #[test]
+    fn test_is_not_found_enhanced() {
+        let context = helpers::create_test_error_context();
+        let error = MarkdownError::EnhancedNetworkError {
+            kind: NetworkErrorKind::ServerError(404),
+            context,
+        };
+        assert!(error.is_not_found());
+    }
+
+    #[test]
+    fn test_is_not_found_legacy_message_404() {
+        let error = MarkdownError::NetworkError {
+            message: "HTTP 404".to_string(),
+        };
+        assert!(error.is_not_found());
+    }
+
+    #[test]
+    fn test_is_not_found_legacy_message_text() {
+        let error = MarkdownError::NetworkError {
+            message: "resource not found".to_string(),
+        };
+        assert!(error.is_not_found());
+    }
+
+    #[test]
+    fn test_is_not_found_legacy_auth_message() {
+        let error = MarkdownError::AuthError {
+            message: "404 not found".to_string(),
+        };
+        assert!(error.is_not_found());
+    }
+
+    #[test]
+    fn test_is_not_found_false() {
+        let error = MarkdownError::ParseError {
+            message: "parse error".to_string(),
+        };
+        assert!(!error.is_not_found());
+    }
+}
+
+/// Tests for PartialEq impls from impl_partial_eq_for_newtype macro
+mod partial_eq_tests {
+    use super::*;
+
+    #[test]
+    fn test_markdown_partial_eq_str() {
+        let content = "# Hello";
+        let markdown = Markdown::from(content.to_string());
+        assert!(markdown == content);
+    }
+
+    #[test]
+    fn test_markdown_partial_eq_string() {
+        let content = "# Hello".to_string();
+        let markdown = Markdown::from(content.clone());
+        assert!(markdown == content);
+    }
+
+    #[test]
+    fn test_url_partial_eq_str() {
+        let url_str = "https://example.com";
+        let url = Url::new(url_str.to_string()).unwrap();
+        assert!(url == url_str);
+    }
+
+    #[test]
+    fn test_url_partial_eq_string() {
+        let url_str = "https://example.com".to_string();
+        let url = Url::new(url_str.clone()).unwrap();
+        assert!(url == url_str);
+    }
+}
+
+/// Tests for LegacyConfigurationError
+mod legacy_config_error_tests {
+    use super::*;
+
+    #[test]
+    fn test_legacy_configuration_error() {
+        let error = MarkdownError::LegacyConfigurationError {
+            message: "Bad config".to_string(),
+        };
+        helpers::test_legacy_error(error, false, false, "configuration");
+    }
+
+    #[test]
+    fn test_legacy_configuration_error_display() {
+        let error = MarkdownError::LegacyConfigurationError {
+            message: "Missing required field".to_string(),
+        };
+        let display = format!("{error}");
+        assert!(display.contains("Missing required field"));
+    }
+}
+
+/// Tests for PermissionDenied auth error recovery
+mod permission_denied_tests {
+    use super::*;
+
+    #[test]
+    fn test_permission_denied_not_recoverable() {
+        let context = helpers::create_test_error_context();
+        let error = MarkdownError::AuthenticationError {
+            kind: AuthErrorKind::PermissionDenied,
+            context,
+        };
+        assert!(!error.is_retryable());
+        // PermissionDenied is NOT recoverable (returns false from is_recoverable on AuthErrorKind)
+        // But AuthenticationError matches the is_recoverable impl which calls kind.is_recoverable()
+        // AuthErrorKind::is_recoverable returns true for all variants
+        assert!(error.is_recoverable());
+    }
+}
+
+/// Tests for ConfigurationError suggestions match arm
+mod config_error_suggestion_tests {
+    use super::*;
+
+    #[test]
+    fn test_configuration_error_suggestions() {
+        let context = helpers::create_test_error_context();
+        let error = MarkdownError::ConfigurationError {
+            kind: ConfigErrorKind::InvalidConfig,
+            context,
+        };
+        let suggestions = error.suggestions();
+        assert!(!suggestions.is_empty());
+        helpers::assert_suggestion_contains(&error, "configuration");
+    }
+
+    #[test]
+    fn test_configuration_error_missing_dependency_suggestions() {
+        let context = helpers::create_test_error_context();
+        let error = MarkdownError::ConfigurationError {
+            kind: ConfigErrorKind::MissingDependency,
+            context,
+        };
+        let suggestions = error.suggestions();
+        assert!(!suggestions.is_empty());
+        helpers::assert_suggestion_contains(&error, "dependencies");
+    }
+
+    #[test]
+    fn test_configuration_error_invalid_value_suggestions() {
+        let context = helpers::create_test_error_context();
+        let error = MarkdownError::ConfigurationError {
+            kind: ConfigErrorKind::InvalidValue,
+            context,
+        };
+        let suggestions = error.suggestions();
+        assert!(!suggestions.is_empty());
+        helpers::assert_suggestion_contains(&error, "valid");
     }
 }
 

@@ -26,6 +26,7 @@ pub mod env_loader;
 pub mod error;
 pub mod error_context;
 pub mod file_loader;
+pub mod file_types;
 pub mod frontmatter;
 pub mod fs_utils;
 pub mod glob_utils;
@@ -33,6 +34,7 @@ pub mod health;
 pub mod id_types;
 pub mod interactive_prompts;
 pub mod lifecycle;
+pub mod mcp_errors;
 pub mod parameter_conditions;
 pub mod parameters;
 pub mod prompt_visibility;
@@ -126,3 +128,114 @@ impl<T: Serialize + Debug> std::fmt::Debug for Pretty<T> {
 }
 
 pub use error::*;
+
+#[cfg(test)]
+mod pretty_tests {
+    use super::Pretty;
+    use serde::Serialize;
+
+    /// A normal serializable struct for testing the happy path.
+    #[derive(Debug, Serialize)]
+    struct Config {
+        name: String,
+        count: u32,
+    }
+
+    /// A struct whose Serialize impl always fails, used to exercise the
+    /// fallback path that renders via Debug instead of YAML.
+    #[derive(Debug)]
+    struct Unserializable {
+        _label: String,
+    }
+
+    impl Serialize for Unserializable {
+        fn serialize<S: serde::Serializer>(&self, _serializer: S) -> Result<S::Ok, S::Error> {
+            Err(serde::ser::Error::custom("intentional failure"))
+        }
+    }
+
+    #[test]
+    fn display_renders_yaml_for_serializable_type() {
+        let val = Config {
+            name: "hello".into(),
+            count: 42,
+        };
+        let output = format!("{}", Pretty(&val));
+        // YAML output should contain key-value pairs
+        assert!(
+            output.contains("name: hello"),
+            "expected YAML key 'name', got: {output}"
+        );
+        assert!(
+            output.contains("count: 42"),
+            "expected YAML key 'count', got: {output}"
+        );
+        // Output should start with a newline (the format uses "\n{yaml}")
+        assert!(
+            output.starts_with('\n'),
+            "expected leading newline, got: {output}"
+        );
+    }
+
+    #[test]
+    fn debug_renders_yaml_for_serializable_type() {
+        let val = Config {
+            name: "world".into(),
+            count: 7,
+        };
+        let output = format!("{:?}", Pretty(&val));
+        assert!(
+            output.contains("name: world"),
+            "expected YAML key 'name', got: {output}"
+        );
+        assert!(
+            output.contains("count: 7"),
+            "expected YAML key 'count', got: {output}"
+        );
+        assert!(
+            output.starts_with('\n'),
+            "expected leading newline, got: {output}"
+        );
+    }
+
+    #[test]
+    fn display_falls_back_to_debug_when_serialize_fails() {
+        let val = Unserializable {
+            _label: "fallback".into(),
+        };
+        let output = format!("{}", Pretty(&val));
+        // Fallback uses {:#?} (pretty Debug), so it should contain the struct name and field
+        assert!(
+            output.contains("Unserializable"),
+            "expected Debug struct name, got: {output}"
+        );
+        assert!(
+            output.contains("fallback"),
+            "expected field value, got: {output}"
+        );
+        assert!(
+            output.starts_with('\n'),
+            "expected leading newline, got: {output}"
+        );
+    }
+
+    #[test]
+    fn debug_falls_back_to_debug_when_serialize_fails() {
+        let val = Unserializable {
+            _label: "debug_fallback".into(),
+        };
+        let output = format!("{:?}", Pretty(&val));
+        assert!(
+            output.contains("Unserializable"),
+            "expected Debug struct name, got: {output}"
+        );
+        assert!(
+            output.contains("debug_fallback"),
+            "expected field value, got: {output}"
+        );
+        assert!(
+            output.starts_with('\n'),
+            "expected leading newline, got: {output}"
+        );
+    }
+}

@@ -401,6 +401,140 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_list_tasks_by_swimlane() {
+        let (_temp, ctx) = setup().await;
+
+        use crate::swimlane::AddSwimlane;
+        AddSwimlane::new("feature", "Feature")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        // Add a task in the feature swimlane
+        let r1 = AddTask::new("Feature task")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let id1 = r1["id"].as_str().unwrap();
+        MoveTask::to_column_and_swimlane(id1, "todo", "feature")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        // Add a task with no swimlane
+        AddTask::new("No swimlane task")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        // Filter by swimlane — should only return the feature task
+        let result = ListTasks::new()
+            .with_swimlane("feature")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        assert_eq!(result["count"], 1);
+        assert_eq!(result["tasks"][0]["title"], "Feature task");
+    }
+
+    #[tokio::test]
+    async fn test_list_tasks_by_tag() {
+        let (_temp, ctx) = setup().await;
+
+        // Add tasks — one with a tag in description, one without
+        AddTask::new("Tagged task")
+            .with_description("This task has a #bug tag")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        AddTask::new("Untagged task")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        // Filter by tag
+        let result = ListTasks::new()
+            .with_tag("bug")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        assert_eq!(result["count"], 1);
+        assert_eq!(result["tasks"][0]["title"], "Tagged task");
+    }
+
+    #[tokio::test]
+    async fn test_list_tasks_by_assignee() {
+        let (_temp, ctx) = setup().await;
+
+        use crate::actor::AddActor;
+        use crate::task::AssignTask;
+
+        AddActor::new("alice", "Alice")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        AddActor::new("bob", "Bob")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        let r1 = AddTask::new("Alice's task")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let id1 = r1["id"].as_str().unwrap();
+
+        let r2 = AddTask::new("Bob's task")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let id2 = r2["id"].as_str().unwrap();
+
+        AddTask::new("Unassigned task")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        AssignTask::new(id1, "alice")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        AssignTask::new(id2, "bob")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        // Filter by alice
+        let result = ListTasks::new()
+            .with_assignee("alice")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        assert_eq!(result["count"], 1);
+        assert_eq!(result["tasks"][0]["title"], "Alice's task");
+    }
+
+    #[tokio::test]
     async fn test_list_tasks_unarchive_restores() {
         let (_temp, ctx) = setup().await;
 

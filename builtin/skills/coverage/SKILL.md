@@ -8,13 +8,18 @@ metadata:
   version: "{{version}}"
 ---
 
-{% include "_partials/detected-projects" %}
 
 # Coverage
 
 Run tests with coverage instrumentation, then identify gaps and produce a concrete work list.
 
 **You MUST run tests with real coverage tools.** Do not guess or structurally deduce coverage — measure it.
+
+
+When you have poor code coverage, it means you have inherited code that was not done with proper TDD. 
+The goal is to fix that and get the test that SHOULD HAVE been written with TDD into place until we get to complete coverage.
+
+** IMPORTANT **  Do not change, delete, modify, refactor the code under test. Improving coverage should only be done by writing new tests, never by changing the code under test. If you find failing tests, note them but do not fix them — that is a separate task.
 
 ## Process
 
@@ -26,14 +31,16 @@ Use `code_context` to detect the project:
 {"op": "detect projects"}
 ```
 
-Select the coverage tool based on detected project type. See the language-specific coverage guides for exact commands:
+Read the matching language-specific coverage guide bundled with this skill for exact commands, tool options, scoping flags, test locations, and what requires tests:
 
-| Project type       | Coverage tool                                      |
-| ------------------ | -------------------------------------------------- |
-| Rust (Cargo)       | `cargo tarpaulin` or `cargo llvm-cov`              |
-| JS/TS (npm/pnpm)  | `vitest --coverage` or `jest --coverage`            |
-| Python (pytest)    | `pytest --cov`                                     |
-| Dart/Flutter       | `flutter test --coverage` or `dart test --coverage` |
+| Project type       | Guide |
+| ------------------ | ----- |
+| Rust (Cargo)       | [RUST_COVERAGE.md](./RUST_COVERAGE.md) |
+| JS/TS (npm/pnpm)   | [JS_TS_COVERAGE.md](./JS_TS_COVERAGE.md) |
+| Python (pytest)    | [PYTHON_COVERAGE.md](./PYTHON_COVERAGE.md) |
+| Dart/Flutter       | [DART_FLUTTER_COVERAGE.md](./DART_FLUTTER_COVERAGE.md) |
+
+Follow the guide's instructions for running coverage, installing tools, and scoping. The guide is authoritative — do not guess commands.
 
 ### 2. Determine scope
 
@@ -53,16 +60,9 @@ There are two modes — **the user decides which one applies**:
 
 ### 3. Run tests with coverage
 
-Run the test suite with coverage instrumentation. Use the shell tool for all commands.
+Run the coverage commands from the language guide. Use the shell tool for all commands. Produce LCOV output — the guide specifies the exact flags and output paths for each tool.
 
-**Produce machine-readable output** — every tool has a format that emits per-file or per-line data:
-
-- Rust: `--out lcov` (tarpaulin) or `--lcov` (llvm-cov) → writes `lcov.info`
-- JS/TS: `--coverage --reporter=lcov` → writes `coverage/lcov.info`
-- Python: `--cov-report=lcov:lcov.info` → writes `lcov.info`
-- Dart/Flutter: `--coverage` → writes `coverage/lcov.info`
-
-If the coverage tool is not installed, install it first (e.g. `cargo install cargo-tarpaulin`).
+If the coverage tool is not installed, install it using the command in the guide.
 
 If tests fail, note the failures but continue with coverage analysis on the passing tests. Do NOT stop to fix failing tests — that is a separate task.
 

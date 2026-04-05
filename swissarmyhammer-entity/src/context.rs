@@ -1877,4 +1877,517 @@ mod tests {
         }
         assert_eq!(count, 1, "should have exactly one attachment file");
     }
+
+    // ===========================================================================
+    // Additional tests from main
+    // ===========================================================================
+
+
+
+    #[tokio::test]
+    async fn archive_dir_correct() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields.clone());
+
+        assert_eq!(
+            ctx.archive_dir("tag"),
+            dir.path().join("tags").join(".archive")
+        );
+        assert_eq!(
+            ctx.archive_dir("task"),
+            dir.path().join("tasks").join(".archive")
+        );
+    }
+
+
+
+
+    #[tokio::test]
+    async fn list_archived_returns_archived_only() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields.clone());
+
+        // Create two tags
+        let mut t1 = Entity::new("tag", "bug");
+        t1.set("tag_name", json!("Bug"));
+        let mut t2 = Entity::new("tag", "feature");
+        t2.set("tag_name", json!("Feature"));
+
+        ctx.write(&t1).await.unwrap();
+        ctx.write(&t2).await.unwrap();
+
+        // Archive only "bug"
+        ctx.archive("tag", "bug").await.unwrap();
+
+        // list() should only return "feature"
+        let live = ctx.list("tag").await.unwrap();
+        assert_eq!(live.len(), 1);
+        assert_eq!(live[0].id, "feature");
+
+        // list_archived() should only return "bug"
+        let archived = ctx.list_archived("tag").await.unwrap();
+        assert_eq!(archived.len(), 1);
+        assert_eq!(archived[0].id, "bug");
+    }
+
+    #[tokio::test]
+    async fn read_archived_returns_entity() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields.clone());
+
+        let mut tag = Entity::new("tag", "bug");
+        tag.set("tag_name", json!("Bug"));
+        tag.set("color", json!("#ff0000"));
+        ctx.write(&tag).await.unwrap();
+
+        ctx.archive("tag", "bug").await.unwrap();
+
+        // read() on archived entity should fail
+        assert!(ctx.read("tag", "bug").await.is_err());
+
+        // read_archived() should succeed
+        let archived = ctx.read_archived("tag", "bug").await.unwrap();
+        assert_eq!(archived.get_str("tag_name"), Some("Bug"));
+        assert_eq!(archived.get_str("color"), Some("#ff0000"));
+    }
+
+    #[tokio::test]
+    async fn archive_writes_changelog() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields.clone());
+
+        let mut tag = Entity::new("tag", "bug");
+        tag.set("tag_name", json!("Bug"));
+        ctx.write(&tag).await.unwrap();
+
+        ctx.archive("tag", "bug").await.unwrap();
+
+        // Changelog lives in the archive directory
+        let archive_log = dir.path().join("tags").join(".archive").join("bug.jsonl");
+        let content = tokio::fs::read_to_string(&archive_log).await.unwrap();
+        assert!(
+            content.contains("\"archive\""),
+            "changelog should contain archive op"
+        );
+    }
+
+    #[tokio::test]
+    async fn unarchive_writes_changelog() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields.clone());
+
+        let mut tag = Entity::new("tag", "bug");
+        tag.set("tag_name", json!("Bug"));
+        ctx.write(&tag).await.unwrap();
+
+        ctx.archive("tag", "bug").await.unwrap();
+        ctx.unarchive("tag", "bug").await.unwrap();
+
+        // After unarchive, changelog is back in live dir
+        let log = ctx.read_changelog("tag", "bug").await.unwrap();
+        assert!(
+            log.iter().any(|e| e.op == "unarchive"),
+            "changelog should contain unarchive op"
+        );
+    }
+
+    #[tokio::test]
+    async fn root_and_fields_accessors() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields.clone());
+
+        assert_eq!(ctx.root(), dir.path());
+        // fields() should return the same FieldsContext
+        assert!(ctx.fields().get_entity("tag").is_some());
+        assert!(ctx.fields().get_entity("task").is_some());
+    }
+
+
+
+    #[tokio::test]
+    async fn list_archived_with_compute_engine() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let compute = Arc::new(swissarmyhammer_fields::ComputeEngine::new());
+        let ctx = EntityContext::new(dir.path(), fields.clone()).with_compute(compute);
+
+        let mut tag = Entity::new("tag", "bug");
+        tag.set("tag_name", json!("Bug"));
+        ctx.write(&tag).await.unwrap();
+        ctx.archive("tag", "bug").await.unwrap();
+
+        // list_archived with compute engine
+        let archived = ctx.list_archived("tag").await.unwrap();
+        assert_eq!(archived.len(), 1);
+        assert_eq!(archived[0].get_str("tag_name"), Some("Bug"));
+    }
+
+    #[tokio::test]
+    async fn extract_attachment_filenames_edge_cases() {
+        // None value returns empty
+        let empty: Vec<String> = EntityContext::extract_attachment_filenames(None, false);
+        assert!(empty.is_empty());
+
+        let empty_multi: Vec<String> = EntityContext::extract_attachment_filenames(None, true);
+        assert!(empty_multi.is_empty());
+
+        // Non-string single value returns empty
+        let num = json!(42);
+        let result = EntityContext::extract_attachment_filenames(Some(&num), false);
+        assert!(result.is_empty());
+
+        // Non-string/non-array multiple value returns empty
+        let result_multi = EntityContext::extract_attachment_filenames(Some(&num), true);
+        assert!(result_multi.is_empty());
+
+        // String value for multiple returns single-element vec
+        let s = json!("filename.txt");
+        let result = EntityContext::extract_attachment_filenames(Some(&s), true);
+        assert_eq!(result, vec!["filename.txt".to_string()]);
+
+        // Array with mixed types filters non-strings
+        let arr = json!(["file1.txt", 42, "file2.txt"]);
+        let result = EntityContext::extract_attachment_filenames(Some(&arr), true);
+        assert_eq!(
+            result,
+            vec!["file1.txt".to_string(), "file2.txt".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn migrate_trash_no_op_when_old_layout_absent() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields.clone());
+
+        // No old-style trash exists; migration should be a no-op
+        ctx.migrate_trash_layout("tag").await.unwrap();
+        // Nothing should be created
+        assert!(!dir.path().join("tags").join(".trash").exists());
+    }
+
+    #[tokio::test]
+    async fn entity_def_returns_correct_definition() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields.clone());
+
+        let def = ctx.entity_def("tag").unwrap();
+        assert_eq!(def.name, "tag");
+        assert!(def.body_field.is_none());
+
+        let def = ctx.entity_def("task").unwrap();
+        assert_eq!(def.name, "task");
+        assert_eq!(def.body_field.as_deref(), Some("body"));
+    }
+
+    #[tokio::test]
+    async fn entity_def_unknown_type_errors() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields.clone());
+
+        let result = ctx.entity_def("nonexistent");
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("unknown entity type"));
+    }
+
+    #[tokio::test]
+    async fn read_changelog_empty_when_no_writes() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields.clone());
+
+        let log = ctx.read_changelog("tag", "nonexistent").await.unwrap();
+        assert!(log.is_empty());
+    }
+
+    #[tokio::test]
+    async fn read_changelog_unknown_entity_type_errors() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields.clone());
+
+        let result = ctx.read_changelog("unicorn", "x").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn changelog_path_unknown_entity_type_errors() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields.clone());
+
+        let result = ctx.changelog_path("unicorn", "x");
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn entity_path_unknown_entity_type_errors() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields.clone());
+
+        let result = ctx.entity_path("unicorn", "x");
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn list_empty_entity_type() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields.clone());
+
+        let result = ctx.list("tag").await.unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn list_unknown_entity_type_errors() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields.clone());
+
+        let result = ctx.list("unicorn").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn list_archived_empty() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields.clone());
+
+        let result = ctx.list_archived("tag").await.unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn list_archived_unknown_entity_type_errors() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields.clone());
+
+        let result = ctx.list_archived("unicorn").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn read_archived_unknown_entity_type_errors() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields.clone());
+
+        let result = ctx.read_archived("unicorn", "x").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn read_archived_not_found_errors() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields.clone());
+
+        let result = ctx.read_archived("tag", "nonexistent").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn delete_unknown_entity_type_errors() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields.clone());
+
+        let result = ctx.delete("unicorn", "x").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn archive_unknown_entity_type_errors() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields.clone());
+
+        let result = ctx.archive("unicorn", "x").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn unarchive_unknown_entity_type_errors() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields.clone());
+
+        let result = ctx.unarchive("unicorn", "x").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn restore_from_trash_unknown_entity_type_errors() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields.clone());
+
+        let result = ctx.restore_from_trash("unicorn", "x").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn restore_from_archive_unknown_entity_type_errors() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields.clone());
+
+        let result = ctx.restore_from_archive("unicorn", "x").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn migration_handles_already_existing_dest() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields.clone());
+
+        // Create old-style trash with a file
+        let old_trash = dir.path().join(".trash").join("tags");
+        tokio::fs::create_dir_all(&old_trash).await.unwrap();
+        tokio::fs::write(old_trash.join("dup.yaml"), "tag_name: Dup\n")
+            .await
+            .unwrap();
+
+        // Also create new-style trash with the same filename already present
+        let new_trash = dir.path().join("tags").join(".trash");
+        tokio::fs::create_dir_all(&new_trash).await.unwrap();
+        tokio::fs::write(new_trash.join("dup.yaml"), "tag_name: Existing\n")
+            .await
+            .unwrap();
+
+        // Migration should handle the AlreadyExists case gracefully
+        ctx.migrate_trash_layout("tag").await.unwrap();
+
+        // The new trash file should still exist (migration skips on AlreadyExists)
+        assert!(new_trash.join("dup.yaml").exists());
+    }
+
+    #[tokio::test]
+    async fn write_task_with_body_round_trips_through_context() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields.clone());
+
+        let mut task = Entity::new("task", "01TEST");
+        task.set("title", json!("Test Task"));
+        task.set(
+            "body",
+            json!("# Heading\n\nParagraph text.\n\n- Item 1\n- Item 2"),
+        );
+        ctx.write(&task).await.unwrap();
+
+        let loaded = ctx.read("task", "01TEST").await.unwrap();
+        assert_eq!(loaded.get_str("title"), Some("Test Task"));
+        assert!(loaded.get_str("body").unwrap().contains("# Heading"));
+    }
+
+    #[tokio::test]
+    async fn delete_nonexistent_entity_does_not_error() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields.clone());
+
+        // Deleting an entity that doesn't exist should succeed (moves to trash, nothing found)
+        let result = ctx.delete("tag", "nonexistent").await;
+        // It succeeds but returns None (no changelog entry since entity had no fields)
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn archive_nonexistent_entity_succeeds_with_none() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields.clone());
+
+        // Archiving entity that doesn't exist should succeed with None
+        let result = ctx.archive("tag", "nonexistent").await;
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn read_changelog_with_trash_fallback_unknown_entity_type_errors() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields.clone());
+
+        let result = ctx.read_changelog_with_trash_fallback("unicorn", "x").await;
+        assert!(result.is_err());
+    }
+
+
+
+    #[tokio::test]
+    async fn enrich_attachment_fields_without_compute_engine() {
+        // Test that attachment enrichment happens even without a compute engine
+        let dir = TempDir::new().unwrap();
+        let fields = attachment_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields);
+        // No .with_compute() — but attachment enrichment should still work
+
+        let source = dir.path().join("photo.png");
+        tokio::fs::write(&source, b"png data").await.unwrap();
+
+        let mut entity = Entity::new("item", "01TEST");
+        entity.set("title", json!("Test"));
+        entity.set("avatar", json!(source.to_string_lossy().to_string()));
+        ctx.write(&entity).await.unwrap();
+
+        let read = ctx.read("item", "01TEST").await.unwrap();
+        let meta = read.fields.get("avatar").unwrap();
+        assert!(
+            meta.is_object(),
+            "attachment should be enriched without compute engine"
+        );
+        assert_eq!(meta["name"], "photo.png");
+    }
+
+    #[tokio::test]
+    async fn list_with_compute_engine_enriches_entities() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let compute = Arc::new(swissarmyhammer_fields::ComputeEngine::new());
+        let ctx = EntityContext::new(dir.path(), fields.clone()).with_compute(compute);
+
+        let mut t1 = Entity::new("tag", "t1");
+        t1.set("tag_name", json!("One"));
+        let mut t2 = Entity::new("tag", "t2");
+        t2.set("tag_name", json!("Two"));
+        ctx.write(&t1).await.unwrap();
+        ctx.write(&t2).await.unwrap();
+
+        let tags = ctx.list("tag").await.unwrap();
+        assert_eq!(tags.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn read_with_compute_engine_derives_fields() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let compute = Arc::new(swissarmyhammer_fields::ComputeEngine::new());
+        let ctx = EntityContext::new(dir.path(), fields.clone()).with_compute(compute);
+
+        let mut tag = Entity::new("tag", "bug");
+        tag.set("tag_name", json!("Bug"));
+        tag.set("color", json!("#ff0000"));
+        ctx.write(&tag).await.unwrap();
+
+        let loaded = ctx.read("tag", "bug").await.unwrap();
+        assert_eq!(loaded.get_str("tag_name"), Some("Bug"));
+    }
 }

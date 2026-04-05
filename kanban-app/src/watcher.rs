@@ -1499,6 +1499,880 @@ mod tests {
         );
     }
 
+    // =========================================================================
+    // sync_search_index tests
+    // =========================================================================
+
+    #[test]
+    fn test_sync_search_index_entity_created() {
+        let mut idx = swissarmyhammer_entity_search::EntitySearchIndex::new();
+        let mut fields = HashMap::new();
+        fields.insert("title".to_string(), serde_json::json!("My Task"));
+        fields.insert("status".to_string(), serde_json::json!("open"));
+
+        let evt = WatchEvent::EntityCreated {
+            entity_type: "task".to_string(),
+            id: "ABC123".to_string(),
+            fields,
+        };
+        sync_search_index(&mut idx, &evt);
+
+        // Verify entity was added to the index
+        let results = idx.search("My Task", 10);
+        assert!(!results.is_empty(), "entity should be findable after sync");
+        assert_eq!(results[0].entity_id, "ABC123");
+    }
+
+    #[test]
+    fn test_sync_search_index_entity_field_changed_with_fields() {
+        let mut idx = swissarmyhammer_entity_search::EntitySearchIndex::new();
+
+        // First, add an entity
+        let mut initial_fields = HashMap::new();
+        initial_fields.insert("title".to_string(), serde_json::json!("Original"));
+        let create_evt = WatchEvent::EntityCreated {
+            entity_type: "task".to_string(),
+            id: "T1".to_string(),
+            fields: initial_fields,
+        };
+        sync_search_index(&mut idx, &create_evt);
+
+        // Now update it with field changes (with fields present)
+        let mut updated_fields = HashMap::new();
+        updated_fields.insert("title".to_string(), serde_json::json!("Updated Title"));
+        let change_evt = WatchEvent::EntityFieldChanged {
+            entity_type: "task".to_string(),
+            id: "T1".to_string(),
+            changes: vec![FieldChange {
+                field: "title".to_string(),
+                value: serde_json::json!("Updated Title"),
+            }],
+            fields: Some(updated_fields),
+        };
+        sync_search_index(&mut idx, &change_evt);
+
+        let results = idx.search("Updated Title", 10);
+        assert!(!results.is_empty(), "updated entity should be findable");
+    }
+
+    #[test]
+    fn test_sync_search_index_entity_field_changed_without_fields() {
+        let mut idx = swissarmyhammer_entity_search::EntitySearchIndex::new();
+
+        // Add an entity first
+        let mut fields = HashMap::new();
+        fields.insert("title".to_string(), serde_json::json!("Task"));
+        let create_evt = WatchEvent::EntityCreated {
+            entity_type: "task".to_string(),
+            id: "T2".to_string(),
+            fields,
+        };
+        sync_search_index(&mut idx, &create_evt);
+
+        // EntityFieldChanged with fields: None should be a no-op
+        let change_evt = WatchEvent::EntityFieldChanged {
+            entity_type: "task".to_string(),
+            id: "T2".to_string(),
+            changes: vec![FieldChange {
+                field: "title".to_string(),
+                value: serde_json::json!("New"),
+            }],
+            fields: None,
+        };
+        sync_search_index(&mut idx, &change_evt);
+
+        // Entity still in index with original title
+        let results = idx.search("Task", 10);
+        assert!(!results.is_empty(), "entity should still exist");
+    }
+
+    #[test]
+    fn test_sync_search_index_entity_removed() {
+        let mut idx = swissarmyhammer_entity_search::EntitySearchIndex::new();
+
+        let mut fields = HashMap::new();
+        fields.insert("title".to_string(), serde_json::json!("Doomed"));
+        let create_evt = WatchEvent::EntityCreated {
+            entity_type: "task".to_string(),
+            id: "DOOM".to_string(),
+            fields,
+        };
+        sync_search_index(&mut idx, &create_evt);
+
+        let remove_evt = WatchEvent::EntityRemoved {
+            entity_type: "task".to_string(),
+            id: "DOOM".to_string(),
+        };
+        sync_search_index(&mut idx, &remove_evt);
+
+        let results = idx.search("Doomed", 10);
+        assert!(
+            results.is_empty() || results.iter().all(|r| r.entity_id != "DOOM"),
+            "removed entity should not be findable"
+        );
+    }
+
+    #[test]
+    fn test_sync_search_index_attachment_changed_noop() {
+        let mut idx = swissarmyhammer_entity_search::EntitySearchIndex::new();
+
+        // AttachmentChanged events should be silently ignored
+        let evt = WatchEvent::AttachmentChanged {
+            entity_type: "task".to_string(),
+            filename: "screenshot.png".to_string(),
+            removed: false,
+        };
+        sync_search_index(&mut idx, &evt);
+        // No panic, no entities added — just a no-op
+    }
+
+    // =========================================================================
+    // classify_event tests
+    // =========================================================================
+
+    #[test]
+    fn test_classify_event_create_entity() {
+        let (_tmp, kanban) = setup_kanban_dir();
+        let path = kanban.join("tasks/abc.yaml");
+        std::fs::write(&path, "title: test\n").unwrap();
+
+        let event = Event {
+            kind: EventKind::Create(notify::event::CreateKind::File),
+            paths: vec![path.clone()],
+            attrs: Default::default(),
+        };
+
+        let actions = classify_event(&event, &kanban);
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(&actions[0], FsAction::Changed(_)));
+    }
+
+    #[test]
+    fn test_classify_event_modify_entity() {
+        let (_tmp, kanban) = setup_kanban_dir();
+        let path = kanban.join("tags/bug.yaml");
+        std::fs::write(&path, "tag_name: bug\n").unwrap();
+
+        let event = Event {
+            kind: EventKind::Modify(notify::event::ModifyKind::Data(
+                notify::event::DataChange::Content,
+            )),
+            paths: vec![path.clone()],
+            attrs: Default::default(),
+        };
+
+        let actions = classify_event(&event, &kanban);
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(&actions[0], FsAction::Changed(_)));
+    }
+
+    #[test]
+    fn test_classify_event_remove_entity() {
+        let (_tmp, kanban) = setup_kanban_dir();
+        // File doesn't need to exist for Remove events
+        let path = kanban.join("tags/gone.yaml");
+
+        let event = Event {
+            kind: EventKind::Remove(notify::event::RemoveKind::File),
+            paths: vec![path.clone()],
+            attrs: Default::default(),
+        };
+
+        let actions = classify_event(&event, &kanban);
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(&actions[0], FsAction::Removed(_)));
+    }
+
+    #[test]
+    fn test_classify_event_other_kind_treated_as_changed() {
+        let (_tmp, kanban) = setup_kanban_dir();
+        let path = kanban.join("tasks/abc.yaml");
+        std::fs::write(&path, "title: test\n").unwrap();
+
+        let event = Event {
+            kind: EventKind::Other,
+            paths: vec![path.clone()],
+            attrs: Default::default(),
+        };
+
+        let actions = classify_event(&event, &kanban);
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(&actions[0], FsAction::Changed(_)));
+    }
+
+    #[test]
+    fn test_classify_event_ignores_non_entity_non_attachment() {
+        let (_tmp, kanban) = setup_kanban_dir();
+        let path = kanban.join("tasks/abc.jsonl");
+        std::fs::write(&path, "log\n").unwrap();
+
+        let event = Event {
+            kind: EventKind::Create(notify::event::CreateKind::File),
+            paths: vec![path.clone()],
+            attrs: Default::default(),
+        };
+
+        let actions = classify_event(&event, &kanban);
+        assert!(actions.is_empty(), "should ignore non-entity files");
+    }
+
+    #[test]
+    fn test_classify_event_entity_in_unrecognized_subdir() {
+        let (_tmp, kanban) = setup_kanban_dir();
+        let weird_dir = kanban.join("unknown");
+        std::fs::create_dir_all(&weird_dir).unwrap();
+        let path = weird_dir.join("foo.yaml");
+        std::fs::write(&path, "name: foo\n").unwrap();
+
+        let event = Event {
+            kind: EventKind::Create(notify::event::CreateKind::File),
+            paths: vec![path.clone()],
+            attrs: Default::default(),
+        };
+
+        let actions = classify_event(&event, &kanban);
+        assert!(
+            actions.is_empty(),
+            "should skip entity files in unrecognized subdirectories"
+        );
+    }
+
+    #[test]
+    fn test_classify_event_attachment_file() {
+        let (_tmp, kanban) = setup_kanban_dir();
+        let att_dir = kanban.join("tasks/.attachments");
+        std::fs::create_dir_all(&att_dir).unwrap();
+        let path = att_dir.join("screenshot.png");
+        std::fs::write(&path, "PNG data").unwrap();
+
+        let event = Event {
+            kind: EventKind::Create(notify::event::CreateKind::File),
+            paths: vec![path.clone()],
+            attrs: Default::default(),
+        };
+
+        let actions = classify_event(&event, &kanban);
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(&actions[0], FsAction::Changed(_)));
+    }
+
+    #[test]
+    fn test_classify_event_attachment_removal() {
+        let (_tmp, kanban) = setup_kanban_dir();
+        let att_dir = kanban.join("tasks/.attachments");
+        std::fs::create_dir_all(&att_dir).unwrap();
+        // File doesn't need to exist for Remove events
+        let path = att_dir.join("deleted.png");
+
+        let event = Event {
+            kind: EventKind::Remove(notify::event::RemoveKind::File),
+            paths: vec![path.clone()],
+            attrs: Default::default(),
+        };
+
+        let actions = classify_event(&event, &kanban);
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(&actions[0], FsAction::Removed(_)));
+    }
+
+    #[test]
+    fn test_classify_event_multiple_paths() {
+        let (_tmp, kanban) = setup_kanban_dir();
+        let path1 = kanban.join("tasks/t1.yaml");
+        let path2 = kanban.join("tags/bug.yaml");
+        std::fs::write(&path1, "title: t1\n").unwrap();
+        std::fs::write(&path2, "tag_name: bug\n").unwrap();
+
+        let event = Event {
+            kind: EventKind::Modify(notify::event::ModifyKind::Data(
+                notify::event::DataChange::Content,
+            )),
+            paths: vec![path1, path2],
+            attrs: Default::default(),
+        };
+
+        let actions = classify_event(&event, &kanban);
+        assert_eq!(actions.len(), 2, "should produce one action per path");
+    }
+
+    // =========================================================================
+    // resolve_change / resolve_removal for attachments
+    // =========================================================================
+
+    #[test]
+    fn test_resolve_change_attachment() {
+        let (_tmp, kanban) = setup_kanban_dir();
+        let att_dir = kanban.join("tasks/.attachments");
+        std::fs::create_dir_all(&att_dir).unwrap();
+        let path = att_dir.join("screenshot.png");
+        std::fs::write(&path, "PNG data").unwrap();
+
+        let cache = new_entity_cache(&kanban);
+        let evt = resolve_change(&path.canonicalize().unwrap(), &cache, &kanban);
+        match evt {
+            Some(WatchEvent::AttachmentChanged {
+                entity_type,
+                filename,
+                removed,
+            }) => {
+                assert_eq!(entity_type, "task");
+                assert_eq!(filename, "screenshot.png");
+                assert!(!removed);
+            }
+            other => panic!("expected AttachmentChanged, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_resolve_removal_attachment() {
+        let (_tmp, kanban) = setup_kanban_dir();
+        let att_dir = kanban.join("tasks/.attachments");
+        std::fs::create_dir_all(&att_dir).unwrap();
+        // Create and then remove the file
+        let path = att_dir.join("deleted.png");
+        std::fs::write(&path, "data").unwrap();
+        let canonical = path.canonicalize().unwrap();
+        std::fs::remove_file(&path).unwrap();
+
+        let cache = new_entity_cache(&kanban);
+        let evt = resolve_removal(&canonical, &cache, &kanban);
+        match evt {
+            Some(WatchEvent::AttachmentChanged {
+                entity_type,
+                filename,
+                removed,
+            }) => {
+                assert_eq!(entity_type, "task");
+                assert_eq!(filename, "deleted.png");
+                assert!(removed);
+            }
+            other => panic!("expected AttachmentChanged removed, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_resolve_removal_untracked_entity() {
+        let (_tmp, kanban) = setup_kanban_dir();
+        // Don't create the file first, so it's never in the cache
+        let path = kanban.join("tags/phantom.yaml");
+
+        let cache = Arc::new(Mutex::new(HashMap::new()));
+        let evt = resolve_removal(&path, &cache, &kanban);
+        assert!(
+            evt.is_none(),
+            "should return None for untracked (never-cached) entity"
+        );
+    }
+
+    // =========================================================================
+    // Root-level entity file tests
+    // =========================================================================
+
+    #[test]
+    fn test_cache_population_root_level_files() {
+        let (_tmp, kanban) = setup_kanban_dir();
+        std::fs::write(kanban.join("board.yaml"), "name: My Board\n").unwrap();
+
+        let cache = new_entity_cache(&kanban);
+        let map = cache.lock().unwrap();
+        assert!(
+            map.contains_key(&kanban.join("board.yaml")),
+            "root-level entity files should be cached"
+        );
+    }
+
+    #[test]
+    fn test_flush_and_emit_root_level_files() {
+        let (_tmp, kanban) = setup_kanban_dir();
+        let cache = new_entity_cache(&kanban);
+
+        // Add a root-level entity file after cache was built
+        std::fs::write(kanban.join("board.yaml"), "name: My Board\n").unwrap();
+
+        let events = flush_and_emit(&kanban, &cache);
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            WatchEvent::EntityCreated {
+                entity_type,
+                id,
+                fields,
+            } => {
+                assert_eq!(entity_type, "board");
+                assert_eq!(id, "board");
+                assert_eq!(fields.get("name").unwrap(), &serde_json::json!("My Board"));
+            }
+            other => panic!("expected EntityCreated for root file, got {:?}", other),
+        }
+    }
+
+    // =========================================================================
+    // update_cache tests
+    // =========================================================================
+
+    #[test]
+    fn test_update_cache_suppresses_change_detection() {
+        let (_tmp, kanban) = setup_kanban_dir();
+        let path = kanban.join("tags/test.yaml");
+        std::fs::write(&path, "tag_name: Original\n").unwrap();
+
+        let cache = new_entity_cache(&kanban);
+
+        // Write new content, then update cache
+        std::fs::write(&path, "tag_name: Updated\n").unwrap();
+        update_cache(&cache, &path);
+
+        // Now resolve_change should return None (cache matches)
+        assert!(
+            resolve_change(&path, &cache, &kanban).is_none(),
+            "should not detect change after update_cache"
+        );
+    }
+
+    // =========================================================================
+    // parse_entity_file edge cases
+    // =========================================================================
+
+    #[test]
+    fn test_parse_entity_file_unknown_extension() {
+        let result = parse_entity_file(Path::new("/foo/bar.txt"), "some content");
+        assert!(result.is_none(), "unknown extension should return None");
+    }
+
+    #[test]
+    fn test_parse_entity_file_yaml_extension() {
+        let result = parse_entity_file(Path::new("/foo/bar.yaml"), "name: test\n");
+        assert!(result.is_some());
+        assert_eq!(
+            result.unwrap().get("name").unwrap(),
+            &serde_json::json!("test")
+        );
+    }
+
+    #[test]
+    fn test_parse_entity_file_yml_extension() {
+        let result = parse_entity_file(Path::new("/foo/bar.yml"), "name: test\n");
+        assert!(result.is_some());
+    }
+
+    #[test]
+    fn test_parse_entity_file_md_extension() {
+        let result = parse_entity_file(Path::new("/foo/bar.md"), "---\ntitle: T\n---\nBody\n");
+        assert!(result.is_some());
+        let fields = result.unwrap();
+        assert_eq!(fields.get("title").unwrap(), &serde_json::json!("T"));
+        assert!(fields.contains_key("body"));
+    }
+
+    #[test]
+    fn test_parse_frontmatter_body_no_frontmatter() {
+        let result = parse_frontmatter_body("Just plain text with no frontmatter");
+        assert!(result.is_none(), "no --- delimiters should return None");
+    }
+
+    #[test]
+    fn test_parse_plain_yaml_scalar_returns_none() {
+        // A bare string is valid YAML but not an object — json_to_field_map returns None
+        let result = parse_plain_yaml("just a string");
+        assert!(
+            result.is_none(),
+            "non-object YAML should return None from json_to_field_map"
+        );
+    }
+
+    // =========================================================================
+    // path_to_entity edge cases
+    // =========================================================================
+
+    #[test]
+    fn test_path_to_entity_unrecognized_subdir() {
+        let root = PathBuf::from("/project/.kanban");
+        assert_eq!(
+            path_to_entity(Path::new("/project/.kanban/unknown/abc.yaml"), &root),
+            None,
+            "files in unrecognized subdirectories should return None"
+        );
+    }
+
+    #[test]
+    fn test_path_to_entity_swimlanes_strips_s() {
+        let root = PathBuf::from("/project/.kanban");
+        assert_eq!(
+            path_to_entity(Path::new("/project/.kanban/swimlanes/main.yaml"), &root),
+            Some(("swimlane".to_string(), "main".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_path_to_entity_views_strips_s() {
+        let root = PathBuf::from("/project/.kanban");
+        assert_eq!(
+            path_to_entity(Path::new("/project/.kanban/views/board.yaml"), &root),
+            Some(("view".to_string(), "board".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_path_to_entity_actors_strips_s() {
+        let root = PathBuf::from("/project/.kanban");
+        assert_eq!(
+            path_to_entity(Path::new("/project/.kanban/actors/alice.yaml"), &root),
+            Some(("actor".to_string(), "alice".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_path_to_entity_boards_strips_s() {
+        let root = PathBuf::from("/project/.kanban");
+        assert_eq!(
+            path_to_entity(Path::new("/project/.kanban/boards/main.yaml"), &root),
+            Some(("board".to_string(), "main".to_string()))
+        );
+    }
+
+    // =========================================================================
+    // is_attachment edge cases
+    // =========================================================================
+
+    #[test]
+    fn test_is_attachment_no_parent() {
+        // A bare filename with no parent
+        assert!(!is_attachment(Path::new("file.png")));
+    }
+
+    // =========================================================================
+    // WatchEvent and BoardWatchEvent serialization tests
+    // =========================================================================
+
+    #[test]
+    fn test_watch_event_serialization_entity_created() {
+        let mut fields = HashMap::new();
+        fields.insert("title".to_string(), serde_json::json!("Test"));
+        let evt = WatchEvent::EntityCreated {
+            entity_type: "task".to_string(),
+            id: "T1".to_string(),
+            fields,
+        };
+        let json = serde_json::to_value(&evt).unwrap();
+        assert_eq!(json["kind"], "entity-created");
+        assert_eq!(json["entity_type"], "task");
+    }
+
+    #[test]
+    fn test_watch_event_serialization_entity_removed() {
+        let evt = WatchEvent::EntityRemoved {
+            entity_type: "tag".to_string(),
+            id: "bug".to_string(),
+        };
+        let json = serde_json::to_value(&evt).unwrap();
+        assert_eq!(json["kind"], "entity-removed");
+    }
+
+    #[test]
+    fn test_watch_event_serialization_field_changed_no_fields() {
+        let evt = WatchEvent::EntityFieldChanged {
+            entity_type: "task".to_string(),
+            id: "T1".to_string(),
+            changes: vec![FieldChange {
+                field: "title".to_string(),
+                value: serde_json::json!("New"),
+            }],
+            fields: None,
+        };
+        let json = serde_json::to_value(&evt).unwrap();
+        assert_eq!(json["kind"], "entity-field-changed");
+        // fields should be absent (skip_serializing_if = None)
+        assert!(json.get("fields").is_none());
+    }
+
+    #[test]
+    fn test_watch_event_serialization_attachment_changed() {
+        let evt = WatchEvent::AttachmentChanged {
+            entity_type: "task".to_string(),
+            filename: "screenshot.png".to_string(),
+            removed: false,
+        };
+        let json = serde_json::to_value(&evt).unwrap();
+        assert_eq!(json["kind"], "attachment-changed");
+        assert_eq!(json["filename"], "screenshot.png");
+    }
+
+    #[test]
+    fn test_board_watch_event_flattens() {
+        let evt = BoardWatchEvent {
+            event: WatchEvent::EntityRemoved {
+                entity_type: "tag".to_string(),
+                id: "bug".to_string(),
+            },
+            board_path: "/path/to/board".to_string(),
+        };
+        let json = serde_json::to_value(&evt).unwrap();
+        assert_eq!(json["kind"], "entity-removed");
+        assert_eq!(json["board_path"], "/path/to/board");
+    }
+
+    // =========================================================================
+    // yaml_to_json edge cases
+    // =========================================================================
+
+    #[test]
+    fn test_yaml_to_json_valid() {
+        let yaml: serde_yaml_ng::Value = serde_yaml_ng::from_str("name: test\ncount: 42").unwrap();
+        let json = yaml_to_json(yaml).unwrap();
+        assert_eq!(json["name"], "test");
+        assert_eq!(json["count"], 42);
+    }
+
+    #[test]
+    fn test_json_to_field_map_non_object() {
+        // json_to_field_map should return None for non-object values
+        let val = serde_json::json!("just a string");
+        assert!(json_to_field_map(val).is_none());
+    }
+
+    // =========================================================================
+    // resolve_change with same hash (no real change)
+    // =========================================================================
+
+    #[test]
+    fn test_resolve_change_same_hash_but_different_fields_returns_none() {
+        let (_tmp, kanban) = setup_kanban_dir();
+        let path = kanban.join("tags/stable.yaml");
+        std::fs::write(&path, "tag_name: Stable\ncolor: \"aaa\"\n").unwrap();
+
+        let cache = new_entity_cache(&kanban);
+
+        // Re-read the same file — same hash, no change
+        let evt = resolve_change(&path, &cache, &kanban);
+        assert!(evt.is_none(), "same content should produce no event");
+    }
+
+    // =========================================================================
+    // flush_and_emit with root-level field changes
+    // =========================================================================
+
+    #[test]
+    fn test_flush_and_emit_root_level_field_change() {
+        let (_tmp, kanban) = setup_kanban_dir();
+        std::fs::write(kanban.join("board.yaml"), "name: Old Name\n").unwrap();
+        let cache = new_entity_cache(&kanban);
+
+        std::fs::write(kanban.join("board.yaml"), "name: New Name\n").unwrap();
+
+        let events = flush_and_emit(&kanban, &cache);
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            WatchEvent::EntityFieldChanged {
+                entity_type,
+                id,
+                changes,
+                ..
+            } => {
+                assert_eq!(entity_type, "board");
+                assert_eq!(id, "board");
+                assert!(changes.iter().any(|c| c.field == "name"));
+            }
+            other => panic!("expected EntityFieldChanged, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_flush_and_emit_root_level_removal() {
+        let (_tmp, kanban) = setup_kanban_dir();
+        std::fs::write(kanban.join("board.yaml"), "name: Board\n").unwrap();
+        let cache = new_entity_cache(&kanban);
+
+        std::fs::remove_file(kanban.join("board.yaml")).unwrap();
+
+        let events = flush_and_emit(&kanban, &cache);
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            WatchEvent::EntityRemoved { entity_type, id } => {
+                assert_eq!(entity_type, "board");
+                assert_eq!(id, "board");
+            }
+            other => panic!("expected EntityRemoved, got {:?}", other),
+        }
+    }
+
+    // =========================================================================
+    // Watcher with .attachments/ directory present
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_watcher_with_attachments_dir() {
+        let (_tmp, kanban) = setup_kanban_dir();
+        // Create .attachments/ dirs so the watcher registers them
+        let att_dir = kanban.join("tasks/.attachments");
+        std::fs::create_dir_all(&att_dir).unwrap();
+
+        let cache = new_entity_cache(&kanban);
+        let events: Arc<Mutex<Vec<WatchEvent>>> = Arc::new(Mutex::new(Vec::new()));
+        let events_clone = events.clone();
+
+        let _watcher = start_watching(kanban.clone(), cache.clone(), move |evt| {
+            events_clone.lock().unwrap().push(evt);
+        })
+        .expect("start_watching should succeed with .attachments/ dir");
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        // Create an attachment file
+        std::fs::write(att_dir.join("screenshot.png"), "PNG data").unwrap();
+
+        tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+
+        let captured = events.lock().unwrap();
+        assert!(!captured.is_empty(), "should emit attachment event");
+        assert!(
+            captured.iter().any(|e| matches!(
+                e,
+                WatchEvent::AttachmentChanged {
+                    entity_type,
+                    filename,
+                    removed,
+                } if entity_type == "task" && filename == "screenshot.png" && !removed
+            )),
+            "should have AttachmentChanged event, got: {:?}",
+            *captured
+        );
+    }
+
+    #[tokio::test]
+    async fn test_watcher_detects_attachment_deletion() {
+        let (_tmp, kanban) = setup_kanban_dir();
+        let att_dir = kanban.join("tasks/.attachments");
+        std::fs::create_dir_all(&att_dir).unwrap();
+        let att_file = att_dir.join("to-delete.png");
+        std::fs::write(&att_file, "data").unwrap();
+
+        let cache = new_entity_cache(&kanban);
+        let events: Arc<Mutex<Vec<WatchEvent>>> = Arc::new(Mutex::new(Vec::new()));
+        let events_clone = events.clone();
+
+        let _watcher = start_watching(kanban.clone(), cache.clone(), move |evt| {
+            events_clone.lock().unwrap().push(evt);
+        })
+        .expect("start_watching should succeed");
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        std::fs::remove_file(&att_file).unwrap();
+
+        tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+
+        let captured = events.lock().unwrap();
+        assert!(
+            !captured.is_empty(),
+            "should emit events for attachment deletion"
+        );
+        assert!(
+            captured.iter().any(|e| matches!(
+                e,
+                WatchEvent::AttachmentChanged {
+                    entity_type,
+                    filename,
+                    removed,
+                } if entity_type == "task" && filename == "to-delete.png" && *removed
+            )),
+            "should have AttachmentChanged removed event, got: {:?}",
+            *captured
+        );
+    }
+
+    // =========================================================================
+    // resolve_change edge case: hash changed but fields identical
+    // =========================================================================
+
+    #[test]
+    fn test_resolve_change_hash_differs_but_fields_same() {
+        // When a file's hash changes (e.g., trailing whitespace) but the parsed
+        // fields are identical, resolve_change should return None.
+        let (_tmp, kanban) = setup_kanban_dir();
+        let path = kanban.join("tags/ws.yaml");
+        std::fs::write(&path, "tag_name: WS\n").unwrap();
+
+        let cache = new_entity_cache(&kanban);
+
+        // Rewrite with trailing whitespace — different hash, same parsed fields
+        std::fs::write(&path, "tag_name: WS\n\n").unwrap();
+
+        let evt = resolve_change(&path, &cache, &kanban);
+        assert!(
+            evt.is_none(),
+            "should return None when hash changes but fields are identical"
+        );
+    }
+
+    // =========================================================================
+    // classify_event: removed file (path doesn't exist, canonicalize parent)
+    // =========================================================================
+
+    #[test]
+    fn test_classify_event_removed_file_canonicalizes_parent() {
+        let (_tmp, kanban) = setup_kanban_dir();
+        // File doesn't exist — classify_event should canonicalize parent dir
+        let path = kanban.join("tasks/removed.yaml");
+
+        let event = Event {
+            kind: EventKind::Remove(notify::event::RemoveKind::File),
+            paths: vec![path],
+            attrs: Default::default(),
+        };
+
+        let actions = classify_event(&event, &kanban);
+        assert_eq!(actions.len(), 1);
+        match &actions[0] {
+            FsAction::Removed(p) => {
+                // Should have canonicalized the parent portion
+                assert!(p.ends_with("tasks/removed.yaml"));
+            }
+            other => panic!("expected Removed, got {:?}", other),
+        }
+    }
+
+    // =========================================================================
+    // new_entity_cache with multiple subdirs containing files
+    // =========================================================================
+
+    #[test]
+    fn test_cache_population_multiple_subdirs() {
+        let (_tmp, kanban) = setup_kanban_dir();
+        std::fs::write(kanban.join("tasks/t1.md"), "---\ntitle: T1\n---\nBody\n").unwrap();
+        std::fs::write(kanban.join("tags/bug.yaml"), "tag_name: Bug\n").unwrap();
+        std::fs::write(kanban.join("columns/todo.yaml"), "name: To Do\n").unwrap();
+        std::fs::write(kanban.join("swimlanes/main.yaml"), "name: Main\n").unwrap();
+        std::fs::write(kanban.join("actors/alice.yaml"), "name: Alice\n").unwrap();
+        std::fs::write(kanban.join("views/board.yaml"), "name: Board\n").unwrap();
+        std::fs::write(kanban.join("board.yaml"), "name: My Board\n").unwrap();
+
+        let cache = new_entity_cache(&kanban);
+        let map = cache.lock().unwrap();
+        assert_eq!(map.len(), 7, "should cache files from all subdirs + root");
+    }
+
+    // =========================================================================
+    // flush_and_emit: scan root-level + subdirs together
+    // =========================================================================
+
+    #[test]
+    fn test_flush_and_emit_scans_all_subdirs() {
+        let (_tmp, kanban) = setup_kanban_dir();
+        std::fs::write(kanban.join("tasks/t1.md"), "---\ntitle: T1\n---\nBody\n").unwrap();
+        std::fs::write(kanban.join("tags/bug.yaml"), "tag_name: Bug\n").unwrap();
+        let cache = new_entity_cache(&kanban);
+
+        // Add new files in different subdirs after cache
+        std::fs::write(kanban.join("columns/done.yaml"), "name: Done\n").unwrap();
+        std::fs::write(kanban.join("board.yaml"), "name: Board\n").unwrap();
+
+        let events = flush_and_emit(&kanban, &cache);
+        assert_eq!(
+            events.len(),
+            2,
+            "should detect new files in subdirs and root"
+        );
+    }
+
     /// Reproduces the drag-and-drop bug: changing position_ordinal in a task .md
     /// file must be detected by flush_and_emit as an EntityFieldChanged event.
     /// Without this, the frontend never learns the card moved.

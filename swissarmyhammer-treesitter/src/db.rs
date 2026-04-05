@@ -827,4 +827,262 @@ mod tests {
             .count();
         assert_eq!(db_count, 1, "Should not duplicate existing entries");
     }
+
+    // =========================================================================
+    // Additional coverage tests
+    // =========================================================================
+
+    #[test]
+    fn test_get_content_hash_returns_none_for_missing_file() {
+        let (_dir, db) = setup_db();
+        let result = db
+            .get_content_hash(Path::new("/nonexistent/file.rs"))
+            .unwrap();
+        assert!(result.is_none(), "Should return None for missing file");
+    }
+
+    #[test]
+    fn test_get_content_hash_returns_hash_for_existing_file() {
+        let (_dir, db) = setup_db();
+        let path = Path::new("/test/file.rs");
+        db.upsert_file(path, &TEST_HASH).unwrap();
+
+        let result = db.get_content_hash(path).unwrap();
+        assert_eq!(result, Some(TEST_HASH));
+    }
+
+    #[test]
+    fn test_get_content_hash_after_update() {
+        let (_dir, db) = setup_db();
+        let path = Path::new("/test/file.rs");
+
+        // Insert with first hash
+        db.upsert_file(path, &ZERO_HASH).unwrap();
+        assert_eq!(db.get_content_hash(path).unwrap(), Some(ZERO_HASH));
+
+        // Update with second hash
+        db.upsert_file(path, &TEST_HASH).unwrap();
+        assert_eq!(db.get_content_hash(path).unwrap(), Some(TEST_HASH));
+    }
+
+    #[test]
+    fn test_get_chunks_for_file_empty() {
+        let (_dir, db) = setup_db();
+        let chunks = db
+            .get_chunks_for_file(Path::new("/nonexistent.rs"))
+            .unwrap();
+        assert!(chunks.is_empty());
+    }
+
+    #[test]
+    fn test_get_chunks_for_file_with_and_without_embeddings() {
+        let (_dir, db) = setup_db();
+        let path = Path::new("/test.rs");
+        let file_id = db.upsert_file(path, &TEST_HASH).unwrap();
+
+        // Insert chunk with embedding
+        let emb = vec![1.0f32, 2.0, 3.0];
+        db.insert_chunk(&file_id, 0, 50, Some(&emb), "func_a")
+            .unwrap();
+
+        // Insert chunk without embedding
+        db.insert_chunk(&file_id, 50, 100, None, "func_b").unwrap();
+
+        let chunks = db.get_chunks_for_file(path).unwrap();
+        assert_eq!(chunks.len(), 2);
+
+        // Chunk with embedding
+        let with_emb = chunks.iter().find(|c| c.symbol_path == "func_a").unwrap();
+        assert!(with_emb.embedding.is_some());
+        assert_eq!(with_emb.embedding.as_ref().unwrap(), &emb);
+        assert_eq!(with_emb.start_byte, 0);
+        assert_eq!(with_emb.end_byte, 50);
+
+        // Chunk without embedding
+        let without_emb = chunks.iter().find(|c| c.symbol_path == "func_b").unwrap();
+        assert!(without_emb.embedding.is_none());
+        assert_eq!(without_emb.start_byte, 50);
+        assert_eq!(without_emb.end_byte, 100);
+    }
+
+    #[test]
+    fn test_file_is_current_with_different_hash() {
+        let (_dir, db) = setup_db();
+        let path = Path::new("/test.rs");
+        db.upsert_file(path, &TEST_HASH).unwrap();
+
+        // Different hash should return false
+        assert!(!db.file_is_current(path, &ZERO_HASH).unwrap());
+        // Same hash should return true
+        assert!(db.file_is_current(path, &TEST_HASH).unwrap());
+    }
+
+    #[test]
+    fn test_remove_file_returns_false_for_nonexistent() {
+        let (_dir, db) = setup_db();
+        let result = db.remove_file(Path::new("/nonexistent.rs")).unwrap();
+        assert!(
+            !result,
+            "Should return false when removing nonexistent file"
+        );
+    }
+
+    #[test]
+    fn test_remove_file_also_removes_chunks() {
+        let (_dir, db) = setup_db();
+        let path = Path::new("/test.rs");
+        let file_id = db.upsert_file(path, &TEST_HASH).unwrap();
+        db.insert_chunk(&file_id, 0, 10, None, "sym").unwrap();
+
+        assert_eq!(db.chunk_count().unwrap(), 1);
+        assert!(db.remove_file(path).unwrap());
+        assert_eq!(db.chunk_count().unwrap(), 0);
+        assert_eq!(db.file_count().unwrap(), 0);
+    }
+
+    #[test]
+    fn test_encode_decode_embedding_empty() {
+        let original: Vec<f32> = vec![];
+        let encoded = encode_embedding(&original);
+        let decoded = decode_embedding(&encoded);
+        assert!(decoded.is_empty());
+    }
+
+    #[test]
+    fn test_encode_decode_embedding_single() {
+        let original = vec![std::f32::consts::PI];
+        let encoded = encode_embedding(&original);
+        assert_eq!(encoded.len(), BYTES_PER_F32);
+        let decoded = decode_embedding(&encoded);
+        assert_eq!(original, decoded);
+    }
+
+    #[test]
+    fn test_list_files_multiple() {
+        let (_dir, db) = setup_db();
+        db.upsert_file(Path::new("/a.rs"), &TEST_HASH).unwrap();
+        db.upsert_file(Path::new("/b.rs"), &ZERO_HASH).unwrap();
+        db.upsert_file(Path::new("/c.rs"), &TEST_HASH).unwrap();
+
+        let files = db.list_files().unwrap();
+        assert_eq!(files.len(), 3);
+        assert!(files.contains(&PathBuf::from("/a.rs")));
+        assert!(files.contains(&PathBuf::from("/b.rs")));
+        assert!(files.contains(&PathBuf::from("/c.rs")));
+    }
+
+    #[test]
+    fn test_embedded_chunk_count_mixed() {
+        let (_dir, db) = setup_db();
+        let path = Path::new("/test.rs");
+        let file_id = db.upsert_file(path, &TEST_HASH).unwrap();
+
+        // One chunk with embedding, one without
+        db.insert_chunk(&file_id, 0, 10, Some(&[1.0, 2.0]), "with_emb")
+            .unwrap();
+        db.insert_chunk(&file_id, 10, 20, None, "no_emb").unwrap();
+
+        assert_eq!(db.chunk_count().unwrap(), 2);
+        assert_eq!(db.embedded_chunk_count().unwrap(), 1);
+    }
+
+    #[test]
+    fn test_get_all_embedded_chunks_skips_null_embeddings() {
+        let (_dir, db) = setup_db();
+        let path = Path::new("/test.rs");
+        let file_id = db.upsert_file(path, &TEST_HASH).unwrap();
+
+        // Insert with and without embeddings
+        db.insert_chunk(&file_id, 0, 10, Some(&[1.0]), "with_emb")
+            .unwrap();
+        db.insert_chunk(&file_id, 10, 20, None, "no_emb").unwrap();
+
+        let embedded = db.get_all_embedded_chunks().unwrap();
+        assert_eq!(embedded.len(), 1);
+        assert_eq!(embedded[0].symbol_path, "with_emb");
+        assert_eq!(embedded[0].start_byte, 0);
+        assert_eq!(embedded[0].end_byte, 10);
+    }
+
+    #[test]
+    fn test_get_all_embedded_chunks_joins_file_path() {
+        let (_dir, db) = setup_db();
+        let path = Path::new("/project/src/main.rs");
+        let file_id = db.upsert_file(path, &TEST_HASH).unwrap();
+        db.insert_chunk(&file_id, 0, 50, Some(&[1.0, 2.0, 3.0]), "main")
+            .unwrap();
+
+        let chunks = db.get_all_embedded_chunks().unwrap();
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0].path, PathBuf::from("/project/src/main.rs"));
+        assert_eq!(chunks[0].embedding, vec![1.0, 2.0, 3.0]);
+    }
+
+    #[test]
+    fn test_clear_removes_all_data() {
+        let (_dir, db) = setup_db();
+        let file_id = db.upsert_file(Path::new("/a.rs"), &TEST_HASH).unwrap();
+        db.insert_chunk(&file_id, 0, 10, Some(&[1.0]), "sym")
+            .unwrap();
+        let file_id2 = db.upsert_file(Path::new("/b.rs"), &ZERO_HASH).unwrap();
+        db.insert_chunk(&file_id2, 0, 20, None, "sym2").unwrap();
+
+        assert_eq!(db.file_count().unwrap(), 2);
+        assert_eq!(db.chunk_count().unwrap(), 2);
+
+        db.clear().unwrap();
+
+        assert_eq!(db.file_count().unwrap(), 0);
+        assert_eq!(db.chunk_count().unwrap(), 0);
+    }
+
+    #[test]
+    fn test_database_path_joins_correctly() {
+        let path = database_path(Path::new("/my/workspace"));
+        assert_eq!(path, PathBuf::from("/my/workspace/.treesitter-index.db"));
+    }
+
+    #[test]
+    fn test_upsert_file_replaces_chunks_on_update() {
+        let (_dir, db) = setup_db();
+        let path = Path::new("/test.rs");
+
+        // First insert with chunks
+        let file_id = db.upsert_file(path, &TEST_HASH).unwrap();
+        db.insert_chunk(&file_id, 0, 10, None, "old_sym").unwrap();
+        db.insert_chunk(&file_id, 10, 20, None, "old_sym2").unwrap();
+        assert_eq!(db.chunk_count().unwrap(), 2);
+
+        // Upsert same file - old chunks should be removed
+        let file_id2 = db.upsert_file(path, &ZERO_HASH).unwrap();
+        assert_eq!(file_id, file_id2, "Same path should yield same file_id");
+        assert_eq!(
+            db.chunk_count().unwrap(),
+            0,
+            "Old chunks should be cleared on upsert"
+        );
+    }
+
+    #[test]
+    fn test_is_readonly_readwrite() {
+        let (_dir, db) = setup_db();
+        assert!(!db.is_readonly());
+    }
+
+    #[test]
+    fn test_ensure_root_gitignore_no_trailing_newline() {
+        let temp = TempDir::new().unwrap();
+        let gitignore_path = temp.path().join(".gitignore");
+
+        // Create .gitignore without trailing newline
+        std::fs::write(&gitignore_path, "target/").unwrap();
+
+        ensure_root_gitignore(temp.path()).unwrap();
+
+        let content = std::fs::read_to_string(&gitignore_path).unwrap();
+        assert!(content.contains("target/"));
+        assert!(content.contains(".treesitter-index.db"));
+        assert!(content.contains(".treesitter-index.db-shm"));
+        assert!(content.contains(".treesitter-index.db-wal"));
+    }
 }

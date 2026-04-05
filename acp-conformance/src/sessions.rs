@@ -578,9 +578,216 @@ pub fn verify_new_session_fixture(
 
 #[cfg(test)]
 mod tests {
-    /// Dummy test to verify module compiles
+    use super::*;
+    use agent_client_protocol::{
+        AuthenticateRequest, AuthenticateResponse, CancelNotification, ExtNotification, ExtRequest,
+        ExtResponse, InitializeResponse, NewSessionResponse, PromptRequest, PromptResponse,
+        SetSessionModeResponse, StopReason,
+    };
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    /// Mock agent for session tests with mode support
+    struct SessionMockAgent {
+        counter: AtomicU64,
+    }
+
+    impl SessionMockAgent {
+        fn new() -> Self {
+            Self {
+                counter: AtomicU64::new(1),
+            }
+        }
+    }
+
+    #[async_trait::async_trait(?Send)]
+    impl Agent for SessionMockAgent {
+        async fn initialize(
+            &self,
+            _request: InitializeRequest,
+        ) -> agent_client_protocol::Result<InitializeResponse> {
+            Ok(InitializeResponse::new(ProtocolVersion::V1))
+        }
+
+        async fn authenticate(
+            &self,
+            _request: AuthenticateRequest,
+        ) -> agent_client_protocol::Result<AuthenticateResponse> {
+            Ok(AuthenticateResponse::new())
+        }
+
+        async fn new_session(
+            &self,
+            _request: NewSessionRequest,
+        ) -> agent_client_protocol::Result<NewSessionResponse> {
+            let id = self.counter.fetch_add(1, Ordering::SeqCst);
+            let resp = NewSessionResponse::new(format!("session-{}", id)).modes(
+                agent_client_protocol::SessionModeState::new(
+                    "default",
+                    vec![
+                        agent_client_protocol::SessionMode::new("default", "Default")
+                            .description("Default mode"),
+                        agent_client_protocol::SessionMode::new("plan", "Plan")
+                            .description("Planning mode"),
+                    ],
+                ),
+            );
+            Ok(resp)
+        }
+
+        async fn prompt(
+            &self,
+            _request: PromptRequest,
+        ) -> agent_client_protocol::Result<PromptResponse> {
+            Ok(PromptResponse::new(StopReason::EndTurn))
+        }
+
+        async fn cancel(&self, _request: CancelNotification) -> agent_client_protocol::Result<()> {
+            Ok(())
+        }
+
+        async fn load_session(
+            &self,
+            _request: LoadSessionRequest,
+        ) -> agent_client_protocol::Result<agent_client_protocol::LoadSessionResponse> {
+            Err(agent_client_protocol::Error::invalid_params())
+        }
+
+        async fn set_session_mode(
+            &self,
+            request: SetSessionModeRequest,
+        ) -> agent_client_protocol::Result<SetSessionModeResponse> {
+            let valid_modes = ["default", "plan"];
+            if valid_modes.contains(&&*request.mode_id.0) {
+                Ok(SetSessionModeResponse::new())
+            } else {
+                Err(agent_client_protocol::Error::invalid_params())
+            }
+        }
+
+        async fn ext_method(
+            &self,
+            _request: ExtRequest,
+        ) -> agent_client_protocol::Result<ExtResponse> {
+            Err(agent_client_protocol::Error::method_not_found())
+        }
+
+        async fn ext_notification(
+            &self,
+            _notification: ExtNotification,
+        ) -> agent_client_protocol::Result<()> {
+            Ok(())
+        }
+    }
+
     #[test]
     fn test_module_compiles() {
         // This ensures the module compiles correctly
+    }
+
+    #[test]
+    fn test_session_stats_default() {
+        let stats = SessionStats::default();
+        assert_eq!(stats.new_session_calls, 0);
+        assert_eq!(stats.load_session_calls, 0);
+        assert_eq!(stats.set_session_mode_calls, 0);
+        assert_eq!(stats.session_ids_found, 0);
+    }
+
+    #[test]
+    fn test_session_stats_debug_and_serialize() {
+        let stats = SessionStats {
+            new_session_calls: 3,
+            load_session_calls: 1,
+            set_session_mode_calls: 2,
+            session_ids_found: 3,
+        };
+        let debug = format!("{:?}", stats);
+        assert!(debug.contains("SessionStats"));
+
+        let json = serde_json::to_value(&stats).unwrap();
+        assert_eq!(json["new_session_calls"], 3);
+        assert_eq!(json["session_ids_found"], 3);
+    }
+
+    #[tokio::test]
+    async fn test_new_session_minimal_mock() {
+        let agent = SessionMockAgent::new();
+        let result = test_new_session_minimal(&agent).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_new_session_with_mcp_mock() {
+        let agent = SessionMockAgent::new();
+        let result = test_new_session_with_mcp(&agent).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_session_ids_unique_mock() {
+        let agent = SessionMockAgent::new();
+        let result = test_session_ids_unique(&agent).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_load_nonexistent_session_mock() {
+        let agent = SessionMockAgent::new();
+        let result = test_load_nonexistent_session(&agent).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_set_session_mode_mock() {
+        let agent = SessionMockAgent::new();
+        let result = test_set_session_mode(&agent).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_new_session_includes_modes_mock() {
+        let agent = SessionMockAgent::new();
+        let result = test_new_session_includes_modes(&agent).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_set_session_mode_to_available_mock() {
+        let agent = SessionMockAgent::new();
+        let result = test_set_session_mode_to_available(&agent).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_set_invalid_session_mode_mock() {
+        let agent = SessionMockAgent::new();
+        let result = test_set_invalid_session_mode(&agent).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_mode_state_validation_mock() {
+        let agent = SessionMockAgent::new();
+        let result = test_mode_state_validation(&agent).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_session_mode_independence_mock() {
+        let agent = SessionMockAgent::new();
+        let result = test_session_mode_independence(&agent).await;
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_verify_session_fixture_not_found() {
+        let result = verify_session_fixture("nonexistent-agent", "nonexistent-test");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_verify_new_session_fixture_not_found() {
+        let result = verify_new_session_fixture("nonexistent-agent", "nonexistent-test", 1);
+        assert!(result.is_err());
     }
 }

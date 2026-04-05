@@ -864,7 +864,6 @@ mod tests {
             .validate(&field, serde_json::Value::Null, &HashMap::new())
             .await;
         assert!(result.is_ok());
-        // Null is not a string, so it hits the None arm and passes through
         assert_eq!(result.unwrap(), serde_json::Value::Null);
     }
 
@@ -919,7 +918,6 @@ mod tests {
 
         let result = engine.validate_entity(&entity_def, &mut fields).await;
         assert!(result.is_ok());
-        // Fields should remain unchanged — "ok" is not an object, so no merge happens
         assert_eq!(fields.len(), 1);
         assert_eq!(fields.get("title").unwrap(), &serde_json::json!("Hello"));
     }
@@ -953,5 +951,10 @@ mod tests {
             fields.get("computed").unwrap(),
             &serde_json::json!("My Task (auto)")
         );
+    }
+
+    #[test]
+    fn validation_engine_default_creates_empty() {
+        let _engine = ValidationEngine::default();
     }
 }

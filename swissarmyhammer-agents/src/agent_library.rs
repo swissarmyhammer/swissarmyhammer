@@ -94,4 +94,58 @@ mod tests {
         sorted_names.sort();
         assert_eq!(names, sorted_names);
     }
+
+    #[test]
+    fn test_library_load_with_resolver() {
+        let resolver = AgentResolver::new();
+        let mut library = AgentLibrary::new();
+        library.load_with_resolver(&resolver);
+
+        assert!(!library.is_empty());
+        assert!(library.get("default").is_some());
+        assert!(library.get("tester").is_some());
+    }
+
+    #[test]
+    fn test_library_len() {
+        let mut library = AgentLibrary::new();
+        assert_eq!(library.len(), 0);
+
+        library.load_defaults();
+        assert!(!library.is_empty());
+    }
+
+    #[test]
+    fn test_library_names() {
+        let mut library = AgentLibrary::new();
+        library.load_defaults();
+
+        let names = library.names();
+        assert!(!names.is_empty());
+
+        // Should be sorted
+        let mut sorted = names.clone();
+        sorted.sort();
+        assert_eq!(names, sorted);
+
+        // Should contain known agents
+        assert!(names.contains(&"default"));
+        assert!(names.contains(&"tester"));
+    }
+
+    #[test]
+    fn test_library_default() {
+        let library = AgentLibrary::default();
+        assert!(library.is_empty());
+        assert_eq!(library.len(), 0);
+    }
+
+    #[test]
+    fn test_library_new_is_empty() {
+        let library = AgentLibrary::new();
+        assert!(library.is_empty());
+        assert_eq!(library.len(), 0);
+        assert!(library.list().is_empty());
+        assert!(library.names().is_empty());
+    }
 }

@@ -158,4 +158,222 @@ mod tests {
             _ => panic!("Expected progress notification"),
         }
     }
+
+    #[test]
+    fn test_capture_log_notification() {
+        let (capture, mut rx) = NotificationCapture::new();
+
+        let params = LoggingMessageNotificationParam {
+            level: LoggingLevel::Info,
+            logger: Some("test-logger".to_string()),
+            data: serde_json::json!("log message"),
+        };
+
+        capture.capture_log(&params);
+
+        match rx.try_recv() {
+            Ok(McpNotification::Log(l)) => {
+                assert_eq!(l.logger.as_deref(), Some("test-logger"));
+                assert_eq!(l.data, serde_json::json!("log message"));
+            }
+            _ => panic!("Expected log notification"),
+        }
+    }
+
+    #[test]
+    fn test_notification_capture_subscribe_creates_new_receiver() {
+        let (capture, _initial_rx) = NotificationCapture::new();
+
+        // subscribe() creates a new receiver independent of the initial one
+        let mut sub_rx = capture.subscribe();
+
+        let params = ProgressNotificationParam {
+            progress_token: ProgressToken(NumberOrString::String("sub-test".into())),
+            progress: 75.0,
+            total: None,
+            message: None,
+        };
+
+        capture.capture_progress(&params);
+
+        match sub_rx.try_recv() {
+            Ok(McpNotification::Progress(p)) => {
+                assert_eq!(p.progress, 75.0);
+            }
+            _ => panic!("Expected progress notification on subscribed receiver"),
+        }
+    }
+
+    #[test]
+    fn test_notification_capture_multiple_subscribers() {
+        let (capture, mut rx1) = NotificationCapture::new();
+        let mut rx2 = capture.subscribe();
+        let mut rx3 = capture.subscribe();
+
+        let params = ProgressNotificationParam {
+            progress_token: ProgressToken(NumberOrString::String("multi".into())),
+            progress: 10.0,
+            total: Some(50.0),
+            message: Some("multi-sub".to_string()),
+        };
+
+        capture.capture_progress(&params);
+
+        // All three receivers should get the same notification
+        for (i, rx) in [&mut rx1, &mut rx2, &mut rx3].iter_mut().enumerate() {
+            match rx.try_recv() {
+                Ok(McpNotification::Progress(p)) => {
+                    assert_eq!(p.progress, 10.0, "receiver {} got wrong progress", i);
+                }
+                _ => panic!("receiver {} did not get progress notification", i),
+            }
+        }
+    }
+
+    #[test]
+    fn test_notification_capture_default() {
+        let capture = NotificationCapture::default();
+
+        // default() should create a working capture (no initial receiver)
+        let mut rx = capture.subscribe();
+
+        let params = LoggingMessageNotificationParam {
+            level: LoggingLevel::Warning,
+            logger: None,
+            data: serde_json::json!("default test"),
+        };
+
+        capture.capture_log(&params);
+
+        match rx.try_recv() {
+            Ok(McpNotification::Log(l)) => {
+                assert_eq!(l.data, serde_json::json!("default test"));
+            }
+            _ => panic!("Expected log notification from default capture"),
+        }
+    }
+
+    #[test]
+    fn test_notification_capture_no_receivers_does_not_panic() {
+        // If all receivers are dropped, sending should silently succeed (not panic)
+        let (capture, rx) = NotificationCapture::new();
+        drop(rx);
+
+        let params = ProgressNotificationParam {
+            progress_token: ProgressToken(NumberOrString::String("dropped".into())),
+            progress: 1.0,
+            total: None,
+            message: None,
+        };
+
+        // This should not panic even though there are no receivers
+        capture.capture_progress(&params);
+
+        let log_params = LoggingMessageNotificationParam {
+            level: LoggingLevel::Error,
+            logger: None,
+            data: serde_json::json!("dropped"),
+        };
+        capture.capture_log(&log_params);
+    }
+
+    #[test]
+    fn test_notification_capture_clone() {
+        let (capture, _rx) = NotificationCapture::new();
+        let cloned = capture.clone();
+
+        // Both the original and clone should send to the same channel
+        let mut rx = cloned.subscribe();
+
+        let params = ProgressNotificationParam {
+            progress_token: ProgressToken(NumberOrString::String("clone-test".into())),
+            progress: 42.0,
+            total: None,
+            message: None,
+        };
+
+        // Send from original
+        capture.capture_progress(&params);
+
+        match rx.try_recv() {
+            Ok(McpNotification::Progress(p)) => {
+                assert_eq!(p.progress, 42.0);
+            }
+            _ => panic!("Expected notification from original capture on cloned subscriber"),
+        }
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_start_notifying_server_binds_and_provides_url() {
+        // Create a minimal handler that implements NotifyingServerHandler
+        #[derive(Clone)]
+        struct TestHandler {
+            _capture: Option<NotificationCapture>,
+        }
+
+        impl NotifyingServerHandler for TestHandler {
+            fn set_notification_capture(&mut self, capture: NotificationCapture) {
+                self._capture = Some(capture);
+            }
+        }
+
+        #[async_trait::async_trait]
+        impl ServerHandler for TestHandler {
+            fn get_info(&self) -> ServerInfo {
+                ServerInfo::new(ServerCapabilities::default())
+                    .with_server_info(Implementation::new("test", "0.1.0"))
+            }
+        }
+
+        let handler = TestHandler { _capture: None };
+        let server = start_notifying_server(handler)
+            .await
+            .expect("server should start");
+
+        // URL should be a valid localhost HTTP URL
+        assert!(
+            server.url().starts_with("http://127.0.0.1:"),
+            "URL should be localhost: {}",
+            server.url()
+        );
+        assert!(
+            server.url().ends_with("/mcp"),
+            "URL should end with /mcp: {}",
+            server.url()
+        );
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_notifying_server_notification_source_trait() {
+        #[derive(Clone)]
+        struct TestHandler2 {
+            _capture: Option<NotificationCapture>,
+        }
+
+        impl NotifyingServerHandler for TestHandler2 {
+            fn set_notification_capture(&mut self, capture: NotificationCapture) {
+                self._capture = Some(capture);
+            }
+        }
+
+        #[async_trait::async_trait]
+        impl ServerHandler for TestHandler2 {
+            fn get_info(&self) -> ServerInfo {
+                ServerInfo::new(ServerCapabilities::default())
+                    .with_server_info(Implementation::new("test2", "0.1.0"))
+            }
+        }
+
+        let handler = TestHandler2 { _capture: None };
+        let server = start_notifying_server(handler)
+            .await
+            .expect("server should start");
+
+        // McpNotificationSource::url() should match
+        let source: &dyn McpNotificationSource = &server;
+        assert_eq!(source.url(), server.url());
+
+        // subscribe() should return a working receiver
+        let _rx = source.subscribe();
+    }
 }

@@ -67,6 +67,21 @@ mod tests {
     }
 
     #[test]
+    fn test_default_config_model_dir() {
+        let config = AneEmbeddingConfig::default();
+        assert_eq!(
+            config.model_dir,
+            PathBuf::from("var/data/models/qwen3-embedding-0.6b")
+        );
+    }
+
+    #[test]
+    fn test_constants() {
+        assert_eq!(DEFAULT_SEQ_LENGTH, 256);
+        assert_eq!(DEFAULT_MODEL_PREFIX, "Qwen3-Embedding-0.6B");
+    }
+
+    #[test]
     fn test_config_serialization() {
         let config = AneEmbeddingConfig::default();
         let json = serde_json::to_string(&config).unwrap();
@@ -74,6 +89,41 @@ mod tests {
         assert_eq!(parsed.normalize_embeddings, config.normalize_embeddings);
         assert_eq!(parsed.seq_length, config.seq_length);
         assert_eq!(parsed.model_prefix, config.model_prefix);
+    }
+
+    #[test]
+    fn test_config_serialization_custom_values() {
+        let config = AneEmbeddingConfig {
+            model_dir: PathBuf::from("/custom/path"),
+            model_prefix: "MyModel".to_string(),
+            normalize_embeddings: false,
+            seq_length: 128,
+            debug: true,
+        };
+        let json = serde_json::to_string(&config).unwrap();
+        let parsed: AneEmbeddingConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.model_dir, PathBuf::from("/custom/path"));
+        assert_eq!(parsed.model_prefix, "MyModel");
+        assert!(!parsed.normalize_embeddings);
+        assert_eq!(parsed.seq_length, 128);
+        assert!(parsed.debug);
+    }
+
+    #[test]
+    fn test_config_deserialization_from_json() {
+        let json = r#"{
+            "model_dir": "/tmp/models",
+            "model_prefix": "test-model",
+            "normalize_embeddings": false,
+            "seq_length": 64,
+            "debug": true
+        }"#;
+        let config: AneEmbeddingConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(config.model_dir, PathBuf::from("/tmp/models"));
+        assert_eq!(config.model_prefix, "test-model");
+        assert!(!config.normalize_embeddings);
+        assert_eq!(config.seq_length, 64);
+        assert!(config.debug);
     }
 
     #[test]
@@ -88,11 +138,56 @@ mod tests {
     }
 
     #[test]
+    fn test_model_path_custom() {
+        let config = AneEmbeddingConfig {
+            model_dir: PathBuf::from("/models"),
+            model_prefix: "BERT".to_string(),
+            seq_length: 512,
+            ..AneEmbeddingConfig::default()
+        };
+        assert_eq!(
+            config.model_path(),
+            PathBuf::from("/models/BERT-seq512.mlpackage")
+        );
+    }
+
+    #[test]
     fn test_tokenizer_path() {
         let config = AneEmbeddingConfig::default();
         assert_eq!(
             config.tokenizer_path(),
             PathBuf::from("var/data/models/qwen3-embedding-0.6b/tokenizer.json")
         );
+    }
+
+    #[test]
+    fn test_tokenizer_path_custom_dir() {
+        let config = AneEmbeddingConfig {
+            model_dir: PathBuf::from("/custom/dir"),
+            ..AneEmbeddingConfig::default()
+        };
+        assert_eq!(
+            config.tokenizer_path(),
+            PathBuf::from("/custom/dir/tokenizer.json")
+        );
+    }
+
+    #[test]
+    fn test_config_debug_impl() {
+        let config = AneEmbeddingConfig::default();
+        let debug = format!("{config:?}");
+        assert!(debug.contains("AneEmbeddingConfig"));
+        assert!(debug.contains("seq_length"));
+    }
+
+    #[test]
+    fn test_config_clone() {
+        let config = AneEmbeddingConfig::default();
+        let cloned = config.clone();
+        assert_eq!(cloned.model_dir, config.model_dir);
+        assert_eq!(cloned.model_prefix, config.model_prefix);
+        assert_eq!(cloned.seq_length, config.seq_length);
+        assert_eq!(cloned.normalize_embeddings, config.normalize_embeddings);
+        assert_eq!(cloned.debug, config.debug);
     }
 }

@@ -131,4 +131,174 @@ mod tests {
         assert!(addrs.frontend.contains("-f.sock"));
         assert!(addrs.backend.contains("-b.sock"));
     }
+
+    #[test]
+    fn test_ipc_addresses_truncates_long_hash() {
+        let dir = TempDir::new().unwrap();
+        let long_hash = "abcdef1234567890abcdef1234567890";
+        let addrs = ipc_addresses(dir.path(), "t", long_hash);
+        // Hash should be truncated to 8 chars
+        assert!(addrs.frontend.contains("abcdef12"));
+        assert!(!addrs.frontend.contains("abcdef1234567890abcdef"));
+    }
+
+    #[test]
+    fn test_ipc_addresses_fallback_long_path() {
+        // Create a base_dir with a very long path to trigger the >90 char fallback
+        let dir = TempDir::new().unwrap();
+        // Build a deeply nested path that makes the socket path > 90 chars
+        let long_segment = "a".repeat(80);
+        let deep_dir = dir.path().join(&long_segment);
+        std::fs::create_dir_all(&deep_dir).unwrap();
+
+        let addrs = ipc_addresses(&deep_dir, "prefix", "hashval1");
+        // When the path is too long, it should fall back to the temp directory
+        let temp = std::env::temp_dir();
+        let temp_str = temp.to_string_lossy();
+        // The address should use temp dir since the deep path is > 90 chars
+        assert!(
+            addrs.frontend.contains(&*temp_str) || addrs.frontend.len() <= 100,
+            "Expected fallback to temp dir for long paths, got: {}",
+            addrs.frontend
+        );
+    }
+
+    #[test]
+    fn test_cleanup_discovery() {
+        let dir = TempDir::new().unwrap();
+        let disc_path = dir.path().join("test.addr");
+        let front_sock = dir.path().join("front.sock");
+        let back_sock = dir.path().join("back.sock");
+
+        // Create the files
+        fs::write(&disc_path, "test").unwrap();
+        fs::write(&front_sock, "").unwrap();
+        fs::write(&back_sock, "").unwrap();
+
+        let addrs = BusAddresses {
+            frontend: format!("ipc://{}", front_sock.display()),
+            backend: format!("ipc://{}", back_sock.display()),
+        };
+
+        cleanup_discovery(&disc_path, &addrs);
+
+        assert!(!disc_path.exists());
+        assert!(!front_sock.exists());
+        assert!(!back_sock.exists());
+    }
+
+    #[test]
+    fn test_cleanup_discovery_missing_files() {
+        let dir = TempDir::new().unwrap();
+        let disc_path = dir.path().join("nonexistent.addr");
+        let addrs = BusAddresses {
+            frontend: "ipc:///tmp/nonexistent-front.sock".to_string(),
+            backend: "ipc:///tmp/nonexistent-back.sock".to_string(),
+        };
+        // Should not panic when files don't exist
+        cleanup_discovery(&disc_path, &addrs);
+    }
+
+    #[test]
+    fn test_cleanup_discovery_no_ipc_prefix() {
+        let dir = TempDir::new().unwrap();
+        let disc_path = dir.path().join("test.addr");
+        fs::write(&disc_path, "test").unwrap();
+
+        // Addresses without ipc:// prefix — cleanup should still remove disc file
+        let addrs = BusAddresses {
+            frontend: "tcp://127.0.0.1:5555".to_string(),
+            backend: "tcp://127.0.0.1:5556".to_string(),
+        };
+
+        cleanup_discovery(&disc_path, &addrs);
+        assert!(!disc_path.exists());
+    }
+
+    #[test]
+    fn test_read_discovery_malformed_content() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("malformed.addr");
+
+        // Write only one line (needs at least 2)
+        fs::write(&path, "only-one-line\n").unwrap();
+        let result = read_discovery(&path).unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_read_discovery_empty_file() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("empty.addr");
+
+        fs::write(&path, "").unwrap();
+        let result = read_discovery(&path).unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_write_discovery_creates_parent_dirs() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("nested").join("deep").join("test.addr");
+
+        let addrs = BusAddresses {
+            frontend: "ipc:///tmp/f.sock".to_string(),
+            backend: "ipc:///tmp/b.sock".to_string(),
+        };
+
+        write_discovery(&path, &addrs).unwrap();
+        assert!(path.exists());
+
+        let read = read_discovery(&path).unwrap().unwrap();
+        assert_eq!(read, addrs);
+    }
+
+    #[test]
+    fn test_discovery_path_format() {
+        let dir = TempDir::new().unwrap();
+        let path = discovery_path(dir.path(), "myapp", "abc123");
+        let filename = path.file_name().unwrap().to_string_lossy();
+        assert_eq!(filename, "myapp-bus-abc123.addr");
+        assert!(path.starts_with(dir.path()));
+    }
+
+    #[test]
+    fn test_bus_addresses_equality() {
+        let a = BusAddresses {
+            frontend: "ipc:///a".to_string(),
+            backend: "ipc:///b".to_string(),
+        };
+        let b = BusAddresses {
+            frontend: "ipc:///a".to_string(),
+            backend: "ipc:///b".to_string(),
+        };
+        assert_eq!(a, b);
+
+        let c = BusAddresses {
+            frontend: "ipc:///x".to_string(),
+            backend: "ipc:///b".to_string(),
+        };
+        assert_ne!(a, c);
+    }
+
+    #[test]
+    fn test_bus_addresses_debug() {
+        let addrs = BusAddresses {
+            frontend: "ipc:///front".to_string(),
+            backend: "ipc:///back".to_string(),
+        };
+        let debug = format!("{:?}", addrs);
+        assert!(debug.contains("front"));
+        assert!(debug.contains("back"));
+    }
+
+    #[test]
+    fn test_bus_addresses_clone() {
+        let addrs = BusAddresses {
+            frontend: "ipc:///f".to_string(),
+            backend: "ipc:///b".to_string(),
+        };
+        let cloned = addrs.clone();
+        assert_eq!(addrs, cloned);
+    }
 }

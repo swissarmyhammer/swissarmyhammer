@@ -292,6 +292,69 @@ mod tests {
     }
 
     #[test]
+    fn test_position_new() {
+        let col = ColumnId::from_string("todo");
+        let ordinal = Ordinal::first();
+        let pos = Position::new(col.clone(), None, ordinal.clone());
+
+        assert_eq!(pos.column, col);
+        assert!(pos.swimlane.is_none());
+        assert_eq!(pos.ordinal, ordinal);
+    }
+
+    #[test]
+    fn test_position_new_with_swimlane() {
+        let col = ColumnId::from_string("doing");
+        let lane = SwimlaneId::from_string("backend");
+        let ordinal = Ordinal::first();
+        let pos = Position::new(col.clone(), Some(lane.clone()), ordinal.clone());
+
+        assert_eq!(pos.column, col);
+        assert_eq!(pos.swimlane, Some(lane));
+        assert_eq!(pos.ordinal, ordinal);
+    }
+
+    #[test]
+    fn test_position_in_column() {
+        let col = ColumnId::from_string("backlog");
+        let pos = Position::in_column(col.clone());
+
+        assert_eq!(pos.column, col);
+        assert!(pos.swimlane.is_none());
+        // Should use the default "first" ordinal
+        assert_eq!(pos.ordinal, Ordinal::first());
+    }
+
+    #[test]
+    fn test_ordinal_is_valid_with_valid_string() {
+        // The default ordinal string should be valid
+        let valid = Ordinal::DEFAULT_STR;
+        assert!(Ordinal::is_valid(valid));
+    }
+
+    #[test]
+    fn test_ordinal_is_valid_with_first_ordinal() {
+        let first = Ordinal::first();
+        assert!(Ordinal::is_valid(first.as_str()));
+    }
+
+    #[test]
+    fn test_ordinal_is_valid_rejects_legacy() {
+        // Legacy ordinals like "a0" are not valid FractionalIndex encodings
+        assert!(!Ordinal::is_valid("a0"));
+    }
+
+    #[test]
+    fn test_ordinal_is_valid_rejects_empty() {
+        assert!(!Ordinal::is_valid(""));
+    }
+
+    #[test]
+    fn test_ordinal_is_valid_rejects_arbitrary_text() {
+        assert!(!Ordinal::is_valid("not-a-valid-ordinal"));
+    }
+
+    #[test]
     fn test_fractional_index_string_format() {
         // Check what format the crate uses
         let a = Ordinal::first();

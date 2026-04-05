@@ -472,6 +472,18 @@ impl<M: BusMessage> FollowerGuard<M> {
     }
 }
 
+// Compile-time assertions: these types are held in Arc<Mutex<>> and sent
+// across tokio::spawn boundaries. Catch regressions if a non-Send field
+// is ever added.
+const _: () = {
+    fn _assert_send<T: Send>() {}
+    fn _checks() {
+        _assert_send::<LeaderElection>();
+        _assert_send::<LeaderGuard>();
+        _assert_send::<FollowerGuard>();
+    }
+};
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -707,16 +719,218 @@ mod tests {
         drop(new_leader);
         assert!(!election.lock_path().exists());
     }
-}
 
-// Compile-time assertions: these types are held in Arc<Mutex<>> and sent
-// across tokio::spawn boundaries. Catch regressions if a non-Send field
-// is ever added.
-const _: () = {
-    fn _assert_send<T: Send>() {}
-    fn _checks() {
-        _assert_send::<LeaderElection>();
-        _assert_send::<LeaderGuard>();
-        _assert_send::<FollowerGuard>();
+    #[test]
+    fn test_election_outcome_debug_leader() {
+        let dir = TempDir::new().unwrap();
+        let election: LeaderElection = LeaderElection::new(dir.path());
+        let outcome = election.elect().unwrap();
+        let debug = format!("{:?}", outcome);
+        assert_eq!(debug, "ElectionOutcome::Leader");
     }
-};
+
+    #[test]
+    fn test_election_outcome_debug_follower() {
+        let dir = TempDir::new().unwrap();
+        let election: LeaderElection = LeaderElection::new(dir.path());
+        let _leader = election.try_become_leader().unwrap();
+        let outcome = election.elect().unwrap();
+        let debug = format!("{:?}", outcome);
+        assert_eq!(debug, "ElectionOutcome::Follower");
+    }
+
+    #[test]
+    fn test_leader_guard_debug() {
+        let dir = TempDir::new().unwrap();
+        let election: LeaderElection = LeaderElection::new(dir.path());
+        let guard = election.try_become_leader().unwrap();
+        let debug = format!("{:?}", guard);
+        assert!(debug.contains("LeaderGuard"));
+        assert!(debug.contains("lock_path"));
+    }
+
+    #[test]
+    fn test_follower_guard_debug() {
+        let dir = TempDir::new().unwrap();
+        let election: LeaderElection = LeaderElection::new(dir.path());
+        let _leader = election.try_become_leader().unwrap();
+        let outcome = election.elect().unwrap();
+        let follower = match outcome {
+            ElectionOutcome::Follower(f) => f,
+            _ => panic!("expected follower"),
+        };
+        let debug = format!("{:?}", follower);
+        assert!(debug.contains("FollowerGuard"));
+        assert!(debug.contains("lock_path"));
+    }
+
+    #[test]
+    fn test_is_locked_returns_true_when_held() {
+        let dir = TempDir::new().unwrap();
+        let election: LeaderElection = LeaderElection::new(dir.path());
+        let _guard = election.try_become_leader().unwrap();
+        assert!(election.is_locked());
+    }
+
+    #[test]
+    fn test_is_locked_returns_false_when_free() {
+        let dir = TempDir::new().unwrap();
+        let election: LeaderElection = LeaderElection::new(dir.path());
+
+        // Create the lock file without holding the flock
+        fs::create_dir_all(election.lock_path().parent().unwrap()).unwrap();
+        File::create(election.lock_path()).unwrap();
+
+        assert!(!election.is_locked());
+    }
+
+    #[test]
+    fn test_is_locked_returns_false_when_no_file() {
+        let dir = TempDir::new().unwrap();
+        let election: LeaderElection = LeaderElection::new(dir.path());
+        // No lock file exists yet
+        assert!(!election.is_locked());
+    }
+
+    #[test]
+    fn test_is_locked_returns_false_after_leader_drops() {
+        let dir = TempDir::new().unwrap();
+        let election: LeaderElection = LeaderElection::new(dir.path());
+        let guard = election.try_become_leader().unwrap();
+        assert!(election.is_locked());
+        drop(guard);
+        // Lock file is removed on drop, so is_locked returns false (no file)
+        assert!(!election.is_locked());
+    }
+
+    #[test]
+    fn test_leader_guard_publish_noop() {
+        let dir = TempDir::new().unwrap();
+        let election: LeaderElection = LeaderElection::new(dir.path());
+        let guard = election.try_become_leader().unwrap();
+        // NullMessage publish should succeed (noop on the bus)
+        assert!(guard.publish(&NullMessage).is_ok());
+    }
+
+    #[test]
+    fn test_leader_guard_subscribe() {
+        let dir = TempDir::new().unwrap();
+        let election: LeaderElection = LeaderElection::new(dir.path());
+        let guard = election.try_become_leader().unwrap();
+        // Subscribe with empty topics (all messages)
+        let sub = guard.subscribe(&[]);
+        assert!(sub.is_ok());
+    }
+
+    #[test]
+    fn test_leader_guard_subscribe_with_topics() {
+        let dir = TempDir::new().unwrap();
+        let election: LeaderElection = LeaderElection::new(dir.path());
+        let guard = election.try_become_leader().unwrap();
+        let sub = guard.subscribe(&[b"topic1", b"topic2"]);
+        assert!(sub.is_ok());
+    }
+
+    #[test]
+    fn test_leader_guard_bus_addresses() {
+        let dir = TempDir::new().unwrap();
+        let election: LeaderElection = LeaderElection::new(dir.path());
+        let guard = election.try_become_leader().unwrap();
+        let addrs = guard.bus_addresses();
+        assert!(addrs.frontend.starts_with("ipc://"));
+        assert!(addrs.backend.starts_with("ipc://"));
+    }
+
+    #[test]
+    fn test_follower_guard_publish_noop() {
+        let dir = TempDir::new().unwrap();
+        let election: LeaderElection = LeaderElection::new(dir.path());
+        let _leader = election.try_become_leader().unwrap();
+        let outcome = election.elect().unwrap();
+        let follower = match outcome {
+            ElectionOutcome::Follower(f) => f,
+            _ => panic!("expected follower"),
+        };
+        // Follower publishes to the bus
+        assert!(follower.publish(&NullMessage).is_ok());
+    }
+
+    #[test]
+    fn test_follower_guard_subscribe() {
+        let dir = TempDir::new().unwrap();
+        let election: LeaderElection = LeaderElection::new(dir.path());
+        let _leader = election.try_become_leader().unwrap();
+        let outcome = election.elect().unwrap();
+        let follower = match outcome {
+            ElectionOutcome::Follower(f) => f,
+            _ => panic!("expected follower"),
+        };
+        let sub = follower.subscribe(&[]);
+        assert!(sub.is_ok());
+    }
+
+    #[test]
+    fn test_follower_guard_lock_path() {
+        let dir = TempDir::new().unwrap();
+        let election: LeaderElection = LeaderElection::new(dir.path());
+        let _leader = election.try_become_leader().unwrap();
+        let outcome = election.elect().unwrap();
+        let follower = match outcome {
+            ElectionOutcome::Follower(f) => f,
+            _ => panic!("expected follower"),
+        };
+        assert_eq!(follower.lock_path(), election.lock_path());
+    }
+
+    #[test]
+    fn test_follower_guard_socket_path() {
+        let dir = TempDir::new().unwrap();
+        let election: LeaderElection = LeaderElection::new(dir.path());
+        let _leader = election.try_become_leader().unwrap();
+        let outcome = election.elect().unwrap();
+        let follower = match outcome {
+            ElectionOutcome::Follower(f) => f,
+            _ => panic!("expected follower"),
+        };
+        assert_eq!(follower.socket_path(), election.socket_path());
+    }
+
+    #[test]
+    fn test_election_outcome_publish_as_leader() {
+        let dir = TempDir::new().unwrap();
+        let election: LeaderElection = LeaderElection::new(dir.path());
+        let outcome = election.elect().unwrap();
+        // Publish through the outcome enum directly
+        assert!(outcome.publish(&NullMessage).is_ok());
+    }
+
+    #[test]
+    fn test_election_outcome_publish_as_follower() {
+        let dir = TempDir::new().unwrap();
+        let election: LeaderElection = LeaderElection::new(dir.path());
+        let _leader = election.try_become_leader().unwrap();
+        let outcome = election.elect().unwrap();
+        assert!(matches!(&outcome, ElectionOutcome::Follower(_)));
+        assert!(outcome.publish(&NullMessage).is_ok());
+    }
+
+    #[test]
+    fn test_elect_follower_reads_discovery_file() {
+        // When a leader is active, the discovery file should exist
+        // and the follower should read it to find the proxy addresses
+        let dir = TempDir::new().unwrap();
+        let config = ElectionConfig::new().with_base_dir(dir.path());
+        let election: LeaderElection = LeaderElection::with_config("/ws", config.clone());
+
+        let _leader = election.elect().unwrap();
+
+        // Discovery file should have been written
+        let disc = election.discovery_path();
+        assert!(disc.exists());
+
+        // Second election should read the discovery file and create a follower
+        let election2: LeaderElection = LeaderElection::with_config("/ws", config);
+        let outcome = election2.elect().unwrap();
+        assert!(matches!(outcome, ElectionOutcome::Follower(_)));
+    }
+}

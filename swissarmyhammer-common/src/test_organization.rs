@@ -573,4 +573,429 @@ mod tests {
         assert!(duration >= std::time::Duration::from_millis(10));
         assert!(duration < std::time::Duration::from_millis(100)); // Should be much less
     }
+
+    #[test]
+    #[should_panic(expected = "Test matrix")]
+    fn test_matrix_reports_failure_with_context() {
+        #[derive(Debug, Clone)]
+        struct FailCase {
+            value: i32,
+        }
+
+        let cases = vec![FailCase { value: 42 }];
+        TestMatrix::new("should_fail").run_tests(cases, |case| {
+            assert_eq!(case.value, 99, "wrong value");
+        });
+    }
+
+    #[test]
+    fn test_matrix_empty_cases() {
+        #[derive(Debug, Clone)]
+        struct EmptyCase;
+
+        let cases: Vec<EmptyCase> = vec![];
+        // Should not panic with empty cases
+        TestMatrix::new("empty").run_tests(cases, |_case| {
+            panic!("Should not be called");
+        });
+    }
+
+    #[test]
+    fn test_matrix_single_case() {
+        #[derive(Debug, Clone)]
+        struct SingleCase(i32);
+
+        let cases = vec![SingleCase(1)];
+        TestMatrix::new("single").run_tests(cases, |case| {
+            assert_eq!(case.0, 1);
+        });
+    }
+
+    #[test]
+    #[should_panic(expected = "Unknown panic")]
+    fn test_matrix_non_string_panic() {
+        #[derive(Debug, Clone)]
+        struct PanicCase;
+
+        let cases = vec![PanicCase];
+        TestMatrix::new("non_string_panic").run_tests(cases, |_case| {
+            std::panic::panic_any(42_i32);
+        });
+    }
+
+    #[tokio::test]
+    async fn test_matrix_async_basic() {
+        #[derive(Debug, Clone)]
+        struct AsyncCase {
+            input: i32,
+            expected: i32,
+        }
+
+        let cases = vec![
+            AsyncCase {
+                input: 1,
+                expected: 2,
+            },
+            AsyncCase {
+                input: 5,
+                expected: 10,
+            },
+        ];
+
+        TestMatrix::new("async_multiply")
+            .run_async_tests(cases, |case| async move {
+                assert_eq!(case.input * 2, case.expected);
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "Async test matrix")]
+    async fn test_matrix_async_failure() {
+        #[derive(Debug, Clone)]
+        struct AsyncFailCase {
+            value: i32,
+        }
+
+        let cases = vec![AsyncFailCase { value: 1 }];
+
+        TestMatrix::new("async_fail")
+            .run_async_tests(cases, |case| async move {
+                assert_eq!(case.value, 999);
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn test_matrix_async_empty_cases() {
+        #[derive(Debug, Clone)]
+        struct EmptyAsync;
+
+        let cases: Vec<EmptyAsync> = vec![];
+        TestMatrix::new("async_empty")
+            .run_async_tests(cases, |_case| async move {
+                panic!("Should not be called");
+            })
+            .await;
+    }
+
+    #[test]
+    fn test_property_generator_file_paths() {
+        let cases = PropertyTestGenerator::file_path_test_cases();
+        assert!(!cases.is_empty());
+
+        // Verify we have both valid and invalid cases
+        let valid_count = cases.iter().filter(|(_, valid)| *valid).count();
+        let invalid_count = cases.iter().filter(|(_, valid)| !*valid).count();
+        assert!(valid_count > 0);
+        assert!(invalid_count > 0);
+
+        // Verify specific expected cases
+        assert!(cases.contains(&("test.txt", true)));
+        assert!(cases.contains(&("", false)));
+    }
+
+    #[test]
+    fn test_property_generator_variable_substitution() {
+        let cases = PropertyTestGenerator::variable_substitution_cases();
+        assert!(!cases.is_empty());
+
+        // Verify the case with no variables
+        let no_vars_case = cases
+            .iter()
+            .find(|(input, _, _)| *input == "No variables here");
+        assert!(no_vars_case.is_some());
+        let (_, vars, expected) = no_vars_case.unwrap();
+        assert!(vars.is_empty());
+        assert_eq!(*expected, "No variables here");
+
+        // Verify cases with variables
+        let name_case = cases.iter().find(|(input, _, _)| *input == "Hello ${name}");
+        assert!(name_case.is_some());
+        let (_, vars, expected) = name_case.unwrap();
+        assert_eq!(*vars.get("name").unwrap(), "test");
+        assert_eq!(*expected, "Hello test");
+    }
+
+    #[test]
+    #[should_panic(expected = "Expected error")]
+    fn test_assertions_error_type_on_ok_panics() {
+        let result: Result<i32, &str> = Ok(42);
+        TestAssertions::assert_error_type(&result, "some error");
+    }
+
+    #[test]
+    #[should_panic(expected = "does not contain expected item")]
+    fn test_assertions_contains_all_missing_item() {
+        let collection = vec![1, 2, 3];
+        let expected = vec![4];
+        TestAssertions::assert_contains_all(&collection, &expected);
+    }
+
+    #[test]
+    fn test_assertions_contains_all_empty_expected() {
+        let collection = vec![1, 2, 3];
+        let expected: Vec<i32> = vec![];
+        // Should succeed - empty expected is always satisfied
+        TestAssertions::assert_contains_all(&collection, &expected);
+    }
+
+    #[test]
+    #[should_panic(expected = "does not contain expected fragment")]
+    fn test_assertions_string_pattern_missing_fragment() {
+        let text = "Hello world";
+        let patterns = vec!["Hello", "missing"];
+        TestAssertions::assert_string_pattern(text, &patterns);
+    }
+
+    #[test]
+    fn test_assertions_string_pattern_empty_patterns() {
+        let text = "Hello world";
+        let patterns: Vec<&str> = vec![];
+        // Should succeed - empty patterns always satisfied
+        TestAssertions::assert_string_pattern(text, &patterns);
+    }
+
+    #[test]
+    #[should_panic(expected = "does not contain expected key")]
+    fn test_assertions_map_contains_missing_key() {
+        let mut map = HashMap::new();
+        map.insert("a", "1");
+
+        let expected = vec![("b", "2")];
+        TestAssertions::assert_map_contains(&map, &expected);
+    }
+
+    #[test]
+    #[should_panic(expected = "Map value for key")]
+    fn test_assertions_map_contains_wrong_value() {
+        let mut map = HashMap::new();
+        map.insert("a", "1");
+
+        let expected = vec![("a", "2")];
+        TestAssertions::assert_map_contains(&map, &expected);
+    }
+
+    #[test]
+    fn test_assertions_map_contains_empty_expected() {
+        let mut map = HashMap::new();
+        map.insert("a", "1");
+
+        let expected: Vec<(&str, &str)> = vec![];
+        TestAssertions::assert_map_contains(&map, &expected);
+    }
+
+    #[test]
+    fn test_mock_action_builder_default() {
+        let builder = MockActionBuilder::default();
+        let action = builder.build();
+
+        assert_eq!(action.action_type(), "test_action");
+        assert_eq!(action.description(), "Test action description");
+        assert!(action.parameters.is_empty());
+    }
+
+    #[test]
+    fn test_mock_action_builder_new() {
+        let builder = MockActionBuilder::new();
+        let action = builder.build();
+
+        assert_eq!(action.action_type(), "test_action");
+        assert_eq!(action.description(), "Test action description");
+    }
+
+    #[test]
+    fn test_mock_action_builder_chain() {
+        let action = MockActionBuilder::new()
+            .action_type("deploy")
+            .description("Deploy to production")
+            .parameter("env", "prod")
+            .parameter("version", "1.0.0")
+            .build();
+
+        assert_eq!(action.action_type(), "deploy");
+        assert_eq!(action.description(), "Deploy to production");
+        assert_eq!(action.get_parameter("env"), Some(&"prod".to_string()));
+        assert_eq!(action.get_parameter("version"), Some(&"1.0.0".to_string()));
+    }
+
+    #[test]
+    fn test_mock_action_builder_parameters_bulk() {
+        let mut params = HashMap::new();
+        params.insert("key1".to_string(), "val1".to_string());
+        params.insert("key2".to_string(), "val2".to_string());
+
+        let action = MockActionBuilder::new().parameters(params).build();
+
+        assert_eq!(action.get_parameter("key1"), Some(&"val1".to_string()));
+        assert_eq!(action.get_parameter("key2"), Some(&"val2".to_string()));
+    }
+
+    #[test]
+    fn test_mock_action_builder_static_method() {
+        let action = MockAction::builder().action_type("test").build();
+
+        assert_eq!(action.action_type(), "test");
+    }
+
+    #[test]
+    fn test_mock_action_get_parameter_missing() {
+        let action = MockAction::builder().build();
+        assert_eq!(action.get_parameter("nonexistent"), None);
+    }
+
+    #[test]
+    fn test_mock_action_serialization() {
+        let action = MockAction::builder()
+            .action_type("serialize_test")
+            .description("Test serialization")
+            .parameter("key", "value")
+            .build();
+
+        let json = serde_json::to_string(&action).unwrap();
+        let deserialized: MockAction = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(action, deserialized);
+    }
+
+    #[test]
+    fn test_mock_action_clone() {
+        let action = MockAction::builder()
+            .action_type("clone_test")
+            .parameter("k", "v")
+            .build();
+
+        let cloned = action.clone();
+        assert_eq!(action, cloned);
+    }
+
+    #[test]
+    fn test_mock_action_debug() {
+        let action = MockAction::builder().action_type("debug_test").build();
+        let debug = format!("{:?}", action);
+        assert!(debug.contains("debug_test"));
+    }
+
+    #[test]
+    #[should_panic(expected = "expected to complete within")]
+    fn test_timing_completes_within_exceeds() {
+        TestTiming::assert_completes_within(std::time::Duration::from_millis(1), || {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        });
+    }
+
+    #[test]
+    fn test_timing_measure_fast() {
+        let (result, duration) = TestTiming::measure(|| 42);
+        assert_eq!(result, 42);
+        assert!(duration < std::time::Duration::from_millis(10));
+    }
+
+    #[tokio::test]
+    async fn test_timing_async_completes_within() {
+        let result = TestTiming::assert_async_completes_within(
+            std::time::Duration::from_secs(1),
+            || async { 42 },
+        )
+        .await;
+        assert_eq!(result, 42);
+    }
+
+    #[test]
+    fn test_matrix_name_stored() {
+        let matrix: TestMatrix<i32> = TestMatrix::new("my_matrix");
+        assert_eq!(matrix.name, "my_matrix");
+    }
+
+    #[test]
+    fn test_property_generator_string_parsing_categories() {
+        let cases = PropertyTestGenerator::string_parsing_cases();
+        let labels: Vec<&str> = cases.iter().map(|(_, label)| *label).collect();
+
+        // Verify all categories are present
+        assert!(labels.contains(&"empty"));
+        assert!(labels.contains(&"whitespace_only"));
+        assert!(labels.contains(&"simple"));
+        assert!(labels.contains(&"with_space"));
+        assert!(labels.contains(&"with_newline"));
+        assert!(labels.contains(&"with_tab"));
+        assert!(labels.contains(&"with_quote"));
+        assert!(labels.contains(&"with_apostrophe"));
+        assert!(labels.contains(&"with_backslash"));
+        assert!(labels.contains(&"with_slash"));
+        assert!(labels.contains(&"with_dot"));
+        assert!(labels.contains(&"with_dash"));
+        assert!(labels.contains(&"with_underscore"));
+        assert!(labels.contains(&"uppercase"));
+        assert!(labels.contains(&"mixed_case"));
+        assert!(labels.contains(&"numeric"));
+        assert!(labels.contains(&"alphanumeric"));
+        assert!(labels.contains(&"special_chars"));
+        assert!(labels.contains(&"unicode_accented"));
+        assert!(labels.contains(&"unicode_emoji"));
+    }
+
+    #[test]
+    fn test_property_generator_duration_all_cases() {
+        let cases = PropertyTestGenerator::duration_test_cases();
+
+        // Verify all expected duration mappings
+        assert!(cases.contains(&("30s", 30)));
+        assert!(cases.contains(&("5m", 300)));
+        assert!(cases.contains(&("2h", 7200)));
+        assert!(cases.contains(&("1d", 86400)));
+        assert!(cases.contains(&("0s", 0)));
+    }
+
+    #[test]
+    fn test_property_generator_file_path_all_valid() {
+        let cases = PropertyTestGenerator::file_path_test_cases();
+
+        // Check specific valid path patterns
+        assert!(cases.contains(&("/absolute/path.txt", true)));
+        assert!(cases.contains(&("./relative/path.txt", true)));
+        assert!(cases.contains(&("../parent/path.txt", true)));
+        assert!(cases.contains(&("path with spaces.txt", true)));
+        assert!(cases.contains(&("path-with-dashes.txt", true)));
+        assert!(cases.contains(&("path_with_underscores.txt", true)));
+        assert!(cases.contains(&("PATH.TXT", true)));
+        assert!(cases.contains(&("file.with.dots.txt", true)));
+    }
+
+    #[test]
+    fn test_property_generator_file_path_all_invalid() {
+        let cases = PropertyTestGenerator::file_path_test_cases();
+
+        // Check specific invalid path patterns
+        assert!(cases.contains(&(".", false)));
+        assert!(cases.contains(&("..", false)));
+        assert!(cases.contains(&("///", false)));
+    }
+
+    #[test]
+    fn test_property_generator_variable_substitution_multi_var() {
+        let cases = PropertyTestGenerator::variable_substitution_cases();
+
+        // Find the multi-variable case
+        let multi_case = cases
+            .iter()
+            .find(|(input, _, _)| *input == "${name} = ${value}");
+        assert!(multi_case.is_some());
+        let (_, vars, expected) = multi_case.unwrap();
+        assert_eq!(*vars.get("name").unwrap(), "test");
+        assert_eq!(*vars.get("value").unwrap(), "42");
+        assert_eq!(*expected, "test = 42");
+    }
+
+    #[test]
+    fn test_property_generator_variable_substitution_file_case() {
+        let cases = PropertyTestGenerator::variable_substitution_cases();
+
+        let file_case = cases.iter().find(|(input, _, _)| input.contains("${file}"));
+        assert!(file_case.is_some());
+        let (_, vars, expected) = file_case.unwrap();
+        assert_eq!(*vars.get("file").unwrap(), "example.rs");
+        assert_eq!(*vars.get("count").unwrap(), "100");
+        assert_eq!(*expected, "Process example.rs with 100 items");
+    }
 }

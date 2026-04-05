@@ -91,3 +91,116 @@ fn parse_csv_line(line: &str, separator: char) -> Vec<String> {
     cells.push(current.trim().to_string());
     cells
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn plugin() -> CsvParserPlugin {
+        CsvParserPlugin
+    }
+
+    #[test]
+    fn test_basic_csv_row_extraction() {
+        let content = "name,age,city\nAlice,30,NYC\nBob,25,LA\n";
+        let entities = plugin().extract_entities(content, "data.csv");
+        assert_eq!(entities.len(), 2);
+        assert_eq!(entities[0].entity_type, "row");
+        assert_eq!(entities[1].entity_type, "row");
+    }
+
+    #[test]
+    fn test_header_values_in_metadata() {
+        let content = "name,age,city\nAlice,30,NYC\n";
+        let entities = plugin().extract_entities(content, "data.csv");
+        assert_eq!(entities.len(), 1);
+        let meta = entities[0].metadata.as_ref().unwrap();
+        assert_eq!(meta.get("name").map(|s| s.as_str()), Some("Alice"));
+        assert_eq!(meta.get("age").map(|s| s.as_str()), Some("30"));
+        assert_eq!(meta.get("city").map(|s| s.as_str()), Some("NYC"));
+    }
+
+    #[test]
+    fn test_row_name_uses_first_column() {
+        let content = "id,value\nABC123,hello\n";
+        let entities = plugin().extract_entities(content, "data.csv");
+        assert_eq!(entities.len(), 1);
+        assert_eq!(entities[0].name, "row[ABC123]");
+    }
+
+    #[test]
+    fn test_row_name_fallback_when_first_cell_empty() {
+        let content = "id,value\n,hello\n";
+        let entities = plugin().extract_entities(content, "data.csv");
+        assert_eq!(entities.len(), 1);
+        // row index 1 (skip(1) gives i=1 for the second element)
+        assert!(entities[0].name.starts_with("row[row_"));
+    }
+
+    #[test]
+    fn test_tsv_separator_detection() {
+        let content = "name\tage\tcolor\nAlice\t30\tblue\n";
+        let entities = plugin().extract_entities(content, "data.tsv");
+        assert_eq!(entities.len(), 1);
+        let meta = entities[0].metadata.as_ref().unwrap();
+        assert_eq!(meta.get("name").map(|s| s.as_str()), Some("Alice"));
+        assert_eq!(meta.get("age").map(|s| s.as_str()), Some("30"));
+        assert_eq!(meta.get("color").map(|s| s.as_str()), Some("blue"));
+    }
+
+    #[test]
+    fn test_quoted_fields_with_comma_inside() {
+        let content = "name,address\nAlice,\"123 Main St, Apt 4\"\n";
+        let entities = plugin().extract_entities(content, "data.csv");
+        assert_eq!(entities.len(), 1);
+        let meta = entities[0].metadata.as_ref().unwrap();
+        assert_eq!(
+            meta.get("address").map(|s| s.as_str()),
+            Some("123 Main St, Apt 4")
+        );
+    }
+
+    #[test]
+    fn test_quoted_field_with_escaped_quote() {
+        let content = "name,bio\nAlice,\"She said \"\"hello\"\"\"\n";
+        let entities = plugin().extract_entities(content, "data.csv");
+        assert_eq!(entities.len(), 1);
+        let meta = entities[0].metadata.as_ref().unwrap();
+        assert_eq!(
+            meta.get("bio").map(|s| s.as_str()),
+            Some("She said \"hello\"")
+        );
+    }
+
+    #[test]
+    fn test_empty_content_returns_no_entities() {
+        let entities = plugin().extract_entities("", "data.csv");
+        assert!(entities.is_empty());
+    }
+
+    #[test]
+    fn test_header_only_returns_no_entities() {
+        let content = "name,age,city\n";
+        let entities = plugin().extract_entities(content, "data.csv");
+        assert!(entities.is_empty());
+    }
+
+    #[test]
+    fn test_line_numbers_are_correct() {
+        let content = "id,name\n1,Alice\n2,Bob\n";
+        let entities = plugin().extract_entities(content, "data.csv");
+        assert_eq!(entities.len(), 2);
+        // First data row is line 2 (header is line 1)
+        assert_eq!(entities[0].start_line, 2);
+        assert_eq!(entities[0].end_line, 2);
+        assert_eq!(entities[1].start_line, 3);
+        assert_eq!(entities[1].end_line, 3);
+    }
+
+    #[test]
+    fn test_file_path_in_entity() {
+        let content = "id\n1\n";
+        let entities = plugin().extract_entities(content, "path/to/records.csv");
+        assert_eq!(entities[0].file_path, "path/to/records.csv");
+    }
+}

@@ -598,4 +598,552 @@ mod tests {
             .unwrap();
         assert_eq!(sym_count, 1);
     }
+
+    // -- new_shutdown_flag tests --
+
+    #[test]
+    fn test_new_shutdown_flag_starts_false() {
+        // The shutdown flag must start as false so workers don't exit immediately.
+        let flag = new_shutdown_flag();
+        assert!(!flag.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn test_shutdown_flag_can_be_set_true() {
+        // Verify the flag can be set to true via store.
+        let flag = new_shutdown_flag();
+        flag.store(true, Ordering::Relaxed);
+        assert!(flag.load(Ordering::Relaxed));
+    }
+
+    // -- run_lsp_indexing_loop shutdown tests --
+
+    /// Build a SharedDb wrapping an in-memory test database.
+    fn create_shared_test_db() -> SharedDb {
+        let conn = create_test_db();
+        Arc::new(Mutex::new(conn))
+    }
+
+    #[test]
+    fn test_loop_exits_immediately_when_shutdown_set() {
+        // Set the shutdown flag before calling the loop so the first iteration
+        // exits cleanly without touching the DB or client.
+        let workspace_root = std::env::temp_dir();
+        let db = create_shared_test_db();
+        let client: SharedLspClient = Arc::new(Mutex::new(None));
+        let config = LspWorkerConfig {
+            batch_size: 10,
+            client_unavailable_sleep: Duration::from_millis(1),
+            idle_sleep: Duration::from_millis(1),
+        };
+        let shutdown = new_shutdown_flag();
+        shutdown.store(true, Ordering::Relaxed);
+
+        let result = run_lsp_indexing_loop(
+            &workspace_root,
+            &db,
+            &client,
+            &config,
+            "rust-analyzer",
+            &shutdown,
+        );
+
+        assert!(result.is_ok(), "Loop should return Ok when shut down");
+    }
+
+    #[test]
+    fn test_loop_idles_and_shuts_down_with_no_dirty_files() {
+        // When there are no dirty files the loop sleeps (idle_sleep) then checks
+        // shutdown again. Setting shutdown after one iteration terminates cleanly.
+        let workspace_root = std::env::temp_dir();
+        let db = create_shared_test_db();
+        // No files inserted — dirty list will always be empty.
+        let client: SharedLspClient = Arc::new(Mutex::new(None));
+        let config = LspWorkerConfig {
+            batch_size: 10,
+            client_unavailable_sleep: Duration::from_millis(1),
+            idle_sleep: Duration::from_millis(1),
+        };
+        let shutdown = new_shutdown_flag();
+        let shutdown_clone = Arc::clone(&shutdown);
+
+        // Run the loop in a background thread; signal shutdown after a short delay.
+        let handle = thread::spawn(move || {
+            run_lsp_indexing_loop(
+                &workspace_root,
+                &db,
+                &client,
+                &config,
+                "rust-analyzer",
+                &shutdown,
+            )
+        });
+
+        thread::sleep(Duration::from_millis(20));
+        shutdown_clone.store(true, Ordering::Relaxed);
+
+        let result = handle.join().expect("Worker thread should not panic");
+        assert!(result.is_ok(), "Loop should return Ok on graceful shutdown");
+    }
+
+    #[test]
+    fn test_loop_sleeps_when_client_unavailable_then_shuts_down() {
+        // When dirty files exist but the LSP client is None (unavailable), the
+        // loop should sleep `client_unavailable_sleep` and retry. Setting shutdown
+        // after a short delay terminates the worker without processing any files.
+        let workspace_root = std::env::temp_dir();
+        let db = create_shared_test_db();
+
+        // Insert a dirty .rs file so the loop reaches the client-availability check.
+        {
+            let conn = db.lock().unwrap();
+            insert_test_file(&conn, "src/main.rs");
+        }
+
+        let client: SharedLspClient = Arc::new(Mutex::new(None)); // client unavailable
+        let config = LspWorkerConfig {
+            batch_size: 10,
+            client_unavailable_sleep: Duration::from_millis(5),
+            idle_sleep: Duration::from_millis(5),
+        };
+        let shutdown = new_shutdown_flag();
+        let shutdown_clone = Arc::clone(&shutdown);
+
+        let handle = thread::spawn(move || {
+            run_lsp_indexing_loop(
+                &workspace_root,
+                &db,
+                &client,
+                &config,
+                "rust-analyzer",
+                &shutdown,
+            )
+        });
+
+        // Give the loop time to enter the client-unavailable sleep at least once.
+        thread::sleep(Duration::from_millis(30));
+        shutdown_clone.store(true, Ordering::Relaxed);
+
+        let result = handle.join().expect("Worker thread should not panic");
+        assert!(result.is_ok(), "Loop should return Ok on graceful shutdown");
+    }
+
+    #[test]
+    fn test_loop_unknown_server_name_no_files_processed() {
+        // An unknown server name produces an empty extensions list.
+        // The loop should log a warning, then idle (no files match) and exit
+        // on shutdown without processing anything.
+        let workspace_root = std::env::temp_dir();
+        let db = create_shared_test_db();
+
+        // Insert a dirty .rs file — it should NOT be processed by an unknown server.
+        {
+            let conn = db.lock().unwrap();
+            insert_test_file(&conn, "src/main.rs");
+        }
+
+        let client: SharedLspClient = Arc::new(Mutex::new(None));
+        let config = LspWorkerConfig {
+            batch_size: 10,
+            client_unavailable_sleep: Duration::from_millis(1),
+            idle_sleep: Duration::from_millis(1),
+        };
+        let shutdown = new_shutdown_flag();
+        let shutdown_clone = Arc::clone(&shutdown);
+
+        let handle = thread::spawn(move || {
+            run_lsp_indexing_loop(
+                &workspace_root,
+                &db,
+                &client,
+                &config,
+                "unknown-server", // triggers empty extensions warning
+                &shutdown,
+            )
+        });
+
+        thread::sleep(Duration::from_millis(20));
+        shutdown_clone.store(true, Ordering::Relaxed);
+
+        let result = handle.join().expect("Worker thread should not panic");
+        assert!(
+            result.is_ok(),
+            "Loop should return Ok when unknown server idles out"
+        );
+    }
+
+    // -- spawn_lsp_indexing_worker tests --
+
+    #[test]
+    fn test_spawn_lsp_indexing_worker_shuts_down_cleanly() {
+        // Verify the public spawn function returns a JoinHandle that exits
+        // cleanly when the shutdown flag is set.
+        let workspace_root = std::env::temp_dir();
+        let db = create_shared_test_db();
+        let client: SharedLspClient = Arc::new(Mutex::new(None));
+        let config = LspWorkerConfig {
+            batch_size: 10,
+            client_unavailable_sleep: Duration::from_millis(1),
+            idle_sleep: Duration::from_millis(1),
+        };
+        let shutdown = new_shutdown_flag();
+        let shutdown_clone = Arc::clone(&shutdown);
+
+        let handle = spawn_lsp_indexing_worker(
+            workspace_root,
+            db,
+            client,
+            config,
+            "rust-analyzer".to_string(),
+            shutdown,
+        );
+
+        // Signal shutdown immediately.
+        shutdown_clone.store(true, Ordering::Relaxed);
+
+        // The join should succeed (no panic, clean exit).
+        handle.join().expect("Worker thread should not panic");
+    }
+
+    #[test]
+    fn test_spawn_lsp_indexing_worker_client_unavailable_then_shutdown() {
+        // Worker is spawned with a None client; dirty files exist so the worker
+        // reaches the client-unavailable branch. It should exit cleanly on shutdown.
+        let workspace_root = std::env::temp_dir();
+        let db = create_shared_test_db();
+        {
+            let conn = db.lock().unwrap();
+            insert_test_file(&conn, "src/lib.rs");
+        }
+
+        let client: SharedLspClient = Arc::new(Mutex::new(None));
+        let config = LspWorkerConfig {
+            batch_size: 10,
+            client_unavailable_sleep: Duration::from_millis(5),
+            idle_sleep: Duration::from_millis(5),
+        };
+        let shutdown = new_shutdown_flag();
+        let shutdown_clone = Arc::clone(&shutdown);
+
+        let handle = spawn_lsp_indexing_worker(
+            workspace_root,
+            db,
+            client,
+            config,
+            "rust-analyzer".to_string(),
+            shutdown,
+        );
+
+        thread::sleep(Duration::from_millis(30));
+        shutdown_clone.store(true, Ordering::Relaxed);
+
+        handle.join().expect("Worker thread should not panic");
+    }
+
+    #[test]
+    fn test_loop_client_unavailable_leaves_files_unindexed() {
+        // When the client is permanently unavailable (None), the worker should
+        // never mark any files as lsp_indexed — it only retries.
+        let workspace_root = std::env::temp_dir();
+        let db = create_shared_test_db();
+
+        {
+            let conn = db.lock().unwrap();
+            insert_test_file(&conn, "src/alpha.rs");
+            insert_test_file(&conn, "src/beta.rs");
+        }
+
+        let client: SharedLspClient = Arc::new(Mutex::new(None));
+        let config = LspWorkerConfig {
+            batch_size: 10,
+            client_unavailable_sleep: Duration::from_millis(5),
+            idle_sleep: Duration::from_millis(5),
+        };
+        let shutdown = new_shutdown_flag();
+        let shutdown_clone = Arc::clone(&shutdown);
+        let db_check = Arc::clone(&db);
+
+        let handle = thread::spawn(move || {
+            run_lsp_indexing_loop(
+                &workspace_root,
+                &db,
+                &client,
+                &config,
+                "rust-analyzer",
+                &shutdown,
+            )
+        });
+
+        thread::sleep(Duration::from_millis(30));
+        shutdown_clone.store(true, Ordering::Relaxed);
+        let _ = handle.join().expect("Worker thread should not panic");
+
+        // Files should still be unindexed because the client was never available.
+        let conn = db_check.lock().unwrap();
+        let unindexed: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM indexed_files WHERE lsp_indexed = 0",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            unindexed, 2,
+            "Files should remain unindexed when client is unavailable"
+        );
+    }
+
+    // -- LspWorkerConfig tests --
+
+    #[test]
+    fn test_lsp_worker_config_default() {
+        // Verify the Default impl produces expected values.
+        let config = LspWorkerConfig::default();
+        assert_eq!(config.batch_size, 50);
+        assert_eq!(config.client_unavailable_sleep, Duration::from_secs(5));
+        assert_eq!(config.idle_sleep, Duration::from_millis(500));
+    }
+
+    #[test]
+    fn test_lsp_worker_config_custom() {
+        // Verify custom configuration works.
+        let config = LspWorkerConfig {
+            batch_size: 10,
+            client_unavailable_sleep: Duration::from_millis(100),
+            idle_sleep: Duration::from_millis(50),
+        };
+        assert_eq!(config.batch_size, 10);
+        assert_eq!(config.client_unavailable_sleep, Duration::from_millis(100));
+        assert_eq!(config.idle_sleep, Duration::from_millis(50));
+    }
+
+    #[test]
+    fn test_lsp_worker_config_clone() {
+        // Verify the Clone derive works.
+        let config = LspWorkerConfig::default();
+        let cloned = config.clone();
+        assert_eq!(config.batch_size, cloned.batch_size);
+        assert_eq!(
+            config.client_unavailable_sleep,
+            cloned.client_unavailable_sleep
+        );
+        assert_eq!(config.idle_sleep, cloned.idle_sleep);
+    }
+
+    #[test]
+    fn test_lsp_worker_config_debug() {
+        // Verify the Debug derive works.
+        let config = LspWorkerConfig::default();
+        let debug_str = format!("{:?}", config);
+        assert!(debug_str.contains("LspWorkerConfig"));
+        assert!(debug_str.contains("batch_size"));
+    }
+
+    // -- LSP_CAPABLE_EXTENSIONS tests --
+
+    #[test]
+    fn test_lsp_capable_extensions_not_empty() {
+        assert!(
+            !LSP_CAPABLE_EXTENSIONS.is_empty(),
+            "LSP_CAPABLE_EXTENSIONS should not be empty"
+        );
+    }
+
+    #[test]
+    fn test_lsp_capable_extensions_contains_common_languages() {
+        assert!(
+            LSP_CAPABLE_EXTENSIONS.contains(&"rs"),
+            "should contain Rust"
+        );
+        assert!(
+            LSP_CAPABLE_EXTENSIONS.contains(&"py"),
+            "should contain Python"
+        );
+        assert!(
+            LSP_CAPABLE_EXTENSIONS.contains(&"ts"),
+            "should contain TypeScript"
+        );
+        assert!(LSP_CAPABLE_EXTENSIONS.contains(&"go"), "should contain Go");
+        assert!(
+            LSP_CAPABLE_EXTENSIONS.contains(&"java"),
+            "should contain Java"
+        );
+    }
+
+    #[test]
+    fn test_lsp_capable_extensions_superset_of_all_servers() {
+        // Every extension returned by lsp_supported_extensions for a known server
+        // should be present in LSP_CAPABLE_EXTENSIONS.
+        let known_servers = [
+            "rust-analyzer",
+            "pyright",
+            "typescript-language-server",
+            "gopls",
+            "jdtls",
+            "clangd",
+            "solargraph",
+            "sourcekit-lsp",
+            "kotlin-language-server",
+            "lua-language-server",
+            "omnisharp",
+            "dart",
+            "phpactor",
+            "metals",
+        ];
+
+        for server in &known_servers {
+            for ext in lsp_supported_extensions(server) {
+                assert!(
+                    LSP_CAPABLE_EXTENSIONS.contains(ext),
+                    "Extension '{}' from server '{}' is not in LSP_CAPABLE_EXTENSIONS",
+                    ext,
+                    server
+                );
+            }
+        }
+    }
+
+    // -- extension_to_language_id additional tests --
+
+    #[test]
+    fn test_extension_to_language_id_javascript() {
+        assert_eq!(
+            extension_to_language_id(Path::new("script.js")),
+            "javascript"
+        );
+        assert_eq!(
+            extension_to_language_id(Path::new("App.jsx")),
+            "javascriptreact"
+        );
+    }
+
+    #[test]
+    fn test_extension_to_language_id_go() {
+        assert_eq!(extension_to_language_id(Path::new("main.go")), "go");
+    }
+
+    #[test]
+    fn test_extension_to_language_id_java() {
+        assert_eq!(extension_to_language_id(Path::new("App.java")), "java");
+    }
+
+    #[test]
+    fn test_extension_to_language_id_c_cpp() {
+        assert_eq!(extension_to_language_id(Path::new("main.c")), "c");
+        assert_eq!(extension_to_language_id(Path::new("main.cpp")), "cpp");
+        assert_eq!(extension_to_language_id(Path::new("main.cc")), "cpp");
+        assert_eq!(extension_to_language_id(Path::new("main.cxx")), "cpp");
+        assert_eq!(extension_to_language_id(Path::new("header.h")), "c");
+        assert_eq!(extension_to_language_id(Path::new("header.hpp")), "cpp");
+        assert_eq!(extension_to_language_id(Path::new("header.hxx")), "cpp");
+    }
+
+    #[test]
+    fn test_extension_to_language_id_ruby() {
+        assert_eq!(extension_to_language_id(Path::new("app.rb")), "ruby");
+    }
+
+    #[test]
+    fn test_extension_to_language_id_swift() {
+        assert_eq!(extension_to_language_id(Path::new("main.swift")), "swift");
+    }
+
+    #[test]
+    fn test_extension_to_language_id_kotlin() {
+        assert_eq!(extension_to_language_id(Path::new("Main.kt")), "kotlin");
+        assert_eq!(extension_to_language_id(Path::new("build.kts")), "kotlin");
+    }
+
+    #[test]
+    fn test_extension_to_language_id_lua() {
+        assert_eq!(extension_to_language_id(Path::new("init.lua")), "lua");
+    }
+
+    #[test]
+    fn test_extension_to_language_id_shell() {
+        assert_eq!(extension_to_language_id(Path::new("run.sh")), "shellscript");
+        assert_eq!(
+            extension_to_language_id(Path::new("run.bash")),
+            "shellscript"
+        );
+    }
+
+    #[test]
+    fn test_extension_to_language_id_config_formats() {
+        assert_eq!(extension_to_language_id(Path::new("config.toml")), "toml");
+        assert_eq!(extension_to_language_id(Path::new("data.yaml")), "yaml");
+        assert_eq!(extension_to_language_id(Path::new("data.yml")), "yaml");
+        assert_eq!(extension_to_language_id(Path::new("data.json")), "json");
+        assert_eq!(extension_to_language_id(Path::new("README.md")), "markdown");
+        assert_eq!(extension_to_language_id(Path::new("index.html")), "html");
+        assert_eq!(extension_to_language_id(Path::new("style.css")), "css");
+    }
+
+    // -- lsp_supported_extensions additional tests --
+
+    #[test]
+    fn test_lsp_supported_extensions_all_known_servers() {
+        // Exercise all match arms in lsp_supported_extensions.
+        assert!(!lsp_supported_extensions("pylsp").is_empty());
+        assert!(!lsp_supported_extensions("pyright-langserver").is_empty());
+        assert!(!lsp_supported_extensions("tsserver").is_empty());
+        assert!(!lsp_supported_extensions("ts_ls").is_empty());
+        assert!(!lsp_supported_extensions("jdtls").is_empty());
+        assert!(!lsp_supported_extensions("java-language-server").is_empty());
+        assert!(!lsp_supported_extensions("clangd").is_empty());
+        assert!(!lsp_supported_extensions("solargraph").is_empty());
+        assert!(!lsp_supported_extensions("ruby-lsp").is_empty());
+        assert!(!lsp_supported_extensions("sourcekit-lsp").is_empty());
+        assert!(!lsp_supported_extensions("kotlin-language-server").is_empty());
+        assert!(!lsp_supported_extensions("lua-language-server").is_empty());
+        assert!(!lsp_supported_extensions("omnisharp").is_empty());
+        assert!(!lsp_supported_extensions("dart").is_empty());
+        assert!(!lsp_supported_extensions("dart-language-server").is_empty());
+        assert!(!lsp_supported_extensions("phpactor").is_empty());
+        assert!(!lsp_supported_extensions("intelephense").is_empty());
+        assert!(!lsp_supported_extensions("metals").is_empty());
+    }
+
+    // -- query_lsp_dirty_files additional tests --
+
+    #[test]
+    fn test_query_lsp_dirty_files_multiple_extensions() {
+        // Verify that multiple extensions are OR'd together correctly.
+        let db = create_test_db();
+        insert_test_file(&db, "src/main.rs");
+        insert_test_file(&db, "src/app.py");
+        insert_test_file(&db, "src/lib.rs");
+        insert_test_file(&db, "src/test.js");
+
+        // Query for Rust and Python
+        let dirty = query_lsp_dirty_files(&db, 100, &["rs", "py"]).unwrap();
+        assert_eq!(dirty.len(), 3, "should find .rs and .py files");
+        assert!(dirty.iter().any(|f| f.ends_with(".rs")));
+        assert!(dirty.iter().any(|f| f.ends_with(".py")));
+        assert!(!dirty.iter().any(|f| f.ends_with(".js")));
+    }
+
+    #[test]
+    fn test_query_lsp_dirty_files_empty_db() {
+        // An empty database should return an empty list.
+        let db = create_test_db();
+        let dirty = query_lsp_dirty_files(&db, 100, &["rs"]).unwrap();
+        assert!(dirty.is_empty());
+    }
+
+    // -- new_shutdown_flag additional tests --
+
+    #[test]
+    fn test_shutdown_flag_shared_across_threads() {
+        // Verify the shutdown flag can be shared and read across threads.
+        let flag = new_shutdown_flag();
+        let flag_clone = Arc::clone(&flag);
+
+        let handle = thread::spawn(move || {
+            flag_clone.store(true, Ordering::Relaxed);
+        });
+
+        handle.join().unwrap();
+        assert!(flag.load(Ordering::Relaxed));
+    }
 }

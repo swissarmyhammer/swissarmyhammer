@@ -6,7 +6,6 @@ metadata:
   version: "{{version}}"
 ---
 
-{% include "_partials/detected-projects" %}
 
 # Double Check
 

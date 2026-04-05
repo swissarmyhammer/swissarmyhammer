@@ -308,4 +308,268 @@ mod tests {
         idx.remove("t1");
         assert_eq!(idx.stale_count(), 0);
     }
+
+    #[test]
+    fn default_creates_empty_index() {
+        let idx = EntitySearchIndex::default();
+        assert!(idx.is_empty());
+        assert!(!idx.has_embeddings());
+        assert_eq!(idx.len(), 0);
+        assert_eq!(idx.stale_count(), 0);
+    }
+
+    #[test]
+    fn get_returns_entity() {
+        let mut idx = EntitySearchIndex::new();
+        idx.add(task("t1", "Fix login"));
+        assert!(idx.get("t1").is_some());
+        assert_eq!(idx.get("t1").unwrap().id, "t1");
+        assert!(idx.get("nonexistent").is_none());
+    }
+
+    #[test]
+    fn merge_fields_updates_existing_entity() {
+        let mut idx = EntitySearchIndex::new();
+        idx.add(task("t1", "Old title"));
+        // Clear stale so we can verify merge marks it stale again
+        assert_eq!(idx.stale_count(), 1);
+
+        let mut fields = std::collections::HashMap::new();
+        fields.insert("title".to_string(), json!("New title"));
+        fields.insert("priority".to_string(), json!(3));
+        idx.merge_fields("task", "t1", &fields);
+
+        assert_eq!(idx.len(), 1);
+        let entity = idx.get("t1").unwrap();
+        assert_eq!(entity.fields["title"], json!("New title"));
+        assert_eq!(entity.fields["priority"], json!(3));
+        // Should be stale after merge
+        assert_eq!(idx.stale_count(), 1);
+    }
+
+    #[test]
+    fn merge_fields_creates_new_entity_when_missing() {
+        let mut idx = EntitySearchIndex::new();
+        assert!(idx.is_empty());
+
+        let mut fields = std::collections::HashMap::new();
+        fields.insert("title".to_string(), json!("Brand new"));
+        idx.merge_fields("task", "t99", &fields);
+
+        assert_eq!(idx.len(), 1);
+        let entity = idx.get("t99").unwrap();
+        assert_eq!(entity.fields["title"], json!("Brand new"));
+        assert_eq!(idx.stale_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn build_embeddings_and_search_semantic() {
+        use model_embedding::mock::MockEmbedder;
+
+        let mut idx = EntitySearchIndex::new();
+        idx.add(task("t1", "Fix login"));
+        idx.add(task("t2", "Dashboard widgets"));
+        assert!(!idx.has_embeddings());
+
+        let embedder = MockEmbedder::new(4);
+        idx.build_embeddings(&embedder).await.unwrap();
+
+        assert!(idx.has_embeddings());
+        assert_eq!(idx.stale_count(), 0);
+
+        let results = idx.search_semantic("login", &embedder, 10).await.unwrap();
+        assert!(!results.is_empty());
+    }
+
+    #[tokio::test]
+    async fn search_semantic_empty_embeddings_returns_empty() {
+        use model_embedding::mock::MockEmbedder;
+
+        let idx = EntitySearchIndex::new();
+        let embedder = MockEmbedder::new(4);
+        let results = idx
+            .search_semantic("anything", &embedder, 10)
+            .await
+            .unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[tokio::test]
+    async fn rebuild_stale_embeddings_noop_when_none_stale() {
+        use model_embedding::mock::MockEmbedder;
+
+        let mut idx = EntitySearchIndex::new();
+        let embedder = MockEmbedder::new(4);
+        // No entities at all — should be a no-op
+        idx.rebuild_stale_embeddings(&embedder).await.unwrap();
+        assert_eq!(idx.stale_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn rebuild_stale_embeddings_updates_only_stale() {
+        use model_embedding::mock::MockEmbedder;
+
+        let mut idx = EntitySearchIndex::new();
+        idx.add(task("t1", "Fix login"));
+        idx.add(task("t2", "Dashboard widgets"));
+
+        let embedder = MockEmbedder::new(4);
+        idx.build_embeddings(&embedder).await.unwrap();
+        assert_eq!(idx.stale_count(), 0);
+        assert!(idx.has_embeddings());
+
+        // Update one entity to mark it stale
+        idx.update(task("t1", "Fix logout instead"));
+        assert_eq!(idx.stale_count(), 1);
+
+        idx.rebuild_stale_embeddings(&embedder).await.unwrap();
+        assert_eq!(idx.stale_count(), 0);
+        assert!(idx.has_embeddings());
+    }
+
+    #[tokio::test]
+    async fn rebuild_stale_with_removed_entity_clears_stale() {
+        use model_embedding::mock::MockEmbedder;
+
+        let mut idx = EntitySearchIndex::new();
+        idx.add(task("t1", "Fix login"));
+
+        let embedder = MockEmbedder::new(4);
+        idx.build_embeddings(&embedder).await.unwrap();
+
+        // Manually insert a stale id that has no entity (simulates race)
+        idx.stale_ids.insert("ghost".to_string());
+        assert_eq!(idx.stale_count(), 1);
+
+        // The stale entity doesn't exist, so stale_refs will be empty
+        // after filtering — should still clear
+        idx.rebuild_stale_embeddings(&embedder).await.unwrap();
+        assert_eq!(idx.stale_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn search_hybrid_short_query_fuzzy_first() {
+        use model_embedding::mock::MockEmbedder;
+
+        let mut idx = EntitySearchIndex::new();
+        idx.add(task("t1", "Fix login"));
+        idx.add(task("t2", "Dashboard widgets"));
+
+        let embedder = MockEmbedder::new(4);
+        // No embeddings built — short query should return fuzzy results
+        let results = idx.search_hybrid("login", &embedder, 10).await.unwrap();
+        assert!(!results.is_empty());
+        assert_eq!(results[0].entity_id, "t1");
+    }
+
+    #[tokio::test]
+    async fn search_hybrid_short_query_falls_back_to_semantic() {
+        use model_embedding::mock::MockEmbedder;
+
+        let mut idx = EntitySearchIndex::new();
+        idx.add(task("t1", "Fix login"));
+
+        let embedder = MockEmbedder::new(4);
+        idx.build_embeddings(&embedder).await.unwrap();
+
+        // Short query with no fuzzy match should fall back to semantic
+        let results = idx
+            .search_hybrid("zzzznotfound", &embedder, 10)
+            .await
+            .unwrap();
+        // Semantic will still return results (mock returns constant embeddings)
+        // since embeddings exist
+        assert!(!results.is_empty());
+    }
+
+    #[tokio::test]
+    async fn search_hybrid_long_query_semantic_first() {
+        use model_embedding::mock::MockEmbedder;
+
+        let mut idx = EntitySearchIndex::new();
+        idx.add(task("t1", "Fix the login page bug"));
+
+        let embedder = MockEmbedder::new(4);
+        idx.build_embeddings(&embedder).await.unwrap();
+
+        // Long query (>3 words) — should use semantic first
+        let results = idx
+            .search_hybrid("fix the login page bug now", &embedder, 10)
+            .await
+            .unwrap();
+        assert!(!results.is_empty());
+    }
+
+    #[tokio::test]
+    async fn search_hybrid_long_query_no_embeddings_uses_fuzzy() {
+        use model_embedding::mock::MockEmbedder;
+
+        let mut idx = EntitySearchIndex::new();
+        idx.add(task("t1", "Fix the login page bug"));
+
+        let embedder = MockEmbedder::new(4);
+        // No embeddings built — long query (>3 words) falls back to fuzzy
+        let results = idx
+            .search_hybrid("Fix the login page", &embedder, 10)
+            .await
+            .unwrap();
+        // Even with >3 words, fuzzy fallback should find a match
+        // since the query is a substring of the title
+        assert!(!results.is_empty());
+    }
+
+    #[tokio::test]
+    async fn search_hybrid_long_query_semantic_empty_falls_back_to_fuzzy() {
+        use model_embedding::mock::MockEmbedder;
+
+        let mut idx = EntitySearchIndex::new();
+        idx.add(task("t1", "Fix the login page bug"));
+
+        let embedder = MockEmbedder::new(4);
+        idx.build_embeddings(&embedder).await.unwrap();
+
+        // Remove embeddings manually to simulate empty semantic results
+        // while has_embeddings still reflects the cleared state
+        idx.embeddings.clear();
+
+        // has_embeddings is false now, so it will go straight to fuzzy
+        let results = idx
+            .search_hybrid("fix the login page", &embedder, 10)
+            .await
+            .unwrap();
+        assert!(!results.is_empty());
+    }
+
+    #[tokio::test]
+    async fn build_embeddings_error_propagates() {
+        use model_embedding::mock::MockEmbedder;
+
+        let mut idx = EntitySearchIndex::new();
+        idx.add(task("t1", "Fix login"));
+
+        // Fail on first call
+        let embedder = MockEmbedder::with_failures(4, vec![0]);
+        let result = idx.build_embeddings(&embedder).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn rebuild_stale_embeddings_error_propagates() {
+        use model_embedding::mock::MockEmbedder;
+
+        let mut idx = EntitySearchIndex::new();
+        idx.add(task("t1", "Fix login"));
+
+        // Build successfully first
+        let good_embedder = MockEmbedder::new(4);
+        idx.build_embeddings(&good_embedder).await.unwrap();
+
+        // Mark t1 stale
+        idx.update(task("t1", "Updated login"));
+
+        // Rebuild with failing embedder
+        let bad_embedder = MockEmbedder::with_failures(4, vec![0]);
+        let result = idx.rebuild_stale_embeddings(&bad_embedder).await;
+        assert!(result.is_err());
+    }
 }

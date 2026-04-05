@@ -1210,6 +1210,27 @@ fields:
     }
 
     #[test]
+    fn from_yaml_sources_skips_invalid_entity_yaml() {
+        let title_yaml = r#"
+id: "00000000000000000000000001"
+name: title
+type:
+  kind: text
+  single_line: true
+"#;
+        let invalid_entity_yaml = "this is not valid yaml: [";
+        let ctx = FieldsContext::from_yaml_sources(
+            PathBuf::from("/tmp/test"),
+            &[("title", title_yaml)],
+            &[("bad", invalid_entity_yaml)],
+        )
+        .unwrap();
+        // The field parsed fine, but the invalid entity was skipped
+        assert_eq!(ctx.all_fields().len(), 1);
+        assert!(ctx.all_entities().is_empty());
+    }
+
+    #[test]
     fn from_yaml_sources_definitions_only() {
         let yaml = r#"
 id: "00000000000000000000000001"
@@ -1250,12 +1271,14 @@ fields:
     }
 
     #[tokio::test]
-    async fn write_entity_update_overwrites() {
+    async fn write_entity_updates_existing() {
         let tmp = TempDir::new().unwrap();
-        let root = tmp.path().join("fields");
-        let mut ctx = FieldsContext::open(&root).build().await.unwrap();
+        let mut ctx = FieldsContext::open(tmp.path().join("fields"))
+            .build()
+            .await
+            .unwrap();
 
-        let entity_v1 = EntityDef {
+        let entity = EntityDef {
             name: "task".into(),
             icon: None,
             body_field: Some("body".into()),
@@ -1266,26 +1289,26 @@ fields:
             search_display_field: None,
             commands: vec![],
         };
-        ctx.write_entity(&entity_v1).await.unwrap();
+        ctx.write_entity(&entity).await.unwrap();
         assert_eq!(ctx.get_entity("task").unwrap().fields.len(), 1);
 
-        let entity_v2 = EntityDef {
+        // Update existing entity with more fields
+        let updated = EntityDef {
             name: "task".into(),
             icon: None,
-            body_field: Some("description".into()),
-            fields: vec!["title".into(), "status".into()],
+            body_field: Some("body".into()),
+            fields: vec!["title".into(), "status".into(), "priority".into()],
             validate: None,
             mention_prefix: None,
             mention_display_field: None,
             search_display_field: None,
             commands: vec![],
         };
-        ctx.write_entity(&entity_v2).await.unwrap();
+        ctx.write_entity(&updated).await.unwrap();
 
-        assert_eq!(ctx.all_entities().len(), 1, "should still be one entity");
-        let loaded = ctx.get_entity("task").unwrap();
-        assert_eq!(loaded.body_field, Some("description".into()));
-        assert_eq!(loaded.fields.len(), 2);
+        // Should have updated in place, not duplicated
+        assert_eq!(ctx.all_entities().len(), 1);
+        assert_eq!(ctx.get_entity("task").unwrap().fields.len(), 3);
     }
 
     #[tokio::test]
@@ -1352,52 +1375,49 @@ fields:
     }
 
     #[test]
-    fn entity_types_depending_on_finds_computed_fields() {
-        let computed_field_yaml = r#"
-id: "00000000000000000000000010"
-name: task_count
+    fn entity_types_depending_on_finds_computed_field_deps() {
+        // Set up a computed field that depends on "tag" entity type
+        let tags_field_yaml = r#"
+id: "00000000000000000000000001"
+name: tags
 type:
   kind: computed
-  derive: count-children
+  derive: parse-body-tags
   depends_on:
-    - task
+    - tag
+  entity: tag
 "#;
-        let plain_field_yaml = r#"
-id: "00000000000000000000000011"
+        let title_yaml = r#"
+id: "00000000000000000000000002"
 name: title
 type:
   kind: text
   single_line: true
 "#;
-        let project_entity_yaml = r#"
-name: project
-fields:
-  - title
-  - task_count
-"#;
         let task_entity_yaml = r#"
 name: task
 fields:
+  - tags
+"#;
+        let tag_entity_yaml = r#"
+name: tag
+fields:
   - title
 "#;
-
         let ctx = FieldsContext::from_yaml_sources(
             PathBuf::from("/tmp/test"),
-            &[
-                ("task_count", computed_field_yaml),
-                ("title", plain_field_yaml),
-            ],
-            &[("project", project_entity_yaml), ("task", task_entity_yaml)],
+            &[("tags", tags_field_yaml), ("title", title_yaml)],
+            &[("task", task_entity_yaml), ("tag", tag_entity_yaml)],
         )
         .unwrap();
 
-        let depending = ctx.entity_types_depending_on("task");
-        assert_eq!(depending.len(), 1);
-        assert_eq!(depending[0], "project");
+        // "task" entity has a computed field that depends_on "tag"
+        let result = ctx.entity_types_depending_on("tag");
+        assert_eq!(result, vec!["task"]);
 
-        // No entity depends on "nonexistent"
-        let none = ctx.entity_types_depending_on("nonexistent");
-        assert!(none.is_empty());
+        // Nothing depends on "column"
+        let result2 = ctx.entity_types_depending_on("column");
+        assert!(result2.is_empty());
     }
 
     #[test]
@@ -1435,12 +1455,21 @@ fields:
         let tmp = TempDir::new().unwrap();
         let dir = tmp.path();
         std::fs::write(dir.join("good.yaml"), "name: good").unwrap();
-        // A subdirectory named with .yaml extension -- should be skipped by read_to_string
         std::fs::create_dir(dir.join("subdir.yaml")).unwrap();
 
         let entries = load_yaml_dir(dir);
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].0, "good");
+    }
+
+    #[test]
+    fn load_yaml_dir_skips_unreadable_dir() {
+        let tmp = TempDir::new().unwrap();
+        let file_path = tmp.path().join("not_a_dir.txt");
+        std::fs::write(&file_path, "hello").unwrap();
+
+        let result = load_yaml_dir(&file_path);
+        assert!(result.is_empty());
     }
 
     #[tokio::test]

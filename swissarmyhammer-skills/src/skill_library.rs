@@ -93,4 +93,59 @@ mod tests {
         sorted_names.sort();
         assert_eq!(names, sorted_names);
     }
+
+    #[test]
+    fn test_library_load_with_resolver() {
+        let resolver = SkillResolver::new();
+        let mut library = SkillLibrary::new();
+        assert!(library.is_empty());
+
+        library.load_with_resolver(&resolver);
+        assert!(!library.is_empty());
+        // Should have the same skills as load_defaults
+        assert!(library.get("plan").is_some());
+    }
+
+    #[test]
+    fn test_library_len() {
+        let mut library = SkillLibrary::new();
+        assert_eq!(library.len(), 0);
+
+        library.load_defaults();
+        assert!(!library.is_empty());
+    }
+
+    #[test]
+    fn test_library_names() {
+        let mut library = SkillLibrary::new();
+        library.load_defaults();
+
+        let names = library.names();
+        assert!(!names.is_empty());
+
+        // Should be sorted
+        let mut sorted = names.clone();
+        sorted.sort();
+        assert_eq!(names, sorted);
+
+        // Should contain known builtins
+        assert!(names.contains(&"plan"));
+        assert!(names.contains(&"commit"));
+    }
+
+    #[test]
+    fn test_library_default_is_empty() {
+        let library = SkillLibrary::default();
+        assert!(library.is_empty());
+        assert_eq!(library.len(), 0);
+        assert!(library.names().is_empty());
+    }
+
+    #[test]
+    fn test_library_new_is_empty() {
+        let library = SkillLibrary::new();
+        assert!(library.is_empty());
+        assert!(library.list().is_empty());
+        assert!(library.get("anything").is_none());
+    }
 }

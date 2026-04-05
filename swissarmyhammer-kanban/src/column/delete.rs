@@ -87,3 +87,83 @@ impl Execute<KanbanContext, KanbanError> for DeleteColumn {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::board::InitBoard;
+    use crate::column::add::AddColumn;
+    use crate::column::get::GetColumn;
+    use crate::error::KanbanError;
+    use crate::task::AddTask;
+    use tempfile::TempDir;
+
+    /// Create a temporary kanban context with a board initialized.
+    async fn setup() -> (TempDir, KanbanContext) {
+        let temp = TempDir::new().unwrap();
+        let kanban_dir = temp.path().join(".kanban");
+        let ctx = KanbanContext::new(kanban_dir);
+        InitBoard::new("Test")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        (temp, ctx)
+    }
+
+    #[tokio::test]
+    async fn test_delete_column_empty() {
+        let (_temp, ctx) = setup().await;
+
+        AddColumn::new("staging", "Staging")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        let result = DeleteColumn::new("staging")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        assert_eq!(result["deleted"], true);
+        assert_eq!(result["id"], "staging");
+
+        // Verify it is gone
+        let get_result = GetColumn::new("staging").execute(&ctx).await.into_result();
+        assert!(matches!(
+            get_result,
+            Err(KanbanError::ColumnNotFound { .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_delete_column_not_found() {
+        let (_temp, ctx) = setup().await;
+
+        let result = DeleteColumn::new("nonexistent")
+            .execute(&ctx)
+            .await
+            .into_result();
+
+        assert!(matches!(result, Err(KanbanError::ColumnNotFound { .. })));
+    }
+
+    #[tokio::test]
+    async fn test_delete_column_with_tasks_fails() {
+        let (_temp, ctx) = setup().await;
+
+        // Add a task to the "todo" column (the default column)
+        AddTask::new("A task in todo")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        // Attempting to delete the non-empty "todo" column should fail
+        let result = DeleteColumn::new("todo").execute(&ctx).await.into_result();
+
+        assert!(matches!(result, Err(KanbanError::ColumnNotEmpty { .. })));
+    }
+}

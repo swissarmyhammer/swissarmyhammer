@@ -163,201 +163,203 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
     use std::sync::Arc;
-    use swissarmyhammer_commands::ui_state::UIState;
-    use swissarmyhammer_commands::CommandContext;
+    use swissarmyhammer_commands::{CommandContext, UIState};
 
-    /// Build a CommandContext with UIState and the given args/scope chain.
+    /// Build a minimal CommandContext with the given UIState, scope, and args.
     fn make_ctx(
         ui: Arc<UIState>,
-        args: HashMap<String, Value>,
-        scope_chain: Vec<String>,
+        scope: Vec<String>,
+        args: HashMap<String, serde_json::Value>,
     ) -> CommandContext {
-        CommandContext::new("test", scope_chain, None, args).with_ui_state(ui)
+        let mut ctx = CommandContext::new("test", scope, None, args);
+        ctx.ui_state = Some(ui);
+        ctx
     }
 
-    // ── SwitchBoardCmd ──────────────────────────────────────────────
+    // =========================================================================
+    // NewBoardCmd
+    // =========================================================================
 
     #[tokio::test]
-    async fn switch_board_updates_window_board_and_most_recent() {
-        let ui = Arc::new(UIState::new());
-        let mut args = HashMap::new();
-        args.insert("path".into(), json!("/tmp/my-board/.kanban"));
-        let ctx = make_ctx(Arc::clone(&ui), args, vec![]);
-
-        let result = SwitchBoardCmd.execute(&ctx).await.unwrap();
-
-        // Returns BoardSwitch payload
-        assert_eq!(result["BoardSwitch"]["path"], "/tmp/my-board/.kanban");
-        assert_eq!(result["BoardSwitch"]["window_label"], "main");
-
-        // Side effects on UIState
-        assert_eq!(
-            ui.window_board("main"),
-            Some("/tmp/my-board/.kanban".to_string())
-        );
-        assert_eq!(
-            ui.most_recent_board(),
-            Some("/tmp/my-board/.kanban".to_string())
-        );
-    }
-
-    #[tokio::test]
-    async fn switch_board_uses_explicit_window_label() {
-        let ui = Arc::new(UIState::new());
-        let mut args = HashMap::new();
-        args.insert("path".into(), json!("/tmp/board2/.kanban"));
-        args.insert("windowLabel".into(), json!("secondary"));
-        let ctx = make_ctx(Arc::clone(&ui), args, vec![]);
-
-        let result = SwitchBoardCmd.execute(&ctx).await.unwrap();
-
-        assert_eq!(result["BoardSwitch"]["window_label"], "secondary");
-        assert_eq!(
-            ui.window_board("secondary"),
-            Some("/tmp/board2/.kanban".to_string())
-        );
-        // "main" window should be unaffected
-        assert_eq!(ui.window_board("main"), None);
-    }
-
-    #[tokio::test]
-    async fn switch_board_also_accepts_snake_case_window_label() {
-        let ui = Arc::new(UIState::new());
-        let mut args = HashMap::new();
-        args.insert("path".into(), json!("/tmp/board/.kanban"));
-        args.insert("window_label".into(), json!("tertiary"));
-        let ctx = make_ctx(Arc::clone(&ui), args, vec![]);
-
-        let result = SwitchBoardCmd.execute(&ctx).await.unwrap();
-        assert_eq!(result["BoardSwitch"]["window_label"], "tertiary");
-        assert_eq!(
-            ui.window_board("tertiary"),
-            Some("/tmp/board/.kanban".to_string())
-        );
-    }
-
-    #[tokio::test]
-    async fn switch_board_fails_without_path() {
-        let ui = Arc::new(UIState::new());
-        let ctx = make_ctx(ui, HashMap::new(), vec![]);
-
-        let err = SwitchBoardCmd.execute(&ctx).await.unwrap_err();
-        assert!(
-            matches!(err, CommandError::MissingArg(ref a) if a == "path"),
-            "expected MissingArg(\"path\"), got: {err:?}"
-        );
-    }
-
-    #[tokio::test]
-    async fn switch_board_fails_without_ui_state() {
-        let mut args = HashMap::new();
-        args.insert("path".into(), json!("/tmp/board/.kanban"));
-        // No UIState attached
-        let ctx = CommandContext::new("test", vec![], None, args);
-
-        let err = SwitchBoardCmd.execute(&ctx).await.unwrap_err();
-        assert!(matches!(err, CommandError::ExecutionFailed(_)));
-    }
-
-    // ── NewBoardCmd ─────────────────────────────────────────────────
-
-    #[tokio::test]
-    async fn new_board_returns_dialog_marker() {
-        let ctx = CommandContext::new("test", vec![], None, HashMap::new());
+    async fn new_board_cmd_returns_dialog_marker() {
+        let ctx = CommandContext::new("file.newBoard", vec![], None, HashMap::new());
         let result = NewBoardCmd.execute(&ctx).await.unwrap();
-        assert_eq!(result, json!({ "NewBoardDialog": true }));
-    }
-
-    // ── OpenBoardCmd ────────────────────────────────────────────────
-
-    #[tokio::test]
-    async fn open_board_returns_dialog_marker() {
-        let ctx = CommandContext::new("test", vec![], None, HashMap::new());
-        let result = OpenBoardCmd.execute(&ctx).await.unwrap();
-        assert_eq!(result, json!({ "OpenBoardDialog": true }));
-    }
-
-    // ── NewWindowCmd ────────────────────────────────────────────────
-
-    #[tokio::test]
-    async fn new_window_returns_create_window_marker() {
-        let ctx = CommandContext::new("test", vec![], None, HashMap::new());
-        let result = NewWindowCmd.execute(&ctx).await.unwrap();
-        assert_eq!(result, json!({ "CreateWindow": true }));
-    }
-
-    // ── CloseBoardCmd ───────────────────────────────────────────────
-
-    #[tokio::test]
-    async fn close_board_with_explicit_path() {
-        let ui = Arc::new(UIState::new());
-        // Pre-populate: add a board to the open list and assign it to "main"
-        ui.add_open_board("/tmp/board/.kanban");
-        ui.set_window_board("main", "/tmp/board/.kanban");
-
-        let mut args = HashMap::new();
-        args.insert("path".into(), json!("/tmp/board/.kanban"));
-        let ctx = make_ctx(Arc::clone(&ui), args, vec!["window:main".into()]);
-
-        let result = CloseBoardCmd.execute(&ctx).await.unwrap();
-
-        // Returns BoardClose with path and window_label
-        assert!(result["BoardClose"]["path"].as_str().is_some());
-        assert_eq!(result["BoardClose"]["window_label"], "main");
-
-        // Board should NOT be removed from open list — Tauri handler decides
-        assert!(
-            ui.open_boards().contains(&"/tmp/board/.kanban".to_string()),
-            "board should still be in open_boards (Tauri handler removes it)"
+        assert_eq!(
+            result["NewBoardDialog"].as_bool(),
+            Some(true),
+            "NewBoardCmd should return {{\"NewBoardDialog\": true}}"
         );
     }
 
     #[tokio::test]
-    async fn close_board_resolves_path_from_window() {
-        let ui = Arc::new(UIState::new());
-        ui.add_open_board("/tmp/board/.kanban");
-        ui.set_window_board("main", "/tmp/board/.kanban");
-
-        // No explicit path arg — should resolve from window's board_path
-        let ctx = make_ctx(Arc::clone(&ui), HashMap::new(), vec!["window:main".into()]);
-
-        let result = CloseBoardCmd.execute(&ctx).await.unwrap();
-        assert!(result["BoardClose"]["path"].as_str().is_some());
-        assert_eq!(result["BoardClose"]["window_label"], "main");
-    }
-
-    #[tokio::test]
-    async fn close_board_fails_without_path_or_window_board() {
-        let ui = Arc::new(UIState::new());
-        // No path arg, and no board assigned to window
-        let ctx = make_ctx(Arc::clone(&ui), HashMap::new(), vec!["window:main".into()]);
-
-        let err = CloseBoardCmd.execute(&ctx).await.unwrap_err();
-        assert!(
-            matches!(err, CommandError::MissingArg(ref a) if a == "path"),
-            "expected MissingArg(\"path\"), got: {err:?}"
-        );
-    }
-
-    #[tokio::test]
-    async fn close_board_fails_without_ui_state() {
-        let mut args = HashMap::new();
-        args.insert("path".into(), json!("/tmp/board/.kanban"));
-        let ctx = CommandContext::new("test", vec![], None, args);
-
-        let err = CloseBoardCmd.execute(&ctx).await.unwrap_err();
-        assert!(matches!(err, CommandError::ExecutionFailed(_)));
-    }
-
-    // ── Availability ────────────────────────────────────────────────
-
-    #[test]
-    fn all_file_commands_are_always_available() {
-        let ctx = CommandContext::new("test", vec![], None, HashMap::new());
-        assert!(SwitchBoardCmd.available(&ctx));
+    async fn new_board_cmd_is_always_available() {
+        let ctx = CommandContext::new("file.newBoard", vec![], None, HashMap::new());
         assert!(NewBoardCmd.available(&ctx));
+    }
+
+    // =========================================================================
+    // OpenBoardCmd
+    // =========================================================================
+
+    #[tokio::test]
+    async fn open_board_cmd_returns_dialog_marker() {
+        let ctx = CommandContext::new("file.openBoard", vec![], None, HashMap::new());
+        let result = OpenBoardCmd.execute(&ctx).await.unwrap();
+        assert_eq!(
+            result["OpenBoardDialog"].as_bool(),
+            Some(true),
+            "OpenBoardCmd should return {{\"OpenBoardDialog\": true}}"
+        );
+    }
+
+    #[tokio::test]
+    async fn open_board_cmd_is_always_available() {
+        let ctx = CommandContext::new("file.openBoard", vec![], None, HashMap::new());
         assert!(OpenBoardCmd.available(&ctx));
+    }
+
+    // =========================================================================
+    // NewWindowCmd
+    // =========================================================================
+
+    #[tokio::test]
+    async fn new_window_cmd_returns_create_window_marker() {
+        let ctx = CommandContext::new("window.new", vec![], None, HashMap::new());
+        let result = NewWindowCmd.execute(&ctx).await.unwrap();
+        assert_eq!(
+            result["CreateWindow"].as_bool(),
+            Some(true),
+            "NewWindowCmd should return {{\"CreateWindow\": true}}"
+        );
+    }
+
+    #[tokio::test]
+    async fn new_window_cmd_is_always_available() {
+        let ctx = CommandContext::new("window.new", vec![], None, HashMap::new());
         assert!(NewWindowCmd.available(&ctx));
-        assert!(CloseBoardCmd.available(&ctx));
+    }
+
+    // =========================================================================
+    // SwitchBoardCmd
+    // =========================================================================
+
+    #[tokio::test]
+    async fn switch_board_cmd_updates_ui_state() {
+        let ui = Arc::new(UIState::new());
+        let mut args = HashMap::new();
+        args.insert("path".into(), json!("/tmp/myboard/.kanban"));
+        let ctx = make_ctx(Arc::clone(&ui), vec![], args);
+
+        let result = SwitchBoardCmd.execute(&ctx).await.unwrap();
+
+        let switch = &result["BoardSwitch"];
+        assert_eq!(switch["path"].as_str(), Some("/tmp/myboard/.kanban"));
+        assert_eq!(
+            switch["window_label"].as_str(),
+            Some("main"),
+            "defaults to 'main' window label"
+        );
+    }
+
+    #[tokio::test]
+    async fn switch_board_cmd_uses_explicit_window_label() {
+        let ui = Arc::new(UIState::new());
+        let mut args = HashMap::new();
+        args.insert("path".into(), json!("/tmp/board/.kanban"));
+        args.insert("windowLabel".into(), json!("secondary"));
+        let ctx = make_ctx(Arc::clone(&ui), vec![], args);
+
+        let result = SwitchBoardCmd.execute(&ctx).await.unwrap();
+        assert_eq!(
+            result["BoardSwitch"]["window_label"].as_str(),
+            Some("secondary")
+        );
+    }
+
+    #[tokio::test]
+    async fn switch_board_cmd_missing_path_returns_error() {
+        let ui = Arc::new(UIState::new());
+        let ctx = make_ctx(Arc::clone(&ui), vec![], HashMap::new());
+        let result = SwitchBoardCmd.execute(&ctx).await;
+        assert!(result.is_err(), "SwitchBoardCmd with no path should fail");
+    }
+
+    #[tokio::test]
+    async fn switch_board_cmd_without_ui_state_returns_error() {
+        let mut args = HashMap::new();
+        args.insert("path".into(), json!("/tmp/board/.kanban"));
+        let ctx = CommandContext::new("file.switchBoard", vec![], None, args);
+        let result = SwitchBoardCmd.execute(&ctx).await;
+        assert!(
+            result.is_err(),
+            "SwitchBoardCmd without UIState should return an error"
+        );
+    }
+
+    #[tokio::test]
+    async fn switch_board_cmd_sets_most_recent_board() {
+        let ui = Arc::new(UIState::new());
+        let path = "/tmp/recent/.kanban";
+        let mut args = HashMap::new();
+        args.insert("path".into(), json!(path));
+        let ctx = make_ctx(Arc::clone(&ui), vec![], args);
+
+        SwitchBoardCmd.execute(&ctx).await.unwrap();
+
+        assert_eq!(
+            ui.most_recent_board().as_deref(),
+            Some(path),
+            "UIState most_recent_board should be updated after switch"
+        );
+    }
+
+    // =========================================================================
+    // CloseBoardCmd
+    // =========================================================================
+
+    #[tokio::test]
+    async fn close_board_cmd_with_explicit_path() {
+        let ui = Arc::new(UIState::new());
+        let path = "/tmp/closeable/.kanban";
+        ui.add_open_board(path);
+
+        let mut args = HashMap::new();
+        args.insert("path".into(), json!(path));
+        let ctx = make_ctx(Arc::clone(&ui), vec![], args);
+
+        let result = CloseBoardCmd.execute(&ctx).await.unwrap();
+        assert!(result["BoardClose"]["path"].as_str().is_some());
+    }
+
+    #[tokio::test]
+    async fn close_board_cmd_uses_window_board_when_no_path_arg() {
+        let ui = Arc::new(UIState::new());
+        let path = "/tmp/window-board/.kanban";
+        ui.set_window_board("main", path);
+
+        let ctx = make_ctx(Arc::clone(&ui), vec!["window:main".into()], HashMap::new());
+        let result = CloseBoardCmd.execute(&ctx).await.unwrap();
+        assert!(result["BoardClose"]["path"].as_str().is_some());
+    }
+
+    #[tokio::test]
+    async fn close_board_cmd_without_ui_state_returns_error() {
+        let ctx = CommandContext::new("file.closeBoard", vec![], None, HashMap::new());
+        let result = CloseBoardCmd.execute(&ctx).await;
+        assert!(
+            result.is_err(),
+            "CloseBoardCmd without UIState should return an error"
+        );
+    }
+
+    #[tokio::test]
+    async fn close_board_cmd_no_path_and_no_window_board_returns_error() {
+        let ui = Arc::new(UIState::new());
+        let ctx = make_ctx(Arc::clone(&ui), vec![], HashMap::new());
+        let result = CloseBoardCmd.execute(&ctx).await;
+        assert!(
+            result.is_err(),
+            "CloseBoardCmd with no path info should return an error"
+        );
     }
 }

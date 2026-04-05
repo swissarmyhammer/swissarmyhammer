@@ -389,4 +389,192 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn test_plan_stats_default() {
+        let stats = PlanStats::default();
+        assert_eq!(stats.plan_notifications, 0);
+        assert_eq!(stats.total_entries, 0);
+        assert_eq!(stats.entries_pending, 0);
+        assert_eq!(stats.entries_in_progress, 0);
+        assert_eq!(stats.entries_completed, 0);
+        assert_eq!(stats.agent_message_chunks, 0);
+    }
+
+    #[test]
+    fn test_plan_stats_debug_and_serialize() {
+        let stats = PlanStats {
+            plan_notifications: 2,
+            total_entries: 5,
+            entries_pending: 2,
+            entries_in_progress: 1,
+            entries_completed: 2,
+            agent_message_chunks: 8,
+        };
+        let debug = format!("{:?}", stats);
+        assert!(debug.contains("PlanStats"));
+
+        let json = serde_json::to_value(&stats).unwrap();
+        assert_eq!(json["plan_notifications"], 2);
+        assert_eq!(json["total_entries"], 5);
+    }
+
+    #[test]
+    fn test_plan_entry_missing_priority() {
+        let entry = serde_json::json!({
+            "content": "Task",
+            "status": "pending"
+        });
+        let result = validate_plan_entry(&entry);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("priority"));
+    }
+
+    #[test]
+    fn test_plan_entry_missing_status() {
+        let entry = serde_json::json!({
+            "content": "Task",
+            "priority": "high"
+        });
+        let result = validate_plan_entry(&entry);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("status"));
+    }
+
+    #[test]
+    fn test_plan_session_update_wrong_type() {
+        let update = serde_json::json!({
+            "sessionUpdate": "agent_message_chunk",
+            "entries": [
+                {"content": "Task", "priority": "high", "status": "pending"}
+            ]
+        });
+        let result = validate_plan_session_update(&update);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .contains("Expected sessionUpdate='plan'"));
+    }
+
+    #[test]
+    fn test_plan_session_update_missing_session_update() {
+        let update = serde_json::json!({
+            "entries": [
+                {"content": "Task", "priority": "high", "status": "pending"}
+            ]
+        });
+        let result = validate_plan_session_update(&update);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_plan_session_update_missing_entries() {
+        let update = serde_json::json!({
+            "sessionUpdate": "plan"
+        });
+        let result = validate_plan_session_update(&update);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_plan_session_update_invalid_entry_propagates() {
+        let update = serde_json::json!({
+            "sessionUpdate": "plan",
+            "entries": [
+                {"content": "Good task", "priority": "high", "status": "pending"},
+                {"content": "Bad task", "priority": "critical", "status": "pending"}
+            ]
+        });
+        let result = validate_plan_session_update(&update);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Entry 1"));
+    }
+
+    // --- Async tests using mock agent ---
+
+    use agent_client_protocol::{
+        AuthenticateRequest, AuthenticateResponse, CancelNotification, ExtNotification, ExtRequest,
+        ExtResponse, InitializeResponse, LoadSessionRequest, LoadSessionResponse,
+        NewSessionResponse, PromptResponse, SetSessionModeRequest, SetSessionModeResponse,
+        StopReason,
+    };
+
+    /// Mock agent for plan tests
+    struct PlanMockAgent;
+
+    #[async_trait::async_trait(?Send)]
+    impl Agent for PlanMockAgent {
+        async fn initialize(
+            &self,
+            _request: InitializeRequest,
+        ) -> agent_client_protocol::Result<InitializeResponse> {
+            Ok(InitializeResponse::new(ProtocolVersion::V1))
+        }
+
+        async fn authenticate(
+            &self,
+            _request: AuthenticateRequest,
+        ) -> agent_client_protocol::Result<AuthenticateResponse> {
+            Ok(AuthenticateResponse::new())
+        }
+
+        async fn new_session(
+            &self,
+            _request: agent_client_protocol::NewSessionRequest,
+        ) -> agent_client_protocol::Result<NewSessionResponse> {
+            Ok(NewSessionResponse::new("plan-test-session"))
+        }
+
+        async fn prompt(
+            &self,
+            _request: PromptRequest,
+        ) -> agent_client_protocol::Result<PromptResponse> {
+            Ok(PromptResponse::new(StopReason::EndTurn))
+        }
+
+        async fn cancel(&self, _request: CancelNotification) -> agent_client_protocol::Result<()> {
+            Ok(())
+        }
+
+        async fn load_session(
+            &self,
+            _request: LoadSessionRequest,
+        ) -> agent_client_protocol::Result<LoadSessionResponse> {
+            Ok(LoadSessionResponse::new())
+        }
+
+        async fn set_session_mode(
+            &self,
+            _request: SetSessionModeRequest,
+        ) -> agent_client_protocol::Result<SetSessionModeResponse> {
+            Ok(SetSessionModeResponse::new())
+        }
+
+        async fn ext_method(
+            &self,
+            _request: ExtRequest,
+        ) -> agent_client_protocol::Result<ExtResponse> {
+            Err(agent_client_protocol::Error::method_not_found())
+        }
+
+        async fn ext_notification(
+            &self,
+            _notification: ExtNotification,
+        ) -> agent_client_protocol::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn test_agent_sends_plan_notifications_mock() {
+        let agent = PlanMockAgent;
+        let result = test_agent_sends_plan_notifications(&agent).await;
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_verify_plan_fixture_not_found() {
+        let result = verify_plan_fixture("nonexistent-agent", "nonexistent-test");
+        assert!(result.is_err());
+    }
 }

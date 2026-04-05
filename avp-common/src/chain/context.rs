@@ -121,4 +121,56 @@ mod tests {
         ctx.set_exit_code(VALIDATOR_BLOCK_EXIT_CODE);
         assert_eq!(ctx.exit_code(), VALIDATOR_BLOCK_EXIT_CODE);
     }
+
+    #[test]
+    fn test_context_contains() {
+        let mut ctx = ChainContext::new();
+        assert!(!ctx.contains("missing"));
+
+        ctx.set("present", "value");
+        assert!(ctx.contains("present"));
+    }
+
+    #[test]
+    fn test_context_remove() {
+        let mut ctx = ChainContext::new();
+        ctx.set("key", "value");
+        assert!(ctx.contains("key"));
+
+        let removed = ctx.remove("key");
+        assert!(removed.is_some());
+        assert!(!ctx.contains("key"));
+    }
+
+    #[test]
+    fn test_context_remove_nonexistent() {
+        let mut ctx = ChainContext::new();
+        let removed = ctx.remove("nonexistent");
+        assert!(removed.is_none());
+    }
+
+    #[test]
+    fn test_context_get_nonexistent() {
+        let ctx = ChainContext::new();
+        let value: Option<String> = ctx.get("nonexistent");
+        assert!(value.is_none());
+    }
+
+    #[test]
+    fn test_context_get_wrong_type() {
+        let mut ctx = ChainContext::new();
+        ctx.set("number", 42);
+        // Try to get as wrong type — should return None
+        let value: Option<String> = ctx.get("number");
+        assert!(value.is_none());
+    }
+
+    #[test]
+    fn test_context_multiple_validation_errors() {
+        let mut ctx = ChainContext::new();
+        ctx.add_validation_error(ValidationError::MissingField("a".to_string()));
+        ctx.add_validation_error(ValidationError::MissingField("b".to_string()));
+        assert!(ctx.has_validation_errors());
+        assert_eq!(ctx.validation_errors().len(), 2);
+    }
 }

@@ -19,3 +19,91 @@ pub fn eval(ctx: &ModuleContext) -> ModuleOutput {
     let text = interpolate(&ctx.config.vim_mode.format, &vars);
     ModuleOutput::new(text, Style::parse(&ctx.config.vim_mode.style))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::StatuslineConfig;
+    use crate::input::{StatuslineInput, VimInfo};
+
+    #[test]
+    fn test_vim_mode_present() {
+        let input = StatuslineInput {
+            vim: Some(VimInfo {
+                mode: Some("NORMAL".into()),
+            }),
+            ..Default::default()
+        };
+        let config = StatuslineConfig::default();
+        let ctx = ModuleContext {
+            input: &input,
+            config: &config,
+        };
+        let out = eval(&ctx);
+        assert!(!out.is_empty());
+        assert!(out.text.contains("NORMAL"));
+    }
+
+    #[test]
+    fn test_vim_mode_none() {
+        let input = StatuslineInput::default();
+        let config = StatuslineConfig::default();
+        let ctx = ModuleContext {
+            input: &input,
+            config: &config,
+        };
+        let out = eval(&ctx);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn test_vim_mode_no_mode() {
+        let input = StatuslineInput {
+            vim: Some(VimInfo { mode: None }),
+            ..Default::default()
+        };
+        let config = StatuslineConfig::default();
+        let ctx = ModuleContext {
+            input: &input,
+            config: &config,
+        };
+        let out = eval(&ctx);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn test_vim_mode_render_output() {
+        let input = StatuslineInput {
+            vim: Some(VimInfo {
+                mode: Some("INSERT".into()),
+            }),
+            ..Default::default()
+        };
+        let config = StatuslineConfig::default();
+        let ctx = ModuleContext {
+            input: &input,
+            config: &config,
+        };
+        let out = eval(&ctx);
+        let rendered = out.render();
+        assert!(rendered.contains("INSERT"));
+        assert!(rendered.contains("\x1b["));
+    }
+
+    #[test]
+    fn test_vim_mode_visual() {
+        let input = StatuslineInput {
+            vim: Some(VimInfo {
+                mode: Some("VISUAL".into()),
+            }),
+            ..Default::default()
+        };
+        let config = StatuslineConfig::default();
+        let ctx = ModuleContext {
+            input: &input,
+            config: &config,
+        };
+        let out = eval(&ctx);
+        assert!(out.text.contains("VISUAL"));
+    }
+}

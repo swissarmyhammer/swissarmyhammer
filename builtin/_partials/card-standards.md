@@ -18,6 +18,9 @@ Card descriptions MUST include:
 ## Tests
 - [ ] <specific test to write or update, with file path>
 - [ ] <test command to run and expected result>
+
+## Workflow
+- Use `/tdd` — write failing tests first, then implement to make them pass.
 ```
 
 A card without acceptance criteria and tests is not a valid card. Include enough context that someone reading only the card (not the spec) can implement it.

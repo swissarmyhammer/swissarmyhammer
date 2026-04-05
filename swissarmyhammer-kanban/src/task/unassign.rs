@@ -187,4 +187,86 @@ mod tests {
 
         assert!(result.is_err());
     }
+
+    #[tokio::test]
+    async fn test_unassign_task_affected_resource_ids() {
+        let (_temp, ctx) = setup().await;
+
+        AddActor::new("assistant", "Assistant")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        let add_result = AddTask::new("Test task")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let task_id = add_result["id"].as_str().unwrap();
+
+        AssignTask::new(task_id, "assistant")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        let op = UnassignTask::new(task_id, "assistant");
+        let exec_result = op.execute(&ctx).await;
+        let value = exec_result.into_result().unwrap();
+
+        let ids = op.affected_resource_ids(&value);
+        assert_eq!(ids.len(), 1);
+        assert_eq!(ids[0], task_id);
+    }
+
+    #[tokio::test]
+    async fn test_unassign_multiple_assignees_keeps_others() {
+        let (_temp, ctx) = setup().await;
+
+        AddActor::new("alice", "Alice")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        AddActor::new("bob", "Bob")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        let add_result = AddTask::new("Test task")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let task_id = add_result["id"].as_str().unwrap();
+
+        AssignTask::new(task_id, "alice")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        AssignTask::new(task_id, "bob")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        // Unassign only alice
+        let result = UnassignTask::new(task_id, "alice")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        assert_eq!(result["unassigned"], true);
+        let remaining: Vec<&str> = result["all_assignees"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect();
+        assert_eq!(remaining, vec!["bob"]);
+    }
 }

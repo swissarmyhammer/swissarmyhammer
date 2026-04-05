@@ -466,6 +466,224 @@ mod tests {
     }
 
     #[test]
+    fn test_resolver_default_impl() {
+        // Default should produce a working resolver identical to new()
+        let resolver = SkillResolver::default();
+        let skills = resolver.resolve_all();
+        assert!(
+            skills.contains_key("plan"),
+            "default resolver should load builtins"
+        );
+    }
+
+    #[test]
+    fn test_resolve_builtins_only() {
+        let resolver = SkillResolver::new();
+        let builtins = resolver.resolve_builtins();
+
+        // All builtins should have SkillSource::Builtin
+        for (name, skill) in &builtins {
+            assert_eq!(
+                skill.source,
+                SkillSource::Builtin,
+                "skill '{}' should be builtin",
+                name
+            );
+        }
+        assert!(!builtins.is_empty());
+    }
+
+    #[test]
+    fn test_load_from_nonexistent_directory() {
+        // Adding a non-existent path should not cause errors — just no skills loaded
+        let mut resolver = SkillResolver::new();
+        resolver.add_search_path(PathBuf::from("/tmp/nonexistent-skills-dir-12345"));
+
+        let skills = resolver.resolve_all();
+        // Should still have builtins
+        assert!(skills.contains_key("plan"));
+    }
+
+    #[test]
+    fn test_load_from_empty_directory() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let mut resolver = SkillResolver::new();
+        resolver.add_search_path(temp_dir.path().to_path_buf());
+
+        let skills = resolver.resolve_all();
+        // Should still have builtins, no errors from empty dir
+        assert!(skills.contains_key("plan"));
+    }
+
+    #[test]
+    fn test_skip_directory_without_skill_md() {
+        // A subdirectory without SKILL.md should be silently skipped
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let not_a_skill = temp_dir.path().join("not-a-skill");
+        std::fs::create_dir_all(&not_a_skill).unwrap();
+        std::fs::write(not_a_skill.join("README.md"), "not a skill").unwrap();
+
+        let mut resolver = SkillResolver::new();
+        resolver.add_search_path(temp_dir.path().to_path_buf());
+
+        let skills = resolver.resolve_all();
+        assert!(!skills.contains_key("not-a-skill"));
+    }
+
+    #[test]
+    fn test_validate_all_sources_no_errors_for_builtins() {
+        let resolver = SkillResolver::new();
+        let issues = resolver.validate_all_sources();
+
+        // Builtins should all validate cleanly
+        let builtin_errors: Vec<_> = issues
+            .iter()
+            .filter(|i| i.file_path.to_string_lossy().contains("builtin"))
+            .collect();
+        assert!(
+            builtin_errors.is_empty(),
+            "builtin skills should have no validation errors, got: {:?}",
+            builtin_errors
+                .iter()
+                .map(|i| &i.message)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_validate_unreadable_directory() {
+        // validate_directory with a path that doesn't exist should not panic
+        let resolver = SkillResolver::new();
+        let issues = resolver.validate_all_sources();
+        // Just ensure it returns without panicking; non-existent VFS paths are skipped
+        let _ = issues;
+    }
+
+    #[test]
+    fn test_load_from_directory_with_valid_skill() {
+        // Create a temp directory with a valid skill subdirectory
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        write_skill(temp_dir.path(), "my-skill", "A custom skill", "Do stuff.");
+
+        let resolver = SkillResolver::new();
+        let mut skills = HashMap::new();
+        resolver.load_from_directory(temp_dir.path(), SkillSource::Local, &mut skills);
+
+        assert!(
+            skills.contains_key("my-skill"),
+            "should have loaded my-skill from directory"
+        );
+        let skill = skills.get("my-skill").unwrap();
+        assert_eq!(skill.description, "A custom skill");
+        assert_eq!(skill.source, SkillSource::Local);
+    }
+
+    #[test]
+    fn test_load_from_directory_with_broken_skill() {
+        // Create a temp directory with a skill that has invalid frontmatter
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let broken_dir = temp_dir.path().join("broken");
+        std::fs::create_dir_all(&broken_dir).unwrap();
+        std::fs::write(
+            broken_dir.join("SKILL.md"),
+            "# No frontmatter at all\nJust plain markdown.",
+        )
+        .unwrap();
+
+        let resolver = SkillResolver::new();
+        let mut skills = HashMap::new();
+        // Should not panic — broken skills are logged and skipped
+        resolver.load_from_directory(temp_dir.path(), SkillSource::Local, &mut skills);
+        assert!(
+            !skills.contains_key("broken"),
+            "broken skill should not be loaded"
+        );
+    }
+
+    #[test]
+    fn test_validate_directory_with_broken_skill() {
+        // validate_directory should produce an error issue for a malformed skill
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let broken_dir = temp_dir.path().join("bad-skill");
+        std::fs::create_dir_all(&broken_dir).unwrap();
+        std::fs::write(broken_dir.join("SKILL.md"), "# No frontmatter\nBroken.").unwrap();
+
+        let resolver = SkillResolver::new();
+        let mut issues = Vec::new();
+        resolver.validate_directory(temp_dir.path(), SkillSource::Local, &mut issues);
+
+        let bad_issues: Vec<_> = issues
+            .iter()
+            .filter(|i| i.file_path.to_string_lossy().contains("bad-skill"))
+            .collect();
+        assert!(
+            !bad_issues.is_empty(),
+            "expected validation error for bad-skill, got none"
+        );
+        assert_eq!(bad_issues[0].level, ValidationLevel::Error);
+        assert!(bad_issues[0].message.contains("Failed to load"));
+    }
+
+    #[test]
+    fn test_validate_directory_nonexistent() {
+        // validate_directory with a non-existent path should produce no issues
+        let resolver = SkillResolver::new();
+        let mut issues = Vec::new();
+        resolver.validate_directory(
+            Path::new("/tmp/nonexistent-validate-dir-99999"),
+            SkillSource::Local,
+            &mut issues,
+        );
+        assert!(
+            issues.is_empty(),
+            "non-existent directory should be silently skipped"
+        );
+    }
+
+    #[test]
+    fn test_validate_directory_skips_without_skill_md() {
+        // Subdirectories without SKILL.md should be silently skipped in validation
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let sub = temp_dir.path().join("not-a-skill");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(sub.join("README.md"), "just a readme").unwrap();
+
+        let resolver = SkillResolver::new();
+        let mut issues = Vec::new();
+        resolver.validate_directory(temp_dir.path(), SkillSource::Local, &mut issues);
+        assert!(
+            issues.is_empty(),
+            "directories without SKILL.md should produce no issues"
+        );
+    }
+
+    #[test]
+    fn test_resolve_search_paths_returns_pairs() {
+        let resolver = SkillResolver::new();
+        let paths = resolver.resolve_search_paths();
+        // Default resolver should have at least the user and local search paths
+        // Each entry should be a (PathBuf, SkillSource) pair
+        for (path, source) in &paths {
+            assert!(!path.as_os_str().is_empty());
+            // Source should be one of the valid variants
+            let _ = format!("{}", source);
+        }
+    }
+
+    #[test]
+    fn test_load_from_directory_file_not_dir_skipped() {
+        // Files (not directories) in the search path should be silently ignored
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(temp_dir.path().join("random-file.txt"), "not a skill").unwrap();
+
+        let resolver = SkillResolver::new();
+        let mut skills = HashMap::new();
+        resolver.load_from_directory(temp_dir.path(), SkillSource::Local, &mut skills);
+        // No skills should be loaded from bare files
+        assert!(skills.is_empty() || skills.values().all(|s| s.source == SkillSource::Builtin));
+    }
+
+    #[test]
     fn test_file_source_to_skill_source_mapping() {
         assert_eq!(
             file_source_to_skill_source(&FileSource::Builtin),

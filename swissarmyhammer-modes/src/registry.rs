@@ -225,6 +225,36 @@ mod tests {
     }
 
     #[test]
+    fn test_mode_registry_default_trait() {
+        let registry = ModeRegistry::default();
+        // Default creates a new empty registry (same as ::new())
+        assert_eq!(registry.count(), 0);
+        assert!(registry.list_ids().is_empty());
+    }
+
+    #[test]
+    fn test_mode_registry_get_nonexistent() {
+        let registry = ModeRegistry::new();
+        assert!(registry.get("nonexistent").is_none());
+    }
+
+    #[test]
+    fn test_mode_registry_contains_false() {
+        let registry = ModeRegistry::new();
+        assert!(!registry.contains("nonexistent"));
+    }
+
+    #[test]
+    fn test_mode_registry_add_overrides_existing() {
+        let mut registry = ModeRegistry::new();
+        registry.add(Mode::new("dup", "First", "First version", "Prompt 1"));
+        registry.add(Mode::new("dup", "Second", "Second version", "Prompt 2"));
+
+        assert_eq!(registry.count(), 1);
+        assert_eq!(registry.get("dup").unwrap().name(), "Second");
+    }
+
+    #[test]
     fn test_builtin_modes_are_embedded() {
         // Verify builtin_modes() function returns the expected modes
         let builtins = crate::builtin_modes();

@@ -269,4 +269,32 @@ mod severity_tests {
         ]);
         assert_eq!(dirty_wd.severity(), ErrorSeverity::Warning);
     }
+
+    #[test]
+    fn test_convert_io_error_function() {
+        let io_err = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "access denied");
+        let git_err = convert_io_error("write_file", io_err);
+        let msg = git_err.to_string();
+        assert!(
+            msg.contains("write_file"),
+            "Expected operation in message: {msg}"
+        );
+        assert!(
+            msg.contains("access denied"),
+            "Expected cause in message: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_git2_error_severity() {
+        let git2_err = git2::Error::from_str("test error");
+        let git_err = GitError::from_git2("test_op".to_string(), git2_err);
+        assert_eq!(git_err.severity(), ErrorSeverity::Error);
+    }
+
+    #[test]
+    fn test_from_string_convenience() {
+        let err = GitError::from_string("something went wrong".to_string());
+        assert_eq!(err.to_string(), "Git error: something went wrong");
+    }
 }

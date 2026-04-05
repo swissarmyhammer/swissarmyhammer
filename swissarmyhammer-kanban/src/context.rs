@@ -1274,4 +1274,231 @@ card_fields:
         let board = views.get_by_id("01JMVIEW0000000000BOARD0").unwrap();
         assert_eq!(board.name, "My Custom Board");
     }
+
+    // =========================================================================
+    // Activity logging tests
+    // =========================================================================
+
+    /// Helper to create a LogEntry for testing
+    fn make_log_entry(op: &str) -> LogEntry {
+        LogEntry::new(
+            op,
+            serde_json::json!({"test": true}),
+            serde_json::json!({"ok": true}),
+            None,
+            10,
+        )
+    }
+
+    #[tokio::test]
+    async fn test_append_task_log_writes_jsonl() {
+        let (_temp, ctx) = setup().await;
+        let task_id = TaskId::from_string("01TESTTASK00000000000000");
+        let entry = make_log_entry("add task");
+
+        ctx.append_task_log(&task_id, &entry).await.unwrap();
+
+        let path = ctx.task_log_path(&task_id);
+        let content = tokio::fs::read_to_string(&path).await.unwrap();
+        let parsed: LogEntry = serde_json::from_str(content.trim()).unwrap();
+        assert_eq!(parsed.op, "add task");
+    }
+
+    #[tokio::test]
+    async fn test_append_tag_log_writes_jsonl() {
+        let (_temp, ctx) = setup().await;
+        let tag_id = TagId::from_string("01TESTTAG000000000000000");
+        let entry = make_log_entry("add tag");
+
+        ctx.append_tag_log(&tag_id, &entry).await.unwrap();
+
+        let path = ctx.tag_log_path(&tag_id);
+        let content = tokio::fs::read_to_string(&path).await.unwrap();
+        let parsed: LogEntry = serde_json::from_str(content.trim()).unwrap();
+        assert_eq!(parsed.op, "add tag");
+    }
+
+    #[tokio::test]
+    async fn test_append_actor_log_writes_jsonl() {
+        let (_temp, ctx) = setup().await;
+        let actor_id = ActorId::from_string("test-actor");
+        let entry = make_log_entry("add actor");
+
+        ctx.append_actor_log(&actor_id, &entry).await.unwrap();
+
+        let path = ctx.actor_log_path(&actor_id);
+        let content = tokio::fs::read_to_string(&path).await.unwrap();
+        let parsed: LogEntry = serde_json::from_str(content.trim()).unwrap();
+        assert_eq!(parsed.op, "add actor");
+    }
+
+    #[tokio::test]
+    async fn test_append_column_log_writes_jsonl() {
+        let (_temp, ctx) = setup().await;
+        let col_id = ColumnId::from_string("todo");
+        let entry = make_log_entry("add column");
+
+        ctx.append_column_log(&col_id, &entry).await.unwrap();
+
+        let path = ctx.column_log_path(&col_id);
+        let content = tokio::fs::read_to_string(&path).await.unwrap();
+        let parsed: LogEntry = serde_json::from_str(content.trim()).unwrap();
+        assert_eq!(parsed.op, "add column");
+    }
+
+    #[tokio::test]
+    async fn test_append_swimlane_log_writes_jsonl() {
+        let (_temp, ctx) = setup().await;
+        let lane_id = SwimlaneId::from_string("backend");
+        let entry = make_log_entry("add swimlane");
+
+        ctx.append_swimlane_log(&lane_id, &entry).await.unwrap();
+
+        let path = ctx.swimlane_log_path(&lane_id);
+        let content = tokio::fs::read_to_string(&path).await.unwrap();
+        let parsed: LogEntry = serde_json::from_str(content.trim()).unwrap();
+        assert_eq!(parsed.op, "add swimlane");
+    }
+
+    #[tokio::test]
+    async fn test_append_board_log_writes_jsonl() {
+        let (_temp, ctx) = setup().await;
+        let entry = make_log_entry("update board");
+
+        ctx.append_board_log(&entry).await.unwrap();
+
+        let path = ctx.board_log_path();
+        let content = tokio::fs::read_to_string(&path).await.unwrap();
+        let parsed: LogEntry = serde_json::from_str(content.trim()).unwrap();
+        assert_eq!(parsed.op, "update board");
+    }
+
+    #[tokio::test]
+    async fn test_append_log_appends_multiple_entries() {
+        let (_temp, ctx) = setup().await;
+        let task_id = TaskId::from_string("01TESTTASK00000000000000");
+
+        let e1 = make_log_entry("add task");
+        let e2 = make_log_entry("update task");
+        ctx.append_task_log(&task_id, &e1).await.unwrap();
+        ctx.append_task_log(&task_id, &e2).await.unwrap();
+
+        let path = ctx.task_log_path(&task_id);
+        let content = tokio::fs::read_to_string(&path).await.unwrap();
+        let lines: Vec<&str> = content.lines().filter(|l| !l.is_empty()).collect();
+        assert_eq!(lines.len(), 2);
+
+        let p1: LogEntry = serde_json::from_str(lines[0]).unwrap();
+        let p2: LogEntry = serde_json::from_str(lines[1]).unwrap();
+        assert_eq!(p1.op, "add task");
+        assert_eq!(p2.op, "update task");
+    }
+
+    // =========================================================================
+    // Path helper tests for tag, actor, board log paths
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_tag_log_path() {
+        let (temp, ctx) = setup().await;
+        let root = temp.path().join(".kanban");
+        let tag_id = TagId::from_string("01TESTTAG000000000000000");
+        assert_eq!(
+            ctx.tag_log_path(&tag_id),
+            root.join("tags").join("01TESTTAG000000000000000.jsonl")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_actor_log_path() {
+        let (temp, ctx) = setup().await;
+        let root = temp.path().join(".kanban");
+        let actor_id = ActorId::from_string("alice");
+        assert_eq!(
+            ctx.actor_log_path(&actor_id),
+            root.join("actors").join("alice.jsonl")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_board_log_path() {
+        let (temp, ctx) = setup().await;
+        let root = temp.path().join(".kanban");
+        assert_eq!(ctx.board_log_path(), root.join("board.jsonl"));
+    }
+
+    // =========================================================================
+    // Entity path helper tests
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_task_path() {
+        let (temp, ctx) = setup().await;
+        let root = temp.path().join(".kanban");
+        let task_id = TaskId::from_string("01TESTTASK00000000000000");
+        assert_eq!(
+            ctx.task_path(&task_id),
+            root.join("tasks").join("01TESTTASK00000000000000.md")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_actor_path() {
+        let (temp, ctx) = setup().await;
+        let root = temp.path().join(".kanban");
+        let actor_id = ActorId::from_string("bob");
+        assert_eq!(
+            ctx.actor_path(&actor_id),
+            root.join("actors").join("bob.yaml")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_tag_path() {
+        let (temp, ctx) = setup().await;
+        let root = temp.path().join(".kanban");
+        let tag_id = TagId::from_string("01TESTTAG000000000000000");
+        assert_eq!(
+            ctx.tag_path(&tag_id),
+            root.join("tags").join("01TESTTAG000000000000000.yaml")
+        );
+    }
+
+    // =========================================================================
+    // find() tests
+    // =========================================================================
+
+    #[test]
+    fn test_find_discovers_kanban_dir() {
+        let temp = TempDir::new().unwrap();
+        let kanban_dir = temp.path().join(".kanban");
+        std::fs::create_dir_all(&kanban_dir).unwrap();
+
+        // find() from the temp root should locate .kanban
+        let ctx = KanbanContext::find(temp.path()).unwrap();
+        assert_eq!(ctx.root(), kanban_dir);
+    }
+
+    #[test]
+    fn test_find_discovers_from_subdirectory() {
+        let temp = TempDir::new().unwrap();
+        let kanban_dir = temp.path().join(".kanban");
+        std::fs::create_dir_all(&kanban_dir).unwrap();
+
+        // Create a nested subdirectory
+        let sub = temp.path().join("src").join("lib");
+        std::fs::create_dir_all(&sub).unwrap();
+
+        // find() from the nested dir should walk up and find .kanban
+        let ctx = KanbanContext::find(&sub).unwrap();
+        assert_eq!(ctx.root(), kanban_dir);
+    }
+
+    #[test]
+    fn test_find_returns_error_when_not_initialized() {
+        let temp = TempDir::new().unwrap();
+        // No .kanban directory created
+        let result = KanbanContext::find(temp.path());
+        assert!(matches!(result, Err(KanbanError::NotInitialized { .. })));
+    }
 }

@@ -1808,4 +1808,1461 @@ This is another prompt.
         assert!(result.contains("App: MyApp"));
         // USER environment variable should be available too
     }
+
+    #[test]
+    fn test_prompt_library_with_storage() {
+        use crate::storage::MemoryStorage;
+
+        // Test that with_storage constructs a library using the provided backend
+        let storage = Box::new(MemoryStorage::new());
+        let mut library = PromptLibrary::with_storage(storage);
+
+        let prompt = Prompt::new("test-storage", "Storage backend test");
+        library.add(prompt).unwrap();
+
+        assert!(library.get("test-storage").is_ok());
+        assert_eq!(library.list_names().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_prompt_library_add_and_remove() {
+        let mut library = PromptLibrary::new();
+
+        // Add a prompt
+        let prompt = Prompt::new("to-remove", "This will be removed");
+        library.add(prompt).unwrap();
+
+        assert!(library.get("to-remove").is_ok());
+        assert_eq!(library.list().unwrap().len(), 1);
+
+        // Remove the prompt
+        library.remove("to-remove").unwrap();
+        assert!(library.get("to-remove").is_err());
+        assert_eq!(library.list().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn test_prompt_library_add_replaces_existing() {
+        let mut library = PromptLibrary::new();
+
+        library
+            .add(Prompt::new("replaceable", "Original content"))
+            .unwrap();
+        library
+            .add(Prompt::new("replaceable", "Updated content"))
+            .unwrap();
+
+        let prompt = library.get("replaceable").unwrap();
+        assert_eq!(prompt.template, "Updated content");
+        assert_eq!(library.list().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_prompt_library_add_directory() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+
+        // Write a valid prompt file
+        let prompt_path = temp_dir.path().join("hello.md");
+        fs::write(
+            &prompt_path,
+            "---\ntitle: Hello Prompt\ndescription: A greeting prompt\n---\n\nHello {{name}}!",
+        )
+        .unwrap();
+
+        let mut library = PromptLibrary::new();
+        let count = library.add_directory(temp_dir.path()).unwrap();
+
+        assert_eq!(count, 1);
+        assert!(library.get("hello").is_ok());
+        let prompt = library.get("hello").unwrap();
+        assert_eq!(prompt.description, Some("A greeting prompt".to_string()));
+    }
+
+    #[test]
+    fn test_prompt_library_add_directory_missing_path() {
+        let mut library = PromptLibrary::new();
+        let result = library.add_directory("/nonexistent/path/to/prompts");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_prompt_library_search() {
+        let mut library = PromptLibrary::new();
+
+        library
+            .add(
+                Prompt::new("debug-js", "Debug JavaScript code")
+                    .with_description("Helps debug JavaScript errors"),
+            )
+            .unwrap();
+        library
+            .add(Prompt::new("format-py", "Format Python code"))
+            .unwrap();
+        library
+            .add(
+                Prompt::new("review-code", "Code review prompt")
+                    .with_description("Reviews any code"),
+            )
+            .unwrap();
+
+        // Search by name
+        let results = library.search("debug").unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "debug-js");
+
+        // Search by description
+        let results = library.search("JavaScript").unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "debug-js");
+
+        // Search by template content
+        let results = library.search("Python").unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "format-py");
+
+        // Search matching nothing
+        let results = library.search("zzz_no_match_zzz").unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_prompt_library_search_by_tag() {
+        let mut library = PromptLibrary::new();
+
+        library
+            .add(
+                Prompt::new("tagged-prompt", "Tagged content")
+                    .with_tags(vec!["rust".to_string(), "code".to_string()]),
+            )
+            .unwrap();
+        library
+            .add(Prompt::new("untagged-prompt", "Untagged content"))
+            .unwrap();
+
+        let results = library.search("rust").unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "tagged-prompt");
+    }
+
+    #[test]
+    fn test_prompt_library_list_filtered() {
+        use crate::prompt_filter::PromptFilter;
+        use crate::PromptSource;
+        use std::collections::HashMap;
+
+        let mut library = PromptLibrary::new();
+        library
+            .add(Prompt::new("code-review", "Review code").with_category("development"))
+            .unwrap();
+        library
+            .add(Prompt::new("write-essay", "Write essay").with_category("writing"))
+            .unwrap();
+        library
+            .add(Prompt::new("debug-rust", "Debug Rust code").with_category("development"))
+            .unwrap();
+
+        let filter = PromptFilter::new().with_category("development");
+        let sources: HashMap<String, PromptSource> = HashMap::new();
+        let results = library.list_filtered(&filter, &sources).unwrap();
+
+        assert_eq!(results.len(), 2);
+        let names: Vec<&str> = results.iter().map(|p| p.name.as_str()).collect();
+        assert!(names.contains(&"code-review"));
+        assert!(names.contains(&"debug-rust"));
+        assert!(!names.contains(&"write-essay"));
+    }
+
+    #[test]
+    fn test_prompt_library_render_text() {
+        let mut library = PromptLibrary::new();
+        library
+            .add(Prompt::new("greeting", "Hello {{name}}!"))
+            .unwrap();
+
+        let mut context = TemplateContext::new();
+        context.set("name".to_string(), serde_json::json!("World"));
+
+        let result = library.render_text("Rendered: {{name}}", &context).unwrap();
+        assert_eq!(result, "Rendered: World");
+    }
+
+    #[test]
+    fn test_prompt_loader_load_file() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("my_prompt.md");
+        fs::write(
+            &file_path,
+            "---\ntitle: My Prompt\ndescription: Test prompt\ncategory: test\ntags:\n  - example\n---\n\nThis is {{subject}}.",
+        )
+        .unwrap();
+
+        let loader = PromptLoader::new();
+        let prompt = loader.load_file(&file_path).unwrap();
+
+        assert_eq!(prompt.name, "my_prompt");
+        assert_eq!(prompt.description, Some("Test prompt".to_string()));
+        assert_eq!(prompt.category, Some("test".to_string()));
+        assert_eq!(prompt.tags, vec!["example"]);
+        assert!(prompt.template.contains("{{subject}}"));
+    }
+
+    #[test]
+    fn test_prompt_loader_load_from_string_with_frontmatter() {
+        let content = r#"---
+title: String Prompt
+description: Loaded from a string
+category: test
+tags:
+  - tag1
+  - tag2
+parameters:
+  - name: topic
+    description: The topic to discuss
+    required: true
+---
+
+Discuss {{topic}} in detail."#;
+
+        let loader = PromptLoader::new();
+        let prompt = loader.load_from_string("string-prompt", content).unwrap();
+
+        assert_eq!(prompt.name, "string-prompt");
+        assert_eq!(prompt.description, Some("Loaded from a string".to_string()));
+        assert_eq!(prompt.category, Some("test".to_string()));
+        assert_eq!(prompt.tags, vec!["tag1", "tag2"]);
+        assert_eq!(prompt.parameters.len(), 1);
+        assert_eq!(prompt.parameters[0].name, "topic");
+        assert!(prompt.parameters[0].required);
+        assert!(prompt.template.contains("{{topic}}"));
+    }
+
+    #[test]
+    fn test_prompt_loader_load_from_string_no_frontmatter() {
+        let content = "Just template content with {{variable}}";
+        let loader = PromptLoader::new();
+        let prompt = loader.load_from_string("simple-prompt", content).unwrap();
+
+        assert_eq!(prompt.name, "simple-prompt");
+        // No frontmatter means it will be treated as a partial
+        assert_eq!(
+            prompt.description,
+            Some("Partial template for reuse in other prompts".to_string())
+        );
+        assert!(prompt.template.contains("{{variable}}"));
+    }
+
+    #[test]
+    fn test_prompt_loader_load_from_string_with_legacy_arguments() {
+        let content = r#"---
+title: Legacy Prompt
+description: Uses legacy arguments field
+arguments:
+  - name: arg1
+    description: First argument
+    required: false
+---
+
+Use {{arg1}}."#;
+
+        let loader = PromptLoader::new();
+        let prompt = loader.load_from_string("legacy-prompt", content).unwrap();
+
+        assert_eq!(prompt.parameters.len(), 1);
+        assert_eq!(prompt.parameters[0].name, "arg1");
+        assert!(!prompt.parameters[0].required);
+    }
+
+    #[test]
+    fn test_prompt_loader_load_from_string_parameter_with_default() {
+        let content = r#"---
+title: Default Param Prompt
+description: Test default param
+parameters:
+  - name: greeting
+    description: The greeting
+    required: false
+    default: "Hello"
+---
+
+{{greeting}} World!"#;
+
+        let loader = PromptLoader::new();
+        let prompt = loader.load_from_string("default-param", content).unwrap();
+
+        assert_eq!(prompt.parameters.len(), 1);
+        assert_eq!(prompt.parameters[0].name, "greeting");
+        assert!(prompt.parameters[0].default.is_some());
+    }
+
+    #[test]
+    fn test_prompt_loader_load_from_string_with_partial_marker() {
+        let content = "{% partial %}\nThis is a partial template with {{slot}}.";
+        let loader = PromptLoader::new();
+        let prompt = loader.load_from_string("_partial", content).unwrap();
+
+        assert_eq!(
+            prompt.description,
+            Some("Partial template for reuse in other prompts".to_string())
+        );
+    }
+
+    // --- Additional coverage tests below ---
+
+    #[test]
+    fn test_prompt_is_partial_template_by_metadata() {
+        // Test the metadata.partial = true path in is_partial_template
+        let mut prompt = Prompt::new("test", "Regular template content");
+        prompt
+            .metadata
+            .insert("partial".to_string(), serde_json::Value::Bool(true));
+        assert!(prompt.is_partial_template());
+    }
+
+    #[test]
+    fn test_prompt_is_partial_template_by_marker() {
+        let prompt = Prompt::new("test", "{% partial %}\nPartial content");
+        assert!(prompt.is_partial_template());
+    }
+
+    #[test]
+    fn test_prompt_is_partial_template_false_for_regular() {
+        let prompt = Prompt::new("test", "Regular template {{var}}");
+        assert!(!prompt.is_partial_template());
+    }
+
+    #[test]
+    fn test_prompt_is_partial_template_metadata_false() {
+        // partial: false should not count
+        let mut prompt = Prompt::new("test", "Regular template {{var}}");
+        prompt
+            .metadata
+            .insert("partial".to_string(), serde_json::Value::Bool(false));
+        assert!(!prompt.is_partial_template());
+    }
+
+    #[test]
+    fn test_prompt_is_partial_template_metadata_non_bool() {
+        // partial: "yes" (not a bool) should not count
+        let mut prompt = Prompt::new("test", "Regular template {{var}}");
+        prompt.metadata.insert(
+            "partial".to_string(),
+            serde_json::Value::String("yes".to_string()),
+        );
+        assert!(!prompt.is_partial_template());
+    }
+
+    #[test]
+    fn test_prompt_validate_missing_title() {
+        use swissarmyhammer_common::Validatable;
+
+        let prompt = Prompt::new("test", "Hello {{name}}!")
+            .with_description("A test prompt")
+            .add_parameter(
+                Parameter::new("name", "Name to greet", ParameterType::String).required(true),
+            );
+
+        let issues = prompt.validate(None);
+        // Should have an error for missing title
+        assert!(
+            issues.iter().any(|i| i.message.contains("title")),
+            "Should report missing title, got: {:?}",
+            issues
+        );
+    }
+
+    #[test]
+    fn test_prompt_validate_missing_description() {
+        use swissarmyhammer_common::Validatable;
+
+        let mut prompt = Prompt::new("test", "Hello {{name}}!").add_parameter(
+            Parameter::new("name", "Name to greet", ParameterType::String).required(true),
+        );
+        prompt.metadata.insert(
+            "title".to_string(),
+            serde_json::Value::String("Test Title".to_string()),
+        );
+
+        let issues = prompt.validate(None);
+        // Should have an error for missing description
+        assert!(
+            issues.iter().any(|i| i.message.contains("description")),
+            "Should report missing description, got: {:?}",
+            issues
+        );
+    }
+
+    #[test]
+    fn test_prompt_validate_valid_prompt() {
+        use swissarmyhammer_common::Validatable;
+
+        let mut prompt = Prompt::new("test", "Hello {{name}}!")
+            .with_description("A test prompt")
+            .add_parameter(
+                Parameter::new("name", "Name to greet", ParameterType::String).required(true),
+            );
+        prompt.metadata.insert(
+            "title".to_string(),
+            serde_json::Value::String("Test Title".to_string()),
+        );
+
+        let issues = prompt.validate(Some(Path::new("test.md")));
+        // Should have no errors for required fields (may have variable warnings)
+        let errors: Vec<_> = issues
+            .iter()
+            .filter(|i| i.level == ValidationLevel::Error)
+            .collect();
+        assert!(
+            errors.is_empty(),
+            "Should have no validation errors, got: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn test_prompt_validate_partial_skips_validation() {
+        use swissarmyhammer_common::Validatable;
+
+        // Partial by name containing "partial"
+        let prompt = Prompt::new("my-partial", "{{undefined_var}}");
+        let issues = prompt.validate(None);
+        assert!(
+            issues.is_empty(),
+            "Partials should skip validation, got: {:?}",
+            issues
+        );
+    }
+
+    #[test]
+    fn test_prompt_validate_partial_by_underscore() {
+        use swissarmyhammer_common::Validatable;
+
+        let prompt = Prompt::new("_header", "{{var}}");
+        let issues = prompt.validate(None);
+        assert!(
+            issues.is_empty(),
+            "Underscore-prefixed prompts should skip validation"
+        );
+    }
+
+    #[test]
+    fn test_prompt_validate_partial_by_marker() {
+        use swissarmyhammer_common::Validatable;
+
+        let prompt = Prompt::new("test", "{% partial %}\n{{var}}");
+        let issues = prompt.validate(None);
+        assert!(
+            issues.is_empty(),
+            "Partial marker prompts should skip validation"
+        );
+    }
+
+    #[test]
+    fn test_prompt_validate_partial_by_description() {
+        use swissarmyhammer_common::Validatable;
+
+        let prompt = Prompt::new("test", "{{var}}")
+            .with_description("Partial template for reuse in other prompts");
+        let issues = prompt.validate(None);
+        assert!(
+            issues.is_empty(),
+            "Partial by description should skip validation"
+        );
+    }
+
+    #[test]
+    fn test_prompt_validate_undefined_template_variable() {
+        use swissarmyhammer_common::Validatable;
+
+        let mut prompt =
+            Prompt::new("test", "Hello {{undefined_var}}!").with_description("A test prompt");
+        prompt.metadata.insert(
+            "title".to_string(),
+            serde_json::Value::String("Test".to_string()),
+        );
+
+        let issues = prompt.validate(None);
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.message.contains("Undefined template variable")
+                    && i.message.contains("undefined_var")),
+            "Should report undefined variable, got: {:?}",
+            issues
+        );
+    }
+
+    #[test]
+    fn test_prompt_validate_unused_parameter_warning() {
+        use swissarmyhammer_common::Validatable;
+
+        let mut prompt = Prompt::new("test", "No variables here.")
+            .with_description("A test prompt")
+            .add_parameter(
+                Parameter::new("unused_param", "Not used", ParameterType::String).required(false),
+            );
+        prompt.metadata.insert(
+            "title".to_string(),
+            serde_json::Value::String("Test".to_string()),
+        );
+
+        let issues = prompt.validate(None);
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.message.contains("Unused parameter")
+                    && i.message.contains("unused_param")),
+            "Should warn about unused parameter, got: {:?}",
+            issues
+        );
+    }
+
+    #[test]
+    fn test_prompt_validate_variables_but_no_parameters() {
+        use swissarmyhammer_common::Validatable;
+
+        let mut prompt = Prompt::new("test", "Hello {{name}}!").with_description("A test prompt");
+        prompt.metadata.insert(
+            "title".to_string(),
+            serde_json::Value::String("Test".to_string()),
+        );
+
+        let issues = prompt.validate(None);
+        assert!(
+            issues.iter().any(|i| i
+                .message
+                .contains("Template uses variables but no parameters are defined")),
+            "Should warn about variables without parameters, got: {:?}",
+            issues
+        );
+    }
+
+    #[test]
+    fn test_prompt_validate_template_with_filters() {
+        use swissarmyhammer_common::Validatable;
+
+        let mut prompt = Prompt::new("test", "Hello {{ name | upcase }}!")
+            .with_description("A test prompt")
+            .add_parameter(Parameter::new("name", "Name", ParameterType::String).required(true));
+        prompt.metadata.insert(
+            "title".to_string(),
+            serde_json::Value::String("Test".to_string()),
+        );
+
+        let issues = prompt.validate(None);
+        let errors: Vec<_> = issues
+            .iter()
+            .filter(|i| i.level == ValidationLevel::Error)
+            .collect();
+        assert!(
+            errors.is_empty(),
+            "Variable with filter should be recognized, got: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn test_prompt_validate_template_with_for_loop() {
+        use swissarmyhammer_common::Validatable;
+
+        let mut prompt = Prompt::new("test", "{% for item in items %}{{item}}{% endfor %}")
+            .with_description("A test prompt")
+            .add_parameter(
+                Parameter::new("items", "List of items", ParameterType::String).required(true),
+            );
+        prompt.metadata.insert(
+            "title".to_string(),
+            serde_json::Value::String("Test".to_string()),
+        );
+
+        let issues = prompt.validate(None);
+        let errors: Vec<_> = issues
+            .iter()
+            .filter(|i| i.level == ValidationLevel::Error)
+            .collect();
+        assert!(
+            errors.is_empty(),
+            "For loop variable should be recognized, got: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn test_prompt_validate_template_with_assign() {
+        use swissarmyhammer_common::Validatable;
+
+        let mut prompt = Prompt::new("test", "{% assign greeting = name %}Hello {{greeting}}!")
+            .with_description("A test prompt")
+            .add_parameter(Parameter::new("name", "Name", ParameterType::String).required(true));
+        prompt.metadata.insert(
+            "title".to_string(),
+            serde_json::Value::String("Test".to_string()),
+        );
+
+        let issues = prompt.validate(None);
+        // greeting should be recognized as assigned, not undefined
+        let errors: Vec<_> = issues
+            .iter()
+            .filter(|i| {
+                i.level == ValidationLevel::Error
+                    && i.message.contains("Undefined")
+                    && i.message.contains("greeting")
+            })
+            .collect();
+        assert!(
+            errors.is_empty(),
+            "Assigned variables should not be flagged as undefined, got: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn test_prompt_validate_template_with_capture() {
+        use swissarmyhammer_common::Validatable;
+
+        let mut prompt = Prompt::new(
+            "test",
+            "{% capture output %}Hello{% endcapture %}{{output}}",
+        )
+        .with_description("A test prompt");
+        prompt.metadata.insert(
+            "title".to_string(),
+            serde_json::Value::String("Test".to_string()),
+        );
+
+        let issues = prompt.validate(None);
+        let errors: Vec<_> = issues
+            .iter()
+            .filter(|i| {
+                i.level == ValidationLevel::Error
+                    && i.message.contains("Undefined")
+                    && i.message.contains("output")
+            })
+            .collect();
+        assert!(
+            errors.is_empty(),
+            "Captured variables should not be flagged as undefined, got: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn test_prompt_validate_template_with_raw_blocks() {
+        use swissarmyhammer_common::Validatable;
+
+        let mut prompt = Prompt::new(
+            "test",
+            "{% raw %}{{not_a_variable}}{% endraw %} Regular text.",
+        )
+        .with_description("A test prompt");
+        prompt.metadata.insert(
+            "title".to_string(),
+            serde_json::Value::String("Test".to_string()),
+        );
+
+        let issues = prompt.validate(None);
+        // Variables inside raw blocks should not be detected
+        let errors: Vec<_> = issues
+            .iter()
+            .filter(|i| i.level == ValidationLevel::Error && i.message.contains("not_a_variable"))
+            .collect();
+        assert!(
+            errors.is_empty(),
+            "Variables in raw blocks should be ignored, got: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn test_prompt_validate_template_with_conditionals() {
+        use swissarmyhammer_common::Validatable;
+
+        let mut prompt = Prompt::new(
+            "test",
+            r#"{% if mode == "debug" %}Debug{% elsif mode == "release" %}Release{% endif %}"#,
+        )
+        .with_description("A test prompt")
+        .add_parameter(Parameter::new("mode", "Build mode", ParameterType::String).required(true));
+        prompt.metadata.insert(
+            "title".to_string(),
+            serde_json::Value::String("Test".to_string()),
+        );
+
+        let issues = prompt.validate(None);
+        let errors: Vec<_> = issues
+            .iter()
+            .filter(|i| i.level == ValidationLevel::Error)
+            .collect();
+        assert!(
+            errors.is_empty(),
+            "Conditional variables should be recognized, got: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn test_prompt_validate_template_with_unless() {
+        use swissarmyhammer_common::Validatable;
+
+        let mut prompt = Prompt::new("test", "{% unless hidden %}Visible{% endunless %}")
+            .with_description("A test prompt")
+            .add_parameter(
+                Parameter::new("hidden", "Hide flag", ParameterType::String).required(true),
+            );
+        prompt.metadata.insert(
+            "title".to_string(),
+            serde_json::Value::String("Test".to_string()),
+        );
+
+        let issues = prompt.validate(None);
+        let errors: Vec<_> = issues
+            .iter()
+            .filter(|i| i.level == ValidationLevel::Error)
+            .collect();
+        assert!(
+            errors.is_empty(),
+            "Unless variables should be recognized, got: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn test_prompt_validate_template_with_case() {
+        use swissarmyhammer_common::Validatable;
+
+        let mut prompt = Prompt::new(
+            "test",
+            r#"{% case level %}{% when "high" %}High{% when "low" %}Low{% endcase %}"#,
+        )
+        .with_description("A test prompt")
+        .add_parameter(Parameter::new("level", "Level", ParameterType::String).required(true));
+        prompt.metadata.insert(
+            "title".to_string(),
+            serde_json::Value::String("Test".to_string()),
+        );
+
+        let issues = prompt.validate(None);
+        let errors: Vec<_> = issues
+            .iter()
+            .filter(|i| i.level == ValidationLevel::Error)
+            .collect();
+        assert!(
+            errors.is_empty(),
+            "Case variables should be recognized, got: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn test_prompt_validate_template_with_object_property() {
+        use swissarmyhammer_common::Validatable;
+
+        let mut prompt = Prompt::new("test", "Hello {{user.name}}!")
+            .with_description("A test prompt")
+            .add_parameter(
+                Parameter::new("user", "User object", ParameterType::String).required(true),
+            );
+        prompt.metadata.insert(
+            "title".to_string(),
+            serde_json::Value::String("Test".to_string()),
+        );
+
+        let issues = prompt.validate(None);
+        let errors: Vec<_> = issues
+            .iter()
+            .filter(|i| i.level == ValidationLevel::Error)
+            .collect();
+        assert!(
+            errors.is_empty(),
+            "Object property access should be recognized, got: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn test_prompt_validate_template_with_array_access() {
+        use swissarmyhammer_common::Validatable;
+
+        let mut prompt = Prompt::new("test", "First: {{items[0]}}")
+            .with_description("A test prompt")
+            .add_parameter(
+                Parameter::new("items", "Items array", ParameterType::String).required(true),
+            );
+        prompt.metadata.insert(
+            "title".to_string(),
+            serde_json::Value::String("Test".to_string()),
+        );
+
+        let issues = prompt.validate(None);
+        let errors: Vec<_> = issues
+            .iter()
+            .filter(|i| i.level == ValidationLevel::Error)
+            .collect();
+        assert!(
+            errors.is_empty(),
+            "Array access variables should be recognized, got: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn test_prompt_validate_builtin_vars_skipped() {
+        use swissarmyhammer_common::Validatable;
+
+        let mut prompt = Prompt::new(
+            "test",
+            "{% for item in items %}{{forloop.index}}: {{item}}{% endfor %} Env: {{env.HOME}}",
+        )
+        .with_description("A test prompt")
+        .add_parameter(Parameter::new("items", "Items", ParameterType::String).required(true));
+        prompt.metadata.insert(
+            "title".to_string(),
+            serde_json::Value::String("Test".to_string()),
+        );
+
+        let issues = prompt.validate(None);
+        // forloop and env should not be flagged as undefined
+        let errors: Vec<_> = issues
+            .iter()
+            .filter(|i| {
+                i.level == ValidationLevel::Error
+                    && (i.message.contains("forloop") || i.message.contains("'env'"))
+            })
+            .collect();
+        assert!(
+            errors.is_empty(),
+            "Builtin variables should be skipped, got: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn test_prompt_validate_empty_title_is_error() {
+        use swissarmyhammer_common::Validatable;
+
+        let mut prompt = Prompt::new("test", "Content").with_description("A test prompt");
+        prompt.metadata.insert(
+            "title".to_string(),
+            serde_json::Value::String("".to_string()),
+        );
+
+        let issues = prompt.validate(None);
+        assert!(
+            issues.iter().any(|i| i.message.contains("title")),
+            "Empty title should be an error, got: {:?}",
+            issues
+        );
+    }
+
+    #[test]
+    fn test_prompt_validate_empty_description_is_error() {
+        use swissarmyhammer_common::Validatable;
+
+        let mut prompt = Prompt::new("test", "Content").with_description("");
+        prompt.metadata.insert(
+            "title".to_string(),
+            serde_json::Value::String("Title".to_string()),
+        );
+
+        let issues = prompt.validate(None);
+        assert!(
+            issues.iter().any(|i| i.message.contains("description")),
+            "Empty description should be an error, got: {:?}",
+            issues
+        );
+    }
+
+    #[test]
+    fn test_prompt_validate_title_non_string_is_error() {
+        use swissarmyhammer_common::Validatable;
+
+        let mut prompt = Prompt::new("test", "Content").with_description("Description");
+        prompt
+            .metadata
+            .insert("title".to_string(), serde_json::Value::Number(42.into()));
+
+        let issues = prompt.validate(None);
+        assert!(
+            issues.iter().any(|i| i.message.contains("title")),
+            "Non-string title should be an error, got: {:?}",
+            issues
+        );
+    }
+
+    #[test]
+    fn test_prompt_library_debug_impl() {
+        let library = PromptLibrary::new();
+        let debug_str = format!("{:?}", library);
+        assert!(debug_str.contains("PromptLibrary"));
+        assert!(debug_str.contains("StorageBackend"));
+    }
+
+    #[test]
+    fn test_prompt_library_default() {
+        let library = PromptLibrary::default();
+        assert!(library.list().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_prompt_library_get_not_found() {
+        let library = PromptLibrary::new();
+        let result = library.get("nonexistent");
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("nonexistent"),
+            "Error should mention the prompt name"
+        );
+    }
+
+    #[test]
+    fn test_prompt_library_render_with_defaults() {
+        // Test that parameter defaults are applied during render
+        let mut library = PromptLibrary::new();
+        let prompt = Prompt::new("test", "Hello {{name}}!").add_parameter(
+            Parameter::new("name", "Name", ParameterType::String)
+                .with_default(serde_json::Value::String("World".to_string())),
+        );
+        library.add(prompt).unwrap();
+
+        let context = TemplateContext::new();
+        let result = library.render("test", &context).unwrap();
+        assert_eq!(result, "Hello World!");
+    }
+
+    #[test]
+    fn test_prompt_library_render_nonexistent() {
+        let library = PromptLibrary::new();
+        let context = TemplateContext::new();
+        let result = library.render("nonexistent", &context);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_prompt_library_template_content_provider() {
+        use swissarmyhammer_templating::partials::TemplateContentProvider;
+
+        let mut library = PromptLibrary::new();
+        library
+            .add(Prompt::new("test-prompt", "Template body"))
+            .unwrap();
+
+        assert_eq!(
+            library.get_template_content("test-prompt"),
+            Some("Template body".to_string())
+        );
+        assert_eq!(library.get_template_content("nonexistent"), None);
+
+        let names = library.list_template_names();
+        assert!(names.contains(&"test-prompt".to_string()));
+    }
+
+    #[test]
+    fn test_prompt_loader_default() {
+        let loader = PromptLoader::default();
+        // Should have extensions configured
+        let path = Path::new("test.md");
+        assert!(loader.is_prompt_file(path));
+    }
+
+    #[test]
+    fn test_prompt_loader_is_prompt_file_extensions() {
+        let loader = PromptLoader::new();
+
+        assert!(loader.is_prompt_file(Path::new("test.md")));
+        assert!(loader.is_prompt_file(Path::new("test.md.liquid")));
+        assert!(loader.is_prompt_file(Path::new("test.liquid.md")));
+        assert!(loader.is_prompt_file(Path::new("test.markdown")));
+        assert!(loader.is_prompt_file(Path::new("test.liquid")));
+        assert!(loader.is_prompt_file(Path::new("test.liquid.markdown")));
+        assert!(loader.is_prompt_file(Path::new("test.markdown.liquid")));
+
+        assert!(!loader.is_prompt_file(Path::new("test.txt")));
+        assert!(!loader.is_prompt_file(Path::new("test.rs")));
+        assert!(!loader.is_prompt_file(Path::new("test.yaml")));
+    }
+
+    #[test]
+    fn test_prompt_loader_extract_prompt_name_fallback() {
+        let loader = PromptLoader::new();
+
+        // Fallback to file_stem when no matching extension
+        let name = loader.extract_prompt_name(Path::new("test.txt"));
+        assert_eq!(name, "test");
+    }
+
+    #[test]
+    fn test_prompt_loader_extract_prompt_name_compound_extensions() {
+        let loader = PromptLoader::new();
+
+        assert_eq!(
+            loader.extract_prompt_name(Path::new("my-prompt.liquid.md")),
+            "my-prompt"
+        );
+        assert_eq!(
+            loader.extract_prompt_name(Path::new("my-prompt.md.liquid")),
+            "my-prompt"
+        );
+        assert_eq!(
+            loader.extract_prompt_name(Path::new("my-prompt.markdown.liquid")),
+            "my-prompt"
+        );
+    }
+
+    #[test]
+    fn test_prompt_loader_extract_prompt_name_with_base() {
+        let loader = PromptLoader::new();
+
+        // Nested path should include parent dirs
+        let name = loader
+            .extract_prompt_name_with_base(Path::new("/base/subdir/prompt.md"), Path::new("/base"));
+        assert_eq!(name, "subdir/prompt");
+
+        // Same dir should just be the filename
+        let name =
+            loader.extract_prompt_name_with_base(Path::new("/base/prompt.md"), Path::new("/base"));
+        assert_eq!(name, "prompt");
+    }
+
+    #[test]
+    fn test_prompt_loader_is_likely_partial_by_name() {
+        // Name contains "partial"
+        assert!(PromptLoader::is_likely_partial(
+            "my-partial-template",
+            "---\ntitle: Test\n---\nContent"
+        ));
+
+        // Name starts with underscore
+        assert!(PromptLoader::is_likely_partial(
+            "_header",
+            "---\ntitle: Test\n---\nContent"
+        ));
+    }
+
+    #[test]
+    fn test_prompt_loader_is_likely_partial_no_frontmatter() {
+        assert!(PromptLoader::is_likely_partial(
+            "regular",
+            "No frontmatter here"
+        ));
+    }
+
+    #[test]
+    fn test_prompt_loader_is_likely_partial_short_content() {
+        // Short content with front matter but no headers
+        let content = "---\ntitle: Test\n---\nOne line\nTwo lines";
+        assert!(PromptLoader::is_likely_partial("regular", content));
+    }
+
+    #[test]
+    fn test_prompt_loader_is_likely_partial_false_for_full_prompt() {
+        // Long content with headers should not be partial
+        let content =
+            "---\ntitle: Test\n---\n# Heading\nLine 1\nLine 2\nLine 3\nLine 4\nLine 5\nLine 6";
+        assert!(!PromptLoader::is_likely_partial("regular", content));
+    }
+
+    #[test]
+    fn test_prompt_loader_load_from_string_with_choices() {
+        let content = r#"---
+title: Choice Prompt
+description: Test choices
+parameters:
+  - name: language
+    description: Programming language
+    required: true
+    type: string
+    choices:
+      - rust
+      - python
+      - javascript
+---
+
+Write {{language}} code."#;
+
+        let loader = PromptLoader::new();
+        let prompt = loader.load_from_string("choice-prompt", content).unwrap();
+
+        assert_eq!(prompt.parameters.len(), 1);
+        assert_eq!(prompt.parameters[0].name, "language");
+        assert!(prompt.parameters[0].choices.is_some());
+        let choices = prompt.parameters[0].choices.as_ref().unwrap();
+        assert_eq!(choices.len(), 3);
+        assert!(choices.contains(&"rust".to_string()));
+        assert!(choices.contains(&"python".to_string()));
+        assert!(choices.contains(&"javascript".to_string()));
+    }
+
+    #[test]
+    fn test_prompt_loader_load_from_string_preserves_all_metadata() {
+        let content = r#"---
+title: Metadata Prompt
+description: Test metadata preservation
+hidden: true
+custom_field: value
+---
+
+Template content."#;
+
+        let loader = PromptLoader::new();
+        let prompt = loader.load_from_string("metadata-prompt", content).unwrap();
+
+        // All metadata should be in the metadata map
+        assert_eq!(
+            prompt.metadata.get("title").and_then(|v| v.as_str()),
+            Some("Metadata Prompt")
+        );
+        assert_eq!(
+            prompt.metadata.get("hidden").and_then(|v| v.as_bool()),
+            Some(true)
+        );
+        assert_eq!(
+            prompt.metadata.get("custom_field").and_then(|v| v.as_str()),
+            Some("value")
+        );
+    }
+
+    #[test]
+    fn test_prompt_loader_load_from_string_with_type() {
+        let content = r#"---
+title: Typed Params
+description: Test parameter types
+parameters:
+  - name: count
+    description: Number of items
+    type: number
+  - name: verbose
+    description: Enable verbose
+    type: boolean
+---
+
+Count: {{count}}, Verbose: {{verbose}}."#;
+
+        let loader = PromptLoader::new();
+        let prompt = loader.load_from_string("typed-params", content).unwrap();
+
+        assert_eq!(prompt.parameters.len(), 2);
+        assert_eq!(prompt.parameters[0].parameter_type, ParameterType::Number);
+        assert_eq!(prompt.parameters[1].parameter_type, ParameterType::Boolean);
+    }
+
+    #[test]
+    fn test_prompt_loader_load_file_with_base_sets_source() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("test.md");
+        fs::write(
+            &file_path,
+            "---\ntitle: Test\ndescription: A test\n---\nContent",
+        )
+        .unwrap();
+
+        let loader = PromptLoader::new();
+        let prompt = loader.load_file(&file_path).unwrap();
+
+        assert!(
+            prompt.source.is_some(),
+            "Source path should be set for file-loaded prompts"
+        );
+        assert_eq!(prompt.source.unwrap(), file_path);
+    }
+
+    #[test]
+    fn test_prompt_loader_load_directory_nonexistent() {
+        let loader = PromptLoader::new();
+        let result = loader.load_directory("/nonexistent/path");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_prompt_loader_load_directory_with_nested_prompts() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let sub_dir = temp_dir.path().join("subdir");
+        fs::create_dir_all(&sub_dir).unwrap();
+
+        let file1 = temp_dir.path().join("root.md");
+        fs::write(
+            &file1,
+            "---\ntitle: Root\ndescription: Root prompt\n---\nRoot content",
+        )
+        .unwrap();
+
+        let file2 = sub_dir.join("nested.md");
+        fs::write(
+            &file2,
+            "---\ntitle: Nested\ndescription: Nested prompt\n---\nNested content",
+        )
+        .unwrap();
+
+        let loader = PromptLoader::new();
+        let prompts = loader.load_directory(temp_dir.path()).unwrap();
+
+        assert_eq!(prompts.len(), 2);
+        let names: Vec<_> = prompts.iter().map(|p| p.name.as_str()).collect();
+        assert!(names.contains(&"root"));
+        assert!(names.contains(&"subdir/nested"));
+    }
+
+    #[test]
+    fn test_prompt_loader_load_directory_skips_non_prompt_files() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+
+        // Write non-prompt files
+        fs::write(temp_dir.path().join("readme.txt"), "Not a prompt").unwrap();
+        fs::write(temp_dir.path().join("config.yaml"), "key: value").unwrap();
+        fs::write(temp_dir.path().join("code.rs"), "fn main() {}").unwrap();
+
+        // Write one prompt file
+        fs::write(
+            temp_dir.path().join("actual.md"),
+            "---\ntitle: Actual\ndescription: A prompt\n---\nPrompt content",
+        )
+        .unwrap();
+
+        let loader = PromptLoader::new();
+        let prompts = loader.load_directory(temp_dir.path()).unwrap();
+
+        assert_eq!(prompts.len(), 1);
+        assert_eq!(prompts[0].name, "actual");
+    }
+
+    #[test]
+    fn test_prompt_loader_load_file_with_parameters_in_frontmatter() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("parameterized.md");
+
+        let content = r#"---
+title: Parameterized Prompt
+description: Prompt with multiple parameter features
+category: testing
+tags:
+  - test
+  - params
+parameters:
+  - name: input
+    description: Main input
+    required: true
+    type: string
+  - name: mode
+    description: Operation mode
+    required: false
+    default: "normal"
+    choices:
+      - normal
+      - verbose
+      - quiet
+---
+
+Process {{input}} in {{mode}} mode."#;
+
+        fs::write(&file_path, content).unwrap();
+
+        let loader = PromptLoader::new();
+        let prompt = loader.load_file(&file_path).unwrap();
+
+        assert_eq!(prompt.name, "parameterized");
+        assert_eq!(
+            prompt.description,
+            Some("Prompt with multiple parameter features".to_string())
+        );
+        assert_eq!(prompt.category, Some("testing".to_string()));
+        assert_eq!(prompt.tags, vec!["test", "params"]);
+        assert_eq!(prompt.parameters.len(), 2);
+
+        // Check first parameter
+        assert_eq!(prompt.parameters[0].name, "input");
+        assert!(prompt.parameters[0].required);
+
+        // Check second parameter with default and choices
+        assert_eq!(prompt.parameters[1].name, "mode");
+        assert!(!prompt.parameters[1].required);
+        assert!(prompt.parameters[1].default.is_some());
+        assert!(prompt.parameters[1].choices.is_some());
+        let choices = prompt.parameters[1].choices.as_ref().unwrap();
+        assert_eq!(choices.len(), 3);
+    }
+
+    #[test]
+    fn test_prompt_library_render_text_with_partials() {
+        let mut library = PromptLibrary::new();
+        library
+            .add(Prompt::new("_helper", "HELPER_CONTENT"))
+            .unwrap();
+
+        let context = TemplateContext::new();
+        let result = library
+            .render_text(r#"Before {% render "_helper" %} After"#, &context)
+            .unwrap();
+        assert!(result.contains("HELPER_CONTENT"));
+    }
+
+    #[test]
+    fn test_prompt_library_list_names() {
+        let mut library = PromptLibrary::new();
+        library.add(Prompt::new("alpha", "Template A")).unwrap();
+        library.add(Prompt::new("beta", "Template B")).unwrap();
+
+        let mut names = library.list_names().unwrap();
+        names.sort();
+        assert_eq!(names, vec!["alpha", "beta"]);
+    }
+
+    #[test]
+    fn test_prompt_library_remove_nonexistent() {
+        let mut library = PromptLibrary::new();
+        // Should succeed even if prompt doesn't exist (remove returns Ok(false))
+        let result = library.remove("nonexistent");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_prompt_serialize_deserialize() {
+        let prompt = Prompt::new("test", "Hello {{name}}!")
+            .with_description("A test prompt")
+            .with_category("greetings")
+            .with_tags(vec!["hello".to_string(), "greeting".to_string()])
+            .add_parameter(
+                Parameter::new("name", "Name to greet", ParameterType::String).required(true),
+            );
+
+        let json = serde_json::to_string(&prompt).unwrap();
+        let deserialized: Prompt = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(deserialized.name, "test");
+        assert_eq!(deserialized.template, "Hello {{name}}!");
+        assert_eq!(deserialized.description, Some("A test prompt".to_string()));
+        assert_eq!(deserialized.category, Some("greetings".to_string()));
+        assert_eq!(deserialized.tags.len(), 2);
+        assert_eq!(deserialized.parameters.len(), 1);
+    }
+
+    #[test]
+    fn test_prompt_parameter_provider_trait() {
+        use swissarmyhammer_common::ParameterProvider;
+
+        let prompt = Prompt::new("test", "{{a}} {{b}}")
+            .add_parameter(Parameter::new("a", "First param", ParameterType::String).required(true))
+            .add_parameter(
+                Parameter::new("b", "Second param", ParameterType::Number).required(false),
+            );
+
+        let params = prompt.get_parameters();
+        assert_eq!(params.len(), 2);
+        assert_eq!(params[0].name, "a");
+        assert_eq!(params[1].name, "b");
+        assert_eq!(params[0].parameter_type, ParameterType::String);
+        assert_eq!(params[1].parameter_type, ParameterType::Number);
+    }
+
+    #[test]
+    fn test_prompt_loader_load_from_string_empty_choices_not_added() {
+        let content = r#"---
+title: Empty Choices
+description: Test empty choices array
+parameters:
+  - name: value
+    description: A value
+    choices: []
+---
+
+Use {{value}}."#;
+
+        let loader = PromptLoader::new();
+        let prompt = loader.load_from_string("empty-choices", content).unwrap();
+
+        assert_eq!(prompt.parameters.len(), 1);
+        // Empty choices should result in None, not Some(vec![])
+        assert!(
+            prompt.parameters[0].choices.is_none(),
+            "Empty choices array should not be set"
+        );
+    }
+
+    #[test]
+    fn test_prompt_loader_load_from_string_partial_by_name_underscore() {
+        let content = "Just content, no frontmatter";
+        let loader = PromptLoader::new();
+        let prompt = loader.load_from_string("_sidebar", content).unwrap();
+
+        assert_eq!(
+            prompt.description,
+            Some("Partial template for reuse in other prompts".to_string())
+        );
+    }
+
+    #[test]
+    fn test_prompt_loader_load_from_string_partial_by_name_contains_partial() {
+        let content = "Just content, no frontmatter";
+        let loader = PromptLoader::new();
+        let prompt = loader
+            .load_from_string("my-partial-template", content)
+            .unwrap();
+
+        assert_eq!(
+            prompt.description,
+            Some("Partial template for reuse in other prompts".to_string())
+        );
+    }
+
+    #[test]
+    fn test_prompt_loader_load_file_with_partial_detection() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+
+        // File with partial marker
+        let partial_path = temp_dir.path().join("reusable.md");
+        fs::write(&partial_path, "{% partial %}\nReusable content").unwrap();
+
+        let loader = PromptLoader::new();
+        let prompt = loader.load_file(&partial_path).unwrap();
+        assert_eq!(
+            prompt.description,
+            Some("Partial template for reuse in other prompts".to_string())
+        );
+    }
+
+    #[test]
+    fn test_prompt_validate_filter_argument_variable() {
+        use swissarmyhammer_common::Validatable;
+
+        // Test: {{ "value" | filter: variable }}
+        let mut prompt = Prompt::new("test", r#"{{ "hello" | append: suffix }}"#)
+            .with_description("A test prompt")
+            .add_parameter(
+                Parameter::new("suffix", "Suffix to append", ParameterType::String).required(true),
+            );
+        prompt.metadata.insert(
+            "title".to_string(),
+            serde_json::Value::String("Test".to_string()),
+        );
+
+        let issues = prompt.validate(None);
+        let errors: Vec<_> = issues
+            .iter()
+            .filter(|i| i.level == ValidationLevel::Error && i.message.contains("suffix"))
+            .collect();
+        assert!(
+            errors.is_empty(),
+            "Filter argument variables should be recognized, got: {:?}",
+            errors
+        );
+    }
 }

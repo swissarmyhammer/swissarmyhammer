@@ -30,6 +30,9 @@ pub mod check_names {
     /// Human-readable check name for AVP hooks installation
     pub const AVP_HOOKS_INSTALLED: &str = "AVP Hooks Installed";
 
+    /// Human-readable check name for CLAUDE.md preamble verification
+    pub const CLAUDE_MD: &str = "CLAUDE.md Preamble";
+
     /// Build a dynamic check name for an LSP server
     pub fn lsp_server(command: &str) -> String {
         format!("{command} (LSP)")
@@ -477,6 +480,68 @@ fn has_avp_hooks_in_file(path: &std::path::Path) -> bool {
     })
 }
 
+/// Check that CLAUDE.md exists and has the required preamble.
+///
+/// Uses `find_git_repository_root()` to locate the git root, then delegates
+/// to `check_claude_md_at()` for the actual file inspection.
+pub fn check_claude_md(checks: &mut Vec<Check>) -> Result<()> {
+    let root = match swissarmyhammer_common::utils::find_git_repository_root() {
+        Some(r) => r,
+        None => return Ok(()), // git check earlier already reported this
+    };
+    check_claude_md_at(&root, checks);
+    Ok(())
+}
+
+/// Check CLAUDE.md preamble at a specific root path.
+///
+/// This is the testable core of the check — it takes a root directory
+/// instead of relying on `find_git_repository_root()`.
+fn check_claude_md_at(root: &std::path::Path, checks: &mut Vec<Check>) {
+    use crate::commands::install::components::CLAUDE_MD_PREAMBLE;
+
+    let path = root.join("CLAUDE.md");
+    if !path.exists() {
+        checks.push(Check {
+            name: check_names::CLAUDE_MD.to_string(),
+            status: CheckStatus::Warning,
+            message: "CLAUDE.md not found at git root".to_string(),
+            fix: Some("Run `sah init` to create CLAUDE.md".to_string()),
+        });
+        return;
+    }
+
+    let content = match std::fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(e) => {
+            checks.push(Check {
+                name: check_names::CLAUDE_MD.to_string(),
+                status: CheckStatus::Error,
+                message: format!("Failed to read CLAUDE.md: {}", e),
+                fix: None,
+            });
+            return;
+        }
+    };
+
+    let first_non_empty = content.lines().find(|l| !l.trim().is_empty());
+    if first_non_empty.is_some_and(|line| line.contains(CLAUDE_MD_PREAMBLE)) {
+        checks.push(Check {
+            name: check_names::CLAUDE_MD.to_string(),
+            status: CheckStatus::Ok,
+            message: "CLAUDE.md has the required preamble".to_string(),
+            fix: None,
+        });
+    } else {
+        checks.push(Check {
+            name: check_names::CLAUDE_MD.to_string(),
+            status: CheckStatus::Warning,
+            message: "CLAUDE.md is missing the required preamble".to_string(),
+            fix: Some("Run `sah init` to add the required preamble".to_string()),
+        });
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -616,5 +681,50 @@ mod tests {
         assert_eq!(checks[0].status, CheckStatus::Warning);
         assert!(checks[0].message.contains("not installed"));
         assert!(checks[0].fix.as_ref().unwrap().contains("avp init"));
+    }
+
+    #[test]
+    fn test_check_claude_md_healthy() {
+        use crate::commands::install::components::CLAUDE_MD_PREAMBLE;
+
+        let temp_dir = TempDir::new().unwrap();
+        let claude_md = temp_dir.path().join("CLAUDE.md");
+        fs::write(&claude_md, format!("{}\nother stuff\n", CLAUDE_MD_PREAMBLE)).unwrap();
+
+        let mut checks = Vec::new();
+        check_claude_md_at(temp_dir.path(), &mut checks);
+
+        assert_eq!(checks.len(), 1);
+        assert_eq!(checks[0].name, check_names::CLAUDE_MD);
+        assert_eq!(checks[0].status, CheckStatus::Ok);
+    }
+
+    #[test]
+    fn test_check_claude_md_missing() {
+        let temp_dir = TempDir::new().unwrap();
+
+        let mut checks = Vec::new();
+        check_claude_md_at(temp_dir.path(), &mut checks);
+
+        assert_eq!(checks.len(), 1);
+        assert_eq!(checks[0].name, check_names::CLAUDE_MD);
+        assert_eq!(checks[0].status, CheckStatus::Warning);
+        assert!(checks[0].fix.as_ref().unwrap().contains("sah init"));
+    }
+
+    #[test]
+    fn test_check_claude_md_no_preamble() {
+        let temp_dir = TempDir::new().unwrap();
+        let claude_md = temp_dir.path().join("CLAUDE.md");
+        fs::write(&claude_md, "some other content\n").unwrap();
+
+        let mut checks = Vec::new();
+        check_claude_md_at(temp_dir.path(), &mut checks);
+
+        assert_eq!(checks.len(), 1);
+        assert_eq!(checks[0].name, check_names::CLAUDE_MD);
+        assert_eq!(checks[0].status, CheckStatus::Warning);
+        assert!(checks[0].message.contains("missing"));
+        assert!(checks[0].fix.as_ref().unwrap().contains("sah init"));
     }
 }

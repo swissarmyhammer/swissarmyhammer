@@ -120,3 +120,217 @@ pub fn interpolate(format: &str, vars: &HashMap<String, String>) -> String {
     }
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_module_output_new() {
+        let out = ModuleOutput::new("hello", Style::parse("green"));
+        assert_eq!(out.text, "hello");
+        assert!(!out.is_empty());
+    }
+
+    #[test]
+    fn test_module_output_hidden() {
+        let out = ModuleOutput::hidden();
+        assert!(out.is_empty());
+        assert_eq!(out.render(), "");
+    }
+
+    #[test]
+    fn test_module_output_render_with_style() {
+        let out = ModuleOutput::new("hello", Style::parse("green"));
+        let rendered = out.render();
+        assert!(rendered.contains("hello"));
+        assert!(rendered.contains("\x1b[32m"));
+    }
+
+    #[test]
+    fn test_module_output_render_empty() {
+        let out = ModuleOutput::new("", Style::parse("green"));
+        assert_eq!(out.render(), "");
+    }
+
+    #[test]
+    fn test_module_registry_new() {
+        let reg = ModuleRegistry::new();
+        assert!(reg.get("directory").is_some());
+        assert!(reg.get("model").is_some());
+        assert!(reg.get("context_bar").is_some());
+        assert!(reg.get("cost").is_some());
+        assert!(reg.get("session").is_some());
+        assert!(reg.get("vim_mode").is_some());
+        assert!(reg.get("agent").is_some());
+        assert!(reg.get("worktree").is_some());
+        assert!(reg.get("version").is_some());
+        assert!(reg.get("git_branch").is_some());
+        assert!(reg.get("git_status").is_some());
+        assert!(reg.get("git_state").is_some());
+        assert!(reg.get("kanban").is_some());
+        assert!(reg.get("index").is_some());
+        assert!(reg.get("languages").is_some());
+    }
+
+    #[test]
+    fn test_module_registry_default() {
+        let reg = ModuleRegistry::default();
+        assert!(reg.get("directory").is_some());
+    }
+
+    #[test]
+    fn test_module_registry_get_nonexistent() {
+        let reg = ModuleRegistry::new();
+        assert!(reg.get("nonexistent").is_none());
+    }
+
+    #[test]
+    fn test_interpolate_basic() {
+        let mut vars = HashMap::new();
+        vars.insert("name".into(), "world".into());
+        assert_eq!(interpolate("hello $name!", &vars), "hello world!");
+    }
+
+    #[test]
+    fn test_interpolate_missing_var() {
+        let vars = HashMap::new();
+        assert_eq!(interpolate("hello $name", &vars), "hello ");
+    }
+
+    #[test]
+    fn test_interpolate_no_vars() {
+        let vars = HashMap::new();
+        assert_eq!(interpolate("literal text", &vars), "literal text");
+    }
+
+    #[test]
+    fn test_interpolate_multiple_vars() {
+        let mut vars = HashMap::new();
+        vars.insert("a".into(), "1".into());
+        vars.insert("b".into(), "2".into());
+        assert_eq!(interpolate("$a+$b", &vars), "1+2");
+    }
+
+    #[test]
+    fn test_module_output_hidden_render_is_empty() {
+        let out = ModuleOutput::hidden();
+        assert_eq!(out.render(), "");
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn test_module_output_new_with_default_style() {
+        let out = ModuleOutput::new("text", Style::default());
+        assert_eq!(out.text, "text");
+        assert!(!out.is_empty());
+        // Default style has no codes, so render returns raw text
+        assert_eq!(out.render(), "text");
+    }
+
+    #[test]
+    fn test_module_output_render_non_empty_with_style() {
+        let out = ModuleOutput::new("styled", Style::parse("bold red"));
+        let rendered = out.render();
+        assert!(rendered.contains("styled"));
+        assert!(rendered.contains("\x1b[1m"));
+        assert!(rendered.contains("\x1b[31m"));
+        assert!(rendered.ends_with("\x1b[0m"));
+    }
+
+    #[test]
+    fn test_module_registry_has_all_modules() {
+        let reg = ModuleRegistry::new();
+        let expected = [
+            "directory",
+            "model",
+            "context_bar",
+            "cost",
+            "session",
+            "vim_mode",
+            "agent",
+            "worktree",
+            "version",
+            "git_branch",
+            "git_status",
+            "git_state",
+            "kanban",
+            "index",
+            "languages",
+        ];
+        for name in &expected {
+            assert!(reg.get(name).is_some(), "missing module: {}", name);
+        }
+    }
+
+    #[test]
+    fn test_module_registry_eval_functions_callable() {
+        let reg = ModuleRegistry::new();
+        let input = crate::input::StatuslineInput::default();
+        let config = crate::config::StatuslineConfig::default();
+        let ctx = ModuleContext {
+            input: &input,
+            config: &config,
+        };
+        // Call each module's eval function to ensure they don't panic
+        for name in [
+            "directory",
+            "model",
+            "context_bar",
+            "cost",
+            "session",
+            "vim_mode",
+            "agent",
+            "worktree",
+            "version",
+        ] {
+            let eval_fn = reg.get(name).unwrap();
+            let out = eval_fn(&ctx);
+            // Just ensure it doesn't panic; output may be empty or not
+            let _ = out.render();
+        }
+    }
+
+    #[test]
+    fn test_interpolate_empty_format() {
+        let vars = HashMap::new();
+        assert_eq!(interpolate("", &vars), "");
+    }
+
+    #[test]
+    fn test_interpolate_only_variable() {
+        let mut vars = HashMap::new();
+        vars.insert("x".into(), "value".into());
+        assert_eq!(interpolate("$x", &vars), "value");
+    }
+
+    #[test]
+    fn test_interpolate_adjacent_vars() {
+        let mut vars = HashMap::new();
+        vars.insert("a".into(), "X".into());
+        vars.insert("b".into(), "Y".into());
+        assert_eq!(interpolate("$a$b", &vars), "XY");
+    }
+
+    #[test]
+    fn test_interpolate_with_brackets() {
+        let mut vars = HashMap::new();
+        vars.insert("bar".into(), "###".into());
+        assert_eq!(interpolate("[$bar]", &vars), "[###]");
+    }
+
+    #[test]
+    fn test_module_output_clone() {
+        let out = ModuleOutput::new("hello", Style::parse("green"));
+        let cloned = out.clone();
+        assert_eq!(cloned.text, out.text);
+        assert_eq!(cloned.render(), out.render());
+    }
+
+    #[test]
+    fn test_module_output_debug() {
+        let out = ModuleOutput::new("test", Style::parse("red"));
+        let debug = format!("{:?}", out);
+        assert!(debug.contains("test"));
+    }
+}

@@ -144,4 +144,137 @@ mod tests {
         let op = parse_input(input).unwrap();
         assert!(matches!(op, AgentOperation::List(_)));
     }
+
+    #[test]
+    fn test_parse_non_object_fails() {
+        let input = json!("not an object");
+        assert!(parse_input(input).is_err());
+    }
+
+    #[test]
+    fn test_parse_array_fails() {
+        let input = json!([1, 2, 3]);
+        assert!(parse_input(input).is_err());
+    }
+
+    #[test]
+    fn test_parse_list_aliases() {
+        for verb in &["ls", "show", "available"] {
+            let input = json!({"op": verb});
+            let op = parse_input(input).unwrap();
+            assert!(
+                matches!(op, AgentOperation::List(_)),
+                "verb '{}' should map to List",
+                verb
+            );
+        }
+    }
+
+    #[test]
+    fn test_parse_use_aliases() {
+        for verb in &["get", "load", "activate", "invoke"] {
+            let input = json!({"op": verb, "name": "default"});
+            let op = parse_input(input).unwrap();
+            assert!(
+                matches!(op, AgentOperation::Use(_)),
+                "verb '{}' should map to Use",
+                verb
+            );
+        }
+    }
+
+    #[test]
+    fn test_parse_search_aliases() {
+        for verb in &["find", "lookup"] {
+            let input = json!({"op": verb, "query": "test"});
+            let op = parse_input(input).unwrap();
+            assert!(
+                matches!(op, AgentOperation::Search(_)),
+                "verb '{}' should map to Search",
+                verb
+            );
+        }
+    }
+
+    #[test]
+    fn test_parse_verb_noun_fields() {
+        let input = json!({"verb": "list", "noun": "agent"});
+        let op = parse_input(input).unwrap();
+        assert!(matches!(op, AgentOperation::List(_)));
+    }
+
+    #[test]
+    fn test_parse_verb_field_without_noun() {
+        let input = json!({"verb": "list"});
+        let op = parse_input(input).unwrap();
+        assert!(matches!(op, AgentOperation::List(_)));
+    }
+
+    #[test]
+    fn test_parse_use_missing_name_fails() {
+        let input = json!({"op": "use agent"});
+        assert!(parse_input(input).is_err());
+    }
+
+    #[test]
+    fn test_parse_search_missing_query_fails() {
+        let input = json!({"op": "search agent"});
+        assert!(parse_input(input).is_err());
+    }
+
+    #[test]
+    fn test_parse_unsupported_verb_fails() {
+        let input = json!({"op": "delete agent"});
+        assert!(parse_input(input).is_err());
+    }
+
+    #[test]
+    fn test_parse_op_verb_only() {
+        // op field with just a single word (no noun)
+        let input = json!({"op": "list"});
+        let op = parse_input(input).unwrap();
+        assert!(matches!(op, AgentOperation::List(_)));
+    }
+
+    #[test]
+    fn test_parse_null_op_with_name_fails() {
+        // op is present but not a string, name is present but op blocks shorthand
+        let input = json!({"op": null, "name": "test"});
+        let result = parse_input(input);
+        assert!(result.is_err());
+        match result {
+            Err(AgentError::Parse { message }) => {
+                assert!(
+                    message.contains("cannot determine agent operation"),
+                    "unexpected message: {}",
+                    message
+                );
+            }
+            _ => panic!("expected Parse error"),
+        }
+    }
+
+    #[test]
+    fn test_parse_null_op_with_query_fails() {
+        // op is present but not a string, query is present but op blocks shorthand
+        let input = json!({"op": null, "query": "test"});
+        let result = parse_input(input);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_integer_op_with_name_fails() {
+        // op is a number (not a string), name present but op blocks shorthand
+        let input = json!({"op": 42, "name": "test"});
+        let result = parse_input(input);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_unrelated_fields_is_list() {
+        // Object with keys that are not name/query/op/verb defaults to list
+        let input = json!({"foo": "bar", "baz": 123});
+        let op = parse_input(input).unwrap();
+        assert!(matches!(op, AgentOperation::List(_)));
+    }
 }

@@ -249,4 +249,165 @@ mod tests {
         let suggestions = network_error.recovery_suggestions();
         assert!(suggestions.iter().any(|s| s.contains("network")));
     }
+
+    #[test]
+    fn test_recovery_suggestions_all_categories() {
+        let validation_error = CommonError::validation("test");
+        let suggestions = validation_error.recovery_suggestions();
+        assert!(!suggestions.is_empty());
+        // User category suggestions
+        assert!(suggestions.iter().any(|s| s.contains("input")));
+
+        let resource_error = CommonError::resource("test");
+        let suggestions = resource_error.recovery_suggestions();
+        assert!(!suggestions.is_empty());
+        // System category suggestions
+        assert!(suggestions.iter().any(|s| s.contains("resources")));
+
+        let internal_error = CommonError::internal("test");
+        let suggestions = internal_error.recovery_suggestions();
+        assert!(!suggestions.is_empty());
+        // Internal category suggestions
+        assert!(suggestions.iter().any(|s| s.contains("bug")));
+
+        let external_error = CommonError::network("test");
+        let suggestions = external_error.recovery_suggestions();
+        assert!(suggestions
+            .iter()
+            .any(|s| s.contains("retry") || s.contains("Retry")));
+    }
+
+    #[test]
+    fn test_user_friendly_messages_all_variants() {
+        let validation_error = CommonError::validation("field is required");
+        let msg = validation_error.user_friendly_message();
+        assert!(msg.contains("Validation Error"));
+        assert!(msg.contains("field is required"));
+
+        let resource_error = CommonError::resource("disk full");
+        let msg = resource_error.user_friendly_message();
+        assert!(msg.contains("Resource Error"));
+        assert!(msg.contains("disk full"));
+
+        let network_error = CommonError::network("connection refused");
+        let msg = network_error.user_friendly_message();
+        assert!(msg.contains("Network Error"));
+        assert!(msg.contains("connection refused"));
+
+        let internal_error = CommonError::internal("unexpected state");
+        let msg = internal_error.user_friendly_message();
+        assert!(msg.contains("Internal Error"));
+        assert!(msg.contains("unexpected state"));
+    }
+
+    #[test]
+    fn test_common_error_display() {
+        assert_eq!(
+            CommonError::configuration("bad config").to_string(),
+            "Configuration error: bad config"
+        );
+        assert_eq!(
+            CommonError::validation("invalid").to_string(),
+            "Validation error: invalid"
+        );
+        assert_eq!(
+            CommonError::resource("no memory").to_string(),
+            "Resource error: no memory"
+        );
+        assert_eq!(
+            CommonError::network("timeout").to_string(),
+            "Network error: timeout"
+        );
+        assert_eq!(
+            CommonError::internal("bug").to_string(),
+            "Internal error: bug"
+        );
+    }
+
+    #[test]
+    fn test_error_category_traits() {
+        let cat = ErrorCategory::User;
+        let cloned = cat;
+        assert_eq!(cat, cloned);
+
+        let debug = format!("{:?}", ErrorCategory::System);
+        assert!(debug.contains("System"));
+
+        let debug = format!("{:?}", ErrorCategory::External);
+        assert!(debug.contains("External"));
+
+        let debug = format!("{:?}", ErrorCategory::Internal);
+        assert!(debug.contains("Internal"));
+    }
+
+    #[test]
+    fn test_validation_category() {
+        let err = CommonError::validation("bad input");
+        assert_eq!(err.category(), ErrorCategory::User);
+        assert!(err.is_user_error());
+        assert!(!err.is_retriable());
+        assert_eq!(err.error_code(), "COMMON_VALIDATION");
+    }
+
+    #[test]
+    fn test_llama_error_default_custom_retry_delay() {
+        let err = CommonError::network("test");
+        assert_eq!(err.custom_retry_delay(1), None);
+        assert_eq!(err.custom_retry_delay(5), None);
+    }
+
+    #[test]
+    fn test_llama_error_default_should_stop_retrying() {
+        let err = CommonError::network("test");
+        assert!(!err.should_stop_retrying(1));
+        assert!(!err.should_stop_retrying(100));
+    }
+
+    #[test]
+    fn test_llama_error_default_user_friendly_message() {
+        // The default implementation on the trait just uses Display
+        // But CommonError overrides it, so this tests the override
+        let err = CommonError::configuration("missing key");
+        let msg = err.user_friendly_message();
+        assert!(msg.contains("missing key"));
+    }
+
+    #[test]
+    fn test_llama_result_type_alias() {
+        fn returns_ok() -> super::LlamaResult<u32> {
+            Ok(42)
+        }
+        fn returns_err() -> super::LlamaResult<u32> {
+            Err(CommonError::internal("fail"))
+        }
+        assert_eq!(returns_ok().unwrap(), 42);
+        assert!(returns_err().is_err());
+    }
+
+    #[test]
+    fn test_common_error_convenience_constructors_with_string() {
+        // Test with String (not just &str) to cover Into<String>
+        let msg = String::from("dynamic message");
+        let err = CommonError::configuration(msg.clone());
+        assert!(err.to_string().contains("dynamic message"));
+
+        let err = CommonError::validation(msg.clone());
+        assert!(err.to_string().contains("dynamic message"));
+
+        let err = CommonError::resource(msg.clone());
+        assert!(err.to_string().contains("dynamic message"));
+
+        let err = CommonError::network(msg.clone());
+        assert!(err.to_string().contains("dynamic message"));
+
+        let err = CommonError::internal(msg);
+        assert!(err.to_string().contains("dynamic message"));
+    }
+
+    #[test]
+    fn test_common_error_debug() {
+        let err = CommonError::configuration("test");
+        let debug = format!("{:?}", err);
+        assert!(debug.contains("Configuration"));
+    }
 }

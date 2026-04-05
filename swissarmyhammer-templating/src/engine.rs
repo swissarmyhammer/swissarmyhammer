@@ -336,4 +336,81 @@ mod tests {
         // Clean up
         env::remove_var("TEST_ENGINE_VAR");
     }
+
+    #[test]
+    fn test_engine_with_parser() {
+        // Build a custom parser and verify the engine uses it
+        let parser = crate::template::create_default_parser();
+        let engine = TemplateEngine::with_parser(parser);
+
+        let mut args = HashMap::new();
+        args.insert("name".to_string(), "custom".to_string());
+
+        let result = engine.render("Hello {{ name }}!", &args).unwrap();
+        assert_eq!(result, "Hello custom!");
+    }
+
+    #[test]
+    fn test_engine_with_partials() {
+        use crate::partials::HashMapPartialLoader;
+        use std::collections::HashMap as HMap;
+
+        let mut partials = HMap::new();
+        partials.insert("greeting".to_string(), "Hello, World!".to_string());
+        let loader = HashMapPartialLoader::new(partials);
+
+        let engine = TemplateEngine::with_partials(loader);
+        // The engine should be usable for rendering plain templates
+        let args = HashMap::new();
+        let result = engine.render("Static text", &args).unwrap();
+        assert_eq!(result, "Static text");
+    }
+
+    #[test]
+    fn test_engine_with_plugins() {
+        // with_plugins is a stub that returns a basic engine
+        let engine = TemplateEngine::with_plugins(());
+        let mut args = HashMap::new();
+        args.insert("val".to_string(), "ok".to_string());
+        let result = engine.render("{{ val }}", &args).unwrap();
+        assert_eq!(result, "ok");
+    }
+
+    #[test]
+    fn test_engine_plugin_registry() {
+        let engine = TemplateEngine::new();
+        // plugin_registry is a stub that always returns None
+        assert!(engine.plugin_registry().is_none());
+    }
+
+    #[test]
+    fn test_engine_create_template() {
+        let engine = TemplateEngine::new();
+        let template = engine.create_template("Hello {{ name }}!").unwrap();
+
+        let mut args = HashMap::new();
+        args.insert("name".to_string(), "World".to_string());
+
+        let result = template.render(&args).unwrap();
+        assert_eq!(result, "Hello World!");
+    }
+
+    #[test]
+    fn test_dummy_partial_loader() {
+        // DummyPartialLoader is used internally by create_template; verify it works via that path
+        let engine = TemplateEngine::new();
+        // A template with no partials should render fine through create_template
+        let template = engine.create_template("No partials here").unwrap();
+        let result = template.render(&HashMap::new()).unwrap();
+        assert_eq!(result, "No partials here");
+    }
+
+    #[test]
+    fn test_dummy_partial_loader_contains_and_try_get() {
+        // Directly exercise DummyPartialLoader::contains and try_get (lines 154-164)
+        let loader = DummyPartialLoader::new();
+        assert!(!loader.contains("anything"));
+        assert!(loader.try_get("anything").is_none());
+        assert!(loader.names().is_empty());
+    }
 }

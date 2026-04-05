@@ -1727,4 +1727,648 @@ mod tests {
             assert!(result.contains("NOT INSTALLED"));
         }
     }
+
+    // ---------------------------------------------------------------
+    // new_with_work_dir() tests
+    // ---------------------------------------------------------------
+
+    #[tokio::test]
+    #[serial_test::serial(cwd)]
+    async fn test_new_with_work_dir_creates_server() {
+        let tmp = tempfile::tempdir().unwrap();
+        let server = McpServer::new_with_work_dir(
+            PromptLibrary::default(),
+            tmp.path().to_path_buf(),
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+
+        // The server should store the working directory
+        assert_eq!(server.work_dir, Some(tmp.path().to_path_buf()));
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(cwd)]
+    async fn test_new_with_work_dir_agent_mode_registers_agent_tools() {
+        let tmp = tempfile::tempdir().unwrap();
+        let server_no_agent = McpServer::new_with_work_dir(
+            PromptLibrary::default(),
+            tmp.path().to_path_buf(),
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+
+        let server_agent = McpServer::new_with_work_dir(
+            PromptLibrary::default(),
+            tmp.path().to_path_buf(),
+            None,
+            true,
+        )
+        .await
+        .unwrap();
+
+        let tools_no_agent = server_no_agent.list_tools().await;
+        let tools_agent = server_agent.list_tools().await;
+
+        // Agent mode should have at least as many tools as non-agent mode
+        // (agent-only tools are added, not subtracted)
+        assert!(
+            tools_agent.len() >= tools_no_agent.len(),
+            "Agent mode should have >= tools: agent={}, non-agent={}",
+            tools_agent.len(),
+            tools_no_agent.len()
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // set_server_port() tests
+    // ---------------------------------------------------------------
+
+    #[tokio::test]
+    #[serial_test::serial(cwd)]
+    async fn test_set_server_port() {
+        let server = McpServer::new(PromptLibrary::default()).await.unwrap();
+
+        // Initially, port should be None
+        let port = server.tool_context.mcp_server_port.read().await;
+        assert_eq!(*port, None);
+        drop(port);
+
+        // Set port
+        server.set_server_port(8080).await;
+
+        let port = server.tool_context.mcp_server_port.read().await;
+        assert_eq!(*port, Some(8080));
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(cwd)]
+    async fn test_set_server_port_updates_existing() {
+        let server = McpServer::new(PromptLibrary::default()).await.unwrap();
+
+        server.set_server_port(8080).await;
+        server.set_server_port(9090).await;
+
+        let port = server.tool_context.mcp_server_port.read().await;
+        assert_eq!(*port, Some(9090));
+    }
+
+    // ---------------------------------------------------------------
+    // initialize() tests
+    // ---------------------------------------------------------------
+
+    #[tokio::test]
+    #[serial_test::serial(cwd)]
+    async fn test_initialize_loads_prompts() {
+        let server = McpServer::new(PromptLibrary::default()).await.unwrap();
+
+        // Initialize should succeed without errors
+        server.initialize().await.unwrap();
+
+        // After initialization, prompts should be loaded from builtin sources
+        let prompts = server.list_prompts().await.unwrap();
+        // There should be at least some builtin prompts
+        assert!(
+            !prompts.is_empty(),
+            "After initialize(), the server should have loaded prompts"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // list_prompts() tests
+    // ---------------------------------------------------------------
+
+    #[tokio::test]
+    #[serial_test::serial(cwd)]
+    async fn test_list_prompts_filters_hidden() {
+        use swissarmyhammer_prompts::Prompt;
+
+        let mut library = PromptLibrary::new();
+        // Add a visible prompt
+        library
+            .add(Prompt::new("visible-prompt", "Hello world"))
+            .unwrap();
+        // Add a hidden prompt (metadata hidden: true)
+        let mut hidden = Prompt::new("hidden-prompt", "Secret stuff");
+        hidden
+            .metadata
+            .insert("hidden".to_string(), serde_json::Value::Bool(true));
+        library.add(hidden).unwrap();
+
+        let server = McpServer::new(library).await.unwrap();
+        let prompts = server.list_prompts().await.unwrap();
+
+        assert!(
+            prompts.contains(&"visible-prompt".to_string()),
+            "Visible prompt should appear in list"
+        );
+        assert!(
+            !prompts.contains(&"hidden-prompt".to_string()),
+            "Hidden prompt should not appear in list"
+        );
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(cwd)]
+    async fn test_list_prompts_filters_partials() {
+        use swissarmyhammer_prompts::Prompt;
+
+        let mut library = PromptLibrary::new();
+        library.add(Prompt::new("normal", "Hello world")).unwrap();
+        library
+            .add(Prompt::new(
+                "partial",
+                "{% partial %}\nSome partial content",
+            ))
+            .unwrap();
+
+        let server = McpServer::new(library).await.unwrap();
+        let prompts = server.list_prompts().await.unwrap();
+
+        assert!(prompts.contains(&"normal".to_string()));
+        assert!(
+            !prompts.contains(&"partial".to_string()),
+            "Partial templates should not appear in list"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // list_tools() tests
+    // ---------------------------------------------------------------
+
+    #[tokio::test]
+    #[serial_test::serial(cwd)]
+    async fn test_list_tools_returns_registered_tools() {
+        let server = McpServer::new(PromptLibrary::default()).await.unwrap();
+        let tools = server.list_tools().await;
+
+        // Should have multiple tools registered
+        assert!(
+            tools.len() > 3,
+            "Should have many tools registered, got {}",
+            tools.len()
+        );
+
+        // Verify some core non-agent tools are present (agent tools like
+        // "files" and "web" are removed when agent_mode=false)
+        let tool_names: Vec<String> = tools.iter().map(|t| t.name.to_string()).collect();
+        assert!(
+            tool_names.contains(&"shell".to_string()),
+            "shell tool should be registered, got: {:?}",
+            tool_names
+        );
+        assert!(
+            tool_names.contains(&"kanban".to_string()),
+            "kanban tool should be registered, got: {:?}",
+            tool_names
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // execute_tool() tests
+    // ---------------------------------------------------------------
+
+    #[tokio::test]
+    #[serial_test::serial(cwd)]
+    async fn test_execute_tool_unknown_tool_returns_error() {
+        let server = McpServer::new(PromptLibrary::default()).await.unwrap();
+
+        let result = server
+            .execute_tool("nonexistent_tool", serde_json::json!({}))
+            .await;
+
+        assert!(result.is_err(), "Unknown tool should return an error");
+        let err = result.unwrap_err();
+        let msg = format!("{:?}", err);
+        assert!(
+            msg.contains("Unknown tool"),
+            "Error should mention unknown tool: {}",
+            msg
+        );
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(cwd)]
+    async fn test_execute_tool_with_non_object_args() {
+        let server = McpServer::new(PromptLibrary::default()).await.unwrap();
+
+        // Passing a non-object (e.g. string) should use an empty map, not crash
+        let result = server
+            .execute_tool("files", serde_json::json!("not an object"))
+            .await;
+
+        // The tool should execute (possibly with an error result, but not a panic)
+        // It's OK if it returns Err or Ok with is_error=true; the point is it doesn't crash.
+        // Just verify we got a response.
+        let _ = result;
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(cwd)]
+    async fn test_execute_tool_has_tool_check() {
+        let server = McpServer::new(PromptLibrary::default()).await.unwrap();
+
+        // "shell" is a non-agent tool, always available
+        assert!(server.has_tool("shell").await, "shell tool should exist");
+        assert!(
+            !server.has_tool("definitely_not_a_tool").await,
+            "nonexistent tool should not exist"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // get_prompt() tests
+    // ---------------------------------------------------------------
+
+    #[tokio::test]
+    #[serial_test::serial(cwd)]
+    async fn test_get_prompt_basic() {
+        use swissarmyhammer_prompts::Prompt;
+
+        let mut library = PromptLibrary::new();
+        library
+            .add(Prompt::new("test-prompt", "Hello from test"))
+            .unwrap();
+
+        let server = McpServer::new(library).await.unwrap();
+        let content = server.get_prompt("test-prompt", None).await.unwrap();
+
+        assert_eq!(content, "Hello from test");
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(cwd)]
+    async fn test_get_prompt_with_template_args() {
+        use swissarmyhammer_prompts::Prompt;
+
+        let mut library = PromptLibrary::new();
+        library
+            .add(Prompt::new("greet", "Hello {{ name }}!"))
+            .unwrap();
+
+        let server = McpServer::new(library).await.unwrap();
+        let mut args = HashMap::new();
+        args.insert("name".to_string(), "World".to_string());
+        let content = server.get_prompt("greet", Some(&args)).await.unwrap();
+
+        assert_eq!(content, "Hello World!");
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(cwd)]
+    async fn test_get_prompt_not_found() {
+        let library = PromptLibrary::new();
+        let server = McpServer::new(library).await.unwrap();
+
+        let result = server.get_prompt("nonexistent", None).await;
+        assert!(result.is_err(), "Should return error for missing prompt");
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(cwd)]
+    async fn test_get_prompt_hidden_prompt_rejected() {
+        use swissarmyhammer_prompts::Prompt;
+
+        let mut library = PromptLibrary::new();
+        let mut hidden = Prompt::new("secret-prompt", "Secret content");
+        hidden
+            .metadata
+            .insert("hidden".to_string(), serde_json::Value::Bool(true));
+        library.add(hidden).unwrap();
+
+        let server = McpServer::new(library).await.unwrap();
+        let result = server.get_prompt("secret-prompt", None).await;
+
+        assert!(
+            result.is_err(),
+            "Hidden prompts should not be accessible via get_prompt"
+        );
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("hidden") || err_msg.contains("Hidden"),
+            "Error should mention hidden: {}",
+            err_msg
+        );
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(cwd)]
+    async fn test_get_prompt_partial_rejected() {
+        use swissarmyhammer_prompts::Prompt;
+
+        let mut library = PromptLibrary::new();
+        library
+            .add(Prompt::new("my-partial", "{% partial %}\nPartial content"))
+            .unwrap();
+
+        let server = McpServer::new(library).await.unwrap();
+        let result = server.get_prompt("my-partial", None).await;
+
+        assert!(
+            result.is_err(),
+            "Partial templates should not be accessible via get_prompt"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // reload_prompts() tests
+    // ---------------------------------------------------------------
+
+    #[tokio::test]
+    #[serial_test::serial(cwd)]
+    async fn test_reload_prompts_succeeds() {
+        let server = McpServer::new(PromptLibrary::default()).await.unwrap();
+        // Initialize first to load prompts
+        server.initialize().await.unwrap();
+
+        // Reload should succeed
+        let result = server.reload_prompts().await;
+        assert!(
+            result.is_ok(),
+            "reload_prompts should succeed: {:?}",
+            result.err()
+        );
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(cwd)]
+    async fn test_reload_prompts_detects_no_change() {
+        let server = McpServer::new(PromptLibrary::default()).await.unwrap();
+        server.initialize().await.unwrap();
+
+        // Reloading without changes should return false (no content change)
+        let changed = server.reload_prompts().await.unwrap();
+        assert!(
+            !changed,
+            "Reloading without filesystem changes should report no change"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // create_validator_server() tests
+    // ---------------------------------------------------------------
+
+    #[tokio::test]
+    #[serial_test::serial(cwd)]
+    async fn test_create_validator_server_shares_work_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let server = McpServer::new_with_work_dir(
+            PromptLibrary::default(),
+            tmp.path().to_path_buf(),
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+
+        let validator = server.create_validator_server();
+
+        assert_eq!(
+            validator.work_dir, server.work_dir,
+            "Validator should share the same work_dir"
+        );
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(cwd)]
+    async fn test_create_validator_server_tool_execution() {
+        let tmp = tempfile::tempdir().unwrap();
+        let server = McpServer::new_with_work_dir(
+            PromptLibrary::default(),
+            tmp.path().to_path_buf(),
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+
+        let validator = server.create_validator_server();
+
+        // Should be able to execute a validator tool (files)
+        let result = validator
+            .execute_tool(
+                "files",
+                serde_json::json!({"path": tmp.path().to_str().unwrap()}),
+            )
+            .await;
+        // The call should not return "Unknown tool" error
+        if let Err(e) = &result {
+            let msg = format!("{:?}", e);
+            assert!(
+                !msg.contains("Unknown tool"),
+                "files tool should be available on validator"
+            );
+        }
+
+        // Should NOT be able to execute non-validator tools
+        let result = validator.execute_tool("shell", serde_json::json!({})).await;
+        assert!(
+            result.is_err(),
+            "Non-validator tool 'shell' should not be executable on validator server"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // stop_file_watching() tests
+    // ---------------------------------------------------------------
+
+    #[tokio::test]
+    #[serial_test::serial(cwd)]
+    async fn test_stop_file_watching_is_safe_without_start() {
+        let server = McpServer::new(PromptLibrary::default()).await.unwrap();
+
+        // Stopping file watching without starting should not panic
+        server.stop_file_watching().await;
+    }
+
+    // ---------------------------------------------------------------
+    // Retry helper tests
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_should_retry_within_limit() {
+        let err = SwissArmyHammerError::Io(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "timed out",
+        ));
+        assert!(should_retry(1, &err, McpServer::is_retryable_fs_error));
+        assert!(should_retry(2, &err, McpServer::is_retryable_fs_error));
+        assert!(!should_retry(3, &err, McpServer::is_retryable_fs_error));
+    }
+
+    #[test]
+    fn test_should_retry_non_retryable() {
+        let err = SwissArmyHammerError::Other {
+            message: "permanent failure".to_string(),
+        };
+        assert!(!should_retry(1, &err, McpServer::is_retryable_fs_error));
+    }
+
+    #[test]
+    fn test_is_retryable_fs_error_io_kinds() {
+        let retryable_kinds = [
+            std::io::ErrorKind::TimedOut,
+            std::io::ErrorKind::Interrupted,
+            std::io::ErrorKind::WouldBlock,
+            std::io::ErrorKind::UnexpectedEof,
+        ];
+        for kind in retryable_kinds {
+            let err = SwissArmyHammerError::Io(std::io::Error::new(kind, "test"));
+            assert!(
+                McpServer::is_retryable_fs_error(&err),
+                "{:?} should be retryable",
+                kind
+            );
+        }
+
+        let non_retryable = SwissArmyHammerError::Io(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "not found",
+        ));
+        assert!(!McpServer::is_retryable_fs_error(&non_retryable));
+    }
+
+    #[test]
+    fn test_is_retryable_fs_error_message_patterns() {
+        let err = SwissArmyHammerError::Other {
+            message: "resource temporarily unavailable".to_string(),
+        };
+        assert!(McpServer::is_retryable_fs_error(&err));
+
+        let err = SwissArmyHammerError::Other {
+            message: "file is locked by another process".to_string(),
+        };
+        assert!(McpServer::is_retryable_fs_error(&err));
+
+        let err = SwissArmyHammerError::Other {
+            message: "resource busy, try again".to_string(),
+        };
+        assert!(McpServer::is_retryable_fs_error(&err));
+    }
+
+    #[tokio::test]
+    async fn test_retry_with_backoff_succeeds_immediately() {
+        let mut call_count = 0u32;
+        let result: swissarmyhammer_common::Result<&str> = retry_with_backoff(
+            || {
+                call_count += 1;
+                async { Ok("success") }
+            },
+            |_| true,
+            "test_op",
+        )
+        .await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "success");
+    }
+
+    #[tokio::test]
+    async fn test_retry_with_backoff_non_retryable_fails_immediately() {
+        let result: swissarmyhammer_common::Result<&str> = retry_with_backoff(
+            || async {
+                Err(SwissArmyHammerError::Other {
+                    message: "permanent".to_string(),
+                })
+            },
+            |_| false, // never retry
+            "test_op",
+        )
+        .await;
+        assert!(result.is_err());
+    }
+
+    // ---------------------------------------------------------------
+    // ServerCapabilities and Implementation tests
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_create_server_capabilities() {
+        let caps = create_server_capabilities();
+        assert!(caps.prompts.is_some(), "Should have prompts capability");
+        assert!(caps.tools.is_some(), "Should have tools capability");
+        assert_eq!(
+            caps.prompts.as_ref().unwrap().list_changed,
+            Some(true),
+            "Prompts should support list_changed"
+        );
+        assert_eq!(
+            caps.tools.as_ref().unwrap().list_changed,
+            Some(true),
+            "Tools should support list_changed"
+        );
+    }
+
+    #[test]
+    fn test_create_server_implementation() {
+        let info = create_server_implementation();
+        assert_eq!(info.name.as_str(), "SwissArmyHammer");
+    }
+
+    // ---------------------------------------------------------------
+    // json_map_to_string_map() tests
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_json_map_to_string_map_strings() {
+        let mut map = serde_json::Map::new();
+        map.insert(
+            "key".to_string(),
+            serde_json::Value::String("value".to_string()),
+        );
+        let result = McpServer::json_map_to_string_map(&map);
+        assert_eq!(result.get("key").unwrap(), "value");
+    }
+
+    #[test]
+    fn test_json_map_to_string_map_non_strings() {
+        let mut map = serde_json::Map::new();
+        map.insert("num".to_string(), serde_json::json!(42));
+        map.insert("bool".to_string(), serde_json::json!(true));
+        let result = McpServer::json_map_to_string_map(&map);
+        assert_eq!(result.get("num").unwrap(), "42");
+        assert_eq!(result.get("bool").unwrap(), "true");
+    }
+
+    // ---------------------------------------------------------------
+    // compute_prompt_signature() tests
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_compute_prompt_signature_deterministic() {
+        use swissarmyhammer_prompts::Prompt;
+        let prompts = vec![Prompt::new("a", "Hello"), Prompt::new("b", "World")];
+        let sig1 = McpServer::compute_prompt_signature(&prompts);
+        let sig2 = McpServer::compute_prompt_signature(&prompts);
+        assert_eq!(sig1, sig2);
+    }
+
+    #[test]
+    fn test_compute_prompt_signature_detects_changes() {
+        use swissarmyhammer_prompts::Prompt;
+        let prompts_v1 = vec![Prompt::new("a", "Hello")];
+        let prompts_v2 = vec![Prompt::new("a", "Hello updated")];
+        let sig1 = McpServer::compute_prompt_signature(&prompts_v1);
+        let sig2 = McpServer::compute_prompt_signature(&prompts_v2);
+        assert_ne!(
+            sig1, sig2,
+            "Different content should produce different signatures"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // get_tool_registry() tests
+    // ---------------------------------------------------------------
+
+    #[tokio::test]
+    #[serial_test::serial(cwd)]
+    async fn test_get_tool_registry_shares_reference() {
+        let server = McpServer::new(PromptLibrary::default()).await.unwrap();
+        let registry = server.get_tool_registry();
+        let tools = registry.read().await;
+        assert!(!tools.is_empty(), "Registry should have tools");
+    }
 }

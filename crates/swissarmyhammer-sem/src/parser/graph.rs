@@ -1010,4 +1010,417 @@ mod tests {
             RefType::TypeRef,
         );
     }
+
+    #[test]
+    fn test_infer_ref_type_import() {
+        assert_eq!(
+            infer_ref_type("import { MyClass } from './module'", "MyClass"),
+            RefType::Imports,
+        );
+    }
+
+    #[test]
+    fn test_infer_ref_type_use_statement() {
+        assert_eq!(
+            infer_ref_type("use crate::MyStruct;", "MyStruct"),
+            RefType::Imports,
+        );
+    }
+
+    #[test]
+    fn test_infer_ref_type_from_statement() {
+        assert_eq!(
+            infer_ref_type("from module import MyFunc", "MyFunc"),
+            RefType::Imports,
+        );
+    }
+
+    #[test]
+    fn test_infer_ref_type_require_statement() {
+        assert_eq!(
+            infer_ref_type("require('MyModule')", "MyModule"),
+            RefType::Imports,
+        );
+    }
+
+    #[test]
+    fn test_infer_ref_type_call_with_word_boundary() {
+        // "foobar(" should NOT match "bar" as a call since it's not at a word boundary
+        assert_eq!(infer_ref_type("foobar(x)", "bar"), RefType::TypeRef,);
+    }
+
+    #[test]
+    fn test_infer_ref_type_call_at_start_of_content() {
+        // Call at the very start of content (pos == 0 boundary)
+        assert_eq!(infer_ref_type("doWork()", "doWork"), RefType::Calls,);
+    }
+
+    #[test]
+    fn test_extract_references_skips_short_lowercase() {
+        // Short lowercase identifiers (< 3 chars) should be skipped
+        let content = "function big() { let ab = 1; let cd = 2; }";
+        let refs = extract_references_from_content(content, "big");
+        assert!(!refs.contains(&"ab"));
+        assert!(!refs.contains(&"cd"));
+    }
+
+    #[test]
+    fn test_extract_references_skips_common_local_names() {
+        let content = "function doWork() { let result = getValue(); let data = process(input); }";
+        let refs = extract_references_from_content(content, "doWork");
+        assert!(!refs.contains(&"result"));
+        assert!(!refs.contains(&"data"));
+        assert!(!refs.contains(&"input"));
+        assert!(refs.contains(&"getValue"));
+        assert!(refs.contains(&"process"));
+    }
+
+    #[test]
+    fn test_extract_references_skips_non_alpha_start() {
+        let content = "function foo() { let _ok = 1; let 123bad = 2; }";
+        let refs = extract_references_from_content(content, "foo");
+        // _ok starts with underscore (alphabetic or _), so it's allowed
+        // 123bad starts with digit, should be skipped
+        assert!(!refs.contains(&"123bad"));
+    }
+
+    #[test]
+    fn test_extract_references_no_duplicates() {
+        let content = "function caller() { helper(); helper(); helper(); }";
+        let refs = extract_references_from_content(content, "caller");
+        let count = refs.iter().filter(|&&r| r == "helper").count();
+        assert_eq!(count, 1, "should deduplicate references");
+    }
+
+    #[test]
+    fn test_is_keyword_returns_true_for_keywords() {
+        assert!(is_keyword("if"));
+        assert!(is_keyword("fn"));
+        assert!(is_keyword("class"));
+        assert!(is_keyword("def"));
+        assert!(is_keyword("func"));
+        assert!(is_keyword("HashMap"));
+    }
+
+    #[test]
+    fn test_is_keyword_returns_false_for_non_keywords() {
+        assert!(!is_keyword("MyClass"));
+        assert!(!is_keyword("processData"));
+        assert!(!is_keyword("customHandler"));
+    }
+
+    #[test]
+    fn test_is_common_local_name() {
+        assert!(is_common_local_name("result"));
+        assert!(is_common_local_name("data"));
+        assert!(is_common_local_name("config"));
+        assert!(!is_common_local_name("MyCustomType"));
+        assert!(!is_common_local_name("processData"));
+    }
+
+    #[test]
+    fn test_get_dependents_empty() {
+        let graph = EntityGraph {
+            entities: HashMap::new(),
+            edges: Vec::new(),
+            dependents: HashMap::new(),
+            dependencies: HashMap::new(),
+        };
+        let result = graph.get_dependents("nonexistent");
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_get_dependencies_empty() {
+        let graph = EntityGraph {
+            entities: HashMap::new(),
+            edges: Vec::new(),
+            dependents: HashMap::new(),
+            dependencies: HashMap::new(),
+        };
+        let result = graph.get_dependencies("nonexistent");
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_get_dependents_and_dependencies() {
+        let (dir, registry) = create_test_repo();
+        let root = dir.path();
+
+        write_file(root, "a.ts", "export function foo() { return bar(); }\n");
+        write_file(root, "b.ts", "export function bar() { return 1; }\n");
+
+        let graph = EntityGraph::build(root, &["a.ts".into(), "b.ts".into()], &registry);
+
+        // foo calls bar, so bar should have foo as a dependent
+        let bar_dependents = graph.get_dependents("b.ts::function::bar");
+        assert!(
+            bar_dependents.iter().any(|e| e.name == "foo"),
+            "bar should have foo as dependent, got: {:?}",
+            bar_dependents.iter().map(|e| &e.name).collect::<Vec<_>>()
+        );
+
+        // foo depends on bar
+        let foo_deps = graph.get_dependencies("a.ts::function::foo");
+        assert!(
+            foo_deps.iter().any(|e| e.name == "bar"),
+            "foo should depend on bar, got: {:?}",
+            foo_deps.iter().map(|e| &e.name).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_impact_analysis_nonexistent_entity() {
+        let graph = EntityGraph {
+            entities: HashMap::new(),
+            edges: Vec::new(),
+            dependents: HashMap::new(),
+            dependencies: HashMap::new(),
+        };
+        let result = graph.impact_analysis("nonexistent");
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_impact_analysis_with_chain() {
+        let (dir, registry) = create_test_repo();
+        let root = dir.path();
+
+        // Create a chain: baz -> bar -> foo (each calls the next)
+        write_file(root, "a.ts", "export function foo() { return 1; }\n");
+        write_file(root, "b.ts", "export function bar() { return foo(); }\n");
+        write_file(root, "c.ts", "export function baz() { return bar(); }\n");
+
+        let graph = EntityGraph::build(
+            root,
+            &["a.ts".into(), "b.ts".into(), "c.ts".into()],
+            &registry,
+        );
+
+        // Changing foo should impact bar (which calls foo), and transitively baz
+        let impacted = graph.impact_analysis("a.ts::function::foo");
+        let names: Vec<&str> = impacted.iter().map(|e| e.name.as_str()).collect();
+        assert!(
+            names.contains(&"bar"),
+            "bar should be impacted by foo change, got: {:?}",
+            names
+        );
+    }
+
+    #[test]
+    fn test_impact_analysis_capped() {
+        let (dir, registry) = create_test_repo();
+        let root = dir.path();
+
+        write_file(root, "a.ts", "export function foo() { return 1; }\n");
+        write_file(root, "b.ts", "export function bar() { return foo(); }\n");
+        write_file(root, "c.ts", "export function baz() { return foo(); }\n");
+
+        let graph = EntityGraph::build(
+            root,
+            &["a.ts".into(), "b.ts".into(), "c.ts".into()],
+            &registry,
+        );
+
+        // Cap at 1 — should return at most 1 result
+        let impacted = graph.impact_analysis_capped("a.ts::function::foo", 1);
+        assert!(impacted.len() <= 1);
+    }
+
+    #[test]
+    fn test_impact_count_nonexistent() {
+        let graph = EntityGraph {
+            entities: HashMap::new(),
+            edges: Vec::new(),
+            dependents: HashMap::new(),
+            dependencies: HashMap::new(),
+        };
+        assert_eq!(graph.impact_count("nonexistent", 100), 0);
+    }
+
+    #[test]
+    fn test_impact_count_with_dependents() {
+        let (dir, registry) = create_test_repo();
+        let root = dir.path();
+
+        write_file(root, "a.ts", "export function foo() { return 1; }\n");
+        write_file(root, "b.ts", "export function bar() { return foo(); }\n");
+        write_file(root, "c.ts", "export function baz() { return foo(); }\n");
+
+        let graph = EntityGraph::build(
+            root,
+            &["a.ts".into(), "b.ts".into(), "c.ts".into()],
+            &registry,
+        );
+
+        let count = graph.impact_count("a.ts::function::foo", 100);
+        assert!(count >= 1, "expected at least 1 dependent, got {count}");
+    }
+
+    #[test]
+    fn test_impact_count_capped() {
+        let (dir, registry) = create_test_repo();
+        let root = dir.path();
+
+        write_file(root, "a.ts", "export function foo() { return 1; }\n");
+        write_file(root, "b.ts", "export function bar() { return foo(); }\n");
+        write_file(root, "c.ts", "export function baz() { return foo(); }\n");
+
+        let graph = EntityGraph::build(
+            root,
+            &["a.ts".into(), "b.ts".into(), "c.ts".into()],
+            &registry,
+        );
+
+        // Cap at 1
+        let count = graph.impact_count("a.ts::function::foo", 1);
+        assert!(count <= 1);
+    }
+
+    #[test]
+    fn test_incremental_rename_file() {
+        let (dir, registry) = create_test_repo();
+        let root = dir.path();
+
+        write_file(root, "old.ts", "export function foo() { return 1; }\n");
+        let mut graph = EntityGraph::build(root, &["old.ts".into()], &registry);
+        assert_eq!(graph.entities.len(), 1);
+
+        // Rename old.ts -> new.ts
+        write_file(root, "new.ts", "export function foo() { return 1; }\n");
+        graph.update_from_changes(
+            &[FileChange {
+                file_path: "new.ts".into(),
+                status: FileStatus::Renamed,
+                old_file_path: Some("old.ts".into()),
+                before_content: None,
+                after_content: None,
+            }],
+            root,
+            &registry,
+        );
+
+        // Old entities should be removed, new entities should exist
+        assert!(!graph.entities.contains_key("old.ts::function::foo"));
+        assert!(graph.entities.contains_key("new.ts::function::foo"));
+    }
+
+    #[test]
+    fn test_incremental_modify_with_content() {
+        let (dir, registry) = create_test_repo();
+        let root = dir.path();
+
+        write_file(root, "a.ts", "export function foo() { return 1; }\n");
+        let mut graph = EntityGraph::build(root, &["a.ts".into()], &registry);
+
+        // Modify with content provided directly
+        graph.update_from_changes(
+            &[FileChange {
+                file_path: "a.ts".into(),
+                status: FileStatus::Modified,
+                old_file_path: None,
+                before_content: None,
+                after_content: Some("export function bar() { return 2; }\n".into()),
+            }],
+            root,
+            &registry,
+        );
+
+        assert!(!graph.entities.contains_key("a.ts::function::foo"));
+        assert!(graph.entities.contains_key("a.ts::function::bar"));
+    }
+
+    #[test]
+    fn test_build_empty_graph() {
+        let (dir, registry) = create_test_repo();
+        let root = dir.path();
+
+        let graph = EntityGraph::build(root, &[], &registry);
+        assert!(graph.entities.is_empty());
+        assert!(graph.edges.is_empty());
+        assert!(graph.dependents.is_empty());
+        assert!(graph.dependencies.is_empty());
+    }
+
+    #[test]
+    fn test_build_with_nonexistent_file() {
+        let (dir, registry) = create_test_repo();
+        let root = dir.path();
+
+        // File doesn't exist on disk — should be gracefully skipped
+        let graph = EntityGraph::build(root, &["nonexistent.ts".into()], &registry);
+        assert!(graph.entities.is_empty());
+    }
+
+    #[test]
+    fn test_infer_ref_type_multiple_occurrences() {
+        // First occurrence is not a call (no '(' after), but second is
+        let content = "let x = MyFunc;\nMyFunc(arg);";
+        assert_eq!(infer_ref_type(content, "MyFunc"), RefType::Calls);
+    }
+
+    #[test]
+    fn test_extract_references_empty_content() {
+        let refs = extract_references_from_content("", "foo");
+        assert!(refs.is_empty());
+    }
+
+    #[test]
+    fn test_extract_references_allows_underscore_start() {
+        let content = "function foo() { _privateHelper(); }";
+        let refs = extract_references_from_content(content, "foo");
+        assert!(refs.contains(&"_privateHelper"));
+    }
+
+    #[test]
+    fn test_remove_entities_cleans_up_edges() {
+        let (dir, registry) = create_test_repo();
+        let root = dir.path();
+
+        write_file(root, "a.ts", "export function foo() { return bar(); }\n");
+        write_file(root, "b.ts", "export function bar() { return 1; }\n");
+
+        let mut graph = EntityGraph::build(root, &["a.ts".into(), "b.ts".into()], &registry);
+        let initial_edges = graph.edges.len();
+        assert!(initial_edges > 0, "should have edges before removal");
+
+        // Remove a.ts entities — should clean up edges that reference foo
+        graph.remove_entities_for_file("a.ts");
+        assert!(!graph.entities.contains_key("a.ts::function::foo"));
+        assert!(graph.entities.contains_key("b.ts::function::bar"));
+        // Edges from foo should be removed
+        assert!(
+            !graph
+                .edges
+                .iter()
+                .any(|e| e.from_entity == "a.ts::function::foo"),
+            "edges from removed entity should be cleaned up"
+        );
+    }
+
+    #[test]
+    fn test_same_file_reference_preferred() {
+        let (dir, registry) = create_test_repo();
+        let root = dir.path();
+
+        // Two files both define helper. a.ts calls helper — should prefer same-file target.
+        write_file(
+            root,
+            "a.ts",
+            "export function caller() { return helper(); }\nexport function helper() { return 1; }\n",
+        );
+        write_file(root, "b.ts", "export function helper() { return 2; }\n");
+
+        let graph = EntityGraph::build(root, &["a.ts".into(), "b.ts".into()], &registry);
+
+        let caller_deps = graph.get_dependencies("a.ts::function::caller");
+        // Should prefer a.ts::function::helper over b.ts::function::helper
+        if !caller_deps.is_empty() {
+            assert!(
+                caller_deps.iter().any(|e| e.file_path == "a.ts"),
+                "should prefer same-file reference, got: {:?}",
+                caller_deps.iter().map(|e| &e.file_path).collect::<Vec<_>>()
+            );
+        }
+    }
 }

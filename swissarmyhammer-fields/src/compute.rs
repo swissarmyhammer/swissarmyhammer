@@ -418,4 +418,10 @@ mod tests {
         let err = result.unwrap_err().to_string();
         assert!(err.contains("aggregate"));
     }
+
+    #[test]
+    fn compute_engine_default_creates_empty() {
+        let engine = ComputeEngine::default();
+        assert!(!engine.has("anything"));
+    }
 }

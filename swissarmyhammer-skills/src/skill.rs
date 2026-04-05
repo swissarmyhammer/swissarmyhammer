@@ -92,3 +92,60 @@ pub struct Skill {
     /// Additional resource files
     pub resources: SkillResources,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_skill_name_display() {
+        let name = SkillName::new("my-skill").unwrap();
+        assert_eq!(format!("{}", name), "my-skill");
+        assert_eq!(name.to_string(), "my-skill");
+    }
+
+    #[test]
+    fn test_skill_name_valid() {
+        assert!(SkillName::new("plan").is_ok());
+        assert!(SkillName::new("my-skill").is_ok());
+        assert!(SkillName::new("skill123").is_ok());
+        assert!(SkillName::new("a-b-c-1-2-3").is_ok());
+    }
+
+    #[test]
+    fn test_skill_name_empty() {
+        let err = SkillName::new("").unwrap_err();
+        assert!(err.contains("cannot be empty"));
+    }
+
+    #[test]
+    fn test_skill_name_invalid_chars() {
+        let err = SkillName::new("My-Skill").unwrap_err();
+        assert!(err.contains("lowercase alphanumeric"));
+
+        let err = SkillName::new("skill_name").unwrap_err();
+        assert!(err.contains("lowercase alphanumeric"));
+
+        let err = SkillName::new("skill name").unwrap_err();
+        assert!(err.contains("lowercase alphanumeric"));
+    }
+
+    #[test]
+    fn test_skill_name_as_str() {
+        let name = SkillName::new("test").unwrap();
+        assert_eq!(name.as_str(), "test");
+    }
+
+    #[test]
+    fn test_skill_source_display() {
+        assert_eq!(format!("{}", SkillSource::Builtin), "builtin");
+        assert_eq!(format!("{}", SkillSource::Local), "local");
+        assert_eq!(format!("{}", SkillSource::User), "user");
+    }
+
+    #[test]
+    fn test_skill_resources_default() {
+        let resources = SkillResources::default();
+        assert!(resources.files.is_empty());
+    }
+}

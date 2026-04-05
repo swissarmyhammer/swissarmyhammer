@@ -269,4 +269,23 @@ mod tests {
             "DeriveHandler::writable() default should return true"
         );
     }
+
+    #[test]
+    fn registry_debug_shows_handler_names() {
+        let mut registry = DeriveRegistry::new();
+        registry.register("alpha", Box::new(UpperTitle));
+        registry.register("beta", Box::new(ReadOnlyField));
+
+        let debug_str = format!("{:?}", registry);
+        assert!(debug_str.contains("DeriveRegistry"));
+        assert!(debug_str.contains("alpha"));
+        assert!(debug_str.contains("beta"));
+    }
+
+    #[test]
+    fn registry_default_creates_empty() {
+        let registry = DeriveRegistry::default();
+        assert!(!registry.has("anything"));
+        assert!(registry.get("anything").is_none());
+    }
 }

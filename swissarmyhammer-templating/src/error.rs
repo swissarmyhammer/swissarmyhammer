@@ -169,4 +169,40 @@ mod severity_tests {
         let error = TemplatingError::Other("unexpected error".to_string());
         assert_eq!(error.severity(), ErrorSeverity::Error);
     }
+
+    #[test]
+    fn test_from_liquid_error() {
+        // Trigger a real liquid::Error by parsing invalid template syntax
+        let parser = liquid::ParserBuilder::with_stdlib().build().unwrap();
+        let result = parser.parse("{% if %}");
+        let liquid_err = match result {
+            Ok(_) => panic!("expected parse error"),
+            Err(e) => e,
+        };
+        let error: TemplatingError = liquid_err.into();
+        assert!(matches!(error, TemplatingError::Render(_)));
+        assert!(!error.to_string().is_empty());
+    }
+
+    #[test]
+    fn test_from_anyhow_error() {
+        let anyhow_err = anyhow::anyhow!("something went wrong");
+        let error: TemplatingError = anyhow_err.into();
+        assert!(matches!(error, TemplatingError::Other(_)));
+        assert!(error.to_string().contains("something went wrong"));
+    }
+
+    #[test]
+    fn test_from_string() {
+        let error: TemplatingError = "string error".to_string().into();
+        assert!(matches!(error, TemplatingError::Other(_)));
+        assert!(error.to_string().contains("string error"));
+    }
+
+    #[test]
+    fn test_from_str() {
+        let error: TemplatingError = "str error".into();
+        assert!(matches!(error, TemplatingError::Other(_)));
+        assert!(error.to_string().contains("str error"));
+    }
 }

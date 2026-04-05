@@ -265,6 +265,18 @@ mod tests {
         let result = start_lsp_server("unsupported_lang", tmp.path());
         assert!(!result.started, "Unsupported language should fail to start");
         assert!(result.error.is_some(), "Error message should be provided");
+        assert!(
+            result.error.unwrap().contains("Unsupported language"),
+            "Error should mention unsupported language"
+        );
+    }
+
+    #[test]
+    fn test_unsupported_language_preserves_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        let result = start_lsp_server("go", tmp.path());
+        assert_eq!(result.language, "go");
+        assert!(!result.started);
     }
 
     #[test]
@@ -273,5 +285,142 @@ mod tests {
         assert_eq!(config.language, "rust");
         assert_eq!(config.executable.file_name().unwrap(), "rust-analyzer");
         assert_eq!(config.init_timeout, 30);
+    }
+
+    #[test]
+    fn test_default_config() {
+        let config = LspServerConfig::default();
+        assert_eq!(config.language, "rust");
+        assert_eq!(config.executable, PathBuf::from("rust-analyzer"));
+        assert!(config.args.is_empty());
+        assert_eq!(config.init_timeout, 30);
+    }
+
+    #[test]
+    fn test_spawn_server_nonexistent_executable() {
+        // An executable that does not exist on the filesystem or in PATH
+        let config = LspServerConfig {
+            language: "fake".to_string(),
+            executable: PathBuf::from("totally_nonexistent_lsp_server_xyz_12345"),
+            args: vec![],
+            init_timeout: 5,
+        };
+        let tmp = tempfile::tempdir().unwrap();
+        let result = spawn_server(&config, tmp.path());
+        assert!(result.is_err(), "Should fail when executable not found");
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("IO error"),
+            "Error should be IO-based, got: {}",
+            err_msg
+        );
+    }
+
+    #[test]
+    fn test_spawn_server_with_exe_in_path_that_exits_immediately() {
+        // Use 'true' (or 'cmd /c exit 0' on Windows) which exits immediately.
+        // This exercises the PATH-lookup branch and the "exited immediately" error path.
+        let exe_name = if cfg!(windows) { "cmd" } else { "true" };
+        let config = LspServerConfig {
+            language: "test".to_string(),
+            executable: PathBuf::from(exe_name),
+            args: if cfg!(windows) {
+                vec!["/c".to_string(), "exit".to_string(), "0".to_string()]
+            } else {
+                vec![]
+            },
+            init_timeout: 5,
+        };
+        let tmp = tempfile::tempdir().unwrap();
+        let result = spawn_server(&config, tmp.path());
+        // 'true' exits immediately, so spawn_server should detect this
+        assert!(
+            result.is_err(),
+            "Should fail because process exits immediately"
+        );
+    }
+
+    #[test]
+    fn test_spawn_server_with_absolute_exe_that_exits_immediately() {
+        // Find the absolute path to 'true' so we hit the else branch (executable.exists())
+        let true_path = find_executable("true");
+        // On some systems 'true' might not be a standalone binary; skip if not found
+        if let Some(abs_path) = true_path {
+            let config = LspServerConfig {
+                language: "test".to_string(),
+                executable: abs_path,
+                args: vec![],
+                init_timeout: 5,
+            };
+            let tmp = tempfile::tempdir().unwrap();
+            let result = spawn_server(&config, tmp.path());
+            assert!(
+                result.is_err(),
+                "Should fail because process exits immediately"
+            );
+        }
+    }
+
+    #[test]
+    fn test_start_lsp_server_rust_without_analyzer() {
+        // If rust-analyzer is not installed, start_lsp_server("rust", ...) should
+        // return a handle with started=false and an error. If it IS installed,
+        // the process will be spawned (and may or may not succeed).
+        let tmp = tempfile::tempdir().unwrap();
+        let result = start_lsp_server("rust", tmp.path());
+        // Regardless of whether rust-analyzer is installed, the handle should have
+        // the correct language field.
+        assert_eq!(result.language, "rust");
+        // We can't assert started true/false since it depends on the environment,
+        // but we verify the fields are consistent.
+        if result.started {
+            assert!(result.error.is_none());
+        } else {
+            assert!(result.error.is_some());
+        }
+    }
+
+    #[test]
+    fn test_spawn_server_with_args() {
+        // Verify args are passed through by using a command that accepts them.
+        // 'sleep 10' stays alive, exercising the "process still running" success path.
+        let exe_name = "sleep";
+        let config = LspServerConfig {
+            language: "test".to_string(),
+            executable: PathBuf::from(exe_name),
+            args: vec!["10".to_string()],
+            init_timeout: 5,
+        };
+        let tmp = tempfile::tempdir().unwrap();
+        let result = spawn_server(&config, tmp.path());
+        // sleep should stay alive for 10s, so spawn_server succeeds
+        assert!(
+            result.is_ok(),
+            "sleep 10 should stay running: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn test_lsp_server_handle_fields() {
+        // Verify LspServerHandle Debug impl works and fields are accessible
+        let handle = LspServerHandle {
+            language: "python".to_string(),
+            started: false,
+            error: Some("not installed".to_string()),
+        };
+        let debug_str = format!("{:?}", handle);
+        assert!(debug_str.contains("python"));
+        assert!(debug_str.contains("not installed"));
+    }
+
+    #[test]
+    fn test_detect_rust_analyzer() {
+        // Just exercise the detect function — result depends on environment
+        let result = detect_rust_analyzer();
+        // If found, it should be a valid path
+        if let Some(path) = result {
+            assert!(path.exists());
+        }
     }
 }

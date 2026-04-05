@@ -273,6 +273,21 @@ mod tests {
     }
 
     #[test]
+    fn test_print_table() {
+        let mut doctor = TestDoctor::new();
+        doctor.add_check(Check {
+            name: "Table Test".to_string(),
+            status: CheckStatus::Ok,
+            message: "Printed".to_string(),
+            fix: None,
+        });
+
+        // Exercise both non-verbose and verbose paths
+        doctor.print_table(false);
+        doctor.print_table(true);
+    }
+
+    #[test]
     fn test_count_by_status() {
         let mut doctor = TestDoctor::new();
 

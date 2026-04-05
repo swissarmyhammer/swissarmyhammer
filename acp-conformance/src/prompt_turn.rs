@@ -477,3 +477,165 @@ pub fn verify_prompt_fixture_with_response(
 
     Ok(stats)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use agent_client_protocol::{
+        AuthenticateRequest, AuthenticateResponse, CancelNotification, ExtNotification, ExtRequest,
+        ExtResponse, InitializeResponse, LoadSessionRequest, LoadSessionResponse,
+        NewSessionResponse, SetSessionModeRequest, SetSessionModeResponse,
+    };
+
+    /// Mock agent that returns simple prompt responses
+    struct PromptMockAgent;
+
+    #[async_trait::async_trait(?Send)]
+    impl Agent for PromptMockAgent {
+        async fn initialize(
+            &self,
+            _request: InitializeRequest,
+        ) -> agent_client_protocol::Result<InitializeResponse> {
+            Ok(InitializeResponse::new(ProtocolVersion::V1))
+        }
+
+        async fn authenticate(
+            &self,
+            _request: AuthenticateRequest,
+        ) -> agent_client_protocol::Result<AuthenticateResponse> {
+            Ok(AuthenticateResponse::new())
+        }
+
+        async fn new_session(
+            &self,
+            _request: NewSessionRequest,
+        ) -> agent_client_protocol::Result<NewSessionResponse> {
+            Ok(NewSessionResponse::new("prompt-test-session"))
+        }
+
+        async fn prompt(
+            &self,
+            _request: PromptRequest,
+        ) -> agent_client_protocol::Result<agent_client_protocol::PromptResponse> {
+            Ok(agent_client_protocol::PromptResponse::new(
+                StopReason::EndTurn,
+            ))
+        }
+
+        async fn cancel(&self, _request: CancelNotification) -> agent_client_protocol::Result<()> {
+            Ok(())
+        }
+
+        async fn load_session(
+            &self,
+            _request: LoadSessionRequest,
+        ) -> agent_client_protocol::Result<LoadSessionResponse> {
+            Ok(LoadSessionResponse::new())
+        }
+
+        async fn set_session_mode(
+            &self,
+            _request: SetSessionModeRequest,
+        ) -> agent_client_protocol::Result<SetSessionModeResponse> {
+            Ok(SetSessionModeResponse::new())
+        }
+
+        async fn ext_method(
+            &self,
+            _request: ExtRequest,
+        ) -> agent_client_protocol::Result<ExtResponse> {
+            Err(agent_client_protocol::Error::method_not_found())
+        }
+
+        async fn ext_notification(
+            &self,
+            _notification: ExtNotification,
+        ) -> agent_client_protocol::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn test_prompt_turn_stats_default() {
+        let stats = PromptTurnStats::default();
+        assert_eq!(stats.initialize_calls, 0);
+        assert_eq!(stats.new_session_calls, 0);
+        assert_eq!(stats.prompt_calls, 0);
+        assert_eq!(stats.cancel_calls, 0);
+        assert_eq!(stats.agent_message_chunks, 0);
+        assert_eq!(stats.user_message_chunks, 0);
+    }
+
+    #[test]
+    fn test_prompt_turn_stats_debug_and_serialize() {
+        let stats = PromptTurnStats {
+            initialize_calls: 1,
+            new_session_calls: 1,
+            prompt_calls: 3,
+            cancel_calls: 0,
+            agent_message_chunks: 10,
+            user_message_chunks: 3,
+        };
+        let debug = format!("{:?}", stats);
+        assert!(debug.contains("PromptTurnStats"));
+
+        let json = serde_json::to_value(&stats).unwrap();
+        assert_eq!(json["prompt_calls"], 3);
+        assert_eq!(json["agent_message_chunks"], 10);
+    }
+
+    #[tokio::test]
+    async fn test_basic_prompt_response_mock() {
+        let agent = PromptMockAgent;
+        let result = test_basic_prompt_response(&agent).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_prompt_completion_mock() {
+        let agent = PromptMockAgent;
+        let result = test_prompt_completion(&agent).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_stop_reasons_mock() {
+        let agent = PromptMockAgent;
+        let result = test_stop_reasons(&agent).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_cancellation_mock() {
+        let agent = PromptMockAgent;
+        let result = test_cancellation(&agent).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_multiple_prompts_mock() {
+        let agent = PromptMockAgent;
+        let result = test_multiple_prompts(&agent).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_streaming_capability_mock() {
+        let agent = PromptMockAgent;
+        let result = test_streaming_capability(&agent).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_streaming_context_maintained_mock() {
+        let agent = PromptMockAgent;
+        let result = test_streaming_context_maintained(&agent).await;
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_verify_prompt_turn_fixture_not_found() {
+        let result = verify_prompt_turn_fixture("nonexistent-agent", "nonexistent-test");
+        assert!(result.is_err());
+    }
+}

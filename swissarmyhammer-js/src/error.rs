@@ -55,3 +55,79 @@ impl JsError {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_evaluation_error_display() {
+        let err = JsError::evaluation("something failed");
+        assert_eq!(
+            err.to_string(),
+            "JavaScript evaluation error: something failed"
+        );
+    }
+
+    #[test]
+    fn test_evaluation_error_from_string() {
+        let err = JsError::evaluation(String::from("owned message"));
+        assert_eq!(
+            err.to_string(),
+            "JavaScript evaluation error: owned message"
+        );
+    }
+
+    #[test]
+    fn test_type_conversion_error_display() {
+        let err = JsError::type_conversion("bad type");
+        assert_eq!(err.to_string(), "Type conversion error: bad type");
+    }
+
+    #[test]
+    fn test_runtime_error_display() {
+        let err = JsError::runtime("init failed");
+        assert_eq!(err.to_string(), "Runtime error: init failed");
+    }
+
+    #[test]
+    fn test_variable_not_found_display() {
+        let err = JsError::VariableNotFound {
+            name: "missing_var".to_string(),
+        };
+        assert_eq!(err.to_string(), "Variable not found: missing_var");
+    }
+
+    #[test]
+    fn test_lock_error_display() {
+        let err = JsError::Lock("mutex poisoned".to_string());
+        assert_eq!(err.to_string(), "Lock error: mutex poisoned");
+    }
+
+    #[test]
+    fn test_timeout_error_display() {
+        let err = JsError::Timeout;
+        assert_eq!(
+            err.to_string(),
+            "Timeout: expression exceeded maximum execution time"
+        );
+    }
+
+    #[test]
+    fn test_error_debug_impl() {
+        let err = JsError::evaluation("test");
+        let debug_str = format!("{:?}", err);
+        assert!(debug_str.contains("Evaluation"));
+        assert!(debug_str.contains("test"));
+    }
+
+    #[test]
+    fn test_result_type_alias() {
+        // Verify the Result type alias works correctly
+        let ok_result: Result<i32> = Ok(42);
+        assert!(matches!(ok_result, Ok(42)));
+
+        let err_result: Result<i32> = Err(JsError::evaluation("fail"));
+        assert!(err_result.is_err());
+    }
+}

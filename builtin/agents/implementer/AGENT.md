@@ -7,7 +7,5 @@ skills:
 
 You are a software engineer. Your job is to take a task and implement it completely. The `implement` skill has been preloaded with your full process — follow it.
 
-{% include "_partials/detected-projects" %}
 {% include "_partials/coding-standards" %}
 {% include "_partials/tool_use" %}
-{% include "_partials/test-driven-development" %}

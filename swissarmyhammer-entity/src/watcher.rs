@@ -284,4 +284,232 @@ mod tests {
         let path = Path::new("/project/.kanban/tasks/01ABC.jsonl");
         assert!(parse_entity_path(root, path).is_none());
     }
+
+    #[test]
+    fn parse_entity_path_single_char_dir_no_s() {
+        let root = Path::new("/project/.kanban");
+        // "x" does not end with 's' (len < 2 after removing 's') -> None
+        let path = Path::new("/project/.kanban/s/foo.yaml");
+        // "s" has len 1 which is < 2 after removing 's'
+        assert!(parse_entity_path(root, path).is_none());
+    }
+
+    // -------------------------------------------------------------------------
+    // Tests for `handle_file_event` and `EntityWatcher` drop
+    // -------------------------------------------------------------------------
+
+    use crate::cache::EntityCache;
+    use crate::context::EntityContext;
+    use crate::entity::Entity;
+    use crate::test_utils::test_fields_context;
+    use serde_json::json;
+    use std::sync::Arc;
+    use tempfile::TempDir;
+
+    /// Helper: build an EntityCache backed by a temp directory.
+    async fn setup_cache() -> (TempDir, Arc<EntityCache>) {
+        let fields = test_fields_context();
+        let temp = TempDir::new().unwrap();
+        let root = temp.path().to_path_buf();
+        std::fs::create_dir_all(root.join("tags")).unwrap();
+        std::fs::create_dir_all(root.join("tasks")).unwrap();
+        let ctx = EntityContext::new(&root, fields);
+        let cache = Arc::new(EntityCache::new(ctx));
+        (temp, cache)
+    }
+
+    #[tokio::test]
+    async fn handle_file_event_create_refreshes_cache() {
+        let (_dir, cache) = setup_cache().await;
+
+        // Write a tag via the cache so it exists on disk
+        let mut tag = Entity::new("tag", "t1");
+        tag.set("tag_name", json!("Bug"));
+        tag.set("color", json!("#ff0000"));
+        cache.write(&tag).await.unwrap();
+
+        // Evict from cache to simulate external edit scenario
+        cache.evict("tag", "t1").await;
+        assert!(cache.get("tag", "t1").await.is_none());
+
+        // Simulate a Create event — should re-read from disk
+        let path = _dir.path().join("tags").join("t1.yaml");
+        handle_file_event(
+            &cache,
+            "tag",
+            "t1",
+            &EventKind::Create(notify::event::CreateKind::File),
+            &path,
+        )
+        .await;
+
+        // Entity should now be back in cache
+        let cached = cache.get("tag", "t1").await;
+        assert!(cached.is_some());
+        assert_eq!(cached.unwrap().get_str("tag_name"), Some("Bug"));
+    }
+
+    #[tokio::test]
+    async fn handle_file_event_modify_refreshes_cache() {
+        let (_dir, cache) = setup_cache().await;
+
+        let mut tag = Entity::new("tag", "t1");
+        tag.set("tag_name", json!("Bug"));
+        tag.set("color", json!("#ff0000"));
+        cache.write(&tag).await.unwrap();
+
+        // Modify the file on disk directly (bypass cache)
+        let path = _dir.path().join("tags").join("t1.yaml");
+        tokio::fs::write(&path, "tag_name: Updated\ncolor: '#00ff00'\n")
+            .await
+            .unwrap();
+
+        // Simulate a Modify event
+        handle_file_event(
+            &cache,
+            "tag",
+            "t1",
+            &EventKind::Modify(notify::event::ModifyKind::Data(
+                notify::event::DataChange::Content,
+            )),
+            &path,
+        )
+        .await;
+
+        // Cache should reflect the on-disk changes
+        let cached = cache.get("tag", "t1").await.unwrap();
+        assert_eq!(cached.get_str("tag_name"), Some("Updated"));
+    }
+
+    #[tokio::test]
+    async fn handle_file_event_remove_evicts_cache() {
+        let (_dir, cache) = setup_cache().await;
+
+        let mut tag = Entity::new("tag", "t1");
+        tag.set("tag_name", json!("Bug"));
+        cache.write(&tag).await.unwrap();
+        assert!(cache.get("tag", "t1").await.is_some());
+
+        // Simulate a Remove event
+        let path = _dir.path().join("tags").join("t1.yaml");
+        handle_file_event(
+            &cache,
+            "tag",
+            "t1",
+            &EventKind::Remove(notify::event::RemoveKind::File),
+            &path,
+        )
+        .await;
+
+        // Entity should be evicted from cache
+        assert!(cache.get("tag", "t1").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn handle_file_event_create_nonexistent_evicts() {
+        let (_dir, cache) = setup_cache().await;
+
+        let mut tag = Entity::new("tag", "t1");
+        tag.set("tag_name", json!("Bug"));
+        cache.write(&tag).await.unwrap();
+
+        // Delete the file on disk but simulate a Create event for it
+        let path = _dir.path().join("tags").join("t1.yaml");
+        tokio::fs::remove_file(&path).await.unwrap();
+
+        handle_file_event(
+            &cache,
+            "tag",
+            "t1",
+            &EventKind::Create(notify::event::CreateKind::File),
+            &path,
+        )
+        .await;
+
+        // Should be evicted (file doesn't exist on Create event)
+        assert!(cache.get("tag", "t1").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn handle_file_event_other_kind_is_noop() {
+        let (_dir, cache) = setup_cache().await;
+
+        let mut tag = Entity::new("tag", "t1");
+        tag.set("tag_name", json!("Bug"));
+        cache.write(&tag).await.unwrap();
+
+        // An "Other" event kind should be a no-op
+        let path = _dir.path().join("tags").join("t1.yaml");
+        handle_file_event(&cache, "tag", "t1", &EventKind::Other, &path).await;
+
+        // Entity should still be in cache
+        assert!(cache.get("tag", "t1").await.is_some());
+    }
+
+    #[test]
+    fn parse_entity_path_ignores_hidden_dirs() {
+        let root = Path::new("/project/.kanban");
+        // Files inside hidden directories like .trash or .archive should be ignored
+        // because they have 3 components: dir/.trash/file
+        let path = Path::new("/project/.kanban/tasks/.trash/01ABC.md");
+        assert!(parse_entity_path(root, path).is_none());
+    }
+
+    #[test]
+    fn parse_entity_path_ignores_archive_dir() {
+        let root = Path::new("/project/.kanban");
+        let path = Path::new("/project/.kanban/tasks/.archive/01ABC.md");
+        assert!(parse_entity_path(root, path).is_none());
+    }
+
+    #[test]
+    fn parse_entity_path_ignores_attachments_dir() {
+        let root = Path::new("/project/.kanban");
+        let path = Path::new("/project/.kanban/tasks/.attachments/01ABC-photo.png");
+        assert!(parse_entity_path(root, path).is_none());
+    }
+
+    #[test]
+    fn parse_entity_path_dir_name_too_short() {
+        let root = Path::new("/project/.kanban");
+        // Single-char dir "x" does not end with 's'
+        let path = Path::new("/project/.kanban/x/foo.yaml");
+        assert!(parse_entity_path(root, path).is_none());
+    }
+
+    #[tokio::test]
+    async fn handle_file_event_access_kind_is_noop() {
+        let (_dir, cache) = setup_cache().await;
+
+        let mut tag = Entity::new("tag", "t1");
+        tag.set("tag_name", json!("Bug"));
+        cache.write(&tag).await.unwrap();
+
+        // An Access event kind should be a no-op
+        let path = _dir.path().join("tags").join("t1.yaml");
+        handle_file_event(
+            &cache,
+            "tag",
+            "t1",
+            &EventKind::Access(notify::event::AccessKind::Read),
+            &path,
+        )
+        .await;
+
+        // Entity should still be in cache unchanged
+        let cached = cache.get("tag", "t1").await.unwrap();
+        assert_eq!(cached.get_str("tag_name"), Some("Bug"));
+    }
+
+    #[tokio::test]
+    async fn entity_watcher_drop_sends_shutdown() {
+        let (_dir, cache) = setup_cache().await;
+
+        // Start the watcher and drop it immediately
+        let watcher = EntityWatcher::start(_dir.path().to_path_buf(), cache);
+        assert!(watcher.is_ok());
+
+        // Drop should send shutdown signal without panic
+        drop(watcher.unwrap());
+    }
 }

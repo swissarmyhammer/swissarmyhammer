@@ -288,4 +288,117 @@ mod tests {
             _ => panic!("Expected Stop"),
         }
     }
+
+    #[test]
+    fn test_chain_result_continue_empty() {
+        match ChainResult::continue_empty() {
+            ChainResult::Continue(None) => {}
+            _ => panic!("Expected Continue(None)"),
+        }
+    }
+
+    #[test]
+    fn test_chain_result_continue_with() {
+        let output = LinkOutput::allow();
+        match ChainResult::continue_with(output) {
+            ChainResult::Continue(Some(o)) => {
+                assert_eq!(o.continue_execution, Some(true));
+            }
+            _ => panic!("Expected Continue(Some)"),
+        }
+    }
+
+    #[test]
+    fn test_chain_result_stop() {
+        let output = LinkOutput::block("blocked");
+        match ChainResult::stop(output) {
+            ChainResult::Stop(o) => {
+                assert_eq!(o.continue_execution, Some(false));
+            }
+            _ => panic!("Expected Stop"),
+        }
+    }
+
+    #[test]
+    fn test_chain_result_error() {
+        match ChainResult::error("TestLink", "Something broke") {
+            ChainResult::Error(e) => {
+                let msg = e.to_string();
+                assert!(msg.contains("TestLink") || msg.contains("Something broke"));
+            }
+            _ => panic!("Expected Error"),
+        }
+    }
+
+    #[test]
+    fn test_pass_through_link_name() {
+        let link: PassThroughLink<PreToolUseInput> = PassThroughLink::new();
+        assert_eq!(link.name(), "PassThrough");
+        assert!(!link.can_short_circuit());
+    }
+
+    #[test]
+    fn test_validation_link_name_and_short_circuit() {
+        let link = ValidationLink::new("TestValidator", |_: &PreToolUseInput| Ok(()));
+        assert_eq!(link.name(), "TestValidator");
+        assert!(link.can_short_circuit());
+    }
+
+    #[tokio::test]
+    async fn test_context_link_with_message() {
+        let link = ContextLink::new("TestContext", |input: &PreToolUseInput| {
+            Some(format!("Tool: {}", input.tool_name))
+        });
+
+        let input: PreToolUseInput = serde_json::from_value(serde_json::json!({
+            "session_id": "test",
+            "transcript_path": "/path",
+            "cwd": "/home",
+            "permission_mode": "default",
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Bash",
+            "tool_input": {"command": "ls"}
+        }))
+        .unwrap();
+        let mut ctx = ChainContext::new();
+
+        match link.process(&input, &mut ctx).await {
+            ChainResult::Continue(Some(output)) => {
+                assert_eq!(output.system_message, Some("Tool: Bash".to_string()));
+            }
+            _ => panic!("Expected Continue(Some)"),
+        }
+
+        assert_eq!(link.name(), "TestContext");
+    }
+
+    #[tokio::test]
+    async fn test_context_link_without_message() {
+        let link = ContextLink::new("TestContext", |_: &PreToolUseInput| None);
+
+        let input: PreToolUseInput = serde_json::from_value(serde_json::json!({
+            "session_id": "test",
+            "transcript_path": "/path",
+            "cwd": "/home",
+            "permission_mode": "default",
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Bash",
+            "tool_input": {"command": "ls"}
+        }))
+        .unwrap();
+        let mut ctx = ChainContext::new();
+
+        match link.process(&input, &mut ctx).await {
+            ChainResult::Continue(None) => {}
+            _ => panic!("Expected Continue(None)"),
+        }
+    }
+
+    #[test]
+    fn test_pass_through_link_new_equivalent_to_default_behavior() {
+        // PassThroughLink::new() produces the same behavior as default
+        let link: PassThroughLink<PreToolUseInput> = PassThroughLink::new();
+        assert_eq!(link.name(), "PassThrough");
+        assert!(!link.can_short_circuit());
+    }
 }

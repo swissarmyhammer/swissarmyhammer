@@ -312,4 +312,56 @@ mod tests {
             _ => panic!("Expected Stop"),
         }
     }
+
+    #[test]
+    fn test_success_starter_name_and_exit_code() {
+        let starter: SuccessStarter<PreToolUseInput> = SuccessStarter::new();
+        assert_eq!(starter.name(), "SuccessStarter");
+        assert_eq!(starter.exit_code(), 0);
+    }
+
+    #[test]
+    fn test_blocking_error_starter_name_and_exit_code() {
+        let starter: BlockingErrorStarter<PreToolUseInput> = BlockingErrorStarter::new("reason");
+        assert_eq!(starter.name(), "BlockingErrorStarter");
+        assert_eq!(starter.exit_code(), VALIDATOR_BLOCK_EXIT_CODE);
+    }
+
+    #[test]
+    fn test_conditional_starter_name_and_exit_code() {
+        let starter = ConditionalStarter::new(|_: &PreToolUseInput| true, "reason");
+        assert_eq!(starter.name(), "ConditionalStarter");
+        assert_eq!(starter.exit_code(), 0);
+    }
+
+    #[test]
+    fn test_validator_context_starter_name_and_exit_code() {
+        let starter: ValidatorContextStarter<PreToolUseInput> = ValidatorContextStarter::new();
+        assert_eq!(starter.name(), "ValidatorContextStarter");
+        assert_eq!(starter.exit_code(), 0);
+    }
+
+    #[test]
+    fn test_validator_context_starter_continues_outside_validator() {
+        // Ensure CLAUDE_ACP is not set for this test
+        std::env::remove_var("CLAUDE_ACP");
+        let starter: ValidatorContextStarter<PreToolUseInput> = ValidatorContextStarter::new();
+        let input = make_input();
+        let mut ctx = ChainContext::new();
+
+        match starter.start(&input, &mut ctx).unwrap() {
+            StarterResult::Continue => {}
+            _ => panic!("Expected Continue when not in validator context"),
+        }
+    }
+
+    #[test]
+    fn test_conditional_starter_fail_exit_code() {
+        let starter = ConditionalStarter::new(|_: &PreToolUseInput| false, "Blocked");
+        let input = make_input();
+        let mut ctx = ChainContext::new();
+
+        starter.start(&input, &mut ctx).unwrap();
+        assert_eq!(ctx.exit_code(), VALIDATOR_BLOCK_EXIT_CODE);
+    }
 }

@@ -8,13 +8,13 @@ metadata:
   version: "{{version}}"
 ---
 
-{% include "_partials/detected-projects" %}
 {% include "_partials/coding-standards" %}
-{% include "_partials/test-driven-development" %}
 
 # Implement
 
 Pick up the next kanban card and get it done.
+
+DO NOT deviate from the plan -- if you run into a problem, you need to stop and ask the user for guidance -- DO NOT deviate from the plan without permission from the user.
 
 ## Process
 

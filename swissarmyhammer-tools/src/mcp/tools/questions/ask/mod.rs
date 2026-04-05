@@ -116,3 +116,66 @@ pub async fn execute_ask(
         ),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_ask_question_operation_metadata() {
+        let op = AskQuestion;
+        assert_eq!(op.verb(), "ask");
+        assert_eq!(op.noun(), "question");
+        assert_eq!(op.op_string(), "ask question");
+        assert!(!op.description().is_empty());
+        assert_eq!(op.parameters().len(), 1);
+        // The only parameter should be "question"
+        assert_eq!(op.parameters()[0].name, "question");
+    }
+
+    #[tokio::test]
+    async fn test_execute_ask_empty_question_fails_validation() {
+        let ctx = crate::test_utils::create_test_context().await;
+
+        let mut args = serde_json::Map::new();
+        args.insert("question".to_string(), serde_json::json!(""));
+
+        let result = execute_ask(args, &ctx).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        // Should fail validation because question is empty
+        assert!(
+            err.contains("empty") || err.contains("question") || err.contains("blank"),
+            "Expected empty-question error, got: {}",
+            err
+        );
+    }
+
+    #[tokio::test]
+    async fn test_execute_ask_no_peer_returns_error() {
+        let ctx = crate::test_utils::create_test_context().await;
+
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "question".to_string(),
+            serde_json::json!("What is your name?"),
+        );
+
+        let result = execute_ask(args, &ctx).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        // Should fail because no elicitation peer is available
+        assert!(
+            err.contains("licitation") || err.contains("peer") || err.contains("available"),
+            "Expected elicitation error, got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_question_ask_request_deserialization() {
+        let req: QuestionAskRequest =
+            serde_json::from_str(r#"{"question": "What is your name?"}"#).unwrap();
+        assert_eq!(req.question, "What is your name?");
+    }
+}

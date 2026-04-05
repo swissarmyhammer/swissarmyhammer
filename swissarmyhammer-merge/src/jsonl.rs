@@ -192,6 +192,73 @@ mod tests {
         assert!(result.contains(ENTRY_B));
     }
 
+    /// Valid JSON lines without an `"id"` field are silently skipped.
+    #[test]
+    fn lines_without_id_are_skipped() {
+        // A valid JSON object but missing the "id" key should be ignored.
+        let no_id = r#"{"timestamp":"2026-01-01T00:00:00Z","op":"create"}"#;
+        let base = lines(&[ENTRY_A]);
+        let ours = format!("{}\n{}\n", ENTRY_A, no_id);
+        let theirs = lines(&[ENTRY_A]);
+
+        let result = merge_jsonl(&base, &ours, &theirs).expect("no conflict");
+        let result_lines: Vec<&str> = result.lines().collect();
+        assert_eq!(
+            result_lines.len(),
+            1,
+            "line without id should be silently skipped"
+        );
+        assert!(result.contains(ENTRY_A));
+    }
+
+    /// Both ours and theirs add the same id with identical content — no conflict.
+    #[test]
+    fn both_add_same_id_same_content_no_conflict() {
+        let base = lines(&[ENTRY_A]);
+        // Both sides add ENTRY_B independently (same id, same content).
+        let ours = lines(&[ENTRY_A, ENTRY_B]);
+        let theirs = lines(&[ENTRY_A, ENTRY_B]);
+
+        let result = merge_jsonl(&base, &ours, &theirs).expect("no conflict expected");
+        let result_lines: Vec<&str> = result.lines().collect();
+        assert_eq!(result_lines.len(), 2, "should have A and B deduplicated");
+        assert!(result.contains(ENTRY_A));
+        assert!(result.contains(ENTRY_B));
+    }
+
+    /// Lines that are not valid JSON at all are silently skipped.
+    #[test]
+    fn invalid_json_lines_are_skipped() {
+        let base = lines(&[ENTRY_A]);
+        let ours = format!("{}\nnot json at all\n", ENTRY_A);
+        let theirs = lines(&[ENTRY_A]);
+
+        let result = merge_jsonl(&base, &ours, &theirs).expect("no conflict");
+        let result_lines: Vec<&str> = result.lines().collect();
+        assert_eq!(
+            result_lines.len(),
+            1,
+            "invalid JSON line should be silently skipped"
+        );
+    }
+
+    /// Empty lines interspersed with valid entries in all three inputs are skipped.
+    #[test]
+    fn empty_lines_skipped_in_all_inputs() {
+        // Embed blank lines in base, ours, and theirs.
+        let base = format!("\n{}\n\n{}\n\n", ENTRY_A, ENTRY_B);
+        let ours = format!("\n{}\n\n{}\n{}\n\n", ENTRY_A, ENTRY_B, ENTRY_C);
+        let theirs = format!("\n{}\n\n{}\n{}\n\n", ENTRY_A, ENTRY_B, ENTRY_D);
+
+        let result = merge_jsonl(&base, &ours, &theirs).expect("no conflict");
+        let result_lines: Vec<&str> = result.lines().collect();
+        assert_eq!(
+            result_lines.len(),
+            4,
+            "should have 4 entries with blank lines ignored"
+        );
+    }
+
     /// Entries inserted out of ULID order come out sorted lexicographically.
     #[test]
     fn sorting() {

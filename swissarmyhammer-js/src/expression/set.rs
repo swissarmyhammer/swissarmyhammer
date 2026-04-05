@@ -101,3 +101,236 @@ impl Execute<JsContext, JsError> for SetExpression {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use swissarmyhammer_operations::Operation;
+
+    #[test]
+    fn test_get_name_with_name_field() {
+        let expr = SetExpression {
+            name: Some("x".to_string()),
+            expression: None,
+        };
+        assert_eq!(expr.get_name().unwrap(), "x");
+    }
+
+    #[test]
+    fn test_get_name_empty_returns_error() {
+        let expr = SetExpression {
+            name: Some(String::new()),
+            expression: None,
+        };
+        assert!(expr.get_name().is_err());
+        assert!(expr
+            .get_name()
+            .unwrap_err()
+            .contains("'name' or 'key' parameter is required"));
+    }
+
+    #[test]
+    fn test_get_name_none_returns_error() {
+        let expr = SetExpression {
+            name: None,
+            expression: None,
+        };
+        assert!(expr.get_name().is_err());
+    }
+
+    #[test]
+    fn test_get_expression_string() {
+        let expr = SetExpression {
+            name: None,
+            expression: Some(Value::String("10 + 5".to_string())),
+        };
+        assert_eq!(expr.get_expression().unwrap(), "10 + 5");
+    }
+
+    #[test]
+    fn test_get_expression_bool_true() {
+        let expr = SetExpression {
+            name: None,
+            expression: Some(Value::Bool(true)),
+        };
+        assert_eq!(expr.get_expression().unwrap(), "true");
+    }
+
+    #[test]
+    fn test_get_expression_bool_false() {
+        let expr = SetExpression {
+            name: None,
+            expression: Some(Value::Bool(false)),
+        };
+        assert_eq!(expr.get_expression().unwrap(), "false");
+    }
+
+    #[test]
+    fn test_get_expression_number() {
+        let expr = SetExpression {
+            name: None,
+            expression: Some(serde_json::json!(42)),
+        };
+        assert_eq!(expr.get_expression().unwrap(), "42");
+    }
+
+    #[test]
+    fn test_get_expression_null() {
+        let expr = SetExpression {
+            name: None,
+            expression: Some(Value::Null),
+        };
+        assert_eq!(expr.get_expression().unwrap(), "null");
+    }
+
+    #[test]
+    fn test_get_expression_array() {
+        let expr = SetExpression {
+            name: None,
+            expression: Some(serde_json::json!([1, 2, 3])),
+        };
+        let result = expr.get_expression().unwrap();
+        assert!(result.starts_with('('));
+        assert!(result.ends_with(')'));
+        assert!(result.contains("[1,2,3]"));
+    }
+
+    #[test]
+    fn test_get_expression_object() {
+        let expr = SetExpression {
+            name: None,
+            expression: Some(serde_json::json!({"a": 1})),
+        };
+        let result = expr.get_expression().unwrap();
+        assert!(result.starts_with('('));
+        assert!(result.ends_with(')'));
+        assert!(result.contains("\"a\""));
+    }
+
+    #[test]
+    fn test_get_expression_none_returns_error() {
+        let expr = SetExpression {
+            name: None,
+            expression: None,
+        };
+        assert!(expr.get_expression().is_err());
+        assert!(expr
+            .get_expression()
+            .unwrap_err()
+            .contains("'expression' or 'value' parameter is required"));
+    }
+
+    #[test]
+    fn test_operation_trait_verb() {
+        let expr = SetExpression {
+            name: None,
+            expression: None,
+        };
+        assert_eq!(expr.verb(), "set");
+    }
+
+    #[test]
+    fn test_operation_trait_noun() {
+        let expr = SetExpression {
+            name: None,
+            expression: None,
+        };
+        assert_eq!(expr.noun(), "expression");
+    }
+
+    #[test]
+    fn test_operation_trait_description() {
+        let expr = SetExpression {
+            name: None,
+            expression: None,
+        };
+        assert_eq!(
+            expr.description(),
+            "Evaluate expression and store as variable"
+        );
+    }
+
+    #[test]
+    fn test_debug_impl() {
+        let expr = SetExpression {
+            name: Some("x".to_string()),
+            expression: Some(Value::String("42".to_string())),
+        };
+        let debug = format!("{:?}", expr);
+        assert!(debug.contains("SetExpression"));
+        assert!(debug.contains("x"));
+    }
+
+    #[test]
+    fn test_serde_deserialize_with_aliases() {
+        // Test key/value aliases
+        let json = serde_json::json!({"key": "x", "value": "42"});
+        let expr: SetExpression = serde_json::from_value(json).unwrap();
+        assert_eq!(expr.get_name().unwrap(), "x");
+        assert_eq!(expr.get_expression().unwrap(), "42");
+    }
+
+    #[test]
+    fn test_serde_deserialize_with_primary_fields() {
+        let json = serde_json::json!({"name": "y", "expression": "10 + 5"});
+        let expr: SetExpression = serde_json::from_value(json).unwrap();
+        assert_eq!(expr.get_name().unwrap(), "y");
+        assert_eq!(expr.get_expression().unwrap(), "10 + 5");
+    }
+
+    #[test]
+    fn test_serde_serialize() {
+        let expr = SetExpression {
+            name: Some("z".to_string()),
+            expression: Some(Value::String("99".to_string())),
+        };
+        let json = serde_json::to_value(&expr).unwrap();
+        assert_eq!(json["name"], "z");
+        assert_eq!(json["expression"], "99");
+    }
+
+    #[tokio::test]
+    async fn test_execute_success() {
+        let ctx = JsContext::new();
+        let expr = SetExpression {
+            name: Some("set_test_exec".to_string()),
+            expression: Some(Value::String("100 + 1".to_string())),
+        };
+        let result = expr.execute(&ctx).await;
+        let value = result.into_result().unwrap();
+        assert_eq!(value, serde_json::json!(101));
+    }
+
+    #[tokio::test]
+    async fn test_execute_missing_name() {
+        let ctx = JsContext::new();
+        let expr = SetExpression {
+            name: None,
+            expression: Some(Value::String("42".to_string())),
+        };
+        let result = expr.execute(&ctx).await;
+        assert!(result.into_result().is_err());
+    }
+
+    #[tokio::test]
+    async fn test_execute_missing_expression() {
+        let ctx = JsContext::new();
+        let expr = SetExpression {
+            name: Some("valid_name".to_string()),
+            expression: None,
+        };
+        let result = expr.execute(&ctx).await;
+        assert!(result.into_result().is_err());
+    }
+
+    #[tokio::test]
+    async fn test_execute_invalid_js() {
+        let ctx = JsContext::new();
+        let expr = SetExpression {
+            name: Some("bad_js".to_string()),
+            expression: Some(Value::String("this is not valid +++".to_string())),
+        };
+        let result = expr.execute(&ctx).await;
+        assert!(result.into_result().is_err());
+    }
+}

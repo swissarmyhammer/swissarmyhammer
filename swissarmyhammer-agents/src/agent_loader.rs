@@ -25,6 +25,8 @@ struct AgentFrontmatter {
     background: bool,
     #[serde(default)]
     metadata: HashMap<String, String>,
+    #[serde(default)]
+    skills: Vec<String>,
 }
 
 /// Parse an AGENT.md file content into an Agent
@@ -68,6 +70,7 @@ pub fn parse_agent_md_with_path(
         max_turns: fm.max_turns,
         background: fm.background,
         metadata: fm.metadata,
+        skills: fm.skills,
         instructions: body.trim().to_string(),
         source_path: source_path.map(|p| p.to_path_buf()),
         source,
@@ -218,5 +221,213 @@ Explore the codebase.
 
         let agent = parse_agent_md(content, AgentSource::Builtin).unwrap();
         assert_eq!(agent.tools, vec!["read", "glob", "grep"]);
+    }
+
+    #[test]
+    fn test_parse_agent_md_with_path() {
+        let content = r#"---
+name: my-agent
+description: An agent with a path
+---
+
+Instructions here.
+"#;
+        let path = std::path::Path::new("/some/path/AGENT.md");
+        let agent = parse_agent_md_with_path(content, AgentSource::Local, Some(path)).unwrap();
+        assert_eq!(agent.name.as_str(), "my-agent");
+        assert_eq!(agent.source_path, Some(path.to_path_buf()));
+        assert_eq!(agent.source, AgentSource::Local);
+    }
+
+    #[test]
+    fn test_parse_agent_md_no_path() {
+        let content = r#"---
+name: no-path-agent
+description: Agent without path
+---
+
+Instructions.
+"#;
+        let agent = parse_agent_md(content, AgentSource::User).unwrap();
+        assert_eq!(agent.source_path, None);
+        assert_eq!(agent.source, AgentSource::User);
+    }
+
+    #[test]
+    fn test_load_agent_from_dir_basic() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let content = r#"---
+name: dir-agent
+description: Agent loaded from directory
+---
+
+Instructions from directory.
+"#;
+        fs::write(temp_dir.path().join("AGENT.md"), content).unwrap();
+
+        let agent = load_agent_from_dir(temp_dir.path(), AgentSource::Local).unwrap();
+        assert_eq!(agent.name.as_str(), "dir-agent");
+        assert_eq!(agent.source, AgentSource::Local);
+        assert!(agent.source_path.is_some());
+    }
+
+    #[test]
+    fn test_load_agent_from_dir_with_resources() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let content = r#"---
+name: resource-agent
+description: Agent with extra resources
+---
+
+Instructions.
+"#;
+        fs::write(temp_dir.path().join("AGENT.md"), content).unwrap();
+        fs::write(temp_dir.path().join("extra.md"), "Extra resource content").unwrap();
+        fs::write(temp_dir.path().join("config.toml"), "[settings]").unwrap();
+
+        let agent = load_agent_from_dir(temp_dir.path(), AgentSource::Local).unwrap();
+        assert!(
+            agent.resources.files.contains_key("extra.md"),
+            "should have extra.md resource"
+        );
+        assert!(
+            agent.resources.files.contains_key("config.toml"),
+            "should have config.toml resource"
+        );
+        assert!(
+            !agent.resources.files.contains_key("AGENT.md"),
+            "AGENT.md should not be in resources"
+        );
+    }
+
+    #[test]
+    fn test_load_agent_from_dir_missing_agent_md() {
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let result = load_agent_from_dir(temp_dir.path(), AgentSource::Local);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("no AGENT.md"));
+    }
+
+    #[test]
+    fn test_load_agent_from_builtin_basic() {
+        let files = vec![
+            (
+                "myagent/AGENT.md",
+                "---\nname: myagent\ndescription: Builtin test agent\n---\n\nInstructions.\n",
+            ),
+            ("myagent/helper.md", "Helper content"),
+        ];
+
+        let agent = load_agent_from_builtin("myagent", &files).unwrap();
+        assert_eq!(agent.name.as_str(), "myagent");
+        assert_eq!(agent.source, AgentSource::Builtin);
+        assert!(agent.resources.files.contains_key("helper.md"));
+    }
+
+    #[test]
+    fn test_load_agent_from_builtin_no_agent_md_fails() {
+        let files = vec![("myagent/other.md", "some content")];
+        let result = load_agent_from_builtin("myagent", &files);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("no AGENT.md"));
+    }
+
+    #[test]
+    fn test_load_agent_from_builtin_top_level_agent_md() {
+        // Some builtins may have AGENT.md at the root (no subdir prefix)
+        let files = vec![(
+            "AGENT.md",
+            "---\nname: rootagent\ndescription: Root-level agent\n---\n\nInstructions.\n",
+        )];
+        let agent = load_agent_from_builtin("rootagent", &files).unwrap();
+        assert_eq!(agent.name.as_str(), "rootagent");
+    }
+
+    #[test]
+    fn test_split_frontmatter_missing_close() {
+        let content = "---\nname: test\n# no closing ---";
+        assert!(split_frontmatter(content).is_err());
+    }
+
+    #[test]
+    fn test_parse_agent_with_background_true() {
+        let content = r#"---
+name: bg-agent
+description: Background agent
+background: true
+---
+
+Runs in background.
+"#;
+        let agent = parse_agent_md(content, AgentSource::Builtin).unwrap();
+        assert!(agent.background);
+    }
+
+    #[test]
+    fn test_parse_agent_with_isolation() {
+        let content = r#"---
+name: isolated-agent
+description: Isolated agent
+isolation: worktree
+---
+
+Runs in isolation.
+"#;
+        let agent = parse_agent_md(content, AgentSource::Builtin).unwrap();
+        assert_eq!(agent.isolation, Some("worktree".to_string()));
+    }
+
+    #[test]
+    fn test_parse_agent_with_metadata() {
+        let content = r#"---
+name: meta-agent
+description: Agent with metadata
+metadata:
+  version: "1.0"
+  author: test
+---
+
+Instructions.
+"#;
+        let agent = parse_agent_md(content, AgentSource::Builtin).unwrap();
+        assert_eq!(agent.metadata.get("version"), Some(&"1.0".to_string()));
+        assert_eq!(agent.metadata.get("author"), Some(&"test".to_string()));
+    }
+
+    #[test]
+    fn test_parse_agent_md_with_skills() {
+        let content = r#"---
+name: skilled-agent
+description: Agent with preloaded skills
+skills:
+  - test
+  - implement
+---
+
+Instructions with skills.
+"#;
+        let agent = parse_agent_md(content, AgentSource::Builtin).unwrap();
+        assert_eq!(agent.skills, vec!["test", "implement"]);
+    }
+
+    #[test]
+    fn test_parse_agent_md_without_skills() {
+        let content = r#"---
+name: no-skills-agent
+description: Agent without skills field
+---
+
+Instructions without skills.
+"#;
+        let agent = parse_agent_md(content, AgentSource::Builtin).unwrap();
+        assert!(agent.skills.is_empty());
     }
 }

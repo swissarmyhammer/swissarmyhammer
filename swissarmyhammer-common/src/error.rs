@@ -605,4 +605,196 @@ mod tests {
             error
         );
     }
+
+    // --- Constructor helper tests ---
+
+    #[test]
+    fn test_directory_creation_constructor() {
+        let io_err = io::Error::new(io::ErrorKind::PermissionDenied, "cannot create dir");
+        let error = SwissArmyHammerError::directory_creation(io_err);
+        match &error {
+            SwissArmyHammerError::DirectoryCreation(msg) => {
+                assert!(msg.contains("cannot create dir"));
+            }
+            _ => panic!("Expected DirectoryCreation variant, got: {:?}", error),
+        }
+        assert_eq!(error.severity(), ErrorSeverity::Critical);
+    }
+
+    #[test]
+    fn test_directory_access_constructor() {
+        let error = SwissArmyHammerError::directory_access("not readable");
+        match &error {
+            SwissArmyHammerError::DirectoryAccess(msg) => {
+                assert_eq!(msg, "not readable");
+            }
+            _ => panic!("Expected DirectoryAccess variant, got: {:?}", error),
+        }
+        assert_eq!(error.severity(), ErrorSeverity::Critical);
+    }
+
+    #[test]
+    fn test_invalid_path_constructor() {
+        let path = PathBuf::from("/some/bad/path");
+        let error = SwissArmyHammerError::invalid_path(path.clone());
+        match &error {
+            SwissArmyHammerError::InvalidPath { path: p } => {
+                assert_eq!(*p, path);
+            }
+            _ => panic!("Expected InvalidPath variant, got: {:?}", error),
+        }
+        assert_eq!(error.severity(), ErrorSeverity::Error);
+    }
+
+    #[test]
+    fn test_io_context_constructor() {
+        let error = SwissArmyHammerError::io_context("disk full".to_string());
+        match &error {
+            SwissArmyHammerError::IoContext { message } => {
+                assert_eq!(message, "disk full");
+            }
+            _ => panic!("Expected IoContext variant, got: {:?}", error),
+        }
+        assert_eq!(error.severity(), ErrorSeverity::Error);
+    }
+
+    #[test]
+    fn test_semantic_constructor() {
+        let error = SwissArmyHammerError::semantic("embedding failed".to_string());
+        match &error {
+            SwissArmyHammerError::Semantic { message } => {
+                assert_eq!(message, "embedding failed");
+            }
+            _ => panic!("Expected Semantic variant, got: {:?}", error),
+        }
+        assert_eq!(error.severity(), ErrorSeverity::Error);
+    }
+
+    #[test]
+    fn test_other_constructor() {
+        let error = SwissArmyHammerError::other("something broke".to_string());
+        match &error {
+            SwissArmyHammerError::Other { message } => {
+                assert_eq!(message, "something broke");
+            }
+            _ => panic!("Expected Other variant, got: {:?}", error),
+        }
+        assert_eq!(error.severity(), ErrorSeverity::Error);
+    }
+
+    // --- Severity tests for variants not covered by existing tests ---
+
+    #[test]
+    fn test_directory_error_severity() {
+        // Directory variant has Error severity
+        let dir_err = swissarmyhammer_directory::DirectoryError::NotInGitRepository;
+        let error = SwissArmyHammerError::Directory(dir_err);
+        assert_eq!(error.severity(), ErrorSeverity::Error);
+    }
+
+    #[test]
+    fn test_serialization_error_severity() {
+        // Construct a serde_yaml_ng error by parsing invalid YAML
+        let yaml_err: std::result::Result<serde_yaml_ng::Value, _> = serde_yaml_ng::from_str(":");
+        if let Err(e) = yaml_err {
+            let error = SwissArmyHammerError::Serialization(e);
+            assert_eq!(error.severity(), ErrorSeverity::Error);
+        }
+        // Even if the parse above succeeds, we still want to test this path.
+        // Use an alternative malformed input.
+        let yaml_err2: std::result::Result<serde_yaml_ng::Value, _> =
+            serde_yaml_ng::from_str("\t\t\t---\n\t\t\tinvalid:\n\t\t\t  - [");
+        if let Err(e) = yaml_err2 {
+            let error = SwissArmyHammerError::Serialization(e);
+            assert_eq!(error.severity(), ErrorSeverity::Error);
+        }
+    }
+
+    #[test]
+    fn test_json_error_severity() {
+        let json_err: std::result::Result<serde_json::Value, _> =
+            serde_json::from_str("not valid json");
+        let error = SwissArmyHammerError::Json(json_err.unwrap_err());
+        assert_eq!(error.severity(), ErrorSeverity::Error);
+    }
+
+    #[test]
+    fn test_context_error_severity() {
+        let source = io::Error::other("underlying");
+        let error = SwissArmyHammerError::Context {
+            message: "wrapping context".to_string(),
+            source: Box::new(source),
+        };
+        assert_eq!(error.severity(), ErrorSeverity::Error);
+        assert!(error.to_string().contains("wrapping context"));
+    }
+
+    // --- ErrorContext trait tests ---
+
+    #[test]
+    fn test_error_context_ok_passes_through() {
+        let result: std::result::Result<i32, io::Error> = Ok(42);
+        let wrapped = result.context("should not matter");
+        assert_eq!(wrapped.unwrap(), 42);
+    }
+
+    #[test]
+    fn test_error_context_err_wraps() {
+        let result: std::result::Result<i32, io::Error> =
+            Err(io::Error::new(io::ErrorKind::NotFound, "gone"));
+        let wrapped = result.context("file operation failed");
+        let err = wrapped.unwrap_err();
+        match &err {
+            SwissArmyHammerError::Context { message, .. } => {
+                assert_eq!(message, "file operation failed");
+            }
+            _ => panic!("Expected Context variant, got: {:?}", err),
+        }
+    }
+
+    #[test]
+    fn test_error_with_context_ok_passes_through() {
+        let result: std::result::Result<i32, io::Error> = Ok(99);
+        let wrapped = result.with_context(|| "lazy message");
+        assert_eq!(wrapped.unwrap(), 99);
+    }
+
+    #[test]
+    fn test_error_with_context_err_wraps() {
+        let result: std::result::Result<i32, io::Error> = Err(io::Error::other("boom"));
+        let wrapped = result.with_context(|| format!("failed to process item {}", 7));
+        let err = wrapped.unwrap_err();
+        match &err {
+            SwissArmyHammerError::Context { message, .. } => {
+                assert_eq!(message, "failed to process item 7");
+            }
+            _ => panic!("Expected Context variant, got: {:?}", err),
+        }
+    }
+
+    // --- ErrorChain / ErrorChainExt tests ---
+
+    #[test]
+    fn test_error_chain_single_error() {
+        let error = SwissArmyHammerError::other("top level".to_string());
+        let chain = error.error_chain();
+        let output = format!("{}", chain);
+        assert!(output.contains("top level"));
+        // No "Caused by" for a single error without source
+        assert!(!output.contains("Caused by"));
+    }
+
+    #[test]
+    fn test_error_chain_with_source() {
+        let source = io::Error::new(io::ErrorKind::NotFound, "file missing");
+        let error = SwissArmyHammerError::Context {
+            message: "could not load config".to_string(),
+            source: Box::new(source),
+        };
+        let chain = error.error_chain();
+        let output = format!("{}", chain);
+        assert!(output.contains("could not load config"));
+        assert!(output.contains("Caused by"));
+        assert!(output.contains("file missing"));
+    }
 }

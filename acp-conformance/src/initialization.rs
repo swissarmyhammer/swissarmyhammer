@@ -372,9 +372,226 @@ pub fn verify_initialization_fixture(
 
 #[cfg(test)]
 mod tests {
-    /// Dummy test to verify module compiles
+    use super::*;
+    use agent_client_protocol::{
+        AgentCapabilities, AuthenticateRequest, AuthenticateResponse, CancelNotification,
+        ExtNotification, ExtRequest, ExtResponse, Implementation, InitializeResponse,
+        LoadSessionRequest, LoadSessionResponse, NewSessionRequest, NewSessionResponse,
+        PromptRequest, PromptResponse, SetSessionModeRequest, SetSessionModeResponse, StopReason,
+    };
+
+    /// Mock agent for initialization tests
+    struct InitMockAgent;
+
+    #[async_trait::async_trait(?Send)]
+    impl Agent for InitMockAgent {
+        async fn initialize(
+            &self,
+            _request: InitializeRequest,
+        ) -> agent_client_protocol::Result<InitializeResponse> {
+            let mut resp = InitializeResponse::new(ProtocolVersion::V1);
+            resp.agent_info = Some(Implementation::new("test-agent", "0.1.0"));
+            Ok(resp)
+        }
+
+        async fn authenticate(
+            &self,
+            _request: AuthenticateRequest,
+        ) -> agent_client_protocol::Result<AuthenticateResponse> {
+            Ok(AuthenticateResponse::new())
+        }
+
+        async fn new_session(
+            &self,
+            _request: NewSessionRequest,
+        ) -> agent_client_protocol::Result<NewSessionResponse> {
+            Ok(NewSessionResponse::new("init-test-session"))
+        }
+
+        async fn prompt(
+            &self,
+            _request: PromptRequest,
+        ) -> agent_client_protocol::Result<PromptResponse> {
+            Ok(PromptResponse::new(StopReason::EndTurn))
+        }
+
+        async fn cancel(&self, _request: CancelNotification) -> agent_client_protocol::Result<()> {
+            Ok(())
+        }
+
+        async fn load_session(
+            &self,
+            _request: LoadSessionRequest,
+        ) -> agent_client_protocol::Result<LoadSessionResponse> {
+            Ok(LoadSessionResponse::new())
+        }
+
+        async fn set_session_mode(
+            &self,
+            _request: SetSessionModeRequest,
+        ) -> agent_client_protocol::Result<SetSessionModeResponse> {
+            Ok(SetSessionModeResponse::new())
+        }
+
+        async fn ext_method(
+            &self,
+            _request: ExtRequest,
+        ) -> agent_client_protocol::Result<ExtResponse> {
+            Err(agent_client_protocol::Error::method_not_found())
+        }
+
+        async fn ext_notification(
+            &self,
+            _notification: ExtNotification,
+        ) -> agent_client_protocol::Result<()> {
+            Ok(())
+        }
+    }
+
     #[test]
     fn test_module_compiles() {
         // This ensures the module compiles correctly
+    }
+
+    #[test]
+    fn test_initialization_stats_default() {
+        let stats = InitializationStats::default();
+        assert_eq!(stats.initialize_calls, 0);
+        assert!(stats.protocol_version.is_none());
+        assert!(!stats.has_agent_info);
+        assert!(!stats.has_agent_capabilities);
+    }
+
+    #[test]
+    fn test_initialization_stats_debug_and_serialize() {
+        let stats = InitializationStats {
+            initialize_calls: 1,
+            protocol_version: Some(1),
+            has_agent_info: true,
+            has_agent_capabilities: true,
+        };
+        let debug = format!("{:?}", stats);
+        assert!(debug.contains("InitializationStats"));
+
+        let json = serde_json::to_value(&stats).unwrap();
+        assert_eq!(json["initialize_calls"], 1);
+        assert_eq!(json["protocol_version"], 1);
+    }
+
+    #[tokio::test]
+    async fn test_minimal_initialization_mock() {
+        let agent = InitMockAgent;
+        let result = test_minimal_initialization(&agent).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_full_capabilities_initialization_mock() {
+        let agent = InitMockAgent;
+        let result = test_full_capabilities_initialization(&agent).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_minimal_client_capabilities_mock() {
+        let agent = InitMockAgent;
+        let result = test_minimal_client_capabilities(&agent).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_protocol_version_negotiation_mock() {
+        let agent = InitMockAgent;
+        let result = test_protocol_version_negotiation(&agent).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_initialize_idempotent_mock() {
+        let agent = InitMockAgent;
+        let result = test_initialize_idempotent(&agent).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_with_client_info_mock() {
+        let agent = InitMockAgent;
+        let result = test_with_client_info(&agent).await;
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_initialization_response_valid() {
+        let mut resp = InitializeResponse::new(ProtocolVersion::V1);
+        resp.agent_info = Some(Implementation::new("test", "1.0"));
+        let result = validate_initialization_response(&resp);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_initialization_response_no_agent_info() {
+        let resp = InitializeResponse::new(ProtocolVersion::V1);
+        // agent_info is optional, should not fail
+        let result = validate_initialization_response(&resp);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_protocol_version_match() {
+        let result = validate_protocol_version(&ProtocolVersion::V1, ProtocolVersion::V1);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_agent_capabilities_present_fn() {
+        let caps = AgentCapabilities::default();
+        let result = validate_agent_capabilities_present(&caps);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_auth_methods_empty() {
+        let result = validate_auth_methods(&[]);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_agent_info_none() {
+        let result = validate_agent_info(&None);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_agent_info_some_valid() {
+        let info = Some(Implementation::new("my-agent", "2.0.0"));
+        let result = validate_agent_info(&info);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_agent_info_empty_name() {
+        let info = Some(Implementation::new("", "1.0"));
+        let result = validate_agent_info(&info);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_agent_info_empty_version() {
+        let info = Some(Implementation::new("agent", ""));
+        let result = validate_agent_info(&info);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_log_agent_capabilities_all_false() {
+        let caps = AgentCapabilities::default();
+        // Just verify it doesn't panic
+        log_agent_capabilities(&caps);
+    }
+
+    #[test]
+    fn test_verify_initialization_fixture_not_found() {
+        let result = verify_initialization_fixture("nonexistent-agent", "nonexistent-test");
+        assert!(result.is_err());
     }
 }

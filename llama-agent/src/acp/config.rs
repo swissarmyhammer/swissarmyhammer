@@ -117,6 +117,10 @@ impl AcpConfig {
         let prompt_library = swissarmyhammer_prompts::PromptLibrary::default();
         let template_context = swissarmyhammer_config::TemplateContext::new();
 
+        // Skill library for resolving agent preloaded skills
+        let mut skill_library = swissarmyhammer_skills::SkillLibrary::new();
+        skill_library.load_defaults();
+
         match registry.load_all() {
             Ok(modes) => {
                 let mut system_prompts = HashMap::new();
@@ -131,6 +135,7 @@ impl AcpConfig {
                             &mode,
                             &agent_library,
                             &prompt_library,
+                            &skill_library,
                             &template_context,
                         );
 
@@ -395,12 +400,14 @@ impl Default for TerminalSettings {
 /// Resolve a mode's display name, description, and system prompt from its agent reference.
 ///
 /// If the mode has an `agent:` field, looks up the agent in the AgentLibrary and uses
-/// the agent's name, description, and Liquid-rendered instructions. Falls back to the
-/// mode's own embedded metadata if the agent is not found.
+/// the agent's name, description, and Liquid-rendered instructions. When the agent declares
+/// preloaded skills, each skill's rendered instructions are appended to the system prompt.
+/// Falls back to the mode's own embedded metadata if the agent is not found.
 fn resolve_mode_from_agent(
     mode: &swissarmyhammer_modes::Mode,
     agent_library: &swissarmyhammer_agents::AgentLibrary,
     prompt_library: &swissarmyhammer_prompts::PromptLibrary,
+    skill_library: &swissarmyhammer_skills::SkillLibrary,
     template_context: &swissarmyhammer_config::TemplateContext,
 ) -> (String, String, String) {
     // 1. Try agent reference
@@ -416,7 +423,37 @@ fn resolve_mode_from_agent(
                     );
                     agent.instructions.clone()
                 });
-            return (agent.name.to_string(), agent.description.clone(), rendered);
+
+            // Append preloaded skill instructions
+            let mut system_prompt = rendered;
+            for skill_name in &agent.skills {
+                if let Some(skill) = skill_library.get(skill_name) {
+                    let skill_rendered = prompt_library
+                        .render_text(&skill.instructions, template_context)
+                        .unwrap_or_else(|e| {
+                            tracing::warn!(
+                                "Failed to render skill '{}' instructions: {}",
+                                skill_name,
+                                e
+                            );
+                            skill.instructions.clone()
+                        });
+                    system_prompt.push_str("\n\n");
+                    system_prompt.push_str(&skill_rendered);
+                } else {
+                    tracing::warn!(
+                        "Agent '{}' references skill '{}' but it was not found",
+                        agent_name,
+                        skill_name
+                    );
+                }
+            }
+
+            return (
+                agent.name.to_string(),
+                agent.description.clone(),
+                system_prompt,
+            );
         }
         tracing::warn!(
             "Mode '{}' references agent '{}' but it was not found, falling back to embedded",
@@ -755,10 +792,18 @@ capabilities:
         lib
     }
 
+    /// Helper: create skill library with builtins for resolution tests
+    fn test_skill_library() -> swissarmyhammer_skills::SkillLibrary {
+        let mut lib = swissarmyhammer_skills::SkillLibrary::new();
+        lib.load_defaults();
+        lib
+    }
+
     #[test]
     fn test_resolve_mode_from_agent_uses_agent_metadata() {
         let agent_library = test_agent_library();
         let prompt_library = swissarmyhammer_prompts::PromptLibrary::default();
+        let skill_library = test_skill_library();
         let template_context = swissarmyhammer_config::TemplateContext::new();
 
         // Create a mode that references the builtin "planner" agent
@@ -769,8 +814,13 @@ capabilities:
             "planner",
         );
 
-        let (name, desc, system_prompt) =
-            resolve_mode_from_agent(&mode, &agent_library, &prompt_library, &template_context);
+        let (name, desc, system_prompt) = resolve_mode_from_agent(
+            &mode,
+            &agent_library,
+            &prompt_library,
+            &skill_library,
+            &template_context,
+        );
 
         // Name and description should come from the agent, NOT the mode
         assert_ne!(name, "Mode Name", "name should come from agent, not mode");
@@ -785,6 +835,7 @@ capabilities:
     fn test_resolve_mode_from_agent_fallback_when_agent_missing() {
         let agent_library = swissarmyhammer_agents::AgentLibrary::new(); // empty
         let prompt_library = swissarmyhammer_prompts::PromptLibrary::default();
+        let skill_library = test_skill_library();
         let template_context = swissarmyhammer_config::TemplateContext::new();
 
         // References a nonexistent agent
@@ -795,8 +846,13 @@ capabilities:
             "nonexistent-agent",
         );
 
-        let (name, desc, _system_prompt) =
-            resolve_mode_from_agent(&mode, &agent_library, &prompt_library, &template_context);
+        let (name, desc, _system_prompt) = resolve_mode_from_agent(
+            &mode,
+            &agent_library,
+            &prompt_library,
+            &skill_library,
+            &template_context,
+        );
 
         // Should fall back to mode's own metadata
         assert_eq!(name, "Fallback Name");
@@ -807,6 +863,7 @@ capabilities:
     fn test_resolve_mode_from_agent_no_agent_ref() {
         let agent_library = test_agent_library();
         let prompt_library = swissarmyhammer_prompts::PromptLibrary::default();
+        let skill_library = test_skill_library();
         let template_context = swissarmyhammer_config::TemplateContext::new();
 
         // Mode with no agent reference (embedded system prompt)
@@ -817,12 +874,55 @@ capabilities:
             "You are a test agent.",
         );
 
-        let (name, desc, system_prompt) =
-            resolve_mode_from_agent(&mode, &agent_library, &prompt_library, &template_context);
+        let (name, desc, system_prompt) = resolve_mode_from_agent(
+            &mode,
+            &agent_library,
+            &prompt_library,
+            &skill_library,
+            &template_context,
+        );
 
         assert_eq!(name, "Embedded Name");
         assert_eq!(desc, "Embedded Desc");
         assert_eq!(system_prompt, "You are a test agent.");
+    }
+
+    #[test]
+    fn test_resolve_mode_from_agent_appends_skill_instructions() {
+        let agent_library = test_agent_library();
+        let prompt_library = swissarmyhammer_prompts::PromptLibrary::default();
+        let skill_library = test_skill_library();
+        let template_context = swissarmyhammer_config::TemplateContext::new();
+
+        // The "tester" agent has skills: [test] in its frontmatter
+        let mode = swissarmyhammer_modes::Mode::with_agent(
+            "test-mode",
+            "Mode Name",
+            "Mode Desc",
+            "tester",
+        );
+
+        let (_name, _desc, system_prompt) = resolve_mode_from_agent(
+            &mode,
+            &agent_library,
+            &prompt_library,
+            &skill_library,
+            &template_context,
+        );
+
+        // The tester agent's instructions should be present
+        assert!(
+            !system_prompt.is_empty(),
+            "system prompt should not be empty"
+        );
+
+        // The "test" skill's instructions should be appended
+        let test_skill = skill_library.get("test").expect("test skill should exist");
+        let skill_snippet = &test_skill.instructions[..test_skill.instructions.len().min(50)];
+        assert!(
+            system_prompt.contains(skill_snippet),
+            "system prompt should contain test skill instructions"
+        );
     }
 
     #[test]

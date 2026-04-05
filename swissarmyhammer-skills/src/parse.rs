@@ -8,6 +8,7 @@ use crate::operations::{ListSkills, SearchSkill, UseSkill};
 use serde_json::{Map, Value};
 
 /// A parsed skill operation ready for execution
+#[derive(Debug)]
 pub enum SkillOperation {
     List(ListSkills),
     Use(UseSkill),
@@ -181,5 +182,107 @@ mod tests {
         let input = json!({"op": "activate skill", "name": "plan"});
         let op = parse_input(input).unwrap();
         assert!(matches!(op, SkillOperation::Use(_)));
+    }
+
+    #[test]
+    fn test_parse_non_object_input() {
+        let input = json!("just a string");
+        let err = parse_input(input).unwrap_err();
+        assert!(err.to_string().contains("JSON object"));
+    }
+
+    #[test]
+    fn test_parse_array_input() {
+        let input = json!([1, 2, 3]);
+        let err = parse_input(input).unwrap_err();
+        assert!(err.to_string().contains("JSON object"));
+    }
+
+    #[test]
+    fn test_parse_single_word_op() {
+        // Single word op should default noun to "skill"
+        let input = json!({"op": "list"});
+        let op = parse_input(input).unwrap();
+        assert!(matches!(op, SkillOperation::List(_)));
+    }
+
+    #[test]
+    fn test_parse_single_word_op_use() {
+        // "use" as single word requires "name" field
+        let input = json!({"op": "use", "name": "plan"});
+        let op = parse_input(input).unwrap();
+        assert!(matches!(op, SkillOperation::Use(_)));
+    }
+
+    #[test]
+    fn test_parse_unsupported_verb() {
+        let input = json!({"op": "delete skill"});
+        let err = parse_input(input).unwrap_err();
+        assert!(err.to_string().contains("unsupported"));
+    }
+
+    #[test]
+    fn test_parse_use_missing_name() {
+        let input = json!({"op": "use skill"});
+        let err = parse_input(input).unwrap_err();
+        assert!(err.to_string().contains("name"));
+    }
+
+    #[test]
+    fn test_parse_search_missing_query() {
+        let input = json!({"op": "search skill"});
+        let err = parse_input(input).unwrap_err();
+        assert!(err.to_string().contains("query"));
+    }
+
+    #[test]
+    fn test_parse_verb_noun_without_noun() {
+        // verb field without noun should default to "skill"
+        let input = json!({"verb": "list"});
+        let op = parse_input(input).unwrap();
+        assert!(matches!(op, SkillOperation::List(_)));
+    }
+
+    #[test]
+    fn test_parse_ls_alias() {
+        let input = json!({"op": "ls skill"});
+        let op = parse_input(input).unwrap();
+        assert!(matches!(op, SkillOperation::List(_)));
+    }
+
+    #[test]
+    fn test_parse_show_alias() {
+        let input = json!({"op": "show skill"});
+        let op = parse_input(input).unwrap();
+        assert!(matches!(op, SkillOperation::List(_)));
+    }
+
+    #[test]
+    fn test_parse_available_alias() {
+        let input = json!({"op": "available skill"});
+        let op = parse_input(input).unwrap();
+        assert!(matches!(op, SkillOperation::List(_)));
+    }
+
+    #[test]
+    fn test_parse_invoke_alias() {
+        let input = json!({"op": "invoke skill", "name": "plan"});
+        let op = parse_input(input).unwrap();
+        assert!(matches!(op, SkillOperation::Use(_)));
+    }
+
+    #[test]
+    fn test_parse_lookup_alias() {
+        let input = json!({"op": "lookup skill", "query": "test"});
+        let op = parse_input(input).unwrap();
+        assert!(matches!(op, SkillOperation::Search(_)));
+    }
+
+    #[test]
+    fn test_parse_unrelated_fields_default_to_list() {
+        // Object with unrelated fields (no name, query, op, verb) → list
+        let input = json!({"foo": "bar", "baz": 42});
+        let op = parse_input(input).unwrap();
+        assert!(matches!(op, SkillOperation::List(_)));
     }
 }

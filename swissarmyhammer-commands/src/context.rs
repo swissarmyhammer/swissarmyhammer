@@ -419,4 +419,37 @@ mod tests {
         let ctx = test_ctx(&["store:C:\\Users\\me\\.kanban", "window:main"]);
         assert_eq!(ctx.resolve_store_path(), Some("C:\\Users\\me\\.kanban"));
     }
+
+    // --- Debug impl tests ---
+
+    #[test]
+    fn command_context_debug_includes_key_fields() {
+        let mut args = HashMap::new();
+        args.insert("title".into(), serde_json::json!("Hello"));
+        let ctx = CommandContext::new(
+            "test.cmd",
+            vec!["task:01ABC".to_string(), "column:todo".to_string()],
+            Some("column:doing".to_string()),
+            args,
+        );
+        let debug_str = format!("{:?}", ctx);
+        assert!(debug_str.contains("CommandContext"));
+        assert!(debug_str.contains("test.cmd"));
+        assert!(debug_str.contains("task:01ABC"));
+        assert!(debug_str.contains("column:doing"));
+        assert!(debug_str.contains("extensions_count"));
+    }
+
+    #[test]
+    fn command_context_debug_shows_extension_count() {
+        let mut ctx = test_ctx(&[]);
+        ctx.set_extension(Arc::new(FakeService { name: "svc".into() }));
+        let debug_str = format!("{:?}", ctx);
+        // Should show extensions_count: 1
+        assert!(
+            debug_str.contains("1"),
+            "debug should show extension count, got: {debug_str}"
+        );
+
+    }
 }

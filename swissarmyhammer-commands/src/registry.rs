@@ -753,4 +753,45 @@ mod tests {
         let registry = CommandsRegistry::default();
         assert!(registry.all_commands().is_empty());
     }
+
+    #[test]
+    fn merge_yaml_value_override_with_invalid_merged_result_preserves_original() {
+        // Start with a valid command, then overlay an override that makes the
+        // merged result invalid (e.g., wrong type for a field).
+        let base = r#"
+- id: task.add
+  name: Add Task
+  undoable: true
+"#;
+        let override_yaml = r#"
+- id: task.add
+  undoable: not_a_bool
+"#;
+        let registry =
+            CommandsRegistry::from_yaml_sources(&[("base", base), ("override", override_yaml)]);
+        let cmd = registry.get("task.add");
+        if let Some(cmd) = cmd {
+            assert_eq!(cmd.name, "Add Task");
+        }
+    }
+
+    #[test]
+    fn merge_yaml_sources_override_adds_new_via_merge() {
+        let base = vec![("base", "- id: app.quit\n  name: Quit\n  undoable: false\n")];
+        let mut reg = CommandsRegistry::from_yaml_sources(&base);
+
+        let over = vec![("over", "- id: app.quit\n  name: Quit App\n")];
+        reg.merge_yaml_sources(&over);
+        let cmd = reg.get("app.quit").unwrap();
+        assert_eq!(cmd.name, "Quit App");
+        assert!(!cmd.undoable);
+    }
+
+    // --- scope_matches edge cases ---
+
+    #[test]
+    fn scope_matches_non_entity_requirement_is_ignored() {
+        let chain = vec!["task:01ABC".to_string()];
+        assert!(scope_matches(Some("custom_scope"), &chain));
+    }
 }

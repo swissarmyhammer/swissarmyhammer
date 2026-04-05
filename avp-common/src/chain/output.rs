@@ -289,4 +289,92 @@ mod tests {
         let block = result.validator_block.unwrap();
         assert_eq!(block.validator_name, "no-secrets");
     }
+
+    #[test]
+    fn test_link_output_with_message() {
+        let output = LinkOutput::empty().with_message("Test message");
+        assert!(output.system_message.is_some());
+        assert_eq!(output.system_message.unwrap(), "Test message");
+    }
+
+    #[test]
+    fn test_chain_output_is_blocked_by_validator() {
+        let output = ChainOutput {
+            continue_execution: true,
+            validator_block: Some(ValidatorBlockInfo {
+                validator_name: "test".to_string(),
+                message: "blocked".to_string(),
+                hook_type: HookType::PreToolUse,
+            }),
+            ..Default::default()
+        };
+        assert!(output.is_blocked());
+        assert!(output.blocking_validator().is_some());
+    }
+
+    #[test]
+    fn test_chain_output_not_blocked() {
+        let output = ChainOutput::success();
+        assert!(!output.is_blocked());
+        assert!(output.blocking_validator().is_none());
+    }
+
+    #[test]
+    fn test_aggregator_suppress_output_or_logic() {
+        let mut aggregator = ChainOutputAggregator::new();
+        aggregator.add(LinkOutput {
+            suppress_output: Some(false),
+            ..Default::default()
+        });
+        aggregator.add(LinkOutput {
+            suppress_output: Some(true),
+            ..Default::default()
+        });
+
+        let result = aggregator.aggregate();
+        assert!(result.suppress_output, "OR logic: any true -> true");
+    }
+
+    #[test]
+    fn test_aggregator_system_messages_concatenated() {
+        let mut aggregator = ChainOutputAggregator::new();
+        aggregator.add(LinkOutput::empty().with_message("first"));
+        aggregator.add(LinkOutput::empty().with_message("second"));
+
+        let result = aggregator.aggregate();
+        let msg = result.system_message.unwrap();
+        assert_eq!(msg, "first\nsecond");
+    }
+
+    #[test]
+    fn test_aggregator_clear_and_len() {
+        let mut aggregator = ChainOutputAggregator::new();
+        assert!(aggregator.is_empty());
+        assert_eq!(aggregator.len(), 0);
+
+        aggregator.add(LinkOutput::empty());
+        aggregator.add(LinkOutput::empty());
+        assert!(!aggregator.is_empty());
+        assert_eq!(aggregator.len(), 2);
+
+        aggregator.clear();
+        assert!(aggregator.is_empty());
+        assert_eq!(aggregator.len(), 0);
+    }
+
+    #[test]
+    fn test_aggregator_first_stop_reason_wins() {
+        let mut aggregator = ChainOutputAggregator::new();
+        aggregator.add(LinkOutput {
+            stop_reason: Some("first reason".to_string()),
+            ..Default::default()
+        });
+        aggregator.add(LinkOutput {
+            stop_reason: Some("second reason".to_string()),
+            ..Default::default()
+        });
+
+        let result = aggregator.aggregate();
+        assert_eq!(result.stop_reason, Some("first reason".to_string()));
+    }
 }

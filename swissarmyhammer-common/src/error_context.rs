@@ -119,4 +119,105 @@ mod tests {
             _ => panic!("Expected IO error"),
         }
     }
+
+    #[test]
+    fn test_io_error_with_message() {
+        let error = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "access denied");
+        let result = io_error_with_message(error, "Cannot write to config".to_string());
+
+        match result {
+            SwissArmyHammerError::Io(io_err) => {
+                let message = io_err.to_string();
+                assert!(message.contains("Cannot write to config"));
+            }
+            _ => panic!("Expected IO error"),
+        }
+    }
+
+    #[test]
+    fn test_io_result_ext_with_io_message() {
+        use std::fs;
+        let path = PathBuf::from("/nonexistent/file.txt");
+        let result: std::result::Result<String, std::io::Error> = fs::read_to_string(&path);
+        let converted = result.with_io_message("Custom message context".to_string());
+
+        assert!(converted.is_err());
+        match converted.err().unwrap() {
+            SwissArmyHammerError::Io(io_err) => {
+                let message = io_err.to_string();
+                assert!(message.contains("Custom message context"));
+            }
+            _ => panic!("Expected IO error"),
+        }
+    }
+
+    #[test]
+    fn test_io_result_ext_to_other_error() {
+        use std::fs;
+        let path = PathBuf::from("/nonexistent/file.txt");
+        let result: std::result::Result<String, std::io::Error> = fs::read_to_string(&path);
+        let converted = result.to_other_error();
+
+        assert!(converted.is_err());
+        match converted.err().unwrap() {
+            SwissArmyHammerError::Other { message } => {
+                // The original io error message should be preserved
+                assert!(!message.is_empty());
+            }
+            _ => panic!("Expected Other error"),
+        }
+    }
+
+    #[test]
+    fn test_io_result_ext_with_io_context_ok() {
+        let result: std::result::Result<i32, std::io::Error> = Ok(42);
+        let path = PathBuf::from("/some/path.txt");
+        let converted = result.with_io_context(&path, "reading");
+
+        assert!(converted.is_ok());
+        assert_eq!(converted.unwrap(), 42);
+    }
+
+    #[test]
+    fn test_io_result_ext_with_io_message_ok() {
+        let result: std::result::Result<&str, std::io::Error> = Ok("hello");
+        let converted = result.with_io_message("some context".to_string());
+
+        assert!(converted.is_ok());
+        assert_eq!(converted.unwrap(), "hello");
+    }
+
+    #[test]
+    fn test_io_result_ext_to_other_error_ok() {
+        let result: std::result::Result<bool, std::io::Error> = Ok(true);
+        let converted = result.to_other_error();
+
+        assert!(converted.is_ok());
+        assert!(converted.unwrap());
+    }
+
+    #[test]
+    fn test_other_error_from_string() {
+        let result = other_error("something broke".to_string());
+        match result {
+            SwissArmyHammerError::Other { message } => {
+                assert_eq!(message, "something broke");
+            }
+            _ => panic!("Expected Other error"),
+        }
+    }
+
+    #[test]
+    fn test_io_error_with_context_preserves_kind() {
+        let error = std::io::Error::new(std::io::ErrorKind::NotFound, "gone");
+        let path = PathBuf::from("/missing.txt");
+        let result = io_error_with_context(error, &path, "Opening");
+
+        match result {
+            SwissArmyHammerError::Io(io_err) => {
+                assert_eq!(io_err.kind(), std::io::ErrorKind::NotFound);
+            }
+            _ => panic!("Expected IO error"),
+        }
+    }
 }

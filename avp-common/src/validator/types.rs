@@ -1358,6 +1358,392 @@ mod tests {
         assert_eq!(frontmatter.name, "validator-name");
     }
 
+    // =========================================================================
+    // RuleSet Matching Tests
+    // =========================================================================
+
+    fn make_ruleset(
+        trigger: HookType,
+        match_criteria: Option<ValidatorMatch>,
+        trigger_matcher: Option<String>,
+    ) -> RuleSet {
+        RuleSet {
+            manifest: RuleSetManifest {
+                name: "test-ruleset".to_string(),
+                description: "Test".to_string(),
+                metadata: RuleSetMetadata {
+                    version: "1.0.0".to_string(),
+                },
+                trigger,
+                match_criteria,
+                trigger_matcher,
+                tags: vec![],
+                severity: Severity::Error,
+                timeout: 30,
+                once: false,
+            },
+            rules: vec![],
+            source: ValidatorSource::Builtin,
+            base_path: PathBuf::from("/test"),
+        }
+    }
+
+    #[test]
+    fn test_ruleset_matches_hook_type() {
+        let rs = make_ruleset(HookType::PreToolUse, None, None);
+        assert!(rs.matches(&MatchContext::new(HookType::PreToolUse)));
+        assert!(!rs.matches(&MatchContext::new(HookType::PostToolUse)));
+    }
+
+    #[test]
+    fn test_ruleset_matches_tool_filter() {
+        let rs = make_ruleset(
+            HookType::PreToolUse,
+            Some(ValidatorMatch {
+                tools: vec!["Write".to_string(), "Edit".to_string()],
+                files: vec![],
+            }),
+            None,
+        );
+        assert!(rs.matches(&MatchContext::new(HookType::PreToolUse).with_tool("Write")));
+        assert!(rs.matches(&MatchContext::new(HookType::PreToolUse).with_tool("write")));
+        assert!(!rs.matches(&MatchContext::new(HookType::PreToolUse).with_tool("Bash")));
+        assert!(!rs.matches(&MatchContext::new(HookType::PreToolUse)));
+    }
+
+    #[test]
+    fn test_ruleset_matches_file_filter() {
+        let rs = make_ruleset(
+            HookType::PostToolUse,
+            Some(ValidatorMatch {
+                tools: vec![],
+                files: vec!["*.ts".to_string(), "src/**/*.rs".to_string()],
+            }),
+            None,
+        );
+        assert!(rs.matches(&MatchContext::new(HookType::PostToolUse).with_file("test.ts")));
+        assert!(rs.matches(&MatchContext::new(HookType::PostToolUse).with_file("src/lib.rs")));
+        assert!(!rs.matches(&MatchContext::new(HookType::PostToolUse).with_file("test.py")));
+        assert!(!rs.matches(&MatchContext::new(HookType::PostToolUse)));
+    }
+
+    #[test]
+    fn test_ruleset_matches_trigger_matcher() {
+        let rs = make_ruleset(HookType::Notification, None, Some("agent_.*".to_string()));
+        assert!(rs.matches(
+            &MatchContext::new(HookType::Notification).with_event_context("agent_complete")
+        ));
+        assert!(!rs
+            .matches(&MatchContext::new(HookType::Notification).with_event_context("user_input")));
+        // No context with triggerMatcher present -> no match
+        assert!(!rs.matches(&MatchContext::new(HookType::Notification)));
+    }
+
+    #[test]
+    fn test_ruleset_matches_invalid_trigger_regex() {
+        let rs = make_ruleset(HookType::Notification, None, Some("[invalid(".to_string()));
+        // Invalid regex should fail gracefully
+        assert!(
+            !rs.matches(&MatchContext::new(HookType::Notification).with_event_context("anything"))
+        );
+    }
+
+    #[test]
+    fn test_ruleset_matches_stop_skips_file_filter() {
+        // Stop hook RuleSets skip file matching
+        let rs = make_ruleset(
+            HookType::Stop,
+            Some(ValidatorMatch {
+                tools: vec![],
+                files: vec!["*.ts".to_string()],
+            }),
+            None,
+        );
+        // Should match even without file path, because Stop skips file matching
+        assert!(rs.matches(&MatchContext::new(HookType::Stop)));
+    }
+
+    // =========================================================================
+    // RuleSet Accessor Tests
+    // =========================================================================
+
+    #[test]
+    fn test_ruleset_name_and_description() {
+        let rs = make_ruleset(HookType::PreToolUse, None, None);
+        assert_eq!(rs.name(), "test-ruleset");
+        assert_eq!(rs.description(), "Test");
+        assert_eq!(rs.trigger(), HookType::PreToolUse);
+    }
+
+    // =========================================================================
+    // Rule Effective Values Tests
+    // =========================================================================
+
+    #[test]
+    fn test_rule_effective_severity_override() {
+        let rs = make_ruleset(HookType::PreToolUse, None, None);
+        let rule = Rule {
+            name: "test".to_string(),
+            description: "Test".to_string(),
+            body: "Body".to_string(),
+            severity: Some(Severity::Warn),
+            timeout: Some(60),
+        };
+        // Rule has override
+        assert_eq!(rule.effective_severity(&rs), Severity::Warn);
+        assert_eq!(rule.effective_timeout(&rs), 60);
+    }
+
+    #[test]
+    fn test_rule_effective_severity_inherits() {
+        let rs = make_ruleset(HookType::PreToolUse, None, None);
+        let rule = Rule {
+            name: "test".to_string(),
+            description: "Test".to_string(),
+            body: "Body".to_string(),
+            severity: None,
+            timeout: None,
+        };
+        // Rule inherits from RuleSet
+        assert_eq!(rule.effective_severity(&rs), Severity::Error);
+        assert_eq!(rule.effective_timeout(&rs), 30);
+    }
+
+    // =========================================================================
+    // ExecutedRuleSet Tests
+    // =========================================================================
+
+    #[test]
+    fn test_executed_ruleset_all_passed() {
+        let executed = ExecutedRuleSet {
+            ruleset_name: "test".to_string(),
+            rule_results: vec![
+                RuleResult {
+                    rule_name: "r1".to_string(),
+                    severity: Severity::Error,
+                    result: ValidatorResult::pass("ok".to_string()),
+                },
+                RuleResult {
+                    rule_name: "r2".to_string(),
+                    severity: Severity::Warn,
+                    result: ValidatorResult::pass("ok".to_string()),
+                },
+            ],
+        };
+        assert!(executed.passed());
+        assert!(!executed.has_blocking_failure());
+        assert!(executed.failed_rules().is_empty());
+        assert!(executed.blocking_failures().is_empty());
+    }
+
+    #[test]
+    fn test_executed_ruleset_with_warn_failure() {
+        let executed = ExecutedRuleSet {
+            ruleset_name: "test".to_string(),
+            rule_results: vec![RuleResult {
+                rule_name: "r1".to_string(),
+                severity: Severity::Warn,
+                result: ValidatorResult::fail("issue".to_string()),
+            }],
+        };
+        assert!(!executed.passed());
+        assert!(
+            !executed.has_blocking_failure(),
+            "Warn failures don't block"
+        );
+        assert_eq!(executed.failed_rules().len(), 1);
+        assert!(executed.blocking_failures().is_empty());
+    }
+
+    #[test]
+    fn test_executed_ruleset_with_error_failure() {
+        let executed = ExecutedRuleSet {
+            ruleset_name: "test".to_string(),
+            rule_results: vec![RuleResult {
+                rule_name: "r1".to_string(),
+                severity: Severity::Error,
+                result: ValidatorResult::fail("bad".to_string()),
+            }],
+        };
+        assert!(!executed.passed());
+        assert!(executed.has_blocking_failure());
+        assert_eq!(executed.blocking_failures().len(), 1);
+    }
+
+    // =========================================================================
+    // RuleResult Tests
+    // =========================================================================
+
+    #[test]
+    fn test_rule_result_passed() {
+        let rr = RuleResult {
+            rule_name: "test".to_string(),
+            severity: Severity::Error,
+            result: ValidatorResult::pass("all good".to_string()),
+        };
+        assert!(rr.passed());
+        assert!(!rr.is_blocking());
+        assert_eq!(rr.message(), "all good");
+    }
+
+    #[test]
+    fn test_rule_result_blocking() {
+        let rr = RuleResult {
+            rule_name: "test".to_string(),
+            severity: Severity::Error,
+            result: ValidatorResult::fail("bad".to_string()),
+        };
+        assert!(!rr.passed());
+        assert!(rr.is_blocking());
+        assert_eq!(rr.message(), "bad");
+    }
+
+    #[test]
+    fn test_rule_result_warn_not_blocking() {
+        let rr = RuleResult {
+            rule_name: "test".to_string(),
+            severity: Severity::Warn,
+            result: ValidatorResult::fail("warning".to_string()),
+        };
+        assert!(!rr.passed());
+        assert!(!rr.is_blocking());
+    }
+
+    // =========================================================================
+    // ExecutedValidator Tests
+    // =========================================================================
+
+    #[test]
+    fn test_executed_validator_passed() {
+        let ev = ExecutedValidator {
+            name: "test".to_string(),
+            severity: Severity::Error,
+            result: ValidatorResult::pass("ok".to_string()),
+        };
+        assert!(ev.passed());
+        assert!(!ev.is_blocking());
+        assert_eq!(ev.message(), "ok");
+    }
+
+    #[test]
+    fn test_executed_validator_blocking() {
+        let ev = ExecutedValidator {
+            name: "test".to_string(),
+            severity: Severity::Error,
+            result: ValidatorResult::fail("bad".to_string()),
+        };
+        assert!(!ev.passed());
+        assert!(ev.is_blocking());
+    }
+
+    #[test]
+    fn test_executed_validator_warn_not_blocking() {
+        let ev = ExecutedValidator {
+            name: "test".to_string(),
+            severity: Severity::Warn,
+            result: ValidatorResult::fail("warn".to_string()),
+        };
+        assert!(!ev.passed());
+        assert!(!ev.is_blocking());
+    }
+
+    // =========================================================================
+    // Severity and ValidatorSource Display Tests
+    // =========================================================================
+
+    #[test]
+    fn test_severity_display() {
+        assert_eq!(Severity::Info.to_string(), "info");
+        assert_eq!(Severity::Warn.to_string(), "warn");
+        assert_eq!(Severity::Error.to_string(), "error");
+    }
+
+    #[test]
+    fn test_validator_source_display() {
+        assert_eq!(ValidatorSource::Builtin.to_string(), "builtin");
+        assert_eq!(ValidatorSource::User.to_string(), "user");
+        assert_eq!(ValidatorSource::Project.to_string(), "project");
+    }
+
+    // =========================================================================
+    // RuleSetManifest apply_defaults Tests
+    // =========================================================================
+
+    #[test]
+    fn test_ruleset_manifest_apply_defaults() {
+        let mut manifest = RuleSetManifest {
+            name: String::new(),
+            description: String::new(),
+            metadata: RuleSetMetadata {
+                version: String::new(),
+            },
+            trigger: HookType::PostToolUse,
+            match_criteria: None,
+            trigger_matcher: None,
+            tags: vec![],
+            severity: Severity::Warn,
+            timeout: 30,
+            once: false,
+        };
+
+        manifest.apply_defaults(std::path::Path::new("/path/to/my-rules"));
+
+        assert_eq!(manifest.name, "my-rules");
+        assert_eq!(manifest.description, "RuleSet: my-rules");
+        assert_eq!(manifest.metadata.version, "1.0.0");
+    }
+
+    #[test]
+    fn test_ruleset_manifest_apply_defaults_preserves_values() {
+        let mut manifest = RuleSetManifest {
+            name: "explicit".to_string(),
+            description: "My description".to_string(),
+            metadata: RuleSetMetadata {
+                version: "2.0.0".to_string(),
+            },
+            trigger: HookType::PreToolUse,
+            match_criteria: None,
+            trigger_matcher: None,
+            tags: vec![],
+            severity: Severity::Error,
+            timeout: 60,
+            once: true,
+        };
+
+        manifest.apply_defaults(std::path::Path::new("other-name"));
+
+        assert_eq!(manifest.name, "explicit");
+        assert_eq!(manifest.description, "My description");
+        assert_eq!(manifest.metadata.version, "2.0.0");
+    }
+
+    // =========================================================================
+    // MatchContext from_json Tests (additional)
+    // =========================================================================
+
+    #[test]
+    fn test_match_context_from_json_file_field() {
+        let input = serde_json::json!({
+            "tool_input": {"file": "/path/to/file.py"}
+        });
+        let ctx = MatchContext::from_json(HookType::PostToolUse, &input);
+        assert_eq!(ctx.file_path, Some("/path/to/file.py".to_string()));
+    }
+
+    #[test]
+    fn test_match_context_from_json_subagent_type() {
+        let input = serde_json::json!({"subagent_type": "task_runner"});
+        let ctx = MatchContext::from_json(HookType::SubagentStart, &input);
+        assert_eq!(ctx.event_context, Some("task_runner".to_string()));
+    }
+
+    #[test]
+    fn test_match_context_from_json_hook_event_name_fallback() {
+        let input = serde_json::json!({"hook_event_name": "Stop"});
+        let ctx = MatchContext::from_json(HookType::Stop, &input);
+        assert_eq!(ctx.event_context, Some("Stop".to_string()));
+    }
+
     #[test]
     fn test_apply_defaults_stop_validators_no_file_patterns() {
         // Stop validators should NOT get default file patterns because they

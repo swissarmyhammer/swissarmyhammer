@@ -278,7 +278,6 @@ mod tests {
 
     #[test]
     fn test_schema_includes_perspective_ops() {
-        // Use the full canonical operation list so perspective ops are included.
         let ops = kanban_operations();
         let schema = generate_kanban_mcp_schema(ops);
 
@@ -313,7 +312,6 @@ mod tests {
             .as_array()
             .expect("examples should be an array");
 
-        // At least one example should mention "perspective" in description or op value
         let has_perspective_example = examples.iter().any(|ex| {
             let desc = ex["description"].as_str().unwrap_or("");
             let op_val = ex["value"]["op"].as_str().unwrap_or("");
@@ -324,5 +322,88 @@ mod tests {
             has_perspective_example,
             "schema examples should include at least one perspective example"
         );
+    }
+
+    #[test]
+    fn test_kanban_operations_returns_full_list() {
+        let ops = kanban_operations();
+
+        assert!(
+            !ops.is_empty(),
+            "kanban_operations() should return a non-empty list"
+        );
+
+        let op_names: Vec<String> = ops.iter().map(|op| op.op_string()).collect();
+        let op_names: Vec<&str> = op_names.iter().map(|s| s.as_str()).collect();
+
+        assert!(op_names.contains(&"init board"), "Missing 'init board'");
+        assert!(op_names.contains(&"get board"), "Missing 'get board'");
+        assert!(op_names.contains(&"update board"), "Missing 'update board'");
+        assert!(op_names.contains(&"add column"), "Missing 'add column'");
+        assert!(op_names.contains(&"list columns"), "Missing 'list columns'");
+        assert!(op_names.contains(&"add swimlane"), "Missing 'add swimlane'");
+        assert!(
+            op_names.contains(&"list swimlanes"),
+            "Missing 'list swimlanes'"
+        );
+        assert!(op_names.contains(&"add actor"), "Missing 'add actor'");
+        assert!(op_names.contains(&"list actors"), "Missing 'list actors'");
+        assert!(op_names.contains(&"add task"), "Missing 'add task'");
+        assert!(
+            op_names.contains(&"complete task"),
+            "Missing 'complete task'"
+        );
+        assert!(op_names.contains(&"move task"), "Missing 'move task'");
+        assert!(op_names.contains(&"next task"), "Missing 'next task'");
+        assert!(op_names.contains(&"list tasks"), "Missing 'list tasks'");
+        assert!(op_names.contains(&"add tag"), "Missing 'add tag'");
+        assert!(op_names.contains(&"list tags"), "Missing 'list tags'");
+    }
+
+    #[test]
+    fn test_kanban_operations_generates_valid_schema() {
+        let ops = kanban_operations();
+        let schema = generate_kanban_mcp_schema(ops);
+
+        assert_eq!(schema["type"], "object");
+        assert_eq!(schema["additionalProperties"], true);
+        assert!(schema["description"].as_str().unwrap().contains("Kanban"));
+
+        let op_enum = schema["properties"]["op"]["enum"].as_array().unwrap();
+        assert!(!op_enum.is_empty(), "op enum should not be empty");
+
+        let enum_strs: Vec<&str> = op_enum.iter().filter_map(|v| v.as_str()).collect();
+        assert!(enum_strs.contains(&"init board"));
+        assert!(enum_strs.contains(&"add task"));
+        assert!(enum_strs.contains(&"complete task"));
+
+        for op in ops {
+            let op_name = op.op_string();
+            assert!(
+                enum_strs.contains(&op_name.as_str()),
+                "Operation '{}' missing from schema enum",
+                op_name
+            );
+        }
+
+        let op_schemas = schema["x-operation-schemas"].as_array().unwrap();
+        assert_eq!(
+            op_schemas.len(),
+            ops.len(),
+            "x-operation-schemas count should match number of operations"
+        );
+    }
+
+    #[test]
+    fn test_kanban_operations_is_static() {
+        let ops1 = kanban_operations();
+        let ops2 = kanban_operations();
+
+        assert_eq!(
+            ops1.as_ptr(),
+            ops2.as_ptr(),
+            "kanban_operations() should return the same static reference"
+        );
+        assert_eq!(ops1.len(), ops2.len());
     }
 }

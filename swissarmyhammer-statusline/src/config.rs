@@ -430,11 +430,16 @@ impl Default for LanguagesModuleConfig {
 /// only needs to specify the fields they want to override. Unspecified fields
 /// retain their values from the previous layer.
 pub fn load_config() -> StatuslineConfig {
+    load_config_with_home(dirs::home_dir())
+}
+
+/// Load config with an explicit home directory (for testing).
+fn load_config_with_home(home: Option<std::path::PathBuf>) -> StatuslineConfig {
     let mut base: serde_yaml_ng::Value =
         serde_yaml_ng::from_str(BUILTIN_CONFIG_YAML).expect("builtin config.yaml must parse");
 
     // User layer
-    if let Some(home) = dirs::home_dir() {
+    if let Some(home) = home {
         let user_path = home.join(".sah").join("statusline").join("config.yaml");
         if let Some(overlay) = load_yaml_value(&user_path) {
             deep_merge(&mut base, overlay);
@@ -551,5 +556,168 @@ mod tests {
         let builtin: StatuslineConfig = serde_yaml_ng::from_str(BUILTIN_CONFIG_YAML).unwrap();
         assert_eq!(config.format, builtin.format);
         assert_eq!(config.directory.style, builtin.directory.style);
+    }
+
+    #[test]
+    fn test_load_yaml_value_nonexistent() {
+        let result = load_yaml_value(Path::new("/nonexistent/path/config.yaml"));
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_load_yaml_value_invalid_yaml() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bad.yaml");
+        std::fs::write(&path, ": [\ninvalid yaml content\n").unwrap();
+        let result = load_yaml_value(&path);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_load_yaml_value_valid() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("good.yaml");
+        std::fs::write(&path, "format: custom\n").unwrap();
+        let result = load_yaml_value(&path);
+        assert!(result.is_some());
+    }
+
+    #[test]
+    fn test_load_config_with_user_overlay() {
+        let home = tempfile::tempdir().unwrap();
+        let config_dir = home.path().join(".sah").join("statusline");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::write(
+            config_dir.join("config.yaml"),
+            "directory:\n  style: \"magenta\"\n",
+        )
+        .unwrap();
+
+        let config = load_config_with_home(Some(home.path().to_path_buf()));
+        assert_eq!(config.directory.style, "magenta");
+        // Other fields should be preserved from builtin
+        let builtin: StatuslineConfig = serde_yaml_ng::from_str(BUILTIN_CONFIG_YAML).unwrap();
+        assert_eq!(config.git_branch.style, builtin.git_branch.style);
+    }
+
+    #[test]
+    fn test_load_config_with_no_home() {
+        let config = load_config_with_home(None);
+        let builtin: StatuslineConfig = serde_yaml_ng::from_str(BUILTIN_CONFIG_YAML).unwrap();
+        assert_eq!(config.format, builtin.format);
+    }
+
+    #[test]
+    fn test_default_config_all_fields() {
+        let config = StatuslineConfig::default();
+        assert!(!config.format.is_empty());
+        assert!(!config.directory.style.is_empty());
+        assert!(!config.git_branch.style.is_empty());
+        assert!(!config.git_branch.symbol.is_empty());
+        assert!(!config.git_status.style.is_empty());
+        assert!(!config.git_state.style.is_empty());
+        assert!(!config.model.style.is_empty());
+        assert!(!config.context_bar.format.is_empty());
+        assert!(!config.cost.style.is_empty());
+        assert!(config.cost.hide_zero);
+        assert!(!config.session.style.is_empty());
+        assert!(!config.vim_mode.style.is_empty());
+        assert!(!config.agent.style.is_empty());
+        assert!(!config.worktree.style.is_empty());
+        assert!(!config.version.style.is_empty());
+        assert!(!config.kanban.style.is_empty());
+        assert!(!config.index.style.is_empty());
+        assert!(!config.languages.style.is_empty());
+    }
+
+    #[test]
+    fn test_config_serde_roundtrip() {
+        let config = StatuslineConfig::default();
+        let yaml = serde_yaml_ng::to_string(&config).unwrap();
+        let parsed: StatuslineConfig = serde_yaml_ng::from_str(&yaml).unwrap();
+        assert_eq!(parsed.format, config.format);
+        assert_eq!(parsed.directory.style, config.directory.style);
+        assert_eq!(
+            parsed.git_branch.truncation_length,
+            config.git_branch.truncation_length
+        );
+        assert_eq!(parsed.git_status.show_counts, config.git_status.show_counts);
+    }
+
+    #[test]
+    fn test_deep_merge_sequence_replaces() {
+        let mut base: serde_yaml_ng::Value =
+            serde_yaml_ng::from_str("items:\n  - a\n  - b").unwrap();
+        let overlay: serde_yaml_ng::Value = serde_yaml_ng::from_str("items:\n  - x").unwrap();
+        deep_merge(&mut base, overlay);
+        // Sequence should be replaced entirely
+        let items = base["items"].as_sequence().unwrap();
+        assert_eq!(items.len(), 1);
+    }
+
+    #[test]
+    fn test_default_git_status_module_config() {
+        let cfg = GitStatusModuleConfig::default();
+        assert!(!cfg.show_counts);
+        assert_eq!(cfg.modified, "!");
+        assert_eq!(cfg.staged, "+");
+        assert_eq!(cfg.untracked, "?");
+        assert_eq!(cfg.conflicted, "=");
+        assert_eq!(cfg.stashed, "$");
+    }
+
+    #[test]
+    fn test_default_context_bar_thresholds() {
+        let cfg = ContextBarModuleConfig::default();
+        assert_eq!(cfg.bar_width, 10);
+        assert_eq!(cfg.thresholds.low.below, 50);
+        assert_eq!(cfg.thresholds.medium.below, 80);
+        assert_eq!(cfg.thresholds.high.below, 101);
+    }
+
+    #[test]
+    fn test_default_kanban_thresholds() {
+        let cfg = KanbanModuleConfig::default();
+        assert_eq!(cfg.bar_width, 6);
+        assert_eq!(cfg.thresholds.low.below, 25);
+        assert_eq!(cfg.thresholds.medium.below, 75);
+        assert_eq!(cfg.thresholds.high.below, 101);
+    }
+
+    #[test]
+    fn test_default_index_module_config() {
+        let cfg = IndexModuleConfig::default();
+        assert!(!cfg.show_when_complete);
+        assert!(!cfg.format.is_empty());
+    }
+
+    #[test]
+    fn test_default_languages_module_config() {
+        let cfg = LanguagesModuleConfig::default();
+        assert!(cfg.dim_without_lsp);
+        assert!(!cfg.missing_lsp_indicator.is_empty());
+    }
+
+    #[test]
+    fn test_builtin_config_yaml_parses() {
+        let config: StatuslineConfig = serde_yaml_ng::from_str(BUILTIN_CONFIG_YAML).unwrap();
+        assert!(!config.format.is_empty());
+    }
+
+    #[test]
+    fn test_deep_merge_both_scalars() {
+        let mut base: serde_yaml_ng::Value = serde_yaml_ng::from_str("42").unwrap();
+        let overlay: serde_yaml_ng::Value = serde_yaml_ng::from_str("99").unwrap();
+        deep_merge(&mut base, overlay);
+        assert_eq!(base, serde_yaml_ng::Value::Number(99.into()));
+    }
+
+    #[test]
+    fn test_load_config_with_home_no_sah_dir() {
+        let home = tempfile::tempdir().unwrap();
+        // No .sah directory; should fall through to builtin
+        let config = load_config_with_home(Some(home.path().to_path_buf()));
+        let builtin: StatuslineConfig = serde_yaml_ng::from_str(BUILTIN_CONFIG_YAML).unwrap();
+        assert_eq!(config.format, builtin.format);
     }
 }

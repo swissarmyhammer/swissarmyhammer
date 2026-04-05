@@ -301,6 +301,149 @@ mod tests {
     }
 
     #[test]
+    fn test_user_friendly_message_text_processing() {
+        use llama_common::error::LlamaError;
+
+        let error = EmbeddingError::text_processing("tokenization failed");
+        let message = error.user_friendly_message();
+        assert!(message.contains("Text Processing Error"));
+        assert!(message.contains("📝"));
+        assert!(message.contains("tokenization failed"));
+        assert!(message.contains("💡"));
+    }
+
+    #[test]
+    fn test_user_friendly_message_batch_processing() {
+        use llama_common::error::LlamaError;
+
+        let error = EmbeddingError::batch_processing("out of memory");
+        let message = error.user_friendly_message();
+        assert!(message.contains("Batch Processing Error"));
+        assert!(message.contains("📦"));
+        assert!(message.contains("out of memory"));
+        assert!(message.contains("💡"));
+    }
+
+    #[test]
+    fn test_user_friendly_message_text_encoding() {
+        use llama_common::error::LlamaError;
+
+        let error = EmbeddingError::text_encoding("invalid utf-8");
+        let message = error.user_friendly_message();
+        assert!(message.contains("Text Encoding Error"));
+        assert!(message.contains("🔤"));
+        assert!(message.contains("invalid utf-8"));
+        assert!(message.contains("💡"));
+    }
+
+    #[test]
+    fn test_user_friendly_message_io() {
+        use llama_common::error::LlamaError;
+
+        let io_err = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "access denied");
+        let error = EmbeddingError::Io(io_err);
+        let message = error.user_friendly_message();
+        assert!(message.contains("I/O Error"));
+        assert!(message.contains("💾"));
+        assert!(message.contains("access denied"));
+        assert!(message.contains("💡"));
+    }
+
+    #[test]
+    fn test_embed_result_type_alias() {
+        // Verify the EmbedResult type alias works correctly.
+        let ok: EmbedResult<i32> = Ok(42);
+        assert!(matches!(ok, Ok(42)));
+
+        let err: EmbedResult<i32> = Err(EmbeddingError::ModelNotLoaded);
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn test_error_debug_format() {
+        // Ensure Debug formatting works for all variants.
+        let errors: Vec<EmbeddingError> = vec![
+            EmbeddingError::model("m"),
+            EmbeddingError::text_processing("t"),
+            EmbeddingError::batch_processing("b"),
+            EmbeddingError::text_encoding("e"),
+            EmbeddingError::configuration("c"),
+            EmbeddingError::ModelNotLoaded,
+            EmbeddingError::DimensionMismatch {
+                expected: 1,
+                actual: 2,
+            },
+            EmbeddingError::Io(std::io::Error::other("io")),
+        ];
+        for error in &errors {
+            let debug = format!("{:?}", error);
+            assert!(!debug.is_empty());
+        }
+    }
+
+    #[test]
+    fn test_error_display_all_variants() {
+        // Verify Display output for every variant.
+        assert_eq!(EmbeddingError::model("x").to_string(), "Model error: x");
+        assert_eq!(
+            EmbeddingError::text_processing("x").to_string(),
+            "Text processing error: x"
+        );
+        assert_eq!(
+            EmbeddingError::batch_processing("x").to_string(),
+            "Batch processing error: x"
+        );
+        assert_eq!(
+            EmbeddingError::text_encoding("x").to_string(),
+            "Text encoding error: x"
+        );
+        assert_eq!(
+            EmbeddingError::configuration("x").to_string(),
+            "Configuration error: x"
+        );
+        assert_eq!(
+            EmbeddingError::ModelNotLoaded.to_string(),
+            "Model not loaded - call load() first"
+        );
+        assert_eq!(
+            EmbeddingError::DimensionMismatch {
+                expected: 10,
+                actual: 20
+            }
+            .to_string(),
+            "Embedding dimension mismatch: expected 10, got 20"
+        );
+
+        let io_err = EmbeddingError::Io(std::io::Error::new(std::io::ErrorKind::NotFound, "gone"));
+        let display = io_err.to_string();
+        assert!(display.contains("IO error"));
+        assert!(display.contains("gone"));
+    }
+
+    #[test]
+    fn test_model_loader_error_conversion() {
+        // Verify From<ModelError> conversion works.
+        use model_loader::error::ModelError;
+
+        let model_err = ModelError::NotFound("test.gguf".to_string());
+        let embedding_err: EmbeddingError = model_err.into();
+        assert!(matches!(embedding_err, EmbeddingError::ModelLoader(_)));
+
+        let display = embedding_err.to_string();
+        assert!(display.contains("Model loading error"));
+    }
+
+    #[test]
+    fn test_model_loader_error_code() {
+        use llama_common::error::LlamaError;
+        use model_loader::error::ModelError;
+
+        let model_err = ModelError::NotFound("test.gguf".to_string());
+        let embedding_err = EmbeddingError::ModelLoader(model_err);
+        assert_eq!(embedding_err.error_code(), "EMBEDDING_MODEL_LOADER");
+    }
+
+    #[test]
     fn test_model_loader_error_delegation() {
         use llama_common::error::LlamaError;
         use model_loader::error::ModelError;
