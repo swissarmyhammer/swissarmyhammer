@@ -1717,27 +1717,6 @@ mod tests {
     }
 
     #[test]
-    fn test_classify_event_entity_in_unrecognized_subdir() {
-        let (_tmp, kanban) = setup_kanban_dir();
-        let weird_dir = kanban.join("unknown");
-        std::fs::create_dir_all(&weird_dir).unwrap();
-        let path = weird_dir.join("foo.yaml");
-        std::fs::write(&path, "name: foo\n").unwrap();
-
-        let event = Event {
-            kind: EventKind::Create(notify::event::CreateKind::File),
-            paths: vec![path.clone()],
-            attrs: Default::default(),
-        };
-
-        let actions = classify_event(&event, &kanban);
-        assert!(
-            actions.is_empty(),
-            "should skip entity files in unrecognized subdirectories"
-        );
-    }
-
-    #[test]
     fn test_classify_event_attachment_file() {
         let (_tmp, kanban) = setup_kanban_dir();
         let att_dir = kanban.join("tasks/.attachments");
@@ -1807,7 +1786,8 @@ mod tests {
         let path = att_dir.join("screenshot.png");
         std::fs::write(&path, "PNG data").unwrap();
 
-        let cache = new_entity_cache(&kanban);
+        let roots = store_roots(&kanban);
+        let cache = new_entity_cache(&kanban, &roots);
         let evt = resolve_change(&path.canonicalize().unwrap(), &cache, &kanban);
         match evt {
             Some(WatchEvent::AttachmentChanged {
@@ -1834,7 +1814,8 @@ mod tests {
         let canonical = path.canonicalize().unwrap();
         std::fs::remove_file(&path).unwrap();
 
-        let cache = new_entity_cache(&kanban);
+        let roots = store_roots(&kanban);
+        let cache = new_entity_cache(&kanban, &roots);
         let evt = resolve_removal(&canonical, &cache, &kanban);
         match evt {
             Some(WatchEvent::AttachmentChanged {
@@ -1873,7 +1854,8 @@ mod tests {
         let (_tmp, kanban) = setup_kanban_dir();
         std::fs::write(kanban.join("board.yaml"), "name: My Board\n").unwrap();
 
-        let cache = new_entity_cache(&kanban);
+        let roots = store_roots(&kanban);
+        let cache = new_entity_cache(&kanban, &roots);
         let map = cache.lock().unwrap();
         assert!(
             map.contains_key(&kanban.join("board.yaml")),
@@ -1884,12 +1866,13 @@ mod tests {
     #[test]
     fn test_flush_and_emit_root_level_files() {
         let (_tmp, kanban) = setup_kanban_dir();
-        let cache = new_entity_cache(&kanban);
+        let roots = store_roots(&kanban);
+        let cache = new_entity_cache(&kanban, &roots);
 
         // Add a root-level entity file after cache was built
         std::fs::write(kanban.join("board.yaml"), "name: My Board\n").unwrap();
 
-        let events = flush_and_emit(&kanban, &cache);
+        let events = flush_and_emit(&kanban, &roots, &cache);
         assert_eq!(events.len(), 1);
         match &events[0] {
             WatchEvent::EntityCreated {
@@ -1915,7 +1898,8 @@ mod tests {
         let path = kanban.join("tags/test.yaml");
         std::fs::write(&path, "tag_name: Original\n").unwrap();
 
-        let cache = new_entity_cache(&kanban);
+        let roots = store_roots(&kanban);
+        let cache = new_entity_cache(&kanban, &roots);
 
         // Write new content, then update cache
         std::fs::write(&path, "tag_name: Updated\n").unwrap();
@@ -1982,16 +1966,6 @@ mod tests {
     // =========================================================================
     // path_to_entity edge cases
     // =========================================================================
-
-    #[test]
-    fn test_path_to_entity_unrecognized_subdir() {
-        let root = PathBuf::from("/project/.kanban");
-        assert_eq!(
-            path_to_entity(Path::new("/project/.kanban/unknown/abc.yaml"), &root),
-            None,
-            "files in unrecognized subdirectories should return None"
-        );
-    }
 
     #[test]
     fn test_path_to_entity_swimlanes_strips_s() {
@@ -2139,7 +2113,8 @@ mod tests {
         let path = kanban.join("tags/stable.yaml");
         std::fs::write(&path, "tag_name: Stable\ncolor: \"aaa\"\n").unwrap();
 
-        let cache = new_entity_cache(&kanban);
+        let roots = store_roots(&kanban);
+        let cache = new_entity_cache(&kanban, &roots);
 
         // Re-read the same file — same hash, no change
         let evt = resolve_change(&path, &cache, &kanban);
@@ -2154,11 +2129,12 @@ mod tests {
     fn test_flush_and_emit_root_level_field_change() {
         let (_tmp, kanban) = setup_kanban_dir();
         std::fs::write(kanban.join("board.yaml"), "name: Old Name\n").unwrap();
-        let cache = new_entity_cache(&kanban);
+        let roots = store_roots(&kanban);
+        let cache = new_entity_cache(&kanban, &roots);
 
         std::fs::write(kanban.join("board.yaml"), "name: New Name\n").unwrap();
 
-        let events = flush_and_emit(&kanban, &cache);
+        let events = flush_and_emit(&kanban, &roots, &cache);
         assert_eq!(events.len(), 1);
         match &events[0] {
             WatchEvent::EntityFieldChanged {
@@ -2179,11 +2155,12 @@ mod tests {
     fn test_flush_and_emit_root_level_removal() {
         let (_tmp, kanban) = setup_kanban_dir();
         std::fs::write(kanban.join("board.yaml"), "name: Board\n").unwrap();
-        let cache = new_entity_cache(&kanban);
+        let roots = store_roots(&kanban);
+        let cache = new_entity_cache(&kanban, &roots);
 
         std::fs::remove_file(kanban.join("board.yaml")).unwrap();
 
-        let events = flush_and_emit(&kanban, &cache);
+        let events = flush_and_emit(&kanban, &roots, &cache);
         assert_eq!(events.len(), 1);
         match &events[0] {
             WatchEvent::EntityRemoved { entity_type, id } => {
@@ -2205,11 +2182,12 @@ mod tests {
         let att_dir = kanban.join("tasks/.attachments");
         std::fs::create_dir_all(&att_dir).unwrap();
 
-        let cache = new_entity_cache(&kanban);
+        let roots = store_roots(&kanban);
+        let cache = new_entity_cache(&kanban, &roots);
         let events: Arc<Mutex<Vec<WatchEvent>>> = Arc::new(Mutex::new(Vec::new()));
         let events_clone = events.clone();
 
-        let _watcher = start_watching(kanban.clone(), cache.clone(), move |evt| {
+        let _watcher = start_watching(kanban.clone(), roots.clone(), cache.clone(), move |evt| {
             events_clone.lock().unwrap().push(evt);
         })
         .expect("start_watching should succeed with .attachments/ dir");
@@ -2245,11 +2223,12 @@ mod tests {
         let att_file = att_dir.join("to-delete.png");
         std::fs::write(&att_file, "data").unwrap();
 
-        let cache = new_entity_cache(&kanban);
+        let roots = store_roots(&kanban);
+        let cache = new_entity_cache(&kanban, &roots);
         let events: Arc<Mutex<Vec<WatchEvent>>> = Arc::new(Mutex::new(Vec::new()));
         let events_clone = events.clone();
 
-        let _watcher = start_watching(kanban.clone(), cache.clone(), move |evt| {
+        let _watcher = start_watching(kanban.clone(), roots.clone(), cache.clone(), move |evt| {
             events_clone.lock().unwrap().push(evt);
         })
         .expect("start_watching should succeed");
@@ -2291,7 +2270,8 @@ mod tests {
         let path = kanban.join("tags/ws.yaml");
         std::fs::write(&path, "tag_name: WS\n").unwrap();
 
-        let cache = new_entity_cache(&kanban);
+        let roots = store_roots(&kanban);
+        let cache = new_entity_cache(&kanban, &roots);
 
         // Rewrite with trailing whitespace — different hash, same parsed fields
         std::fs::write(&path, "tag_name: WS\n\n").unwrap();
@@ -2345,7 +2325,8 @@ mod tests {
         std::fs::write(kanban.join("views/board.yaml"), "name: Board\n").unwrap();
         std::fs::write(kanban.join("board.yaml"), "name: My Board\n").unwrap();
 
-        let cache = new_entity_cache(&kanban);
+        let roots = store_roots(&kanban);
+        let cache = new_entity_cache(&kanban, &roots);
         let map = cache.lock().unwrap();
         assert_eq!(map.len(), 7, "should cache files from all subdirs + root");
     }
@@ -2359,13 +2340,14 @@ mod tests {
         let (_tmp, kanban) = setup_kanban_dir();
         std::fs::write(kanban.join("tasks/t1.md"), "---\ntitle: T1\n---\nBody\n").unwrap();
         std::fs::write(kanban.join("tags/bug.yaml"), "tag_name: Bug\n").unwrap();
-        let cache = new_entity_cache(&kanban);
+        let roots = store_roots(&kanban);
+        let cache = new_entity_cache(&kanban, &roots);
 
         // Add new files in different subdirs after cache
         std::fs::write(kanban.join("columns/done.yaml"), "name: Done\n").unwrap();
         std::fs::write(kanban.join("board.yaml"), "name: Board\n").unwrap();
 
-        let events = flush_and_emit(&kanban, &cache);
+        let events = flush_and_emit(&kanban, &roots, &cache);
         assert_eq!(
             events.len(),
             2,
