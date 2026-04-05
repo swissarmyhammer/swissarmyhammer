@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: '8280'
+position_column: done
+position_ordinal: ffffffffffffffffe680
 title: 'WARNING: enrich_all_task_entities clones entire task vec for snapshot'
 ---
 **File:** swissarmyhammer-kanban/src/task_helpers.rs (enrich_all_task_entities)\n\n**What:** `let snapshot: Vec<Entity> = entities.to_vec()` clones the entire entity list so that `registry.evaluate` can receive an immutable `&[Entity]` while the loop mutates each entity. For boards with many tasks, this is a non-trivial allocation.\n\n**Why this matters:** The batch enrichment function was designed specifically for O(N) performance, but the full clone undermines the memory efficiency. The snapshot is only needed because `VirtualTagStrategy::matches` takes `all_tasks: &[Entity]`, yet the strategies only read `position_column` and `depends_on` from other tasks -- data that is already captured in the `positions` and `depends_on_index` HashMaps built earlier in the same function.\n\n**Suggestion:** Consider changing the virtual tag strategy interface to accept the pre-built indexes (or an `EntityFilterContext`) instead of requiring the full entity slice. Alternatively, if the interface must stay, build the snapshot from just the fields the strategies need rather than cloning entire entities. This is not urgent for current board sizes but will matter if boards scale.\n\n**Verification:** Manual review of memory usage; no behavioral test needed." #review-finding

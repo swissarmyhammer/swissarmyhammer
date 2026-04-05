@@ -88,7 +88,7 @@ impl Execute<KanbanContext, KanbanError> for ListTasks {
 
             // Enrich all tasks first so filter_tags and ready are available
             let registry = default_virtual_tag_registry();
-            enrich_all_task_entities(&mut all_tasks, terminal_column, &registry);
+            enrich_all_task_entities(&mut all_tasks, terminal_column, registry);
 
             // Filter tasks
             let filtered: Vec<Value> = all_tasks
@@ -143,7 +143,7 @@ impl Execute<KanbanContext, KanbanError> for ListTasks {
 
                     true
                 })
-                .map(|t| task_entity_to_rich_json(t, &all_tasks, terminal_column))
+                .map(task_entity_to_rich_json)
                 .collect();
 
             Ok(serde_json::json!({

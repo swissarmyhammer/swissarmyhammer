@@ -5,7 +5,8 @@ use crate::context::KanbanContext;
 use crate::error::KanbanError;
 use crate::swimlane::swimlane_entity_to_json;
 use crate::tag::tag_entity_to_json;
-use crate::task_helpers::task_is_ready;
+use crate::task_helpers::enrich_all_task_entities;
+use crate::virtual_tags::default_virtual_tag_registry;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -73,15 +74,18 @@ impl Execute<KanbanContext, KanbanError> for GetBoard {
                 }));
             }
 
-            // Read all tasks as entities
-            let all_tasks = ectx.list("task").await?;
+            // Read all tasks and enrich via the same pipeline as ListTasks/NextTask
+            let mut all_tasks = ectx.list("task").await?;
             let terminal_id = all_columns
                 .iter()
                 .max_by_key(|c| c.get("order").and_then(|v| v.as_u64()).unwrap_or(0))
                 .map(|c| c.id.as_str())
                 .unwrap_or("done");
 
-            // Count tasks by column, computing ready status in a single pass.
+            let registry = default_virtual_tag_registry();
+            enrich_all_task_entities(&mut all_tasks, terminal_id, registry);
+
+            // Count tasks by column, reading ready status from enriched entities.
             let mut column_counts: HashMap<String, usize> = HashMap::new();
             let mut column_ready_counts: HashMap<String, usize> = HashMap::new();
             let mut total_ready: usize = 0;
@@ -93,7 +97,7 @@ impl Execute<KanbanContext, KanbanError> for GetBoard {
                     .to_string();
                 *column_counts.entry(col.clone()).or_insert(0) += 1;
 
-                if task_is_ready(task, &all_tasks, terminal_id) {
+                if task.get("ready").and_then(|v| v.as_bool()).unwrap_or(false) {
                     *column_ready_counts.entry(col).or_insert(0) += 1;
                     total_ready += 1;
                 }

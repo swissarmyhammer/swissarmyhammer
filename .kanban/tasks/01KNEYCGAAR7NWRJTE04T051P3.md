@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: '8180'
+position_column: done
+position_ordinal: ffffffffffffffffe080
 title: 'WARNING: task_entity_to_rich_json double-computes ready/blocked_by/blocks after enrichment'
 ---
 **File:** swissarmyhammer-kanban/src/task_helpers.rs (task_entity_to_rich_json)\n\n**What:** In `list.rs` and `next.rs`, entities are enriched via `enrich_all_task_entities` which sets `ready`, `blocked_by`, and `blocks` on each entity. Then `task_entity_to_rich_json` is called, which re-computes these same three values from scratch using the O(N) helper functions `task_is_ready`, `task_blocked_by`, and `task_blocks`. This means each task's ready/blocked_by/blocks is computed twice -- once during enrichment and once during JSON serialization.\n\n**Why this matters:** (1) Performance: the O(N) batch enrichment was specifically built to avoid O(N^2) per-task scanning, but `task_entity_to_rich_json` re-introduces the O(N) per-task scan, negating the optimization. (2) Correctness risk: the enriched values and the re-computed values could diverge (see the missing-dep inconsistency in the blocker finding). The JSON output uses the re-computed values, making the enriched values dead writes for ready/blocked_by/blocks.\n\n**Suggestion:** Have `task_entity_to_rich_json` read the pre-enriched fields from the entity instead of re-computing them. For example: `result[\"ready\"] = entity.get(\"ready\").cloned().unwrap_or(json!(true))`. This makes the enrichment the single source of truth and eliminates the redundant O(N) work.\n\n**Verification:** cargo test -p swissarmyhammer-kanban -- task_helpers list next" #review-finding

@@ -6,6 +6,7 @@
 //! (color, description) and commands that appear in the context menu.
 
 use std::collections::HashMap;
+use std::sync::LazyLock;
 
 use serde::{Deserialize, Serialize};
 use swissarmyhammer_entity::EntityFilterContext;
@@ -49,6 +50,13 @@ pub trait VirtualTagStrategy: Send + Sync {
     fn description(&self) -> &str;
 
     /// Commands available on this virtual tag's context menu.
+    ///
+    /// Returns owned `VirtualTagCommand` values. Because strategies are static
+    /// singletons with compile-time-known data, each call allocates new
+    /// `String`s. This is fine today since `commands()` is only called during
+    /// metadata serialization (not on every `evaluate`). If it becomes a hot
+    /// path, consider caching with `LazyLock<Vec<VirtualTagCommand>>` or
+    /// switching fields to `Cow<'static, str>`.
     fn commands(&self) -> Vec<VirtualTagCommand>;
 
     /// Whether this virtual tag applies to the entity in the given context.
@@ -83,6 +91,14 @@ pub struct VirtualTagRegistry {
     strategies: HashMap<String, Box<dyn VirtualTagStrategy>>,
     /// Insertion order for deterministic iteration.
     order: Vec<String>,
+}
+
+impl std::fmt::Debug for VirtualTagRegistry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("VirtualTagRegistry")
+            .field("strategies", &self.order)
+            .finish()
+    }
 }
 
 impl VirtualTagRegistry {
@@ -321,13 +337,23 @@ impl VirtualTagStrategy for BlockedStrategy {
     }
 }
 
-/// Creates the default virtual tag registry with all built-in strategies.
-pub fn default_virtual_tag_registry() -> VirtualTagRegistry {
+/// Static singleton for the default virtual tag registry.
+///
+/// The registry is immutable once built and never changes at runtime,
+/// so we build it once and share it via a static reference.
+static DEFAULT_REGISTRY: LazyLock<VirtualTagRegistry> = LazyLock::new(|| {
     let mut registry = VirtualTagRegistry::new();
     registry.register(Box::new(ReadyStrategy));
     registry.register(Box::new(BlockedStrategy));
     registry.register(Box::new(BlockingStrategy));
     registry
+});
+
+/// Returns a reference to the default virtual tag registry with all built-in strategies.
+///
+/// The registry is created once on first access and reused for all subsequent calls.
+pub fn default_virtual_tag_registry() -> &'static VirtualTagRegistry {
+    &DEFAULT_REGISTRY
 }
 
 #[cfg(test)]
@@ -670,6 +696,38 @@ mod tests {
 
         let ctx = make_ctx(&task, &[], "done");
         assert!(!strategy.matches(&ctx));
+    }
+
+    #[test]
+    fn ready_missing_dep_is_not_ready() {
+        // Dependency "ghost" doesn't exist in entities — should NOT be ready.
+        // This must match task_is_ready semantics (unwrap_or(false)).
+        let strategy = ReadyStrategy;
+        let mut task = Entity::new("task", "t1");
+        task.set("position_column", Value::String("todo".into()));
+        task.set(
+            "depends_on",
+            Value::Array(vec![Value::String("ghost".into())]),
+        );
+
+        let ctx = make_ctx(&task, &[], "done");
+        assert!(!strategy.matches(&ctx));
+    }
+
+    #[test]
+    fn blocked_missing_dep_is_blocked() {
+        // Dependency "ghost" doesn't exist in entities — should be BLOCKED.
+        // This must match task_blocked_by semantics (unwrap_or(true)).
+        let strategy = BlockedStrategy;
+        let mut task = Entity::new("task", "t1");
+        task.set("position_column", Value::String("todo".into()));
+        task.set(
+            "depends_on",
+            Value::Array(vec![Value::String("ghost".into())]),
+        );
+
+        let ctx = make_ctx(&task, &[], "done");
+        assert!(strategy.matches(&ctx));
     }
 
     // --- BlockingStrategy tests ---

@@ -136,6 +136,9 @@ pub fn parse_checklist_counts(text: &str) -> (usize, usize) {
 }
 
 /// Check if all dependencies are complete (in the given terminal column).
+///
+/// A missing dependency (ID not found in `all_tasks`) is treated as incomplete,
+/// making the task not ready. This matches the semantics in [`ReadyStrategy`].
 pub fn task_is_ready(entity: &Entity, all_tasks: &[Entity], terminal_column_id: &str) -> bool {
     let deps = entity.get_string_list("depends_on");
     deps.iter().all(|dep_id| {
@@ -143,11 +146,15 @@ pub fn task_is_ready(entity: &Entity, all_tasks: &[Entity], terminal_column_id: 
             .iter()
             .find(|t| t.id == *dep_id)
             .map(|t| t.get_str("position_column") == Some(terminal_column_id))
-            .unwrap_or(true) // Missing dependency is treated as complete
+            .unwrap_or(false) // Missing dependency = not ready (safer default)
     })
 }
 
 /// Get task IDs that this task is blocked by (incomplete dependencies).
+///
+/// A missing dependency (ID not found in `all_tasks`) is included in the
+/// result, treating it as blocking. This matches the semantics in
+/// [`BlockedStrategy`].
 pub fn task_blocked_by(
     entity: &Entity,
     all_tasks: &[Entity],
@@ -160,7 +167,7 @@ pub fn task_blocked_by(
                 .iter()
                 .find(|t| t.id == *dep_id)
                 .map(|t| t.get_str("position_column") != Some(terminal_column_id))
-                .unwrap_or(false)
+                .unwrap_or(true) // Missing dependency = blocked (safer default)
         })
         .collect()
 }
@@ -265,9 +272,26 @@ pub fn enrich_all_task_entities(
         })
         .collect();
 
-    // Snapshot entities for virtual tag evaluation (strategies need the full
-    // immutable list while we mutate each entity in the loop below).
-    let snapshot: Vec<Entity> = entities.to_vec();
+    // Build lightweight entity stubs for virtual tag evaluation.
+    //
+    // Strategies need an immutable `&[Entity]` while we mutate each entity in
+    // the loop below, but they only read `id`, `position_column`, and
+    // `depends_on` from the slice. Instead of cloning every entity (which
+    // duplicates all fields including large descriptions), we build minimal
+    // stubs containing only the fields strategies actually inspect.
+    let stubs: Vec<Entity> = entities
+        .iter()
+        .map(|e| {
+            let mut stub = Entity::new(e.entity_type.clone(), e.id.clone());
+            if let Some(col) = e.get("position_column") {
+                stub.set("position_column", col.clone());
+            }
+            if let Some(deps) = e.get("depends_on") {
+                stub.set("depends_on", deps.clone());
+            }
+            stub
+        })
+        .collect();
 
     for entity in entities.iter_mut() {
         let progress = task_progress(entity);
@@ -284,7 +308,7 @@ pub fn enrich_all_task_entities(
                 positions
                     .get(*dep_id)
                     .map(|col| col != terminal_column_id)
-                    .unwrap_or(false)
+                    .unwrap_or(true) // Missing dependency = blocked (safer default)
             })
             .cloned()
             .collect();
@@ -299,8 +323,8 @@ pub fn enrich_all_task_entities(
             .unwrap_or_default();
         entity.set("blocks", json!(blocks));
 
-        // Virtual tags: evaluate strategies against snapshot
-        let mut vtag_ctx = EntityFilterContext::for_entity(entity, &snapshot);
+        // Virtual tags: evaluate strategies against lightweight stubs
+        let mut vtag_ctx = EntityFilterContext::for_entity(entity, &stubs);
         vtag_ctx.insert(TerminalColumnId(terminal_column_id.to_string()));
         let virtual_slugs = registry.evaluate(&vtag_ctx);
         entity.set("virtual_tags", json!(virtual_slugs));
@@ -368,23 +392,19 @@ pub fn task_entity_to_json(entity: &Entity) -> Value {
     result
 }
 
-/// Convert a task Entity to JSON with full computed fields (ready, blocked_by, blocks).
+/// Convert a pre-enriched task Entity to JSON with computed fields.
 ///
-/// This is the "rich" version used by get/list that requires all tasks for DAG analysis.
-pub fn task_entity_to_rich_json(
-    entity: &Entity,
-    all_tasks: &[Entity],
-    terminal_column_id: &str,
-) -> Value {
+/// Reads `ready`, `blocked_by`, `blocks`, `virtual_tags`, and `filter_tags`
+/// from fields already set by `enrich_task_entity` / `enrich_all_task_entities`.
+/// Callers must enrich the entity before calling this function.
+pub fn task_entity_to_rich_json(entity: &Entity) -> Value {
     let mut result = task_entity_to_json(entity);
 
-    let ready = task_is_ready(entity, all_tasks, terminal_column_id);
-    let blocked_by = task_blocked_by(entity, all_tasks, terminal_column_id);
-    let blocks = task_blocks(entity, all_tasks);
-
-    result["ready"] = json!(ready);
-    result["blocked_by"] = json!(blocked_by);
-    result["blocks"] = json!(blocks);
+    result["ready"] = entity.get("ready").cloned().unwrap_or(json!(true));
+    result["blocked_by"] = json!(entity.get_string_list("blocked_by"));
+    result["blocks"] = json!(entity.get_string_list("blocks"));
+    result["virtual_tags"] = json!(entity.get_string_list("virtual_tags"));
+    result["filter_tags"] = json!(entity.get_string_list("filter_tags"));
 
     result
 }
@@ -525,6 +545,25 @@ mod tests {
     }
 
     #[test]
+    fn test_task_is_ready_missing_dep_is_not_ready() {
+        // Dependency "ghost" doesn't exist in all_tasks — should NOT be ready.
+        // This must match ReadyStrategy::matches semantics (unwrap_or(false)).
+        let mut e = make_task("t1", "Test", "", "todo");
+        e.set("depends_on", json!(["ghost"]));
+        assert!(!task_is_ready(&e, &[], "done"));
+    }
+
+    #[test]
+    fn test_task_blocked_by_missing_dep_is_blocking() {
+        // Dependency "ghost" doesn't exist in all_tasks — should appear as blocker.
+        // This must match BlockedStrategy::matches semantics (unwrap_or(true)).
+        let mut e = make_task("t1", "Test", "", "todo");
+        e.set("depends_on", json!(["ghost"]));
+        let blocked = task_blocked_by(&e, &[], "done");
+        assert_eq!(blocked, vec!["ghost"]);
+    }
+
+    #[test]
     fn test_task_blocks() {
         let blocker = make_task("t1", "Blocker", "", "todo");
         let mut dependent = make_task("t2", "Dependent", "", "todo");
@@ -567,9 +606,15 @@ mod tests {
         let mut e = make_task("t1", "Test", "", "todo");
         e.set("depends_on", json!(["dep1"]));
 
-        let result = task_entity_to_rich_json(&e, &[dep, e.clone()], "done");
+        let all = vec![dep, e.clone()];
+        let registry = VirtualTagRegistry::new();
+        enrich_task_entity(&mut e, &all, "done", &registry);
+
+        let result = task_entity_to_rich_json(&e);
         assert_eq!(result["ready"], false);
         assert_eq!(result["blocked_by"], json!(["dep1"]));
+        assert_eq!(result["virtual_tags"], json!([]));
+        assert_eq!(result["filter_tags"], json!([]));
     }
 
     #[test]

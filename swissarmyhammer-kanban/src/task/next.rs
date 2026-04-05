@@ -71,7 +71,7 @@ impl Execute<KanbanContext, KanbanError> for NextTask {
 
             // Enrich all tasks first so filter_tags and ready are available
             let registry = default_virtual_tag_registry();
-            enrich_all_task_entities(&mut all_tasks, terminal_column, &registry);
+            enrich_all_task_entities(&mut all_tasks, terminal_column, registry);
 
             // Get column ordering for sorting candidates
             let column_order: std::collections::HashMap<&str, usize> = all_columns
@@ -144,7 +144,7 @@ impl Execute<KanbanContext, KanbanError> for NextTask {
 
             // Return the first (oldest by position)
             match candidates.first() {
-                Some(task) => Ok(task_entity_to_rich_json(task, &all_tasks, terminal_column)),
+                Some(task) => Ok(task_entity_to_rich_json(task)),
                 None => Ok(Value::Null),
             }
         }

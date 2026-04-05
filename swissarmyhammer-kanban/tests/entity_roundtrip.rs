@@ -229,7 +229,7 @@ async fn enriched_entity_has_computed_fields() {
     let all_tasks = tasks.clone();
     for t in &mut tasks {
         let registry = default_virtual_tag_registry();
-        enrich_task_entity(t, &all_tasks, "done", &registry);
+        enrich_task_entity(t, &all_tasks, "done", registry);
     }
 
     // Verify the blocked task has ready=false

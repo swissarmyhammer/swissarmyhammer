@@ -225,7 +225,7 @@ pub async fn list_entities(
 
         // Batch-enrich in O(N) using pre-built dependency indexes
         let registry = default_virtual_tag_registry();
-        enrich_all_task_entities(&mut entities, &terminal_id, &registry);
+        enrich_all_task_entities(&mut entities, &terminal_id, registry);
 
         // Sort by position so the frontend can trust the order
         entities.sort_by(|a, b| {
@@ -283,7 +283,7 @@ pub async fn get_entity(
             .map(|c| c.id.to_string())
             .unwrap_or_else(|| "done".to_string());
         let registry = default_virtual_tag_registry();
-        enrich_task_entity(&mut entity, &all_tasks, &terminal_id, &registry);
+        enrich_task_entity(&mut entity, &all_tasks, &terminal_id, registry);
     }
 
     Ok(entity.to_json())

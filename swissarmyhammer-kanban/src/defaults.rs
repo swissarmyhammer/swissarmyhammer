@@ -19,6 +19,10 @@ use crate::tag_parser;
 use crate::task_helpers;
 
 /// Builtin field definition YAML files, embedded at compile time.
+///
+/// Each builtin field uses a zero-padded sentinel ID (e.g. `00000000000000000000000001`)
+/// that sorts before any real ULID. The last two characters encode the builtin field
+/// code. See `builtin/fields/definitions/*.yaml` for the full set.
 static BUILTIN_DEFINITIONS: Dir = include_dir!("$CARGO_MANIFEST_DIR/builtin/fields/definitions");
 
 /// Builtin entity definition YAML files, embedded at compile time.
