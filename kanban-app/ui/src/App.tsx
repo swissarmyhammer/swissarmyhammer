@@ -43,17 +43,15 @@ function App() {
           <BoardContainer>
             <div className="h-screen bg-background text-foreground flex flex-col">
               <NavBar />
-              <PerspectivesContainer>
-                <PerspectiveContainer>
-                  <div className="flex-1 flex min-h-0">
-                    <ViewsContainer>
-                      <div className="flex-1 min-w-0 overflow-hidden flex flex-col">
-                        <ViewContainer />
-                      </div>
-                    </ViewsContainer>
-                  </div>
-                </PerspectiveContainer>
-              </PerspectivesContainer>
+              <ViewsContainer>
+                <PerspectivesContainer>
+                  <PerspectiveContainer>
+                    <div className="flex-1 min-w-0 overflow-hidden flex flex-col">
+                      <ViewContainer />
+                    </div>
+                  </PerspectiveContainer>
+                </PerspectivesContainer>
+              </ViewsContainer>
               <ModeIndicator />
             </div>
           </BoardContainer>
