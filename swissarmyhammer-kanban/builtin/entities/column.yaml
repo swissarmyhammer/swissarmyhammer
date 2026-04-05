@@ -11,6 +11,10 @@ commands:
     keys:
       cua: Mod+V
       vim: p
+  - id: column.reorder
+    name: Reorder Columns
+    undoable: true
+    visible: false
 fields:
   - name
   - order

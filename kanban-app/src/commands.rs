@@ -1468,17 +1468,17 @@ async fn flush_and_emit_for_handle(app: &AppHandle, handle: &BoardHandle) {
     let mut events: Vec<crate::watcher::WatchEvent> = Vec::new();
     for se in &store_events {
         let store_name = se
-            .payload
+            .payload()
             .get("store")
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        let id = se.payload.get("id").and_then(|v| v.as_str()).unwrap_or("");
+        let id = se.payload().get("id").and_then(|v| v.as_str()).unwrap_or("");
         if store_name.is_empty() || id.is_empty() {
-            tracing::warn!(event_name = %se.event_name, "dropping store event with empty store_name or id");
+            tracing::warn!(event_name = %se.event_name(), "dropping store event with empty store_name or id");
             continue;
         }
 
-        match se.event_name.as_str() {
+        match se.event_name() {
             "item-created" => {
                 events.push(crate::watcher::WatchEvent::EntityCreated {
                     entity_type: store_name.to_string(),
@@ -1600,20 +1600,20 @@ mod tests {
     /// payloads, and that events with missing fields are identified.
     #[test]
     fn store_name_extraction_from_change_event() {
-        let event = swissarmyhammer_store::ChangeEvent {
-            event_name: "item-created".to_string(),
-            payload: serde_json::json!({
+        let event = swissarmyhammer_store::ChangeEvent::new(
+            "item-created",
+            serde_json::json!({
                 "store": "task",
                 "id": "01ABC"
             }),
-        };
+        );
         let store_name = event
-            .payload
+            .payload()
             .get("store")
             .and_then(|v| v.as_str())
             .unwrap_or("");
         let id = event
-            .payload
+            .payload()
             .get("id")
             .and_then(|v| v.as_str())
             .unwrap_or("");
@@ -1624,17 +1624,17 @@ mod tests {
     /// Events missing store or id should be detected so they can be dropped.
     #[test]
     fn store_name_extraction_missing_fields() {
-        let event = swissarmyhammer_store::ChangeEvent {
-            event_name: "item-changed".to_string(),
-            payload: serde_json::json!({}),
-        };
+        let event = swissarmyhammer_store::ChangeEvent::new(
+            "item-changed",
+            serde_json::json!({}),
+        );
         let store_name = event
-            .payload
+            .payload()
             .get("store")
             .and_then(|v| v.as_str())
             .unwrap_or("");
         let id = event
-            .payload
+            .payload()
             .get("id")
             .and_then(|v| v.as_str())
             .unwrap_or("");
@@ -1645,20 +1645,20 @@ mod tests {
     /// Events with null values for store/id should also be treated as empty.
     #[test]
     fn store_name_extraction_null_values() {
-        let event = swissarmyhammer_store::ChangeEvent {
-            event_name: "item-changed".to_string(),
-            payload: serde_json::json!({
+        let event = swissarmyhammer_store::ChangeEvent::new(
+            "item-changed",
+            serde_json::json!({
                 "store": null,
                 "id": null
             }),
-        };
+        );
         let store_name = event
-            .payload
+            .payload()
             .get("store")
             .and_then(|v| v.as_str())
             .unwrap_or("");
         let id = event
-            .payload
+            .payload()
             .get("id")
             .and_then(|v| v.as_str())
             .unwrap_or("");

@@ -1,5 +1,8 @@
-name: board
-icon: kanban
+name: actor
+icon: user
+mention_prefix: "@"
+mention_display_field: name
+mention_color_field: color
 search_display_field: name
 commands:
   - id: ui.inspect
@@ -7,5 +10,5 @@ commands:
     context_menu: true
 fields:
   - name
-  - description
-  - percent_complete
+  - color
+  - avatar

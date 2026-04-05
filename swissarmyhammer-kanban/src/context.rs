@@ -79,14 +79,14 @@ impl KanbanContext {
     /// Create a fully-initialized context with field registry.
     ///
     /// Loads builtin field/entity YAML definitions (embedded at compile time),
-    /// then merges with any local overrides from `.kanban/fields/`.
+    /// then merges with any local overrides from `.kanban/definitions/` and
+    /// `.kanban/entities/`.
     pub async fn open(root: impl Into<PathBuf>) -> Result<Self> {
         let root = root.into();
 
-        // Ensure fields directory structure exists for local overrides
-        let fields_root = root.join("fields");
-        fs::create_dir_all(fields_root.join("definitions")).await?;
-        fs::create_dir_all(fields_root.join("entities")).await?;
+        // Ensure definitions/ and entities/ exist for local overrides
+        fs::create_dir_all(root.join("definitions")).await?;
+        fs::create_dir_all(root.join("entities")).await?;
 
         let (fields, entities) = Self::build_entity_context(&root)?;
         let cell = OnceCell::new();
@@ -407,17 +407,15 @@ impl KanbanContext {
     /// Build a FieldsContext + EntityContext from builtin and local field definitions.
     ///
     /// Loads builtin YAML definitions (embedded at compile time), then merges
-    /// with any local overrides from `.kanban/fields/`. Does NOT create directories
-    /// — callers that need dirs should ensure them beforehand.
+    /// with any local overrides from `.kanban/definitions/` and `.kanban/entities/`.
+    /// Does NOT create directories — callers that need dirs should ensure them beforehand.
     fn build_entity_context(root: &Path) -> Result<(Arc<FieldsContext>, EntityContext)> {
-        let fields_root = root.join("fields");
-
         let builtin_defs = builtin_field_definitions();
         let builtin_entities = builtin_entity_definitions();
 
         // Load local overrides (returns empty vec if dirs don't exist)
-        let local_defs = load_yaml_dir(&fields_root.join("definitions"));
-        let local_entities = load_yaml_dir(&fields_root.join("entities"));
+        let local_defs = load_yaml_dir(&root.join("definitions"));
+        let local_entities = load_yaml_dir(&root.join("entities"));
 
         let mut all_defs: Vec<(&str, &str)> = builtin_defs.clone();
         let local_def_refs: Vec<(&str, &str)> = local_defs
@@ -434,7 +432,7 @@ impl KanbanContext {
         all_entities.extend(local_entity_refs);
 
         let fields = Arc::new(
-            FieldsContext::from_yaml_sources(fields_root, &all_defs, &all_entities)
+            FieldsContext::from_yaml_sources(root, &all_defs, &all_entities)
                 .map_err(|e| KanbanError::FieldsError(e.to_string()))?,
         );
 
@@ -788,10 +786,9 @@ mod tests {
 
         let ctx = KanbanContext::open(&kanban_dir).await.unwrap();
 
-        // fields/ directory should exist
-        assert!(kanban_dir.join("fields").exists());
-        assert!(kanban_dir.join("fields/definitions").exists());
-        assert!(kanban_dir.join("fields/entities").exists());
+        // definitions/ and entities/ should exist as top-level siblings
+        assert!(kanban_dir.join("definitions").exists());
+        assert!(kanban_dir.join("entities").exists());
 
         // fields() should return Some
         assert!(ctx.fields().is_some());
@@ -806,11 +803,11 @@ mod tests {
         let ctx = KanbanContext::open(&kanban_dir).await.unwrap();
         let fields = ctx.fields().unwrap();
 
-        // Should have all 23 built-in fields
-        assert_eq!(fields.all_fields().len(), 23);
+        // Should have all 24 built-in fields
+        assert_eq!(fields.all_fields().len(), 24);
 
-        // Should have all 7 entity templates
-        assert_eq!(fields.all_entities().len(), 7);
+        // Should have all 8 entity templates
+        assert_eq!(fields.all_entities().len(), 8);
 
         // Check a specific field
         let title = fields.get_field_by_name("title").unwrap();
@@ -821,7 +818,7 @@ mod tests {
     async fn test_open_preserves_customizations() {
         let temp = TempDir::new().unwrap();
         let kanban_dir = temp.path().join(".kanban");
-        let fields_defs_dir = kanban_dir.join("fields/definitions");
+        let fields_defs_dir = kanban_dir.join("definitions");
         std::fs::create_dir_all(&fields_defs_dir).unwrap();
 
         // Manually add a custom field to definitions/
@@ -835,10 +832,10 @@ type:
             .await
             .unwrap();
 
-        // Open — should have 23 built-in + 1 custom = 24
+        // Open — should have 24 built-in + 1 custom = 25
         let ctx = KanbanContext::open(&kanban_dir).await.unwrap();
         let fields = ctx.fields().unwrap();
-        assert_eq!(fields.all_fields().len(), 24);
+        assert_eq!(fields.all_fields().len(), 25);
 
         // Custom field should be present
         let sprint = fields.get_field_by_name("sprint").unwrap();

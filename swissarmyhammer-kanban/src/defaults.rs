@@ -1,8 +1,9 @@
 //! Built-in field definitions and entity templates for kanban.
 //!
-//! Builtin YAML files are embedded from `builtin/fields/` at compile time via
-//! `include_dir!`. At runtime, these are merged with local overrides from
-//! `.kanban/fields/` to produce the full field registry.
+//! Builtin YAML files are embedded from `builtin/definitions/` and
+//! `builtin/entities/` at compile time via `include_dir!`. At runtime,
+//! these are merged with local overrides from `.kanban/definitions/` and
+//! `.kanban/entities/` to produce the full field registry.
 //!
 //! `KanbanLookup` implements `EntityLookup` for kanban entity stores,
 //! enabling reference field validation to prune dangling IDs.
@@ -22,11 +23,11 @@ use crate::task_helpers;
 ///
 /// Each builtin field uses a zero-padded sentinel ID (e.g. `00000000000000000000000001`)
 /// that sorts before any real ULID. The last two characters encode the builtin field
-/// code. See `builtin/fields/definitions/*.yaml` for the full set.
-static BUILTIN_DEFINITIONS: Dir = include_dir!("$CARGO_MANIFEST_DIR/builtin/fields/definitions");
+/// code. See `builtin/definitions/*.yaml` for the full set.
+static BUILTIN_DEFINITIONS: Dir = include_dir!("$CARGO_MANIFEST_DIR/builtin/definitions");
 
 /// Builtin entity definition YAML files, embedded at compile time.
-static BUILTIN_ENTITIES: Dir = include_dir!("$CARGO_MANIFEST_DIR/builtin/fields/entities");
+static BUILTIN_ENTITIES: Dir = include_dir!("$CARGO_MANIFEST_DIR/builtin/entities");
 
 /// Builtin view definition YAML files, embedded at compile time.
 static BUILTIN_VIEWS: Dir = include_dir!("$CARGO_MANIFEST_DIR/builtin/views");
@@ -286,13 +287,13 @@ mod tests {
     #[test]
     fn builtin_field_definitions_load() {
         let defs = builtin_field_definitions();
-        assert_eq!(defs.len(), 23, "expected 23 builtin field definitions");
+        assert_eq!(defs.len(), 24, "expected 24 builtin field definitions");
     }
 
     #[test]
     fn builtin_entity_definitions_load() {
         let defs = builtin_entity_definitions();
-        assert_eq!(defs.len(), 7, "expected 7 builtin entity definitions");
+        assert_eq!(defs.len(), 8, "expected 8 builtin entity definitions");
     }
 
     #[test]
@@ -419,8 +420,8 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(ctx.all_fields().len(), 23);
-        assert_eq!(ctx.all_entities().len(), 7);
+        assert_eq!(ctx.all_fields().len(), 24);
+        assert_eq!(ctx.all_entities().len(), 8);
         assert!(ctx.get_field_by_name("title").is_some());
         assert!(ctx.get_entity("task").is_some());
         assert_eq!(ctx.fields_for_entity("task").len(), 12);

@@ -2,6 +2,7 @@ name: tag
 icon: tag
 mention_prefix: "#"
 mention_display_field: tag_name
+mention_color_field: color
 search_display_field: tag_name
 commands:
   - id: ui.inspect
@@ -22,6 +23,11 @@ commands:
     keys:
       cua: Mod+X
       vim: x
+  - id: tag.update
+    name: Update Tag
+    scope: "entity:tag"
+    undoable: true
+    visible: false
 fields:
   - tag_name
   - color

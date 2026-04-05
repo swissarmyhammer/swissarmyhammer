@@ -4,6 +4,7 @@ body_field: body
 search_display_field: title
 mention_prefix: "^"
 mention_display_field: title
+mention_color_field: color
 commands:
   - id: ui.inspect
     name: "Inspect {{entity.type}}"
