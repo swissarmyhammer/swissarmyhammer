@@ -19,6 +19,10 @@ use crate::tag_parser;
 use crate::task_helpers;
 
 /// Builtin field definition YAML files, embedded at compile time.
+///
+/// Each builtin field uses a zero-padded sentinel ID (e.g. `00000000000000000000000001`)
+/// that sorts before any real ULID. The last two characters encode the builtin field
+/// code. See `builtin/fields/definitions/*.yaml` for the full set.
 static BUILTIN_DEFINITIONS: Dir = include_dir!("$CARGO_MANIFEST_DIR/builtin/fields/definitions");
 
 /// Builtin entity definition YAML files, embedded at compile time.
@@ -171,6 +175,20 @@ pub fn kanban_compute_engine() -> ComputeEngine {
         }),
     );
 
+    // compute-virtual-tags: stub — returns empty array.
+    // Populated by the enrichment pipeline in a later card.
+    engine.register(
+        "compute-virtual-tags",
+        Box::new(|_fields| Box::pin(async { serde_json::Value::Array(vec![]) })),
+    );
+
+    // compute-filter-tags: stub — returns empty array.
+    // Will compute tags ∪ virtual_tags once the enrichment pipeline lands.
+    engine.register(
+        "compute-filter-tags",
+        Box::new(|_fields| Box::pin(async { serde_json::Value::Array(vec![]) })),
+    );
+
     engine
 }
 
@@ -268,7 +286,7 @@ mod tests {
     #[test]
     fn builtin_field_definitions_load() {
         let defs = builtin_field_definitions();
-        assert_eq!(defs.len(), 21, "expected 21 builtin field definitions");
+        assert_eq!(defs.len(), 23, "expected 23 builtin field definitions");
     }
 
     #[test]
@@ -401,11 +419,11 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(ctx.all_fields().len(), 21);
+        assert_eq!(ctx.all_fields().len(), 23);
         assert_eq!(ctx.all_entities().len(), 7);
         assert!(ctx.get_field_by_name("title").is_some());
         assert!(ctx.get_entity("task").is_some());
-        assert_eq!(ctx.fields_for_entity("task").len(), 10);
+        assert_eq!(ctx.fields_for_entity("task").len(), 12);
     }
 
     #[test]

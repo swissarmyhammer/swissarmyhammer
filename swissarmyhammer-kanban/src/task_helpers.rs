@@ -8,10 +8,11 @@
 //! The functions here simply read those pre-computed fields.
 
 use serde_json::{json, Value};
-use std::collections::HashMap;
-use swissarmyhammer_entity::Entity;
+use std::collections::{HashMap, HashSet};
+use swissarmyhammer_entity::{Entity, EntityFilterContext};
 
 use crate::types::Ordinal;
+use crate::virtual_tags::{TerminalColumnId, VirtualTagRegistry};
 
 /// Generate a default title for a new task.
 ///
@@ -135,6 +136,9 @@ pub fn parse_checklist_counts(text: &str) -> (usize, usize) {
 }
 
 /// Check if all dependencies are complete (in the given terminal column).
+///
+/// A missing dependency (ID not found in `all_tasks`) is treated as incomplete,
+/// making the task not ready. This matches the semantics in [`ReadyStrategy`].
 pub fn task_is_ready(entity: &Entity, all_tasks: &[Entity], terminal_column_id: &str) -> bool {
     let deps = entity.get_string_list("depends_on");
     deps.iter().all(|dep_id| {
@@ -142,11 +146,15 @@ pub fn task_is_ready(entity: &Entity, all_tasks: &[Entity], terminal_column_id: 
             .iter()
             .find(|t| t.id == *dep_id)
             .map(|t| t.get_str("position_column") == Some(terminal_column_id))
-            .unwrap_or(true) // Missing dependency is treated as complete
+            .unwrap_or(false) // Missing dependency = not ready (safer default)
     })
 }
 
 /// Get task IDs that this task is blocked by (incomplete dependencies).
+///
+/// A missing dependency (ID not found in `all_tasks`) is included in the
+/// result, treating it as blocking. This matches the semantics in
+/// [`BlockedStrategy`].
 pub fn task_blocked_by(
     entity: &Entity,
     all_tasks: &[Entity],
@@ -159,7 +167,7 @@ pub fn task_blocked_by(
                 .iter()
                 .find(|t| t.id == *dep_id)
                 .map(|t| t.get_str("position_column") != Some(terminal_column_id))
-                .unwrap_or(false)
+                .unwrap_or(true) // Missing dependency = blocked (safer default)
         })
         .collect()
 }
@@ -187,7 +195,12 @@ pub fn task_blocks(entity: &Entity, all_tasks: &[Entity]) -> Vec<String> {
 /// Tags and raw progress are already populated by `ComputeEngine` during read;
 /// this function adds the higher-level computed fields that require the full
 /// task list for DAG analysis.
-pub fn enrich_task_entity(entity: &mut Entity, all_tasks: &[Entity], terminal_column_id: &str) {
+pub fn enrich_task_entity(
+    entity: &mut Entity,
+    all_tasks: &[Entity],
+    terminal_column_id: &str,
+    registry: &VirtualTagRegistry,
+) {
     // progress as a scalar fraction (the progress field from ComputeEngine is {total, completed, percent})
     let progress = task_progress(entity);
     entity.set("progress_fraction", json!(progress));
@@ -203,6 +216,23 @@ pub fn enrich_task_entity(entity: &mut Entity, all_tasks: &[Entity], terminal_co
     // blocks list
     let blocks = task_blocks(entity, all_tasks);
     entity.set("blocks", json!(blocks));
+
+    // virtual tags: evaluate strategies against this entity
+    let mut vtag_ctx = EntityFilterContext::for_entity(entity, all_tasks);
+    vtag_ctx.insert(TerminalColumnId(terminal_column_id.to_string()));
+    let virtual_slugs = registry.evaluate(&vtag_ctx);
+    entity.set("virtual_tags", json!(virtual_slugs));
+
+    // filter_tags: union of body-parsed tags + virtual tags (for filtering)
+    let body_tags = entity.get_string_list("tags");
+    let mut union: Vec<String> = body_tags;
+    let existing: HashSet<String> = union.iter().cloned().collect();
+    for slug in &virtual_slugs {
+        if !existing.contains(slug) {
+            union.push(slug.clone());
+        }
+    }
+    entity.set("filter_tags", json!(union));
 }
 
 /// Enrich all task entities in a single O(N) pass using pre-built indexes.
@@ -211,7 +241,11 @@ pub fn enrich_task_entity(entity: &mut Entity, all_tasks: &[Entity], terminal_co
 /// which would be O(N^2) because each call scans all tasks for dependency
 /// lookups. This function pre-builds `blocks` and `depends_on` indexes so
 /// the per-task enrichment is O(1).
-pub fn enrich_all_task_entities(entities: &mut [Entity], terminal_column_id: &str) {
+pub fn enrich_all_task_entities(
+    entities: &mut [Entity],
+    terminal_column_id: &str,
+    registry: &VirtualTagRegistry,
+) {
     // Build dependency index: dep_id -> list of task_ids that depend on it (i.e. "blocks")
     let mut blocks_index: HashMap<String, Vec<String>> = HashMap::new();
     let mut depends_on_index: HashMap<String, Vec<String>> = HashMap::new();
@@ -238,6 +272,27 @@ pub fn enrich_all_task_entities(entities: &mut [Entity], terminal_column_id: &st
         })
         .collect();
 
+    // Build lightweight entity stubs for virtual tag evaluation.
+    //
+    // Strategies need an immutable `&[Entity]` while we mutate each entity in
+    // the loop below, but they only read `id`, `position_column`, and
+    // `depends_on` from the slice. Instead of cloning every entity (which
+    // duplicates all fields including large descriptions), we build minimal
+    // stubs containing only the fields strategies actually inspect.
+    let stubs: Vec<Entity> = entities
+        .iter()
+        .map(|e| {
+            let mut stub = Entity::new(e.entity_type.clone(), e.id.clone());
+            if let Some(col) = e.get("position_column") {
+                stub.set("position_column", col.clone());
+            }
+            if let Some(deps) = e.get("depends_on") {
+                stub.set("depends_on", deps.clone());
+            }
+            stub
+        })
+        .collect();
+
     for entity in entities.iter_mut() {
         let progress = task_progress(entity);
         entity.set("progress_fraction", json!(progress));
@@ -253,7 +308,7 @@ pub fn enrich_all_task_entities(entities: &mut [Entity], terminal_column_id: &st
                 positions
                     .get(*dep_id)
                     .map(|col| col != terminal_column_id)
-                    .unwrap_or(false)
+                    .unwrap_or(true) // Missing dependency = blocked (safer default)
             })
             .cloned()
             .collect();
@@ -267,6 +322,23 @@ pub fn enrich_all_task_entities(entities: &mut [Entity], terminal_column_id: &st
             .cloned()
             .unwrap_or_default();
         entity.set("blocks", json!(blocks));
+
+        // Virtual tags: evaluate strategies against lightweight stubs
+        let mut vtag_ctx = EntityFilterContext::for_entity(entity, &stubs);
+        vtag_ctx.insert(TerminalColumnId(terminal_column_id.to_string()));
+        let virtual_slugs = registry.evaluate(&vtag_ctx);
+        entity.set("virtual_tags", json!(virtual_slugs));
+
+        // filter_tags: union of body-parsed tags + virtual tags
+        let body_tags = entity.get_string_list("tags");
+        let mut union: Vec<String> = body_tags;
+        let existing: HashSet<String> = union.iter().cloned().collect();
+        for slug in &virtual_slugs {
+            if !existing.contains(slug) {
+                union.push(slug.clone());
+            }
+        }
+        entity.set("filter_tags", json!(union));
     }
 }
 
@@ -320,23 +392,19 @@ pub fn task_entity_to_json(entity: &Entity) -> Value {
     result
 }
 
-/// Convert a task Entity to JSON with full computed fields (ready, blocked_by, blocks).
+/// Convert a pre-enriched task Entity to JSON with computed fields.
 ///
-/// This is the "rich" version used by get/list that requires all tasks for DAG analysis.
-pub fn task_entity_to_rich_json(
-    entity: &Entity,
-    all_tasks: &[Entity],
-    terminal_column_id: &str,
-) -> Value {
+/// Reads `ready`, `blocked_by`, `blocks`, `virtual_tags`, and `filter_tags`
+/// from fields already set by `enrich_task_entity` / `enrich_all_task_entities`.
+/// Callers must enrich the entity before calling this function.
+pub fn task_entity_to_rich_json(entity: &Entity) -> Value {
     let mut result = task_entity_to_json(entity);
 
-    let ready = task_is_ready(entity, all_tasks, terminal_column_id);
-    let blocked_by = task_blocked_by(entity, all_tasks, terminal_column_id);
-    let blocks = task_blocks(entity, all_tasks);
-
-    result["ready"] = json!(ready);
-    result["blocked_by"] = json!(blocked_by);
-    result["blocks"] = json!(blocks);
+    result["ready"] = entity.get("ready").cloned().unwrap_or(json!(true));
+    result["blocked_by"] = json!(entity.get_string_list("blocked_by"));
+    result["blocks"] = json!(entity.get_string_list("blocks"));
+    result["virtual_tags"] = json!(entity.get_string_list("virtual_tags"));
+    result["filter_tags"] = json!(entity.get_string_list("filter_tags"));
 
     result
 }
@@ -477,6 +545,25 @@ mod tests {
     }
 
     #[test]
+    fn test_task_is_ready_missing_dep_is_not_ready() {
+        // Dependency "ghost" doesn't exist in all_tasks — should NOT be ready.
+        // This must match ReadyStrategy::matches semantics (unwrap_or(false)).
+        let mut e = make_task("t1", "Test", "", "todo");
+        e.set("depends_on", json!(["ghost"]));
+        assert!(!task_is_ready(&e, &[], "done"));
+    }
+
+    #[test]
+    fn test_task_blocked_by_missing_dep_is_blocking() {
+        // Dependency "ghost" doesn't exist in all_tasks — should appear as blocker.
+        // This must match BlockedStrategy::matches semantics (unwrap_or(true)).
+        let mut e = make_task("t1", "Test", "", "todo");
+        e.set("depends_on", json!(["ghost"]));
+        let blocked = task_blocked_by(&e, &[], "done");
+        assert_eq!(blocked, vec!["ghost"]);
+    }
+
+    #[test]
     fn test_task_blocks() {
         let blocker = make_task("t1", "Blocker", "", "todo");
         let mut dependent = make_task("t2", "Dependent", "", "todo");
@@ -519,9 +606,15 @@ mod tests {
         let mut e = make_task("t1", "Test", "", "todo");
         e.set("depends_on", json!(["dep1"]));
 
-        let result = task_entity_to_rich_json(&e, &[dep, e.clone()], "done");
+        let all = vec![dep, e.clone()];
+        let registry = VirtualTagRegistry::new();
+        enrich_task_entity(&mut e, &all, "done", &registry);
+
+        let result = task_entity_to_rich_json(&e);
         assert_eq!(result["ready"], false);
         assert_eq!(result["blocked_by"], json!(["dep1"]));
+        assert_eq!(result["virtual_tags"], json!([]));
+        assert_eq!(result["filter_tags"], json!([]));
     }
 
     #[test]
@@ -531,7 +624,8 @@ mod tests {
         e.set("depends_on", json!(["dep1"]));
 
         let all = vec![dep, e.clone()];
-        enrich_task_entity(&mut e, &all, "done");
+        let registry = VirtualTagRegistry::new();
+        enrich_task_entity(&mut e, &all, "done", &registry);
 
         assert_eq!(e.get("progress_fraction").unwrap(), &json!(0.5));
         assert_eq!(e.get("ready").unwrap(), &json!(false));
@@ -546,7 +640,8 @@ mod tests {
         e.set("depends_on", json!(["dep1"]));
 
         let all = vec![dep, e.clone()];
-        enrich_task_entity(&mut e, &all, "done");
+        let registry = VirtualTagRegistry::new();
+        enrich_task_entity(&mut e, &all, "done", &registry);
 
         assert_eq!(e.get("ready").unwrap(), &json!(true));
         assert!(e.get_string_list("blocked_by").is_empty());
@@ -560,7 +655,8 @@ mod tests {
         blocker.set("depends_on", json!(["dep1"]));
 
         let mut entities = vec![dep, blocker];
-        enrich_all_task_entities(&mut entities, "done");
+        let registry = VirtualTagRegistry::new();
+        enrich_all_task_entities(&mut entities, "done", &registry);
 
         // dep1 should block t1
         let dep_enriched = &entities[0];
@@ -582,7 +678,8 @@ mod tests {
         task.set("depends_on", json!(["dep1"]));
 
         let mut entities = vec![dep, task];
-        enrich_all_task_entities(&mut entities, "done");
+        let registry = VirtualTagRegistry::new();
+        enrich_all_task_entities(&mut entities, "done", &registry);
 
         let t1_enriched = &entities[1];
         assert_eq!(t1_enriched.get("ready").unwrap(), &json!(true));
@@ -932,5 +1029,149 @@ mod tests {
             last.as_str(),
             ord2.as_str()
         );
+    }
+
+    // =========================================================================
+    // Virtual tag enrichment tests
+    // =========================================================================
+
+    use crate::virtual_tags::{VirtualTagCommand, VirtualTagStrategy};
+    use swissarmyhammer_entity::EntityFilterContext;
+
+    /// Mock strategy that always matches — used to test virtual tag injection.
+    struct AlwaysVirtualTag;
+
+    impl VirtualTagStrategy for AlwaysVirtualTag {
+        fn slug(&self) -> &str {
+            "ALWAYS"
+        }
+        fn color(&self) -> &str {
+            "22c55e"
+        }
+        fn description(&self) -> &str {
+            "Always applies"
+        }
+        fn commands(&self) -> Vec<VirtualTagCommand> {
+            vec![]
+        }
+        fn matches(&self, _ctx: &EntityFilterContext) -> bool {
+            true
+        }
+    }
+
+    /// Mock strategy that never matches.
+    struct NeverVirtualTag;
+
+    impl VirtualTagStrategy for NeverVirtualTag {
+        fn slug(&self) -> &str {
+            "NEVER"
+        }
+        fn color(&self) -> &str {
+            "ef4444"
+        }
+        fn description(&self) -> &str {
+            "Never applies"
+        }
+        fn commands(&self) -> Vec<VirtualTagCommand> {
+            vec![]
+        }
+        fn matches(&self, _ctx: &EntityFilterContext) -> bool {
+            false
+        }
+    }
+
+    #[test]
+    fn test_enrich_sets_virtual_tags_field() {
+        let mut registry = VirtualTagRegistry::new();
+        registry.register(Box::new(AlwaysVirtualTag));
+        registry.register(Box::new(NeverVirtualTag));
+
+        let mut e = make_task("t1", "Test", "", "todo");
+        let all = vec![e.clone()];
+        enrich_task_entity(&mut e, &all, "done", &registry);
+
+        let virtual_tags = e.get_string_list("virtual_tags");
+        assert_eq!(virtual_tags, vec!["ALWAYS"]);
+    }
+
+    #[test]
+    fn test_enrich_sets_filter_tags_as_union() {
+        let mut registry = VirtualTagRegistry::new();
+        registry.register(Box::new(AlwaysVirtualTag));
+
+        let mut e = make_task_computed("t1", "Test", "#bug some text", "todo", vec!["bug"], 0, 0);
+        let all = vec![e.clone()];
+        enrich_task_entity(&mut e, &all, "done", &registry);
+
+        let filter_tags = e.get_string_list("filter_tags");
+        assert!(filter_tags.contains(&"bug".to_string()));
+        assert!(filter_tags.contains(&"ALWAYS".to_string()));
+        assert_eq!(filter_tags.len(), 2);
+    }
+
+    #[test]
+    fn test_enrich_does_not_modify_tags_field() {
+        let mut registry = VirtualTagRegistry::new();
+        registry.register(Box::new(AlwaysVirtualTag));
+
+        let mut e = make_task_computed("t1", "Test", "#bug text", "todo", vec!["bug"], 0, 0);
+        let all = vec![e.clone()];
+        enrich_task_entity(&mut e, &all, "done", &registry);
+
+        // tags field should still only contain body-parsed tags
+        let tags = e.get_string_list("tags");
+        assert_eq!(tags, vec!["bug"]);
+        assert!(!tags.contains(&"ALWAYS".to_string()));
+    }
+
+    #[test]
+    fn test_enrich_all_sets_virtual_tags_and_filter_tags() {
+        let mut registry = VirtualTagRegistry::new();
+        registry.register(Box::new(AlwaysVirtualTag));
+
+        let e1 = make_task_computed("t1", "Test1", "#bug text", "todo", vec!["bug"], 0, 0);
+        let e2 = make_task("t2", "Test2", "", "todo");
+
+        let mut entities = vec![e1, e2];
+        enrich_all_task_entities(&mut entities, "done", &registry);
+
+        // t1: has body tag "bug" + virtual tag "ALWAYS"
+        let t1 = &entities[0];
+        assert_eq!(t1.get_string_list("virtual_tags"), vec!["ALWAYS"]);
+        let filter = t1.get_string_list("filter_tags");
+        assert!(filter.contains(&"bug".to_string()));
+        assert!(filter.contains(&"ALWAYS".to_string()));
+        assert_eq!(t1.get_string_list("tags"), vec!["bug"]);
+
+        // t2: no body tags, just virtual tag "ALWAYS"
+        let t2 = &entities[1];
+        assert_eq!(t2.get_string_list("virtual_tags"), vec!["ALWAYS"]);
+        assert_eq!(t2.get_string_list("filter_tags"), vec!["ALWAYS"]);
+    }
+
+    #[test]
+    fn test_enrich_filter_tags_deduplicates() {
+        let mut registry = VirtualTagRegistry::new();
+        registry.register(Box::new(AlwaysVirtualTag));
+
+        // Body already has tag "ALWAYS" — should not appear twice in filter_tags
+        let mut e = make_task_computed("t1", "Test", "#ALWAYS text", "todo", vec!["ALWAYS"], 0, 0);
+        let all = vec![e.clone()];
+        enrich_task_entity(&mut e, &all, "done", &registry);
+
+        let filter_tags = e.get_string_list("filter_tags");
+        assert_eq!(filter_tags, vec!["ALWAYS"]);
+    }
+
+    #[test]
+    fn test_enrich_empty_registry_no_virtual_tags() {
+        let registry = VirtualTagRegistry::new();
+
+        let mut e = make_task_computed("t1", "Test", "#bug text", "todo", vec!["bug"], 0, 0);
+        let all = vec![e.clone()];
+        enrich_task_entity(&mut e, &all, "done", &registry);
+
+        assert!(e.get_string_list("virtual_tags").is_empty());
+        assert_eq!(e.get_string_list("filter_tags"), vec!["bug"]);
     }
 }

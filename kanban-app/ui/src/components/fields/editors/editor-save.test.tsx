@@ -81,7 +81,7 @@ function editableFieldsFor(entityType: string): FieldDef[] {
     );
 }
 
-/** Get ALL FieldDefs for an entity type. */
+/** Get ALL FieldDefs for an entity type (excludes display: none fields). */
 function allFieldsFor(entityType: string): FieldDef[] {
   const entityDef = loadEntityDef(entityType);
   const allDefs = loadAllFieldDefs();
@@ -89,7 +89,9 @@ function allFieldsFor(entityType: string): FieldDef[] {
 
   return entityDef.fields
     .map((name) => defMap.get(name))
-    .filter((d): d is FieldDef => d !== undefined);
+    .filter(
+      (d): d is FieldDef => d !== undefined && d.display !== "none",
+    );
 }
 
 // ---------------------------------------------------------------------------

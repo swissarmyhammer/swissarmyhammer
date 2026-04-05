@@ -5,7 +5,8 @@ use crate::context::KanbanContext;
 use crate::error::KanbanError;
 use crate::swimlane::swimlane_entity_to_json;
 use crate::tag::tag_entity_to_json;
-use crate::task_helpers::{task_is_ready, task_tags};
+use crate::task_helpers::enrich_all_task_entities;
+use crate::virtual_tags::default_virtual_tag_registry;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -73,15 +74,18 @@ impl Execute<KanbanContext, KanbanError> for GetBoard {
                 }));
             }
 
-            // Read all tasks as entities
-            let all_tasks = ectx.list("task").await?;
+            // Read all tasks and enrich via the same pipeline as ListTasks/NextTask
+            let mut all_tasks = ectx.list("task").await?;
             let terminal_id = all_columns
                 .iter()
                 .max_by_key(|c| c.get("order").and_then(|v| v.as_u64()).unwrap_or(0))
                 .map(|c| c.id.as_str())
                 .unwrap_or("done");
 
-            // Count tasks by column, computing ready status in a single pass.
+            let registry = default_virtual_tag_registry();
+            enrich_all_task_entities(&mut all_tasks, terminal_id, registry);
+
+            // Count tasks by column, reading ready status from enriched entities.
             let mut column_counts: HashMap<String, usize> = HashMap::new();
             let mut column_ready_counts: HashMap<String, usize> = HashMap::new();
             let mut total_ready: usize = 0;
@@ -93,7 +97,7 @@ impl Execute<KanbanContext, KanbanError> for GetBoard {
                     .to_string();
                 *column_counts.entry(col.clone()).or_insert(0) += 1;
 
-                if task_is_ready(task, &all_tasks, terminal_id) {
+                if task.get("ready").and_then(|v| v.as_bool()).unwrap_or(false) {
                     *column_ready_counts.entry(col).or_insert(0) += 1;
                     total_ready += 1;
                 }
@@ -106,15 +110,6 @@ impl Execute<KanbanContext, KanbanError> for GetBoard {
                     if !swimlane.is_empty() {
                         *swimlane_counts.entry(swimlane.to_string()).or_insert(0) += 1;
                     }
-                }
-            }
-
-            // Count tasks by tag name (computed from body)
-            let all_task_tags: Vec<Vec<String>> = all_tasks.iter().map(task_tags).collect();
-            let mut tag_counts: HashMap<String, usize> = HashMap::new();
-            for tags in &all_task_tags {
-                for tag_name in tags {
-                    *tag_counts.entry(tag_name.clone()).or_insert(0) += 1;
                 }
             }
 
@@ -153,23 +148,9 @@ impl Execute<KanbanContext, KanbanError> for GetBoard {
                 })
                 .collect();
 
-            // Read all tags and enhance with counts
+            // Read all tags
             let all_tags = ectx.list("tag").await?;
-            let tags: Vec<Value> = all_tags
-                .iter()
-                .map(|tag| {
-                    let tag_name = tag.get_str("tag_name").unwrap_or("");
-                    let count = tag_counts.get(tag_name).copied().unwrap_or(0);
-
-                    json!({
-                        "id": tag.id,
-                        "name": tag_name,
-                        "description": tag.get_str("description").unwrap_or(""),
-                        "color": tag.get_str("color").unwrap_or(""),
-                        "task_count": count
-                    })
-                })
-                .collect();
+            let tags: Vec<Value> = all_tags.iter().map(tag_entity_to_json).collect();
 
             // Calculate summary (ready count already computed in the column pass)
             let total_tasks = all_tasks.len();
@@ -524,11 +505,12 @@ mod tests {
             .find(|t| t["id"].as_str() == Some(&*feature_id))
             .unwrap();
 
-        assert_eq!(bug_tag["task_count"], 2);
+        // Tags should not include task_count
+        assert!(bug_tag.get("task_count").is_none() || bug_tag["task_count"].is_null());
         assert_eq!(bug_tag["description"], "Something isn't working");
         assert_eq!(bug_tag["color"], "d73a4a");
 
-        assert_eq!(feature_tag["task_count"], 1);
+        assert!(feature_tag.get("task_count").is_none() || feature_tag["task_count"].is_null());
     }
 
     #[tokio::test]

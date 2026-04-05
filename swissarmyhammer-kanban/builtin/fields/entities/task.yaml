@@ -40,3 +40,5 @@ fields:
   - position_swimlane
   - position_ordinal
   - attachments
+  - virtual_tags
+  - filter_tags

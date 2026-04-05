@@ -1552,38 +1552,6 @@ mod tests {
     // Activity operations
     // ------------------------------------------------------------------
 
-    #[tokio::test]
-    #[ignore = "list activity operation removed on this branch"]
-    async fn dispatch_list_activity() {
-        let (_temp, ctx) = setup().await;
-
-        // Add a task to generate activity
-        let ops = parse_input(json!({"op": "add task", "title": "Activity task"})).unwrap();
-        execute_operation(&ctx, &ops[0]).await.unwrap();
-
-        let ops = parse_input(json!({"op": "list activity"})).unwrap();
-        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
-        assert!(result["entries"].is_array(), "should return entries array");
-    }
-
-    #[tokio::test]
-    #[ignore = "list activity operation removed on this branch"]
-    async fn dispatch_list_activity_with_limit() {
-        let (_temp, ctx) = setup().await;
-
-        // Generate multiple activity entries
-        for i in 0..5 {
-            let ops =
-                parse_input(json!({"op": "add task", "title": format!("Task {}", i)})).unwrap();
-            execute_operation(&ctx, &ops[0]).await.unwrap();
-        }
-
-        let ops = parse_input(json!({"op": "list activity", "limit": 2})).unwrap();
-        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
-        let entries = result["entries"].as_array().unwrap();
-        assert!(entries.len() <= 2, "limit should cap results at 2");
-    }
-
     // ------------------------------------------------------------------
     // Dispatch: add task with optional fields
     // ------------------------------------------------------------------

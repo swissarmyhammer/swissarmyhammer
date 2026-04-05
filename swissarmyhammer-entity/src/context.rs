@@ -534,6 +534,40 @@ impl EntityContext {
         Ok(entities)
     }
 
+    /// List entities of a type, filtered by a predicate with access to context.
+    ///
+    /// Loads all entities first (with computed fields derived), builds an
+    /// `EntityFilterContext` via the `build_ctx` callback, then keeps only
+    /// entities where `predicate` returns `true`.
+    ///
+    /// The `build_ctx` callback receives the loaded entity slice and returns
+    /// a populated `EntityFilterContext` — this is where callers inject
+    /// domain-specific extras (tag registries, column IDs, etc.) without the
+    /// entity layer knowing about those types.
+    pub async fn list_where<F>(
+        &self,
+        entity_type: impl AsRef<str>,
+        build_ctx: impl FnOnce(&[Entity]) -> crate::filter::EntityFilterContext<'_>,
+        predicate: F,
+    ) -> Result<Vec<Entity>>
+    where
+        F: Fn(&Entity, &crate::filter::EntityFilterContext) -> bool,
+    {
+        let mut entities = self.list(entity_type).await?;
+        let ctx = build_ctx(&entities);
+        // Collect passing indices while ctx borrows entities, then drop ctx
+        // before draining. This satisfies the borrow checker without cloning.
+        let keep: Vec<bool> = entities.iter().map(|e| predicate(e, &ctx)).collect();
+        drop(ctx);
+        let mut i = 0;
+        entities.retain(|_| {
+            let pass = keep[i];
+            i += 1;
+            pass
+        });
+        Ok(entities)
+    }
+
     /// Read the changelog for an entity.
     pub async fn read_changelog(
         &self,
@@ -2389,5 +2423,109 @@ mod tests {
 
         let loaded = ctx.read("tag", "bug").await.unwrap();
         assert_eq!(loaded.get_str("tag_name"), Some("Bug"));
+    }
+
+    // -----------------------------------------------------------------------
+    // list_where tests (from kanban branch)
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn list_where_filters_by_field() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields.clone());
+
+        let mut t1 = Entity::new("tag", "bug");
+        t1.set("tag_name", json!("Bug"));
+        t1.set("color", json!("#ff0000"));
+        let mut t2 = Entity::new("tag", "feature");
+        t2.set("tag_name", json!("Feature"));
+        t2.set("color", json!("#00ff00"));
+
+        ctx.write(&t1).await.unwrap();
+        ctx.write(&t2).await.unwrap();
+
+        let result = ctx
+            .list_where(
+                "tag",
+                |entities| crate::filter::EntityFilterContext::new(entities),
+                |entity, _ctx| entity.get_str("tag_name") == Some("Bug"),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].id.as_ref(), "bug");
+    }
+
+    #[tokio::test]
+    async fn list_where_with_context_extra() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields.clone());
+
+        let mut t1 = Entity::new("tag", "bug");
+        t1.set("tag_name", json!("Bug"));
+        let mut t2 = Entity::new("tag", "feature");
+        t2.set("tag_name", json!("Feature"));
+
+        ctx.write(&t1).await.unwrap();
+        ctx.write(&t2).await.unwrap();
+
+        // Inject a set of allowed tag names via extras
+        let allowed: std::collections::HashSet<String> =
+            ["Feature"].iter().map(|s| s.to_string()).collect();
+
+        let result = ctx
+            .list_where(
+                "tag",
+                |entities| {
+                    let mut fctx = crate::filter::EntityFilterContext::new(entities);
+                    fctx.insert(allowed.clone());
+                    fctx
+                },
+                |entity, fctx| {
+                    let allowed = fctx.get::<std::collections::HashSet<String>>().unwrap();
+                    entity
+                        .get_str("tag_name")
+                        .map_or(false, |name| allowed.contains(name))
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].id.as_ref(), "feature");
+    }
+
+    #[tokio::test]
+    async fn list_where_predicate_accesses_all_entities() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields.clone());
+
+        let mut t1 = Entity::new("tag", "a");
+        t1.set("tag_name", json!("Alpha"));
+        let mut t2 = Entity::new("tag", "b");
+        t2.set("tag_name", json!("Beta"));
+        let mut t3 = Entity::new("tag", "c");
+        t3.set("tag_name", json!("Charlie"));
+
+        ctx.write(&t1).await.unwrap();
+        ctx.write(&t2).await.unwrap();
+        ctx.write(&t3).await.unwrap();
+
+        // Keep only entities when total count > 2 (cross-entity logic)
+        let result = ctx
+            .list_where(
+                "tag",
+                |entities| crate::filter::EntityFilterContext::new(entities),
+                |_entity, fctx| fctx.entities.len() > 2,
+            )
+            .await
+            .unwrap();
+
+        // All 3 pass because entities.len() == 3 > 2
+        assert_eq!(result.len(), 3);
     }
 }

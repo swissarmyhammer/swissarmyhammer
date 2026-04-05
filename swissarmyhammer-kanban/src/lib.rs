@@ -92,6 +92,7 @@ pub mod scope_commands;
 pub mod swimlane;
 pub mod tag;
 pub mod task;
+pub mod virtual_tags;
 
 // Re-export Execute trait and types from operations crate
 pub use swissarmyhammer_operations::{
