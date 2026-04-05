@@ -218,6 +218,8 @@ pub struct EntityCommandKeys {
 /// Commands are metadata only -- the frontend attaches `execute` implementations
 /// at mount time by matching on `id`. The `name` field is a template string
 /// that may reference `{{entity.type}}` or `{{entity.<field>}}`.
+/// Carries the same metadata as `CommandDef` so entity YAML files can be the
+/// single source of truth for entity-scoped commands.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct EntityCommand {
     pub id: String,
@@ -227,6 +229,19 @@ pub struct EntityCommand {
     pub context_menu: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub keys: Option<EntityCommandKeys>,
+    /// Whether this command supports undo.
+    #[serde(default)]
+    pub undoable: bool,
+    /// Whether this command is visible in the command palette. Defaults to true
+    /// when absent (matching `CommandDef` semantics).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub visible: Option<bool>,
+    /// Display name override for native menus.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub menu_name: Option<String>,
+    /// Scope string for dual-scoped commands (e.g. `"entity:tag,entity:task"`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
 }
 
 /// An entity definition -- a template declaring which fields belong to an entity type.
@@ -1060,6 +1075,10 @@ fields:
                     name: "Inspect {{entity.type}}".into(),
                     context_menu: true,
                     keys: None,
+                    undoable: false,
+                    visible: None,
+                    menu_name: None,
+                    scope: None,
                 },
                 EntityCommand {
                     id: "entity.archive".into(),
@@ -1070,6 +1089,10 @@ fields:
                         cua: None,
                         emacs: None,
                     }),
+                    undoable: false,
+                    visible: None,
+                    menu_name: None,
+                    scope: None,
                 },
             ],
         };

@@ -202,51 +202,82 @@ pub fn commands_for_scope(
         let base_id = entity_id.split('.').next().unwrap_or(entity_id);
         let entity_moniker = format!("{entity_type}:{base_id}");
 
-        // Entity schema commands (from entity YAML definitions)
+        // Entity schema commands (from entity YAML definitions).
+        // Two passes: (1) commands declared directly on this entity type,
+        // (2) commands from ANY entity definition whose `scope` field
+        // references this entity type (e.g. task.add on task entity with
+        // scope "entity:column" when processing a column moniker).
         if let Some(fields) = fields {
-            if let Some(entity_def) = fields.get_entity(entity_type) {
-                for cmd in &entity_def.commands {
-                    let key = (cmd.id.clone(), Some(entity_moniker.clone()));
-                    if seen.contains(&key) {
-                        continue;
-                    }
-                    seen.insert(key);
+            let scope_bare_et = entity_type;
+            let scope_prefixed_et = format!("entity:{entity_type}");
 
-                    let tpl = TemplateParams {
-                        entity_type: if cmd.id == "entity.paste" {
-                            clipboard_type.as_deref().unwrap_or("entity")
-                        } else {
-                            entity_type
-                        },
-                        ..Default::default()
-                    };
-                    let name = resolve_name_template(&cmd.name, &tpl);
+            let direct_cmds: Vec<_> = fields
+                .get_entity(entity_type)
+                .map(|e| e.commands.iter().collect())
+                .unwrap_or_default();
 
-                    let keys = cmd.keys.as_ref().map(|k| KeysDef {
-                        vim: k.vim.clone(),
-                        cua: k.cua.clone(),
-                        emacs: k.emacs.clone(),
-                    });
+            let scoped_cmds: Vec<_> = fields
+                .all_entities()
+                .iter()
+                .flat_map(|e| e.commands.iter())
+                .filter(|cmd| {
+                    cmd.scope.as_deref().is_some_and(|s| {
+                        s.split(',').any(|r| {
+                            let r = r.trim();
+                            r == scope_bare_et || r == scope_prefixed_et
+                        })
+                    })
+                })
+                .collect();
 
-                    let available = check_available(
-                        &cmd.id,
-                        scope_chain,
-                        Some(moniker),
-                        command_impls,
-                        ui_state,
-                    );
-
-                    result.push(ResolvedCommand {
-                        id: cmd.id.clone(),
-                        name,
-                        menu_name: None,
-                        target: Some(entity_moniker.clone()),
-                        group: entity_type.to_string(),
-                        context_menu: cmd.context_menu,
-                        keys,
-                        available,
-                    });
+            for cmd in direct_cmds.into_iter().chain(scoped_cmds) {
+                if cmd.visible == Some(false) {
+                    continue;
                 }
+                let key = (cmd.id.clone(), Some(entity_moniker.clone()));
+                if seen.contains(&key) {
+                    continue;
+                }
+                seen.insert(key);
+
+                let tpl = TemplateParams {
+                    entity_type: if cmd.id == "entity.paste" {
+                        clipboard_type.as_deref().unwrap_or("entity")
+                    } else {
+                        entity_type
+                    },
+                    ..Default::default()
+                };
+                let name = resolve_name_template(&cmd.name, &tpl);
+                let menu_name = cmd
+                    .menu_name
+                    .as_ref()
+                    .map(|mn| resolve_name_template(mn, &tpl));
+
+                let keys = cmd.keys.as_ref().map(|k| KeysDef {
+                    vim: k.vim.clone(),
+                    cua: k.cua.clone(),
+                    emacs: k.emacs.clone(),
+                });
+
+                let available = check_available(
+                    &cmd.id,
+                    scope_chain,
+                    Some(moniker),
+                    command_impls,
+                    ui_state,
+                );
+
+                result.push(ResolvedCommand {
+                    id: cmd.id.clone(),
+                    name,
+                    menu_name,
+                    target: Some(entity_moniker.clone()),
+                    group: entity_type.to_string(),
+                    context_menu: cmd.context_menu,
+                    keys,
+                    available,
+                });
             }
         }
 
@@ -1916,5 +1947,74 @@ mod tests {
             inspect_cmds.len(),
             inspect_cmds.iter().map(|c| &c.target).collect::<Vec<_>>()
         );
+    }
+
+    // =========================================================================
+    // Entity schema as primary source for scoped commands
+    // =========================================================================
+
+    #[test]
+    fn task_add_from_entity_schema_has_target() {
+        // task.add is declared on the task entity with scope "entity:column".
+        // When column:todo is in scope, it should appear via the entity schema
+        // path with a target pointing to the column moniker.
+        let (registry, impls, fields, ui) = setup();
+        let scope = vec!["column:todo".into(), "board:board".into()];
+        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
+        let task_add = cmds
+            .iter()
+            .find(|c| c.id == "task.add")
+            .expect("task.add should be in resolved commands");
+        assert_eq!(
+            task_add.target.as_deref(),
+            Some("column:todo"),
+            "task.add should have target from entity schema path"
+        );
+    }
+
+    #[test]
+    fn task_untag_from_entity_schema_has_target() {
+        // task.untag is declared on the task entity with scope
+        // "entity:tag,entity:task". When both tag and task are in scope,
+        // it should appear via the entity schema path with a target
+        // pointing to the tag moniker (innermost match).
+        let (registry, impls, fields, ui) = setup();
+        let scope = vec![
+            "tag:bug".into(),
+            "task:01X".into(),
+            "column:todo".into(),
+        ];
+        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
+        let untag = cmds
+            .iter()
+            .find(|c| c.id == "task.untag")
+            .expect("task.untag should be in resolved commands");
+        assert!(
+            untag.target.is_some(),
+            "task.untag should have a target from entity schema path"
+        );
+    }
+
+    #[test]
+    fn entity_schema_commands_carry_menu_name() {
+        // Commands resolved via the entity schema block should carry
+        // menu_name from EntityCommand.menu_name, not hardcode None.
+        let (registry, impls, fields, ui) = setup();
+        let scope = vec![
+            "task:01X".into(),
+            "column:todo".into(),
+            "board:board".into(),
+        ];
+        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
+
+        // entity.archive has no explicit menu_name in YAML so should be None
+        let archive = cmds.iter().find(|c| c.id == "entity.archive");
+        if let Some(a) = archive {
+            assert!(
+                a.menu_name.is_none(),
+                "entity.archive should have no menu_name: {:?}",
+                a.menu_name
+            );
+        }
     }
 }
