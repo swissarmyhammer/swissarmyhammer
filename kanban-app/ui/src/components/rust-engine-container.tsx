@@ -297,25 +297,48 @@ export function RustEngineContainer({ children }: RustEngineContainerProps) {
         // entity array reference on every field change, which would cause
         // derived state (cellMonikers, etc.) to rebuild and reset the
         // grid cursor.
-        setEntitiesFor(entity_type, (prev) =>
-          prev.map((e) => {
-            if (e.id !== id) return e;
-            // When the backend provides full fields, use them directly.
-            // Otherwise fall back to patching individual changes.
-            if (fields) {
-              return { ...e, fields: { ...fields } };
-            }
-            if (changes && changes.length > 0) {
+        if (fields) {
+          // Backend provided full fields — use them directly.
+          setEntitiesFor(entity_type, (prev) =>
+            prev.map((e) =>
+              e.id === id ? { ...e, fields: { ...fields } } : e,
+            ),
+          );
+        } else if (changes && changes.length > 0) {
+          // Patch individual changed fields.
+          setEntitiesFor(entity_type, (prev) =>
+            prev.map((e) => {
+              if (e.id !== id) return e;
               const patched = { ...e.fields };
               for (const { field, value } of changes) {
                 patched[field] = value;
               }
               return { ...e, fields: patched };
-            }
-            // No fields and no changes — nothing to patch, return as-is.
-            return e;
-          }),
-        );
+            }),
+          );
+        } else {
+          // No fields and no changes — backend didn't enrich the event.
+          // Re-fetch the full entity so the UI stays in sync.
+          invoke<EntityBag>("get_entity", {
+            entityType: entity_type,
+            id,
+            ...(activeBoardPathRef.current
+              ? { boardPath: activeBoardPathRef.current }
+              : {}),
+          })
+            .then((bag) => {
+              const entity = entityFromBag(bag);
+              setEntitiesFor(entity_type, (prev) =>
+                prev.map((e) => (e.id === id ? entity : e)),
+              );
+            })
+            .catch((err) => {
+              console.error(
+                `[entity-field-changed] re-fetch failed for ${entity_type}/${id}:`,
+                err,
+              );
+            });
+        }
       }),
     ];
     return () => {

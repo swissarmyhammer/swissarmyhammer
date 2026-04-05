@@ -398,6 +398,85 @@ describe("RustEngineContainer", () => {
     });
   });
 
+  it("entity-field-changed with empty fields/changes re-fetches via get_entity", async () => {
+    // Seed an entity, then emit entity-field-changed with no fields and no
+    // changes. The handler should fall back to get_entity and update the
+    // entity in the store with the re-fetched data.
+    const taskBagV1 = { entity_type: "task", id: "t1", title: "Original" };
+    const taskBagV2 = { entity_type: "task", id: "t1", title: "Re-fetched" };
+
+    let getEntityCallCount = 0;
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === "get_entity") {
+        getEntityCallCount++;
+        // First call (seed) returns v1, subsequent calls return v2
+        return Promise.resolve(getEntityCallCount <= 1 ? taskBagV1 : taskBagV2);
+      }
+      if (cmd === "get_ui_state")
+        return Promise.resolve({
+          palette_open: false,
+          palette_mode: "command",
+          keymap_mode: "cua",
+          scope_chain: [],
+          open_boards: [],
+          windows: {},
+          recent_boards: [],
+        });
+      if (cmd === "list_schemas") return Promise.resolve([]);
+      return Promise.resolve(null);
+    });
+
+    /** Probe that displays the task title. */
+    function TitleProbe() {
+      const entitiesByType = useEntitiesByType();
+      const tasks = entitiesByType.task ?? [];
+      const title =
+        tasks.length > 0 ? String(tasks[0].fields.title ?? "") : "none";
+      return <span data-testid="task-title">{title}</span>;
+    }
+
+    await act(async () => {
+      render(
+        <RustEngineContainer>
+          <TitleProbe />
+        </RustEngineContainer>,
+      );
+    });
+
+    // Seed with entity-created
+    await act(async () => {
+      emitTauriEvent("entity-created", {
+        kind: "entity-created",
+        entity_type: "task",
+        id: "t1",
+        fields: {},
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("task-title").textContent).toBe("Original");
+    });
+
+    // Now emit entity-field-changed with EMPTY fields and changes
+    await act(async () => {
+      emitTauriEvent("entity-field-changed", {
+        kind: "entity-field-changed",
+        entity_type: "task",
+        id: "t1",
+        changes: [],
+        // fields is absent — simulates the backend not enriching the event
+      });
+    });
+
+    // The handler should have re-fetched via get_entity, getting v2
+    await waitFor(() => {
+      expect(screen.getByTestId("task-title").textContent).toBe("Re-fetched");
+    });
+
+    // Verify get_entity was called at least twice (once for seed, once for re-fetch)
+    expect(getEntityCallCount).toBeGreaterThanOrEqual(2);
+  });
+
   it("entity events with mismatched board_path are ignored", async () => {
     mockInvoke.mockImplementation((cmd: string) => {
       if (cmd === "get_entity")
