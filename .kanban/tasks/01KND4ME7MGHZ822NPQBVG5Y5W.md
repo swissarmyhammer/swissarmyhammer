@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KND4KPNAEPKSDEN98TFYBEH1
-position_column: todo
-position_ordinal: '8680'
+position_column: done
+position_ordinal: ffffffffffffffffdc80
 title: 'VT-7: Strategy — BLOCKING virtual tag'
 ---
 ## What

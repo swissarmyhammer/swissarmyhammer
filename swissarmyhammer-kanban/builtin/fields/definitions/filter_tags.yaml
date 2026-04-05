@@ -1,0 +1,10 @@
+id: "0000000000000000000000000X"
+name: filter_tags
+description: Union of tags and virtual_tags for filtering
+type:
+  kind: computed
+  derive: compute-filter-tags
+  entity: tag
+  commit_display_names: true
+display: none
+editor: none

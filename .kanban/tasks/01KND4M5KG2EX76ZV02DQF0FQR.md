@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KND4KPNAEPKSDEN98TFYBEH1
-position_column: todo
-position_ordinal: '8480'
+position_column: done
+position_ordinal: ffffffffffffffffdb80
 title: 'VT-5: Strategy — READY virtual tag'
 ---
 ## What

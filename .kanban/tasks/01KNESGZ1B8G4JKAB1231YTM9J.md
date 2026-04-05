@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: 8a80
+position_column: done
+position_ordinal: ffffffffffffffffd680
 title: 'VT-0: Entity-level predicate filtering with EntityFilterContext'
 ---
 ## What

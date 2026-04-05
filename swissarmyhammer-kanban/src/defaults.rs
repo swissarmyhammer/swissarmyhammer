@@ -171,6 +171,20 @@ pub fn kanban_compute_engine() -> ComputeEngine {
         }),
     );
 
+    // compute-virtual-tags: stub — returns empty array.
+    // Populated by the enrichment pipeline in a later card.
+    engine.register(
+        "compute-virtual-tags",
+        Box::new(|_fields| Box::pin(async { serde_json::Value::Array(vec![]) })),
+    );
+
+    // compute-filter-tags: stub — returns empty array.
+    // Will compute tags ∪ virtual_tags once the enrichment pipeline lands.
+    engine.register(
+        "compute-filter-tags",
+        Box::new(|_fields| Box::pin(async { serde_json::Value::Array(vec![]) })),
+    );
+
     engine
 }
 
@@ -268,7 +282,7 @@ mod tests {
     #[test]
     fn builtin_field_definitions_load() {
         let defs = builtin_field_definitions();
-        assert_eq!(defs.len(), 17, "expected 17 builtin field definitions");
+        assert_eq!(defs.len(), 19, "expected 19 builtin field definitions");
     }
 
     #[test]
@@ -401,11 +415,11 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(ctx.all_fields().len(), 17);
+        assert_eq!(ctx.all_fields().len(), 19);
         assert_eq!(ctx.all_entities().len(), 6);
         assert!(ctx.get_field_by_name("title").is_some());
         assert!(ctx.get_entity("task").is_some());
-        assert_eq!(ctx.fields_for_entity("task").len(), 10);
+        assert_eq!(ctx.fields_for_entity("task").len(), 12);
     }
 
     #[test]

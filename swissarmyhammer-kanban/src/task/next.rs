@@ -2,8 +2,9 @@
 
 use crate::context::KanbanContext;
 use crate::error::KanbanError;
-use crate::task_helpers::{task_entity_to_rich_json, task_is_ready, task_tags};
+use crate::task_helpers::{enrich_all_task_entities, task_entity_to_rich_json};
 use crate::types::{ActorId, Ordinal, SwimlaneId, TagId};
+use crate::virtual_tags::default_virtual_tag_registry;
 use serde::Deserialize;
 use serde_json::Value;
 use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResult};
@@ -59,7 +60,7 @@ impl Execute<KanbanContext, KanbanError> for NextTask {
         match async {
             let ectx = ctx.entity_context().await?;
             let all_columns = ectx.list("column").await?;
-            let all_tasks = ectx.list("task").await?;
+            let mut all_tasks = ectx.list("task").await?;
 
             // Get terminal column (highest order) — tasks here are done
             let terminal_column = all_columns
@@ -67,6 +68,10 @@ impl Execute<KanbanContext, KanbanError> for NextTask {
                 .max_by_key(|c| c.get("order").and_then(|v| v.as_u64()).unwrap_or(0))
                 .map(|c| c.id.as_str())
                 .unwrap_or("done");
+
+            // Enrich all tasks first so filter_tags and ready are available
+            let registry = default_virtual_tag_registry();
+            enrich_all_task_entities(&mut all_tasks, terminal_column, &registry);
 
             // Get column ordering for sorting candidates
             let column_order: std::collections::HashMap<&str, usize> = all_columns
@@ -84,8 +89,9 @@ impl Execute<KanbanContext, KanbanError> for NextTask {
                         return false;
                     }
 
-                    // Must be ready (all deps complete)
-                    if !task_is_ready(t, &all_tasks, terminal_column) {
+                    // Must be ready (already enriched on entity)
+                    let is_ready = t.get("ready").and_then(|v| v.as_bool()).unwrap_or(true);
+                    if !is_ready {
                         return false;
                     }
 
@@ -106,9 +112,9 @@ impl Execute<KanbanContext, KanbanError> for NextTask {
                         }
                     }
 
-                    // Filter by tag if specified
+                    // Filter by tag (uses filter_tags which includes virtual tags)
                     if let Some(ref tag) = self.tag {
-                        if !task_tags(t).contains(&tag.to_string()) {
+                        if !t.get_string_list("filter_tags").contains(&tag.to_string()) {
                             return false;
                         }
                     }

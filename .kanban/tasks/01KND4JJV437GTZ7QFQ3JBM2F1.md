@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KND4J0P5NK9XY1VM3ZCQ1BY9
-position_column: todo
-position_ordinal: '8180'
+position_column: done
+position_ordinal: ffffffffffffffffd980
 title: 'VT-2: VirtualTagStrategy trait and registry'
 ---
 ## What

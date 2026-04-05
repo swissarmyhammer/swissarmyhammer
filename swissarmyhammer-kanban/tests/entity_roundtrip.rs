@@ -9,7 +9,8 @@
 use serde_json::json;
 use swissarmyhammer_kanban::{
     board::InitBoard, entity::UpdateEntityField, task::AddTask, task::MoveTask,
-    task_helpers::enrich_task_entity, KanbanContext, KanbanOperationProcessor, OperationProcessor,
+    task_helpers::enrich_task_entity, virtual_tags::default_virtual_tag_registry, KanbanContext,
+    KanbanOperationProcessor, OperationProcessor,
 };
 use tempfile::TempDir;
 
@@ -227,7 +228,8 @@ async fn enriched_entity_has_computed_fields() {
     let mut tasks = ectx.list("task").await.unwrap();
     let all_tasks = tasks.clone();
     for t in &mut tasks {
-        enrich_task_entity(t, &all_tasks, "done");
+        let registry = default_virtual_tag_registry();
+        enrich_task_entity(t, &all_tasks, "done", &registry);
     }
 
     // Verify the blocked task has ready=false

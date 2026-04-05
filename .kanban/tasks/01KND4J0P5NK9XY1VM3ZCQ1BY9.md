@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KNESQHQ68QVG341SMAKD8DXZ
-position_column: todo
-position_ordinal: '80'
+position_column: done
+position_ordinal: ffffffffffffffffd880
 title: 'VT-1: Add `virtual_tags` and `filter_tags` hidden field definitions on task entity'
 ---
 ## What

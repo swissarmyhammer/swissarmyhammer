@@ -30,6 +30,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use swissarmyhammer_kanban::task_helpers::{enrich_all_task_entities, enrich_task_entity};
+use swissarmyhammer_kanban::virtual_tags::default_virtual_tag_registry;
 use tauri::menu::{ContextMenu, MenuBuilder};
 use tauri::webview::WebviewWindowBuilder;
 use tauri::{AppHandle, Emitter, Manager, State, Window};
@@ -223,7 +224,8 @@ pub async fn list_entities(
             .unwrap_or_else(|| "done".to_string());
 
         // Batch-enrich in O(N) using pre-built dependency indexes
-        enrich_all_task_entities(&mut entities, &terminal_id);
+        let registry = default_virtual_tag_registry();
+        enrich_all_task_entities(&mut entities, &terminal_id, &registry);
 
         // Sort by position so the frontend can trust the order
         entities.sort_by(|a, b| {
@@ -280,7 +282,8 @@ pub async fn get_entity(
             .last()
             .map(|c| c.id.to_string())
             .unwrap_or_else(|| "done".to_string());
-        enrich_task_entity(&mut entity, &all_tasks, &terminal_id);
+        let registry = default_virtual_tag_registry();
+        enrich_task_entity(&mut entity, &all_tasks, &terminal_id, &registry);
     }
 
     Ok(entity.to_json())
@@ -504,14 +507,6 @@ pub async fn get_board_data(
         }
     }
 
-    // Count tasks per tag name
-    let mut tag_counts: HashMap<String, usize> = HashMap::new();
-    for task in &all_tasks {
-        for tag_name in swissarmyhammer_kanban::task_helpers::task_tags(task) {
-            *tag_counts.entry(tag_name).or_insert(0) += 1;
-        }
-    }
-
     // Serialize columns with injected task_count and ready_count
     let columns_json: Vec<Value> = columns
         .iter()
@@ -539,17 +534,8 @@ pub async fn get_board_data(
         })
         .collect();
 
-    // Serialize tags with injected task_count
-    let tags_json: Vec<Value> = tags
-        .iter()
-        .map(|tag| {
-            let mut e = tag.clone();
-            let tag_name = tag.get_str("tag_name").unwrap_or("");
-            let count = tag_counts.get(tag_name).copied().unwrap_or(0);
-            e.set("task_count", json!(count));
-            e.to_json()
-        })
-        .collect();
+    // Serialize tags (no task_count — removed to avoid O(tasks × tags) scanning)
+    let tags_json: Vec<Value> = tags.iter().map(|tag| tag.to_json()).collect();
 
     // Compute summary counts
     let total_tasks = all_tasks.len();
