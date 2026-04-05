@@ -111,64 +111,17 @@ impl GitOperations {
     ) -> GitResult<Vec<String>> {
         let repo = self.repo.inner();
 
-        // Find branch references
-        let current_branch_ref = repo
-            .find_branch(current_branch, BranchType::Local)
-            .map_err(|e| convert_git2_error("find_current_branch", e))?;
+        let current_commit = self.resolve_branch_commit(current_branch)?;
+        let parent_commit = self.resolve_branch_commit(parent_branch)?;
 
-        let parent_branch_ref = repo
-            .find_branch(parent_branch, BranchType::Local)
-            .map_err(|e| convert_git2_error("find_parent_branch", e))?;
-
-        // Get commit OIDs from branches
-        let current_commit = current_branch_ref
-            .get()
-            .peel_to_commit()
-            .map_err(|e| convert_git2_error("peel_current_branch", e))?;
-
-        let parent_commit = parent_branch_ref
-            .get()
-            .peel_to_commit()
-            .map_err(|e| convert_git2_error("peel_parent_branch", e))?;
-
-        // Find merge-base (common ancestor)
         let merge_base = repo
-            .merge_base(current_commit.id(), parent_commit.id())
+            .merge_base(current_commit, parent_commit)
             .map_err(|e| convert_git2_error("merge_base", e))?;
 
-        // Get tree objects for diff
-        let merge_base_commit = repo
-            .find_commit(merge_base)
-            .map_err(|e| convert_git2_error("find_merge_base_commit", e))?;
+        let from_tree = self.commit_tree(merge_base)?;
+        let to_tree = self.commit_tree(current_commit)?;
 
-        let merge_base_tree = merge_base_commit
-            .tree()
-            .map_err(|e| convert_git2_error("get_merge_base_tree", e))?;
-
-        let current_tree = current_commit
-            .tree()
-            .map_err(|e| convert_git2_error("get_current_tree", e))?;
-
-        // Compute diff from merge-base to current branch HEAD
-        let diff = repo
-            .diff_tree_to_tree(Some(&merge_base_tree), Some(&current_tree), None)
-            .map_err(|e| convert_git2_error("diff_tree_to_tree", e))?;
-
-        // Extract file paths from diff deltas
-        let mut changed_files = Vec::new();
-        for delta in diff.deltas() {
-            if let Some(path) = delta.new_file().path() {
-                if let Some(path_str) = path.to_str() {
-                    changed_files.push(path_str.to_string());
-                }
-            }
-        }
-
-        // Deduplicate (shouldn't be necessary with diff deltas, but being defensive)
-        changed_files.sort();
-        changed_files.dedup();
-
-        Ok(changed_files)
+        self.diff_tree_paths(&from_tree, &to_tree)
     }
 
     /// Get list of files changed within a git revision range
@@ -197,49 +150,13 @@ impl GitOperations {
             (range.to_string(), "HEAD".to_string())
         };
 
-        // Resolve each ref to a commit
-        let from_obj = repo
-            .revparse_single(&from_ref)
-            .map_err(|e| convert_git2_error("revparse_from_ref", e))?;
-        let from_commit = from_obj
-            .peel_to_commit()
-            .map_err(|e| convert_git2_error("peel_from_to_commit", e))?;
+        let from_commit = self.resolve_ref_to_commit(repo, &from_ref)?;
+        let to_commit = self.resolve_ref_to_commit(repo, &to_ref)?;
 
-        let to_obj = repo
-            .revparse_single(&to_ref)
-            .map_err(|e| convert_git2_error("revparse_to_ref", e))?;
-        let to_commit = to_obj
-            .peel_to_commit()
-            .map_err(|e| convert_git2_error("peel_to_to_commit", e))?;
+        let from_tree = self.commit_tree(from_commit)?;
+        let to_tree = self.commit_tree(to_commit)?;
 
-        // Get trees for diff
-        let from_tree = from_commit
-            .tree()
-            .map_err(|e| convert_git2_error("get_from_tree", e))?;
-        let to_tree = to_commit
-            .tree()
-            .map_err(|e| convert_git2_error("get_to_tree", e))?;
-
-        // Compute diff from..to
-        let diff = repo
-            .diff_tree_to_tree(Some(&from_tree), Some(&to_tree), None)
-            .map_err(|e| convert_git2_error("diff_tree_to_tree_range", e))?;
-
-        // Extract file paths from diff deltas
-        let mut changed_files = Vec::new();
-        for delta in diff.deltas() {
-            if let Some(path) = delta.new_file().path() {
-                if let Some(path_str) = path.to_str() {
-                    changed_files.push(path_str.to_string());
-                }
-            }
-        }
-
-        // Deduplicate and sort for consistent output
-        changed_files.sort();
-        changed_files.dedup();
-
-        Ok(changed_files)
+        self.diff_tree_paths(&from_tree, &to_tree)
     }
 
     /// Get all tracked files in the repository
@@ -834,51 +751,51 @@ impl GitOperations {
             None => return Ok(None),
         };
 
-        let merge_base = match self.repo.inner().merge_base(issue_commit, target_commit) {
-            Ok(base) => base,
-            Err(_) => return Ok(None),
-        };
+        let (merge_base, merge_base_time) =
+            match self.find_merge_base_with_time(issue_commit, target_commit) {
+                Some(result) => result,
+                None => return Ok(None),
+            };
 
-        let merge_base_commit = match self.repo.inner().find_commit(merge_base) {
-            Ok(c) => c,
-            Err(_) => return Ok(None),
-        };
-
-        let merge_base_time = merge_base_commit.time().seconds();
         let is_perfect_match = merge_base == target_commit;
-
-        debug!(
-            "Branch '{}': merge_base = {}, target_head = {}, merge_base_time = {}, perfect_match = {}",
-            branch_name, merge_base, target_commit, merge_base_time, is_perfect_match
-        );
-        if is_perfect_match {
-            debug!(
-                "Perfect match found: branch branched directly from tip of '{}'",
-                branch_name
-            );
-        }
-
         let issue_distance = self
             .count_commits_between(merge_base, issue_commit)
             .unwrap_or(usize::MAX);
 
+        debug!(
+            "Branch '{}': merge_base={}, perfect={}, distance={}",
+            branch_name, merge_base, is_perfect_match, issue_distance
+        );
+
+        let score = Self::compute_merge_score(issue_distance, is_perfect_match, merge_base_time);
+        Ok(Some((branch_name.to_string(), score)))
+    }
+
+    /// Find the merge base between two commits and return it with its timestamp.
+    /// Returns `None` if there is no common history or the commit cannot be read.
+    fn find_merge_base_with_time(
+        &self,
+        a: git2::Oid,
+        b: git2::Oid,
+    ) -> Option<(git2::Oid, i64)> {
+        let merge_base = self.repo.inner().merge_base(a, b).ok()?;
+        let commit = self.repo.inner().find_commit(merge_base).ok()?;
+        Some((merge_base, commit.time().seconds()))
+    }
+
+    /// Compute a merge-target score from distance, perfect-match, and recency.
+    fn compute_merge_score(distance: usize, is_perfect_match: bool, merge_base_time: i64) -> i64 {
         // Scoring weights: distance dominates, perfect-match is a tie-breaker, recency is minor.
         const MAX_DISTANCE: i64 = 1000; // Cap beyond which branches are considered unrelated
         const DISTANCE_WEIGHT: i64 = 1000; // Multiplier so distance outweighs other factors
         const PERFECT_MATCH_BONUS: i64 = 100; // Small bonus when merge-base == target tip
         const RECENCY_DIVISOR: i64 = 1000; // Scale epoch seconds to a minor scoring component
 
-        let distance_score = (MAX_DISTANCE - issue_distance as i64).max(0) * DISTANCE_WEIGHT;
-        let perfect_match_bonus = if is_perfect_match { PERFECT_MATCH_BONUS } else { 0 };
+        let distance_score = (MAX_DISTANCE - distance as i64).max(0) * DISTANCE_WEIGHT;
+        let perfect_bonus = if is_perfect_match { PERFECT_MATCH_BONUS } else { 0 };
         let recency_score = merge_base_time / RECENCY_DIVISOR;
 
-        let score = distance_score + perfect_match_bonus + recency_score;
-        debug!(
-            "Branch '{}': distance = {}, score = {}",
-            branch_name, issue_distance, score
-        );
-
-        Ok(Some((branch_name.to_string(), score)))
+        distance_score + perfect_bonus + recency_score
     }
 
     /// Try to resolve a branch to its commit OID, returning `None` on any error.
@@ -889,6 +806,54 @@ impl GitOperations {
             .ok()
             .and_then(|b| b.get().peel_to_commit().ok())
             .map(|c| c.id())
+    }
+
+    /// Resolve an arbitrary ref (branch, tag, SHA, HEAD~N) to a commit OID.
+    fn resolve_ref_to_commit(
+        &self,
+        repo: &git2::Repository,
+        refspec: &str,
+    ) -> GitResult<git2::Oid> {
+        let obj = repo
+            .revparse_single(refspec)
+            .map_err(|e| convert_git2_error("revparse", e))?;
+        let commit = obj
+            .peel_to_commit()
+            .map_err(|e| convert_git2_error("peel_to_commit", e))?;
+        Ok(commit.id())
+    }
+
+    /// Get the tree for a commit OID.
+    fn commit_tree(&self, oid: git2::Oid) -> GitResult<git2::Tree<'_>> {
+        let commit = self
+            .repo
+            .inner()
+            .find_commit(oid)
+            .map_err(|e| convert_git2_error("find_commit", e))?;
+        commit
+            .tree()
+            .map_err(|e| convert_git2_error("get_tree", e))
+    }
+
+    /// Diff two trees and return sorted, deduplicated file paths.
+    fn diff_tree_paths(
+        &self,
+        from_tree: &git2::Tree<'_>,
+        to_tree: &git2::Tree<'_>,
+    ) -> GitResult<Vec<String>> {
+        let diff = self
+            .repo
+            .inner()
+            .diff_tree_to_tree(Some(from_tree), Some(to_tree), None)
+            .map_err(|e| convert_git2_error("diff_tree_to_tree", e))?;
+
+        let mut files: Vec<String> = diff
+            .deltas()
+            .filter_map(|d| d.new_file().path()?.to_str().map(String::from))
+            .collect();
+        files.sort();
+        files.dedup();
+        Ok(files)
     }
 
     /// Count commits between two commit IDs
