@@ -404,6 +404,38 @@ impl ClaudeCodeHookStrategy {
         )
     }
 
+    /// Clean up turn diffs, state, and pre-content after an allowed Stop.
+    ///
+    /// Only cleans when the hook is Stop AND the chain result is allowed
+    /// (no validator blocked). When Stop is blocked, diffs must survive
+    /// for the next Stop iteration.
+    fn maybe_cleanup_turn_state(
+        &self,
+        hook_type: HookType,
+        session_id: &str,
+        chain_output: &ChainOutput,
+    ) {
+        if hook_type != HookType::Stop {
+            return;
+        }
+        // Only clean up when the stop was allowed (no block)
+        if chain_output.validator_block.is_some() || !chain_output.continue_execution {
+            return;
+        }
+
+        let turn_state = self.context.turn_state();
+        if let Err(e) = turn_state.clear(session_id) {
+            tracing::warn!("Failed to clear turn state on allowed Stop: {}", e);
+        }
+        if let Err(e) = turn_state.clear_diffs(session_id) {
+            tracing::warn!("Failed to clear diffs on allowed Stop: {}", e);
+        }
+        if let Err(e) = turn_state.clear_pre_content(session_id) {
+            tracing::warn!("Failed to clear pre-content on allowed Stop: {}", e);
+        }
+        tracing::debug!(session_id, "Cleaned turn state after allowed Stop");
+    }
+
     fn block_stop(base: HookOutput, reason: String) -> (HookOutput, i32) {
         (
             HookOutput {
@@ -434,9 +466,18 @@ impl AgentHookStrategy for ClaudeCodeHookStrategy {
             .and_then(|v| v.as_str())
             .map(String::from);
         let prompt_len = input.get("prompt").and_then(|v| v.as_str()).map(str::len);
+        let session_id = input
+            .get("session_id")
+            .and_then(|v| v.as_str())
+            .map(String::from);
 
         let chain_result = self.route_to_chain(hook_type, input).await;
         self.log_chain_result(hook_type, &tool_name, &prompt_len, &chain_result);
+
+        // Clean up turn diffs/state after an allowed Stop
+        if let (Ok((ref chain_output, _)), Some(ref sid)) = (&chain_result, &session_id) {
+            self.maybe_cleanup_turn_state(hook_type, sid, chain_output);
+        }
 
         chain_result
             .map(|(chain_output, _)| Self::transform_to_claude_output(chain_output, hook_type))
@@ -710,6 +751,183 @@ mod tests {
         assert!(
             names.contains(&"security-rules"),
             "security-rules should match PostToolUse + Write + source files"
+        );
+    }
+
+    /// After an allowed Stop (no validator blocks), turn diffs, state, and
+    /// pre-content should be cleaned for the session.
+    #[tokio::test]
+    #[serial_test::serial(cwd)]
+    async fn test_allowed_stop_cleans_turn_state() {
+        let (_temp, strategy) = create_test_strategy();
+        let session_id = "stop-clean-test";
+        let turn_state = strategy.context.turn_state();
+
+        // Seed some state so we can verify cleanup
+        let mut state = crate::turn::TurnState::new();
+        state.changed.push(std::path::PathBuf::from("/tmp/foo.rs"));
+        turn_state.save(session_id, &state).unwrap();
+        turn_state
+            .write_diff(session_id, std::path::Path::new("/tmp/foo.rs"), "some diff")
+            .unwrap();
+        turn_state
+            .write_pre_content(
+                session_id,
+                "tool-1",
+                std::path::Path::new("/tmp/foo.rs"),
+                Some(b"old content"),
+            )
+            .unwrap();
+
+        // Verify state exists before Stop
+        assert!(turn_state.load(session_id).unwrap().has_changes());
+        assert!(!turn_state.load_all_diffs(session_id).is_empty());
+
+        // Process a Stop hook (no blocking validators → allowed)
+        let input = serde_json::json!({
+            "session_id": session_id,
+            "transcript_path": "/path",
+            "cwd": "/home",
+            "permission_mode": "default",
+            "hook_event_name": "Stop",
+            "stop_hook_active": true,
+        });
+        let (output, _exit_code) = strategy.process(input).await.unwrap();
+
+        // Stop was allowed (no blocking validators)
+        assert!(output.continue_execution);
+
+        // After allowed Stop, turn state should be cleaned
+        let loaded = turn_state.load(session_id).unwrap();
+        assert!(
+            !loaded.has_changes(),
+            "Turn state should be cleared after allowed Stop"
+        );
+        assert!(
+            turn_state.load_all_diffs(session_id).is_empty(),
+            "Diffs should be cleared after allowed Stop"
+        );
+    }
+
+    /// Non-Stop hooks (e.g. PostToolUse) must NOT clean turn state.
+    /// This proves the cleanup is conditional on the Stop hook type.
+    #[tokio::test]
+    #[serial_test::serial(cwd)]
+    async fn test_non_stop_hook_preserves_turn_state() {
+        let (_temp, strategy) = create_test_strategy();
+        let session_id = "non-stop-preserve";
+        let turn_state = strategy.context.turn_state();
+
+        // Seed state
+        let mut state = crate::turn::TurnState::new();
+        state.changed.push(std::path::PathBuf::from("/tmp/bar.rs"));
+        turn_state.save(session_id, &state).unwrap();
+        turn_state
+            .write_diff(session_id, std::path::Path::new("/tmp/bar.rs"), "bar diff")
+            .unwrap();
+
+        // Process a non-Stop hook (PostToolUse)
+        let input = serde_json::json!({
+            "session_id": session_id,
+            "transcript_path": "/path",
+            "cwd": "/home",
+            "permission_mode": "default",
+            "hook_event_name": "PostToolUse",
+            "tool_name": "Write",
+            "tool_input": {"file_path": "/tmp/bar.rs"},
+            "tool_use_id": "tool-1"
+        });
+        let (_output, _exit_code) = strategy.process(input).await.unwrap();
+
+        // After non-Stop hook, state must survive
+        let loaded = turn_state.load(session_id).unwrap();
+        assert!(
+            loaded.has_changes(),
+            "Turn state should survive after non-Stop hooks"
+        );
+        assert!(
+            !turn_state.load_all_diffs(session_id).is_empty(),
+            "Diffs should survive after non-Stop hooks"
+        );
+    }
+
+    /// The cleanup helper should be a no-op when the chain output indicates a block.
+    #[test]
+    #[serial_test::serial(cwd)]
+    fn test_cleanup_skipped_when_blocked() {
+        let (_temp, strategy) = create_test_strategy();
+        let session_id = "cleanup-blocked";
+        let turn_state = strategy.context.turn_state();
+
+        // Seed state
+        let mut state = crate::turn::TurnState::new();
+        state.changed.push(std::path::PathBuf::from("/tmp/baz.rs"));
+        turn_state.save(session_id, &state).unwrap();
+        turn_state
+            .write_diff(session_id, std::path::Path::new("/tmp/baz.rs"), "baz diff")
+            .unwrap();
+
+        // Simulate a blocked chain output
+        let blocked_output = ChainOutput {
+            continue_execution: true,
+            validator_block: Some(crate::chain::ValidatorBlockInfo {
+                validator_name: "test-blocker".to_string(),
+                message: "blocked for test".to_string(),
+                hook_type: HookType::Stop,
+            }),
+            ..Default::default()
+        };
+
+        // Call the cleanup helper directly -- should NOT clean when blocked
+        strategy.maybe_cleanup_turn_state(HookType::Stop, session_id, &blocked_output);
+
+        // State should survive
+        let loaded = turn_state.load(session_id).unwrap();
+        assert!(
+            loaded.has_changes(),
+            "Turn state should survive when Stop is blocked"
+        );
+        assert!(
+            !turn_state.load_all_diffs(session_id).is_empty(),
+            "Diffs should survive when Stop is blocked"
+        );
+    }
+
+    /// The cleanup helper should clean state when the chain output is allowed.
+    #[test]
+    #[serial_test::serial(cwd)]
+    fn test_cleanup_runs_when_allowed() {
+        let (_temp, strategy) = create_test_strategy();
+        let session_id = "cleanup-allowed";
+        let turn_state = strategy.context.turn_state();
+
+        // Seed state
+        let mut state = crate::turn::TurnState::new();
+        state.changed.push(std::path::PathBuf::from("/tmp/qux.rs"));
+        turn_state.save(session_id, &state).unwrap();
+        turn_state
+            .write_diff(session_id, std::path::Path::new("/tmp/qux.rs"), "qux diff")
+            .unwrap();
+
+        // Simulate an allowed chain output
+        let allowed_output = ChainOutput {
+            continue_execution: true,
+            validator_block: None,
+            ..Default::default()
+        };
+
+        // Call the cleanup helper directly -- should clean when allowed
+        strategy.maybe_cleanup_turn_state(HookType::Stop, session_id, &allowed_output);
+
+        // State should be cleaned
+        let loaded = turn_state.load(session_id).unwrap();
+        assert!(
+            !loaded.has_changes(),
+            "Turn state should be cleared after allowed Stop cleanup"
+        );
+        assert!(
+            turn_state.load_all_diffs(session_id).is_empty(),
+            "Diffs should be cleared after allowed Stop cleanup"
         );
     }
 }

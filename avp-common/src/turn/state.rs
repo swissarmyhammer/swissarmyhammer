@@ -4,8 +4,9 @@
 //! This isolates subagent state from parent sessions, preventing race conditions
 //! where a subagent's cleanup would wipe the parent's tracked changes.
 //!
-//! State is cleaned at SessionStart (not Stop), preserving debug evidence and
-//! matching the lifecycle of sidecar diff files.
+//! State is cleaned after an allowed Stop (no validator blocked), ensuring
+//! diffs don't leak across turns. SessionStart still cleans stale state from
+//! crashed sessions as a fallback.
 //!
 //! The turn state tracks file changes between PreToolUse and PostToolUse hooks,
 //! accumulating a list of changed files that is passed to Stop validators.
