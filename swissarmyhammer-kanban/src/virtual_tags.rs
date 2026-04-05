@@ -34,12 +34,29 @@ pub struct VirtualTagCommand {
     pub keys: Option<HashMap<String, String>>,
 }
 
+/// Sealing module for [`VirtualTagStrategy`].
+///
+/// The `Sealed` supertrait lives in a public module so that sibling workspace
+/// crates can implement it, but the trait is `#[doc(hidden)]` so downstream
+/// consumers cannot discover or implement it.
+pub mod sealed {
+    /// Marker trait that seals [`VirtualTagStrategy`](super::VirtualTagStrategy).
+    ///
+    /// Implement this for any type that should be allowed to implement
+    /// `VirtualTagStrategy`. This prevents arbitrary downstream types from
+    /// implementing the trait, preserving semver freedom to add methods.
+    #[doc(hidden)]
+    pub trait Sealed {}
+}
+
 /// Trait for virtual tag evaluation strategies.
 ///
 /// Each implementation defines a single virtual tag with its metadata
 /// and matching logic. Strategies must be Send + Sync to support
 /// concurrent evaluation across threads.
-pub trait VirtualTagStrategy: Send + Sync {
+///
+/// This trait is sealed and cannot be implemented outside this workspace.
+pub trait VirtualTagStrategy: sealed::Sealed + Send + Sync {
     /// The tag slug (e.g. "READY", "BLOCKED").
     fn slug(&self) -> &str;
 
@@ -184,6 +201,8 @@ impl Default for VirtualTagRegistry {
 /// dependencies are always ready (unless already completed).
 pub struct ReadyStrategy;
 
+impl sealed::Sealed for ReadyStrategy {}
+
 impl VirtualTagStrategy for ReadyStrategy {
     fn slug(&self) -> &str {
         "READY"
@@ -235,6 +254,8 @@ impl VirtualTagStrategy for ReadyStrategy {
 /// A task is BLOCKING when at least one other task lists it in `depends_on`
 /// AND the task itself is not yet in the terminal (done) column.
 pub struct BlockingStrategy;
+
+impl sealed::Sealed for BlockingStrategy {}
 
 impl VirtualTagStrategy for BlockingStrategy {
     fn slug(&self) -> &str {
@@ -290,6 +311,8 @@ impl VirtualTagStrategy for BlockingStrategy {
 /// in the terminal (done) column. Missing dependencies (not found in
 /// `all_tasks`) are also considered blocking.
 pub struct BlockedStrategy;
+
+impl sealed::Sealed for BlockedStrategy {}
 
 impl VirtualTagStrategy for BlockedStrategy {
     fn slug(&self) -> &str {
@@ -366,6 +389,8 @@ mod tests {
     /// Mock strategy that matches entities whose "status" field equals "active".
     struct ActiveStrategy;
 
+    impl sealed::Sealed for ActiveStrategy {}
+
     impl VirtualTagStrategy for ActiveStrategy {
         fn slug(&self) -> &str {
             "ACTIVE"
@@ -400,6 +425,8 @@ mod tests {
     /// Mock strategy that always matches.
     struct AlwaysStrategy;
 
+    impl sealed::Sealed for AlwaysStrategy {}
+
     impl VirtualTagStrategy for AlwaysStrategy {
         fn slug(&self) -> &str {
             "ALWAYS"
@@ -424,6 +451,8 @@ mod tests {
 
     /// Mock strategy that never matches.
     struct NeverStrategy;
+
+    impl sealed::Sealed for NeverStrategy {}
 
     impl VirtualTagStrategy for NeverStrategy {
         fn slug(&self) -> &str {

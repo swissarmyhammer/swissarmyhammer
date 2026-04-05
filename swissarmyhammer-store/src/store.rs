@@ -11,11 +11,29 @@ use std::str::FromStr;
 
 use crate::error::Result;
 
+/// Sealing module for [`TrackedStore`].
+///
+/// The `Sealed` supertrait lives in a public module so that sibling workspace
+/// crates (swissarmyhammer-entity, swissarmyhammer-perspectives) can implement
+/// it, but the trait is `#[doc(hidden)]` so downstream consumers cannot
+/// discover or implement it.
+pub mod sealed {
+    /// Marker trait that seals [`TrackedStore`](super::TrackedStore).
+    ///
+    /// Implement this for any type that should be allowed to implement
+    /// `TrackedStore`. This prevents arbitrary downstream types from
+    /// implementing the trait, preserving semver freedom to add methods.
+    #[doc(hidden)]
+    pub trait Sealed {}
+}
+
 /// A file-backed store managing one directory.
 ///
 /// Implementors provide only serialization; the `StoreHandle` blanket impl
 /// provides write, delete, undo, redo, changelog, and change detection.
-pub trait TrackedStore: Send + Sync + 'static {
+///
+/// This trait is sealed and cannot be implemented outside this workspace.
+pub trait TrackedStore: sealed::Sealed + Send + Sync + 'static {
     /// The item type this store manages.
     type Item: Send + Sync;
 

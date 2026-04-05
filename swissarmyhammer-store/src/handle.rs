@@ -27,7 +27,7 @@ use crate::trash;
 /// of truth — writes and deletes record pending events that are drained by
 /// `flush_changes()`.
 pub struct StoreHandle<S: TrackedStore> {
-    pub(crate) store: Arc<S>,
+    store: Arc<S>,
     pending_events: RwLock<Vec<ChangeEvent>>,
 }
 
@@ -38,6 +38,11 @@ impl<S: TrackedStore> StoreHandle<S> {
             store,
             pending_events: RwLock::new(Vec::new()),
         }
+    }
+
+    /// Returns a reference to the underlying store.
+    pub(crate) fn store(&self) -> &S {
+        &self.store
     }
 
     /// Return the path to the per-item changelog for the given item ID.
@@ -118,10 +123,10 @@ impl<S: TrackedStore> StoreHandle<S> {
         } else {
             "item-changed"
         };
-        self.pending_events.write().await.push(ChangeEvent {
-            event_name: event_name.to_string(),
-            payload: serde_json::json!({ "store": self.store.store_name(), "id": id_str }),
-        });
+        self.pending_events.write().await.push(ChangeEvent::new(
+            event_name,
+            serde_json::json!({ "store": self.store.store_name(), "id": id_str }),
+        ));
 
         Ok(Some(entry_id))
     }
@@ -171,10 +176,10 @@ impl<S: TrackedStore> StoreHandle<S> {
             .map_err(StoreError::Io)?;
 
         // Record pending event
-        self.pending_events.write().await.push(ChangeEvent {
-            event_name: "item-removed".to_string(),
-            payload: serde_json::json!({ "store": self.store.store_name(), "id": id_str }),
-        });
+        self.pending_events.write().await.push(ChangeEvent::new(
+            "item-removed",
+            serde_json::json!({ "store": self.store.store_name(), "id": id_str }),
+        ));
 
         Ok(entry_id)
     }
@@ -224,10 +229,10 @@ impl<S: TrackedStore> StoreHandle<S> {
             .map_err(StoreError::Io)?;
 
         // Record pending event
-        self.pending_events.write().await.push(ChangeEvent {
-            event_name: "item-removed".to_string(),
-            payload: serde_json::json!({ "store": self.store.store_name(), "id": id_str }),
-        });
+        self.pending_events.write().await.push(ChangeEvent::new(
+            "item-removed",
+            serde_json::json!({ "store": self.store.store_name(), "id": id_str }),
+        ));
 
         Ok(entry_id)
     }
@@ -311,10 +316,10 @@ impl<S: TrackedStore> StoreHandle<S> {
             .map_err(StoreError::Io)?;
 
         // Record pending event
-        self.pending_events.write().await.push(ChangeEvent {
-            event_name: "item-created".to_string(),
-            payload: serde_json::json!({ "store": self.store.store_name(), "id": id_str }),
-        });
+        self.pending_events.write().await.push(ChangeEvent::new(
+            "item-created",
+            serde_json::json!({ "store": self.store.store_name(), "id": id_str }),
+        ));
 
         let parsed_id = id_str
             .parse::<S::ItemId>()
@@ -363,10 +368,10 @@ impl<S: TrackedStore> StoreHandle<S> {
                     .map_err(StoreError::Io)?;
 
                 // Record pending event
-                self.pending_events.write().await.push(ChangeEvent {
-                    event_name: "item-removed".to_string(),
-                    payload: serde_json::json!({ "store": self.store.store_name(), "id": entry.item_id.as_str() }),
-                });
+                self.pending_events.write().await.push(ChangeEvent::new(
+                    "item-removed",
+                    serde_json::json!({ "store": self.store.store_name(), "id": entry.item_id.as_str() }),
+                ));
 
                 let id = entry
                     .item_id
@@ -394,10 +399,10 @@ impl<S: TrackedStore> StoreHandle<S> {
                 self.atomic_write(entry.item_id.as_str(), &target).await?;
 
                 // Record pending event
-                self.pending_events.write().await.push(ChangeEvent {
-                    event_name: "item-changed".to_string(),
-                    payload: serde_json::json!({ "store": self.store.store_name(), "id": entry.item_id.as_str() }),
-                });
+                self.pending_events.write().await.push(ChangeEvent::new(
+                    "item-changed",
+                    serde_json::json!({ "store": self.store.store_name(), "id": entry.item_id.as_str() }),
+                ));
 
                 let id = entry
                     .item_id
@@ -421,10 +426,10 @@ impl<S: TrackedStore> StoreHandle<S> {
                 let restored_text = diff::apply_patch("", &entry.reverse_patch)?;
 
                 // Record pending event
-                self.pending_events.write().await.push(ChangeEvent {
-                    event_name: "item-created".to_string(),
-                    payload: serde_json::json!({ "store": self.store.store_name(), "id": entry.item_id.as_str() }),
-                });
+                self.pending_events.write().await.push(ChangeEvent::new(
+                    "item-created",
+                    serde_json::json!({ "store": self.store.store_name(), "id": entry.item_id.as_str() }),
+                ));
 
                 let id = entry
                     .item_id
@@ -448,10 +453,10 @@ impl<S: TrackedStore> StoreHandle<S> {
                 let restored_text = diff::apply_patch("", &entry.reverse_patch)?;
 
                 // Record pending event
-                self.pending_events.write().await.push(ChangeEvent {
-                    event_name: "item-created".to_string(),
-                    payload: serde_json::json!({ "store": self.store.store_name(), "id": entry.item_id.as_str() }),
-                });
+                self.pending_events.write().await.push(ChangeEvent::new(
+                    "item-created",
+                    serde_json::json!({ "store": self.store.store_name(), "id": entry.item_id.as_str() }),
+                ));
 
                 let id = entry
                     .item_id
@@ -476,10 +481,10 @@ impl<S: TrackedStore> StoreHandle<S> {
                     .map_err(StoreError::Io)?;
 
                 // Record pending event
-                self.pending_events.write().await.push(ChangeEvent {
-                    event_name: "item-removed".to_string(),
-                    payload: serde_json::json!({ "store": self.store.store_name(), "id": entry.item_id.as_str() }),
-                });
+                self.pending_events.write().await.push(ChangeEvent::new(
+                    "item-removed",
+                    serde_json::json!({ "store": self.store.store_name(), "id": entry.item_id.as_str() }),
+                ));
 
                 let id = entry
                     .item_id
@@ -530,10 +535,10 @@ impl<S: TrackedStore> StoreHandle<S> {
                 let created_text = diff::apply_patch("", &entry.forward_patch)?;
 
                 // Record pending event
-                self.pending_events.write().await.push(ChangeEvent {
-                    event_name: "item-created".to_string(),
-                    payload: serde_json::json!({ "store": self.store.store_name(), "id": entry.item_id.as_str() }),
-                });
+                self.pending_events.write().await.push(ChangeEvent::new(
+                    "item-created",
+                    serde_json::json!({ "store": self.store.store_name(), "id": entry.item_id.as_str() }),
+                ));
 
                 let id = entry
                     .item_id
@@ -561,10 +566,10 @@ impl<S: TrackedStore> StoreHandle<S> {
                 self.atomic_write(entry.item_id.as_str(), &target).await?;
 
                 // Record pending event
-                self.pending_events.write().await.push(ChangeEvent {
-                    event_name: "item-changed".to_string(),
-                    payload: serde_json::json!({ "store": self.store.store_name(), "id": entry.item_id.as_str() }),
-                });
+                self.pending_events.write().await.push(ChangeEvent::new(
+                    "item-changed",
+                    serde_json::json!({ "store": self.store.store_name(), "id": entry.item_id.as_str() }),
+                ));
 
                 let id = entry
                     .item_id
@@ -590,10 +595,10 @@ impl<S: TrackedStore> StoreHandle<S> {
                     .map_err(StoreError::Io)?;
 
                 // Record pending event
-                self.pending_events.write().await.push(ChangeEvent {
-                    event_name: "item-removed".to_string(),
-                    payload: serde_json::json!({ "store": self.store.store_name(), "id": entry.item_id.as_str() }),
-                });
+                self.pending_events.write().await.push(ChangeEvent::new(
+                    "item-removed",
+                    serde_json::json!({ "store": self.store.store_name(), "id": entry.item_id.as_str() }),
+                ));
 
                 let id = entry
                     .item_id
@@ -619,10 +624,10 @@ impl<S: TrackedStore> StoreHandle<S> {
                     .map_err(StoreError::Io)?;
 
                 // Record pending event
-                self.pending_events.write().await.push(ChangeEvent {
-                    event_name: "item-removed".to_string(),
-                    payload: serde_json::json!({ "store": self.store.store_name(), "id": entry.item_id.as_str() }),
-                });
+                self.pending_events.write().await.push(ChangeEvent::new(
+                    "item-removed",
+                    serde_json::json!({ "store": self.store.store_name(), "id": entry.item_id.as_str() }),
+                ));
 
                 let id = entry
                     .item_id
@@ -646,10 +651,10 @@ impl<S: TrackedStore> StoreHandle<S> {
                 let restored_text = diff::apply_patch("", &entry.forward_patch)?;
 
                 // Record pending event
-                self.pending_events.write().await.push(ChangeEvent {
-                    event_name: "item-created".to_string(),
-                    payload: serde_json::json!({ "store": self.store.store_name(), "id": entry.item_id.as_str() }),
-                });
+                self.pending_events.write().await.push(ChangeEvent::new(
+                    "item-created",
+                    serde_json::json!({ "store": self.store.store_name(), "id": entry.item_id.as_str() }),
+                ));
 
                 let id = entry
                     .item_id
@@ -737,6 +742,8 @@ mod tests {
     struct MockStore {
         root: PathBuf,
     }
+
+    impl crate::store::sealed::Sealed for MockStore {}
 
     impl TrackedStore for MockStore {
         type Item = String;
@@ -928,7 +935,7 @@ mod tests {
 
         let events = handle.flush_changes().await;
         assert_eq!(events.len(), 1);
-        assert_eq!(events[0].event_name, "item-created");
+        assert_eq!(events[0].event_name(), "item-created");
     }
 
     #[tokio::test]
@@ -944,7 +951,7 @@ mod tests {
         handle.write(&v2).await.unwrap();
         let events = handle.flush_changes().await;
         assert_eq!(events.len(), 1);
-        assert_eq!(events[0].event_name, "item-changed");
+        assert_eq!(events[0].event_name(), "item-changed");
     }
 
     #[tokio::test]
@@ -959,7 +966,7 @@ mod tests {
         handle.delete(&"item1".to_string()).await.unwrap();
         let events = handle.flush_changes().await;
         assert_eq!(events.len(), 1);
-        assert_eq!(events[0].event_name, "item-removed");
+        assert_eq!(events[0].event_name(), "item-removed");
     }
 
     #[tokio::test]
@@ -1278,7 +1285,7 @@ mod tests {
             .unwrap();
         let events = handle.flush_changes().await;
         assert_eq!(events.len(), 1);
-        assert_eq!(events[0].event_name, "item-changed");
+        assert_eq!(events[0].event_name(), "item-changed");
     }
 
     #[tokio::test]
@@ -1297,6 +1304,8 @@ mod tests {
         root: PathBuf,
         name: String,
     }
+
+    impl crate::store::sealed::Sealed for NamedMockStore {}
 
     impl TrackedStore for NamedMockStore {
         type Item = String;
@@ -1340,9 +1349,9 @@ mod tests {
         handle.write(&"item42\ncontent".to_string()).await.unwrap();
         let events = handle.flush_changes().await;
         assert_eq!(events.len(), 1);
-        assert_eq!(events[0].event_name, "item-created");
-        assert_eq!(events[0].payload["store"], "my-entities");
-        assert_eq!(events[0].payload["id"], "item42");
+        assert_eq!(events[0].event_name(), "item-created");
+        assert_eq!(events[0].payload()["store"], "my-entities");
+        assert_eq!(events[0].payload()["id"], "item42");
 
         // Update
         handle
@@ -1351,17 +1360,17 @@ mod tests {
             .unwrap();
         let events = handle.flush_changes().await;
         assert_eq!(events.len(), 1);
-        assert_eq!(events[0].event_name, "item-changed");
-        assert_eq!(events[0].payload["store"], "my-entities");
-        assert_eq!(events[0].payload["id"], "item42");
+        assert_eq!(events[0].event_name(), "item-changed");
+        assert_eq!(events[0].payload()["store"], "my-entities");
+        assert_eq!(events[0].payload()["id"], "item42");
 
         // Delete
         handle.delete(&"item42".to_string()).await.unwrap();
         let events = handle.flush_changes().await;
         assert_eq!(events.len(), 1);
-        assert_eq!(events[0].event_name, "item-removed");
-        assert_eq!(events[0].payload["store"], "my-entities");
-        assert_eq!(events[0].payload["id"], "item42");
+        assert_eq!(events[0].event_name(), "item-removed");
+        assert_eq!(events[0].payload()["store"], "my-entities");
+        assert_eq!(events[0].payload()["id"], "item42");
     }
 
     #[tokio::test]

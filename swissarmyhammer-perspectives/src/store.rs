@@ -34,6 +34,8 @@ impl PerspectiveStore {
     }
 }
 
+impl swissarmyhammer_store::store::sealed::Sealed for PerspectiveStore {}
+
 impl TrackedStore for PerspectiveStore {
     type Item = Perspective;
     type ItemId = PerspectiveId;

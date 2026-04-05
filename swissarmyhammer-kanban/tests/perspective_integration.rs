@@ -191,11 +191,11 @@ async fn test_perspective_store_events_and_list() {
     // StoreHandle must have pending events (two creates)
     let events = handle.flush_changes().await;
     assert_eq!(events.len(), 2, "expected two create events");
-    assert!(events.iter().all(|e| e.event_name == "item-created"));
+    assert!(events.iter().all(|e| e.event_name() == "item-created"));
 
     let event_ids: Vec<&str> = events
         .iter()
-        .map(|e| e.payload["id"].as_str().unwrap())
+        .map(|e| e.payload()["id"].as_str().unwrap())
         .collect();
     assert!(event_ids.contains(&id1));
     assert!(event_ids.contains(&id2));

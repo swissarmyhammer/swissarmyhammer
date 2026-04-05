@@ -78,6 +78,8 @@ impl EntityTypeStore {
     }
 }
 
+impl swissarmyhammer_store::store::sealed::Sealed for EntityTypeStore {}
+
 impl TrackedStore for EntityTypeStore {
     type Item = Entity;
     type ItemId = EntityId;

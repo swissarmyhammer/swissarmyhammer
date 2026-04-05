@@ -6,10 +6,36 @@
 /// A change event produced by a store's `flush_changes()`.
 ///
 /// The caller (dispatch layer) emits these to the frontend.
+/// Fields are private to preserve semver freedom to add new fields.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ChangeEvent {
     /// Event name for the frontend (e.g. "entity-field-changed", "perspective-changed").
-    pub event_name: String,
+    event_name: String,
     /// JSON payload with change details.
-    pub payload: serde_json::Value,
+    payload: serde_json::Value,
+}
+
+impl ChangeEvent {
+    /// Creates a new change event.
+    ///
+    /// # Parameters
+    ///
+    /// - `event_name` -- the event name for the frontend (e.g. "item-created").
+    /// - `payload` -- JSON payload with change details.
+    pub fn new(event_name: impl Into<String>, payload: serde_json::Value) -> Self {
+        Self {
+            event_name: event_name.into(),
+            payload,
+        }
+    }
+
+    /// Returns the event name (e.g. "item-created", "item-changed", "item-removed").
+    pub fn event_name(&self) -> &str {
+        &self.event_name
+    }
+
+    /// Returns the JSON payload with change details.
+    pub fn payload(&self) -> &serde_json::Value {
+        &self.payload
+    }
 }

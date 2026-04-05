@@ -1041,6 +1041,8 @@ mod tests {
     /// Mock strategy that always matches — used to test virtual tag injection.
     struct AlwaysVirtualTag;
 
+    impl crate::virtual_tags::sealed::Sealed for AlwaysVirtualTag {}
+
     impl VirtualTagStrategy for AlwaysVirtualTag {
         fn slug(&self) -> &str {
             "ALWAYS"
@@ -1061,6 +1063,8 @@ mod tests {
 
     /// Mock strategy that never matches.
     struct NeverVirtualTag;
+
+    impl crate::virtual_tags::sealed::Sealed for NeverVirtualTag {}
 
     impl VirtualTagStrategy for NeverVirtualTag {
         fn slug(&self) -> &str {

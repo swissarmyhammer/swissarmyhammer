@@ -48,11 +48,11 @@ pub trait ErasedStore: Send + Sync {
 #[async_trait]
 impl<S: TrackedStore> ErasedStore for StoreHandle<S> {
     fn root(&self) -> &Path {
-        self.store.root()
+        self.store().root()
     }
 
     fn store_name(&self) -> &str {
-        self.store.store_name()
+        self.store().store_name()
     }
 
     async fn flush_changes(&self) -> Vec<ChangeEvent> {
@@ -85,6 +85,8 @@ mod tests {
     struct MockStore {
         root: PathBuf,
     }
+
+    impl crate::store::sealed::Sealed for MockStore {}
 
     impl TrackedStore for MockStore {
         type Item = String;

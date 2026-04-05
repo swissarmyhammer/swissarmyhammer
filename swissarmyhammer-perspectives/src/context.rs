@@ -846,9 +846,9 @@ mod tests {
         // StoreHandle must have a pending event
         let events = handle.flush_changes().await;
         assert_eq!(events.len(), 1);
-        assert_eq!(events[0].event_name, "item-created");
-        assert_eq!(events[0].payload["store"], "perspective");
-        assert_eq!(events[0].payload["id"], "01AAAAAAAAAAAAAAAAAAAAAAAA");
+        assert_eq!(events[0].event_name(), "item-created");
+        assert_eq!(events[0].payload()["store"], "perspective");
+        assert_eq!(events[0].payload()["id"], "01AAAAAAAAAAAAAAAAAAAAAAAA");
     }
 
     #[tokio::test]
@@ -867,8 +867,8 @@ mod tests {
 
         let events = handle.flush_changes().await;
         assert_eq!(events.len(), 1);
-        assert_eq!(events[0].event_name, "item-changed");
-        assert_eq!(events[0].payload["id"], "01AAAAAAAAAAAAAAAAAAAAAAAA");
+        assert_eq!(events[0].event_name(), "item-changed");
+        assert_eq!(events[0].payload()["id"], "01AAAAAAAAAAAAAAAAAAAAAAAA");
     }
 
     #[tokio::test]
@@ -897,8 +897,8 @@ mod tests {
         // StoreHandle must have a pending event
         let events = handle.flush_changes().await;
         assert_eq!(events.len(), 1);
-        assert_eq!(events[0].event_name, "item-removed");
-        assert_eq!(events[0].payload["id"], "01AAAAAAAAAAAAAAAAAAAAAAAA");
+        assert_eq!(events[0].event_name(), "item-removed");
+        assert_eq!(events[0].payload()["id"], "01AAAAAAAAAAAAAAAAAAAAAAAA");
     }
 
     // =========================================================================

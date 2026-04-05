@@ -350,9 +350,9 @@ async fn test_add_perspective_emits_item_created_event() {
 
     let events = handle.flush_changes().await;
     assert_eq!(events.len(), 1, "expected exactly one event");
-    assert_eq!(events[0].event_name, "item-created");
-    assert_eq!(events[0].payload["store"], "perspective");
-    assert_eq!(events[0].payload["id"], id);
+    assert_eq!(events[0].event_name(), "item-created");
+    assert_eq!(events[0].payload()["store"], "perspective");
+    assert_eq!(events[0].payload()["id"], id);
 }
 
 #[tokio::test]
@@ -378,9 +378,9 @@ async fn test_update_perspective_emits_item_changed_event() {
 
     let events = handle.flush_changes().await;
     assert_eq!(events.len(), 1, "expected exactly one event");
-    assert_eq!(events[0].event_name, "item-changed");
-    assert_eq!(events[0].payload["store"], "perspective");
-    assert_eq!(events[0].payload["id"], id.as_str());
+    assert_eq!(events[0].event_name(), "item-changed");
+    assert_eq!(events[0].payload()["store"], "perspective");
+    assert_eq!(events[0].payload()["id"], id.as_str());
 }
 
 #[tokio::test]
@@ -405,7 +405,7 @@ async fn test_delete_perspective_emits_item_removed_event() {
 
     let events = handle.flush_changes().await;
     assert_eq!(events.len(), 1, "expected exactly one event");
-    assert_eq!(events[0].event_name, "item-removed");
-    assert_eq!(events[0].payload["store"], "perspective");
-    assert_eq!(events[0].payload["id"], id.as_str());
+    assert_eq!(events[0].event_name(), "item-removed");
+    assert_eq!(events[0].payload()["store"], "perspective");
+    assert_eq!(events[0].payload()["id"], id.as_str());
 }

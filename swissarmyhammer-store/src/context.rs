@@ -208,6 +208,8 @@ mod tests {
         root: PathBuf,
     }
 
+    impl crate::store::sealed::Sealed for MockStore {}
+
     impl TrackedStore for MockStore {
         type Item = String;
         type ItemId = String;
@@ -451,18 +453,18 @@ mod tests {
         // Find the event for each store by `store` field
         let widget_event = events
             .iter()
-            .find(|e| e.payload["store"] == "widgets")
+            .find(|e| e.payload()["store"] == "widgets")
             .expect("expected event with store=widgets");
         let gadget_event = events
             .iter()
-            .find(|e| e.payload["store"] == "gadgets")
+            .find(|e| e.payload()["store"] == "gadgets")
             .expect("expected event with store=gadgets");
 
-        assert_eq!(widget_event.event_name, "item-created");
-        assert_eq!(widget_event.payload["id"], "widget1");
+        assert_eq!(widget_event.event_name(), "item-created");
+        assert_eq!(widget_event.payload()["id"], "widget1");
 
-        assert_eq!(gadget_event.event_name, "item-created");
-        assert_eq!(gadget_event.payload["id"], "gadget1");
+        assert_eq!(gadget_event.event_name(), "item-created");
+        assert_eq!(gadget_event.payload()["id"], "gadget1");
     }
 
     #[tokio::test]
