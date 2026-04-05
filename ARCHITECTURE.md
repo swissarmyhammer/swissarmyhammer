@@ -453,16 +453,16 @@ This separation means Containers are testable for state management without rende
 Each level of the scope hierarchy uses a Container component:
 
 ```
-WindowContainer          window:{label}     — window scope, board switching, AppShell
-  AppModeContainer       mode:{mode}        — interaction mode (normal/command/search)
-    RustEngineContainer  engine             — schema, entities, UIState, undo, events
-      BoardContainer     board:{id}         — board data, file-drop, drag
-        ViewsContainer   (view commands)    — ViewsProvider, LeftNav, view.switch:*
-          ViewContainer  view:{id}          — active view routing
-            PerspectivesContainer           — PerspectiveProvider, tab bar
-              PerspectiveContainer p:{id}   — filter/sort/group applied
-                [BoardView | GridView]      — the actual content
-        InspectorContainer                  — panel stack overlay
+RustEngineContainer  engine             — schema, entities, UIState, undo, events
+  WindowContainer    window:{label}     — window scope, board switching, AppShell
+    AppModeContainer mode:{mode}        — interaction mode (normal/command/search)
+      BoardContainer board:{id}         — board data, file-drop, drag (StoreContainer inside)
+        ViewsContainer (view commands)  — ViewsProvider, LeftNav, view.switch:*
+          PerspectivesContainer         — PerspectiveProvider, tab bar
+            PerspectiveContainer p:{id} — filter/sort/group applied
+              ViewContainer view:{id}   — active view routing
+                [BoardView | GridView]  — the actual content
+        InspectorContainer              — panel stack overlay (peer of ViewsContainer)
 ```
 
 `AppModeContainer` is the first container inside the window because the interaction mode governs the entire UI surface — which keybindings are active, whether the toolbar shows a search field, which commands are available. It wraps NavBar, the content area, and everything else. Mode transitions (normal → command → search) are command-driven through Rust UIState.
@@ -509,21 +509,23 @@ Commands use the scope chain in three ways:
 The container tree directly produces the scope chain:
 
 ```tsx
-<WindowContainer moniker="window:main">           // outermost
-  <AppModeContainer moniker="mode:normal">        // wraps everything incl. toolbar
-    <RustEngineContainer moniker="engine">
+<RustEngineContainer moniker="engine">              // outermost
+  <WindowContainer moniker="window:main">
+    <AppModeContainer moniker="mode:normal">        // wraps everything incl. toolbar
       <BoardContainer moniker="board:01ABC">
-        <ViewContainer moniker="view:board">
-          <ColumnView moniker="column:todo">
-            <TaskCard moniker="task:01XYZ">       // innermost — focused element
-              {/* right-click here builds the chain above */}
-            </TaskCard>
-          </ColumnView>
-        </ViewContainer>
+        <PerspectiveContainer moniker="perspective:p1">
+          <ViewContainer moniker="view:board">
+            <ColumnView moniker="column:todo">
+              <TaskCard moniker="task:01XYZ">       // innermost — focused element
+                {/* right-click here builds the chain above */}
+              </TaskCard>
+            </ColumnView>
+          </ViewContainer>
+        </PerspectiveContainer>
       </BoardContainer>
-    </RustEngineContainer>
-  </AppModeContainer>
-</WindowContainer>
+    </AppModeContainer>
+  </WindowContainer>
+</RustEngineContainer>
 ```
 
 ##### Command Flow: React to Rust
