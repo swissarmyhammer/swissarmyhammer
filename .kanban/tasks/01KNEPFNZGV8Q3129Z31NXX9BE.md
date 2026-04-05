@@ -1,0 +1,8 @@
+---
+assignees:
+- claude-code
+position_column: todo
+position_ordinal: '80'
+title: Fix UI not updating after entity mutations — entity-field-changed events arrive with no fields or changes
+---
+## What\n\nMultiple features are broken because `entity-field-changed` events arrive with `fields=no changes=0`:\n- Drag-and-drop cards between columns\n- \"Do this next\" context menu\n- Any command that mutates entity fields\n\n**Root cause:** The `entity-field-changed` handler in `rust-engine-container.tsx` no longer re-fetches when both `fields` and `changes` are empty.\n\n**Fix:** Add back the `invoke(\"get_entity\")` re-fetch as a fallback.\n\n**MANDATORY: TDD — write the failing test FIRST, then implement the fix.**\n\n**File to modify:**\n- `kanban-app/ui/src/components/rust-engine-container.tsx`\n- `kanban-app/ui/src/components/rust-engine-container.test.tsx` — add test: entity-field-changed with empty fields/changes triggers get_entity re-fetch\n\n**MANDATORY: All dispatch via useDispatchCommand. Run tsc --noEmit before done.**\n\n## Acceptance Criteria\n- [ ] Test written FIRST proving the fallback re-fetch fires\n- [ ] Drag-drop updates the UI\n- [ ] \"Do this next\" moves the card visually\n- [ ] Entity field edits still update\n\n## Tests\n- [ ] New test: entity-field-changed with no fields/changes calls get_entity (RED first, then GREEN)\n- [ ] `cd kanban-app/ui && pnpm vitest run` — all pass"
