@@ -714,175 +714,181 @@ impl GitOperations {
     pub fn find_merge_target_for_issue(&self, issue_branch: &BranchName) -> GitResult<String> {
         debug!("Finding merge target for branch: {}", issue_branch);
 
-        // Get the commit for the branch
-        let issue_commit = match self
+        let issue_commit = self.resolve_branch_commit(issue_branch.as_str())?;
+        let candidates = self.collect_candidate_branches(issue_branch)?;
+        debug!("Total candidate branches: {}", candidates.len());
+
+        let had_candidates = !candidates.is_empty();
+        let best_target = self.find_best_scoring_branch(&candidates, issue_commit)?;
+
+        if let Some(target) = best_target {
+            debug!("Selected merge target: {}", target);
+            return Ok(target);
+        }
+
+        if had_candidates {
+            debug!("No valid merge-base found with any candidate - likely orphan branch or unrelated history");
+            return Err(GitError::generic(format!(
+                "Branch '{}' has no common history with other branches (orphan branch)",
+                issue_branch
+            )));
+        }
+
+        debug!("No candidate branches found, falling back to main branch");
+        let main = self.main_branch()?;
+        if issue_branch.as_str() == main {
+            return Err(GitError::generic(format!(
+                "Branch '{}' is the main branch and has no parent",
+                issue_branch
+            )));
+        }
+        Ok(main)
+    }
+
+    /// Resolve a local branch name to its commit OID.
+    fn resolve_branch_commit(&self, branch_name: &str) -> GitResult<git2::Oid> {
+        let branch = self
             .repo
             .inner()
-            .find_branch(issue_branch.as_str(), git2::BranchType::Local)
-        {
-            Ok(branch) => {
-                let commit = branch
-                    .get()
-                    .peel_to_commit()
-                    .map_err(|e| convert_git2_error("peel_to_commit", e))?;
-                commit.id()
-            }
-            Err(e) => return Err(convert_git2_error("find_branch", e)),
-        };
+            .find_branch(branch_name, BranchType::Local)
+            .map_err(|e| convert_git2_error("find_branch", e))?;
+        let commit = branch
+            .get()
+            .peel_to_commit()
+            .map_err(|e| convert_git2_error("peel_to_commit", e))?;
+        Ok(commit.id())
+    }
 
-        // Get all local branches except the current branch itself
-        let mut branches = Vec::new();
+    /// Collect local branches that are valid merge-target candidates for the given issue branch.
+    /// Excludes the issue branch itself and sibling branches sharing the same prefix.
+    fn collect_candidate_branches(&self, issue_branch: &BranchName) -> GitResult<Vec<String>> {
         let branch_iter = self
             .repo
             .inner()
-            .branches(Some(git2::BranchType::Local))
+            .branches(Some(BranchType::Local))
             .map_err(|e| convert_git2_error("branches", e))?;
 
-        // Extract branch prefix (e.g., "feature/" from "feature/foo") to filter out sibling branches
-        // with the same prefix. This prevents merging feature/ branches back to other feature/ branches,
-        // or issue/ branches back to other issue/ branches, ensuring we find the actual parent branch
-        // from a different hierarchy level (e.g., feature/foo should merge to main, not feature/bar).
+        // Extract prefix (e.g. "feature/" from "feature/foo") to skip sibling branches.
         let branch_prefix = issue_branch
             .as_str()
             .split('/')
             .next()
-            .filter(|_prefix| issue_branch.as_str().contains('/'))
+            .filter(|_| issue_branch.as_str().contains('/'))
             .map(|s| format!("{}/", s));
 
+        let mut candidates = Vec::new();
         for branch_result in branch_iter {
             let (branch, _) = branch_result.map_err(|e| convert_git2_error("branch_iter", e))?;
-
-            if let Some(branch_name) = branch
+            let name = match branch
                 .name()
                 .map_err(|e| convert_git2_error("branch_name", e))?
             {
-                // Skip the current branch itself
-                if branch_name == issue_branch.as_str() {
-                    continue;
-                }
+                Some(n) => n,
+                None => continue,
+            };
 
-                // Skip branches with the same prefix (e.g., don't merge issue/ to issue/, feature/ to feature/)
-                if let Some(ref prefix) = branch_prefix {
-                    if branch_name.starts_with(prefix) {
-                        continue;
-                    }
-                }
-
-                branches.push(branch_name.to_string());
-                debug!("Found candidate branch: {}", branch_name);
+            if name == issue_branch.as_str() {
+                continue;
             }
+            if branch_prefix.as_deref().is_some_and(|p| name.starts_with(p)) {
+                continue;
+            }
+
+            debug!("Found candidate branch: {}", name);
+            candidates.push(name.to_string());
         }
-        debug!("Total candidate branches: {}", branches.len());
+        Ok(candidates)
+    }
 
-        let had_candidates = !branches.is_empty();
-
+    /// Score each candidate branch by merge-base proximity and return the best one.
+    fn find_best_scoring_branch(
+        &self,
+        candidates: &[String],
+        issue_commit: git2::Oid,
+    ) -> GitResult<Option<String>> {
         let mut best_target = None;
-        let mut best_score = 0i64; // Track best match score
+        let mut best_score = 0i64;
 
-        // For each potential target branch, find the merge base
-        for branch_name in branches {
-            debug!("Processing branch: {}", branch_name);
-            let target_commit = match self
-                .repo
-                .inner()
-                .find_branch(&branch_name, git2::BranchType::Local)
-            {
-                Ok(branch) => {
-                    match branch.get().peel_to_commit() {
-                        Ok(commit) => commit.id(),
-                        Err(_) => continue, // Skip branches we can't read
-                    }
+        for branch_name in candidates {
+            if let Some((name, score)) = self.score_candidate(branch_name, issue_commit)? {
+                debug!("Branch '{}': score = {}", name, score);
+                if score > best_score {
+                    best_score = score;
+                    debug!("New best target: {} (score: {})", name, score);
+                    best_target = Some(name);
                 }
-                Err(_) => continue, // Skip branches that don't exist
-            };
-
-            // Find merge base between this branch and this potential target
-            let merge_base = match self.repo.inner().merge_base(issue_commit, target_commit) {
-                Ok(base) => base,
-                Err(_) => continue, // Skip if no merge base (unrelated histories)
-            };
-
-            // Get the merge base commit to check its timestamp
-            let merge_base_commit = match self.repo.inner().find_commit(merge_base) {
-                Ok(commit) => commit,
-                Err(_) => continue,
-            };
-
-            let merge_base_time = merge_base_commit.time().seconds();
-            let is_perfect_match = merge_base == target_commit;
-
-            debug!(
-                "Branch '{}': merge_base = {}, target_head = {}, merge_base_time = {}, perfect_match = {}",
-                branch_name,
-                merge_base,
-                target_commit,
-                merge_base_time,
-                is_perfect_match
-            );
-
-            // Calculate distance from merge base to issue branch (how many commits ahead is the issue)
-            let issue_distance = self
-                .count_commits_between(merge_base, issue_commit)
-                .unwrap_or(usize::MAX);
-
-            // Calculate score: prioritize shortest distance, with perfect match as tie-breaker
-            // Distance is most important - closer = more direct parent relationship
-            let distance_score = (1000 - issue_distance as i64).max(0) * 1000; // Distance gets high weight
-            let perfect_match_bonus = if is_perfect_match { 100 } else { 0 }; // Small bonus for perfect match
-            let recency_score = merge_base_time / 1000; // Small component for recency
-
-            let score = distance_score + perfect_match_bonus + recency_score;
-
-            if is_perfect_match {
-                debug!(
-                    "Perfect match found: branch branched directly from tip of '{}'",
-                    branch_name
-                );
-            }
-
-            debug!(
-                "Branch '{}': distance = {}, score = {}",
-                branch_name, issue_distance, score
-            );
-
-            if score > best_score {
-                best_score = score;
-                debug!("New best target: {} (score: {})", branch_name, score);
-                best_target = Some(branch_name);
             }
         }
+        Ok(best_target)
+    }
 
-        // Return the best target, or fall back to main branch only if there were no candidates at all
-        match best_target {
-            Some(target) => {
-                debug!("Selected merge target: {}", target);
-                Ok(target)
-            }
-            None => {
-                // If we had candidate branches but found no valid merge-base, it's an orphan or unrelated branch
-                if had_candidates {
-                    debug!("No valid merge-base found with any candidate - likely orphan branch or unrelated history");
-                    return Err(GitError::generic(format!(
-                        "Branch '{}' has no common history with other branches (orphan branch)",
-                        issue_branch
-                    )));
-                }
+    /// Compute a merge-target score for a single candidate branch.
+    /// Returns `None` if the branch cannot be resolved or has no common history.
+    fn score_candidate(
+        &self,
+        branch_name: &str,
+        issue_commit: git2::Oid,
+    ) -> GitResult<Option<(String, i64)>> {
+        let target_commit = match self.resolve_branch_commit_lenient(branch_name) {
+            Some(oid) => oid,
+            None => return Ok(None),
+        };
 
-                // If we had NO candidates at all, fall back to main branch
-                debug!("No candidate branches found, falling back to main branch");
-                let main = self.main_branch()?;
+        let merge_base = match self.repo.inner().merge_base(issue_commit, target_commit) {
+            Ok(base) => base,
+            Err(_) => return Ok(None),
+        };
 
-                // If this branch IS the main branch, return error
-                if issue_branch.as_str() == main {
-                    return Err(GitError::generic(format!(
-                        "Branch '{}' is the main branch and has no parent",
-                        issue_branch
-                    )));
-                }
+        let merge_base_commit = match self.repo.inner().find_commit(merge_base) {
+            Ok(c) => c,
+            Err(_) => return Ok(None),
+        };
 
-                Ok(main)
-            }
+        let merge_base_time = merge_base_commit.time().seconds();
+        let is_perfect_match = merge_base == target_commit;
+
+        debug!(
+            "Branch '{}': merge_base = {}, target_head = {}, merge_base_time = {}, perfect_match = {}",
+            branch_name, merge_base, target_commit, merge_base_time, is_perfect_match
+        );
+        if is_perfect_match {
+            debug!(
+                "Perfect match found: branch branched directly from tip of '{}'",
+                branch_name
+            );
         }
+
+        let issue_distance = self
+            .count_commits_between(merge_base, issue_commit)
+            .unwrap_or(usize::MAX);
+
+        // Scoring weights: distance dominates, perfect-match is a tie-breaker, recency is minor.
+        const MAX_DISTANCE: i64 = 1000; // Cap beyond which branches are considered unrelated
+        const DISTANCE_WEIGHT: i64 = 1000; // Multiplier so distance outweighs other factors
+        const PERFECT_MATCH_BONUS: i64 = 100; // Small bonus when merge-base == target tip
+        const RECENCY_DIVISOR: i64 = 1000; // Scale epoch seconds to a minor scoring component
+
+        let distance_score = (MAX_DISTANCE - issue_distance as i64).max(0) * DISTANCE_WEIGHT;
+        let perfect_match_bonus = if is_perfect_match { PERFECT_MATCH_BONUS } else { 0 };
+        let recency_score = merge_base_time / RECENCY_DIVISOR;
+
+        let score = distance_score + perfect_match_bonus + recency_score;
+        debug!(
+            "Branch '{}': distance = {}, score = {}",
+            branch_name, issue_distance, score
+        );
+
+        Ok(Some((branch_name.to_string(), score)))
+    }
+
+    /// Try to resolve a branch to its commit OID, returning `None` on any error.
+    fn resolve_branch_commit_lenient(&self, branch_name: &str) -> Option<git2::Oid> {
+        self.repo
+            .inner()
+            .find_branch(branch_name, BranchType::Local)
+            .ok()
+            .and_then(|b| b.get().peel_to_commit().ok())
+            .map(|c| c.id())
     }
 
     /// Count commits between two commit IDs
