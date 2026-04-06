@@ -769,7 +769,7 @@ fn parse_from_ranges(json: &str) -> Vec<LspRange> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_fixtures::{insert_file, insert_ts_chunk, test_db};
+    use crate::test_fixtures::{insert_call_edge, insert_file, insert_ts_chunk, test_db};
 
     /// Insert an LSP symbol (without detail, for layered_context tests).
     fn insert_lsp_symbol(
@@ -1174,5 +1174,428 @@ mod tests {
     fn test_parse_from_ranges_invalid_json() {
         let ranges = parse_from_ranges("not json");
         assert!(ranges.is_empty());
+    }
+
+    // --- symbol_kind_int_to_string exhaustive coverage ---
+
+    /// Verify every LSP SymbolKind integer (1-26) maps to the correct string,
+    /// and that out-of-range values return "unknown".
+    #[test]
+    fn test_symbol_kind_int_to_string_all_variants() {
+        let expected: &[(i32, &str)] = &[
+            (1, "file"),
+            (2, "module"),
+            (3, "namespace"),
+            (4, "package"),
+            (5, "class"),
+            (6, "method"),
+            (7, "property"),
+            (8, "field"),
+            (9, "constructor"),
+            (10, "enum"),
+            (11, "interface"),
+            (12, "function"),
+            (13, "variable"),
+            (14, "constant"),
+            (15, "string"),
+            (16, "number"),
+            (17, "boolean"),
+            (18, "array"),
+            (19, "object"),
+            (20, "key"),
+            (21, "null"),
+            (22, "enum_member"),
+            (23, "struct"),
+            (24, "event"),
+            (25, "operator"),
+            (26, "type_parameter"),
+        ];
+        for &(kind, label) in expected {
+            assert_eq!(
+                symbol_kind_int_to_string(kind),
+                label,
+                "SymbolKind {} should map to {:?}",
+                kind,
+                label,
+            );
+        }
+    }
+
+    /// Out-of-range values (0, negative, >26) all return "unknown".
+    #[test]
+    fn test_symbol_kind_int_to_string_unknown_cases() {
+        for kind in [0, -1, 27, 100, i32::MAX, i32::MIN] {
+            assert_eq!(
+                symbol_kind_int_to_string(kind),
+                "unknown",
+                "SymbolKind {} should be unknown",
+                kind,
+            );
+        }
+    }
+
+    // --- lsp_callees_of coverage ---
+
+    /// When a caller symbol has call edges, lsp_callees_of returns the callee symbols.
+    #[test]
+    fn test_lsp_callees_of_returns_callee_symbols() {
+        let conn = test_db();
+        insert_file(&conn, "src/main.rs", 1, 1);
+        insert_file(&conn, "src/helper.rs", 1, 1);
+
+        // The caller symbol
+        insert_lsp_symbol(
+            &conn,
+            "sym:caller",
+            "do_work",
+            12,
+            "src/main.rs",
+            1,
+            0,
+            10,
+            1,
+        );
+        // Two callee symbols
+        insert_lsp_symbol(
+            &conn,
+            "sym:callee_a",
+            "helper_a",
+            12,
+            "src/helper.rs",
+            1,
+            0,
+            5,
+            1,
+        );
+        insert_lsp_symbol(
+            &conn,
+            "sym:callee_b",
+            "helper_b",
+            6,
+            "src/helper.rs",
+            10,
+            0,
+            20,
+            1,
+        );
+
+        // Edges: caller -> callee_a and caller -> callee_b
+        let from_ranges_json =
+            r#"[{"start":{"line":3,"character":4},"end":{"line":3,"character":12}}]"#;
+        insert_call_edge(
+            &conn,
+            "sym:caller",
+            "sym:callee_a",
+            "src/main.rs",
+            "src/helper.rs",
+            "lsp",
+            from_ranges_json,
+        );
+        insert_call_edge(
+            &conn,
+            "sym:caller",
+            "sym:callee_b",
+            "src/main.rs",
+            "src/helper.rs",
+            "lsp",
+            "[]",
+        );
+
+        let ctx = LayeredContext::new(&conn, None);
+        let callees = ctx.lsp_callees_of("sym:caller");
+
+        assert_eq!(callees.len(), 2);
+
+        let names: Vec<&str> = callees.iter().map(|c| c.symbol.name.as_str()).collect();
+        assert!(names.contains(&"helper_a"));
+        assert!(names.contains(&"helper_b"));
+
+        // Verify the first callee's call_sites were parsed from from_ranges
+        let a = callees
+            .iter()
+            .find(|c| c.symbol.name == "helper_a")
+            .unwrap();
+        assert_eq!(a.call_sites.len(), 1);
+        assert_eq!(a.call_sites[0].start_line, 3);
+        assert_eq!(a.call_sites[0].start_character, 4);
+
+        // Verify kind was translated through symbol_kind_int_to_string
+        assert_eq!(a.symbol.kind, "function");
+        let b = callees
+            .iter()
+            .find(|c| c.symbol.name == "helper_b")
+            .unwrap();
+        assert_eq!(b.symbol.kind, "method");
+    }
+
+    /// When a symbol has no outgoing call edges, lsp_callees_of returns an empty vec.
+    #[test]
+    fn test_lsp_callees_of_returns_empty_when_no_edges() {
+        let conn = test_db();
+        insert_file(&conn, "src/main.rs", 1, 1);
+        insert_lsp_symbol(
+            &conn,
+            "sym:lonely",
+            "lonely_fn",
+            12,
+            "src/main.rs",
+            1,
+            0,
+            5,
+            1,
+        );
+
+        let ctx = LayeredContext::new(&conn, None);
+        let callees = ctx.lsp_callees_of("sym:lonely");
+        assert!(callees.is_empty());
+    }
+
+    // --- ts_callers_of ---
+
+    /// A single tree-sitter call edge is returned with correct symbol info and call sites.
+    #[test]
+    fn test_ts_callers_of_single_caller() {
+        let conn = test_db();
+        insert_file(&conn, "src/lib.rs", 1, 0);
+        insert_file(&conn, "src/main.rs", 1, 0);
+
+        insert_lsp_symbol(
+            &conn,
+            "caller1",
+            "run_process",
+            12,
+            "src/main.rs",
+            10,
+            0,
+            25,
+            1,
+        );
+        insert_lsp_symbol(&conn, "callee1", "do_work", 12, "src/lib.rs", 1, 0, 5, 1);
+
+        let ranges_json =
+            r#"[{"start":{"line":15,"character":4},"end":{"line":15,"character":20}}]"#;
+        insert_call_edge(
+            &conn,
+            "caller1",
+            "callee1",
+            "src/main.rs",
+            "src/lib.rs",
+            "treesitter",
+            ranges_json,
+        );
+
+        let ctx = LayeredContext::new(&conn, None);
+        let results = ctx.ts_callers_of("src/lib.rs", "process");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].symbol.name, "run_process");
+        assert_eq!(results[0].symbol.file_path, "src/main.rs");
+        assert_eq!(results[0].symbol.kind, "function");
+        assert_eq!(results[0].symbol.range.start_line, 10);
+        assert_eq!(results[0].symbol.range.end_line, 25);
+        assert_eq!(results[0].call_sites.len(), 1);
+        assert_eq!(results[0].call_sites[0].start_line, 15);
+        assert_eq!(results[0].call_sites[0].start_character, 4);
+    }
+
+    /// Multiple callers from different files are all returned.
+    #[test]
+    fn test_ts_callers_of_multiple_callers() {
+        let conn = test_db();
+        insert_file(&conn, "src/target.rs", 1, 0);
+        insert_file(&conn, "src/a.rs", 1, 0);
+        insert_file(&conn, "src/b.rs", 1, 0);
+
+        insert_lsp_symbol(&conn, "c1", "invoke_target", 12, "src/a.rs", 1, 0, 10, 1);
+        insert_lsp_symbol(&conn, "c2", "call_target", 12, "src/b.rs", 5, 0, 15, 1);
+        insert_lsp_symbol(&conn, "t1", "some_target", 12, "src/target.rs", 1, 0, 20, 1);
+
+        let ranges1 = r#"[{"start":{"line":3,"character":0},"end":{"line":3,"character":10}}]"#;
+        let ranges2 = r#"[{"start":{"line":8,"character":2},"end":{"line":8,"character":12}}]"#;
+        insert_call_edge(
+            &conn,
+            "c1",
+            "t1",
+            "src/a.rs",
+            "src/target.rs",
+            "treesitter",
+            ranges1,
+        );
+        insert_call_edge(
+            &conn,
+            "c2",
+            "t1",
+            "src/b.rs",
+            "src/target.rs",
+            "treesitter",
+            ranges2,
+        );
+
+        let ctx = LayeredContext::new(&conn, None);
+        let results = ctx.ts_callers_of("src/target.rs", "target");
+        assert_eq!(results.len(), 2);
+
+        let names: Vec<&str> = results.iter().map(|r| r.symbol.name.as_str()).collect();
+        assert!(names.contains(&"invoke_target"));
+        assert!(names.contains(&"call_target"));
+    }
+
+    /// When no edges exist for a file/symbol, ts_callers_of returns an empty vec.
+    #[test]
+    fn test_ts_callers_of_no_callers() {
+        let conn = test_db();
+        insert_file(&conn, "src/orphan.rs", 1, 0);
+
+        let ctx = LayeredContext::new(&conn, None);
+        let results = ctx.ts_callers_of("src/orphan.rs", "some_func");
+        assert!(results.is_empty());
+    }
+
+    /// Edges with source != 'treesitter' are excluded from ts_callers_of results.
+    #[test]
+    fn test_ts_callers_of_ignores_non_treesitter_edges() {
+        let conn = test_db();
+        insert_file(&conn, "src/lib.rs", 1, 0);
+        insert_file(&conn, "src/main.rs", 1, 0);
+
+        insert_lsp_symbol(
+            &conn,
+            "lsp_caller",
+            "do_stuff",
+            12,
+            "src/main.rs",
+            1,
+            0,
+            10,
+            1,
+        );
+        insert_lsp_symbol(&conn, "target", "the_target", 12, "src/lib.rs", 1, 0, 5, 1);
+
+        let ranges = r#"[{"start":{"line":5,"character":0},"end":{"line":5,"character":8}}]"#;
+        insert_call_edge(
+            &conn,
+            "lsp_caller",
+            "target",
+            "src/main.rs",
+            "src/lib.rs",
+            "lsp",
+            ranges,
+        );
+
+        let ctx = LayeredContext::new(&conn, None);
+        let results = ctx.ts_callers_of("src/lib.rs", "stuff");
+        assert!(results.is_empty());
+    }
+
+    /// Multiple call sites within a single edge are all parsed and returned.
+    #[test]
+    fn test_ts_callers_of_parses_multiple_call_sites() {
+        let conn = test_db();
+        insert_file(&conn, "src/lib.rs", 1, 0);
+        insert_file(&conn, "src/main.rs", 1, 0);
+
+        insert_lsp_symbol(
+            &conn,
+            "multi",
+            "run_process",
+            12,
+            "src/main.rs",
+            1,
+            0,
+            50,
+            1,
+        );
+        insert_lsp_symbol(&conn, "callee", "target_fn", 12, "src/lib.rs", 1, 0, 10, 1);
+
+        let ranges = r#"[{"start":{"line":10,"character":4},"end":{"line":10,"character":15}},{"start":{"line":30,"character":8},"end":{"line":30,"character":19}}]"#;
+        insert_call_edge(
+            &conn,
+            "multi",
+            "callee",
+            "src/main.rs",
+            "src/lib.rs",
+            "treesitter",
+            ranges,
+        );
+
+        let ctx = LayeredContext::new(&conn, None);
+        let results = ctx.ts_callers_of("src/lib.rs", "process");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].call_sites.len(), 2);
+        assert_eq!(results[0].call_sites[0].start_line, 10);
+        assert_eq!(results[0].call_sites[0].start_character, 4);
+        assert_eq!(results[0].call_sites[1].start_line, 30);
+        assert_eq!(results[0].call_sites[1].start_character, 8);
+    }
+
+    // --- enrich_location additional coverage ---
+
+    /// Verify the symbol fields produced by the tree-sitter fallback path.
+    #[test]
+    fn test_enrich_location_treesitter_symbol_fields() {
+        let conn = test_db();
+        insert_file(&conn, "src/lib.rs", 1, 0);
+        insert_ts_chunk(
+            &conn,
+            "src/lib.rs",
+            10,
+            25,
+            "fn process_data() {\n    let x = 42;\n}",
+            None,
+        );
+
+        let ctx = LayeredContext::new(&conn, None);
+        let range = LspRange {
+            start_line: 15,
+            start_character: 0,
+            end_line: 15,
+            end_character: 0,
+        };
+        let result = ctx.enrich_location("src/lib.rs", &range);
+        assert_eq!(result.source_layer, SourceLayer::TreeSitter);
+
+        let sym = result.symbol.expect("should have symbol");
+        // Name is extracted from the first line of chunk text, trimmed.
+        assert_eq!(sym.name, "fn process_data() {");
+        assert_eq!(sym.kind, "chunk");
+        assert_eq!(sym.file_path, "src/lib.rs");
+        assert_eq!(sym.range.start_line, 10);
+        assert_eq!(sym.range.end_line, 25);
+        assert_eq!(sym.range.start_character, 0);
+        assert_eq!(sym.range.end_character, 0);
+    }
+
+    /// A file that does not exist in the DB at all yields SourceLayer::None.
+    #[test]
+    fn test_enrich_location_file_not_in_db() {
+        let conn = test_db();
+        let ctx = LayeredContext::new(&conn, None);
+        let range = LspRange {
+            start_line: 0,
+            start_character: 0,
+            end_line: 0,
+            end_character: 0,
+        };
+        let result = ctx.enrich_location("nonexistent.rs", &range);
+        assert_eq!(result.source_layer, SourceLayer::None);
+        assert!(result.symbol.is_none());
+    }
+
+    /// A range that falls outside all indexed chunks yields SourceLayer::None.
+    #[test]
+    fn test_enrich_location_range_outside_all_chunks() {
+        let conn = test_db();
+        insert_file(&conn, "src/main.rs", 1, 0);
+        insert_ts_chunk(&conn, "src/main.rs", 1, 5, "fn small() {}", None);
+
+        let ctx = LayeredContext::new(&conn, None);
+        let range = LspRange {
+            start_line: 500,
+            start_character: 0,
+            end_line: 500,
+            end_character: 0,
+        };
+        let result = ctx.enrich_location("src/main.rs", &range);
+        assert_eq!(result.source_layer, SourceLayer::None);
+        assert!(result.symbol.is_none());
     }
 }

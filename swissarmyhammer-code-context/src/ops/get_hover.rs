@@ -263,6 +263,7 @@ pub(crate) use super::lsp_helpers::file_path_to_uri;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ops::lsp_helpers::language_id_from_path;
     use crate::test_fixtures::{insert_file, test_db};
     use rusqlite::Connection;
 

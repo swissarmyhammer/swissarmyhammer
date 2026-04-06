@@ -189,4 +189,128 @@ mod tests {
         let range_json = serde_json::json!({ "start": { "line": 0 } });
         assert!(parse_lsp_range(&range_json).is_none());
     }
+
+    // --- read_source_range coverage ---
+
+    /// Valid file and range returns the expected lines.
+    #[test]
+    fn test_read_source_range_valid_range() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("sample.rs");
+        std::fs::write(
+            &file,
+            "line0
+line1
+line2
+line3
+line4
+",
+        )
+        .unwrap();
+
+        let range = LspRange {
+            start_line: 1,
+            start_character: 0,
+            end_line: 3,
+            end_character: 0,
+        };
+        let result = read_source_range(file.to_str().unwrap(), &range);
+        assert_eq!(
+            result,
+            Some(
+                "line1
+line2
+line3"
+                    .to_string()
+            )
+        );
+    }
+
+    /// A single-line range returns exactly one line.
+    #[test]
+    fn test_read_source_range_single_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("single.rs");
+        std::fs::write(
+            &file,
+            "alpha
+beta
+gamma
+",
+        )
+        .unwrap();
+
+        let range = LspRange {
+            start_line: 1,
+            start_character: 0,
+            end_line: 1,
+            end_character: 0,
+        };
+        let result = read_source_range(file.to_str().unwrap(), &range);
+        assert_eq!(result, Some("beta".to_string()));
+    }
+
+    /// Missing file returns None.
+    #[test]
+    fn test_read_source_range_missing_file() {
+        let range = LspRange {
+            start_line: 0,
+            start_character: 0,
+            end_line: 0,
+            end_character: 0,
+        };
+        let result = read_source_range("/tmp/does_not_exist_12345.rs", &range);
+        assert_eq!(result, None);
+    }
+
+    /// End line beyond EOF is clamped to the last line.
+    #[test]
+    fn test_read_source_range_end_beyond_eof() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("short.rs");
+        std::fs::write(
+            &file,
+            "first
+second
+",
+        )
+        .unwrap();
+
+        let range = LspRange {
+            start_line: 0,
+            start_character: 0,
+            end_line: 999,
+            end_character: 0,
+        };
+        let result = read_source_range(file.to_str().unwrap(), &range);
+        assert_eq!(
+            result,
+            Some(
+                "first
+second"
+                    .to_string()
+            )
+        );
+    }
+
+    /// Start line beyond EOF returns None.
+    #[test]
+    fn test_read_source_range_start_beyond_eof() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("tiny.rs");
+        std::fs::write(
+            &file, "only
+",
+        )
+        .unwrap();
+
+        let range = LspRange {
+            start_line: 100,
+            start_character: 0,
+            end_line: 200,
+            end_character: 0,
+        };
+        let result = read_source_range(file.to_str().unwrap(), &range);
+        assert_eq!(result, None);
+    }
 }

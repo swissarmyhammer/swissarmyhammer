@@ -95,10 +95,7 @@ pub fn get_rename_edits(
         )?;
 
         // null means the position is not renameable
-        if prepare_response.is_null()
-            || prepare_response
-                .get("result")
-                .is_some_and(|v| v.is_null())
+        if prepare_response.is_null() || prepare_response.get("result").is_some_and(|v| v.is_null())
         {
             return Ok(not_renameable());
         }

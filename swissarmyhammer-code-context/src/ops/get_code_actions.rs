@@ -653,4 +653,489 @@ mod tests {
         assert!(roundtrip.actions[0].is_preferred);
         assert_eq!(roundtrip.actions[1].title, "Run test");
     }
+
+    // --- parse_code_actions: non-array responses ---
+
+    #[test]
+    fn test_parse_code_actions_object_returns_empty() {
+        let response = serde_json::json!({"title": "not an array"});
+        assert!(parse_code_actions(&response).is_empty());
+    }
+
+    #[test]
+    fn test_parse_code_actions_string_returns_empty() {
+        let response = serde_json::json!("just a string");
+        assert!(parse_code_actions(&response).is_empty());
+    }
+
+    #[test]
+    fn test_parse_code_actions_number_returns_empty() {
+        let response = serde_json::json!(42);
+        assert!(parse_code_actions(&response).is_empty());
+    }
+
+    // --- parse_single_action: malformed entries ---
+
+    #[test]
+    fn test_parse_action_missing_title_skipped() {
+        let response = serde_json::json!([
+            {
+                "kind": "quickfix",
+                "edit": {}
+            }
+        ]);
+        let actions = parse_code_actions(&response);
+        assert!(
+            actions.is_empty(),
+            "actions without title should be skipped"
+        );
+    }
+
+    #[test]
+    fn test_parse_action_title_not_string_skipped() {
+        let response = serde_json::json!([
+            {
+                "title": 123,
+                "kind": "quickfix"
+            }
+        ]);
+        let actions = parse_code_actions(&response);
+        assert!(actions.is_empty(), "non-string title should be skipped");
+    }
+
+    #[test]
+    fn test_parse_action_null_element_skipped() {
+        let response = serde_json::json!([null, {"title": "Valid", "kind": "quickfix"}]);
+        let actions = parse_code_actions(&response);
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0].title, "Valid");
+    }
+
+    // --- CodeAction with kind but no edit ---
+
+    #[test]
+    fn test_parse_code_action_no_edit_field() {
+        let response = serde_json::json!([
+            {
+                "title": "Organize imports",
+                "kind": "source.organizeImports",
+                "isPreferred": false
+            }
+        ]);
+        let actions = parse_code_actions(&response);
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0].kind.as_deref(), Some("source.organizeImports"));
+        assert!(
+            actions[0].edits.is_none(),
+            "no edit field means edits is None"
+        );
+    }
+
+    // --- CodeAction with empty workspace edit (should filter to None) ---
+
+    #[test]
+    fn test_parse_code_action_with_empty_edit() {
+        let response = serde_json::json!([
+            {
+                "title": "No-op action",
+                "kind": "quickfix",
+                "edit": {}
+            }
+        ]);
+        let actions = parse_code_actions(&response);
+        assert_eq!(actions.len(), 1);
+        assert!(
+            actions[0].edits.is_none(),
+            "empty workspace edit should be filtered to None"
+        );
+    }
+
+    #[test]
+    fn test_parse_code_action_with_empty_changes_map() {
+        let response = serde_json::json!([
+            {
+                "title": "Empty changes",
+                "kind": "refactor",
+                "edit": {
+                    "changes": {}
+                }
+            }
+        ]);
+        let actions = parse_code_actions(&response);
+        assert_eq!(actions.len(), 1);
+        assert!(
+            actions[0].edits.is_none(),
+            "empty changes map should produce None edits"
+        );
+    }
+
+    #[test]
+    fn test_parse_code_action_with_empty_document_changes() {
+        let response = serde_json::json!([
+            {
+                "title": "Empty doc changes",
+                "kind": "refactor",
+                "edit": {
+                    "documentChanges": []
+                }
+            }
+        ]);
+        let actions = parse_code_actions(&response);
+        assert_eq!(actions.len(), 1);
+        assert!(
+            actions[0].edits.is_none(),
+            "empty documentChanges array should produce None edits"
+        );
+    }
+
+    // --- is_preferred defaults ---
+
+    #[test]
+    fn test_is_preferred_defaults_false_when_absent() {
+        let response = serde_json::json!([
+            {
+                "title": "Some action",
+                "kind": "quickfix"
+            }
+        ]);
+        let actions = parse_code_actions(&response);
+        assert!(!actions[0].is_preferred);
+    }
+
+    #[test]
+    fn test_is_preferred_true() {
+        let response = serde_json::json!([
+            {
+                "title": "Preferred action",
+                "kind": "quickfix",
+                "isPreferred": true
+            }
+        ]);
+        let actions = parse_code_actions(&response);
+        assert!(actions[0].is_preferred);
+    }
+
+    // --- parse_workspace_edit: documentChanges precedence over changes ---
+
+    #[test]
+    fn test_parse_workspace_edit_document_changes_takes_precedence() {
+        let edit = serde_json::json!({
+            "documentChanges": [
+                {
+                    "textDocument": { "uri": "file:///src/from_doc_changes.rs", "version": 1 },
+                    "edits": [
+                        {
+                            "range": {
+                                "start": { "line": 0, "character": 0 },
+                                "end": { "line": 0, "character": 0 }
+                            },
+                            "newText": "from documentChanges"
+                        }
+                    ]
+                }
+            ],
+            "changes": {
+                "file:///src/from_changes.rs": [
+                    {
+                        "range": {
+                            "start": { "line": 0, "character": 0 },
+                            "end": { "line": 0, "character": 0 }
+                        },
+                        "newText": "from changes"
+                    }
+                ]
+            }
+        });
+
+        let file_edits = parse_workspace_edit(&edit);
+        assert_eq!(file_edits.len(), 1);
+        assert!(
+            file_edits[0].file_path.contains("from_doc_changes"),
+            "documentChanges should take precedence over changes"
+        );
+        assert_eq!(file_edits[0].text_edits[0].new_text, "from documentChanges");
+    }
+
+    // --- parse_workspace_edit: multiple edits in one file ---
+
+    #[test]
+    fn test_parse_workspace_edit_multiple_edits_in_one_file() {
+        let edit = serde_json::json!({
+            "changes": {
+                "file:///src/multi.rs": [
+                    {
+                        "range": {
+                            "start": { "line": 1, "character": 0 },
+                            "end": { "line": 1, "character": 5 }
+                        },
+                        "newText": "first"
+                    },
+                    {
+                        "range": {
+                            "start": { "line": 10, "character": 0 },
+                            "end": { "line": 10, "character": 3 }
+                        },
+                        "newText": "second"
+                    }
+                ]
+            }
+        });
+
+        let file_edits = parse_workspace_edit(&edit);
+        assert_eq!(file_edits.len(), 1);
+        assert_eq!(file_edits[0].text_edits.len(), 2);
+        assert_eq!(file_edits[0].text_edits[0].new_text, "first");
+        assert_eq!(file_edits[0].text_edits[1].new_text, "second");
+    }
+
+    // --- parse_workspace_edit: multiple files in documentChanges ---
+
+    #[test]
+    fn test_parse_workspace_edit_multiple_files_document_changes() {
+        let edit = serde_json::json!({
+            "documentChanges": [
+                {
+                    "textDocument": { "uri": "file:///src/a.rs", "version": 1 },
+                    "edits": [
+                        {
+                            "range": {
+                                "start": { "line": 0, "character": 0 },
+                                "end": { "line": 0, "character": 0 }
+                            },
+                            "newText": "edit_a"
+                        }
+                    ]
+                },
+                {
+                    "textDocument": { "uri": "file:///src/b.rs", "version": 2 },
+                    "edits": [
+                        {
+                            "range": {
+                                "start": { "line": 5, "character": 0 },
+                                "end": { "line": 5, "character": 0 }
+                            },
+                            "newText": "edit_b"
+                        }
+                    ]
+                }
+            ]
+        });
+
+        let file_edits = parse_workspace_edit(&edit);
+        assert_eq!(file_edits.len(), 2);
+    }
+
+    // --- parse_text_edit: malformed edits ---
+
+    #[test]
+    fn test_parse_workspace_edit_text_edit_missing_new_text() {
+        let edit = serde_json::json!({
+            "changes": {
+                "file:///src/bad.rs": [
+                    {
+                        "range": {
+                            "start": { "line": 0, "character": 0 },
+                            "end": { "line": 0, "character": 0 }
+                        }
+                    }
+                ]
+            }
+        });
+
+        let file_edits = parse_workspace_edit(&edit);
+        assert!(
+            file_edits.is_empty(),
+            "text edit missing newText should be skipped, leaving no valid edits"
+        );
+    }
+
+    #[test]
+    fn test_parse_workspace_edit_text_edit_missing_range() {
+        let edit = serde_json::json!({
+            "changes": {
+                "file:///src/bad.rs": [
+                    {
+                        "newText": "orphan text"
+                    }
+                ]
+            }
+        });
+
+        let file_edits = parse_workspace_edit(&edit);
+        assert!(
+            file_edits.is_empty(),
+            "text edit missing range should be skipped"
+        );
+    }
+
+    #[test]
+    fn test_parse_workspace_edit_text_edit_malformed_range() {
+        let edit = serde_json::json!({
+            "changes": {
+                "file:///src/bad.rs": [
+                    {
+                        "range": {
+                            "start": { "line": 0 }
+                        },
+                        "newText": "bad range"
+                    }
+                ]
+            }
+        });
+
+        let file_edits = parse_workspace_edit(&edit);
+        assert!(
+            file_edits.is_empty(),
+            "text edit with incomplete range should be skipped"
+        );
+    }
+
+    // --- documentChanges: missing textDocument or edits ---
+
+    #[test]
+    fn test_parse_document_changes_missing_text_document() {
+        let edit = serde_json::json!({
+            "documentChanges": [
+                {
+                    "edits": [
+                        {
+                            "range": {
+                                "start": { "line": 0, "character": 0 },
+                                "end": { "line": 0, "character": 0 }
+                            },
+                            "newText": "orphan"
+                        }
+                    ]
+                }
+            ]
+        });
+
+        let file_edits = parse_workspace_edit(&edit);
+        assert!(
+            file_edits.is_empty(),
+            "documentChange missing textDocument should be skipped"
+        );
+    }
+
+    #[test]
+    fn test_parse_document_changes_missing_edits_array() {
+        let edit = serde_json::json!({
+            "documentChanges": [
+                {
+                    "textDocument": { "uri": "file:///src/main.rs", "version": 1 }
+                }
+            ]
+        });
+
+        let file_edits = parse_workspace_edit(&edit);
+        assert!(
+            file_edits.is_empty(),
+            "documentChange missing edits array should be skipped"
+        );
+    }
+
+    // --- CodeAction with command object (not string) should still parse as CodeAction ---
+
+    #[test]
+    fn test_parse_code_action_with_nested_command_object() {
+        let response = serde_json::json!([
+            {
+                "title": "Fix with command object",
+                "kind": "quickfix",
+                "command": {
+                    "title": "Apply fix",
+                    "command": "editor.action.fixAll",
+                    "arguments": []
+                },
+                "isPreferred": false
+            }
+        ]);
+        let actions = parse_code_actions(&response);
+        assert_eq!(actions.len(), 1);
+        assert_eq!(
+            actions[0].kind.as_deref(),
+            Some("quickfix"),
+            "action with kind + command object should be parsed as CodeAction, not Command"
+        );
+    }
+
+    // --- Range values are correctly parsed ---
+
+    #[test]
+    fn test_parse_workspace_edit_range_values() {
+        let edit = serde_json::json!({
+            "changes": {
+                "file:///src/range.rs": [
+                    {
+                        "range": {
+                            "start": { "line": 3, "character": 7 },
+                            "end": { "line": 5, "character": 12 }
+                        },
+                        "newText": "replaced"
+                    }
+                ]
+            }
+        });
+
+        let file_edits = parse_workspace_edit(&edit);
+        assert_eq!(file_edits.len(), 1);
+        let te = &file_edits[0].text_edits[0];
+        assert_eq!(te.range.start_line, 3);
+        assert_eq!(te.range.start_character, 7);
+        assert_eq!(te.range.end_line, 5);
+        assert_eq!(te.range.end_character, 12);
+    }
+
+    // --- changes format: edits value not an array ---
+
+    #[test]
+    fn test_parse_workspace_edit_changes_value_not_array() {
+        let edit = serde_json::json!({
+            "changes": {
+                "file:///src/bad.rs": "not an array"
+            }
+        });
+
+        let file_edits = parse_workspace_edit(&edit);
+        assert!(
+            file_edits.is_empty(),
+            "non-array edits value should be skipped"
+        );
+    }
+
+    // --- Multiple valid and invalid actions in one response ---
+
+    #[test]
+    fn test_parse_code_actions_mixed_valid_invalid() {
+        let response = serde_json::json!([
+            { "title": "Good command", "command": "do.thing" },
+            { "no_title": true },
+            null,
+            {
+                "title": "Good action",
+                "kind": "source.organizeImports",
+                "isPreferred": true,
+                "edit": {
+                    "changes": {
+                        "file:///src/main.rs": [
+                            {
+                                "range": {
+                                    "start": { "line": 0, "character": 0 },
+                                    "end": { "line": 0, "character": 0 }
+                                },
+                                "newText": "import"
+                            }
+                        ]
+                    }
+                }
+            },
+            42
+        ]);
+        let actions = parse_code_actions(&response);
+        assert_eq!(actions.len(), 2, "only valid actions should survive");
+        assert_eq!(actions[0].title, "Good command");
+        assert_eq!(actions[1].title, "Good action");
+        assert_eq!(actions[1].kind.as_deref(), Some("source.organizeImports"));
+        assert!(actions[1].is_preferred);
+    }
 }

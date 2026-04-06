@@ -920,6 +920,168 @@ mod tests {
         assert_eq!(roundtrip.source_layer, SourceLayer::LiveLsp);
     }
 
+    // --- Tree-sitter fallback (try_treesitter) ---
+
+    #[test]
+    fn test_try_treesitter_callers_found() {
+        // Set up a scenario where try_lsp_index returns None (no LSP symbol at
+        // cursor) but try_treesitter finds callers via ts_chunks + call edges.
+        let conn = test_db();
+        insert_file(&conn, "src/target.rs", 1, 0);
+        insert_file(&conn, "src/caller.rs", 1, 0);
+
+        // ts_chunk for the target with symbol_path so find_ts_symbol_at_cursor works
+        insert_ts_chunk(
+            &conn,
+            "src/target.rs",
+            5,
+            15,
+            "fn do_work() { /* body */ }",
+            Some("target::do_work"),
+        );
+
+        // Both caller and callee need LSP symbols for the FK constraint.
+        // Place the target LSP symbol at lines 50-60 (away from cursor at 10)
+        // so lsp_symbol_at won't find it and try_lsp_index returns None.
+        insert_lsp_symbol(
+            &conn,
+            "target::do_work",
+            "do_work",
+            12,
+            "src/target.rs",
+            50,
+            0,
+            60,
+            1,
+        );
+        insert_lsp_symbol(
+            &conn,
+            "ts:caller_fn",
+            "invoke",
+            12,
+            "src/caller.rs",
+            1,
+            0,
+            10,
+            1,
+        );
+
+        // Call edge: caller_fn calls target::do_work
+        insert_call_edge(
+            &conn,
+            "ts:caller_fn",
+            "target::do_work",
+            "src/caller.rs",
+            "src/target.rs",
+            "treesitter",
+            "[]",
+        );
+
+        let ctx = LayeredContext::new(&conn, None);
+        let opts = GetInboundCallsOptions {
+            file_path: "src/target.rs".to_string(),
+            line: 10,
+            character: 0,
+            depth: 1,
+        };
+
+        let result = get_inbound_calls(&ctx, &opts).unwrap();
+        assert_eq!(result.source_layer, SourceLayer::TreeSitter);
+        assert_eq!(result.target, "do_work");
+        assert_eq!(result.callers.len(), 1);
+        assert_eq!(result.callers[0].symbol_name, "invoke");
+        assert_eq!(result.callers[0].depth, 1);
+        assert!(result.callers[0].callers.is_empty());
+    }
+
+    #[test]
+    fn test_try_treesitter_no_callers() {
+        // Tree-sitter finds the symbol but there are no call edges pointing to it.
+        let conn = test_db();
+        insert_file(&conn, "src/lonely.rs", 1, 0);
+
+        insert_ts_chunk(
+            &conn,
+            "src/lonely.rs",
+            1,
+            10,
+            "fn orphan() {}",
+            Some("lonely::orphan"),
+        );
+
+        let ctx = LayeredContext::new(&conn, None);
+        let opts = GetInboundCallsOptions {
+            file_path: "src/lonely.rs".to_string(),
+            line: 5,
+            character: 0,
+            depth: 1,
+        };
+
+        let result = get_inbound_calls(&ctx, &opts).unwrap();
+        // No callers found -- falls through to SourceLayer::None
+        assert_eq!(result.source_layer, SourceLayer::None);
+        assert!(result.callers.is_empty());
+    }
+
+    #[test]
+    fn test_try_treesitter_depth_greater_than_1() {
+        // Verify recursion: A <- B <- C with depth=2 via tree-sitter path.
+        let conn = test_db();
+        insert_file(&conn, "src/a.rs", 1, 0);
+        insert_file(&conn, "src/b.rs", 1, 0);
+        insert_file(&conn, "src/c.rs", 1, 0);
+
+        // ts_chunk for target at cursor (lines 1-10, cursor at 5)
+        insert_ts_chunk(&conn, "src/a.rs", 1, 10, "fn alpha() {}", Some("a::alpha"));
+
+        // Target LSP symbol at lines 50-60 (away from cursor at 5) so
+        // lsp_symbol_at misses and try_lsp_index returns None.
+        insert_lsp_symbol(&conn, "a::alpha", "alpha", 12, "src/a.rs", 50, 0, 60, 1);
+        // Callers need LSP symbols for the JOIN in lsp_callers_of
+        insert_lsp_symbol(&conn, "ts:beta", "beta", 12, "src/b.rs", 1, 0, 10, 1);
+        insert_lsp_symbol(&conn, "ts:gamma", "gamma", 12, "src/c.rs", 1, 0, 10, 1);
+
+        // B calls A, C calls B
+        insert_call_edge(
+            &conn,
+            "ts:beta",
+            "a::alpha",
+            "src/b.rs",
+            "src/a.rs",
+            "treesitter",
+            "[]",
+        );
+        insert_call_edge(
+            &conn,
+            "ts:gamma",
+            "ts:beta",
+            "src/c.rs",
+            "src/b.rs",
+            "treesitter",
+            "[]",
+        );
+
+        let ctx = LayeredContext::new(&conn, None);
+        let opts = GetInboundCallsOptions {
+            file_path: "src/a.rs".to_string(),
+            line: 5,
+            character: 0,
+            depth: 2,
+        };
+
+        let result = get_inbound_calls(&ctx, &opts).unwrap();
+        assert_eq!(result.source_layer, SourceLayer::TreeSitter);
+        assert_eq!(result.target, "alpha");
+        assert_eq!(result.callers.len(), 1);
+        assert_eq!(result.callers[0].symbol_name, "beta");
+        assert_eq!(result.callers[0].depth, 1);
+
+        // depth=2: beta's callers should include gamma
+        assert_eq!(result.callers[0].callers.len(), 1);
+        assert_eq!(result.callers[0].callers[0].symbol_name, "gamma");
+        assert_eq!(result.callers[0].callers[0].depth, 2);
+    }
+
     // --- Recursive tree construction ---
 
     #[test]

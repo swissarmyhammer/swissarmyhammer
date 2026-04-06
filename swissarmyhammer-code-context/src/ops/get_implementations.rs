@@ -328,6 +328,160 @@ mod tests {
         assert_eq!(uri_to_file_path("/raw/path.rs"), "/raw/path.rs");
     }
 
+    // --- Tree-sitter fallback (Layer 3) ---
+
+    #[test]
+    fn treesitter_finds_impl_blocks() {
+        // LSP symbol at cursor gives find_symbol the name "Drawable",
+        // then ts_chunks_matching finds "impl Drawable" chunks.
+        let conn = crate::test_fixtures::test_db();
+        crate::test_fixtures::insert_file(&conn, "src/traits.rs", 1, 0);
+
+        // LSP symbol so find_symbol resolves the name "Drawable" at cursor
+        crate::test_fixtures::insert_lsp_symbol(
+            &conn,
+            "sym:drawable",
+            "Drawable",
+            11,
+            "src/traits.rs",
+            0,
+            0,
+            5,
+            1,
+            None,
+        );
+
+        // Two impl blocks whose text contains "impl Drawable"
+        crate::test_fixtures::insert_ts_chunk(
+            &conn,
+            "src/traits.rs",
+            10,
+            20,
+            "impl Drawable for Circle { fn draw(&self) {} }",
+            Some("traits::CircleDrawable"),
+        );
+        crate::test_fixtures::insert_ts_chunk(
+            &conn,
+            "src/traits.rs",
+            25,
+            35,
+            "impl Drawable for Square { fn draw(&self) {} }",
+            Some("traits::SquareDrawable"),
+        );
+
+        let ctx = LayeredContext::new(&conn, None);
+        let opts = GetImplementationsOptions {
+            file_path: "src/traits.rs".to_string(),
+            line: 2,
+            character: 6,
+            max_results: None,
+        };
+
+        let result = get_implementations(&ctx, &opts).unwrap();
+        assert_eq!(result.source_layer, SourceLayer::TreeSitter);
+        assert_eq!(result.implementations.len(), 2);
+
+        // Both results come from the "impl Drawable" chunks
+        let paths: Vec<&str> = result
+            .implementations
+            .iter()
+            .map(|l| l.file_path.as_str())
+            .collect();
+        assert!(paths.iter().all(|p| *p == "src/traits.rs"));
+
+        // Verify ranges correspond to the impl chunks
+        let start_lines: Vec<u32> = result
+            .implementations
+            .iter()
+            .map(|l| l.range.start_line)
+            .collect();
+        assert!(start_lines.contains(&10));
+        assert!(start_lines.contains(&25));
+    }
+
+    #[test]
+    fn treesitter_no_impls_found() {
+        // Symbol found but no chunks match "impl <Name>".
+        let conn = crate::test_fixtures::test_db();
+        crate::test_fixtures::insert_file(&conn, "src/orphan.rs", 1, 0);
+
+        // LSP symbol so find_symbol resolves the name
+        crate::test_fixtures::insert_lsp_symbol(
+            &conn,
+            "sym:invisible",
+            "Invisible",
+            11,
+            "src/orphan.rs",
+            0,
+            0,
+            5,
+            1,
+            None,
+        );
+
+        let ctx = LayeredContext::new(&conn, None);
+        let opts = GetImplementationsOptions {
+            file_path: "src/orphan.rs".to_string(),
+            line: 2,
+            character: 6,
+            max_results: None,
+        };
+
+        let result = get_implementations(&ctx, &opts).unwrap();
+        // No impls -- falls through to SourceLayer::None
+        assert_eq!(result.source_layer, SourceLayer::None);
+        assert!(result.implementations.is_empty());
+    }
+
+    #[test]
+    fn treesitter_struct_impl_blocks() {
+        // Verify finding `impl StructName` blocks (not just traits).
+        let conn = crate::test_fixtures::test_db();
+        crate::test_fixtures::insert_file(&conn, "src/structs.rs", 1, 0);
+
+        // LSP symbol for the struct at cursor
+        crate::test_fixtures::insert_lsp_symbol(
+            &conn,
+            "sym:widget",
+            "Widget",
+            23,
+            "src/structs.rs",
+            0,
+            0,
+            3,
+            1,
+            None,
+        );
+
+        // Inherent impl block
+        crate::test_fixtures::insert_ts_chunk(
+            &conn,
+            "src/structs.rs",
+            5,
+            15,
+            "impl Widget { fn new() -> Self { Widget { x: 0 } } }",
+            Some("structs::Widget_impl"),
+        );
+
+        let ctx = LayeredContext::new(&conn, None);
+        let opts = GetImplementationsOptions {
+            file_path: "src/structs.rs".to_string(),
+            line: 1,
+            character: 7,
+            max_results: None,
+        };
+
+        let result = get_implementations(&ctx, &opts).unwrap();
+        assert_eq!(result.source_layer, SourceLayer::TreeSitter);
+        assert_eq!(result.implementations.len(), 1);
+        assert_eq!(result.implementations[0].range.start_line, 5);
+        assert!(result.implementations[0]
+            .source_text
+            .as_ref()
+            .unwrap()
+            .contains("impl Widget"));
+    }
+
     #[test]
     fn language_id_detection() {
         assert_eq!(language_id_from_path("src/main.rs"), "rust");
