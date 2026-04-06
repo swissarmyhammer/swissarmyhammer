@@ -442,10 +442,10 @@ mod tests {
     }
 
     #[test]
-    fn unarchive_entity_available_with_target() {
+    fn unarchive_entity_available_with_archive_target() {
         let cmds = register_commands();
         let cmd = cmds.get("entity.unarchive").unwrap();
-        let ctx = ctx_with(&[], Some("task:01ABC"), None);
+        let ctx = ctx_with(&[], Some("task:01ABC:archive"), None);
         assert!(cmd.available(&ctx));
     }
 

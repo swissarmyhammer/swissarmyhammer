@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: todo
-position_ordinal: 8a80
+position_ordinal: '80'
 title: Add indeterminate progress bar to NavBar during long operations
 ---
 ## What
