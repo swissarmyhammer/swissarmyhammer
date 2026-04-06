@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KNF8SW8CJHRFE6B3ZEQF1FV9
-position_column: todo
-position_ordinal: '8480'
+position_column: done
+position_ordinal: ffffffffffffffffffffdc80
 title: 'Frontend: Remove swimlanes, wire project field grouping'
 ---
 ## What

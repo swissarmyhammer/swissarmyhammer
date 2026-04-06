@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KNF8SW8CJHRFE6B3ZEQF1FV9
-position_column: todo
-position_ordinal: '8380'
+position_column: done
+position_ordinal: ffffffffffffffffffffdd80
 title: Update MCP tool description and kanban skill for projects
 ---
 ## What

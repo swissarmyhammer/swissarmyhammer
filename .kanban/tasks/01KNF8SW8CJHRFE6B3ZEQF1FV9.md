@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KNF8S3X6BZX4YXVSWAD5FZSG
-position_column: todo
-position_ordinal: '8280'
+position_column: done
+position_ordinal: ffffffffffffffffffffdb80
 title: 'Rust: Remove swimlane module and all references'
 ---
 ## What

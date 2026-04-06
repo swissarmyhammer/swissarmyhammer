@@ -435,7 +435,7 @@ pub async fn search_entities(
 
 /// Get the board data with all entities as raw entity bags.
 ///
-/// Columns, swimlanes, and tags are returned as `Entity::to_json()` with
+/// Columns and tags are returned as `Entity::to_json()` with
 /// computed count fields injected. Tasks are NOT included (use `list_entities`
 /// for that). A summary object provides aggregate counts.
 #[tauri::command]
@@ -462,13 +462,6 @@ pub async fn get_board_data(
         .await
         .map_err(|e| format!("get_board_data: {}", e))?;
     columns.sort_by_key(|c| c.get("order").and_then(|v| v.as_u64()).unwrap_or(0) as usize);
-
-    // Read and sort swimlanes by order
-    let mut swimlanes = ectx
-        .list("swimlane")
-        .await
-        .map_err(|e| format!("get_board_data: {}", e))?;
-    swimlanes.sort_by_key(|s| s.get("order").and_then(|v| v.as_u64()).unwrap_or(0) as usize);
 
     // Read tags
     let tags = ectx
@@ -497,16 +490,6 @@ pub async fn get_board_data(
         }
     }
 
-    // Count tasks per swimlane
-    let mut swimlane_counts: HashMap<String, usize> = HashMap::new();
-    for task in &all_tasks {
-        if let Some(sl) = task.get_str("position_swimlane") {
-            if !sl.is_empty() {
-                *swimlane_counts.entry(sl.to_string()).or_insert(0) += 1;
-            }
-        }
-    }
-
     // Serialize columns with injected task_count and ready_count
     let columns_json: Vec<Value> = columns
         .iter()
@@ -519,17 +502,6 @@ pub async fn get_board_data(
                 .unwrap_or(0);
             e.set("task_count", json!(count));
             e.set("ready_count", json!(ready));
-            e.to_json()
-        })
-        .collect();
-
-    // Serialize swimlanes with injected task_count
-    let swimlanes_json: Vec<Value> = swimlanes
-        .iter()
-        .map(|sl| {
-            let mut e = sl.clone();
-            let count = swimlane_counts.get(sl.id.as_str()).copied().unwrap_or(0);
-            e.set("task_count", json!(count));
             e.to_json()
         })
         .collect();
@@ -558,7 +530,6 @@ pub async fn get_board_data(
     Ok(json!({
         "board": board.to_json(),
         "columns": columns_json,
-        "swimlanes": swimlanes_json,
         "tags": tags_json,
         "summary": {
             "total_tasks": total_tasks,
@@ -1440,8 +1411,9 @@ pub async fn list_commands_for_scope(
 ///
 /// Routes change detection through `StoreContext.flush_all()` for entity files
 /// managed by stores, then falls back to the watcher's `flush_and_emit` for
-/// non-store files (attachments). Events are raw signals — the frontend
-/// always re-fetches entity state via `get_entity` on receipt.
+/// non-store files (attachments). Created/changed events are enriched with the
+/// full entity fields (read back through the EntityContext) so the frontend can
+/// patch in-place without a round-trip re-fetch.
 async fn flush_and_emit_for_handle(app: &AppHandle, handle: &BoardHandle) {
     let kanban_root = handle.ctx.root().to_path_buf();
 
@@ -1465,6 +1437,12 @@ async fn flush_and_emit_for_handle(app: &AppHandle, handle: &BoardHandle) {
     );
 
     // 3. Convert store ChangeEvents into WatchEvents.
+    //
+    // For created/changed events, read the entity back through the
+    // EntityContext so the frontend receives the full field set
+    // (including computed fields) and can patch in-place without a
+    // round-trip re-fetch via get_entity.
+    let entity_context = handle.ctx.entity_context().await.ok();
     let mut events: Vec<crate::watcher::WatchEvent> = Vec::new();
     for se in &store_events {
         let store_name = se
@@ -1472,18 +1450,31 @@ async fn flush_and_emit_for_handle(app: &AppHandle, handle: &BoardHandle) {
             .get("store")
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        let id = se.payload().get("id").and_then(|v| v.as_str()).unwrap_or("");
+        let id = se
+            .payload()
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
         if store_name.is_empty() || id.is_empty() {
             tracing::warn!(event_name = %se.event_name(), "dropping store event with empty store_name or id");
             continue;
         }
+
+        // Read the current entity fields for enrichment.  Falls back
+        // gracefully to empty/None when the read fails (e.g. entity
+        // was just deleted).
+        let enriched_fields = if let Some(ref ectx) = entity_context {
+            ectx.read(store_name, id).await.ok().map(|e| e.fields)
+        } else {
+            None
+        };
 
         match se.event_name() {
             "item-created" => {
                 events.push(crate::watcher::WatchEvent::EntityCreated {
                     entity_type: store_name.to_string(),
                     id: id.to_string(),
-                    fields: std::collections::HashMap::new(),
+                    fields: enriched_fields.clone().unwrap_or_default(),
                 });
             }
             "item-changed" => {
@@ -1491,7 +1482,7 @@ async fn flush_and_emit_for_handle(app: &AppHandle, handle: &BoardHandle) {
                     entity_type: store_name.to_string(),
                     id: id.to_string(),
                     changes: vec![],
-                    fields: None,
+                    fields: enriched_fields,
                 });
             }
             "item-removed" => {
@@ -1513,8 +1504,9 @@ async fn flush_and_emit_for_handle(app: &AppHandle, handle: &BoardHandle) {
 
     // 5. Sync search index and emit to frontend.
     //
-    // Events are signals to re-fetch, not data carriers. The frontend always
-    // calls get_entity on any event — no enrichment or cascade needed here.
+    // Store-sourced events carry the full entity fields so the frontend can
+    // patch in-place.  The re-fetch path (get_entity) remains as a fallback
+    // for watcher-sourced events that lack enriched fields.
     {
         let board_path_str = kanban_root.display().to_string();
         let mut search_idx = handle.search_index.write().await;
@@ -1624,10 +1616,7 @@ mod tests {
     /// Events missing store or id should be detected so they can be dropped.
     #[test]
     fn store_name_extraction_missing_fields() {
-        let event = swissarmyhammer_store::ChangeEvent::new(
-            "item-changed",
-            serde_json::json!({}),
-        );
+        let event = swissarmyhammer_store::ChangeEvent::new("item-changed", serde_json::json!({}));
         let store_name = event
             .payload()
             .get("store")

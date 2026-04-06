@@ -18,7 +18,7 @@ use swissarmyhammer_kanban::commands::register_commands;
 use swissarmyhammer_kanban::{
     board::InitBoard, KanbanContext, KanbanOperationProcessor, OperationProcessor,
 };
-use swissarmyhammer_store::StoreHandle;
+use swissarmyhammer_store::{StoreContext, StoreHandle};
 use tempfile::TempDir;
 
 // ===========================================================================
@@ -34,6 +34,8 @@ struct TestEngine {
     _registry: CommandsRegistry,
     ui_state: Arc<UIState>,
     clipboard: Arc<InMemoryClipboard>,
+    /// Optional StoreContext — present when created via `with_store_context()`.
+    store_context: Option<Arc<StoreContext>>,
 }
 
 impl TestEngine {
@@ -63,6 +65,7 @@ impl TestEngine {
             _registry: registry,
             ui_state,
             clipboard,
+            store_context: None,
         }
     }
 
@@ -97,6 +100,47 @@ impl TestEngine {
             ectx.register_store(entity_type, handle).await;
         }
 
+        engine
+    }
+
+    /// Create a test engine with both StoreHandles AND a StoreContext.
+    ///
+    /// This is the full production-like setup: every entity type store is
+    /// registered with both EntityContext (for write delegation) and
+    /// StoreContext (for flush_all / undo). Use this when testing the
+    /// event pipeline end-to-end.
+    async fn with_store_context() -> Self {
+        let mut engine = Self::new().await;
+
+        let store_context = Arc::new(StoreContext::new(engine.kanban.root().to_path_buf()));
+
+        let ectx = engine
+            .kanban
+            .entity_context()
+            .await
+            .expect("entity_context should be available");
+
+        // Wire StoreContext into EntityContext for undo stack integration
+        ectx.set_store_context(Arc::clone(&store_context));
+
+        let fields_ctx = ectx.fields();
+        for entity_def in fields_ctx.all_entities() {
+            let entity_type = entity_def.name.as_str();
+            let field_defs = fields_ctx.fields_for_entity(entity_type);
+            let owned_defs: Vec<_> = field_defs.into_iter().cloned().collect();
+            let entity_type_store = EntityTypeStore::new(
+                ectx.entity_dir(entity_type),
+                entity_type,
+                std::sync::Arc::new(entity_def.clone()),
+                std::sync::Arc::new(owned_defs),
+            );
+            let handle =
+                std::sync::Arc::new(StoreHandle::new(std::sync::Arc::new(entity_type_store)));
+            ectx.register_store(entity_type, handle.clone()).await;
+            store_context.register(handle).await;
+        }
+
+        engine.store_context = Some(store_context);
         engine
     }
 
@@ -1018,71 +1062,6 @@ async fn task_delete_removes_task() {
 }
 
 // ===========================================================================
-// Card 01KMT7ZAFSH0BW898EV3MF3M5E — MoveTaskCmd swimlane arg
-// ===========================================================================
-
-#[tokio::test]
-async fn task_move_with_swimlane_arg() {
-    let engine = TestEngine::new().await;
-
-    // Create a swimlane via the lower-level API
-    let processor = KanbanOperationProcessor::new();
-    processor
-        .process(
-            &swissarmyhammer_kanban::swimlane::AddSwimlane::new("urgent", "Urgent"),
-            &engine.kanban,
-        )
-        .await
-        .expect("swimlane creation should succeed");
-
-    // Add a task in todo
-    let add_result = engine
-        .dispatch_simple("task.add", &["column:todo"], None)
-        .await
-        .expect("task.add should succeed");
-    let task_id = add_result["id"].as_str().unwrap();
-
-    // Verify task has no swimlane initially
-    let task = engine
-        .kanban
-        .read_entity_generic("task", task_id)
-        .await
-        .unwrap();
-    assert!(
-        task.get_str("position_swimlane").is_none()
-            || task.get_str("position_swimlane") == Some(""),
-        "task should have no swimlane initially"
-    );
-
-    // Move task to doing with swimlane arg
-    let mut args = HashMap::new();
-    args.insert("column".to_string(), json!("doing"));
-    args.insert("swimlane".to_string(), json!("urgent"));
-
-    engine
-        .dispatch("task.move", &[&format!("task:{}", task_id)], None, args)
-        .await
-        .expect("task.move with swimlane should succeed");
-
-    // Verify the task is in the correct column and swimlane
-    let task = engine
-        .kanban
-        .read_entity_generic("task", task_id)
-        .await
-        .unwrap();
-    assert_eq!(
-        task.get_str("position_column"),
-        Some("doing"),
-        "task should be in doing column"
-    );
-    assert_eq!(
-        task.get_str("position_swimlane"),
-        Some("urgent"),
-        "task should be in urgent swimlane"
-    );
-}
-
-// ===========================================================================
 // (task.tag command was removed — tagging is tested via paste-tag and unit tests)
 
 // ===========================================================================
@@ -1499,5 +1478,54 @@ async fn task_untag_with_legacy_written_files() {
         !body_after.contains("#bug"),
         "body should no longer contain '#bug' after untag on legacy file, got: {}",
         body_after
+    );
+}
+
+/// After task.move, `StoreContext.flush_all()` must return at least one
+/// "item-changed" event for the moved task.  This is the mechanism that
+/// `flush_and_emit_for_handle` relies on to emit `entity-field-changed`
+/// events to the frontend.
+#[tokio::test]
+async fn task_move_produces_store_event_via_flush_all() {
+    let engine = TestEngine::with_store_context().await;
+    let ids = add_tasks(&engine, &["A", "B"]).await;
+
+    let store_context = engine
+        .store_context
+        .as_ref()
+        .expect("with_store_context should provide a StoreContext");
+
+    // Drain any events from the initial add operations
+    store_context.flush_all().await;
+
+    // Move task A to done column
+    let mut args = HashMap::new();
+    args.insert("task".to_string(), json!(ids[0]));
+    args.insert("column".to_string(), json!("done"));
+    engine
+        .dispatch("task.move", &[&format!("task:{}", ids[0])], None, args)
+        .await
+        .expect("task.move should succeed");
+
+    // flush_all must return at least one event
+    let events = store_context.flush_all().await;
+    assert!(
+        !events.is_empty(),
+        "flush_all() must return events after task.move — got none"
+    );
+
+    // The event must be an "item-changed" for the moved task
+    let task_event = events.iter().find(|e| {
+        e.event_name() == "item-changed"
+            && e.payload().get("store").and_then(|v| v.as_str()) == Some("task")
+            && e.payload().get("id").and_then(|v| v.as_str()) == Some(ids[0].as_str())
+    });
+    assert!(
+        task_event.is_some(),
+        "flush_all() must contain an item-changed event for the moved task; got: {:?}",
+        events
+            .iter()
+            .map(|e| format!("{}({})", e.event_name(), e.payload()))
+            .collect::<Vec<_>>()
     );
 }

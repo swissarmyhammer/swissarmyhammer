@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KNF8RC3NRWS8H1G64RQMZFTA
-position_column: todo
-position_ordinal: '8180'
+position_column: done
+position_ordinal: ffffffffffffffffffffda80
 title: 'Rust: Create Project CRUD operations'
 ---
 ## What

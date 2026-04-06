@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KNFJKD5E13JBPA3VRTKKKF2X
-position_column: todo
-position_ordinal: '9080'
+position_column: done
+position_ordinal: ffffffffffffffffffffd180
 title: 'Smoke test: grouped board end-to-end with drag across groups'
 ---
 ## What

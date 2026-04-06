@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KNF8VJ53FZD5YGVW1JS0TKB7
-position_column: todo
-position_ordinal: '8580'
+position_column: done
+position_ordinal: ffffffffffffffffffffde80
 title: 'Frontend: Project management grid view'
 ---
 ## What

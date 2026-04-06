@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KNFFHX8XQE2NX9GCJQCEJP76
-position_column: doing
-position_ordinal: '80'
+position_column: done
+position_ordinal: ffffffffffffffffffffd980
 title: 'Flatten builtin/ directory: move fields/definitions → definitions/, fields/entities → entities/'
 ---
 ## What
