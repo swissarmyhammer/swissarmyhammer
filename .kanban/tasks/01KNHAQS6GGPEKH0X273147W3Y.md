@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: todo
-position_ordinal: '80'
+position_ordinal: '7880'
 title: 'Backend: Add moniker() method to Entity and include moniker in to_json()'
 ---
 ## What

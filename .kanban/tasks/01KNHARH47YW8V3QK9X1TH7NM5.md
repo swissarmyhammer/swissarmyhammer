@@ -4,7 +4,7 @@ assignees:
 depends_on:
 - 01KNHAQS6GGPEKH0X273147W3Y
 position_column: todo
-position_ordinal: '8180'
+position_ordinal: '7980'
 title: 'Frontend: Use entity.moniker from backend instead of constructing monikers client-side'
 ---
 ## What
