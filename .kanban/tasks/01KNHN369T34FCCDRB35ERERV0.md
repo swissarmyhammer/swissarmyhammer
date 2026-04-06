@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: todo
-position_ordinal: '8e80'
+position_ordinal: '80'
 title: Display virtual tags in task card header below regular tags
 ---
 ## What

@@ -37,6 +37,7 @@ import { AppShell } from "@/components/app-shell";
 import {
   CommandScopeProvider,
   ActiveBoardPathProvider,
+  CommandBusyProvider,
   useDispatchCommand,
 } from "@/lib/command-scope";
 import {
@@ -399,24 +400,26 @@ function WindowContainerInner({ children }: WindowContainerProps) {
     <TooltipProvider delayDuration={400}>
       <Toaster position="bottom-right" richColors />
       <InitProgressListener />
-      <ActiveBoardPathProvider value={activeBoardPath}>
-        <OpenBoardsContext.Provider value={openBoards}>
-          <ActiveBoardPathContext.Provider value={activeBoardPath}>
-            <HandleSwitchBoardContext.Provider value={handleSwitchBoard}>
-              <BoardDataContext.Provider value={board}>
-                <LoadingContext.Provider value={loading}>
-                  <AppShell
-                    openBoards={openBoards}
-                    onSwitchBoard={handleSwitchBoard}
-                  >
-                    {children}
-                  </AppShell>
-                </LoadingContext.Provider>
-              </BoardDataContext.Provider>
-            </HandleSwitchBoardContext.Provider>
-          </ActiveBoardPathContext.Provider>
-        </OpenBoardsContext.Provider>
-      </ActiveBoardPathProvider>
+      <CommandBusyProvider>
+        <ActiveBoardPathProvider value={activeBoardPath}>
+          <OpenBoardsContext.Provider value={openBoards}>
+            <ActiveBoardPathContext.Provider value={activeBoardPath}>
+              <HandleSwitchBoardContext.Provider value={handleSwitchBoard}>
+                <BoardDataContext.Provider value={board}>
+                  <LoadingContext.Provider value={loading}>
+                    <AppShell
+                      openBoards={openBoards}
+                      onSwitchBoard={handleSwitchBoard}
+                    >
+                      {children}
+                    </AppShell>
+                  </LoadingContext.Provider>
+                </BoardDataContext.Provider>
+              </HandleSwitchBoardContext.Provider>
+            </ActiveBoardPathContext.Provider>
+          </OpenBoardsContext.Provider>
+        </ActiveBoardPathProvider>
+      </CommandBusyProvider>
     </TooltipProvider>
   );
 }

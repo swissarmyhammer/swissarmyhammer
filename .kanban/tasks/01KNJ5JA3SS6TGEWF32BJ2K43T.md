@@ -7,43 +7,48 @@ title: 'Fix: tag cut/untag not working from body #tag pills or tags badge-list'
 ---
 ## What
 
-The `task.untag` / `entity.cut` commands for tags are not visibly working. The user expects:
-1. Click or right-click a `#tag` pill in the **body** field → "Remove Tag" option → tag vanishes from body text
-2. Click or right-click a `#tag` pill in the **tags badge-list** field → same behavior
+Tag cut/untag commands fail silently because field-row monikers like `task:01ABC.body` and `task:01ABC.tags_field` pollute the scope chain, shadowing the real `task:01ABC` moniker.
 
 ### Root Cause
 
-Two issues:
+When a tag pill is rendered inside a task's inspector, the scope chain walks:
+```
+tag:bugId → task:01ABC.body → task:01ABC → column:todo → ...
+```
 
-**Issue 1: Body markdown pills don't pass `taskId` to MentionPill**
+The backend's `resolve_entity_id("task")` returns the **first** `task:` moniker, which is `01ABC.body` — a field-row moniker, not a real task ID. So `UntagTask::new("01ABC.body", "bug")` fails because no task with that ID exists.
 
-In `kanban-app/ui/src/components/fields/displays/markdown-display.tsx:96-109`, the `mentionComponents` factory creates `MentionPill` instances for `#tag` mentions in the body, but does **not** pass `taskId`. Without `taskId`, `MentionPill` (line 106 of `mention-pill.tsx`) skips building the `task.untag` extra command, so there's no "Remove Tag" in the context menu.
+The same applies to badge-list tag pills (`task:01ABC.tags_field` shadows `task:01ABC`).
 
-Fix: Thread the `entity` (or at least `entity.id` when `entity.entity_type === "task"`) from `MarkdownDisplay` → `MarkdownFull` → the pill component factory so each tag pill gets `taskId={entity.id}`.
+### Fix approach
 
-**Issue 2: Verify badge-list tag pills dispatch correctly**
+The field-row monikers in `entity-inspector.tsx:267` use format `{entity.moniker}.{field.name}` which produces `task:01ABC.body`. Since `parse_moniker` splits on the first `:`, this matches entity type `task` with id `01ABC.body`.
 
-In `kanban-app/ui/src/components/fields/displays/badge-list-display.tsx:135`, `taskId` IS passed (`taskId={isComputedSlug ? entity.id : undefined}`). The `task.untag` command is registered in the backend (`swissarmyhammer-kanban/src/commands/mod.rs:50`). However, after the backend executes `UntagTask` (which removes `#tag` from the body text), the UI may not be re-rendering because the entity store isn't getting the updated entity. Need to verify the event flow: command dispatch → entity write → store update → re-render.
+**Option A (recommended): Change field-row monikers to use a non-entity namespace.** Instead of `task:01ABC.body`, use `field:task:01ABC.body` or `task:01ABC/body` — a format that doesn't parse as entity type `task`. This is the cleanest fix because field rows are not entities.
+
+**Option B: Make `resolve_entity_id` skip monikers with dots.** Fragile — dots could appear in real IDs.
 
 ### Files to modify
 
-1. `kanban-app/ui/src/components/fields/displays/markdown-display.tsx` — Pass `entity` through to `MarkdownFull`, then pass `taskId` to each tag `MentionPill`
-2. Possibly `kanban-app/ui/src/components/fields/displays/badge-list-display.tsx` — Verify the entity.cut scope chain works after untag
+1. `kanban-app/ui/src/components/entity-inspector.tsx:267` — Change `scopeMoniker` format so field-row FocusScopes don't masquerade as entity monikers. E.g. use `field:task:01ABC.body` or a separator that `parse_moniker` won't match as `task`.
+2. Any code that depends on field-row moniker format (navigation predicates in the same file, tests).
 
 ## Acceptance Criteria
 
-- [ ] Right-clicking a `#tag` pill in the **body** markdown field shows "Remove Tag" in the context menu
-- [ ] Executing "Remove Tag" on a body `#tag` pill removes `#tag` from the body text and the tag disappears from the rendered view
-- [ ] Right-clicking a `#tag` pill in the **tags badge-list** shows "Remove Tag" in the context menu
-- [ ] Executing "Remove Tag" on a badge-list tag pill removes the tag from the task (body updated, tag gone from badge list)
-- [ ] The `entity.cut` keybinding (Ctrl/Cmd+X) works when a tag pill is focused in either location
+- [ ] Field-row scope monikers no longer parse as the parent entity type (no `task:` prefix on field-row scopes)
+- [ ] Right-clicking a `#tag` pill in the body field shows "Remove Tag" and executing it removes the tag from the body
+- [ ] Right-clicking a `#tag` pill in the tags badge-list shows "Remove Tag" and executing it removes the tag
+- [ ] `entity.cut` (Ctrl/Cmd+X) works when a tag pill is focused in either location
+- [ ] Inspector field navigation (up/down/left/right between fields) still works correctly
+- [ ] Inspector edit mode (entering/exiting field editors) still works correctly
 
 ## Tests
 
-- [ ] `kanban-app/ui/src/components/fields/displays/markdown-display.test.tsx` — Add test: when entity is a task, body `#tag` pills render with `taskId` prop, enabling `task.untag` in context menu
-- [ ] `kanban-app/ui/src/components/mention-pill.test.tsx` — Existing tests cover `task.untag` presence/absence — verify they still pass
-- [ ] `kanban-app/ui/src/components/fields/displays/badge-list-display.test.tsx` — Add test: tag pills in computed-slug mode pass `taskId` and have "Remove Tag" in context menu
+- [ ] `kanban-app/ui/src/components/entity-inspector.test.tsx` — Verify field-row monikers use new format, update any assertions on moniker strings
+- [ ] `kanban-app/ui/src/components/fields/displays/badge-list-nav.test.tsx` — Verify pill navigation still works with new field-row moniker format
+- [ ] `kanban-app/ui/src/components/mention-pill.test.tsx` — Existing task.untag tests still pass
 - [ ] Run `cd kanban-app/ui && npx vitest run` — all tests pass
+- [ ] Manual: right-click a tag pill in inspector body → "Remove Tag" → tag vanishes
 
 ## Workflow
 

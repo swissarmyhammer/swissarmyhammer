@@ -7,7 +7,7 @@ import {
   TooltipContent,
 } from "@/components/ui/tooltip";
 import { useSchema } from "@/lib/schema-context";
-import { useDispatchCommand } from "@/lib/command-scope";
+import { useDispatchCommand, useCommandBusy } from "@/lib/command-scope";
 import {
   useBoardData,
   useOpenBoards,
@@ -28,9 +28,10 @@ export function NavBar() {
   const dispatchSearch = useDispatchCommand("app.search");
   const { getFieldDef } = useSchema();
   const percentFieldDef = getFieldDef("board", "percent_complete");
+  const { isBusy } = useCommandBusy();
 
   return (
-    <header className="flex h-12 items-center border-b px-4 gap-3">
+    <header className="relative flex h-12 items-center border-b px-4 gap-3">
       <BoardSelector
         boards={openBoards}
         selectedPath={
@@ -81,6 +82,15 @@ export function NavBar() {
         </TooltipTrigger>
         <TooltipContent side="bottom">Search</TooltipContent>
       </Tooltip>
+      {isBusy && (
+        <div
+          role="progressbar"
+          aria-label="Command in progress"
+          className="absolute bottom-0 left-0 right-0 h-0.5 overflow-hidden"
+        >
+          <div className="h-full w-1/3 bg-primary animate-indeterminate" />
+        </div>
+      )}
     </header>
   );
 }

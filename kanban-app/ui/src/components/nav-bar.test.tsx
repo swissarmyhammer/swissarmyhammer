@@ -47,6 +47,8 @@ vi.mock("@/components/window-container", () => ({
 const mockDispatchInspect = vi.hoisted(() => vi.fn(() => Promise.resolve()));
 const mockDispatchSearch = vi.hoisted(() => vi.fn(() => Promise.resolve()));
 
+const mockIsBusy = vi.hoisted(() => vi.fn(() => false));
+
 vi.mock("@/lib/command-scope", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/command-scope")>();
   return {
@@ -56,6 +58,7 @@ vi.mock("@/lib/command-scope", async (importOriginal) => {
       if (cmd === "app.search") return mockDispatchSearch;
       return vi.fn(() => Promise.resolve());
     },
+    useCommandBusy: () => ({ isBusy: mockIsBusy() }),
   };
 });
 
@@ -199,5 +202,19 @@ describe("NavBar", () => {
 
     renderNavBar();
     expect(screen.queryByTestId("field-percent")).toBeNull();
+  });
+
+  it("renders progress bar when isBusy is true", () => {
+    mockIsBusy.mockReturnValue(true);
+
+    renderNavBar();
+    expect(screen.getByRole("progressbar")).toBeTruthy();
+  });
+
+  it("does not render progress bar when isBusy is false", () => {
+    mockIsBusy.mockReturnValue(false);
+
+    renderNavBar();
+    expect(screen.queryByRole("progressbar")).toBeNull();
   });
 });
