@@ -16,6 +16,7 @@ path = "src/main.rs"
 
 [dependencies]
 swissarmyhammer-kanban = { path = "../swissarmyhammer-kanban" }
+swissarmyhammer-fields = { path = "../swissarmyhammer-fields" }
 swissarmyhammer-commands = { path = "../swissarmyhammer-commands" }
 swissarmyhammer-common = { path = "../swissarmyhammer-common" }
 swissarmyhammer-directory = { path = "../swissarmyhammer-directory" }

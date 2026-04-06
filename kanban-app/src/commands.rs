@@ -1418,9 +1418,11 @@ pub async fn list_commands_for_scope(
 /// and running `diff_fields`. Store events tell us WHICH entities were
 /// written; the watcher tells us WHAT changed.
 ///
-/// **DO NOT** add `EntityContext.read()` enrichment here. The watcher's
-/// `diff_fields` produces exactly the field-level diffs the frontend needs.
-/// We never read entities back just to stuff fields into events.
+/// After collecting raw diffs, computed fields (e.g. `tags`, `progress`)
+/// are re-derived via `EntityContext.read()` and appended to field-changed
+/// events. Computed fields exist only at read time — the watcher never sees
+/// them because they aren't stored on disk. This enrichment is the only way
+/// the frontend learns about computed field updates.
 async fn flush_and_emit_for_handle(app: &AppHandle, handle: &BoardHandle) {
     let kanban_root = handle.ctx.root().to_path_buf();
 
@@ -1536,7 +1538,16 @@ async fn flush_and_emit_for_handle(app: &AppHandle, handle: &BoardHandle) {
         }
     }
 
-    // 4. Sync search index and emit to frontend.
+    // 4. Enrich field-changed events with computed field values.
+    //
+    // Computed fields (tags, progress, etc.) are derived at read time by
+    // the ComputeEngine — they don't exist on disk, so the watcher's
+    // diff_fields never sees them. For each EntityFieldChanged, read the
+    // entity through EntityContext (which runs derive_all) and append any
+    // computed fields whose values differ from the raw diff.
+    let events = enrich_computed_fields(&handle.ctx, events).await;
+
+    // 5. Sync search index and emit to frontend.
     {
         let board_path_str = kanban_root.display().to_string();
         let mut search_idx = handle.search_index.write().await;
@@ -1555,6 +1566,86 @@ async fn flush_and_emit_for_handle(app: &AppHandle, handle: &BoardHandle) {
             let _ = app.emit(event_name, &wrapped);
         }
     }
+}
+
+/// Enrich `EntityFieldChanged` events with re-derived computed field values.
+///
+/// Computed fields (e.g. `tags` from `parse-body-tags`, `progress` from
+/// `parse-body-progress`) don't exist on disk — the watcher's `diff_fields`
+/// never sees them. This function reads each changed entity through
+/// `EntityContext` (which runs `ComputeEngine.derive_all()`) and appends
+/// any computed fields to the event's changes array.
+///
+/// This is generic: any field with `FieldType::Computed` in the schema gets
+/// picked up automatically. No hardcoded field names.
+async fn enrich_computed_fields(
+    ctx: &swissarmyhammer_kanban::KanbanContext,
+    mut events: Vec<crate::watcher::WatchEvent>,
+) -> Vec<crate::watcher::WatchEvent> {
+    // Get the entity context (has ComputeEngine) and field definitions.
+    let ectx = match ctx.entity_context().await {
+        Ok(ectx) => ectx,
+        Err(e) => {
+            tracing::warn!("enrich_computed_fields: failed to get entity context: {e}");
+            return events;
+        }
+    };
+    let fields_ctx = match ctx.fields() {
+        Some(f) => f,
+        None => return events,
+    };
+
+    for evt in &mut events {
+        let (entity_type, id, changes) = match evt {
+            crate::watcher::WatchEvent::EntityFieldChanged {
+                entity_type,
+                id,
+                changes,
+            } => (entity_type.as_str(), id.as_str(), changes),
+            _ => continue,
+        };
+
+        // Identify computed field names for this entity type.
+        let field_defs = fields_ctx.fields_for_entity(entity_type);
+        let computed_names: Vec<&str> = field_defs
+            .iter()
+            .filter(|fd| matches!(fd.type_, swissarmyhammer_fields::FieldType::Computed { .. }))
+            .map(|fd| fd.name.as_str())
+            .collect();
+        if computed_names.is_empty() {
+            continue;
+        }
+
+        // Read the entity through EntityContext to get derived computed values.
+        let entity = match ectx.read(entity_type, id).await {
+            Ok(e) => e,
+            Err(e) => {
+                tracing::warn!(
+                    entity_type = entity_type,
+                    id = id,
+                    "enrich_computed_fields: failed to read entity: {e}"
+                );
+                continue;
+            }
+        };
+
+        // Append computed field values that aren't already in the changes.
+        let existing: std::collections::HashSet<String> =
+            changes.iter().map(|c| c.field.clone()).collect();
+        for name in computed_names {
+            if existing.contains(name) {
+                continue;
+            }
+            if let Some(value) = entity.fields.get(name) {
+                changes.push(crate::watcher::FieldChange {
+                    field: name.to_string(),
+                    value: value.clone(),
+                });
+            }
+        }
+    }
+
+    events
 }
 
 /// A single item in a generic context menu.

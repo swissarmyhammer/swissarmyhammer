@@ -32,8 +32,9 @@ const ENTITY_EXTENSIONS: &[&str] = &["yaml", "yml", "md"];
 ///
 /// 2. **Field-level** — `EntityFieldChanged` carries a `Vec<FieldChange>`,
 ///    one entry per changed field, each with the field name and new value.
-///    The watcher produces these from `diff_fields` by comparing the old and
-///    new file content — no `EntityContext.read()` enrichment.
+///    The watcher produces raw diffs from `diff_fields` by comparing the old
+///    and new file content. Computed fields (not on disk) are appended by
+///    `enrich_computed_fields` in commands.rs after the watcher runs.
 ///
 /// The frontend contract:
 /// - `entity-created`: add entity to store from payload fields, or
@@ -45,8 +46,8 @@ const ENTITY_EXTENSIONS: &[&str] = &["yaml", "yml", "md"];
 /// **DO NOT** add a `fields: Option<HashMap>` full-state payload to
 /// `EntityFieldChanged`. That is the enrichment anti-pattern — it requires
 /// reading the entity back after every write, is racy with deletes, and
-/// caused repeated bugs. The watcher's `diff_fields` produces exactly the
-/// granular diffs the frontend needs.
+/// caused repeated bugs. Field-changed events carry only the specific fields
+/// that changed (raw diffs from the watcher + computed fields from enrichment).
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind")]
 #[allow(clippy::enum_variant_names)]
@@ -64,12 +65,13 @@ pub enum WatchEvent {
     /// One or more fields on an entity changed.
     ///
     /// Each `FieldChange` carries the field name and its new value.
-    /// The watcher produces these diffs from `diff_fields` — no entity
-    /// reads are needed. The frontend patches individual fields in place.
+    /// The watcher produces raw diffs from `diff_fields`. Computed fields
+    /// (not stored on disk) are appended by `enrich_computed_fields` after
+    /// the watcher runs. The frontend patches individual fields in place.
     ///
     /// **Architecture rule (event-architecture):** DO NOT add a `fields`
-    /// option for full-state enrichment. Events are thin signals. The
-    /// watcher's `diff_fields` produces exactly the field-level diffs needed.
+    /// option for full-state enrichment. Events are thin signals carrying
+    /// only changed fields (raw diffs + derived computed fields).
     #[serde(rename = "entity-field-changed")]
     EntityFieldChanged {
         entity_type: String,
