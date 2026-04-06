@@ -15,9 +15,9 @@ categories = ["config", "development-tools"]
 workspace = true
 
 [dependencies]
-swissarmyhammer-common = { path = "../swissarmyhammer-common" }
-swissarmyhammer-project-detection = { path = "../swissarmyhammer-project-detection" }
-swissarmyhammer-skills = { path = "../swissarmyhammer-skills" }
+swissarmyhammer-common = { workspace = true }
+swissarmyhammer-project-detection = { workspace = true }
+swissarmyhammer-skills = { workspace = true }
 figment = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -41,12 +41,12 @@ tracing = { workspace = true }
 liquid = { workspace = true }
 
 [build-dependencies]
-swissarmyhammer-build = { path = "../swissarmyhammer-build" }
+swissarmyhammer-build = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
 serial_test = { workspace = true }
-swissarmyhammer-prompts = { path = "../swissarmyhammer-prompts" }
+swissarmyhammer-prompts = { workspace = true }
 
 
 # NEVER add features or feature flags to this Cargo.toml!

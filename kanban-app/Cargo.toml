@@ -15,13 +15,13 @@ name = "kanban-app"
 path = "src/main.rs"
 
 [dependencies]
-swissarmyhammer-kanban = { path = "../swissarmyhammer-kanban" }
-swissarmyhammer-commands = { path = "../swissarmyhammer-commands" }
-swissarmyhammer-common = { path = "../swissarmyhammer-common" }
-swissarmyhammer-directory = { path = "../swissarmyhammer-directory" }
-swissarmyhammer-views = { path = "../swissarmyhammer-views" }
-swissarmyhammer-entity-search = { path = "../swissarmyhammer-entity-search" }
-swissarmyhammer-entity = { path = "../swissarmyhammer-entity" }
+swissarmyhammer-kanban = { workspace = true }
+swissarmyhammer-commands = { workspace = true }
+swissarmyhammer-common = { workspace = true }
+swissarmyhammer-directory = { workspace = true }
+swissarmyhammer-views = { workspace = true }
+swissarmyhammer-entity-search = { workspace = true }
+swissarmyhammer-entity = { workspace = true }
 tauri = { version = "2", features = ["macos-private-api", "devtools"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-log = { version = "2", features = ["tracing"] }

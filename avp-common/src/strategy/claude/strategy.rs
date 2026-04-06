@@ -26,6 +26,100 @@ use crate::validator::ValidatorLoader;
 
 use crate::strategy::traits::AgentHookStrategy;
 
+/// Dispatch a hook event to the appropriate chain.
+///
+/// Deserializes the input JSON to the typed input, picks the chain (from the
+/// factory for validator-enabled hooks, or `Chain::success()` for pass-through
+/// hooks), executes, and maps the error. Kept as a macro so `rustfmt` doesn't
+/// expand 22 one-liner arms into 88 lines.
+macro_rules! dispatch_hook {
+    ($self:expr, $hook_type:expr, $input:expr) => {
+        match $hook_type {
+            HookType::SessionStart => run_chain!(
+                SessionStartInput,
+                $self.chain_factory.session_start_chain(),
+                $input
+            ),
+            HookType::SessionEnd => run_chain!(
+                SessionEndInput,
+                $self.chain_factory.session_end_chain(),
+                $input
+            ),
+            HookType::PreToolUse => run_chain!(
+                PreToolUseInput,
+                $self.chain_factory.pre_tool_use_chain(),
+                $input
+            ),
+            HookType::PostToolUse => run_chain!(
+                PostToolUseInput,
+                $self.chain_factory.post_tool_use_chain(),
+                $input
+            ),
+            HookType::Stop => run_chain!(StopInput, $self.chain_factory.stop_chain(), $input),
+            HookType::Elicitation => run_chain!(
+                ElicitationInput,
+                $self.chain_factory.elicitation_chain(),
+                $input
+            ),
+            HookType::ElicitationResult => run_chain!(
+                ElicitationResultInput,
+                $self.chain_factory.elicitation_result_chain(),
+                $input
+            ),
+            HookType::ConfigChange => run_chain!(
+                ConfigChangeInput,
+                $self.chain_factory.config_change_chain(),
+                $input
+            ),
+            HookType::WorktreeCreate => run_chain!(
+                WorktreeCreateInput,
+                $self.chain_factory.worktree_create_chain(),
+                $input
+            ),
+            HookType::TeammateIdle => run_chain!(
+                TeammateIdleInput,
+                $self.chain_factory.teammate_idle_chain(),
+                $input
+            ),
+            HookType::TaskCompleted => run_chain!(
+                TaskCompletedInput,
+                $self.chain_factory.task_completed_chain(),
+                $input
+            ),
+            HookType::UserPromptSubmit => {
+                run_chain!(UserPromptSubmitInput, Chain::success(), $input)
+            }
+            HookType::PermissionRequest => {
+                run_chain!(PermissionRequestInput, Chain::success(), $input)
+            }
+            HookType::PostToolUseFailure => {
+                run_chain!(PostToolUseFailureInput, Chain::success(), $input)
+            }
+            HookType::SubagentStart => run_chain!(SubagentStartInput, Chain::success(), $input),
+            HookType::SubagentStop => run_chain!(SubagentStopInput, Chain::success(), $input),
+            HookType::PreCompact => run_chain!(PreCompactInput, Chain::success(), $input),
+            HookType::PostCompact => run_chain!(PostCompactInput, Chain::success(), $input),
+            HookType::Setup => run_chain!(SetupInput, Chain::success(), $input),
+            HookType::Notification => run_chain!(NotificationInput, Chain::success(), $input),
+            HookType::InstructionsLoaded => {
+                run_chain!(InstructionsLoadedInput, Chain::success(), $input)
+            }
+            HookType::WorktreeRemove => run_chain!(WorktreeRemoveInput, Chain::success(), $input),
+        }
+    };
+}
+
+/// Deserialize JSON to a typed input, execute a chain, and map the error.
+macro_rules! run_chain {
+    ($type:ty, $chain:expr, $input:expr) => {{
+        let typed: $type = serde_json::from_value($input).map_err(AvpError::Json)?;
+        $chain.execute(&typed).await.map_err(AvpError::Chain)
+    }};
+}
+
+/// Exit code that tells Claude Code to treat output as stderr (non-JSON block).
+const EXIT_CODE_STDERR: i32 = 2;
+
 /// Claude Code hook strategy with validator support.
 ///
 /// This strategy handles all 13 hook types from Claude Code.
@@ -157,375 +251,30 @@ impl ClaudeCodeHookStrategy {
         }
     }
 
-    /// Transform agent-agnostic ChainOutput to Claude Code-specific HookOutput.
-    ///
-    /// This is where all Claude-specific formatting happens, based on the hook type:
-    /// - PreToolUse: hookSpecificOutput.permissionDecision: "deny"
-    /// - PermissionRequest: hookSpecificOutput.decision.behavior: "deny"
-    /// - PostToolUse/PostToolUseFailure: decision: "block", reason
-    /// - Stop/SubagentStop: decision: "block", reason, continue: true
-    /// - UserPromptSubmit: decision: "block", reason
-    /// - Other hooks: continue: false, stopReason
-    fn transform_to_claude_output(
-        chain_output: ChainOutput,
+    /// Route a hook event to its chain. Deserializes input and executes the chain.
+    async fn route_to_chain(
+        &self,
         hook_type: HookType,
-    ) -> (HookOutput, i32) {
-        // If no validator blocked, return success
-        if chain_output.validator_block.is_none() && chain_output.continue_execution {
-            return (
-                HookOutput {
-                    continue_execution: true,
-                    system_message: chain_output.system_message,
-                    suppress_output: chain_output.suppress_output,
-                    ..Default::default()
-                },
-                0,
-            );
-        }
-
-        // Get validator block info
-        let (validator_name, message) = if let Some(ref block) = chain_output.validator_block {
-            (block.validator_name.clone(), block.message.clone())
-        } else {
-            (
-                "unknown".to_string(),
-                chain_output
-                    .stop_reason
-                    .clone()
-                    .unwrap_or_else(|| "Unknown reason".to_string()),
-            )
-        };
-
-        let reason = format!("blocked by validator '{}': {}", validator_name, message);
-
-        // Transform based on hook type per Claude Code docs
-        match hook_type {
-            // PreToolUse: use hookSpecificOutput.permissionDecision: "deny"
-            HookType::PreToolUse => {
-                let output = HookOutput {
-                    continue_execution: true, // Exit 0 so JSON is parsed
-                    hook_specific_output: Some(HookSpecificOutput::PreToolUse(PreToolUseOutput {
-                        permission_decision: Some(PermissionDecision::Deny),
-                        permission_decision_reason: Some(reason),
-                        ..Default::default()
-                    })),
-                    system_message: chain_output.system_message,
-                    suppress_output: chain_output.suppress_output,
-                    ..Default::default()
-                };
-                (output, 0)
-            }
-
-            // PermissionRequest: use hookSpecificOutput.decision.behavior: "deny"
-            HookType::PermissionRequest => {
-                let output = HookOutput {
-                    continue_execution: true, // Exit 0 so JSON is parsed
-                    hook_specific_output: Some(HookSpecificOutput::PermissionRequest(
-                        PermissionRequestOutput {
-                            decision: Some(PermissionRequestDecision {
-                                behavior: PermissionBehavior::Deny,
-                                message: Some(reason),
-                                updated_input: None,
-                                interrupt: false,
-                            }),
-                        },
-                    )),
-                    system_message: chain_output.system_message,
-                    suppress_output: chain_output.suppress_output,
-                    ..Default::default()
-                };
-                (output, 0)
-            }
-
-            // PostToolUse/PostToolUseFailure: decision: "block" + reason
-            HookType::PostToolUse | HookType::PostToolUseFailure => {
-                let output = HookOutput {
-                    continue_execution: true, // Tool already ran
-                    decision: Some("block".to_string()),
-                    reason: Some(reason),
-                    system_message: chain_output.system_message,
-                    suppress_output: chain_output.suppress_output,
-                    ..Default::default()
-                };
-                (output, 0)
-            }
-
-            // Stop/SubagentStop: decision: "block" + reason, continue: true
-            HookType::Stop | HookType::SubagentStop => {
-                let output = HookOutput {
-                    continue_execution: true, // Claude MUST continue, can't stop
-                    stop_reason: Some(reason.clone()),
-                    decision: Some("block".to_string()),
-                    reason: Some(reason),
-                    system_message: chain_output.system_message,
-                    suppress_output: chain_output.suppress_output,
-                    ..Default::default()
-                };
-                (output, 0)
-            }
-
-            // UserPromptSubmit: decision: "block" + reason
-            HookType::UserPromptSubmit => {
-                let output = HookOutput {
-                    continue_execution: true, // Exit 0 so JSON is parsed
-                    decision: Some("block".to_string()),
-                    reason: Some(reason),
-                    system_message: chain_output.system_message,
-                    suppress_output: chain_output.suppress_output,
-                    ..Default::default()
-                };
-                (output, 0)
-            }
-
-            // Other hooks: use stderr format (exit code 2)
-            _ => {
-                let output = HookOutput {
-                    continue_execution: false,
-                    stop_reason: Some(reason),
-                    system_message: chain_output.system_message,
-                    suppress_output: chain_output.suppress_output,
-                    ..Default::default()
-                };
-                (output, 2)
-            }
-        }
-    }
-}
-
-#[async_trait(?Send)]
-impl AgentHookStrategy for ClaudeCodeHookStrategy {
-    fn name(&self) -> &'static str {
-        "ClaudeCode"
+        input: serde_json::Value,
+    ) -> Result<(ChainOutput, i32), AvpError> {
+        // Each arm: deserialize → pick chain → execute → map error.
+        // rustfmt expands these; the logic per arm is one line via the macro.
+        dispatch_hook!(self, hook_type, input)
     }
 
-    fn can_handle(&self, input: &serde_json::Value) -> bool {
-        input.get("hook_event_name").is_some()
-    }
-
-    async fn process(&self, input: serde_json::Value) -> Result<(HookOutput, i32), AvpError> {
-        let hook_type = self.extract_hook_type(&input)?;
-
-        // Extract details for logging
-        let tool_name: Option<String> = input
-            .get("tool_name")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
-
-        let prompt_len: Option<usize> = input
-            .get("prompt")
-            .and_then(|v| v.as_str())
-            .map(|p| p.len());
-
-        // Route to appropriate chain - the chain handles everything:
-        // file tracking, validator execution, etc.
-        // Chain returns ChainOutput (agent-agnostic), which we transform to HookOutput (Claude-specific)
-        let chain_result = match hook_type {
-            HookType::SessionStart => {
-                let typed: SessionStartInput =
-                    serde_json::from_value(input).map_err(AvpError::Json)?;
-                self.chain_factory
-                    .session_start_chain()
-                    .execute(&typed)
-                    .await
-                    .map_err(AvpError::Chain)
-            }
-            HookType::SessionEnd => {
-                let typed: SessionEndInput =
-                    serde_json::from_value(input).map_err(AvpError::Json)?;
-                self.chain_factory
-                    .session_end_chain()
-                    .execute(&typed)
-                    .await
-                    .map_err(AvpError::Chain)
-            }
-            HookType::PreToolUse => {
-                let typed: PreToolUseInput =
-                    serde_json::from_value(input).map_err(AvpError::Json)?;
-                self.chain_factory
-                    .pre_tool_use_chain()
-                    .execute(&typed)
-                    .await
-                    .map_err(AvpError::Chain)
-            }
-            HookType::PostToolUse => {
-                let typed: PostToolUseInput =
-                    serde_json::from_value(input).map_err(AvpError::Json)?;
-                self.chain_factory
-                    .post_tool_use_chain()
-                    .execute(&typed)
-                    .await
-                    .map_err(AvpError::Chain)
-            }
-            HookType::Stop => {
-                let typed: StopInput = serde_json::from_value(input).map_err(AvpError::Json)?;
-                self.chain_factory
-                    .stop_chain()
-                    .execute(&typed)
-                    .await
-                    .map_err(AvpError::Chain)
-            }
-            // Pass-through hooks - no file tracking or validators, just allow
-            HookType::UserPromptSubmit => {
-                let typed: UserPromptSubmitInput =
-                    serde_json::from_value(input).map_err(AvpError::Json)?;
-                Chain::success()
-                    .execute(&typed)
-                    .await
-                    .map_err(AvpError::Chain)
-            }
-            HookType::PermissionRequest => {
-                let typed: PermissionRequestInput =
-                    serde_json::from_value(input).map_err(AvpError::Json)?;
-                Chain::success()
-                    .execute(&typed)
-                    .await
-                    .map_err(AvpError::Chain)
-            }
-            HookType::PostToolUseFailure => {
-                let typed: PostToolUseFailureInput =
-                    serde_json::from_value(input).map_err(AvpError::Json)?;
-                Chain::success()
-                    .execute(&typed)
-                    .await
-                    .map_err(AvpError::Chain)
-            }
-            HookType::SubagentStart => {
-                let typed: SubagentStartInput =
-                    serde_json::from_value(input).map_err(AvpError::Json)?;
-                Chain::success()
-                    .execute(&typed)
-                    .await
-                    .map_err(AvpError::Chain)
-            }
-            HookType::SubagentStop => {
-                let typed: SubagentStopInput =
-                    serde_json::from_value(input).map_err(AvpError::Json)?;
-                Chain::success()
-                    .execute(&typed)
-                    .await
-                    .map_err(AvpError::Chain)
-            }
-            HookType::PreCompact => {
-                let typed: PreCompactInput =
-                    serde_json::from_value(input).map_err(AvpError::Json)?;
-                Chain::success()
-                    .execute(&typed)
-                    .await
-                    .map_err(AvpError::Chain)
-            }
-            HookType::Setup => {
-                let typed: SetupInput = serde_json::from_value(input).map_err(AvpError::Json)?;
-                Chain::success()
-                    .execute(&typed)
-                    .await
-                    .map_err(AvpError::Chain)
-            }
-            HookType::Notification => {
-                let typed: NotificationInput =
-                    serde_json::from_value(input).map_err(AvpError::Json)?;
-                Chain::success()
-                    .execute(&typed)
-                    .await
-                    .map_err(AvpError::Chain)
-            }
-            // Elicitation: an MCP server is requesting user input — validators can block/deny
-            HookType::Elicitation => {
-                let typed: ElicitationInput =
-                    serde_json::from_value(input).map_err(AvpError::Json)?;
-                self.chain_factory
-                    .elicitation_chain()
-                    .execute(&typed)
-                    .await
-                    .map_err(AvpError::Chain)
-            }
-            // ElicitationResult: user responded to MCP elicitation — validators can block/deny
-            HookType::ElicitationResult => {
-                let typed: ElicitationResultInput =
-                    serde_json::from_value(input).map_err(AvpError::Json)?;
-                self.chain_factory
-                    .elicitation_result_chain()
-                    .execute(&typed)
-                    .await
-                    .map_err(AvpError::Chain)
-            }
-            // InstructionsLoaded: observe-only — CLAUDE.md files have already been read,
-            // nothing to block; validators receive the event for informational purposes only.
-            HookType::InstructionsLoaded => {
-                let typed: InstructionsLoadedInput =
-                    serde_json::from_value(input).map_err(AvpError::Json)?;
-                Chain::success()
-                    .execute(&typed)
-                    .await
-                    .map_err(AvpError::Chain)
-            }
-            // ConfigChange: config file changed — validators can block/deny
-            HookType::ConfigChange => {
-                let typed: ConfigChangeInput =
-                    serde_json::from_value(input).map_err(AvpError::Json)?;
-                self.chain_factory
-                    .config_change_chain()
-                    .execute(&typed)
-                    .await
-                    .map_err(AvpError::Chain)
-            }
-            // WorktreeCreate: a git worktree is being created — validators can block/deny
-            HookType::WorktreeCreate => {
-                let typed: WorktreeCreateInput =
-                    serde_json::from_value(input).map_err(AvpError::Json)?;
-                self.chain_factory
-                    .worktree_create_chain()
-                    .execute(&typed)
-                    .await
-                    .map_err(AvpError::Chain)
-            }
-            // WorktreeRemove: observe-only — the worktree is already being removed by the time
-            // this hook fires; validators cannot prevent removal, only observe it.
-            HookType::WorktreeRemove => {
-                let typed: WorktreeRemoveInput =
-                    serde_json::from_value(input).map_err(AvpError::Json)?;
-                Chain::success()
-                    .execute(&typed)
-                    .await
-                    .map_err(AvpError::Chain)
-            }
-            // PostCompact: observe-only — context compaction has already completed;
-            // validators cannot undo it, only observe the post-compaction state.
-            HookType::PostCompact => {
-                let typed: PostCompactInput =
-                    serde_json::from_value(input).map_err(AvpError::Json)?;
-                Chain::success()
-                    .execute(&typed)
-                    .await
-                    .map_err(AvpError::Chain)
-            }
-            // TeammateIdle: an agent teammate went idle — validators can block/deny further action
-            HookType::TeammateIdle => {
-                let typed: TeammateIdleInput =
-                    serde_json::from_value(input).map_err(AvpError::Json)?;
-                self.chain_factory
-                    .teammate_idle_chain()
-                    .execute(&typed)
-                    .await
-                    .map_err(AvpError::Chain)
-            }
-            // TaskCompleted: a task was marked complete — validators can block/deny
-            HookType::TaskCompleted => {
-                let typed: TaskCompletedInput =
-                    serde_json::from_value(input).map_err(AvpError::Json)?;
-                self.chain_factory
-                    .task_completed_chain()
-                    .execute(&typed)
-                    .await
-                    .map_err(AvpError::Chain)
-            }
-        };
-
-        // Log the hook event based on chain result
+    /// Log the result of a chain execution.
+    fn log_chain_result(
+        &self,
+        hook_type: HookType,
+        tool_name: &Option<String>,
+        prompt_len: &Option<usize>,
+        chain_result: &Result<(ChainOutput, i32), AvpError>,
+    ) {
         let hook_type_str = format!("{}", hook_type);
-        match &chain_result {
+        match chain_result {
             Ok((chain_output, _)) => {
                 let details =
-                    self.extract_log_details(hook_type, &tool_name, &prompt_len, chain_output);
+                    self.extract_log_details(hook_type, tool_name, prompt_len, chain_output);
                 let decision =
                     if chain_output.continue_execution && chain_output.validator_block.is_none() {
                         Decision::Allow
@@ -546,8 +295,190 @@ impl AgentHookStrategy for ClaudeCodeHookStrategy {
                 });
             }
         }
+    }
 
-        // Transform ChainOutput to Claude-specific HookOutput
+    /// Transform a chain output to a Claude-specific hook output.
+    fn transform_to_claude_output(
+        chain_output: ChainOutput,
+        hook_type: HookType,
+    ) -> (HookOutput, i32) {
+        if chain_output.validator_block.is_none() && chain_output.continue_execution {
+            return (
+                HookOutput {
+                    continue_execution: true,
+                    system_message: chain_output.system_message,
+                    suppress_output: chain_output.suppress_output,
+                    ..Default::default()
+                },
+                0,
+            );
+        }
+        Self::transform_block_output(chain_output, hook_type)
+    }
+
+    /// Build the block output for a validator that blocked the chain.
+    fn transform_block_output(chain_output: ChainOutput, hook_type: HookType) -> (HookOutput, i32) {
+        let reason = Self::extract_block_reason(&chain_output);
+        let base = HookOutput {
+            continue_execution: true,
+            system_message: chain_output.system_message,
+            suppress_output: chain_output.suppress_output,
+            ..Default::default()
+        };
+
+        match hook_type {
+            HookType::PreToolUse => Self::block_pre_tool_use(base, reason),
+            HookType::PermissionRequest => Self::block_permission_request(base, reason),
+            HookType::PostToolUse | HookType::PostToolUseFailure => {
+                Self::block_with_decision(base, reason)
+            }
+            HookType::Stop | HookType::SubagentStop => Self::block_stop(base, reason),
+            HookType::UserPromptSubmit => Self::block_with_decision(base, reason),
+            _ => (
+                HookOutput {
+                    continue_execution: false,
+                    stop_reason: Some(reason),
+                    ..base
+                },
+                EXIT_CODE_STDERR, // non-zero tells Claude Code to treat output as stderr
+            ),
+        }
+    }
+
+    /// Extract a human-readable block reason from chain output.
+    fn extract_block_reason(chain_output: &ChainOutput) -> String {
+        let (name, message) = match &chain_output.validator_block {
+            Some(block) => (block.validator_name.as_str(), block.message.as_str()),
+            None => (
+                "unknown",
+                chain_output
+                    .stop_reason
+                    .as_deref()
+                    .unwrap_or("Unknown reason"),
+            ),
+        };
+        format!("blocked by validator '{}': {}", name, message)
+    }
+
+    fn block_pre_tool_use(base: HookOutput, reason: String) -> (HookOutput, i32) {
+        (
+            HookOutput {
+                hook_specific_output: Some(HookSpecificOutput::PreToolUse(PreToolUseOutput {
+                    permission_decision: Some(PermissionDecision::Deny),
+                    permission_decision_reason: Some(reason),
+                    ..Default::default()
+                })),
+                ..base
+            },
+            0,
+        )
+    }
+
+    fn block_permission_request(base: HookOutput, reason: String) -> (HookOutput, i32) {
+        (
+            HookOutput {
+                hook_specific_output: Some(HookSpecificOutput::PermissionRequest(
+                    PermissionRequestOutput {
+                        decision: Some(PermissionRequestDecision {
+                            behavior: PermissionBehavior::Deny,
+                            message: Some(reason),
+                            updated_input: None,
+                            interrupt: false,
+                        }),
+                    },
+                )),
+                ..base
+            },
+            0,
+        )
+    }
+
+    fn block_with_decision(base: HookOutput, reason: String) -> (HookOutput, i32) {
+        (
+            HookOutput {
+                decision: Some("block".to_string()),
+                reason: Some(reason),
+                ..base
+            },
+            0,
+        )
+    }
+
+    /// Clean up turn diffs, state, and pre-content after an allowed Stop.
+    ///
+    /// Only cleans when the hook is Stop AND the chain result is allowed
+    /// (no validator blocked). When Stop is blocked, diffs must survive
+    /// for the next Stop iteration.
+    fn maybe_cleanup_turn_state(
+        &self,
+        hook_type: HookType,
+        session_id: &str,
+        chain_output: &ChainOutput,
+    ) {
+        if hook_type != HookType::Stop {
+            return;
+        }
+        // Only clean up when the stop was allowed (no block)
+        if chain_output.validator_block.is_some() || !chain_output.continue_execution {
+            return;
+        }
+
+        let turn_state = self.context.turn_state();
+        if let Err(e) = turn_state.clear(session_id) {
+            tracing::warn!("Failed to clear turn state on allowed Stop: {}", e);
+        }
+        if let Err(e) = turn_state.clear_diffs(session_id) {
+            tracing::warn!("Failed to clear diffs on allowed Stop: {}", e);
+        }
+        if let Err(e) = turn_state.clear_pre_content(session_id) {
+            tracing::warn!("Failed to clear pre-content on allowed Stop: {}", e);
+        }
+        tracing::debug!(session_id, "Cleaned turn state after allowed Stop");
+    }
+
+    fn block_stop(base: HookOutput, reason: String) -> (HookOutput, i32) {
+        (
+            HookOutput {
+                stop_reason: Some(reason.clone()),
+                decision: Some("block".to_string()),
+                reason: Some(reason),
+                ..base
+            },
+            0,
+        )
+    }
+}
+
+#[async_trait(?Send)]
+impl AgentHookStrategy for ClaudeCodeHookStrategy {
+    fn name(&self) -> &'static str {
+        "ClaudeCode"
+    }
+
+    fn can_handle(&self, input: &serde_json::Value) -> bool {
+        input.get("hook_event_name").is_some()
+    }
+
+    async fn process(&self, input: serde_json::Value) -> Result<(HookOutput, i32), AvpError> {
+        let hook_type = self.extract_hook_type(&input)?;
+        let tool_name = input
+            .get("tool_name")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+        let prompt_len = input.get("prompt").and_then(|v| v.as_str()).map(str::len);
+        let session_id = input
+            .get("session_id")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+
+        let chain_result = self.route_to_chain(hook_type, input).await;
+        self.log_chain_result(hook_type, &tool_name, &prompt_len, &chain_result);
+
+        // Clean up turn diffs/state after an allowed Stop
+        if let (Ok((ref chain_output, _)), Some(ref sid)) = (&chain_result, &session_id) {
+            self.maybe_cleanup_turn_state(hook_type, sid, chain_output);
+        }
+
         chain_result
             .map(|(chain_output, _)| Self::transform_to_claude_output(chain_output, hook_type))
     }
@@ -653,10 +584,10 @@ mod tests {
         let (_temp, strategy) = create_test_strategy();
 
         // Should have at least the builtin RuleSets
-        // (security-rules, command-safety, code-quality, test-integrity)
+        // (security-rules, code-quality, test-integrity)
         assert!(
-            strategy.validator_loader().ruleset_count() >= 4,
-            "Should have at least 4 builtin RuleSets, got {}",
+            strategy.validator_loader().ruleset_count() >= 3,
+            "Should have at least 3 builtin RuleSets, got {}",
             strategy.validator_loader().ruleset_count()
         );
         assert!(
@@ -665,35 +596,6 @@ mod tests {
                 .get_ruleset("security-rules")
                 .is_some(),
             "Should have security-rules"
-        );
-        assert!(
-            strategy
-                .validator_loader()
-                .get_ruleset("command-safety")
-                .is_some(),
-            "Should have command-safety"
-        );
-    }
-
-    #[test]
-    #[serial_test::serial(cwd)]
-    fn test_matching_rulesets_pre_tool_use() {
-        let (_temp, strategy) = create_test_strategy();
-
-        let input = serde_json::json!({
-            "hook_event_name": "PreToolUse",
-            "tool_name": "Bash",
-            "tool_input": {"command": "ls"}
-        });
-
-        let ctx = crate::validator::MatchContext::from_json(HookType::PreToolUse, &input);
-        let matching = strategy.validator_loader().matching_rulesets(&ctx);
-
-        // command-safety should match PreToolUse + Bash
-        let names: Vec<_> = matching.iter().map(|rs| rs.name()).collect();
-        assert!(
-            names.contains(&"command-safety"),
-            "command-safety should match PreToolUse + Bash"
         );
     }
 
@@ -849,6 +751,183 @@ mod tests {
         assert!(
             names.contains(&"security-rules"),
             "security-rules should match PostToolUse + Write + source files"
+        );
+    }
+
+    /// After an allowed Stop (no validator blocks), turn diffs, state, and
+    /// pre-content should be cleaned for the session.
+    #[tokio::test]
+    #[serial_test::serial(cwd)]
+    async fn test_allowed_stop_cleans_turn_state() {
+        let (_temp, strategy) = create_test_strategy();
+        let session_id = "stop-clean-test";
+        let turn_state = strategy.context.turn_state();
+
+        // Seed some state so we can verify cleanup
+        let mut state = crate::turn::TurnState::new();
+        state.changed.push(std::path::PathBuf::from("/tmp/foo.rs"));
+        turn_state.save(session_id, &state).unwrap();
+        turn_state
+            .write_diff(session_id, std::path::Path::new("/tmp/foo.rs"), "some diff")
+            .unwrap();
+        turn_state
+            .write_pre_content(
+                session_id,
+                "tool-1",
+                std::path::Path::new("/tmp/foo.rs"),
+                Some(b"old content"),
+            )
+            .unwrap();
+
+        // Verify state exists before Stop
+        assert!(turn_state.load(session_id).unwrap().has_changes());
+        assert!(!turn_state.load_all_diffs(session_id).is_empty());
+
+        // Process a Stop hook (no blocking validators → allowed)
+        let input = serde_json::json!({
+            "session_id": session_id,
+            "transcript_path": "/path",
+            "cwd": "/home",
+            "permission_mode": "default",
+            "hook_event_name": "Stop",
+            "stop_hook_active": true,
+        });
+        let (output, _exit_code) = strategy.process(input).await.unwrap();
+
+        // Stop was allowed (no blocking validators)
+        assert!(output.continue_execution);
+
+        // After allowed Stop, turn state should be cleaned
+        let loaded = turn_state.load(session_id).unwrap();
+        assert!(
+            !loaded.has_changes(),
+            "Turn state should be cleared after allowed Stop"
+        );
+        assert!(
+            turn_state.load_all_diffs(session_id).is_empty(),
+            "Diffs should be cleared after allowed Stop"
+        );
+    }
+
+    /// Non-Stop hooks (e.g. PostToolUse) must NOT clean turn state.
+    /// This proves the cleanup is conditional on the Stop hook type.
+    #[tokio::test]
+    #[serial_test::serial(cwd)]
+    async fn test_non_stop_hook_preserves_turn_state() {
+        let (_temp, strategy) = create_test_strategy();
+        let session_id = "non-stop-preserve";
+        let turn_state = strategy.context.turn_state();
+
+        // Seed state
+        let mut state = crate::turn::TurnState::new();
+        state.changed.push(std::path::PathBuf::from("/tmp/bar.rs"));
+        turn_state.save(session_id, &state).unwrap();
+        turn_state
+            .write_diff(session_id, std::path::Path::new("/tmp/bar.rs"), "bar diff")
+            .unwrap();
+
+        // Process a non-Stop hook (PostToolUse)
+        let input = serde_json::json!({
+            "session_id": session_id,
+            "transcript_path": "/path",
+            "cwd": "/home",
+            "permission_mode": "default",
+            "hook_event_name": "PostToolUse",
+            "tool_name": "Write",
+            "tool_input": {"file_path": "/tmp/bar.rs"},
+            "tool_use_id": "tool-1"
+        });
+        let (_output, _exit_code) = strategy.process(input).await.unwrap();
+
+        // After non-Stop hook, state must survive
+        let loaded = turn_state.load(session_id).unwrap();
+        assert!(
+            loaded.has_changes(),
+            "Turn state should survive after non-Stop hooks"
+        );
+        assert!(
+            !turn_state.load_all_diffs(session_id).is_empty(),
+            "Diffs should survive after non-Stop hooks"
+        );
+    }
+
+    /// The cleanup helper should be a no-op when the chain output indicates a block.
+    #[test]
+    #[serial_test::serial(cwd)]
+    fn test_cleanup_skipped_when_blocked() {
+        let (_temp, strategy) = create_test_strategy();
+        let session_id = "cleanup-blocked";
+        let turn_state = strategy.context.turn_state();
+
+        // Seed state
+        let mut state = crate::turn::TurnState::new();
+        state.changed.push(std::path::PathBuf::from("/tmp/baz.rs"));
+        turn_state.save(session_id, &state).unwrap();
+        turn_state
+            .write_diff(session_id, std::path::Path::new("/tmp/baz.rs"), "baz diff")
+            .unwrap();
+
+        // Simulate a blocked chain output
+        let blocked_output = ChainOutput {
+            continue_execution: true,
+            validator_block: Some(crate::chain::ValidatorBlockInfo {
+                validator_name: "test-blocker".to_string(),
+                message: "blocked for test".to_string(),
+                hook_type: HookType::Stop,
+            }),
+            ..Default::default()
+        };
+
+        // Call the cleanup helper directly -- should NOT clean when blocked
+        strategy.maybe_cleanup_turn_state(HookType::Stop, session_id, &blocked_output);
+
+        // State should survive
+        let loaded = turn_state.load(session_id).unwrap();
+        assert!(
+            loaded.has_changes(),
+            "Turn state should survive when Stop is blocked"
+        );
+        assert!(
+            !turn_state.load_all_diffs(session_id).is_empty(),
+            "Diffs should survive when Stop is blocked"
+        );
+    }
+
+    /// The cleanup helper should clean state when the chain output is allowed.
+    #[test]
+    #[serial_test::serial(cwd)]
+    fn test_cleanup_runs_when_allowed() {
+        let (_temp, strategy) = create_test_strategy();
+        let session_id = "cleanup-allowed";
+        let turn_state = strategy.context.turn_state();
+
+        // Seed state
+        let mut state = crate::turn::TurnState::new();
+        state.changed.push(std::path::PathBuf::from("/tmp/qux.rs"));
+        turn_state.save(session_id, &state).unwrap();
+        turn_state
+            .write_diff(session_id, std::path::Path::new("/tmp/qux.rs"), "qux diff")
+            .unwrap();
+
+        // Simulate an allowed chain output
+        let allowed_output = ChainOutput {
+            continue_execution: true,
+            validator_block: None,
+            ..Default::default()
+        };
+
+        // Call the cleanup helper directly -- should clean when allowed
+        strategy.maybe_cleanup_turn_state(HookType::Stop, session_id, &allowed_output);
+
+        // State should be cleaned
+        let loaded = turn_state.load(session_id).unwrap();
+        assert!(
+            !loaded.has_changes(),
+            "Turn state should be cleared after allowed Stop cleanup"
+        );
+        assert!(
+            turn_state.load_all_diffs(session_id).is_empty(),
+            "Diffs should be cleared after allowed Stop cleanup"
         );
     }
 }

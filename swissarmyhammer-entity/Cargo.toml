@@ -17,9 +17,9 @@ tracing = { workspace = true }
 chrono = { workspace = true }
 ulid = { workspace = true }
 async-trait = { workspace = true }
-swissarmyhammer-common = { path = "../swissarmyhammer-common" }
-swissarmyhammer-commands = { path = "../swissarmyhammer-commands" }
-swissarmyhammer-fields = { path = "../swissarmyhammer-fields" }
+swissarmyhammer-common = { workspace = true }
+swissarmyhammer-commands = { workspace = true }
+swissarmyhammer-fields = { workspace = true }
 diffy = { workspace = true }
 mime_guess = "2"
 notify = { workspace = true }

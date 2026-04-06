@@ -15,8 +15,8 @@ name = "kanban"
 path = "src/main.rs"
 
 [dependencies]
-swissarmyhammer-kanban = { path = "../swissarmyhammer-kanban" }
-swissarmyhammer-merge = { path = "../swissarmyhammer-merge" }
+swissarmyhammer-kanban = { workspace = true }
+swissarmyhammer-merge = { workspace = true }
 swissarmyhammer-operations = { workspace = true }
 
 clap = { workspace = true }

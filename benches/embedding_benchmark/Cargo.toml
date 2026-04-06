@@ -21,10 +21,10 @@ harness = false
 
 [dependencies]
 criterion = { version = "0.5", features = ["async_tokio"] }
-llama-embedding = { path = "../../llama-embedding" }
-model-embedding = { path = "../../model-embedding" }
-model-loader = { path = "../../model-loader" }
+llama-embedding = { workspace = true }
+model-embedding = { workspace = true }
+model-loader = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-ane-embedding = { path = "../../ane-embedding" }
+ane-embedding = { workspace = true }

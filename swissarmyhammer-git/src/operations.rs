@@ -111,64 +111,17 @@ impl GitOperations {
     ) -> GitResult<Vec<String>> {
         let repo = self.repo.inner();
 
-        // Find branch references
-        let current_branch_ref = repo
-            .find_branch(current_branch, BranchType::Local)
-            .map_err(|e| convert_git2_error("find_current_branch", e))?;
+        let current_commit = self.resolve_branch_commit(current_branch)?;
+        let parent_commit = self.resolve_branch_commit(parent_branch)?;
 
-        let parent_branch_ref = repo
-            .find_branch(parent_branch, BranchType::Local)
-            .map_err(|e| convert_git2_error("find_parent_branch", e))?;
-
-        // Get commit OIDs from branches
-        let current_commit = current_branch_ref
-            .get()
-            .peel_to_commit()
-            .map_err(|e| convert_git2_error("peel_current_branch", e))?;
-
-        let parent_commit = parent_branch_ref
-            .get()
-            .peel_to_commit()
-            .map_err(|e| convert_git2_error("peel_parent_branch", e))?;
-
-        // Find merge-base (common ancestor)
         let merge_base = repo
-            .merge_base(current_commit.id(), parent_commit.id())
+            .merge_base(current_commit, parent_commit)
             .map_err(|e| convert_git2_error("merge_base", e))?;
 
-        // Get tree objects for diff
-        let merge_base_commit = repo
-            .find_commit(merge_base)
-            .map_err(|e| convert_git2_error("find_merge_base_commit", e))?;
+        let from_tree = self.commit_tree(merge_base)?;
+        let to_tree = self.commit_tree(current_commit)?;
 
-        let merge_base_tree = merge_base_commit
-            .tree()
-            .map_err(|e| convert_git2_error("get_merge_base_tree", e))?;
-
-        let current_tree = current_commit
-            .tree()
-            .map_err(|e| convert_git2_error("get_current_tree", e))?;
-
-        // Compute diff from merge-base to current branch HEAD
-        let diff = repo
-            .diff_tree_to_tree(Some(&merge_base_tree), Some(&current_tree), None)
-            .map_err(|e| convert_git2_error("diff_tree_to_tree", e))?;
-
-        // Extract file paths from diff deltas
-        let mut changed_files = Vec::new();
-        for delta in diff.deltas() {
-            if let Some(path) = delta.new_file().path() {
-                if let Some(path_str) = path.to_str() {
-                    changed_files.push(path_str.to_string());
-                }
-            }
-        }
-
-        // Deduplicate (shouldn't be necessary with diff deltas, but being defensive)
-        changed_files.sort();
-        changed_files.dedup();
-
-        Ok(changed_files)
+        self.diff_tree_paths(&from_tree, &to_tree)
     }
 
     /// Get list of files changed within a git revision range
@@ -197,49 +150,13 @@ impl GitOperations {
             (range.to_string(), "HEAD".to_string())
         };
 
-        // Resolve each ref to a commit
-        let from_obj = repo
-            .revparse_single(&from_ref)
-            .map_err(|e| convert_git2_error("revparse_from_ref", e))?;
-        let from_commit = from_obj
-            .peel_to_commit()
-            .map_err(|e| convert_git2_error("peel_from_to_commit", e))?;
+        let from_commit = self.resolve_ref_to_commit(repo, &from_ref)?;
+        let to_commit = self.resolve_ref_to_commit(repo, &to_ref)?;
 
-        let to_obj = repo
-            .revparse_single(&to_ref)
-            .map_err(|e| convert_git2_error("revparse_to_ref", e))?;
-        let to_commit = to_obj
-            .peel_to_commit()
-            .map_err(|e| convert_git2_error("peel_to_to_commit", e))?;
+        let from_tree = self.commit_tree(from_commit)?;
+        let to_tree = self.commit_tree(to_commit)?;
 
-        // Get trees for diff
-        let from_tree = from_commit
-            .tree()
-            .map_err(|e| convert_git2_error("get_from_tree", e))?;
-        let to_tree = to_commit
-            .tree()
-            .map_err(|e| convert_git2_error("get_to_tree", e))?;
-
-        // Compute diff from..to
-        let diff = repo
-            .diff_tree_to_tree(Some(&from_tree), Some(&to_tree), None)
-            .map_err(|e| convert_git2_error("diff_tree_to_tree_range", e))?;
-
-        // Extract file paths from diff deltas
-        let mut changed_files = Vec::new();
-        for delta in diff.deltas() {
-            if let Some(path) = delta.new_file().path() {
-                if let Some(path_str) = path.to_str() {
-                    changed_files.push(path_str.to_string());
-                }
-            }
-        }
-
-        // Deduplicate and sort for consistent output
-        changed_files.sort();
-        changed_files.dedup();
-
-        Ok(changed_files)
+        self.diff_tree_paths(&from_tree, &to_tree)
     }
 
     /// Get all tracked files in the repository
@@ -511,27 +428,20 @@ impl GitOperations {
 
         let repo = self.repo.inner();
 
-        // Get the source branch commit
         let source_ref = repo
             .find_reference(&format!("refs/heads/{}", source_branch.as_str()))
             .map_err(|e| convert_git2_error("find_source_reference", e))?;
-
         let source_commit = source_ref
             .peel_to_commit()
             .map_err(|e| convert_git2_error("peel_source_commit", e))?;
-
-        // Get the current HEAD commit
         let head_commit = repo
             .head()
             .and_then(|head| head.peel_to_commit())
             .map_err(|e| convert_git2_error("get_head_commit", e))?;
 
-        // Create an AnnotatedCommit from the source commit for merge analysis
         let annotated_commit = repo
             .find_annotated_commit(source_commit.id())
             .map_err(|e| convert_git2_error("find_annotated_commit", e))?;
-
-        // Perform the merge analysis
         let analysis = repo
             .merge_analysis(&[&annotated_commit])
             .map_err(|e| convert_git2_error("merge_analysis", e))?;
@@ -542,142 +452,178 @@ impl GitOperations {
         }
 
         if analysis.0.is_fast_forward() {
-            // Fast-forward merge
-            debug!("Performing fast-forward merge for branch {}", source_branch);
-            let mut head_ref = repo
-                .head()
-                .map_err(|e| convert_git2_error("get_head_ref", e))?;
-
-            head_ref
-                .set_target(source_commit.id(), "Fast-forward merge")
-                .map_err(|e| convert_git2_error("fast_forward", e))?;
-
-            let mut checkout_opts = git2::build::CheckoutBuilder::new();
-            checkout_opts.force();
-            repo.checkout_head(Some(&mut checkout_opts))
-                .map_err(|e| convert_git2_error("checkout_after_merge", e))?;
-
-            info!("Fast-forward merged branch {}", source_branch);
+            self.fast_forward_merge(repo, &source_commit, source_branch)?;
         } else {
-            // Perform actual merge operation
-            debug!("Performing three-way merge for branch {}", source_branch);
-            let mut checkout_opts = git2::build::CheckoutBuilder::new();
-            checkout_opts.conflict_style_merge(true);
-
-            let mut merge_opts = git2::MergeOptions::new();
-            merge_opts.file_favor(git2::FileFavor::Normal);
-
-            // Perform the merge
-            repo.merge(
-                &[&annotated_commit],
-                Some(&mut merge_opts),
-                Some(&mut checkout_opts),
-            )
-            .map_err(|e| convert_git2_error("perform_merge", e))?;
-
-            debug!("Merge operation completed, checking for conflicts");
-
-            // Check if there are conflicts
-            let mut index = repo
-                .index()
-                .map_err(|e| convert_git2_error("get_index_after_merge", e))?;
-
-            if index.has_conflicts() {
-                // Critical: Clean up merge state before returning error
-                // This ensures no partial merge state is left in the repository
-
-                info!(
-                    "CONFLICT DETECTED: Cleaning up merge state for branch {}",
-                    source_branch
-                );
-
-                // Step 1: Clean up merge state first
-                repo.cleanup_state()
-                    .map_err(|e| convert_git2_error("cleanup_after_conflict", e))?;
-
-                // Step 2: Reset index to HEAD to clear any conflicted entries
-                let head_commit = repo
-                    .head()
-                    .map_err(|e| convert_git2_error("get_head_for_reset", e))?
-                    .peel_to_commit()
-                    .map_err(|e| convert_git2_error("peel_head_for_reset", e))?;
-
-                let tree = head_commit
-                    .tree()
-                    .map_err(|e| convert_git2_error("get_head_tree", e))?;
-
-                // Get a fresh index handle and reset it
-                let mut fresh_index = repo
-                    .index()
-                    .map_err(|e| convert_git2_error("get_fresh_index", e))?;
-                fresh_index
-                    .read_tree(&tree)
-                    .map_err(|e| convert_git2_error("reset_index", e))?;
-                fresh_index
-                    .write()
-                    .map_err(|e| convert_git2_error("write_reset_index", e))?;
-
-                // Step 3: Force checkout HEAD to reset working directory
-                let mut checkout_opts = git2::build::CheckoutBuilder::new();
-                checkout_opts.force();
-                checkout_opts.remove_untracked(true);
-                repo.checkout_head(Some(&mut checkout_opts))
-                    .map_err(|e| convert_git2_error("reset_after_conflict", e))?;
-
-                debug!("Conflict cleanup completed");
-
-                return Err(GitError::from_string(format!(
-                    "Merge conflicts detected when merging branch '{}'. Please resolve conflicts manually.",
-                    source_branch
-                )));
-            }
-
-            // Create merge commit
-            let signature = repo
-                .signature()
-                .map_err(|e| convert_git2_error("get_signature", e))?;
-
-            let message = format!("Merge branch '{}'", source_branch);
-            let tree_id = index
-                .write_tree()
-                .map_err(|e| convert_git2_error("write_merge_tree", e))?;
-
-            let tree = repo
-                .find_tree(tree_id)
-                .map_err(|e| convert_git2_error("find_merge_tree", e))?;
-
-            repo.commit(
-                Some("HEAD"),
-                &signature,
-                &signature,
-                &message,
-                &tree,
-                &[&head_commit, &source_commit],
-            )
-            .map_err(|e| convert_git2_error("create_merge_commit", e))?;
-
-            // Clean up merge state
-            repo.cleanup_state()
-                .map_err(|e| convert_git2_error("cleanup_merge_state", e))?;
-
-            // Force checkout to update working directory with merged content
-            // After a merge commit, we need to checkout the new commit to update working directory
-            let head_commit = repo
-                .head()
-                .map_err(|e| convert_git2_error("get_head_after_merge", e))?
-                .peel_to_commit()
-                .map_err(|e| convert_git2_error("peel_head_after_merge", e))?;
-
-            let mut checkout_opts = git2::build::CheckoutBuilder::new();
-            checkout_opts.force();
-            checkout_opts.remove_untracked(false);
-
-            repo.checkout_tree(head_commit.as_object(), Some(&mut checkout_opts))
-                .map_err(|e| convert_git2_error("checkout_tree_after_merge", e))?;
-
-            info!("Created merge commit for branch {}", source_branch);
+            self.three_way_merge(
+                repo,
+                &annotated_commit,
+                &head_commit,
+                &source_commit,
+                source_branch,
+            )?;
         }
 
+        Ok(())
+    }
+
+    /// Perform a fast-forward merge by advancing HEAD to the source commit.
+    fn fast_forward_merge(
+        &self,
+        repo: &git2::Repository,
+        source_commit: &git2::Commit<'_>,
+        source_branch: &BranchName,
+    ) -> GitResult<()> {
+        debug!("Performing fast-forward merge for branch {}", source_branch);
+
+        let mut head_ref = repo
+            .head()
+            .map_err(|e| convert_git2_error("get_head_ref", e))?;
+        head_ref
+            .set_target(source_commit.id(), "Fast-forward merge")
+            .map_err(|e| convert_git2_error("fast_forward", e))?;
+
+        let mut checkout_opts = git2::build::CheckoutBuilder::new();
+        checkout_opts.force();
+        repo.checkout_head(Some(&mut checkout_opts))
+            .map_err(|e| convert_git2_error("checkout_after_merge", e))?;
+
+        info!("Fast-forward merged branch {}", source_branch);
+        Ok(())
+    }
+
+    /// Perform a three-way merge, handling conflicts and creating the merge commit.
+    fn three_way_merge(
+        &self,
+        repo: &git2::Repository,
+        annotated_commit: &git2::AnnotatedCommit<'_>,
+        head_commit: &git2::Commit<'_>,
+        source_commit: &git2::Commit<'_>,
+        source_branch: &BranchName,
+    ) -> GitResult<()> {
+        debug!("Performing three-way merge for branch {}", source_branch);
+
+        let mut checkout_opts = git2::build::CheckoutBuilder::new();
+        checkout_opts.conflict_style_merge(true);
+        let mut merge_opts = git2::MergeOptions::new();
+        merge_opts.file_favor(git2::FileFavor::Normal);
+
+        repo.merge(
+            &[annotated_commit],
+            Some(&mut merge_opts),
+            Some(&mut checkout_opts),
+        )
+        .map_err(|e| convert_git2_error("perform_merge", e))?;
+
+        let mut index = repo
+            .index()
+            .map_err(|e| convert_git2_error("get_index_after_merge", e))?;
+
+        if index.has_conflicts() {
+            return self.abort_conflicted_merge(repo, source_branch);
+        }
+
+        self.create_merge_commit(repo, &mut index, head_commit, source_commit, source_branch)?;
+        self.checkout_after_merge(repo)?;
+
+        info!("Created merge commit for branch {}", source_branch);
+        Ok(())
+    }
+
+    /// Clean up merge state and reset working directory after a conflict.
+    fn abort_conflicted_merge(
+        &self,
+        repo: &git2::Repository,
+        source_branch: &BranchName,
+    ) -> GitResult<()> {
+        info!(
+            "CONFLICT DETECTED: Cleaning up merge state for branch {}",
+            source_branch
+        );
+
+        repo.cleanup_state()
+            .map_err(|e| convert_git2_error("cleanup_after_conflict", e))?;
+
+        // Reset index to HEAD to clear conflicted entries
+        let head_commit = repo
+            .head()
+            .map_err(|e| convert_git2_error("get_head_for_reset", e))?
+            .peel_to_commit()
+            .map_err(|e| convert_git2_error("peel_head_for_reset", e))?;
+        let tree = head_commit
+            .tree()
+            .map_err(|e| convert_git2_error("get_head_tree", e))?;
+
+        let mut fresh_index = repo
+            .index()
+            .map_err(|e| convert_git2_error("get_fresh_index", e))?;
+        fresh_index
+            .read_tree(&tree)
+            .map_err(|e| convert_git2_error("reset_index", e))?;
+        fresh_index
+            .write()
+            .map_err(|e| convert_git2_error("write_reset_index", e))?;
+
+        // Force checkout HEAD to reset working directory
+        let mut checkout_opts = git2::build::CheckoutBuilder::new();
+        checkout_opts.force();
+        checkout_opts.remove_untracked(true);
+        repo.checkout_head(Some(&mut checkout_opts))
+            .map_err(|e| convert_git2_error("reset_after_conflict", e))?;
+
+        Err(GitError::from_string(format!(
+            "Merge conflicts detected when merging branch '{}'. Please resolve conflicts manually.",
+            source_branch
+        )))
+    }
+
+    /// Create a merge commit from the current index state.
+    fn create_merge_commit(
+        &self,
+        repo: &git2::Repository,
+        index: &mut git2::Index,
+        head_commit: &git2::Commit<'_>,
+        source_commit: &git2::Commit<'_>,
+        source_branch: &BranchName,
+    ) -> GitResult<()> {
+        let signature = repo
+            .signature()
+            .map_err(|e| convert_git2_error("get_signature", e))?;
+        let message = format!("Merge branch '{}'", source_branch);
+        let tree_id = index
+            .write_tree()
+            .map_err(|e| convert_git2_error("write_merge_tree", e))?;
+        let tree = repo
+            .find_tree(tree_id)
+            .map_err(|e| convert_git2_error("find_merge_tree", e))?;
+
+        repo.commit(
+            Some("HEAD"),
+            &signature,
+            &signature,
+            &message,
+            &tree,
+            &[head_commit, source_commit],
+        )
+        .map_err(|e| convert_git2_error("create_merge_commit", e))?;
+
+        repo.cleanup_state()
+            .map_err(|e| convert_git2_error("cleanup_merge_state", e))?;
+        Ok(())
+    }
+
+    /// Force-checkout HEAD to update the working directory after a merge commit.
+    fn checkout_after_merge(&self, repo: &git2::Repository) -> GitResult<()> {
+        let head_commit = repo
+            .head()
+            .map_err(|e| convert_git2_error("get_head_after_merge", e))?
+            .peel_to_commit()
+            .map_err(|e| convert_git2_error("peel_head_after_merge", e))?;
+
+        let mut checkout_opts = git2::build::CheckoutBuilder::new();
+        checkout_opts.force();
+        checkout_opts.remove_untracked(false);
+        repo.checkout_tree(head_commit.as_object(), Some(&mut checkout_opts))
+            .map_err(|e| convert_git2_error("checkout_tree_after_merge", e))?;
         Ok(())
     }
 
@@ -714,175 +660,230 @@ impl GitOperations {
     pub fn find_merge_target_for_issue(&self, issue_branch: &BranchName) -> GitResult<String> {
         debug!("Finding merge target for branch: {}", issue_branch);
 
-        // Get the commit for the branch
-        let issue_commit = match self
+        let issue_commit = self.resolve_branch_commit(issue_branch.as_str())?;
+        let candidates = self.collect_candidate_branches(issue_branch)?;
+        debug!("Total candidate branches: {}", candidates.len());
+
+        let had_candidates = !candidates.is_empty();
+        let best_target = self.find_best_scoring_branch(&candidates, issue_commit)?;
+
+        if let Some(target) = best_target {
+            debug!("Selected merge target: {}", target);
+            return Ok(target);
+        }
+
+        if had_candidates {
+            debug!("No valid merge-base found with any candidate - likely orphan branch or unrelated history");
+            return Err(GitError::generic(format!(
+                "Branch '{}' has no common history with other branches (orphan branch)",
+                issue_branch
+            )));
+        }
+
+        debug!("No candidate branches found, falling back to main branch");
+        let main = self.main_branch()?;
+        if issue_branch.as_str() == main {
+            return Err(GitError::generic(format!(
+                "Branch '{}' is the main branch and has no parent",
+                issue_branch
+            )));
+        }
+        Ok(main)
+    }
+
+    /// Resolve a local branch name to its commit OID.
+    fn resolve_branch_commit(&self, branch_name: &str) -> GitResult<git2::Oid> {
+        let branch = self
             .repo
             .inner()
-            .find_branch(issue_branch.as_str(), git2::BranchType::Local)
-        {
-            Ok(branch) => {
-                let commit = branch
-                    .get()
-                    .peel_to_commit()
-                    .map_err(|e| convert_git2_error("peel_to_commit", e))?;
-                commit.id()
-            }
-            Err(e) => return Err(convert_git2_error("find_branch", e)),
-        };
+            .find_branch(branch_name, BranchType::Local)
+            .map_err(|e| convert_git2_error("find_branch", e))?;
+        let commit = branch
+            .get()
+            .peel_to_commit()
+            .map_err(|e| convert_git2_error("peel_to_commit", e))?;
+        Ok(commit.id())
+    }
 
-        // Get all local branches except the current branch itself
-        let mut branches = Vec::new();
+    /// Collect local branches that are valid merge-target candidates for the given issue branch.
+    /// Excludes the issue branch itself and sibling branches sharing the same prefix.
+    fn collect_candidate_branches(&self, issue_branch: &BranchName) -> GitResult<Vec<String>> {
         let branch_iter = self
             .repo
             .inner()
-            .branches(Some(git2::BranchType::Local))
+            .branches(Some(BranchType::Local))
             .map_err(|e| convert_git2_error("branches", e))?;
 
-        // Extract branch prefix (e.g., "feature/" from "feature/foo") to filter out sibling branches
-        // with the same prefix. This prevents merging feature/ branches back to other feature/ branches,
-        // or issue/ branches back to other issue/ branches, ensuring we find the actual parent branch
-        // from a different hierarchy level (e.g., feature/foo should merge to main, not feature/bar).
+        // Extract prefix (e.g. "feature/" from "feature/foo") to skip sibling branches.
         let branch_prefix = issue_branch
             .as_str()
             .split('/')
             .next()
-            .filter(|_prefix| issue_branch.as_str().contains('/'))
+            .filter(|_| issue_branch.as_str().contains('/'))
             .map(|s| format!("{}/", s));
 
+        let mut candidates = Vec::new();
         for branch_result in branch_iter {
             let (branch, _) = branch_result.map_err(|e| convert_git2_error("branch_iter", e))?;
-
-            if let Some(branch_name) = branch
+            let name = match branch
                 .name()
                 .map_err(|e| convert_git2_error("branch_name", e))?
             {
-                // Skip the current branch itself
-                if branch_name == issue_branch.as_str() {
-                    continue;
-                }
+                Some(n) => n,
+                None => continue,
+            };
 
-                // Skip branches with the same prefix (e.g., don't merge issue/ to issue/, feature/ to feature/)
-                if let Some(ref prefix) = branch_prefix {
-                    if branch_name.starts_with(prefix) {
-                        continue;
-                    }
-                }
-
-                branches.push(branch_name.to_string());
-                debug!("Found candidate branch: {}", branch_name);
+            if name == issue_branch.as_str() {
+                continue;
             }
-        }
-        debug!("Total candidate branches: {}", branches.len());
-
-        let had_candidates = !branches.is_empty();
-
-        let mut best_target = None;
-        let mut best_score = 0i64; // Track best match score
-
-        // For each potential target branch, find the merge base
-        for branch_name in branches {
-            debug!("Processing branch: {}", branch_name);
-            let target_commit = match self
-                .repo
-                .inner()
-                .find_branch(&branch_name, git2::BranchType::Local)
+            if branch_prefix
+                .as_deref()
+                .is_some_and(|p| name.starts_with(p))
             {
-                Ok(branch) => {
-                    match branch.get().peel_to_commit() {
-                        Ok(commit) => commit.id(),
-                        Err(_) => continue, // Skip branches we can't read
-                    }
-                }
-                Err(_) => continue, // Skip branches that don't exist
-            };
-
-            // Find merge base between this branch and this potential target
-            let merge_base = match self.repo.inner().merge_base(issue_commit, target_commit) {
-                Ok(base) => base,
-                Err(_) => continue, // Skip if no merge base (unrelated histories)
-            };
-
-            // Get the merge base commit to check its timestamp
-            let merge_base_commit = match self.repo.inner().find_commit(merge_base) {
-                Ok(commit) => commit,
-                Err(_) => continue,
-            };
-
-            let merge_base_time = merge_base_commit.time().seconds();
-            let is_perfect_match = merge_base == target_commit;
-
-            debug!(
-                "Branch '{}': merge_base = {}, target_head = {}, merge_base_time = {}, perfect_match = {}",
-                branch_name,
-                merge_base,
-                target_commit,
-                merge_base_time,
-                is_perfect_match
-            );
-
-            // Calculate distance from merge base to issue branch (how many commits ahead is the issue)
-            let issue_distance = self
-                .count_commits_between(merge_base, issue_commit)
-                .unwrap_or(usize::MAX);
-
-            // Calculate score: prioritize shortest distance, with perfect match as tie-breaker
-            // Distance is most important - closer = more direct parent relationship
-            let distance_score = (1000 - issue_distance as i64).max(0) * 1000; // Distance gets high weight
-            let perfect_match_bonus = if is_perfect_match { 100 } else { 0 }; // Small bonus for perfect match
-            let recency_score = merge_base_time / 1000; // Small component for recency
-
-            let score = distance_score + perfect_match_bonus + recency_score;
-
-            if is_perfect_match {
-                debug!(
-                    "Perfect match found: branch branched directly from tip of '{}'",
-                    branch_name
-                );
+                continue;
             }
 
-            debug!(
-                "Branch '{}': distance = {}, score = {}",
-                branch_name, issue_distance, score
-            );
+            debug!("Found candidate branch: {}", name);
+            candidates.push(name.to_string());
+        }
+        Ok(candidates)
+    }
 
-            if score > best_score {
-                best_score = score;
-                debug!("New best target: {} (score: {})", branch_name, score);
-                best_target = Some(branch_name);
+    /// Score each candidate branch by merge-base proximity and return the best one.
+    fn find_best_scoring_branch(
+        &self,
+        candidates: &[String],
+        issue_commit: git2::Oid,
+    ) -> GitResult<Option<String>> {
+        let mut best_target = None;
+        let mut best_score = 0i64;
+
+        for branch_name in candidates {
+            if let Some((name, score)) = self.score_candidate(branch_name, issue_commit)? {
+                debug!("Branch '{}': score = {}", name, score);
+                if score > best_score {
+                    best_score = score;
+                    debug!("New best target: {} (score: {})", name, score);
+                    best_target = Some(name);
+                }
             }
         }
+        Ok(best_target)
+    }
 
-        // Return the best target, or fall back to main branch only if there were no candidates at all
-        match best_target {
-            Some(target) => {
-                debug!("Selected merge target: {}", target);
-                Ok(target)
-            }
-            None => {
-                // If we had candidate branches but found no valid merge-base, it's an orphan or unrelated branch
-                if had_candidates {
-                    debug!("No valid merge-base found with any candidate - likely orphan branch or unrelated history");
-                    return Err(GitError::generic(format!(
-                        "Branch '{}' has no common history with other branches (orphan branch)",
-                        issue_branch
-                    )));
-                }
+    /// Compute a merge-target score for a single candidate branch.
+    /// Returns `None` if the branch cannot be resolved or has no common history.
+    fn score_candidate(
+        &self,
+        branch_name: &str,
+        issue_commit: git2::Oid,
+    ) -> GitResult<Option<(String, i64)>> {
+        let target_commit = match self.resolve_branch_commit_lenient(branch_name) {
+            Some(oid) => oid,
+            None => return Ok(None),
+        };
 
-                // If we had NO candidates at all, fall back to main branch
-                debug!("No candidate branches found, falling back to main branch");
-                let main = self.main_branch()?;
+        let (merge_base, merge_base_time) =
+            match self.find_merge_base_with_time(issue_commit, target_commit) {
+                Some(result) => result,
+                None => return Ok(None),
+            };
 
-                // If this branch IS the main branch, return error
-                if issue_branch.as_str() == main {
-                    return Err(GitError::generic(format!(
-                        "Branch '{}' is the main branch and has no parent",
-                        issue_branch
-                    )));
-                }
+        let is_perfect_match = merge_base == target_commit;
+        let issue_distance = self
+            .count_commits_between(merge_base, issue_commit)
+            .unwrap_or(usize::MAX);
 
-                Ok(main)
-            }
-        }
+        debug!(
+            "Branch '{}': merge_base={}, perfect={}, distance={}",
+            branch_name, merge_base, is_perfect_match, issue_distance
+        );
+
+        let score = Self::compute_merge_score(issue_distance, is_perfect_match, merge_base_time);
+        Ok(Some((branch_name.to_string(), score)))
+    }
+
+    /// Find the merge base between two commits and return it with its timestamp.
+    /// Returns `None` if there is no common history or the commit cannot be read.
+    fn find_merge_base_with_time(&self, a: git2::Oid, b: git2::Oid) -> Option<(git2::Oid, i64)> {
+        let merge_base = self.repo.inner().merge_base(a, b).ok()?;
+        let commit = self.repo.inner().find_commit(merge_base).ok()?;
+        Some((merge_base, commit.time().seconds()))
+    }
+
+    /// Compute a merge-target score from distance, perfect-match, and recency.
+    fn compute_merge_score(distance: usize, is_perfect_match: bool, merge_base_time: i64) -> i64 {
+        // Scoring weights: distance dominates, perfect-match is a tie-breaker, recency is minor.
+        const MAX_DISTANCE: i64 = 1000; // Cap beyond which branches are considered unrelated
+        const DISTANCE_WEIGHT: i64 = 1000; // Multiplier so distance outweighs other factors
+        const PERFECT_MATCH_BONUS: i64 = 100; // Small bonus when merge-base == target tip
+        const RECENCY_DIVISOR: i64 = 1000; // Scale epoch seconds to a minor scoring component
+
+        let distance_score = (MAX_DISTANCE - distance as i64).max(0) * DISTANCE_WEIGHT;
+        let perfect_bonus = if is_perfect_match {
+            PERFECT_MATCH_BONUS
+        } else {
+            0
+        };
+        let recency_score = merge_base_time / RECENCY_DIVISOR;
+
+        distance_score + perfect_bonus + recency_score
+    }
+
+    /// Try to resolve a branch to its commit OID, returning `None` on any error.
+    fn resolve_branch_commit_lenient(&self, branch_name: &str) -> Option<git2::Oid> {
+        self.repo
+            .inner()
+            .find_branch(branch_name, BranchType::Local)
+            .ok()
+            .and_then(|b| b.get().peel_to_commit().ok())
+            .map(|c| c.id())
+    }
+
+    /// Resolve an arbitrary ref (branch, tag, SHA, HEAD~N) to a commit OID.
+    fn resolve_ref_to_commit(
+        &self,
+        repo: &git2::Repository,
+        refspec: &str,
+    ) -> GitResult<git2::Oid> {
+        let obj = repo
+            .revparse_single(refspec)
+            .map_err(|e| convert_git2_error("revparse", e))?;
+        let commit = obj
+            .peel_to_commit()
+            .map_err(|e| convert_git2_error("peel_to_commit", e))?;
+        Ok(commit.id())
+    }
+
+    /// Get the tree for a commit OID.
+    fn commit_tree(&self, oid: git2::Oid) -> GitResult<git2::Tree<'_>> {
+        let commit = self
+            .repo
+            .inner()
+            .find_commit(oid)
+            .map_err(|e| convert_git2_error("find_commit", e))?;
+        commit.tree().map_err(|e| convert_git2_error("get_tree", e))
+    }
+
+    /// Diff two trees and return sorted, deduplicated file paths.
+    fn diff_tree_paths(
+        &self,
+        from_tree: &git2::Tree<'_>,
+        to_tree: &git2::Tree<'_>,
+    ) -> GitResult<Vec<String>> {
+        let diff = self
+            .repo
+            .inner()
+            .diff_tree_to_tree(Some(from_tree), Some(to_tree), None)
+            .map_err(|e| convert_git2_error("diff_tree_to_tree", e))?;
+
+        let mut files: Vec<String> = diff
+            .deltas()
+            .filter_map(|d| d.new_file().path()?.to_str().map(String::from))
+            .collect();
+        files.sort();
+        files.dedup();
+        Ok(files)
     }
 
     /// Count commits between two commit IDs
@@ -1514,12 +1515,12 @@ mod tests {
         let head = repo.head().unwrap();
         let current_branch = head.shorthand().unwrap_or("").to_string();
         if current_branch == "main" {
-            return; // Already on main, nothing to do
+            return;
         }
         let head_commit = head.peel_to_commit().unwrap();
-        repo.branch("main", &head_commit, true).unwrap();
+        repo.branch("main", &head_commit, false).unwrap();
         repo.set_head("refs/heads/main").unwrap();
-        // Delete the old default branch so only "main" remains
+        // Delete the old default branch (e.g. "master")
         if let Ok(mut old_branch) = repo.find_branch(&current_branch, BranchType::Local) {
             old_branch.delete().ok();
         }
@@ -1938,22 +1939,17 @@ mod tests {
         config.set_str("user.name", "Test User").unwrap();
         config.set_str("user.email", "test@example.com").unwrap();
 
-        // Create initial commit on whatever the default branch is
+        // Create initial commit, then ensure we're on "master" (not "main")
         raw_commit(&repo, "Initial commit", vec![("README.md", "# Repo")]);
         let head = repo.head().unwrap();
-        let default_branch = head.shorthand().unwrap_or("").to_string();
-        let head_commit = head.peel_to_commit().unwrap();
-
-        // If we're not already on master, create it and switch
-        if default_branch != "master" {
-            repo.branch("master", &head_commit, true).unwrap();
+        let current_branch = head.shorthand().unwrap_or("");
+        if current_branch != "master" {
+            let head_commit = head.peel_to_commit().unwrap();
+            repo.branch("master", &head_commit, false).unwrap();
             repo.set_head("refs/heads/master").unwrap();
-        }
-
-        // Delete any non-master branches (e.g. "main" from git init default)
-        if default_branch != "master" {
-            if let Ok(mut branch) = repo.find_branch(&default_branch, BranchType::Local) {
-                branch.delete().ok();
+            // Delete the old default branch
+            if let Ok(mut old_branch) = repo.find_branch(current_branch, BranchType::Local) {
+                old_branch.delete().ok();
             }
         }
 

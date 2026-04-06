@@ -3,11 +3,8 @@ name: test-integrity
 description: Ensure tests are not inappropriately skipped, disabled, or mocked
 metadata:
   version: "{{version}}"
-trigger: PostToolUse
+trigger: Stop
 match:
-  tools:
-    - .*write.*
-    - .*edit.*
   files:
     - "@file_groups/source_code"
     - "@file_groups/test_files"

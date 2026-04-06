@@ -16,27 +16,27 @@ categories = ["command-line-utilities", "development-tools"]
 [dependencies]
 # Core library dependency removed - now uses domain crates only
 
-swissarmyhammer-common = { path = "../swissarmyhammer-common" }
-swissarmyhammer-directory = { path = "../swissarmyhammer-directory" }
-swissarmyhammer-prompts = { path = "../swissarmyhammer-prompts" }
-swissarmyhammer-config = { path = "../swissarmyhammer-config" }
-swissarmyhammer-git = { path = "../swissarmyhammer-git" }
-swissarmyhammer-kanban = { path = "../swissarmyhammer-kanban" }
-swissarmyhammer-skills = { path = "../swissarmyhammer-skills" }
-swissarmyhammer-templating = { path = "../swissarmyhammer-templating" }
-swissarmyhammer-agents = { path = "../swissarmyhammer-agents" }
-swissarmyhammer-shell = { path = "../swissarmyhammer-shell" }
-mirdan = { path = "../mirdan" }
+swissarmyhammer-common = { workspace = true }
+swissarmyhammer-directory = { workspace = true }
+swissarmyhammer-prompts = { workspace = true }
+swissarmyhammer-config = { workspace = true }
+swissarmyhammer-git = { workspace = true }
+swissarmyhammer-kanban = { workspace = true }
+swissarmyhammer-skills = { workspace = true }
+swissarmyhammer-templating = { workspace = true }
+swissarmyhammer-agents = { workspace = true }
+swissarmyhammer-shell = { workspace = true }
+mirdan = { workspace = true }
 tempfile = { workspace = true }
-swissarmyhammer-web = { path = "../swissarmyhammer-web" }
-swissarmyhammer-code-context = { path = "../swissarmyhammer-code-context" }
-swissarmyhammer-treesitter = { path = "../swissarmyhammer-treesitter" }
-swissarmyhammer-project-detection = { path = "../swissarmyhammer-project-detection" }
+swissarmyhammer-web = { workspace = true }
+swissarmyhammer-code-context = { workspace = true }
+swissarmyhammer-treesitter = { workspace = true }
+swissarmyhammer-project-detection = { workspace = true }
 # ACP agents (direct usage, no executor wrapper)
-claude-agent = { path = "../claude-agent" }
+claude-agent = { workspace = true }
 llama-agent = { workspace = true }
 
-swissarmyhammer-mcp-proxy = { path = "../swissarmyhammer-mcp-proxy" }
+swissarmyhammer-mcp-proxy = { workspace = true }
 
 
 # Async and JSON processing
@@ -91,8 +91,8 @@ futures-util = { workspace = true }
 reqwest = { workspace = true }
 
 # Embedding model for semantic search (platform-aware: ANE on Apple Silicon, llama.cpp elsewhere)
-swissarmyhammer-embedding = { path = "../swissarmyhammer-embedding" }
-model-embedding = { path = "../model-embedding" }
+swissarmyhammer-embedding = { workspace = true }
+model-embedding = { workspace = true }
 
 # SQLite for embedding storage
 rusqlite = { workspace = true }
@@ -121,8 +121,8 @@ agent-client-protocol = { workspace = true }
 
 [dev-dependencies]
 tokio-test = { workspace = true }
-swissarmyhammer-web = { path = "../swissarmyhammer-web" }
-swissarmyhammer-config = { path = "../swissarmyhammer-config" }
+swissarmyhammer-web = { workspace = true }
+swissarmyhammer-config = { workspace = true }
 tempfile = { workspace = true }
 futures-util = { workspace = true }
 tracing-subscriber = { workspace = true }

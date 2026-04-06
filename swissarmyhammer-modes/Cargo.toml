@@ -24,7 +24,7 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 
 # SwissArmyHammer domain dependencies
-swissarmyhammer-common = { path = "../swissarmyhammer-common" }
+swissarmyhammer-common = { workspace = true }
 
 # File system and utilities
 walkdir = { workspace = true }
@@ -36,8 +36,8 @@ include_dir = { workspace = true }
 [dev-dependencies]
 tempfile = { workspace = true }
 tokio = { workspace = true }
-swissarmyhammer-config = { path = "../swissarmyhammer-config" }
-swissarmyhammer-prompts = { path = "../swissarmyhammer-prompts" }
+swissarmyhammer-config = { workspace = true }
+swissarmyhammer-prompts = { workspace = true }
 
 # NEVER add features or feature flags to this Cargo.toml!
 # SwissArmyHammer provides ALL functionality ALL the time.

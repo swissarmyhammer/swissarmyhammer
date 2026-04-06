@@ -19,12 +19,12 @@ thiserror = { workspace = true }
 tokio = { workspace = true }
 
 # Local workspace dependencies
-swissarmyhammer-common = { path = "../swissarmyhammer-common" }
-swissarmyhammer-directory = { path = "../swissarmyhammer-directory" }
+swissarmyhammer-common = { workspace = true }
+swissarmyhammer-directory = { workspace = true }
 swissarmyhammer-operations = { workspace = true }
 
 [build-dependencies]
-swissarmyhammer-build = { path = "../swissarmyhammer-build" }
+swissarmyhammer-build = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

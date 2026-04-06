@@ -694,11 +694,11 @@ mod tests {
     #[test]
     fn test_pre_tool_use_deny_from_validator() {
         let output =
-            AvpPreToolUseOutput::deny_from_validator("safe-commands", "rm -rf not allowed");
+            AvpPreToolUseOutput::deny_from_validator("input-validation", "rm -rf not allowed");
         assert!(!output.allow);
         assert!(output.base.validator_block.is_some());
         let block = output.base.validator_block.as_ref().unwrap();
-        assert_eq!(block.validator_name, "safe-commands");
+        assert_eq!(block.validator_name, "input-validation");
     }
 
     #[test]

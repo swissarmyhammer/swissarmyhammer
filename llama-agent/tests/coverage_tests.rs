@@ -2201,11 +2201,9 @@ fn test_http_server_config_to_streamable() {
 
 #[test]
 fn test_http_server_config_from_streamable() {
-    let streamable = rmcp::transport::StreamableHttpServerConfig {
-        sse_keep_alive: Some(Duration::from_secs(45)),
-        stateful_mode: true,
-        ..Default::default()
-    };
+    let mut streamable = rmcp::transport::StreamableHttpServerConfig::default();
+    streamable.sse_keep_alive = Some(Duration::from_secs(45));
+    streamable.stateful_mode = true;
 
     let config = HttpServerConfig::from_streamable_config(
         "test".to_string(),

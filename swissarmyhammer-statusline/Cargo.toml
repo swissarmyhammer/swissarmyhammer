@@ -19,11 +19,11 @@ serde_yaml_ng = { workspace = true }
 tracing = { workspace = true }
 git2 = { workspace = true }
 dirs = { workspace = true }
-swissarmyhammer-directory = { path = "../swissarmyhammer-directory" }
-swissarmyhammer-kanban = { path = "../swissarmyhammer-kanban" }
-swissarmyhammer-code-context = { path = "../swissarmyhammer-code-context" }
-swissarmyhammer-lsp = { path = "../swissarmyhammer-lsp" }
-swissarmyhammer-treesitter = { path = "../swissarmyhammer-treesitter" }
+swissarmyhammer-directory = { workspace = true }
+swissarmyhammer-kanban = { workspace = true }
+swissarmyhammer-code-context = { workspace = true }
+swissarmyhammer-lsp = { workspace = true }
+swissarmyhammer-treesitter = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
