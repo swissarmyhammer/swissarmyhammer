@@ -16,7 +16,6 @@ import type { FieldDef, Entity } from "@/types/kanban";
 import { FocusScope } from "@/components/focus-scope";
 import { useEntityFocus } from "@/lib/entity-focus-context";
 import { useIsFocused, type ClaimPredicate } from "@/lib/entity-focus-context";
-import { fieldMoniker } from "@/lib/moniker";
 import { icons, HelpCircle } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
@@ -89,11 +88,8 @@ export function EntityInspector({ entity, navRef }: EntityInspectorProps) {
 
   /** Monikers for all navigable fields, in flat order. */
   const fieldMonikers = useMemo(
-    () =>
-      navigableFields.map((f) =>
-        fieldMoniker(entity.entity_type, entity.id, f.name),
-      ),
-    [navigableFields, entity.entity_type, entity.id],
+    () => navigableFields.map((f) => `${entity.moniker}.${f.name}`),
+    [navigableFields, entity.moniker],
   );
 
   /** ClaimWhen predicates for each field at index i. */
@@ -266,7 +262,7 @@ function FieldRow({
   const [editing, setEditing] = useState(false);
 
   const editable = isEditable(field);
-  const scopeMoniker = fieldMoniker(entity.entity_type, entity.id, field.name);
+  const scopeMoniker = `${entity.moniker}.${field.name}`;
   const isFocused = useIsFocused(scopeMoniker);
   const shouldEdit = isFocused && inspectorMode === "edit" && editable;
 

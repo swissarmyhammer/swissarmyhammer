@@ -29,7 +29,6 @@ import { useEntityFocus } from "@/lib/entity-focus-context";
 function defaultTaskTitle(_columnName: string): string {
   return "New task";
 }
-import { moniker, fieldMoniker } from "@/lib/moniker";
 import { useEntityCommands } from "@/lib/entity-commands";
 import { useDragSession } from "@/lib/drag-session-context";
 import { useActivePerspective } from "@/components/perspective-container";
@@ -58,7 +57,7 @@ interface TaskDragState {
  */
 export function BoardView({ board, tasks }: BoardViewProps) {
   const { startSession, cancelSession, completeSession } = useDragSession();
-  const boardMoniker = moniker("board", "board");
+  const boardMoniker = board.board.moniker;
   const boardCommands = useEntityCommands("board", "board");
   const dispatch = useDispatchCommand();
   const dispatchInspect = useDispatchCommand("ui.inspect");
@@ -153,11 +152,11 @@ export function BoardView({ board, tasks }: BoardViewProps) {
       const taskIds = baseLayout.get(col.id) ?? [];
       map.set(
         col.id,
-        taskIds.map((id) => moniker("task", id)),
+        taskIds.map((id) => taskMap.get(id)?.moniker ?? `task:${id}`),
       );
     }
     return map;
-  }, [columns, baseLayout]);
+  }, [columns, baseLayout, taskMap]);
 
   /** All task monikers on the board — used for nav.first/nav.last. */
   const allBoardTaskMonikers = useMemo(() => {
@@ -172,8 +171,8 @@ export function BoardView({ board, tasks }: BoardViewProps) {
   const allBoardHeaderMonikers = useMemo(() => {
     const set = new Set<string>();
     for (const col of columns) {
-      set.add(moniker("column", col.id));
-      set.add(fieldMoniker("column", col.id, "name"));
+      set.add(col.moniker);
+      set.add(`${col.moniker}.name`);
     }
     return set;
   }, [columns]);
@@ -212,7 +211,7 @@ export function BoardView({ board, tasks }: BoardViewProps) {
     }
     // All columns empty — focus first column header
     if (columns.length > 0) {
-      setFocus(moniker("column", columns[0].id));
+      setFocus(columns[0].moniker);
     }
   }, [columns, columnTaskMonikers, setFocus]);
 
@@ -529,7 +528,7 @@ export function BoardView({ board, tasks }: BoardViewProps) {
                       }
                       leftColumnHeaderMoniker={
                         prevColId
-                          ? fieldMoniker("column", prevColId, "name")
+                          ? `${columnMap.get(prevColId)?.moniker ?? `column:${prevColId}`}.name`
                           : null
                       }
                       rightColumnTaskMonikers={
@@ -539,7 +538,7 @@ export function BoardView({ board, tasks }: BoardViewProps) {
                       }
                       rightColumnHeaderMoniker={
                         nextColId
-                          ? fieldMoniker("column", nextColId, "name")
+                          ? `${columnMap.get(nextColId)?.moniker ?? `column:${nextColId}`}.name`
                           : null
                       }
                       allBoardTaskMonikers={allBoardTaskMonikers}

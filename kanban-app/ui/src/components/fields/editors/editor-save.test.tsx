@@ -181,6 +181,7 @@ import type { Entity } from "@/types/kanban";
 const TEST_ENTITY: Entity = {
   entity_type: "task",
   id: "test-task-1",
+  moniker: "task:test-task-1",
   fields: {
     title: "Test Title",
     body: "Test body with #tag",
@@ -199,6 +200,7 @@ const TEST_ENTITIES: Record<string, Entity[]> = {
     {
       entity_type: "tag",
       id: "tag-1",
+      moniker: "tag:tag-1",
       fields: { tag_name: "bug", color: "ff0000" },
     },
   ],
@@ -206,11 +208,17 @@ const TEST_ENTITIES: Record<string, Entity[]> = {
     {
       entity_type: "actor",
       id: "actor-1",
+      moniker: "actor:actor-1",
       fields: { name: "Alice", color: "0000ff" },
     },
   ],
   column: [
-    { entity_type: "column", id: "todo", fields: { name: "Todo", order: 0 } },
+    {
+      entity_type: "column",
+      id: "todo",
+      moniker: "column:todo",
+      fields: { name: "Todo", order: 0 },
+    },
   ],
 };
 

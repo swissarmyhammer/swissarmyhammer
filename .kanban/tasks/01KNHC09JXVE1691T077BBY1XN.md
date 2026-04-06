@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: '8480'
+position_column: done
+position_ordinal: ffffffffffffffffffffe980
 title: Center loading spinner in full viewport using h-screen instead of flex-1
 ---
 ## What

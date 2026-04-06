@@ -69,7 +69,12 @@ export function QuickCapture() {
   // kanban data model — every board has exactly one entity with these values.
   const selected = boards.find((b) => b.path === selectedPath);
   const boardEntity: Entity | undefined = selected
-    ? { entity_type: "board", id: "board", fields: { name: selected.name } }
+    ? {
+        entity_type: "board",
+        id: "board",
+        moniker: "board:board",
+        fields: { name: selected.name },
+      }
     : undefined;
 
   useEffect(() => {

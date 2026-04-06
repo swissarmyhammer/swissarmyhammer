@@ -53,6 +53,7 @@ function makeColumn(id: string, name: string, order: number): Entity {
   return {
     id,
     entity_type: "column",
+    moniker: `column:${id}`,
     fields: { name, order },
   };
 }
@@ -61,6 +62,7 @@ function makeTask(id: string, columnId: string, ordinal: string): Entity {
   return {
     id,
     entity_type: "task",
+    moniker: `task:${id}`,
     fields: {
       title: `Task ${id}`,
       position_column: columnId,
@@ -73,6 +75,7 @@ const board: BoardData = {
   board: {
     id: "board-1",
     entity_type: "board",
+    moniker: "board:board-1",
     fields: { name: "Test Board" },
   },
   columns: [

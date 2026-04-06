@@ -58,7 +58,7 @@ export function buildEntityCommandDefs(
   entityId: string,
   entity?: Entity,
 ): CommandDef[] {
-  const entityMoniker = moniker(entityType, entityId);
+  const entityMoniker = entity?.moniker ?? moniker(entityType, entityId);
   return schemaCommands.map((cmd) => ({
     id: cmd.id,
     name: resolveCommandName(cmd.name, entityType, entity),
@@ -114,7 +114,7 @@ export function useEntityCommands(
   extraCommands?: CommandDef[],
 ): CommandDef[] {
   const { getEntityCommands } = useSchemaOptional();
-  const entityMoniker = moniker(entityType, entityId);
+  const entityMoniker = entity?.moniker ?? moniker(entityType, entityId);
   const schemaCommands = getEntityCommands(entityType);
 
   return useMemo(() => {

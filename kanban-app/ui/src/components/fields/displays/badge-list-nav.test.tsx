@@ -34,16 +34,19 @@ const mockTags = [
   {
     id: "tag-1",
     entity_type: "tag",
+    moniker: "tag:tag-1",
     fields: { tag_name: "bugfix", color: "ff0000" },
   },
   {
     id: "tag-2",
     entity_type: "tag",
+    moniker: "tag:tag-2",
     fields: { tag_name: "feature", color: "00ff00" },
   },
   {
     id: "tag-3",
     entity_type: "tag",
+    moniker: "tag:tag-3",
     fields: { tag_name: "docs", color: "0000ff" },
   },
 ];
@@ -96,12 +99,14 @@ const refField: FieldDef = {
 const taskEntity: Entity = {
   id: "task-1",
   entity_type: "task",
+  moniker: "task:task-1",
   fields: { tags: ["bugfix", "feature", "docs"] },
 };
 
 const refEntity: Entity = {
   id: "task-1",
   entity_type: "task",
+  moniker: "task:task-1",
   fields: { depends_on: ["task-dep-A", "task-dep-B"] },
 };
 

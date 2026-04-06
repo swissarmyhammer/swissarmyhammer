@@ -30,7 +30,7 @@ function makeProps(
       type: { kind: "text" },
     } as DisplayProps["field"],
     value,
-    entity: { entity_type: "task", id: "t1", fields: {} },
+    entity: { entity_type: "task", id: "t1", moniker: "task:t1", fields: {} },
     mode,
     onCommit,
   };

@@ -6,7 +6,6 @@ import { EntityInspector } from "@/components/entity-inspector";
 import { useEntityFocus } from "@/lib/entity-focus-context";
 import { FocusScope } from "@/components/focus-scope";
 import { useEntityCommands } from "@/lib/entity-commands";
-import { moniker } from "@/lib/moniker";
 
 interface InspectorFocusBridgeProps {
   entity: Entity;
@@ -31,7 +30,7 @@ export function InspectorFocusBridge({ entity }: InspectorFocusBridgeProps) {
   const broadcastRef = useRef(broadcastNavCommand);
   broadcastRef.current = broadcastNavCommand;
 
-  const entityMoniker = moniker(entity.entity_type, entity.id);
+  const entityMoniker = entity.moniker;
   const entityCommands = useEntityCommands(
     entity.entity_type,
     entity.id,

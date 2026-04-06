@@ -163,6 +163,7 @@ function taskToEntity(task: StrippedTask): Entity {
   return {
     entity_type: "task",
     id: task.id,
+    moniker: `task:${task.id}`,
     fields: {
       title: task.title,
       position_column: task.position.column,
@@ -182,6 +183,7 @@ function columnToEntity(col: StrippedColumn): Entity {
   return {
     entity_type: "column",
     id: col.id,
+    moniker: `column:${col.id}`,
     fields: { name: col.name, order: col.order },
   };
 }
@@ -192,6 +194,7 @@ function buildBoardData(): BoardData {
     board: {
       entity_type: "board",
       id: "board",
+      moniker: "board:board",
       fields: { name: testBoardName },
     },
     columns: testColumns.map(columnToEntity),

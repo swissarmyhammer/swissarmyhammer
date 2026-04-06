@@ -8,7 +8,6 @@ import {
 } from "@/components/ui/tooltip";
 import { useSchema } from "@/lib/schema-context";
 import { useDispatchCommand } from "@/lib/command-scope";
-import { moniker } from "@/lib/moniker";
 import {
   useBoardData,
   useOpenBoards,
@@ -49,7 +48,7 @@ export function NavBar() {
               aria-label="Inspect board"
               className="p-1 rounded text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted transition-colors"
               onClick={() => {
-                dispatchInspect({ target: moniker("board", "board") }).catch(
+                dispatchInspect({ target: board.board.moniker }).catch(
                   console.error,
                 );
               }}

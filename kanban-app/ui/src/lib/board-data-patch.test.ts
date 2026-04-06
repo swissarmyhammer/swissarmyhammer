@@ -9,7 +9,7 @@ function makeEntity(
   id: string,
   fields: Record<string, unknown> = {},
 ): Entity {
-  return { entity_type: type, id, fields };
+  return { entity_type: type, id, moniker: `${type}:${id}`, fields };
 }
 
 /** Helper to build a minimal BoardData. */

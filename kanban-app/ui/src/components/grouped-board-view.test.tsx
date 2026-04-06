@@ -68,7 +68,12 @@ vi.mock("@/components/board-view", () => ({
 }));
 
 function makeColumn(id: string, name: string, order: number): Entity {
-  return { id, entity_type: "column", fields: { name, order } };
+  return {
+    id,
+    entity_type: "column",
+    moniker: `column:${id}`,
+    fields: { name, order },
+  };
 }
 
 function makeTask(id: string, column: string, groupValue?: string): Entity {
@@ -78,11 +83,16 @@ function makeTask(id: string, column: string, groupValue?: string): Entity {
     position_ordinal: "a0",
   };
   if (groupValue !== undefined) fields.project = groupValue;
-  return { id, entity_type: "task", fields };
+  return { id, entity_type: "task", moniker: `task:${id}`, fields };
 }
 
 const board: BoardData = {
-  board: { id: "b1", entity_type: "board", fields: { name: "Board" } },
+  board: {
+    id: "b1",
+    entity_type: "board",
+    moniker: "board:b1",
+    fields: { name: "Board" },
+  },
   columns: [makeColumn("todo", "Todo", 0), makeColumn("doing", "Doing", 1)],
   tags: [],
   summary: {

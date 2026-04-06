@@ -117,6 +117,7 @@ const MOCK_BOARD: BoardData = {
   board: {
     entity_type: "board",
     id: "b1",
+    moniker: "board:b1",
     fields: { name: { String: "Test Board" } },
   },
   columns: [],

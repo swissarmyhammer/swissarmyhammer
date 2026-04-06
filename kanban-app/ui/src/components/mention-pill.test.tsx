@@ -127,6 +127,7 @@ import type { Entity } from "@/types/kanban";
 const mockTag: Entity = {
   id: "tag-1",
   entity_type: "tag",
+  moniker: "tag:tag-1",
   fields: {
     tag_name: "bugfix",
     color: "ff0000",
@@ -174,6 +175,7 @@ describe("MentionPill", () => {
       const entity: Entity = {
         id: `${mt.entityType}-99`,
         entity_type: mt.entityType,
+        moniker: `${mt.entityType}:${mt.entityType}-99`,
         fields: { [mt.displayField]: "test-value", color: "aabbcc" },
       };
       mockGetEntities.mockReturnValue([entity]);
@@ -287,6 +289,7 @@ describe("MentionPill", () => {
       {
         id: "task-42",
         entity_type: "task",
+        moniker: "task:task-42",
         fields: { title: "Fix Login Bug", color: "3366ff" },
       },
     ];

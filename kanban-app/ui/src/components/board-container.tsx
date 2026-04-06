@@ -98,7 +98,7 @@ export function BoardContainer({ children }: BoardContainerProps) {
   // Loading state — show spinner
   if (loading) {
     return (
-      <main role="status" className="flex-1 flex items-center justify-center">
+      <main role="status" className="h-screen flex items-center justify-center">
         <Loader2 className="h-8 w-8 text-muted-foreground/50 animate-spin [animation-delay:200ms] [animation-fill-mode:backwards]" />
       </main>
     );
@@ -107,7 +107,7 @@ export function BoardContainer({ children }: BoardContainerProps) {
   // No board loaded — show placeholder
   if (!board || !activeBoardPath) {
     return (
-      <main className="flex-1 flex items-center justify-center">
+      <main className="h-screen flex items-center justify-center">
         <div className="text-center space-y-3">
           <p className="text-muted-foreground text-lg">No board loaded</p>
           <div className="text-sm text-muted-foreground/70 space-y-1">

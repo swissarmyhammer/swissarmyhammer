@@ -44,7 +44,12 @@ function makeActor(
   name: string,
   overrides: Record<string, unknown> = {},
 ): Entity {
-  return { entity_type: "actor", id, fields: { name, ...overrides } };
+  return {
+    entity_type: "actor",
+    id,
+    moniker: `actor:${id}`,
+    fields: { name, ...overrides },
+  };
 }
 
 const DATA_URI = "data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=";

@@ -253,6 +253,7 @@ export function RustEngineContainer({ children }: RustEngineContainerProps) {
           const entity: Entity = {
             id,
             entity_type,
+            moniker: `${entity_type}:${id}`,
             fields: fields as Record<string, unknown>,
           };
           setEntitiesFor(entity_type, (prev) => {
@@ -364,7 +365,10 @@ export function RustEngineContainer({ children }: RustEngineContainerProps) {
             console.warn(
               `[entity-field-changed] entity ${entity_type}/${id} not in store, upserting`,
             );
-            return [...next, { entity_type, id, fields }];
+            return [
+              ...next,
+              { entity_type, id, moniker: `${entity_type}:${id}`, fields },
+            ];
           }
           return next;
         });

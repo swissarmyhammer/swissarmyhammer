@@ -14,7 +14,7 @@ function makeProps(
       type: { kind: "computed" },
     } as DisplayProps["field"],
     value,
-    entity: { entity_type: "board", id: "b1", fields: {} },
+    entity: { entity_type: "board", id: "b1", moniker: "board:b1", fields: {} },
     mode,
   };
 }

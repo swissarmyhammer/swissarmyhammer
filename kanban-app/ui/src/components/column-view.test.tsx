@@ -31,7 +31,12 @@ import type { Entity } from "@/types/kanban";
 
 /** Create a minimal column entity. */
 function makeColumn(id = "col-1", name = "To Do"): Entity {
-  return { entity_type: "column", id, fields: { name } };
+  return {
+    entity_type: "column",
+    id,
+    moniker: `column:${id}`,
+    fields: { name },
+  };
 }
 
 /** Create a minimal task entity. */
@@ -39,6 +44,7 @@ function makeTask(id: string, column = "col-1"): Entity {
   return {
     entity_type: "task",
     id,
+    moniker: `task:${id}`,
     fields: {
       title: `Task ${id}`,
       position_column: column,

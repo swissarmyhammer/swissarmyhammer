@@ -5,14 +5,25 @@ import { upsertEntity } from "./upsert-entity";
 
 describe("upsertEntity", () => {
   const existing: Entity[] = [
-    { entity_type: "task", id: "aaa", fields: { title: "A" } },
-    { entity_type: "task", id: "bbb", fields: { title: "B" } },
+    {
+      entity_type: "task",
+      id: "aaa",
+      moniker: "task:aaa",
+      fields: { title: "A" },
+    },
+    {
+      entity_type: "task",
+      id: "bbb",
+      moniker: "task:bbb",
+      fields: { title: "B" },
+    },
   ];
 
   it("replaces an entity already in the list", () => {
     const updated: Entity = {
       entity_type: "task",
       id: "aaa",
+      moniker: "task:aaa",
       fields: { title: "A-updated" },
     };
     const result = upsertEntity(existing, updated);
@@ -24,6 +35,7 @@ describe("upsertEntity", () => {
     const newEntity: Entity = {
       entity_type: "task",
       id: "ccc",
+      moniker: "task:ccc",
       fields: { title: "C" },
     };
     const result = upsertEntity(existing, newEntity);
@@ -35,6 +47,7 @@ describe("upsertEntity", () => {
     const updated: Entity = {
       entity_type: "task",
       id: "aaa",
+      moniker: "task:aaa",
       fields: { title: "A-updated" },
     };
     const result = upsertEntity(existing, updated);

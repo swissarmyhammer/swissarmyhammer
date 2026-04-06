@@ -53,6 +53,7 @@ function makeActor(
   return {
     entity_type: "actor",
     id,
+    moniker: `actor:${id}`,
     fields: {
       name,
       ...overrides,

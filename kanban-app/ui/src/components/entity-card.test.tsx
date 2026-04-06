@@ -117,6 +117,7 @@ function makeEntity(fieldOverrides: Record<string, unknown> = {}): Entity {
   return {
     entity_type: "task",
     id: "task-1",
+    moniker: "task:task-1",
     fields: {
       title: "Hello **world**",
       body: "",

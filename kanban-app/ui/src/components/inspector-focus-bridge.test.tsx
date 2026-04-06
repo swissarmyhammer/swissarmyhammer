@@ -79,7 +79,12 @@ import type { Entity } from "@/types/kanban";
 import { useState } from "react";
 
 function makeEntity(fields: Record<string, unknown> = {}): Entity {
-  return { entity_type: "task", id: "test-id", fields };
+  return {
+    entity_type: "task",
+    id: "test-id",
+    moniker: "task:test-id",
+    fields,
+  };
 }
 
 /** Reads focusedMoniker and renders it as text for test assertions. */

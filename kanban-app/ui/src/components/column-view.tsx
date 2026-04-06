@@ -13,7 +13,6 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { moniker, fieldMoniker } from "@/lib/moniker";
 import { useEntityCommands } from "@/lib/entity-commands";
 import { useSchema } from "@/lib/schema-context";
 import {
@@ -105,8 +104,8 @@ export const ColumnView = memo(function ColumnView({
   isFirstColumn = false,
   isLastColumn = false,
 }: ColumnViewProps) {
-  const columnMoniker = moniker("column", column.id);
-  const columnNameMoniker = fieldMoniker("column", column.id, "name");
+  const columnMoniker = column.moniker;
+  const columnNameMoniker = `${column.moniker}.name`;
   const dispatchTaskMove = useDispatchCommand("task.move");
   const dispatchTaskAdd = useDispatchCommand("task.add");
   const { getFieldDef } = useSchema();
@@ -203,10 +202,7 @@ export const ColumnView = memo(function ColumnView({
   // --- Compute claimWhen predicates for header and each card ---
 
   /** Monikers for tasks in this column, in display order. */
-  const taskMonikers = useMemo(
-    () => tasks.map((t) => moniker("task", t.id)),
-    [tasks],
-  );
+  const taskMonikers = useMemo(() => tasks.map((t) => t.moniker), [tasks]);
 
   /**
    * Helper: returns true if the focused moniker belongs to any card or header
