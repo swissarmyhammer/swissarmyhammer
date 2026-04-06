@@ -231,3 +231,182 @@ pub async fn execute_search(
         })?,
     ))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Helper that builds a minimal serde_json::Map with the given query.
+    fn search_args(query: &str) -> serde_json::Map<String, serde_json::Value> {
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "query".to_string(),
+            serde_json::Value::String(query.to_string()),
+        );
+        args
+    }
+
+    async fn test_context() -> ToolContext {
+        crate::test_utils::create_test_context().await
+    }
+
+    // ── Validation error paths ────────────────────────────────────────────────
+
+    /// An empty query is rejected before any network call is made.
+    #[tokio::test]
+    async fn test_execute_search_empty_query_returns_invalid_request() {
+        let ctx = test_context().await;
+        let result = execute_search(search_args(""), &ctx).await;
+        assert!(result.is_err(), "empty query should fail");
+        let err = result.unwrap_err();
+        assert!(
+            err.message.contains("empty") || err.message.contains("cannot be empty"),
+            "error should mention empty query, got: {}",
+            err.message
+        );
+    }
+
+    /// A whitespace-only query is treated the same as an empty query.
+    #[tokio::test]
+    async fn test_execute_search_whitespace_query_returns_invalid_request() {
+        let ctx = test_context().await;
+        let result = execute_search(search_args("   "), &ctx).await;
+        assert!(result.is_err(), "whitespace-only query should fail");
+    }
+
+    /// A query that exceeds 500 characters is rejected.
+    #[tokio::test]
+    async fn test_execute_search_query_too_long_returns_invalid_request() {
+        let ctx = test_context().await;
+        let long_query = "a".repeat(501);
+        let result = execute_search(search_args(&long_query), &ctx).await;
+        assert!(result.is_err(), "501-char query should fail");
+        let err = result.unwrap_err();
+        assert!(
+            err.message.contains("501") || err.message.contains("maximum"),
+            "error should mention query length, got: {}",
+            err.message
+        );
+    }
+
+    /// An invalid language code is rejected before any network call.
+    #[tokio::test]
+    async fn test_execute_search_invalid_language_returns_invalid_request() {
+        let ctx = test_context().await;
+        let mut args = search_args("rust programming");
+        args.insert(
+            "language".to_string(),
+            serde_json::Value::String("not-a-lang".to_string()),
+        );
+        let result = execute_search(args, &ctx).await;
+        assert!(result.is_err(), "invalid language should fail");
+        let err = result.unwrap_err();
+        assert!(
+            err.message.contains("language") || err.message.contains("Invalid"),
+            "error should mention language, got: {}",
+            err.message
+        );
+    }
+
+    /// Zero results_count is rejected.
+    #[tokio::test]
+    async fn test_execute_search_zero_results_count_returns_invalid_request() {
+        let ctx = test_context().await;
+        let mut args = search_args("rust");
+        args.insert(
+            "results_count".to_string(),
+            serde_json::Value::Number(serde_json::Number::from(0u64)),
+        );
+        let result = execute_search(args, &ctx).await;
+        assert!(result.is_err(), "results_count=0 should fail");
+        let err = result.unwrap_err();
+        assert!(
+            err.message.contains("least 1") || err.message.contains("results"),
+            "error should mention results count, got: {}",
+            err.message
+        );
+    }
+
+    /// results_count above the 50-item ceiling is rejected.
+    #[tokio::test]
+    async fn test_execute_search_excess_results_count_returns_invalid_request() {
+        let ctx = test_context().await;
+        let mut args = search_args("rust");
+        args.insert(
+            "results_count".to_string(),
+            serde_json::Value::Number(serde_json::Number::from(51u64)),
+        );
+        let result = execute_search(args, &ctx).await;
+        assert!(result.is_err(), "results_count=51 should fail");
+        let err = result.unwrap_err();
+        assert!(
+            err.message.contains("50") || err.message.contains("maximum"),
+            "error should mention maximum results, got: {}",
+            err.message
+        );
+    }
+
+    // ── Parameter parsing ────────────────────────────────────────────────────
+
+    /// Deserialization of unknown/extra fields should not panic execute_search.
+    /// This test may hit the real Brave endpoint; we only care that it does not
+    /// crash with a deserialization error on the extra field.
+    #[tokio::test]
+    async fn test_execute_search_ignores_unknown_fields_in_args() {
+        let ctx = test_context().await;
+        // "unknown_param" is not part of WebSearchRequest — the tool should
+        // either silently ignore it or fail gracefully (not panic).
+        let mut args = search_args("");
+        args.insert(
+            "unknown_param".to_string(),
+            serde_json::Value::String("ignored".to_string()),
+        );
+        // An empty query means validation fails before any network call.
+        let result = execute_search(args, &ctx).await;
+        assert!(
+            result.is_err(),
+            "empty query + unknown param should fail on validation"
+        );
+    }
+
+    // ── SearchUrl operation metadata ─────────────────────────────────────────
+
+    #[test]
+    fn test_search_url_operation_verb_and_noun() {
+        let op = SearchUrl::default();
+        assert_eq!(op.verb(), "search");
+        assert_eq!(op.noun(), "url");
+    }
+
+    #[test]
+    fn test_search_url_operation_description_not_empty() {
+        let op = SearchUrl::default();
+        assert!(!op.description().is_empty());
+    }
+
+    #[test]
+    fn test_search_url_operation_parameters_not_empty() {
+        let op = SearchUrl::default();
+        assert!(!op.parameters().is_empty());
+    }
+
+    #[test]
+    fn test_search_url_has_required_query_param() {
+        use swissarmyhammer_operations::ParamMeta;
+        let op = SearchUrl::default();
+        let params: &[ParamMeta] = op.parameters();
+        let query_param = params.iter().find(|p| p.name == "query");
+        assert!(query_param.is_some(), "should have a 'query' parameter");
+        assert!(
+            query_param.unwrap().required,
+            "'query' parameter should be required"
+        );
+    }
+
+    #[test]
+    fn test_search_url_op_string() {
+        use swissarmyhammer_operations::Operation;
+        let op = SearchUrl::default();
+        assert_eq!(op.op_string(), "search url");
+    }
+}

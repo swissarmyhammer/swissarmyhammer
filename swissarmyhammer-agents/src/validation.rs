@@ -66,4 +66,40 @@ mod tests {
         assert!(validate_frontmatter(&None, &Some("description".to_string())).is_err());
         assert!(validate_frontmatter(&Some("test".to_string()), &None).is_err());
     }
+
+    #[test]
+    fn test_validate_frontmatter_empty_name() {
+        let result = validate_frontmatter(&Some("".to_string()), &Some("desc".to_string()));
+        assert!(result.is_err());
+        let errors = result.unwrap_err();
+        assert!(errors.iter().any(|e| e.contains("name")));
+    }
+
+    #[test]
+    fn test_validate_frontmatter_empty_description() {
+        let result = validate_frontmatter(&Some("test".to_string()), &Some("".to_string()));
+        assert!(result.is_err());
+        let errors = result.unwrap_err();
+        assert!(errors.iter().any(|e| e.contains("description")));
+    }
+
+    #[test]
+    fn test_validate_frontmatter_both_none() {
+        let result = validate_frontmatter(&None, &None);
+        assert!(result.is_err());
+        let errors = result.unwrap_err();
+        assert!(
+            errors.len() >= 2,
+            "should have errors for both name and description"
+        );
+    }
+
+    #[test]
+    fn test_validate_frontmatter_invalid_name_format() {
+        let result = validate_frontmatter(&Some("INVALID".to_string()), &Some("desc".to_string()));
+        assert!(result.is_err());
+        let errors = result.unwrap_err();
+        // Should have the name validation error
+        assert!(errors.iter().any(|e| e.contains("lowercase")));
+    }
 }

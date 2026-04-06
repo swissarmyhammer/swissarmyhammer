@@ -25,13 +25,13 @@ pub enum KanbanError {
     #[error("column not found: {id}")]
     ColumnNotFound { id: String },
 
-    /// Swimlane not found
-    #[error("swimlane not found: {id}")]
-    SwimlaneNotFound { id: String },
-
     /// Actor not found
     #[error("actor not found: {id}")]
     ActorNotFound { id: String },
+
+    /// Project not found
+    #[error("project not found: {id}")]
+    ProjectNotFound { id: String },
 
     /// Tag not found
     #[error("tag not found: {id}")]
@@ -49,9 +49,9 @@ pub enum KanbanError {
     #[error("column '{id}' has {count} tasks and cannot be deleted")]
     ColumnNotEmpty { id: String, count: usize },
 
-    /// Swimlane has tasks and cannot be deleted
-    #[error("swimlane '{id}' has {count} tasks and cannot be deleted")]
-    SwimlaneNotEmpty { id: String, count: usize },
+    /// Project has tasks and cannot be deleted
+    #[error("project '{id}' has {count} tasks and cannot be deleted")]
+    ProjectHasTasks { id: String, count: usize },
 
     /// Duplicate ID
     #[error("duplicate {item_type} ID: {id}")]
@@ -108,6 +108,10 @@ pub enum KanbanError {
     /// Entity I/O error
     #[error("entity error: {0}")]
     EntityError(#[from] swissarmyhammer_entity::EntityError),
+
+    /// Store layer error
+    #[error("store error: {0}")]
+    StoreError(String),
 }
 
 impl KanbanError {
@@ -151,7 +155,7 @@ impl KanbanError {
             match entity_type.as_str() {
                 "task" => return Self::TaskNotFound { id: id.clone() },
                 "column" => return Self::ColumnNotFound { id: id.clone() },
-                "swimlane" => return Self::SwimlaneNotFound { id: id.clone() },
+                "project" => return Self::ProjectNotFound { id: id.clone() },
                 "actor" => return Self::ActorNotFound { id: id.clone() },
                 "tag" => return Self::TagNotFound { id: id.clone() },
                 "comment" => return Self::CommentNotFound { id: id.clone() },
@@ -166,9 +170,34 @@ impl KanbanError {
         Self::EntityError(err)
     }
 
+    /// Create a generic not-found error
+    pub fn not_found(resource: impl Into<String>, id: impl Into<String>) -> Self {
+        Self::NotFound {
+            resource: resource.into(),
+            id: id.into(),
+        }
+    }
+
     /// Check if this is a retryable error
     pub fn is_retryable(&self) -> bool {
         matches!(self, Self::LockBusy)
+    }
+}
+
+impl From<swissarmyhammer_perspectives::PerspectiveError> for KanbanError {
+    /// Convert a [`PerspectiveError`] into the corresponding [`KanbanError`] variant.
+    fn from(e: swissarmyhammer_perspectives::PerspectiveError) -> Self {
+        match e {
+            swissarmyhammer_perspectives::PerspectiveError::NotFound { resource, id } => {
+                KanbanError::NotFound { resource, id }
+            }
+            swissarmyhammer_perspectives::PerspectiveError::Io(inner) => KanbanError::Io(inner),
+            swissarmyhammer_perspectives::PerspectiveError::Yaml(inner) => KanbanError::Yaml(inner),
+            swissarmyhammer_perspectives::PerspectiveError::Json(inner) => KanbanError::Json(inner),
+            swissarmyhammer_perspectives::PerspectiveError::Store(inner) => {
+                KanbanError::StoreError(inner.to_string())
+            }
+        }
     }
 }
 

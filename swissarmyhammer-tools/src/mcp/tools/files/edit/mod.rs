@@ -1227,4 +1227,130 @@ mod tests {
         assert!(result.is_err());
         assert!(format!("{:?}", result).contains("path"));
     }
+
+    #[tokio::test]
+    async fn test_edit_whitespace_path_error() {
+        let context = crate::test_utils::create_test_context().await;
+
+        let args = create_edit_arguments("   ", "old", "new", None);
+        let result = execute_edit(args, &context).await;
+        assert!(result.is_err());
+        assert!(
+            format!("{:?}", result).contains("empty") || format!("{:?}", result).contains("path")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_edit_old_string_in_index_one_operation() {
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("index_test.txt");
+        fs::write(&test_file, "line 1\nline 2\nline 3\n").unwrap();
+
+        let context = crate::test_utils::create_test_context().await;
+
+        // Multiple edits - second operation has empty old_text
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "path".to_string(),
+            serde_json::Value::String(test_file.to_string_lossy().to_string()),
+        );
+        args.insert(
+            "edits".to_string(),
+            serde_json::json!([
+                { "oldText": "line 1", "newText": "LINE ONE" },
+                { "oldText": "", "newText": "something" }
+            ]),
+        );
+
+        let result = execute_edit(args, &context).await;
+        assert!(result.is_err());
+        let err = format!("{:?}", result.unwrap_err());
+        assert!(err.contains("old_text cannot be empty") || err.contains("empty"));
+    }
+
+    #[tokio::test]
+    async fn test_edit_multiple_edits_same_and_different_not_allowed() {
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("same_test.txt");
+        fs::write(&test_file, "content").unwrap();
+
+        let context = crate::test_utils::create_test_context().await;
+
+        // Multiple edits - second operation has same old and new text
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "path".to_string(),
+            serde_json::Value::String(test_file.to_string_lossy().to_string()),
+        );
+        args.insert(
+            "edits".to_string(),
+            serde_json::json!([
+                { "oldText": "content", "newText": "new_content" },
+                { "oldText": "same_text", "newText": "same_text" }
+            ]),
+        );
+
+        let result = execute_edit(args, &context).await;
+        assert!(result.is_err());
+        let err = format!("{:?}", result.unwrap_err());
+        assert!(err.contains("must be different") || err.contains("different"));
+    }
+
+    #[tokio::test]
+    async fn test_edit_multiple_edits_success_response_format() {
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("multi_response.txt");
+        fs::write(&test_file, "foo bar baz").unwrap();
+
+        let context = crate::test_utils::create_test_context().await;
+
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "path".to_string(),
+            serde_json::Value::String(test_file.to_string_lossy().to_string()),
+        );
+        args.insert(
+            "edits".to_string(),
+            serde_json::json!([
+                { "oldText": "foo", "newText": "FOO" },
+                { "oldText": "bar", "newText": "BAR" }
+            ]),
+        );
+
+        let result = execute_edit(args, &context).await;
+        assert!(result.is_ok());
+        let call_result = result.unwrap();
+        let text = match &call_result.content[0].raw {
+            rmcp::model::RawContent::Text(t) => t.text.clone(),
+            _ => panic!("Expected text"),
+        };
+        // Multiple edits response says "OK: Applied N edit operations"
+        assert!(text.contains("OK") && text.contains("2") || text.contains("Applied"));
+    }
+
+    #[tokio::test]
+    async fn test_edit_cr_line_endings_preserved() {
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("cr_endings.txt");
+        // Classic Mac line endings
+        let content = "line1\rold content\rline3\r";
+        fs::write(&test_file, content).unwrap();
+
+        let context = crate::test_utils::create_test_context().await;
+        let args = create_edit_arguments(
+            &test_file.to_string_lossy(),
+            "old content",
+            "new content",
+            None,
+        );
+
+        let result = execute_edit(args, &context).await;
+        assert!(result.is_ok());
+
+        let edited = fs::read(&test_file).unwrap();
+        let edited_str = String::from_utf8(edited).unwrap();
+        assert!(edited_str.contains("new content"));
+        // CR line endings should be preserved
+        assert!(edited_str.contains('\r'));
+    }
 }

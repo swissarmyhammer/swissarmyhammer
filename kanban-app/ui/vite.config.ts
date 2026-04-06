@@ -38,6 +38,7 @@ export default defineConfig({
           exclude: ["src/**/*.browser.test.{ts,tsx}"],
           environment: "jsdom",
           globals: true,
+          setupFiles: ["src/test/setup.ts"],
         },
       },
       {
@@ -66,6 +67,7 @@ export default defineConfig({
           browser: {
             enabled: true,
             provider: playwright(),
+            headless: true,
             instances: [{ browser: "chromium" }],
             commands: integrationCommands,
           },

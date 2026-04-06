@@ -110,6 +110,103 @@ mod tests {
     }
 
     #[test]
+    fn extract_text_skips_empty_strings() {
+        let mut e = Entity::new("task", "t1");
+        e.set("title", json!("Hello"));
+        e.set("empty", json!(""));
+        let text = extract_text(&e);
+        assert_eq!(text, "Hello");
+    }
+
+    #[test]
+    fn semantic_search_respects_limit() {
+        let embeddings = vec![
+            EntityEmbedding {
+                entity_id: "a".into(),
+                embedding: vec![1.0, 0.0],
+            },
+            EntityEmbedding {
+                entity_id: "b".into(),
+                embedding: vec![0.9, 0.1],
+            },
+            EntityEmbedding {
+                entity_id: "c".into(),
+                embedding: vec![0.0, 1.0],
+            },
+        ];
+        let query = vec![1.0, 0.0];
+        let results = semantic_search(&query, &embeddings, 2);
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].entity_id, "a");
+    }
+
+    #[test]
+    fn semantic_search_empty_embeddings() {
+        let results = semantic_search(&[1.0, 0.0], &[], 10);
+        assert!(results.is_empty());
+    }
+
+    #[tokio::test]
+    async fn build_embeddings_success() {
+        use model_embedding::mock::MockEmbedder;
+
+        let mut e = Entity::new("task", "t1");
+        e.set("title", json!("Fix login bug"));
+        let entities: Vec<(String, &Entity)> = vec![("t1".to_string(), &e)];
+
+        let embedder = MockEmbedder::new(4);
+        let result = build_embeddings(&entities, &embedder).await.unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].entity_id, "t1");
+        assert_eq!(result[0].embedding.len(), 4);
+    }
+
+    #[tokio::test]
+    async fn build_embeddings_skips_empty_text() {
+        use model_embedding::mock::MockEmbedder;
+
+        // Entity with no string fields — extract_text returns ""
+        let e = Entity::new("task", "t1");
+        let entities: Vec<(String, &Entity)> = vec![("t1".to_string(), &e)];
+
+        let embedder = MockEmbedder::new(4);
+        let result = build_embeddings(&entities, &embedder).await.unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn build_embeddings_model_not_loaded_breaks_early() {
+        use model_embedding::mock::MockEmbedder;
+
+        let mut e1 = Entity::new("task", "t1");
+        e1.set("title", json!("First"));
+        let mut e2 = Entity::new("task", "t2");
+        e2.set("title", json!("Second"));
+        let entities: Vec<(String, &Entity)> =
+            vec![("t1".to_string(), &e1), ("t2".to_string(), &e2)];
+
+        // Fail on first call with ModelNotLoaded — should break, not error
+        let embedder = MockEmbedder::with_model_not_loaded(4, vec![0]);
+        let result = build_embeddings(&entities, &embedder).await.unwrap();
+        // Should have 0 embeddings since it broke on the first call
+        assert!(result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn build_embeddings_other_error_propagates() {
+        use model_embedding::mock::MockEmbedder;
+
+        let mut e = Entity::new("task", "t1");
+        e.set("title", json!("Something"));
+        let entities: Vec<(String, &Entity)> = vec![("t1".to_string(), &e)];
+
+        // Fail with TextProcessing error — should propagate
+        let embedder = MockEmbedder::with_failures(4, vec![0]);
+        let result = build_embeddings(&entities, &embedder).await;
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn semantic_search_ranks_by_similarity() {
         let embeddings = vec![
             EntityEmbedding {

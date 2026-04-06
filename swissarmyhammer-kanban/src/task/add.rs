@@ -30,8 +30,6 @@ pub struct AddTask {
     pub description: Option<String>,
     /// Initial column (if None, uses first column)
     pub column: Option<String>,
-    /// Initial swimlane
-    pub swimlane: Option<String>,
     /// Initial ordinal (if None, appended at end)
     pub ordinal: Option<String>,
     /// Assignees for this task
@@ -49,7 +47,6 @@ impl AddTask {
             title: title.into(),
             description: None,
             column: None,
-            swimlane: None,
             ordinal: None,
             assignees: Vec::new(),
             depends_on: Vec::new(),
@@ -62,10 +59,9 @@ impl AddTask {
         self
     }
 
-    /// Set the position (column, swimlane, ordinal) for backward compat
+    /// Set the position (column, ordinal) for backward compat
     pub fn with_position(mut self, position: crate::types::Position) -> Self {
         self.column = Some(position.column.to_string());
-        self.swimlane = position.swimlane.map(|s| s.to_string());
         self.ordinal = Some(position.ordinal.as_str().to_string());
         self
     }
@@ -107,7 +103,7 @@ impl Execute<KanbanContext, KanbanError> for AddTask {
                 }
             };
 
-            // Calculate ordinal at end of target column/swimlane
+            // Calculate ordinal at end of target column
             let ordinal = match &self.ordinal {
                 Some(ord) => ord.clone(),
                 None => {
@@ -116,8 +112,7 @@ impl Execute<KanbanContext, KanbanError> for AddTask {
 
                     for t in &tasks {
                         let t_col = t.get_str("position_column").unwrap_or("");
-                        let t_swim = t.get_str("position_swimlane");
-                        if t_col == column && t_swim == self.swimlane.as_deref() {
+                        if t_col == column {
                             let ord_str = t
                                 .get_str("position_ordinal")
                                 .unwrap_or(Ordinal::DEFAULT_STR);
@@ -143,9 +138,6 @@ impl Execute<KanbanContext, KanbanError> for AddTask {
             entity.set("title", json!(self.title));
             entity.set("body", json!(self.description.clone().unwrap_or_default()));
             entity.set("position_column", json!(column));
-            if let Some(ref swimlane) = self.swimlane {
-                entity.set("position_swimlane", json!(swimlane));
-            }
             entity.set("position_ordinal", json!(ordinal));
 
             if !self.assignees.is_empty() {

@@ -133,6 +133,9 @@ pub struct FieldDef {
     pub section: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub validate: Option<String>,
+    /// Whether this field can be used as a group-by column in grid views.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub groupable: Option<bool>,
 }
 
 impl FieldDef {
@@ -215,6 +218,8 @@ pub struct EntityCommandKeys {
 /// Commands are metadata only -- the frontend attaches `execute` implementations
 /// at mount time by matching on `id`. The `name` field is a template string
 /// that may reference `{{entity.type}}` or `{{entity.<field>}}`.
+/// Carries the same metadata as `CommandDef` so entity YAML files can be the
+/// single source of truth for entity-scoped commands.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct EntityCommand {
     pub id: String,
@@ -224,6 +229,19 @@ pub struct EntityCommand {
     pub context_menu: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub keys: Option<EntityCommandKeys>,
+    /// Whether this command supports undo.
+    #[serde(default)]
+    pub undoable: bool,
+    /// Whether this command is visible in the command palette. Defaults to true
+    /// when absent (matching `CommandDef` semantics).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub visible: Option<bool>,
+    /// Display name override for native menus.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub menu_name: Option<String>,
+    /// Scope string for dual-scoped commands (e.g. `"entity:tag,entity:task"`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
 }
 
 /// An entity definition -- a template declaring which fields belong to an entity type.
@@ -362,6 +380,77 @@ editor: custom-widget
     }
 
     #[test]
+    fn groupable_deserializes_when_present() {
+        let yaml_input = r#"
+id: 00000000000000000000000001
+name: tags
+type:
+  kind: text
+  single_line: true
+groupable: true
+"#;
+        let field: FieldDef = serde_yaml_ng::from_str(yaml_input).unwrap();
+        assert_eq!(field.groupable, Some(true));
+    }
+
+    #[test]
+    fn groupable_defaults_to_none_when_absent() {
+        let yaml_input = r#"
+id: 00000000000000000000000001
+name: title
+type:
+  kind: text
+  single_line: true
+"#;
+        let field: FieldDef = serde_yaml_ng::from_str(yaml_input).unwrap();
+        assert_eq!(field.groupable, None);
+    }
+
+    #[test]
+    fn groupable_round_trips_through_yaml() {
+        let field = FieldDef {
+            id: FieldDefId::new(),
+            name: "tags".into(),
+            description: None,
+            type_: FieldType::Text { single_line: true },
+            default: None,
+            editor: None,
+            display: None,
+            sort: None,
+            width: None,
+            icon: None,
+            section: None,
+            validate: None,
+            groupable: Some(true),
+        };
+        let yaml = serde_yaml_ng::to_string(&field).unwrap();
+        assert!(yaml.contains("groupable: true"));
+        let parsed: FieldDef = serde_yaml_ng::from_str(&yaml).unwrap();
+        assert_eq!(field, parsed);
+    }
+
+    #[test]
+    fn groupable_none_omitted_from_yaml() {
+        let field = FieldDef {
+            id: FieldDefId::new(),
+            name: "title".into(),
+            description: None,
+            type_: FieldType::Text { single_line: true },
+            default: None,
+            editor: None,
+            display: None,
+            sort: None,
+            width: None,
+            icon: None,
+            section: None,
+            validate: None,
+            groupable: None,
+        };
+        let yaml = serde_yaml_ng::to_string(&field).unwrap();
+        assert!(!yaml.contains("groupable"));
+    }
+
+    #[test]
     fn field_def_yaml_round_trip() {
         let field = FieldDef {
             id: FieldDefId::new(),
@@ -393,6 +482,7 @@ editor: custom-widget
             icon: None,
             section: None,
             validate: None,
+            groupable: None,
         };
         let yaml = serde_yaml_ng::to_string(&field).unwrap();
         let parsed: FieldDef = serde_yaml_ng::from_str(&yaml).unwrap();
@@ -414,6 +504,7 @@ editor: custom-widget
             icon: None,
             section: None,
             validate: None,
+            groupable: None,
         };
         let yaml = serde_yaml_ng::to_string(&field).unwrap();
         assert!(yaml.contains("type:"));
@@ -481,6 +572,7 @@ editor: custom-widget
             icon: None,
             section: None,
             validate: None,
+            groupable: None,
         };
         assert_eq!(field.effective_editor(), "date");
         assert_eq!(field.effective_display(), "date");
@@ -501,6 +593,7 @@ editor: custom-widget
             icon: None,
             section: None,
             validate: None,
+            groupable: None,
         };
         assert_eq!(field.effective_editor(), "none");
         assert_eq!(field.effective_display(), "badge");
@@ -526,6 +619,7 @@ editor: custom-widget
             icon: None,
             section: None,
             validate: None,
+            groupable: None,
         };
         assert_eq!(field.effective_editor(), "none");
         assert_eq!(field.effective_display(), "text");
@@ -549,6 +643,7 @@ editor: custom-widget
             icon: None,
             section: None,
             validate: None,
+            groupable: None,
         };
         assert_eq!(single.effective_editor(), "select");
         assert_eq!(single.effective_display(), "badge");
@@ -569,6 +664,7 @@ editor: custom-widget
             icon: None,
             section: None,
             validate: None,
+            groupable: None,
         };
         assert_eq!(multi.effective_editor(), "multi-select");
         assert_eq!(multi.effective_display(), "badge-list");
@@ -595,6 +691,7 @@ editor: custom-widget
             icon: None,
             section: None,
             validate: None,
+            groupable: None,
         };
         assert_eq!(field.effective_editor(), "number");
         assert_eq!(field.effective_display(), "number");
@@ -798,6 +895,7 @@ fields:
             icon: None,
             section: None,
             validate: None,
+            groupable: None,
         };
         assert_eq!(field.effective_sort(), SortKind::Lexical);
     }
@@ -817,6 +915,7 @@ fields:
             icon: None,
             section: None,
             validate: None,
+            groupable: None,
         };
         assert_eq!(field.effective_sort(), SortKind::Datetime);
     }
@@ -836,6 +935,7 @@ fields:
             icon: None,
             section: None,
             validate: None,
+            groupable: None,
         };
         assert_eq!(field.effective_sort(), SortKind::Datetime);
     }
@@ -858,6 +958,7 @@ fields:
             icon: None,
             section: None,
             validate: None,
+            groupable: None,
         };
         assert_eq!(field.effective_sort(), SortKind::Numeric);
     }
@@ -885,6 +986,7 @@ fields:
             icon: None,
             section: None,
             validate: None,
+            groupable: None,
         };
         assert_eq!(field.effective_sort(), SortKind::OptionOrder);
 
@@ -910,6 +1012,7 @@ fields:
             icon: None,
             section: None,
             validate: None,
+            groupable: None,
         };
         assert_eq!(multi.effective_sort(), SortKind::OptionOrder);
     }
@@ -929,6 +1032,7 @@ fields:
             icon: None,
             section: None,
             validate: None,
+            groupable: None,
         };
         assert_eq!(field.effective_sort(), SortKind::Lexical);
     }
@@ -949,6 +1053,7 @@ fields:
             icon: None,
             section: None,
             validate: None,
+            groupable: None,
         };
         assert_eq!(field.effective_sort(), SortKind::Lexical);
     }
@@ -970,6 +1075,10 @@ fields:
                     name: "Inspect {{entity.type}}".into(),
                     context_menu: true,
                     keys: None,
+                    undoable: false,
+                    visible: None,
+                    menu_name: None,
+                    scope: None,
                 },
                 EntityCommand {
                     id: "entity.archive".into(),
@@ -980,6 +1089,10 @@ fields:
                         cua: None,
                         emacs: None,
                     }),
+                    undoable: false,
+                    visible: None,
+                    menu_name: None,
+                    scope: None,
                 },
             ],
         };
@@ -1027,34 +1140,6 @@ fields:
         assert!(entity.commands[1].context_menu);
     }
 
-    /// Helper: build a FieldDef with no explicit editor/display for the given type.
-    fn field_with_type(type_: FieldType) -> FieldDef {
-        FieldDef {
-            id: FieldDefId::new(),
-            name: "test".into(),
-            description: None,
-            type_,
-            default: None,
-            editor: None,
-            display: None,
-            sort: None,
-            width: None,
-            icon: None,
-            section: None,
-            validate: None,
-        }
-    }
-
-    #[test]
-    fn reference_multiple_field_infers_editor_display() {
-        let field = field_with_type(FieldType::Reference {
-            entity: "task".into(),
-            multiple: true,
-        });
-        assert_eq!(field.effective_editor(), "multi-select");
-        assert_eq!(field.effective_display(), "badge-list");
-    }
-
     #[test]
     fn entity_def_without_commands_still_deserializes() {
         // Backwards compat: existing YAML without a commands field should
@@ -1068,6 +1153,117 @@ fields:
         let entity: EntityDef = serde_yaml_ng::from_str(yaml_input).unwrap();
         assert_eq!(entity.name, "tag");
         assert!(entity.commands.is_empty());
+    }
+
+    // ── helpers for effective_* tests ─────────────────────────────────
+
+    /// Build a minimal FieldDef with the given type and no explicit overrides.
+    fn make_field(type_: FieldType) -> FieldDef {
+        FieldDef {
+            id: FieldDefId::new(),
+            name: "test".into(),
+            description: None,
+            type_,
+            default: None,
+            editor: None,
+            display: None,
+            sort: None,
+            width: None,
+            icon: None,
+            section: None,
+            validate: None,
+            groupable: None,
+        }
+    }
+
+    // ── is_false (serde helper) ───────────────────────────────────────
+
+    #[test]
+    fn is_false_returns_true_for_false_input() {
+        assert!(is_false(&false));
+    }
+
+    #[test]
+    fn is_false_returns_false_for_true_input() {
+        assert!(!is_false(&true));
+    }
+
+    // ── effective_editor: explicit override ───────────────────────────
+
+    #[test]
+    fn effective_editor_uses_explicit_when_set() {
+        let mut f = make_field(FieldType::Text { single_line: false });
+        f.editor = Some("custom-editor".into());
+        assert_eq!(f.effective_editor(), "custom-editor");
+    }
+
+    // ── effective_editor: Computed type (not covered by existing tests)
+
+    #[test]
+    fn effective_editor_computed_defaults_to_none() {
+        let f = make_field(FieldType::Computed {
+            derive: "count".into(),
+            depends_on: vec![],
+            entity: None,
+            commit_display_names: false,
+        });
+        assert_eq!(f.effective_editor(), "none");
+    }
+
+    // ── effective_display: explicit override ──────────────────────────
+
+    #[test]
+    fn effective_display_uses_explicit_when_set() {
+        let mut f = make_field(FieldType::Date);
+        f.display = Some("custom-display".into());
+        assert_eq!(f.effective_display(), "custom-display");
+    }
+
+    // ── effective_display: Computed type (not covered by existing tests)
+
+    #[test]
+    fn effective_display_computed_defaults_to_text() {
+        let f = make_field(FieldType::Computed {
+            derive: "count".into(),
+            depends_on: vec![],
+            entity: None,
+            commit_display_names: false,
+        });
+        assert_eq!(f.effective_display(), "text");
+    }
+
+    // ── effective_sort: types not covered by existing tests ───────────
+
+    #[test]
+    fn effective_sort_markdown_defaults_to_lexical() {
+        let f = make_field(FieldType::Markdown { single_line: false });
+        assert_eq!(f.effective_sort(), SortKind::Lexical);
+    }
+
+    #[test]
+    fn effective_sort_color_defaults_to_lexical() {
+        let f = make_field(FieldType::Color);
+        assert_eq!(f.effective_sort(), SortKind::Lexical);
+    }
+
+    #[test]
+    fn effective_sort_reference_defaults_to_lexical() {
+        let f = make_field(FieldType::Reference {
+            entity: "task".into(),
+            multiple: false,
+        });
+        assert_eq!(f.effective_sort(), SortKind::Lexical);
+    }
+
+    #[test]
+    fn effective_sort_computed_defaults_to_lexical() {
+        let f = make_field(FieldType::Computed {
+            derive: "count".into(),
+            depends_on: vec![],
+            entity: None,
+            commit_display_names: false,
+        });
+        assert_eq!(f.effective_sort(), SortKind::Lexical);
     }
 
     #[test]
@@ -1108,7 +1304,7 @@ fields:
 
     #[test]
     fn attachment_field_infers_editor_display() {
-        let single = field_with_type(FieldType::Attachment {
+        let single = make_field(FieldType::Attachment {
             max_bytes: 104_857_600,
             multiple: false,
         });
@@ -1116,12 +1312,81 @@ fields:
         assert_eq!(single.effective_display(), "attachment");
         assert_eq!(single.effective_sort(), SortKind::Lexical);
 
-        let multi = field_with_type(FieldType::Attachment {
+        let multi = make_field(FieldType::Attachment {
             max_bytes: 104_857_600,
             multiple: true,
         });
         assert_eq!(multi.effective_editor(), "attachment");
         assert_eq!(multi.effective_display(), "attachment-list");
         assert_eq!(multi.effective_sort(), SortKind::Lexical);
+    }
+
+    fn field_with_type(type_: FieldType) -> FieldDef {
+        FieldDef {
+            id: FieldDefId::new(),
+            name: "test".into(),
+            description: None,
+            type_,
+            default: None,
+            editor: None,
+            display: None,
+            sort: None,
+            width: None,
+            icon: None,
+            section: None,
+            validate: None,
+            groupable: None,
+        }
+    }
+
+    #[test]
+    fn text_field_infers_editor_display() {
+        let field = field_with_type(FieldType::Text { single_line: true });
+        assert_eq!(field.effective_editor(), "markdown");
+        assert_eq!(field.effective_display(), "text");
+    }
+
+    #[test]
+    fn markdown_field_infers_editor_display() {
+        let field = field_with_type(FieldType::Markdown { single_line: false });
+        assert_eq!(field.effective_editor(), "markdown");
+        assert_eq!(field.effective_display(), "markdown");
+    }
+
+    #[test]
+    fn color_field_infers_editor_display() {
+        let field = field_with_type(FieldType::Color);
+        assert_eq!(field.effective_editor(), "color-palette");
+        assert_eq!(field.effective_display(), "color-swatch");
+    }
+
+    #[test]
+    fn select_field_infers_editor_display() {
+        let field = field_with_type(FieldType::Select {
+            options: vec![SelectOption {
+                value: "A".into(),
+                label: None,
+                color: None,
+                icon: None,
+                order: 0,
+            }],
+        });
+        assert_eq!(field.effective_editor(), "select");
+        assert_eq!(field.effective_display(), "badge");
+    }
+
+    #[test]
+    fn multi_select_field_infers_editor_display() {
+        let field = field_with_type(FieldType::MultiSelect {
+            options: vec![SelectOption {
+                value: "X".into(),
+                label: None,
+                color: None,
+                icon: None,
+                order: 0,
+            }],
+        });
+        assert_eq!(field.effective_editor(), "multi-select");
+        assert_eq!(field.effective_display(), "badge-list");
     }
 }

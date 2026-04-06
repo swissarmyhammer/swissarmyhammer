@@ -305,6 +305,188 @@ mod tests {
     }
 
     #[test]
+    fn test_non_object_json_returns_empty() {
+        // JSON arrays at top level should return no entities
+        let plugin = JsonParserPlugin;
+        let entities = plugin.extract_entities("[1, 2, 3]", "data.json");
+        assert!(entities.is_empty());
+    }
+
+    #[test]
+    fn test_empty_json_returns_empty() {
+        let plugin = JsonParserPlugin;
+        let entities = plugin.extract_entities("", "empty.json");
+        assert!(entities.is_empty());
+    }
+
+    #[test]
+    fn test_whitespace_only_returns_empty() {
+        let plugin = JsonParserPlugin;
+        let entities = plugin.extract_entities("   \n  \n  ", "blank.json");
+        assert!(entities.is_empty());
+    }
+
+    #[test]
+    fn test_single_property() {
+        let content = "{\n  \"key\": \"value\"\n}\n";
+        let plugin = JsonParserPlugin;
+        let entities = plugin.extract_entities(content, "test.json");
+        assert_eq!(entities.len(), 1);
+        assert_eq!(entities[0].name, "key");
+        assert_eq!(entities[0].entity_type, "property");
+    }
+
+    #[test]
+    fn test_nested_array_value() {
+        let content = "{\n  \"items\": [\n    1,\n    2,\n    3\n  ]\n}\n";
+        let plugin = JsonParserPlugin;
+        let entities = plugin.extract_entities(content, "arr.json");
+        assert_eq!(entities.len(), 1);
+        assert_eq!(entities[0].name, "items");
+        assert_eq!(entities[0].entity_type, "object");
+    }
+
+    #[test]
+    fn test_boolean_and_null_values() {
+        let content = "{\n  \"enabled\": true,\n  \"debug\": false,\n  \"extra\": null\n}\n";
+        let plugin = JsonParserPlugin;
+        let entities = plugin.extract_entities(content, "flags.json");
+        assert_eq!(entities.len(), 3);
+        assert!(entities.iter().all(|e| e.entity_type == "property"));
+    }
+
+    #[test]
+    fn test_numeric_value() {
+        let content = "{\n  \"port\": 8080\n}\n";
+        let plugin = JsonParserPlugin;
+        let entities = plugin.extract_entities(content, "config.json");
+        assert_eq!(entities.len(), 1);
+        assert_eq!(entities[0].entity_type, "property");
+    }
+
+    #[test]
+    fn test_json_pointer_with_special_chars() {
+        // Key with / and ~ should be escaped in the JSON pointer
+        let content = "{\n  \"a/b\": 1,\n  \"c~d\": 2\n}\n";
+        let plugin = JsonParserPlugin;
+        let entities = plugin.extract_entities(content, "special.json");
+        assert_eq!(entities.len(), 2);
+        // Check pointer escaping: ~ → ~0, / → ~1
+        assert_eq!(entities[0].id, "special.json::property::/a~1b");
+        assert_eq!(entities[1].id, "special.json::property::/c~0d");
+    }
+
+    #[test]
+    fn test_string_value_with_colon() {
+        // Colon inside a string value should not confuse the parser
+        let content = "{\n  \"url\": \"http://example.com:8080\"\n}\n";
+        let plugin = JsonParserPlugin;
+        let entities = plugin.extract_entities(content, "urls.json");
+        assert_eq!(entities.len(), 1);
+        assert_eq!(entities[0].name, "url");
+    }
+
+    #[test]
+    fn test_escaped_quote_in_key() {
+        // Key with escaped quotes inside
+        let content = "{\n  \"say\\\"hi\\\"\": \"value\"\n}\n";
+        let plugin = JsonParserPlugin;
+        let entities = plugin.extract_entities(content, "escaped.json");
+        assert_eq!(entities.len(), 1);
+        assert_eq!(entities[0].name, "say\\\"hi\\\"");
+    }
+
+    #[test]
+    fn test_many_properties() {
+        let content = "{\n  \"a\": 1,\n  \"b\": 2,\n  \"c\": 3,\n  \"d\": 4,\n  \"e\": 5\n}\n";
+        let plugin = JsonParserPlugin;
+        let entities = plugin.extract_entities(content, "many.json");
+        assert_eq!(entities.len(), 5);
+        let names: Vec<&str> = entities.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, vec!["a", "b", "c", "d", "e"]);
+    }
+
+    #[test]
+    fn test_extract_value_content_scalar() {
+        let result = extract_value_content("\"key\": 42");
+        assert_eq!(result, "42");
+    }
+
+    #[test]
+    fn test_extract_value_content_string_value() {
+        let result = extract_value_content("\"key\": \"hello\"");
+        assert_eq!(result, "\"hello\"");
+    }
+
+    #[test]
+    fn test_extract_value_content_with_trailing_comma() {
+        let result = extract_value_content("\"key\": 42,");
+        assert_eq!(result, "42");
+    }
+
+    #[test]
+    fn test_extract_value_content_with_colon_in_string_key() {
+        // Colon inside the key string should be skipped; only the bare colon matters
+        let result = extract_value_content("\"url:port\": 8080");
+        assert_eq!(result, "8080");
+    }
+
+    #[test]
+    fn test_extract_value_content_no_colon() {
+        // If there's no colon, returns the original content
+        let result = extract_value_content("just some text");
+        assert_eq!(result, "just some text");
+    }
+
+    #[test]
+    fn test_find_closing_brace_line() {
+        let lines = vec!["  {", "    \"a\": 1", "  }"];
+        assert_eq!(find_closing_brace_line(&lines), 3);
+    }
+
+    #[test]
+    fn test_find_closing_brace_line_no_brace() {
+        let lines = vec!["no", "closing", "brace"];
+        assert_eq!(find_closing_brace_line(&lines), 3); // falls back to lines.len()
+    }
+
+    #[test]
+    fn test_trim_trailing_blanks() {
+        let lines = vec!["{", "  \"a\": 1,", "", "  \"b\": 2", "}"];
+        // From start=2 (line 2, "  \"a\": 1,"), next_start=4 (line 4, "  \"b\": 2")
+        // Should trim the blank line 3 and return end_line 2
+        let end = trim_trailing_blanks(&lines, 2, 4);
+        assert_eq!(end, 2);
+    }
+
+    #[test]
+    fn test_json_plugin_id_and_extensions() {
+        let plugin = JsonParserPlugin;
+        assert_eq!(plugin.id(), "json");
+        assert_eq!(plugin.extensions(), &[".json"]);
+    }
+
+    #[test]
+    fn test_entity_file_path() {
+        let content = "{\n  \"key\": \"value\"\n}\n";
+        let plugin = JsonParserPlugin;
+        let entities = plugin.extract_entities(content, "path/to/config.json");
+        assert_eq!(entities[0].file_path, "path/to/config.json");
+    }
+
+    #[test]
+    fn test_deeply_nested_object_is_single_entity() {
+        // Only top-level keys become entities
+        let content =
+            "{\n  \"config\": {\n    \"db\": {\n      \"host\": \"localhost\"\n    }\n  }\n}\n";
+        let plugin = JsonParserPlugin;
+        let entities = plugin.extract_entities(content, "deep.json");
+        assert_eq!(entities.len(), 1);
+        assert_eq!(entities[0].name, "config");
+        assert_eq!(entities[0].entity_type, "object");
+    }
+
+    #[test]
     fn test_renamed_object_property_shares_structural_hash() {
         let before_content = "{\n  \"config\": {\n    \"port\": 8080\n  }\n}\n";
         let after_content = "{\n  \"settings\": {\n    \"port\": 8080\n  }\n}\n";

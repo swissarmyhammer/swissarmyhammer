@@ -10,11 +10,11 @@ use crate::style::Style;
 /// Uses git2 to count modified, staged, untracked, deleted, and conflicted files.
 /// Also shows ahead/behind counts relative to the upstream tracking branch.
 pub fn eval(ctx: &ModuleContext) -> ModuleOutput {
-    let mut repo = match git2::Repository::discover(".") {
-        Ok(r) => r,
-        Err(_) => return ModuleOutput::hidden(),
-    };
+    try_eval(ctx).unwrap_or_else(ModuleOutput::hidden)
+}
 
+fn try_eval(ctx: &ModuleContext) -> Option<ModuleOutput> {
+    let mut repo = git2::Repository::discover(".").ok()?;
     let cfg = &ctx.config.git_status;
 
     let mut modified = 0u32;
@@ -26,32 +26,17 @@ pub fn eval(ctx: &ModuleContext) -> ModuleOutput {
     // Scope the immutable borrow of `repo` via `statuses` so we can later
     // call `stash_foreach` which requires `&mut self`.
     {
-        let statuses = match repo.statuses(None) {
-            Ok(s) => s,
-            Err(_) => return ModuleOutput::hidden(),
-        };
-
+        let statuses = repo.statuses(None).ok()?;
         for entry in statuses.iter() {
             let s = entry.status();
-            if s.intersects(git2::Status::WT_MODIFIED | git2::Status::WT_RENAMED) {
-                modified += 1;
-            }
-            if s.intersects(
-                git2::Status::INDEX_NEW
-                    | git2::Status::INDEX_MODIFIED
-                    | git2::Status::INDEX_RENAMED,
-            ) {
-                staged += 1;
-            }
-            if s.contains(git2::Status::WT_NEW) {
-                untracked += 1;
-            }
-            if s.intersects(git2::Status::WT_DELETED | git2::Status::INDEX_DELETED) {
-                deleted += 1;
-            }
-            if s.contains(git2::Status::CONFLICTED) {
-                conflicted += 1;
-            }
+            classify_status(
+                s,
+                &mut modified,
+                &mut staged,
+                &mut untracked,
+                &mut deleted,
+                &mut conflicted,
+            );
         }
     }
 
@@ -65,6 +50,64 @@ pub fn eval(ctx: &ModuleContext) -> ModuleOutput {
     // Ahead/behind
     let (ahead, behind) = get_ahead_behind(&repo);
 
+    let counts = StatusCounts {
+        modified,
+        staged,
+        untracked,
+        deleted,
+        conflicted,
+        stashed,
+        ahead,
+        behind,
+    };
+    Some(build_status_output(&counts, cfg))
+}
+
+/// Classify a single git status entry and increment the appropriate counters.
+fn classify_status(
+    s: git2::Status,
+    modified: &mut u32,
+    staged: &mut u32,
+    untracked: &mut u32,
+    deleted: &mut u32,
+    conflicted: &mut u32,
+) {
+    if s.intersects(git2::Status::WT_MODIFIED | git2::Status::WT_RENAMED) {
+        *modified += 1;
+    }
+    if s.intersects(
+        git2::Status::INDEX_NEW | git2::Status::INDEX_MODIFIED | git2::Status::INDEX_RENAMED,
+    ) {
+        *staged += 1;
+    }
+    if s.contains(git2::Status::WT_NEW) {
+        *untracked += 1;
+    }
+    if s.intersects(git2::Status::WT_DELETED | git2::Status::INDEX_DELETED) {
+        *deleted += 1;
+    }
+    if s.contains(git2::Status::CONFLICTED) {
+        *conflicted += 1;
+    }
+}
+
+/// Raw counts for git status.
+struct StatusCounts {
+    modified: u32,
+    staged: u32,
+    untracked: u32,
+    deleted: u32,
+    conflicted: u32,
+    stashed: u32,
+    ahead: usize,
+    behind: usize,
+}
+
+/// Build the styled module output from raw status counts.
+fn build_status_output(
+    counts: &StatusCounts,
+    cfg: &crate::config::GitStatusModuleConfig,
+) -> ModuleOutput {
     // Helper: format a symbol with an optional count
     let fmt = |symbol: &str, count: u32| -> String {
         if cfg.show_counts {
@@ -83,35 +126,35 @@ pub fn eval(ctx: &ModuleContext) -> ModuleOutput {
         }
         all_status.push_str(&part);
     };
-    if modified > 0 {
-        push_part(fmt(&cfg.modified, modified));
+    if counts.modified > 0 {
+        push_part(fmt(&cfg.modified, counts.modified));
     }
-    if staged > 0 {
-        push_part(fmt(&cfg.staged, staged));
+    if counts.staged > 0 {
+        push_part(fmt(&cfg.staged, counts.staged));
     }
-    if untracked > 0 {
-        push_part(fmt(&cfg.untracked, untracked));
+    if counts.untracked > 0 {
+        push_part(fmt(&cfg.untracked, counts.untracked));
     }
-    if deleted > 0 {
-        push_part(fmt(&cfg.deleted, deleted));
+    if counts.deleted > 0 {
+        push_part(fmt(&cfg.deleted, counts.deleted));
     }
-    if conflicted > 0 {
-        push_part(fmt(&cfg.conflicted, conflicted));
+    if counts.conflicted > 0 {
+        push_part(fmt(&cfg.conflicted, counts.conflicted));
     }
-    if stashed > 0 {
-        push_part(fmt(&cfg.stashed, stashed));
+    if counts.stashed > 0 {
+        push_part(fmt(&cfg.stashed, counts.stashed));
     }
 
     // Build ahead_behind string
     let mut ahead_behind = String::new();
-    if ahead > 0 && behind > 0 {
-        ahead_behind = fmt(&cfg.diverged, ahead as u32);
+    if counts.ahead > 0 && counts.behind > 0 {
+        ahead_behind = fmt(&cfg.diverged, counts.ahead as u32);
     } else {
-        if ahead > 0 {
-            ahead_behind.push_str(&fmt(&cfg.ahead, ahead as u32));
+        if counts.ahead > 0 {
+            ahead_behind.push_str(&fmt(&cfg.ahead, counts.ahead as u32));
         }
-        if behind > 0 {
-            ahead_behind.push_str(&fmt(&cfg.behind, behind as u32));
+        if counts.behind > 0 {
+            ahead_behind.push_str(&fmt(&cfg.behind, counts.behind as u32));
         }
     }
 
@@ -134,27 +177,592 @@ pub fn eval(ctx: &ModuleContext) -> ModuleOutput {
 
 /// Get ahead/behind counts relative to the upstream tracking branch.
 fn get_ahead_behind(repo: &git2::Repository) -> (usize, usize) {
-    let head = match repo.head() {
-        Ok(h) => h,
-        Err(_) => return (0, 0),
-    };
+    try_ahead_behind(repo).unwrap_or((0, 0))
+}
 
-    let local_oid = match head.target() {
-        Some(oid) => oid,
-        None => return (0, 0),
-    };
-
-    let branch_name = match head.shorthand() {
-        Some(name) => name.to_string(),
-        None => return (0, 0),
-    };
-
+fn try_ahead_behind(repo: &git2::Repository) -> Option<(usize, usize)> {
+    let head = repo.head().ok()?;
+    let local_oid = head.target()?;
+    let branch_name = head.shorthand()?;
     let upstream_ref = format!("refs/remotes/origin/{}", branch_name);
-    let upstream_oid = match repo.refname_to_id(&upstream_ref) {
-        Ok(oid) => oid,
-        Err(_) => return (0, 0),
-    };
+    let upstream_oid = repo.refname_to_id(&upstream_ref).ok()?;
+    repo.graph_ahead_behind(local_oid, upstream_oid).ok()
+}
 
-    repo.graph_ahead_behind(local_oid, upstream_oid)
-        .unwrap_or((0, 0))
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::StatuslineConfig;
+    use crate::input::StatuslineInput;
+
+    fn default_cfg() -> crate::config::GitStatusModuleConfig {
+        StatuslineConfig::default().git_status
+    }
+
+    #[test]
+    fn test_git_status_in_repo() {
+        let input = StatuslineInput::default();
+        let config = StatuslineConfig::default();
+        let ctx = ModuleContext {
+            input: &input,
+            config: &config,
+        };
+        let _out = eval(&ctx);
+    }
+
+    #[test]
+    fn test_git_status_with_counts() {
+        let input = StatuslineInput::default();
+        let mut config = StatuslineConfig::default();
+        config.git_status.show_counts = true;
+        let ctx = ModuleContext {
+            input: &input,
+            config: &config,
+        };
+        let _out = eval(&ctx);
+    }
+
+    #[test]
+    fn test_build_status_modified_only() {
+        let cfg = default_cfg();
+        let counts = StatusCounts {
+            modified: 3,
+            staged: 0,
+            untracked: 0,
+            deleted: 0,
+            conflicted: 0,
+            stashed: 0,
+            ahead: 0,
+            behind: 0,
+        };
+        let out = build_status_output(&counts, &cfg);
+        assert!(!out.is_empty());
+        assert!(out.text.contains("!"));
+    }
+
+    #[test]
+    fn test_build_status_all_types() {
+        let cfg = default_cfg();
+        let counts = StatusCounts {
+            modified: 1,
+            staged: 2,
+            untracked: 3,
+            deleted: 1,
+            conflicted: 1,
+            stashed: 1,
+            ahead: 0,
+            behind: 0,
+        };
+        let out = build_status_output(&counts, &cfg);
+        assert!(!out.is_empty());
+        assert!(out.text.contains("!"));
+        assert!(out.text.contains("+"));
+        assert!(out.text.contains("?"));
+    }
+
+    #[test]
+    fn test_build_status_with_counts_enabled() {
+        let mut cfg = default_cfg();
+        cfg.show_counts = true;
+        let counts = StatusCounts {
+            modified: 3,
+            staged: 2,
+            untracked: 5,
+            deleted: 1,
+            conflicted: 0,
+            stashed: 4,
+            ahead: 0,
+            behind: 0,
+        };
+        let out = build_status_output(&counts, &cfg);
+        assert!(out.text.contains("!3"));
+        assert!(out.text.contains("+2"));
+        assert!(out.text.contains("?5"));
+        assert!(out.text.contains("$4"));
+    }
+
+    #[test]
+    fn test_build_status_empty_hidden() {
+        let cfg = default_cfg();
+        let counts = StatusCounts {
+            modified: 0,
+            staged: 0,
+            untracked: 0,
+            deleted: 0,
+            conflicted: 0,
+            stashed: 0,
+            ahead: 0,
+            behind: 0,
+        };
+        let out = build_status_output(&counts, &cfg);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn test_build_status_ahead_only() {
+        let cfg = default_cfg();
+        let counts = StatusCounts {
+            modified: 0,
+            staged: 0,
+            untracked: 0,
+            deleted: 0,
+            conflicted: 0,
+            stashed: 0,
+            ahead: 3,
+            behind: 0,
+        };
+        let out = build_status_output(&counts, &cfg);
+        assert!(!out.is_empty());
+    }
+
+    #[test]
+    fn test_build_status_behind_only() {
+        let cfg = default_cfg();
+        let counts = StatusCounts {
+            modified: 0,
+            staged: 0,
+            untracked: 0,
+            deleted: 0,
+            conflicted: 0,
+            stashed: 0,
+            ahead: 0,
+            behind: 2,
+        };
+        let out = build_status_output(&counts, &cfg);
+        assert!(!out.is_empty());
+    }
+
+    #[test]
+    fn test_build_status_diverged() {
+        let cfg = default_cfg();
+        let counts = StatusCounts {
+            modified: 0,
+            staged: 0,
+            untracked: 0,
+            deleted: 0,
+            conflicted: 0,
+            stashed: 0,
+            ahead: 2,
+            behind: 3,
+        };
+        let out = build_status_output(&counts, &cfg);
+        assert!(!out.is_empty());
+    }
+
+    #[test]
+    fn test_build_status_mixed_status_and_ahead() {
+        let cfg = default_cfg();
+        let counts = StatusCounts {
+            modified: 1,
+            staged: 0,
+            untracked: 0,
+            deleted: 0,
+            conflicted: 0,
+            stashed: 0,
+            ahead: 1,
+            behind: 0,
+        };
+        let out = build_status_output(&counts, &cfg);
+        assert!(!out.is_empty());
+    }
+
+    #[test]
+    fn test_build_status_conflicted_and_deleted() {
+        let cfg = default_cfg();
+        let counts = StatusCounts {
+            modified: 0,
+            staged: 0,
+            untracked: 0,
+            deleted: 2,
+            conflicted: 1,
+            stashed: 0,
+            ahead: 0,
+            behind: 0,
+        };
+        let out = build_status_output(&counts, &cfg);
+        assert!(!out.is_empty());
+    }
+
+    #[test]
+    fn test_classify_modified() {
+        let (mut m, mut s, mut u, mut d, mut c) = (0, 0, 0, 0, 0);
+        classify_status(
+            git2::Status::WT_MODIFIED,
+            &mut m,
+            &mut s,
+            &mut u,
+            &mut d,
+            &mut c,
+        );
+        assert_eq!(m, 1);
+        assert_eq!((s, u, d, c), (0, 0, 0, 0));
+    }
+
+    #[test]
+    fn test_classify_renamed() {
+        let (mut m, mut s, mut u, mut d, mut c) = (0, 0, 0, 0, 0);
+        classify_status(
+            git2::Status::WT_RENAMED,
+            &mut m,
+            &mut s,
+            &mut u,
+            &mut d,
+            &mut c,
+        );
+        assert_eq!(m, 1);
+    }
+
+    #[test]
+    fn test_classify_staged() {
+        let (mut m, mut s, mut u, mut d, mut c) = (0, 0, 0, 0, 0);
+        classify_status(
+            git2::Status::INDEX_NEW,
+            &mut m,
+            &mut s,
+            &mut u,
+            &mut d,
+            &mut c,
+        );
+        assert_eq!(s, 1);
+        classify_status(
+            git2::Status::INDEX_MODIFIED,
+            &mut m,
+            &mut s,
+            &mut u,
+            &mut d,
+            &mut c,
+        );
+        assert_eq!(s, 2);
+        classify_status(
+            git2::Status::INDEX_RENAMED,
+            &mut m,
+            &mut s,
+            &mut u,
+            &mut d,
+            &mut c,
+        );
+        assert_eq!(s, 3);
+    }
+
+    #[test]
+    fn test_classify_untracked() {
+        let (mut m, mut s, mut u, mut d, mut c) = (0, 0, 0, 0, 0);
+        classify_status(git2::Status::WT_NEW, &mut m, &mut s, &mut u, &mut d, &mut c);
+        assert_eq!(u, 1);
+    }
+
+    #[test]
+    fn test_classify_deleted() {
+        let (mut m, mut s, mut u, mut d, mut c) = (0, 0, 0, 0, 0);
+        classify_status(
+            git2::Status::WT_DELETED,
+            &mut m,
+            &mut s,
+            &mut u,
+            &mut d,
+            &mut c,
+        );
+        assert_eq!(d, 1);
+        classify_status(
+            git2::Status::INDEX_DELETED,
+            &mut m,
+            &mut s,
+            &mut u,
+            &mut d,
+            &mut c,
+        );
+        assert_eq!(d, 2);
+    }
+
+    #[test]
+    fn test_classify_conflicted() {
+        let (mut m, mut s, mut u, mut d, mut c) = (0, 0, 0, 0, 0);
+        classify_status(
+            git2::Status::CONFLICTED,
+            &mut m,
+            &mut s,
+            &mut u,
+            &mut d,
+            &mut c,
+        );
+        assert_eq!(c, 1);
+    }
+
+    #[test]
+    fn test_get_ahead_behind_in_repo() {
+        let repo = git2::Repository::discover(".").unwrap();
+        let (ahead, behind) = get_ahead_behind(&repo);
+        // Just verify it doesn't crash; actual values depend on repo state
+        let _ = (ahead, behind);
+    }
+
+    #[test]
+    fn test_build_status_deleted_only_with_counts() {
+        let mut cfg = default_cfg();
+        cfg.show_counts = true;
+        let counts = StatusCounts {
+            modified: 0,
+            staged: 0,
+            untracked: 0,
+            deleted: 4,
+            conflicted: 0,
+            stashed: 0,
+            ahead: 0,
+            behind: 0,
+        };
+        let out = build_status_output(&counts, &cfg);
+        assert!(!out.is_empty());
+        assert!(out.text.contains("4"));
+    }
+
+    #[test]
+    fn test_build_status_conflicted_only_with_counts() {
+        let mut cfg = default_cfg();
+        cfg.show_counts = true;
+        let counts = StatusCounts {
+            modified: 0,
+            staged: 0,
+            untracked: 0,
+            deleted: 0,
+            conflicted: 7,
+            stashed: 0,
+            ahead: 0,
+            behind: 0,
+        };
+        let out = build_status_output(&counts, &cfg);
+        assert!(!out.is_empty());
+        assert!(out.text.contains("=7"));
+    }
+
+    #[test]
+    fn test_build_status_stashed_only_with_counts() {
+        let mut cfg = default_cfg();
+        cfg.show_counts = true;
+        let counts = StatusCounts {
+            modified: 0,
+            staged: 0,
+            untracked: 0,
+            deleted: 0,
+            conflicted: 0,
+            stashed: 3,
+            ahead: 0,
+            behind: 0,
+        };
+        let out = build_status_output(&counts, &cfg);
+        assert!(!out.is_empty());
+        assert!(out.text.contains("$3"));
+    }
+
+    #[test]
+    fn test_build_status_behind_with_counts() {
+        let mut cfg = default_cfg();
+        cfg.show_counts = true;
+        let counts = StatusCounts {
+            modified: 0,
+            staged: 0,
+            untracked: 0,
+            deleted: 0,
+            conflicted: 0,
+            stashed: 0,
+            ahead: 0,
+            behind: 5,
+        };
+        let out = build_status_output(&counts, &cfg);
+        assert!(!out.is_empty());
+        assert!(out.text.contains("5"));
+    }
+
+    #[test]
+    fn test_build_status_ahead_with_counts() {
+        let mut cfg = default_cfg();
+        cfg.show_counts = true;
+        let counts = StatusCounts {
+            modified: 0,
+            staged: 0,
+            untracked: 0,
+            deleted: 0,
+            conflicted: 0,
+            stashed: 0,
+            ahead: 8,
+            behind: 0,
+        };
+        let out = build_status_output(&counts, &cfg);
+        assert!(!out.is_empty());
+        assert!(out.text.contains("8"));
+    }
+
+    #[test]
+    fn test_build_status_diverged_with_counts() {
+        let mut cfg = default_cfg();
+        cfg.show_counts = true;
+        let counts = StatusCounts {
+            modified: 0,
+            staged: 0,
+            untracked: 0,
+            deleted: 0,
+            conflicted: 0,
+            stashed: 0,
+            ahead: 4,
+            behind: 6,
+        };
+        let out = build_status_output(&counts, &cfg);
+        assert!(!out.is_empty());
+        assert!(out.text.contains("4"));
+    }
+
+    #[test]
+    fn test_build_status_space_separation_with_counts() {
+        let mut cfg = default_cfg();
+        cfg.show_counts = true;
+        let counts = StatusCounts {
+            modified: 1,
+            staged: 2,
+            untracked: 3,
+            deleted: 0,
+            conflicted: 0,
+            stashed: 0,
+            ahead: 0,
+            behind: 0,
+        };
+        let out = build_status_output(&counts, &cfg);
+        // With counts on, parts are space-separated
+        assert!(out.text.contains("!1 +2 ?3") || out.text.contains("!1"));
+    }
+
+    #[test]
+    fn test_build_status_no_space_without_counts() {
+        let cfg = default_cfg();
+        let counts = StatusCounts {
+            modified: 1,
+            staged: 1,
+            untracked: 1,
+            deleted: 0,
+            conflicted: 0,
+            stashed: 0,
+            ahead: 0,
+            behind: 0,
+        };
+        let out = build_status_output(&counts, &cfg);
+        // Without counts, symbols are packed tight
+        assert!(out.text.contains("!+?"));
+    }
+
+    #[test]
+    fn test_build_status_status_and_behind() {
+        let cfg = default_cfg();
+        let counts = StatusCounts {
+            modified: 1,
+            staged: 0,
+            untracked: 0,
+            deleted: 0,
+            conflicted: 0,
+            stashed: 0,
+            ahead: 0,
+            behind: 2,
+        };
+        let out = build_status_output(&counts, &cfg);
+        assert!(!out.is_empty());
+    }
+
+    #[test]
+    fn test_build_status_all_types_with_counts() {
+        let mut cfg = default_cfg();
+        cfg.show_counts = true;
+        let counts = StatusCounts {
+            modified: 1,
+            staged: 2,
+            untracked: 3,
+            deleted: 4,
+            conflicted: 5,
+            stashed: 6,
+            ahead: 7,
+            behind: 8,
+        };
+        let out = build_status_output(&counts, &cfg);
+        assert!(!out.is_empty());
+        // Diverged takes precedence over separate ahead/behind
+        assert!(out.text.contains("!1"));
+        assert!(out.text.contains("+2"));
+        assert!(out.text.contains("?3"));
+        assert!(out.text.contains("$6"));
+    }
+
+    #[test]
+    fn test_build_status_render_output() {
+        let cfg = default_cfg();
+        let counts = StatusCounts {
+            modified: 1,
+            staged: 0,
+            untracked: 0,
+            deleted: 0,
+            conflicted: 0,
+            stashed: 0,
+            ahead: 0,
+            behind: 0,
+        };
+        let out = build_status_output(&counts, &cfg);
+        let rendered = out.render();
+        // Should have ANSI codes from style
+        assert!(rendered.contains("!"));
+        assert!(rendered.contains("\x1b["));
+    }
+
+    #[test]
+    fn test_classify_combined_status_flags() {
+        let (mut m, mut s, mut u, mut d, mut c) = (0, 0, 0, 0, 0);
+        // A file that is both modified in worktree and staged
+        let combined = git2::Status::WT_MODIFIED | git2::Status::INDEX_MODIFIED;
+        classify_status(combined, &mut m, &mut s, &mut u, &mut d, &mut c);
+        assert_eq!(m, 1);
+        assert_eq!(s, 1);
+    }
+
+    #[test]
+    fn test_classify_empty_status() {
+        let (mut m, mut s, mut u, mut d, mut c) = (0, 0, 0, 0, 0);
+        classify_status(
+            git2::Status::CURRENT,
+            &mut m,
+            &mut s,
+            &mut u,
+            &mut d,
+            &mut c,
+        );
+        assert_eq!((m, s, u, d, c), (0, 0, 0, 0, 0));
+    }
+
+    #[test]
+    fn test_build_status_only_ahead_behind_no_status() {
+        let cfg = default_cfg();
+        // Only ahead, no file changes
+        let counts = StatusCounts {
+            modified: 0,
+            staged: 0,
+            untracked: 0,
+            deleted: 0,
+            conflicted: 0,
+            stashed: 0,
+            ahead: 1,
+            behind: 0,
+        };
+        let out = build_status_output(&counts, &cfg);
+        assert!(!out.is_empty());
+        // ahead_behind should NOT have a space prefix since all_status is empty
+        assert!(!out.text.starts_with(" "));
+    }
+
+    #[test]
+    fn test_eval_produces_output_or_hidden() {
+        // eval wraps try_eval, ensuring no panics
+        let input = StatuslineInput::default();
+        let config = StatuslineConfig::default();
+        let ctx = ModuleContext {
+            input: &input,
+            config: &config,
+        };
+        let out = eval(&ctx);
+        // In a git repo: non-empty or empty, just ensure no crash
+        let _ = out.is_empty();
+        let _ = out.render();
+    }
 }

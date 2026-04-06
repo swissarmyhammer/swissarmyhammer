@@ -234,3 +234,63 @@ impl ServerHandler for FilteringMcpProxy {
             .with_instructions("Filtering proxy for MCP tool access control")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::filter::ToolFilter;
+
+    /// Create a proxy instance for testing without a live upstream.
+    fn make_proxy(upstream_url: &str) -> FilteringMcpProxy {
+        let filter = ToolFilter::new(vec![], vec![]).unwrap();
+        FilteringMcpProxy::new(upstream_url.to_string(), filter)
+    }
+
+    #[test]
+    fn test_new_stores_upstream_url() {
+        let proxy = make_proxy("http://127.0.0.1:9999/mcp");
+        assert_eq!(proxy.upstream_url, "http://127.0.0.1:9999/mcp");
+    }
+
+    #[test]
+    fn test_proxy_implementation_name() {
+        let impl_info = FilteringMcpProxy::proxy_implementation();
+        assert_eq!(impl_info.name, "swissarmyhammer-filtering-proxy");
+    }
+
+    #[test]
+    fn test_proxy_capabilities_has_tools_and_prompts() {
+        let caps = FilteringMcpProxy::proxy_capabilities();
+        assert!(caps.tools.is_some(), "capabilities should include tools");
+        assert!(
+            caps.prompts.is_some(),
+            "capabilities should include prompts"
+        );
+    }
+
+    #[test]
+    fn test_get_info_returns_server_info() {
+        let proxy = make_proxy("http://127.0.0.1:9999/mcp");
+        let info = proxy.get_info();
+        // The info should contain implementation details
+        assert_eq!(info.server_info.name, "swissarmyhammer-filtering-proxy");
+    }
+
+    #[test]
+    fn test_proxy_is_cloneable() {
+        let proxy = make_proxy("http://127.0.0.1:9999/mcp");
+        let _cloned = proxy.clone();
+    }
+
+    #[test]
+    fn test_map_upstream_error_formats_message() {
+        use rmcp::service::ServiceError;
+        let err = ServiceError::TransportClosed;
+        let mcp_err = FilteringMcpProxy::map_upstream_error("list_tools", err);
+        let msg = mcp_err.message;
+        assert!(
+            msg.contains("list_tools"),
+            "error message should contain operation name"
+        );
+    }
+}

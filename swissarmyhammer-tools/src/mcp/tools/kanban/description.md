@@ -39,23 +39,23 @@ The tool accepts `op` as a "verb noun" string (e.g., "add task", "move task").
 
 - `list columns` - List all columns
 
-### Swimlane Operations
+### Project Operations
 
-- `add swimlane` - Add horizontal grouping
+- `add project` - Create a project for grouping tasks
   - Required: `id`, `name`
-  - Optional: `order`
+  - Optional: `description`, `color` (6-char hex without #), `order`
 
-- `get swimlane` - Get swimlane by ID
+- `get project` - Get project by ID
   - Required: `id`
 
-- `update swimlane` - Update swimlane name or order
+- `update project` - Update project properties
   - Required: `id`
-  - Optional: `name`, `order`
+  - Optional: `name`, `description`, `color`, `order`
 
-- `delete swimlane` - Delete a swimlane
+- `delete project` - Delete a project (fails if tasks reference it)
   - Required: `id`
 
-- `list swimlanes` - List all swimlanes
+- `list projects` - List all projects
 
 ### Actor Operations
 
@@ -92,7 +92,7 @@ The tool accepts `op` as a "verb noun" string (e.g., "add task", "move task").
 
 - `move task` - Move task to a different column or position
   - Required: `id`, `column`
-  - Optional: `swimlane`, `ordinal`, `before_id` (place before this task), `after_id` (place after this task)
+  - Optional: `ordinal`, `before_id` (place before this task), `after_id` (place after this task)
 
 - `delete task` - Delete a task (removes from dependencies)
   - Required: `id`
@@ -113,10 +113,10 @@ The tool accepts `op` as a "verb noun" string (e.g., "add task", "move task").
   - Required: `id` (task), `tag` (tag ID)
 
 - `next task` - Get next actionable task from any non-done column (no incomplete dependencies)
-  - Optional: `tag`, `swimlane`, `assignee`
+  - Optional: `tag`, `assignee`
 
 - `list tasks` - List tasks with optional filters (excludes done tasks by default)
-  - Optional: `column`, `swimlane`, `tag`, `assignee`, `ready`
+  - Optional: `column`, `tag`, `assignee`, `ready`
   - **Important**: Never call with no parameters — always provide at least one filter. Done tasks are automatically excluded unless you explicitly pass `column: "done"`. Prefer `next task` to get one actionable card at a time.
 
 ### Tag Operations
@@ -174,11 +174,6 @@ The tool accepts `op` as a "verb noun" string (e.g., "add task", "move task").
 - `list attachments` - List all attachments on a task
   - Required: `task_id`
 
-### Activity Operations
-
-- `list activity` - List recent operations (most recent first)
-  - Optional: `limit` (number of entries)
-
 ## Examples
 
 ### Initialize a board
@@ -202,13 +197,15 @@ The tool accepts `op` as a "verb noun" string (e.g., "add task", "move task").
 }
 ```
 
-### Add swimlanes for organization
+### Add projects for organization
 
 ```json
 {
-  "op": "add swimlane",
-  "id": "feature",
-  "name": "Feature Work"
+  "op": "add project",
+  "id": "backend",
+  "name": "Backend Services",
+  "description": "API and server-side work",
+  "color": "0066cc"
 }
 ```
 
@@ -261,8 +258,7 @@ Move a task:
 {
   "op": "move task",
   "id": "01ABC123...",
-  "column": "doing",
-  "swimlane": "feature"
+  "column": "doing"
 }
 ```
 
@@ -384,14 +380,6 @@ The blocked task won't appear in ready tasks until the blocker is completed:
 }
 ```
 
-### View activity log
-
-```json
-{
-  "op": "list activity",
-  "limit": 10
-}
-```
 
 ## Complete Workflow Example
 

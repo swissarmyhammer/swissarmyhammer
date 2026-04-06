@@ -1,31 +1,16 @@
-import {
-  useCallback,
-  useContext,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
-import {
-  useActiveBoardPath,
-  backendDispatch,
-  CommandScopeContext,
-  scopeChainFromScope,
-} from "@/lib/command-scope";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useDispatchCommand } from "@/lib/command-scope";
 import { useGrid } from "@/hooks/use-grid";
 import { useSchema } from "@/lib/schema-context";
 import { useEntityStore } from "@/lib/entity-store-context";
-import { useInspect } from "@/lib/inspect-context";
 import { fieldMoniker } from "@/lib/moniker";
 import {
   useEntityFocus,
   type ClaimPredicate,
 } from "@/lib/entity-focus-context";
-import {
-  useEntityCommands,
-  buildEntityCommandDefs,
-} from "@/lib/entity-commands";
+import { buildEntityCommandDefs } from "@/lib/entity-commands";
 import { CommandScopeProvider, type CommandDef } from "@/lib/command-scope";
+import { useActivePerspective } from "@/components/perspective-container";
 import { DataTable, type DataTableColumn } from "@/components/data-table";
 import { Field } from "@/components/fields/field";
 import type { ViewDef, Entity, FieldDef } from "@/types/kanban";
@@ -35,22 +20,32 @@ interface GridViewProps {
 }
 
 export function GridView({ view }: GridViewProps) {
-  const boardPath = useActiveBoardPath();
-  const boardPathRef = useRef(boardPath);
-  boardPathRef.current = boardPath;
-  const scope = useContext(CommandScopeContext);
-  const scopeChain = useMemo(() => scopeChainFromScope(scope), [scope]);
+  const dispatch = useDispatchCommand();
   const { getEntities } = useEntityStore();
 
   // All hooks must be called unconditionally (React rules of hooks).
   // Use empty-string fallback so hooks always run; we guard before JSX below.
   const entityType = view.entity_type ?? "";
-  const entities = getEntities(entityType);
+  const rawEntities = getEntities(entityType);
   const { getSchema, getEntityCommands } = useSchema();
   const schema = getSchema(entityType);
   const fields = schema?.fields ?? [];
   // Schema-driven entity commands for per-row context menus
   const schemaCommands = getEntityCommands(entityType);
+
+  // Filter and sort entities through the active perspective container.
+  const { activePerspective, applyFilter, applySort, groupField } =
+    useActivePerspective();
+  const entities = useMemo(() => {
+    const filtered = applyFilter(rawEntities);
+    return applySort(filtered);
+  }, [applyFilter, applySort, rawEntities]);
+
+  // Derive DataTable grouping from the active perspective's group field.
+  const grouping = useMemo<string[] | undefined>(
+    () => (groupField ? [groupField] : undefined),
+    [groupField],
+  );
 
   // Build columns from view's card_fields (or all visible fields)
   const columns = useMemo<DataTableColumn[]>(() => {
@@ -125,16 +120,20 @@ export function GridView({ view }: GridViewProps) {
   const gridRef = useRef(grid);
   gridRef.current = grid;
 
-  // Focus the first cell on mount if no grid cell is focused
+  // Focus the first cell on initial mount if no grid cell is focused.
+  // Guarded by a ref so it only fires once — without this, entity changes
+  // after a cell edit rebuild cellMonikers, which changes firstCellMoniker's
+  // reference, re-fires the effect, and snaps the cursor back to (0,0).
   const firstCellMoniker = cellMonikers[0]?.[0] ?? null;
+  const hasInitialFocusRef = useRef(false);
   useEffect(() => {
     if (!firstCellMoniker) return;
-    // Only focus if nothing in this grid is currently focused
+    if (hasInitialFocusRef.current) return;
     if (!derivedCursor) {
       setFocus(firstCellMoniker);
+      hasInitialFocusRef.current = true;
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [firstCellMoniker, setFocus]);
+  }, [firstCellMoniker, setFocus, derivedCursor]);
 
   /**
    * Build claimWhen predicates for each cell in the grid.
@@ -237,16 +236,6 @@ export function GridView({ view }: GridViewProps) {
       }),
     );
   }, [cellMonikers, cellMonikerMap, columns.length]);
-
-  const inspectEntity = useInspect();
-
-  // Current entity and field from cursor position
-  const currentEntity =
-    grid.cursor.row >= 0 && grid.cursor.row < entities.length
-      ? entities[grid.cursor.row]
-      : null;
-  // currentField and monikers removed — not currently needed.
-  // Re-derive from grid.cursor.col + columns if needed in the future.
 
   // Grid-level commands: navigation broadcasts nav commands via claimWhen.
   // Non-navigation commands (edit, visual, delete, new row) remain push-based.
@@ -371,13 +360,8 @@ export function GridView({ view }: GridViewProps) {
           const row = gridRef.current.cursor.row;
           if (row >= 0 && row < entities.length) {
             const entity = entities[row];
-            backendDispatch({
-              cmd: `${entityType}.archive`,
+            dispatch(`${entityType}.archive`, {
               args: { id: entity.id },
-              ...(boardPathRef.current
-                ? { boardPath: boardPathRef.current }
-                : {}),
-              scopeChain,
             }).catch((err) => console.error("Failed to delete row:", err));
           }
         },
@@ -387,13 +371,8 @@ export function GridView({ view }: GridViewProps) {
         name: "New Row Below",
         keys: { vim: "o", cua: "Mod+Enter" },
         execute: () => {
-          backendDispatch({
-            cmd: `${entityType}.add`,
+          dispatch(`${entityType}.add`, {
             args: { title: `New ${entityType}` },
-            ...(boardPathRef.current
-              ? { boardPath: boardPathRef.current }
-              : {}),
-            scopeChain,
           }).catch((err) => console.error("Failed to add row:", err));
         },
       },
@@ -402,32 +381,13 @@ export function GridView({ view }: GridViewProps) {
         name: "New Row Above",
         keys: { vim: "O", cua: "Mod+Shift+Enter" },
         execute: () => {
-          backendDispatch({
-            cmd: `${entityType}.add`,
+          dispatch(`${entityType}.add`, {
             args: { title: `New ${entityType}` },
-            ...(boardPathRef.current
-              ? { boardPath: boardPathRef.current }
-              : {}),
-            scopeChain,
           }).catch((err) => console.error("Failed to add row:", err));
         },
       },
     ],
     [entities, entityType],
-  );
-
-  // Entity-level commands (depend on cursor row)
-  // Schema-driven: reads entity commands from YAML schema via useEntityCommands.
-  const entityCommands = useEntityCommands(
-    entityType,
-    currentEntity?.id ?? "",
-    currentEntity
-      ? {
-          entity_type: entityType,
-          id: currentEntity.id,
-          fields: currentEntity.fields ?? {},
-        }
-      : undefined,
   );
 
   const handleCellClick = useCallback(
@@ -456,12 +416,10 @@ export function GridView({ view }: GridViewProps) {
         schemaCommands,
         entityType,
         entity.id,
-        inspectEntity,
-        boardPathRef.current,
         entity,
       );
     },
-    [schemaCommands, entityType, inspectEntity],
+    [schemaCommands, entityType],
   );
 
   const renderEditor = useCallback(
@@ -501,10 +459,6 @@ export function GridView({ view }: GridViewProps) {
 
   return (
     <CommandScopeProvider commands={gridCommands}>
-      {/* Entity commands scope — navigation is pull-based via claimWhen */}
-      <CommandScopeProvider commands={entityCommands}>
-        <></>
-      </CommandScopeProvider>
       <main className="flex-1 flex flex-col min-h-0">
         <div className="flex items-center px-4 py-1.5 border-b border-border bg-muted/30 text-xs text-muted-foreground gap-3">
           <span>{entities.length} rows</span>
@@ -533,8 +487,11 @@ export function GridView({ view }: GridViewProps) {
           claimPredicates={claimPredicates}
           onCellClick={handleCellClick}
           renderEditor={renderEditor}
+          grouping={grouping}
           onVisibleRowCount={setVisibleRowCount}
           rowEntityCommands={buildRowEntityCommands}
+          perspectiveSort={activePerspective?.sort}
+          perspectiveId={activePerspective?.id}
         />
       </main>
     </CommandScopeProvider>

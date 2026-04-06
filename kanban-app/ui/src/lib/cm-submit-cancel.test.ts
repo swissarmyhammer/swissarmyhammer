@@ -212,6 +212,43 @@ describe("buildSubmitCancelExtensions", () => {
       expect(refs.onCancelRef.current).not.toHaveBeenCalled();
     });
 
+    it("Enter in insert mode calls onSubmitRef when alwaysSubmitOnEnter is true", async () => {
+      const refs = makeRefs();
+      const extensions = [
+        vim(),
+        ...buildSubmitCancelExtensions({
+          mode: "vim",
+          ...refs,
+          alwaysSubmitOnEnter: true,
+        }),
+      ];
+      const { view, cleanup: c } = createEditor(extensions, "hello");
+      cleanup = c;
+
+      // Enter insert mode
+      const cm = getCM(view);
+      if (cm) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (cm as any).state.vim.insertMode = true;
+      }
+
+      // alwaysSubmitOnEnter uses Prec.highest keymap, which fires through
+      // CM6's key dispatch on contentDOM (not a capture-phase DOM listener).
+      view.contentDOM.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Enter",
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+
+      // Submit is deferred with setTimeout to avoid destroying the view
+      // mid-dispatch, so flush the microtask/timer queue.
+      await new Promise((r) => setTimeout(r, 0));
+
+      expect(refs.onSubmitRef.current).toHaveBeenCalledOnce();
+    });
+
     it("singleLine=false skips Enter handler entirely", () => {
       const refs = makeRefs();
       const extensions = [

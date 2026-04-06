@@ -879,6 +879,422 @@ pub mod tests {
         }
     }
 
+    // ── StdFileSystem tests (use real temp directories) ──────────────────
+
+    #[test]
+    fn test_std_fs_read_to_string() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("hello.txt");
+        std::fs::write(&file, "hello world").unwrap();
+
+        let fs = StdFileSystem;
+        let content = fs.read_to_string(&file).unwrap();
+        assert_eq!(content, "hello world");
+    }
+
+    #[test]
+    fn test_std_fs_read_to_string_not_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("nope.txt");
+
+        let fs = StdFileSystem;
+        let result = fs.read_to_string(&missing);
+        assert!(result.is_err());
+    }
+
+    // NOTE: StdFileSystem::write and write_with_permissions cannot be tested
+    // directly with real I/O in #[cfg(test)] mode. The test-mode code path
+    // calls create_dir_all on the parent directory, which applies
+    // FilePermissions::Standard (0o644) -- this removes the execute bit from
+    // the directory, making it untraversable on Unix. The subsequent
+    // std::fs::write then fails with "Permission denied". These methods are
+    // exercised through MockFileSystem in the tests above. The non-test
+    // (production) atomic-write path is not reachable from #[cfg(test)].
+
+    #[test]
+    fn test_std_fs_exists() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("exists.txt");
+        std::fs::write(&file, "").unwrap();
+
+        let fs = StdFileSystem;
+        assert!(fs.exists(&file));
+        assert!(!fs.exists(&dir.path().join("missing.txt")));
+    }
+
+    #[test]
+    fn test_std_fs_is_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("file.txt");
+        std::fs::write(&file, "").unwrap();
+
+        let fs = StdFileSystem;
+        assert!(fs.is_file(&file));
+        assert!(!fs.is_file(dir.path()));
+    }
+
+    #[test]
+    fn test_std_fs_is_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("file.txt");
+        std::fs::write(&file, "").unwrap();
+
+        let fs = StdFileSystem;
+        assert!(fs.is_dir(dir.path()));
+        assert!(!fs.is_dir(&file));
+    }
+
+    #[test]
+    fn test_std_fs_create_dir_all() {
+        let dir = tempfile::tempdir().unwrap();
+        let nested = dir.path().join("x").join("y").join("z");
+
+        let fs = StdFileSystem;
+        fs.create_dir_all(&nested).unwrap();
+        assert!(nested.is_dir());
+
+        // Restore execute bits so tempdir cleanup works
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            for d in &[
+                dir.path().join("x").join("y").join("z"),
+                dir.path().join("x").join("y"),
+                dir.path().join("x"),
+            ] {
+                let _ = std::fs::set_permissions(d, std::fs::Permissions::from_mode(0o755));
+            }
+        }
+    }
+
+    #[test]
+    fn test_std_fs_create_dir_all_with_permissions() {
+        let dir = tempfile::tempdir().unwrap();
+        let nested = dir.path().join("perm_dir");
+
+        let fs = StdFileSystem;
+        fs.create_dir_all_with_permissions(&nested, FilePermissions::OwnerReadWrite)
+            .unwrap();
+        assert!(nested.is_dir());
+
+        // Restore execute bits so tempdir cleanup works
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&nested, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+    }
+
+    #[test]
+    fn test_std_fs_read_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.txt"), "a").unwrap();
+        std::fs::write(dir.path().join("b.txt"), "b").unwrap();
+
+        let fs = StdFileSystem;
+        let entries = fs.read_dir(dir.path()).unwrap();
+        assert_eq!(entries.len(), 2);
+
+        let names: Vec<String> = entries
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().to_string())
+            .collect();
+        assert!(names.contains(&"a.txt".to_string()));
+        assert!(names.contains(&"b.txt".to_string()));
+    }
+
+    #[test]
+    fn test_std_fs_read_dir_not_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("nope");
+
+        let fs = StdFileSystem;
+        let result = fs.read_dir(&missing);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_std_fs_remove_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("doomed.txt");
+        std::fs::write(&file, "bye").unwrap();
+
+        let fs = StdFileSystem;
+        assert!(file.exists());
+        fs.remove_file(&file).unwrap();
+        assert!(!file.exists());
+    }
+
+    #[test]
+    fn test_std_fs_remove_file_not_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("nope.txt");
+
+        let fs = StdFileSystem;
+        let result = fs.remove_file(&missing);
+        assert!(result.is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_std_fs_set_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("perms.txt");
+        std::fs::write(&file, "data").unwrap();
+
+        let fs = StdFileSystem;
+        fs.set_permissions(&file, FilePermissions::OwnerReadWrite)
+            .unwrap();
+
+        let mode = std::fs::metadata(&file).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+
+        fs.set_permissions(&file, FilePermissions::OwnerReadOnly)
+            .unwrap();
+
+        let mode = std::fs::metadata(&file).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o400);
+
+        // Restore write so tempdir cleanup works
+        fs.set_permissions(&file, FilePermissions::Standard)
+            .unwrap();
+    }
+
+    // ── FileSystemUtils with StdFileSystem (real I/O) ─────────────────
+
+    #[test]
+    fn test_utils_read_yaml_real_fs() {
+        // Write the file with std::fs (bypassing the broken test-mode write),
+        // then read with FileSystemUtils::read_yaml to cover the real FS path.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("data.yaml");
+
+        #[derive(serde::Serialize, serde::Deserialize, PartialEq, Debug)]
+        struct Cfg {
+            enabled: bool,
+            count: u32,
+        }
+
+        let data = Cfg {
+            enabled: true,
+            count: 7,
+        };
+
+        let yaml = serde_yaml_ng::to_string(&data).unwrap();
+        std::fs::write(&path, &yaml).unwrap();
+
+        let utils = FileSystemUtils::new();
+        let round: Cfg = utils.read_yaml(&path).unwrap();
+        assert_eq!(data, round);
+    }
+
+    #[test]
+    fn test_utils_read_json_real_fs() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("data.json");
+
+        #[derive(serde::Serialize, serde::Deserialize, PartialEq, Debug)]
+        struct Item {
+            name: String,
+            tags: Vec<String>,
+        }
+
+        let data = Item {
+            name: "widget".into(),
+            tags: vec!["a".into(), "b".into()],
+        };
+
+        let json = serde_json::to_string_pretty(&data).unwrap();
+        std::fs::write(&path, &json).unwrap();
+
+        let utils = FileSystemUtils::new();
+        let round: Item = utils.read_json(&path).unwrap();
+        assert_eq!(data, round);
+    }
+
+    #[test]
+    fn test_utils_write_yaml_via_mock() {
+        // Write round-trip via mock covers write_yaml and write_yaml_secure paths
+        let mock_fs = Arc::new(MockFileSystem::new());
+        let utils = FileSystemUtils::with_fs(mock_fs);
+        let path = Path::new("secure.yaml");
+
+        #[derive(serde::Serialize, serde::Deserialize, PartialEq, Debug)]
+        struct Secret {
+            token: String,
+        }
+
+        let data = Secret {
+            token: "abc123".into(),
+        };
+
+        utils
+            .write_yaml_secure(path, &data, FilePermissions::OwnerReadWrite)
+            .unwrap();
+        let round: Secret = utils.read_yaml(path).unwrap();
+        assert_eq!(data, round);
+    }
+
+    #[test]
+    fn test_utils_write_json_via_mock() {
+        let mock_fs = Arc::new(MockFileSystem::new());
+        let utils = FileSystemUtils::with_fs(mock_fs);
+        let path = Path::new("secure.json");
+
+        #[derive(serde::Serialize, serde::Deserialize, PartialEq, Debug)]
+        struct Secret {
+            key: String,
+        }
+
+        let data = Secret {
+            key: "s3cret".into(),
+        };
+
+        utils
+            .write_json_secure(path, &data, FilePermissions::OwnerReadWrite)
+            .unwrap();
+        let round: Secret = utils.read_json(path).unwrap();
+        assert_eq!(data, round);
+    }
+
+    #[test]
+    fn test_utils_read_yaml_invalid() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bad.yaml");
+        std::fs::write(&path, "}{not yaml at all").unwrap();
+
+        let utils = FileSystemUtils::new();
+        let result: Result<serde_json::Value> = utils.read_yaml(&path);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_utils_read_json_invalid() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bad.json");
+        std::fs::write(&path, "not json!!!").unwrap();
+
+        let utils = FileSystemUtils::new();
+        let result: Result<serde_json::Value> = utils.read_json(&path);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_utils_default() {
+        // FileSystemUtils::default() should work the same as ::new()
+        let utils = FileSystemUtils::default();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("default.txt");
+
+        // Write with std::fs, read with FileSystemUtils to verify default() works
+        std::fs::write(&path, "via default").unwrap();
+        let content = utils.read_text(&path).unwrap();
+        assert_eq!(content, "via default");
+    }
+
+    #[test]
+    fn test_utils_validate_file_path_real_fs() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("real.txt");
+        std::fs::write(&file, "content").unwrap();
+
+        let utils = FileSystemUtils::new();
+        let result = utils.validate_file_path(file.to_str().unwrap());
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_utils_validate_file_path_real_fs_dir() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let utils = FileSystemUtils::new();
+        let result = utils.validate_file_path(dir.path().to_str().unwrap());
+        assert!(result.is_err());
+    }
+
+    // ── MockFileSystem direct tests ───────────────────────────────────
+
+    #[test]
+    fn test_mock_fs_default() {
+        let fs = MockFileSystem::default();
+        assert!(!fs.exists(Path::new("anything")));
+    }
+
+    #[test]
+    fn test_mock_fs_create_dir_all() {
+        let fs = MockFileSystem::new();
+        let dir = Path::new("/fake/dir");
+
+        assert!(!fs.is_dir(dir));
+        fs.create_dir_all(dir).unwrap();
+        assert!(fs.is_dir(dir));
+        assert!(fs.exists(dir));
+        assert!(!fs.is_file(dir));
+    }
+
+    #[test]
+    fn test_mock_fs_create_dir_all_with_permissions() {
+        let fs = MockFileSystem::new();
+        let dir = Path::new("/fake/perm_dir");
+
+        fs.create_dir_all_with_permissions(dir, FilePermissions::OwnerReadWrite)
+            .unwrap();
+        assert!(fs.is_dir(dir));
+    }
+
+    #[test]
+    fn test_mock_fs_write_read_remove() {
+        let fs = MockFileSystem::new();
+        let path = Path::new("/fake/file.txt");
+
+        fs.write(path, "data").unwrap();
+        assert!(fs.exists(path));
+        assert!(fs.is_file(path));
+        assert!(!fs.is_dir(path));
+
+        let content = fs.read_to_string(path).unwrap();
+        assert_eq!(content, "data");
+
+        fs.remove_file(path).unwrap();
+        assert!(!fs.exists(path));
+    }
+
+    #[test]
+    fn test_mock_fs_write_with_permissions() {
+        let fs = MockFileSystem::new();
+        let path = Path::new("/fake/secure.txt");
+
+        fs.write_with_permissions(path, "secret", FilePermissions::OwnerReadOnly)
+            .unwrap();
+
+        let content = fs.read_to_string(path).unwrap();
+        assert_eq!(content, "secret");
+    }
+
+    #[test]
+    fn test_mock_fs_read_not_found() {
+        let fs = MockFileSystem::new();
+        let result = fs.read_to_string(Path::new("/missing"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_mock_fs_read_dir_returns_empty() {
+        let fs = MockFileSystem::new();
+        let entries = fs.read_dir(Path::new("/fake")).unwrap();
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn test_mock_fs_set_permissions_noop() {
+        let fs = MockFileSystem::new();
+        // set_permissions on mock is a no-op, should succeed
+        fs.set_permissions(Path::new("/anything"), FilePermissions::OwnerReadOnly)
+            .unwrap();
+    }
+
     #[test]
     fn test_validate_file_path_relative_and_absolute() {
         let mock_fs = Arc::new(MockFileSystem::new());

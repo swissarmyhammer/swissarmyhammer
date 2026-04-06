@@ -630,6 +630,291 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_default_trait() {
+        let state = JsState;
+        let result = state.get("1 + 1").await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), serde_json::json!(2));
+    }
+
+    #[tokio::test]
+    async fn test_clone_trait() {
+        let state = JsState::global();
+        let cloned = state.clone();
+        let result = cloned.get("2 + 3").await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), serde_json::json!(5));
+    }
+
+    #[tokio::test]
+    async fn test_thrown_value_not_exception() {
+        let state = JsState::global();
+        // throw a non-Error value to exercise CaughtError::Value branch
+        let result = state
+            .get("(function() { throw 'custom error string'; })()")
+            .await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("threw") || err.contains("error") || err.contains("Error"),
+            "Expected thrown value error, got: {}",
+            err
+        );
+    }
+
+    #[tokio::test]
+    async fn test_set_thrown_value_error() {
+        let state = JsState::global();
+        // Exercise CaughtError::Value branch during set
+        let result = state
+            .set("throw_test", "(function() { throw 'oops'; })()")
+            .await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("threw") || err.contains("oops") || err.contains("error"),
+            "Expected thrown value error, got: {}",
+            err
+        );
+    }
+
+    #[tokio::test]
+    async fn test_set_with_exception() {
+        let state = JsState::global();
+        // throw an Error object to exercise CaughtError::Exception branch
+        let result = state
+            .set("exc_test", "throw new Error('test exception')")
+            .await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("test exception") || err.contains("JS error"),
+            "Expected exception error, got: {}",
+            err
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_with_exception() {
+        let state = JsState::global();
+        let result = state.get("throw new TypeError('bad type')").await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("bad type") || err.contains("JS error"),
+            "Expected exception error, got: {}",
+            err
+        );
+    }
+
+    #[tokio::test]
+    async fn test_set_syntax_error() {
+        let state = JsState::global();
+        // Syntax error exercises CaughtError::Error or Exception branch
+        let result = state.set("syn_err", "function {{{").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_set_undefined_value() {
+        let state = JsState::global();
+        // undefined in JS converts to null in JSON via bridge
+        let result = state.set("undef_test", "undefined").await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), serde_json::Value::Null);
+    }
+
+    #[tokio::test]
+    async fn test_set_function_value() {
+        let state = JsState::global();
+        // Functions are converted to null in JSON bridge
+        let result = state.set("fn_test", "(function() {})").await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), serde_json::Value::Null);
+    }
+
+    #[tokio::test]
+    async fn test_set_nested_object() {
+        let state = JsState::global();
+        let result = state.set("nested_obj", "({a: {b: {c: 42}}})").await;
+        assert!(result.is_ok());
+        let val = result.unwrap();
+        assert_eq!(val["a"]["b"]["c"], 42);
+    }
+
+    #[tokio::test]
+    async fn test_set_float_value() {
+        let state = JsState::global();
+        let result = state.set("float_val", "2.72").await;
+        assert!(result.is_ok());
+        let val = result.unwrap();
+        assert!((val.as_f64().unwrap() - 2.72).abs() < 0.001);
+    }
+
+    #[tokio::test]
+    async fn test_set_empty_object() {
+        let state = JsState::global();
+        let result = state.set("empty_obj", "({})").await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), serde_json::json!({}));
+    }
+
+    #[tokio::test]
+    async fn test_set_empty_array() {
+        let state = JsState::global();
+        let result = state.set("empty_arr", "[]").await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), serde_json::json!([]));
+    }
+
+    #[tokio::test]
+    async fn test_get_template_literal() {
+        let state = JsState::global();
+        let _ = state.set("tpl_name", "'World'").await;
+        let result = state.get("`Hello ${tpl_name}`").await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), serde_json::json!("Hello World"));
+    }
+
+    #[tokio::test]
+    async fn test_auto_capture_skips_functions() {
+        let state = JsState::global();
+        // Define a function global — it should NOT appear in variables
+        let _ = state
+            .set(
+                "capture_fn_test",
+                "(function() { globalThis.myFunc = function() {}; return 1; })()",
+            )
+            .await;
+
+        let vars = state.get_all_variables().await.unwrap();
+        // myFunc should NOT be in the variables because functions are skipped
+        assert!(
+            !vars.contains_key("myFunc"),
+            "Functions should not be auto-captured"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_auto_capture_skips_builtins() {
+        let state = JsState::global();
+        let _ = state.set("builtin_check", "1").await;
+
+        let vars = state.get_all_variables().await.unwrap();
+        // Builtins should never appear in tracked variables
+        assert!(!vars.contains_key("Object"));
+        assert!(!vars.contains_key("Array"));
+        assert!(!vars.contains_key("Math"));
+        assert!(!vars.contains_key("JSON"));
+        assert!(!vars.contains_key("env"));
+        assert!(!vars.contains_key("process"));
+    }
+
+    #[tokio::test]
+    async fn test_set_overwrites_previous_value() {
+        let state = JsState::global();
+        let _ = state.set("overwrite_me", "1").await;
+        let _ = state.set("overwrite_me", "2").await;
+
+        let result = state.get("overwrite_me").await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), serde_json::json!(2));
+
+        let vars = state.get_all_variables().await.unwrap();
+        assert_eq!(vars["overwrite_me"], serde_json::json!(2));
+    }
+
+    #[tokio::test]
+    async fn test_set_failed_does_not_update_variables() {
+        let state = JsState::global();
+        // Set a valid value first
+        let _ = state.set("fail_track_test", "100").await;
+
+        // Now try to set with invalid JS - should fail
+        let result = state
+            .set("fail_track_test", "throw new Error('nope')")
+            .await;
+        assert!(result.is_err());
+
+        // The variables should still have the old value
+        let vars = state.get_all_variables().await.unwrap();
+        assert_eq!(vars["fail_track_test"], serde_json::json!(100));
+    }
+
+    #[tokio::test]
+    async fn test_absolute_path_import_rejected() {
+        let state = JsState::global();
+        let tmp = tempfile::TempDir::new().unwrap();
+
+        // Create a module inside the sandbox
+        let sandbox = tmp.path().join("abs_sandbox");
+        std::fs::create_dir_all(&sandbox).unwrap();
+        std::fs::write(sandbox.join("ok.js"), "export const v = 1;").unwrap();
+
+        // Set module base
+        let _ = state.set_module_base(&sandbox).await;
+
+        // Attempt to import an absolute path — should be rejected by the resolver
+        let _ = state
+            .set(
+                "abs_import_test",
+                "(function() { import('/etc/passwd').then(m => { globalThis.abs_ok = true; }).catch(e => { globalThis.abs_err = e.message || 'blocked'; }); return 'tried'; })()",
+            )
+            .await;
+
+        // The absolute path import should have been blocked
+        let err_result = state.get("abs_err").await;
+        assert!(
+            err_result.is_ok(),
+            "abs_err should be set from catch: {:?}",
+            err_result
+        );
+        let ok_result = state.get("abs_ok").await;
+        assert!(
+            ok_result.is_err(),
+            "abs_ok should not exist — absolute import should have been rejected"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_backslash_path_import_rejected() {
+        let state = JsState::global();
+        let tmp = tempfile::TempDir::new().unwrap();
+
+        let sandbox = tmp.path().join("bs_sandbox");
+        std::fs::create_dir_all(&sandbox).unwrap();
+        std::fs::write(sandbox.join("ok.js"), "export const v = 1;").unwrap();
+
+        let _ = state.set_module_base(&sandbox).await;
+
+        // Attempt to import a backslash-prefixed path
+        let _ = state
+            .set(
+                "bs_import_test",
+                r#"(function() { import('\\something').then(m => { globalThis.bs_ok = true; }).catch(e => { globalThis.bs_err = e.message || 'blocked'; }); return 'tried'; })()"#,
+            )
+            .await;
+
+        let err_result = state.get("bs_err").await;
+        assert!(
+            err_result.is_ok(),
+            "bs_err should be set from catch: {:?}",
+            err_result
+        );
+    }
+
+    #[tokio::test]
+    async fn test_json_stringify_returns_none_for_symbol() {
+        let state = JsState::global();
+        // Symbol() cannot be JSON.stringified — should return null
+        let result = state.set("sym_test", "Symbol('test')").await;
+        // Symbols go through the Ok(None) branch of json_stringify
+        // They may also hit the is_function check or be treated as null
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), serde_json::Value::Null);
+    }
+
+    #[tokio::test]
     async fn test_module_import_and_sandbox() {
         let state = JsState::global();
         let tmp = tempfile::TempDir::new().unwrap();

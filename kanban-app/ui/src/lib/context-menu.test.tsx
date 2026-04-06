@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 import { invoke } from "@tauri-apps/api/core";
-import { dispatchContextMenuCommand, useContextMenu } from "./context-menu";
+import { useContextMenu } from "./context-menu";
+import { EntityFocusProvider } from "./entity-focus-context";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
@@ -9,6 +10,10 @@ vi.mock("@tauri-apps/api/core", () => ({
 
 vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({ label: "main" }),
+}));
+
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn(() => Promise.resolve(() => {})),
 }));
 
 /** Helper to create a synthetic MouseEvent with preventDefault/stopPropagation spies. */
@@ -30,10 +35,6 @@ interface ResolvedCommand {
   available: boolean;
 }
 
-/**
- * Set up invoke mock so that `list_commands_for_scope` returns the given
- * commands, and all other invocations resolve to undefined.
- */
 function mockResolvedCommands(commands: ResolvedCommand[]) {
   (invoke as ReturnType<typeof vi.fn>).mockImplementation(
     (cmd: string, _args?: unknown) => {
@@ -43,12 +44,16 @@ function mockResolvedCommands(commands: ResolvedCommand[]) {
   );
 }
 
+const wrapper = ({ children }: { children: React.ReactNode }) => (
+  <EntityFocusProvider>{children}</EntityFocusProvider>
+);
+
 describe("useContextMenu", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  it("calls list_commands_for_scope and show_context_menu with resolved items", async () => {
+  it("calls list_commands_for_scope and show_context_menu with self-contained items", async () => {
     const commands: ResolvedCommand[] = [
       {
         id: "entity.inspect",
@@ -67,30 +72,39 @@ describe("useContextMenu", () => {
     ];
     mockResolvedCommands(commands);
 
-    const scopeChain = ["task:t1"];
-    const { result } = renderHook(() => useContextMenu(scopeChain));
+    const { result } = renderHook(() => useContextMenu(), { wrapper });
 
     await act(async () => {
       result.current(fakeMouseEvent());
-      // Let the promise chain settle
       await new Promise((r) => setTimeout(r, 10));
     });
 
     expect(invoke).toHaveBeenCalledWith("list_commands_for_scope", {
-      scopeChain: ["task:t1"],
+      scopeChain: [],
       contextMenu: true,
     });
+    // Items carry full dispatch info — cmd, scope_chain, separator flag
     expect(invoke).toHaveBeenCalledWith("show_context_menu", {
       items: [
-        { id: "entity.inspect", name: "Inspect Task" },
-        { id: "entity.archive", name: "Archive Task" },
+        {
+          name: "Inspect Task",
+          cmd: "entity.inspect",
+          scope_chain: [],
+          separator: false,
+        },
+        {
+          name: "Archive Task",
+          cmd: "entity.archive",
+          scope_chain: [],
+          separator: false,
+        },
       ],
     });
   });
 
   it("prevents default and stops propagation", async () => {
     mockResolvedCommands([]);
-    const { result } = renderHook(() => useContextMenu(["task:t1"]));
+    const { result } = renderHook(() => useContextMenu(), { wrapper });
 
     const event = fakeMouseEvent();
     await act(async () => {
@@ -103,21 +117,21 @@ describe("useContextMenu", () => {
 
   it("does not call show_context_menu when command list is empty", async () => {
     mockResolvedCommands([]);
-    const { result } = renderHook(() => useContextMenu(["task:t1"]));
+    const { result } = renderHook(() => useContextMenu(), { wrapper });
 
     await act(async () => {
       result.current(fakeMouseEvent());
       await new Promise((r) => setTimeout(r, 10));
     });
 
-    expect(invoke).toHaveBeenCalledTimes(1); // only list_commands_for_scope
+    expect(invoke).toHaveBeenCalledTimes(1);
     expect(invoke).not.toHaveBeenCalledWith(
       "show_context_menu",
       expect.anything(),
     );
   });
 
-  it("uses target in the pending key when present", async () => {
+  it("includes target in the menu item when present", async () => {
     const commands: ResolvedCommand[] = [
       {
         id: "entity.inspect",
@@ -130,7 +144,7 @@ describe("useContextMenu", () => {
     ];
     mockResolvedCommands(commands);
 
-    const { result } = renderHook(() => useContextMenu(["task:t1"]));
+    const { result } = renderHook(() => useContextMenu(), { wrapper });
 
     await act(async () => {
       result.current(fakeMouseEvent());
@@ -138,7 +152,15 @@ describe("useContextMenu", () => {
     });
 
     expect(invoke).toHaveBeenCalledWith("show_context_menu", {
-      items: [{ id: "entity.inspect:task:t1", name: "Inspect Task" }],
+      items: [
+        {
+          name: "Inspect Task",
+          cmd: "entity.inspect",
+          target: "task:t1",
+          scope_chain: [],
+          separator: false,
+        },
+      ],
     });
   });
 
@@ -161,7 +183,7 @@ describe("useContextMenu", () => {
     ];
     mockResolvedCommands(commands);
 
-    const { result } = renderHook(() => useContextMenu(["task:t1"]));
+    const { result } = renderHook(() => useContextMenu(), { wrapper });
 
     await act(async () => {
       result.current(fakeMouseEvent());
@@ -170,9 +192,19 @@ describe("useContextMenu", () => {
 
     expect(invoke).toHaveBeenCalledWith("show_context_menu", {
       items: [
-        { id: "entity.inspect", name: "Inspect Task" },
-        { id: "__separator__", name: "" },
-        { id: "task.archive", name: "Archive" },
+        {
+          name: "Inspect Task",
+          cmd: "entity.inspect",
+          scope_chain: [],
+          separator: false,
+        },
+        { name: "", cmd: "", scope_chain: [], separator: true },
+        {
+          name: "Archive",
+          cmd: "task.archive",
+          scope_chain: [],
+          separator: false,
+        },
       ],
     });
   });
@@ -196,7 +228,7 @@ describe("useContextMenu", () => {
     ];
     mockResolvedCommands(commands);
 
-    const { result } = renderHook(() => useContextMenu(["task:t1"]));
+    const { result } = renderHook(() => useContextMenu(), { wrapper });
 
     await act(async () => {
       result.current(fakeMouseEvent());
@@ -207,120 +239,7 @@ describe("useContextMenu", () => {
       (c: unknown[]) => c[0] === "show_context_menu",
     );
     expect(showCall).toBeDefined();
-    const items: Array<{ id: string }> = showCall![1].items;
-    expect(items.some((item) => item.id === "__separator__")).toBe(false);
-  });
-});
-
-describe("dispatchContextMenuCommand", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  it("dispatches to Rust without windowLabel", async () => {
-    const commands: ResolvedCommand[] = [
-      {
-        id: "task.archive",
-        name: "Archive",
-        group: "task",
-        context_menu: true,
-        available: true,
-      },
-    ];
-    mockResolvedCommands(commands);
-
-    const { result } = renderHook(() => useContextMenu(["task:t1"]));
-
-    // Open context menu to populate pendingCommands
-    await act(async () => {
-      result.current(fakeMouseEvent());
-      await new Promise((r) => setTimeout(r, 10));
-    });
-
-    vi.clearAllMocks();
-    (invoke as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
-
-    const dispatched = await dispatchContextMenuCommand("task.archive");
-    expect(dispatched).toBe(true);
-    expect(invoke).toHaveBeenCalledWith("dispatch_command", {
-      cmd: "task.archive",
-      target: undefined,
-      scopeChain: ["task:t1"],
-    });
-  });
-
-  it("returns false for unknown id", async () => {
-    const result = await dispatchContextMenuCommand("nonexistent");
-    expect(result).toBe(false);
-  });
-
-  it("handlers are cleared on each context menu open", async () => {
-    // First open registers "task.archive"
-    mockResolvedCommands([
-      {
-        id: "task.archive",
-        name: "Archive",
-        group: "task",
-        context_menu: true,
-        available: true,
-      },
-    ]);
-    const { result: r1, unmount } = renderHook(() =>
-      useContextMenu(["task:t1"]),
-    );
-    await act(async () => {
-      r1.current(fakeMouseEvent());
-      await new Promise((r) => setTimeout(r, 10));
-    });
-    unmount();
-
-    // Second open registers "task.delete" and clears "task.archive"
-    mockResolvedCommands([
-      {
-        id: "task.delete",
-        name: "Delete",
-        group: "task",
-        context_menu: true,
-        available: true,
-      },
-    ]);
-    const { result: r2 } = renderHook(() => useContextMenu(["task:t2"]));
-    await act(async () => {
-      r2.current(fakeMouseEvent());
-      await new Promise((r) => setTimeout(r, 10));
-    });
-
-    // Old handler should be gone
-    const dispatched = await dispatchContextMenuCommand("task.archive");
-    expect(dispatched).toBe(false);
-  });
-
-  it("does not add separator IDs to pending commands", async () => {
-    const commands: ResolvedCommand[] = [
-      {
-        id: "entity.inspect",
-        name: "Inspect",
-        group: "entity",
-        context_menu: true,
-        available: true,
-      },
-      {
-        id: "task.archive",
-        name: "Archive",
-        group: "task",
-        context_menu: true,
-        available: true,
-      },
-    ];
-    mockResolvedCommands(commands);
-
-    const { result } = renderHook(() => useContextMenu(["task:t1"]));
-    await act(async () => {
-      result.current(fakeMouseEvent());
-      await new Promise((r) => setTimeout(r, 10));
-    });
-
-    const dispatched = await dispatchContextMenuCommand("__separator__");
-    expect(dispatched).toBe(false);
+    const items = showCall![1].items as Array<{ separator: boolean }>;
+    expect(items.some((item) => item.separator)).toBe(false);
   });
 });

@@ -15,7 +15,7 @@
  */
 
 import { execSync } from "child_process";
-import { mkdtempSync, writeFileSync } from "fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readdirSync } from "fs";
 import { tmpdir } from "os";
 import { join, resolve } from "path";
 import yaml from "js-yaml";
@@ -63,7 +63,13 @@ function stripColumn(c: any) {
  * Returns stripped board data, tasks, and columns.
  */
 export const createTestBoard: BrowserCommand<
-  [config: { name: string; tasks: { title: string; column?: string }[] }]
+  [
+    config: {
+      name: string;
+      tasks: { title: string; column?: string }[];
+      perspectives?: { name: string; view: string }[];
+    },
+  ]
 > = ({ testPath: _testPath }, config) => {
   const dir = mkdtempSync(join(tmpdir(), "kanban-integration-"));
 
@@ -78,6 +84,15 @@ export const createTestBoard: BrowserCommand<
     }
   }
 
+  // Create perspectives via CLI
+  const perspectiveIds: string[] = [];
+  for (const p of config.perspectives ?? []) {
+    const output = parseYaml(
+      kanban(dir, `perspective add --name "${p.name}" --view ${p.view}`),
+    );
+    perspectiveIds.push(output.id);
+  }
+
   const boardRaw = parseYaml(kanban(dir, "board get --include_counts"));
   const taskList = parseYaml(kanban(dir, "tasks list"));
   const columnList = parseYaml(kanban(dir, "columns list"));
@@ -89,6 +104,7 @@ export const createTestBoard: BrowserCommand<
     tasks: (taskList.tasks || []).map(stripTask),
     columns: (columnList.columns || []).map(stripColumn),
     taskIds,
+    perspectiveIds,
   };
 };
 
@@ -146,6 +162,28 @@ export const createTempFile: BrowserCommand<
   const filePath = join(config.dir, config.name);
   writeFileSync(filePath, config.content, "utf-8");
   return filePath;
+};
+
+/**
+ * List perspectives by reading YAML files from .kanban/perspectives/.
+ * The CLI lacks a `perspective list` subcommand, so we read the directory directly.
+ */
+export const listPerspectives: BrowserCommand<[config: { dir: string }]> = (
+  { testPath: _testPath },
+  config,
+) => {
+  const perspDir = join(config.dir, ".kanban", "perspectives");
+  try {
+    const files = readdirSync(perspDir).filter((f) => f.endsWith(".yaml"));
+    const perspectives = files.map((f) => {
+      const content = require("fs").readFileSync(join(perspDir, f), "utf-8");
+      const p = yaml.load(content) as any;
+      return { id: p.id, name: p.name, view: p.view };
+    });
+    return { perspectives, count: perspectives.length };
+  } catch {
+    return { perspectives: [], count: 0 };
+  }
 };
 
 /**

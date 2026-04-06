@@ -69,30 +69,21 @@ export function BadgeListDisplay({ field, value, entity, mode }: DisplayProps) {
 
   const parentMoniker = useParentFocusScope();
 
-  // Compute context-unique monikers for each pill's FocusScope.
-  // Prefixed with the parent field moniker so the same entity in different
-  // locations (inspector vs board card) gets distinct monikers.
+  // Clean entity monikers — the scope chain provides context (which task,
+  // which column, etc.), so the moniker just identifies what this scope IS.
   const pillMonikers = useMemo(() => {
-    const prefix = parentMoniker ? `${parentMoniker}/` : "";
     return values.map((val) => {
       if (isComputedSlug) {
         const tagEntity = targetEntities.find((e) => {
           const raw = getStr(e, displayField ?? "name");
           return raw && (raw === val || slugify(raw) === val);
         });
-        return `${prefix}${buildMoniker(targetEntityType ?? "tag", tagEntity?.id ?? val)}`;
+        return buildMoniker(targetEntityType ?? "tag", tagEntity?.id ?? val);
       } else {
-        return `${prefix}${buildMoniker(targetEntityType ?? "tag", val)}`;
+        return buildMoniker(targetEntityType ?? "tag", val);
       }
     });
-  }, [
-    values,
-    isComputedSlug,
-    targetEntities,
-    displayField,
-    targetEntityType,
-    parentMoniker,
-  ]);
+  }, [values, isComputedSlug, targetEntities, displayField, targetEntityType]);
 
   // Build claimWhen predicates so nav.left/nav.right moves focus between pills.
   const pillClaimPredicates = useMemo(() => {

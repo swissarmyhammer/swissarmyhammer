@@ -734,4 +734,350 @@ mod tests {
         assert_eq!(config.max_files, MAX_FILES);
         assert!(!config.sort_by_mtime);
     }
+
+    // --- Tests for uncovered pattern matching areas ---
+
+    #[test]
+    fn test_validate_glob_pattern_invalid_syntax() {
+        // Uncovered: line 391 - invalid glob syntax error path
+        let result = validate_glob_pattern("[invalid");
+        assert!(result.is_err());
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(err_msg.contains("Invalid glob pattern"));
+    }
+
+    #[test]
+    fn test_matches_glob_pattern_invalid_pattern() {
+        // Uncovered: line 409 - invalid pattern error path in matches_glob_pattern
+        let path = Path::new("src/main.rs");
+        let result = matches_glob_pattern(path, "[bad", false);
+        assert!(result.is_err());
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(err_msg.contains("Invalid glob pattern"));
+    }
+
+    #[test]
+    fn test_matches_glob_pattern_case_sensitivity() {
+        // Test case sensitive vs insensitive matching
+        let path = Path::new("src/Main.rs");
+        assert!(matches_glob_pattern(path, "src/main.rs", false).unwrap());
+        assert!(!matches_glob_pattern(path, "src/main.rs", true).unwrap());
+        assert!(matches_glob_pattern(path, "src/Main.rs", true).unwrap());
+    }
+
+    #[test]
+    fn test_parse_glob_pattern_no_glob_chars() {
+        // Uncovered: line 465 - pattern_components is empty when no glob chars
+        let (base_dir, file_pattern) = parse_glob_pattern("src/lib");
+        assert_eq!(base_dir, PathBuf::from("src/lib"));
+        assert_eq!(file_pattern, "*");
+    }
+
+    #[test]
+    fn test_parse_glob_pattern_with_question_mark() {
+        // Question mark is a glob character
+        let (base_dir, file_pattern) = parse_glob_pattern("src/?.rs");
+        assert_eq!(base_dir, PathBuf::from("src"));
+        assert_eq!(file_pattern, "?.rs");
+    }
+
+    #[test]
+    fn test_parse_glob_pattern_with_bracket() {
+        // Bracket is a glob character
+        let (base_dir, file_pattern) = parse_glob_pattern("src/[ab].rs");
+        assert_eq!(base_dir, PathBuf::from("src"));
+        assert_eq!(file_pattern, "[ab].rs");
+    }
+
+    #[test]
+    fn test_parse_glob_pattern_deep_base_dir() {
+        let (base_dir, file_pattern) = parse_glob_pattern("a/b/c/**/*.rs");
+        assert_eq!(base_dir, PathBuf::from("a/b/c"));
+        assert_eq!(file_pattern, "**/*.rs");
+    }
+
+    #[test]
+    fn test_is_in_hidden_directory_outside_search_dir() {
+        // Uncovered: line 288 - path not under search_dir returns false
+        let entry = Path::new("/other/path/file.rs");
+        let search_dir = Path::new("/somewhere/else");
+        assert!(!is_in_hidden_directory(entry, search_dir));
+    }
+
+    #[test]
+    fn test_is_in_hidden_directory_detects_hidden() {
+        let search_dir = Path::new("/project");
+        let hidden_path = Path::new("/project/.hidden/file.rs");
+        assert!(is_in_hidden_directory(hidden_path, search_dir));
+    }
+
+    #[test]
+    fn test_is_in_hidden_directory_allows_regular() {
+        let search_dir = Path::new("/project");
+        let regular_path = Path::new("/project/src/file.rs");
+        assert!(!is_in_hidden_directory(regular_path, search_dir));
+    }
+
+    #[test]
+    #[serial_test::serial(cwd)]
+    fn test_expand_glob_patterns_max_files_limit() {
+        // Uncovered: lines 151, 223, 305 - max_files break conditions
+        let temp_dir = TempDir::new().unwrap();
+        for i in 0..10 {
+            fs::write(temp_dir.path().join(format!("file{}.rs", i)), "content").unwrap();
+        }
+
+        let _guard = CurrentDirGuard::new(temp_dir.path()).unwrap();
+
+        let config = GlobExpansionConfig {
+            max_files: 3,
+            ..Default::default()
+        };
+        let patterns = vec![temp_dir.path().to_string_lossy().to_string()];
+        let result = expand_glob_patterns(&patterns, &config).unwrap();
+        assert!(result.len() <= 3, "Should respect max_files limit");
+    }
+
+    #[test]
+    #[serial_test::serial(cwd)]
+    fn test_expand_glob_patterns_max_files_with_wildcard() {
+        // Uncovered: line 223 - max_files break in walker loop
+        let temp_dir = TempDir::new().unwrap();
+        for i in 0..10 {
+            fs::write(temp_dir.path().join(format!("file{}.rs", i)), "content").unwrap();
+        }
+
+        let _guard = CurrentDirGuard::new(temp_dir.path()).unwrap();
+
+        let config = GlobExpansionConfig {
+            max_files: 3,
+            ..Default::default()
+        };
+        let patterns = vec!["*.rs".to_string()];
+        let result = expand_glob_patterns(&patterns, &config).unwrap();
+        assert!(
+            result.len() <= 3,
+            "Should respect max_files limit with wildcard patterns"
+        );
+    }
+
+    #[test]
+    #[serial_test::serial(cwd)]
+    fn test_expand_glob_with_sort_by_mtime() {
+        // Uncovered: lines 347, 352-356, 360-364 - mtime sorting
+        let temp_dir = TempDir::new().unwrap();
+        let file_a = temp_dir.path().join("a.rs");
+        let file_b = temp_dir.path().join("b.rs");
+        fs::write(&file_a, "first").unwrap();
+        // Small delay to ensure different mtime
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        fs::write(&file_b, "second").unwrap();
+
+        let _guard = CurrentDirGuard::new(temp_dir.path()).unwrap();
+
+        let config = GlobExpansionConfig {
+            sort_by_mtime: true,
+            ..Default::default()
+        };
+        let patterns = vec!["*.rs".to_string()];
+        let result = expand_glob_patterns(&patterns, &config).unwrap();
+
+        assert_eq!(result.len(), 2);
+        // Most recently modified file (b.rs) should come first
+        assert!(
+            result[0].ends_with("b.rs"),
+            "Most recent file should be first"
+        );
+    }
+
+    #[test]
+    fn test_get_modification_time_nonexistent_file() {
+        // Uncovered: lines 352-356 - fallback to UNIX_EPOCH for missing file
+        let mtime = get_modification_time(Path::new("/nonexistent/file.rs"));
+        assert_eq!(mtime, std::time::SystemTime::UNIX_EPOCH);
+    }
+
+    #[test]
+    fn test_sort_files_by_modification_time() {
+        // Uncovered: lines 360-364 - sorting by mtime
+        let temp_dir = TempDir::new().unwrap();
+        let file_a = temp_dir.path().join("old.rs");
+        let file_b = temp_dir.path().join("new.rs");
+        fs::write(&file_a, "old").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        fs::write(&file_b, "new").unwrap();
+
+        let mut files = vec![file_a.clone(), file_b.clone()];
+        sort_files_by_modification_time(&mut files);
+
+        // Most recent (file_b) should be first
+        assert_eq!(files[0], file_b);
+        assert_eq!(files[1], file_a);
+    }
+
+    #[test]
+    #[serial_test::serial(cwd)]
+    fn test_handle_direct_file_in_hidden_directory() {
+        // Uncovered: lines 123-128 - hidden directory filtering for direct file paths
+        let temp_dir = TempDir::new().unwrap();
+        // Canonicalize to handle macOS /tmp -> /private/tmp symlink
+        let canonical_dir = temp_dir.path().canonicalize().unwrap();
+        let hidden_dir = canonical_dir.join(".hidden");
+        fs::create_dir(&hidden_dir).unwrap();
+        let hidden_file = hidden_dir.join("secret.rs");
+        fs::write(&hidden_file, "secret").unwrap();
+
+        let _guard = CurrentDirGuard::new(&canonical_dir).unwrap();
+
+        let patterns = vec![hidden_file.to_string_lossy().to_string()];
+        let config = GlobExpansionConfig::default();
+        let result = expand_glob_patterns(&patterns, &config).unwrap();
+
+        // Direct file in hidden directory should be filtered out
+        assert_eq!(
+            result.len(),
+            0,
+            "Files in hidden directories should be filtered"
+        );
+    }
+
+    #[test]
+    #[serial_test::serial(cwd)]
+    fn test_handle_direct_file_outside_current_dir() {
+        // Uncovered: lines 117-119 - file outside current directory always included
+        let temp_dir = TempDir::new().unwrap();
+        let other_dir = TempDir::new().unwrap();
+        let outside_file = other_dir.path().join("outside.rs");
+        fs::write(&outside_file, "outside").unwrap();
+
+        let _guard = CurrentDirGuard::new(temp_dir.path()).unwrap();
+
+        let patterns = vec![outside_file.to_string_lossy().to_string()];
+        let config = GlobExpansionConfig::default();
+        let result = expand_glob_patterns(&patterns, &config).unwrap();
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0], outside_file);
+    }
+
+    #[test]
+    #[serial_test::serial(cwd)]
+    fn test_expand_simple_glob_pattern_no_wildcards() {
+        // Uncovered: lines 186, 299-310 - simple glob pattern expansion (no *, **, ?)
+        // When pattern contains no wildcard chars but also isn't a file or directory
+        let temp_dir = TempDir::new().unwrap();
+        fs::write(temp_dir.path().join("exact_name.rs"), "content").unwrap();
+
+        let _guard = CurrentDirGuard::new(temp_dir.path()).unwrap();
+
+        // A pattern with no wildcards that isn't an existing file or directory
+        // goes through handle_glob_pattern -> expand_simple_glob_pattern
+        let config = GlobExpansionConfig::default();
+        // This file exists, so it'll be handled as direct file, but let's try a non-file pattern
+        let patterns = vec!["nonexistent_pattern".to_string()];
+        let result = expand_glob_patterns(&patterns, &config).unwrap();
+        // No match expected since no file matches
+        assert_eq!(result.len(), 0);
+    }
+
+    #[test]
+    #[serial_test::serial(cwd)]
+    fn test_expand_glob_invalid_pattern_in_walker() {
+        // Uncovered: line 218 - invalid glob pattern error in expand_glob_pattern_with_walker
+        let temp_dir = TempDir::new().unwrap();
+        let _guard = CurrentDirGuard::new(temp_dir.path()).unwrap();
+
+        let patterns = vec!["**/*[invalid".to_string()];
+        let config = GlobExpansionConfig::default();
+        let result = expand_glob_patterns(&patterns, &config);
+        assert!(
+            result.is_err(),
+            "Invalid glob in walker should produce error"
+        );
+    }
+
+    #[test]
+    fn test_filter_excluded_paths_non_canonicalizable() {
+        // Uncovered: lines 330, 334-337 - non-canonicalizable path fallback
+        let mut files = vec![
+            PathBuf::from("/nonexistent/path/file.rs"),
+            PathBuf::from("/another/path/keep.rs"),
+        ];
+        let config = GlobExpansionConfig {
+            exclude_paths: vec![PathBuf::from("/nonexistent/path")],
+            ..Default::default()
+        };
+        filter_excluded_paths(&mut files, &config);
+        // The /nonexistent/path/file.rs should be filtered out via starts_with fallback
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0], PathBuf::from("/another/path/keep.rs"));
+    }
+
+    #[test]
+    fn test_filter_excluded_paths_empty_excludes() {
+        // Uncovered: line 320-322 early return (already covered but good to verify)
+        let mut files = vec![PathBuf::from("file.rs")];
+        let config = GlobExpansionConfig::default();
+        filter_excluded_paths(&mut files, &config);
+        assert_eq!(files.len(), 1);
+    }
+
+    #[test]
+    fn test_matches_path_against_pattern_relative() {
+        // Test matching against relative path
+        let search_dir = Path::new("/project/src");
+        let entry_path = Path::new("/project/src/lib/utils.rs");
+        let pattern = "lib/*.rs";
+        let glob_obj = glob::Pattern::new(pattern).unwrap();
+        let opts = glob::MatchOptions::new();
+
+        assert!(matches_path_against_pattern(
+            entry_path, search_dir, pattern, &glob_obj, opts
+        ));
+    }
+
+    #[test]
+    fn test_matches_path_against_pattern_filename_only() {
+        // Pattern without '/' and not starting with '**' matches against filename
+        let search_dir = Path::new("/project");
+        let entry_path = Path::new("/project/src/main.rs");
+        let pattern = "*.rs";
+        let glob_obj = glob::Pattern::new(pattern).unwrap();
+        let opts = glob::MatchOptions::new();
+
+        assert!(matches_path_against_pattern(
+            entry_path, search_dir, pattern, &glob_obj, opts
+        ));
+    }
+
+    #[test]
+    fn test_matches_path_against_pattern_no_match() {
+        let search_dir = Path::new("/project");
+        let entry_path = Path::new("/project/src/main.rs");
+        let pattern = "*.txt";
+        let glob_obj = glob::Pattern::new(pattern).unwrap();
+        let opts = glob::MatchOptions::new();
+
+        assert!(!matches_path_against_pattern(
+            entry_path, search_dir, pattern, &glob_obj, opts
+        ));
+    }
+
+    #[test]
+    #[serial_test::serial(cwd)]
+    fn test_expand_glob_with_absolute_pattern() {
+        // Test glob pattern with absolute path
+        let temp_dir = TempDir::new().unwrap();
+        fs::write(temp_dir.path().join("test.rs"), "content").unwrap();
+
+        let _guard = CurrentDirGuard::new(temp_dir.path()).unwrap();
+
+        let pattern = format!("{}/*.rs", temp_dir.path().display());
+        let patterns = vec![pattern];
+        let config = GlobExpansionConfig::default();
+        let result = expand_glob_patterns(&patterns, &config).unwrap();
+
+        assert_eq!(result.len(), 1);
+        assert!(result[0].ends_with("test.rs"));
+    }
 }

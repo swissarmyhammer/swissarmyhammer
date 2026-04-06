@@ -43,6 +43,34 @@ export interface ViewDef {
 }
 
 // ---------------------------------------------------------------------------
+// Perspective definitions
+// ---------------------------------------------------------------------------
+
+export interface PerspectiveFieldEntry {
+  readonly field: string;
+  readonly caption?: string;
+  readonly width?: number;
+  readonly editor?: string;
+  readonly display?: string;
+  readonly sort_comparator?: string;
+}
+
+export interface PerspectiveSortEntry {
+  readonly field: string;
+  readonly direction: "asc" | "desc";
+}
+
+export interface PerspectiveDef {
+  readonly id: string;
+  readonly name: string;
+  readonly view: string;
+  readonly fields?: readonly PerspectiveFieldEntry[];
+  readonly filter?: string;
+  readonly group?: string;
+  readonly sort?: readonly PerspectiveSortEntry[];
+}
+
+// ---------------------------------------------------------------------------
 // Board types
 // ---------------------------------------------------------------------------
 
@@ -96,6 +124,8 @@ export interface FieldDef {
   sort?: string;
   filter?: string;
   group?: string;
+  /** Whether this field can be used as a group-by target in perspectives. */
+  groupable?: boolean;
   validate?: string;
 }
 
@@ -196,7 +226,6 @@ export interface BoardSummary {
 export interface BoardDataResponse {
   board: EntityBag;
   columns: EntityBag[];
-  swimlanes: EntityBag[];
   tags: EntityBag[];
   summary: BoardSummary;
 }
@@ -215,7 +244,6 @@ export interface EntityListResponse {
 export interface BoardData {
   board: Entity;
   columns: Entity[];
-  swimlanes: Entity[];
   tags: Entity[];
   summary: BoardSummary;
 }
@@ -225,7 +253,6 @@ export function parseBoardData(data: BoardDataResponse): BoardData {
   return {
     board: entityFromBag(data.board),
     columns: data.columns.map(entityFromBag),
-    swimlanes: data.swimlanes.map(entityFromBag),
     tags: data.tags.map(entityFromBag),
     summary: data.summary,
   };

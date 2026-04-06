@@ -6,10 +6,14 @@
  */
 
 import { useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { ExternalLink } from "lucide-react";
-import { dispatchCommand } from "@/lib/command-scope";
+import { useDispatchCommand } from "@/lib/command-scope";
 import { Button } from "@/components/ui/button";
+import {
+  Tooltip,
+  TooltipTrigger,
+  TooltipContent,
+} from "@/components/ui/tooltip";
 import {
   Select,
   SelectContent,
@@ -56,6 +60,7 @@ export function BoardSelector({
     getSchema("board")?.entity.search_display_field ?? "name";
   const nameFieldDef = getFieldDef("board", displayFieldName);
   const [editingName, setEditingName] = useState(false);
+  const dispatchNewWindow = useDispatchCommand("window.new");
   // Live board name from entity store — stays current across windows
   const boardName = useFieldValue(
     "board",
@@ -92,15 +97,7 @@ export function BoardSelector({
       <Select
         value={selectedPath ?? undefined}
         onValueChange={(path) => {
-          dispatchCommand(
-            {
-              id: "file.switchBoard",
-              name: "Switch Board",
-              execute: () => onSelect(path),
-            },
-            undefined,
-            [],
-          );
+          onSelect(path);
         }}
       >
         <SelectTrigger
@@ -132,26 +129,24 @@ export function BoardSelector({
       </Select>
 
       {showTearOff && selectedPath && (
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-6 w-6 text-muted-foreground/40"
-          title="Open in new window"
-          onClick={() => {
-            dispatchCommand(
-              {
-                id: "window.new",
-                name: "New Window",
-                execute: () =>
-                  invoke("create_window", { boardPath: selectedPath }),
-              },
-              undefined,
-              [],
-            );
-          }}
-        >
-          <ExternalLink className="h-3.5 w-3.5" />
-        </Button>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label="Open in new window"
+              className="h-6 w-6 text-muted-foreground/40"
+              onClick={() => {
+                dispatchNewWindow({ args: { board_path: selectedPath } }).catch(
+                  console.error,
+                );
+              }}
+            >
+              <ExternalLink className="h-3.5 w-3.5" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">Open in new window</TooltipContent>
+        </Tooltip>
       )}
     </div>
   );

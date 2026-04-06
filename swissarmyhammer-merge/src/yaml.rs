@@ -360,7 +360,7 @@ mod tests {
         match v {
             serde_yaml_ng::Value::Mapping(m) => m
                 .into_iter()
-                .filter_map(|(k, v)| {
+                .map(|(k, v)| {
                     let key = match k {
                         serde_yaml_ng::Value::String(s) => s,
                         other => format!("{other:?}"),
@@ -372,7 +372,7 @@ mod tests {
                         serde_yaml_ng::Value::Null => "null".to_owned(),
                         other => format!("{other:?}"),
                     };
-                    Some((key, val))
+                    (key, val)
                 })
                 .collect(),
             _ => BTreeMap::new(),
@@ -1035,6 +1035,167 @@ mod tests {
         assert_eq!(
             winner, &theirs,
             "empty changelog — fallback_precedence=Theirs should win"
+        );
+    }
+
+    /// Field removed by theirs only (ours unchanged from base).
+    ///
+    /// This exercises the `(Some(b), Some(o), None) if o == b => None` arm.
+    #[test]
+    fn field_removal_by_theirs_only() {
+        let base = "id: abc\ntitle: OldTitle\n";
+        // Theirs removed title; ours kept it unchanged.
+        let ours = "id: abc\ntitle: OldTitle\n";
+        let theirs = "id: abc\n";
+
+        let merged = merge_yaml(base, ours, theirs, &opts_no_jsonl()).unwrap();
+        let map = parse(&merged);
+        assert_eq!(map["id"], "abc");
+        assert!(
+            !map.contains_key("title"),
+            "title removed by theirs should be absent"
+        );
+    }
+
+    /// Both sides independently add the same field with the same value (base has no such
+    /// field).
+    ///
+    /// This exercises the `(_, Some(o), Some(t)) if o == t` arm with base=None.
+    #[test]
+    fn both_add_same_field_same_value() {
+        let base = "id: abc\n";
+        let ours = "id: abc\ntitle: SameTitle\n";
+        let theirs = "id: abc\ntitle: SameTitle\n";
+
+        let merged = merge_yaml(base, ours, theirs, &opts_no_jsonl()).unwrap();
+        let map = parse(&merged);
+        assert_eq!(
+            map["title"], "SameTitle",
+            "both sides added same value — should keep it"
+        );
+    }
+
+    /// Both sides removed a field that was present in base.
+    ///
+    /// This exercises the `(_, None, None) => None` arm with base=Some.
+    #[test]
+    fn both_removed_field() {
+        let base = "id: abc\ntitle: OldTitle\n";
+        let ours = "id: abc\n";
+        let theirs = "id: abc\n";
+
+        let merged = merge_yaml(base, ours, theirs, &opts_no_jsonl()).unwrap();
+        let map = parse(&merged);
+        assert!(
+            !map.contains_key("title"),
+            "field removed by both sides should be absent"
+        );
+    }
+
+    /// Ours removed a field but theirs changed it from base — catch-all arm takes theirs.
+    ///
+    /// This exercises the catch-all `(_, None, Some(t))` arm (base present, ours absent,
+    /// theirs changed from base so the guard `t == b` on the earlier arm fails).
+    #[test]
+    fn ours_removed_theirs_changed_catch_all() {
+        let base = "id: abc\ntitle: Original\n";
+        // Ours removed title entirely.
+        let ours = "id: abc\n";
+        // Theirs changed title to a new value.
+        let theirs = "id: abc\ntitle: Changed\n";
+
+        let merged = merge_yaml(base, ours, theirs, &opts_no_jsonl()).unwrap();
+        let map = parse(&merged);
+        assert_eq!(
+            map["title"], "Changed",
+            "catch-all should keep theirs' changed value when ours removed"
+        );
+    }
+
+    /// Theirs removed a field but ours changed it from base — catch-all arm takes ours.
+    ///
+    /// This exercises the catch-all `(_, Some(o), None)` arm (base present, theirs absent,
+    /// ours changed from base so the guard `o == b` on the earlier arm fails).
+    #[test]
+    fn theirs_removed_ours_changed_catch_all() {
+        let base = "id: abc\ntitle: Original\n";
+        // Ours changed title.
+        let ours = "id: abc\ntitle: Changed\n";
+        // Theirs removed title entirely.
+        let theirs = "id: abc\n";
+
+        let merged = merge_yaml(base, ours, theirs, &opts_no_jsonl()).unwrap();
+        let map = parse(&merged);
+        assert_eq!(
+            map["title"], "Changed",
+            "catch-all should keep ours' changed value when theirs removed"
+        );
+    }
+
+    /// Resolve conflict with numeric YAML values exercises the Number branch of
+    /// `yaml_val_to_string`.
+    #[test]
+    fn resolve_conflict_with_numeric_values() {
+        let ours = serde_yaml_ng::Value::Number(serde_yaml_ng::Number::from(42));
+        let theirs = serde_yaml_ng::Value::Number(serde_yaml_ng::Number::from(99));
+        // Changelog says the field was last set to "42" (matches ours).
+        let ts = single_ts("count", "42", "2026-01-01T00:00:00Z");
+
+        let winner = resolve_conflict("count", &ours, &theirs, &ts, Precedence::Theirs);
+        assert_eq!(
+            winner, &ours,
+            "ours numeric value matches the log so ours should win"
+        );
+    }
+
+    /// Resolve conflict with boolean YAML values exercises the Bool branch of
+    /// `yaml_val_to_string`.
+    #[test]
+    fn resolve_conflict_with_bool_values() {
+        let ours = serde_yaml_ng::Value::Bool(true);
+        let theirs = serde_yaml_ng::Value::Bool(false);
+        // Changelog says the field was last set to "false" (matches theirs).
+        let ts = single_ts("active", "false", "2026-01-01T00:00:00Z");
+
+        let winner = resolve_conflict("active", &ours, &theirs, &ts, Precedence::Ours);
+        assert_eq!(
+            winner, &theirs,
+            "theirs bool value matches the log so theirs should win"
+        );
+    }
+
+    /// Resolve conflict with null YAML value exercises the Null branch of
+    /// `yaml_val_to_string`.
+    #[test]
+    fn resolve_conflict_with_null_value() {
+        let ours = serde_yaml_ng::Value::Null;
+        let theirs = serde_yaml_ng::Value::String("something".to_owned());
+        // Changelog says the field was last set to "null" (matches ours).
+        let ts = single_ts("optional", "null", "2026-01-01T00:00:00Z");
+
+        let winner = resolve_conflict("optional", &ours, &theirs, &ts, Precedence::Theirs);
+        assert_eq!(
+            winner, &ours,
+            "ours null value matches the log so ours should win"
+        );
+    }
+
+    /// Resolve conflict with a complex YAML value (sequence) exercises the catch-all
+    /// `other => format!("{other:?}")` branch of `yaml_val_to_string`.
+    #[test]
+    fn resolve_conflict_with_complex_value_debug_format() {
+        // A YAML sequence value hits the catch-all Debug format branch.
+        let ours =
+            serde_yaml_ng::Value::Sequence(vec![serde_yaml_ng::Value::String("a".to_owned())]);
+        let theirs =
+            serde_yaml_ng::Value::Sequence(vec![serde_yaml_ng::Value::String("b".to_owned())]);
+        // No changelog entry for this field — fallback applies.
+        let ts: HashMap<String, (String, String)> = HashMap::new();
+
+        let winner = resolve_conflict("tags", &ours, &theirs, &ts, Precedence::Ours);
+        assert_eq!(
+            winner, &ours,
+            "no log match, fallback=Ours, so ours should win"
         );
     }
 

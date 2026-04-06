@@ -1,8 +1,0 @@
----
-depends_on:
-- 01KKJ5NPDMAT6TFDYFNJ7Y4KBK
-position_column: todo
-position_ordinal: a4
-title: Add tests for legacy→XDG migration scenarios
----
-## What\nUsers with existing directories need a migration path for TWO changes:\n1. **XDG move**: `~/.swissarmyhammer` → `$XDG_CONFIG_HOME/sah` (or `~/.config/sah`)\n2. **Rename**: `.swissarmyhammer` → `.sah` (both at ~ level and project level)\n\nAlso covers legacy dot-directories: `~/.prompts`, `~/.skills`, `~/.agents`, `~/.models`\n\nStrategy: Option C — check both locations with legacy as fallback (read from old, write to new). On first run, if XDG path doesn't exist but legacy does, use legacy + log deprecation warning.\n\nAffected files:\n- `swissarmyhammer-directory/src/directory.rs` — `from_user_home()` legacy check\n- `swissarmyhammer-directory/src/file_loader.rs` — dot-directory legacy check\n\n## Acceptance Criteria\n- [ ] Existing users with `~/.swissarmyhammer` continue to work\n- [ ] Existing users with project-level `.swissarmyhammer/` continue to work\n- [ ] New users get `.sah` at XDG paths by default\n- [ ] Deprecation warning logged when legacy path is used\n- [ ] No data loss scenario exists\n\n## Tests\n- [ ] Test: legacy `~/.swissarmyhammer` exists, `.sah` doesn't → legacy used\n- [ ] Test: `.sah` exists → `.sah` used regardless of legacy\n- [ ] Test: neither exists → `.sah` created at XDG path\n- [ ] `cargo test -p swissarmyhammer-directory`

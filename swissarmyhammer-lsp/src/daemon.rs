@@ -755,4 +755,732 @@ mod tests {
         assert_eq!(daemon.state(), LspDaemonState::NotStarted);
         assert_eq!(daemon.command(), "rust-analyzer");
     }
+
+    // -- helper for lifecycle tests ------------------------------------------
+
+    /// Build a minimal `OwnedLspServerSpec` for testing.
+    fn test_spec(command: &str) -> OwnedLspServerSpec {
+        OwnedLspServerSpec {
+            project_types: vec![],
+            command: command.to_string(),
+            args: vec![],
+            language_ids: vec!["test".to_string()],
+            file_extensions: vec!["txt".to_string()],
+            startup_timeout_secs: 5,
+            health_check_interval_secs: 60,
+            install_hint: format!("install {command}"),
+            icon: None,
+        }
+    }
+
+    // -- start() tests -------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_start_binary_not_found() {
+        let spec = test_spec("nonexistent-lsp-binary-abc123xyz");
+        let mut daemon = LspDaemon::new(spec, PathBuf::from("/tmp"));
+
+        let result = daemon.start().await;
+        assert!(result.is_err());
+
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, LspError::BinaryNotFound { .. }),
+            "expected BinaryNotFound, got: {err:?}"
+        );
+        assert_eq!(daemon.state(), LspDaemonState::NotFound);
+    }
+
+    #[tokio::test]
+    async fn test_start_binary_not_found_preserves_hint() {
+        let spec = test_spec("nonexistent-lsp-binary-abc123xyz");
+        let mut daemon = LspDaemon::new(spec, PathBuf::from("/tmp"));
+
+        let result = daemon.start().await;
+        match result.unwrap_err() {
+            LspError::BinaryNotFound {
+                command,
+                install_hint,
+            } => {
+                assert_eq!(command, "nonexistent-lsp-binary-abc123xyz");
+                assert!(install_hint.contains("nonexistent-lsp-binary-abc123xyz"));
+            }
+            other => panic!("expected BinaryNotFound, got: {other:?}"),
+        }
+    }
+
+    // -- client() tests ------------------------------------------------------
+
+    #[test]
+    fn test_client_returns_none_when_not_started() {
+        let spec = test_spec("some-server");
+        let daemon = LspDaemon::new(spec, PathBuf::from("/tmp"));
+        assert!(daemon.client().is_none());
+    }
+
+    #[test]
+    fn test_shared_client_returns_arc() {
+        let spec = test_spec("some-server");
+        let daemon = LspDaemon::new(spec, PathBuf::from("/tmp"));
+        let shared = daemon.shared_client();
+        // The shared client should be lockable and contain None
+        let guard = shared.lock().unwrap();
+        assert!(guard.is_none());
+    }
+
+    #[test]
+    fn test_client_recovers_from_poisoned_mutex() {
+        let spec = test_spec("some-server");
+        let daemon = LspDaemon::new(spec, PathBuf::from("/tmp"));
+
+        // Poison the mutex by panicking inside a lock
+        let shared = daemon.shared_client();
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = shared.lock().unwrap();
+            panic!("intentional panic to poison mutex");
+        }));
+
+        // client() should still work via the poison-recovery path
+        // The inner Option is still None, so it returns None
+        assert!(daemon.client().is_none());
+    }
+
+    // -- health_check() tests ------------------------------------------------
+
+    #[test]
+    fn test_health_check_returns_false_when_no_child() {
+        let spec = test_spec("some-server");
+        let mut daemon = LspDaemon::new(spec, PathBuf::from("/tmp"));
+        assert!(!daemon.health_check());
+    }
+
+    // -- shutdown() tests ----------------------------------------------------
+
+    #[tokio::test]
+    async fn test_shutdown_when_not_started() {
+        let spec = test_spec("some-server");
+        let mut daemon = LspDaemon::new(spec, PathBuf::from("/tmp"));
+
+        // Shutdown should be a no-op that transitions to NotStarted
+        daemon.shutdown().await;
+        assert_eq!(daemon.state(), LspDaemonState::NotStarted);
+    }
+
+    #[tokio::test]
+    async fn test_shutdown_clears_client() {
+        let spec = test_spec("some-server");
+        let mut daemon = LspDaemon::new(spec, PathBuf::from("/tmp"));
+        let shared = daemon.shared_client();
+
+        daemon.shutdown().await;
+
+        // Client should be None after shutdown
+        let guard = shared.lock().unwrap();
+        assert!(guard.is_none());
+    }
+
+    // -- restart_with_backoff() tests ----------------------------------------
+
+    #[tokio::test]
+    async fn test_restart_with_backoff_exhausted() {
+        let spec = test_spec("some-server");
+        let mut daemon = LspDaemon::new(spec, PathBuf::from("/tmp"));
+
+        // Simulate MAX_CONSECUTIVE_FAILURES failures
+        daemon.consecutive_failures = MAX_CONSECUTIVE_FAILURES;
+
+        let result = daemon.restart_with_backoff().await;
+        assert!(result.is_err());
+
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, LspError::HandshakeFailed(ref msg) if msg.contains("too many consecutive failures")),
+            "expected HandshakeFailed with 'too many consecutive failures', got: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_restart_with_backoff_resets_on_binary_not_found() {
+        // restart_with_backoff calls start(), which will fail with BinaryNotFound
+        // and increment consecutive_failures further
+        let spec = test_spec("nonexistent-lsp-binary-abc123xyz");
+        let mut daemon = LspDaemon::new(spec, PathBuf::from("/tmp"));
+        daemon.consecutive_failures = 0;
+
+        let result = daemon.restart_with_backoff().await;
+        assert!(result.is_err());
+        // State should be NotFound since binary doesn't exist
+        assert_eq!(daemon.state(), LspDaemonState::NotFound);
+    }
+
+    // -- force_restart() tests -----------------------------------------------
+
+    #[tokio::test]
+    async fn test_force_restart_resets_failures() {
+        let spec = test_spec("nonexistent-lsp-binary-abc123xyz");
+        let mut daemon = LspDaemon::new(spec, PathBuf::from("/tmp"));
+        daemon.consecutive_failures = 3;
+
+        // force_restart resets failures to 0 then calls start()
+        let result = daemon.force_restart().await;
+        assert!(result.is_err()); // binary not found
+                                  // consecutive_failures was reset to 0 before start(), but start() didn't
+                                  // call record_failure because BinaryNotFound doesn't go through record_failure
+        assert_eq!(daemon.consecutive_failures, 0);
+    }
+
+    // -- state_rx() tests ----------------------------------------------------
+
+    #[tokio::test]
+    async fn test_state_rx_observes_transitions() {
+        let spec = test_spec("nonexistent-lsp-binary-abc123xyz");
+        let mut daemon = LspDaemon::new(spec, PathBuf::from("/tmp"));
+        let mut rx = daemon.state_rx();
+
+        assert_eq!(*rx.borrow(), LspDaemonState::NotStarted);
+
+        // Trigger a start (will fail with NotFound)
+        let _ = daemon.start().await;
+
+        // The rx should have seen the NotFound state
+        rx.changed().await.unwrap();
+        assert_eq!(*rx.borrow(), LspDaemonState::NotFound);
+    }
+
+    // -- record_failure() tests ----------------------------------------------
+
+    #[test]
+    fn test_record_failure_increments_counter() {
+        let spec = test_spec("some-server");
+        let mut daemon = LspDaemon::new(spec, PathBuf::from("/tmp"));
+        assert_eq!(daemon.consecutive_failures, 0);
+
+        daemon.record_failure("test failure 1".into());
+        assert_eq!(daemon.consecutive_failures, 1);
+        assert!(matches!(
+            daemon.state(),
+            LspDaemonState::Failed { attempts: 1, .. }
+        ));
+
+        daemon.record_failure("test failure 2".into());
+        assert_eq!(daemon.consecutive_failures, 2);
+        assert!(matches!(
+            daemon.state(),
+            LspDaemonState::Failed { attempts: 2, .. }
+        ));
+    }
+
+    #[test]
+    fn test_record_failure_stores_reason() {
+        let spec = test_spec("some-server");
+        let mut daemon = LspDaemon::new(spec, PathBuf::from("/tmp"));
+
+        daemon.record_failure("connection refused".into());
+        match daemon.state() {
+            LspDaemonState::Failed { reason, .. } => {
+                assert_eq!(reason, "connection refused");
+            }
+            other => panic!("expected Failed state, got: {other:?}"),
+        }
+    }
+
+    // -- Debug impl test -----------------------------------------------------
+
+    #[test]
+    fn test_daemon_debug_output() {
+        let spec = test_spec("test-server");
+        let daemon = LspDaemon::new(spec, PathBuf::from("/tmp"));
+        let debug = format!("{daemon:?}");
+        assert!(debug.contains("test-server"));
+        assert!(debug.contains("NotStarted"));
+    }
+
+    // -- Lifecycle tests with real processes ---------------------------------
+    //
+    // These tests use simple commands (cat, true, etc.) to exercise the
+    // daemon lifecycle without requiring a full LSP server implementation.
+
+    /// Build a spec that spawns a process which exits immediately.
+    /// This tests the handshake timeout / EOF error path.
+    fn immediately_exiting_spec() -> OwnedLspServerSpec {
+        OwnedLspServerSpec {
+            project_types: vec![],
+            command: "true".to_string(),
+            args: vec![],
+            language_ids: vec!["test".to_string()],
+            file_extensions: vec!["txt".to_string()],
+            startup_timeout_secs: 2,
+            health_check_interval_secs: 60,
+            install_hint: "N/A".to_string(),
+            icon: None,
+        }
+    }
+
+    /// Build a spec that spawns `cat`, which keeps stdin/stdout open
+    /// but never speaks LSP protocol. This tests the handshake timeout path.
+    fn cat_spec() -> OwnedLspServerSpec {
+        OwnedLspServerSpec {
+            project_types: vec![],
+            command: "cat".to_string(),
+            args: vec![],
+            language_ids: vec!["test".to_string()],
+            file_extensions: vec!["txt".to_string()],
+            // Very short timeout so the test doesn't hang
+            startup_timeout_secs: 1,
+            health_check_interval_secs: 60,
+            install_hint: "N/A".to_string(),
+            icon: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_start_immediately_exiting_process() {
+        // `true` exits immediately, so the handshake should fail with EOF
+        let spec = immediately_exiting_spec();
+        let workspace = tempfile::tempdir().expect("workspace tempdir");
+        let mut daemon = LspDaemon::new(spec, workspace.path().to_path_buf());
+
+        let result = daemon.start().await;
+        assert!(result.is_err(), "expected start to fail");
+        // Should be a handshake failure (EOF reading headers) or timeout
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, LspError::HandshakeFailed(_) | LspError::Timeout(_)),
+            "expected HandshakeFailed or Timeout, got: {err:?}"
+        );
+        // State should be Failed
+        assert!(
+            matches!(daemon.state(), LspDaemonState::Failed { .. }),
+            "expected Failed, got: {:?}",
+            daemon.state()
+        );
+        assert_eq!(daemon.consecutive_failures, 1);
+    }
+
+    #[tokio::test]
+    async fn test_start_with_cat_succeeds_as_echo() {
+        // `cat` echoes the initialize request back verbatim, which happens to
+        // be valid JSON-RPC framing. The daemon doesn't validate response
+        // content, so this "succeeds". This confirms the handshake completes
+        // when the child produces valid framing on stdout.
+        let spec = cat_spec();
+        let workspace = tempfile::tempdir().expect("workspace tempdir");
+        let mut daemon = LspDaemon::new(spec, workspace.path().to_path_buf());
+
+        let result = daemon.start().await;
+        // cat echoes a valid JSON-RPC message, so the handshake succeeds
+        assert!(
+            result.is_ok(),
+            "expected cat echo to pass handshake: {result:?}"
+        );
+        assert!(matches!(daemon.state(), LspDaemonState::Running { .. }));
+
+        daemon.shutdown().await;
+        assert_eq!(daemon.state(), LspDaemonState::NotStarted);
+    }
+
+    #[tokio::test]
+    async fn test_health_check_detects_exited_process_via_cat() {
+        // Spawn `cat`, then kill it and verify health_check detects the exit.
+        // We skip the handshake by directly setting up the child.
+        let workspace = tempfile::tempdir().expect("workspace tempdir");
+        let child = Command::new("cat")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .expect("spawn cat");
+
+        let spec = cat_spec();
+        let mut daemon = LspDaemon::new(spec, workspace.path().to_path_buf());
+        daemon.child = Some(child);
+
+        // Process should be alive
+        assert!(daemon.health_check());
+
+        // Kill it
+        if let Some(child) = daemon.child.as_mut() {
+            child.kill().await.expect("kill cat");
+            let _ = child.wait().await;
+        }
+
+        // health_check should now detect the exit
+        assert!(!daemon.health_check());
+        assert!(
+            matches!(daemon.state(), LspDaemonState::Failed { .. }),
+            "expected Failed, got: {:?}",
+            daemon.state()
+        );
+        assert_eq!(daemon.consecutive_failures, 1);
+    }
+
+    #[tokio::test]
+    async fn test_graceful_stop_of_running_child() {
+        // Directly set a child process and test that stop drops it
+        let workspace = tempfile::tempdir().expect("workspace tempdir");
+        let child = Command::new("cat")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .expect("spawn cat");
+
+        let spec = cat_spec();
+        let mut daemon = LspDaemon::new(spec, workspace.path().to_path_buf());
+        daemon.child = Some(child);
+
+        // Shutting down should clean up the child
+        daemon.shutdown().await;
+        assert_eq!(daemon.state(), LspDaemonState::NotStarted);
+        assert!(daemon.child.is_none());
+        assert!(daemon.client().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_force_restart_after_failure() {
+        // Simulate a daemon that failed, then force_restart
+        let spec = test_spec("nonexistent-lsp-binary-abc123xyz");
+        let mut daemon = LspDaemon::new(spec, PathBuf::from("/tmp"));
+        daemon.consecutive_failures = 4;
+        daemon.record_failure("previous crash".into());
+
+        // force_restart resets consecutive_failures to 0 then calls start()
+        let result = daemon.force_restart().await;
+        assert!(result.is_err()); // binary still not found
+                                  // But consecutive_failures was reset before the start attempt
+        assert_eq!(daemon.consecutive_failures, 0);
+    }
+
+    #[tokio::test]
+    async fn test_state_transitions_through_failed_start() {
+        let spec = immediately_exiting_spec();
+        let workspace = tempfile::tempdir().expect("workspace tempdir");
+        let mut daemon = LspDaemon::new(spec, workspace.path().to_path_buf());
+        let mut rx = daemon.state_rx();
+
+        assert_eq!(*rx.borrow(), LspDaemonState::NotStarted);
+
+        let _ = daemon.start().await;
+
+        // Should have transitioned through Starting -> Failed
+        // Drain all changes
+        while rx.has_changed().unwrap_or(false) {
+            let _ = rx.borrow_and_update();
+        }
+        let final_state = rx.borrow().clone();
+        assert!(
+            matches!(final_state, LspDaemonState::Failed { .. }),
+            "expected Failed, got: {final_state:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_shutdown_with_child_transitions_through_shutting_down() {
+        let workspace = tempfile::tempdir().expect("workspace tempdir");
+        let child = Command::new("cat")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .expect("spawn cat");
+
+        let spec = cat_spec();
+        let mut daemon = LspDaemon::new(spec, workspace.path().to_path_buf());
+        daemon.child = Some(child);
+
+        let mut rx = daemon.state_rx();
+
+        daemon.shutdown().await;
+
+        // Collect all state changes that happened
+        let mut saw_shutting_down = false;
+        // The watch channel coalesces changes, but ShuttingDown should have
+        // been emitted before NotStarted
+        while rx.has_changed().unwrap_or(false) {
+            let state = rx.borrow_and_update().clone();
+            if state == LspDaemonState::ShuttingDown {
+                saw_shutting_down = true;
+            }
+        }
+        // Final state should be NotStarted
+        assert_eq!(*rx.borrow(), LspDaemonState::NotStarted);
+        // Note: watch channels coalesce, so ShuttingDown might have been
+        // replaced by NotStarted before we observed it. That's OK -- the
+        // important thing is that NotStarted is the final state.
+        let _ = saw_shutting_down; // avoid unused warning
+    }
+
+    #[tokio::test]
+    async fn test_multiple_consecutive_failures_track_correctly() {
+        let spec = immediately_exiting_spec();
+        let workspace = tempfile::tempdir().expect("workspace tempdir");
+        let mut daemon = LspDaemon::new(spec, workspace.path().to_path_buf());
+
+        // Each failed start should increment the failure counter
+        let _ = daemon.start().await;
+        assert_eq!(daemon.consecutive_failures, 1);
+
+        let _ = daemon.start().await;
+        assert_eq!(daemon.consecutive_failures, 2);
+
+        let _ = daemon.start().await;
+        assert_eq!(daemon.consecutive_failures, 3);
+
+        match daemon.state() {
+            LspDaemonState::Failed { attempts, .. } => {
+                assert_eq!(attempts, 3);
+            }
+            other => panic!("expected Failed, got: {other:?}"),
+        }
+    }
+
+    // -- JSON-RPC edge case tests -------------------------------------------
+
+    #[tokio::test]
+    async fn test_jsonrpc_bad_content_length_value() {
+        let bad_input = b"Content-Length: abc\r\n\r\n";
+        let mut cursor = &bad_input[..];
+        let mut reader = BufReader::new(&mut cursor);
+        let result = read_jsonrpc_message(&mut reader).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("bad Content-Length"),
+            "expected bad Content-Length error, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_jsonrpc_ignores_non_content_length_headers() {
+        // Build a valid message with extra headers that should be ignored
+        let body = r#"{"jsonrpc":"2.0","id":1}"#;
+        let msg = format!(
+            "Content-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        let bytes = msg.as_bytes();
+        let mut cursor = bytes;
+        let mut reader = BufReader::new(&mut cursor);
+        let decoded = read_jsonrpc_message(&mut reader).await.unwrap();
+        assert_eq!(decoded["id"], 1);
+    }
+
+    #[tokio::test]
+    async fn test_jsonrpc_invalid_json_body() {
+        let body = "not valid json!!!";
+        let msg = format!("Content-Length: {}\r\n\r\n{}", body.len(), body);
+        let bytes = msg.as_bytes();
+        let mut cursor = bytes;
+        let mut reader = BufReader::new(&mut cursor);
+        let result = read_jsonrpc_message(&mut reader).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("json decode"),
+            "expected json decode error, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_jsonrpc_truncated_body() {
+        // Content-Length says 100 but only 5 bytes available
+        let msg = "Content-Length: 100\r\n\r\nhello";
+        let bytes = msg.as_bytes();
+        let mut cursor = bytes;
+        let mut reader = BufReader::new(&mut cursor);
+        let result = read_jsonrpc_message(&mut reader).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("read body"),
+            "expected read body error, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_send_jsonrpc_formats_content_length_correctly() {
+        let msg = json!({"jsonrpc": "2.0", "method": "test"});
+        let mut buf: Vec<u8> = Vec::new();
+        send_jsonrpc_message(&mut buf, &msg).await.unwrap();
+
+        let output = String::from_utf8(buf).unwrap();
+        assert!(output.starts_with("Content-Length: "));
+        assert!(output.contains("\r\n\r\n"));
+        // Verify the content-length value matches the actual body
+        let parts: Vec<&str> = output.splitn(2, "\r\n\r\n").collect();
+        let header = parts[0];
+        let body = parts[1];
+        let claimed_len: usize = header
+            .strip_prefix("Content-Length: ")
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert_eq!(claimed_len, body.len());
+    }
+
+    // -- LspError Display tests -----------------------------------------------
+
+    #[test]
+    fn test_lsp_error_display_variants() {
+        let err = LspError::BinaryNotFound {
+            command: "test-cmd".to_string(),
+            install_hint: "install it".to_string(),
+        };
+        assert!(err.to_string().contains("test-cmd"));
+
+        let err = LspError::HandshakeFailed("timeout".to_string());
+        assert!(err.to_string().contains("timeout"));
+
+        let err = LspError::Timeout(Duration::from_secs(30));
+        assert!(err.to_string().contains("30"));
+
+        let err = LspError::ShutdownFailed("crash".to_string());
+        assert!(err.to_string().contains("crash"));
+
+        let err = LspError::NotRunning;
+        assert!(err.to_string().contains("not running"));
+
+        let err = LspError::JsonRpc("bad frame".to_string());
+        assert!(err.to_string().contains("bad frame"));
+
+        let err = LspError::ProjectDetection("no projects".to_string());
+        assert!(err.to_string().contains("no projects"));
+
+        let err = LspError::DaemonNotFound("missing-cmd".to_string());
+        assert!(err.to_string().contains("missing-cmd"));
+    }
+
+    // -- start() timeout path via cat -----------------------------------------
+
+    #[tokio::test]
+    async fn test_start_cat_with_very_short_timeout() {
+        // cat keeps stdin/stdout open but doesn't respond with valid JSON-RPC.
+        // It actually echoes the request back as raw bytes, which happens to be
+        // valid framing. To trigger the timeout path, we need a command that
+        // keeps pipes open but doesn't echo. `/bin/sleep` does this.
+        let spec = OwnedLspServerSpec {
+            project_types: vec![],
+            command: "sleep".to_string(),
+            args: vec!["10".to_string()],
+            language_ids: vec!["test".to_string()],
+            file_extensions: vec!["txt".to_string()],
+            startup_timeout_secs: 1,
+            health_check_interval_secs: 60,
+            install_hint: "N/A".to_string(),
+            icon: None,
+        };
+        let workspace = tempfile::tempdir().expect("workspace tempdir");
+        let mut daemon = LspDaemon::new(spec, workspace.path().to_path_buf());
+
+        let result = daemon.start().await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        // sleep doesn't have stdin piped correctly for write, so it may fail
+        // with either Timeout, HandshakeFailed, or SpawnFailed depending on
+        // the OS behavior. The key is that it fails.
+        assert!(
+            matches!(
+                err,
+                LspError::Timeout(_)
+                    | LspError::HandshakeFailed(_)
+                    | LspError::SpawnFailed(_)
+                    | LspError::JsonRpc(_)
+            ),
+            "expected Timeout/HandshakeFailed/SpawnFailed/JsonRpc, got: {err:?}"
+        );
+    }
+
+    // -- shutdown with a real running child -----------------------------------
+
+    #[tokio::test]
+    async fn test_shutdown_kills_long_running_child() {
+        // Spawn a process that won't exit on its own
+        let workspace = tempfile::tempdir().expect("workspace tempdir");
+        let child = Command::new("sleep")
+            .args(["60"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .expect("spawn sleep");
+
+        let spec = test_spec("sleep");
+        let mut daemon = LspDaemon::new(spec, workspace.path().to_path_buf());
+        daemon.child = Some(child);
+
+        // Shutdown should complete within the grace period (kill_on_drop)
+        daemon.shutdown().await;
+        assert_eq!(daemon.state(), LspDaemonState::NotStarted);
+        assert!(daemon.child.is_none());
+    }
+
+    // -- restart_with_backoff delay test --------------------------------------
+
+    #[test]
+    fn test_client_recovers_from_poisoned_mutex_with_some_value() {
+        // This test covers the poisoned mutex path where the inner Option IS Some.
+        // We can't easily create a real LspJsonRpcClient without pipes, so we
+        // test via shared_client directly.
+        let spec = test_spec("some-server");
+        let daemon = LspDaemon::new(spec, PathBuf::from("/tmp"));
+        let shared = daemon.shared_client();
+
+        // Put a real client into the mutex
+        // We need stdin/stdout for LspJsonRpcClient::new
+        let stdin = std::process::Command::new("cat")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn();
+
+        if let Ok(mut child) = stdin {
+            let child_stdin = child.stdin.take().unwrap();
+            let child_stdout = child.stdout.take().unwrap();
+            {
+                let mut guard = shared.lock().unwrap();
+                *guard = Some(LspJsonRpcClient::new(child_stdin, child_stdout));
+            }
+
+            // Poison the mutex by panicking inside a lock
+            let shared_clone = Arc::clone(&shared);
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _guard = shared_clone.lock().unwrap();
+                panic!("intentional panic to poison mutex");
+            }));
+
+            // client() should recover from the poisoned mutex.
+            // The inner Option is Some, so it should return Some.
+            let result = daemon.client();
+            assert!(
+                result.is_some(),
+                "expected Some from poisoned mutex with client present"
+            );
+
+            let _ = child.kill();
+        }
+    }
+
+    #[tokio::test]
+    async fn test_restart_with_backoff_increments_failure_on_bad_binary() {
+        let spec = test_spec("nonexistent-lsp-binary-abc123xyz");
+        let mut daemon = LspDaemon::new(spec, PathBuf::from("/tmp"));
+        // Set to 1 failure (below MAX) so restart_with_backoff proceeds
+        daemon.consecutive_failures = 1;
+
+        let start = std::time::Instant::now();
+        let result = daemon.restart_with_backoff().await;
+        let elapsed = start.elapsed();
+
+        assert!(result.is_err());
+        // Should have waited at least ~2s backoff for attempt=1
+        assert!(
+            elapsed >= Duration::from_secs(1),
+            "expected at least 1s backoff delay, got: {elapsed:?}"
+        );
+        assert_eq!(daemon.state(), LspDaemonState::NotFound);
+    }
 }

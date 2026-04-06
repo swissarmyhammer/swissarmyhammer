@@ -63,7 +63,7 @@ vi.mock("@/lib/entity-focus-context", () => ({
 
 import { BadgeListDisplay } from "./badge-list-display";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { InspectProvider } from "@/lib/inspect-context";
+
 import type { Entity, FieldDef } from "@/types/kanban";
 
 const tagField: FieldDef = {
@@ -85,14 +85,12 @@ function renderDisplay(
 ) {
   return render(
     <TooltipProvider>
-      <InspectProvider onInspect={() => {}} onDismiss={() => false}>
-        <BadgeListDisplay
-          field={tagField}
-          value={overrides.value ?? ["bugfix", "feature"]}
-          entity={taskEntity}
-          mode="full"
-        />
-      </InspectProvider>
+      <BadgeListDisplay
+        field={tagField}
+        value={overrides.value ?? ["bugfix", "feature"]}
+        entity={taskEntity}
+        mode="full"
+      />
     </TooltipProvider>,
   );
 }

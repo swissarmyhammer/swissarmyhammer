@@ -3,41 +3,34 @@
 //! Uses the `fractional_index` crate (Figma's algorithm) for correct,
 //! unbounded fractional key generation.
 
-use super::ids::{ColumnId, SwimlaneId};
+use super::ids::ColumnId;
 use fractional_index::FractionalIndex;
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 
-/// Full position of a task on the board: column + optional swimlane + ordinal
+/// Full position of a task on the board: column + ordinal
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Position {
     pub column: ColumnId,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub swimlane: Option<SwimlaneId>,
     pub ordinal: Ordinal,
 }
 
 impl Position {
     /// Create a new position
-    pub fn new(column: ColumnId, swimlane: Option<SwimlaneId>, ordinal: Ordinal) -> Self {
-        Self {
-            column,
-            swimlane,
-            ordinal,
-        }
+    pub fn new(column: ColumnId, ordinal: Ordinal) -> Self {
+        Self { column, ordinal }
     }
 
     /// Create a position in a column with default ordinal (at the start)
     pub fn in_column(column: ColumnId) -> Self {
         Self {
             column,
-            swimlane: None,
             ordinal: Ordinal::first(),
         }
     }
 }
 
-/// Ordering within a column/swimlane cell using fractional indexing.
+/// Ordering within a column using fractional indexing.
 ///
 /// Backed by the `fractional_index` crate (Figma's algorithm).
 /// Legacy ordinals are migrated on board open — no dual-algorithm support.
@@ -289,6 +282,55 @@ mod tests {
             result.as_str(),
             b.as_str()
         );
+    }
+
+    #[test]
+    fn test_position_new() {
+        let col = ColumnId::from_string("todo");
+        let ordinal = Ordinal::first();
+        let pos = Position::new(col.clone(), ordinal.clone());
+
+        assert_eq!(pos.column, col);
+        assert_eq!(pos.ordinal, ordinal);
+    }
+
+    #[test]
+    fn test_position_in_column() {
+        let col = ColumnId::from_string("backlog");
+        let pos = Position::in_column(col.clone());
+
+        assert_eq!(pos.column, col);
+        // Should use the default "first" ordinal
+        assert_eq!(pos.ordinal, Ordinal::first());
+    }
+
+    #[test]
+    fn test_ordinal_is_valid_with_valid_string() {
+        // The default ordinal string should be valid
+        let valid = Ordinal::DEFAULT_STR;
+        assert!(Ordinal::is_valid(valid));
+    }
+
+    #[test]
+    fn test_ordinal_is_valid_with_first_ordinal() {
+        let first = Ordinal::first();
+        assert!(Ordinal::is_valid(first.as_str()));
+    }
+
+    #[test]
+    fn test_ordinal_is_valid_rejects_legacy() {
+        // Legacy ordinals like "a0" are not valid FractionalIndex encodings
+        assert!(!Ordinal::is_valid("a0"));
+    }
+
+    #[test]
+    fn test_ordinal_is_valid_rejects_empty() {
+        assert!(!Ordinal::is_valid(""));
+    }
+
+    #[test]
+    fn test_ordinal_is_valid_rejects_arbitrary_text() {
+        assert!(!Ordinal::is_valid("not-a-valid-ordinal"));
     }
 
     #[test]

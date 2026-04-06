@@ -380,4 +380,320 @@ mod tests {
         assert!(score > 0.5);
         assert!(score < 1.0);
     }
+
+    /// Helper that creates an entity with a structural_hash set explicitly.
+    fn make_entity_with_structural(
+        id: &str,
+        name: &str,
+        content: &str,
+        file_path: &str,
+        structural: &str,
+    ) -> SemanticEntity {
+        let mut e = make_entity(id, name, content, file_path);
+        e.structural_hash = Some(structural.to_string());
+        e
+    }
+
+    // ------------------------------------------------------------------
+    // Move detection (Phase 2 – same content_hash, different file_path)
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn test_content_hash_move_different_files() {
+        // Entity moved from a.ts to b.ts — same ID hash, different file path.
+        let before = vec![make_entity("a::f::foo", "foo", "same content", "a.ts")];
+        let after = vec![make_entity("b::f::foo", "foo", "same content", "b.ts")];
+        let result = match_entities(&before, &after, "a.ts", None, None, None);
+        assert_eq!(result.changes.len(), 1);
+        assert_eq!(result.changes[0].change_type, ChangeType::Moved);
+        // old_file_path must be populated for moves
+        assert_eq!(result.changes[0].old_file_path, Some("a.ts".to_string()));
+        assert_eq!(result.changes[0].file_path, "b.ts");
+    }
+
+    #[test]
+    fn test_content_hash_move_preserves_content() {
+        // Verify before_content / after_content are carried over correctly.
+        let before = vec![make_entity(
+            "old::f::fn1",
+            "fn1",
+            "body text here",
+            "old.ts",
+        )];
+        let after = vec![make_entity(
+            "new::f::fn1",
+            "fn1",
+            "body text here",
+            "new.ts",
+        )];
+        let result = match_entities(&before, &after, "old.ts", None, Some("sha1"), Some("alice"));
+        assert_eq!(result.changes.len(), 1);
+        let ch = &result.changes[0];
+        assert_eq!(ch.change_type, ChangeType::Moved);
+        assert_eq!(ch.before_content.as_deref(), Some("body text here"));
+        assert_eq!(ch.after_content.as_deref(), Some("body text here"));
+        assert_eq!(ch.commit_sha.as_deref(), Some("sha1"));
+        assert_eq!(ch.author.as_deref(), Some("alice"));
+    }
+
+    // ------------------------------------------------------------------
+    // Rename detection via structural_hash (Phase 2 fallback)
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn test_structural_hash_rename_same_file() {
+        // Same structural hash, different content hash (e.g. comment change),
+        // same file path → should be Renamed, not Moved.
+        let before = vec![make_entity_with_structural(
+            "a::f::old",
+            "old",
+            "fn old() { /* comment */ }",
+            "a.ts",
+            "struct-abc",
+        )];
+        let after = vec![make_entity_with_structural(
+            "a::f::new",
+            "new",
+            "fn new() {}",
+            "a.ts",
+            "struct-abc",
+        )];
+        let result = match_entities(&before, &after, "a.ts", None, None, None);
+        assert_eq!(result.changes.len(), 1);
+        assert_eq!(result.changes[0].change_type, ChangeType::Renamed);
+        assert_eq!(result.changes[0].old_file_path, None);
+    }
+
+    #[test]
+    fn test_structural_hash_move_different_files() {
+        // Same structural hash, different file paths → Moved.
+        let before = vec![make_entity_with_structural(
+            "a::f::fn1",
+            "fn1",
+            "fn fn1() { let x = 1; }",
+            "a.ts",
+            "struct-xyz",
+        )];
+        let after = vec![make_entity_with_structural(
+            "b::f::fn1",
+            "fn1",
+            "fn fn1() { let y = 1; }",
+            "b.ts",
+            "struct-xyz",
+        )];
+        let result = match_entities(&before, &after, "a.ts", None, None, None);
+        assert_eq!(result.changes.len(), 1);
+        assert_eq!(result.changes[0].change_type, ChangeType::Moved);
+        assert_eq!(result.changes[0].old_file_path, Some("a.ts".to_string()));
+    }
+
+    #[test]
+    fn test_structural_hash_not_matched_when_already_matched() {
+        // If an entity was already matched in Phase 1, it should not appear in Phase 2.
+        let before = vec![
+            make_entity_with_structural("id1", "fn1", "content1", "a.ts", "hash-s"),
+            make_entity_with_structural("id2", "fn2", "content2", "a.ts", "hash-s"),
+        ];
+        // id1 matches exactly in Phase 1 (same ID). id2 is unmatched.
+        let after = vec![
+            make_entity_with_structural("id1", "fn1", "content1-changed", "a.ts", "hash-s"),
+            make_entity_with_structural("id3", "fn3", "content3", "a.ts", "hash-s"),
+        ];
+        let result = match_entities(&before, &after, "a.ts", None, None, None);
+        // id1 → Modified (Phase 1), id2 → structural match with id3 (Phase 2 → Renamed)
+        let change_types: Vec<ChangeType> = result.changes.iter().map(|c| c.change_type).collect();
+        assert!(change_types.contains(&ChangeType::Modified));
+        assert!(change_types.contains(&ChangeType::Renamed));
+        // id2 must not appear as Deleted since it was matched via structural hash
+        assert!(!change_types.contains(&ChangeType::Deleted));
+    }
+
+    // ------------------------------------------------------------------
+    // Phase 3 fuzzy similarity – move vs rename distinction
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn test_fuzzy_match_rename_same_file() {
+        // High similarity (≥0.8) but same file path → Renamed.
+        // 9 shared tokens, 1 unique each → Jaccard = 9/11 ≈ 0.818 ≥ 0.8.
+        let base = "alpha beta gamma delta epsilon zeta eta theta iota";
+        let before = vec![make_entity(
+            "a::old",
+            "old",
+            &format!("{base} old_unique"),
+            "a.ts",
+        )];
+        let after = vec![make_entity(
+            "a::new",
+            "new",
+            &format!("{base} new_unique"),
+            "a.ts",
+        )];
+        let result = match_entities(
+            &before,
+            &after,
+            "a.ts",
+            Some(&default_similarity),
+            None,
+            None,
+        );
+        assert_eq!(result.changes.len(), 1);
+        assert_eq!(result.changes[0].change_type, ChangeType::Renamed);
+        assert_eq!(result.changes[0].old_file_path, None);
+    }
+
+    #[test]
+    fn test_fuzzy_match_move_different_files() {
+        // High similarity (≥0.8), different file paths → Moved.
+        // 9 shared tokens, 1 unique each → Jaccard = 9/11 ≈ 0.818 ≥ 0.8.
+        let base = "alpha beta gamma delta epsilon zeta eta theta iota";
+        let before = vec![make_entity(
+            "a::fn1",
+            "fn1",
+            &format!("{base} old_unique"),
+            "a.ts",
+        )];
+        let after = vec![make_entity(
+            "b::fn1",
+            "fn1",
+            &format!("{base} new_unique"),
+            "b.ts",
+        )];
+        let result = match_entities(
+            &before,
+            &after,
+            "a.ts",
+            Some(&default_similarity),
+            None,
+            None,
+        );
+        assert_eq!(result.changes.len(), 1);
+        assert_eq!(result.changes[0].change_type, ChangeType::Moved);
+        assert_eq!(result.changes[0].old_file_path, Some("a.ts".to_string()));
+    }
+
+    // ------------------------------------------------------------------
+    // default_similarity boundary cases
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn test_default_similarity_identical_content() {
+        // Identical content → score should be 1.0.
+        let a = make_entity("a", "a", "hello world foo bar", "a.ts");
+        let b = make_entity("b", "b", "hello world foo bar", "b.ts");
+        let score = default_similarity(&a, &b);
+        assert!((score - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_default_similarity_empty_content() {
+        // Both entities have empty content → should return 0.0 (no tokens to compare).
+        let a = make_entity("a", "a", "", "a.ts");
+        let b = make_entity("b", "b", "", "b.ts");
+        let score = default_similarity(&a, &b);
+        assert_eq!(score, 0.0);
+    }
+
+    #[test]
+    fn test_default_similarity_completely_different() {
+        // No tokens in common → score 0.0.
+        let a = make_entity("a", "a", "alpha beta gamma", "a.ts");
+        let b = make_entity("b", "b", "delta epsilon zeta", "b.ts");
+        let score = default_similarity(&a, &b);
+        assert_eq!(score, 0.0);
+    }
+
+    #[test]
+    fn test_default_similarity_size_ratio_rejected() {
+        // Token count ratio below 0.6 → early return 0.0.
+        // "a" has 2 tokens, "b" has 10+ tokens, ratio << 0.6.
+        let a = make_entity("a", "a", "fn foo", "a.ts");
+        let b = make_entity(
+            "b",
+            "b",
+            "one two three four five six seven eight nine ten eleven twelve",
+            "b.ts",
+        );
+        let score = default_similarity(&a, &b);
+        assert_eq!(score, 0.0);
+    }
+
+    #[test]
+    fn test_default_similarity_at_threshold() {
+        // Build content that produces a score at exactly (or just above) the 0.8 threshold
+        // so that the fuzzy matcher picks it up.
+        // 9 shared tokens out of 10 unique → Jaccard = 9/10 = 0.9 ≥ 0.8.
+        let common = "one two three four five six seven eight nine";
+        let a = make_entity("a", "a", &format!("{common} alpha"), "a.ts");
+        let b = make_entity("b", "b", &format!("{common} beta"), "b.ts");
+        let score = default_similarity(&a, &b);
+        // 9 shared / 11 total unique = 9/11 ≈ 0.818
+        assert!(score >= 0.8, "expected score >= 0.8, got {score}");
+    }
+
+    #[test]
+    fn test_default_similarity_below_threshold() {
+        // Build content that produces a score below 0.8 so fuzzy matcher ignores it.
+        // 1 shared token out of 5 → Jaccard = 1/5 = 0.2.
+        let a = make_entity("a", "a", "shared alpha beta gamma", "a.ts");
+        let b = make_entity("b", "b", "shared delta epsilon zeta", "b.ts");
+        let score = default_similarity(&a, &b);
+        assert!(score < 0.8, "expected score < 0.8, got {score}");
+    }
+
+    // ------------------------------------------------------------------
+    // Phase 3 fuzzy: no match below threshold → deleted + added
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn test_fuzzy_no_match_below_threshold() {
+        // Entities are too different to match → should produce Deleted + Added.
+        let before = vec![make_entity(
+            "a::fn1",
+            "fn1",
+            "completely different code here",
+            "a.ts",
+        )];
+        let after = vec![make_entity(
+            "b::fn2",
+            "fn2",
+            "totally unrelated stuff there",
+            "b.ts",
+        )];
+        let result = match_entities(
+            &before,
+            &after,
+            "a.ts",
+            Some(&default_similarity),
+            None,
+            None,
+        );
+        let types: Vec<ChangeType> = result.changes.iter().map(|c| c.change_type).collect();
+        assert!(types.contains(&ChangeType::Deleted));
+        assert!(types.contains(&ChangeType::Added));
+        assert!(!types.contains(&ChangeType::Moved));
+        assert!(!types.contains(&ChangeType::Renamed));
+    }
+
+    // ------------------------------------------------------------------
+    // Multiple entities: partial move scenario
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn test_multiple_entities_one_moved_one_unchanged() {
+        // Two entities: one stays in place, one moves to a different file.
+        let before = vec![
+            make_entity("a::fn_stay", "fn_stay", "stay content", "a.ts"),
+            make_entity("a::fn_move", "fn_move", "move content", "a.ts"),
+        ];
+        let after = vec![
+            make_entity("a::fn_stay", "fn_stay", "stay content", "a.ts"),
+            make_entity("b::fn_move", "fn_move", "move content", "b.ts"),
+        ];
+        let result = match_entities(&before, &after, "a.ts", None, None, None);
+        // fn_stay is unchanged → no change recorded; fn_move → Moved
+        assert_eq!(result.changes.len(), 1);
+        assert_eq!(result.changes[0].change_type, ChangeType::Moved);
+        assert_eq!(result.changes[0].entity_id, "b::fn_move");
+    }
 }

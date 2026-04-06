@@ -298,4 +298,202 @@ mod tests {
     // Note: download_with_retry and download_with_retry_internal require network access
     // to HuggingFace and are tested via integration tests. The coordinator logic
     // is tested in download_lock.rs unit tests.
+
+    #[test]
+    fn test_is_retriable_error_unknown_defaults_to_retriable() {
+        #[derive(Debug)]
+        struct TestError(String);
+        impl std::fmt::Display for TestError {
+            fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                write!(f, "{}", self.0)
+            }
+        }
+        impl std::error::Error for TestError {}
+
+        // Unknown errors default to retriable
+        assert!(is_retriable_error(&TestError(
+            "something weird happened".to_string()
+        )));
+        assert!(is_retriable_error(&TestError("".to_string())));
+    }
+
+    #[test]
+    fn test_is_retriable_error_case_insensitive() {
+        #[derive(Debug)]
+        struct TestError(String);
+        impl std::fmt::Display for TestError {
+            fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                write!(f, "{}", self.0)
+            }
+        }
+        impl std::error::Error for TestError {}
+
+        // Case insensitive matching
+        assert!(is_retriable_error(&TestError(
+            "INTERNAL SERVER ERROR".to_string()
+        )));
+        assert!(is_retriable_error(&TestError("Bad Gateway".to_string())));
+        assert!(is_retriable_error(&TestError(
+            "SERVICE UNAVAILABLE".to_string()
+        )));
+        assert!(is_retriable_error(&TestError(
+            "GATEWAY TIMEOUT".to_string()
+        )));
+        assert!(!is_retriable_error(&TestError("NOT FOUND".to_string())));
+        assert!(!is_retriable_error(&TestError("FORBIDDEN".to_string())));
+        assert!(!is_retriable_error(&TestError("UNAUTHORIZED".to_string())));
+        assert!(!is_retriable_error(&TestError(
+            "TOO MANY REQUESTS".to_string()
+        )));
+    }
+
+    #[test]
+    fn test_is_retriable_error_mixed_messages() {
+        #[derive(Debug)]
+        struct TestError(String);
+        impl std::fmt::Display for TestError {
+            fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                write!(f, "{}", self.0)
+            }
+        }
+        impl std::error::Error for TestError {}
+
+        // Connection-related errors
+        assert!(is_retriable_error(&TestError(
+            "Connection reset by peer".to_string()
+        )));
+        assert!(is_retriable_error(&TestError(
+            "Request timeout after 30s".to_string()
+        )));
+        assert!(is_retriable_error(&TestError(
+            "Network is unreachable (os error 101)".to_string()
+        )));
+    }
+
+    #[test]
+    fn test_format_download_error_forbidden() {
+        #[derive(Debug)]
+        struct TestError(String);
+        impl std::fmt::Display for TestError {
+            fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                write!(f, "{}", self.0)
+            }
+        }
+        impl std::error::Error for TestError {}
+
+        let error = TestError("403 Forbidden".to_string());
+        let result = format_download_error("model.gguf", "test/repo", &error, 3);
+        assert!(result.contains("model.gguf"));
+        assert!(result.contains("test/repo"));
+        assert!(result.contains("3 retries"));
+        assert!(result.contains("🔒")); // Forbidden guidance
+        assert!(result.contains("authentication"));
+    }
+
+    #[test]
+    fn test_format_download_error_rate_limited() {
+        #[derive(Debug)]
+        struct TestError(String);
+        impl std::fmt::Display for TestError {
+            fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                write!(f, "{}", self.0)
+            }
+        }
+        impl std::error::Error for TestError {}
+
+        let error = TestError("429 Too Many Requests".to_string());
+        let result = format_download_error("model.gguf", "test/repo", &error, 5);
+        assert!(result.contains("5 retries"));
+        assert!(result.contains("⏱️")); // Rate limit guidance
+        assert!(result.contains("Rate limited"));
+    }
+
+    #[test]
+    fn test_format_download_error_server_error() {
+        #[derive(Debug)]
+        struct TestError(String);
+        impl std::fmt::Display for TestError {
+            fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                write!(f, "{}", self.0)
+            }
+        }
+        impl std::error::Error for TestError {}
+
+        for code in ["500", "502", "503", "504"] {
+            let error = TestError(format!("{} Server Error", code));
+            let result = format_download_error("model.gguf", "test/repo", &error, 2);
+            assert!(
+                result.contains("🏥"),
+                "Server error {} should contain hospital emoji",
+                code
+            );
+            assert!(result.contains("Server error"));
+        }
+    }
+
+    #[test]
+    fn test_format_download_error_generic_network() {
+        #[derive(Debug)]
+        struct TestError(String);
+        impl std::fmt::Display for TestError {
+            fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                write!(f, "{}", self.0)
+            }
+        }
+        impl std::error::Error for TestError {}
+
+        let error = TestError("Connection refused".to_string());
+        let result = format_download_error("model.gguf", "test/repo", &error, 1);
+        assert!(result.contains("🌐")); // Network error guidance
+        assert!(result.contains("internet connection"));
+    }
+
+    #[test]
+    fn test_format_download_error_contains_help() {
+        #[derive(Debug)]
+        struct TestError(String);
+        impl std::fmt::Display for TestError {
+            fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                write!(f, "{}", self.0)
+            }
+        }
+        impl std::error::Error for TestError {}
+
+        let error = TestError("some error".to_string());
+        let result = format_download_error("model.gguf", "test/repo", &error, 3);
+        // All messages should contain the additional help text
+        assert!(result.contains("💡"));
+        assert!(result.contains("GGUF format"));
+        assert!(result.contains("retry_config.max_retries"));
+    }
+
+    #[test]
+    fn test_format_download_error_zero_retries() {
+        #[derive(Debug)]
+        struct TestError(String);
+        impl std::fmt::Display for TestError {
+            fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                write!(f, "{}", self.0)
+            }
+        }
+        impl std::error::Error for TestError {}
+
+        let error = TestError("error".to_string());
+        let result = format_download_error("model.gguf", "test/repo", &error, 0);
+        assert!(result.contains("0 retries"));
+    }
+
+    #[test]
+    fn test_retry_config_custom_values() {
+        let config = RetryConfig {
+            max_retries: 10,
+            initial_delay_ms: 500,
+            backoff_multiplier: 1.5,
+            max_delay_ms: 5000,
+        };
+        assert_eq!(config.max_retries, 10);
+        assert_eq!(config.initial_delay_ms, 500);
+        assert_eq!(config.backoff_multiplier, 1.5);
+        assert_eq!(config.max_delay_ms, 5000);
+    }
 }

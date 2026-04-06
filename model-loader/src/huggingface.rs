@@ -222,4 +222,104 @@ mod tests {
         let parts = get_all_parts("model-part1-of-3.gguf");
         assert!(parts.is_none());
     }
+
+    #[test]
+    fn test_get_all_parts_not_first_part() {
+        // Only matches -00001- pattern (first part)
+        let parts = get_all_parts("model-00002-of-00003.gguf");
+        assert!(parts.is_none());
+    }
+
+    #[test]
+    fn test_get_all_parts_single_part() {
+        let parts = get_all_parts("model-00001-of-00001.gguf").unwrap();
+        assert_eq!(parts.len(), 1);
+        assert_eq!(parts[0], "model-00001-of-00001.gguf");
+    }
+
+    #[test]
+    fn test_get_all_parts_many_parts() {
+        let parts = get_all_parts("llama-00001-of-00010.gguf").unwrap();
+        assert_eq!(parts.len(), 10);
+        assert_eq!(parts[0], "llama-00001-of-00010.gguf");
+        assert_eq!(parts[9], "llama-00010-of-00010.gguf");
+    }
+
+    #[test]
+    fn test_get_all_parts_complex_name() {
+        let parts = get_all_parts("my-model-bf16-00001-of-00005.gguf").unwrap();
+        assert_eq!(parts.len(), 5);
+        assert_eq!(parts[0], "my-model-bf16-00001-of-00005.gguf");
+        assert_eq!(parts[4], "my-model-bf16-00005-of-00005.gguf");
+    }
+
+    #[test]
+    fn test_get_all_parts_wrong_extension() {
+        let parts = get_all_parts("model-00001-of-00003.bin");
+        assert!(parts.is_none());
+    }
+
+    #[test]
+    fn test_get_all_parts_three_digit_numbers() {
+        // Pattern requires 5-digit numbers
+        let parts = get_all_parts("model-001-of-003.gguf");
+        assert!(parts.is_none());
+    }
+
+    #[test]
+    fn test_deref_folder_symlinks_no_match() {
+        // When the folder name is not found in the path, should silently succeed
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("somefile.bin");
+        std::fs::write(&file_path, "data").unwrap();
+        let result = deref_folder_symlinks(&file_path, "nonexistent_folder_name");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_deref_dir_recursive_regular_files() {
+        // Directory with only regular files — should be a no-op
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(temp_dir.path().join("file1.txt"), "a").unwrap();
+        std::fs::write(temp_dir.path().join("file2.txt"), "b").unwrap();
+        let subdir = temp_dir.path().join("subdir");
+        std::fs::create_dir(&subdir).unwrap();
+        std::fs::write(subdir.join("file3.txt"), "c").unwrap();
+
+        let result = deref_dir_recursive(temp_dir.path());
+        assert!(result.is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_deref_dir_recursive_with_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let blob = temp_dir.path().join("blob.bin");
+        std::fs::write(&blob, "model data").unwrap();
+
+        let link_dir = temp_dir.path().join("snapshot");
+        std::fs::create_dir(&link_dir).unwrap();
+        let link_path = link_dir.join("model.bin");
+        symlink(&blob, &link_path).unwrap();
+
+        assert!(link_path
+            .symlink_metadata()
+            .unwrap()
+            .file_type()
+            .is_symlink());
+
+        let result = deref_dir_recursive(&link_dir);
+        assert!(result.is_ok());
+
+        // After deref, it should be a hard link (not a symlink)
+        assert!(!link_path
+            .symlink_metadata()
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        // Content should still be the same
+        assert_eq!(std::fs::read_to_string(&link_path).unwrap(), "model data");
+    }
 }

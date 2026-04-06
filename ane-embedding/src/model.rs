@@ -214,4 +214,116 @@ mod tests {
         assert_eq!(model.embedding_dimension(), None);
         assert_eq!(model.seq_length(), 256);
     }
+
+    #[test]
+    fn test_seq_length_custom() {
+        let config = AneEmbeddingConfig {
+            seq_length: 128,
+            ..AneEmbeddingConfig::default()
+        };
+        let model = AneEmbeddingModel::new(config);
+        assert_eq!(model.seq_length(), 128);
+    }
+
+    #[test]
+    fn test_is_loaded_returns_false_before_load() {
+        let model = AneEmbeddingModel::new(AneEmbeddingConfig::default());
+        assert!(!model.is_loaded());
+    }
+
+    #[test]
+    fn test_embedding_dimension_none_before_load() {
+        let model = AneEmbeddingModel::new(AneEmbeddingConfig::default());
+        assert_eq!(model.embedding_dimension(), None);
+    }
+
+    #[tokio::test]
+    async fn test_embed_text_before_load_returns_model_not_loaded() {
+        let model = AneEmbeddingModel::new(AneEmbeddingConfig::default());
+        let result = model.embed_impl("hello").await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, EmbeddingError::ModelNotLoaded),
+            "Expected ModelNotLoaded, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_load_fails_with_missing_tokenizer() {
+        // Use a temp dir with no files — tokenizer load will fail
+        let tmp = tempfile::tempdir().unwrap();
+        let config = AneEmbeddingConfig {
+            model_dir: tmp.path().to_path_buf(),
+            ..AneEmbeddingConfig::default()
+        };
+        let model = AneEmbeddingModel::new(config);
+        let result = model.load_model().await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, EmbeddingError::Tokenization(_)),
+            "Expected Tokenization error for missing tokenizer, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_load_fails_with_missing_model_file() {
+        // Create a temp dir with a valid tokenizer.json but no .mlpackage
+        let tmp = tempfile::tempdir().unwrap();
+        let tok_path = tmp.path().join("tokenizer.json");
+        // Write a minimal valid tokenizer JSON (from HuggingFace tokenizers format)
+        std::fs::write(
+            &tok_path,
+            r#"{
+                "version": "1.0",
+                "model": {
+                    "type": "BPE",
+                    "vocab": {"a": 0, "b": 1},
+                    "merges": []
+                }
+            }"#,
+        )
+        .unwrap();
+
+        let config = AneEmbeddingConfig {
+            model_dir: tmp.path().to_path_buf(),
+            ..AneEmbeddingConfig::default()
+        };
+        let model = AneEmbeddingModel::new(config);
+        let result = model.load_model().await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, EmbeddingError::Configuration(_)),
+            "Expected Configuration error for missing model, got: {err}"
+        );
+        assert!(
+            err.to_string().contains("not found"),
+            "Error should mention model not found: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_trait_embed_text_before_load() {
+        let model = AneEmbeddingModel::new(AneEmbeddingConfig::default());
+        let result = TextEmbedder::embed_text(&model, "hello").await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(
+            err,
+            model_embedding::EmbeddingError::ModelNotLoaded
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_trait_load_with_bad_path() {
+        let config = AneEmbeddingConfig {
+            model_dir: std::path::PathBuf::from("/nonexistent/path/to/model"),
+            ..AneEmbeddingConfig::default()
+        };
+        let model = AneEmbeddingModel::new(config);
+        let result = TextEmbedder::load(&model).await;
+        assert!(result.is_err());
+    }
 }

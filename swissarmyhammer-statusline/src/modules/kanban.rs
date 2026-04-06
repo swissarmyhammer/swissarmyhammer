@@ -22,15 +22,20 @@ pub fn eval(ctx: &ModuleContext) -> ModuleOutput {
         return ModuleOutput::hidden();
     }
 
+    let (done, total) = count_tasks_in_dir(&tasks_dir);
+    render_kanban_bar(done, total, &ctx.config.kanban)
+}
+
+/// Count tasks in a directory by reading `.md` files and checking frontmatter.
+fn count_tasks_in_dir(tasks_dir: &std::path::Path) -> (u32, u32) {
     let mut total = 0u32;
     let mut done = 0u32;
 
-    if let Ok(entries) = std::fs::read_dir(&tasks_dir) {
+    if let Ok(entries) = std::fs::read_dir(tasks_dir) {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.extension().is_some_and(|e| e == "md") {
                 total += 1;
-                // Read frontmatter to check if task is in a "done" column
                 if let Ok(content) = std::fs::read_to_string(&path) {
                     if content.contains("position_column: done")
                         || content.contains("position_column: Done")
@@ -42,11 +47,19 @@ pub fn eval(ctx: &ModuleContext) -> ModuleOutput {
         }
     }
 
+    (done, total)
+}
+
+/// Render a kanban progress bar from task counts.
+fn render_kanban_bar(
+    done: u32,
+    total: u32,
+    cfg: &crate::config::KanbanModuleConfig,
+) -> ModuleOutput {
     if total == 0 {
         return ModuleOutput::hidden();
     }
 
-    let cfg = &ctx.config.kanban;
     let pct = (done as f64 / total as f64 * 100.0) as u32;
     let width = cfg.bar_width;
     let filled = ((pct as f64 / 100.0) * width as f64).round() as usize;
@@ -60,4 +73,150 @@ pub fn eval(ctx: &ModuleContext) -> ModuleOutput {
     vars.insert("total".into(), total.to_string());
     let text = interpolate(&cfg.format, &vars);
     ModuleOutput::new(text, Style::parse(&cfg.style))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::StatuslineConfig;
+    use crate::input::StatuslineInput;
+
+    #[test]
+    fn test_kanban_in_repo() {
+        let input = StatuslineInput::default();
+        let config = StatuslineConfig::default();
+        let ctx = ModuleContext {
+            input: &input,
+            config: &config,
+        };
+        let _out = eval(&ctx);
+    }
+
+    #[test]
+    fn test_render_kanban_bar_zero_total() {
+        let cfg = StatuslineConfig::default().kanban;
+        let out = render_kanban_bar(0, 0, &cfg);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn test_render_kanban_bar_partial() {
+        let cfg = StatuslineConfig::default().kanban;
+        let out = render_kanban_bar(3, 10, &cfg);
+        assert!(!out.is_empty());
+        assert!(out.text.contains("3"));
+        assert!(out.text.contains("10"));
+    }
+
+    #[test]
+    fn test_render_kanban_bar_all_done() {
+        let cfg = StatuslineConfig::default().kanban;
+        let out = render_kanban_bar(10, 10, &cfg);
+        assert!(!out.is_empty());
+        assert!(out.text.contains("10/10"));
+    }
+
+    #[test]
+    fn test_render_kanban_bar_none_done() {
+        let cfg = StatuslineConfig::default().kanban;
+        let out = render_kanban_bar(0, 5, &cfg);
+        assert!(!out.is_empty());
+        assert!(out.text.contains("0"));
+        assert!(out.text.contains("5"));
+    }
+
+    #[test]
+    fn test_count_tasks_empty_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let (done, total) = count_tasks_in_dir(dir.path());
+        assert_eq!(done, 0);
+        assert_eq!(total, 0);
+    }
+
+    #[test]
+    fn test_count_tasks_with_tasks() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("task1.md"),
+            "---\nposition_column: todo\n---\nTask 1\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("task2.md"),
+            "---\nposition_column: done\n---\nTask 2\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("task3.md"),
+            "---\nposition_column: Done\n---\nTask 3\n",
+        )
+        .unwrap();
+        // Non-md files should be ignored
+        std::fs::write(dir.path().join("readme.txt"), "not a task").unwrap();
+
+        let (done, total) = count_tasks_in_dir(dir.path());
+        assert_eq!(total, 3);
+        assert_eq!(done, 2);
+    }
+
+    #[test]
+    fn test_count_tasks_nonexistent_dir() {
+        let (done, total) = count_tasks_in_dir(std::path::Path::new("/nonexistent/path"));
+        assert_eq!(done, 0);
+        assert_eq!(total, 0);
+    }
+
+    #[test]
+    fn test_render_kanban_bar_one_of_one() {
+        let cfg = StatuslineConfig::default().kanban;
+        let out = render_kanban_bar(1, 1, &cfg);
+        assert!(!out.is_empty());
+        assert!(out.text.contains("1/1"));
+    }
+
+    #[test]
+    fn test_render_kanban_bar_large_counts() {
+        let cfg = StatuslineConfig::default().kanban;
+        let out = render_kanban_bar(50, 100, &cfg);
+        assert!(!out.is_empty());
+        assert!(out.text.contains("50"));
+        assert!(out.text.contains("100"));
+    }
+
+    #[test]
+    fn test_render_kanban_bar_render_output() {
+        let cfg = StatuslineConfig::default().kanban;
+        let out = render_kanban_bar(3, 10, &cfg);
+        let rendered = out.render();
+        assert!(rendered.contains("3"));
+        assert!(rendered.contains("10"));
+    }
+
+    #[test]
+    fn test_count_tasks_non_md_files_ignored() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("notes.txt"), "not a task").unwrap();
+        std::fs::write(dir.path().join("data.json"), "{}").unwrap();
+        let (done, total) = count_tasks_in_dir(dir.path());
+        assert_eq!(done, 0);
+        assert_eq!(total, 0);
+    }
+
+    #[test]
+    fn test_count_tasks_md_without_done() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("task1.md"),
+            "---\nposition_column: doing\n---\nIn progress\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("task2.md"),
+            "---\nposition_column: todo\n---\nPending\n",
+        )
+        .unwrap();
+        let (done, total) = count_tasks_in_dir(dir.path());
+        assert_eq!(total, 2);
+        assert_eq!(done, 0);
+    }
 }

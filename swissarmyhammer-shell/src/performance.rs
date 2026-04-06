@@ -876,4 +876,185 @@ mod tests {
         assert!(logs_contain("Shell command performance"));
         assert!(logs_contain("echo hello"));
     }
+
+    #[test]
+    fn test_profiler_default_impl() {
+        // Exercises Default impl for ShellPerformanceProfiler (lines 378-380)
+        let profiler: ShellPerformanceProfiler = Default::default();
+        assert!(profiler.current_metrics.is_none());
+        assert!(profiler.historical_metrics.is_empty());
+    }
+
+    #[test]
+    fn test_finish_profiling_without_starting() {
+        // Exercises finish_profiling when no profiling was started (lines 254-255)
+        let mut profiler = ShellPerformanceProfiler::new();
+        let result = profiler.finish_profiling();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_mark_command_end_without_start() {
+        // Exercises mark_command_end when command_start_time is None (line 189)
+        let mut profiler = ShellPerformanceProfiler::new();
+        profiler.start_profiling("test".to_string());
+        // Don't call mark_command_start — command_start_time is None
+        profiler.mark_command_end(0);
+        // Should not panic, metrics.command_execution_time stays at ZERO
+        let metrics = profiler.finish_profiling().unwrap();
+        assert_eq!(metrics.command_execution_time, Duration::ZERO);
+    }
+
+    #[test]
+    fn test_set_output_info_without_metrics() {
+        // Exercises set_output_info when current_metrics is None (line 192 guard)
+        let mut profiler = ShellPerformanceProfiler::new();
+        // Don't start profiling — no current_metrics
+        profiler.set_output_info(100, 50, true);
+        // Should not panic
+    }
+
+    #[test]
+    fn test_set_timeout_info_without_metrics() {
+        // Exercises set_timeout_info when current_metrics is None
+        let mut profiler = ShellPerformanceProfiler::new();
+        profiler.set_timeout_info(true);
+        // Should not panic
+    }
+
+    #[test]
+    fn test_record_cleanup_time_without_metrics() {
+        // Exercises record_cleanup_time when current_metrics is None
+        let mut profiler = ShellPerformanceProfiler::new();
+        profiler.record_cleanup_time(Duration::from_millis(100));
+        // Should not panic
+    }
+
+    #[test]
+    fn test_clear_historical_metrics() {
+        // Exercises clear_historical_metrics (lines 265-267)
+        let mut profiler = ShellPerformanceProfiler::new();
+
+        // Add some metrics
+        profiler.start_profiling("cmd1".to_string());
+        profiler.mark_command_start();
+        profiler.mark_command_end(0);
+        profiler.finish_profiling();
+
+        let stats = profiler.get_performance_statistics();
+        assert_eq!(stats.total_commands, 1);
+
+        profiler.clear_historical_metrics();
+        let stats = profiler.get_performance_statistics();
+        assert_eq!(stats.total_commands, 0);
+    }
+
+    #[test]
+    fn test_historical_metrics_overflow_trim() {
+        // Exercises add_to_historical_metrics overflow (line 372)
+        let config = PerformanceConfig {
+            collect_memory_metrics: false,
+            log_metrics: false,
+            max_historical_metrics: 3,
+            warn_on_threshold_violations: false,
+        };
+        let mut profiler = ShellPerformanceProfiler::with_config(config);
+
+        // Add 5 metrics — should trim to max of 3
+        for i in 0..5 {
+            profiler.start_profiling(format!("cmd{}", i));
+            profiler.mark_command_start();
+            profiler.mark_command_end(0);
+            profiler.finish_profiling();
+        }
+
+        let stats = profiler.get_performance_statistics();
+        assert_eq!(
+            stats.total_commands, 3,
+            "Should trim to max_historical_metrics"
+        );
+    }
+
+    #[test]
+    fn test_memory_growth_saturating() {
+        // Exercises memory_growth() saturating subtraction (line 79)
+        let mut metrics = ShellPerformanceMetrics::new("test".to_string());
+        metrics.initial_memory_usage = 1000;
+        metrics.peak_memory_usage = 500; // Peak less than initial
+        assert_eq!(metrics.memory_growth(), 0, "Should saturate at 0");
+    }
+
+    #[test]
+    fn test_meets_performance_targets_all_passing() {
+        // Exercises meets_performance_targets happy path (lines 83-94)
+        let mut metrics = ShellPerformanceMetrics::new("test".to_string());
+        metrics.overhead_time = Duration::from_millis(10); // < 100ms
+        metrics.initial_memory_usage = 0;
+        metrics.peak_memory_usage = 1024; // < 50MB growth
+        metrics.cleanup_time = Duration::from_millis(100); // < 1s
+        assert!(metrics.meets_performance_targets());
+    }
+
+    #[test]
+    fn test_meets_performance_targets_high_overhead() {
+        let mut metrics = ShellPerformanceMetrics::new("test".to_string());
+        metrics.overhead_time = Duration::from_millis(200); // >= 100ms
+        metrics.cleanup_time = Duration::ZERO;
+        assert!(!metrics.meets_performance_targets());
+    }
+
+    #[test]
+    fn test_meets_performance_targets_high_memory() {
+        let mut metrics = ShellPerformanceMetrics::new("test".to_string());
+        metrics.overhead_time = Duration::from_millis(10);
+        metrics.initial_memory_usage = 0;
+        metrics.peak_memory_usage = 60 * 1024 * 1024; // 60MB >= 50MB threshold
+        metrics.cleanup_time = Duration::ZERO;
+        assert!(!metrics.meets_performance_targets());
+    }
+
+    #[test]
+    fn test_meets_performance_targets_slow_cleanup() {
+        let mut metrics = ShellPerformanceMetrics::new("test".to_string());
+        metrics.overhead_time = Duration::from_millis(10);
+        metrics.cleanup_time = Duration::from_secs(2); // >= 1s
+        assert!(!metrics.meets_performance_targets());
+    }
+
+    #[test]
+    fn test_log_metrics_disabled() {
+        // Exercises the path where log_metrics is false
+        let config = PerformanceConfig {
+            collect_memory_metrics: false,
+            log_metrics: false,
+            max_historical_metrics: 100,
+            warn_on_threshold_violations: false,
+        };
+        let mut profiler = ShellPerformanceProfiler::with_config(config);
+        profiler.start_profiling("quiet".to_string());
+        profiler.mark_command_start();
+        profiler.mark_command_end(0);
+
+        let metrics = profiler.finish_profiling();
+        assert!(metrics.is_some());
+    }
+
+    #[test]
+    fn test_profiler_with_memory_metrics_disabled() {
+        // Exercises paths where collect_memory_metrics is false
+        let config = PerformanceConfig {
+            collect_memory_metrics: false,
+            log_metrics: false,
+            max_historical_metrics: 100,
+            warn_on_threshold_violations: false,
+        };
+        let mut profiler = ShellPerformanceProfiler::with_config(config);
+        profiler.start_profiling("no-mem".to_string());
+        profiler.mark_command_start();
+        profiler.mark_command_end(0);
+
+        let metrics = profiler.finish_profiling().unwrap();
+        assert_eq!(metrics.initial_memory_usage, 0);
+        assert_eq!(metrics.peak_memory_usage, 0);
+    }
 }

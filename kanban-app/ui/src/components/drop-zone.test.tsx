@@ -22,7 +22,7 @@ import type { DropZoneDescriptor } from "@/lib/drop-zones";
 describe("DropZone", () => {
   const baseDescriptor: DropZoneDescriptor = {
     key: "before-task-2",
-    boardPath: "/boards/test",
+
     columnId: "col-1",
     beforeId: "task-2",
   };
@@ -42,7 +42,7 @@ describe("DropZone", () => {
   it("renders data-drop-after when descriptor has afterId", () => {
     const descriptor: DropZoneDescriptor = {
       key: "after-task-3",
-      boardPath: "/boards/test",
+
       columnId: "col-1",
       afterId: "task-3",
     };
@@ -54,7 +54,7 @@ describe("DropZone", () => {
   it("renders data-drop-empty for empty-column variant", () => {
     const descriptor: DropZoneDescriptor = {
       key: "empty",
-      boardPath: "/boards/test",
+
       columnId: "col-1",
     };
     render(
@@ -89,7 +89,7 @@ describe("DropZone", () => {
   it("empty-column zone fires onDrop (no before/after in descriptor)", () => {
     const emptyDescriptor: DropZoneDescriptor = {
       key: "empty",
-      boardPath: "/boards/test",
+
       columnId: "col-1",
     };
     const onDrop = vi.fn();
@@ -137,7 +137,7 @@ describe("DropZone", () => {
     const onDrop = vi.fn();
     const descriptor: DropZoneDescriptor = {
       key: "after-task-3",
-      boardPath: "/boards/test",
+
       columnId: "col-1",
       afterId: "task-3",
     };

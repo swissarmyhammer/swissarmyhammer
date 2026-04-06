@@ -183,6 +183,82 @@ Use the flow tool.
     }
 
     #[test]
+    fn test_load_skill_from_dir_missing_skill_md() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        // Directory exists but has no SKILL.md
+        let result = load_skill_from_dir(temp_dir.path(), SkillSource::Local);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("no SKILL.md found"),
+            "expected 'no SKILL.md found' error, got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_load_skill_from_dir_with_resources() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let skill_dir = temp_dir.path().join("my-skill");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+
+        // Write a valid SKILL.md
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: my-skill\ndescription: A test skill\n---\nInstructions here.",
+        )
+        .unwrap();
+
+        // Write an extra resource file
+        std::fs::write(skill_dir.join("helper.md"), "Extra resource content").unwrap();
+
+        let skill = load_skill_from_dir(&skill_dir, SkillSource::Local).unwrap();
+        assert_eq!(skill.name.as_str(), "my-skill");
+        assert!(
+            skill.resources.files.contains_key("helper.md"),
+            "should have loaded helper.md resource"
+        );
+        assert_eq!(
+            skill.resources.files.get("helper.md").unwrap(),
+            "Extra resource content"
+        );
+    }
+
+    #[test]
+    fn test_load_skill_from_dir_source_path() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let skill_dir = temp_dir.path().join("path-skill");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: path-skill\ndescription: test\n---\nBody.",
+        )
+        .unwrap();
+
+        let skill = load_skill_from_dir(&skill_dir, SkillSource::User).unwrap();
+        assert_eq!(skill.source, SkillSource::User);
+        assert!(
+            skill.source_path.is_some(),
+            "should have source_path set for disk-loaded skill"
+        );
+        assert!(skill
+            .source_path
+            .unwrap()
+            .to_string_lossy()
+            .contains("SKILL.md"));
+    }
+
+    #[test]
+    fn test_split_frontmatter_unterminated() {
+        let content = "---\nname: test\nNo closing delimiter";
+        let result = split_frontmatter(content);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("not terminated"));
+    }
+
+    #[test]
     fn test_parse_skill_md_with_star_allowed_tools() {
         let content = r#"---
 name: plan

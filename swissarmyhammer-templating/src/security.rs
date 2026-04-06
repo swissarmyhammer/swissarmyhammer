@@ -180,4 +180,45 @@ mod tests {
         let nested = "{% if a %}{% for item in items %}{{ item }}{% endfor %}{% endif %}";
         assert_eq!(check_template_nesting_depth(nested), 2);
     }
+
+    #[test]
+    fn test_validate_template_security_too_many_variables() {
+        // Build a template with more than MAX_TEMPLATE_VARIABLES unique variables
+        let mut template = String::new();
+        for i in 0..=MAX_TEMPLATE_VARIABLES {
+            template.push_str(&format!("{{{{ var{i} }}}} "));
+        }
+        let result = validate_template_security(&template, false);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Too many template variables"));
+    }
+
+    #[test]
+    fn test_nesting_depth_closing_before_opening() {
+        // Exercise the path where both open and close are found, but close comes first (lines 111-114)
+        // {% if a %} opens (depth=1, max=1), then {% endfor %} closes before next {% if b %}
+        let template = "{% if a %}x{% endfor %}{% if b %}y{% endif %}";
+        let depth = check_template_nesting_depth(template);
+        // if opens (1), endfor closes (0), if opens (1), endif closes (0) => max=1
+        assert_eq!(depth, 1);
+    }
+
+    #[test]
+    fn test_nesting_depth_only_opening_tags() {
+        // Exercise the path where only opening tags are found with no matching close (lines 116-120)
+        let template = "{% if a %}{% if b %}content";
+        let depth = check_template_nesting_depth(template);
+        assert_eq!(depth, 2);
+    }
+
+    #[test]
+    fn test_nesting_depth_only_closing_tags() {
+        // Exercise the path where only closing tags are found (lines 121-123)
+        let template = "{% endif %}{% endfor %}";
+        let depth = check_template_nesting_depth(template);
+        assert_eq!(depth, 0);
+    }
 }

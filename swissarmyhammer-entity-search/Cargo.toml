@@ -17,4 +17,5 @@ tracing = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
+model-embedding = { path = "../model-embedding", features = ["test-support"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

@@ -14,7 +14,10 @@ use swissarmyhammer_commands::{Command, CommandContext, CommandError, DragSessio
 /// Returns a `DragStart` result that the Tauri dispatch layer uses to emit
 /// the `drag-session-active` event to all windows.
 ///
-/// Required args: `taskId`, `boardPath`
+/// The source board path is derived from the scope chain's `store:{path}`
+/// moniker — no explicit `boardPath` arg is needed.
+///
+/// Required args: `taskId`
 /// Optional args: `sourceWindowLabel` (defaults to "main"), `taskFields`, `copyMode`
 pub struct DragStartCmd;
 
@@ -43,12 +46,22 @@ impl Command for DragStartCmd {
             .ok_or_else(|| CommandError::MissingArg("taskId".into()))?
             .to_string();
 
+        // Derive board path from scope chain's store:{path} moniker.
+        // Falls back to explicit boardPath arg for backwards compatibility.
         let source_board_path = ctx
-            .args
-            .get("boardPath")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| CommandError::MissingArg("boardPath".into()))?
-            .to_string();
+            .resolve_store_path()
+            .map(|s| s.to_string())
+            .or_else(|| {
+                ctx.args
+                    .get("boardPath")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+            })
+            .ok_or_else(|| {
+                CommandError::ExecutionFailed(
+                    "No store path in scope chain and no boardPath arg".into(),
+                )
+            })?;
 
         let source_window_label = ctx
             .args
@@ -107,6 +120,9 @@ impl Command for DragStartCmd {
 /// Reads the active drag session from UIState, determines whether the drop is
 /// same-board or cross-board, and returns a `DragComplete` result payload.
 ///
+/// The target board path is derived from the scope chain's `store:{path}`
+/// moniker — no explicit `targetBoardPath` arg is needed.
+///
 /// **Same-board**: performs the task.move operation directly via `MoveTaskCmd`
 /// logic using the `KanbanContext` extension.
 ///
@@ -115,7 +131,7 @@ impl Command for DragStartCmd {
 /// calls `swissarmyhammer_kanban::cross_board::transfer_task()` with both board
 /// handles, then emits the appropriate events.
 ///
-/// Required args: `targetBoardPath`, `targetColumn`
+/// Required args: `targetColumn`
 /// Optional args: `dropIndex`, `beforeId`, `afterId`, `copyMode`
 pub struct DragCompleteCmd;
 
@@ -140,12 +156,22 @@ impl Command for DragCompleteCmd {
             .take_drag()
             .ok_or_else(|| CommandError::ExecutionFailed("No active drag session".into()))?;
 
+        // Derive target board path from scope chain's store:{path} moniker.
+        // Falls back to explicit targetBoardPath arg for backwards compatibility.
         let target_board_path = ctx
-            .args
-            .get("targetBoardPath")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| CommandError::MissingArg("targetBoardPath".into()))?
-            .to_string();
+            .resolve_store_path()
+            .map(|s| s.to_string())
+            .or_else(|| {
+                ctx.args
+                    .get("targetBoardPath")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+            })
+            .ok_or_else(|| {
+                CommandError::ExecutionFailed(
+                    "No store path in scope chain and no targetBoardPath arg".into(),
+                )
+            })?;
 
         let target_column = ctx
             .args
@@ -396,5 +422,765 @@ impl Command for DragCancelCmd {
             })),
             None => Ok(Value::Null),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    use swissarmyhammer_commands::{CommandContext, UIState};
+    use swissarmyhammer_operations::Execute;
+
+    /// Build a CommandContext with the given scope chain, target, and optional UIState.
+    fn ctx_with(scope: &[&str], target: Option<&str>, ui: Option<Arc<UIState>>) -> CommandContext {
+        let mut ctx = CommandContext::new(
+            "test",
+            scope.iter().map(|s| s.to_string()).collect(),
+            target.map(|s| s.to_string()),
+            HashMap::new(),
+        );
+        if let Some(ui) = ui {
+            ctx.ui_state = Some(ui);
+        }
+        ctx
+    }
+
+    fn ctx_with_args_and_ui(args: HashMap<String, Value>, ui: Arc<UIState>) -> CommandContext {
+        let mut ctx = CommandContext::new("test", vec![], None, args);
+        ctx.ui_state = Some(ui);
+        ctx
+    }
+
+    // =========================================================================
+    // Availability tests
+    // =========================================================================
+
+    #[test]
+    fn drag_start_always_available() {
+        let cmd = DragStartCmd;
+        let ctx = ctx_with(&[], None, None);
+        assert!(cmd.available(&ctx));
+    }
+
+    #[test]
+    fn drag_start_available_with_any_scope() {
+        let cmd = DragStartCmd;
+        let ctx = ctx_with(&["task:01ABC", "column:todo"], None, None);
+        assert!(cmd.available(&ctx));
+    }
+
+    #[test]
+    fn drag_complete_always_available() {
+        let cmd = DragCompleteCmd;
+        let ctx = ctx_with(&[], None, None);
+        assert!(cmd.available(&ctx));
+    }
+
+    #[test]
+    fn drag_cancel_always_available() {
+        let cmd = DragCancelCmd;
+        let ctx = ctx_with(&[], None, None);
+        assert!(cmd.available(&ctx));
+    }
+
+    #[test]
+    fn drag_cancel_available_with_scope() {
+        let cmd = DragCancelCmd;
+        let ctx = ctx_with(&["task:01ABC"], None, None);
+        assert!(cmd.available(&ctx));
+    }
+
+    // =========================================================================
+    // DragStartCmd execute error cases
+    // =========================================================================
+
+    #[tokio::test]
+    async fn drag_start_fails_without_ui_state() {
+        let cmd = DragStartCmd;
+        let mut args = HashMap::new();
+        args.insert("boardPath".into(), json!("/boards/a"));
+        args.insert("taskId".into(), json!("task-1"));
+        let ctx = CommandContext::new("drag.start", vec![], None, args);
+        // No ui_state set
+        let result = cmd.execute(&ctx).await;
+        assert!(result.is_err(), "should fail without UIState");
+    }
+
+    #[tokio::test]
+    async fn drag_start_fails_without_board_path() {
+        let cmd = DragStartCmd;
+        let ui = Arc::new(UIState::new());
+        let mut args = HashMap::new();
+        args.insert("taskId".into(), json!("task-1"));
+        // boardPath intentionally omitted
+        let ctx = ctx_with_args_and_ui(args, ui);
+        let result = cmd.execute(&ctx).await;
+        assert!(result.is_err(), "should fail without boardPath");
+    }
+
+    #[tokio::test]
+    async fn drag_start_custom_source_window_label() {
+        let cmd = DragStartCmd;
+        let ui = Arc::new(UIState::new());
+        let mut args = HashMap::new();
+        args.insert("boardPath".into(), json!("/boards/a"));
+        args.insert("taskId".into(), json!("task-1"));
+        args.insert("sourceWindowLabel".into(), json!("secondary"));
+        let ctx = ctx_with_args_and_ui(args, ui.clone());
+
+        let result = cmd.execute(&ctx).await.unwrap();
+        let ds = result.get("DragStart").unwrap();
+        assert_eq!(ds["source_window_label"].as_str().unwrap(), "secondary");
+
+        let session = ui.drag_session().unwrap();
+        assert_eq!(session.source_window_label, "secondary");
+    }
+
+    #[tokio::test]
+    async fn drag_start_preserves_task_fields() {
+        let cmd = DragStartCmd;
+        let ui = Arc::new(UIState::new());
+        let mut args = HashMap::new();
+        args.insert("boardPath".into(), json!("/boards/a"));
+        args.insert("taskId".into(), json!("task-1"));
+        args.insert(
+            "taskFields".into(),
+            json!({"title": "Hello", "status": "open"}),
+        );
+        let ctx = ctx_with_args_and_ui(args, ui.clone());
+
+        let result = cmd.execute(&ctx).await.unwrap();
+        let ds = result.get("DragStart").unwrap();
+        assert_eq!(ds["task_fields"]["title"].as_str().unwrap(), "Hello");
+        assert_eq!(ds["task_fields"]["status"].as_str().unwrap(), "open");
+    }
+
+    #[tokio::test]
+    async fn drag_start_task_fields_defaults_to_null() {
+        let cmd = DragStartCmd;
+        let ui = Arc::new(UIState::new());
+        let mut args = HashMap::new();
+        args.insert("boardPath".into(), json!("/boards/a"));
+        args.insert("taskId".into(), json!("task-1"));
+        // taskFields not provided
+        let ctx = ctx_with_args_and_ui(args, ui);
+
+        let result = cmd.execute(&ctx).await.unwrap();
+        let ds = result.get("DragStart").unwrap();
+        assert!(ds["task_fields"].is_null());
+    }
+
+    #[tokio::test]
+    async fn drag_start_copy_mode_in_result() {
+        let cmd = DragStartCmd;
+        let ui = Arc::new(UIState::new());
+        let mut args = HashMap::new();
+        args.insert("boardPath".into(), json!("/boards/a"));
+        args.insert("taskId".into(), json!("task-1"));
+        args.insert("copyMode".into(), json!(true));
+        let ctx = ctx_with_args_and_ui(args, ui);
+
+        let result = cmd.execute(&ctx).await.unwrap();
+        let ds = result.get("DragStart").unwrap();
+        assert!(ds["copy_mode"].as_bool().unwrap());
+    }
+
+    #[tokio::test]
+    async fn drag_start_result_has_session_id() {
+        let cmd = DragStartCmd;
+        let ui = Arc::new(UIState::new());
+        let mut args = HashMap::new();
+        args.insert("boardPath".into(), json!("/boards/a"));
+        args.insert("taskId".into(), json!("task-1"));
+        let ctx = ctx_with_args_and_ui(args, ui);
+
+        let result = cmd.execute(&ctx).await.unwrap();
+        let ds = result.get("DragStart").unwrap();
+        let sid = ds["session_id"].as_str().unwrap();
+        assert!(!sid.is_empty(), "session_id should be non-empty");
+    }
+
+    #[tokio::test]
+    async fn drag_start_result_has_started_at_ms() {
+        let cmd = DragStartCmd;
+        let ui = Arc::new(UIState::new());
+        let mut args = HashMap::new();
+        args.insert("boardPath".into(), json!("/boards/a"));
+        args.insert("taskId".into(), json!("task-1"));
+        let ctx = ctx_with_args_and_ui(args, ui);
+
+        let result = cmd.execute(&ctx).await.unwrap();
+        let ds = result.get("DragStart").unwrap();
+        assert!(ds["started_at_ms"].as_u64().unwrap() > 0);
+    }
+
+    // =========================================================================
+    // DragCompleteCmd execute error cases
+    // =========================================================================
+
+    #[tokio::test]
+    async fn drag_complete_fails_without_ui_state() {
+        let cmd = DragCompleteCmd;
+        let mut args = HashMap::new();
+        args.insert("targetBoardPath".into(), json!("/boards/b"));
+        args.insert("targetColumn".into(), json!("done"));
+        let ctx = CommandContext::new("drag.complete", vec![], None, args);
+        let result = cmd.execute(&ctx).await;
+        assert!(result.is_err(), "should fail without UIState");
+    }
+
+    #[tokio::test]
+    async fn drag_complete_fails_without_active_session() {
+        let cmd = DragCompleteCmd;
+        let ui = Arc::new(UIState::new());
+        let mut args = HashMap::new();
+        args.insert("targetBoardPath".into(), json!("/boards/b"));
+        args.insert("targetColumn".into(), json!("done"));
+        let ctx = ctx_with_args_and_ui(args, ui);
+        let result = cmd.execute(&ctx).await;
+        assert!(result.is_err(), "should fail without active drag session");
+    }
+
+    #[tokio::test]
+    async fn drag_complete_fails_without_target_board_path() {
+        let cmd = DragCompleteCmd;
+        let ui = Arc::new(UIState::new());
+        // Start a session first
+        let session = DragSession {
+            session_id: "s1".into(),
+            source_board_path: "/boards/a".into(),
+            source_window_label: "main".into(),
+            task_id: "task-1".into(),
+            task_fields: Value::Null,
+            copy_mode: false,
+            started_at_ms: 0,
+        };
+        ui.start_drag(session);
+
+        let mut args = HashMap::new();
+        // targetBoardPath intentionally omitted
+        args.insert("targetColumn".into(), json!("done"));
+        let ctx = ctx_with_args_and_ui(args, ui);
+        let result = cmd.execute(&ctx).await;
+        assert!(result.is_err(), "should fail without targetBoardPath");
+    }
+
+    #[tokio::test]
+    async fn drag_complete_fails_without_target_column() {
+        let cmd = DragCompleteCmd;
+        let ui = Arc::new(UIState::new());
+        let session = DragSession {
+            session_id: "s1".into(),
+            source_board_path: "/boards/a".into(),
+            source_window_label: "main".into(),
+            task_id: "task-1".into(),
+            task_fields: Value::Null,
+            copy_mode: false,
+            started_at_ms: 0,
+        };
+        ui.start_drag(session);
+
+        let mut args = HashMap::new();
+        args.insert("targetBoardPath".into(), json!("/boards/b"));
+        // targetColumn intentionally omitted
+        let ctx = ctx_with_args_and_ui(args, ui);
+        let result = cmd.execute(&ctx).await;
+        assert!(result.is_err(), "should fail without targetColumn");
+    }
+
+    #[tokio::test]
+    async fn drag_complete_cross_board_returns_transfer_params() {
+        let cmd = DragCompleteCmd;
+        let ui = Arc::new(UIState::new());
+        let session = DragSession {
+            session_id: "s1".into(),
+            source_board_path: "/boards/a".into(),
+            source_window_label: "main".into(),
+            task_id: "task-1".into(),
+            task_fields: Value::Null,
+            copy_mode: false,
+            started_at_ms: 100,
+        };
+        ui.start_drag(session);
+
+        let mut args = HashMap::new();
+        args.insert("targetBoardPath".into(), json!("/boards/b"));
+        args.insert("targetColumn".into(), json!("done"));
+        let ctx = ctx_with_args_and_ui(args, ui);
+
+        let result = cmd.execute(&ctx).await.unwrap();
+        let dc = result.get("DragComplete").unwrap();
+        assert!(!dc["same_board"].as_bool().unwrap());
+        assert!(dc["cross_board"].as_bool().unwrap());
+        assert_eq!(dc["source_board_path"].as_str().unwrap(), "/boards/a");
+        assert_eq!(dc["target_board_path"].as_str().unwrap(), "/boards/b");
+        assert_eq!(dc["task_id"].as_str().unwrap(), "task-1");
+        assert_eq!(dc["target_column"].as_str().unwrap(), "done");
+        assert!(!dc["copy_mode"].as_bool().unwrap());
+    }
+
+    #[tokio::test]
+    async fn drag_complete_cross_board_with_copy_mode_from_session() {
+        let cmd = DragCompleteCmd;
+        let ui = Arc::new(UIState::new());
+        let session = DragSession {
+            session_id: "s2".into(),
+            source_board_path: "/boards/a".into(),
+            source_window_label: "main".into(),
+            task_id: "task-2".into(),
+            task_fields: Value::Null,
+            copy_mode: true,
+            started_at_ms: 200,
+        };
+        ui.start_drag(session);
+
+        let mut args = HashMap::new();
+        args.insert("targetBoardPath".into(), json!("/boards/c"));
+        args.insert("targetColumn".into(), json!("todo"));
+        // copyMode not set in args, but session has copy_mode=true
+        let ctx = ctx_with_args_and_ui(args, ui);
+
+        let result = cmd.execute(&ctx).await.unwrap();
+        let dc = result.get("DragComplete").unwrap();
+        assert!(
+            dc["copy_mode"].as_bool().unwrap(),
+            "effective_copy_mode should be true from session"
+        );
+    }
+
+    #[tokio::test]
+    async fn drag_complete_cross_board_with_copy_mode_from_args() {
+        let cmd = DragCompleteCmd;
+        let ui = Arc::new(UIState::new());
+        let session = DragSession {
+            session_id: "s3".into(),
+            source_board_path: "/boards/a".into(),
+            source_window_label: "main".into(),
+            task_id: "task-3".into(),
+            task_fields: Value::Null,
+            copy_mode: false,
+            started_at_ms: 300,
+        };
+        ui.start_drag(session);
+
+        let mut args = HashMap::new();
+        args.insert("targetBoardPath".into(), json!("/boards/d"));
+        args.insert("targetColumn".into(), json!("todo"));
+        args.insert("copyMode".into(), json!(true));
+        let ctx = ctx_with_args_and_ui(args, ui);
+
+        let result = cmd.execute(&ctx).await.unwrap();
+        let dc = result.get("DragComplete").unwrap();
+        assert!(
+            dc["copy_mode"].as_bool().unwrap(),
+            "effective_copy_mode should be true from args"
+        );
+    }
+
+    #[tokio::test]
+    async fn drag_complete_cross_board_with_before_after_ids() {
+        let cmd = DragCompleteCmd;
+        let ui = Arc::new(UIState::new());
+        let session = DragSession {
+            session_id: "s4".into(),
+            source_board_path: "/boards/a".into(),
+            source_window_label: "main".into(),
+            task_id: "task-4".into(),
+            task_fields: Value::Null,
+            copy_mode: false,
+            started_at_ms: 400,
+        };
+        ui.start_drag(session);
+
+        let mut args = HashMap::new();
+        args.insert("targetBoardPath".into(), json!("/boards/e"));
+        args.insert("targetColumn".into(), json!("doing"));
+        args.insert("beforeId".into(), json!("ref-task-1"));
+        args.insert("afterId".into(), json!("ref-task-2"));
+        args.insert("dropIndex".into(), json!(3));
+        let ctx = ctx_with_args_and_ui(args, ui);
+
+        let result = cmd.execute(&ctx).await.unwrap();
+        let dc = result.get("DragComplete").unwrap();
+        assert_eq!(dc["before_id"].as_str().unwrap(), "ref-task-1");
+        assert_eq!(dc["after_id"].as_str().unwrap(), "ref-task-2");
+        assert_eq!(dc["drop_index"].as_u64().unwrap(), 3);
+    }
+
+    #[tokio::test]
+    async fn drag_complete_consumes_session() {
+        let cmd = DragCompleteCmd;
+        let ui = Arc::new(UIState::new());
+        let session = DragSession {
+            session_id: "s5".into(),
+            source_board_path: "/boards/a".into(),
+            source_window_label: "main".into(),
+            task_id: "task-5".into(),
+            task_fields: Value::Null,
+            copy_mode: false,
+            started_at_ms: 500,
+        };
+        ui.start_drag(session);
+        assert!(ui.drag_session().is_some());
+
+        let mut args = HashMap::new();
+        args.insert("targetBoardPath".into(), json!("/boards/f"));
+        args.insert("targetColumn".into(), json!("done"));
+        let ctx = ctx_with_args_and_ui(args, ui.clone());
+
+        cmd.execute(&ctx).await.unwrap();
+        // Session should be consumed by take_drag
+        assert!(ui.drag_session().is_none());
+    }
+
+    // =========================================================================
+    // DragCancelCmd execute error cases
+    // =========================================================================
+
+    #[tokio::test]
+    async fn drag_cancel_fails_without_ui_state() {
+        let cmd = DragCancelCmd;
+        let ctx = CommandContext::new("drag.cancel", vec![], None, HashMap::new());
+        let result = cmd.execute(&ctx).await;
+        assert!(result.is_err(), "should fail without UIState");
+    }
+
+    #[tokio::test]
+    async fn drag_cancel_returns_drag_cancel_result_when_session_active() {
+        let cmd = DragCancelCmd;
+        let ui = Arc::new(UIState::new());
+        let session = DragSession {
+            session_id: "cancel-s1".into(),
+            source_board_path: "/boards/a".into(),
+            source_window_label: "main".into(),
+            task_id: "task-x".into(),
+            task_fields: serde_json::Value::Null,
+            copy_mode: false,
+            started_at_ms: 999,
+        };
+        ui.start_drag(session);
+
+        let ctx = ctx_with_args_and_ui(HashMap::new(), ui.clone());
+        let result = cmd.execute(&ctx).await.unwrap();
+
+        let dc = result
+            .get("DragCancel")
+            .expect("should have DragCancel key");
+        assert_eq!(dc["session_id"].as_str().unwrap(), "cancel-s1");
+
+        // Session should be consumed
+        assert!(ui.drag_session().is_none(), "session should be taken");
+    }
+
+    #[tokio::test]
+    async fn drag_cancel_returns_null_when_no_session_active() {
+        let cmd = DragCancelCmd;
+        let ui = Arc::new(UIState::new());
+        // No session started
+
+        let ctx = ctx_with_args_and_ui(HashMap::new(), ui);
+        let result = cmd.execute(&ctx).await.unwrap();
+
+        assert!(
+            result.is_null(),
+            "should return null when no session is active, got: {:?}",
+            result
+        );
+    }
+
+    #[tokio::test]
+    async fn drag_cancel_cancels_existing_session_before_new_drag_start() {
+        // Verify that starting a new drag cancels any existing session (from DragStartCmd).
+        let cmd = DragStartCmd;
+        let ui = Arc::new(UIState::new());
+
+        // Start first drag
+        let mut args = HashMap::new();
+        args.insert("boardPath".into(), json!("/boards/a"));
+        args.insert("taskId".into(), json!("task-1"));
+        let ctx1 = ctx_with_args_and_ui(args.clone(), ui.clone());
+        cmd.execute(&ctx1).await.unwrap();
+
+        let first_session = ui.drag_session().unwrap();
+        let first_id = first_session.session_id.clone();
+
+        // Start second drag — DragStartCmd calls cancel_drag() then start_drag()
+        let mut args2 = HashMap::new();
+        args2.insert("boardPath".into(), json!("/boards/b"));
+        args2.insert("taskId".into(), json!("task-2"));
+        let ctx2 = ctx_with_args_and_ui(args2, ui.clone());
+        cmd.execute(&ctx2).await.unwrap();
+
+        let new_session = ui.drag_session().unwrap();
+        assert_ne!(
+            first_id, new_session.session_id,
+            "new session should replace the old one"
+        );
+        assert_eq!(new_session.task_id, "task-2");
+    }
+
+    // =========================================================================
+    // DragCompleteCmd — same-board path (needs KanbanContext)
+    // =========================================================================
+
+    #[tokio::test]
+    async fn drag_complete_same_board_moves_task() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let kanban_dir = temp.path().join(".kanban");
+        let ctx = crate::context::KanbanContext::new(kanban_dir.clone());
+
+        // Init board
+        crate::board::InitBoard::new("Test")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        // Add a task
+        let result = crate::task::AddTask::new("Draggable")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let task_id = result["id"].as_str().unwrap().to_string();
+
+        let cmd = DragCompleteCmd;
+        let ui = Arc::new(UIState::new());
+        let board_path = kanban_dir.display().to_string();
+        let session = DragSession {
+            session_id: "same-board-s1".into(),
+            source_board_path: board_path.clone(),
+            source_window_label: "main".into(),
+            task_id: task_id.clone(),
+            task_fields: Value::Null,
+            copy_mode: false,
+            started_at_ms: 0,
+        };
+        ui.start_drag(session);
+
+        let mut args = HashMap::new();
+        args.insert("targetBoardPath".into(), json!(board_path));
+        args.insert("targetColumn".into(), json!("doing"));
+        let mut cmd_ctx = CommandContext::new("drag.complete", vec![], None, args);
+        cmd_ctx.ui_state = Some(ui.clone());
+        cmd_ctx.set_extension(Arc::new(ctx));
+
+        let result = cmd.execute(&cmd_ctx).await.unwrap();
+        let dc = result.get("DragComplete").unwrap();
+        assert!(dc["same_board"].as_bool().unwrap());
+        assert_eq!(dc["target_column"].as_str().unwrap(), "doing");
+    }
+
+    #[tokio::test]
+    async fn drag_complete_same_board_with_drop_index() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let kanban_dir = temp.path().join(".kanban");
+        let ctx = crate::context::KanbanContext::new(kanban_dir.clone());
+
+        crate::board::InitBoard::new("Test")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        // Add two tasks in doing
+        let mut op1 = crate::task::AddTask::new("D1");
+        op1.column = Some("doing".into());
+        op1.execute(&ctx).await.into_result().unwrap();
+
+        let mut op2 = crate::task::AddTask::new("D2");
+        op2.column = Some("doing".into());
+        op2.execute(&ctx).await.into_result().unwrap();
+
+        // Add task to drag
+        let result = crate::task::AddTask::new("Dragger")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let task_id = result["id"].as_str().unwrap().to_string();
+
+        let cmd = DragCompleteCmd;
+        let ui = Arc::new(UIState::new());
+        let board_path = kanban_dir.display().to_string();
+        let session = DragSession {
+            session_id: "drop-idx-s1".into(),
+            source_board_path: board_path.clone(),
+            source_window_label: "main".into(),
+            task_id: task_id.clone(),
+            task_fields: Value::Null,
+            copy_mode: false,
+            started_at_ms: 0,
+        };
+        ui.start_drag(session);
+
+        let mut args = HashMap::new();
+        args.insert("targetBoardPath".into(), json!(board_path));
+        args.insert("targetColumn".into(), json!("doing"));
+        args.insert("dropIndex".into(), json!(0));
+        let mut cmd_ctx = CommandContext::new("drag.complete", vec![], None, args);
+        cmd_ctx.ui_state = Some(ui.clone());
+        cmd_ctx.set_extension(Arc::new(ctx));
+
+        let result = cmd.execute(&cmd_ctx).await.unwrap();
+        let dc = result.get("DragComplete").unwrap();
+        assert!(dc["same_board"].as_bool().unwrap());
+    }
+
+    #[tokio::test]
+    async fn drag_complete_same_board_with_before_id() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let kanban_dir = temp.path().join(".kanban");
+        let ctx = crate::context::KanbanContext::new(kanban_dir.clone());
+
+        crate::board::InitBoard::new("Test")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        // Add a reference task in doing
+        let mut ref_op = crate::task::AddTask::new("Reference");
+        ref_op.column = Some("doing".into());
+        let ref_result = ref_op.execute(&ctx).await.into_result().unwrap();
+        let ref_id = ref_result["id"].as_str().unwrap().to_string();
+
+        // Task to drag
+        let result = crate::task::AddTask::new("Before mover")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let task_id = result["id"].as_str().unwrap().to_string();
+
+        let cmd = DragCompleteCmd;
+        let ui = Arc::new(UIState::new());
+        let board_path = kanban_dir.display().to_string();
+        let session = DragSession {
+            session_id: "before-s1".into(),
+            source_board_path: board_path.clone(),
+            source_window_label: "main".into(),
+            task_id: task_id.clone(),
+            task_fields: Value::Null,
+            copy_mode: false,
+            started_at_ms: 0,
+        };
+        ui.start_drag(session);
+
+        let mut args = HashMap::new();
+        args.insert("targetBoardPath".into(), json!(board_path));
+        args.insert("targetColumn".into(), json!("doing"));
+        args.insert("beforeId".into(), json!(ref_id));
+        let mut cmd_ctx = CommandContext::new("drag.complete", vec![], None, args);
+        cmd_ctx.ui_state = Some(ui.clone());
+        cmd_ctx.set_extension(Arc::new(ctx));
+
+        let result = cmd.execute(&cmd_ctx).await.unwrap();
+        let dc = result.get("DragComplete").unwrap();
+        assert!(dc["same_board"].as_bool().unwrap());
+    }
+
+    #[tokio::test]
+    async fn drag_complete_same_board_with_after_id() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let kanban_dir = temp.path().join(".kanban");
+        let ctx = crate::context::KanbanContext::new(kanban_dir.clone());
+
+        crate::board::InitBoard::new("Test")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        // Add a reference task in doing
+        let mut ref_op = crate::task::AddTask::new("Anchor");
+        ref_op.column = Some("doing".into());
+        let ref_result = ref_op.execute(&ctx).await.into_result().unwrap();
+        let ref_id = ref_result["id"].as_str().unwrap().to_string();
+
+        // Task to drag
+        let result = crate::task::AddTask::new("After mover")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let task_id = result["id"].as_str().unwrap().to_string();
+
+        let cmd = DragCompleteCmd;
+        let ui = Arc::new(UIState::new());
+        let board_path = kanban_dir.display().to_string();
+        let session = DragSession {
+            session_id: "after-s1".into(),
+            source_board_path: board_path.clone(),
+            source_window_label: "main".into(),
+            task_id: task_id.clone(),
+            task_fields: Value::Null,
+            copy_mode: false,
+            started_at_ms: 0,
+        };
+        ui.start_drag(session);
+
+        let mut args = HashMap::new();
+        args.insert("targetBoardPath".into(), json!(board_path));
+        args.insert("targetColumn".into(), json!("doing"));
+        args.insert("afterId".into(), json!(ref_id));
+        let mut cmd_ctx = CommandContext::new("drag.complete", vec![], None, args);
+        cmd_ctx.ui_state = Some(ui.clone());
+        cmd_ctx.set_extension(Arc::new(ctx));
+
+        let result = cmd.execute(&cmd_ctx).await.unwrap();
+        let dc = result.get("DragComplete").unwrap();
+        assert!(dc["same_board"].as_bool().unwrap());
+    }
+
+    // =========================================================================
+    // DragStartCmd — missing arg tests
+    // =========================================================================
+
+    #[tokio::test]
+    async fn drag_start_fails_without_task_id() {
+        let cmd = DragStartCmd;
+        let ui = Arc::new(UIState::new());
+        let mut args = HashMap::new();
+        args.insert("boardPath".into(), json!("/boards/a"));
+        // taskId intentionally omitted
+        let ctx = ctx_with_args_and_ui(args, ui);
+        let result = cmd.execute(&ctx).await;
+        assert!(result.is_err(), "should fail without taskId");
+    }
+
+    #[tokio::test]
+    async fn drag_start_default_source_window_label_is_main() {
+        let cmd = DragStartCmd;
+        let ui = Arc::new(UIState::new());
+        let mut args = HashMap::new();
+        args.insert("boardPath".into(), json!("/boards/a"));
+        args.insert("taskId".into(), json!("task-1"));
+        // sourceWindowLabel not provided — should default to "main"
+        let ctx = ctx_with_args_and_ui(args, ui.clone());
+
+        let result = cmd.execute(&ctx).await.unwrap();
+        let ds = result.get("DragStart").unwrap();
+        assert_eq!(ds["source_window_label"].as_str().unwrap(), "main");
+    }
+
+    #[tokio::test]
+    async fn drag_start_stores_session_in_ui_state() {
+        let cmd = DragStartCmd;
+        let ui = Arc::new(UIState::new());
+        let mut args = HashMap::new();
+        args.insert("boardPath".into(), json!("/boards/a"));
+        args.insert("taskId".into(), json!("task-1"));
+        let ctx = ctx_with_args_and_ui(args, ui.clone());
+
+        assert!(ui.drag_session().is_none(), "no session before execute");
+        cmd.execute(&ctx).await.unwrap();
+        let session = ui
+            .drag_session()
+            .expect("session should be set after execute");
+        assert_eq!(session.task_id, "task-1");
+        assert_eq!(session.source_board_path, "/boards/a");
     }
 }

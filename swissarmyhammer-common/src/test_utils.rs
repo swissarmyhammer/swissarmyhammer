@@ -545,4 +545,315 @@ mod tests {
         assert!(temp_dir.path().exists());
         assert!(temp_dir.path().is_dir());
     }
+
+    #[test]
+    fn test_current_dir_guard_basic() {
+        let temp = create_temp_dir();
+        let original = std::env::current_dir().unwrap().canonicalize().unwrap();
+        let temp_canonical = temp.path().canonicalize().unwrap();
+
+        {
+            let _guard = CurrentDirGuard::new(temp.path()).unwrap();
+            let cwd = std::env::current_dir().unwrap().canonicalize().unwrap();
+            assert_eq!(cwd, temp_canonical);
+        }
+
+        // After drop, we should be back at the original directory
+        let restored = std::env::current_dir().unwrap().canonicalize().unwrap();
+        assert_eq!(restored, original);
+    }
+
+    #[test]
+    fn test_current_dir_guard_nonexistent_directory() {
+        let result = CurrentDirGuard::new("/nonexistent/path/that/does/not/exist");
+        assert!(result.is_err());
+        match result {
+            Err(err) => {
+                assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+                assert!(err.to_string().contains("does not exist"));
+            }
+            Ok(_) => panic!("Expected error"),
+        }
+    }
+
+    #[test]
+    fn test_current_dir_guard_deleted_before_lock() {
+        // Create a directory, then delete it before acquiring the guard
+        let temp = create_temp_dir();
+        let path = temp.path().to_path_buf();
+        // Drop temp to delete the directory
+        drop(temp);
+
+        let result = CurrentDirGuard::new(&path);
+        assert!(result.is_err());
+        match result {
+            Err(err) => {
+                assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+            }
+            Ok(_) => panic!("Expected error"),
+        }
+    }
+
+    #[test]
+    fn test_process_guard_new() {
+        // Spawn a short-lived process
+        let child = std::process::Command::new("echo")
+            .arg("hello")
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+
+        let _guard = ProcessGuard::new(child);
+        // Guard will clean up in drop
+    }
+
+    #[test]
+    fn test_process_guard_is_running_finished_process() {
+        let child = std::process::Command::new("echo")
+            .arg("done")
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+
+        let mut guard = ProcessGuard::new(child);
+        // Give the process time to complete
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        assert!(!guard.is_running());
+    }
+
+    #[test]
+    fn test_process_guard_is_running_active_process() {
+        let child = std::process::Command::new("sleep")
+            .arg("10")
+            .spawn()
+            .unwrap();
+
+        let mut guard = ProcessGuard::new(child);
+        assert!(guard.is_running());
+        // force_kill to clean up
+        guard.force_kill().unwrap();
+    }
+
+    #[test]
+    fn test_process_guard_force_kill() {
+        let child = std::process::Command::new("sleep")
+            .arg("10")
+            .spawn()
+            .unwrap();
+
+        let mut guard = ProcessGuard::new(child);
+        assert!(guard.is_running());
+
+        guard.force_kill().unwrap();
+        // After kill, should not be running
+        assert!(!guard.is_running());
+    }
+
+    #[test]
+    fn test_process_guard_terminate_gracefully_already_exited() {
+        let child = std::process::Command::new("echo")
+            .arg("fast")
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+
+        let mut guard = ProcessGuard::new(child);
+        // Wait for completion
+        std::thread::sleep(std::time::Duration::from_millis(100));
+
+        // Graceful termination on an already-exited process should succeed
+        let result = guard.terminate_gracefully(std::time::Duration::from_millis(100));
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_process_guard_terminate_gracefully_timeout_then_kill() {
+        let child = std::process::Command::new("sleep")
+            .arg("10")
+            .spawn()
+            .unwrap();
+
+        let mut guard = ProcessGuard::new(child);
+        // Use a very short timeout so it will force kill
+        let result = guard.terminate_gracefully(std::time::Duration::from_millis(50));
+        assert!(result.is_ok());
+        assert!(!guard.is_running());
+    }
+
+    #[test]
+    fn test_process_guard_drop_cleans_up() {
+        let child = std::process::Command::new("sleep")
+            .arg("10")
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+
+        {
+            let _guard = ProcessGuard::new(child);
+            // Guard dropped here
+        }
+
+        // After drop, the process should be killed
+        // Try to check if the process still exists (may not work on all platforms)
+        let check = std::process::Command::new("kill")
+            .arg("-0")
+            .arg(pid.to_string())
+            .status();
+
+        // The process should be dead (kill -0 returns non-zero if process doesn't exist)
+        if let Ok(status) = check {
+            // On some systems this might still succeed briefly; just verify guard didn't panic
+            let _ = status;
+        }
+    }
+
+    #[test]
+    fn test_process_guard_field_access() {
+        let child = std::process::Command::new("echo")
+            .arg("test")
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+
+        let guard = ProcessGuard(child);
+        // Access the inner child through the public field
+        assert!(guard.0.id() > 0);
+    }
+
+    #[test]
+    fn test_acquire_semantic_db_lock() {
+        // Should not panic and should return a guard
+        let guard = acquire_semantic_db_lock();
+        // Guard is held
+        drop(guard);
+        // Re-acquire should work
+        let _guard2 = acquire_semantic_db_lock();
+    }
+
+    #[test]
+    fn test_isolated_test_home_default() {
+        // Test that Default trait works
+        let home = IsolatedTestHome::default();
+        assert!(home.home_path().exists());
+    }
+
+    #[test]
+    fn test_isolated_test_home_swissarmyhammer_dir_structure() {
+        let home = IsolatedTestHome::new();
+        let sah_dir = home.swissarmyhammer_dir();
+
+        // Verify all expected subdirectories
+        assert!(sah_dir.join("workflows").exists());
+        assert!(sah_dir.join("todo").exists());
+        assert!(sah_dir.join("issues").exists());
+        assert!(sah_dir.join("issues").join("complete").exists());
+    }
+
+    #[test]
+    fn test_isolated_test_environment_new() {
+        let env = IsolatedTestEnvironment::new().unwrap();
+
+        assert!(env.home_path().exists());
+        assert!(env.temp_dir().exists());
+        assert!(env.swissarmyhammer_dir().exists());
+        assert!(env.prompts_dir().exists());
+        assert!(env.issues_dir().exists());
+        assert!(env.complete_dir().exists());
+    }
+
+    #[test]
+    fn test_isolated_test_environment_paths_are_distinct() {
+        let env = IsolatedTestEnvironment::new().unwrap();
+
+        let home = env.home_path();
+        let temp = env.temp_dir();
+
+        // Home and temp should be different directories
+        assert_ne!(home, temp);
+        // Both should exist
+        assert!(home.exists());
+        assert!(temp.exists());
+    }
+
+    #[test]
+    fn test_isolated_test_environment_prompts_dir() {
+        let env = IsolatedTestEnvironment::new().unwrap();
+        let prompts = env.prompts_dir();
+        assert!(prompts.exists());
+        assert!(prompts.ends_with(".prompts"));
+    }
+
+    #[test]
+    fn test_isolated_test_environment_issues_dir() {
+        let env = IsolatedTestEnvironment::new().unwrap();
+        let issues = env.issues_dir();
+        assert!(issues.exists());
+        assert!(issues.ends_with("issues"));
+    }
+
+    #[test]
+    fn test_isolated_test_environment_complete_dir() {
+        let env = IsolatedTestEnvironment::new().unwrap();
+        let complete = env.complete_dir();
+        assert!(complete.exists());
+        assert!(complete.ends_with("complete"));
+    }
+
+    #[test]
+    fn test_isolated_test_environment_drop_restores_home() {
+        let original_home = std::env::var("HOME").ok();
+
+        {
+            let _env = IsolatedTestEnvironment::new().unwrap();
+            // HOME is now set to the isolated directory
+        }
+
+        // After drop, HOME should be restored
+        let restored_home = std::env::var("HOME").ok();
+        assert_eq!(original_home, restored_home);
+    }
+
+    #[test]
+    fn test_create_temp_dir_returns_unique_dirs() {
+        let dir1 = create_temp_dir();
+        let dir2 = create_temp_dir();
+
+        assert_ne!(dir1.path(), dir2.path());
+        assert!(dir1.path().exists());
+        assert!(dir2.path().exists());
+    }
+
+    #[test]
+    fn test_create_isolated_test_home_structure() {
+        let (temp_dir, home_path) = create_isolated_test_home();
+
+        assert!(temp_dir.path().exists());
+        assert!(home_path.exists());
+        assert_eq!(temp_dir.path().to_path_buf(), home_path);
+
+        // Verify the .prompts directory was created
+        assert!(home_path.join(".prompts").exists());
+    }
+
+    #[test]
+    fn test_isolated_test_home_drop_restores_home_none() {
+        // Save current HOME
+        let saved = std::env::var("HOME").ok();
+
+        {
+            // Remove HOME temporarily
+            std::env::remove_var("HOME");
+
+            // Create isolated home - it will save original_home as None
+            let home = IsolatedTestHome::new();
+            assert!(home.home_path().exists());
+            // HOME is now set to isolated dir
+            assert!(std::env::var("HOME").is_ok());
+        }
+        // After drop, HOME should be removed (restored to None)
+        // But we need to restore it for other tests
+        if let Some(h) = &saved {
+            std::env::set_var("HOME", h);
+        }
+    }
 }

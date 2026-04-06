@@ -7,7 +7,7 @@
 //! ## Overview
 //!
 //! - **One repo = one board** - The `.kanban` directory lives at the repo root
-//! - **File-per-entity** - Tasks, tags, columns, actors, swimlanes are individual files
+//! - **File-per-entity** - Tasks, tags, columns, actors, projects are individual files
 //! - **Git-friendly** - Human-readable YAML/Markdown, no binary formats
 //! - **Agent-aware** - Per-entity JSONL logs track which agent/user modified what and why
 //!
@@ -47,14 +47,11 @@
 //!     ├── columns/
 //!     │   ├── {id}.yaml        # Column state
 //!     │   ├── {id}.jsonl       # Per-column operation log
-//!     ├── swimlanes/
-//!     │   ├── {id}.yaml        # Swimlane state
-//!     │   ├── {id}.jsonl       # Per-swimlane operation log
 //!     ├── actors/
 //!     │   ├── {id}.yaml        # Actor state
 //!     │   ├── {id}.jsonl       # Per-actor operation log
-//!     └── activity/
-//!         └── current.jsonl    # Global operation log
+//!     └── perspectives/
+//!         ├── {id}.yaml        # Perspective (saved view config)
 //! ```
 //!
 //! Entity state files use YAML (or YAML frontmatter + markdown for tasks).
@@ -75,18 +72,21 @@ pub mod tag_parser;
 pub mod task_helpers;
 pub mod types;
 
+// Perspective types for saved view configurations
+pub mod perspective;
+
 // Domain command trait implementations
 pub mod commands;
 
 // Command modules
-pub mod activity;
 pub mod actor;
+pub mod attachment;
 pub mod board;
 pub mod column;
 pub mod entity;
+pub mod project;
 pub mod schema;
 pub mod scope_commands;
-pub mod swimlane;
 pub mod tag;
 pub mod task;
 pub mod virtual_tags;
@@ -112,5 +112,5 @@ pub use swissarmyhammer_entity::EntityContext;
 // Re-export commonly used types
 pub use types::{
     default_column_entities, ActorId, ColumnId, LogEntry, Noun, Operation as KanbanOperation,
-    OperationResult, Ordinal, Position, SwimlaneId, TagId, TaskId, Verb,
+    OperationResult, Ordinal, Position, ProjectId, TagId, TaskId, Verb,
 };

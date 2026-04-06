@@ -21,6 +21,7 @@ pub fn register_all(registry: &mut InitRegistry, global: bool, remove_directory:
     registry.register(ClaudeLocalScope);
     registry.register(DenyBash);
     registry.register(ProjectStructure::new(remove_directory));
+    registry.register(ClaudeMd);
     registry.register(SkillDeployment::new(global));
     registry.register(AgentDeployment::new(global));
     registry.register(LockfileCleanup);
@@ -1249,6 +1250,203 @@ impl Initializable for LockfileCleanup {
     }
 }
 
+// ── ClaudeMd (priority 22) ──────────────────────────────────────────
+
+/// The preamble line that must appear at the top of CLAUDE.md.
+pub const CLAUDE_MD_PREAMBLE: &str = "MANDATORY: load the thoughtful skill";
+
+/// Ensures a `CLAUDE.md` file exists at the git root with the required preamble.
+pub struct ClaudeMd;
+
+/// Check if `CLAUDE.md` at the given root has the required preamble as its first non-empty line.
+///
+/// Returns `None` if the file does not exist, `Some(true)` if the preamble is present,
+/// and `Some(false)` if it is missing.
+#[cfg(test)]
+fn claude_md_has_preamble(root: &std::path::Path) -> Option<bool> {
+    let path = root.join("CLAUDE.md");
+    if !path.exists() {
+        return None;
+    }
+    let content = std::fs::read_to_string(&path).ok()?;
+    let first_non_empty = content.lines().find(|l| !l.trim().is_empty());
+    Some(first_non_empty.is_some_and(|line| line.contains(CLAUDE_MD_PREAMBLE)))
+}
+
+/// Ensure `CLAUDE.md` at the given root has the required preamble.
+///
+/// Returns `"created"` if the file was created, `"already present"` if
+/// no change was needed, or `"prepended"` if the preamble was prepended.
+fn ensure_claude_md_preamble(root: &std::path::Path) -> Result<&'static str, String> {
+    let path = root.join("CLAUDE.md");
+    if !path.exists() {
+        std::fs::write(&path, format!("{}\n", CLAUDE_MD_PREAMBLE))
+            .map_err(|e| format!("Failed to create CLAUDE.md: {}", e))?;
+        return Ok("created");
+    }
+    let content =
+        std::fs::read_to_string(&path).map_err(|e| format!("Failed to read CLAUDE.md: {}", e))?;
+    let first_non_empty = content.lines().find(|l| !l.trim().is_empty());
+    if first_non_empty.is_some_and(|line| line.contains(CLAUDE_MD_PREAMBLE)) {
+        return Ok("already present");
+    }
+    let new_content = format!("{}\n\n{}", CLAUDE_MD_PREAMBLE, content);
+    std::fs::write(&path, new_content).map_err(|e| format!("Failed to update CLAUDE.md: {}", e))?;
+    Ok("prepended")
+}
+
+/// Remove the preamble from `CLAUDE.md`. Deletes the file if it becomes empty.
+///
+/// Returns `"removed"` if the preamble was stripped, `"deleted"` if the file
+/// was deleted (only contained the preamble), `"not found"` if no file exists,
+/// or `"no preamble"` if the file exists but has no preamble.
+fn remove_claude_md_preamble(root: &std::path::Path) -> Result<&'static str, String> {
+    let path = root.join("CLAUDE.md");
+    if !path.exists() {
+        return Ok("not found");
+    }
+    let content =
+        std::fs::read_to_string(&path).map_err(|e| format!("Failed to read CLAUDE.md: {}", e))?;
+    let first_non_empty = content.lines().find(|l| !l.trim().is_empty());
+    if !first_non_empty.is_some_and(|line| line.contains(CLAUDE_MD_PREAMBLE)) {
+        return Ok("no preamble");
+    }
+    // Remove the preamble line and any immediately following blank lines
+    let mut lines = content.lines().peekable();
+    let mut after_preamble = Vec::new();
+    let mut found = false;
+    for line in &mut lines {
+        if !found && line.contains(CLAUDE_MD_PREAMBLE) {
+            found = true;
+            continue;
+        }
+        if found {
+            after_preamble.push(line);
+        }
+    }
+    // Trim leading blank lines after preamble removal
+    while after_preamble.first().is_some_and(|l| l.trim().is_empty()) {
+        after_preamble.remove(0);
+    }
+    if after_preamble.is_empty() {
+        std::fs::remove_file(&path).map_err(|e| format!("Failed to delete CLAUDE.md: {}", e))?;
+        return Ok("deleted");
+    }
+    let new_content = after_preamble.join("\n") + "\n";
+    std::fs::write(&path, new_content).map_err(|e| format!("Failed to update CLAUDE.md: {}", e))?;
+    Ok("removed")
+}
+
+impl Initializable for ClaudeMd {
+    /// The component name for CLAUDE.md preamble management.
+    fn name(&self) -> &str {
+        "claude-md"
+    }
+
+    /// Component category: configuration tasks.
+    fn category(&self) -> &str {
+        "configuration"
+    }
+
+    /// Component priority: 22 (runs after ProjectStructure, before KanbanTool).
+    fn priority(&self) -> i32 {
+        22
+    }
+
+    /// Only applicable to project and local scope installations.
+    fn is_applicable(&self, scope: &InitScope) -> bool {
+        matches!(scope, InitScope::Project | InitScope::Local)
+    }
+
+    /// Ensure CLAUDE.md exists at the git root with the required preamble.
+    fn init(&self, _scope: &InitScope, reporter: &dyn InitReporter) -> Vec<InitResult> {
+        let root = match swissarmyhammer_common::utils::find_git_repository_root() {
+            Some(r) => r,
+            None => {
+                return vec![InitResult::error(
+                    self.name(),
+                    "No git repository found".to_string(),
+                )];
+            }
+        };
+
+        match ensure_claude_md_preamble(&root) {
+            Ok("created") => {
+                reporter.emit(&InitEvent::Action {
+                    verb: "Created".to_string(),
+                    message: format!("CLAUDE.md at {}", root.display()),
+                });
+                vec![InitResult::ok(
+                    self.name(),
+                    "CLAUDE.md created with preamble",
+                )]
+            }
+            Ok("prepended") => {
+                reporter.emit(&InitEvent::Action {
+                    verb: "Updated".to_string(),
+                    message: format!("CLAUDE.md at {}", root.display()),
+                });
+                vec![InitResult::ok(
+                    self.name(),
+                    "Preamble prepended to CLAUDE.md",
+                )]
+            }
+            Ok(_) => {
+                reporter.emit(&InitEvent::Skipped {
+                    component: self.name().to_string(),
+                    reason: "CLAUDE.md already has the required preamble".to_string(),
+                });
+                vec![InitResult::ok(
+                    self.name(),
+                    "CLAUDE.md already has preamble",
+                )]
+            }
+            Err(e) => vec![InitResult::error(self.name(), e)],
+        }
+    }
+
+    /// Remove the preamble from CLAUDE.md (or delete the file if only preamble).
+    fn deinit(&self, _scope: &InitScope, reporter: &dyn InitReporter) -> Vec<InitResult> {
+        let root = match swissarmyhammer_common::utils::find_git_repository_root() {
+            Some(r) => r,
+            None => {
+                return vec![InitResult::error(
+                    self.name(),
+                    "No git repository found".to_string(),
+                )];
+            }
+        };
+
+        match remove_claude_md_preamble(&root) {
+            Ok("deleted") => {
+                reporter.emit(&InitEvent::Action {
+                    verb: "Removed".to_string(),
+                    message: format!("CLAUDE.md from {}", root.display()),
+                });
+                vec![InitResult::ok(self.name(), "CLAUDE.md deleted")]
+            }
+            Ok("removed") => {
+                reporter.emit(&InitEvent::Action {
+                    verb: "Updated".to_string(),
+                    message: format!("removed preamble from CLAUDE.md at {}", root.display()),
+                });
+                vec![InitResult::ok(
+                    self.name(),
+                    "Preamble removed from CLAUDE.md",
+                )]
+            }
+            Ok(_) => {
+                reporter.emit(&InitEvent::Skipped {
+                    component: self.name().to_string(),
+                    reason: "CLAUDE.md not found or has no preamble".to_string(),
+                });
+                vec![InitResult::ok(self.name(), "Nothing to remove")]
+            }
+            Err(e) => vec![InitResult::error(self.name(), e)],
+        }
+    }
+}
+
 // ── Shared helpers ───────────────────────────────────────────────────
 
 /// Remove the `mcpServers` key from a JSON value if it is an empty object.
@@ -1398,5 +1596,115 @@ mod tests {
         assert!(!is_safe_name("foo/bar"));
         assert!(!is_safe_name("foo\\bar"));
         assert!(!is_safe_name(""));
+    }
+
+    #[test]
+    fn test_claude_md_creates_file_when_absent() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let result = ensure_claude_md_preamble(temp.path()).unwrap();
+        assert_eq!(result, "created");
+
+        let content = std::fs::read_to_string(temp.path().join("CLAUDE.md")).unwrap();
+        assert!(content.starts_with(CLAUDE_MD_PREAMBLE));
+        assert!(content.ends_with('\n'));
+    }
+
+    #[test]
+    fn test_claude_md_prepends_preamble_to_existing() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let claude_md = temp.path().join("CLAUDE.md");
+        std::fs::write(&claude_md, "existing content\n").unwrap();
+
+        let result = ensure_claude_md_preamble(temp.path()).unwrap();
+        assert_eq!(result, "prepended");
+
+        let content = std::fs::read_to_string(&claude_md).unwrap();
+        assert!(content.starts_with(CLAUDE_MD_PREAMBLE));
+        assert!(content.contains("existing content"));
+    }
+
+    #[test]
+    fn test_claude_md_idempotent() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let claude_md = temp.path().join("CLAUDE.md");
+        std::fs::write(&claude_md, format!("{}\n", CLAUDE_MD_PREAMBLE)).unwrap();
+
+        let result = ensure_claude_md_preamble(temp.path()).unwrap();
+        assert_eq!(result, "already present");
+
+        let content = std::fs::read_to_string(&claude_md).unwrap();
+        // Should not have doubled the preamble
+        assert_eq!(content.matches(CLAUDE_MD_PREAMBLE).count(), 1);
+    }
+
+    #[test]
+    fn test_claude_md_has_preamble_absent() {
+        let temp = tempfile::TempDir::new().unwrap();
+        assert_eq!(claude_md_has_preamble(temp.path()), None);
+    }
+
+    #[test]
+    fn test_claude_md_has_preamble_present() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let claude_md = temp.path().join("CLAUDE.md");
+        std::fs::write(&claude_md, format!("{}\nother stuff\n", CLAUDE_MD_PREAMBLE)).unwrap();
+        assert_eq!(claude_md_has_preamble(temp.path()), Some(true));
+    }
+
+    #[test]
+    fn test_claude_md_has_preamble_missing() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let claude_md = temp.path().join("CLAUDE.md");
+        std::fs::write(&claude_md, "some other content\n").unwrap();
+        assert_eq!(claude_md_has_preamble(temp.path()), Some(false));
+    }
+
+    #[test]
+    fn test_claude_md_deinit_deletes_preamble_only_file() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let claude_md = temp.path().join("CLAUDE.md");
+        std::fs::write(&claude_md, format!("{}\n", CLAUDE_MD_PREAMBLE)).unwrap();
+
+        let result = remove_claude_md_preamble(temp.path()).unwrap();
+        assert_eq!(result, "deleted");
+        assert!(!claude_md.exists());
+    }
+
+    #[test]
+    fn test_claude_md_deinit_strips_preamble_keeps_content() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let claude_md = temp.path().join("CLAUDE.md");
+        std::fs::write(
+            &claude_md,
+            format!("{}\n\nmy project notes\nmore stuff\n", CLAUDE_MD_PREAMBLE),
+        )
+        .unwrap();
+
+        let result = remove_claude_md_preamble(temp.path()).unwrap();
+        assert_eq!(result, "removed");
+        let content = std::fs::read_to_string(&claude_md).unwrap();
+        assert!(!content.contains(CLAUDE_MD_PREAMBLE));
+        assert!(content.contains("my project notes"));
+        assert!(content.contains("more stuff"));
+    }
+
+    #[test]
+    fn test_claude_md_deinit_no_file() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let result = remove_claude_md_preamble(temp.path()).unwrap();
+        assert_eq!(result, "not found");
+    }
+
+    #[test]
+    fn test_claude_md_deinit_no_preamble() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let claude_md = temp.path().join("CLAUDE.md");
+        std::fs::write(&claude_md, "just user content\n").unwrap();
+
+        let result = remove_claude_md_preamble(temp.path()).unwrap();
+        assert_eq!(result, "no preamble");
+        // File should be untouched
+        let content = std::fs::read_to_string(&claude_md).unwrap();
+        assert_eq!(content, "just user content\n");
     }
 }

@@ -22,6 +22,8 @@ swissarmyhammer-directory = { path = "../swissarmyhammer-directory" }
 swissarmyhammer-views = { path = "../swissarmyhammer-views" }
 swissarmyhammer-entity-search = { path = "../swissarmyhammer-entity-search" }
 swissarmyhammer-entity = { path = "../swissarmyhammer-entity" }
+swissarmyhammer-perspectives = { path = "../swissarmyhammer-perspectives" }
+swissarmyhammer-store = { path = "../swissarmyhammer-store" }
 tauri = { version = "2", features = ["macos-private-api", "devtools"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-log = { version = "2", features = ["tracing"] }

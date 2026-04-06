@@ -2428,4 +2428,831 @@ mod tests {
         assert_eq!(decisions.len(), 1);
         assert!(matches!(decisions[0], HookDecision::Block { .. }));
     }
+
+    // -- to_command_input JSON tests for all event variants --
+
+    #[test]
+    fn test_session_start_to_command_input() {
+        let event = HookEvent::SessionStart {
+            session_id: "s1".into(),
+            source: SessionSource::Startup,
+            cwd: PathBuf::from("/project"),
+        };
+        let json = event.to_command_input();
+        assert_eq!(json["hook_event_name"], "SessionStart");
+        assert_eq!(json["session_id"], "s1");
+        assert_eq!(json["source"], "startup");
+        assert_eq!(json["cwd"], "/project");
+    }
+
+    #[test]
+    fn test_session_start_resume_source() {
+        let event = HookEvent::SessionStart {
+            session_id: "s1".into(),
+            source: SessionSource::Resume,
+            cwd: PathBuf::from("/tmp"),
+        };
+        let json = event.to_command_input();
+        assert_eq!(json["source"], "resume");
+    }
+
+    #[test]
+    fn test_user_prompt_submit_to_command_input() {
+        let event = HookEvent::UserPromptSubmit {
+            session_id: "s1".into(),
+            prompt: vec![ContentBlock::Text(TextContent::new("test prompt"))],
+            cwd: PathBuf::from("/project"),
+        };
+        let json = event.to_command_input();
+        assert_eq!(json["hook_event_name"], "UserPromptSubmit");
+        assert_eq!(json["prompt"], "test prompt");
+    }
+
+    #[test]
+    fn test_stop_to_command_input() {
+        let event = HookEvent::Stop {
+            session_id: "s1".into(),
+            stop_reason: StopReason::EndTurn,
+            stop_hook_active: true,
+            cwd: PathBuf::from("/tmp"),
+        };
+        let json = event.to_command_input();
+        assert_eq!(json["hook_event_name"], "Stop");
+        assert_eq!(json["stop_hook_active"], true);
+    }
+
+    #[test]
+    fn test_elicitation_to_command_input_with_all_fields() {
+        let event = HookEvent::Elicitation {
+            session_id: "s1".into(),
+            mcp_server_name: Some("sah".into()),
+            message: Some("pick one".into()),
+            mode: "blocking".into(),
+            requested_schema: serde_json::json!({"type": "string"}),
+            cwd: PathBuf::from("/tmp"),
+        };
+        let json = event.to_command_input();
+        assert_eq!(json["hook_event_name"], "Elicitation");
+        assert_eq!(json["mcp_server_name"], "sah");
+        assert_eq!(json["message"], "pick one");
+        assert_eq!(json["mode"], "blocking");
+    }
+
+    #[test]
+    fn test_elicitation_to_command_input_without_optional_fields() {
+        let event = HookEvent::Elicitation {
+            session_id: "s1".into(),
+            mcp_server_name: None,
+            message: None,
+            mode: "blocking".into(),
+            requested_schema: serde_json::json!({}),
+            cwd: PathBuf::from("/tmp"),
+        };
+        let json = event.to_command_input();
+        assert_eq!(json["hook_event_name"], "Elicitation");
+        assert!(json.get("mcp_server_name").is_none() || json["mcp_server_name"].is_null());
+        assert!(json.get("message").is_none() || json["message"].is_null());
+    }
+
+    #[test]
+    fn test_elicitation_result_to_command_input() {
+        let event = HookEvent::ElicitationResult {
+            session_id: "s1".into(),
+            mcp_server_name: "sah".into(),
+            action: Some("submit".into()),
+            content: serde_json::json!({"answer": "yes"}),
+            elicitation_id: "e1".into(),
+            cwd: PathBuf::from("/tmp"),
+        };
+        let json = event.to_command_input();
+        assert_eq!(json["hook_event_name"], "ElicitationResult");
+        assert_eq!(json["mcp_server_name"], "sah");
+        assert_eq!(json["action"], "submit");
+        assert_eq!(json["elicitation_id"], "e1");
+    }
+
+    #[test]
+    fn test_elicitation_result_to_command_input_without_action() {
+        let event = HookEvent::ElicitationResult {
+            session_id: "s1".into(),
+            mcp_server_name: "sah".into(),
+            action: None,
+            content: serde_json::json!({}),
+            elicitation_id: "e1".into(),
+            cwd: PathBuf::from("/tmp"),
+        };
+        let json = event.to_command_input();
+        assert!(json.get("action").is_none() || json["action"].is_null());
+    }
+
+    #[test]
+    fn test_instructions_loaded_to_command_input() {
+        let event = HookEvent::InstructionsLoaded {
+            file_path: Some("/project/CLAUDE.md".into()),
+            load_reason: "startup".into(),
+            cwd: PathBuf::from("/project"),
+        };
+        let json = event.to_command_input();
+        assert_eq!(json["hook_event_name"], "InstructionsLoaded");
+        assert_eq!(json["file_path"], "/project/CLAUDE.md");
+        assert_eq!(json["load_reason"], "startup");
+    }
+
+    #[test]
+    fn test_instructions_loaded_to_command_input_without_file() {
+        let event = HookEvent::InstructionsLoaded {
+            file_path: None,
+            load_reason: "startup".into(),
+            cwd: PathBuf::from("/project"),
+        };
+        let json = event.to_command_input();
+        assert!(json.get("file_path").is_none() || json["file_path"].is_null());
+    }
+
+    #[test]
+    fn test_config_change_to_command_input() {
+        let event = HookEvent::ConfigChange {
+            session_id: "s1".into(),
+            source: Some("user_settings".into()),
+            cwd: PathBuf::from("/tmp"),
+        };
+        let json = event.to_command_input();
+        assert_eq!(json["hook_event_name"], "ConfigChange");
+        assert_eq!(json["source"], "user_settings");
+    }
+
+    #[test]
+    fn test_config_change_to_command_input_without_source() {
+        let event = HookEvent::ConfigChange {
+            session_id: "s1".into(),
+            source: None,
+            cwd: PathBuf::from("/tmp"),
+        };
+        let json = event.to_command_input();
+        assert!(json.get("source").is_none() || json["source"].is_null());
+    }
+
+    #[test]
+    fn test_worktree_create_to_command_input() {
+        let event = HookEvent::WorktreeCreate {
+            worktree_path: Some("/tmp/wt".into()),
+            branch_name: Some("feat".into()),
+            cwd: PathBuf::from("/tmp"),
+        };
+        let json = event.to_command_input();
+        assert_eq!(json["hook_event_name"], "WorktreeCreate");
+        assert_eq!(json["worktree_path"], "/tmp/wt");
+        assert_eq!(json["branch_name"], "feat");
+    }
+
+    #[test]
+    fn test_worktree_create_to_command_input_without_optionals() {
+        let event = HookEvent::WorktreeCreate {
+            worktree_path: None,
+            branch_name: None,
+            cwd: PathBuf::from("/tmp"),
+        };
+        let json = event.to_command_input();
+        assert_eq!(json["hook_event_name"], "WorktreeCreate");
+        assert!(json.get("worktree_path").is_none() || json["worktree_path"].is_null());
+    }
+
+    #[test]
+    fn test_worktree_remove_to_command_input() {
+        let event = HookEvent::WorktreeRemove {
+            worktree_path: "/tmp/wt".into(),
+            cwd: PathBuf::from("/tmp"),
+        };
+        let json = event.to_command_input();
+        assert_eq!(json["hook_event_name"], "WorktreeRemove");
+        assert_eq!(json["worktree_path"], "/tmp/wt");
+    }
+
+    #[test]
+    fn test_post_compact_to_command_input() {
+        let event = HookEvent::PostCompact {
+            session_id: "s1".into(),
+            cwd: PathBuf::from("/tmp"),
+        };
+        let json = event.to_command_input();
+        assert_eq!(json["hook_event_name"], "PostCompact");
+        assert_eq!(json["session_id"], "s1");
+    }
+
+    #[test]
+    fn test_teammate_idle_to_command_input() {
+        let event = HookEvent::TeammateIdle {
+            session_id: "s1".into(),
+            teammate_id: Some("agent-2".into()),
+            cwd: PathBuf::from("/tmp"),
+        };
+        let json = event.to_command_input();
+        assert_eq!(json["hook_event_name"], "TeammateIdle");
+        assert_eq!(json["teammate_id"], "agent-2");
+    }
+
+    #[test]
+    fn test_teammate_idle_to_command_input_without_teammate_id() {
+        let event = HookEvent::TeammateIdle {
+            session_id: "s1".into(),
+            teammate_id: None,
+            cwd: PathBuf::from("/tmp"),
+        };
+        let json = event.to_command_input();
+        assert!(json.get("teammate_id").is_none() || json["teammate_id"].is_null());
+    }
+
+    #[test]
+    fn test_task_completed_to_command_input() {
+        let event = HookEvent::TaskCompleted {
+            session_id: "s1".into(),
+            task_id: Some("t1".into()),
+            task_title: Some("Fix bug".into()),
+            cwd: PathBuf::from("/tmp"),
+        };
+        let json = event.to_command_input();
+        assert_eq!(json["hook_event_name"], "TaskCompleted");
+        assert_eq!(json["task_id"], "t1");
+        assert_eq!(json["task_title"], "Fix bug");
+    }
+
+    #[test]
+    fn test_task_completed_to_command_input_without_optionals() {
+        let event = HookEvent::TaskCompleted {
+            session_id: "s1".into(),
+            task_id: None,
+            task_title: None,
+            cwd: PathBuf::from("/tmp"),
+        };
+        let json = event.to_command_input();
+        assert!(json.get("task_id").is_none() || json["task_id"].is_null());
+        assert!(json.get("task_title").is_none() || json["task_title"].is_null());
+    }
+
+    // -- AVP context tests --
+
+    #[test]
+    fn test_avp_context_empty_permission_mode_not_included() {
+        let event = HookEvent::SessionStart {
+            session_id: "s1".into(),
+            source: SessionSource::Startup,
+            cwd: PathBuf::from("/tmp"),
+        };
+        let ctx = HookCommandContext {
+            transcript_path: "/tmp/t.jsonl".into(),
+            permission_mode: String::new(),
+        };
+        let json = event.to_command_input_full(&ctx);
+        assert_eq!(json["transcript_path"], "/tmp/t.jsonl");
+        // Empty permission_mode should not be included
+        assert!(json.get("permission_mode").is_none() || json["permission_mode"].is_null(),);
+    }
+
+    // -- tool_event_json tests --
+
+    #[test]
+    fn test_tool_event_json_with_no_tool_use_id() {
+        let json = tool_event_json(
+            "PreToolUse",
+            "s1",
+            "Bash",
+            &PathBuf::from("/tmp"),
+            &None,
+            &None,
+            &None,
+        );
+        assert_eq!(json["hook_event_name"], "PreToolUse");
+        assert_eq!(json["tool_name"], "Bash");
+        assert!(json.get("tool_use_id").is_none() || json["tool_use_id"].is_null());
+        assert!(json.get("tool_response").is_none() || json["tool_response"].is_null());
+    }
+
+    #[test]
+    fn test_tool_event_json_with_all_fields() {
+        let json = tool_event_json(
+            "PostToolUse",
+            "s1",
+            "Read",
+            &PathBuf::from("/project"),
+            &Some(serde_json::json!({"path": "/file"})),
+            &Some("toolu_1".to_string()),
+            &Some(serde_json::json!({"content": "file data"})),
+        );
+        assert_eq!(json["hook_event_name"], "PostToolUse");
+        assert_eq!(json["tool_use_id"], "toolu_1");
+        assert_eq!(json["tool_input"]["path"], "/file");
+        assert_eq!(json["tool_response"]["content"], "file data");
+    }
+
+    // -- notification_update_name tests --
+
+    #[test]
+    fn test_notification_update_name_agent_message() {
+        let update = SessionUpdate::AgentMessageChunk(agent_client_protocol::ContentChunk::new(
+            ContentBlock::Text(TextContent::new("hi")),
+        ));
+        assert_eq!(notification_update_name(&update), "agent_message");
+    }
+
+    #[test]
+    fn test_notification_update_name_agent_thought() {
+        let update = SessionUpdate::AgentThoughtChunk(agent_client_protocol::ContentChunk::new(
+            ContentBlock::Text(TextContent::new("hmm")),
+        ));
+        assert_eq!(notification_update_name(&update), "agent_thought");
+    }
+
+    #[test]
+    fn test_notification_update_name_tool_call() {
+        let update = SessionUpdate::ToolCall(agent_client_protocol::ToolCall::new("c1", "Bash"));
+        assert_eq!(notification_update_name(&update), "tool_call");
+    }
+
+    #[test]
+    fn test_notification_update_name_tool_call_update() {
+        let update = SessionUpdate::ToolCallUpdate(agent_client_protocol::ToolCallUpdate::new(
+            "c1",
+            agent_client_protocol::ToolCallUpdateFields::new(),
+        ));
+        assert_eq!(notification_update_name(&update), "tool_call_update");
+    }
+
+    #[test]
+    fn test_notification_update_name_plan() {
+        let update = SessionUpdate::Plan(agent_client_protocol::Plan::new(vec![]));
+        assert_eq!(notification_update_name(&update), "plan");
+    }
+
+    #[test]
+    fn test_notification_update_name_available_commands() {
+        let update = SessionUpdate::AvailableCommandsUpdate(
+            agent_client_protocol::AvailableCommandsUpdate::new(vec![]),
+        );
+        assert_eq!(notification_update_name(&update), "available_commands");
+    }
+
+    #[test]
+    fn test_notification_update_name_current_mode() {
+        let update =
+            SessionUpdate::CurrentModeUpdate(agent_client_protocol::CurrentModeUpdate::new("plan"));
+        assert_eq!(notification_update_name(&update), "current_mode");
+    }
+
+    // -- notification_to_events tests --
+
+    #[test]
+    fn test_notification_to_events_tool_call() {
+        let notification = agent_client_protocol::SessionNotification::new(
+            SessionId::from("s1"),
+            SessionUpdate::ToolCall(agent_client_protocol::ToolCall::new("c1", "Bash")),
+        );
+        let mut tool_names = HashMap::new();
+        let events = notification_to_events(&notification, &PathBuf::from("/tmp"), &mut tool_names);
+
+        // Should produce PreToolUse + Notification
+        assert_eq!(events.len(), 2);
+        assert!(matches!(events[0], HookEvent::PreToolUse { .. }));
+        assert!(matches!(events[1], HookEvent::Notification { .. }));
+
+        // tool_names should track the tool call
+        assert!(tool_names.contains_key("c1"));
+    }
+
+    #[test]
+    fn test_notification_to_events_tool_call_update_success() {
+        let mut tool_names = HashMap::new();
+        tool_names.insert(
+            "c1".to_string(),
+            ("Bash".to_string(), Some(serde_json::json!({"cmd": "ls"}))),
+        );
+
+        let update = agent_client_protocol::ToolCallUpdate::new(
+            "c1",
+            agent_client_protocol::ToolCallUpdateFields::new()
+                .status(agent_client_protocol::ToolCallStatus::Completed),
+        );
+        let notification = agent_client_protocol::SessionNotification::new(
+            SessionId::from("s1"),
+            SessionUpdate::ToolCallUpdate(update),
+        );
+
+        let events = notification_to_events(&notification, &PathBuf::from("/tmp"), &mut tool_names);
+
+        // Should produce PostToolUse + Notification
+        assert_eq!(events.len(), 2);
+        assert!(matches!(events[0], HookEvent::PostToolUse { .. }));
+    }
+
+    #[test]
+    fn test_notification_to_events_tool_call_update_failure() {
+        let mut tool_names = HashMap::new();
+        tool_names.insert("c1".to_string(), ("Bash".to_string(), None));
+
+        let update = agent_client_protocol::ToolCallUpdate::new(
+            "c1",
+            agent_client_protocol::ToolCallUpdateFields::new()
+                .status(agent_client_protocol::ToolCallStatus::Failed),
+        );
+        let notification = agent_client_protocol::SessionNotification::new(
+            SessionId::from("s1"),
+            SessionUpdate::ToolCallUpdate(update),
+        );
+
+        let events = notification_to_events(&notification, &PathBuf::from("/tmp"), &mut tool_names);
+
+        // Should produce PostToolUseFailure + Notification
+        assert_eq!(events.len(), 2);
+        assert!(matches!(events[0], HookEvent::PostToolUseFailure { .. }));
+    }
+
+    #[test]
+    fn test_notification_to_events_unknown_tool_call_id() {
+        let mut tool_names = HashMap::new();
+        // Don't pre-register tool name
+
+        let update = agent_client_protocol::ToolCallUpdate::new(
+            "unknown-id",
+            agent_client_protocol::ToolCallUpdateFields::new()
+                .status(agent_client_protocol::ToolCallStatus::Completed),
+        );
+        let notification = agent_client_protocol::SessionNotification::new(
+            SessionId::from("s1"),
+            SessionUpdate::ToolCallUpdate(update),
+        );
+
+        let events = notification_to_events(&notification, &PathBuf::from("/tmp"), &mut tool_names);
+
+        // Should still produce events, using the tool_call_id as fallback name
+        assert_eq!(events.len(), 2);
+        match &events[0] {
+            HookEvent::PostToolUse { tool_name, .. } => {
+                assert_eq!(tool_name, "unknown-id");
+            }
+            other => panic!("Expected PostToolUse, got {:?}", other.kind()),
+        }
+    }
+
+    #[test]
+    fn test_notification_to_events_non_tool_notification() {
+        let notification = agent_client_protocol::SessionNotification::new(
+            SessionId::from("s1"),
+            SessionUpdate::AgentMessageChunk(agent_client_protocol::ContentChunk::new(
+                ContentBlock::Text(TextContent::new("hi")),
+            )),
+        );
+        let mut tool_names = HashMap::new();
+        let events = notification_to_events(&notification, &PathBuf::from("/tmp"), &mut tool_names);
+
+        // Should only produce Notification event
+        assert_eq!(events.len(), 1);
+        assert!(matches!(events[0], HookEvent::Notification { .. }));
+    }
+
+    // -- HookRegistration tests --
+
+    #[test]
+    fn test_hook_registration_debug() {
+        let reg = HookRegistration::new(
+            vec![HookEventKind::PreToolUse],
+            Some(regex::Regex::new("Bash").unwrap()),
+            Arc::new(AllowHook),
+        );
+        let debug = format!("{:?}", reg);
+        assert!(debug.contains("PreToolUse"));
+        assert!(debug.contains("Bash"));
+    }
+
+    #[test]
+    fn test_hook_registration_clone() {
+        let reg = HookRegistration::new(
+            vec![HookEventKind::PreToolUse, HookEventKind::PostToolUse],
+            Some(regex::Regex::new(".*").unwrap()),
+            Arc::new(AllowHook),
+        );
+        let cloned = reg.clone();
+        assert_eq!(cloned.events(), reg.events());
+        assert!(cloned.matcher().is_some());
+    }
+
+    #[test]
+    fn test_hook_registration_events_accessor() {
+        let reg = HookRegistration::new(
+            vec![HookEventKind::Stop, HookEventKind::UserPromptSubmit],
+            None,
+            Arc::new(AllowHook),
+        );
+        assert_eq!(reg.events().len(), 2);
+        assert!(reg.events().contains(&HookEventKind::Stop));
+        assert!(reg.events().contains(&HookEventKind::UserPromptSubmit));
+    }
+
+    #[test]
+    fn test_hook_registration_matcher_accessor() {
+        let without_matcher =
+            HookRegistration::new(vec![HookEventKind::Stop], None, Arc::new(AllowHook));
+        assert!(without_matcher.matcher().is_none());
+
+        let with_matcher = HookRegistration::new(
+            vec![HookEventKind::PreToolUse],
+            Some(regex::Regex::new("Bash").unwrap()),
+            Arc::new(AllowHook),
+        );
+        assert!(with_matcher.matcher().is_some());
+    }
+
+    // -- HookDecision Default test --
+
+    #[test]
+    fn test_hook_decision_default_is_allow() {
+        let decision: HookDecision = HookDecision::default();
+        assert!(matches!(decision, HookDecision::Allow));
+    }
+
+    // -- SessionSource tests --
+
+    #[test]
+    fn test_session_source_as_str() {
+        assert_eq!(SessionSource::Startup.as_str(), "startup");
+        assert_eq!(SessionSource::Resume.as_str(), "resume");
+    }
+
+    // -- HookCommandContext tests --
+
+    #[test]
+    fn test_hook_command_context_default() {
+        let ctx = HookCommandContext::default();
+        assert!(ctx.transcript_path.is_empty());
+        assert!(ctx.permission_mode.is_empty());
+    }
+
+    // -- HookableAgent builder tests --
+
+    #[tokio::test]
+    async fn test_hookable_agent_with_transcript_path() {
+        let (mock, _) = MockAgent::new();
+        let agent =
+            HookableAgent::new(Arc::new(mock)).with_transcript_path("/tmp/transcript.jsonl");
+        assert_eq!(
+            agent.command_context().transcript_path,
+            "/tmp/transcript.jsonl"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_hookable_agent_with_permission_mode() {
+        let (mock, _) = MockAgent::new();
+        let agent = HookableAgent::new(Arc::new(mock)).with_permission_mode("default");
+        assert_eq!(agent.command_context().permission_mode, "default");
+    }
+
+    #[tokio::test]
+    async fn test_hookable_agent_with_registration() {
+        let (mock, _) = MockAgent::new();
+        let called = Arc::new(AtomicBool::new(false));
+        let reg = HookRegistration::new(
+            vec![HookEventKind::UserPromptSubmit],
+            None,
+            Arc::new(RecordingHook {
+                called: called.clone(),
+            }),
+        );
+        let agent = HookableAgent::new(Arc::new(mock)).with_registration(reg);
+
+        let _ = agent.prompt(make_prompt_request()).await.unwrap();
+        assert!(called.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn test_hookable_agent_inner_returns_inner_agent() {
+        let (mock, _) = MockAgent::new();
+        let agent = HookableAgent::new(Arc::new(mock));
+
+        // inner() should return an Arc to the inner agent
+        let _ = agent.inner();
+    }
+
+    #[tokio::test]
+    async fn test_hookable_agent_get_cwd_unknown_session_fallback() {
+        let (mock, _) = MockAgent::new();
+        let agent = HookableAgent::new(Arc::new(mock));
+
+        // Unknown session should fall back to "."
+        let cwd = agent.get_cwd("nonexistent-session");
+        assert_eq!(cwd, PathBuf::from("."));
+    }
+
+    // -- Agent trait delegation tests --
+
+    #[tokio::test]
+    async fn test_hookable_agent_initialize_delegates() {
+        let (mock, _) = MockAgent::new();
+        let agent = HookableAgent::new(Arc::new(mock));
+
+        let _response = agent
+            .initialize(InitializeRequest::new(
+                agent_client_protocol::ProtocolVersion::LATEST,
+            ))
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_hookable_agent_authenticate_delegates() {
+        let (mock, _) = MockAgent::new();
+        let agent = HookableAgent::new(Arc::new(mock));
+
+        let _response = agent
+            .authenticate(AuthenticateRequest::new("test-method"))
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_hookable_agent_set_session_mode_delegates() {
+        let (mock, _) = MockAgent::new();
+        let agent = HookableAgent::new(Arc::new(mock));
+
+        let _response = agent
+            .set_session_mode(SetSessionModeRequest::new("test-session", "plan"))
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_hookable_agent_ext_method_delegates() {
+        let (mock, _) = MockAgent::new();
+        let agent = HookableAgent::new(Arc::new(mock));
+
+        let raw = serde_json::value::RawValue::from_string("{}".to_string()).unwrap();
+        let request = ExtRequest::new("custom", std::sync::Arc::from(raw));
+        // MockAgent returns method_not_found
+        let result = agent.ext_method(request).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_hookable_agent_ext_notification_delegates() {
+        let (mock, _) = MockAgent::new();
+        let agent = HookableAgent::new(Arc::new(mock));
+
+        let raw = serde_json::value::RawValue::from_string("{}".to_string()).unwrap();
+        let notification = ExtNotification::new("custom/notify", std::sync::Arc::from(raw));
+        agent.ext_notification(notification).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_hookable_agent_cancel_delegates() {
+        let (mock, _) = MockAgent::new();
+        let agent = HookableAgent::new(Arc::new(mock));
+
+        agent
+            .cancel(CancelNotification::new("test-session"))
+            .await
+            .unwrap();
+    }
+
+    // -- dispatch_notification_hooks tests --
+
+    #[tokio::test]
+    async fn test_dispatch_notification_hooks_allow_with_updated_input() {
+        // AllowWithUpdatedInput in notification pipeline should be treated as Allow
+        struct UpdatedInputHook;
+
+        #[async_trait::async_trait]
+        impl HookHandler for UpdatedInputHook {
+            async fn handle(&self, _event: &HookEvent) -> HookDecision {
+                HookDecision::AllowWithUpdatedInput {
+                    updated_input: serde_json::json!({"modified": true}),
+                }
+            }
+        }
+
+        let hooks = vec![HookRegistration::new(
+            vec![HookEventKind::Notification],
+            None,
+            Arc::new(UpdatedInputHook),
+        )];
+
+        let notification = agent_client_protocol::SessionNotification::new(
+            SessionId::from("s1"),
+            SessionUpdate::AgentMessageChunk(agent_client_protocol::ContentChunk::new(
+                ContentBlock::Text(TextContent::new("hi")),
+            )),
+        );
+
+        let events = vec![HookEvent::Notification {
+            notification: Box::new(notification.clone()),
+            cwd: PathBuf::from("/tmp"),
+        }];
+
+        let (cancel_tx, _cancel_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (context_tx, _context_rx) = tokio::sync::mpsc::unbounded_channel();
+
+        // Should not panic — AllowWithUpdatedInput is logged and treated as Allow
+        dispatch_notification_hooks(&hooks, &events, &notification, &cancel_tx, &context_tx).await;
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_notification_hooks_block_decision_is_noop() {
+        // Block decisions in notification pipeline are logged but don't cancel
+        let hooks = vec![HookRegistration::new(
+            vec![HookEventKind::Notification],
+            None,
+            Arc::new(BlockHook {
+                reason: "blocked".into(),
+            }),
+        )];
+
+        let notification = agent_client_protocol::SessionNotification::new(
+            SessionId::from("s1"),
+            SessionUpdate::AgentMessageChunk(agent_client_protocol::ContentChunk::new(
+                ContentBlock::Text(TextContent::new("hi")),
+            )),
+        );
+
+        let events = vec![HookEvent::Notification {
+            notification: Box::new(notification.clone()),
+            cwd: PathBuf::from("/tmp"),
+        }];
+
+        let (cancel_tx, mut cancel_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (context_tx, _context_rx) = tokio::sync::mpsc::unbounded_channel();
+
+        dispatch_notification_hooks(&hooks, &events, &notification, &cancel_tx, &context_tx).await;
+
+        // Block in notification pipeline doesn't send to cancel channel
+        assert!(cancel_rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_notification_hooks_should_continue_is_noop() {
+        let hooks = vec![HookRegistration::new(
+            vec![HookEventKind::Notification],
+            None,
+            Arc::new(ShouldContinueHook {
+                reason: "keep going".into(),
+            }),
+        )];
+
+        let notification = agent_client_protocol::SessionNotification::new(
+            SessionId::from("s1"),
+            SessionUpdate::AgentMessageChunk(agent_client_protocol::ContentChunk::new(
+                ContentBlock::Text(TextContent::new("hi")),
+            )),
+        );
+
+        let events = vec![HookEvent::Notification {
+            notification: Box::new(notification.clone()),
+            cwd: PathBuf::from("/tmp"),
+        }];
+
+        let (cancel_tx, mut cancel_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (context_tx, mut context_rx) = tokio::sync::mpsc::unbounded_channel();
+
+        dispatch_notification_hooks(&hooks, &events, &notification, &cancel_tx, &context_tx).await;
+
+        // ShouldContinue doesn't send to either channel
+        assert!(cancel_rx.try_recv().is_err());
+        assert!(context_rx.try_recv().is_err());
+    }
+
+    // -- Notification event serialization tests --
+
+    #[test]
+    fn test_notification_event_to_command_input() {
+        let notification = agent_client_protocol::SessionNotification::new(
+            SessionId::from("sess-1"),
+            SessionUpdate::AgentMessageChunk(agent_client_protocol::ContentChunk::new(
+                ContentBlock::Text(TextContent::new("test")),
+            )),
+        );
+        let event = HookEvent::Notification {
+            notification: Box::new(notification),
+            cwd: PathBuf::from("/project"),
+        };
+
+        let json = event.to_command_input();
+        assert_eq!(json["hook_event_name"], "Notification");
+        assert_eq!(json["notification_type"], "agent_message");
+        assert!(json.get("notification").is_some());
+    }
+
+    // -- PostToolUseFailure with error in to_command_input --
+
+    #[test]
+    fn test_post_tool_use_failure_without_error() {
+        let event = HookEvent::PostToolUseFailure {
+            session_id: "s1".into(),
+            tool_name: "Bash".into(),
+            tool_input: None,
+            error: None,
+            tool_use_id: None,
+            cwd: PathBuf::from("/tmp"),
+        };
+
+        let json = event.to_command_input();
+        assert_eq!(json["hook_event_name"], "PostToolUseFailure");
+        // No error field when None
+        assert!(json.get("error").is_none() || json["error"].is_null());
+    }
 }

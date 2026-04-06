@@ -90,3 +90,165 @@ pub async fn execute_summary(
         .to_string(),
     ))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mcp::tools::questions::persistence::save_question_answer;
+    use serial_test::serial;
+    use tempfile::TempDir;
+
+    /// RAII guard to restore working directory when dropped
+    struct DirGuard(std::path::PathBuf);
+    impl Drop for DirGuard {
+        fn drop(&mut self) {
+            let _ = std::env::set_current_dir(&self.0);
+        }
+    }
+
+    fn setup_test_env() -> (TempDir, DirGuard) {
+        let original_dir = std::env::current_dir().unwrap();
+        let temp_dir = TempDir::new().unwrap();
+        std::env::set_current_dir(temp_dir.path()).unwrap();
+        (temp_dir, DirGuard(original_dir))
+    }
+
+    #[test]
+    fn test_summarize_questions_operation_metadata() {
+        let op = SummarizeQuestions;
+        assert_eq!(op.verb(), "summarize");
+        assert_eq!(op.noun(), "questions");
+        assert_eq!(op.op_string(), "summarize questions");
+        assert!(!op.description().is_empty());
+        assert_eq!(op.parameters().len(), 1);
+    }
+
+    #[tokio::test]
+    #[serial(cwd)]
+    async fn test_execute_summary_empty() {
+        let (_temp, _guard) = setup_test_env();
+        let ctx = crate::test_utils::create_test_context().await;
+
+        let args = serde_json::Map::new();
+        let result = execute_summary(args, &ctx).await;
+        assert!(result.is_ok());
+
+        let response = result.unwrap();
+        let content = response
+            .content
+            .first()
+            .and_then(|c| c.raw.as_text())
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        let json: serde_json::Value = serde_json::from_str(content).unwrap();
+        assert_eq!(json["count"], 0);
+        assert!(json["summary"]
+            .as_str()
+            .unwrap()
+            .contains("Total Q&A Pairs: 0"));
+    }
+
+    #[tokio::test]
+    #[serial(cwd)]
+    async fn test_execute_summary_with_questions() {
+        let (_temp, _guard) = setup_test_env();
+        let ctx = crate::test_utils::create_test_context().await;
+
+        // Save some questions
+        save_question_answer("Question 1?", "Answer 1").unwrap();
+        save_question_answer("Question 2?", "Answer 2").unwrap();
+
+        let args = serde_json::Map::new();
+        let result = execute_summary(args, &ctx).await;
+        assert!(result.is_ok());
+
+        let response = result.unwrap();
+        let content = response
+            .content
+            .first()
+            .and_then(|c| c.raw.as_text())
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        let json: serde_json::Value = serde_json::from_str(content).unwrap();
+        assert_eq!(json["count"], 2);
+        let summary = json["summary"].as_str().unwrap();
+        assert!(summary.contains("Question 1?"));
+        assert!(summary.contains("Answer 1"));
+        assert!(summary.contains("Question 2?"));
+        assert!(summary.contains("Answer 2"));
+    }
+
+    #[tokio::test]
+    #[serial(cwd)]
+    async fn test_execute_summary_with_limit() {
+        let (_temp, _guard) = setup_test_env();
+        let ctx = crate::test_utils::create_test_context().await;
+
+        // Save 3 questions
+        save_question_answer("Q1?", "A1").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        save_question_answer("Q2?", "A2").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        save_question_answer("Q3?", "A3").unwrap();
+
+        // Request only last 2
+        let mut args = serde_json::Map::new();
+        args.insert("limit".to_string(), serde_json::json!(2));
+        let result = execute_summary(args, &ctx).await;
+        assert!(result.is_ok());
+
+        let response = result.unwrap();
+        let content = response
+            .content
+            .first()
+            .and_then(|c| c.raw.as_text())
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        let json: serde_json::Value = serde_json::from_str(content).unwrap();
+        // Only 2 entries should be returned (most recent)
+        assert_eq!(json["count"], 2);
+        let summary = json["summary"].as_str().unwrap();
+        // Q2 and Q3 should be in summary, Q1 should not
+        assert!(summary.contains("Q2?"));
+        assert!(summary.contains("Q3?"));
+        assert!(!summary.contains("Q1?"));
+    }
+
+    #[tokio::test]
+    #[serial(cwd)]
+    async fn test_execute_summary_limit_larger_than_total() {
+        let (_temp, _guard) = setup_test_env();
+        let ctx = crate::test_utils::create_test_context().await;
+
+        save_question_answer("Only question?", "Only answer").unwrap();
+
+        // Request more than available
+        let mut args = serde_json::Map::new();
+        args.insert("limit".to_string(), serde_json::json!(100));
+        let result = execute_summary(args, &ctx).await;
+        assert!(result.is_ok());
+
+        let response = result.unwrap();
+        let content = response
+            .content
+            .first()
+            .and_then(|c| c.raw.as_text())
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        let json: serde_json::Value = serde_json::from_str(content).unwrap();
+        // Should return all available (only 1)
+        assert_eq!(json["count"], 1);
+    }
+
+    #[test]
+    fn test_question_summary_request_defaults() {
+        let req: QuestionSummaryRequest = serde_json::from_str("{}").unwrap();
+        assert_eq!(req.limit, None);
+    }
+
+    #[test]
+    fn test_question_summary_request_with_limit() {
+        let req: QuestionSummaryRequest = serde_json::from_str(r#"{"limit": 5}"#).unwrap();
+        assert_eq!(req.limit, Some(5));
+    }
+}

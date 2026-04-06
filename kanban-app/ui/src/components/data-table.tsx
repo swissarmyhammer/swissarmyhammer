@@ -1,4 +1,4 @@
-import { useRef, useEffect, useCallback, useMemo, useState, useContext } from "react";
+import { useRef, useEffect, useCallback, useMemo, useState } from "react";
 import { ArrowUp, ArrowDown, ChevronRight, ChevronDown } from "lucide-react";
 import {
   useReactTable,
@@ -22,27 +22,16 @@ import {
 } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
 import { useContextMenu } from "@/lib/context-menu";
-import { CommandScopeProvider, CommandScopeContext, type CommandDef } from "@/lib/command-scope";
+import { useDispatchCommand, type CommandDef } from "@/lib/command-scope";
 import { FocusScope } from "@/components/focus-scope";
+import { moniker } from "@/lib/moniker";
 import { Field } from "@/components/fields/field";
 import type { UseGridReturn } from "@/hooks/use-grid";
-import type { ClaimPredicate } from "@/lib/entity-focus-context";
-import type { CommandScope } from "@/lib/command-scope";
-import type { Entity, FieldDef } from "@/types/kanban";
-
-/** Build the moniker scope chain from the current CommandScopeContext to the root. */
-function useScopeChain(): string[] {
-  const scope = useContext(CommandScopeContext);
-  return useMemo(() => {
-    const chain: string[] = [];
-    let current: CommandScope | null = scope;
-    while (current) {
-      if (current.moniker) chain.push(current.moniker);
-      current = current.parent;
-    }
-    return chain;
-  }, [scope]);
-}
+import {
+  useEntityFocus,
+  type ClaimPredicate,
+} from "@/lib/entity-focus-context";
+import type { Entity, FieldDef, PerspectiveSortEntry } from "@/types/kanban";
 
 export interface DataTableColumn {
   field: FieldDef;
@@ -79,16 +68,17 @@ interface DataTableProps {
   showRowSelector?: boolean;
   /**
    * Optional factory that returns entity-specific commands for a given row.
-   *
-   * When provided, each row's selector cell is wrapped in a per-row
-   * CommandScopeProvider so that right-clicking row N always resolves
-   * commands for row N's entity -- regardless of the grid cursor position.
-   *
-   * This eliminates the race between `grid.setCursor()` (async state update)
-   * and `contextMenuHandler(e)` (synchronous) when the user right-clicks a
-   * row that isn't the current cursor row.
+   * When provided, each row is wrapped in a FocusScope with these commands
+   * so right-click, inspect, and palette resolve for that row's entity.
    */
   rowEntityCommands?: (entity: Entity) => CommandDef[];
+  /**
+   * Active perspective sort entries. When provided, column headers show
+   * sort indicators and dispatch `perspective.sort.toggle` on click.
+   */
+  perspectiveSort?: readonly PerspectiveSortEntry[];
+  /** Active perspective ID — required for dispatching sort commands. */
+  perspectiveId?: string;
 }
 
 export function DataTable({
@@ -104,19 +94,36 @@ export function DataTable({
   onVisibleRowCount,
   showRowSelector = true,
   rowEntityCommands,
+  perspectiveSort,
+  perspectiveId,
 }: DataTableProps) {
   const tableContainerRef = useRef<HTMLDivElement>(null);
   const cursorRef = useRef<HTMLTableCellElement>(null);
-  // Grid-level context menu handler -- used when rowEntityCommands is not set.
-  const gridScopeChain = useScopeChain();
-  const contextMenuHandler = useContextMenu(gridScopeChain);
+  const dispatchSortToggle = useDispatchCommand("perspective.sort.toggle");
   const [sorting, setSorting] = useState<SortingState>([]);
   const [grouping, setGrouping] = useState<GroupingState>(groupingProp ?? []);
 
-  // Sync external grouping prop
+  // Sync external grouping prop — reset to [] when cleared so the grid
+  // reverts to a flat layout instead of retaining stale grouping state.
   useEffect(() => {
-    if (groupingProp) setGrouping(groupingProp);
+    setGrouping(groupingProp ?? []);
   }, [groupingProp]);
+
+  // Build a lookup: field name → { direction, priority } from perspective sort entries.
+  const perspectiveSortMap = useMemo(() => {
+    const map = new Map<
+      string,
+      { direction: "asc" | "desc"; priority: number }
+    >();
+    if (!perspectiveSort) return map;
+    for (let i = 0; i < perspectiveSort.length; i++) {
+      map.set(perspectiveSort[i].field, {
+        direction: perspectiveSort[i].direction,
+        priority: i + 1,
+      });
+    }
+    return map;
+  }, [perspectiveSort]);
 
   // Build TanStack column definitions from our field-based columns
   const tanstackColumns = useMemo<ColumnDef<Entity>[]>(
@@ -240,11 +247,55 @@ export function DataTable({
                 />
               )}
               {headerGroup.headers.map((header, ci) => {
-                const isSorted = header.column.getIsSorted();
+                const columnId = header.column.id;
                 const isGrouped = header.column.getIsGrouped();
+                // Use perspective sort state when available, fall back to TanStack
+                const pSort = perspectiveSortMap.get(columnId);
+                const isSorted = pSort
+                  ? pSort.direction
+                  : header.column.getIsSorted();
+                const sortPriority = pSort?.priority;
+                const showPriority =
+                  sortPriority !== undefined && perspectiveSortMap.size > 1;
+
+                const handleHeaderClick = perspectiveId
+                  ? (e: React.MouseEvent) => {
+                      // Shift+click appends to multi-sort via set; plain click toggles
+                      if (e.shiftKey) {
+                        // Shift+click: cycle this field independently (toggle)
+                        dispatchSortToggle({
+                          args: {
+                            field: columnId,
+                            perspective_id: perspectiveId,
+                          },
+                        }).catch(console.error);
+                      } else {
+                        dispatchSortToggle({
+                          args: {
+                            field: columnId,
+                            perspective_id: perspectiveId,
+                          },
+                        }).catch(console.error);
+                      }
+                    }
+                  : header.column.getToggleSortingHandler();
+
+                const handleHeaderContextMenu = perspectiveId
+                  ? (e: React.MouseEvent) => {
+                      e.preventDefault();
+                      // Context menu not wired to command palette yet —
+                      // for now toggle grouping as before.
+                      header.column.toggleGrouping();
+                    }
+                  : (e: React.MouseEvent) => {
+                      e.preventDefault();
+                      header.column.toggleGrouping();
+                    };
+
                 return (
                   <TableHead
                     key={header.id}
+                    data-testid={`column-header-${columnId}`}
                     className={cn(
                       "text-left px-3 py-1.5 text-xs font-medium text-muted-foreground uppercase tracking-wide select-none cursor-pointer hover:bg-muted/60 transition-colors h-auto",
                       ci === 0 && "pl-4",
@@ -254,11 +305,8 @@ export function DataTable({
                         ? { width: header.column.getSize() }
                         : undefined
                     }
-                    onClick={header.column.getToggleSortingHandler()}
-                    onContextMenu={(e) => {
-                      e.preventDefault();
-                      header.column.toggleGrouping();
-                    }}
+                    onClick={handleHeaderClick}
+                    onContextMenu={handleHeaderContextMenu}
                   >
                     <span className="flex items-center gap-1">
                       {isGrouped && (
@@ -268,8 +316,26 @@ export function DataTable({
                         header.column.columnDef.header,
                         header.getContext(),
                       )}
-                      {isSorted === "asc" && <ArrowUp className="h-3 w-3" />}
-                      {isSorted === "desc" && <ArrowDown className="h-3 w-3" />}
+                      {isSorted === "asc" && (
+                        <ArrowUp
+                          className="h-3 w-3"
+                          data-testid={`sort-indicator-${columnId}`}
+                        />
+                      )}
+                      {isSorted === "desc" && (
+                        <ArrowDown
+                          className="h-3 w-3"
+                          data-testid={`sort-indicator-${columnId}`}
+                        />
+                      )}
+                      {showPriority && (
+                        <span
+                          className="text-[9px] text-muted-foreground/70"
+                          data-testid={`sort-priority-${columnId}`}
+                        >
+                          {sortPriority}
+                        </span>
+                      )}
                     </span>
                   </TableHead>
                 );
@@ -314,131 +380,108 @@ export function DataTable({
             // Data row -- use data-row index (di) for grid cursor, not visual index (ri)
             const di = dataRowIndices[ri];
             const entity = row.original;
+            const entityMk = moniker(entity.entity_type, entity.id);
+            const rowCommands = rowEntityCommands?.(entity) ?? [];
             return (
-              <TableRow
+              <FocusScope
                 key={row.id}
-                className={cn(
-                  "border-b border-border/50 transition-colors",
-                  di === grid.cursor.row &&
-                    grid.mode !== "edit" &&
-                    "bg-accent/30",
-                )}
-                onContextMenu={(e) => {
-                  onCellClick?.(di, grid.cursor.col);
-                  onRowContextMenu?.(entity, e);
-                  contextMenuHandler(e);
-                }}
+                moniker={entityMk}
+                commands={rowCommands}
+                renderContainer={false}
               >
-                {showRowSelector &&
-                  (rowEntityCommands ? (
-                    <RowSelectorWithScope
-                      entity={entity}
+                <EntityRow
+                  entityMk={entityMk}
+                  isCursorRow={di === grid.cursor.row}
+                  isEditing={grid.mode === "edit"}
+                >
+                  {showRowSelector && (
+                    <RowSelector
                       di={di}
-                      cursorRow={grid.cursor.row}
-                      cursorCol={grid.cursor.col}
-                      commands={rowEntityCommands(entity)}
-                      onCellClick={handleCellClick}
-                      onRowContextMenu={onRowContextMenu}
-                    />
-                  ) : (
-                    <TableCell
-                      data-testid="row-selector"
-                      data-active={di === grid.cursor.row ? "true" : "false"}
-                      className={cn(
-                        "w-10 px-0 py-1.5 text-center cursor-pointer select-none text-[10px] font-medium text-muted-foreground bg-muted/50 border-r border-border/50",
-                        di === grid.cursor.row && "bg-muted text-foreground",
-                      )}
-                      style={{ width: 40 }}
+                      isCursorRow={di === grid.cursor.row}
                       onClick={() => handleCellClick(di, grid.cursor.col)}
-                      onContextMenu={(e) => {
-                        onCellClick?.(di, grid.cursor.col);
-                        onRowContextMenu?.(entity, e);
-                        contextMenuHandler(e);
-                      }}
-                    >
-                      {di + 1}
-                    </TableCell>
-                  ))}
-                {columns.map((col, ci) => {
-                  const isCursor =
-                    di === grid.cursor.row && ci === grid.cursor.col;
-                  const isSel = isSelected(di, ci);
-                  const isEditing =
-                    isCursor && grid.mode === "edit" && renderEditor;
-
-                  const cellContent = isEditing ? (
-                    renderEditor(
-                      entity,
-                      col.field,
-                      () => grid.exitEdit(),
-                      () => grid.exitEdit(),
-                    )
-                  ) : (
-                    <Field
-                      fieldDef={col.field}
-                      entityType={entity.entity_type}
-                      entityId={entity.id}
-                      mode="compact"
-                      editing={false}
                     />
-                  );
+                  )}
+                  {columns.map((col, ci) => {
+                    const isCursor =
+                      di === grid.cursor.row && ci === grid.cursor.col;
+                    const isSel = isSelected(di, ci);
+                    const isEditing =
+                      isCursor && grid.mode === "edit" && renderEditor;
 
-                  const cellClasses = cn(
-                    "px-3 py-1.5 align-middle max-w-[300px]",
-                    ci === 0 && "pl-4",
-                    isCursor && "ring-2 ring-primary ring-inset",
-                    isSel && !isCursor && "bg-primary/10",
-                    // Strip cell padding during editing for editors that
-                    // fill the entire cell.
-                    isEditing &&
-                      col.field.editor !== "color-palette" &&
-                      col.field.editor !== "select" &&
-                      col.field.editor !== "multi-select" &&
-                      "p-0",
-                  );
+                    const cellContent = isEditing ? (
+                      renderEditor(
+                        entity,
+                        col.field,
+                        () => grid.exitEdit(),
+                        () => grid.exitEdit(),
+                      )
+                    ) : (
+                      <Field
+                        fieldDef={col.field}
+                        entityType={entity.entity_type}
+                        entityId={entity.id}
+                        mode="compact"
+                        editing={false}
+                      />
+                    );
 
-                  // Wrap in FocusScope when claimWhen navigation is active
-                  if (useClaimNav) {
-                    const mk = cellMonikers[di]?.[ci];
-                    const preds = claimPredicates[di]?.[ci];
-                    if (mk && preds) {
-                      return (
-                        <GridCellScope
-                          key={col.field.id}
-                          moniker={mk}
-                          claimWhen={preds}
-                          isCursor={isCursor}
-                          cursorRef={isCursor ? cursorRef : undefined}
-                          className={cellClasses}
-                          onClick={() => handleCellClick(di, ci)}
-                          onDoubleClick={() => {
-                            onCellClick?.(di, ci);
-                            grid.enterEdit();
-                          }}
-                        >
-                          {cellContent}
-                        </GridCellScope>
-                      );
+                    const cellClasses = cn(
+                      "px-3 py-1.5 align-middle max-w-[300px]",
+                      ci === 0 && "pl-4",
+                      isCursor && "ring-2 ring-primary ring-inset",
+                      isSel && !isCursor && "bg-primary/10",
+                      // Strip cell padding during editing for editors that
+                      // fill the entire cell.
+                      isEditing &&
+                        col.field.editor !== "color-palette" &&
+                        col.field.editor !== "select" &&
+                        col.field.editor !== "multi-select" &&
+                        "p-0",
+                    );
+
+                    // Wrap in FocusScope when claimWhen navigation is active
+                    if (useClaimNav) {
+                      const mk = cellMonikers[di]?.[ci];
+                      const preds = claimPredicates[di]?.[ci];
+                      if (mk && preds) {
+                        return (
+                          <GridCellScope
+                            key={col.field.id}
+                            moniker={mk}
+                            claimWhen={preds}
+                            isCursor={isCursor}
+                            cursorRef={isCursor ? cursorRef : undefined}
+                            className={cellClasses}
+                            onClick={() => handleCellClick(di, ci)}
+                            onDoubleClick={() => {
+                              onCellClick?.(di, ci);
+                              grid.enterEdit();
+                            }}
+                          >
+                            {cellContent}
+                          </GridCellScope>
+                        );
+                      }
                     }
-                  }
 
-                  // Fallback: plain TableCell (no claimWhen)
-                  return (
-                    <TableCell
-                      key={col.field.id}
-                      ref={isCursor ? cursorRef : undefined}
-                      className={cellClasses}
-                      onClick={() => handleCellClick(di, ci)}
-                      onDoubleClick={() => {
-                        onCellClick?.(di, ci);
-                        grid.enterEdit();
-                      }}
-                    >
-                      {cellContent}
-                    </TableCell>
-                  );
-                })}
-              </TableRow>
+                    // Fallback: plain TableCell (no claimWhen)
+                    return (
+                      <TableCell
+                        key={col.field.id}
+                        ref={isCursor ? cursorRef : undefined}
+                        className={cellClasses}
+                        onClick={() => handleCellClick(di, ci)}
+                        onDoubleClick={() => {
+                          onCellClick?.(di, ci);
+                          grid.enterEdit();
+                        }}
+                      >
+                        {cellContent}
+                      </TableCell>
+                    );
+                  })}
+                </EntityRow>
+              </FocusScope>
             );
           })}
         </TableBody>
@@ -502,95 +545,64 @@ function GridCellScope({
   );
 }
 
-interface RowSelectorWithScopeProps {
-  entity: Entity;
-  di: number;
-  cursorRow: number;
-  cursorCol: number;
-  commands: CommandDef[];
-  onCellClick: (row: number, col: number) => void;
-  onRowContextMenu?: (entity: Entity, e: React.MouseEvent) => void;
+interface EntityRowProps {
+  entityMk: string;
+  isCursorRow: boolean;
+  isEditing: boolean;
+  children: React.ReactNode;
 }
 
 /**
- * Renders a row selector cell wrapped in a per-row CommandScopeProvider.
+ * Table row rendered inside a FocusScope(renderContainer=false).
  *
- * This component exists so that `useContextMenu()` is called from inside the
- * row-specific scope. When the user right-clicks this cell, the context menu
- * resolves commands from `commands` (built for this row's entity) rather than
- * from the grid-level scope -- eliminating the race between `grid.setCursor()`
- * (async state update) and the synchronous context menu open.
+ * Mirrors FocusScopeInner behavior on a <tr>: click sets entity focus,
+ * double-click dispatches ui.inspect, right-click opens context menu.
+ * All hooks read from the per-row FocusScope that wraps this component.
  */
-function RowSelectorWithScope({
-  entity,
-  di,
-  cursorRow,
-  cursorCol,
-  commands,
-  onCellClick,
-  onRowContextMenu,
-}: RowSelectorWithScopeProps) {
+function EntityRow({
+  entityMk,
+  isCursorRow,
+  isEditing,
+  children,
+}: EntityRowProps) {
+  const contextMenuHandler = useContextMenu();
+  const { setFocus } = useEntityFocus();
+
   return (
-    <CommandScopeProvider commands={commands}>
-      <RowSelectorCell
-        entity={entity}
-        di={di}
-        cursorRow={cursorRow}
-        cursorCol={cursorCol}
-        onCellClick={onCellClick}
-        onRowContextMenu={onRowContextMenu}
-      />
-    </CommandScopeProvider>
+    <TableRow
+      data-moniker={entityMk}
+      className={cn(
+        "border-b border-border/50 transition-colors",
+        isCursorRow && !isEditing && "bg-accent/30",
+      )}
+      onContextMenu={(e) => {
+        setFocus(entityMk);
+        contextMenuHandler(e);
+      }}
+    >
+      {children}
+    </TableRow>
   );
 }
 
-interface RowSelectorCellProps {
-  entity: Entity;
+interface RowSelectorProps {
   di: number;
-  cursorRow: number;
-  cursorCol: number;
-  onCellClick: (row: number, col: number) => void;
-  onRowContextMenu?: (entity: Entity, e: React.MouseEvent) => void;
+  isCursorRow: boolean;
+  onClick: () => void;
 }
 
-/**
- * The inner selector cell rendered inside the per-row CommandScopeProvider.
- *
- * Calls `useContextMenu()` here so the hook reads from the row-specific scope,
- * not the grid-level scope. The `data-row-entity-id` attribute on the wrapping
- * `<td>` enables tests to verify which entity's scope is active per row.
- */
-function RowSelectorCell({
-  entity,
-  di,
-  cursorRow,
-  cursorCol,
-  onCellClick,
-  onRowContextMenu,
-}: RowSelectorCellProps) {
-  const rowScopeChain = useScopeChain();
-  const contextMenuHandler = useContextMenu(rowScopeChain);
-
-  const handleContextMenu = useCallback(
-    (e: React.MouseEvent) => {
-      onRowContextMenu?.(entity, e);
-      contextMenuHandler(e);
-    },
-    [entity, onRowContextMenu, contextMenuHandler],
-  );
-
+/** Row number selector cell. */
+function RowSelector({ di, isCursorRow, onClick }: RowSelectorProps) {
   return (
     <TableCell
       data-testid="row-selector"
-      data-active={di === cursorRow ? "true" : "false"}
-      data-row-entity-id={entity.id}
+      data-active={isCursorRow ? "true" : "false"}
       className={cn(
         "w-10 px-0 py-1.5 text-center cursor-pointer select-none text-[10px] font-medium text-muted-foreground bg-muted/50 border-r border-border/50",
-        di === cursorRow && "bg-muted text-foreground",
+        isCursorRow && "bg-muted text-foreground",
       )}
       style={{ width: 40 }}
-      onClick={() => onCellClick(di, cursorCol)}
-      onContextMenu={handleContextMenu}
+      onClick={onClick}
     >
       {di + 1}
     </TableCell>

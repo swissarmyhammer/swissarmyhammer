@@ -1239,6 +1239,395 @@ mod tests {
         assert!(ret > 0, "poll should return >0 when data is available");
     }
 
+    // ---------------------------------------------------------------------------
+    // Tests for collect_and_persist_symbols (standalone DB function)
+    // ---------------------------------------------------------------------------
+
+    /// Open an in-memory SQLite DB with the code-context schema.
+    fn open_test_db() -> rusqlite::Connection {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::configure_connection(&conn).unwrap();
+        crate::db::create_schema(&conn).unwrap();
+        conn
+    }
+
+    /// Insert a placeholder row into `indexed_files` so FK constraints pass.
+    fn seed_indexed_file(conn: &rusqlite::Connection, path: &str) {
+        conn.execute(
+            "INSERT INTO indexed_files (file_path, content_hash, file_size, last_seen_at)
+             VALUES (?1, X'deadbeef', 512, 999)",
+            [path],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn test_collect_and_persist_symbols_writes_to_db() {
+        // Verify that collect_and_persist_symbols stores symbols and marks lsp_indexed.
+        let conn = open_test_db();
+        let file_path = "src/demo.rs";
+        seed_indexed_file(&conn, file_path);
+
+        let symbols = vec![
+            DocumentSymbol {
+                name: "Demo".to_string(),
+                detail: None,
+                kind: SymbolKind::STRUCT,
+                tags: None,
+                deprecated: None,
+                range: Range::new(Position::new(0, 0), Position::new(10, 1)),
+                selection_range: Range::new(Position::new(0, 0), Position::new(0, 4)),
+                children: None,
+            },
+            DocumentSymbol {
+                name: "run".to_string(),
+                detail: None,
+                kind: SymbolKind::FUNCTION,
+                tags: None,
+                deprecated: None,
+                range: Range::new(Position::new(12, 0), Position::new(20, 1)),
+                selection_range: Range::new(Position::new(12, 0), Position::new(12, 3)),
+                children: None,
+            },
+        ];
+
+        let count = collect_and_persist_symbols(&conn, file_path, &symbols).unwrap();
+        assert_eq!(count, 2, "should have written 2 symbols");
+
+        // Verify lsp_indexed flag was set
+        let lsp_indexed: i32 = conn
+            .query_row(
+                "SELECT lsp_indexed FROM indexed_files WHERE file_path = ?1",
+                [file_path],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(lsp_indexed, 1, "lsp_indexed should be 1 after persist");
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn test_collect_and_persist_symbols_empty_writes_nothing_but_marks_indexed() {
+        // Even with no symbols, the file should be marked lsp_indexed.
+        let conn = open_test_db();
+        let file_path = "src/empty.rs";
+        seed_indexed_file(&conn, file_path);
+
+        let count = collect_and_persist_symbols(&conn, file_path, &[]).unwrap();
+        assert_eq!(count, 0);
+
+        let lsp_indexed: i32 = conn
+            .query_row(
+                "SELECT lsp_indexed FROM indexed_files WHERE file_path = ?1",
+                [file_path],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            lsp_indexed, 1,
+            "lsp_indexed should still be 1 for empty file"
+        );
+    }
+
+    // ---------------------------------------------------------------------------
+    // Tests for read_jsonrpc_response edge cases
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn test_read_jsonrpc_response_eof_on_empty_input() {
+        // An empty reader triggers EOF while reading headers.
+        let input: &[u8] = b"";
+        let mut reader = std::io::BufReader::new(input);
+        let result = read_jsonrpc_response(&mut reader);
+        assert!(result.is_err(), "expected error on empty input (EOF)");
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("EOF") || err.contains("header"),
+            "error should mention EOF or header, got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_read_jsonrpc_response_eof_during_body() {
+        // Content-Length claims 100 bytes but body is truncated.
+        let message = b"Content-Length: 100\r\n\r\nshort";
+        let mut reader = std::io::BufReader::new(&message[..]);
+        let result = read_jsonrpc_response(&mut reader);
+        assert!(result.is_err(), "expected error when body is truncated");
+    }
+
+    #[test]
+    fn test_read_jsonrpc_response_invalid_json_body() {
+        // Body is not valid JSON.
+        let body = b"not valid json!!!";
+        let message = format!("Content-Length: {}\r\n\r\n", body.len());
+        let mut data = message.into_bytes();
+        data.extend_from_slice(body);
+        let mut reader = std::io::BufReader::new(&data[..]);
+        let result = read_jsonrpc_response(&mut reader);
+        assert!(result.is_err(), "expected error on invalid JSON body");
+    }
+
+    // ---------------------------------------------------------------------------
+    // Tests for parse_call_hierarchy_items and parse_outgoing_calls error paths
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn test_parse_call_hierarchy_items_error_response() {
+        // JSON-RPC error field causes an Err result.
+        let response = json!({
+            "jsonrpc": "2.0",
+            "id": 3,
+            "error": {"code": -32601, "message": "Method not found"}
+        });
+        let result = parse_call_hierarchy_items(&response);
+        assert!(result.is_err(), "expected Err for error response");
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("LSP error"),
+            "error should mention LSP error, got: {}",
+            msg
+        );
+    }
+
+    #[test]
+    fn test_parse_call_hierarchy_items_unexpected_result_type() {
+        // Non-null, non-array result type should return Err.
+        let response = json!({
+            "jsonrpc": "2.0",
+            "id": 3,
+            "result": "unexpected_string"
+        });
+        let result = parse_call_hierarchy_items(&response);
+        assert!(result.is_err(), "expected Err for unexpected result type");
+    }
+
+    #[test]
+    fn test_parse_outgoing_calls_error_response() {
+        // JSON-RPC error field causes an Err result.
+        let response = json!({
+            "jsonrpc": "2.0",
+            "id": 4,
+            "error": {"code": -32600, "message": "Invalid Request"}
+        });
+        let result = parse_outgoing_calls(&response);
+        assert!(result.is_err(), "expected Err for error response");
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("LSP error"),
+            "error should mention LSP error, got: {}",
+            msg
+        );
+    }
+
+    #[test]
+    fn test_parse_outgoing_calls_unexpected_result_type() {
+        // Non-null, non-array result type should return Err.
+        let response = json!({
+            "jsonrpc": "2.0",
+            "id": 4,
+            "result": 42
+        });
+        let result = parse_outgoing_calls(&response);
+        assert!(result.is_err(), "expected Err for unexpected result type");
+    }
+
+    #[test]
+    fn test_parse_outgoing_calls_null() {
+        // Null result returns empty Vec.
+        let response = json!({"jsonrpc": "2.0", "id": 4, "result": null});
+        let calls = parse_outgoing_calls(&response).unwrap();
+        assert!(calls.is_empty());
+    }
+
+    // ---------------------------------------------------------------------------
+    // Mock LSP stdio helpers and tests for initialize/shutdown
+    // ---------------------------------------------------------------------------
+
+    /// Spawn a mock LSP server using Python3.
+    ///
+    /// The server reads a single JSON-RPC request and writes back the
+    /// given `response` JSON, then exits. This lets us test
+    /// `LspJsonRpcClient` methods that require actual stdio round-trips.
+    fn spawn_mock_lsp(responses: Vec<Value>) -> std::process::Child {
+        // Build a Python3 script that handles N responses in sequence,
+        // reading one request per response and replying.
+        let mut script = String::from(
+            "import sys, json\n\
+             def read_msg():\n\
+             \tcl = None\n\
+             \twhile True:\n\
+             \t\tline = sys.stdin.readline()\n\
+             \t\tif not line: return None\n\
+             \t\tline = line.strip()\n\
+             \t\tif not line: break\n\
+             \t\tif line.startswith('Content-Length:'):\n\
+             \t\t\tcl = int(line.split(':', 1)[1].strip())\n\
+             \tif cl is None: return None\n\
+             \tbody = sys.stdin.read(cl)\n\
+             \treturn json.loads(body)\n\
+             def send_msg(obj):\n\
+             \ts = json.dumps(obj)\n\
+             \tsys.stdout.write(f'Content-Length: {len(s)}\\r\\n\\r\\n{s}')\n\
+             \tsys.stdout.flush()\n",
+        );
+
+        for resp in &responses {
+            let resp_json = resp.to_string().replace('\'', "\\'");
+            script.push_str(&format!(
+                "read_msg()\nsend_msg(json.loads('{}'))\n",
+                resp_json
+            ));
+        }
+
+        std::process::Command::new("python3")
+            .arg("-c")
+            .arg(&script)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("failed to spawn mock LSP python3 process")
+    }
+
+    #[test]
+    fn test_initialize_with_mock_server() {
+        // initialize() should send the initialize request and succeed when
+        // the mock server returns a valid response.
+        let init_response = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {"capabilities": {}}
+        });
+
+        let mut child = spawn_mock_lsp(vec![init_response]);
+        let stdin = child.stdin.take().unwrap();
+        let stdout = child.stdout.take().unwrap();
+
+        let mut client = LspJsonRpcClient::new(stdin, stdout);
+        let result = client.initialize(std::path::Path::new("/workspace"));
+        assert!(result.is_ok(), "initialize should succeed: {:?}", result);
+
+        let _ = child.wait();
+    }
+
+    #[test]
+    fn test_initialize_returns_error_on_lsp_error_response() {
+        // initialize() should propagate an LSP error from the server.
+        let error_response = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "error": {"code": -32600, "message": "Invalid Request"}
+        });
+
+        let mut child = spawn_mock_lsp(vec![error_response]);
+        let stdin = child.stdin.take().unwrap();
+        let stdout = child.stdout.take().unwrap();
+
+        let mut client = LspJsonRpcClient::new(stdin, stdout);
+        let result = client.initialize(std::path::Path::new("/workspace"));
+        assert!(
+            result.is_err(),
+            "initialize should fail on LSP error response"
+        );
+
+        let _ = child.wait();
+    }
+
+    #[test]
+    fn test_shutdown_with_mock_server() {
+        // shutdown() should send shutdown request and exit notification without error.
+        let shutdown_response = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": null
+        });
+
+        let mut child = spawn_mock_lsp(vec![shutdown_response]);
+        let stdin = child.stdin.take().unwrap();
+        let stdout = child.stdout.take().unwrap();
+
+        let client = LspJsonRpcClient::new(stdin, stdout);
+        let result = client.shutdown();
+        assert!(result.is_ok(), "shutdown should succeed: {:?}", result);
+
+        let _ = child.wait();
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn test_collect_and_persist_file_symbols_with_mock_server() {
+        // collect_and_persist_file_symbols() should request documentSymbol, parse,
+        // and persist the results to the database.
+        let file_path = std::path::Path::new("/workspace/src/demo.rs");
+        let relative_path = "src/demo.rs";
+
+        // Mock server response for textDocument/documentSymbol
+        let symbol_response = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": [
+                {
+                    "name": "run",
+                    "kind": 12,  // FUNCTION
+                    "range": {"start": {"line": 0, "character": 0}, "end": {"line": 10, "character": 1}},
+                    "selectionRange": {"start": {"line": 0, "character": 3}, "end": {"line": 0, "character": 6}}
+                }
+            ]
+        });
+
+        let mut child = spawn_mock_lsp(vec![symbol_response]);
+        let stdin = child.stdin.take().unwrap();
+        let stdout = child.stdout.take().unwrap();
+
+        let conn = open_test_db();
+        seed_indexed_file(&conn, relative_path);
+
+        let mut client = LspJsonRpcClient::new(stdin, stdout);
+        let result = client.collect_and_persist_file_symbols(&conn, file_path, relative_path);
+        assert!(
+            result.is_ok(),
+            "collect_and_persist_file_symbols should succeed: {:?}",
+            result
+        );
+        let info = result.unwrap();
+        assert_eq!(info.symbol_count, 1, "should have found 1 symbol");
+        assert!(info.error.is_none());
+
+        let _ = child.wait();
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn test_collect_and_persist_call_edges_empty_symbols() {
+        // collect_and_persist_call_edges() returns 0 when documentSymbol returns empty.
+        let file_path = std::path::Path::new("/workspace/src/empty.rs");
+        let relative_path = "src/empty.rs";
+
+        // Mock server: empty documentSymbol response
+        let empty_response = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": []
+        });
+
+        let mut child = spawn_mock_lsp(vec![empty_response]);
+        let stdin = child.stdin.take().unwrap();
+        let stdout = child.stdout.take().unwrap();
+
+        let conn = open_test_db();
+        seed_indexed_file(&conn, relative_path);
+
+        let mut client = LspJsonRpcClient::new(stdin, stdout);
+        let count = client.collect_and_persist_call_edges(&conn, file_path, relative_path);
+        assert!(count.is_ok(), "should succeed with empty symbols");
+        assert_eq!(count.unwrap(), 0, "no edges for empty file");
+
+        let _ = child.wait();
+    }
+
     #[cfg(unix)]
     #[test]
     fn test_wait_for_readable_timeout() {
@@ -1269,6 +1658,578 @@ mod tests {
         );
 
         let _ = child.kill();
+        let _ = child.wait();
+    }
+
+    // ---------------------------------------------------------------------------
+    // Tests for send_did_open / send_did_close via mock LSP
+    // ---------------------------------------------------------------------------
+
+    /// Spawn a mock LSP that reads N messages without replying (for notifications).
+    fn spawn_mock_notification_sink(count: usize) -> std::process::Child {
+        let script = format!(
+            "import sys, json\n\
+             def read_msg():\n\
+             \tcl = None\n\
+             \twhile True:\n\
+             \t\tline = sys.stdin.readline()\n\
+             \t\tif not line: return None\n\
+             \t\tline = line.strip()\n\
+             \t\tif not line: break\n\
+             \t\tif line.startswith('Content-Length:'):\n\
+             \t\t\tcl = int(line.split(':', 1)[1].strip())\n\
+             \tif cl is None: return None\n\
+             \tbody = sys.stdin.read(cl)\n\
+             \treturn json.loads(body)\n\
+             for _ in range({count}):\n\
+             \tread_msg()\n"
+        );
+
+        std::process::Command::new("python3")
+            .arg("-c")
+            .arg(&script)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("failed to spawn mock notification sink")
+    }
+
+    #[test]
+    fn test_send_did_open_with_mock_server() {
+        // send_did_open is a notification — no response expected.
+        // The mock just consumes the message without replying.
+        let mut child = spawn_mock_notification_sink(1);
+        let stdin = child.stdin.take().unwrap();
+        let stdout = child.stdout.take().unwrap();
+
+        let mut client = LspJsonRpcClient::new(stdin, stdout);
+        let result =
+            client.send_did_open(Path::new("/workspace/src/main.rs"), "rust", "fn main() {}");
+        assert!(result.is_ok(), "send_did_open should succeed: {:?}", result);
+
+        let _ = child.wait();
+    }
+
+    #[test]
+    fn test_send_did_close_with_mock_server() {
+        // send_did_close is a notification — no response expected.
+        let mut child = spawn_mock_notification_sink(1);
+        let stdin = child.stdin.take().unwrap();
+        let stdout = child.stdout.take().unwrap();
+
+        let mut client = LspJsonRpcClient::new(stdin, stdout);
+        let result = client.send_did_close(Path::new("/workspace/src/main.rs"));
+        assert!(
+            result.is_ok(),
+            "send_did_close should succeed: {:?}",
+            result
+        );
+
+        let _ = child.wait();
+    }
+
+    #[test]
+    fn test_collect_file_symbols_with_mock_server() {
+        // collect_file_symbols sends a documentSymbol request and parses response.
+        let symbol_response = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": [
+                {
+                    "name": "main",
+                    "kind": 12,
+                    "range": {"start": {"line": 0, "character": 0}, "end": {"line": 5, "character": 1}},
+                    "selectionRange": {"start": {"line": 0, "character": 3}, "end": {"line": 0, "character": 7}}
+                }
+            ]
+        });
+
+        let mut child = spawn_mock_lsp(vec![symbol_response]);
+        let stdin = child.stdin.take().unwrap();
+        let stdout = child.stdout.take().unwrap();
+
+        let mut client = LspJsonRpcClient::new(stdin, stdout);
+        let result = client.collect_file_symbols(Path::new("/workspace/src/main.rs"));
+        assert!(
+            result.is_ok(),
+            "collect_file_symbols should succeed: {:?}",
+            result
+        );
+        let info = result.unwrap();
+        assert_eq!(info.symbol_count, 1);
+        assert!(info.error.is_none());
+
+        let _ = child.wait();
+    }
+
+    #[test]
+    fn test_collect_file_symbols_parse_error_returns_result_with_error() {
+        // When the server returns an LSP error, collect_file_symbols should
+        // still return Ok(LspCollectionResult) with the error field set.
+        let error_response = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "error": {"code": -32600, "message": "Invalid Request"}
+        });
+
+        let mut child = spawn_mock_lsp(vec![error_response]);
+        let stdin = child.stdin.take().unwrap();
+        let stdout = child.stdout.take().unwrap();
+
+        let mut client = LspJsonRpcClient::new(stdin, stdout);
+        let result = client.collect_file_symbols(Path::new("/workspace/src/bad.rs"));
+        assert!(result.is_ok(), "should return Ok with error field set");
+        let info = result.unwrap();
+        assert_eq!(info.symbol_count, 0);
+        assert!(info.error.is_some(), "error field should be populated");
+
+        let _ = child.wait();
+    }
+
+    #[test]
+    fn test_collect_and_persist_file_symbols_error_returns_result_with_error() {
+        // When the LSP server returns an error, collect_and_persist_file_symbols
+        // should return Ok(LspCollectionResult) with the error field set.
+        let error_response = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "error": {"code": -32601, "message": "Method not found"}
+        });
+
+        let mut child = spawn_mock_lsp(vec![error_response]);
+        let stdin = child.stdin.take().unwrap();
+        let stdout = child.stdout.take().unwrap();
+
+        let conn = open_test_db();
+        seed_indexed_file(&conn, "src/err.rs");
+
+        let mut client = LspJsonRpcClient::new(stdin, stdout);
+        let result = client.collect_and_persist_file_symbols(
+            &conn,
+            Path::new("/workspace/src/err.rs"),
+            "src/err.rs",
+        );
+        assert!(result.is_ok(), "should return Ok with error field set");
+        let info = result.unwrap();
+        assert_eq!(info.symbol_count, 0);
+        assert!(info.error.is_some());
+
+        let _ = child.wait();
+    }
+
+    #[test]
+    fn test_send_request_skips_notifications_before_response() {
+        // The mock sends a notification (no "id" field) first, then the real response.
+        // send_request should skip the notification and return the response.
+        let script = r#"
+import sys, json
+
+def read_msg():
+    cl = None
+    while True:
+        line = sys.stdin.readline()
+        if not line: return None
+        line = line.strip()
+        if not line: break
+        if line.startswith('Content-Length:'):
+            cl = int(line.split(':', 1)[1].strip())
+    if cl is None: return None
+    body = sys.stdin.read(cl)
+    return json.loads(body)
+
+def send_msg(obj):
+    s = json.dumps(obj)
+    sys.stdout.write(f'Content-Length: {len(s)}\r\n\r\n{s}')
+    sys.stdout.flush()
+
+# Read the request
+req = read_msg()
+
+# Send a notification first (no "id" field)
+send_msg({"jsonrpc": "2.0", "method": "window/logMessage", "params": {"type": 3, "message": "info"}})
+
+# Then send the actual response
+send_msg({"jsonrpc": "2.0", "id": req["id"], "result": {"capabilities": {}}})
+"#;
+
+        let mut child = std::process::Command::new("python3")
+            .arg("-c")
+            .arg(script)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("failed to spawn python3");
+
+        let stdin = child.stdin.take().unwrap();
+        let stdout = child.stdout.take().unwrap();
+
+        let mut client = LspJsonRpcClient::new(stdin, stdout);
+        // initialize calls send_request internally
+        let result = client.initialize(Path::new("/workspace"));
+        assert!(
+            result.is_ok(),
+            "should succeed after skipping notification: {:?}",
+            result
+        );
+
+        let _ = child.wait();
+    }
+
+    #[test]
+    fn test_send_request_accepts_mismatched_id_response() {
+        // When the server returns a response with a different ID than expected,
+        // send_request should still return that response (after logging a warning).
+        let script = r#"
+import sys, json
+
+def read_msg():
+    cl = None
+    while True:
+        line = sys.stdin.readline()
+        if not line: return None
+        line = line.strip()
+        if not line: break
+        if line.startswith('Content-Length:'):
+            cl = int(line.split(':', 1)[1].strip())
+    if cl is None: return None
+    body = sys.stdin.read(cl)
+    return json.loads(body)
+
+def send_msg(obj):
+    s = json.dumps(obj)
+    sys.stdout.write(f'Content-Length: {len(s)}\r\n\r\n{s}')
+    sys.stdout.flush()
+
+# Read the request
+req = read_msg()
+
+# Send response with a different ID (e.g., id=999)
+send_msg({"jsonrpc": "2.0", "id": 999, "result": {"capabilities": {}}})
+"#;
+
+        let mut child = std::process::Command::new("python3")
+            .arg("-c")
+            .arg(script)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("failed to spawn python3");
+
+        let stdin = child.stdin.take().unwrap();
+        let stdout = child.stdout.take().unwrap();
+
+        let mut client = LspJsonRpcClient::new(stdin, stdout);
+        // initialize() calls send_request, which should accept the mismatched response
+        let result = client.initialize(Path::new("/workspace"));
+        assert!(
+            result.is_ok(),
+            "should succeed even with mismatched ID: {:?}",
+            result
+        );
+
+        let _ = child.wait();
+    }
+
+    #[test]
+    fn test_collect_call_edges_with_functions() {
+        // Test collect_call_edges with a response that has function symbols,
+        // triggering the call hierarchy flow.
+        // Response 1: documentSymbol with a function
+        // Response 2: prepareCallHierarchy with an item
+        // Response 3: outgoingCalls with a call
+        let symbol_response = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": [
+                {
+                    "name": "process",
+                    "kind": 12,
+                    "range": {"start": {"line": 0, "character": 0}, "end": {"line": 10, "character": 1}},
+                    "selectionRange": {"start": {"line": 0, "character": 3}, "end": {"line": 0, "character": 10}}
+                }
+            ]
+        });
+        let prepare_response = json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "result": [
+                {
+                    "name": "process",
+                    "kind": 12,
+                    "uri": "file:///workspace/src/main.rs",
+                    "range": {"start": {"line": 0, "character": 0}, "end": {"line": 10, "character": 1}},
+                    "selectionRange": {"start": {"line": 0, "character": 3}, "end": {"line": 0, "character": 10}}
+                }
+            ]
+        });
+        let outgoing_response = json!({
+            "jsonrpc": "2.0",
+            "id": 3,
+            "result": [
+                {
+                    "to": {
+                        "name": "helper",
+                        "kind": 12,
+                        "uri": "file:///workspace/src/utils.rs",
+                        "range": {"start": {"line": 5, "character": 0}, "end": {"line": 15, "character": 1}},
+                        "selectionRange": {"start": {"line": 5, "character": 3}, "end": {"line": 5, "character": 9}}
+                    },
+                    "fromRanges": [
+                        {"start": {"line": 3, "character": 4}, "end": {"line": 3, "character": 10}}
+                    ]
+                }
+            ]
+        });
+
+        let mut child = spawn_mock_lsp(vec![symbol_response, prepare_response, outgoing_response]);
+        let stdin = child.stdin.take().unwrap();
+        let stdout = child.stdout.take().unwrap();
+
+        let mut client = LspJsonRpcClient::new(stdin, stdout);
+        let edges = client
+            .collect_call_edges(Path::new("/workspace/src/main.rs"), "src/main.rs")
+            .unwrap();
+
+        assert_eq!(edges.len(), 1, "should find 1 call edge");
+        assert!(edges[0].callee_id.contains("helper"));
+        assert_eq!(edges[0].source, "lsp");
+
+        let _ = child.wait();
+    }
+
+    #[test]
+    fn test_collect_and_persist_call_edges_with_functions() {
+        // End-to-end: collect call edges and persist them to the database.
+        let symbol_response = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": [
+                {
+                    "name": "caller_fn",
+                    "kind": 12,
+                    "range": {"start": {"line": 0, "character": 0}, "end": {"line": 10, "character": 1}},
+                    "selectionRange": {"start": {"line": 0, "character": 3}, "end": {"line": 0, "character": 12}}
+                }
+            ]
+        });
+        let prepare_response = json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "result": [
+                {
+                    "name": "caller_fn",
+                    "kind": 12,
+                    "uri": "file:///workspace/src/call.rs",
+                    "range": {"start": {"line": 0, "character": 0}, "end": {"line": 10, "character": 1}},
+                    "selectionRange": {"start": {"line": 0, "character": 3}, "end": {"line": 0, "character": 12}}
+                }
+            ]
+        });
+        let outgoing_response = json!({
+            "jsonrpc": "2.0",
+            "id": 3,
+            "result": [
+                {
+                    "to": {
+                        "name": "callee_fn",
+                        "kind": 12,
+                        "uri": "file:///workspace/src/target.rs",
+                        "range": {"start": {"line": 0, "character": 0}, "end": {"line": 5, "character": 1}},
+                        "selectionRange": {"start": {"line": 0, "character": 3}, "end": {"line": 0, "character": 12}}
+                    },
+                    "fromRanges": [
+                        {"start": {"line": 3, "character": 4}, "end": {"line": 3, "character": 13}}
+                    ]
+                }
+            ]
+        });
+
+        let mut child = spawn_mock_lsp(vec![symbol_response, prepare_response, outgoing_response]);
+        let stdin = child.stdin.take().unwrap();
+        let stdout = child.stdout.take().unwrap();
+
+        let conn = open_test_db();
+        seed_indexed_file(&conn, "src/call.rs");
+        seed_indexed_file(&conn, "src/target.rs");
+
+        // Pre-seed lsp_symbols for the caller (produced by flatten_symbols)
+        // and callee so the FK constraints on lsp_call_edges are satisfied.
+        conn.execute(
+            "INSERT INTO lsp_symbols (id, name, kind, file_path, start_line, start_char, end_line, end_char)
+             VALUES ('lsp:src/call.rs:caller_fn', 'caller_fn', 12, 'src/call.rs', 0, 3, 10, 1)",
+            [],
+        )
+        .unwrap();
+
+        // The callee_id is "lsp:<relative_callee_file>:<callee_name>"
+        // uri_to_relative_path("file:///workspace/src/target.rs", Path::new("/workspace/src/call.rs"))
+        // walks up from /workspace/src/ and strips, yielding "target.rs" (sibling).
+        // But the caller_file's parent is /workspace/src, so target.rs -> "target.rs".
+        // The callee_id = "lsp:target.rs:callee_fn"
+        conn.execute(
+            "INSERT INTO lsp_symbols (id, name, kind, file_path, start_line, start_char, end_line, end_char)
+             VALUES ('lsp:target.rs:callee_fn', 'callee_fn', 12, 'src/target.rs', 0, 3, 5, 1)",
+            [],
+        )
+        .unwrap();
+
+        let mut client = LspJsonRpcClient::new(stdin, stdout);
+        let count = client
+            .collect_and_persist_call_edges(
+                &conn,
+                Path::new("/workspace/src/call.rs"),
+                "src/call.rs",
+            )
+            .unwrap();
+
+        assert_eq!(count, 1, "should have persisted 1 edge");
+
+        // Verify edge was written to the database
+        let edge_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM lsp_call_edges WHERE caller_file = 'src/call.rs'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(edge_count, 1, "edge should be in the database");
+
+        let _ = child.wait();
+    }
+
+    #[test]
+    fn test_collect_call_edges_skips_non_callable_symbols() {
+        // Symbols that are not functions/methods/constructors should be skipped.
+        let symbol_response = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": [
+                {
+                    "name": "MyStruct",
+                    "kind": 23,  // STRUCT — not callable
+                    "range": {"start": {"line": 0, "character": 0}, "end": {"line": 5, "character": 1}},
+                    "selectionRange": {"start": {"line": 0, "character": 11}, "end": {"line": 0, "character": 19}}
+                }
+            ]
+        });
+
+        let mut child = spawn_mock_lsp(vec![symbol_response]);
+        let stdin = child.stdin.take().unwrap();
+        let stdout = child.stdout.take().unwrap();
+
+        let mut client = LspJsonRpcClient::new(stdin, stdout);
+        let edges = client
+            .collect_call_edges(Path::new("/workspace/src/types.rs"), "src/types.rs")
+            .unwrap();
+
+        assert!(
+            edges.is_empty(),
+            "struct symbols should produce no call edges"
+        );
+
+        let _ = child.wait();
+    }
+
+    #[test]
+    fn test_parse_document_symbols_unexpected_result_type() {
+        // Non-null, non-array result should return Err.
+        let response = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": "unexpected_string"
+        });
+        let result = parse_document_symbols(&response);
+        assert!(result.is_err(), "expected Err for unexpected result type");
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("unexpected"),
+            "error should mention unexpected type, got: {}",
+            msg
+        );
+    }
+
+    #[test]
+    fn test_parse_document_symbols_no_result_field() {
+        // Response with no "result" and no "error" returns empty Vec.
+        let response = json!({
+            "jsonrpc": "2.0",
+            "id": 1
+        });
+        let symbols = parse_document_symbols(&response).unwrap();
+        assert!(symbols.is_empty());
+    }
+
+    #[test]
+    fn test_count_symbols_recursive_empty() {
+        // Empty input should return 0.
+        assert_eq!(count_symbols_recursive(&[]), 0);
+    }
+
+    #[test]
+    fn test_uri_to_relative_path_no_file_prefix() {
+        // URI without file:// prefix should be returned as-is.
+        let ref_path = Path::new("/workspace/src/main.rs");
+        let rel = uri_to_relative_path("/some/path/file.rs", ref_path);
+        assert_eq!(rel, "some/path/file.rs");
+    }
+
+    #[test]
+    fn test_read_jsonrpc_response_bad_content_length_value() {
+        // Content-Length with a non-numeric value should return an error.
+        let message = b"Content-Length: not_a_number\r\n\r\n";
+        let mut reader = std::io::BufReader::new(&message[..]);
+        let result = read_jsonrpc_response(&mut reader);
+        assert!(result.is_err(), "expected error for bad Content-Length");
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("Content-Length"),
+            "error should mention Content-Length, got: {}",
+            msg
+        );
+    }
+
+    #[test]
+    fn test_lsp_collection_result_debug_impl() {
+        // Exercise the Debug derive on LspCollectionResult.
+        let result = LspCollectionResult {
+            file_path: "src/test.rs".to_string(),
+            symbol_count: 3,
+            error: None,
+        };
+        let debug_str = format!("{:?}", result);
+        assert!(debug_str.contains("src/test.rs"));
+        assert!(debug_str.contains("3"));
+    }
+
+    #[test]
+    fn test_collect_file_symbols_send_request_error_returns_result_with_error() {
+        // When the LSP process exits before responding, send_request fails.
+        // collect_file_symbols should wrap this in LspCollectionResult.error.
+        let mut child = std::process::Command::new("python3")
+            .arg("-c")
+            .arg("import sys; sys.exit(0)")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("failed to spawn");
+
+        let stdin = child.stdin.take().unwrap();
+        let stdout = child.stdout.take().unwrap();
+
+        // Give the process time to exit
+        std::thread::sleep(Duration::from_millis(100));
+
+        let mut client = LspJsonRpcClient::new(stdin, stdout);
+        let result = client.collect_file_symbols(Path::new("/workspace/src/crash.rs"));
+        assert!(result.is_ok(), "should return Ok with error field");
+        let info = result.unwrap();
+        assert_eq!(info.symbol_count, 0);
+        assert!(info.error.is_some(), "error field should be set on failure");
+
         let _ = child.wait();
     }
 }

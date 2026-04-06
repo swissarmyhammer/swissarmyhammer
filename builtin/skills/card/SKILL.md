@@ -6,9 +6,7 @@ metadata:
   version: "{{version}}"
 ---
 
-{% include "_partials/detected-projects" %}
 {% include "_partials/coding-standards" %}
-{% include "_partials/test-driven-development" %}
 {% include "_partials/card-standards" %}
 
 # Card

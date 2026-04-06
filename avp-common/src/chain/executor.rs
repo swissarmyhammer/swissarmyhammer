@@ -264,4 +264,109 @@ mod tests {
         assert!(!output.continue_execution);
         assert_eq!(exit_code, VALIDATOR_BLOCK_EXIT_CODE);
     }
+
+    #[test]
+    fn test_chain_default() {
+        let chain: Chain<PreToolUseInput> = Chain::default();
+        assert!(chain.is_empty());
+        assert_eq!(chain.len(), 0);
+    }
+
+    #[test]
+    fn test_chain_builder_default() {
+        let builder: ChainBuilder<PreToolUseInput> = ChainBuilder::default();
+        let chain = builder.build();
+        assert!(chain.is_empty());
+    }
+
+    #[test]
+    fn test_chain_builder_no_starter_defaults_to_success() {
+        let chain: Chain<PreToolUseInput> = ChainBuilder::new().build();
+        assert!(chain.is_empty());
+    }
+
+    #[test]
+    fn test_chain_len_and_names() {
+        let chain: Chain<PreToolUseInput> = Chain::success()
+            .add_link(PassThroughLink::new())
+            .add_link(PassThroughLink::new());
+        assert_eq!(chain.len(), 2);
+        assert!(!chain.is_empty());
+        assert_eq!(chain.link_names(), vec!["PassThrough", "PassThrough"]);
+    }
+
+    #[test]
+    fn test_chain_builder_with_multiple_links() {
+        let chain: Chain<PreToolUseInput> = ChainBuilder::new()
+            .with_starter(SuccessStarter::new())
+            .add_link(PassThroughLink::new())
+            .add_link(PassThroughLink::new())
+            .add_link(PassThroughLink::new())
+            .build();
+
+        assert_eq!(chain.len(), 3);
+    }
+
+    struct ErrorLink;
+
+    #[async_trait(?Send)]
+    impl ChainLink<PreToolUseInput> for ErrorLink {
+        async fn process(&self, _input: &PreToolUseInput, _ctx: &mut ChainContext) -> ChainResult {
+            ChainResult::error("ErrorLink", "Something went wrong")
+        }
+
+        fn name(&self) -> &'static str {
+            "ErrorLink"
+        }
+    }
+
+    #[tokio::test]
+    async fn test_chain_error_propagation() {
+        let mut chain: Chain<PreToolUseInput> = Chain::success().add_link(ErrorLink);
+        let input = make_input();
+
+        let result = chain.execute(&input).await;
+        assert!(result.is_err(), "Chain should propagate errors");
+    }
+
+    struct OutputLink {
+        message: &'static str,
+    }
+
+    #[async_trait(?Send)]
+    impl ChainLink<PreToolUseInput> for OutputLink {
+        async fn process(&self, _input: &PreToolUseInput, _ctx: &mut ChainContext) -> ChainResult {
+            ChainResult::continue_with(LinkOutput::empty().with_message(self.message))
+        }
+
+        fn name(&self) -> &'static str {
+            "OutputLink"
+        }
+    }
+
+    #[tokio::test]
+    async fn test_chain_aggregates_system_messages() {
+        let mut chain: Chain<PreToolUseInput> = Chain::success()
+            .add_link(OutputLink { message: "msg1" })
+            .add_link(OutputLink { message: "msg2" });
+        let input = make_input();
+
+        let (output, exit_code) = chain.execute(&input).await.unwrap();
+        assert!(output.continue_execution);
+        assert_eq!(exit_code, 0);
+        let sys_msg = output.system_message.unwrap();
+        assert!(sys_msg.contains("msg1"));
+        assert!(sys_msg.contains("msg2"));
+    }
+
+    #[tokio::test]
+    async fn test_chain_with_blocking_starter_skips_links() {
+        let mut chain: Chain<PreToolUseInput> =
+            Chain::new(BlockingErrorStarter::new("Blocked early")).add_link(PassThroughLink::new());
+        let input = make_input();
+
+        let (output, _exit_code) = chain.execute(&input).await.unwrap();
+        assert!(!output.continue_execution);
+        assert_eq!(output.stop_reason, Some("Blocked early".to_string()));
+    }
 }

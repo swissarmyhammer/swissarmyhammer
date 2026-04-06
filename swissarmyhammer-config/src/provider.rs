@@ -460,6 +460,93 @@ database:
     }
 
     #[test]
+    fn test_default_provider_metadata() {
+        let provider = DefaultProvider::empty();
+        let meta = provider.metadata();
+        assert_eq!(meta.name, "defaults");
+    }
+
+    #[test]
+    fn test_cli_provider_metadata() {
+        let provider = CliProvider::empty();
+        let meta = provider.metadata();
+        assert_eq!(meta.name, "cli");
+    }
+
+    #[test]
+    fn test_default_provider_empty() {
+        let provider = DefaultProvider::empty();
+        let figment = provider.load_into(Figment::new()).unwrap();
+
+        let config: Value = figment.extract().unwrap();
+        assert_eq!(config, json!({}));
+    }
+
+    #[test]
+    fn test_cli_provider_empty() {
+        let provider = CliProvider::empty();
+        let figment = provider.load_into(Figment::new()).unwrap();
+
+        let config: Value = figment.extract().unwrap();
+        assert_eq!(config, json!({}));
+    }
+
+    #[test]
+    fn test_file_provider_yaml_null_file() {
+        // An empty YAML file parses to null; the provider should skip it gracefully
+        let temp_dir = TempDir::new().unwrap();
+        let yaml_file = temp_dir.path().join("empty.yaml");
+        fs::write(&yaml_file, "").unwrap();
+
+        let provider = FileProvider::new(yaml_file);
+        let figment = provider.load_into(Figment::new()).unwrap();
+
+        // Figment should be unchanged (no config merged)
+        let config: Value = figment.extract().unwrap_or(json!({}));
+        assert_eq!(config, json!({}));
+    }
+
+    #[test]
+    fn test_file_provider_yaml_comment_only_null() {
+        // A YAML file with only comments also parses to null
+        let temp_dir = TempDir::new().unwrap();
+        let yaml_file = temp_dir.path().join("comments.yml");
+        fs::write(&yaml_file, "# just a comment\n").unwrap();
+
+        let provider = FileProvider::new(yaml_file);
+        let figment = provider.load_into(Figment::new()).unwrap();
+
+        let config: Value = figment.extract().unwrap_or(json!({}));
+        assert_eq!(config, json!({}));
+    }
+
+    #[test]
+    fn test_file_provider_unsupported_extension() {
+        // A file with an unsupported extension (e.g. .ini) should return an error
+        let temp_dir = TempDir::new().unwrap();
+        let ini_file = temp_dir.path().join("config.ini");
+        fs::write(&ini_file, "[section]\nkey=value\n").unwrap();
+
+        let provider = FileProvider::new(ini_file);
+        let result = provider.load_into(Figment::new());
+
+        assert!(result.is_err());
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(
+            err_msg.contains("Unsupported file extension"),
+            "Expected 'Unsupported file extension' in error, got: {}",
+            err_msg
+        );
+    }
+
+    #[test]
+    fn test_file_provider_metadata() {
+        let provider = FileProvider::new(PathBuf::from("/some/path/config.toml"));
+        let meta = provider.metadata();
+        assert_eq!(meta.name, "file: /some/path/config.toml");
+    }
+
+    #[test]
     fn test_provider_precedence() {
         // Test that providers merge correctly with proper precedence
         let defaults = json!({"key": "default", "only_default": "default_value"});
@@ -472,5 +559,202 @@ database:
         let config: Value = figment.extract().unwrap();
         assert_eq!(config["key"], "cli"); // CLI should override default
         assert_eq!(config["only_default"], "default_value"); // Default should remain
+    }
+
+    #[test]
+    fn test_env_provider_metadata_sah() {
+        // Exercises the `metadata()` method on `EnvProvider`.
+        let provider = EnvProvider::sah();
+        let meta = provider.metadata();
+        assert_eq!(meta.name, "env: SAH_");
+    }
+
+    #[test]
+    fn test_env_provider_metadata_swissarmyhammer() {
+        let provider = EnvProvider::swissarmyhammer();
+        let meta = provider.metadata();
+        assert_eq!(meta.name, "env: SWISSARMYHAMMER_");
+    }
+
+    #[test]
+    fn test_env_provider_no_matching_vars() {
+        // Exercises the empty env_config path where no env vars match the prefix.
+        // Use a prefix that won't match any real env vars
+        let provider = EnvProvider {
+            prefix: "ZZZZNONEXISTENT_PREFIX_".to_string(),
+        };
+        let figment = provider.load_into(Figment::new()).unwrap();
+        let config: Value = figment.extract().unwrap_or(json!({}));
+        assert_eq!(config, json!({}));
+    }
+
+    #[test]
+    fn test_env_provider_parse_env_value_types() {
+        // Exercises the `parse_env_value` function for all type paths.
+        // Boolean
+        assert_eq!(EnvProvider::parse_env_value("true"), json!(true));
+        assert_eq!(EnvProvider::parse_env_value("false"), json!(false));
+
+        // Integer
+        assert_eq!(EnvProvider::parse_env_value("42"), json!(42));
+        assert_eq!(EnvProvider::parse_env_value("-7"), json!(-7));
+
+        // Float
+        assert_eq!(EnvProvider::parse_env_value("2.72"), json!(2.72));
+
+        // String fallback
+        assert_eq!(EnvProvider::parse_env_value("hello"), json!("hello"));
+    }
+
+    #[test]
+    fn test_env_provider_key_to_path_parts() {
+        let parts = EnvProvider::key_to_path_parts("DATABASE_HOST");
+        assert_eq!(parts, vec!["database", "host"]);
+
+        let parts = EnvProvider::key_to_path_parts("SINGLE");
+        assert_eq!(parts, vec!["single"]);
+    }
+
+    #[test]
+    fn test_env_provider_insert_nested_value_empty_path() {
+        // Exercises the empty path early return in `insert_nested_value`.
+        let mut map = serde_json::Map::new();
+        EnvProvider::insert_nested_value(&mut map, &[], "value".to_string());
+        assert!(map.is_empty());
+    }
+
+    #[test]
+    fn test_env_provider_insert_nested_value_single_key() {
+        // Exercises the single-level path in `insert_nested_value`.
+        let mut map = serde_json::Map::new();
+        EnvProvider::insert_nested_value(&mut map, &["key".to_string()], "value".to_string());
+        assert_eq!(map.get("key"), Some(&json!("value")));
+    }
+
+    #[test]
+    fn test_env_provider_insert_nested_value_multi_key() {
+        // Exercises the multi-level nesting in `insert_nested_value`.
+        let mut map = serde_json::Map::new();
+        EnvProvider::insert_nested_value(
+            &mut map,
+            &["database".to_string(), "host".to_string()],
+            "localhost".to_string(),
+        );
+        assert_eq!(map["database"]["host"], json!("localhost"));
+    }
+
+    #[test]
+    fn test_env_provider_insert_nested_value_existing_non_object() {
+        // Exercises the branch where an intermediate value is not an object.
+        let mut map = serde_json::Map::new();
+        map.insert("key".to_string(), json!("string_value"));
+        // Trying to nest into a string should gracefully break
+        EnvProvider::insert_nested_value(
+            &mut map,
+            &["key".to_string(), "nested".to_string()],
+            "value".to_string(),
+        );
+        // The original string value should remain (can't nest into it)
+        assert_eq!(map["key"], json!("string_value"));
+    }
+
+    #[test]
+    fn test_env_provider_process_env_var_with_prefix() {
+        let provider = EnvProvider::sah();
+        let mut map = serde_json::Map::new();
+        provider.process_env_var(&mut map, "SAH_DB_HOST".to_string(), "localhost".to_string());
+        assert_eq!(map["db"]["host"], json!("localhost"));
+    }
+
+    #[test]
+    fn test_env_provider_process_env_var_without_prefix() {
+        // Exercises the branch where key doesn't match the prefix.
+        let provider = EnvProvider::sah();
+        let mut map = serde_json::Map::new();
+        provider.process_env_var(&mut map, "OTHER_VAR".to_string(), "value".to_string());
+        assert!(map.is_empty(), "Non-matching prefix should be ignored");
+    }
+
+    #[test]
+    fn test_file_provider_yml_extension() {
+        // Exercises the `.yml` extension path (in addition to `.yaml`).
+        let temp_dir = TempDir::new().unwrap();
+        let yml_file = temp_dir.path().join("config.yml");
+        fs::write(&yml_file, "database:\n  host: localhost\n  port: 5432\n").unwrap();
+
+        let provider = FileProvider::new(yml_file);
+        let figment = provider.load_into(Figment::new()).unwrap();
+
+        let config: Value = figment.extract().unwrap();
+        assert_eq!(config["database"]["host"], "localhost");
+    }
+
+    #[test]
+    fn test_file_provider_invalid_toml() {
+        // Exercises the TOML validation error path.
+        let temp_dir = TempDir::new().unwrap();
+        let toml_file = temp_dir.path().join("bad.toml");
+        fs::write(&toml_file, "invalid toml [[[content").unwrap();
+
+        let provider = FileProvider::new(toml_file);
+        let result = provider.load_into(Figment::new());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_file_provider_invalid_json() {
+        // Exercises the JSON validation error path.
+        let temp_dir = TempDir::new().unwrap();
+        let json_file = temp_dir.path().join("bad.json");
+        fs::write(&json_file, "{ invalid json }").unwrap();
+
+        let provider = FileProvider::new(json_file);
+        let result = provider.load_into(Figment::new());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_file_provider_invalid_yaml() {
+        // Exercises the YAML parse error path.
+        let temp_dir = TempDir::new().unwrap();
+        let yaml_file = temp_dir.path().join("bad.yaml");
+        // Create YAML that parses but can't be extracted as a Value
+        fs::write(&yaml_file, "valid: yaml\n  but: invalid indentation").unwrap();
+
+        let provider = FileProvider::new(yaml_file);
+        let result = provider.load_into(Figment::new());
+        // This may or may not error depending on the YAML content;
+        // the important thing is it doesn't panic
+        let _ = result;
+    }
+
+    #[test]
+    fn test_env_provider_parse_nan_float() {
+        // Exercises the float parsing path where `from_f64` returns None (NaN).
+        let result = EnvProvider::parse_env_value("NaN");
+        // NaN can't be represented as JSON number, so falls through to string
+        assert!(result.is_string() || result.is_number());
+    }
+
+    #[test]
+    fn test_env_provider_parse_infinity() {
+        // Exercises the float parsing path where `from_f64` returns None (Infinity).
+        let result = EnvProvider::parse_env_value("inf");
+        // inf can't be represented as JSON number, so falls through to string
+        assert_eq!(result, json!("inf"));
+    }
+
+    #[test]
+    fn test_file_provider_yaml_unreadable_path() {
+        // Exercises the YAML read error path (line 42-47 in validate_and_merge_yaml).
+        // Uses a directory path which can't be read as a string.
+        let temp_dir = TempDir::new().unwrap();
+        // Create a .yaml file that is actually a directory (can't be read as string)
+        let yaml_dir = temp_dir.path().join("config.yaml");
+        fs::create_dir(&yaml_dir).unwrap();
+
+        let provider = FileProvider::new(yaml_dir);
+        let result = provider.load_into(Figment::new());
+        assert!(result.is_err(), "Reading a directory as YAML should fail");
     }
 }

@@ -10,6 +10,9 @@ use swissarmyhammer_common::{ErrorSeverity, Severity};
 pub struct BraveSearchClient {
     scoring_config: ScoringConfig,
     http_client: reqwest::Client,
+    /// Base URL override for testing; defaults to "https://search.brave.com"
+    #[cfg(test)]
+    base_url: String,
 }
 
 /// Errors that can occur during Brave search operations
@@ -57,7 +60,16 @@ impl BraveSearchClient {
         Self {
             scoring_config,
             http_client,
+            #[cfg(test)]
+            base_url: "https://search.brave.com".to_string(),
         }
+    }
+
+    /// Creates a client that sends requests to a custom base URL (for testing only)
+    #[cfg(test)]
+    pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
+        self.base_url = base_url.into();
+        self
     }
 
     /// Performs a web search using Brave Search via direct HTTP request
@@ -68,7 +80,11 @@ impl BraveSearchClient {
         tracing::debug!("Starting Brave search for: '{}'", request.query);
 
         let encoded_query = urlencoding::encode(&request.query);
-        let url = format!("https://search.brave.com/search?q={encoded_query}&source=web");
+        #[cfg(test)]
+        let base = &self.base_url;
+        #[cfg(not(test))]
+        let base = "https://search.brave.com";
+        let url = format!("{base}/search?q={encoded_query}&source=web");
 
         let response = self
             .http_client
@@ -338,5 +354,333 @@ mod tests {
             BraveSearchError::NoResults.severity(),
             ErrorSeverity::Warning
         );
+    }
+
+    #[test]
+    fn test_title_fallback_from_anchor_text() {
+        // When there is no .title span, the code should fall back to <a> text
+        let client = BraveSearchClient::new();
+        let html = r#"
+        <html><body>
+            <div data-pos="1">
+                <a href="https://example.com/page">Example Page Title</a>
+            </div>
+        </body></html>
+        "#;
+        let results = client.parse_html_results(html, 10).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].title, "Example Page Title");
+        assert_eq!(results[0].url, "https://example.com/page");
+    }
+
+    #[test]
+    fn test_description_fallback_to_paragraph() {
+        // When no .snippet-description exists, fall back to <p> with >20 chars
+        let client = BraveSearchClient::new();
+        let html = r#"
+        <html><body>
+            <div data-pos="1">
+                <a href="https://example.com">
+                    <span class="title">Example</span>
+                </a>
+                <p>Too short</p>
+                <p>This is a longer paragraph that should be used as the description fallback.</p>
+            </div>
+        </body></html>
+        "#;
+        let results = client.parse_html_results(html, 10).unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(results[0].description.contains("longer paragraph"));
+        // The short <p> should be skipped (<=20 chars)
+        assert!(!results[0].description.contains("Too short"));
+    }
+
+    #[test]
+    fn test_exponential_decay_scoring() {
+        let config = ScoringConfig {
+            base_score: 1.0,
+            position_penalty: 0.05,
+            min_score: 0.01,
+            exponential_decay: true,
+            decay_rate: 0.5,
+        };
+        let client = BraveSearchClient::with_scoring_config(config);
+
+        // Index 0: base_score * exp(-0.5 * 0) = 1.0 * 1.0 = 1.0
+        let score0 = client.calculate_result_score(0);
+        assert!((score0 - 1.0).abs() < 1e-10);
+
+        // Index 1: 1.0 * exp(-0.5 * 1) = exp(-0.5) ≈ 0.6065
+        let score1 = client.calculate_result_score(1);
+        let expected = (-0.5_f64).exp();
+        assert!(
+            (score1 - expected).abs() < 1e-10,
+            "expected {expected}, got {score1}"
+        );
+
+        // Index 2: 1.0 * exp(-0.5 * 2) = exp(-1.0) ≈ 0.3679
+        let score2 = client.calculate_result_score(2);
+        let expected2 = (-1.0_f64).exp();
+        assert!(
+            (score2 - expected2).abs() < 1e-10,
+            "expected {expected2}, got {score2}"
+        );
+
+        // Scores should decrease monotonically
+        assert!(score0 > score1);
+        assert!(score1 > score2);
+    }
+
+    #[test]
+    fn test_default_impl() {
+        let client = BraveSearchClient::default();
+        // Default should use the same config as new()
+        assert_eq!(client.scoring_config.base_score, 1.0);
+        assert!(!client.scoring_config.exponential_decay);
+        assert_eq!(client.scoring_config.position_penalty, 0.05);
+    }
+
+    #[test]
+    fn test_max_results_limiting() {
+        let client = BraveSearchClient::new();
+        let html = r#"
+        <html><body>
+            <div data-pos="1">
+                <a href="https://first.com"><span class="title">First Result</span></a>
+            </div>
+            <div data-pos="2">
+                <a href="https://second.com"><span class="title">Second Result</span></a>
+            </div>
+            <div data-pos="3">
+                <a href="https://third.com"><span class="title">Third Result</span></a>
+            </div>
+        </body></html>
+        "#;
+        let results = client.parse_html_results(html, 1).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].title, "First Result");
+    }
+
+    #[test]
+    fn test_parse_result_elements_without_valid_links_are_skipped() {
+        // data-pos elements that have no <a href> starting with http should be skipped (line 174)
+        let client = BraveSearchClient::new();
+        let html = r#"
+        <html><body>
+            <div data-pos="1">
+                <span>No link here at all</span>
+            </div>
+            <div data-pos="2">
+                <a href="/relative/path"><span class="title">Relative URL</span></a>
+            </div>
+            <div data-pos="3">
+                <a href="https://valid.com"><span class="title">Valid Result</span></a>
+            </div>
+        </body></html>
+        "#;
+        // First two elements are skipped; only the third is valid
+        let results = client.parse_html_results(html, 10).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].url, "https://valid.com");
+    }
+
+    #[test]
+    fn test_parse_element_with_no_title_and_no_link_is_skipped() {
+        // data-pos element with an <a> that has no text and no http href is skipped
+        let client = BraveSearchClient::new();
+        let html = r#"
+        <html><body>
+            <div data-pos="1">
+                <a href="ftp://unsupported.com">FTP link</a>
+            </div>
+            <div data-pos="2">
+                <a href="https://ok.com">OK Title</a>
+            </div>
+        </body></html>
+        "#;
+        let results = client.parse_html_results(html, 10).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].title, "OK Title");
+    }
+
+    #[tokio::test]
+    async fn test_search_http_non_success_status() {
+        // When the Brave API returns a non-2xx status, search() should return an Http error
+        use wiremock::matchers::{method, path_regex};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let mock_server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path_regex("/search.*"))
+            .respond_with(ResponseTemplate::new(429))
+            .mount(&mock_server)
+            .await;
+
+        let client = BraveSearchClient::new().with_base_url(mock_server.uri());
+        let request = WebSearchRequest {
+            query: "test query".to_string(),
+            category: None,
+            language: None,
+            results_count: Some(5),
+            fetch_content: None,
+            safe_search: None,
+            time_range: None,
+        };
+
+        let result = client.search(&request).await;
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            BraveSearchError::Http(msg) => {
+                assert!(msg.contains("429"), "Expected 429 in error, got: {msg}");
+            }
+            other => panic!("Expected Http error, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_search_http_server_error() {
+        // When the Brave API returns a 503 status, search() should return an Http error
+        use wiremock::matchers::{method, path_regex};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let mock_server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path_regex("/search.*"))
+            .respond_with(ResponseTemplate::new(503))
+            .mount(&mock_server)
+            .await;
+
+        let client = BraveSearchClient::new().with_base_url(mock_server.uri());
+        let request = WebSearchRequest {
+            query: "rust programming".to_string(),
+            category: None,
+            language: None,
+            results_count: None,
+            fetch_content: None,
+            safe_search: None,
+            time_range: None,
+        };
+
+        let result = client.search(&request).await;
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            BraveSearchError::Http(msg) => {
+                assert!(
+                    msg.contains("503"),
+                    "Expected status 503 in error message, got: {msg}"
+                );
+            }
+            other => panic!("Expected Http error, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_search_successful_parse_with_results() {
+        // Test the happy path: a successful HTTP response with valid HTML is parsed correctly
+        use wiremock::matchers::{method, path_regex};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let html = r#"
+        <html><body>
+            <div data-pos="1">
+                <a href="https://example.com"><span class="title">Example Result</span></a>
+                <p class="snippet-description">A description of the example result.</p>
+            </div>
+        </body></html>
+        "#;
+
+        let mock_server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path_regex("/search.*"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(html))
+            .mount(&mock_server)
+            .await;
+
+        let client = BraveSearchClient::new().with_base_url(mock_server.uri());
+        let request = WebSearchRequest {
+            query: "example".to_string(),
+            category: None,
+            language: None,
+            results_count: Some(10),
+            fetch_content: None,
+            safe_search: None,
+            time_range: None,
+        };
+
+        let result = client.search(&request).await;
+        assert!(result.is_ok(), "Expected Ok, got: {result:?}");
+        let results = result.unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].title, "Example Result");
+        assert_eq!(results[0].url, "https://example.com");
+    }
+
+    #[tokio::test]
+    async fn test_search_returns_no_results_error_on_empty_html() {
+        // When the server returns HTML with no parseable results, NoResults is returned
+        use wiremock::matchers::{method, path_regex};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let html = "<html><body><p>No search results found.</p></body></html>";
+
+        let mock_server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path_regex("/search.*"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(html))
+            .mount(&mock_server)
+            .await;
+
+        let client = BraveSearchClient::new().with_base_url(mock_server.uri());
+        let request = WebSearchRequest {
+            query: "obscure query with no results".to_string(),
+            category: None,
+            language: None,
+            results_count: Some(10),
+            fetch_content: None,
+            safe_search: None,
+            time_range: None,
+        };
+
+        let result = client.search(&request).await;
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), BraveSearchError::NoResults));
+    }
+
+    #[tokio::test]
+    async fn test_search_uses_results_count_from_request() {
+        // When results_count is None, it defaults to 10; test default is respected
+        use wiremock::matchers::{method, path_regex};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        // Build HTML with 15 results
+        let items: String = (1..=15)
+            .map(|i| {
+                format!(
+                    r#"<div data-pos="{i}"><a href="https://result{i}.com"><span class="title">Result {i}</span></a></div>"#
+                )
+            })
+            .collect();
+        let html = format!("<html><body>{items}</body></html>");
+
+        let mock_server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path_regex("/search.*"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(html))
+            .mount(&mock_server)
+            .await;
+
+        let client = BraveSearchClient::new().with_base_url(mock_server.uri());
+        let request = WebSearchRequest {
+            query: "test".to_string(),
+            category: None,
+            language: None,
+            results_count: None, // defaults to 10
+            fetch_content: None,
+            safe_search: None,
+            time_range: None,
+        };
+
+        let result = client.search(&request).await.unwrap();
+        assert_eq!(result.len(), 10, "Expected 10 results (the default)");
     }
 }

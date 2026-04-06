@@ -435,7 +435,7 @@ pub async fn search_entities(
 
 /// Get the board data with all entities as raw entity bags.
 ///
-/// Columns, swimlanes, and tags are returned as `Entity::to_json()` with
+/// Columns and tags are returned as `Entity::to_json()` with
 /// computed count fields injected. Tasks are NOT included (use `list_entities`
 /// for that). A summary object provides aggregate counts.
 #[tauri::command]
@@ -462,13 +462,6 @@ pub async fn get_board_data(
         .await
         .map_err(|e| format!("get_board_data: {}", e))?;
     columns.sort_by_key(|c| c.get("order").and_then(|v| v.as_u64()).unwrap_or(0) as usize);
-
-    // Read and sort swimlanes by order
-    let mut swimlanes = ectx
-        .list("swimlane")
-        .await
-        .map_err(|e| format!("get_board_data: {}", e))?;
-    swimlanes.sort_by_key(|s| s.get("order").and_then(|v| v.as_u64()).unwrap_or(0) as usize);
 
     // Read tags
     let tags = ectx
@@ -497,16 +490,6 @@ pub async fn get_board_data(
         }
     }
 
-    // Count tasks per swimlane
-    let mut swimlane_counts: HashMap<String, usize> = HashMap::new();
-    for task in &all_tasks {
-        if let Some(sl) = task.get_str("position_swimlane") {
-            if !sl.is_empty() {
-                *swimlane_counts.entry(sl.to_string()).or_insert(0) += 1;
-            }
-        }
-    }
-
     // Serialize columns with injected task_count and ready_count
     let columns_json: Vec<Value> = columns
         .iter()
@@ -519,17 +502,6 @@ pub async fn get_board_data(
                 .unwrap_or(0);
             e.set("task_count", json!(count));
             e.set("ready_count", json!(ready));
-            e.to_json()
-        })
-        .collect();
-
-    // Serialize swimlanes with injected task_count
-    let swimlanes_json: Vec<Value> = swimlanes
-        .iter()
-        .map(|sl| {
-            let mut e = sl.clone();
-            let count = swimlane_counts.get(sl.id.as_str()).copied().unwrap_or(0);
-            e.set("task_count", json!(count));
             e.to_json()
         })
         .collect();
@@ -558,7 +530,6 @@ pub async fn get_board_data(
     Ok(json!({
         "board": board.to_json(),
         "columns": columns_json,
-        "swimlanes": swimlanes_json,
         "tags": tags_json,
         "summary": {
             "total_tasks": total_tasks,
@@ -782,15 +753,10 @@ pub async fn get_undo_state(
         Err(_) => return Ok(json!({ "can_undo": false, "can_redo": false })),
     };
 
-    let ectx = handle
-        .ctx
-        .entity_context()
-        .await
-        .map_err(|e| e.to_string())?;
-    let stack = ectx.undo_stack().await;
+    let sc = &handle.store_context;
     Ok(json!({
-        "can_undo": stack.can_undo(),
-        "can_redo": stack.can_redo(),
+        "can_undo": sc.can_undo().await,
+        "can_redo": sc.can_redo().await,
     }))
 }
 
@@ -1003,13 +969,19 @@ pub(crate) async fn dispatch_command_internal(
 
     // Set KanbanContext extension if board is open.
     // Uses effective_board_path when provided (multi-window) to avoid targeting the wrong board.
-    let active_handle = resolve_handle(state, effective_board_path).await.ok();
+    // Falls back to the `store:` moniker in the scope chain so StoreContainer
+    // can supply the board path without an explicit parameter.
+    let resolved_board_path =
+        effective_board_path.or_else(|| ctx.resolve_store_path().map(|s| s.to_string()));
+    let active_handle = resolve_handle(state, resolved_board_path).await.ok();
     if let Some(ref handle) = active_handle {
         ctx.set_extension(Arc::clone(&handle.ctx));
-        // Set EntityContext extension for entity-layer commands (undo/redo).
+        // Set EntityContext extension for entity-layer commands.
         if let Ok(ectx_arc) = handle.ctx.entity_context().await {
             ctx.set_extension(ectx_arc);
         }
+        // Set StoreContext extension for undo/redo commands.
+        ctx.set_extension(Arc::clone(&handle.store_context));
     }
 
     // Inject ClipboardProvider so commands can read/write the system clipboard.
@@ -1071,8 +1043,14 @@ pub(crate) async fn dispatch_command_internal(
 
     if let Some(board_close) = result.get("BoardClose") {
         if let Some(path_str) = board_close.get("path").and_then(|v| v.as_str()) {
-            // Find which window(s) had this board so we can reset their titles
-            let close_labels: Vec<String> = state
+            let requesting_label = board_close
+                .get("window_label")
+                .and_then(|v| v.as_str())
+                .unwrap_or("main")
+                .to_string();
+
+            // Count how many windows currently show this board
+            let windows_showing: Vec<String> = state
                 .ui_state
                 .all_window_boards()
                 .into_iter()
@@ -1080,14 +1058,36 @@ pub(crate) async fn dispatch_command_internal(
                 .map(|(label, _)| label)
                 .collect();
 
-            let target = std::path::PathBuf::from(path_str);
-            if let Err(e) = state.close_board(&target).await {
-                tracing::error!(cmd = %effective_cmd, path = %path_str, error = %e, "BoardClose: failed to close board");
+            let is_last_viewer = windows_showing.len() <= 1;
+
+            if is_last_viewer {
+                // Last window showing this board — drop handle and remove from open list
+                let target = std::path::PathBuf::from(path_str);
+                if let Err(e) = state.close_board(&target).await {
+                    tracing::error!(cmd = %effective_cmd, path = %path_str, error = %e, "BoardClose: failed to close board");
+                }
+                state.ui_state.remove_open_board(path_str);
+            } else {
+                // Other windows still show this board — just clear this window's assignment
+                state.ui_state.set_window_board(&requesting_label, "");
             }
-            // Reset window titles back to base name
-            for label in &close_labels {
-                update_window_title(app, label, None);
+
+            // Close the requesting window — unless it's the last visible window
+            let visible_windows: Vec<_> = app
+                .webview_windows()
+                .into_iter()
+                .filter(|(label, w)| label != "quick-capture" && w.is_visible().unwrap_or(false))
+                .collect();
+
+            if visible_windows.len() > 1 {
+                if let Some(win) = app.get_webview_window(&requesting_label) {
+                    let _ = win.close();
+                }
+            } else {
+                // Last window — keep open, just reset title
+                update_window_title(app, &requesting_label, None);
             }
+
             let _ = app.emit("board-changed", ());
         }
     }
@@ -1252,15 +1252,13 @@ pub(crate) async fn dispatch_command_internal(
     if needs_flush {
         if let Some(ref handle) = active_handle {
             flush_and_emit_for_handle(app, handle).await;
-            // Sync UIState's cached undo/redo flags from the undo stack so that
+            // Sync UIState's cached undo/redo flags from the StoreContext so that
             // Command::available() (synchronous) returns accurate results for
             // menu-item enabled state.
-            if let Ok(ectx) = handle.ctx.entity_context().await {
-                let stack = ectx.undo_stack().await;
-                state
-                    .ui_state
-                    .set_undo_redo_state(stack.can_undo(), stack.can_redo());
-            }
+            state.ui_state.set_undo_redo_state(
+                handle.store_context.can_undo().await,
+                handle.store_context.can_redo().await,
+            );
             // Refresh window titles from the board entity display name.
             // Catches board name edits, undo/redo of name changes, etc.
             let display_name = board_display_name(handle).await;
@@ -1410,55 +1408,135 @@ pub async fn list_commands_for_scope(
 // ---------------------------------------------------------------------------
 
 /// Flush entity changes for a board handle and emit events.
+///
+/// **Architecture rule (event-architecture):** Events are thin signals with
+/// two granularities:
+/// - Entity-level: `(entity_type, id)` for created/removed
+/// - Field-level: `(entity_type, id, field, value)` for changes
+///
+/// The watcher produces field-level diffs by comparing file content hashes
+/// and running `diff_fields`. Store events tell us WHICH entities were
+/// written; the watcher tells us WHAT changed.
+///
+/// **DO NOT** add `EntityContext.read()` enrichment here. The watcher's
+/// `diff_fields` produces exactly the field-level diffs the frontend needs.
+/// We never read entities back just to stuff fields into events.
 async fn flush_and_emit_for_handle(app: &AppHandle, handle: &BoardHandle) {
     let kanban_root = handle.ctx.root().to_path_buf();
-    let mut events = crate::watcher::flush_and_emit(&kanban_root, &handle.entity_cache);
-    tracing::info!(event_count = events.len(), path = %kanban_root.display(), "flush_and_emit result");
-    tracing::debug!(event_count = events.len(), path = %kanban_root.display(), "flush_and_emit_for_handle");
-    if let Ok(ectx) = handle.ctx.entity_context().await {
-        for evt in &mut events {
-            match evt {
-                crate::watcher::WatchEvent::EntityCreated {
-                    entity_type,
-                    id,
-                    fields,
-                } => {
-                    if let Ok(entity) = ectx.read(entity_type, id).await {
-                        *fields = entity
-                            .fields
-                            .into_iter()
-                            .map(|(k, v)| (k.to_string(), v))
-                            .collect();
-                    }
-                }
-                crate::watcher::WatchEvent::EntityFieldChanged {
-                    entity_type,
-                    id,
-                    fields,
-                    ..
-                } => {
-                    if let Ok(entity) = ectx.read(entity_type, id).await {
-                        *fields = Some(
-                            entity
-                                .fields
-                                .into_iter()
-                                .map(|(k, v)| (k.to_string(), v))
-                                .collect(),
-                        );
-                    }
-                }
-                crate::watcher::WatchEvent::EntityRemoved { .. } => {}
-                crate::watcher::WatchEvent::AttachmentChanged { .. } => {
-                    // Attachment file changes are forwarded directly to the frontend;
-                    // no entity enrichment needed.
-                }
+
+    // 1. Drain store-level change events. These tell us which entities were
+    //    written by the command that just executed, but they carry only
+    //    (store_name, id, event_kind) — no field data.
+    let store_events = handle.store_context.flush_all().await;
+    tracing::info!(
+        store_event_count = store_events.len(),
+        path = %kanban_root.display(),
+        "store_context.flush_all result"
+    );
+
+    // 2. Flush the watcher cache. The watcher scans entity files on disk,
+    //    compares against its cached hashes, and produces field-level diffs
+    //    via diff_fields. This is the source of truth for WHAT changed.
+    let watcher_events =
+        crate::watcher::flush_and_emit(&kanban_root, &handle.store_roots, &handle.entity_cache);
+    tracing::info!(
+        watcher_event_count = watcher_events.len(),
+        path = %kanban_root.display(),
+        "watcher flush_and_emit result"
+    );
+
+    // 3. Build the event list. The watcher events are primary — they carry
+    //    field-level diffs. Store events supplement with create/remove signals
+    //    that the watcher may not have (e.g. the watcher sees a new file as
+    //    EntityCreated, but the store knows the exact timing).
+    //
+    //    Dedup: collect watcher (entity_type, id) pairs for EntityFieldChanged
+    //    and EntityCreated. If a store event has a matching watcher event, the
+    //    watcher event wins (it has the diffs). Store-only events (no watcher
+    //    match) are emitted as thin signals.
+    let mut seen: std::collections::HashSet<(String, String)> = std::collections::HashSet::new();
+    let mut events: Vec<crate::watcher::WatchEvent> = Vec::new();
+
+    // Watcher events first — they carry the field-level diffs.
+    for evt in watcher_events {
+        match &evt {
+            crate::watcher::WatchEvent::EntityFieldChanged {
+                entity_type, id, ..
             }
+            | crate::watcher::WatchEvent::EntityCreated {
+                entity_type, id, ..
+            } => {
+                seen.insert((entity_type.clone(), id.clone()));
+            }
+            crate::watcher::WatchEvent::EntityRemoved {
+                entity_type, id, ..
+            } => {
+                seen.insert((entity_type.clone(), id.clone()));
+            }
+            crate::watcher::WatchEvent::AttachmentChanged { .. } => {}
+        }
+        events.push(evt);
+    }
+
+    // Store events — only emit if the watcher didn't already cover them.
+    for se in &store_events {
+        let store_name = se
+            .payload()
+            .get("store")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let id = se
+            .payload()
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if store_name.is_empty() || id.is_empty() {
+            tracing::warn!(event_name = %se.event_name(), "dropping store event with empty store_name or id");
+            continue;
         }
 
-        // Cascade: recompute aggregate fields that depend on changed entity types
-        let cascade = cascade_aggregate_events(&ectx, &events).await;
-        events.extend(cascade);
+        let key = (store_name.to_string(), id.to_string());
+        if seen.contains(&key) {
+            // Watcher already produced a diff for this entity — skip the
+            // store event to avoid duplicates.
+            tracing::debug!(
+                entity_type = store_name,
+                id = id,
+                event = se.event_name(),
+                "store event deduped by watcher"
+            );
+            continue;
+        }
+
+        // Store event with no watcher match — emit as a thin signal.
+        match se.event_name() {
+            "item-created" => {
+                events.push(crate::watcher::WatchEvent::EntityCreated {
+                    entity_type: store_name.to_string(),
+                    id: id.to_string(),
+                    fields: std::collections::HashMap::new(),
+                });
+            }
+            "item-changed" => {
+                // The watcher didn't detect a change (hash unchanged =
+                // idempotent write). Nothing actually changed on disk.
+                tracing::debug!(
+                    entity_type = store_name,
+                    id = id,
+                    "store item-changed but watcher saw no diff — skipping"
+                );
+            }
+            "item-removed" => {
+                events.push(crate::watcher::WatchEvent::EntityRemoved {
+                    entity_type: store_name.to_string(),
+                    id: id.to_string(),
+                });
+            }
+            _ => {}
+        }
     }
+
+    // 4. Sync search index and emit to frontend.
     {
         let board_path_str = kanban_root.display().to_string();
         let mut search_idx = handle.search_index.write().await;
@@ -1479,111 +1557,131 @@ async fn flush_and_emit_for_handle(app: &AppHandle, handle: &BoardHandle) {
     }
 }
 
-/// Check if any aggregate computed fields depend on the changed entity types,
-/// and if so, recompute them and produce additional `entity-field-changed` events.
-///
-/// Reads `depends_on` from field definitions — no hardcoded logic per command.
-async fn cascade_aggregate_events(
-    ectx: &swissarmyhammer_entity::EntityContext,
-    primary_events: &[crate::watcher::WatchEvent],
-) -> Vec<crate::watcher::WatchEvent> {
-    use std::collections::HashSet;
-
-    // Collect entity types that changed
-    let changed_types: HashSet<&str> = primary_events
-        .iter()
-        .map(|evt| match evt {
-            crate::watcher::WatchEvent::EntityCreated { entity_type, .. }
-            | crate::watcher::WatchEvent::EntityFieldChanged { entity_type, .. }
-            | crate::watcher::WatchEvent::EntityRemoved { entity_type, .. }
-            | crate::watcher::WatchEvent::AttachmentChanged { entity_type, .. } => {
-                entity_type.as_str()
-            }
-        })
-        .collect();
-
-    if changed_types.is_empty() {
-        return vec![];
-    }
-
-    let fields_ctx = ectx.fields();
-    let mut cascade_events = Vec::new();
-
-    // Find entity types with aggregate fields depending on the changed types
-    let mut dependent_types: HashSet<&str> = HashSet::new();
-    for trigger_type in &changed_types {
-        for dep_type in fields_ctx.entity_types_depending_on(trigger_type) {
-            dependent_types.insert(dep_type);
-        }
-    }
-
-    // Re-read dependent entities to trigger recomputation
-    for entity_type in dependent_types {
-        if let Ok(entities) = ectx.list(entity_type).await {
-            for entity in entities {
-                let all_fields: std::collections::HashMap<String, serde_json::Value> = entity
-                    .fields
-                    .into_iter()
-                    .map(|(k, v)| (k.to_string(), v))
-                    .collect();
-                cascade_events.push(crate::watcher::WatchEvent::EntityFieldChanged {
-                    entity_type: entity_type.to_string(),
-                    id: entity.id.to_string(),
-                    changes: vec![],
-                    fields: Some(all_fields),
-                });
-            }
-        }
-    }
-
-    cascade_events
-}
-
 /// A single item in a generic context menu.
-#[derive(serde::Deserialize)]
+///
+/// Each item is self-contained: it carries the command ID, target, and scope
+/// chain needed for dispatch. The frontend sends all dispatch info upfront;
+/// when the user selects an item, Rust dispatches directly — no round-trip.
+#[derive(serde::Deserialize, serde::Serialize, Clone)]
 pub struct ContextMenuItem {
-    pub id: String,
+    /// Display name shown in the menu.
     pub name: String,
+    /// Command ID to dispatch (e.g. "entity.copy"). Empty for separators.
+    #[serde(default)]
+    pub cmd: String,
+    /// Optional target moniker (e.g. "task:01ABC").
+    #[serde(default)]
+    pub target: Option<String>,
+    /// Scope chain from the right-click point.
+    #[serde(default)]
+    pub scope_chain: Vec<String>,
+    /// Whether this item is a separator.
+    #[serde(default)]
+    pub separator: bool,
 }
 
 /// Show a native context menu with the given items.
 ///
-/// Menu selections are emitted as `context-menu-command` events to the
-/// frontend. The item IDs are stored in AppState so `handle_menu_event`
-/// can distinguish them from regular menu bar commands.
+/// Each item carries its full dispatch info (cmd, target, scope_chain).
+/// When the user selects an item, `handle_menu_event` parses the JSON-encoded
+/// ID and dispatches directly via `dispatch_command_internal` — no round-trip
+/// to the frontend.
 #[tauri::command]
 pub async fn show_context_menu(
     app: AppHandle,
     window: Window,
-    state: State<'_, AppState>,
     items: Vec<ContextMenuItem>,
 ) -> Result<(), String> {
     if items.is_empty() {
         return Ok(());
     }
 
-    // Store IDs so handle_menu_event can route selections correctly.
-    // Separators are not selectable items — exclude them from the id set.
-    {
-        let ids: std::collections::HashSet<String> = items
-            .iter()
-            .filter(|item| item.id != "__separator__")
-            .map(|item| item.id.clone())
-            .collect();
-        state.ui_state.set_context_menu_ids(ids);
-    }
-
+    // Encode each item's dispatch info as JSON into the native menu item ID.
+    // When the user selects an item, handle_menu_event parses the JSON and
+    // dispatches directly — no lookup table needed.
     let mut builder = MenuBuilder::new(&app);
     for item in &items {
-        if item.id == "__separator__" {
+        if item.separator {
             builder = builder.separator();
         } else {
-            builder = builder.text(&item.id, &item.name);
+            let encoded = serde_json::to_string(&item).unwrap_or_default();
+            builder = builder.text(encoded, &item.name);
         }
     }
+
     let menu = builder.build().map_err(|e| e.to_string())?;
     menu.popup(window)
         .map_err(|e: tauri::Error| e.to_string())?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    /// Verifies that store_name and id are correctly extracted from ChangeEvent
+    /// payloads, and that events with missing fields are identified.
+    #[test]
+    fn store_name_extraction_from_change_event() {
+        let event = swissarmyhammer_store::ChangeEvent::new(
+            "item-created",
+            serde_json::json!({
+                "store": "task",
+                "id": "01ABC"
+            }),
+        );
+        let store_name = event
+            .payload()
+            .get("store")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let id = event
+            .payload()
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        assert_eq!(store_name, "task");
+        assert_eq!(id, "01ABC");
+    }
+
+    /// Events missing store or id should be detected so they can be dropped.
+    #[test]
+    fn store_name_extraction_missing_fields() {
+        let event = swissarmyhammer_store::ChangeEvent::new("item-changed", serde_json::json!({}));
+        let store_name = event
+            .payload()
+            .get("store")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let id = event
+            .payload()
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        assert!(store_name.is_empty());
+        assert!(id.is_empty());
+    }
+
+    /// Events with null values for store/id should also be treated as empty.
+    #[test]
+    fn store_name_extraction_null_values() {
+        let event = swissarmyhammer_store::ChangeEvent::new(
+            "item-changed",
+            serde_json::json!({
+                "store": null,
+                "id": null
+            }),
+        );
+        let store_name = event
+            .payload()
+            .get("store")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let id = event
+            .payload()
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        assert!(store_name.is_empty());
+        assert!(id.is_empty());
+    }
 }

@@ -279,3 +279,140 @@ pub fn verify_commands_update_fixture(
 
     Ok(stats)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use agent_client_protocol::{
+        AuthenticateRequest, AuthenticateResponse, CancelNotification, ExtNotification, ExtRequest,
+        ExtResponse, InitializeResponse, LoadSessionRequest, LoadSessionResponse,
+        NewSessionResponse, SetSessionModeRequest, SetSessionModeResponse, StopReason,
+    };
+
+    /// Mock agent for tool call tests
+    struct ToolCallMockAgent;
+
+    #[async_trait::async_trait(?Send)]
+    impl Agent for ToolCallMockAgent {
+        async fn initialize(
+            &self,
+            _request: InitializeRequest,
+        ) -> agent_client_protocol::Result<InitializeResponse> {
+            Ok(InitializeResponse::new(ProtocolVersion::V1))
+        }
+
+        async fn authenticate(
+            &self,
+            _request: AuthenticateRequest,
+        ) -> agent_client_protocol::Result<AuthenticateResponse> {
+            Ok(AuthenticateResponse::new())
+        }
+
+        async fn new_session(
+            &self,
+            _request: NewSessionRequest,
+        ) -> agent_client_protocol::Result<NewSessionResponse> {
+            Ok(NewSessionResponse::new("tool-call-test-session"))
+        }
+
+        async fn prompt(
+            &self,
+            _request: PromptRequest,
+        ) -> agent_client_protocol::Result<agent_client_protocol::PromptResponse> {
+            Ok(agent_client_protocol::PromptResponse::new(
+                StopReason::EndTurn,
+            ))
+        }
+
+        async fn cancel(&self, _request: CancelNotification) -> agent_client_protocol::Result<()> {
+            Ok(())
+        }
+
+        async fn load_session(
+            &self,
+            _request: LoadSessionRequest,
+        ) -> agent_client_protocol::Result<LoadSessionResponse> {
+            Ok(LoadSessionResponse::new())
+        }
+
+        async fn set_session_mode(
+            &self,
+            _request: SetSessionModeRequest,
+        ) -> agent_client_protocol::Result<SetSessionModeResponse> {
+            Ok(SetSessionModeResponse::new())
+        }
+
+        async fn ext_method(
+            &self,
+            _request: ExtRequest,
+        ) -> agent_client_protocol::Result<ExtResponse> {
+            Err(agent_client_protocol::Error::method_not_found())
+        }
+
+        async fn ext_notification(
+            &self,
+            _notification: ExtNotification,
+        ) -> agent_client_protocol::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn test_tool_call_stats_default() {
+        let stats = ToolCallStats::default();
+        assert_eq!(stats.tool_calls, 0);
+        assert_eq!(stats.tool_call_updates, 0);
+        assert_eq!(stats.tool_call_completed, 0);
+        assert_eq!(stats.agent_message_chunks, 0);
+        assert_eq!(stats.mcp_progress, 0);
+        assert_eq!(stats.mcp_log, 0);
+        assert_eq!(stats.available_commands_updates, 0);
+        assert_eq!(stats.user_message_chunks, 0);
+    }
+
+    #[test]
+    fn test_tool_call_stats_debug_and_serialize() {
+        let stats = ToolCallStats {
+            tool_calls: 3,
+            tool_call_updates: 6,
+            tool_call_completed: 3,
+            agent_message_chunks: 10,
+            mcp_progress: 4,
+            mcp_log: 2,
+            available_commands_updates: 1,
+            user_message_chunks: 0,
+        };
+        let debug = format!("{:?}", stats);
+        assert!(debug.contains("ToolCallStats"));
+
+        let json = serde_json::to_value(&stats).unwrap();
+        assert_eq!(json["tool_calls"], 3);
+        assert_eq!(json["mcp_progress"], 4);
+    }
+
+    #[tokio::test]
+    async fn test_tool_call_notifications_mock() {
+        let agent = ToolCallMockAgent;
+        let result = test_tool_call_notifications(&agent).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_commands_update_notification_mock() {
+        let agent = ToolCallMockAgent;
+        let result = test_commands_update_notification(&agent).await;
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_verify_tool_call_fixture_not_found() {
+        let result = verify_tool_call_fixture("nonexistent-agent", "nonexistent-test");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_verify_commands_update_fixture_not_found() {
+        let result = verify_commands_update_fixture("nonexistent-agent", "nonexistent-test");
+        assert!(result.is_err());
+    }
+}

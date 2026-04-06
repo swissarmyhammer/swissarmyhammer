@@ -12,10 +12,9 @@
 
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import CodeMirror, { type ReactCodeMirrorRef } from "@uiw/react-codemirror";
-import { keymap } from "@codemirror/view";
-import { Prec } from "@codemirror/state";
 import { invoke } from "@tauri-apps/api/core";
 import { shadcnTheme, keymapExtension } from "@/lib/cm-keymap";
+import { buildSubmitCancelExtensions } from "@/lib/cm-submit-cancel";
 import { useUIState } from "@/lib/ui-state-context";
 import { useSchema } from "@/lib/schema-context";
 import { useEntityStore } from "@/lib/entity-store-context";
@@ -177,6 +176,14 @@ export function MultiSelectEditor({
   const cancelRef = useRef(onCancel);
   cancelRef.current = onCancel;
 
+  // Refs wired into buildSubmitCancelExtensions for Enter/Escape handling.
+  const submitRef = useRef<(() => void) | null>(null);
+  submitRef.current = () => commitRef.current();
+
+  const escapeRef = useRef<(() => void) | null>(null);
+  escapeRef.current =
+    mode === "vim" ? () => commitRef.current() : () => cancelRef.current();
+
   // Build async search for autocomplete
   const searchFn = useMemo(() => {
     if (!targetEntityType) return null;
@@ -228,28 +235,12 @@ export function MultiSelectEditor({
 
     // Enter always commits. Escape: vim saves, CUA/emacs discards.
     exts.push(
-      Prec.highest(
-        keymap.of([
-          {
-            key: "Enter",
-            run: () => {
-              commitRef.current();
-              return true;
-            },
-          },
-          {
-            key: "Escape",
-            run: () => {
-              if (mode === "vim") {
-                commitRef.current();
-              } else {
-                cancelRef.current();
-              }
-              return true;
-            },
-          },
-        ]),
-      ),
+      ...buildSubmitCancelExtensions({
+        mode,
+        onSubmitRef: submitRef,
+        onCancelRef: escapeRef,
+        singleLine: true,
+      }),
     );
 
     return exts;

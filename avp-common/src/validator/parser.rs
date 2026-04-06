@@ -923,4 +923,448 @@ Body.
         let vars = frontmatter_vars();
         assert_eq!(vars.get("version").unwrap(), crate::VERSION);
     }
+
+    // =========================================================================
+    // RuleSet Directory Parsing Tests
+    // =========================================================================
+
+    #[test]
+    fn test_parse_ruleset_manifest_basic() {
+        let content = r#"---
+name: security-rules
+description: Critical security validations
+trigger: PostToolUse
+severity: error
+---
+
+# Security Rules
+"#;
+        let manifest = parse_ruleset_manifest::<swissarmyhammer_directory::AvpConfig>(
+            content,
+            std::path::Path::new("security-rules"),
+            None,
+        )
+        .unwrap();
+        assert_eq!(manifest.name, "security-rules");
+        assert_eq!(manifest.description, "Critical security validations");
+        assert_eq!(manifest.trigger, HookType::PostToolUse);
+        assert_eq!(manifest.severity, Severity::Error);
+    }
+
+    #[test]
+    fn test_parse_ruleset_manifest_defaults() {
+        let content = r#"---
+name: ""
+description: ""
+---
+
+Minimal manifest.
+"#;
+        let manifest = parse_ruleset_manifest::<swissarmyhammer_directory::AvpConfig>(
+            content,
+            std::path::Path::new("my-rules"),
+            None,
+        )
+        .unwrap();
+        // Name defaults to directory name when empty
+        assert_eq!(manifest.name, "my-rules");
+        // Description defaults
+        assert_eq!(manifest.description, "RuleSet: my-rules");
+        // Version defaults to 1.0.0
+        assert_eq!(manifest.metadata.version, "1.0.0");
+        // Trigger defaults to PostToolUse
+        assert_eq!(manifest.trigger, HookType::PostToolUse);
+        // Severity defaults to Warn
+        assert_eq!(manifest.severity, Severity::Warn);
+    }
+
+    #[test]
+    fn test_parse_rule_basic() {
+        let content = r#"---
+name: no-secrets
+description: Detect hardcoded secrets
+severity: error
+timeout: 60
+---
+
+Check for API keys, passwords, and tokens.
+"#;
+        let rule = parse_rule(content, std::path::Path::new("no-secrets.md")).unwrap();
+        assert_eq!(rule.name, "no-secrets");
+        assert_eq!(rule.description, "Detect hardcoded secrets");
+        assert_eq!(rule.severity, Some(Severity::Error));
+        assert_eq!(rule.timeout, Some(60));
+        assert!(rule.body.contains("Check for API keys"));
+    }
+
+    #[test]
+    fn test_parse_rule_defaults() {
+        let content = r#"---
+name: ""
+description: ""
+---
+
+Check the code.
+"#;
+        let rule = parse_rule(content, std::path::Path::new("check-code.md")).unwrap();
+        assert_eq!(rule.name, "check-code");
+        assert_eq!(rule.description, "Rule: check-code");
+        assert!(rule.severity.is_none());
+        assert!(rule.timeout.is_none());
+    }
+
+    #[test]
+    fn test_parse_rule_with_all_fields() {
+        let content = r#"---
+name: my-rule
+description: My custom rule
+severity: info
+timeout: 120
+---
+
+Body content here.
+"#;
+        let rule = parse_rule(content, std::path::Path::new("my-rule.md")).unwrap();
+        assert_eq!(rule.name, "my-rule");
+        assert_eq!(rule.description, "My custom rule");
+        assert_eq!(rule.severity, Some(Severity::Info));
+        assert_eq!(rule.timeout, Some(120));
+    }
+
+    #[test]
+    fn test_parse_ruleset_directory_complete() {
+        use tempfile::TempDir;
+
+        let temp = TempDir::new().unwrap();
+        let dir = temp.path().join("my-ruleset");
+        std::fs::create_dir_all(dir.join("rules")).unwrap();
+
+        // Write VALIDATOR.md
+        std::fs::write(
+            dir.join("VALIDATOR.md"),
+            r#"---
+name: test-ruleset
+description: Test RuleSet
+trigger: PreToolUse
+severity: error
+---
+
+# Test RuleSet
+"#,
+        )
+        .unwrap();
+
+        // Write rule files
+        std::fs::write(
+            dir.join("rules/rule-a.md"),
+            r#"---
+name: rule-a
+description: First rule
+---
+
+Check first thing.
+"#,
+        )
+        .unwrap();
+
+        std::fs::write(
+            dir.join("rules/rule-b.md"),
+            r#"---
+name: rule-b
+description: Second rule
+severity: warn
+---
+
+Check second thing.
+"#,
+        )
+        .unwrap();
+
+        let ruleset = parse_ruleset_directory::<swissarmyhammer_directory::AvpConfig>(
+            &dir,
+            ValidatorSource::Project,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(ruleset.manifest.name, "test-ruleset");
+        assert_eq!(ruleset.rules.len(), 2);
+        // Rules should be sorted by name
+        assert_eq!(ruleset.rules[0].name, "rule-a");
+        assert_eq!(ruleset.rules[1].name, "rule-b");
+        assert_eq!(ruleset.source, ValidatorSource::Project);
+    }
+
+    #[test]
+    fn test_parse_ruleset_directory_not_a_directory() {
+        let result = parse_ruleset_directory::<swissarmyhammer_directory::AvpConfig>(
+            std::path::Path::new("/nonexistent/path"),
+            ValidatorSource::Builtin,
+            None,
+        );
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not a directory"));
+    }
+
+    #[test]
+    fn test_parse_ruleset_directory_missing_manifest() {
+        use tempfile::TempDir;
+
+        let temp = TempDir::new().unwrap();
+        let dir = temp.path().join("no-manifest");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let result = parse_ruleset_directory::<swissarmyhammer_directory::AvpConfig>(
+            &dir,
+            ValidatorSource::Builtin,
+            None,
+        );
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("missing VALIDATOR.md"));
+    }
+
+    #[test]
+    fn test_parse_ruleset_directory_missing_rules_dir() {
+        use tempfile::TempDir;
+
+        let temp = TempDir::new().unwrap();
+        let dir = temp.path().join("no-rules");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("VALIDATOR.md"),
+            "---\nname: test\ndescription: Test\n---\nBody.",
+        )
+        .unwrap();
+
+        let result = parse_ruleset_directory::<swissarmyhammer_directory::AvpConfig>(
+            &dir,
+            ValidatorSource::Builtin,
+            None,
+        );
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("missing rules/ directory"));
+    }
+
+    #[test]
+    fn test_parse_ruleset_directory_duplicate_rule_names() {
+        use tempfile::TempDir;
+
+        let temp = TempDir::new().unwrap();
+        let dir = temp.path().join("dup-rules");
+        std::fs::create_dir_all(dir.join("rules")).unwrap();
+        std::fs::write(
+            dir.join("VALIDATOR.md"),
+            "---\nname: test\ndescription: Test\n---\nBody.",
+        )
+        .unwrap();
+
+        // Two files with the same rule name
+        std::fs::write(
+            dir.join("rules/first.md"),
+            "---\nname: duplicate\ndescription: Dup1\n---\nBody1.",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("rules/second.md"),
+            "---\nname: duplicate\ndescription: Dup2\n---\nBody2.",
+        )
+        .unwrap();
+
+        let result = parse_ruleset_directory::<swissarmyhammer_directory::AvpConfig>(
+            &dir,
+            ValidatorSource::Builtin,
+            None,
+        );
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("duplicate rule name"));
+    }
+
+    #[test]
+    fn test_parse_ruleset_directory_skips_non_md_files() {
+        use tempfile::TempDir;
+
+        let temp = TempDir::new().unwrap();
+        let dir = temp.path().join("skip-non-md");
+        std::fs::create_dir_all(dir.join("rules")).unwrap();
+        std::fs::write(
+            dir.join("VALIDATOR.md"),
+            "---\nname: test\ndescription: Test\n---\nBody.",
+        )
+        .unwrap();
+
+        // Write a .md file and a non-.md file
+        std::fs::write(
+            dir.join("rules/valid.md"),
+            "---\nname: valid\ndescription: Valid\n---\nBody.",
+        )
+        .unwrap();
+        std::fs::write(dir.join("rules/ignored.txt"), "Not a rule").unwrap();
+
+        let ruleset = parse_ruleset_directory::<swissarmyhammer_directory::AvpConfig>(
+            &dir,
+            ValidatorSource::Builtin,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(ruleset.rules.len(), 1);
+        assert_eq!(ruleset.rules[0].name, "valid");
+    }
+
+    #[test]
+    fn test_parse_ruleset_directory_skips_partial_files() {
+        use tempfile::TempDir;
+
+        let temp = TempDir::new().unwrap();
+        let dir = temp.path().join("skip-partials");
+        std::fs::create_dir_all(dir.join("rules")).unwrap();
+        std::fs::write(
+            dir.join("VALIDATOR.md"),
+            "---\nname: test\ndescription: Test\n---\nBody.",
+        )
+        .unwrap();
+
+        std::fs::write(
+            dir.join("rules/valid.md"),
+            "---\nname: valid\ndescription: Valid\n---\nBody.",
+        )
+        .unwrap();
+        // Files starting with _ are skipped as partials
+        std::fs::write(
+            dir.join("rules/_partial.md"),
+            "---\nname: partial\ndescription: Partial\n---\nBody.",
+        )
+        .unwrap();
+
+        let ruleset = parse_ruleset_directory::<swissarmyhammer_directory::AvpConfig>(
+            &dir,
+            ValidatorSource::Builtin,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(ruleset.rules.len(), 1);
+    }
+
+    #[test]
+    fn test_parse_validator_skips_partials_by_path() {
+        let content = "---\nname: test\n---\nBody.";
+        let result = parse_validator(
+            content,
+            PathBuf::from("/validators/_partials/common.md"),
+            ValidatorSource::Builtin,
+        );
+        assert!(result.is_err());
+        // Should be a Partial error
+        let err = result.unwrap_err();
+        assert!(err.is_partial());
+    }
+
+    #[test]
+    fn test_parse_validator_skips_partials_by_content() {
+        let content = "{% partial %}\n\nThis is a partial.";
+        let result = parse_validator(
+            content,
+            PathBuf::from("some-validator.md"),
+            ValidatorSource::Builtin,
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_ruleset_manifest_invalid_yaml() {
+        let content = r#"---
+name: [invalid yaml
+---
+
+Body.
+"#;
+        let result = parse_ruleset_manifest::<swissarmyhammer_directory::AvpConfig>(
+            content,
+            std::path::Path::new("test"),
+            None,
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_rule_invalid_yaml() {
+        let content = r#"---
+name: [invalid
+---
+
+Body.
+"#;
+        let result = parse_rule(content, std::path::Path::new("test.md"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_extract_frontmatter_empty_content() {
+        let (frontmatter, body) = extract_frontmatter("", std::path::Path::new("test")).unwrap();
+        assert_eq!(frontmatter, "");
+        assert_eq!(body, "");
+    }
+
+    #[test]
+    fn test_extract_frontmatter_no_delimiters() {
+        let content = "Just body content.";
+        let (frontmatter, body) =
+            extract_frontmatter(content, std::path::Path::new("test")).unwrap();
+        assert_eq!(frontmatter, "");
+        assert_eq!(body, "Just body content.");
+    }
+
+    #[test]
+    fn test_extract_frontmatter_unclosed() {
+        let content = "---\nname: test\nNo closing delimiter.";
+        let (frontmatter, body) =
+            extract_frontmatter(content, std::path::Path::new("test")).unwrap();
+        assert_eq!(frontmatter, "");
+        assert!(body.contains("name: test"));
+    }
+
+    #[test]
+    fn test_parse_ruleset_manifest_with_expansion() {
+        use swissarmyhammer_directory::AvpConfig;
+
+        let content = r#"---
+name: expanded
+description: Test expansion
+match:
+  files:
+    - "@file_groups/source_code"
+---
+
+Body.
+"#;
+
+        let mut expander = swissarmyhammer_directory::YamlExpander::<AvpConfig>::new();
+        expander
+            .add_builtin(
+                "file_groups/source_code",
+                r#"
+- "*.rs"
+- "*.ts"
+"#,
+            )
+            .unwrap();
+
+        let manifest =
+            parse_ruleset_manifest(content, std::path::Path::new("test"), Some(&expander)).unwrap();
+
+        assert_eq!(manifest.name, "expanded");
+        let match_criteria = manifest.match_criteria.unwrap();
+        assert!(match_criteria.files.contains(&"*.rs".to_string()));
+        assert!(match_criteria.files.contains(&"*.ts".to_string()));
+    }
 }

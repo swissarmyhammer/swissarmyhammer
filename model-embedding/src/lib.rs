@@ -38,6 +38,8 @@
 
 pub mod batch;
 pub mod error;
+#[cfg(feature = "test-support")]
+pub mod mock;
 /// Sealed trait module — backends must implement `Sealed` to implement `TextEmbedder`.
 pub mod private {
     pub trait Sealed {}

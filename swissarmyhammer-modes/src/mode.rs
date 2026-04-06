@@ -378,4 +378,138 @@ description: A test mode
             &PathBuf::from("/path/to/mode.md")
         );
     }
+
+    #[test]
+    fn test_mode_with_prompt_constructor() {
+        let mode = Mode::with_prompt(
+            "ref-mode",
+            "Reference Mode",
+            "Uses a prompt reference",
+            ".system/planner",
+        );
+
+        assert_eq!(mode.id(), "ref-mode");
+        assert_eq!(mode.name(), "Reference Mode");
+        assert_eq!(mode.description(), "Uses a prompt reference");
+        assert_eq!(mode.system_prompt(), "");
+        assert_eq!(mode.prompt(), Some(".system/planner"));
+        assert!(mode.agent().is_none());
+        assert!(mode.uses_prompt_reference());
+        assert!(!mode.uses_agent_reference());
+        assert!(mode.source_path().is_none());
+    }
+
+    #[test]
+    fn test_mode_with_agent_constructor() {
+        let mode = Mode::with_agent(
+            "agent-mode",
+            "Agent Mode",
+            "Uses an agent reference",
+            "planner",
+        );
+
+        assert_eq!(mode.id(), "agent-mode");
+        assert_eq!(mode.name(), "Agent Mode");
+        assert_eq!(mode.description(), "Uses an agent reference");
+        assert_eq!(mode.system_prompt(), "");
+        assert!(mode.prompt().is_none());
+        assert_eq!(mode.agent(), Some("planner"));
+        assert!(!mode.uses_prompt_reference());
+        assert!(mode.uses_agent_reference());
+        assert!(mode.source_path().is_none());
+    }
+
+    #[test]
+    fn test_mode_new_accessors() {
+        let mode = Mode::new("id", "Name", "Desc", "Prompt");
+
+        assert!(mode.prompt().is_none());
+        assert!(mode.agent().is_none());
+        assert!(!mode.uses_prompt_reference());
+        assert!(!mode.uses_agent_reference());
+    }
+
+    #[test]
+    fn test_mode_from_markdown_with_prompt_ref() {
+        let content =
+            "---\nname: Planner\ndescription: Planning mode\nprompt: .system/planner\n---\n";
+        let mode = Mode::from_markdown(content, "planner").unwrap();
+
+        assert_eq!(mode.id(), "planner");
+        assert_eq!(mode.name(), "Planner");
+        assert_eq!(mode.description(), "Planning mode");
+        assert_eq!(mode.prompt(), Some(".system/planner"));
+        assert!(mode.uses_prompt_reference());
+        assert!(mode.system_prompt().is_empty());
+    }
+
+    #[test]
+    fn test_mode_from_markdown_with_both_prompt_and_agent() {
+        let content =
+            "---\nname: Both\ndescription: Has both\nprompt: .system/foo\nagent: bar\n---\n";
+        let mode = Mode::from_markdown(content, "both").unwrap();
+
+        assert_eq!(mode.prompt(), Some(".system/foo"));
+        assert_eq!(mode.agent(), Some("bar"));
+        assert!(mode.uses_prompt_reference());
+        assert!(mode.uses_agent_reference());
+    }
+
+    #[test]
+    fn test_mode_from_file_success() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("test-mode.md");
+        std::fs::write(
+            &file_path,
+            "---\nname: File Mode\ndescription: Loaded from file\n---\nFile system prompt content.\n",
+        )
+        .unwrap();
+
+        let mode = Mode::from_file(&file_path).unwrap();
+        assert_eq!(mode.id(), "test-mode");
+        assert_eq!(mode.name(), "File Mode");
+        assert_eq!(mode.description(), "Loaded from file");
+        assert!(mode.system_prompt().contains("File system prompt content"));
+        assert!(mode.source_path().is_some());
+        assert_eq!(mode.source_path().unwrap(), &file_path);
+    }
+
+    #[test]
+    fn test_mode_from_file_not_found() {
+        let result = Mode::from_file(std::path::Path::new("/nonexistent/path/mode.md"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_mode_from_file_invalid_content() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("bad-mode.md");
+        std::fs::write(&file_path, "no frontmatter at all").unwrap();
+
+        let result = Mode::from_file(&file_path);
+        // No frontmatter means metadata is None, so this should error
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_mode_from_file_invalid_filename() {
+        // Create a file with no stem (just an extension won't work on most OS,
+        // but a path ending in ".." or similar edge case)
+        // On Unix, a file named just ".md" has stem "" which is still valid to_str
+        // We'll test with a directory path which has no file_stem
+        let result = Mode::from_file(std::path::Path::new("/some/directory/"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_mode_from_markdown_with_prompt_and_content() {
+        // Both prompt reference and embedded content are present
+        let content =
+            "---\nname: Hybrid\ndescription: Has prompt ref and content\nprompt: .system/foo\n---\nSome fallback content\n";
+        let mode = Mode::from_markdown(content, "hybrid").unwrap();
+
+        assert_eq!(mode.prompt(), Some(".system/foo"));
+        assert!(!mode.system_prompt().is_empty());
+        assert!(mode.system_prompt().contains("fallback"));
+    }
 }

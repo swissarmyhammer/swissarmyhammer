@@ -26,8 +26,10 @@ swissarmyhammer-common = { path = "../swissarmyhammer-common" }
 swissarmyhammer-fields = { path = "../swissarmyhammer-fields" }
 swissarmyhammer-entity = { path = "../swissarmyhammer-entity" }
 swissarmyhammer-views = { path = "../swissarmyhammer-views" }
+swissarmyhammer-perspectives = { path = "../swissarmyhammer-perspectives" }
 swissarmyhammer-operations = { workspace = true }
 swissarmyhammer-commands = { path = "../swissarmyhammer-commands" }
+swissarmyhammer-store = { path = "../swissarmyhammer-store" }
 
 include_dir = { workspace = true }
 fractional_index = "2.0.2"

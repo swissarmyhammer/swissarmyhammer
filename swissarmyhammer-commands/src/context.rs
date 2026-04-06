@@ -145,6 +145,15 @@ impl CommandContext {
     pub fn target_moniker(&self) -> Option<(&str, &str)> {
         self.target.as_deref().and_then(parse_moniker)
     }
+
+    /// Extract the store path from a `store:` moniker in the scope chain.
+    ///
+    /// The frontend injects a `store:{canonicalPath}` moniker via
+    /// `StoreContainer`, so the scope chain carries the board's filesystem
+    /// path. Returns `None` when no `store:` moniker is present.
+    pub fn resolve_store_path(&self) -> Option<&str> {
+        self.resolve_entity_id("store")
+    }
 }
 
 /// Parse a "type:id" moniker string into (entity_type, id).
@@ -377,5 +386,69 @@ mod tests {
     fn window_label_from_scope_empty_chain() {
         let ctx = test_ctx(&[]);
         assert_eq!(ctx.window_label_from_scope(), None);
+    }
+
+    // --- resolve_store_path tests ---
+
+    #[test]
+    fn resolve_store_path_finds_path() {
+        let ctx = test_ctx(&[
+            "task:t1",
+            "column:todo",
+            "store:/Users/me/.kanban",
+            "window:main",
+        ]);
+        assert_eq!(ctx.resolve_store_path(), Some("/Users/me/.kanban"));
+    }
+
+    #[test]
+    fn resolve_store_path_returns_none_when_missing() {
+        let ctx = test_ctx(&["task:t1", "column:todo", "window:main"]);
+        assert_eq!(ctx.resolve_store_path(), None);
+    }
+
+    #[test]
+    fn resolve_store_path_empty_chain() {
+        let ctx = test_ctx(&[]);
+        assert_eq!(ctx.resolve_store_path(), None);
+    }
+
+    #[test]
+    fn resolve_store_path_with_colons_in_path() {
+        // Windows paths could contain colons (e.g. C:\...)
+        let ctx = test_ctx(&["store:C:\\Users\\me\\.kanban", "window:main"]);
+        assert_eq!(ctx.resolve_store_path(), Some("C:\\Users\\me\\.kanban"));
+    }
+
+    // --- Debug impl tests ---
+
+    #[test]
+    fn command_context_debug_includes_key_fields() {
+        let mut args = HashMap::new();
+        args.insert("title".into(), serde_json::json!("Hello"));
+        let ctx = CommandContext::new(
+            "test.cmd",
+            vec!["task:01ABC".to_string(), "column:todo".to_string()],
+            Some("column:doing".to_string()),
+            args,
+        );
+        let debug_str = format!("{:?}", ctx);
+        assert!(debug_str.contains("CommandContext"));
+        assert!(debug_str.contains("test.cmd"));
+        assert!(debug_str.contains("task:01ABC"));
+        assert!(debug_str.contains("column:doing"));
+        assert!(debug_str.contains("extensions_count"));
+    }
+
+    #[test]
+    fn command_context_debug_shows_extension_count() {
+        let mut ctx = test_ctx(&[]);
+        ctx.set_extension(Arc::new(FakeService { name: "svc".into() }));
+        let debug_str = format!("{:?}", ctx);
+        // Should show extensions_count: 1
+        assert!(
+            debug_str.contains("1"),
+            "debug should show extension count, got: {debug_str}"
+        );
     }
 }

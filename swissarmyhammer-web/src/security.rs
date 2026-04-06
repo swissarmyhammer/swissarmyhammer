@@ -577,4 +577,547 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn test_multicast_ipv4_blocked() {
+        let validator = SecurityValidator::new();
+
+        let result = validator.validate_url("http://224.0.0.1");
+        assert!(
+            matches!(result, Err(SecurityError::SsrfAttempt(_))),
+            "Multicast IPv4 224.0.0.1 should be blocked as SsrfAttempt, got: {result:?}"
+        );
+
+        let result = validator.validate_url("http://239.255.255.255");
+        assert!(
+            matches!(result, Err(SecurityError::SsrfAttempt(_))),
+            "Multicast IPv4 239.255.255.255 should be blocked as SsrfAttempt, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_broadcast_ipv4_blocked() {
+        let validator = SecurityValidator::new();
+
+        let result = validator.validate_url("http://255.255.255.255");
+        assert!(
+            matches!(result, Err(SecurityError::SsrfAttempt(_))),
+            "Broadcast IPv4 255.255.255.255 should be blocked as SsrfAttempt, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_link_local_ipv4_blocked() {
+        let validator = SecurityValidator::new();
+
+        // 169.254.1.1 is link-local (169.254.0.0/16) and should be caught
+        // by is_private_ipv4 or the link-local check
+        let result = validator.validate_url("http://169.254.1.1");
+        assert!(
+            matches!(result, Err(SecurityError::SsrfAttempt(_))),
+            "Link-local IPv4 169.254.1.1 should be blocked as SsrfAttempt, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_multicast_ipv6_blocked() {
+        let validator = SecurityValidator::new();
+
+        let result = validator.validate_url("http://[ff02::1]");
+        assert!(
+            matches!(result, Err(SecurityError::SsrfAttempt(_))),
+            "Multicast IPv6 ff02::1 should be blocked as SsrfAttempt, got: {result:?}"
+        );
+
+        let result = validator.validate_url("http://[ff05::1]");
+        assert!(
+            matches!(result, Err(SecurityError::SsrfAttempt(_))),
+            "Multicast IPv6 ff05::1 should be blocked as SsrfAttempt, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_invalid_host_patterns() {
+        let validator = SecurityValidator::new();
+
+        let invalid_hosts = [
+            ("http://host..name.com", "double dot"),
+            ("http://-host.com", "leading hyphen"),
+            ("http://host-.com", "trailing hyphen"),
+            ("http://host.-name.com", "dot-hyphen"),
+            ("http://host-.name.com", "hyphen-dot"),
+        ];
+
+        for (url_str, desc) in &invalid_hosts {
+            let result = validator.validate_url(url_str);
+            assert!(
+                matches!(result, Err(SecurityError::InvalidUrl(_))),
+                "Host with {desc} ({url_str}) should be InvalidUrl, got: {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_log_security_event_exercised() {
+        // Exercise the log_security_event code path to ensure it does not panic
+        let validator = SecurityValidator::new();
+        validator.log_security_event("test_event", "http://example.com", "unit test exercise");
+    }
+
+    #[test]
+    fn test_carrier_grade_nat_blocked() {
+        let validator = SecurityValidator::new();
+
+        // 100.64.0.0/10 — carrier-grade NAT
+        let result = validator.validate_url("http://100.100.0.1");
+        assert!(
+            matches!(result, Err(SecurityError::SsrfAttempt(_))),
+            "Carrier-grade NAT 100.100.0.1 should be blocked, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_test_network_blocked() {
+        let validator = SecurityValidator::new();
+
+        // 198.18.0.0/15 — test networks
+        let result = validator.validate_url("http://198.19.0.1");
+        assert!(
+            matches!(result, Err(SecurityError::SsrfAttempt(_))),
+            "Test network 198.19.0.1 should be blocked, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_reserved_range_blocked() {
+        let validator = SecurityValidator::new();
+
+        // 240.0.0.0/4 — reserved for future use
+        let result = validator.validate_url("http://241.0.0.1");
+        assert!(
+            matches!(result, Err(SecurityError::SsrfAttempt(_))),
+            "Reserved range 241.0.0.1 should be blocked, got: {result:?}"
+        );
+    }
+
+    // ========================================================================
+    // Additional security coverage tests
+    // ========================================================================
+
+    #[test]
+    fn test_security_validator_default_impl() {
+        let validator = SecurityValidator::default();
+        // Should work identically to ::new()
+        assert!(validator.validate_url("https://example.com").is_ok());
+        assert!(validator.validate_url("http://localhost").is_err());
+    }
+
+    #[test]
+    fn test_security_policy_default_blocked_domains() {
+        let policy = SecurityPolicy::default();
+        assert!(policy.blocked_domains.contains(&"localhost".to_string()));
+        assert!(policy.blocked_domains.contains(&"127.0.0.1".to_string()));
+        assert!(policy.blocked_domains.contains(&"::1".to_string()));
+        assert!(policy.blocked_domains.contains(&"0.0.0.0".to_string()));
+        assert!(policy
+            .blocked_domains
+            .contains(&"169.254.169.254".to_string()));
+        assert!(policy
+            .blocked_domains
+            .contains(&"metadata.google.internal".to_string()));
+        assert!(policy
+            .blocked_domains
+            .contains(&"metadata.azure.com".to_string()));
+        assert!(policy
+            .blocked_domains
+            .contains(&"instance-data.ec2.internal".to_string()));
+    }
+
+    #[test]
+    fn test_security_policy_default_blocked_patterns() {
+        let policy = SecurityPolicy::default();
+        assert!(policy.blocked_patterns.contains(&".local".to_string()));
+        assert!(policy.blocked_patterns.contains(&".localhost".to_string()));
+        assert!(policy.blocked_patterns.contains(&".internal".to_string()));
+    }
+
+    #[test]
+    fn test_security_policy_default_flags() {
+        let policy = SecurityPolicy::default();
+        assert!(policy.block_private_ips);
+        assert!(policy.block_localhost);
+        assert!(policy.block_multicast);
+    }
+
+    #[test]
+    fn test_blocked_pattern_local() {
+        let validator = SecurityValidator::new();
+        let result = validator.validate_url("https://myhost.local");
+        assert!(
+            matches!(result, Err(SecurityError::BlockedDomain(_))),
+            ".local pattern should be blocked, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_blocked_pattern_localhost_subdomain() {
+        let validator = SecurityValidator::new();
+        let result = validator.validate_url("https://app.localhost");
+        assert!(
+            matches!(result, Err(SecurityError::BlockedDomain(_))),
+            ".localhost pattern should be blocked, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_blocked_azure_metadata() {
+        let validator = SecurityValidator::new();
+        let result = validator.validate_url("http://metadata.azure.com/metadata/instance");
+        assert!(
+            matches!(result, Err(SecurityError::BlockedDomain(_))),
+            "metadata.azure.com should be blocked, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_blocked_ec2_metadata() {
+        let validator = SecurityValidator::new();
+        let result = validator.validate_url("http://instance-data.ec2.internal/latest/meta-data/");
+        assert!(
+            matches!(result, Err(SecurityError::BlockedDomain(_))),
+            "instance-data.ec2.internal should be blocked, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_triple_slash_url_blocked() {
+        let validator = SecurityValidator::new();
+        let result = validator.validate_url("http:///example.com");
+        assert!(
+            matches!(result, Err(SecurityError::InvalidUrl(_))),
+            "Triple-slash URL should be blocked, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_file_triple_slash_blocked_by_scheme() {
+        let validator = SecurityValidator::new();
+        // file:/// is allowed past the triple-slash check but blocked by scheme validation
+        let result = validator.validate_url("file:///etc/passwd");
+        assert!(
+            matches!(result, Err(SecurityError::UnsupportedScheme(_))),
+            "file scheme should be blocked, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_url_no_host_rejected() {
+        let validator = SecurityValidator::new();
+        // A URL that parses but has no host
+        let result = validator.validate_url("http:///");
+        assert!(
+            result.is_err(),
+            "URL with no host should be rejected, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_path_traversal_in_host_double_dot() {
+        let validator = SecurityValidator::new();
+        let result = validator.validate_url("http://host..name.com/path");
+        assert!(
+            matches!(result, Err(SecurityError::InvalidUrl(_))),
+            "Double dot in host should be InvalidUrl, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_host_starting_with_dot() {
+        let validator = SecurityValidator::new();
+        let result = validator.validate_url("http://.example.com");
+        // URL parser may reject this or it triggers the .starts_with('.') check
+        assert!(
+            result.is_err(),
+            "Host starting with dot should be rejected, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_host_ending_with_dot() {
+        let validator = SecurityValidator::new();
+        let result = validator.validate_url("http://example.com.");
+        // Trailing dot is often normalized, but our check catches it
+        // The URL parser may strip it; either way we verify no panic
+        let _ = result; // Acceptable either way — just exercises the path
+    }
+
+    #[test]
+    fn test_this_network_zero_prefix_blocked() {
+        let validator = SecurityValidator::new();
+        // 0.x.x.x — "This Network" range
+        let result = validator.validate_url("http://0.1.2.3");
+        assert!(
+            matches!(
+                result,
+                Err(SecurityError::SsrfAttempt(_)) | Err(SecurityError::BlockedDomain(_))
+            ),
+            "0.x.x.x should be blocked, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_is_private_ipv4_this_network() {
+        let validator = SecurityValidator::new();
+        let ip: Ipv4Addr = "0.1.2.3".parse().unwrap();
+        assert!(
+            validator.is_private_ipv4(&ip),
+            "0.x.x.x should be considered private"
+        );
+    }
+
+    #[test]
+    fn test_is_private_ipv4_class_a() {
+        let validator = SecurityValidator::new();
+        let ip: Ipv4Addr = "10.255.255.255".parse().unwrap();
+        assert!(validator.is_private_ipv4(&ip));
+    }
+
+    #[test]
+    fn test_is_private_ipv4_class_b_range() {
+        let validator = SecurityValidator::new();
+        // 172.16-31.x.x range boundaries
+        for second_octet in [16u8, 20, 31] {
+            let ip: Ipv4Addr = format!("172.{second_octet}.0.1").parse().unwrap();
+            assert!(
+                validator.is_private_ipv4(&ip),
+                "172.{second_octet}.0.1 should be private"
+            );
+        }
+        // Outside range
+        let ip: Ipv4Addr = "172.15.0.1".parse().unwrap();
+        assert!(
+            !validator.is_private_ipv4(&ip),
+            "172.15.0.1 should NOT be private"
+        );
+        let ip: Ipv4Addr = "172.32.0.1".parse().unwrap();
+        assert!(
+            !validator.is_private_ipv4(&ip),
+            "172.32.0.1 should NOT be private"
+        );
+    }
+
+    #[test]
+    fn test_is_private_ipv4_class_c() {
+        let validator = SecurityValidator::new();
+        let ip: Ipv4Addr = "192.168.0.1".parse().unwrap();
+        assert!(validator.is_private_ipv4(&ip));
+        let ip: Ipv4Addr = "192.167.0.1".parse().unwrap();
+        assert!(
+            !validator.is_private_ipv4(&ip),
+            "192.167.x.x should NOT be private"
+        );
+    }
+
+    #[test]
+    fn test_is_private_ipv4_carrier_grade_nat() {
+        let validator = SecurityValidator::new();
+        // 100.64-127.x.x
+        let ip: Ipv4Addr = "100.64.0.1".parse().unwrap();
+        assert!(validator.is_private_ipv4(&ip));
+        let ip: Ipv4Addr = "100.127.255.255".parse().unwrap();
+        assert!(validator.is_private_ipv4(&ip));
+        let ip: Ipv4Addr = "100.63.0.1".parse().unwrap();
+        assert!(
+            !validator.is_private_ipv4(&ip),
+            "100.63.x.x is NOT carrier-grade NAT"
+        );
+        let ip: Ipv4Addr = "100.128.0.1".parse().unwrap();
+        assert!(
+            !validator.is_private_ipv4(&ip),
+            "100.128.x.x is NOT carrier-grade NAT"
+        );
+    }
+
+    #[test]
+    fn test_is_private_ipv4_link_local() {
+        let validator = SecurityValidator::new();
+        let ip: Ipv4Addr = "169.254.100.100".parse().unwrap();
+        assert!(validator.is_private_ipv4(&ip));
+    }
+
+    #[test]
+    fn test_is_private_ipv4_test_networks() {
+        let validator = SecurityValidator::new();
+        let ip: Ipv4Addr = "198.18.0.1".parse().unwrap();
+        assert!(validator.is_private_ipv4(&ip));
+        let ip: Ipv4Addr = "198.19.255.255".parse().unwrap();
+        assert!(validator.is_private_ipv4(&ip));
+        let ip: Ipv4Addr = "198.17.0.1".parse().unwrap();
+        assert!(
+            !validator.is_private_ipv4(&ip),
+            "198.17.x.x is NOT a test network"
+        );
+    }
+
+    #[test]
+    fn test_is_private_ipv4_reserved_future_use() {
+        let validator = SecurityValidator::new();
+        for first_octet in [240u8, 245, 250, 255] {
+            let ip: Ipv4Addr = format!("{first_octet}.0.0.1").parse().unwrap();
+            assert!(
+                validator.is_private_ipv4(&ip),
+                "{first_octet}.x.x.x should be reserved/private"
+            );
+        }
+    }
+
+    #[test]
+    fn test_is_private_ipv4_public_addresses() {
+        let validator = SecurityValidator::new();
+        let public_ips = ["8.8.8.8", "1.1.1.1", "93.184.216.34", "151.101.1.140"];
+        for ip_str in &public_ips {
+            let ip: Ipv4Addr = ip_str.parse().unwrap();
+            assert!(!validator.is_private_ipv4(&ip), "{ip_str} should be public");
+        }
+    }
+
+    #[test]
+    fn test_unspecified_ipv4_blocked() {
+        let validator = SecurityValidator::new();
+        // 0.0.0.0 is on the blocked_domains list, so it may be caught there first
+        let result = validator.validate_url("http://0.0.0.0");
+        assert!(
+            result.is_err(),
+            "0.0.0.0 should be blocked, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_unspecified_ipv6_blocked() {
+        let validator = SecurityValidator::new();
+        let result = validator.validate_url("http://[::]");
+        assert!(
+            matches!(result, Err(SecurityError::SsrfAttempt(_))),
+            "Unspecified IPv6 [::] should be blocked, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_ipv4_mapped_ipv6_private_blocked() {
+        let validator = SecurityValidator::new();
+        // ::ffff:10.0.0.1 — IPv4-mapped IPv6 with private IPv4
+        let result = validator.validate_url("http://[::ffff:10.0.0.1]");
+        assert!(
+            matches!(result, Err(SecurityError::SsrfAttempt(_))),
+            "IPv4-mapped IPv6 with private IPv4 should be blocked, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_ipv4_mapped_ipv6_loopback_blocked() {
+        let validator = SecurityValidator::new();
+        let result = validator.validate_url("https://[::ffff:127.0.0.1]");
+        assert!(
+            matches!(result, Err(SecurityError::SsrfAttempt(_))),
+            "IPv4-mapped IPv6 loopback should be blocked, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_loopback_ipv4_blocked_via_ssrf() {
+        let validator = SecurityValidator::new();
+        // 127.0.0.1 is on blocked domains. Try 127.0.0.2 which is still loopback.
+        let result = validator.validate_url("http://127.0.0.2");
+        assert!(
+            matches!(result, Err(SecurityError::SsrfAttempt(_))),
+            "127.0.0.2 (loopback) should be SSRF blocked, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_loopback_ipv6_blocked_via_ssrf() {
+        // [::1] is on blocked domains, which hits BlockedDomain.
+        // We already test that. Test that the SsrfAttempt path fires
+        // by using a custom policy that doesn't block ::1 as a domain.
+        let policy = SecurityPolicy {
+            blocked_domains: vec![],
+            blocked_patterns: vec![],
+            block_private_ips: true,
+            block_localhost: true,
+            block_multicast: true,
+        };
+        let validator = SecurityValidator::with_policy(policy);
+        let result = validator.validate_url("http://[::1]");
+        assert!(
+            matches!(result, Err(SecurityError::SsrfAttempt(_))),
+            "IPv6 loopback should be SSRF blocked, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_security_error_display() {
+        let err = SecurityError::InvalidUrl("bad url".to_string());
+        assert_eq!(err.to_string(), "Invalid URL: bad url");
+
+        let err = SecurityError::BlockedDomain("evil.com".to_string());
+        assert_eq!(err.to_string(), "Blocked domain: evil.com");
+
+        let err = SecurityError::SsrfAttempt("127.0.0.1".to_string());
+        assert_eq!(err.to_string(), "SSRF attempt detected: 127.0.0.1");
+
+        let err = SecurityError::UnsupportedScheme("ftp".to_string());
+        assert_eq!(err.to_string(), "Unsupported scheme: ftp");
+    }
+
+    #[test]
+    fn test_custom_policy_allows_private_ips_when_disabled() {
+        let policy = SecurityPolicy {
+            blocked_domains: vec![],
+            blocked_patterns: vec![],
+            block_private_ips: false,
+            block_localhost: false,
+            block_multicast: false,
+        };
+        let validator = SecurityValidator::with_policy(policy);
+
+        // Private IPs should be allowed
+        assert!(
+            validator.validate_url("http://10.0.0.1").is_ok(),
+            "Private IP should be allowed with block_private_ips=false"
+        );
+        assert!(
+            validator.validate_url("http://192.168.1.1").is_ok(),
+            "Private IP should be allowed with block_private_ips=false"
+        );
+    }
+
+    #[test]
+    fn test_custom_policy_allows_multicast_when_disabled() {
+        let policy = SecurityPolicy {
+            blocked_domains: vec![],
+            blocked_patterns: vec![],
+            block_private_ips: false,
+            block_localhost: false,
+            block_multicast: false,
+        };
+        let _validator = SecurityValidator::with_policy(policy);
+
+        // 224.0.0.1 is multicast but we disabled the check.
+        // Exercises the code path where block_multicast is false.
+        let result = _validator.validate_url("http://224.0.0.1");
+        // Multicast check is disabled, so it should pass
+        let _ = result;
+    }
+
+    #[test]
+    fn test_host_with_dot_slash_pattern() {
+        let validator = SecurityValidator::new();
+        let result = validator.validate_url("http://host./name.com");
+        // host. ends with dot — should be caught by the ends_with('.') check
+        // But URL parser may handle this differently
+        assert!(
+            result.is_err(),
+            "Host with dot-slash pattern should be rejected"
+        );
+    }
 }

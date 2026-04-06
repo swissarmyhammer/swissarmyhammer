@@ -492,4 +492,455 @@ mod tests {
 
         verify_table_output(&table, &["✓", "⚠️"], None, &["→", "•", "©", "™"]);
     }
+
+    // --- Tests for private helper functions ---
+
+    #[test]
+    fn test_value_to_string_string() {
+        let val = serde_json::Value::String("hello".to_string());
+        assert_eq!(super::value_to_string(&val), "hello");
+    }
+
+    #[test]
+    fn test_value_to_string_number() {
+        let val = serde_json::json!(42);
+        assert_eq!(super::value_to_string(&val), "42");
+    }
+
+    #[test]
+    fn test_value_to_string_float() {
+        let val = serde_json::json!(2.72);
+        assert_eq!(super::value_to_string(&val), "2.72");
+    }
+
+    #[test]
+    fn test_value_to_string_bool() {
+        assert_eq!(
+            super::value_to_string(&serde_json::Value::Bool(true)),
+            "true"
+        );
+        assert_eq!(
+            super::value_to_string(&serde_json::Value::Bool(false)),
+            "false"
+        );
+    }
+
+    #[test]
+    fn test_value_to_string_null() {
+        assert_eq!(super::value_to_string(&serde_json::Value::Null), "null");
+    }
+
+    #[test]
+    fn test_value_to_string_array() {
+        let val = serde_json::json!([1, 2, 3]);
+        // Arrays fall through to the catch-all which uses .to_string()
+        assert_eq!(super::value_to_string(&val), "[1,2,3]");
+    }
+
+    #[test]
+    fn test_value_to_string_object() {
+        let val = serde_json::json!({"key": "val"});
+        let result = super::value_to_string(&val);
+        assert!(result.contains("key"));
+        assert!(result.contains("val"));
+    }
+
+    #[test]
+    fn test_get_key_priority_known_keys() {
+        assert_eq!(super::get_key_priority("name"), 0);
+        assert_eq!(super::get_key_priority("description"), 1);
+        assert_eq!(super::get_key_priority("title"), 1);
+        assert_eq!(super::get_key_priority("source"), 2);
+        assert_eq!(super::get_key_priority("status"), 3);
+    }
+
+    #[test]
+    fn test_get_key_priority_unknown_keys() {
+        assert_eq!(super::get_key_priority("foo"), 99);
+        assert_eq!(super::get_key_priority("bar"), 99);
+        assert_eq!(super::get_key_priority(""), 99);
+    }
+
+    #[test]
+    fn test_capitalize_first_normal() {
+        assert_eq!(super::capitalize_first("hello"), "Hello");
+        assert_eq!(super::capitalize_first("world"), "World");
+    }
+
+    #[test]
+    fn test_capitalize_first_already_capitalized() {
+        assert_eq!(super::capitalize_first("Hello"), "Hello");
+    }
+
+    #[test]
+    fn test_capitalize_first_empty() {
+        assert_eq!(super::capitalize_first(""), "");
+    }
+
+    #[test]
+    fn test_capitalize_first_single_char() {
+        assert_eq!(super::capitalize_first("a"), "A");
+    }
+
+    #[test]
+    fn test_get_sorted_keys() {
+        let mut map = serde_json::Map::new();
+        map.insert("status".to_string(), serde_json::Value::String("ok".into()));
+        map.insert("name".to_string(), serde_json::Value::String("test".into()));
+        map.insert("foo".to_string(), serde_json::Value::String("bar".into()));
+        map.insert(
+            "description".to_string(),
+            serde_json::Value::String("desc".into()),
+        );
+
+        let keys = super::get_sorted_keys(&map);
+        // name(0), description(1), status(3), foo(99)
+        assert_eq!(keys[0], "name");
+        assert_eq!(keys[1], "description");
+        assert_eq!(keys[2], "status");
+        assert_eq!(keys[3], "foo");
+    }
+
+    #[test]
+    fn test_create_table_headers() {
+        let keys = vec!["name".to_string(), "status".to_string()];
+        let headers = super::create_table_headers(&keys);
+        assert_eq!(headers, vec!["Name", "Status"]);
+    }
+
+    #[test]
+    fn test_create_table_row() {
+        let mut map = serde_json::Map::new();
+        map.insert("name".to_string(), serde_json::Value::String("test".into()));
+        map.insert("count".to_string(), serde_json::json!(42));
+
+        let keys = vec![
+            "name".to_string(),
+            "count".to_string(),
+            "missing".to_string(),
+        ];
+        let row = super::create_table_row(&map, &keys);
+        assert_eq!(row, vec!["test", "42", ""]);
+    }
+
+    #[test]
+    fn test_build_table_from_items_success() {
+        let items = vec![
+            serde_json::json!({"name": "Alice", "status": "active"}),
+            serde_json::json!({"name": "Bob", "status": "inactive"}),
+        ];
+        let result = super::build_table_from_items(&items);
+        assert!(result.is_ok());
+        let table = result.unwrap().to_string();
+        assert!(table.contains("Alice"));
+        assert!(table.contains("Bob"));
+    }
+
+    #[test]
+    fn test_build_table_from_items_empty() {
+        let items: Vec<serde_json::Value> = vec![];
+        let result = super::build_table_from_items(&items);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_build_table_from_items_non_object() {
+        let items = vec![serde_json::json!("just a string")];
+        let result = super::build_table_from_items(&items);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_add_table_rows_skips_non_objects() {
+        let mut table = swissarmyhammer_doctor::new_table();
+        table.set_header(vec!["Name"]);
+        let items = vec![
+            serde_json::json!({"name": "Alice"}),
+            serde_json::json!("not an object"),
+            serde_json::json!({"name": "Bob"}),
+        ];
+        let keys = vec!["name".to_string()];
+        super::add_table_rows(&mut table, &items, &keys);
+        let output = table.to_string();
+        assert!(output.contains("Alice"));
+        assert!(output.contains("Bob"));
+    }
+
+    #[test]
+    fn test_map_error_creates_error_with_context() {
+        let mapper = super::map_error::<String>("Loading config");
+        let err = mapper("file not found".to_string());
+        let err_msg = format!("{}", err);
+        assert!(err_msg.contains("Loading config"));
+        assert!(err_msg.contains("file not found"));
+    }
+
+    #[test]
+    fn test_cli_context_builder_require_field_some() {
+        let result =
+            super::CliContextBuilder::require_field(Some("value".to_string()), "test_field");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "value");
+    }
+
+    #[test]
+    fn test_cli_context_builder_require_field_none() {
+        let result = super::CliContextBuilder::require_field::<String>(None, "test_field");
+        assert!(result.is_err());
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(err_msg.contains("test_field"));
+        assert!(err_msg.contains("required"));
+    }
+
+    #[tokio::test]
+    async fn test_cli_context_new() {
+        let template_context = swissarmyhammer_config::TemplateContext::new();
+        let matches = clap::Command::new("test").get_matches_from(vec!["test"]);
+
+        let ctx = super::CliContext::new(
+            template_context,
+            super::OutputFormat::Table,
+            None,
+            false,
+            false,
+            false,
+            matches,
+        )
+        .await;
+        assert!(ctx.is_ok());
+        let ctx = ctx.unwrap();
+        assert!(!ctx.verbose);
+        assert!(!ctx.debug);
+        assert!(!ctx.quiet);
+    }
+
+    #[tokio::test]
+    async fn test_cli_context_builder_missing_required_fields() {
+        // Missing template_context and matches should fail
+        let result = super::CliContextBuilder::default().build_async().await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_cli_context_get_prompt_library() {
+        let template_context = swissarmyhammer_config::TemplateContext::new();
+        let matches = clap::Command::new("test").get_matches_from(vec!["test"]);
+
+        let ctx = super::CliContext::new(
+            template_context,
+            super::OutputFormat::Table,
+            None,
+            false,
+            false,
+            false,
+            matches,
+        )
+        .await
+        .unwrap();
+
+        let library = ctx.get_prompt_library();
+        assert!(library.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_cli_context_render_prompt_nonexistent() {
+        let template_context = swissarmyhammer_config::TemplateContext::new();
+        let matches = clap::Command::new("test").get_matches_from(vec!["test"]);
+
+        let ctx = super::CliContext::new(
+            template_context,
+            super::OutputFormat::Table,
+            None,
+            false,
+            false,
+            false,
+            matches,
+        )
+        .await
+        .unwrap();
+
+        let params = std::collections::HashMap::new();
+        let result = ctx.render_prompt("nonexistent-prompt", &params);
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_cli_context_display_formats() {
+        use serde::Serialize;
+
+        #[derive(Serialize)]
+        struct Item {
+            name: String,
+            value: i32,
+        }
+
+        let template_context = swissarmyhammer_config::TemplateContext::new();
+        let matches = clap::Command::new("test").get_matches_from(vec!["test"]);
+
+        // Test with format_option overriding format
+        let ctx = super::CliContextBuilder::default()
+            .template_context(template_context.clone())
+            .matches(matches)
+            .format(super::OutputFormat::Table)
+            .format_option(Some(super::OutputFormat::Json))
+            .build_async()
+            .await
+            .unwrap();
+
+        let items = vec![
+            Item {
+                name: "a".into(),
+                value: 1,
+            },
+            Item {
+                name: "b".into(),
+                value: 2,
+            },
+        ];
+
+        // display uses format_option when set
+        let result = ctx.display(items);
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_cli_context_display_empty_items() {
+        use serde::Serialize;
+
+        #[derive(Serialize)]
+        struct Item {
+            name: String,
+        }
+
+        let template_context = swissarmyhammer_config::TemplateContext::new();
+        let matches = clap::Command::new("test").get_matches_from(vec!["test"]);
+
+        let ctx = super::CliContext::new(
+            template_context,
+            super::OutputFormat::Table,
+            None,
+            false,
+            false,
+            false,
+            matches,
+        )
+        .await
+        .unwrap();
+
+        let items: Vec<Item> = vec![];
+        let result = ctx.display(items);
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_cli_context_display_yaml() {
+        use serde::Serialize;
+
+        #[derive(Serialize)]
+        struct Item {
+            name: String,
+        }
+
+        let template_context = swissarmyhammer_config::TemplateContext::new();
+        let matches = clap::Command::new("test").get_matches_from(vec!["test"]);
+
+        let ctx = super::CliContextBuilder::default()
+            .template_context(template_context)
+            .matches(matches)
+            .format(super::OutputFormat::Yaml)
+            .build_async()
+            .await
+            .unwrap();
+
+        let items = vec![Item {
+            name: "test".into(),
+        }];
+        let result = ctx.display(items);
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_cli_context_display_table_with_items() {
+        use serde::Serialize;
+
+        #[derive(Serialize)]
+        struct Item {
+            name: String,
+            status: String,
+        }
+
+        let template_context = swissarmyhammer_config::TemplateContext::new();
+        let matches = clap::Command::new("test").get_matches_from(vec!["test"]);
+
+        let ctx = super::CliContext::new(
+            template_context,
+            super::OutputFormat::Table,
+            None,
+            false,
+            false,
+            false,
+            matches,
+        )
+        .await
+        .unwrap();
+
+        let items = vec![Item {
+            name: "test".into(),
+            status: "ok".into(),
+        }];
+        let result = ctx.display(items);
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_cli_context_display_prompts() {
+        use crate::commands::prompt::display::{DisplayRows, PromptRow};
+
+        let template_context = swissarmyhammer_config::TemplateContext::new();
+        let matches = clap::Command::new("test").get_matches_from(vec!["test"]);
+
+        let ctx = super::CliContextBuilder::default()
+            .template_context(template_context)
+            .matches(matches)
+            .format_option(Some(super::OutputFormat::Json))
+            .build_async()
+            .await
+            .unwrap();
+
+        // Test Standard variant
+        let rows = DisplayRows::Standard(vec![PromptRow {
+            name: "test".into(),
+            title: "Test Prompt".into(),
+            source: "builtin".into(),
+        }]);
+        let result = ctx.display_prompts(rows);
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_cli_context_display_prompts_verbose() {
+        use crate::commands::prompt::display::{DisplayRows, VerbosePromptRow};
+
+        let template_context = swissarmyhammer_config::TemplateContext::new();
+        let matches = clap::Command::new("test").get_matches_from(vec!["test"]);
+
+        let ctx = super::CliContextBuilder::default()
+            .template_context(template_context)
+            .matches(matches)
+            .format_option(Some(super::OutputFormat::Json))
+            .build_async()
+            .await
+            .unwrap();
+
+        // Test Verbose variant
+        let rows = DisplayRows::Verbose(vec![VerbosePromptRow {
+            name: "test".into(),
+            title: "Test Prompt".into(),
+            description: "A test prompt".into(),
+            source: "builtin".into(),
+            category: "test".into(),
+        }]);
+        let result = ctx.display_prompts(rows);
+        assert!(result.is_ok());
+    }
 }

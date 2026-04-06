@@ -190,4 +190,39 @@ Content without closing delimiter
         assert!(result.metadata.is_none());
         assert_eq!(result.content, content);
     }
+
+    #[test]
+    fn test_parse_frontmatter_crlf_line_endings() {
+        let content = "---\r\nname: test-mode\r\ndescription: A test\r\n---\r\nSystem prompt\r\n";
+
+        let result = parse_frontmatter(content).unwrap();
+        assert!(result.metadata.is_some());
+
+        let metadata = result.metadata.unwrap();
+        assert_eq!(
+            metadata.get("name").and_then(|v| v.as_str()),
+            Some("test-mode")
+        );
+        assert!(result.content.contains("System prompt"));
+    }
+
+    #[test]
+    fn test_parse_frontmatter_no_newline_after_opening_delimiter() {
+        // "---" followed by content directly (no newline), should be treated as no frontmatter
+        let content = "---some text here\nmore content\n---\n";
+
+        let result = parse_frontmatter(content).unwrap();
+        assert!(result.metadata.is_none());
+        assert_eq!(result.content, content);
+    }
+
+    #[test]
+    fn test_parse_frontmatter_leading_whitespace() {
+        // Content with leading whitespace before the "---" delimiter
+        let content = "   ---\nname: test\ndescription: desc\n---\nPrompt content\n";
+
+        let result = parse_frontmatter(content).unwrap();
+        // trim_start() is called, so leading whitespace is stripped and "---" is found
+        assert!(result.metadata.is_some());
+    }
 }

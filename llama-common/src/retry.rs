@@ -429,4 +429,263 @@ mod tests {
         delay = manager.calculate_next_delay(delay);
         assert_eq!(delay, Duration::from_millis(8000));
     }
+
+    #[test]
+    fn test_retry_manager_new_uses_defaults() {
+        let manager = RetryManager::new();
+        // Verify it uses defaults by checking delay calculation behaves correctly
+        let delay = manager.calculate_next_delay(Duration::from_millis(1000));
+        // Default backoff_multiplier is 2.0
+        assert_eq!(delay, Duration::from_millis(2000));
+    }
+
+    #[test]
+    fn test_retry_manager_default_trait() {
+        let manager = RetryManager::default();
+        let delay = manager.calculate_next_delay(Duration::from_millis(1000));
+        assert_eq!(delay, Duration::from_millis(2000));
+    }
+
+    #[test]
+    fn test_retry_config_clone_and_debug() {
+        let config = RetryConfig::default();
+        let cloned = config.clone();
+        assert_eq!(cloned.max_retries, config.max_retries);
+        assert_eq!(cloned.initial_delay, config.initial_delay);
+        assert_eq!(cloned.backoff_multiplier, config.backoff_multiplier);
+        assert_eq!(cloned.max_delay, config.max_delay);
+        assert_eq!(cloned.use_jitter, config.use_jitter);
+        // Debug formatting works
+        let debug = format!("{:?}", config);
+        assert!(debug.contains("RetryConfig"));
+    }
+
+    #[tokio::test]
+    async fn test_retry_succeeds_on_first_attempt() {
+        let operation = TestOperation::new(0, TestError::Retriable);
+        let retry_manager = RetryManager::with_config(RetryConfig {
+            max_retries: 3,
+            initial_delay: Duration::from_millis(1),
+            backoff_multiplier: 1.0,
+            max_delay: Duration::from_millis(10),
+            use_jitter: false,
+        });
+
+        let result = retry_manager.retry("test", || operation.execute()).await;
+
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 1);
+        // Only one attempt needed
+        assert_eq!(operation.attempts.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn test_calculate_delay_with_jitter() {
+        let manager = RetryManager::with_config(RetryConfig {
+            use_jitter: true,
+            max_delay: Duration::from_secs(60),
+            ..Default::default()
+        });
+
+        let base_delay = Duration::from_millis(1000);
+        let delay = manager.calculate_delay(base_delay, 1);
+
+        // With jitter, delay should be >= base_delay (jitter adds, never subtracts)
+        assert!(delay >= base_delay);
+        // Jitter adds up to 25%, so delay <= base_delay * 1.25
+        let max_with_jitter = Duration::from_millis(1250);
+        assert!(delay <= max_with_jitter);
+    }
+
+    #[test]
+    fn test_calculate_delay_capped_by_max_delay() {
+        let manager = RetryManager::with_config(RetryConfig {
+            use_jitter: false,
+            max_delay: Duration::from_millis(500),
+            ..Default::default()
+        });
+
+        let base_delay = Duration::from_millis(1000);
+        let delay = manager.calculate_delay(base_delay, 1);
+
+        // Should be capped at max_delay
+        assert_eq!(delay, Duration::from_millis(500));
+    }
+
+    #[test]
+    fn test_calculate_next_delay_capped_by_max_delay() {
+        let manager = RetryManager::with_config(RetryConfig {
+            backoff_multiplier: 10.0,
+            max_delay: Duration::from_millis(5000),
+            ..Default::default()
+        });
+
+        let delay = manager.calculate_next_delay(Duration::from_millis(1000));
+        // 1000 * 10.0 = 10000ms, but capped at 5000ms
+        assert_eq!(delay, Duration::from_millis(5000));
+    }
+
+    /// Error type that exercises should_stop_retrying and custom_retry_delay
+    #[derive(Error, Debug, PartialEq, Clone)]
+    enum StoppableError {
+        #[error("Stop after attempt")]
+        StopRetrying,
+        #[error("Custom delay error")]
+        CustomDelay,
+    }
+
+    impl RetryableError for StoppableError {
+        fn is_retriable(&self) -> bool {
+            true
+        }
+
+        fn should_stop_retrying(&self, _attempt: u32) -> bool {
+            matches!(self, StoppableError::StopRetrying)
+        }
+
+        fn custom_retry_delay(&self, _attempt: u32) -> Option<Duration> {
+            match self {
+                StoppableError::CustomDelay => Some(Duration::from_millis(1)),
+                _ => None,
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_retry_should_stop_retrying() {
+        let attempts = std::sync::Arc::new(AtomicU32::new(0));
+        let attempts_clone = attempts.clone();
+        let retry_manager = RetryManager::with_config(RetryConfig {
+            max_retries: 10,
+            initial_delay: Duration::from_millis(1),
+            backoff_multiplier: 1.0,
+            max_delay: Duration::from_millis(10),
+            use_jitter: false,
+        });
+
+        let result: Result<u32, StoppableError> = retry_manager
+            .retry("test", || {
+                let a = attempts_clone.clone();
+                async move {
+                    a.fetch_add(1, Ordering::SeqCst);
+                    Err(StoppableError::StopRetrying)
+                }
+            })
+            .await;
+
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), StoppableError::StopRetrying);
+        // Should stop after first failed attempt because should_stop_retrying returns true
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn test_retry_with_custom_delay() {
+        let attempts = std::sync::Arc::new(AtomicU32::new(0));
+        let attempts_clone = attempts.clone();
+        let retry_manager = RetryManager::with_config(RetryConfig {
+            max_retries: 2,
+            initial_delay: Duration::from_millis(1),
+            backoff_multiplier: 1.0,
+            max_delay: Duration::from_millis(10),
+            use_jitter: false,
+        });
+
+        let result: Result<u32, StoppableError> = retry_manager
+            .retry("test", || {
+                let a = attempts_clone.clone();
+                async move {
+                    let attempt = a.fetch_add(1, Ordering::SeqCst);
+                    if attempt < 1 {
+                        Err(StoppableError::CustomDelay)
+                    } else {
+                        Ok(42)
+                    }
+                }
+            })
+            .await;
+
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 42);
+    }
+
+    #[test]
+    fn test_classify_error_bad_request() {
+        #[derive(Error, Debug)]
+        #[error("{0}")]
+        struct E(String);
+
+        assert!(!classify_error_for_retry(&E("400 Bad Request".to_string())));
+    }
+
+    #[test]
+    fn test_classify_error_dns() {
+        #[derive(Error, Debug)]
+        #[error("{0}")]
+        struct E(String);
+
+        assert!(classify_error_for_retry(&E(
+            "DNS resolution failed".to_string()
+        )));
+    }
+
+    #[test]
+    fn test_classify_error_unknown_defaults_to_retriable() {
+        #[derive(Error, Debug)]
+        #[error("{0}")]
+        struct E(String);
+
+        assert!(classify_error_for_retry(&E(
+            "some completely unknown error".to_string()
+        )));
+    }
+
+    #[test]
+    fn test_classify_error_lowercase_patterns() {
+        #[derive(Error, Debug)]
+        #[error("{0}")]
+        struct E(String);
+
+        // lowercase "internal server error" without code
+        assert!(classify_error_for_retry(&E(
+            "internal server error occurred".to_string()
+        )));
+        assert!(classify_error_for_retry(&E("bad gateway".to_string())));
+        assert!(classify_error_for_retry(&E(
+            "service unavailable".to_string()
+        )));
+        assert!(classify_error_for_retry(&E("gateway timeout".to_string())));
+        assert!(!classify_error_for_retry(&E(
+            "too many requests".to_string()
+        )));
+        assert!(!classify_error_for_retry(&E("unauthorized".to_string())));
+        assert!(!classify_error_for_retry(&E("forbidden".to_string())));
+        assert!(!classify_error_for_retry(&E("not found".to_string())));
+        assert!(!classify_error_for_retry(&E("bad request".to_string())));
+    }
+
+    #[test]
+    fn test_pseudo_random_returns_values_in_range() {
+        // Exercise pseudo_random indirectly through calculate_delay with jitter
+        let manager = RetryManager::with_config(RetryConfig {
+            use_jitter: true,
+            max_delay: Duration::from_secs(60),
+            ..Default::default()
+        });
+
+        // Call multiple times to exercise the LCG state machine
+        for _ in 0..10 {
+            let delay = manager.calculate_delay(Duration::from_millis(1000), 1);
+            assert!(delay >= Duration::from_millis(1000));
+            assert!(delay <= Duration::from_millis(1250));
+        }
+    }
+
+    #[test]
+    fn test_retryable_error_default_methods() {
+        // Test the default implementations of custom_retry_delay and should_stop_retrying
+        let err = TestError::Retriable;
+        assert_eq!(err.custom_retry_delay(1), None);
+        assert!(!err.should_stop_retrying(1));
+    }
 }

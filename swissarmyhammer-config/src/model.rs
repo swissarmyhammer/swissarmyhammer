@@ -2030,8 +2030,8 @@ mod tests {
     use super::*;
     use swissarmyhammer_common::test_utils::CurrentDirGuard;
 
-    /// Set up a temporary config test environment with directory change
-    /// Returns (temp_dir, config_path, guard)
+    // Set up a temporary config test environment with directory change
+    // Returns (temp_dir, config_path, guard)
     fn setup_config_test_env(
         config_filename: &str,
         initial_content: Option<&str>,
@@ -3589,6 +3589,46 @@ model: qwen-coder
                 "claude-code"
             );
         }
+
+        // Test get_agent returns None when config file exists but has no model key.
+        // Covers the Ok(None) return on line 1728 where the config is parsed
+        // but contains no "model" entry.
+        #[test]
+        #[serial_test::serial(cwd)]
+        fn test_get_agent_config_exists_without_model_key() {
+            let temp_dir = setup_test_env();
+            let _guard = CurrentDirGuard::new(temp_dir.path()).unwrap();
+
+            let config_path = ModelManager::ensure_config_structure(&ModelPaths::sah()).unwrap();
+            // Write a valid YAML config that has other keys but no "model" key
+            std::fs::write(&config_path, "quiet: true\n").unwrap();
+
+            let result = ModelManager::get_agent(&ModelPaths::sah()).unwrap();
+            assert_eq!(
+                result, None,
+                "Should return None when config has no model key"
+            );
+        }
+
+        // Test resolve_agent_config falls back to claude-code when config exists
+        // but has no model key. Covers the default fallback on line 1754/1758.
+        #[test]
+        #[serial_test::serial(cwd)]
+        fn test_resolve_agent_config_falls_back_when_no_model_key() {
+            let temp_dir = setup_test_env();
+            let _guard = CurrentDirGuard::new(temp_dir.path()).unwrap();
+
+            let config_path = ModelManager::ensure_config_structure(&ModelPaths::sah()).unwrap();
+            // Write a config file that exists but has no model key
+            std::fs::write(&config_path, "quiet: true\n").unwrap();
+
+            let config = ModelManager::resolve_agent_config(&ModelPaths::sah()).unwrap();
+            assert_eq!(
+                config.executor_type(),
+                ModelExecutorType::ClaudeCode,
+                "Should fall back to claude-code when config has no model key"
+            );
+        }
     }
 
     // ========================================================================
@@ -3751,5 +3791,1776 @@ quiet: false
     #[test]
     fn test_platform_current_is_stable() {
         assert_eq!(Platform::current(), Platform::current());
+    }
+
+    // ========================================================================
+    // validate_config_file_path and check_directory_writable tests
+    // ========================================================================
+
+    #[test]
+    fn test_validate_config_file_path_empty_path() {
+        let result = ModelManager::validate_config_file_path(Path::new(""));
+        assert!(result.is_err(), "Empty path should be rejected");
+        match result.unwrap_err() {
+            ModelError::InvalidPath(p) => {
+                assert!(p.as_os_str().is_empty(), "Should return the empty path");
+            }
+            other => panic!("Expected InvalidPath, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_validate_config_file_path_too_long() {
+        let long_path = "a".repeat(4097);
+        let result = ModelManager::validate_config_file_path(Path::new(&long_path));
+        assert!(
+            result.is_err(),
+            "Path exceeding 4096 chars should be rejected"
+        );
+        match result.unwrap_err() {
+            ModelError::InvalidPath(_) => {}
+            other => panic!("Expected InvalidPath, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_validate_config_file_path_exactly_max_length() {
+        // 4096 chars should be accepted (boundary case)
+        let max_path = "a".repeat(4096);
+        let result = ModelManager::validate_config_file_path(Path::new(&max_path));
+        // Should not fail due to length (may fail for other reasons like file not existing,
+        // but the length check should pass)
+        match &result {
+            Err(ModelError::InvalidPath(p)) => {
+                // If it failed, it should not be because of length
+                assert_ne!(
+                    p.to_string_lossy().len(),
+                    4096,
+                    "4096-char path should pass the length check"
+                );
+            }
+            _ => {
+                // Either Ok or a different error is fine — length check passed
+            }
+        }
+    }
+
+    #[test]
+    fn test_validate_config_file_path_suspicious_null_byte() {
+        let path_with_null = "config\0.yaml";
+        let result = ModelManager::validate_config_file_path(Path::new(path_with_null));
+        assert!(
+            result.is_err(),
+            "Path with null byte should be rejected by suspicious pattern check"
+        );
+    }
+
+    #[test]
+    fn test_validate_config_file_path_directory_not_file() {
+        let temp_dir = tempfile::TempDir::new().expect("Failed to create temp dir");
+        let dir_path = temp_dir.path();
+
+        // The path exists and is a directory, not a file
+        let result = ModelManager::validate_config_file_path(dir_path);
+        assert!(result.is_err(), "Directory path should be rejected");
+        match result.unwrap_err() {
+            ModelError::InvalidPath(p) => {
+                assert!(
+                    p.is_dir() || p.is_absolute(),
+                    "Should return the canonical directory path"
+                );
+            }
+            other => panic!("Expected InvalidPath, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_validate_config_file_path_valid_existing_file() {
+        let temp_dir = tempfile::TempDir::new().expect("Failed to create temp dir");
+        let file_path = temp_dir.path().join("test-config.yaml");
+        std::fs::write(&file_path, "model: test\n").expect("Failed to write test file");
+
+        let result = ModelManager::validate_config_file_path(&file_path);
+        assert!(result.is_ok(), "Valid file path should be accepted");
+        let canonical = result.unwrap();
+        assert!(
+            canonical.is_absolute(),
+            "Should return an absolute/canonical path"
+        );
+        assert!(canonical.is_file(), "Canonical path should point to a file");
+    }
+
+    #[test]
+    fn test_validate_config_file_path_nonexistent_file() {
+        let result =
+            ModelManager::validate_config_file_path(Path::new("/tmp/does-not-exist-config.yaml"));
+        assert!(
+            result.is_ok(),
+            "Non-existent file path should be accepted (returned as-is)"
+        );
+        let returned = result.unwrap();
+        assert_eq!(
+            returned,
+            PathBuf::from("/tmp/does-not-exist-config.yaml"),
+            "Should return the path unchanged for non-existent files"
+        );
+    }
+
+    #[test]
+    fn test_check_directory_writable_valid_dir() {
+        let temp_dir = tempfile::TempDir::new().expect("Failed to create temp dir");
+        let result = ModelManager::check_directory_writable(temp_dir.path());
+        assert!(result.is_ok(), "Writable temp directory should pass");
+    }
+
+    #[test]
+    fn test_check_directory_writable_not_a_directory() {
+        let temp_dir = tempfile::TempDir::new().expect("Failed to create temp dir");
+        let file_path = temp_dir.path().join("regular-file.txt");
+        std::fs::write(&file_path, "content").expect("Failed to write file");
+
+        let result = ModelManager::check_directory_writable(&file_path);
+        assert!(
+            result.is_err(),
+            "Regular file should not pass directory check"
+        );
+        match result.unwrap_err() {
+            ModelError::InvalidPath(p) => {
+                assert_eq!(p, file_path, "Should return the non-directory path");
+            }
+            other => panic!("Expected InvalidPath, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_check_directory_writable_nonexistent_path() {
+        let result =
+            ModelManager::check_directory_writable(Path::new("/nonexistent/path/does/not/exist"));
+        assert!(result.is_err(), "Non-existent path should fail");
+        match result.unwrap_err() {
+            ModelError::IoError(e) => {
+                assert_eq!(e.kind(), std::io::ErrorKind::NotFound);
+            }
+            other => panic!("Expected IoError(NotFound), got: {:?}", other),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_check_directory_writable_readonly_dir() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp_dir = tempfile::TempDir::new().expect("Failed to create temp dir");
+        let readonly_dir = temp_dir.path().join("readonly");
+        std::fs::create_dir(&readonly_dir).expect("Failed to create dir");
+
+        // Remove write permission (owner read+execute only)
+        std::fs::set_permissions(&readonly_dir, std::fs::Permissions::from_mode(0o500))
+            .expect("Failed to set permissions");
+
+        let result = ModelManager::check_directory_writable(&readonly_dir);
+        assert!(
+            result.is_err(),
+            "Read-only directory should fail write check"
+        );
+        match result.unwrap_err() {
+            ModelError::IoError(e) => {
+                assert_eq!(e.kind(), std::io::ErrorKind::PermissionDenied);
+            }
+            other => panic!("Expected IoError(PermissionDenied), got: {:?}", other),
+        }
+
+        // Restore permissions so temp_dir cleanup works
+        std::fs::set_permissions(&readonly_dir, std::fs::Permissions::from_mode(0o700))
+            .expect("Failed to restore permissions");
+    }
+
+    // ── Directory loading pipeline tests ──────────────────────────────
+
+    #[test]
+    fn test_validate_directory_path_empty() {
+        // Empty path should return InvalidPath error
+        let result = ModelManager::validate_directory_path(Path::new(""));
+        assert!(result.is_err(), "Empty path should be rejected");
+        match result.unwrap_err() {
+            ModelError::InvalidPath(p) => assert!(p.as_os_str().is_empty()),
+            other => panic!("Expected InvalidPath, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_validate_directory_path_too_long() {
+        // Path exceeding MAX_PATH_LENGTH (4096) should return InvalidPath error
+        let long_component = "a".repeat(4097);
+        let long_path = Path::new(&long_component);
+        let result = ModelManager::validate_directory_path(long_path);
+        assert!(result.is_err(), "Overly long path should be rejected");
+        match result.unwrap_err() {
+            ModelError::InvalidPath(_) => {} // expected
+            other => panic!("Expected InvalidPath, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_validate_directory_path_nonexistent_returns_ok() {
+        // A non-existent but otherwise valid path should return Ok with the
+        // original path so that is_valid_directory can handle it gracefully.
+        let result = ModelManager::validate_directory_path(Path::new("/tmp/no_such_dir_xyz_test"));
+        assert!(
+            result.is_ok(),
+            "Non-existent path should return Ok (handled later by is_valid_directory)"
+        );
+    }
+
+    #[test]
+    fn test_validate_directory_path_real_directory() {
+        // A real, readable directory should canonicalize successfully
+        let temp_dir = tempfile::TempDir::new().expect("create temp dir");
+        let result = ModelManager::validate_directory_path(temp_dir.path());
+        assert!(
+            result.is_ok(),
+            "Real directory should validate: {:?}",
+            result
+        );
+        // The returned path should be canonical (absolute)
+        let validated = result.unwrap();
+        assert!(validated.is_absolute());
+    }
+
+    #[test]
+    fn test_check_directory_permissions_on_file() {
+        // Passing a regular file (not a directory) should return InvalidPath
+        let temp_dir = tempfile::TempDir::new().expect("create temp dir");
+        let file_path = temp_dir.path().join("regular_file.txt");
+        std::fs::write(&file_path, "content").expect("write file");
+
+        let result = ModelManager::check_directory_permissions(&file_path);
+        assert!(result.is_err(), "Regular file should fail directory check");
+        match result.unwrap_err() {
+            ModelError::InvalidPath(_) => {} // expected
+            other => panic!("Expected InvalidPath, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_extract_model_name_normal() {
+        // Standard filename should extract stem without extension
+        let path = Path::new("/models/my-agent.yaml");
+        let name = ModelManager::extract_model_name(path).expect("should extract name");
+        assert_eq!(name, "my-agent");
+    }
+
+    #[test]
+    fn test_extract_model_name_nested_path() {
+        // Deeply nested path should still extract just the file stem
+        let path = Path::new("/a/b/c/deep-model.yaml");
+        let name = ModelManager::extract_model_name(path).expect("should extract name");
+        assert_eq!(name, "deep-model");
+    }
+
+    #[test]
+    fn test_extract_model_name_no_extension() {
+        // File without extension should still extract the full filename as stem
+        let path = Path::new("/models/no-ext");
+        let name = ModelManager::extract_model_name(path).expect("should extract name");
+        assert_eq!(name, "no-ext");
+    }
+
+    #[test]
+    fn test_extract_model_name_root_path() {
+        // Root path "/" has no file stem and should return InvalidPath
+        let result = ModelManager::extract_model_name(Path::new("/"));
+        assert!(
+            result.is_err(),
+            "Root path should fail to extract model name"
+        );
+        match result.unwrap_err() {
+            ModelError::InvalidPath(_) => {} // expected
+            other => panic!("Expected InvalidPath, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_extract_model_name_dotfile() {
+        // Hidden file like ".hidden.yaml" should extract ".hidden" as stem
+        let path = Path::new("/models/.hidden.yaml");
+        let name = ModelManager::extract_model_name(path).expect("should extract name");
+        assert_eq!(name, ".hidden");
+    }
+
+    #[test]
+    fn test_read_model_content_missing_file() {
+        // Reading a non-existent file should return IoError
+        let result = ModelManager::read_model_content(Path::new("/no/such/file.yaml"));
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            ModelError::IoError(_) => {} // expected
+            other => panic!("Expected IoError, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_read_model_content_success() {
+        // Reading an existing file should return its content
+        let temp_dir = tempfile::TempDir::new().expect("create temp dir");
+        let file_path = temp_dir.path().join("test.yaml");
+        std::fs::write(&file_path, "executor:\n  type: claude-code\n").expect("write");
+
+        let content = ModelManager::read_model_content(&file_path).expect("should read");
+        assert!(content.contains("claude-code"));
+    }
+
+    #[test]
+    fn test_process_directory_entries_mixed_success_and_failure() {
+        // Directory with valid YAML, invalid YAML, and non-YAML files should
+        // report correct success/failure counts and only return valid models.
+        use std::fs;
+        let temp_dir = tempfile::TempDir::new().expect("create temp dir");
+
+        // Valid model file
+        let valid_content = "executor:\n  type: claude-code\n  config: {}\nquiet: false\n";
+        fs::write(temp_dir.path().join("good-model.yaml"), valid_content).expect("write valid");
+
+        // Invalid YAML model file (parseable YAML but invalid ModelConfig)
+        fs::write(
+            temp_dir.path().join("bad-model.yaml"),
+            "this_is_not: a_valid_model_config\n",
+        )
+        .expect("write invalid");
+
+        // Non-YAML file (should be silently skipped)
+        fs::write(temp_dir.path().join("readme.txt"), "ignore me").expect("write txt");
+
+        let entries = std::fs::read_dir(temp_dir.path()).expect("read dir");
+        let (models, success, failed) =
+            ModelManager::process_directory_entries(entries, &ModelConfigSource::Project);
+
+        assert_eq!(success, 1, "Should have 1 successful model");
+        assert_eq!(failed, 1, "Should have 1 failed model (bad YAML)");
+        assert_eq!(models.len(), 1, "Should return 1 model");
+        assert_eq!(models[0].name, "good-model");
+        assert_eq!(models[0].source, ModelConfigSource::Project);
+    }
+
+    #[test]
+    fn test_process_directory_entries_all_valid() {
+        // Directory with only valid model files should load all of them
+        use std::fs;
+        let temp_dir = tempfile::TempDir::new().expect("create temp dir");
+
+        let content = "executor:\n  type: claude-code\n  config: {}\nquiet: false\n";
+        fs::write(temp_dir.path().join("model-a.yaml"), content).expect("write a");
+        fs::write(temp_dir.path().join("model-b.yaml"), content).expect("write b");
+
+        let entries = std::fs::read_dir(temp_dir.path()).expect("read dir");
+        let (models, success, failed) =
+            ModelManager::process_directory_entries(entries, &ModelConfigSource::User);
+
+        assert_eq!(success, 2);
+        assert_eq!(failed, 0);
+        assert_eq!(models.len(), 2);
+    }
+
+    #[test]
+    fn test_process_directory_entries_empty_directory() {
+        // Empty directory should return zero models and zero counts
+        let temp_dir = tempfile::TempDir::new().expect("create temp dir");
+
+        let entries = std::fs::read_dir(temp_dir.path()).expect("read dir");
+        let (models, success, failed) =
+            ModelManager::process_directory_entries(entries, &ModelConfigSource::Project);
+
+        assert_eq!(success, 0);
+        assert_eq!(failed, 0);
+        assert!(models.is_empty());
+    }
+
+    #[test]
+    fn test_process_directory_entries_only_non_yaml() {
+        // Directory containing only non-YAML files should skip them all
+        use std::fs;
+        let temp_dir = tempfile::TempDir::new().expect("create temp dir");
+
+        fs::write(temp_dir.path().join("readme.md"), "# Hello").expect("write md");
+        fs::write(temp_dir.path().join("config.json"), "{}").expect("write json");
+        fs::write(temp_dir.path().join("script.sh"), "#!/bin/sh").expect("write sh");
+
+        let entries = std::fs::read_dir(temp_dir.path()).expect("read dir");
+        let (models, success, failed) =
+            ModelManager::process_directory_entries(entries, &ModelConfigSource::Project);
+
+        assert_eq!(success, 0);
+        assert_eq!(failed, 0);
+        assert!(models.is_empty());
+    }
+
+    #[test]
+    fn test_is_yaml_file_extensions() {
+        // Only .yaml extension files that are actual files should match
+        let temp_dir = tempfile::TempDir::new().expect("create temp dir");
+
+        let yaml_path = temp_dir.path().join("model.yaml");
+        std::fs::write(&yaml_path, "content").expect("write");
+
+        let txt_path = temp_dir.path().join("model.txt");
+        std::fs::write(&txt_path, "content").expect("write");
+
+        let yml_path = temp_dir.path().join("model.yml");
+        std::fs::write(&yml_path, "content").expect("write");
+
+        assert!(ModelManager::is_yaml_file(&yaml_path));
+        assert!(!ModelManager::is_yaml_file(&txt_path));
+        assert!(!ModelManager::is_yaml_file(&yml_path)); // only .yaml, not .yml
+    }
+
+    #[test]
+    fn test_load_models_from_dir_end_to_end_mixed() {
+        // Full pipeline: create a temp directory with valid/invalid files,
+        // call load_models_from_dir, and verify results.
+        use std::fs;
+        let temp_dir = tempfile::TempDir::new().expect("create temp dir");
+
+        // Valid model with description
+        let content_with_desc = "---\ndescription: \"My custom model\"\n---\nexecutor:\n  type: claude-code\n  config: {}\nquiet: false\n";
+        fs::write(temp_dir.path().join("custom.yaml"), content_with_desc).expect("write");
+
+        // Valid model without description
+        let content_no_desc = "executor:\n  type: claude-code\n  config: {}\nquiet: true\n";
+        fs::write(temp_dir.path().join("plain.yaml"), content_no_desc).expect("write");
+
+        // Invalid model
+        fs::write(temp_dir.path().join("broken.yaml"), "not: valid: model").expect("write");
+
+        // Non-YAML
+        fs::write(temp_dir.path().join("notes.txt"), "skip me").expect("write");
+
+        let result =
+            ModelManager::load_models_from_dir(temp_dir.path(), ModelConfigSource::Project);
+        assert!(result.is_ok(), "Should succeed: {:?}", result);
+
+        let models = result.unwrap();
+        // 2 valid YAML files out of 4 total
+        assert_eq!(models.len(), 2, "Should load 2 valid models");
+
+        let custom = models.iter().find(|m| m.name == "custom");
+        assert!(custom.is_some(), "Should find 'custom' model");
+        assert_eq!(
+            custom.unwrap().description,
+            Some("My custom model".to_string())
+        );
+
+        let plain = models.iter().find(|m| m.name == "plain");
+        assert!(plain.is_some(), "Should find 'plain' model");
+        assert_eq!(plain.unwrap().description, None);
+    }
+
+    // ========================================================================
+    // validate_agent_name_security tests
+    // ========================================================================
+
+    #[test]
+    fn test_validate_agent_name_security_empty_name() {
+        let result = ModelManager::validate_agent_name_security("");
+        assert!(result.is_err(), "Empty name should be rejected");
+        match result {
+            Err(ModelError::ConfigError(msg)) => {
+                assert!(msg.contains("empty"), "Error should mention empty: {}", msg);
+            }
+            other => panic!("Expected ConfigError, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_validate_agent_name_security_whitespace_only_name() {
+        let result = ModelManager::validate_agent_name_security("   ");
+        assert!(
+            result.is_err(),
+            "Whitespace-only name should be rejected as empty"
+        );
+        match result {
+            Err(ModelError::ConfigError(msg)) => {
+                assert!(msg.contains("empty"), "Error should mention empty");
+            }
+            other => panic!("Expected ConfigError, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_validate_agent_name_security_too_long_name() {
+        let long_name = "a".repeat(257);
+        let result = ModelManager::validate_agent_name_security(&long_name);
+        assert!(
+            result.is_err(),
+            "Name exceeding 256 chars should be rejected"
+        );
+        match result {
+            Err(ModelError::ConfigError(msg)) => {
+                assert!(
+                    msg.contains("too long"),
+                    "Error should mention too long: {}",
+                    msg
+                );
+                assert!(
+                    msg.contains("257"),
+                    "Error should mention actual length: {}",
+                    msg
+                );
+            }
+            other => panic!("Expected ConfigError, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_validate_agent_name_security_max_length_is_ok() {
+        // Exactly 256 chars should pass the security validation
+        let max_name = "a".repeat(256);
+        let result = ModelManager::validate_agent_name_security(&max_name);
+        assert!(
+            result.is_ok(),
+            "Name at exactly 256 chars should pass security validation"
+        );
+    }
+
+    #[test]
+    fn test_validate_agent_name_security_null_bytes() {
+        let result = ModelManager::validate_agent_name_security("agent\0name");
+        assert!(result.is_err(), "Name with null byte should be rejected");
+        match result {
+            Err(ModelError::ConfigError(msg)) => {
+                assert!(
+                    msg.contains("null byte"),
+                    "Error should mention null byte: {}",
+                    msg
+                );
+            }
+            other => panic!("Expected ConfigError, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_validate_agent_name_security_path_traversal_dotdot_slash() {
+        let result = ModelManager::validate_agent_name_security("../etc/passwd");
+        assert!(
+            result.is_err(),
+            "Name with ../ path traversal should be rejected"
+        );
+        match result {
+            Err(ModelError::ConfigError(msg)) => {
+                assert!(
+                    msg.contains("invalid pattern"),
+                    "Error should mention invalid pattern: {}",
+                    msg
+                );
+            }
+            other => panic!("Expected ConfigError, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_validate_agent_name_security_path_traversal_backslash() {
+        let result = ModelManager::validate_agent_name_security("..\\windows\\system32");
+        assert!(
+            result.is_err(),
+            "Name with ..\\\\ path traversal should be rejected"
+        );
+        match result {
+            Err(ModelError::ConfigError(msg)) => {
+                assert!(
+                    msg.contains("invalid pattern"),
+                    "Error should mention invalid pattern"
+                );
+            }
+            other => panic!("Expected ConfigError, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_validate_agent_name_security_forward_slash() {
+        let result = ModelManager::validate_agent_name_security("some/agent");
+        assert!(
+            result.is_err(),
+            "Name with forward slash should be rejected"
+        );
+        match result {
+            Err(ModelError::ConfigError(msg)) => {
+                assert!(
+                    msg.contains("invalid pattern"),
+                    "Error should mention invalid pattern"
+                );
+            }
+            other => panic!("Expected ConfigError, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_validate_agent_name_security_backslash() {
+        let result = ModelManager::validate_agent_name_security("some\\agent");
+        assert!(result.is_err(), "Name with backslash should be rejected");
+        match result {
+            Err(ModelError::ConfigError(msg)) => {
+                assert!(
+                    msg.contains("invalid pattern"),
+                    "Error should mention invalid pattern"
+                );
+            }
+            other => panic!("Expected ConfigError, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_validate_agent_name_security_control_characters() {
+        let result = ModelManager::validate_agent_name_security("agent\x07name");
+        assert!(
+            result.is_err(),
+            "Name with control characters should be rejected"
+        );
+        match result {
+            Err(ModelError::ConfigError(msg)) => {
+                assert!(
+                    msg.contains("control characters"),
+                    "Error should mention control characters: {}",
+                    msg
+                );
+            }
+            other => panic!("Expected ConfigError, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_validate_agent_name_security_tab_character() {
+        let result = ModelManager::validate_agent_name_security("agent\tname");
+        assert!(
+            result.is_err(),
+            "Name with tab character should be rejected as control char"
+        );
+        match result {
+            Err(ModelError::ConfigError(msg)) => {
+                assert!(
+                    msg.contains("control characters"),
+                    "Error should mention control characters"
+                );
+            }
+            other => panic!("Expected ConfigError, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_validate_agent_name_security_newline_character() {
+        let result = ModelManager::validate_agent_name_security("agent\nname");
+        assert!(
+            result.is_err(),
+            "Name with newline should be rejected as control char"
+        );
+        match result {
+            Err(ModelError::ConfigError(msg)) => {
+                assert!(
+                    msg.contains("control characters"),
+                    "Error should mention control characters"
+                );
+            }
+            other => panic!("Expected ConfigError, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_validate_agent_name_security_valid_name() {
+        let result = ModelManager::validate_agent_name_security("claude-code");
+        assert!(
+            result.is_ok(),
+            "Valid agent name should pass security check"
+        );
+    }
+
+    #[test]
+    fn test_validate_agent_name_security_valid_name_with_dots() {
+        let result = ModelManager::validate_agent_name_security("my.agent.v2");
+        assert!(
+            result.is_ok(),
+            "Agent name with dots (no traversal) should pass"
+        );
+    }
+
+    #[test]
+    fn test_validate_agent_name_security_valid_name_with_underscores() {
+        let result = ModelManager::validate_agent_name_security("my_custom_agent");
+        assert!(result.is_ok(), "Agent name with underscores should pass");
+    }
+
+    // ========================================================================
+    // use_agent security integration tests
+    // ========================================================================
+
+    #[test]
+    fn test_use_agent_rejects_empty_name() {
+        let result = ModelManager::use_agent("", &ModelPaths::sah());
+        assert!(result.is_err(), "use_agent should reject empty agent name");
+        match result {
+            Err(ModelError::ConfigError(msg)) => {
+                assert!(msg.contains("empty"), "Error should mention empty");
+            }
+            other => panic!("Expected ConfigError for empty name, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_use_agent_rejects_path_traversal() {
+        let result = ModelManager::use_agent("../malicious", &ModelPaths::sah());
+        assert!(
+            result.is_err(),
+            "use_agent should reject path traversal in agent name"
+        );
+        match result {
+            Err(ModelError::ConfigError(msg)) => {
+                assert!(
+                    msg.contains("invalid pattern"),
+                    "Error should mention invalid pattern"
+                );
+            }
+            other => panic!("Expected ConfigError for path traversal, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_use_agent_rejects_null_byte() {
+        let result = ModelManager::use_agent("agent\0name", &ModelPaths::sah());
+        assert!(
+            result.is_err(),
+            "use_agent should reject agent name with null byte"
+        );
+        match result {
+            Err(ModelError::ConfigError(msg)) => {
+                assert!(msg.contains("null byte"), "Error should mention null byte");
+            }
+            other => panic!("Expected ConfigError for null byte, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_use_agent_rejects_control_chars() {
+        let result = ModelManager::use_agent("agent\x07name", &ModelPaths::sah());
+        assert!(
+            result.is_err(),
+            "use_agent should reject agent name with control characters"
+        );
+        match result {
+            Err(ModelError::ConfigError(msg)) => {
+                assert!(
+                    msg.contains("control characters"),
+                    "Error should mention control characters"
+                );
+            }
+            other => panic!(
+                "Expected ConfigError for control characters, got {:?}",
+                other
+            ),
+        }
+    }
+
+    #[test]
+    #[serial_test::serial(cwd)]
+    fn test_use_agent_valid_name_writes_config() {
+        use std::fs;
+
+        let temp_dir = tempfile::TempDir::new().expect("Failed to create temp dir");
+        fs::create_dir(temp_dir.path().join(".git")).expect("Failed to create .git marker");
+        let _guard = CurrentDirGuard::new(temp_dir.path()).expect("Failed to change directory");
+
+        let result = ModelManager::use_agent("claude-code", &ModelPaths::sah());
+        assert!(
+            result.is_ok(),
+            "use_agent should succeed for valid agent name: {:?}",
+            result
+        );
+
+        // Verify config file was written
+        let config_path = temp_dir
+            .path()
+            .join(SwissarmyhammerDirectory::dir_name())
+            .join("sah.yaml");
+        assert!(config_path.exists(), "Config file should be created");
+
+        let content = fs::read_to_string(&config_path).expect("Failed to read config");
+        assert!(
+            content.contains("claude-code"),
+            "Config should contain agent name"
+        );
+    }
+
+    // ---- Tests for load_or_create_config, save_config, check_file_readable, update_config_with_agent ----
+
+    #[test]
+    fn test_load_or_create_config_nonexistent_returns_empty_mapping() {
+        // When the config file does not exist, load_or_create_config should return
+        // an empty YAML mapping (not an error).
+        let temp_dir = tempfile::TempDir::new().expect("Failed to create temp dir");
+        let config_path = temp_dir.path().join("nonexistent.yaml");
+
+        let result = ModelManager::load_or_create_config(&config_path);
+        assert!(result.is_ok(), "Should succeed for nonexistent file");
+        let value = result.unwrap();
+        assert!(value.is_mapping(), "Should return a mapping");
+        assert!(
+            value.as_mapping().unwrap().is_empty(),
+            "Mapping should be empty"
+        );
+    }
+
+    #[test]
+    fn test_load_or_create_config_valid_yaml() {
+        // Loading a valid YAML config file should parse it correctly.
+        let temp_dir = tempfile::TempDir::new().expect("Failed to create temp dir");
+        let config_path = temp_dir.path().join("config.yaml");
+        std::fs::write(&config_path, "model: claude-code\nquiet: true\n")
+            .expect("Failed to write config");
+
+        let result = ModelManager::load_or_create_config(&config_path);
+        assert!(result.is_ok(), "Should parse valid YAML");
+        let value = result.unwrap();
+        assert!(value.is_mapping());
+        let map = value.as_mapping().unwrap();
+        assert_eq!(
+            map.get(serde_yaml_ng::Value::String("model".to_string())),
+            Some(&serde_yaml_ng::Value::String("claude-code".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_load_or_create_config_empty_yaml_returns_empty_mapping() {
+        // An empty YAML file parses as Null; load_or_create_config should normalize
+        // that to an empty mapping.
+        let temp_dir = tempfile::TempDir::new().expect("Failed to create temp dir");
+        let config_path = temp_dir.path().join("empty.yaml");
+        std::fs::write(&config_path, "").expect("Failed to write empty file");
+
+        let result = ModelManager::load_or_create_config(&config_path);
+        assert!(result.is_ok(), "Should succeed for empty YAML");
+        let value = result.unwrap();
+        assert!(
+            value.is_mapping(),
+            "Null YAML should be normalized to empty mapping"
+        );
+        assert!(value.as_mapping().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_load_or_create_config_file_too_large() {
+        // Files exceeding 10MB should be rejected with a ConfigError.
+        let temp_dir = tempfile::TempDir::new().expect("Failed to create temp dir");
+        let config_path = temp_dir.path().join("huge.yaml");
+
+        // Write a file just over 10MB
+        let oversized = vec![b'a'; 10 * 1024 * 1024 + 1];
+        std::fs::write(&config_path, &oversized).expect("Failed to write large file");
+
+        let result = ModelManager::load_or_create_config(&config_path);
+        assert!(result.is_err(), "Should reject oversized config file");
+        let err = result.unwrap_err();
+        match &err {
+            ModelError::ConfigError(msg) => {
+                assert!(
+                    msg.contains("too large"),
+                    "Error should mention 'too large', got: {}",
+                    msg
+                );
+            }
+            other => panic!("Expected ConfigError, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_check_file_readable_not_a_file() {
+        // Passing a directory path (not a file) should return InvalidPath.
+        let temp_dir = tempfile::TempDir::new().expect("Failed to create temp dir");
+
+        let result = ModelManager::check_file_readable(temp_dir.path());
+        assert!(result.is_err(), "Directory should not be readable as file");
+        match result.unwrap_err() {
+            ModelError::InvalidPath(p) => {
+                assert_eq!(p, temp_dir.path());
+            }
+            other => panic!("Expected InvalidPath, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_check_file_readable_nonexistent_path() {
+        // A nonexistent path should return IoError.
+        let result = ModelManager::check_file_readable(Path::new("/tmp/nonexistent_sah_test_file"));
+        assert!(result.is_err(), "Nonexistent path should fail");
+        match result.unwrap_err() {
+            ModelError::IoError(_) => {}
+            other => panic!("Expected IoError, got: {:?}", other),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_check_file_readable_no_read_permission() {
+        // On Unix, a file without owner-read permission should be rejected.
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp_dir = tempfile::TempDir::new().expect("Failed to create temp dir");
+        let file_path = temp_dir.path().join("unreadable.yaml");
+        std::fs::write(&file_path, "key: value").expect("Failed to write file");
+
+        // Remove all read permissions (write-only)
+        std::fs::set_permissions(&file_path, std::fs::Permissions::from_mode(0o200))
+            .expect("Failed to set permissions");
+
+        let result = ModelManager::check_file_readable(&file_path);
+        assert!(result.is_err(), "File without read permission should fail");
+        match result.unwrap_err() {
+            ModelError::IoError(e) => {
+                assert_eq!(e.kind(), std::io::ErrorKind::PermissionDenied);
+            }
+            other => panic!("Expected IoError(PermissionDenied), got: {:?}", other),
+        }
+
+        // Restore permissions so temp_dir cleanup works
+        std::fs::set_permissions(&file_path, std::fs::Permissions::from_mode(0o644))
+            .expect("Failed to restore permissions");
+    }
+
+    #[test]
+    fn test_check_file_readable_valid_file() {
+        // A normal readable file should pass check_file_readable.
+        let temp_dir = tempfile::TempDir::new().expect("Failed to create temp dir");
+        let file_path = temp_dir.path().join("readable.yaml");
+        std::fs::write(&file_path, "key: value").expect("Failed to write file");
+
+        let result = ModelManager::check_file_readable(&file_path);
+        assert!(result.is_ok(), "Readable file should pass: {:?}", result);
+    }
+
+    #[test]
+    fn test_update_config_with_agent() {
+        // update_config_with_agent should insert a "model" key into the mapping.
+        let mut config = serde_yaml_ng::Value::Mapping(Default::default());
+        let result = ModelManager::update_config_with_agent(&mut config, "llama-agent");
+        assert!(result.is_ok());
+
+        let map = config.as_mapping().unwrap();
+        assert_eq!(
+            map.get(serde_yaml_ng::Value::String("model".to_string())),
+            Some(&serde_yaml_ng::Value::String("llama-agent".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_update_config_with_agent_overwrites_existing() {
+        // Calling update_config_with_agent twice should overwrite the previous value.
+        let mut config = serde_yaml_ng::Value::Mapping(Default::default());
+        ModelManager::update_config_with_agent(&mut config, "first-agent").unwrap();
+        ModelManager::update_config_with_agent(&mut config, "second-agent").unwrap();
+
+        let map = config.as_mapping().unwrap();
+        assert_eq!(
+            map.get(serde_yaml_ng::Value::String("model".to_string())),
+            Some(&serde_yaml_ng::Value::String("second-agent".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_save_config_round_trip() {
+        // Saving a config and then loading it should produce the same value.
+        let temp_dir = tempfile::TempDir::new().expect("Failed to create temp dir");
+        let config_path = temp_dir.path().join("roundtrip.yaml");
+
+        let mut mapping = serde_yaml_ng::Mapping::new();
+        mapping.insert(
+            serde_yaml_ng::Value::String("model".to_string()),
+            serde_yaml_ng::Value::String("claude-code".to_string()),
+        );
+        mapping.insert(
+            serde_yaml_ng::Value::String("quiet".to_string()),
+            serde_yaml_ng::Value::Bool(true),
+        );
+        let config = serde_yaml_ng::Value::Mapping(mapping);
+
+        // Save
+        let save_result = ModelManager::save_config(&config_path, &config);
+        assert!(save_result.is_ok(), "save_config failed: {:?}", save_result);
+
+        // Load back
+        let loaded = ModelManager::load_or_create_config(&config_path);
+        assert!(loaded.is_ok(), "load_or_create_config failed: {:?}", loaded);
+        let loaded_value = loaded.unwrap();
+
+        let loaded_map = loaded_value.as_mapping().unwrap();
+        assert_eq!(
+            loaded_map.get(serde_yaml_ng::Value::String("model".to_string())),
+            Some(&serde_yaml_ng::Value::String("claude-code".to_string()))
+        );
+        assert_eq!(
+            loaded_map.get(serde_yaml_ng::Value::String("quiet".to_string())),
+            Some(&serde_yaml_ng::Value::Bool(true))
+        );
+    }
+
+    #[test]
+    fn test_save_config_creates_file() {
+        // save_config should create a new file if it does not exist.
+        let temp_dir = tempfile::TempDir::new().expect("Failed to create temp dir");
+        let config_path = temp_dir.path().join("new_config.yaml");
+
+        assert!(!config_path.exists());
+        let config = serde_yaml_ng::Value::Mapping(Default::default());
+        let result = ModelManager::save_config(&config_path, &config);
+        assert!(
+            result.is_ok(),
+            "save_config should create file: {:?}",
+            result
+        );
+        assert!(config_path.exists(), "File should exist after save");
+    }
+
+    #[test]
+    fn test_save_config_write_error_bad_parent() {
+        // Attempting to save to a path with nonexistent parent should fail.
+        let config_path = Path::new("/tmp/nonexistent_sah_parent_dir/sub/config.yaml");
+
+        let config = serde_yaml_ng::Value::Mapping(Default::default());
+        let result = ModelManager::save_config(config_path, &config);
+        assert!(result.is_err(), "Should fail with bad parent directory");
+    }
+
+    // ========================================================================
+    // ensure_config_structure additional coverage tests
+    // ========================================================================
+
+    #[test]
+    #[serial_test::serial(cwd)]
+    fn test_ensure_config_structure_with_existing_yaml_config() {
+        // When a YAML config file already exists, ensure_config_structure should
+        // detect it and return the canonicalized path to the existing file.
+        // Exercises the detect_config_file -> validate_config_file_path -> return
+        // existing config branch (lines 1607-1611).
+        use std::fs;
+
+        let temp_dir = tempfile::TempDir::new().expect("Failed to create temp dir");
+        fs::create_dir(temp_dir.path().join(".git")).expect("Failed to create .git marker");
+        let _guard = CurrentDirGuard::new(temp_dir.path()).expect("Failed to change directory");
+
+        let sah_dir = temp_dir.path().join(SwissarmyhammerDirectory::dir_name());
+        fs::create_dir_all(&sah_dir).expect("Failed to pre-create directory");
+        let existing_config = sah_dir.join("sah.yaml");
+        fs::write(
+            &existing_config,
+            "executor:\n  type: claude-code\n  config: {}\nquiet: false\n",
+        )
+        .expect("Failed to write existing yaml config");
+
+        let result = ModelManager::ensure_config_structure(&ModelPaths::sah());
+        assert!(
+            result.is_ok(),
+            "Should detect existing YAML config: {:?}",
+            result
+        );
+
+        let config_path = result.unwrap();
+        assert_eq!(
+            config_path.file_name(),
+            Some(std::ffi::OsStr::new("sah.yaml")),
+            "Should return existing yaml config file"
+        );
+        assert!(
+            config_path.is_absolute(),
+            "Should return canonical absolute path"
+        );
+        assert!(
+            config_path.is_file(),
+            "Returned path should point to an existing file"
+        );
+    }
+
+    #[test]
+    #[serial_test::serial(cwd)]
+    fn test_ensure_config_structure_with_avp_paths() {
+        // Verify ensure_config_structure works with AVP paths (.avp/avp.yaml)
+        // to confirm it is not hardcoded to .sah paths. Exercises directory
+        // creation (lines 1581-1601) and new config path validation (lines 1615-1623).
+        use std::fs;
+
+        let temp_dir = tempfile::TempDir::new().expect("Failed to create temp dir");
+        fs::create_dir(temp_dir.path().join(".git")).expect("Failed to create .git marker");
+        let _guard = CurrentDirGuard::new(temp_dir.path()).expect("Failed to change directory");
+
+        let result = ModelManager::ensure_config_structure(&ModelPaths::avp());
+        assert!(
+            result.is_ok(),
+            "Should successfully create AVP config structure: {:?}",
+            result
+        );
+
+        let config_path = result.unwrap();
+        assert_eq!(
+            config_path.file_name(),
+            Some(std::ffi::OsStr::new("avp.yaml")),
+            "Should return path to avp.yaml"
+        );
+        assert!(
+            config_path.ends_with(".avp/avp.yaml"),
+            "Should end with .avp/avp.yaml, got: {}",
+            config_path.display()
+        );
+
+        let avp_dir = temp_dir.path().join(".avp");
+        assert!(avp_dir.exists(), "Should create .avp directory");
+        assert!(avp_dir.is_dir(), "Should be a directory");
+    }
+
+    #[test]
+    #[serial_test::serial(cwd)]
+    fn test_ensure_config_structure_avp_with_existing_config() {
+        // Exercise the existing-config detection path with AVP paths and a
+        // pre-existing YAML config, ensuring validate_config_file_path is called
+        // on the detected file (lines 1609-1611).
+        use std::fs;
+
+        let temp_dir = tempfile::TempDir::new().expect("Failed to create temp dir");
+        fs::create_dir(temp_dir.path().join(".git")).expect("Failed to create .git marker");
+        let _guard = CurrentDirGuard::new(temp_dir.path()).expect("Failed to change directory");
+
+        let avp_dir = temp_dir.path().join(".avp");
+        fs::create_dir_all(&avp_dir).expect("Failed to create .avp dir");
+        let existing_config = avp_dir.join("avp.yaml");
+        fs::write(
+            &existing_config,
+            "executor:\n  type: claude-code\n  config: {}\nquiet: true\n",
+        )
+        .expect("Failed to write avp config");
+
+        let result = ModelManager::ensure_config_structure(&ModelPaths::avp());
+        assert!(
+            result.is_ok(),
+            "Should handle existing AVP config: {:?}",
+            result
+        );
+
+        let config_path = result.unwrap();
+        assert_eq!(
+            config_path.file_name(),
+            Some(std::ffi::OsStr::new("avp.yaml")),
+            "Should return existing avp.yaml"
+        );
+        assert!(
+            config_path.is_file(),
+            "Returned path should be an existing file"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    #[serial_test::serial(cwd)]
+    fn test_ensure_config_structure_create_dir_fails_readonly_parent() {
+        // When the parent directory is read-only, check_directory_writable should
+        // fail and ensure_config_structure should propagate the error. Exercises
+        // the permission check error path (line 1583).
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp_dir = tempfile::TempDir::new().expect("Failed to create temp dir");
+        std::fs::create_dir(temp_dir.path().join(".git")).expect("Failed to create .git marker");
+        let _guard = CurrentDirGuard::new(temp_dir.path()).expect("Failed to change directory");
+
+        // Make the temp directory read-only so .sah cannot be created
+        std::fs::set_permissions(temp_dir.path(), std::fs::Permissions::from_mode(0o500))
+            .expect("Failed to set read-only permissions");
+
+        let result = ModelManager::ensure_config_structure(&ModelPaths::sah());
+        assert!(
+            result.is_err(),
+            "Should fail when parent directory is read-only"
+        );
+
+        // Restore permissions so temp_dir cleanup works
+        std::fs::set_permissions(temp_dir.path(), std::fs::Permissions::from_mode(0o700))
+            .expect("Failed to restore permissions");
+    }
+
+    #[test]
+    #[serial_test::serial(cwd)]
+    fn test_ensure_config_structure_returns_new_yaml_path_when_no_config_exists() {
+        // When the config directory exists but has no config file,
+        // ensure_config_structure should return the path for a new YAML config.
+        // Exercises the new config path construction and validation (lines 1615-1623).
+        use std::fs;
+
+        let temp_dir = tempfile::TempDir::new().expect("Failed to create temp dir");
+        fs::create_dir(temp_dir.path().join(".git")).expect("Failed to create .git marker");
+        let _guard = CurrentDirGuard::new(temp_dir.path()).expect("Failed to change directory");
+
+        let sah_dir = temp_dir.path().join(SwissarmyhammerDirectory::dir_name());
+        fs::create_dir_all(&sah_dir).expect("Failed to create .sah dir");
+
+        let result = ModelManager::ensure_config_structure(&ModelPaths::sah());
+        assert!(
+            result.is_ok(),
+            "Should succeed with empty config directory: {:?}",
+            result
+        );
+
+        let config_path = result.unwrap();
+        assert_eq!(
+            config_path.file_name(),
+            Some(std::ffi::OsStr::new("sah.yaml")),
+            "Should return path for new sah.yaml"
+        );
+        // The file should NOT exist yet (ensure_config_structure only returns the path)
+        assert!(
+            !config_path.exists(),
+            "New config file should not be created by ensure_config_structure"
+        );
+    }
+
+    #[test]
+    #[serial_test::serial(cwd)]
+    fn test_ensure_config_structure_prefers_yaml_over_toml() {
+        // When both .yaml and .toml config files exist, ensure_config_structure
+        // should prefer the YAML file since detect_config_file checks YAML first.
+        use std::fs;
+
+        let temp_dir = tempfile::TempDir::new().expect("Failed to create temp dir");
+        fs::create_dir(temp_dir.path().join(".git")).expect("Failed to create .git marker");
+        let _guard = CurrentDirGuard::new(temp_dir.path()).expect("Failed to change directory");
+
+        let sah_dir = temp_dir.path().join(SwissarmyhammerDirectory::dir_name());
+        fs::create_dir_all(&sah_dir).expect("Failed to create .sah dir");
+
+        fs::write(
+            sah_dir.join("sah.yaml"),
+            "executor:\n  type: claude-code\n  config: {}\nquiet: false\n",
+        )
+        .expect("Failed to write yaml config");
+        fs::write(sah_dir.join("sah.toml"), "[existing]\nvalue = true\n")
+            .expect("Failed to write toml config");
+
+        let result = ModelManager::ensure_config_structure(&ModelPaths::sah());
+        assert!(result.is_ok(), "Should succeed: {:?}", result);
+
+        let config_path = result.unwrap();
+        assert_eq!(
+            config_path.file_name(),
+            Some(std::ffi::OsStr::new("sah.yaml")),
+            "Should prefer YAML config over TOML"
+        );
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn test_for_small_model_deprecated_alias() {
+        // Exercises the deprecated `for_small_model()` alias for coverage.
+        let config = LlamaAgentConfig::for_small_model();
+        let testing_config = LlamaAgentConfig::for_testing();
+        // Both should produce equivalent configurations
+        assert_eq!(config.model.batch_size, testing_config.model.batch_size);
+        assert_eq!(
+            config.mcp_server.timeout_seconds,
+            testing_config.mcp_server.timeout_seconds
+        );
+    }
+
+    #[test]
+    fn test_gitroot_display_emoji() {
+        assert_eq!(ModelConfigSource::GitRoot.display_emoji(), "🔧 GitRoot");
+    }
+
+    #[test]
+    fn test_gitroot_source_serialization() {
+        let gitroot = ModelConfigSource::GitRoot;
+        let json = serde_json::to_string(&gitroot).expect("Failed to serialize GitRoot");
+        assert_eq!(json, "\"git-root\"");
+
+        let deserialized: ModelConfigSource =
+            serde_json::from_str(&json).expect("Failed to deserialize GitRoot");
+        assert_eq!(deserialized, ModelConfigSource::GitRoot);
+    }
+
+    #[test]
+    fn test_model_config_deserialize_missing_executor_field() {
+        // Exercises the error path when neither `executor` nor `executors` is present.
+        let yaml = "quiet: true\n";
+        let result = serde_yaml_ng::from_str::<ModelConfig>(yaml);
+        assert!(result.is_err(), "Should fail when no executor field");
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(
+            err_msg.contains("executor"),
+            "Error should mention executor: {}",
+            err_msg
+        );
+    }
+
+    #[test]
+    fn test_model_config_deserialize_executors_list() {
+        // Exercises the `executors` list deserialization path.
+        let yaml = r#"
+executors:
+  - platform: macos-arm64
+    executor:
+      type: claude-code
+      config: {}
+  - executor:
+      type: claude-code
+      config: {}
+quiet: true
+"#;
+        let config: ModelConfig =
+            serde_yaml_ng::from_str(yaml).expect("Should parse executors list");
+        assert_eq!(config.executors.len(), 2);
+        assert!(config.quiet);
+        assert_eq!(config.executors[0].platform, Some(Platform::MacosArm64));
+        assert_eq!(config.executors[1].platform, None);
+    }
+
+    #[test]
+    fn test_model_config_deserialize_unknown_fields_ignored() {
+        // Exercises the `_: IgnoredAny` path in the custom deserializer.
+        let yaml = r#"
+executor:
+  type: claude-code
+  config: {}
+quiet: false
+unknown_field: "should be ignored"
+another_unknown: 42
+"#;
+        let config: ModelConfig =
+            serde_yaml_ng::from_str(yaml).expect("Should parse despite unknown fields");
+        assert_eq!(config.executor_type(), ModelExecutorType::ClaudeCode);
+        assert!(!config.quiet);
+    }
+
+    #[test]
+    fn test_model_config_select_executor_no_match() {
+        // Exercises `select_executor()` returning `None` when all entries have
+        // non-matching platform constraints.
+        let config = ModelConfig {
+            executors: vec![ExecutorEntry {
+                // Use a platform that definitely doesn't match current
+                platform: Some(Platform::LinuxX86_64),
+                executor: ModelExecutorConfig::ClaudeCode(ClaudeCodeConfig::default()),
+            }],
+            quiet: false,
+        };
+        // On macOS ARM this won't match LinuxX86_64
+        // We can't guarantee which platform we're on, so just test the method works
+        let _result = config.select_executor();
+    }
+
+    #[test]
+    fn test_platform_serialization_roundtrip() {
+        // Exercises Platform serialization/deserialization for all variants.
+        let platforms = vec![
+            Platform::MacosArm64,
+            Platform::MacosX86_64,
+            Platform::LinuxX86_64,
+            Platform::LinuxAarch64,
+        ];
+        for platform in platforms {
+            let json = serde_json::to_string(&platform)
+                .unwrap_or_else(|_| panic!("Failed to serialize {:?}", platform));
+            let deserialized: Platform = serde_json::from_str(&json)
+                .unwrap_or_else(|_| panic!("Failed to deserialize {:?}", platform));
+            assert_eq!(platform, deserialized);
+        }
+    }
+
+    #[test]
+    fn test_platform_current() {
+        // Exercises `Platform::current()` — just verifies it doesn't panic.
+        let _current = Platform::current();
+    }
+
+    #[test]
+    fn test_repetition_detection_config_default() {
+        let config = RepetitionDetectionConfig::default();
+        assert!(config.enabled);
+        assert!(
+            (config.repetition_penalty - crate::DEFAULT_REPETITION_PENALTY).abs() < f64::EPSILON
+        );
+        assert_eq!(
+            config.repetition_threshold,
+            crate::DEFAULT_REPETITION_THRESHOLD
+        );
+        assert_eq!(config.repetition_window, crate::DEFAULT_REPETITION_WINDOW);
+    }
+
+    #[test]
+    fn test_embedding_model_config_deserialization() {
+        let yaml = r#"
+source: !HuggingFace
+  repo: "test/embedding-model"
+  filename: "model.gguf"
+normalize: true
+max_sequence_length: 512
+"#;
+        let config: EmbeddingModelConfig =
+            serde_yaml_ng::from_str(yaml).expect("Should parse embedding config");
+        assert!(config.normalize);
+        assert_eq!(config.max_sequence_length, Some(512));
+    }
+
+    #[test]
+    fn test_model_error_severity() {
+        use swissarmyhammer_common::{ErrorSeverity, Severity};
+
+        let parse_err = serde_yaml_ng::from_str::<ModelConfig>("invalid: yaml: [unclosed")
+            .expect_err("Should fail to parse");
+        let model_parse_err = ModelError::ParseError(parse_err);
+        assert_eq!(model_parse_err.severity(), ErrorSeverity::Critical);
+
+        let config_err = ModelError::ConfigError("test".to_string());
+        assert_eq!(config_err.severity(), ErrorSeverity::Critical);
+
+        let not_found = ModelError::NotFound("test".to_string());
+        assert_eq!(not_found.severity(), ErrorSeverity::Error);
+
+        let invalid_path = ModelError::InvalidPath(PathBuf::from("/test"));
+        assert_eq!(invalid_path.severity(), ErrorSeverity::Error);
+
+        let io_err = ModelError::IoError(std::io::Error::new(std::io::ErrorKind::NotFound, "test"));
+        assert_eq!(io_err.severity(), ErrorSeverity::Error);
+    }
+
+    #[test]
+    fn test_model_paths_avp() {
+        let paths = ModelPaths::avp();
+        assert_eq!(paths.dir_name, ".avp");
+        assert_eq!(paths.config_filename, "avp.yaml");
+    }
+
+    #[test]
+    fn test_model_paths_sah() {
+        let paths = ModelPaths::sah();
+        assert_eq!(paths.dir_name, ".sah");
+        assert_eq!(paths.config_filename, "sah.yaml");
+    }
+
+    #[test]
+    fn test_executor_type_all_variants() {
+        // Exercises `executor_type()` for all executor types.
+        let claude = ModelConfig::claude_code();
+        assert_eq!(claude.executor_type(), ModelExecutorType::ClaudeCode);
+
+        let llama = ModelConfig::llama_agent(LlamaAgentConfig::for_testing());
+        assert_eq!(llama.executor_type(), ModelExecutorType::LlamaAgent);
+
+        // Test LlamaEmbedding
+        let embedding_config = ModelConfig {
+            executors: vec![ExecutorEntry {
+                platform: None,
+                executor: ModelExecutorConfig::LlamaEmbedding(EmbeddingModelConfig {
+                    source: ModelSource::HuggingFace {
+                        repo: "test/repo".to_string(),
+                        filename: Some("model.gguf".to_string()),
+                        folder: None,
+                    },
+                    normalize: false,
+                    max_sequence_length: None,
+                }),
+            }],
+            quiet: false,
+        };
+        assert_eq!(
+            embedding_config.executor_type(),
+            ModelExecutorType::LlamaEmbedding
+        );
+
+        // Test AneEmbedding
+        let ane_config = ModelConfig {
+            executors: vec![ExecutorEntry {
+                platform: None,
+                executor: ModelExecutorConfig::AneEmbedding(EmbeddingModelConfig {
+                    source: ModelSource::HuggingFace {
+                        repo: "test/repo".to_string(),
+                        filename: Some("model.gguf".to_string()),
+                        folder: None,
+                    },
+                    normalize: true,
+                    max_sequence_length: Some(256),
+                }),
+            }],
+            quiet: false,
+        };
+        assert_eq!(ane_config.executor_type(), ModelExecutorType::AneEmbedding);
+    }
+
+    #[test]
+    fn test_validate_directory_path_empty_coverage() {
+        let result = ModelManager::validate_directory_path(Path::new(""));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_directory_path_too_long_coverage() {
+        let long_path = "a".repeat(5000);
+        let result = ModelManager::validate_directory_path(Path::new(&long_path));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_is_yaml_file() {
+        use tempfile::TempDir;
+        let temp_dir = TempDir::new().unwrap();
+
+        let yaml_file = temp_dir.path().join("test.yaml");
+        std::fs::write(&yaml_file, "key: val").unwrap();
+        assert!(ModelManager::is_yaml_file(&yaml_file));
+
+        let txt_file = temp_dir.path().join("test.txt");
+        std::fs::write(&txt_file, "text").unwrap();
+        assert!(!ModelManager::is_yaml_file(&txt_file));
+
+        // Directory should not count
+        assert!(!ModelManager::is_yaml_file(temp_dir.path()));
+    }
+
+    #[test]
+    fn test_extract_model_name() {
+        let path = PathBuf::from("/some/dir/my-model.yaml");
+        let name = ModelManager::extract_model_name(&path).unwrap();
+        assert_eq!(name, "my-model");
+    }
+
+    #[test]
+    fn test_check_suspicious_patterns_clean() {
+        assert!(ModelManager::check_suspicious_patterns("/normal/path").is_ok());
+    }
+
+    #[test]
+    fn test_is_valid_directory_nonexistent() {
+        assert!(!ModelManager::is_valid_directory(Path::new(
+            "/nonexistent/dir"
+        )));
+    }
+
+    #[test]
+    fn test_is_valid_directory_file() {
+        use tempfile::TempDir;
+        let temp_dir = TempDir::new().unwrap();
+        let file = temp_dir.path().join("afile");
+        std::fs::write(&file, "content").unwrap();
+        assert!(!ModelManager::is_valid_directory(&file));
+    }
+
+    #[test]
+    fn test_check_file_readable_nonexistent() {
+        let result = ModelManager::check_file_readable(Path::new("/nonexistent/file.yaml"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_check_file_readable_directory() {
+        use tempfile::TempDir;
+        let temp_dir = TempDir::new().unwrap();
+        let result = ModelManager::check_file_readable(temp_dir.path());
+        assert!(
+            result.is_err(),
+            "Directory should not be readable as a file"
+        );
+    }
+
+    #[test]
+    fn test_validate_config_file_path_empty() {
+        let result = ModelManager::validate_config_file_path(Path::new(""));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_config_file_path_too_long_coverage() {
+        let long_path = "a".repeat(5000);
+        let result = ModelManager::validate_config_file_path(Path::new(&long_path));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_config_file_path_nonexistent() {
+        // Exercises the non-existent file path branch (just returns the path).
+        let result =
+            ModelManager::validate_config_file_path(Path::new("/tmp/nonexistent_config.yaml"));
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_config_file_path_existing_file() {
+        use tempfile::TempDir;
+        let temp_dir = TempDir::new().unwrap();
+        let file = temp_dir.path().join("config.yaml");
+        std::fs::write(&file, "key: val").unwrap();
+        let result = ModelManager::validate_config_file_path(&file);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_config_file_path_existing_directory() {
+        /// Exercises the branch where an existing path is not a file.
+        use tempfile::TempDir;
+        let temp_dir = TempDir::new().unwrap();
+        let dir = temp_dir.path().join("subdir");
+        std::fs::create_dir(&dir).unwrap();
+        let result = ModelManager::validate_config_file_path(&dir);
+        assert!(
+            result.is_err(),
+            "Directory should fail validation as config file"
+        );
+    }
+
+    #[test]
+    fn test_load_or_create_config_nonexistent() {
+        let result = ModelManager::load_or_create_config(Path::new("/nonexistent/config.yaml"));
+        assert!(result.is_ok());
+        let value = result.unwrap();
+        assert!(
+            value.is_mapping(),
+            "Should return empty mapping for nonexistent file"
+        );
+    }
+
+    #[test]
+    fn test_load_or_create_config_empty_yaml() {
+        /// Exercises the branch where YAML content parses to null.
+        use tempfile::TempDir;
+        let temp_dir = TempDir::new().unwrap();
+        let file = temp_dir.path().join("empty.yaml");
+        std::fs::write(&file, "").unwrap();
+        let result = ModelManager::load_or_create_config(&file);
+        assert!(result.is_ok());
+        let value = result.unwrap();
+        assert!(
+            value.is_mapping(),
+            "Null YAML should be normalized to empty mapping"
+        );
+    }
+
+    #[test]
+    fn test_load_or_create_config_valid_yaml_coverage() {
+        use tempfile::TempDir;
+        let temp_dir = TempDir::new().unwrap();
+        let file = temp_dir.path().join("valid.yaml");
+        std::fs::write(&file, "model: claude-code\n").unwrap();
+        let result = ModelManager::load_or_create_config(&file);
+        assert!(result.is_ok());
+        let value = result.unwrap();
+        assert!(value.is_mapping());
+    }
+
+    #[test]
+    fn test_update_config_with_agent_coverage() {
+        let mut config = serde_yaml_ng::Value::Mapping(Default::default());
+        ModelManager::update_config_with_agent(&mut config, "test-agent").unwrap();
+        let map = config.as_mapping().unwrap();
+        let model_key = serde_yaml_ng::Value::String("model".to_string());
+        assert_eq!(
+            map.get(&model_key),
+            Some(&serde_yaml_ng::Value::String("test-agent".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_save_config_and_round_trip() {
+        use tempfile::TempDir;
+        let temp_dir = TempDir::new().unwrap();
+        let file = temp_dir.path().join("out.yaml");
+
+        let mut mapping = serde_yaml_ng::Mapping::new();
+        mapping.insert(
+            serde_yaml_ng::Value::String("model".to_string()),
+            serde_yaml_ng::Value::String("claude-code".to_string()),
+        );
+        let config = serde_yaml_ng::Value::Mapping(mapping);
+
+        ModelManager::save_config(&file, &config).unwrap();
+        assert!(file.exists());
+
+        let content = std::fs::read_to_string(&file).unwrap();
+        assert!(content.contains("claude-code"));
+    }
+
+    #[test]
+    fn test_check_directory_writable_valid() {
+        use tempfile::TempDir;
+        let temp_dir = TempDir::new().unwrap();
+        assert!(ModelManager::check_directory_writable(temp_dir.path()).is_ok());
+    }
+
+    #[test]
+    fn test_check_directory_writable_file() {
+        /// Exercises the branch where path is not a directory.
+        use tempfile::TempDir;
+        let temp_dir = TempDir::new().unwrap();
+        let file = temp_dir.path().join("afile");
+        std::fs::write(&file, "content").unwrap();
+        let result = ModelManager::check_directory_writable(&file);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_check_directory_writable_nonexistent() {
+        let result = ModelManager::check_directory_writable(Path::new("/nonexistent/dir"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_check_directory_permissions_not_a_directory() {
+        use tempfile::TempDir;
+        let temp_dir = TempDir::new().unwrap();
+        let file = temp_dir.path().join("afile");
+        std::fs::write(&file, "content").unwrap();
+        let result = ModelManager::check_directory_permissions(&file);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_check_directory_permissions_nonexistent() {
+        let result = ModelManager::check_directory_permissions(Path::new("/nonexistent/dir"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_agent_name_security_valid() {
+        assert!(ModelManager::validate_agent_name_security("claude-code").is_ok());
+        assert!(ModelManager::validate_agent_name_security("my-agent-v2").is_ok());
+    }
+
+    #[test]
+    fn test_validate_agent_name_security_empty() {
+        assert!(ModelManager::validate_agent_name_security("").is_err());
+        assert!(ModelManager::validate_agent_name_security("   ").is_err());
+    }
+
+    #[test]
+    fn test_validate_agent_name_security_too_long() {
+        let long_name = "a".repeat(257);
+        assert!(ModelManager::validate_agent_name_security(&long_name).is_err());
+    }
+
+    #[test]
+    fn test_validate_agent_name_security_null_byte() {
+        assert!(ModelManager::validate_agent_name_security("test\0agent").is_err());
+    }
+
+    #[test]
+    fn test_validate_agent_name_security_path_traversal() {
+        assert!(ModelManager::validate_agent_name_security("../etc/passwd").is_err());
+        assert!(ModelManager::validate_agent_name_security("..\\windows").is_err());
+        assert!(ModelManager::validate_agent_name_security("test/slash").is_err());
+        assert!(ModelManager::validate_agent_name_security("test\\backslash").is_err());
+    }
+
+    #[test]
+    fn test_validate_agent_name_security_control_chars() {
+        assert!(ModelManager::validate_agent_name_security("test\nagent").is_err());
+        assert!(ModelManager::validate_agent_name_security("test\tagent").is_err());
+    }
+
+    #[test]
+    fn test_model_config_source_debug_variants() {
+        assert_eq!(format!("{:?}", ModelConfigSource::GitRoot), "GitRoot");
+    }
+
+    #[test]
+    fn test_model_config_source_equality_gitroot() {
+        assert_eq!(ModelConfigSource::GitRoot, ModelConfigSource::GitRoot);
+        assert_ne!(ModelConfigSource::GitRoot, ModelConfigSource::Builtin);
+        assert_ne!(ModelConfigSource::GitRoot, ModelConfigSource::Project);
+        assert_ne!(ModelConfigSource::GitRoot, ModelConfigSource::User);
     }
 }

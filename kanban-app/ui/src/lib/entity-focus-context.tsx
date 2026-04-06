@@ -9,7 +9,7 @@ import {
   type ReactNode,
 } from "react";
 import type { CommandScope } from "./command-scope";
-import { backendDispatch } from "./command-scope";
+import { useDispatchCommand, FocusedScopeContext } from "./command-scope";
 
 /** A predicate that a FocusScope uses to claim focus when a nav command fires. */
 export interface ClaimPredicate {
@@ -57,37 +57,18 @@ interface EntityFocusContextValue {
 
 const EntityFocusContext = createContext<EntityFocusContextValue | null>(null);
 
-/**
- * Build a scope chain from the registry and send the focus change to Rust.
- * Defined outside the component body so it never closes over stale state.
- */
-function invokeFocusChange(
-  mk: string | null,
-  registry: React.MutableRefObject<Map<string, CommandScope>>,
-) {
-  console.warn(`[FocusScope] focus → ${mk ?? "(none)"}`);
-  if (mk) {
-    const scope = registry.current.get(mk);
-    const chain: string[] = [mk];
-    let current = scope?.parent ?? null;
-    while (current !== null) {
-      if (current.moniker) {
-        chain.push(current.moniker);
-      }
-      current = current.parent;
-    }
-    backendDispatch({
-      cmd: "ui.setFocus",
-      args: { scope_chain: chain },
-      scopeChain: chain,
-    }).catch((error) => console.error("ui.setFocus failed:", error));
-  } else {
-    backendDispatch({
-      cmd: "ui.setFocus",
-      args: { scope_chain: [] },
-      scopeChain: [],
-    }).catch((error) => console.error("ui.setFocus failed:", error));
+/** Build scope chain by walking the registry from a moniker to root. */
+function buildScopeChain(
+  mk: string,
+  registry: Map<string, CommandScope>,
+): string[] {
+  const chain: string[] = [mk];
+  let current = registry.get(mk)?.parent ?? null;
+  while (current !== null) {
+    if (current.moniker) chain.push(current.moniker);
+    current = current.parent;
   }
+  return chain;
 }
 
 /**
@@ -96,6 +77,7 @@ function invokeFocusChange(
  */
 export function EntityFocusProvider({ children }: { children: ReactNode }) {
   const [focusedMoniker, setFocusedMoniker] = useState<string | null>(null);
+  const dispatch = useDispatchCommand("ui.setFocus");
 
   // Ref that shadows focusedMoniker state so callbacks can read the current
   // value without depending on render-time state.
@@ -104,11 +86,20 @@ export function EntityFocusProvider({ children }: { children: ReactNode }) {
   // Scope registry: ref so registrations don't cause re-renders
   const registryRef = useRef<Map<string, CommandScope>>(new Map());
 
-  const setFocus = useCallback((moniker: string | null) => {
-    focusedMonikerRef.current = moniker;
-    setFocusedMoniker(moniker);
-    invokeFocusChange(moniker, registryRef);
-  }, []);
+  const setFocus = useCallback(
+    (moniker: string | null) => {
+      focusedMonikerRef.current = moniker;
+      setFocusedMoniker(moniker);
+      console.warn(`[FocusScope] focus → ${moniker ?? "(none)"}`);
+      const chain = moniker
+        ? buildScopeChain(moniker, registryRef.current)
+        : [];
+      dispatch({ args: { scope_chain: chain } }).catch((error) =>
+        console.error("ui.setFocus failed:", error),
+      );
+    },
+    [dispatch],
+  );
 
   const registerScope = useCallback((moniker: string, scope: CommandScope) => {
     registryRef.current.set(moniker, scope);
@@ -217,9 +208,18 @@ export function EntityFocusProvider({ children }: { children: ReactNode }) {
     ],
   );
 
+  // Derive the focused CommandScope so useDispatchCommand can read it via
+  // FocusedScopeContext. Registry is a ref (not state), so we look up on
+  // each render triggered by focusedMoniker changes.
+  const focusedScope = focusedMoniker
+    ? (registryRef.current.get(focusedMoniker) ?? null)
+    : null;
+
   return (
     <EntityFocusContext.Provider value={value}>
-      {children}
+      <FocusedScopeContext.Provider value={focusedScope}>
+        {children}
+      </FocusedScopeContext.Provider>
     </EntityFocusContext.Provider>
   );
 }

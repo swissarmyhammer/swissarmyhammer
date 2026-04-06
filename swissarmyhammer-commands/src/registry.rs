@@ -187,6 +187,10 @@ pub fn builtin_yaml_sources() -> Vec<(&'static str, &'static str)> {
         ("file", include_str!("../builtin/commands/file.yaml")),
         ("drag", include_str!("../builtin/commands/drag.yaml")),
         (
+            "perspective",
+            include_str!("../builtin/commands/perspective.yaml"),
+        ),
+        (
             "attachment",
             include_str!("../builtin/commands/attachment.yaml"),
         ),
@@ -406,17 +410,20 @@ mod tests {
         let registry = CommandsRegistry::from_yaml_sources(&sources_ref);
 
         // app: about, help, quit, command, palette, search, dismiss, undo, redo = 9
-        // entity: task.add, task.move, task.delete, task.untag, entity.update_field,
-        //         entity.delete, entity.archive, entity.unarchive, tag.update,
-        //         column.reorder, attachment.delete,
-        //         entity.copy, entity.cut, entity.paste = 14
+        // entity: task.add, task.move, task.delete, task.untag, task.doThisNext,
+        //         entity.update_field, entity.delete, entity.archive, entity.unarchive,
+        //         tag.update, column.reorder, attachment.delete,
+        //         entity.copy, entity.cut, entity.paste = 15
         // ui: inspect, inspector.close, inspector.close_all, palette.open,
-        //     palette.close, view.set, setFocus, window.new = 8
+        //     palette.close, view.set, perspective.set, setFocus, window.new = 9
         // settings: keymap.vim, keymap.cua, keymap.emacs = 3
         // file: switchBoard, closeBoard, newBoard, openBoard = 4
         // drag: start, cancel, complete = 3
+        // perspective: load, save, delete, rename, filter, clearFilter, group, clearGroup,
+        //             sort.set, sort.clear, sort.toggle, list = 12
         // attachment: open, reveal = 2
-        assert_eq!(registry.all_commands().len(), 43);
+        // +1 for ui.mode.set
+        assert_eq!(registry.all_commands().len(), 58);
 
         // Spot checks
         assert!(registry.get("app.quit").is_some());
@@ -428,6 +435,34 @@ mod tests {
         assert!(!registry.get("app.undo").unwrap().undoable);
         assert!(registry.get("file.closeBoard").is_some());
         assert!(registry.get("drag.start").is_some());
+    }
+
+    #[test]
+    fn perspective_commands_all_registered() {
+        let sources = builtin_yaml_sources();
+        let sources_ref: Vec<(&str, &str)> = sources.iter().map(|(n, c)| (*n, *c)).collect();
+        let registry = CommandsRegistry::from_yaml_sources(&sources_ref);
+
+        let expected = [
+            "perspective.load",
+            "perspective.save",
+            "perspective.delete",
+            "perspective.rename",
+            "perspective.filter",
+            "perspective.clearFilter",
+            "perspective.group",
+            "perspective.clearGroup",
+            "perspective.sort.set",
+            "perspective.sort.clear",
+            "perspective.sort.toggle",
+            "perspective.list",
+        ];
+        for cmd_id in &expected {
+            assert!(
+                registry.get(cmd_id).is_some(),
+                "perspective command '{cmd_id}' must be registered"
+            );
+        }
     }
 
     #[test]
@@ -543,6 +578,47 @@ mod tests {
     }
 
     #[test]
+    fn test_perspective_yaml_parses() {
+        let perspective = include_str!("../builtin/commands/perspective.yaml");
+        let registry = CommandsRegistry::from_yaml_sources(&[("perspective", perspective)]);
+
+        // All 12 perspective commands should parse (9 original + 3 sort)
+        assert_eq!(registry.all_commands().len(), 12);
+        assert!(registry.get("perspective.load").is_some());
+        assert!(registry.get("perspective.save").is_some());
+        assert!(registry.get("perspective.delete").is_some());
+        assert!(registry.get("perspective.rename").is_some());
+        assert!(registry.get("perspective.filter").is_some());
+        assert!(registry.get("perspective.clearFilter").is_some());
+        assert!(registry.get("perspective.group").is_some());
+        assert!(registry.get("perspective.clearGroup").is_some());
+        assert!(registry.get("perspective.sort.set").is_some());
+        assert!(registry.get("perspective.sort.clear").is_some());
+        assert!(registry.get("perspective.sort.toggle").is_some());
+        assert!(registry.get("perspective.list").is_some());
+
+        // Load/save/delete should have a 'name' param
+        let load = registry.get("perspective.load").unwrap();
+        assert_eq!(load.name, "Load Perspective");
+        assert!(load.params.iter().any(|p| p.name == "name"));
+
+        // Filter command should have 'filter' and 'perspective_id' params
+        let filter = registry.get("perspective.filter").unwrap();
+        assert_eq!(filter.name, "Set Filter");
+        assert!(filter.params.iter().any(|p| p.name == "filter"));
+        assert!(filter.params.iter().any(|p| p.name == "perspective_id"));
+
+        // All perspective commands should be visible (default true) except perspective.list
+        for cmd in registry.all_commands() {
+            if cmd.id == "perspective.list" {
+                assert!(!cmd.visible, "perspective.list should not be visible");
+            } else {
+                assert!(cmd.visible, "{} should be visible", cmd.id);
+            }
+        }
+    }
+
+    #[test]
     fn merge_yaml_sources_invalid_yaml_skipped() {
         let base = vec![("base", "- id: task.add\n  name: Add Task\n")];
         let mut reg = CommandsRegistry::from_yaml_sources(&base);
@@ -551,5 +627,173 @@ mod tests {
         reg.merge_yaml_sources(&invalid);
         // Original command still intact
         assert!(reg.get("task.add").is_some());
+    }
+
+    // --- merge_yaml_value edge cases ---
+
+    #[test]
+    fn merge_yaml_value_skips_entry_without_id() {
+        // A YAML entry missing the `id` field should be silently skipped.
+        let yaml = r#"
+- name: No ID Command
+  keys:
+    cua: Mod+X
+"#;
+        let registry = CommandsRegistry::from_yaml_sources(&[("test", yaml)]);
+        assert!(registry.all_commands().is_empty());
+    }
+
+    #[test]
+    fn merge_yaml_value_skips_invalid_override_on_existing() {
+        // When an override introduces an unknown field on an existing command,
+        // the merge deserialization should fail and the original remains.
+        let base_yaml = r#"
+- id: app.test
+  name: Test Command
+"#;
+        let override_yaml = r#"
+- id: app.test
+  name: Updated
+  unknown_field_that_breaks: true
+"#;
+        let registry = CommandsRegistry::from_yaml_sources(&[
+            ("base", base_yaml),
+            ("override", override_yaml),
+        ]);
+        // The merge fails due to deny_unknown_fields, so the original is kept
+        let cmd = registry.get("app.test").unwrap();
+        assert_eq!(cmd.name, "Test Command");
+    }
+
+    #[test]
+    fn from_yaml_sources_empty_sources() {
+        // An empty sources slice produces an empty registry.
+        let registry = CommandsRegistry::from_yaml_sources(&[]);
+        assert!(registry.all_commands().is_empty());
+    }
+
+    #[test]
+    fn from_yaml_sources_empty_yaml_list() {
+        // A YAML source that parses to an empty list adds no commands.
+        let registry = CommandsRegistry::from_yaml_sources(&[("empty", "[]")]);
+        assert!(registry.all_commands().is_empty());
+    }
+
+    #[test]
+    fn merge_yaml_sources_multiple_sources_at_once() {
+        // Verify that merge_yaml_sources handles multiple sources in a single call.
+        let mut reg = CommandsRegistry::new();
+        let sources: Vec<(&str, &str)> = vec![
+            ("a", "- id: cmd.a\n  name: A\n"),
+            ("b", "- id: cmd.b\n  name: B\n"),
+        ];
+        reg.merge_yaml_sources(&sources);
+        assert_eq!(reg.all_commands().len(), 2);
+        assert!(reg.get("cmd.a").is_some());
+        assert!(reg.get("cmd.b").is_some());
+    }
+
+    #[test]
+    fn all_commands_returns_all_registered() {
+        // Verify all_commands returns every command, regardless of scope.
+        let yaml = r#"
+- id: global.cmd
+  name: Global
+
+- id: scoped.cmd
+  name: Scoped
+  scope: "entity:task"
+"#;
+        let registry = CommandsRegistry::from_yaml_sources(&[("test", yaml)]);
+        let all = registry.all_commands();
+        assert_eq!(all.len(), 2);
+        let ids: Vec<&str> = all.iter().map(|c| c.id.as_str()).collect();
+        assert!(ids.contains(&"global.cmd"));
+        assert!(ids.contains(&"scoped.cmd"));
+    }
+
+    #[test]
+    fn load_yaml_dir_reads_file_content() {
+        // Verify that load_yaml_dir reads actual file content, not just names.
+        let dir = tempfile::tempdir().unwrap();
+        let content = "- id: loaded.cmd\n  name: Loaded Command\n";
+        std::fs::write(dir.path().join("commands.yaml"), content).unwrap();
+        let result = load_yaml_dir(dir.path());
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].0, "commands");
+        assert_eq!(result[0].1, content);
+    }
+
+    #[test]
+    fn load_yaml_dir_then_merge_into_registry() {
+        // End-to-end: load YAML files from a directory and merge into a registry.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("custom.yaml"),
+            "- id: custom.greet\n  name: Greet\n",
+        )
+        .unwrap();
+
+        let base_yaml = "- id: app.quit\n  name: Quit\n";
+        let mut registry = CommandsRegistry::from_yaml_sources(&[("app", base_yaml)]);
+
+        let dir_sources = load_yaml_dir(dir.path());
+        let refs: Vec<(&str, &str)> = dir_sources
+            .iter()
+            .map(|(n, c)| (n.as_str(), c.as_str()))
+            .collect();
+        registry.merge_yaml_sources(&refs);
+
+        assert_eq!(registry.all_commands().len(), 2);
+        assert!(registry.get("app.quit").is_some());
+        assert!(registry.get("custom.greet").is_some());
+    }
+
+    #[test]
+    fn default_creates_empty_registry() {
+        // Verify the Default impl produces an empty registry.
+        let registry = CommandsRegistry::default();
+        assert!(registry.all_commands().is_empty());
+    }
+
+    #[test]
+    fn merge_yaml_value_override_with_invalid_merged_result_preserves_original() {
+        // Start with a valid command, then overlay an override that makes the
+        // merged result invalid (e.g., wrong type for a field).
+        let base = r#"
+- id: task.add
+  name: Add Task
+  undoable: true
+"#;
+        let override_yaml = r#"
+- id: task.add
+  undoable: not_a_bool
+"#;
+        let registry =
+            CommandsRegistry::from_yaml_sources(&[("base", base), ("override", override_yaml)]);
+        let cmd = registry.get("task.add");
+        if let Some(cmd) = cmd {
+            assert_eq!(cmd.name, "Add Task");
+        }
+    }
+
+    #[test]
+    fn merge_yaml_sources_override_adds_new_via_merge() {
+        let base = vec![("base", "- id: app.quit\n  name: Quit\n  undoable: false\n")];
+        let mut reg = CommandsRegistry::from_yaml_sources(&base);
+
+        let over = vec![("over", "- id: app.quit\n  name: Quit App\n")];
+        reg.merge_yaml_sources(&over);
+        let cmd = reg.get("app.quit").unwrap();
+        assert_eq!(cmd.name, "Quit App");
+        assert!(!cmd.undoable);
+    }
+
+    // --- scope_matches edge cases ---
+
+    #[test]
+    fn scope_matches_non_entity_requirement_is_ignored() {
+        let chain = vec!["task:01ABC".to_string()];
+        assert!(scope_matches(Some("custom_scope"), &chain));
     }
 }

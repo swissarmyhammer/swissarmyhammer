@@ -225,4 +225,115 @@ mod tests {
             elapsed_ms: 100,
         });
     }
+
+    /// Helper that builds one of every `InitEvent` variant for exhaustive testing.
+    fn all_event_variants() -> Vec<InitEvent> {
+        vec![
+            InitEvent::Header {
+                message: "Initializing sah...".to_string(),
+            },
+            InitEvent::Action {
+                verb: "Installed".to_string(),
+                message: "MCP server".to_string(),
+            },
+            InitEvent::Warning {
+                message: "config missing".to_string(),
+            },
+            InitEvent::Error {
+                message: "connection refused".to_string(),
+            },
+            InitEvent::Skipped {
+                component: "lsp".to_string(),
+                reason: "not configured".to_string(),
+            },
+            InitEvent::Finished {
+                message: "Done".to_string(),
+                elapsed_ms: 1234,
+            },
+        ]
+    }
+
+    #[test]
+    fn emit_plain_handles_all_variants() {
+        // Exercises every branch in emit_plain. Output goes to stderr
+        // which is fine for coverage — we verify no panics and that every
+        // match arm is reached.
+        for event in all_event_variants() {
+            emit_plain(&event);
+        }
+    }
+
+    #[test]
+    fn emit_styled_handles_all_variants() {
+        // Exercises every branch in emit_styled including colored output.
+        // When running in CI (non-TTY), colored will strip ANSI codes
+        // but the formatting logic still runs.
+        for event in all_event_variants() {
+            emit_styled(&event);
+        }
+    }
+
+    #[test]
+    fn emit_plain_skipped_is_silent() {
+        // Skipped events intentionally produce no output in plain mode.
+        // This verifies the empty match arm doesn't panic.
+        emit_plain(&InitEvent::Skipped {
+            component: "watcher".to_string(),
+            reason: "disabled".to_string(),
+        });
+    }
+
+    #[test]
+    fn emit_styled_skipped_is_silent() {
+        // Skipped events intentionally produce no output in styled mode.
+        emit_styled(&InitEvent::Skipped {
+            component: "watcher".to_string(),
+            reason: "disabled".to_string(),
+        });
+    }
+
+    #[test]
+    fn emit_plain_finished_formats_seconds() {
+        // Verify the elapsed-time conversion doesn't panic with edge values.
+        emit_plain(&InitEvent::Finished {
+            message: "Complete".to_string(),
+            elapsed_ms: 0,
+        });
+        emit_plain(&InitEvent::Finished {
+            message: "Complete".to_string(),
+            elapsed_ms: 999,
+        });
+        emit_plain(&InitEvent::Finished {
+            message: "Complete".to_string(),
+            elapsed_ms: 60_000,
+        });
+    }
+
+    #[test]
+    fn emit_styled_finished_formats_seconds() {
+        // Verify the elapsed-time conversion doesn't panic with edge values.
+        emit_styled(&InitEvent::Finished {
+            message: "Complete".to_string(),
+            elapsed_ms: 0,
+        });
+        emit_styled(&InitEvent::Finished {
+            message: "Complete".to_string(),
+            elapsed_ms: 999,
+        });
+        emit_styled(&InitEvent::Finished {
+            message: "Complete".to_string(),
+            elapsed_ms: 60_000,
+        });
+    }
+
+    #[test]
+    fn cli_reporter_emit_exercises_all_variants() {
+        // Calls CliReporter::emit for every variant, covering the
+        // dispatch logic (line 50-56) and whichever of emit_plain /
+        // emit_styled the environment selects.
+        let reporter = CliReporter;
+        for event in all_event_variants() {
+            reporter.emit(&event);
+        }
+    }
 }

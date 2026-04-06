@@ -19,3 +19,74 @@ pub fn eval(ctx: &ModuleContext) -> ModuleOutput {
     let text = interpolate(&ctx.config.agent.format, &vars);
     ModuleOutput::new(text, Style::parse(&ctx.config.agent.style))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::StatuslineConfig;
+    use crate::input::{AgentInfo, StatuslineInput};
+
+    #[test]
+    fn test_agent_present() {
+        let input = StatuslineInput {
+            agent: Some(AgentInfo {
+                name: Some("explorer".into()),
+            }),
+            ..Default::default()
+        };
+        let config = StatuslineConfig::default();
+        let ctx = ModuleContext {
+            input: &input,
+            config: &config,
+        };
+        let out = eval(&ctx);
+        assert!(!out.is_empty());
+        assert!(out.text.contains("explorer"));
+    }
+
+    #[test]
+    fn test_agent_none() {
+        let input = StatuslineInput::default();
+        let config = StatuslineConfig::default();
+        let ctx = ModuleContext {
+            input: &input,
+            config: &config,
+        };
+        let out = eval(&ctx);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn test_agent_with_no_name() {
+        let input = StatuslineInput {
+            agent: Some(AgentInfo { name: None }),
+            ..Default::default()
+        };
+        let config = StatuslineConfig::default();
+        let ctx = ModuleContext {
+            input: &input,
+            config: &config,
+        };
+        let out = eval(&ctx);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn test_agent_render_output() {
+        let input = StatuslineInput {
+            agent: Some(AgentInfo {
+                name: Some("tester".into()),
+            }),
+            ..Default::default()
+        };
+        let config = StatuslineConfig::default();
+        let ctx = ModuleContext {
+            input: &input,
+            config: &config,
+        };
+        let out = eval(&ctx);
+        let rendered = out.render();
+        assert!(rendered.contains("tester"));
+        assert!(rendered.contains("\x1b["));
+    }
+}

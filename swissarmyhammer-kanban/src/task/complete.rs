@@ -69,7 +69,7 @@ impl Execute<KanbanContext, KanbanError> for CompleteTask {
                 }
             }
 
-            // Update position to done column (preserving swimlane)
+            // Update position to done column
             entity.set("position_column", serde_json::json!(terminal.id.as_str()));
             entity.set(
                 "position_ordinal",
@@ -163,46 +163,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_complete_task_preserves_swimlane() {
-        let (_temp, ctx) = setup().await;
-
-        // Add a swimlane
-        use crate::swimlane::AddSwimlane;
-        AddSwimlane::new("feature", "Feature")
-            .execute(&ctx)
-            .await
-            .into_result()
-            .unwrap();
-
-        // Add a task and move it to the swimlane
-        let add_result = AddTask::new("Task with swimlane")
-            .execute(&ctx)
-            .await
-            .into_result()
-            .unwrap();
-        let task_id = add_result["id"].as_str().unwrap();
-
-        // Move to doing column with swimlane
-        use crate::task::MoveTask;
-        MoveTask::to_column_and_swimlane(task_id, "doing", "feature")
-            .execute(&ctx)
-            .await
-            .into_result()
-            .unwrap();
-
-        // Complete the task
-        let result = CompleteTask::new(task_id)
-            .execute(&ctx)
-            .await
-            .into_result()
-            .unwrap();
-
-        // Should be in done column but preserve swimlane
-        assert_eq!(result["position"]["column"], "done");
-        assert_eq!(result["position"]["swimlane"], "feature");
-    }
-
-    #[tokio::test]
     async fn test_complete_nonexistent_task() {
         let (_temp, ctx) = setup().await;
 
@@ -212,5 +172,69 @@ mod tests {
             .into_result();
 
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_complete_task_affected_resource_ids() {
+        let (_temp, ctx) = setup().await;
+
+        let add_result = AddTask::new("Task to complete")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let task_id = add_result["id"].as_str().unwrap();
+
+        let op = CompleteTask::new(task_id);
+        let exec_result = op.execute(&ctx).await;
+        let value = exec_result.into_result().unwrap();
+
+        let ids = op.affected_resource_ids(&value);
+        assert_eq!(ids.len(), 1);
+        assert_eq!(ids[0], task_id);
+    }
+
+    #[tokio::test]
+    async fn test_complete_task_ordering_multiple_done() {
+        let (_temp, ctx) = setup().await;
+
+        // Complete two tasks; the second should be ordered after the first in done column.
+        let r1 = AddTask::new("First to complete")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let id1 = r1["id"].as_str().unwrap();
+
+        let r2 = AddTask::new("Second to complete")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let id2 = r2["id"].as_str().unwrap();
+
+        let done1 = CompleteTask::new(id1)
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let done2 = CompleteTask::new(id2)
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        assert_eq!(done1["position"]["column"], "done");
+        assert_eq!(done2["position"]["column"], "done");
+
+        // Second completed task should have a higher ordinal than the first.
+        let ord1 = done1["position"]["ordinal"].as_str().unwrap();
+        let ord2 = done2["position"]["ordinal"].as_str().unwrap();
+        assert!(
+            ord2 > ord1,
+            "second done task ({}) should sort after first ({})",
+            ord2,
+            ord1
+        );
     }
 }

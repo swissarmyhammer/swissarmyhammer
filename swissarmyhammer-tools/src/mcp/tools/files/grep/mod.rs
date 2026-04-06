@@ -365,4 +365,304 @@ mod tests {
         let result = execute_grep(arguments, &context).await;
         assert!(result.is_ok());
     }
+
+    #[tokio::test]
+    async fn test_grep_invalid_regex_error() {
+        let context = create_test_context().await;
+        let temp_dir = tempfile::TempDir::new().unwrap();
+
+        let mut arguments = serde_json::Map::new();
+        arguments.insert(
+            "pattern".to_string(),
+            // Invalid regex: unmatched bracket
+            serde_json::Value::String("[invalid".to_string()),
+        );
+        arguments.insert(
+            "path".to_string(),
+            serde_json::Value::String(temp_dir.path().display().to_string()),
+        );
+
+        let result = execute_grep(arguments, &context).await;
+        assert!(result.is_err());
+        let err = format!("{:?}", result.unwrap_err());
+        assert!(err.contains("Invalid regex") || err.contains("regex") || err.contains("pattern"));
+    }
+
+    #[tokio::test]
+    async fn test_grep_output_mode_count() {
+        let context = create_test_context().await;
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("count_test.txt");
+        std::fs::write(&test_file, "foo\nfoo\nbar\nfoo\n").unwrap();
+
+        let mut arguments = serde_json::Map::new();
+        arguments.insert(
+            "pattern".to_string(),
+            serde_json::Value::String("foo".to_string()),
+        );
+        arguments.insert(
+            "path".to_string(),
+            serde_json::Value::String(temp_dir.path().display().to_string()),
+        );
+        arguments.insert(
+            "output_mode".to_string(),
+            serde_json::Value::String("count".to_string()),
+        );
+
+        let result = execute_grep(arguments, &context).await;
+        assert!(result.is_ok());
+        let call_result = result.unwrap();
+        let text = match &call_result.content[0].raw {
+            rmcp::model::RawContent::Text(t) => t.text.clone(),
+            _ => panic!("Expected text"),
+        };
+        // count mode shows "N matches in M files"
+        assert!(text.contains("matches"));
+        assert!(text.contains("files"));
+    }
+
+    #[tokio::test]
+    async fn test_grep_output_mode_files_with_matches() {
+        let context = create_test_context().await;
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("match.txt");
+        let no_match_file = temp_dir.path().join("no_match.txt");
+        std::fs::write(&test_file, "hello world\n").unwrap();
+        std::fs::write(&no_match_file, "no match here\n").unwrap();
+
+        let mut arguments = serde_json::Map::new();
+        arguments.insert(
+            "pattern".to_string(),
+            serde_json::Value::String("hello".to_string()),
+        );
+        arguments.insert(
+            "path".to_string(),
+            serde_json::Value::String(temp_dir.path().display().to_string()),
+        );
+        arguments.insert(
+            "output_mode".to_string(),
+            serde_json::Value::String("files_with_matches".to_string()),
+        );
+
+        let result = execute_grep(arguments, &context).await;
+        assert!(result.is_ok());
+        let call_result = result.unwrap();
+        let text = match &call_result.content[0].raw {
+            rmcp::model::RawContent::Text(t) => t.text.clone(),
+            _ => panic!("Expected text"),
+        };
+        assert!(text.contains("match.txt") || text.contains("Files with matches"));
+    }
+
+    #[tokio::test]
+    async fn test_grep_case_insensitive() {
+        let context = create_test_context().await;
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("case_test.txt");
+        std::fs::write(&test_file, "Hello World\nHELLO WORLD\nhello world\n").unwrap();
+
+        let mut arguments = serde_json::Map::new();
+        arguments.insert(
+            "pattern".to_string(),
+            serde_json::Value::String("hello".to_string()),
+        );
+        arguments.insert(
+            "path".to_string(),
+            serde_json::Value::String(temp_dir.path().display().to_string()),
+        );
+        arguments.insert(
+            "case_insensitive".to_string(),
+            serde_json::Value::Bool(true),
+        );
+
+        let result = execute_grep(arguments, &context).await;
+        assert!(result.is_ok());
+        let call_result = result.unwrap();
+        let text = match &call_result.content[0].raw {
+            rmcp::model::RawContent::Text(t) => t.text.clone(),
+            _ => panic!("Expected text"),
+        };
+        // Should find 3 matches (Hello, HELLO, hello)
+        assert!(text.contains("3 matches") || text.contains("Found 3"));
+    }
+
+    #[tokio::test]
+    async fn test_grep_file_type_filter() {
+        let context = create_test_context().await;
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let rs_file = temp_dir.path().join("code.rs");
+        let txt_file = temp_dir.path().join("notes.txt");
+        std::fs::write(&rs_file, "fn hello() {}\n").unwrap();
+        std::fs::write(&txt_file, "fn hello world\n").unwrap();
+
+        let mut arguments = serde_json::Map::new();
+        arguments.insert(
+            "pattern".to_string(),
+            serde_json::Value::String("hello".to_string()),
+        );
+        arguments.insert(
+            "path".to_string(),
+            serde_json::Value::String(temp_dir.path().display().to_string()),
+        );
+        arguments.insert(
+            "type".to_string(),
+            serde_json::Value::String("rust".to_string()),
+        );
+
+        let result = execute_grep(arguments, &context).await;
+        assert!(result.is_ok());
+        let call_result = result.unwrap();
+        let text = match &call_result.content[0].raw {
+            rmcp::model::RawContent::Text(t) => t.text.clone(),
+            _ => panic!("Expected text"),
+        };
+        // Should only find in .rs file
+        assert!(text.contains("code.rs") || text.contains("1 match"));
+        assert!(!text.contains("notes.txt"));
+    }
+
+    #[tokio::test]
+    async fn test_grep_glob_filter() {
+        let context = create_test_context().await;
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let rs_file = temp_dir.path().join("code.rs");
+        let txt_file = temp_dir.path().join("notes.txt");
+        std::fs::write(&rs_file, "hello rust\n").unwrap();
+        std::fs::write(&txt_file, "hello text\n").unwrap();
+
+        let mut arguments = serde_json::Map::new();
+        arguments.insert(
+            "pattern".to_string(),
+            serde_json::Value::String("hello".to_string()),
+        );
+        arguments.insert(
+            "path".to_string(),
+            serde_json::Value::String(temp_dir.path().display().to_string()),
+        );
+        arguments.insert(
+            "glob".to_string(),
+            serde_json::Value::String("*.rs".to_string()),
+        );
+
+        let result = execute_grep(arguments, &context).await;
+        assert!(result.is_ok());
+        let call_result = result.unwrap();
+        let text = match &call_result.content[0].raw {
+            rmcp::model::RawContent::Text(t) => t.text.clone(),
+            _ => panic!("Expected text"),
+        };
+        // Should only search .rs files
+        assert!(text.contains("code.rs") || text.contains("1 match"));
+        assert!(!text.contains("notes.txt"));
+    }
+
+    #[tokio::test]
+    async fn test_grep_no_matches() {
+        let context = create_test_context().await;
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("test.txt");
+        std::fs::write(&test_file, "nothing relevant here\n").unwrap();
+
+        let mut arguments = serde_json::Map::new();
+        arguments.insert(
+            "pattern".to_string(),
+            serde_json::Value::String("xyz_not_found_pattern".to_string()),
+        );
+        arguments.insert(
+            "path".to_string(),
+            serde_json::Value::String(temp_dir.path().display().to_string()),
+        );
+
+        let result = execute_grep(arguments, &context).await;
+        assert!(result.is_ok());
+        let call_result = result.unwrap();
+        let text = match &call_result.content[0].raw {
+            rmcp::model::RawContent::Text(t) => t.text.clone(),
+            _ => panic!("Expected text"),
+        };
+        assert!(text.contains("No matches found") || text.contains("0 matches"));
+    }
+
+    #[tokio::test]
+    async fn test_grep_search_single_file() {
+        let context = create_test_context().await;
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("single.txt");
+        std::fs::write(&test_file, "line 1\ntarget line\nline 3\n").unwrap();
+
+        // Point path directly at a file
+        let mut arguments = serde_json::Map::new();
+        arguments.insert(
+            "pattern".to_string(),
+            serde_json::Value::String("target".to_string()),
+        );
+        arguments.insert(
+            "path".to_string(),
+            serde_json::Value::String(test_file.display().to_string()),
+        );
+
+        let result = execute_grep(arguments, &context).await;
+        assert!(result.is_ok());
+        let call_result = result.unwrap();
+        let text = match &call_result.content[0].raw {
+            rmcp::model::RawContent::Text(t) => t.text.clone(),
+            _ => panic!("Expected text"),
+        };
+        assert!(text.contains("target") || text.contains("1 match"));
+    }
+
+    #[tokio::test]
+    async fn test_grep_nonexistent_path_error() {
+        let context = create_test_context().await;
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let nonexistent = temp_dir.path().join("does_not_exist");
+
+        let mut arguments = serde_json::Map::new();
+        arguments.insert(
+            "pattern".to_string(),
+            serde_json::Value::String("hello".to_string()),
+        );
+        arguments.insert(
+            "path".to_string(),
+            serde_json::Value::String(nonexistent.display().to_string()),
+        );
+
+        let result = execute_grep(arguments, &context).await;
+        assert!(result.is_err());
+        let err = format!("{:?}", result.unwrap_err());
+        assert!(
+            err.contains("does not exist") || err.contains("not found") || err.contains("NotFound")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_grep_files_with_no_matches_mode() {
+        let context = create_test_context().await;
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("test.txt");
+        std::fs::write(&test_file, "no match here\n").unwrap();
+
+        let mut arguments = serde_json::Map::new();
+        arguments.insert(
+            "pattern".to_string(),
+            serde_json::Value::String("xyz_not_present".to_string()),
+        );
+        arguments.insert(
+            "path".to_string(),
+            serde_json::Value::String(temp_dir.path().display().to_string()),
+        );
+        arguments.insert(
+            "output_mode".to_string(),
+            serde_json::Value::String("files_with_matches".to_string()),
+        );
+
+        let result = execute_grep(arguments, &context).await;
+        assert!(result.is_ok());
+        let call_result = result.unwrap();
+        let text = match &call_result.content[0].raw {
+            rmcp::model::RawContent::Text(t) => t.text.clone(),
+            _ => panic!("Expected text"),
+        };
+        assert!(text.contains("No files found") || text.contains("0"));
+    }
 }

@@ -191,6 +191,7 @@ mod tests {
             icon: None,
             section: None,
             validate: None,
+            groupable: None,
         }
     }
 
@@ -208,6 +209,7 @@ mod tests {
             icon: None,
             section: None,
             validate: None,
+            groupable: None,
         }
     }
 
@@ -417,5 +419,11 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("aggregate"));
+    }
+
+    #[test]
+    fn compute_engine_default_creates_empty() {
+        let engine = ComputeEngine::default();
+        assert!(!engine.has("anything"));
     }
 }

@@ -17,7 +17,7 @@ use crate::context::EntityContext;
 use crate::entity::Entity;
 use crate::error::Result;
 use crate::events::EntityEvent;
-use crate::id_types::ChangeEntryId;
+use swissarmyhammer_store::UndoEntryId;
 
 /// A cached entity with its content hash and version stamp.
 #[derive(Debug, Clone)]
@@ -147,9 +147,9 @@ impl EntityCache {
     /// Delegates to `inner.write()` first. On success, computes the content hash
     /// and inserts/updates the cache entry. Only bumps the version and emits an
     /// `EntityChanged` event if the content hash actually changed (or the entity
-    /// is new). Returns the `ChangeEntryId` from the underlying write (or `None`
+    /// is new). Returns the `UndoEntryId` from the underlying write (or `None`
     /// if unchanged).
-    pub async fn write(&self, entity: &Entity) -> Result<Option<ChangeEntryId>> {
+    pub async fn write(&self, entity: &Entity) -> Result<Option<UndoEntryId>> {
         // Grab the old hash before writing, so we can detect no-op writes.
         let old_hash = {
             let map = self.cache.read().await;
@@ -207,7 +207,7 @@ impl EntityCache {
     /// Delegates to `inner.delete()` first, then removes the cache entry and
     /// emits an `EntityDeleted` event. Returns the `ChangeEntryId` from the
     /// underlying delete (or `None`).
-    pub async fn delete(&self, entity_type: &str, id: &str) -> Result<Option<ChangeEntryId>> {
+    pub async fn delete(&self, entity_type: &str, id: &str) -> Result<Option<UndoEntryId>> {
         let change_id = self.inner.delete(entity_type, id).await?;
 
         let mut map = self.cache.write().await;
@@ -606,5 +606,43 @@ mod tests {
         let changed = cache.refresh_from_disk("tag", "t1").await.unwrap();
         assert!(!changed);
         assert!(rx.try_recv().is_err());
+    }
+
+    /// get_all returns all cached entities of a given type.
+    #[tokio::test]
+    async fn get_all_returns_entities_of_type() {
+        let (_dir, cache) = setup().await;
+
+        // Write two tags and one task
+        let mut t1 = Entity::new("tag", "t1");
+        t1.set("tag_name", json!("Bug"));
+        t1.set("color", json!("#ff0000"));
+        cache.write(&t1).await.unwrap();
+
+        let mut t2 = Entity::new("tag", "t2");
+        t2.set("tag_name", json!("Feature"));
+        t2.set("color", json!("#00ff00"));
+        cache.write(&t2).await.unwrap();
+
+        let mut task = Entity::new("task", "01ABC");
+        task.set("title", json!("Fix bug"));
+        task.set("body", json!("Details"));
+        cache.write(&task).await.unwrap();
+
+        // get_all for "tag" should return exactly the two tags
+        let tags = cache.get_all("tag").await;
+        assert_eq!(tags.len(), 2);
+        let tag_ids: Vec<&str> = tags.iter().map(|t| t.id.as_str()).collect();
+        assert!(tag_ids.contains(&"t1"));
+        assert!(tag_ids.contains(&"t2"));
+
+        // get_all for "task" should return exactly one task
+        let tasks = cache.get_all("task").await;
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].id, "01ABC");
+
+        // get_all for unknown type returns empty
+        let empty = cache.get_all("column").await;
+        assert!(empty.is_empty());
     }
 }

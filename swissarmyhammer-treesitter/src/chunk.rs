@@ -965,4 +965,386 @@ impl Foo {
             path
         );
     }
+
+    // === Parsed variant byte-range extraction edge cases ===
+
+    #[test]
+    fn test_chunk_source_parsed_empty_byte_range() {
+        // When start == end, byte_len should be 0
+        let parsed = create_parsed_file("fn main() {}");
+        let source = ChunkSource::parsed(parsed, 5, 5);
+        assert_eq!(source.byte_len(), 0);
+        // content() at an empty range should return empty string (valid range)
+        assert_eq!(source.content(), Some(""));
+    }
+
+    #[test]
+    fn test_chunk_source_parsed_inverted_byte_range() {
+        // When start > end, byte_len saturates to 0
+        let parsed = create_parsed_file("fn main() {}");
+        let source = ChunkSource::parsed(parsed, 10, 5);
+        assert_eq!(source.byte_len(), 0);
+        // content() with inverted range returns None (start > end is invalid)
+        assert_eq!(source.content(), None);
+    }
+
+    #[test]
+    fn test_chunk_source_parsed_out_of_bounds_byte_range() {
+        // When end exceeds source length, content() returns None
+        let parsed = create_parsed_file("fn main() {}"); // 12 bytes
+        let source = ChunkSource::parsed(parsed, 0, 999);
+        // byte_len reports the arithmetic length even if out of bounds
+        assert_eq!(source.byte_len(), 999);
+        // content() returns None because end > source.len()
+        assert_eq!(source.content(), None);
+    }
+
+    #[test]
+    fn test_chunk_source_parsed_parent_node() {
+        // function_item inside an impl block should have a parent
+        let source = "impl Foo { fn bar() {} }";
+        let parsed = create_parsed_file(source);
+        // Byte range covering the fn bar() {} part
+        let chunks = chunk_file(parsed);
+        let method_chunk = chunks
+            .iter()
+            .find(|c| c.node().map(|n| n.kind()) == Some("function_item"))
+            .unwrap();
+        // The method's parent_node should exist (it's inside impl_item's declaration_list)
+        let parent = method_chunk.source.parent_node();
+        assert!(
+            parent.is_some(),
+            "Method inside impl should have a parent node"
+        );
+    }
+
+    #[test]
+    fn test_chunk_source_text_parent_node_is_none() {
+        let source = ChunkSource::text("some code");
+        assert!(source.parent_node().is_none());
+    }
+
+    // === ChunkSource equality and ordering ===
+
+    #[test]
+    fn test_chunk_source_equality_same_parsed() {
+        let parsed = create_parsed_file("fn main() {}");
+        let s1 = ChunkSource::parsed(parsed.clone(), 0, 12);
+        let s2 = ChunkSource::parsed(parsed, 0, 12);
+        assert_eq!(s1, s2);
+    }
+
+    #[test]
+    fn test_chunk_source_equality_different_ranges() {
+        let parsed = create_parsed_file("fn main() {}");
+        let s1 = ChunkSource::parsed(parsed.clone(), 0, 6);
+        let s2 = ChunkSource::parsed(parsed, 6, 12);
+        assert_ne!(s1, s2);
+    }
+
+    #[test]
+    fn test_chunk_source_equality_parsed_vs_text() {
+        let parsed = create_parsed_file("fn main() {}");
+        let ps = ChunkSource::parsed(parsed, 0, 12);
+        let ts = ChunkSource::text("fn main() {}");
+        // Parsed and text sources are never equal even with same content
+        assert_ne!(ps, ts);
+    }
+
+    #[test]
+    fn test_chunk_source_equality_same_text() {
+        let s1 = ChunkSource::text("hello");
+        let s2 = ChunkSource::text("hello");
+        assert_eq!(s1, s2);
+    }
+
+    #[test]
+    fn test_chunk_source_equality_different_text() {
+        let s1 = ChunkSource::text("hello");
+        let s2 = ChunkSource::text("world");
+        assert_ne!(s1, s2);
+    }
+
+    #[test]
+    fn test_chunk_source_ordering_parsed_before_text() {
+        // Parsed sources sort before Text sources
+        let parsed = create_parsed_file("fn main() {}");
+        let ps = ChunkSource::parsed(parsed, 0, 12);
+        let ts = ChunkSource::text("fn main() {}");
+        assert!(ps < ts, "Parsed should sort before text");
+    }
+
+    #[test]
+    fn test_chunk_source_ordering_text_vs_text() {
+        let s1 = ChunkSource::text("aardvark");
+        let s2 = ChunkSource::text("zebra");
+        assert!(s1 < s2);
+        assert!(s2 > s1);
+    }
+
+    #[test]
+    fn test_chunk_source_hash_consistency() {
+        // Same source should produce consistent hash results (used in HashSets)
+        use std::collections::HashSet;
+        let parsed = create_parsed_file("fn main() {}");
+        let s1 = ChunkSource::parsed(parsed.clone(), 0, 12);
+        let s2 = ChunkSource::parsed(parsed, 0, 12);
+
+        let mut set = HashSet::new();
+        set.insert(s1);
+        // Inserting an equal source should not grow the set
+        assert!(!set.insert(s2));
+        assert_eq!(set.len(), 1);
+    }
+
+    #[test]
+    fn test_chunk_source_hash_text_in_set() {
+        use std::collections::HashSet;
+        let mut set = HashSet::new();
+        set.insert(ChunkSource::text("hello"));
+        assert!(!set.insert(ChunkSource::text("hello")));
+        assert!(set.insert(ChunkSource::text("world")));
+        assert_eq!(set.len(), 2);
+    }
+
+    // === ChunkGraph additional methods ===
+
+    #[test]
+    fn test_chunk_graph_chunks_for_file() {
+        let mut graph = ChunkGraph::new();
+        let parsed_a = create_parsed_file("fn a() {}");
+        // Create a different parsed file on a different path
+        let registry = crate::language::LanguageRegistry::global();
+        let config = registry.get_by_name("rust").unwrap();
+        let language = config.language();
+        let mut parser = tree_sitter::Parser::new();
+        parser.set_language(&language).unwrap();
+        let source_b = "fn b() {}";
+        let tree_b = parser.parse(source_b, None).unwrap();
+        let hash_b = md5::compute(source_b.as_bytes());
+        let parsed_b = Arc::new(ParsedFile::new(
+            PathBuf::from("/other.rs"),
+            source_b.to_string(),
+            tree_b,
+            hash_b.into(),
+        ));
+
+        graph.add(SemanticChunk::from_parsed(parsed_a, 0, 9));
+        graph.add(SemanticChunk::from_parsed(parsed_b, 0, 9));
+        graph.add(SemanticChunk::from_text("unrelated"));
+
+        // chunks_for_file should return only chunks for the requested path
+        let chunks = graph.chunks_for_file(Path::new("/test.rs"));
+        assert_eq!(chunks.len(), 1);
+
+        let chunks_b = graph.chunks_for_file(Path::new("/other.rs"));
+        assert_eq!(chunks_b.len(), 1);
+
+        // Text chunks have no path, so they're not returned for any file
+        let chunks_none = graph.chunks_for_file(Path::new("/nonexistent.rs"));
+        assert_eq!(chunks_none.len(), 0);
+    }
+
+    #[test]
+    fn test_chunk_graph_clear() {
+        let mut graph = ChunkGraph::new();
+        let parsed = create_parsed_file("fn main() {}");
+        graph.add(SemanticChunk::from_parsed(parsed, 0, 12));
+        graph.add(SemanticChunk::from_text("some text"));
+        assert_eq!(graph.len(), 2);
+
+        graph.clear();
+        assert!(graph.is_empty());
+        assert_eq!(graph.len(), 0);
+    }
+
+    #[test]
+    fn test_chunk_graph_chunks_accessor() {
+        let mut graph = ChunkGraph::new();
+        let parsed = create_parsed_file("fn main() {}");
+        graph.add(SemanticChunk::from_parsed(parsed, 0, 12));
+        graph.add(SemanticChunk::from_text("search"));
+
+        let all_chunks = graph.chunks();
+        assert_eq!(all_chunks.len(), 2);
+    }
+
+    // === SimilarityQuery variants ===
+
+    #[test]
+    fn test_similarity_query_chunks_variant() {
+        // Test the Chunks (plural) query variant
+        let mut graph = ChunkGraph::new();
+        let parsed = create_parsed_file("fn main() {} fn other() {}");
+        graph.add(
+            SemanticChunk::from_parsed(parsed.clone(), 0, 12).with_embedding(vec![1.0, 0.0, 0.0]),
+        );
+        graph.add(SemanticChunk::from_parsed(parsed, 13, 26).with_embedding(vec![0.5, 0.5, 0.0]));
+
+        // Query using multiple source chunks
+        let query_chunk1 = SemanticChunk::from_text("main").with_embedding(vec![1.0, 0.0, 0.0]);
+        let query_chunk2 = SemanticChunk::from_text("other").with_embedding(vec![0.5, 0.5, 0.0]);
+        let results = graph
+            .query(SimilarityQuery::chunks(vec![query_chunk1, query_chunk2]).min_similarity(0.9));
+        // Should find both chunks that are similar to either query
+        assert!(!results.is_empty());
+    }
+
+    #[test]
+    fn test_similarity_query_embedding_variant() {
+        // Test the Embedding (raw vector) query variant
+        let mut graph = ChunkGraph::new();
+        let parsed = create_parsed_file("fn main() {}");
+        graph.add(SemanticChunk::from_parsed(parsed, 0, 12).with_embedding(vec![1.0, 0.0, 0.0]));
+
+        let results =
+            graph.query(SimilarityQuery::embedding(vec![1.0, 0.0, 0.0]).min_similarity(0.9));
+        assert_eq!(results.len(), 1);
+        assert!((results[0].similarity - 1.0).abs() < 0.0001);
+    }
+
+    #[test]
+    fn test_similarity_query_file_variant() {
+        // Test the File path query variant
+        let mut graph = ChunkGraph::new();
+        let parsed = create_parsed_file("fn main() {}");
+
+        // Add chunk from /test.rs (the default in create_parsed_file)
+        let chunk =
+            SemanticChunk::from_parsed(parsed.clone(), 0, 12).with_embedding(vec![1.0, 0.0, 0.0]);
+        graph.add(chunk.clone());
+
+        // Add a non-similar chunk also from /test.rs
+        graph.add(SemanticChunk::from_parsed(parsed, 0, 6).with_embedding(vec![0.0, 1.0, 0.0]));
+
+        // Query using the file path — this uses all chunks from /test.rs as query source
+        // and excludes them from results, so the result should be empty
+        let results = graph.query(SimilarityQuery::file("/test.rs").min_similarity(0.1));
+        // All chunks from /test.rs are excluded from results
+        assert_eq!(results.len(), 0);
+    }
+
+    #[test]
+    fn test_similarity_query_no_embeddings_returns_empty() {
+        // Query chunk without embedding returns no results
+        let mut graph = ChunkGraph::new();
+        let parsed = create_parsed_file("fn main() {}");
+        // Add chunk WITHOUT embedding
+        graph.add(SemanticChunk::from_parsed(parsed, 0, 12));
+
+        // Query chunk also WITHOUT embedding
+        let query_chunk = SemanticChunk::from_text("main");
+        let results = graph.query(SimilarityQuery::chunk(query_chunk).min_similarity(0.5));
+        assert!(results.is_empty(), "No results when query has no embedding");
+    }
+
+    #[test]
+    fn test_semantic_chunk_similarity_no_embedding() {
+        // similarity_to() returns 0.0 when either chunk lacks embedding
+        let chunk_with = SemanticChunk::from_text("a").with_embedding(vec![1.0, 0.0]);
+        let chunk_without = SemanticChunk::from_text("b");
+
+        assert_eq!(chunk_with.similarity_to(&chunk_without), 0.0);
+        assert_eq!(chunk_without.similarity_to(&chunk_with), 0.0);
+        assert_eq!(chunk_without.similarity_to(&chunk_without), 0.0);
+    }
+
+    // === chunk_file edge cases ===
+
+    #[test]
+    fn test_chunk_file_empty_source() {
+        // Empty source produces no chunks
+        let parsed = create_parsed_file("");
+        let chunks = chunk_file(parsed);
+        assert!(chunks.is_empty(), "Empty source should produce no chunks");
+    }
+
+    #[test]
+    fn test_chunk_file_no_embeddable_nodes() {
+        // Source with only comments/whitespace — no function or struct definitions
+        let source = "// just a comment\n";
+        let parsed = create_parsed_file(source);
+        let chunks = chunk_file(parsed);
+        assert!(
+            chunks.is_empty(),
+            "Comment-only source should produce no chunks"
+        );
+    }
+
+    #[test]
+    fn test_chunk_file_byte_ranges_are_valid() {
+        // Each chunk's byte range should be a valid slice of the source
+        let source = "fn alpha() {} fn beta() { let x = 1; }";
+        let parsed = create_parsed_file(source);
+        let chunks = chunk_file(parsed);
+
+        assert!(!chunks.is_empty());
+        for chunk in &chunks {
+            // content() must not be None — the byte range must be valid
+            assert!(
+                chunk.content().is_some(),
+                "Chunk byte range should be valid: {:?}",
+                chunk.source
+            );
+            // byte_len must match actual content length
+            let content_len = chunk.content().unwrap().len();
+            assert_eq!(
+                chunk.byte_len(),
+                content_len,
+                "byte_len should match content length"
+            );
+        }
+    }
+
+    #[test]
+    fn test_chunk_file_with_struct_and_impl() {
+        let source = r#"struct Foo {
+    x: i32,
+}
+
+impl Foo {
+    fn new(x: i32) -> Self {
+        Foo { x }
+    }
+}
+"#;
+        let parsed = create_parsed_file(source);
+        let chunks = chunk_file(parsed);
+
+        let kinds: Vec<_> = chunks.iter().map(|c| c.node().unwrap().kind()).collect();
+
+        // Should find struct_item, impl_item, and function_item
+        assert!(
+            kinds.contains(&"struct_item"),
+            "Should find struct: {:?}",
+            kinds
+        );
+        assert!(
+            kinds.contains(&"impl_item"),
+            "Should find impl: {:?}",
+            kinds
+        );
+        assert!(
+            kinds.contains(&"function_item"),
+            "Should find fn: {:?}",
+            kinds
+        );
+    }
+
+    #[test]
+    fn test_chunk_source_parsed_node_at_exact_function_range() {
+        // Verify node() returns the correct tree-sitter node for a known byte range
+        let source = "fn foo() {} fn bar() {}";
+        let parsed = create_parsed_file(source);
+
+        // fn foo() {} is bytes 0..11
+        let s = ChunkSource::parsed(parsed.clone(), 0, 11);
+        let node = s.node().expect("Should find a node");
+        assert_eq!(node.kind(), "function_item");
+
+        // fn bar() {} is bytes 12..23
+        let s2 = ChunkSource::parsed(parsed, 12, 23);
+        let node2 = s2.node().expect("Should find a node");
+        assert_eq!(node2.kind(), "function_item");
+    }
 }

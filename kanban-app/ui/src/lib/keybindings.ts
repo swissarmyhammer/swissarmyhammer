@@ -151,7 +151,7 @@ const SEQUENCE_TIMEOUT_MS = 500;
  *
  * @param mode - The active keymap mode ("vim", "cua", or "emacs").
  * @param executeCommand - Callback to run a command by ID, typically from
- *        `useExecuteCommand()` in the command scope.
+ *        `useDispatchCommand()` in the command scope.
  * @returns A function suitable for `addEventListener("keydown", ...)`.
  */
 /**

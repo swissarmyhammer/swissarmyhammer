@@ -355,3 +355,656 @@ impl<A: Agent + crate::AgentWithFixture> crate::AgentWithFixture for RecordingAg
         self.inner.agent_type()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use agent_client_protocol::{
+        AuthenticateRequest, AuthenticateResponse, CancelNotification, ContentBlock,
+        ExtNotification, ExtRequest, ExtResponse, InitializeRequest, InitializeResponse,
+        LoadSessionRequest, LoadSessionResponse, NewSessionRequest, NewSessionResponse,
+        PromptRequest, PromptResponse, SessionId, SetSessionModeRequest, SetSessionModeResponse,
+        StopReason, TextContent,
+    };
+    use serde_json::value::RawValue;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    // -- Mock agent for recording tests --
+
+    struct MockAgent {
+        prompt_called: Arc<AtomicBool>,
+    }
+
+    impl MockAgent {
+        fn new() -> (Self, Arc<AtomicBool>) {
+            let called = Arc::new(AtomicBool::new(false));
+            (
+                Self {
+                    prompt_called: called.clone(),
+                },
+                called,
+            )
+        }
+    }
+
+    #[async_trait::async_trait(?Send)]
+    impl Agent for MockAgent {
+        async fn initialize(
+            &self,
+            _request: InitializeRequest,
+        ) -> agent_client_protocol::Result<InitializeResponse> {
+            Ok(InitializeResponse::new(
+                agent_client_protocol::ProtocolVersion::LATEST,
+            ))
+        }
+
+        async fn authenticate(
+            &self,
+            _request: AuthenticateRequest,
+        ) -> agent_client_protocol::Result<AuthenticateResponse> {
+            Ok(AuthenticateResponse::new())
+        }
+
+        async fn new_session(
+            &self,
+            _request: NewSessionRequest,
+        ) -> agent_client_protocol::Result<NewSessionResponse> {
+            Ok(NewSessionResponse::new("test-session"))
+        }
+
+        async fn prompt(
+            &self,
+            _request: PromptRequest,
+        ) -> agent_client_protocol::Result<PromptResponse> {
+            self.prompt_called.store(true, Ordering::SeqCst);
+            Ok(PromptResponse::new(StopReason::EndTurn))
+        }
+
+        async fn cancel(&self, _request: CancelNotification) -> agent_client_protocol::Result<()> {
+            Ok(())
+        }
+
+        async fn load_session(
+            &self,
+            _request: LoadSessionRequest,
+        ) -> agent_client_protocol::Result<LoadSessionResponse> {
+            Ok(LoadSessionResponse::new())
+        }
+
+        async fn set_session_mode(
+            &self,
+            _request: SetSessionModeRequest,
+        ) -> agent_client_protocol::Result<SetSessionModeResponse> {
+            Ok(SetSessionModeResponse::new())
+        }
+
+        async fn ext_method(
+            &self,
+            _request: ExtRequest,
+        ) -> agent_client_protocol::Result<ExtResponse> {
+            Err(agent_client_protocol::Error::method_not_found())
+        }
+
+        async fn ext_notification(
+            &self,
+            _notification: ExtNotification,
+        ) -> agent_client_protocol::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn make_prompt_request() -> PromptRequest {
+        PromptRequest::new(
+            SessionId::from("test-session"),
+            vec![ContentBlock::Text(TextContent::new("hello"))],
+        )
+    }
+
+    fn make_ext_request() -> ExtRequest {
+        let raw = RawValue::from_string("{}".to_string()).unwrap();
+        ExtRequest::new("custom/method", Arc::from(raw))
+    }
+
+    fn make_ext_notification() -> ExtNotification {
+        let raw = RawValue::from_string("{}".to_string()).unwrap();
+        ExtNotification::new("custom/notify", Arc::from(raw))
+    }
+
+    fn make_mcp_progress_notification(
+        token: &str,
+    ) -> model_context_protocol_extras::McpNotification {
+        use rmcp::model::{NumberOrString, ProgressNotificationParam, ProgressToken};
+        model_context_protocol_extras::McpNotification::Progress(ProgressNotificationParam {
+            progress_token: ProgressToken(NumberOrString::String(token.to_string().into())),
+            progress: 50.0,
+            total: Some(100.0),
+            message: Some("halfway".into()),
+        })
+    }
+
+    #[test]
+    fn test_recorded_call_serialization_roundtrip() {
+        let call = RecordedCall {
+            method: "prompt".to_string(),
+            request: serde_json::json!({"prompt": "hello"}),
+            response: serde_json::json!({"stop_reason": "EndTurn"}),
+            notifications: vec![serde_json::json!({"type": "chunk"})],
+        };
+
+        let json = serde_json::to_string(&call).unwrap();
+        let deserialized: RecordedCall = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(deserialized.method, "prompt");
+        assert_eq!(deserialized.notifications.len(), 1);
+    }
+
+    #[test]
+    fn test_recorded_call_default_notifications() {
+        let json = r#"{"method":"init","request":{},"response":{}}"#;
+        let call: RecordedCall = serde_json::from_str(json).unwrap();
+        assert!(call.notifications.is_empty());
+    }
+
+    #[test]
+    fn test_recorded_session_serialization_roundtrip() {
+        let session = RecordedSession {
+            calls: vec![RecordedCall {
+                method: "initialize".to_string(),
+                request: serde_json::json!({}),
+                response: serde_json::json!({}),
+                notifications: vec![],
+            }],
+        };
+
+        let json = serde_json::to_string(&session).unwrap();
+        let deserialized: RecordedSession = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.calls.len(), 1);
+        assert_eq!(deserialized.calls[0].method, "initialize");
+    }
+
+    #[test]
+    fn test_recording_agent_new_creates_empty_state() {
+        let (mock, _) = MockAgent::new();
+        let agent = RecordingAgent::new(mock, PathBuf::from("/tmp/test_rec_new.json"));
+
+        let buffer = agent.notification_buffer();
+        assert!(buffer.lock().unwrap().is_empty());
+        {
+            let calls = agent.calls.lock().unwrap();
+            assert!(calls.is_empty());
+        }
+
+        std::mem::forget(agent);
+    }
+
+    #[test]
+    fn test_notification_buffer_returns_shared_ref() {
+        let (mock, _) = MockAgent::new();
+        let agent = RecordingAgent::new(mock, PathBuf::from("/tmp/test_rec_buf.json"));
+
+        let buf1 = agent.notification_buffer();
+        let buf2 = agent.notification_buffer();
+
+        buf1.lock().unwrap().push(serde_json::json!("test"));
+        assert_eq!(buf2.lock().unwrap().len(), 1);
+
+        std::mem::forget(agent);
+    }
+
+    #[test]
+    fn test_record_with_notifications_stores_call() {
+        let (mock, _) = MockAgent::new();
+        let agent = RecordingAgent::new(mock, PathBuf::from("/tmp/test_rec_record.json"));
+
+        agent.record_with_notifications(
+            "initialize",
+            &serde_json::json!({"protocol_version": "2024-11-05"}),
+            &serde_json::json!({"agent_info": null}),
+        );
+
+        {
+            let calls = agent.calls.lock().unwrap();
+            assert_eq!(calls.len(), 1);
+            assert_eq!(calls[0].method, "initialize");
+            assert!(calls[0].notifications.is_empty());
+        }
+
+        std::mem::forget(agent);
+    }
+
+    #[test]
+    fn test_save_creates_file_and_writes_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("recording.json");
+
+        let (mock, _) = MockAgent::new();
+        let agent = RecordingAgent::new(mock, path.clone());
+        agent.record_with_notifications("initialize", &"req", &"resp");
+
+        agent.save().unwrap();
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        let session: RecordedSession = serde_json::from_str(&content).unwrap();
+        assert_eq!(session.calls.len(), 1);
+        assert_eq!(session.calls[0].method, "initialize");
+
+        std::mem::forget(agent);
+    }
+
+    #[test]
+    fn test_save_creates_parent_directories() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nested/deep/recording.json");
+
+        let (mock, _) = MockAgent::new();
+        let agent = RecordingAgent::new(mock, path.clone());
+        agent.save().unwrap();
+
+        assert!(path.exists());
+
+        std::mem::forget(agent);
+    }
+
+    #[tokio::test]
+    async fn test_recording_agent_initialize_delegates_and_records() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.json");
+
+        let (mock, _) = MockAgent::new();
+        let agent = RecordingAgent::new(mock, path);
+
+        let _response = agent
+            .initialize(InitializeRequest::new(
+                agent_client_protocol::ProtocolVersion::LATEST,
+            ))
+            .await
+            .unwrap();
+
+        {
+            let calls = agent.calls.lock().unwrap();
+            assert_eq!(calls.len(), 1);
+            assert_eq!(calls[0].method, "initialize");
+        }
+
+        std::mem::forget(agent);
+    }
+
+    #[tokio::test]
+    async fn test_recording_agent_authenticate_delegates_without_recording() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.json");
+
+        let (mock, _) = MockAgent::new();
+        let agent = RecordingAgent::new(mock, path);
+
+        let _response = agent
+            .authenticate(AuthenticateRequest::new("test-method"))
+            .await
+            .unwrap();
+
+        {
+            let calls = agent.calls.lock().unwrap();
+            assert!(calls.is_empty());
+        }
+
+        std::mem::forget(agent);
+    }
+
+    #[tokio::test]
+    async fn test_recording_agent_new_session_delegates_and_records() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.json");
+
+        let (mock, _) = MockAgent::new();
+        let agent = RecordingAgent::new(mock, path);
+
+        let response = agent
+            .new_session(NewSessionRequest::new("/tmp"))
+            .await
+            .unwrap();
+
+        assert_eq!(response.session_id.to_string(), "test-session");
+
+        {
+            let calls = agent.calls.lock().unwrap();
+            assert_eq!(calls.len(), 1);
+            assert_eq!(calls[0].method, "new_session");
+        }
+
+        std::mem::forget(agent);
+    }
+
+    #[tokio::test]
+    async fn test_recording_agent_prompt_delegates_and_records() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.json");
+
+        let (mock, called) = MockAgent::new();
+        let agent = RecordingAgent::new(mock, path);
+
+        let response = agent.prompt(make_prompt_request()).await.unwrap();
+
+        assert!(called.load(Ordering::SeqCst));
+        assert_eq!(response.stop_reason, StopReason::EndTurn);
+
+        {
+            let calls = agent.calls.lock().unwrap();
+            assert_eq!(calls.len(), 1);
+            assert_eq!(calls[0].method, "prompt");
+        }
+
+        std::mem::forget(agent);
+    }
+
+    #[tokio::test]
+    async fn test_recording_agent_cancel_delegates_and_records() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.json");
+
+        let (mock, _) = MockAgent::new();
+        let agent = RecordingAgent::new(mock, path);
+
+        agent
+            .cancel(CancelNotification::new("test-session"))
+            .await
+            .unwrap();
+
+        {
+            let calls = agent.calls.lock().unwrap();
+            assert_eq!(calls.len(), 1);
+            assert_eq!(calls[0].method, "cancel");
+        }
+
+        std::mem::forget(agent);
+    }
+
+    #[tokio::test]
+    async fn test_recording_agent_load_session_delegates_and_records() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.json");
+
+        let (mock, _) = MockAgent::new();
+        let agent = RecordingAgent::new(mock, path);
+
+        let _response = agent
+            .load_session(LoadSessionRequest::new("test-session", "/tmp"))
+            .await
+            .unwrap();
+
+        {
+            let calls = agent.calls.lock().unwrap();
+            assert_eq!(calls.len(), 1);
+            assert_eq!(calls[0].method, "load_session");
+        }
+
+        std::mem::forget(agent);
+    }
+
+    #[tokio::test]
+    async fn test_recording_agent_set_session_mode_delegates_and_records() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.json");
+
+        let (mock, _) = MockAgent::new();
+        let agent = RecordingAgent::new(mock, path);
+
+        let _response = agent
+            .set_session_mode(SetSessionModeRequest::new("test-session", "plan"))
+            .await
+            .unwrap();
+
+        {
+            let calls = agent.calls.lock().unwrap();
+            assert_eq!(calls.len(), 1);
+            assert_eq!(calls[0].method, "set_session_mode");
+        }
+
+        std::mem::forget(agent);
+    }
+
+    #[tokio::test]
+    async fn test_recording_agent_ext_method_records_error_response() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.json");
+
+        let (mock, _) = MockAgent::new();
+        let agent = RecordingAgent::new(mock, path);
+
+        let result = agent.ext_method(make_ext_request()).await;
+        assert!(result.is_err());
+
+        {
+            let calls = agent.calls.lock().unwrap();
+            assert_eq!(calls.len(), 1);
+            assert_eq!(calls[0].method, "ext_method");
+            assert!(calls[0].response.get("error").is_some());
+        }
+
+        std::mem::forget(agent);
+    }
+
+    #[tokio::test]
+    async fn test_recording_agent_ext_notification_delegates_and_records() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.json");
+
+        let (mock, _) = MockAgent::new();
+        let agent = RecordingAgent::new(mock, path);
+
+        agent
+            .ext_notification(make_ext_notification())
+            .await
+            .unwrap();
+
+        {
+            let calls = agent.calls.lock().unwrap();
+            assert_eq!(calls.len(), 1);
+            assert_eq!(calls[0].method, "ext_notification");
+        }
+
+        std::mem::forget(agent);
+    }
+
+    #[tokio::test]
+    async fn test_with_notifications_captures_acp_notifications() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.json");
+
+        let (tx, rx) = tokio::sync::broadcast::channel(16);
+        let (mock, _) = MockAgent::new();
+        let agent = RecordingAgent::with_notifications(mock, path, rx);
+
+        let notification = agent_client_protocol::SessionNotification::new(
+            SessionId::from("s1"),
+            agent_client_protocol::SessionUpdate::AgentMessageChunk(
+                agent_client_protocol::ContentChunk::new(ContentBlock::Text(TextContent::new(
+                    "hello",
+                ))),
+            ),
+        );
+        tx.send(notification).unwrap();
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+        {
+            let buffer = agent.notification_buffer.lock().unwrap();
+            assert_eq!(buffer.len(), 1);
+        }
+
+        drop(tx);
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+        std::mem::forget(agent);
+    }
+
+    #[tokio::test]
+    async fn test_add_mcp_source_captures_and_deduplicates() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.json");
+
+        let (mock, _) = MockAgent::new();
+        let agent = RecordingAgent::new(mock, path);
+
+        let (tx, rx) =
+            tokio::sync::broadcast::channel::<model_context_protocol_extras::McpNotification>(16);
+        agent.add_mcp_source(rx);
+
+        let notif = make_mcp_progress_notification("t1");
+        tx.send(notif.clone()).unwrap();
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+        {
+            let buffer = agent.notification_buffer.lock().unwrap();
+            assert_eq!(buffer.len(), 1);
+        }
+
+        // Send duplicate — should be deduped
+        tx.send(notif).unwrap();
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+        {
+            let buffer = agent.notification_buffer.lock().unwrap();
+            assert_eq!(buffer.len(), 1, "Duplicate notification should be deduped");
+        }
+
+        drop(tx);
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+        std::mem::forget(agent);
+    }
+
+    #[tokio::test]
+    async fn test_with_notifications_handles_lagged_receiver() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.json");
+
+        let (tx, rx) = tokio::sync::broadcast::channel(1);
+        let (mock, _) = MockAgent::new();
+        let agent = RecordingAgent::with_notifications(mock, path, rx);
+
+        for i in 0..5 {
+            let notification = agent_client_protocol::SessionNotification::new(
+                SessionId::from("s1"),
+                agent_client_protocol::SessionUpdate::AgentMessageChunk(
+                    agent_client_protocol::ContentChunk::new(ContentBlock::Text(TextContent::new(
+                        format!("msg {}", i),
+                    ))),
+                ),
+            );
+            let _ = tx.send(notification);
+        }
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+        drop(tx);
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+        std::mem::forget(agent);
+    }
+
+    #[tokio::test]
+    async fn test_add_mcp_source_handles_lagged_receiver() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.json");
+
+        let (mock, _) = MockAgent::new();
+        let agent = RecordingAgent::new(mock, path);
+
+        let (tx, rx) =
+            tokio::sync::broadcast::channel::<model_context_protocol_extras::McpNotification>(1);
+        agent.add_mcp_source(rx);
+
+        for i in 0..5 {
+            let notif = make_mcp_progress_notification(&format!("t{}", i));
+            let _ = tx.send(notif);
+        }
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+        drop(tx);
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+        std::mem::forget(agent);
+    }
+
+    #[tokio::test]
+    async fn test_ext_method_records_success_response() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.json");
+
+        struct SuccessExtAgent;
+
+        #[async_trait::async_trait(?Send)]
+        impl Agent for SuccessExtAgent {
+            async fn initialize(
+                &self,
+                _r: InitializeRequest,
+            ) -> agent_client_protocol::Result<InitializeResponse> {
+                Ok(InitializeResponse::new(
+                    agent_client_protocol::ProtocolVersion::LATEST,
+                ))
+            }
+            async fn authenticate(
+                &self,
+                _r: AuthenticateRequest,
+            ) -> agent_client_protocol::Result<AuthenticateResponse> {
+                Ok(AuthenticateResponse::new())
+            }
+            async fn new_session(
+                &self,
+                _r: NewSessionRequest,
+            ) -> agent_client_protocol::Result<NewSessionResponse> {
+                Ok(NewSessionResponse::new("s1"))
+            }
+            async fn prompt(
+                &self,
+                _r: PromptRequest,
+            ) -> agent_client_protocol::Result<PromptResponse> {
+                Ok(PromptResponse::new(StopReason::EndTurn))
+            }
+            async fn cancel(&self, _r: CancelNotification) -> agent_client_protocol::Result<()> {
+                Ok(())
+            }
+            async fn load_session(
+                &self,
+                _r: LoadSessionRequest,
+            ) -> agent_client_protocol::Result<LoadSessionResponse> {
+                Ok(LoadSessionResponse::new())
+            }
+            async fn set_session_mode(
+                &self,
+                _r: SetSessionModeRequest,
+            ) -> agent_client_protocol::Result<SetSessionModeResponse> {
+                Ok(SetSessionModeResponse::new())
+            }
+            async fn ext_method(
+                &self,
+                _r: ExtRequest,
+            ) -> agent_client_protocol::Result<ExtResponse> {
+                let raw = RawValue::from_string(r#"{"status":"ok"}"#.to_string()).unwrap();
+                Ok(ExtResponse::new(Arc::from(raw)))
+            }
+            async fn ext_notification(
+                &self,
+                _n: ExtNotification,
+            ) -> agent_client_protocol::Result<()> {
+                Ok(())
+            }
+        }
+
+        let agent = RecordingAgent::new(SuccessExtAgent, path);
+
+        let result = agent.ext_method(make_ext_request()).await;
+        assert!(result.is_ok());
+
+        {
+            let calls = agent.calls.lock().unwrap();
+            assert_eq!(calls.len(), 1);
+            assert_eq!(calls[0].method, "ext_method");
+        }
+
+        std::mem::forget(agent);
+    }
+}

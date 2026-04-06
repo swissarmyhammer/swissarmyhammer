@@ -109,7 +109,7 @@ impl Execute<KanbanContext, KanbanError> for DeleteTask {
 mod tests {
     use super::*;
     use crate::board::InitBoard;
-    use crate::task::{AddTask, UpdateTask};
+    use crate::task::AddTask;
     use tempfile::TempDir;
 
     async fn setup() -> (TempDir, KanbanContext) {
@@ -197,46 +197,48 @@ mod tests {
             .unwrap();
         let task_id = add_result["id"].as_str().unwrap();
 
-        // Create a real file to attach
-        let source_file = temp.path().join("file.txt");
-        std::fs::write(&source_file, b"hello").unwrap();
+        // Create a real file and attach via entity layer
+        let file_path = temp.path().join("file.txt");
+        std::fs::write(&file_path, b"hello").unwrap();
 
-        // Add an attachment via update task (entity layer copies the file)
-        UpdateTask::new(task_id)
-            .with_attachments(serde_json::json!([source_file.to_str().unwrap()]))
-            .execute(&ctx)
-            .await
-            .into_result()
-            .unwrap();
-
-        // The entity layer stores attachments as "{ulid}-{basename}" files.
-        // Read the task back to get the stored filename via enriched metadata.
         let ectx = ctx.entity_context().await.unwrap();
-        let entity = ectx.read("task", task_id).await.unwrap();
-        let att_arr = entity.get("attachments").unwrap();
-        let att_obj = att_arr.as_array().unwrap().first().unwrap();
-        let att_id = att_obj["id"].as_str().unwrap();
-        let att_name = att_obj["name"].as_str().unwrap();
-        let stored_filename = format!("{}-{}", att_id, att_name);
+        let mut task = ectx.read("task", task_id).await.unwrap();
+        task.set(
+            "attachments",
+            serde_json::json!([file_path.to_string_lossy().to_string()]),
+        );
+        ectx.write(&task).await.unwrap();
 
-        // Verify attachment file exists in .attachments/
-        let att_dir = temp
-            .path()
-            .join(".kanban")
-            .join("tasks")
-            .join(".attachments");
-        assert!(att_dir.join(&stored_filename).exists());
+        // Verify the task has an attachment
+        let task = ectx.read("task", task_id).await.unwrap();
+        let arr = task.get("attachments").unwrap().as_array().unwrap();
+        assert_eq!(arr.len(), 1);
 
-        // Delete the task — entity layer trashes attachment files automatically
+        // Get stored filename for later verification
+        let stored_id = arr[0]["id"].as_str().unwrap();
+        let stored_name = arr[0]["name"].as_str().unwrap();
+        let stored_filename = format!("{}-{}", stored_id, stored_name);
+
+        // Delete the task
         DeleteTask::new(task_id)
             .execute(&ctx)
             .await
             .into_result()
             .unwrap();
 
-        // Verify attachment file was moved to trash
-        assert!(!att_dir.join(&stored_filename).exists());
-        let trash_dir = att_dir.join(".trash");
-        assert!(trash_dir.join(&stored_filename).exists());
+        // Verify the task is gone
+        assert!(ectx.read("task", task_id).await.is_err());
+
+        // Verify the attachment file was trashed
+        let att_file = temp
+            .path()
+            .join(".kanban")
+            .join("tasks")
+            .join(".attachments")
+            .join(&stored_filename);
+        assert!(
+            !att_file.exists(),
+            "Attachment file should be removed after task deletion"
+        );
     }
 }

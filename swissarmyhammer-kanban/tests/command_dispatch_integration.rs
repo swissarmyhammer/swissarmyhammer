@@ -10,6 +10,7 @@ use std::sync::Arc;
 use swissarmyhammer_commands::{
     builtin_yaml_sources, Command, CommandContext, CommandError, CommandsRegistry, UIState,
 };
+use swissarmyhammer_entity::EntityTypeStore;
 use swissarmyhammer_kanban::clipboard::{
     ClipboardProvider, ClipboardProviderExt, InMemoryClipboard,
 };
@@ -17,6 +18,7 @@ use swissarmyhammer_kanban::commands::register_commands;
 use swissarmyhammer_kanban::{
     board::InitBoard, KanbanContext, KanbanOperationProcessor, OperationProcessor,
 };
+use swissarmyhammer_store::{StoreContext, StoreHandle};
 use tempfile::TempDir;
 
 // ===========================================================================
@@ -32,6 +34,8 @@ struct TestEngine {
     _registry: CommandsRegistry,
     ui_state: Arc<UIState>,
     clipboard: Arc<InMemoryClipboard>,
+    /// Optional StoreContext — present when created via `with_store_context()`.
+    store_context: Option<Arc<StoreContext>>,
 }
 
 impl TestEngine {
@@ -61,7 +65,83 @@ impl TestEngine {
             _registry: registry,
             ui_state,
             clipboard,
+            store_context: None,
         }
+    }
+
+    /// Create a new test engine with store handles registered (production-like).
+    ///
+    /// This mirrors how `kanban-app/src/state.rs` sets up the EntityContext:
+    /// every entity type gets a StoreHandle registered so writes go through
+    /// the undo-capable store path instead of the legacy io path.
+    async fn with_store_handles() -> Self {
+        let engine = Self::new().await;
+
+        // Register StoreHandle for every entity type, just like production
+        let ectx = engine
+            .kanban
+            .entity_context()
+            .await
+            .expect("entity_context should be available");
+
+        let fields_ctx = ectx.fields();
+        for entity_def in fields_ctx.all_entities() {
+            let entity_type = entity_def.name.as_str();
+            let field_defs = fields_ctx.fields_for_entity(entity_type);
+            let owned_defs: Vec<_> = field_defs.into_iter().cloned().collect();
+            let entity_type_store = EntityTypeStore::new(
+                ectx.entity_dir(entity_type),
+                entity_type,
+                std::sync::Arc::new(entity_def.clone()),
+                std::sync::Arc::new(owned_defs),
+            );
+            let handle =
+                std::sync::Arc::new(StoreHandle::new(std::sync::Arc::new(entity_type_store)));
+            ectx.register_store(entity_type, handle).await;
+        }
+
+        engine
+    }
+
+    /// Create a test engine with both StoreHandles AND a StoreContext.
+    ///
+    /// This is the full production-like setup: every entity type store is
+    /// registered with both EntityContext (for write delegation) and
+    /// StoreContext (for flush_all / undo). Use this when testing the
+    /// event pipeline end-to-end.
+    async fn with_store_context() -> Self {
+        let mut engine = Self::new().await;
+
+        let store_context = Arc::new(StoreContext::new(engine.kanban.root().to_path_buf()));
+
+        let ectx = engine
+            .kanban
+            .entity_context()
+            .await
+            .expect("entity_context should be available");
+
+        // Wire StoreContext into EntityContext for undo stack integration
+        ectx.set_store_context(Arc::clone(&store_context));
+
+        let fields_ctx = ectx.fields();
+        for entity_def in fields_ctx.all_entities() {
+            let entity_type = entity_def.name.as_str();
+            let field_defs = fields_ctx.fields_for_entity(entity_type);
+            let owned_defs: Vec<_> = field_defs.into_iter().cloned().collect();
+            let entity_type_store = EntityTypeStore::new(
+                ectx.entity_dir(entity_type),
+                entity_type,
+                std::sync::Arc::new(entity_def.clone()),
+                std::sync::Arc::new(owned_defs),
+            );
+            let handle =
+                std::sync::Arc::new(StoreHandle::new(std::sync::Arc::new(entity_type_store)));
+            ectx.register_store(entity_type, handle.clone()).await;
+            store_context.register(handle).await;
+        }
+
+        engine.store_context = Some(store_context);
+        engine
     }
 
     /// Dispatch a command by ID through the full availability + execute cycle.
@@ -109,14 +189,8 @@ impl TestEngine {
 
         let result = cmd.execute(&ctx).await;
 
-        // Sync UIState undo/redo flags from the undo stack so that subsequent
-        // available() checks reflect the current stack state (mirrors Tauri
-        // dispatch behavior in kanban-app/src/commands.rs).
-        if let Ok(ectx) = self.kanban.entity_context().await {
-            let stack = ectx.undo_stack().await;
-            self.ui_state
-                .set_undo_redo_state(stack.can_undo(), stack.can_redo());
-        }
+        // Undo/redo state sync is now handled through StoreContext in the
+        // Tauri layer. In tests without a StoreContext, this is a no-op.
 
         result
     }
@@ -145,11 +219,7 @@ async fn task_add_creates_task() {
         .await
         .expect("task.add should succeed");
 
-    // Should return a JSON object with an operation_id and task id
-    assert!(
-        result.get("operation_id").is_some(),
-        "result should contain operation_id"
-    );
+    // Should return a JSON object with a task id
     assert!(result.get("id").is_some(), "result should contain task id");
 
     // Verify the task actually exists on disk
@@ -177,12 +247,10 @@ async fn task_move_to_column() {
     let mut args = HashMap::new();
     args.insert("column".to_string(), json!("doing"));
 
-    let move_result = engine
+    engine
         .dispatch("task.move", &[&format!("task:{}", task_id)], None, args)
         .await
         .expect("task.move should succeed");
-
-    assert!(move_result.get("operation_id").is_some());
 
     // Verify the task is now in the "doing" column
     let task = engine
@@ -243,7 +311,7 @@ async fn task_untag_removes_tag() {
     );
 
     // Now dispatch task.untag via the command system
-    let result = engine
+    let _result = engine
         .dispatch_simple(
             "task.untag",
             &["tag:bug", &format!("task:{}", task_id)],
@@ -251,8 +319,6 @@ async fn task_untag_removes_tag() {
         )
         .await
         .expect("task.untag should succeed");
-
-    assert!(result.get("operation_id").is_some());
 
     // Verify the tag was removed
     let task = engine
@@ -288,12 +354,10 @@ async fn entity_update_field() {
     args.insert("field_name".to_string(), json!("title"));
     args.insert("value".to_string(), json!("New Title"));
 
-    let result = engine
+    engine
         .dispatch("entity.update_field", &[], None, args)
         .await
         .expect("entity.update_field should succeed");
-
-    assert!(result.get("operation_id").is_some());
 
     // Verify the title was updated
     let task = engine
@@ -526,134 +590,6 @@ async fn keymap_mode_change() {
 
 // ===========================================================================
 // Undo / Redo tests
-// ===========================================================================
-
-#[tokio::test]
-async fn undo_reverts_task_add() {
-    let engine = TestEngine::new().await;
-
-    // Add a task
-    let add_result = engine
-        .dispatch_simple("task.add", &["column:todo"], None)
-        .await
-        .expect("task.add should succeed");
-    let task_id = add_result["id"].as_str().unwrap();
-    let operation_id = add_result["operation_id"].as_str().unwrap();
-
-    // Verify the task exists
-    assert!(
-        engine
-            .kanban
-            .read_entity_generic("task", task_id)
-            .await
-            .is_ok(),
-        "task should exist after add"
-    );
-
-    // Undo the add
-    let mut undo_args = HashMap::new();
-    undo_args.insert("id".to_string(), json!(operation_id));
-    let undo_result = engine
-        .dispatch("app.undo", &[], None, undo_args)
-        .await
-        .expect("app.undo should succeed");
-
-    assert_eq!(undo_result["undone"].as_str(), Some(operation_id));
-    let undo_op_id = undo_result["operation_id"].as_str();
-
-    // Task should be gone (trashed)
-    assert!(
-        engine
-            .kanban
-            .read_entity_generic("task", task_id)
-            .await
-            .is_err(),
-        "task should not exist after undo"
-    );
-
-    // Redo the add (undo the undo) — use the undo operation_id
-    if let Some(redo_id) = undo_op_id {
-        let mut redo_args = HashMap::new();
-        redo_args.insert("id".to_string(), json!(redo_id));
-        let redo_result = engine
-            .dispatch("app.redo", &[], None, redo_args)
-            .await
-            .expect("app.redo should succeed");
-
-        assert_eq!(redo_result["redone"].as_str(), Some(redo_id));
-
-        // Task should be back
-        let task = engine
-            .kanban
-            .read_entity_generic("task", task_id)
-            .await
-            .expect("task should exist after redo");
-        assert!(task.get_str("title").is_some());
-    }
-}
-
-#[tokio::test]
-async fn undo_reverts_field_update() {
-    let engine = TestEngine::new().await;
-
-    // Add a task
-    let add_result = engine
-        .dispatch_simple("task.add", &["column:todo"], None)
-        .await
-        .unwrap();
-    let task_id = add_result["id"].as_str().unwrap();
-
-    // Get the original title
-    let task = engine
-        .kanban
-        .read_entity_generic("task", task_id)
-        .await
-        .unwrap();
-    let original_title = task.get_str("title").unwrap_or("").to_string();
-
-    // Update the title
-    let mut update_args = HashMap::new();
-    update_args.insert("entity_type".to_string(), json!("task"));
-    update_args.insert("id".to_string(), json!(task_id));
-    update_args.insert("field_name".to_string(), json!("title"));
-    update_args.insert("value".to_string(), json!("Changed Title"));
-    let update_result = engine
-        .dispatch("entity.update_field", &[], None, update_args)
-        .await
-        .expect("update should succeed");
-    let update_op_id = update_result["operation_id"].as_str().unwrap();
-
-    // Verify title changed
-    let task = engine
-        .kanban
-        .read_entity_generic("task", task_id)
-        .await
-        .unwrap();
-    assert_eq!(task.get_str("title"), Some("Changed Title"));
-
-    // Undo the update
-    let mut undo_args = HashMap::new();
-    undo_args.insert("id".to_string(), json!(update_op_id));
-    engine
-        .dispatch("app.undo", &[], None, undo_args)
-        .await
-        .expect("undo should succeed");
-
-    // Title should be back to original
-    let task = engine
-        .kanban
-        .read_entity_generic("task", task_id)
-        .await
-        .unwrap();
-    assert_eq!(
-        task.get_str("title"),
-        Some(original_title.as_str()),
-        "title should revert after undo"
-    );
-}
-
-// ===========================================================================
-// Full session test
 // ===========================================================================
 
 #[tokio::test]
@@ -1109,15 +1045,10 @@ async fn task_delete_removes_task() {
     );
 
     // Dispatch task.delete through the command harness
-    let delete_result = engine
+    engine
         .dispatch_simple("task.delete", &[&format!("task:{}", task_id)], None)
         .await
         .expect("task.delete should succeed");
-
-    assert!(
-        delete_result.get("operation_id").is_some(),
-        "result should contain operation_id"
-    );
 
     // Verify the task is gone
     assert!(
@@ -1127,73 +1058,6 @@ async fn task_delete_removes_task() {
             .await
             .is_err(),
         "task should not exist after delete"
-    );
-}
-
-// ===========================================================================
-// Card 01KMT7ZAFSH0BW898EV3MF3M5E — MoveTaskCmd swimlane arg
-// ===========================================================================
-
-#[tokio::test]
-async fn task_move_with_swimlane_arg() {
-    let engine = TestEngine::new().await;
-
-    // Create a swimlane via the lower-level API
-    let processor = KanbanOperationProcessor::new();
-    processor
-        .process(
-            &swissarmyhammer_kanban::swimlane::AddSwimlane::new("urgent", "Urgent"),
-            &engine.kanban,
-        )
-        .await
-        .expect("swimlane creation should succeed");
-
-    // Add a task in todo
-    let add_result = engine
-        .dispatch_simple("task.add", &["column:todo"], None)
-        .await
-        .expect("task.add should succeed");
-    let task_id = add_result["id"].as_str().unwrap();
-
-    // Verify task has no swimlane initially
-    let task = engine
-        .kanban
-        .read_entity_generic("task", task_id)
-        .await
-        .unwrap();
-    assert!(
-        task.get_str("position_swimlane").is_none()
-            || task.get_str("position_swimlane") == Some(""),
-        "task should have no swimlane initially"
-    );
-
-    // Move task to doing with swimlane arg
-    let mut args = HashMap::new();
-    args.insert("column".to_string(), json!("doing"));
-    args.insert("swimlane".to_string(), json!("urgent"));
-
-    let move_result = engine
-        .dispatch("task.move", &[&format!("task:{}", task_id)], None, args)
-        .await
-        .expect("task.move with swimlane should succeed");
-
-    assert!(move_result.get("operation_id").is_some());
-
-    // Verify the task is in the correct column and swimlane
-    let task = engine
-        .kanban
-        .read_entity_generic("task", task_id)
-        .await
-        .unwrap();
-    assert_eq!(
-        task.get_str("position_column"),
-        Some("doing"),
-        "task should be in doing column"
-    );
-    assert_eq!(
-        task.get_str("position_swimlane"),
-        Some("urgent"),
-        "task should be in urgent swimlane"
     );
 }
 
@@ -1215,24 +1079,29 @@ async fn drag_complete_same_board_moves_task() {
         .expect("task.add should succeed");
     let task_id = add_result["id"].as_str().unwrap();
 
-    // Start a drag session
+    // Start a drag session — board path derived from scope chain's store: moniker
     let board_path = engine.kanban.root().to_string_lossy().to_string();
+    let store_moniker = format!("store:{}", board_path);
     let mut start_args = HashMap::new();
     start_args.insert("taskId".to_string(), json!(task_id));
-    start_args.insert("boardPath".to_string(), json!(&board_path));
 
     engine
-        .dispatch("drag.start", &[], None, start_args)
+        .dispatch("drag.start", &[store_moniker.as_str()], None, start_args)
         .await
         .expect("drag.start should succeed");
 
     // Complete the drag on the same board, targeting "doing" column
+    // Target board path also from scope chain
     let mut complete_args = HashMap::new();
-    complete_args.insert("targetBoardPath".to_string(), json!(&board_path));
     complete_args.insert("targetColumn".to_string(), json!("doing"));
 
     let result = engine
-        .dispatch("drag.complete", &[], None, complete_args)
+        .dispatch(
+            "drag.complete",
+            &[store_moniker.as_str()],
+            None,
+            complete_args,
+        )
         .await
         .expect("drag.complete should succeed");
 
@@ -1284,26 +1153,31 @@ async fn drag_complete_cross_board_returns_transfer_params() {
         .expect("task.add should succeed");
     let task_id = add_result["id"].as_str().unwrap();
 
-    // Start a drag session with source board path
+    // Start a drag session — source board path from scope chain store: moniker
     let source_board_path = "/boards/source/.kanban";
+    let source_store = format!("store:{}", source_board_path);
     let mut start_args = HashMap::new();
     start_args.insert("taskId".to_string(), json!(task_id));
-    start_args.insert("boardPath".to_string(), json!(source_board_path));
 
     engine
-        .dispatch("drag.start", &[], None, start_args)
+        .dispatch("drag.start", &[source_store.as_str()], None, start_args)
         .await
         .expect("drag.start should succeed");
 
-    // Complete the drag targeting a DIFFERENT board path
+    // Complete the drag targeting a DIFFERENT board path via scope chain
     let target_board_path = "/boards/target/.kanban";
+    let target_store = format!("store:{}", target_board_path);
     let mut complete_args = HashMap::new();
-    complete_args.insert("targetBoardPath".to_string(), json!(target_board_path));
     complete_args.insert("targetColumn".to_string(), json!("done"));
     complete_args.insert("dropIndex".to_string(), json!(0));
 
     let result = engine
-        .dispatch("drag.complete", &[], None, complete_args)
+        .dispatch(
+            "drag.complete",
+            &[target_store.as_str()],
+            None,
+            complete_args,
+        )
         .await
         .expect("drag.complete should succeed");
 
@@ -1407,273 +1281,251 @@ async fn entity_copy_copies_task_to_clipboard() {
     );
 }
 
+// ===========================================================================
+// StoreHandle integration — reproduces untag bug with production-like setup
+// ===========================================================================
+
+/// Untag through the StoreHandle path (production-like setup).
+///
+/// This test reproduces the "untag not working after StoreHandle migration" bug
+/// by registering StoreHandle for all entity types, then exercising the full
+/// tag → untag cycle.
 #[tokio::test]
-async fn entity_cut_undo_redo() {
-    let engine = TestEngine::new().await;
+async fn task_untag_removes_tag_with_store_handles() {
+    let engine = TestEngine::with_store_handles().await;
+
+    let processor = KanbanOperationProcessor::new();
 
     // Create a task
-    let mut args = HashMap::new();
-    args.insert("title".to_string(), json!("Cut me"));
-    let add_result = engine
-        .dispatch("task.add", &["column:todo"], None, args)
+    let add_result = processor
+        .process(
+            &swissarmyhammer_kanban::task::AddTask::new("Tagged task"),
+            &engine.kanban,
+        )
         .await
         .unwrap();
     let task_id = add_result["id"].as_str().unwrap();
 
-    // Dispatch entity.cut
-    let cut_result = engine
-        .dispatch_simple("entity.cut", &[&format!("task:{}", task_id)], None)
+    // Create tag definition
+    processor
+        .process(
+            &swissarmyhammer_kanban::tag::AddTag::new("bug"),
+            &engine.kanban,
+        )
         .await
-        .expect("entity.cut should succeed");
-    let cut_op_id = cut_result["operation_id"].as_str().unwrap();
+        .unwrap();
 
-    // Verify clipboard has the task snapshot (wrapped format)
-    let clipboard_text = engine
-        .clipboard
-        .read_text()
+    // Tag the task (adds #bug to body)
+    processor
+        .process(
+            &swissarmyhammer_kanban::task::TagTask::new(task_id, "bug"),
+            &engine.kanban,
+        )
         .await
-        .unwrap()
-        .expect("clipboard should have data");
-    let clipboard_json: Value = serde_json::from_str(&clipboard_text).unwrap();
-    let content = &clipboard_json["swissarmyhammer_clipboard"];
-    assert_eq!(content["entity_type"].as_str(), Some("task"));
-    assert_eq!(content["mode"].as_str(), Some("cut"));
+        .unwrap();
 
-    // Verify task is deleted
-    assert!(
-        engine
-            .kanban
-            .read_entity_generic("task", task_id)
-            .await
-            .is_err(),
-        "task should be deleted after cut"
-    );
-
-    // Verify has_clipboard flag was set
-    assert!(engine.ui_state.has_clipboard());
-
-    // Undo the cut — task should be restored
-    let mut undo_args = HashMap::new();
-    undo_args.insert("id".to_string(), json!(cut_op_id));
-    let undo_result = engine
-        .dispatch("app.undo", &[], None, undo_args)
-        .await
-        .expect("app.undo should succeed");
-    let undo_op_id = undo_result["operation_id"].as_str().unwrap();
-
+    // Verify tag is present
     let task = engine
         .kanban
         .read_entity_generic("task", task_id)
         .await
-        .expect("task should be restored after undo");
-    assert_eq!(task.get_str("title"), Some("Cut me"));
-
-    // Clipboard should still have data
+        .unwrap();
+    let tags = task
+        .get("tags")
+        .and_then(|v| v.as_array().cloned())
+        .unwrap_or_default();
     assert!(
-        engine.clipboard.read_text().await.unwrap().is_some(),
-        "clipboard should still have data after undo"
+        tags.iter().any(|t| t.as_str() == Some("bug")),
+        "task should have 'bug' tag before untag, got tags: {:?}",
+        tags
+    );
+    let body_before = task.get_str("body").unwrap_or("").to_string();
+    assert!(
+        body_before.contains("#bug"),
+        "body should contain '#bug' before untag, got: {}",
+        body_before
     );
 
-    // Redo the cut — task should be deleted again
-    let mut redo_args = HashMap::new();
-    redo_args.insert("id".to_string(), json!(undo_op_id));
+    // Untag via dispatch (same path as production)
     engine
-        .dispatch("app.redo", &[], None, redo_args)
+        .dispatch_simple(
+            "task.untag",
+            &["tag:bug", &format!("task:{}", task_id)],
+            None,
+        )
         .await
-        .expect("app.redo should succeed");
+        .expect("task.untag should succeed");
 
+    // Verify the tag was removed
+    let task = engine
+        .kanban
+        .read_entity_generic("task", task_id)
+        .await
+        .unwrap();
+    let tags = task
+        .get("tags")
+        .and_then(|v| v.as_array().cloned())
+        .unwrap_or_default();
     assert!(
-        engine
-            .kanban
-            .read_entity_generic("task", task_id)
-            .await
-            .is_err(),
-        "task should be deleted again after redo"
+        !tags.iter().any(|t| t.as_str() == Some("bug")),
+        "task should no longer have 'bug' tag after untag, got tags: {:?}",
+        tags
+    );
+    let body_after = task.get_str("body").unwrap_or("").to_string();
+    assert!(
+        !body_after.contains("#bug"),
+        "body should no longer contain '#bug' after untag, got: {}",
+        body_after
     );
 }
 
+/// Tag and untag with legacy-written task files (migration scenario).
+///
+/// Simulates the production case where task files were written by the legacy
+/// io path (before StoreHandle migration), then StoreHandle is registered and
+/// untag is performed. The legacy path includes computed fields in frontmatter;
+/// the StoreHandle path strips them.
 #[tokio::test]
-async fn entity_paste_undo_redo() {
+async fn task_untag_with_legacy_written_files() {
+    // Phase 1: Create board and tasks WITHOUT store handles (legacy path)
     let engine = TestEngine::new().await;
+    let processor = KanbanOperationProcessor::new();
 
-    // Create a task and copy it
-    let mut args = HashMap::new();
-    args.insert("title".to_string(), json!("Original task"));
-    let add_result = engine
-        .dispatch("task.add", &["column:todo"], None, args)
+    let add_result = processor
+        .process(
+            &swissarmyhammer_kanban::task::AddTask::new("Legacy task"),
+            &engine.kanban,
+        )
         .await
         .unwrap();
-    let original_id = add_result["id"].as_str().unwrap();
+    let task_id = add_result["id"].as_str().unwrap().to_string();
 
-    engine
-        .dispatch_simple("entity.copy", &[&format!("task:{}", original_id)], None)
+    processor
+        .process(
+            &swissarmyhammer_kanban::tag::AddTag::new("bug"),
+            &engine.kanban,
+        )
         .await
-        .expect("entity.copy should succeed");
+        .unwrap();
 
-    // Paste into doing column
-    let paste_result = engine
-        .dispatch_simple("entity.paste", &["column:doing"], None)
+    processor
+        .process(
+            &swissarmyhammer_kanban::task::TagTask::new(task_id.as_str(), "bug"),
+            &engine.kanban,
+        )
         .await
-        .expect("entity.paste should succeed");
-    let pasted_id = paste_result["id"].as_str().unwrap();
-    let paste_op_id = paste_result["operation_id"].as_str().unwrap();
+        .unwrap();
 
-    // Pasted task should have a new ID (different from original)
-    assert_ne!(pasted_id, original_id, "pasted task should have a new ID");
-
-    // Verify the pasted task exists with copied fields
-    let pasted_task = engine
-        .kanban
-        .read_entity_generic("task", pasted_id)
-        .await
-        .expect("pasted task should exist");
-    assert_eq!(pasted_task.get_str("title"), Some("Original task"));
-    assert_eq!(pasted_task.get_str("position_column"), Some("doing"));
-
-    // Clipboard should still have data (multi-paste support)
-    assert!(
-        engine.clipboard.read_text().await.unwrap().is_some(),
-        "clipboard should still have data after paste"
-    );
-
-    // Undo the paste — pasted task should be removed
-    let mut undo_args = HashMap::new();
-    undo_args.insert("id".to_string(), json!(paste_op_id));
-    let undo_result = engine
-        .dispatch("app.undo", &[], None, undo_args)
-        .await
-        .expect("app.undo should succeed");
-    let undo_op_id = undo_result["operation_id"].as_str().unwrap();
-
-    assert!(
-        engine
-            .kanban
-            .read_entity_generic("task", pasted_id)
-            .await
-            .is_err(),
-        "pasted task should be gone after undo"
-    );
-
-    // Original task should still exist
-    assert!(
-        engine
-            .kanban
-            .read_entity_generic("task", original_id)
-            .await
-            .is_ok(),
-        "original task should still exist"
-    );
-
-    // Redo the paste — pasted task should reappear
-    let mut redo_args = HashMap::new();
-    redo_args.insert("id".to_string(), json!(undo_op_id));
-    engine
-        .dispatch("app.redo", &[], None, redo_args)
-        .await
-        .expect("app.redo should succeed");
-
+    // Verify tag is on the task (written by legacy path)
     let task = engine
         .kanban
-        .read_entity_generic("task", pasted_id)
+        .read_entity_generic("task", &task_id)
         .await
-        .expect("pasted task should reappear after redo");
-    assert_eq!(task.get_str("title"), Some("Original task"));
+        .unwrap();
+    assert!(
+        task.get_str("body").unwrap_or("").contains("#bug"),
+        "body should contain #bug after tagging via legacy path"
+    );
+
+    // Phase 2: Register store handles (simulating app upgrade/restart)
+    let ectx = engine
+        .kanban
+        .entity_context()
+        .await
+        .expect("entity_context should be available");
+    let fields_ctx = ectx.fields();
+    for entity_def in fields_ctx.all_entities() {
+        let entity_type = entity_def.name.as_str();
+        let field_defs = fields_ctx.fields_for_entity(entity_type);
+        let owned_defs: Vec<_> = field_defs.into_iter().cloned().collect();
+        let entity_type_store = EntityTypeStore::new(
+            ectx.entity_dir(entity_type),
+            entity_type,
+            std::sync::Arc::new(entity_def.clone()),
+            std::sync::Arc::new(owned_defs),
+        );
+        let handle = std::sync::Arc::new(StoreHandle::new(std::sync::Arc::new(entity_type_store)));
+        ectx.register_store(entity_type, handle).await;
+    }
+
+    // Phase 3: Untag via StoreHandle path
+    engine
+        .dispatch_simple(
+            "task.untag",
+            &["tag:bug", &format!("task:{}", task_id)],
+            None,
+        )
+        .await
+        .expect("task.untag should succeed with store handles on legacy files");
+
+    // Verify the tag was removed
+    let task = engine
+        .kanban
+        .read_entity_generic("task", &task_id)
+        .await
+        .unwrap();
+    let tags = task
+        .get("tags")
+        .and_then(|v| v.as_array().cloned())
+        .unwrap_or_default();
+    assert!(
+        !tags.iter().any(|t| t.as_str() == Some("bug")),
+        "task should no longer have 'bug' tag after untag on legacy file, got tags: {:?}",
+        tags
+    );
+    let body_after = task.get_str("body").unwrap_or("").to_string();
+    assert!(
+        !body_after.contains("#bug"),
+        "body should no longer contain '#bug' after untag on legacy file, got: {}",
+        body_after
+    );
 }
 
+/// After task.move, `StoreContext.flush_all()` must return at least one
+/// "item-changed" event for the moved task.  This is the mechanism that
+/// `flush_and_emit_for_handle` relies on to emit `entity-field-changed`
+/// events to the frontend.
 #[tokio::test]
-async fn cut_paste_end_to_end_undo() {
-    let engine = TestEngine::new().await;
+async fn task_move_produces_store_event_via_flush_all() {
+    let engine = TestEngine::with_store_context().await;
+    let ids = add_tasks(&engine, &["A", "B"]).await;
 
-    // Create a task in todo
+    let store_context = engine
+        .store_context
+        .as_ref()
+        .expect("with_store_context should provide a StoreContext");
+
+    // Drain any events from the initial add operations
+    store_context.flush_all().await;
+
+    // Move task A to done column
     let mut args = HashMap::new();
-    args.insert("title".to_string(), json!("Moveable task"));
-    let add_result = engine
-        .dispatch("task.add", &["column:todo"], None, args)
-        .await
-        .unwrap();
-    let original_id = add_result["id"].as_str().unwrap();
-
-    // Verify task is in todo
-    let task = engine
-        .kanban
-        .read_entity_generic("task", original_id)
-        .await
-        .unwrap();
-    assert_eq!(task.get_str("position_column"), Some("todo"));
-
-    // Cut the task from todo
-    let cut_result = engine
-        .dispatch_simple("entity.cut", &[&format!("task:{}", original_id)], None)
-        .await
-        .expect("entity.cut should succeed");
-    let cut_op_id = cut_result["operation_id"].as_str().unwrap();
-
-    // Task should be deleted
-    assert!(
-        engine
-            .kanban
-            .read_entity_generic("task", original_id)
-            .await
-            .is_err(),
-        "task should be deleted after cut"
-    );
-
-    // Paste into doing column
-    let paste_result = engine
-        .dispatch_simple("entity.paste", &["column:doing"], None)
-        .await
-        .expect("entity.paste should succeed");
-    let pasted_id = paste_result["id"].as_str().unwrap();
-    let paste_op_id = paste_result["operation_id"].as_str().unwrap();
-
-    // Pasted task in doing
-    let pasted_task = engine
-        .kanban
-        .read_entity_generic("task", pasted_id)
-        .await
-        .unwrap();
-    assert_eq!(pasted_task.get_str("position_column"), Some("doing"));
-
-    // Undo the paste — pasted task removed from doing
-    let mut undo_paste_args = HashMap::new();
-    undo_paste_args.insert("id".to_string(), json!(paste_op_id));
+    args.insert("task".to_string(), json!(ids[0]));
+    args.insert("column".to_string(), json!("done"));
     engine
-        .dispatch("app.undo", &[], None, undo_paste_args)
+        .dispatch("task.move", &[&format!("task:{}", ids[0])], None, args)
         .await
-        .expect("undo paste should succeed");
+        .expect("task.move should succeed");
 
+    // flush_all must return at least one event
+    let events = store_context.flush_all().await;
     assert!(
-        engine
-            .kanban
-            .read_entity_generic("task", pasted_id)
-            .await
-            .is_err(),
-        "pasted task should be gone after undoing paste"
+        !events.is_empty(),
+        "flush_all() must return events after task.move — got none"
     );
 
-    // Original still deleted (only paste was undone, not cut)
+    // The event must be an "item-changed" for the moved task
+    let task_event = events.iter().find(|e| {
+        e.event_name() == "item-changed"
+            && e.payload().get("store").and_then(|v| v.as_str()) == Some("task")
+            && e.payload().get("id").and_then(|v| v.as_str()) == Some(ids[0].as_str())
+    });
     assert!(
-        engine
-            .kanban
-            .read_entity_generic("task", original_id)
-            .await
-            .is_err(),
-        "original task should still be deleted (cut not undone yet)"
+        task_event.is_some(),
+        "flush_all() must contain an item-changed event for the moved task; got: {:?}",
+        events
+            .iter()
+            .map(|e| format!("{}({})", e.event_name(), e.payload()))
+            .collect::<Vec<_>>()
     );
-
-    // Undo the cut — original task restored in todo
-    let mut undo_cut_args = HashMap::new();
-    undo_cut_args.insert("id".to_string(), json!(cut_op_id));
-    engine
-        .dispatch("app.undo", &[], None, undo_cut_args)
-        .await
-        .expect("undo cut should succeed");
-
-    let restored = engine
-        .kanban
-        .read_entity_generic("task", original_id)
-        .await
-        .expect("original task should be restored after undoing cut");
-    assert_eq!(restored.get_str("title"), Some("Moveable task"));
-    assert_eq!(restored.get_str("position_column"), Some("todo"));
 }

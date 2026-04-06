@@ -1,6 +1,7 @@
 //! Integration test modules for claude-agent
 
 mod concurrent_session;
+mod coverage_tests;
 mod integrations;
 mod session_persistence;
 mod terminal_rate_limiting;

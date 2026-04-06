@@ -15,10 +15,14 @@ export interface WindowStateSnapshot {
   inspector_stack: string[];
   /** The active view ID for this window. */
   active_view_id: string;
+  /** The active perspective ID for this window. Empty string means no perspective selected. */
+  active_perspective_id: string;
   /** Whether the command palette is open in this window. */
   palette_open: boolean;
   /** Palette mode for this window: "command" or "search". */
   palette_mode: "command" | "search";
+  /** Application interaction mode for this window. */
+  app_mode: "normal" | "command" | "search";
   x?: number;
   y?: number;
   width?: number;

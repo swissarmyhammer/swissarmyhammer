@@ -646,11 +646,11 @@ mod tests {
     }
 
     // =========================================================================
-    // Swimlane operations
+    // Project operations
     // =========================================================================
 
     #[tokio::test]
-    async fn test_add_swimlane() {
+    async fn test_add_project() {
         let temp = TempDir::new().unwrap();
         let context = create_test_context()
             .await
@@ -659,19 +659,19 @@ mod tests {
         init_test_board(&tool, &context).await;
 
         let mut args = serde_json::Map::new();
-        args.insert("op".to_string(), json!("add swimlane"));
-        args.insert("id".to_string(), json!("urgent"));
-        args.insert("name".to_string(), json!("Urgent"));
+        args.insert("op".to_string(), json!("add project"));
+        args.insert("id".to_string(), json!("backend"));
+        args.insert("name".to_string(), json!("Backend"));
 
         let result = tool.execute(args, &context).await.unwrap();
         let data = parse_json(&result);
 
-        assert_eq!(data["id"], "urgent");
-        assert_eq!(data["name"], "Urgent");
+        assert_eq!(data["id"], "backend");
+        assert_eq!(data["name"], "Backend");
     }
 
     #[tokio::test]
-    async fn test_get_swimlane() {
+    async fn test_get_project() {
         let temp = TempDir::new().unwrap();
         let context = create_test_context()
             .await
@@ -679,27 +679,27 @@ mod tests {
         let tool = KanbanTool::new();
         init_test_board(&tool, &context).await;
 
-        // Add a swimlane
+        // Add a project
         let mut add_args = serde_json::Map::new();
-        add_args.insert("op".to_string(), json!("add swimlane"));
-        add_args.insert("id".to_string(), json!("urgent"));
-        add_args.insert("name".to_string(), json!("Urgent"));
+        add_args.insert("op".to_string(), json!("add project"));
+        add_args.insert("id".to_string(), json!("backend"));
+        add_args.insert("name".to_string(), json!("Backend"));
         tool.execute(add_args, &context).await.unwrap();
 
-        // Get the swimlane
+        // Get the project
         let mut get_args = serde_json::Map::new();
-        get_args.insert("op".to_string(), json!("get swimlane"));
-        get_args.insert("id".to_string(), json!("urgent"));
+        get_args.insert("op".to_string(), json!("get project"));
+        get_args.insert("id".to_string(), json!("backend"));
 
         let result = tool.execute(get_args, &context).await.unwrap();
         let data = parse_json(&result);
 
-        assert_eq!(data["id"], "urgent");
-        assert_eq!(data["name"], "Urgent");
+        assert_eq!(data["id"], "backend");
+        assert_eq!(data["name"], "Backend");
     }
 
     #[tokio::test]
-    async fn test_list_swimlanes() {
+    async fn test_list_projects() {
         let temp = TempDir::new().unwrap();
         let context = create_test_context()
             .await
@@ -707,30 +707,29 @@ mod tests {
         let tool = KanbanTool::new();
         init_test_board(&tool, &context).await;
 
-        // Add swimlanes
-        for (id, name) in [("urgent", "Urgent"), ("normal", "Normal")] {
+        // Add projects
+        for (id, name) in [("backend", "Backend"), ("frontend", "Frontend")] {
             let mut add_args = serde_json::Map::new();
-            add_args.insert("op".to_string(), json!("add swimlane"));
+            add_args.insert("op".to_string(), json!("add project"));
             add_args.insert("id".to_string(), json!(id));
             add_args.insert("name".to_string(), json!(name));
             tool.execute(add_args, &context).await.unwrap();
         }
 
-        // List swimlanes
+        // List projects
         let mut list_args = serde_json::Map::new();
-        list_args.insert("op".to_string(), json!("list swimlanes"));
+        list_args.insert("op".to_string(), json!("list projects"));
 
         let result = tool.execute(list_args, &context).await.unwrap();
         let data = parse_json(&result);
 
-        // Response format: {"swimlanes": [...], "count": N}
         assert_eq!(data["count"], 2);
-        assert!(data["swimlanes"].is_array());
-        assert_eq!(data["swimlanes"].as_array().unwrap().len(), 2);
+        assert!(data["projects"].is_array());
+        assert_eq!(data["projects"].as_array().unwrap().len(), 2);
     }
 
     #[tokio::test]
-    async fn test_delete_swimlane() {
+    async fn test_delete_project() {
         let temp = TempDir::new().unwrap();
         let context = create_test_context()
             .await
@@ -738,25 +737,25 @@ mod tests {
         let tool = KanbanTool::new();
         init_test_board(&tool, &context).await;
 
-        // Add a swimlane
+        // Add a project
         let mut add_args = serde_json::Map::new();
-        add_args.insert("op".to_string(), json!("add swimlane"));
-        add_args.insert("id".to_string(), json!("urgent"));
-        add_args.insert("name".to_string(), json!("Urgent"));
+        add_args.insert("op".to_string(), json!("add project"));
+        add_args.insert("id".to_string(), json!("backend"));
+        add_args.insert("name".to_string(), json!("Backend"));
         tool.execute(add_args, &context).await.unwrap();
 
         // Delete it
         let mut delete_args = serde_json::Map::new();
-        delete_args.insert("op".to_string(), json!("delete swimlane"));
-        delete_args.insert("id".to_string(), json!("urgent"));
+        delete_args.insert("op".to_string(), json!("delete project"));
+        delete_args.insert("id".to_string(), json!("backend"));
 
         let result = tool.execute(delete_args, &context).await;
         assert!(result.is_ok());
 
         // Verify it's gone
         let mut get_args = serde_json::Map::new();
-        get_args.insert("op".to_string(), json!("get swimlane"));
-        get_args.insert("id".to_string(), json!("urgent"));
+        get_args.insert("op".to_string(), json!("get project"));
+        get_args.insert("id".to_string(), json!("backend"));
 
         let get_result = tool.execute(get_args, &context).await;
         assert!(get_result.is_err());
@@ -1312,38 +1311,6 @@ mod tests {
     }
 
     // =========================================================================
-    // Activity operations
-    // =========================================================================
-
-    #[tokio::test]
-    async fn test_list_activity() {
-        let temp = TempDir::new().unwrap();
-        let context = create_test_context()
-            .await
-            .with_working_dir(temp.path().to_path_buf());
-        let tool = KanbanTool::new();
-        init_test_board(&tool, &context).await;
-
-        // Add a task to generate some activity
-        let mut task_args = serde_json::Map::new();
-        task_args.insert("op".to_string(), json!("add task"));
-        task_args.insert("title".to_string(), json!("Test task"));
-        tool.execute(task_args, &context).await.unwrap();
-
-        // List activity
-        let mut list_args = serde_json::Map::new();
-        list_args.insert("op".to_string(), json!("list activity"));
-
-        let result = tool.execute(list_args, &context).await.unwrap();
-        let data = parse_json(&result);
-
-        // Response format: {"entries": [...], "count": N}
-        assert!(data["entries"].is_array());
-        // Should have at least some activity entries
-        assert!(data["count"].as_i64().unwrap_or(0) >= 0);
-    }
-
-    // =========================================================================
     // Column operations
     // =========================================================================
 
@@ -1624,7 +1591,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_update_swimlane() {
+    async fn test_update_project() {
         let temp = TempDir::new().unwrap();
         let context = create_test_context()
             .await
@@ -1632,24 +1599,24 @@ mod tests {
         let tool = KanbanTool::new();
         init_test_board(&tool, &context).await;
 
-        // Add a swimlane first
+        // Add a project first
         let mut add_args = serde_json::Map::new();
-        add_args.insert("op".to_string(), json!("add swimlane"));
-        add_args.insert("id".to_string(), json!("urgent"));
-        add_args.insert("name".to_string(), json!("Urgent"));
+        add_args.insert("op".to_string(), json!("add project"));
+        add_args.insert("id".to_string(), json!("backend"));
+        add_args.insert("name".to_string(), json!("Backend"));
         tool.execute(add_args, &context).await.unwrap();
 
         // Update it
         let mut update_args = serde_json::Map::new();
-        update_args.insert("op".to_string(), json!("update swimlane"));
-        update_args.insert("id".to_string(), json!("urgent"));
-        update_args.insert("name".to_string(), json!("Critical"));
+        update_args.insert("op".to_string(), json!("update project"));
+        update_args.insert("id".to_string(), json!("backend"));
+        update_args.insert("name".to_string(), json!("Backend Services"));
 
         let result = tool.execute(update_args, &context).await.unwrap();
         let data = parse_json(&result);
 
-        assert_eq!(data["id"], "urgent");
-        assert_eq!(data["name"], "Critical");
+        assert_eq!(data["id"], "backend");
+        assert_eq!(data["name"], "Backend Services");
     }
 
     #[tokio::test]
@@ -1885,69 +1852,6 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    #[tokio::test]
-    async fn test_activity_logging_via_mcp() {
-        let temp = TempDir::new().unwrap();
-        let context = create_test_context()
-            .await
-            .with_working_dir(temp.path().to_path_buf());
-        let tool = KanbanTool::new();
-        init_test_board(&tool, &context).await;
-
-        // Add task with actor
-        let mut add_args = serde_json::Map::new();
-        add_args.insert("op".to_string(), json!("add task"));
-        add_args.insert("title".to_string(), json!("Test Task"));
-        add_args.insert("actor".to_string(), json!("alice"));
-
-        let result = tool.execute(add_args, &context).await.unwrap();
-        let task_id = extract_task_id(&result);
-
-        // Update task with different actor
-        let mut update_args = serde_json::Map::new();
-        update_args.insert("op".to_string(), json!("update task"));
-        update_args.insert("id".to_string(), json!(task_id));
-        update_args.insert("title".to_string(), json!("Updated Task"));
-        update_args.insert("actor".to_string(), json!("bob"));
-
-        tool.execute(update_args, &context).await.unwrap();
-
-        // Read operation (should not log)
-        let mut get_args = serde_json::Map::new();
-        get_args.insert("op".to_string(), json!("get task"));
-        get_args.insert("id".to_string(), json!(task_id));
-
-        tool.execute(get_args, &context).await.unwrap();
-
-        // Verify activity log via list activity
-        let mut list_activity_args = serde_json::Map::new();
-        list_activity_args.insert("op".to_string(), json!("list activity"));
-
-        let result = tool.execute(list_activity_args, &context).await.unwrap();
-        let data = parse_json(&result);
-
-        let entries = data["entries"].as_array().unwrap();
-        assert_eq!(entries.len(), 3); // init, add, update (not get)
-
-        // Verify actor attribution
-        assert_eq!(entries[0]["op"], "update task");
-        assert_eq!(entries[0]["actor"], "bob");
-        assert_eq!(entries[1]["op"], "add task");
-        assert_eq!(entries[1]["actor"], "alice");
-        assert_eq!(entries[2]["op"], "init board");
-        assert!(entries[2]["actor"].is_null());
-
-        // Verify per-task log file exists
-        let kanban_ctx = KanbanContext::find(temp.path()).unwrap();
-        let task_id_type = swissarmyhammer_kanban::types::TaskId::from_string(&task_id);
-        let task_log_path = kanban_ctx.task_log_path(&task_id_type);
-        assert!(task_log_path.exists());
-
-        let task_log = std::fs::read_to_string(task_log_path).unwrap();
-        let log_lines: Vec<&str> = task_log.lines().collect();
-        assert_eq!(log_lines.len(), 2); // add + update (not get)
-    }
-
     // =========================================================================
     // Directory initialization tests
     // =========================================================================
@@ -1999,7 +1903,7 @@ mod tests {
         assert!(ctx.tasks_dir().exists());
         assert!(ctx.actors_dir().exists());
         assert!(ctx.tags_dir().exists());
-        assert!(ctx.activity_dir().exists());
+        assert!(ctx.perspectives_dir().exists());
     }
 
     #[tokio::test]

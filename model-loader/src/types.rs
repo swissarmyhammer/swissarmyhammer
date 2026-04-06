@@ -397,4 +397,485 @@ mod tests {
         assert_eq!(config.backoff_multiplier, 2.0);
         assert_eq!(config.max_delay_ms, 30000);
     }
+
+    #[test]
+    fn test_retry_config_into_llama_common() {
+        let config = RetryConfig {
+            max_retries: 5,
+            initial_delay_ms: 2000,
+            backoff_multiplier: 3.0,
+            max_delay_ms: 60000,
+        };
+        let common: llama_common::retry::RetryConfig = config.into();
+        assert_eq!(common.max_retries, 5);
+        assert_eq!(common.initial_delay, Duration::from_millis(2000));
+        assert_eq!(common.backoff_multiplier, 3.0);
+        assert_eq!(common.max_delay, Duration::from_millis(60000));
+        assert!(common.use_jitter); // Always enabled
+    }
+
+    #[test]
+    fn test_retry_config_from_llama_common() {
+        let common = llama_common::retry::RetryConfig {
+            max_retries: 7,
+            initial_delay: Duration::from_millis(500),
+            backoff_multiplier: 1.5,
+            max_delay: Duration::from_millis(10000),
+            use_jitter: false,
+        };
+        let config: RetryConfig = common.into();
+        assert_eq!(config.max_retries, 7);
+        assert_eq!(config.initial_delay_ms, 500);
+        assert_eq!(config.backoff_multiplier, 1.5);
+        assert_eq!(config.max_delay_ms, 10000);
+    }
+
+    #[test]
+    fn test_retry_config_roundtrip() {
+        let original = RetryConfig {
+            max_retries: 4,
+            initial_delay_ms: 1500,
+            backoff_multiplier: 2.5,
+            max_delay_ms: 45000,
+        };
+        let common: llama_common::retry::RetryConfig = original.clone().into();
+        let roundtrip: RetryConfig = common.into();
+        assert_eq!(roundtrip.max_retries, original.max_retries);
+        assert_eq!(roundtrip.initial_delay_ms, original.initial_delay_ms);
+        assert_eq!(roundtrip.backoff_multiplier, original.backoff_multiplier);
+        assert_eq!(roundtrip.max_delay_ms, original.max_delay_ms);
+    }
+
+    #[test]
+    fn test_model_config_default() {
+        let config = ModelConfig::default();
+        assert!(!config.debug);
+        assert_eq!(config.retry_config.max_retries, 3);
+        match &config.source {
+            ModelSource::HuggingFace {
+                repo,
+                filename,
+                folder,
+            } => {
+                assert_eq!(repo, "microsoft/DialoGPT-medium");
+                assert!(filename.is_none());
+                assert!(folder.is_none());
+            }
+            _ => panic!("Expected HuggingFace source"),
+        }
+    }
+
+    #[test]
+    fn test_model_config_validate_delegates_to_source() {
+        // Valid config
+        let config = ModelConfig::default();
+        assert!(config.validate().is_ok());
+
+        // Invalid config (empty repo)
+        let config = ModelConfig {
+            source: ModelSource::HuggingFace {
+                repo: "".to_string(),
+                filename: None,
+                folder: None,
+            },
+            retry_config: RetryConfig::default(),
+            debug: false,
+        };
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_compute_model_hash_huggingface() {
+        let config1 = ModelConfig {
+            source: ModelSource::HuggingFace {
+                repo: "org/repo".to_string(),
+                filename: Some("model.gguf".to_string()),
+                folder: None,
+            },
+            retry_config: RetryConfig::default(),
+            debug: false,
+        };
+        let config2 = ModelConfig {
+            source: ModelSource::HuggingFace {
+                repo: "org/other-repo".to_string(),
+                filename: Some("model.gguf".to_string()),
+                folder: None,
+            },
+            retry_config: RetryConfig::default(),
+            debug: false,
+        };
+
+        let hash1 = config1.compute_model_hash();
+        let hash2 = config2.compute_model_hash();
+        assert_ne!(
+            hash1, hash2,
+            "Different repos should yield different hashes"
+        );
+
+        // Same config should yield same hash
+        let hash1_again = config1.compute_model_hash();
+        assert_eq!(hash1, hash1_again);
+    }
+
+    #[test]
+    fn test_compute_model_hash_local() {
+        let config = ModelConfig {
+            source: ModelSource::Local {
+                folder: PathBuf::from("/some/path"),
+                filename: Some("model.gguf".to_string()),
+            },
+            retry_config: RetryConfig::default(),
+            debug: false,
+        };
+        let hash = config.compute_model_hash();
+        assert!(!hash.is_empty());
+
+        // Different folder produces different hash
+        let config2 = ModelConfig {
+            source: ModelSource::Local {
+                folder: PathBuf::from("/other/path"),
+                filename: Some("model.gguf".to_string()),
+            },
+            retry_config: RetryConfig::default(),
+            debug: false,
+        };
+        assert_ne!(config.compute_model_hash(), config2.compute_model_hash());
+    }
+
+    #[test]
+    fn test_compute_model_hash_folder_changes_hash() {
+        let config_no_folder = ModelConfig {
+            source: ModelSource::HuggingFace {
+                repo: "org/repo".to_string(),
+                filename: Some("model.gguf".to_string()),
+                folder: None,
+            },
+            retry_config: RetryConfig::default(),
+            debug: false,
+        };
+        let config_with_folder = ModelConfig {
+            source: ModelSource::HuggingFace {
+                repo: "org/repo".to_string(),
+                filename: Some("model.gguf".to_string()),
+                folder: Some("subfolder".to_string()),
+            },
+            retry_config: RetryConfig::default(),
+            debug: false,
+        };
+        assert_ne!(
+            config_no_folder.compute_model_hash(),
+            config_with_folder.compute_model_hash()
+        );
+    }
+
+    #[test]
+    fn test_model_source_hf_invalid_characters() {
+        let source = ModelSource::HuggingFace {
+            repo: "org/repo with spaces".to_string(),
+            filename: None,
+            folder: None,
+        };
+        let err = source.validate().unwrap_err();
+        assert!(format!("{}", err).contains("Invalid characters"));
+    }
+
+    #[test]
+    fn test_model_source_hf_unsupported_extension() {
+        let source = ModelSource::HuggingFace {
+            repo: "org/repo".to_string(),
+            filename: Some("model.txt".to_string()),
+            folder: None,
+        };
+        let err = source.validate().unwrap_err();
+        assert!(format!("{}", err).contains("Unsupported model file extension"));
+    }
+
+    #[test]
+    fn test_model_source_hf_all_valid_extensions() {
+        for ext in MODEL_EXTENSIONS {
+            let source = ModelSource::HuggingFace {
+                repo: "org/repo".to_string(),
+                filename: Some(format!("model.{}", ext)),
+                folder: None,
+            };
+            assert!(
+                source.validate().is_ok(),
+                "Extension .{} should be valid",
+                ext
+            );
+        }
+    }
+
+    #[test]
+    fn test_model_source_hf_empty_folder() {
+        let source = ModelSource::HuggingFace {
+            repo: "org/repo".to_string(),
+            filename: None,
+            folder: Some("".to_string()),
+        };
+        let err = source.validate().unwrap_err();
+        assert!(format!("{}", err).contains("Folder name cannot be empty"));
+    }
+
+    #[test]
+    fn test_model_source_hf_folder_leading_slash() {
+        let source = ModelSource::HuggingFace {
+            repo: "org/repo".to_string(),
+            filename: None,
+            folder: Some("/leading".to_string()),
+        };
+        let err = source.validate().unwrap_err();
+        assert!(format!("{}", err).contains("leading or trailing slashes"));
+    }
+
+    #[test]
+    fn test_model_source_hf_folder_trailing_slash() {
+        let source = ModelSource::HuggingFace {
+            repo: "org/repo".to_string(),
+            filename: None,
+            folder: Some("trailing/".to_string()),
+        };
+        let err = source.validate().unwrap_err();
+        assert!(format!("{}", err).contains("leading or trailing slashes"));
+    }
+
+    #[test]
+    fn test_model_source_hf_valid_folder() {
+        let source = ModelSource::HuggingFace {
+            repo: "org/repo".to_string(),
+            filename: None,
+            folder: Some("subfolder".to_string()),
+        };
+        assert!(source.validate().is_ok());
+    }
+
+    #[test]
+    fn test_model_source_local_not_a_directory() {
+        // Create a temp file (not a directory)
+        let temp = tempfile::NamedTempFile::new().unwrap();
+        let source = ModelSource::Local {
+            folder: temp.path().to_path_buf(),
+            filename: None,
+        };
+        let err = source.validate().unwrap_err();
+        assert!(format!("{}", err).contains("not a directory"));
+    }
+
+    #[test]
+    fn test_model_source_local_file_exists() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let model_file = temp_dir.path().join("model.gguf");
+        std::fs::write(&model_file, "fake model").unwrap();
+
+        let source = ModelSource::Local {
+            folder: temp_dir.path().to_path_buf(),
+            filename: Some("model.gguf".to_string()),
+        };
+        assert!(source.validate().is_ok());
+    }
+
+    #[test]
+    fn test_model_source_local_file_not_found() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let source = ModelSource::Local {
+            folder: temp_dir.path().to_path_buf(),
+            filename: Some("nonexistent.gguf".to_string()),
+        };
+        let err = source.validate().unwrap_err();
+        assert!(format!("{}", err).contains("does not exist"));
+    }
+
+    #[test]
+    fn test_model_source_serialization() {
+        let source = ModelSource::HuggingFace {
+            repo: "org/repo".to_string(),
+            filename: Some("model.gguf".to_string()),
+            folder: None,
+        };
+        let json = serde_json::to_string(&source).unwrap();
+        let deserialized: ModelSource = serde_json::from_str(&json).unwrap();
+        assert_eq!(source, deserialized);
+    }
+
+    #[test]
+    fn test_model_source_local_serialization() {
+        let source = ModelSource::Local {
+            folder: PathBuf::from("/tmp/models"),
+            filename: Some("model.gguf".to_string()),
+        };
+        let json = serde_json::to_string(&source).unwrap();
+        let deserialized: ModelSource = serde_json::from_str(&json).unwrap();
+        assert_eq!(source, deserialized);
+    }
+
+    #[test]
+    fn test_model_metadata_serialization_roundtrip() {
+        let metadata = ModelMetadata {
+            source: ModelSource::HuggingFace {
+                repo: "test/repo".to_string(),
+                filename: Some("model.gguf".to_string()),
+                folder: Some("subfolder".to_string()),
+            },
+            filename: "model.gguf".to_string(),
+            size_bytes: 4096,
+            resolve_time: Duration::from_secs_f64(1.5),
+            cache_hit: true,
+        };
+        let json = serde_json::to_string(&metadata).unwrap();
+        let deserialized: ModelMetadata = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.filename, "model.gguf");
+        assert_eq!(deserialized.size_bytes, 4096);
+        assert!(deserialized.cache_hit);
+        // Duration roundtrip should be close (floating point)
+        let diff = (deserialized.resolve_time.as_secs_f64() - 1.5).abs();
+        assert!(diff < 0.001, "Duration roundtrip mismatch: {}", diff);
+    }
+
+    #[test]
+    fn test_retry_config_serialization() {
+        let config = RetryConfig {
+            max_retries: 5,
+            initial_delay_ms: 2000,
+            backoff_multiplier: 3.0,
+            max_delay_ms: 60000,
+        };
+        let json = serde_json::to_string(&config).unwrap();
+        let deserialized: RetryConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.max_retries, 5);
+        assert_eq!(deserialized.initial_delay_ms, 2000);
+        assert_eq!(deserialized.backoff_multiplier, 3.0);
+        assert_eq!(deserialized.max_delay_ms, 60000);
+    }
+
+    #[test]
+    fn test_model_config_serialization() {
+        let config = ModelConfig::default();
+        let json = serde_json::to_string(&config).unwrap();
+        let deserialized: ModelConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.debug, config.debug);
+        assert_eq!(
+            deserialized.retry_config.max_retries,
+            config.retry_config.max_retries
+        );
+    }
+
+    #[test]
+    fn test_resolved_model_creation() {
+        let model = ResolvedModel {
+            path: PathBuf::from("/tmp/model.gguf"),
+            metadata: ModelMetadata {
+                source: ModelSource::Local {
+                    folder: PathBuf::from("/tmp"),
+                    filename: Some("model.gguf".to_string()),
+                },
+                filename: "model.gguf".to_string(),
+                size_bytes: 2048,
+                resolve_time: Duration::from_millis(100),
+                cache_hit: false,
+            },
+        };
+        assert_eq!(model.path, PathBuf::from("/tmp/model.gguf"));
+        assert_eq!(model.metadata.size_bytes, 2048);
+        assert!(!model.metadata.cache_hit);
+    }
+
+    #[test]
+    fn test_model_extensions_constant() {
+        assert!(MODEL_EXTENSIONS.contains(&"gguf"));
+        assert!(MODEL_EXTENSIONS.contains(&"onnx"));
+        assert!(MODEL_EXTENSIONS.contains(&"mlmodel"));
+        assert!(MODEL_EXTENSIONS.contains(&"mlpackage"));
+        assert!(MODEL_EXTENSIONS.contains(&"bin"));
+        assert!(MODEL_EXTENSIONS.contains(&"safetensors"));
+        assert!(!MODEL_EXTENSIONS.contains(&"txt"));
+        assert!(!MODEL_EXTENSIONS.contains(&"json"));
+    }
+
+    #[test]
+    fn test_model_source_equality() {
+        let a = ModelSource::HuggingFace {
+            repo: "org/repo".to_string(),
+            filename: None,
+            folder: None,
+        };
+        let b = ModelSource::HuggingFace {
+            repo: "org/repo".to_string(),
+            filename: None,
+            folder: None,
+        };
+        assert_eq!(a, b);
+
+        let c = ModelSource::HuggingFace {
+            repo: "org/other".to_string(),
+            filename: None,
+            folder: None,
+        };
+        assert_ne!(a, c);
+    }
+
+    #[test]
+    fn test_model_source_clone() {
+        let source = ModelSource::HuggingFace {
+            repo: "org/repo".to_string(),
+            filename: Some("model.gguf".to_string()),
+            folder: Some("sub".to_string()),
+        };
+        let cloned = source.clone();
+        assert_eq!(source, cloned);
+    }
+
+    #[test]
+    fn test_retry_config_clone() {
+        let config = RetryConfig {
+            max_retries: 10,
+            initial_delay_ms: 500,
+            backoff_multiplier: 1.5,
+            max_delay_ms: 5000,
+        };
+        let cloned = config.clone();
+        assert_eq!(cloned.max_retries, 10);
+        assert_eq!(cloned.initial_delay_ms, 500);
+    }
+
+    #[test]
+    fn test_model_config_clone() {
+        let config = ModelConfig::default();
+        let cloned = config.clone();
+        assert_eq!(cloned.debug, config.debug);
+    }
+
+    #[test]
+    fn test_model_metadata_clone() {
+        let metadata = ModelMetadata {
+            source: ModelSource::Local {
+                folder: PathBuf::from("/tmp"),
+                filename: None,
+            },
+            filename: "test.gguf".to_string(),
+            size_bytes: 100,
+            resolve_time: Duration::from_secs(0),
+            cache_hit: true,
+        };
+        let cloned = metadata.clone();
+        assert_eq!(cloned.filename, "test.gguf");
+        assert!(cloned.cache_hit);
+    }
+
+    #[test]
+    fn test_model_source_hf_case_insensitive_extension() {
+        // Upper case extension should also be valid
+        let source = ModelSource::HuggingFace {
+            repo: "org/repo".to_string(),
+            filename: Some("model.GGUF".to_string()),
+            folder: None,
+        };
+        assert!(source.validate().is_ok());
+
+        let source = ModelSource::HuggingFace {
+            repo: "org/repo".to_string(),
+            filename: Some("model.Safetensors".to_string()),
+            folder: None,
+        };
+        assert!(source.validate().is_ok());
+    }
 }

@@ -205,6 +205,114 @@ pub async fn collect_all_health_checks() -> Vec<HealthCheck> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    /// Test that PromptHealthChecker reports its name and category correctly.
+    #[test]
+    fn test_prompt_health_checker_name_and_category() {
+        let checker = PromptHealthChecker;
+        assert_eq!(checker.name(), "Prompts");
+        assert_eq!(checker.category(), "prompts");
+    }
+
+    /// Test that PromptHealthChecker is always applicable.
+    #[test]
+    fn test_prompt_health_checker_is_applicable() {
+        let checker = PromptHealthChecker;
+        assert!(checker.is_applicable());
+    }
+
+    /// Test that run_health_checks covers the local prompts "found" branch
+    /// by creating a temp directory with markdown files and running with it
+    /// as the current directory.
+    #[test]
+    #[serial_test::serial(cwd)]
+    fn test_prompt_health_checker_with_local_prompts_directory() {
+        let tmp = TempDir::new().unwrap();
+        let prompts_dir = tmp.path().join(".prompts");
+        fs::create_dir_all(&prompts_dir).unwrap();
+
+        // Create two plain markdown files (no YAML frontmatter).
+        fs::write(prompts_dir.join("a.md"), "# Title\n\nSome content.").unwrap();
+        fs::write(prompts_dir.join("b.md"), "# Another\n\nMore content.").unwrap();
+
+        // Run with the temp dir as working directory so the local `.prompts` path resolves.
+        let original_dir = std::env::current_dir().ok();
+        std::env::set_current_dir(tmp.path()).unwrap();
+
+        let checker = PromptHealthChecker;
+        let checks = checker.run_health_checks();
+
+        // Restore original directory.
+        if let Some(dir) = original_dir {
+            let _ = std::env::set_current_dir(dir);
+        }
+
+        // All checks should succeed (plain markdown, no YAML errors).
+        for check in &checks {
+            assert_ne!(
+                check.status,
+                swissarmyhammer_common::health::HealthStatus::Error,
+                "Unexpected error in check '{}': {}",
+                check.name,
+                check.message
+            );
+        }
+
+        // Should have a "Local prompts directory" check with count information.
+        let local_check = checks.iter().find(|c| c.name == "Local prompts directory");
+        assert!(
+            local_check.is_some(),
+            "Should have Local prompts directory check"
+        );
+        let msg = &local_check.unwrap().message;
+        assert!(
+            msg.contains("Found 2 prompts"),
+            "Should report 2 prompts, got: {}",
+            msg
+        );
+    }
+
+    /// Test that PromptHealthChecker detects YAML parsing errors when a prompt file
+    /// has invalid YAML frontmatter.
+    #[test]
+    #[serial_test::serial(cwd)]
+    fn test_prompt_health_checker_detects_yaml_errors() {
+        let tmp = TempDir::new().unwrap();
+        let prompts_dir = tmp.path().join(".prompts");
+        fs::create_dir_all(&prompts_dir).unwrap();
+
+        // Write a prompt file with invalid YAML frontmatter.
+        fs::write(
+            prompts_dir.join("bad.md"),
+            "---\ntitle: [unclosed bracket\n---\n# Content",
+        )
+        .unwrap();
+
+        let original_dir = std::env::current_dir().ok();
+        std::env::set_current_dir(tmp.path()).unwrap();
+
+        let checker = PromptHealthChecker;
+        let checks = checker.run_health_checks();
+
+        if let Some(dir) = original_dir {
+            let _ = std::env::set_current_dir(dir);
+        }
+
+        // Should have at least one error check for the bad YAML.
+        let error_checks: Vec<_> = checks
+            .iter()
+            .filter(|c| {
+                c.status == swissarmyhammer_common::health::HealthStatus::Error
+                    && c.name.contains("YAML parsing")
+            })
+            .collect();
+        assert!(
+            !error_checks.is_empty(),
+            "Should detect YAML parsing error in bad.md"
+        );
+    }
 
     #[tokio::test]
     async fn test_collect_all_health_checks() {

@@ -5,11 +5,11 @@ import {
   EntityFocusProvider,
   useEntityFocus,
 } from "@/lib/entity-focus-context";
-import { InspectProvider } from "@/lib/inspect-context";
 import { DragSessionProvider } from "@/lib/drag-session-context";
 import { SchemaProvider } from "@/lib/schema-context";
 import { EntityStoreProvider } from "@/lib/entity-store-context";
 import { ActiveBoardPathProvider } from "@/lib/command-scope";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { BoardView } from "./board-view";
 import type { BoardData, Entity } from "@/types/kanban";
 
@@ -20,6 +20,15 @@ vi.mock("@tauri-apps/api/core", () => ({
 vi.mock("@tauri-apps/api/event", () => ({
   emit: vi.fn(() => Promise.resolve()),
   listen: vi.fn(() => Promise.resolve(() => {})),
+}));
+
+vi.mock("@/components/perspective-container", () => ({
+  useActivePerspective: () => ({
+    activePerspective: null,
+    applyFilter: (entities: unknown[]) => entities,
+    applySort: (entities: unknown[]) => entities,
+    groupField: undefined,
+  }),
 }));
 
 vi.mock("@tauri-apps/api/window", () => ({
@@ -71,7 +80,7 @@ const board: BoardData = {
     makeColumn("col-doing", "Doing", 1),
     makeColumn("col-done", "Done", 2),
   ],
-  swimlanes: [],
+
   tags: [],
   summary: {
     total_tasks: 3,
@@ -90,28 +99,25 @@ const tasks: Entity[] = [
 ];
 
 function renderBoard(overrides?: { board?: BoardData; tasks?: Entity[] }) {
-  const onInspect = vi.fn();
-  const onDismiss = vi.fn(() => false);
-
   const result = render(
     <EntityFocusProvider>
       <SchemaProvider>
         <EntityStoreProvider entities={{}}>
-          <ActiveBoardPathProvider value="/test/board">
-            <InspectProvider onInspect={onInspect} onDismiss={onDismiss}>
+          <TooltipProvider>
+            <ActiveBoardPathProvider value="/test/board">
               <DragSessionProvider>
                 <BoardView
                   board={overrides?.board ?? board}
                   tasks={overrides?.tasks ?? tasks}
                 />
               </DragSessionProvider>
-            </InspectProvider>
-          </ActiveBoardPathProvider>
+            </ActiveBoardPathProvider>
+          </TooltipProvider>
         </EntityStoreProvider>
       </SchemaProvider>
     </EntityFocusProvider>,
   );
-  return { ...result, onInspect };
+  return result;
 }
 
 describe("BoardView navigation commands", () => {
@@ -140,8 +146,8 @@ describe("BoardView navigation commands", () => {
       <EntityFocusProvider>
         <SchemaProvider>
           <EntityStoreProvider entities={{}}>
-            <ActiveBoardPathProvider value="/test/board">
-              <InspectProvider onInspect={vi.fn()} onDismiss={() => false}>
+            <TooltipProvider>
+              <ActiveBoardPathProvider value="/test/board">
                 <DragSessionProvider>
                   <ScopeProbe
                     onScope={(fn) => {
@@ -150,8 +156,8 @@ describe("BoardView navigation commands", () => {
                   />
                   <BoardView board={board} tasks={tasks} />
                 </DragSessionProvider>
-              </InspectProvider>
-            </ActiveBoardPathProvider>
+              </ActiveBoardPathProvider>
+            </TooltipProvider>
           </EntityStoreProvider>
         </SchemaProvider>
       </EntityFocusProvider>,

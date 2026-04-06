@@ -61,6 +61,16 @@ const mockInvoke = vi.fn(async (cmd: string, _args?: any) => {
   if (cmd === "get_entity_schema") return TASK_SCHEMA;
   if (cmd === "list_commands_for_scope") return { commands: [] };
   if (cmd === "list_views") return [];
+  if (cmd === "get_ui_state")
+    return {
+      palette_open: false,
+      palette_mode: "command",
+      keymap_mode: "cua",
+      scope_chain: [],
+      open_boards: [],
+      windows: {},
+      recent_boards: [],
+    };
   return null;
 });
 
@@ -99,7 +109,7 @@ vi.mock("@tauri-apps/plugin-log", () => ({
 import "@/components/fields/registrations";
 
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
-import { InspectProvider } from "@/lib/inspect-context";
+
 import { DragSessionProvider } from "@/lib/drag-session-context";
 import { SchemaProvider } from "@/lib/schema-context";
 import { EntityStoreProvider } from "@/lib/entity-store-context";
@@ -107,6 +117,10 @@ import { ActiveBoardPathProvider } from "@/lib/command-scope";
 import { FileDropProvider } from "@/lib/file-drop-context";
 import { FieldUpdateProvider } from "@/lib/field-update-context";
 import { UIStateProvider } from "@/lib/ui-state-context";
+import { ViewsProvider } from "@/lib/views-context";
+import { PerspectiveProvider } from "@/lib/perspective-context";
+import { PerspectiveContainer } from "@/components/perspective-container";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { BoardView } from "./board-view";
 
 // ---------------------------------------------------------------------------
@@ -181,7 +195,7 @@ function buildBoardData(): BoardData {
       fields: { name: testBoardName },
     },
     columns: testColumns.map(columnToEntity),
-    swimlanes: [],
+
     tags: [],
     summary: testSummary,
   };
@@ -197,17 +211,23 @@ function renderIntegrationBoard() {
       <EntityFocusProvider>
         <SchemaProvider>
           <EntityStoreProvider entities={{ task: tasks, tag: [] }}>
-            <ActiveBoardPathProvider value={testBoardDir + "/.kanban"}>
-              <InspectProvider onInspect={vi.fn()} onDismiss={() => false}>
+            <TooltipProvider>
+              <ActiveBoardPathProvider value={testBoardDir + "/.kanban"}>
                 <FieldUpdateProvider>
                   <UIStateProvider>
-                    <DragSessionProvider>
-                      <BoardView board={board} tasks={tasks} />
-                    </DragSessionProvider>
+                    <ViewsProvider>
+                      <PerspectiveProvider>
+                        <PerspectiveContainer>
+                          <DragSessionProvider>
+                            <BoardView board={board} tasks={tasks} />
+                          </DragSessionProvider>
+                        </PerspectiveContainer>
+                      </PerspectiveProvider>
+                    </ViewsProvider>
                   </UIStateProvider>
                 </FieldUpdateProvider>
-              </InspectProvider>
-            </ActiveBoardPathProvider>
+              </ActiveBoardPathProvider>
+            </TooltipProvider>
           </EntityStoreProvider>
         </SchemaProvider>
       </EntityFocusProvider>
@@ -228,6 +248,10 @@ describe("Board integration — real .kanban data", () => {
         { title: "Card Beta" },
         { title: "Card Gamma" },
         { title: "Card Delta", column: "doing" },
+      ],
+      perspectives: [
+        { name: "Sprint Board", view: "board" },
+        { name: "Grid Overview", view: "grid" },
       ],
     });
     testBoardDir = result.dir;
@@ -258,6 +282,14 @@ describe("Board integration — real .kanban data", () => {
     });
     expect(task.title).toBe("Card Alpha");
     expect(task.position.column).toBe("todo");
+  });
+
+  it("creates perspectives on disk via CLI", async () => {
+    const result = await commands.listPerspectives({ dir: testBoardDir });
+    expect(result.count).toBe(2);
+    const names = result.perspectives.map((p) => p.name);
+    expect(names).toContain("Sprint Board");
+    expect(names).toContain("Grid Overview");
   });
 
   it("renders the board with all columns and task cards", async () => {

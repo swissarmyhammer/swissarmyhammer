@@ -1,11 +1,4 @@
-import {
-  useCallback,
-  useContext,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   DndContext,
   DragOverlay,
@@ -24,16 +17,13 @@ import {
 import { emit } from "@tauri-apps/api/event";
 import type { DropZoneDescriptor } from "@/lib/drop-zones";
 import {
-  CommandScopeContext,
   CommandScopeProvider,
-  backendDispatch,
-  scopeChainFromScope,
+  useDispatchCommand,
   type CommandDef,
 } from "@/lib/command-scope";
 import { ColumnView } from "@/components/column-view";
 import { SortableColumn } from "@/components/sortable-column";
 import { FocusScope } from "@/components/focus-scope";
-import { useInspect } from "@/lib/inspect-context";
 import { useEntityFocus } from "@/lib/entity-focus-context";
 /** Default title for new tasks — the Rust side also uses this as fallback. */
 function defaultTaskTitle(_columnName: string): string {
@@ -42,13 +32,13 @@ function defaultTaskTitle(_columnName: string): string {
 import { moniker, fieldMoniker } from "@/lib/moniker";
 import { useEntityCommands } from "@/lib/entity-commands";
 import { useDragSession } from "@/lib/drag-session-context";
+import { useActivePerspective } from "@/components/perspective-container";
 import type { BoardData, Entity } from "@/types/kanban";
 import { getStr, getNum } from "@/types/kanban";
 
 interface BoardViewProps {
   board: BoardData;
   tasks: Entity[];
-  boardPath?: string;
 }
 
 type ColumnLayout = Map<string, string[]>;
@@ -66,15 +56,12 @@ interface TaskDragState {
  * left/right/first/last, and each predicate evaluates whether it should claim
  * focus. No push-based cursor state is needed.
  */
-export function BoardView({ board, tasks, boardPath }: BoardViewProps) {
-  const boardPathRef = useRef(boardPath);
-  boardPathRef.current = boardPath;
-  const scope = useContext(CommandScopeContext);
-  const scopeChain = useMemo(() => scopeChainFromScope(scope), [scope]);
+export function BoardView({ board, tasks }: BoardViewProps) {
   const { startSession, cancelSession, completeSession } = useDragSession();
   const boardMoniker = moniker("board", "board");
   const boardCommands = useEntityCommands("board", "board");
-  const inspectEntity = useInspect();
+  const dispatch = useDispatchCommand();
+  const dispatchInspect = useDispatchCommand("ui.inspect");
   const { focusedMoniker, broadcastNavCommand, setFocus } = useEntityFocus();
   const broadcastRef = useRef(broadcastNavCommand);
   broadcastRef.current = broadcastNavCommand;
@@ -91,11 +78,15 @@ export function BoardView({ board, tasks, boardPath }: BoardViewProps) {
 
   const columnIdList = useMemo(() => columns.map((c) => c.id), [columns]);
 
+  // Filter tasks and get grouping from the active perspective container.
+  const { applyFilter, groupField } = useActivePerspective();
+  const filteredTasks = useMemo(() => applyFilter(tasks), [applyFilter, tasks]);
+
   const taskMap = useMemo(() => {
     const map = new Map<string, Entity>();
-    for (const task of tasks) map.set(task.id, task);
+    for (const task of filteredTasks) map.set(task.id, task);
     return map;
-  }, [tasks]);
+  }, [filteredTasks]);
 
   const columnMap = useMemo(() => {
     const map = new Map<string, Entity>();
@@ -106,7 +97,7 @@ export function BoardView({ board, tasks, boardPath }: BoardViewProps) {
   const baseLayout = useMemo<ColumnLayout>(() => {
     const map: ColumnLayout = new Map();
     for (const col of columns) map.set(col.id, []);
-    for (const task of tasks) {
+    for (const task of filteredTasks) {
       const col = getStr(task, "position_column");
       const list = map.get(col);
       if (list) list.push(task.id);
@@ -115,13 +106,21 @@ export function BoardView({ board, tasks, boardPath }: BoardViewProps) {
       ids.sort((a, b) => {
         const ta = taskMap.get(a)!;
         const tb = taskMap.get(b)!;
+        // When a group field is active, cluster by group value first,
+        // then by ordinal within each group.
+        if (groupField) {
+          const ga = String(ta.fields[groupField] ?? "");
+          const gb = String(tb.fields[groupField] ?? "");
+          const groupCmp = ga.localeCompare(gb);
+          if (groupCmp !== 0) return groupCmp;
+        }
         return getStr(ta, "position_ordinal", "a0").localeCompare(
           getStr(tb, "position_ordinal", "a0"),
         );
       });
     }
     return map;
-  }, [columns, tasks, taskMap]);
+  }, [columns, filteredTasks, taskMap, groupField]);
 
   // Pre-resolved task entity arrays per column — memoized so that React.memo
   // on ColumnView sees stable references and skips re-renders on cursor moves.
@@ -249,7 +248,7 @@ export function BoardView({ board, tasks, boardPath }: BoardViewProps) {
         keys: { vim: "Enter", cua: "Enter" },
         execute: () => {
           const fm = focusedMonikerRef.current;
-          if (fm) inspectEntity(fm);
+          if (fm) dispatchInspect({ target: fm }).catch(console.error);
         },
       },
       {
@@ -283,7 +282,7 @@ export function BoardView({ board, tasks, boardPath }: BoardViewProps) {
         },
       },
     ];
-  }, [columns, taskMap, inspectEntity]);
+  }, [columns, taskMap, dispatchInspect]);
 
   // --- Column drag state (managed by @dnd-kit) ---
   const [activeColumn, setActiveColumn] = useState<Entity | null>(null);
@@ -363,11 +362,8 @@ export function BoardView({ board, tasks, boardPath }: BoardViewProps) {
       }
 
       try {
-        await backendDispatch({
-          cmd: "column.reorder",
+        await dispatch("column.reorder", {
           args: { id: activeId, target_index: newIndex },
-          ...(boardPathRef.current ? { boardPath: boardPathRef.current } : {}),
-          scopeChain,
         });
       } catch (e) {
         console.error("Failed to reorder columns:", e);
@@ -385,16 +381,14 @@ export function BoardView({ board, tasks, boardPath }: BoardViewProps) {
         const args: Record<string, unknown> = {
           id: taskId,
           column: descriptor.columnId,
-          swimlane: getStr(entity, "position_swimlane") || null,
         };
         if (descriptor.beforeId) args.before_id = descriptor.beforeId;
         if (descriptor.afterId) args.after_id = descriptor.afterId;
-        const boardPath = descriptor.boardPath || boardPathRef.current;
-        await backendDispatch({
-          cmd: "task.move",
+        // Board identity is resolved from the scope chain by useDispatchCommand —
+        // no explicit boardPath needed.
+        await dispatch("task.move", {
           args,
-          scopeChain: [`task:${taskId}`],
-          ...(boardPath ? { boardPath } : {}),
+          target: `task:${taskId}`,
         });
       } catch (e) {
         console.error("Failed to move task:", e);
@@ -468,11 +462,8 @@ export function BoardView({ board, tasks, boardPath }: BoardViewProps) {
       const col = columnMap.get(columnId);
       const title = defaultTaskTitle(col ? getStr(col, "name") : "");
       try {
-        await backendDispatch({
-          cmd: "task.add",
+        await dispatch("task.add", {
           args: { title, column: columnId },
-          ...(boardPathRef.current ? { boardPath: boardPathRef.current } : {}),
-          scopeChain,
         });
       } catch (e) {
         console.error("Failed to add task:", e);
@@ -530,7 +521,6 @@ export function BoardView({ board, tasks, boardPath }: BoardViewProps) {
                       onTaskDragEnd={handleTaskDragEnd}
                       onDrop={handleZoneDrop}
                       dragTaskId={taskDrag?.sourceTaskId ?? null}
-                      boardPath={boardPath}
                       firstTodoTaskId={firstTodoTaskId}
                       leftColumnTaskMonikers={
                         prevColId

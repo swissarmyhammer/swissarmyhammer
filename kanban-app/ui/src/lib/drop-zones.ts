@@ -10,8 +10,6 @@
 export interface DropZoneDescriptor {
   /** Unique key for React rendering. */
   key: string;
-  /** Board path for cross-board drops. */
-  boardPath: string;
   /** Target column ID. */
   columnId: string;
   /** Place the dropped task before this ID (mutually exclusive with afterId). */
@@ -26,24 +24,26 @@ export interface DropZoneDescriptor {
  * For N tasks returns N+1 zones: one "before" zone per task, plus one
  * "after" zone for the last task. For an empty column returns a single
  * zone with no placement (backend will append).
+ *
+ * Board identity is resolved from the scope chain at dispatch time —
+ * descriptors carry only placement data (column + before/after anchors).
  */
 export function computeDropZones(
   taskIds: string[],
   columnId: string,
-  boardPath: string,
 ): DropZoneDescriptor[] {
   if (taskIds.length === 0) {
-    return [{ key: "empty", boardPath, columnId }];
+    return [{ key: "empty", columnId }];
   }
 
   const zones: DropZoneDescriptor[] = [];
 
   for (const id of taskIds) {
-    zones.push({ key: `before-${id}`, boardPath, columnId, beforeId: id });
+    zones.push({ key: `before-${id}`, columnId, beforeId: id });
   }
 
   const lastId = taskIds[taskIds.length - 1];
-  zones.push({ key: `after-${lastId}`, boardPath, columnId, afterId: lastId });
+  zones.push({ key: `after-${lastId}`, columnId, afterId: lastId });
 
   return zones;
 }

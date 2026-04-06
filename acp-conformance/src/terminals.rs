@@ -666,8 +666,260 @@ pub fn verify_terminals_fixture(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use agent_client_protocol::{
+        AuthenticateRequest, AuthenticateResponse, CancelNotification, ExtNotification,
+        ExtResponse, InitializeResponse, LoadSessionRequest, LoadSessionResponse,
+        NewSessionResponse, PromptRequest, PromptResponse, SetSessionModeRequest,
+        SetSessionModeResponse, StopReason,
+    };
+    use serde_json::json;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    /// Mock agent that supports terminal operations via ext_method
+    struct TerminalMockAgent {
+        /// Whether terminal capability was declared during init
+        terminal_enabled: AtomicBool,
+        /// Tracks created terminal IDs
+        terminal_created: std::sync::Mutex<Vec<String>>,
+        /// Tracks released terminal IDs
+        terminal_released: std::sync::Mutex<Vec<String>>,
+        /// Tracks killed terminal IDs
+        terminal_killed: std::sync::Mutex<Vec<String>>,
+    }
+
+    impl TerminalMockAgent {
+        fn new() -> Self {
+            Self {
+                terminal_enabled: AtomicBool::new(false),
+                terminal_created: std::sync::Mutex::new(Vec::new()),
+                terminal_released: std::sync::Mutex::new(Vec::new()),
+                terminal_killed: std::sync::Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    #[async_trait::async_trait(?Send)]
+    impl Agent for TerminalMockAgent {
+        async fn initialize(
+            &self,
+            request: InitializeRequest,
+        ) -> agent_client_protocol::Result<InitializeResponse> {
+            // Check if terminal capability was declared
+            if request.client_capabilities.terminal {
+                self.terminal_enabled.store(true, Ordering::SeqCst);
+            }
+            Ok(InitializeResponse::new(ProtocolVersion::V1))
+        }
+
+        async fn authenticate(
+            &self,
+            _request: AuthenticateRequest,
+        ) -> agent_client_protocol::Result<AuthenticateResponse> {
+            Ok(AuthenticateResponse::new())
+        }
+
+        async fn new_session(
+            &self,
+            _request: agent_client_protocol::NewSessionRequest,
+        ) -> agent_client_protocol::Result<NewSessionResponse> {
+            Ok(NewSessionResponse::new("test-session-1"))
+        }
+
+        async fn prompt(
+            &self,
+            _request: PromptRequest,
+        ) -> agent_client_protocol::Result<PromptResponse> {
+            Ok(PromptResponse::new(StopReason::EndTurn))
+        }
+
+        async fn cancel(&self, _request: CancelNotification) -> agent_client_protocol::Result<()> {
+            Ok(())
+        }
+
+        async fn load_session(
+            &self,
+            _request: LoadSessionRequest,
+        ) -> agent_client_protocol::Result<LoadSessionResponse> {
+            Ok(LoadSessionResponse::new())
+        }
+
+        async fn set_session_mode(
+            &self,
+            _request: SetSessionModeRequest,
+        ) -> agent_client_protocol::Result<SetSessionModeResponse> {
+            Ok(SetSessionModeResponse::new())
+        }
+
+        async fn ext_method(
+            &self,
+            request: ExtRequest,
+        ) -> agent_client_protocol::Result<ExtResponse> {
+            let params: serde_json::Value =
+                serde_json::from_str(request.params.get()).unwrap_or_default();
+
+            if !self.terminal_enabled.load(Ordering::SeqCst) {
+                return Err(agent_client_protocol::Error::invalid_params());
+            }
+
+            match &*request.method {
+                "terminal/create" => {
+                    let tid = format!("term-{}", uuid_like());
+                    self.terminal_created.lock().unwrap().push(tid.clone());
+                    let resp = json!({"terminalId": tid});
+                    Ok(ExtResponse::new(Arc::from(
+                        serde_json::value::to_raw_value(&resp).unwrap(),
+                    )))
+                }
+                "terminal/output" => {
+                    let tid = params
+                        .get("terminalId")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    // Check if released
+                    if self
+                        .terminal_released
+                        .lock()
+                        .unwrap()
+                        .contains(&tid.to_string())
+                    {
+                        return Err(agent_client_protocol::Error::invalid_params());
+                    }
+                    let resp = json!({"output": "hello world\n", "truncated": false});
+                    Ok(ExtResponse::new(Arc::from(
+                        serde_json::value::to_raw_value(&resp).unwrap(),
+                    )))
+                }
+                "terminal/wait_for_exit" => {
+                    let resp = json!({"exitCode": 0, "signal": ""});
+                    Ok(ExtResponse::new(Arc::from(
+                        serde_json::value::to_raw_value(&resp).unwrap(),
+                    )))
+                }
+                "terminal/kill" => {
+                    let tid = params
+                        .get("terminalId")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    self.terminal_killed.lock().unwrap().push(tid);
+                    let resp = json!({"success": true});
+                    Ok(ExtResponse::new(Arc::from(
+                        serde_json::value::to_raw_value(&resp).unwrap(),
+                    )))
+                }
+                "terminal/release" => {
+                    let tid = params
+                        .get("terminalId")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    self.terminal_released.lock().unwrap().push(tid);
+                    let resp = json!({"success": true});
+                    Ok(ExtResponse::new(Arc::from(
+                        serde_json::value::to_raw_value(&resp).unwrap(),
+                    )))
+                }
+                _ => Err(agent_client_protocol::Error::method_not_found()),
+            }
+        }
+
+        async fn ext_notification(
+            &self,
+            _notification: ExtNotification,
+        ) -> agent_client_protocol::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Simple counter for unique IDs
+    fn uuid_like() -> String {
+        use std::sync::atomic::AtomicU64;
+        static COUNTER: AtomicU64 = AtomicU64::new(1);
+        format!("{}", COUNTER.fetch_add(1, Ordering::SeqCst))
+    }
+
     #[test]
     fn test_module_compiles() {
         // Module compiles successfully
+    }
+
+    #[test]
+    fn test_terminals_stats_default() {
+        let stats = TerminalsStats::default();
+        assert_eq!(stats.initialize_calls, 0);
+        assert_eq!(stats.new_session_calls, 0);
+        assert_eq!(stats.ext_method_calls, 0);
+    }
+
+    #[test]
+    fn test_terminals_stats_debug_and_serialize() {
+        let stats = TerminalsStats {
+            initialize_calls: 2,
+            new_session_calls: 1,
+            ext_method_calls: 5,
+        };
+        let debug = format!("{:?}", stats);
+        assert!(debug.contains("TerminalsStats"));
+
+        let json = serde_json::to_value(&stats).unwrap();
+        assert_eq!(json["initialize_calls"], 2);
+        assert_eq!(json["new_session_calls"], 1);
+        assert_eq!(json["ext_method_calls"], 5);
+    }
+
+    #[tokio::test]
+    async fn test_terminal_capability_check_no_capability() {
+        let agent = TerminalMockAgent::new();
+        let result = test_terminal_capability_check(&agent).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_terminal_create_with_capability() {
+        let agent = TerminalMockAgent::new();
+        let result = test_terminal_create(&agent).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_terminal_output_with_capability() {
+        let agent = TerminalMockAgent::new();
+        let result = test_terminal_output(&agent).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_terminal_wait_for_exit_flow() {
+        let agent = TerminalMockAgent::new();
+        let result = test_terminal_wait_for_exit(&agent).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_terminal_kill_flow() {
+        let agent = TerminalMockAgent::new();
+        let result = test_terminal_kill(&agent).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_terminal_release_flow() {
+        let agent = TerminalMockAgent::new();
+        let result = test_terminal_release(&agent).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_terminal_timeout_flow() {
+        let agent = TerminalMockAgent::new();
+        let result = test_terminal_timeout(&agent).await;
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_verify_terminals_fixture_not_found() {
+        let result = verify_terminals_fixture("nonexistent-agent", "nonexistent-test");
+        assert!(result.is_err());
     }
 }

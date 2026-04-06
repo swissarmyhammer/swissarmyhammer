@@ -311,4 +311,162 @@ mod tests {
         assert_eq!(filtered[0].name, "test1");
         assert_eq!(filtered[1].name, "test3");
     }
+
+    #[test]
+    fn test_empty_filter_matches_all_prompts() {
+        let filter = PromptFilter::new();
+        let sources = HashMap::new();
+
+        let prompts = [
+            create_test_prompt("one", Some("cat1"), vec!["tag1"]),
+            create_test_prompt("two", None, vec![]),
+            create_test_prompt("three", Some("cat2"), vec!["tag2", "tag3"]),
+        ];
+
+        let refs: Vec<&Prompt> = prompts.iter().collect();
+        let filtered = filter.apply(refs, &sources);
+        // Empty filter excludes partials by default; all have no partial markers
+        assert_eq!(filtered.len(), 3);
+    }
+
+    #[test]
+    fn test_wildcard_name_pattern() {
+        let filter = PromptFilter::by_name_pattern("*");
+        let sources = HashMap::new();
+
+        let prompt = create_test_prompt("anything", None, vec![]);
+        assert!(filter.matches(&prompt, &sources));
+    }
+
+    #[test]
+    fn test_glob_name_pattern_with_question_mark() {
+        let filter = PromptFilter::by_name_pattern("te?t");
+        let sources = HashMap::new();
+
+        let matching = create_test_prompt("test", None, vec![]);
+        let non_matching = create_test_prompt("text-more", None, vec![]);
+
+        assert!(filter.matches(&matching, &sources));
+        assert!(!filter.matches(&non_matching, &sources));
+    }
+
+    #[test]
+    fn test_substring_name_pattern() {
+        // Pattern without glob characters should do substring match
+        let filter = PromptFilter::by_name_pattern("debug");
+        let sources = HashMap::new();
+
+        let matching = create_test_prompt("my-debug-tool", None, vec![]);
+        let non_matching = create_test_prompt("format-code", None, vec![]);
+
+        assert!(filter.matches(&matching, &sources));
+        assert!(!filter.matches(&non_matching, &sources));
+    }
+
+    #[test]
+    fn test_multiple_tags_any_match() {
+        // Tags filter uses OR logic - any matching tag should pass
+        let filter = PromptFilter::by_tags(vec!["rust".to_string(), "python".to_string()]);
+        let sources = HashMap::new();
+
+        let has_rust = create_test_prompt("rust-prompt", None, vec!["rust"]);
+        let has_python = create_test_prompt("python-prompt", None, vec!["python"]);
+        let has_both = create_test_prompt("both-prompt", None, vec!["rust", "python"]);
+        let has_neither = create_test_prompt("other-prompt", None, vec!["java"]);
+
+        assert!(filter.matches(&has_rust, &sources));
+        assert!(filter.matches(&has_python, &sources));
+        assert!(filter.matches(&has_both, &sources));
+        assert!(!filter.matches(&has_neither, &sources));
+    }
+
+    #[test]
+    fn test_partial_detection_by_name_contains_partial() {
+        let filter = PromptFilter::new().with_partials(false);
+        let sources = HashMap::new();
+
+        // "partial" in name should be detected as partial
+        let partial_by_name = create_test_prompt("header-partial", None, vec![]);
+        let partial_underscore = create_test_prompt("_sidebar", None, vec![]);
+        let regular = create_test_prompt("sidebar-content", None, vec![]);
+
+        assert!(!filter.matches(&partial_by_name, &sources));
+        assert!(!filter.matches(&partial_underscore, &sources));
+        assert!(filter.matches(&regular, &sources));
+    }
+
+    #[test]
+    fn test_partial_detection_by_template_marker() {
+        let filter = PromptFilter::new().with_partials(false);
+        let sources = HashMap::new();
+
+        let partial_by_marker = Prompt {
+            name: "my-template".to_string(),
+            template: "{% partial %}\nContent here".to_string(),
+            description: None,
+            category: None,
+            tags: vec![],
+            parameters: vec![],
+            source: None,
+            metadata: HashMap::new(),
+        };
+
+        assert!(!filter.matches(&partial_by_marker, &sources));
+    }
+
+    #[test]
+    fn test_include_partials_true() {
+        // When include_partials is true, partial templates should be included
+        let filter = PromptFilter::new().with_partials(true);
+        let sources = HashMap::new();
+
+        let partial = create_test_prompt("_partial-name", None, vec![]);
+        assert!(filter.matches(&partial, &sources));
+    }
+
+    #[test]
+    fn test_is_empty_with_single_field() {
+        let filter_with_name = PromptFilter::new().with_name_pattern("something");
+        let filter_with_category = PromptFilter::new().with_category("cat");
+        let filter_with_tags = PromptFilter::new().with_tags(vec!["tag".to_string()]);
+
+        assert!(!filter_with_name.is_empty());
+        assert!(!filter_with_category.is_empty());
+        assert!(!filter_with_tags.is_empty());
+    }
+
+    #[test]
+    fn test_sources_filter_with_multiple_sources() {
+        use PromptSource::*;
+
+        let filter = PromptFilter::by_sources(vec![Builtin, User]);
+        let mut sources = HashMap::new();
+        sources.insert("builtin_p".to_string(), Builtin);
+        sources.insert("user_p".to_string(), User);
+        sources.insert("local_p".to_string(), PromptSource::Local);
+
+        let builtin_p = create_test_prompt("builtin_p", None, vec![]);
+        let user_p = create_test_prompt("user_p", None, vec![]);
+        let local_p = create_test_prompt("local_p", None, vec![]);
+
+        assert!(filter.matches(&builtin_p, &sources));
+        assert!(filter.matches(&user_p, &sources));
+        assert!(!filter.matches(&local_p, &sources));
+    }
+
+    #[test]
+    fn test_combined_filter_name_and_category() {
+        let filter = PromptFilter::new()
+            .with_name_pattern("rust*")
+            .with_category("development");
+        let sources = HashMap::new();
+
+        let matching = create_test_prompt("rust-debug", Some("development"), vec![]);
+        let wrong_category = create_test_prompt("rust-tool", Some("other"), vec![]);
+        let wrong_name = create_test_prompt("python-debug", Some("development"), vec![]);
+
+        assert!(filter.matches(&matching, &sources));
+        assert!(!filter.matches(&wrong_category, &sources));
+        assert!(!filter.matches(&wrong_name, &sources));
+    }
 }

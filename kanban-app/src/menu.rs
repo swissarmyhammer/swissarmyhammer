@@ -370,14 +370,27 @@ pub fn handle_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
         return;
     }
 
-    // Generic context menu items — emit as context-menu-command so the
-    // frontend can distinguish them from menu bar commands.
-    // UIState uses std::sync::RwLock (not tokio), so read access works in
-    // sync contexts like this menu event handler.
-    {
-        let state = app.state::<AppState>();
-        if state.ui_state.is_context_menu_id(&id) {
-            let _ = app.emit("context-menu-command", &id);
+    // Context menu items carry self-contained dispatch info as JSON in the ID.
+    // If it parses, it's a context menu selection — dispatch directly.
+    if let Ok(item) = serde_json::from_str::<crate::commands::ContextMenuItem>(&id) {
+        if !item.cmd.is_empty() {
+            let handle = app.clone();
+            tauri::async_runtime::spawn(async move {
+                let state = handle.state::<AppState>();
+                if let Err(e) = crate::commands::dispatch_command_internal(
+                    &handle,
+                    &state,
+                    &item.cmd,
+                    Some(item.scope_chain),
+                    item.target,
+                    None,
+                    None,
+                )
+                .await
+                {
+                    tracing::error!("Context menu dispatch failed: {}", e);
+                }
+            });
             return;
         }
     }

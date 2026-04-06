@@ -408,4 +408,149 @@ mod tests {
         let result = coordinator.read_completed_path(&lock_path).unwrap();
         assert!(result.is_none());
     }
+
+    #[test]
+    fn test_read_completed_path_without_path_line() {
+        let temp_dir = TempDir::new().unwrap();
+        let coordinator = test_coordinator(&temp_dir);
+        let lock_path = coordinator.lock_dir.join("test.lock");
+
+        // Completed status but no path= line
+        fs::write(&lock_path, "status=completed\n").unwrap();
+
+        let result = coordinator.read_completed_path(&lock_path).unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_is_stale_lock_fresh_downloading() {
+        let temp_dir = TempDir::new().unwrap();
+        let coordinator = test_coordinator(&temp_dir);
+        let lock_path = coordinator.lock_dir.join("test.lock");
+
+        // Fresh lock file with downloading status
+        fs::write(&lock_path, "pid=12345\nstatus=downloading\n").unwrap();
+
+        let is_stale = coordinator.is_stale_lock(&lock_path).unwrap();
+        assert!(!is_stale, "Fresh lock should not be stale");
+    }
+
+    #[test]
+    fn test_is_stale_lock_completed_never_stale() {
+        let temp_dir = TempDir::new().unwrap();
+        let coordinator = test_coordinator(&temp_dir);
+        let lock_path = coordinator.lock_dir.join("test.lock");
+
+        // Completed lock file — should never be considered stale
+        fs::write(
+            &lock_path,
+            "pid=12345\nstatus=completed\npath=/some/model.gguf\n",
+        )
+        .unwrap();
+
+        let is_stale = coordinator.is_stale_lock(&lock_path).unwrap();
+        assert!(!is_stale, "Completed lock should not be stale");
+    }
+
+    #[test]
+    fn test_lock_path_safe_characters() {
+        let temp_dir = TempDir::new().unwrap();
+        let coordinator = test_coordinator(&temp_dir);
+
+        // Repo with special characters gets sanitized
+        let path = coordinator.lock_path("org/repo-name", "model-v2.gguf");
+        let filename = path.file_name().unwrap().to_string_lossy();
+        assert!(
+            filename.ends_with(".lock"),
+            "Lock path should end with .lock"
+        );
+        // Should not contain forward slashes
+        assert!(
+            !filename.contains('/'),
+            "Lock filename should not contain slashes"
+        );
+    }
+
+    #[test]
+    fn test_lock_path_deterministic() {
+        let temp_dir = TempDir::new().unwrap();
+        let coordinator = test_coordinator(&temp_dir);
+
+        let path1 = coordinator.lock_path("org/repo", "model.gguf");
+        let path2 = coordinator.lock_path("org/repo", "model.gguf");
+        assert_eq!(path1, path2, "Same input should yield same lock path");
+    }
+
+    #[test]
+    fn test_create_lock_file_atomic_exclusion() {
+        let temp_dir = TempDir::new().unwrap();
+        let coordinator = test_coordinator(&temp_dir);
+        let lock_path = coordinator.lock_dir.join("exclusive.lock");
+
+        // First creation succeeds
+        let _guard = coordinator.create_lock_file(&lock_path).unwrap();
+
+        // Second creation should fail (AlreadyExists)
+        let result = coordinator.create_lock_file(&lock_path);
+        assert!(result.is_err());
+        let err = result.err().unwrap();
+        assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists);
+    }
+
+    #[tokio::test]
+    async fn test_coordinate_download_error_propagation() {
+        let temp_dir = TempDir::new().unwrap();
+        let coordinator = test_coordinator(&temp_dir);
+
+        let result = coordinator
+            .coordinate_download("test/repo", "model.gguf", || async {
+                Err(ModelError::Network("download failed".to_string()))
+            })
+            .await;
+
+        assert!(result.is_err());
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(err_msg.contains("download failed"));
+    }
+
+    #[tokio::test]
+    async fn test_coordinate_download_completed_reuse() {
+        let temp_dir = TempDir::new().unwrap();
+        let coordinator = test_coordinator(&temp_dir);
+        let download_path = temp_dir.path().join("model.gguf");
+        fs::write(&download_path, "fake model").unwrap();
+
+        // First download succeeds and marks complete
+        let result = coordinator
+            .coordinate_download("test/repo", "model.gguf", || async {
+                Ok(download_path.clone())
+            })
+            .await;
+        assert!(result.is_ok());
+
+        // Second coordinate should find the completed lock and return the path
+        let result2 = coordinator
+            .coordinate_download("test/repo", "model.gguf", || async {
+                panic!("Should not be called — previous download completed");
+            })
+            .await;
+        assert!(result2.is_ok());
+        assert_eq!(result2.unwrap(), download_path);
+    }
+
+    #[test]
+    fn test_default_coordinator() {
+        // DownloadCoordinator::default() should not panic
+        let coord = DownloadCoordinator::default();
+        // lock_dir may or may not exist yet — just verify default() doesn't panic
+        let _ = coord.lock_dir.exists();
+    }
+
+    #[test]
+    fn test_default_lock_dir_returns_path() {
+        let result = DownloadCoordinator::default_lock_dir();
+        assert!(result.is_ok());
+        let path = result.unwrap();
+        assert!(path.to_string_lossy().contains("download_locks"));
+    }
 }

@@ -967,7 +967,7 @@ mod tests {
     fn parse_frontmatter_flattens_nested_objects() {
         // Legacy task files have nested position: {column, ordinal}
         // The parser should flatten them to position_column, position_ordinal
-        let content = "---\ntitle: My Task\nposition:\n  column: todo\n  ordinal: a0\n  swimlane: feature\nassignees: []\n---\nBody text\n";
+        let content = "---\ntitle: My Task\nposition:\n  column: todo\n  ordinal: a0\nassignees: []\n---\nBody text\n";
 
         let parsed =
             parse_frontmatter_body(content, "task", "01ABC", "body", Path::new("test.md")).unwrap();
@@ -975,7 +975,6 @@ mod tests {
         assert_eq!(parsed.get_str("title"), Some("My Task"));
         assert_eq!(parsed.get_str("position_column"), Some("todo"));
         assert_eq!(parsed.get_str("position_ordinal"), Some("a0"));
-        assert_eq!(parsed.get_str("position_swimlane"), Some("feature"));
         // The nested "position" key should NOT exist as a field
         assert!(parsed.get("position").is_none());
         assert_eq!(parsed.get_str("body"), Some("Body text\n"));
@@ -1101,6 +1100,154 @@ mod tests {
         assert!(matches!(err, EntityError::RestoreFromTrashFailed { .. }));
     }
 
+    #[test]
+    fn detect_mime_type_known_extensions() {
+        assert_eq!(detect_mime_type("photo.png"), Some("image/png".to_string()));
+        assert_eq!(
+            detect_mime_type("photo.jpg"),
+            Some("image/jpeg".to_string())
+        );
+        assert_eq!(
+            detect_mime_type("doc.pdf"),
+            Some("application/pdf".to_string())
+        );
+        assert_eq!(detect_mime_type("style.css"), Some("text/css".to_string()));
+    }
+
+    #[test]
+    fn detect_mime_type_unknown_extension() {
+        // Unknown or missing extension returns None
+        assert!(detect_mime_type("file.xyz123").is_none());
+        assert!(detect_mime_type("noext").is_none());
+    }
+
+    #[tokio::test]
+    async fn attachment_metadata_returns_none_when_file_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let result = attachment_metadata("nonexistent-file.txt", dir.path()).await;
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn attachment_metadata_no_dash_in_filename() {
+        let dir = tempfile::tempdir().unwrap();
+        let att_dir = attachments_dir(dir.path());
+        fs::create_dir_all(&att_dir).await.unwrap();
+        fs::write(att_dir.join("nodash"), b"data").await.unwrap();
+
+        let meta = attachment_metadata("nodash", dir.path()).await.unwrap();
+        // When no dash, both id and name are the full filename
+        assert_eq!(meta["id"], "nodash");
+        assert_eq!(meta["name"], "nodash");
+        assert_eq!(meta["size"], 4);
+    }
+
+    #[tokio::test]
+    async fn attachment_metadata_with_dash_splits_correctly() {
+        let dir = tempfile::tempdir().unwrap();
+        let att_dir = attachments_dir(dir.path());
+        fs::create_dir_all(&att_dir).await.unwrap();
+        fs::write(att_dir.join("01ABC-photo.png"), b"png bytes")
+            .await
+            .unwrap();
+
+        let meta = attachment_metadata("01ABC-photo.png", dir.path())
+            .await
+            .unwrap();
+        assert_eq!(meta["id"], "01ABC");
+        assert_eq!(meta["name"], "photo.png");
+        assert_eq!(meta["size"], 9);
+        assert_eq!(meta["mime_type"], "image/png");
+        assert!(meta["path"].as_str().unwrap().contains(".attachments"));
+    }
+
+    #[test]
+    fn attachments_dir_path_correct() {
+        let dir = Path::new("/root/tasks");
+        assert_eq!(
+            attachments_dir(dir),
+            PathBuf::from("/root/tasks/.attachments")
+        );
+    }
+
+    #[test]
+    fn attachments_trash_dir_path_correct() {
+        let dir = Path::new("/root/tasks");
+        assert_eq!(
+            attachments_trash_dir(dir),
+            PathBuf::from("/root/tasks/.attachments/.trash")
+        );
+    }
+
+    #[tokio::test]
+    async fn copy_attachment_validates_source_exists() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = Path::new("/nonexistent/file.txt");
+        let result = copy_attachment(source, dir.path(), "avatar", 1_000_000).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, EntityError::AttachmentSourceNotFound { .. }));
+    }
+
+    #[tokio::test]
+    async fn copy_attachment_validates_max_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("big.bin");
+        fs::write(&source, b"12345").await.unwrap();
+
+        // max_bytes=3, file is 5 bytes
+        let result = copy_attachment(&source, dir.path(), "avatar", 3).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, EntityError::AttachmentTooLarge { .. }));
+    }
+
+    #[tokio::test]
+    async fn copy_attachment_success() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("test.txt");
+        fs::write(&source, b"hello world").await.unwrap();
+
+        let stored = copy_attachment(&source, dir.path(), "avatar", 1_000_000)
+            .await
+            .unwrap();
+
+        // Stored name should contain original filename
+        assert!(stored.contains("test.txt"));
+        // File should exist in .attachments/
+        let att_dir = attachments_dir(dir.path());
+        assert!(att_dir.join(&stored).exists());
+        // Content should match
+        let content = fs::read(att_dir.join(&stored)).await.unwrap();
+        assert_eq!(content, b"hello world");
+    }
+
+    #[tokio::test]
+    async fn trash_attachment_moves_to_trash_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let att_dir = attachments_dir(dir.path());
+        fs::create_dir_all(&att_dir).await.unwrap();
+        fs::write(att_dir.join("01ABC-file.txt"), b"data")
+            .await
+            .unwrap();
+
+        trash_attachment("01ABC-file.txt", dir.path())
+            .await
+            .unwrap();
+
+        assert!(!att_dir.join("01ABC-file.txt").exists());
+        assert!(att_dir.join(".trash").join("01ABC-file.txt").exists());
+    }
+
+    #[tokio::test]
+    async fn trash_attachment_nonexistent_is_ok() {
+        let dir = tempfile::tempdir().unwrap();
+        // Trashing a file that doesn't exist should not error
+        trash_attachment("nonexistent.txt", dir.path())
+            .await
+            .unwrap();
+    }
+
     #[tokio::test]
     async fn restore_entity_files_missing_changelog_ok() {
         let dir = tempfile::tempdir().unwrap();
@@ -1125,5 +1272,114 @@ mod tests {
         assert!(path.exists());
         // Changelog should not exist (it was never there)
         assert!(!path.with_extension("jsonl").exists());
+    }
+
+    // -----------------------------------------------------------------------
+    // Attachment IO tests
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn copy_attachment_copies_file_and_returns_ulid_prefixed_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let entity_type_dir = dir.path().join("items");
+        fs::create_dir_all(&entity_type_dir).await.unwrap();
+
+        // Create a source file
+        let source = dir.path().join("photo.png");
+        fs::write(&source, b"fake png data").await.unwrap();
+
+        let stored = copy_attachment(&source, &entity_type_dir, "avatar", 10_000_000)
+            .await
+            .unwrap();
+
+        // Stored name should be ULID-photo.png
+        assert!(
+            stored.ends_with("-photo.png"),
+            "stored name should end with original filename, got: {stored}"
+        );
+        assert!(
+            stored.len() > "photo.png".len(),
+            "stored name should have ULID prefix"
+        );
+
+        // File should exist in .attachments/ with correct contents
+        let att_path = attachments_dir(&entity_type_dir).join(&stored);
+        assert!(att_path.exists());
+        let contents = fs::read(&att_path).await.unwrap();
+        assert_eq!(contents, b"fake png data");
+    }
+
+    #[tokio::test]
+    async fn copy_attachment_rejects_missing_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let entity_type_dir = dir.path().join("items");
+
+        let source = dir.path().join("nonexistent.txt");
+        let result = copy_attachment(&source, &entity_type_dir, "files", 10_000_000).await;
+
+        assert!(result.is_err());
+        assert!(
+            matches!(
+                result.unwrap_err(),
+                EntityError::AttachmentSourceNotFound { .. }
+            ),
+            "should be AttachmentSourceNotFound"
+        );
+    }
+
+    #[tokio::test]
+    async fn copy_attachment_rejects_oversized_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let entity_type_dir = dir.path().join("items");
+
+        let source = dir.path().join("big.bin");
+        fs::write(&source, vec![0u8; 500]).await.unwrap();
+
+        // max_bytes = 100, file is 500
+        let result = copy_attachment(&source, &entity_type_dir, "avatar", 100).await;
+        assert!(result.is_err());
+        assert!(
+            matches!(result.unwrap_err(), EntityError::AttachmentTooLarge { .. }),
+            "should be AttachmentTooLarge"
+        );
+    }
+
+    #[tokio::test]
+    async fn attachment_metadata_returns_enriched_json_for_existing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let entity_type_dir = dir.path().join("items");
+        let att_dir = attachments_dir(&entity_type_dir);
+        fs::create_dir_all(&att_dir).await.unwrap();
+
+        // Create a stored file with ULID-name pattern
+        let stored_name = "01ABCDEF-screenshot.png";
+        fs::write(att_dir.join(stored_name), b"png bytes here")
+            .await
+            .unwrap();
+
+        let meta = attachment_metadata(stored_name, &entity_type_dir)
+            .await
+            .expect("should return Some for existing file");
+
+        assert_eq!(meta["id"], "01ABCDEF");
+        assert_eq!(meta["name"], "screenshot.png");
+        assert_eq!(meta["size"], 14); // b"png bytes here".len()
+        assert_eq!(meta["mime_type"], "image/png");
+        assert!(
+            meta["path"].as_str().unwrap().contains(".attachments"),
+            "path should contain .attachments"
+        );
+    }
+
+    #[tokio::test]
+    async fn attachment_metadata_returns_none_for_missing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let entity_type_dir = dir.path().join("items");
+
+        let result = attachment_metadata("01MISSING-gone.txt", &entity_type_dir).await;
+        assert!(
+            result.is_none(),
+            "should return None when the file does not exist"
+        );
     }
 }

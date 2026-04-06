@@ -1,9 +1,0 @@
-id: "0000000000000000000000000A"
-name: color
-description: Display color
-type:
-  kind: color
-icon: palette
-editor: color-palette
-display: color-swatch
-width: 80

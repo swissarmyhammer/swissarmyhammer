@@ -42,7 +42,6 @@ function WithFileDropProvider({ children }: { children: ReactNode }) {
 
 const descriptor: DropZoneDescriptor = {
   key: "before-task-2",
-  boardPath: "/boards/test",
   columnId: "col-1",
   beforeId: "task-2",
 };

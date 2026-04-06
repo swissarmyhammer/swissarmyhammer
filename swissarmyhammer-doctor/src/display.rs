@@ -248,6 +248,57 @@ mod tests {
     }
 
     #[test]
+    fn test_check_result_appends_fix_for_warnings() {
+        let check = Check {
+            name: "Slow Tool".to_string(),
+            status: CheckStatus::Warning,
+            message: "Running slowly".to_string(),
+            fix: Some("upgrade to latest version".to_string()),
+        };
+        let result = CheckResult::from(&check);
+        assert!(result.message.contains("Running slowly"));
+        assert!(result.message.contains("Fix: upgrade to latest version"));
+    }
+
+    #[test]
+    fn test_categorize_check_prompt() {
+        let check = Check {
+            name: "Prompt Validation".to_string(),
+            status: CheckStatus::Ok,
+            message: "Valid".to_string(),
+            fix: None,
+        };
+        assert_eq!(categorize_check(&check), "Prompt");
+
+        let check = Check {
+            name: "YAML Syntax".to_string(),
+            status: CheckStatus::Ok,
+            message: "Valid".to_string(),
+            fix: None,
+        };
+        assert_eq!(categorize_check(&check), "Prompt");
+
+        let check = Check {
+            name: "Template Loading".to_string(),
+            status: CheckStatus::Ok,
+            message: "Loaded".to_string(),
+            fix: None,
+        };
+        assert_eq!(categorize_check(&check), "Prompt");
+    }
+
+    #[test]
+    fn test_categorize_check_workflow() {
+        let check = Check {
+            name: "Workflow Execution".to_string(),
+            status: CheckStatus::Ok,
+            message: "Running".to_string(),
+            fix: None,
+        };
+        assert_eq!(categorize_check(&check), "Workflow");
+    }
+
+    #[test]
     fn test_serialization_check_result() {
         let result = CheckResult {
             status: "\u{2713}".to_string(),

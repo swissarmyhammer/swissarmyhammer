@@ -59,3 +59,127 @@ impl Execute<AgentContext, AgentError> for UseAgent {
         vec![]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agent_library::AgentLibrary;
+    use crate::context::AgentContext;
+    use crate::error::AgentError;
+    use std::sync::Arc;
+    use tokio::sync::RwLock;
+
+    /// Build a context pre-loaded with the default builtin agents.
+    fn make_context() -> AgentContext {
+        let mut library = AgentLibrary::new();
+        library.load_defaults();
+        AgentContext::new(Arc::new(RwLock::new(library)))
+    }
+
+    #[tokio::test]
+    async fn test_use_existing_agent_returns_full_definition() {
+        let ctx = make_context();
+        let op = UseAgent::new("tester");
+        let result = op.execute(&ctx).await;
+
+        match result {
+            ExecutionResult::Unlogged { value } => {
+                assert_eq!(
+                    value.get("name").and_then(|v| v.as_str()),
+                    Some("tester"),
+                    "returned agent should have name 'tester'"
+                );
+                assert!(
+                    value.get("description").is_some(),
+                    "returned agent should have 'description'"
+                );
+                assert!(
+                    value.get("instructions").is_some(),
+                    "returned agent should have 'instructions'"
+                );
+                assert!(
+                    value.get("source").is_some(),
+                    "returned agent should have 'source'"
+                );
+            }
+            other => panic!("expected Unlogged result, got: {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_use_missing_agent_returns_not_found_error() {
+        let ctx = make_context();
+        let op = UseAgent::new("this-agent-does-not-exist");
+        let result = op.execute(&ctx).await;
+
+        match result {
+            ExecutionResult::Failed { error, .. } => match error {
+                AgentError::NotFound { name } => {
+                    assert_eq!(name, "this-agent-does-not-exist");
+                }
+                other => panic!("expected NotFound error, got: {:?}", other),
+            },
+            other => panic!("expected Failed result, got: {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_use_agent_response_has_all_fields() {
+        let ctx = make_context();
+        let op = UseAgent::new("default");
+        let result = op.execute(&ctx).await;
+
+        match result {
+            ExecutionResult::Unlogged { value } => {
+                let required_fields = [
+                    "name",
+                    "description",
+                    "instructions",
+                    "model",
+                    "tools",
+                    "disallowed_tools",
+                    "isolation",
+                    "max_turns",
+                    "background",
+                    "source",
+                ];
+                for field in &required_fields {
+                    assert!(
+                        value.get(field).is_some(),
+                        "expected field '{}' in use_agent response",
+                        field
+                    );
+                }
+            }
+            other => panic!("expected Unlogged result, got: {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_use_agent_instructions_are_non_empty() {
+        let ctx = make_context();
+        let op = UseAgent::new("tester");
+        let result = op.execute(&ctx).await;
+
+        match result {
+            ExecutionResult::Unlogged { value } => {
+                let instructions = value
+                    .get("instructions")
+                    .and_then(|v| v.as_str())
+                    .expect("instructions should be a string");
+                assert!(
+                    !instructions.is_empty(),
+                    "tester agent should have non-empty instructions"
+                );
+            }
+            other => panic!("expected Unlogged result, got: {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_use_agent_affected_resource_ids_is_empty() {
+        let op = UseAgent::new("anything");
+        let ids = op.affected_resource_ids(&json!({}));
+        assert!(ids.is_empty());
+    }
+}

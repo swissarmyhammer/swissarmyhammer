@@ -91,3 +91,85 @@ pub async fn render_skill_instructions_for_test(
 ) -> Value {
     render_skill_instructions(value, prompt_library, arguments).await
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn default_prompt_library() -> Arc<RwLock<PromptLibrary>> {
+        Arc::new(RwLock::new(PromptLibrary::default()))
+    }
+
+    #[tokio::test]
+    async fn test_execute_use_missing_name_returns_error() {
+        let library = Arc::new(RwLock::new(SkillLibrary::new()));
+        {
+            let mut lib = library.write().await;
+            lib.load_defaults();
+        }
+        let prompt_library = default_prompt_library();
+
+        // No "name" key in arguments
+        let args = serde_json::Map::new();
+        let result = execute_use(args, &library, &prompt_library).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("name") || err.contains("Missing"),
+            "Expected missing name error, got: {}",
+            err
+        );
+    }
+
+    #[tokio::test]
+    async fn test_execute_use_nonexistent_skill_returns_error() {
+        let library = Arc::new(RwLock::new(SkillLibrary::new()));
+        {
+            let mut lib = library.write().await;
+            lib.load_defaults();
+        }
+        let prompt_library = default_prompt_library();
+
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "name".to_string(),
+            serde_json::json!("nonexistent-skill-12345"),
+        );
+        let result = execute_use(args, &library, &prompt_library).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_execute_use_with_arguments() {
+        let library = Arc::new(RwLock::new(SkillLibrary::new()));
+        {
+            let mut lib = library.write().await;
+            lib.load_defaults();
+        }
+        let prompt_library = default_prompt_library();
+
+        let mut args = serde_json::Map::new();
+        args.insert("name".to_string(), serde_json::json!("plan"));
+        args.insert("arguments".to_string(), serde_json::json!("test task"));
+
+        let result = execute_use(args, &library, &prompt_library).await;
+        assert!(result.is_ok(), "use with arguments should succeed");
+    }
+
+    #[tokio::test]
+    async fn test_render_skill_instructions_no_instructions_field() {
+        // Value without an "instructions" field should pass through unchanged
+        let value = serde_json::json!({
+            "name": "test-skill",
+            "description": "A test skill"
+        });
+        let prompt_library = default_prompt_library();
+
+        let rendered =
+            render_skill_instructions_for_test(value.clone(), &prompt_library, None).await;
+        // Should be unchanged since no "instructions" key
+        assert_eq!(rendered["name"], "test-skill");
+        assert_eq!(rendered["description"], "A test skill");
+        assert!(rendered.get("instructions").is_none());
+    }
+}

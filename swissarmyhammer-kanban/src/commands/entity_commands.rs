@@ -63,7 +63,7 @@ impl Command for DeleteEntityCmd {
             "tag" => run_op(&crate::tag::DeleteTag::new(id), &kanban).await,
             "column" => run_op(&crate::column::DeleteColumn::new(id), &kanban).await,
             "actor" => run_op(&crate::actor::DeleteActor::new(id), &kanban).await,
-            "swimlane" => run_op(&crate::swimlane::DeleteSwimlane::new(id), &kanban).await,
+            "project" => run_op(&crate::project::DeleteProject::new(id), &kanban).await,
             _ => Err(CommandError::ExecutionFailed(format!(
                 "unknown entity type for delete: '{}'",
                 entity_type
@@ -283,5 +283,573 @@ impl Command for AttachmentRevealCmd {
         .map_err(|e| CommandError::ExecutionFailed(e.to_string()))?
         .map_err(|e| CommandError::ExecutionFailed(format!("failed to reveal {}: {}", path, e)))?;
         Ok(serde_json::json!({ "revealed": path }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::board::InitBoard;
+    use crate::context::KanbanContext;
+    use crate::tag::AddTag;
+    use crate::task::AddTask;
+    use serde_json::Value;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    use swissarmyhammer_commands::CommandContext;
+    use swissarmyhammer_operations::Execute;
+    use tempfile::TempDir;
+
+    /// Initialize a board and return a (TempDir, KanbanContext) pair.
+    /// TempDir is returned to keep the temp directory alive for the duration of the test.
+    async fn setup() -> (TempDir, KanbanContext) {
+        let temp = TempDir::new().unwrap();
+        let kanban_dir = temp.path().join(".kanban");
+        let ctx = KanbanContext::new(kanban_dir);
+        InitBoard::new("Test")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        (temp, ctx)
+    }
+
+    /// Build a CommandContext with a KanbanContext extension and optional target moniker.
+    fn make_ctx(
+        kanban: Arc<KanbanContext>,
+        target: Option<String>,
+        scope: Vec<String>,
+        args: HashMap<String, Value>,
+    ) -> CommandContext {
+        let mut ctx = CommandContext::new("test", scope, target, args);
+        ctx.set_extension(kanban);
+        ctx
+    }
+
+    // =========================================================================
+    // DeleteEntityCmd availability
+    // =========================================================================
+
+    #[test]
+    fn delete_entity_available_when_target_set() {
+        let ctx = CommandContext::new(
+            "entity.delete",
+            vec![],
+            Some("task:01ABC".into()),
+            HashMap::new(),
+        );
+        let cmd = DeleteEntityCmd;
+        assert!(cmd.available(&ctx));
+    }
+
+    #[test]
+    fn delete_entity_not_available_without_target() {
+        let ctx = CommandContext::new("entity.delete", vec![], None, HashMap::new());
+        let cmd = DeleteEntityCmd;
+        assert!(!cmd.available(&ctx));
+    }
+
+    // =========================================================================
+    // DeleteEntityCmd execute — task, tag, column, actor, unknown
+    // =========================================================================
+
+    #[tokio::test]
+    async fn delete_entity_deletes_task() {
+        let (_temp, ctx) = setup().await;
+        let add_result = AddTask::new("To delete")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let task_id = add_result["id"].as_str().unwrap().to_string();
+
+        let kanban = Arc::new(ctx);
+        let cmd_ctx = make_ctx(
+            Arc::clone(&kanban),
+            Some(format!("task:{}", task_id)),
+            vec![],
+            HashMap::new(),
+        );
+        let result = DeleteEntityCmd.execute(&cmd_ctx).await;
+        assert!(result.is_ok(), "delete task should succeed: {:?}", result);
+
+        // Verify the task is gone
+        let ectx = kanban.entity_context().await.unwrap();
+        assert!(ectx.list("task").await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn delete_entity_deletes_tag() {
+        let (_temp, ctx) = setup().await;
+        let add_result = AddTag::new("bug")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let tag_id = add_result["id"].as_str().unwrap().to_string();
+
+        let kanban = Arc::new(ctx);
+        let cmd_ctx = make_ctx(
+            Arc::clone(&kanban),
+            Some(format!("tag:{}", tag_id)),
+            vec![],
+            HashMap::new(),
+        );
+        let result = DeleteEntityCmd.execute(&cmd_ctx).await;
+        assert!(result.is_ok(), "delete tag should succeed: {:?}", result);
+    }
+
+    #[tokio::test]
+    async fn delete_entity_deletes_column() {
+        let (_temp, ctx) = setup().await;
+
+        let kanban = Arc::new(ctx);
+        let cmd_ctx = make_ctx(
+            Arc::clone(&kanban),
+            Some("column:todo".into()),
+            vec![],
+            HashMap::new(),
+        );
+        let result = DeleteEntityCmd.execute(&cmd_ctx).await;
+        assert!(result.is_ok(), "delete column should succeed: {:?}", result);
+    }
+
+    #[tokio::test]
+    async fn delete_entity_deletes_actor() {
+        let (_temp, ctx) = setup().await;
+        let add_result = crate::actor::AddActor::new("alice", "Alice")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let actor_id = add_result["actor"]["id"].as_str().unwrap().to_string();
+
+        let kanban = Arc::new(ctx);
+        let cmd_ctx = make_ctx(
+            Arc::clone(&kanban),
+            Some(format!("actor:{}", actor_id)),
+            vec![],
+            HashMap::new(),
+        );
+        let result = DeleteEntityCmd.execute(&cmd_ctx).await;
+        assert!(result.is_ok(), "delete actor should succeed: {:?}", result);
+    }
+
+    #[tokio::test]
+    async fn delete_entity_unknown_type_returns_error() {
+        let (_temp, ctx) = setup().await;
+        let kanban = Arc::new(ctx);
+        let cmd_ctx = make_ctx(
+            Arc::clone(&kanban),
+            Some("widget:some-id".into()),
+            vec![],
+            HashMap::new(),
+        );
+        let result = DeleteEntityCmd.execute(&cmd_ctx).await;
+        assert!(result.is_err(), "unknown entity type should fail");
+    }
+
+    #[tokio::test]
+    async fn delete_entity_fails_without_kanban_context() {
+        let ctx = CommandContext::new(
+            "entity.delete",
+            vec![],
+            Some("task:01ABC".into()),
+            HashMap::new(),
+        );
+        let result = DeleteEntityCmd.execute(&ctx).await;
+        assert!(result.is_err(), "should fail without KanbanContext");
+    }
+
+    #[tokio::test]
+    async fn delete_entity_fails_without_target() {
+        let (_temp, ctx) = setup().await;
+        let kanban = Arc::new(ctx);
+        let cmd_ctx = make_ctx(Arc::clone(&kanban), None, vec![], HashMap::new());
+        let result = DeleteEntityCmd.execute(&cmd_ctx).await;
+        assert!(result.is_err(), "should fail without target");
+    }
+
+    #[tokio::test]
+    async fn delete_entity_invalid_moniker_returns_error() {
+        let (_temp, ctx) = setup().await;
+        let kanban = Arc::new(ctx);
+        // Provide invalid moniker (no colon)
+        let cmd_ctx = make_ctx(
+            Arc::clone(&kanban),
+            Some("nocolon".into()),
+            vec![],
+            HashMap::new(),
+        );
+        let result = DeleteEntityCmd.execute(&cmd_ctx).await;
+        assert!(result.is_err(), "invalid moniker should fail");
+    }
+
+    // =========================================================================
+    // ArchiveEntityCmd availability
+    // =========================================================================
+
+    #[test]
+    fn archive_entity_available_when_target_set() {
+        let ctx = CommandContext::new(
+            "entity.archive",
+            vec![],
+            Some("task:01ABC".into()),
+            HashMap::new(),
+        );
+        assert!(ArchiveEntityCmd.available(&ctx));
+    }
+
+    #[test]
+    fn archive_entity_not_available_without_target() {
+        let ctx = CommandContext::new("entity.archive", vec![], None, HashMap::new());
+        assert!(!ArchiveEntityCmd.available(&ctx));
+    }
+
+    // =========================================================================
+    // ArchiveEntityCmd execute
+    // =========================================================================
+
+    #[tokio::test]
+    async fn archive_entity_archives_task() {
+        let (_temp, ctx) = setup().await;
+        let add_result = AddTask::new("Archive me")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let task_id = add_result["id"].as_str().unwrap().to_string();
+
+        let kanban = Arc::new(ctx);
+        let cmd_ctx = make_ctx(
+            Arc::clone(&kanban),
+            Some(format!("task:{}", task_id)),
+            vec![],
+            HashMap::new(),
+        );
+        let result = ArchiveEntityCmd.execute(&cmd_ctx).await.unwrap();
+        assert_eq!(result["archived"], true);
+        assert_eq!(result["title"].as_str().unwrap(), "Archive me");
+
+        // Verify task is gone from live list
+        let ectx = kanban.entity_context().await.unwrap();
+        assert!(ectx.list("task").await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn archive_entity_archives_non_task_entity() {
+        let (_temp, ctx) = setup().await;
+        // Use a column (non-task entity) — should call ectx.archive() directly
+        let kanban = Arc::new(ctx);
+        let cmd_ctx = make_ctx(
+            Arc::clone(&kanban),
+            Some("column:todo".into()),
+            vec![],
+            HashMap::new(),
+        );
+        let result = ArchiveEntityCmd.execute(&cmd_ctx).await.unwrap();
+        assert_eq!(result["archived"], true);
+    }
+
+    #[tokio::test]
+    async fn archive_entity_fails_without_target() {
+        let (_temp, ctx) = setup().await;
+        let kanban = Arc::new(ctx);
+        let cmd_ctx = make_ctx(Arc::clone(&kanban), None, vec![], HashMap::new());
+        let result = ArchiveEntityCmd.execute(&cmd_ctx).await;
+        assert!(result.is_err(), "should fail without target");
+    }
+
+    #[tokio::test]
+    async fn archive_entity_invalid_moniker_returns_error() {
+        let (_temp, ctx) = setup().await;
+        let kanban = Arc::new(ctx);
+        let cmd_ctx = make_ctx(
+            Arc::clone(&kanban),
+            Some("nocolon".into()),
+            vec![],
+            HashMap::new(),
+        );
+        let result = ArchiveEntityCmd.execute(&cmd_ctx).await;
+        assert!(result.is_err(), "invalid moniker should fail");
+    }
+
+    // =========================================================================
+    // UnarchiveEntityCmd availability
+    // =========================================================================
+
+    #[test]
+    fn unarchive_entity_available_when_target_set() {
+        let ctx = CommandContext::new(
+            "entity.unarchive",
+            vec![],
+            Some("task:01ABC".into()),
+            HashMap::new(),
+        );
+        assert!(UnarchiveEntityCmd.available(&ctx));
+    }
+
+    #[test]
+    fn unarchive_entity_not_available_without_target() {
+        let ctx = CommandContext::new("entity.unarchive", vec![], None, HashMap::new());
+        assert!(!UnarchiveEntityCmd.available(&ctx));
+    }
+
+    // =========================================================================
+    // UnarchiveEntityCmd execute
+    // =========================================================================
+
+    #[tokio::test]
+    async fn unarchive_entity_unarchives_task() {
+        let (_temp, ctx) = setup().await;
+        let add_result = AddTask::new("Restore me")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let task_id = add_result["id"].as_str().unwrap().to_string();
+
+        // Archive the task first via the operation
+        crate::task::ArchiveTask::new(task_id.as_str())
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        let kanban = Arc::new(ctx);
+        let cmd_ctx = make_ctx(
+            Arc::clone(&kanban),
+            Some(format!("task:{}", task_id)),
+            vec![],
+            HashMap::new(),
+        );
+        let result = UnarchiveEntityCmd.execute(&cmd_ctx).await.unwrap();
+        assert_eq!(result["unarchived"], true);
+
+        // Verify task is back in the live list
+        let ectx = kanban.entity_context().await.unwrap();
+        assert_eq!(ectx.list("task").await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn unarchive_entity_unarchives_non_task_entity() {
+        let (_temp, ctx) = setup().await;
+        // Archive a column first, then unarchive it
+        let ectx = ctx.entity_context().await.unwrap();
+        ectx.archive("column", "todo").await.unwrap();
+
+        let kanban = Arc::new(ctx);
+        let cmd_ctx = make_ctx(
+            Arc::clone(&kanban),
+            Some("column:todo".into()),
+            vec![],
+            HashMap::new(),
+        );
+        let result = UnarchiveEntityCmd.execute(&cmd_ctx).await.unwrap();
+        assert_eq!(result["unarchived"], true);
+    }
+
+    #[tokio::test]
+    async fn unarchive_entity_fails_without_target() {
+        let (_temp, ctx) = setup().await;
+        let kanban = Arc::new(ctx);
+        let cmd_ctx = make_ctx(Arc::clone(&kanban), None, vec![], HashMap::new());
+        let result = UnarchiveEntityCmd.execute(&cmd_ctx).await;
+        assert!(result.is_err(), "should fail without target");
+    }
+
+    // =========================================================================
+    // TagUpdateCmd availability
+    // =========================================================================
+
+    #[test]
+    fn tag_update_available_when_tag_in_scope() {
+        let ctx = CommandContext::new("tag.update", vec!["tag:01ABC".into()], None, HashMap::new());
+        assert!(TagUpdateCmd.available(&ctx));
+    }
+
+    #[test]
+    fn tag_update_not_available_without_tag_scope() {
+        let ctx = CommandContext::new(
+            "tag.update",
+            vec!["task:01ABC".into()],
+            None,
+            HashMap::new(),
+        );
+        assert!(!TagUpdateCmd.available(&ctx));
+    }
+
+    #[test]
+    fn tag_update_not_available_with_empty_scope() {
+        let ctx = CommandContext::new("tag.update", vec![], None, HashMap::new());
+        assert!(!TagUpdateCmd.available(&ctx));
+    }
+
+    // =========================================================================
+    // TagUpdateCmd execute
+    // =========================================================================
+
+    #[tokio::test]
+    async fn tag_update_renames_tag() {
+        let (_temp, ctx) = setup().await;
+        let add_result = AddTag::new("bug")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let tag_id = add_result["id"].as_str().unwrap().to_string();
+
+        let kanban = Arc::new(ctx);
+        let mut args = HashMap::new();
+        args.insert("name".into(), Value::String("defect".into()));
+        let cmd_ctx = make_ctx(
+            Arc::clone(&kanban),
+            None,
+            vec![format!("tag:{}", tag_id)],
+            args,
+        );
+
+        let result = TagUpdateCmd.execute(&cmd_ctx).await.unwrap();
+        assert_eq!(result["name"].as_str().unwrap(), "defect");
+    }
+
+    #[tokio::test]
+    async fn tag_update_changes_color() {
+        let (_temp, ctx) = setup().await;
+        let add_result = AddTag::new("bug")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let tag_id = add_result["id"].as_str().unwrap().to_string();
+
+        let kanban = Arc::new(ctx);
+        let mut args = HashMap::new();
+        args.insert("color".into(), Value::String("ff0000".into()));
+        let cmd_ctx = make_ctx(
+            Arc::clone(&kanban),
+            None,
+            vec![format!("tag:{}", tag_id)],
+            args,
+        );
+
+        let result = TagUpdateCmd.execute(&cmd_ctx).await.unwrap();
+        assert_eq!(result["color"].as_str().unwrap(), "ff0000");
+    }
+
+    #[tokio::test]
+    async fn tag_update_changes_description() {
+        let (_temp, ctx) = setup().await;
+        let add_result = AddTag::new("bug")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let tag_id = add_result["id"].as_str().unwrap().to_string();
+
+        let kanban = Arc::new(ctx);
+        let mut args = HashMap::new();
+        args.insert("description".into(), Value::String("A known bug".into()));
+        let cmd_ctx = make_ctx(
+            Arc::clone(&kanban),
+            None,
+            vec![format!("tag:{}", tag_id)],
+            args,
+        );
+
+        let result = TagUpdateCmd.execute(&cmd_ctx).await.unwrap();
+        assert_eq!(result["description"].as_str().unwrap(), "A known bug");
+    }
+
+    #[tokio::test]
+    async fn tag_update_fails_without_tag_in_scope() {
+        let (_temp, ctx) = setup().await;
+        let kanban = Arc::new(ctx);
+        let mut args = HashMap::new();
+        args.insert("name".into(), Value::String("new-name".into()));
+        // No tag in scope
+        let cmd_ctx = make_ctx(Arc::clone(&kanban), None, vec![], args);
+        let result = TagUpdateCmd.execute(&cmd_ctx).await;
+        assert!(result.is_err(), "should fail without tag in scope");
+    }
+
+    // =========================================================================
+    // AttachmentOpenCmd availability
+    // =========================================================================
+
+    #[test]
+    fn attachment_open_available_when_attachment_in_scope() {
+        let ctx = CommandContext::new(
+            "attachment.open",
+            vec!["attachment:/tmp/file.txt".into()],
+            None,
+            HashMap::new(),
+        );
+        assert!(AttachmentOpenCmd.available(&ctx));
+    }
+
+    #[test]
+    fn attachment_open_not_available_without_attachment_scope() {
+        let ctx = CommandContext::new(
+            "attachment.open",
+            vec!["task:01ABC".into()],
+            None,
+            HashMap::new(),
+        );
+        assert!(!AttachmentOpenCmd.available(&ctx));
+    }
+
+    #[test]
+    fn attachment_open_not_available_with_empty_scope() {
+        let ctx = CommandContext::new("attachment.open", vec![], None, HashMap::new());
+        assert!(!AttachmentOpenCmd.available(&ctx));
+    }
+
+    // =========================================================================
+    // AttachmentRevealCmd availability
+    // =========================================================================
+
+    #[test]
+    fn attachment_reveal_available_when_attachment_in_scope() {
+        let ctx = CommandContext::new(
+            "attachment.reveal",
+            vec!["attachment:/tmp/file.txt".into()],
+            None,
+            HashMap::new(),
+        );
+        assert!(AttachmentRevealCmd.available(&ctx));
+    }
+
+    #[test]
+    fn attachment_reveal_not_available_without_attachment_scope() {
+        let ctx = CommandContext::new(
+            "attachment.reveal",
+            vec!["task:01ABC".into()],
+            None,
+            HashMap::new(),
+        );
+        assert!(!AttachmentRevealCmd.available(&ctx));
+    }
+
+    // =========================================================================
+    // AttachmentOpenCmd execute — error when attachment path not in scope
+    // =========================================================================
+
+    #[tokio::test]
+    async fn attachment_open_fails_without_attachment_scope() {
+        let ctx = CommandContext::new("attachment.open", vec![], None, HashMap::new());
+        let result = AttachmentOpenCmd.execute(&ctx).await;
+        assert!(result.is_err(), "should fail without attachment in scope");
+    }
+
+    // =========================================================================
+    // AttachmentRevealCmd execute — error when attachment path not in scope
+    // =========================================================================
+
+    #[tokio::test]
+    async fn attachment_reveal_fails_without_attachment_scope() {
+        let ctx = CommandContext::new("attachment.reveal", vec![], None, HashMap::new());
+        let result = AttachmentRevealCmd.execute(&ctx).await;
+        assert!(result.is_err(), "should fail without attachment in scope");
     }
 }

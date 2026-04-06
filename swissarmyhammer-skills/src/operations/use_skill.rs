@@ -54,3 +54,115 @@ impl Execute<SkillContext, SkillError> for UseSkill {
         vec![]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::context::SkillContext;
+    use crate::skill_library::SkillLibrary;
+    use std::sync::Arc;
+    use swissarmyhammer_operations::Execute;
+    use tokio::sync::RwLock;
+
+    /// Build a SkillContext with a library loaded from defaults (builtin skills)
+    fn test_context_with_defaults() -> SkillContext {
+        let mut library = SkillLibrary::new();
+        library.load_defaults();
+        SkillContext::new(Arc::new(RwLock::new(library)))
+    }
+
+    /// Build a SkillContext with an empty library
+    fn test_context_empty() -> SkillContext {
+        let library = SkillLibrary::new();
+        SkillContext::new(Arc::new(RwLock::new(library)))
+    }
+
+    #[tokio::test]
+    async fn test_use_skill_found() {
+        let ctx = test_context_with_defaults();
+        let op = UseSkill::new("plan");
+        let result = op.execute(&ctx).await;
+
+        let value = result
+            .into_result()
+            .expect("use should succeed for known skill");
+        assert_eq!(value["name"].as_str(), Some("plan"));
+        assert!(value["description"].is_string());
+        assert!(value["instructions"].is_string());
+        assert!(value["allowed_tools"].is_array());
+        let source = value["source"].as_str().unwrap();
+        assert!(
+            ["builtin", "local", "user"].contains(&source),
+            "source should be a valid SkillSource variant, got: {}",
+            source
+        );
+    }
+
+    #[tokio::test]
+    async fn test_use_skill_not_found() {
+        let ctx = test_context_with_defaults();
+        let op = UseSkill::new("zzz-nonexistent-skill");
+        let result = op.execute(&ctx).await;
+
+        match result {
+            ExecutionResult::Failed { error, log_entry } => {
+                assert!(
+                    format!("{}", error).contains("not found"),
+                    "error should mention 'not found'"
+                );
+                assert!(log_entry.is_none(), "NotFound should have no log entry");
+            }
+            _ => panic!("UseSkill should fail for nonexistent skill"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_use_skill_empty_library() {
+        let ctx = test_context_empty();
+        let op = UseSkill::new("plan");
+        let result = op.execute(&ctx).await;
+
+        match result {
+            ExecutionResult::Failed { error, .. } => {
+                assert!(format!("{}", error).contains("not found"));
+            }
+            _ => panic!("UseSkill should fail when library is empty"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_use_skill_returns_instructions() {
+        let ctx = test_context_with_defaults();
+        let op = UseSkill::new("commit");
+        let result = op.execute(&ctx).await;
+
+        let value = result
+            .into_result()
+            .expect("use should succeed for 'commit'");
+        let instructions = value["instructions"]
+            .as_str()
+            .expect("instructions should be a string");
+        assert!(
+            !instructions.is_empty(),
+            "instructions should not be empty for a builtin skill"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_use_skill_returns_unlogged_on_success() {
+        let ctx = test_context_with_defaults();
+        let op = UseSkill::new("plan");
+        let result = op.execute(&ctx).await;
+
+        match result {
+            ExecutionResult::Unlogged { .. } => {} // expected
+            _ => panic!("UseSkill should return Unlogged on success"),
+        }
+    }
+
+    #[test]
+    fn test_use_skill_affected_resource_ids_empty() {
+        let op = UseSkill::new("test");
+        assert!(op.affected_resource_ids(&json!({})).is_empty());
+    }
+}

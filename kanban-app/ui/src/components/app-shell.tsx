@@ -3,11 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   CommandScopeProvider,
-  useExecuteCommand,
-  resolveCommand,
-  dispatchCommand,
-  scopeChainFromScope,
-  useActiveBoardPath,
+  useDispatchCommand,
   type CommandDef,
 } from "@/lib/command-scope";
 import { useFocusedScope, useEntityFocus } from "@/lib/entity-focus-context";
@@ -19,32 +15,26 @@ import {
   type KeymapMode,
 } from "@/lib/keybindings";
 import { CommandPalette } from "@/components/command-palette";
-import { dispatchContextMenuCommand } from "@/lib/context-menu";
 
 /**
  * Internal component that attaches a global keydown listener.
  *
- * Must be rendered inside a CommandScopeProvider so that useExecuteCommand
+ * Must be rendered inside a CommandScopeProvider so that useDispatchCommand
  * resolves commands from the scope AppShell just created.
  *
  * When a FocusScope is focused, commands resolve from the focused scope
  * first, falling back to the root scope (current context) if not found.
  */
 function KeybindingHandler({ mode }: { mode: KeymapMode }) {
-  const rootExecuteCommand = useExecuteCommand();
+  const dispatch = useDispatchCommand();
   const focusedScope = useFocusedScope();
-  const boardPath = useActiveBoardPath();
 
-  // Store focused scope in a ref so the key handler callback always sees
-  // the latest value without re-creating the handler on every focus change.
+  const dispatchRef = useRef(dispatch);
+  dispatchRef.current = dispatch;
   const focusedScopeRef = useRef(focusedScope);
   focusedScopeRef.current = focusedScope;
-  const rootExecuteRef = useRef(rootExecuteCommand);
-  rootExecuteRef.current = rootExecuteCommand;
-  const boardPathRef = useRef(boardPath);
-  boardPathRef.current = boardPath;
 
-  /** Execute a command, preferring the focused scope when available. */
+  /** Execute a command via useDispatchCommand (focused scope preferred). */
   const executeCommand = useCallback(async (id: string): Promise<boolean> => {
     // When a CM6 editor has focus, let it handle its own undo/redo
     if (
@@ -54,17 +44,8 @@ function KeybindingHandler({ mode }: { mode: KeymapMode }) {
       return false;
     }
 
-    const scope = focusedScopeRef.current;
-    if (scope) {
-      const cmd = resolveCommand(scope, id);
-      if (cmd) {
-        const chain = scopeChainFromScope(scope);
-        await dispatchCommand(cmd, boardPathRef.current, chain);
-        return true;
-      }
-    }
-    // Fall back to root scope (useExecuteCommand already passes scope chain)
-    return rootExecuteRef.current(id);
+    await dispatchRef.current(id);
+    return true;
   }, []);
 
   useEffect(() => {
@@ -92,21 +73,6 @@ function KeybindingHandler({ mode }: { mode: KeymapMode }) {
       unlisten.then((fn) => fn());
     };
   }, [executeCommand]);
-
-  // Listen for context-menu-command events from the native context menu
-  // and dispatch from the pending handlers map (populated by useContextMenu).
-  useEffect(() => {
-    const unlisten = listen<string>("context-menu-command", async (event) => {
-      const commandId = event.payload;
-      const dispatched = await dispatchContextMenuCommand(commandId);
-      if (!dispatched) {
-        console.warn(`Context menu command not found: ${commandId}`);
-      }
-    });
-    return () => {
-      unlisten.then((fn) => fn());
-    };
-  }, []);
 
   return null;
 }
@@ -144,6 +110,7 @@ export function AppShell({ children, onSwitchBoard }: AppShellProps) {
       : "cua";
   const { setMode } = useAppMode();
   const { broadcastNavCommand } = useEntityFocus();
+  const dismiss = useDispatchCommand("app.dismiss");
   const broadcastRef = useRef(broadcastNavCommand);
   broadcastRef.current = broadcastNavCommand;
 
@@ -304,9 +271,8 @@ export function AppShell({ children, onSwitchBoard }: AppShellProps) {
 
   /** Close the command palette (dispatch to backend) and return to normal mode. */
   const closePalette = useCallback(() => {
-    // Dispatch app.dismiss to backend to close palette
-    dispatchCommand({ id: "app.dismiss", name: "Dismiss" }, undefined, []);
-  }, []);
+    dismiss();
+  }, [dismiss]);
 
   return (
     <CommandScopeProvider commands={globalCommands}>

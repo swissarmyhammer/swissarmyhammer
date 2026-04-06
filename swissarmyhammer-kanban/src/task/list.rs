@@ -3,7 +3,7 @@
 use crate::context::KanbanContext;
 use crate::error::KanbanError;
 use crate::task_helpers::{enrich_all_task_entities, task_entity_to_rich_json};
-use crate::types::{ActorId, ColumnId, SwimlaneId};
+use crate::types::{ActorId, ColumnId};
 use crate::virtual_tags::default_virtual_tag_registry;
 use serde::Deserialize;
 use serde_json::Value;
@@ -19,8 +19,6 @@ use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResul
 pub struct ListTasks {
     /// Filter by column
     pub column: Option<ColumnId>,
-    /// Filter by swimlane
-    pub swimlane: Option<SwimlaneId>,
     /// Filter by tag name (slug)
     pub tag: Option<String>,
     /// Filter by assignee
@@ -34,7 +32,6 @@ impl ListTasks {
     pub fn new() -> Self {
         Self {
             column: None,
-            swimlane: None,
             tag: None,
             assignee: None,
             ready: None,
@@ -44,12 +41,6 @@ impl ListTasks {
     /// Filter by column
     pub fn with_column(mut self, column: impl Into<ColumnId>) -> Self {
         self.column = Some(column.into());
-        self
-    }
-
-    /// Filter by swimlane
-    pub fn with_swimlane(mut self, swimlane: impl Into<SwimlaneId>) -> Self {
-        self.swimlane = Some(swimlane.into());
         self
     }
 
@@ -103,13 +94,6 @@ impl Execute<KanbanContext, KanbanError> for ListTasks {
                         }
                     } else if t.get_str("position_column") == Some(terminal_column) {
                         return false;
-                    }
-
-                    // Filter by swimlane
-                    if let Some(ref swimlane) = self.swimlane {
-                        if t.get_str("position_swimlane") != Some(swimlane.as_str()) {
-                            return false;
-                        }
                     }
 
                     // Filter by tag (uses filter_tags which includes virtual tags)
@@ -407,6 +391,97 @@ mod tests {
         assert!(titles.contains(&"Task 1"));
         assert!(titles.contains(&"Task 3"));
         assert!(!titles.contains(&"Task 2 (to archive)"));
+    }
+
+    #[tokio::test]
+    async fn test_list_tasks_by_tag() {
+        let (_temp, ctx) = setup().await;
+
+        // Add tasks — one with a tag in description, one without
+        AddTask::new("Tagged task")
+            .with_description("This task has a #bug tag")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        AddTask::new("Untagged task")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        // Filter by tag
+        let result = ListTasks::new()
+            .with_tag("bug")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        assert_eq!(result["count"], 1);
+        assert_eq!(result["tasks"][0]["title"], "Tagged task");
+    }
+
+    #[tokio::test]
+    async fn test_list_tasks_by_assignee() {
+        let (_temp, ctx) = setup().await;
+
+        use crate::actor::AddActor;
+        use crate::task::AssignTask;
+
+        AddActor::new("alice", "Alice")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        AddActor::new("bob", "Bob")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        let r1 = AddTask::new("Alice's task")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let id1 = r1["id"].as_str().unwrap();
+
+        let r2 = AddTask::new("Bob's task")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let id2 = r2["id"].as_str().unwrap();
+
+        AddTask::new("Unassigned task")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        AssignTask::new(id1, "alice")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        AssignTask::new(id2, "bob")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        // Filter by alice
+        let result = ListTasks::new()
+            .with_assignee("alice")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        assert_eq!(result["count"], 1);
+        assert_eq!(result["tasks"][0]["title"], "Alice's task");
     }
 
     #[tokio::test]

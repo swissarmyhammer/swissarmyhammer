@@ -7,11 +7,16 @@ use serde_json::{json, Map, Value};
 use std::sync::LazyLock;
 use swissarmyhammer_operations::{generate_mcp_schema, Operation, SchemaConfig};
 
-use crate::activity::ListActivity;
 use crate::actor::{AddActor, DeleteActor, GetActor, ListActors, UpdateActor};
+use crate::attachment::{
+    AddAttachment, DeleteAttachment, GetAttachment, ListAttachments, UpdateAttachment,
+};
 use crate::board::{GetBoard, InitBoard, UpdateBoard};
 use crate::column::{AddColumn, DeleteColumn, GetColumn, ListColumns, UpdateColumn};
-use crate::swimlane::{AddSwimlane, DeleteSwimlane, GetSwimlane, ListSwimlanes, UpdateSwimlane};
+use crate::perspective::{
+    AddPerspective, DeletePerspective, GetPerspective, ListPerspectives, UpdatePerspective,
+};
+use crate::project::{AddProject, DeleteProject, GetProject, ListProjects, UpdateProject};
 use crate::tag::{AddTag, DeleteTag, GetTag, ListTags, UpdateTag};
 use crate::task::{
     AddTask, ArchiveTask, AssignTask, CompleteTask, DeleteTask, GetTask, ListArchived, ListTasks,
@@ -31,12 +36,6 @@ static KANBAN_OPERATIONS: LazyLock<Vec<&'static dyn Operation>> = LazyLock::new(
         Box::leak(Box::new(UpdateColumn::new(""))) as &dyn Operation,
         Box::leak(Box::new(DeleteColumn::new(""))) as &dyn Operation,
         Box::leak(Box::new(ListColumns)) as &dyn Operation,
-        // Swimlane
-        Box::leak(Box::new(AddSwimlane::new("", ""))) as &dyn Operation,
-        Box::leak(Box::new(GetSwimlane::new(""))) as &dyn Operation,
-        Box::leak(Box::new(UpdateSwimlane::new(""))) as &dyn Operation,
-        Box::leak(Box::new(DeleteSwimlane::new(""))) as &dyn Operation,
-        Box::leak(Box::new(ListSwimlanes)) as &dyn Operation,
         // Actor
         Box::leak(Box::new(AddActor::new("", ""))) as &dyn Operation,
         Box::leak(Box::new(GetActor::new(""))) as &dyn Operation,
@@ -65,8 +64,24 @@ static KANBAN_OPERATIONS: LazyLock<Vec<&'static dyn Operation>> = LazyLock::new(
         Box::leak(Box::new(UpdateTag::new(""))) as &dyn Operation,
         Box::leak(Box::new(DeleteTag::new(""))) as &dyn Operation,
         Box::leak(Box::new(ListTags::default())) as &dyn Operation,
-        // Activity
-        Box::leak(Box::new(ListActivity::default())) as &dyn Operation,
+        // Attachment
+        Box::leak(Box::new(AddAttachment::new("", "", ""))) as &dyn Operation,
+        Box::leak(Box::new(GetAttachment::new("", ""))) as &dyn Operation,
+        Box::leak(Box::new(UpdateAttachment::new("", ""))) as &dyn Operation,
+        Box::leak(Box::new(DeleteAttachment::new("", ""))) as &dyn Operation,
+        Box::leak(Box::new(ListAttachments::new(""))) as &dyn Operation,
+        // Project
+        Box::leak(Box::new(AddProject::new("", ""))) as &dyn Operation,
+        Box::leak(Box::new(GetProject::new(""))) as &dyn Operation,
+        Box::leak(Box::new(UpdateProject::new(""))) as &dyn Operation,
+        Box::leak(Box::new(DeleteProject::new(""))) as &dyn Operation,
+        Box::leak(Box::new(ListProjects)) as &dyn Operation,
+        // Perspective
+        Box::leak(Box::new(AddPerspective::new("", ""))) as &dyn Operation,
+        Box::leak(Box::new(GetPerspective::new(""))) as &dyn Operation,
+        Box::leak(Box::new(UpdatePerspective::new(""))) as &dyn Operation,
+        Box::leak(Box::new(DeletePerspective::new(""))) as &dyn Operation,
+        Box::leak(Box::new(ListPerspectives::new())) as &dyn Operation,
     ]
 });
 
@@ -132,6 +147,18 @@ fn generate_kanban_examples() -> Vec<Value> {
             "description": "List my assigned tasks",
             "value": {"op": "list tasks", "assignee": "alice", "exclude_done": true}
         }),
+        json!({
+            "description": "Add attachment to a task",
+            "value": {"op": "add attachment", "task_id": "01ABC...", "name": "screenshot.png", "path": "/path/to/screenshot.png"}
+        }),
+        json!({
+            "description": "Add a perspective",
+            "value": {"op": "add perspective", "name": "Active Sprint", "view": "board"}
+        }),
+        json!({
+            "description": "List all perspectives",
+            "value": {"op": "list perspectives"}
+        }),
     ]
 }
 
@@ -157,7 +184,6 @@ fn get_kanban_verb_aliases() -> Map<String, Value> {
 mod tests {
     use super::*;
     use crate::{
-        activity::ListActivity,
         actor::{AddActor, ListActors},
         board::InitBoard,
         task::{AddTask, AssignTask, ListTasks},
@@ -172,7 +198,6 @@ mod tests {
             Box::leak(Box::new(ListTasks::new())) as &dyn Operation,
             Box::leak(Box::new(AddActor::new("", ""))) as &dyn Operation,
             Box::leak(Box::new(ListActors)) as &dyn Operation,
-            Box::leak(Box::new(ListActivity::default())) as &dyn Operation,
         ]
     }
 
@@ -249,5 +274,136 @@ mod tests {
         assert!(!schema.as_object().unwrap().contains_key("oneOf"));
         assert!(!schema.as_object().unwrap().contains_key("allOf"));
         assert!(!schema.as_object().unwrap().contains_key("anyOf"));
+    }
+
+    #[test]
+    fn test_schema_includes_perspective_ops() {
+        let ops = kanban_operations();
+        let schema = generate_kanban_mcp_schema(ops);
+
+        let op_enum = schema["properties"]["op"]["enum"]
+            .as_array()
+            .expect("op enum should be an array");
+        let op_strings: Vec<&str> = op_enum.iter().filter_map(|v| v.as_str()).collect();
+
+        let expected = [
+            "add perspective",
+            "get perspective",
+            "update perspective",
+            "delete perspective",
+            "list perspectives",
+        ];
+        for expected_op in &expected {
+            assert!(
+                op_strings.contains(expected_op),
+                "op enum should contain {:?}, got: {:?}",
+                expected_op,
+                op_strings
+            );
+        }
+    }
+
+    #[test]
+    fn test_schema_has_perspective_examples() {
+        let ops = kanban_operations();
+        let schema = generate_kanban_mcp_schema(ops);
+
+        let examples = schema["examples"]
+            .as_array()
+            .expect("examples should be an array");
+
+        let has_perspective_example = examples.iter().any(|ex| {
+            let desc = ex["description"].as_str().unwrap_or("");
+            let op_val = ex["value"]["op"].as_str().unwrap_or("");
+            desc.to_lowercase().contains("perspective") || op_val.contains("perspective")
+        });
+
+        assert!(
+            has_perspective_example,
+            "schema examples should include at least one perspective example"
+        );
+    }
+
+    #[test]
+    fn test_kanban_operations_returns_full_list() {
+        let ops = kanban_operations();
+
+        assert!(
+            !ops.is_empty(),
+            "kanban_operations() should return a non-empty list"
+        );
+
+        let op_names: Vec<String> = ops.iter().map(|op| op.op_string()).collect();
+        let op_names: Vec<&str> = op_names.iter().map(|s| s.as_str()).collect();
+
+        assert!(op_names.contains(&"init board"), "Missing 'init board'");
+        assert!(op_names.contains(&"get board"), "Missing 'get board'");
+        assert!(op_names.contains(&"update board"), "Missing 'update board'");
+        assert!(op_names.contains(&"add column"), "Missing 'add column'");
+        assert!(op_names.contains(&"list columns"), "Missing 'list columns'");
+        assert!(op_names.contains(&"add actor"), "Missing 'add actor'");
+        assert!(op_names.contains(&"list actors"), "Missing 'list actors'");
+        assert!(op_names.contains(&"add task"), "Missing 'add task'");
+        assert!(
+            op_names.contains(&"complete task"),
+            "Missing 'complete task'"
+        );
+        assert!(op_names.contains(&"move task"), "Missing 'move task'");
+        assert!(op_names.contains(&"next task"), "Missing 'next task'");
+        assert!(op_names.contains(&"list tasks"), "Missing 'list tasks'");
+        assert!(op_names.contains(&"add tag"), "Missing 'add tag'");
+        assert!(op_names.contains(&"list tags"), "Missing 'list tags'");
+        assert!(op_names.contains(&"add project"), "Missing 'add project'");
+        assert!(
+            op_names.contains(&"list projects"),
+            "Missing 'list projects'"
+        );
+    }
+
+    #[test]
+    fn test_kanban_operations_generates_valid_schema() {
+        let ops = kanban_operations();
+        let schema = generate_kanban_mcp_schema(ops);
+
+        assert_eq!(schema["type"], "object");
+        assert_eq!(schema["additionalProperties"], true);
+        assert!(schema["description"].as_str().unwrap().contains("Kanban"));
+
+        let op_enum = schema["properties"]["op"]["enum"].as_array().unwrap();
+        assert!(!op_enum.is_empty(), "op enum should not be empty");
+
+        let enum_strs: Vec<&str> = op_enum.iter().filter_map(|v| v.as_str()).collect();
+        assert!(enum_strs.contains(&"init board"));
+        assert!(enum_strs.contains(&"add task"));
+        assert!(enum_strs.contains(&"complete task"));
+
+        for op in ops {
+            let op_name = op.op_string();
+            assert!(
+                enum_strs.contains(&op_name.as_str()),
+                "Operation '{}' missing from schema enum",
+                op_name
+            );
+        }
+
+        let op_schemas = schema["x-operation-schemas"].as_array().unwrap();
+        assert_eq!(
+            op_schemas.len(),
+            ops.len(),
+            "x-operation-schemas count should match number of operations"
+        );
+    }
+
+    #[test]
+    fn test_kanban_operations_is_static() {
+        let ops1 = kanban_operations();
+        let ops2 = kanban_operations();
+
+        assert_eq!(
+            ops1.as_ptr(),
+            ops2.as_ptr(),
+            "kanban_operations() should return the same static reference"
+        );
+        assert_eq!(ops1.len(), ops2.len());
     }
 }

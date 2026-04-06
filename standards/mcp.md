@@ -286,7 +286,7 @@ Ok(BaseToolImpl::create_error_response("Operation failed", Some(details)))
 
 The `ExecutionResult` enum exists for tools that need audit logging of mutations. The kanban tool uses this extensively. Shell and code_context do NOT use it — they return `CallToolResult` directly.
 
-**Use `ExecutionResult` when**: your tool has a persistent store and you want an activity log (like kanban's `list activity`).
+**Use `ExecutionResult` when**: your tool has a persistent store and you want per-entity audit logs (like kanban's per-task JSONL logs).
 
 **Skip it when**: your tool is stateless, session-scoped, or doesn't need audit trails.
 

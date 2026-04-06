@@ -203,6 +203,68 @@ mod tests {
     }
 
     #[test]
+    fn test_hook_type_display_all_variants() {
+        // Cover the Display impl for every HookType variant
+        let variants = vec![
+            (HookType::SessionStart, "SessionStart"),
+            (HookType::UserPromptSubmit, "UserPromptSubmit"),
+            (HookType::PreToolUse, "PreToolUse"),
+            (HookType::PermissionRequest, "PermissionRequest"),
+            (HookType::PostToolUse, "PostToolUse"),
+            (HookType::PostToolUseFailure, "PostToolUseFailure"),
+            (HookType::SubagentStart, "SubagentStart"),
+            (HookType::SubagentStop, "SubagentStop"),
+            (HookType::Stop, "Stop"),
+            (HookType::PreCompact, "PreCompact"),
+            (HookType::Setup, "Setup"),
+            (HookType::SessionEnd, "SessionEnd"),
+            (HookType::Notification, "Notification"),
+            (HookType::Elicitation, "Elicitation"),
+            (HookType::ElicitationResult, "ElicitationResult"),
+            (HookType::InstructionsLoaded, "InstructionsLoaded"),
+            (HookType::ConfigChange, "ConfigChange"),
+            (HookType::WorktreeCreate, "WorktreeCreate"),
+            (HookType::WorktreeRemove, "WorktreeRemove"),
+            (HookType::PostCompact, "PostCompact"),
+            (HookType::TeammateIdle, "TeammateIdle"),
+            (HookType::TaskCompleted, "TaskCompleted"),
+        ];
+        for (variant, expected) in &variants {
+            assert_eq!(variant.to_string(), *expected, "Display for {:?}", variant);
+        }
+    }
+
+    #[test]
+    fn test_hook_type_equality_and_hash() {
+        use std::collections::HashSet;
+        let mut set = HashSet::new();
+        set.insert(HookType::PreToolUse);
+        set.insert(HookType::PostToolUse);
+        assert!(set.contains(&HookType::PreToolUse));
+        assert!(!set.contains(&HookType::Stop));
+    }
+
+    #[test]
+    fn test_hook_type_copy_clone() {
+        let a = HookType::Stop;
+        let b = a; // Copy
+        let c = a; // Clone
+        assert_eq!(a, b);
+        assert_eq!(a, c);
+    }
+
+    #[test]
+    fn test_common_input_default_permission_mode() {
+        // When permission_mode is absent, it defaults to "bypassPermissions"
+        let json = r#"{
+            "cwd": "/c",
+            "hook_event_name": "Stop"
+        }"#;
+        let input: CommonInput = serde_json::from_str(json).unwrap();
+        assert_eq!(input.permission_mode, "bypassPermissions");
+    }
+
+    #[test]
     fn test_common_input_without_permission_mode() {
         // Claude Code doesn't always send permission_mode for SessionStart
         let json = r#"{

@@ -466,6 +466,97 @@ mod tests {
     }
 
     #[test]
+    fn test_generate_mcp_schema_with_extensions() {
+        let ops: Vec<&dyn Operation> = vec![&MockAddTask];
+        let config = SchemaConfig::new("Test")
+            .with_extension("x-custom-field".to_string(), json!("custom_value"))
+            .with_extension("x-another".to_string(), json!({"nested": true}));
+        let schema = generate_mcp_schema(&ops, config);
+
+        assert_eq!(schema["x-custom-field"], "custom_value");
+        assert_eq!(schema["x-another"]["nested"], true);
+    }
+
+    // Mock operation with an array parameter and empty description
+    struct MockWithArrayParam;
+
+    static MOCK_ARRAY_PARAMS: &[ParamMeta] = &[
+        ParamMeta::new("tags")
+            .description("Tag list")
+            .param_type(ParamType::Array)
+            .required(),
+        ParamMeta::new("silent")
+            .description("")
+            .param_type(ParamType::Boolean),
+    ];
+
+    impl Operation for MockWithArrayParam {
+        fn verb(&self) -> &'static str {
+            "tag"
+        }
+        fn noun(&self) -> &'static str {
+            "item"
+        }
+        fn description(&self) -> &'static str {
+            "Tag an item"
+        }
+        fn parameters(&self) -> &'static [ParamMeta] {
+            MOCK_ARRAY_PARAMS
+        }
+    }
+
+    #[test]
+    fn test_collect_all_parameters_with_array_type() {
+        let ops: Vec<&dyn Operation> = vec![&MockWithArrayParam];
+        let properties = collect_all_parameters(&ops);
+
+        // Array param should have items schema
+        let tags_prop = &properties["tags"];
+        assert_eq!(tags_prop["type"], "array");
+        assert_eq!(tags_prop["items"]["type"], "string");
+        assert_eq!(tags_prop["description"], "Tag list");
+    }
+
+    #[test]
+    fn test_collect_all_parameters_empty_description_omitted() {
+        let ops: Vec<&dyn Operation> = vec![&MockWithArrayParam];
+        let properties = collect_all_parameters(&ops);
+
+        // Empty description should not be included
+        let silent_prop = properties["silent"].as_object().unwrap();
+        assert!(!silent_prop.contains_key("description"));
+        assert_eq!(silent_prop["type"], "boolean");
+    }
+
+    #[test]
+    fn test_operation_to_schema_with_array_param() {
+        let op = MockWithArrayParam;
+        let schema = operation_to_schema(&op);
+
+        // Array param should have items in the per-operation schema too
+        assert_eq!(schema["properties"]["tags"]["type"], "array");
+        assert_eq!(schema["properties"]["tags"]["items"]["type"], "string");
+
+        // Required should include tags
+        let required = schema["required"].as_array().unwrap();
+        assert!(required.contains(&json!("tags")));
+    }
+
+    #[test]
+    fn test_operation_to_schema_empty_description_omitted() {
+        let op = MockWithArrayParam;
+        let schema = operation_to_schema(&op);
+
+        // Silent param has empty description — should not appear in schema
+        let silent_prop = schema["properties"]["silent"].as_object().unwrap();
+        assert!(!silent_prop.contains_key("description"));
+
+        // Silent is not required
+        let required = schema["required"].as_array().unwrap();
+        assert!(!required.contains(&json!("silent")));
+    }
+
+    #[test]
     fn test_no_top_level_oneof() {
         // Critical: Claude API doesn't support oneOf/allOf/anyOf at top level
         let ops: Vec<&dyn Operation> = vec![&MockAddTask, &MockGetTask];

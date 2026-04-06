@@ -62,7 +62,6 @@ export async function refreshBoards(
     entitiesByType = {
       board: [entityFromBag(bd.board)],
       column: bd.columns.map(entityFromBag),
-      swimlane: bd.swimlanes.map(entityFromBag),
       tag: bd.tags.map(entityFromBag),
       task: taskData.entities.map(entityFromBag),
       actor: actorData.entities.map(entityFromBag),

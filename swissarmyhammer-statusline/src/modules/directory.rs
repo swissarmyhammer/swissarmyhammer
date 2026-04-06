@@ -43,3 +43,169 @@ pub fn eval(ctx: &ModuleContext) -> ModuleOutput {
     let text = interpolate(&ctx.config.directory.format, &vars);
     ModuleOutput::new(text, Style::parse(&ctx.config.directory.style))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::StatuslineConfig;
+    use crate::input::{StatuslineInput, WorkspaceInfo};
+
+    #[test]
+    fn test_directory_from_workspace() {
+        let input = StatuslineInput {
+            workspace: Some(WorkspaceInfo {
+                current_dir: Some("/home/user/project".into()),
+            }),
+            ..Default::default()
+        };
+        let config = StatuslineConfig::default();
+        let ctx = ModuleContext {
+            input: &input,
+            config: &config,
+        };
+        let out = eval(&ctx);
+        assert!(!out.is_empty());
+        assert!(out.text.contains("project"));
+    }
+
+    #[test]
+    fn test_directory_from_cwd_fallback() {
+        let input = StatuslineInput {
+            cwd: Some("/tmp/mydir".into()),
+            ..Default::default()
+        };
+        let config = StatuslineConfig::default();
+        let ctx = ModuleContext {
+            input: &input,
+            config: &config,
+        };
+        let out = eval(&ctx);
+        assert!(!out.is_empty());
+        assert!(out.text.contains("mydir"));
+    }
+
+    #[test]
+    fn test_directory_none() {
+        let input = StatuslineInput::default();
+        let config = StatuslineConfig::default();
+        let ctx = ModuleContext {
+            input: &input,
+            config: &config,
+        };
+        let out = eval(&ctx);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn test_directory_truncation() {
+        let input = StatuslineInput {
+            cwd: Some("/home/user/deep/nested/project".into()),
+            ..Default::default()
+        };
+        let mut config = StatuslineConfig::default();
+        config.directory.truncation_length = 2;
+        let ctx = ModuleContext {
+            input: &input,
+            config: &config,
+        };
+        let out = eval(&ctx);
+        assert!(out.text.contains("nested/project"));
+    }
+
+    #[test]
+    fn test_directory_no_truncation() {
+        let input = StatuslineInput {
+            cwd: Some("/home/user/project".into()),
+            ..Default::default()
+        };
+        let mut config = StatuslineConfig::default();
+        config.directory.truncation_length = 0;
+        let ctx = ModuleContext {
+            input: &input,
+            config: &config,
+        };
+        let out = eval(&ctx);
+        assert!(out.text.contains("project"));
+    }
+
+    #[test]
+    fn test_directory_root_path() {
+        let input = StatuslineInput {
+            cwd: Some("/".into()),
+            ..Default::default()
+        };
+        let config = StatuslineConfig::default();
+        let ctx = ModuleContext {
+            input: &input,
+            config: &config,
+        };
+        let out = eval(&ctx);
+        assert!(!out.is_empty());
+    }
+
+    #[test]
+    fn test_directory_render_output() {
+        let input = StatuslineInput {
+            cwd: Some("/home/user/project".into()),
+            ..Default::default()
+        };
+        let config = StatuslineConfig::default();
+        let ctx = ModuleContext {
+            input: &input,
+            config: &config,
+        };
+        let out = eval(&ctx);
+        let rendered = out.render();
+        assert!(rendered.contains("project"));
+        assert!(rendered.contains("\x1b["));
+    }
+
+    #[test]
+    fn test_directory_workspace_takes_precedence_over_cwd() {
+        let input = StatuslineInput {
+            workspace: Some(WorkspaceInfo {
+                current_dir: Some("/ws/path".into()),
+            }),
+            cwd: Some("/cwd/path".into()),
+            ..Default::default()
+        };
+        let config = StatuslineConfig::default();
+        let ctx = ModuleContext {
+            input: &input,
+            config: &config,
+        };
+        let out = eval(&ctx);
+        assert!(out.text.contains("path"));
+    }
+
+    #[test]
+    fn test_directory_truncation_length_3() {
+        let input = StatuslineInput {
+            cwd: Some("/a/b/c/d/e".into()),
+            ..Default::default()
+        };
+        let mut config = StatuslineConfig::default();
+        config.directory.truncation_length = 3;
+        let ctx = ModuleContext {
+            input: &input,
+            config: &config,
+        };
+        let out = eval(&ctx);
+        assert!(out.text.contains("c/d/e"));
+    }
+
+    #[test]
+    fn test_directory_single_component() {
+        let input = StatuslineInput {
+            cwd: Some("/project".into()),
+            ..Default::default()
+        };
+        let config = StatuslineConfig::default();
+        let ctx = ModuleContext {
+            input: &input,
+            config: &config,
+        };
+        let out = eval(&ctx);
+        assert!(out.text.contains("project"));
+    }
+}

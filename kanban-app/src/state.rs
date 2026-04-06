@@ -54,6 +54,10 @@ impl ClipboardProvider for TauriClipboardProvider {
                 // revisit if tauri-plugin-clipboard-manager ever adds structured errors.
                 let msg = e.to_string();
                 if msg.contains("empty") || msg.contains("format") {
+                    tracing::warn!(
+                        error = %e,
+                        "suppressing clipboard error matched by fragile string check"
+                    );
                     Ok(None)
                 } else {
                     Err(format!("clipboard read failed: {e}"))
@@ -66,6 +70,10 @@ impl ClipboardProvider for TauriClipboardProvider {
 /// A handle to a single open kanban board.
 pub(crate) struct BoardHandle {
     pub(crate) ctx: Arc<KanbanContext>,
+    /// Store-level undo/redo context shared across all entity type stores.
+    pub(crate) store_context: Arc<swissarmyhammer_store::StoreContext>,
+    /// Root paths of all registered stores, used to drive the file watcher.
+    pub(crate) store_roots: Vec<std::path::PathBuf>,
     /// Entity cache for detecting external file changes with field-level diffing.
     pub(crate) entity_cache: EntityCache,
     /// In-memory search index over all entities.
@@ -83,7 +91,62 @@ impl BoardHandle {
         let ctx = KanbanContext::open(&kanban_path)
             .await
             .map_err(|e| format!("Failed to open board context: {e}"))?;
-        let entity_cache = watcher::new_entity_cache(&kanban_path);
+
+        // Create StoreContext for undo/redo and register entity type stores.
+        let store_context = Arc::new(swissarmyhammer_store::StoreContext::new(
+            kanban_path.to_path_buf(),
+        ));
+        if let Ok(ectx) = ctx.entity_context().await {
+            // Wire the StoreContext into EntityContext so write/delete
+            // automatically push onto the shared undo stack.
+            ectx.set_store_context(Arc::clone(&store_context));
+
+            let fields_ctx = ectx.fields();
+            for entity_def in fields_ctx.all_entities() {
+                let entity_type = entity_def.name.as_str();
+                let field_defs = fields_ctx.fields_for_entity(entity_type);
+                let owned_defs: Vec<_> = field_defs.into_iter().cloned().collect();
+                let entity_type_store = swissarmyhammer_entity::EntityTypeStore::new(
+                    ectx.entity_dir(entity_type),
+                    entity_type,
+                    std::sync::Arc::new(entity_def.clone()),
+                    std::sync::Arc::new(owned_defs),
+                );
+                let handle = std::sync::Arc::new(swissarmyhammer_store::StoreHandle::new(
+                    std::sync::Arc::new(entity_type_store),
+                ));
+                // Register with EntityContext so write/delete delegates to the store
+                ectx.register_store(entity_type, handle.clone()).await;
+                // Register with StoreContext so undo/redo dispatches correctly
+                store_context.register(handle).await;
+            }
+        }
+
+        // Register perspective store for undo/redo changelog support and
+        // wire the handle into PerspectiveContext so writes delegate to it.
+        {
+            let perspectives_dir = kanban_path.join("perspectives");
+            let perspective_store =
+                swissarmyhammer_perspectives::PerspectiveStore::new(&perspectives_dir);
+            let handle = std::sync::Arc::new(swissarmyhammer_store::StoreHandle::new(
+                std::sync::Arc::new(perspective_store),
+            ));
+            store_context.register(handle.clone()).await;
+
+            // Wire into PerspectiveContext so write/delete produce change
+            // events and push onto the shared undo stack.
+            if let Ok(pctx) = ctx.perspective_context().await {
+                let mut pctx = pctx.write().await;
+                pctx.set_store_handle(handle);
+                pctx.set_store_context(Arc::clone(&store_context));
+            }
+        }
+
+        // Collect store roots now that all stores are registered.
+        // This drives the file watcher — every registered store's directory
+        // will be watched automatically (no hardcoded list needed).
+        let store_roots = store_context.watched_roots().await;
+        let entity_cache = watcher::new_entity_cache(&kanban_path, &store_roots);
 
         // Migrate legacy ordinals to FractionalIndex format.
         // Reads all tasks, groups by column, sorts by existing ordinal string,
@@ -134,7 +197,7 @@ impl BoardHandle {
         // Load all entities into search index
         let mut all_entities: Vec<Entity> = Vec::new();
         if let Ok(ectx) = ctx.entity_context().await {
-            for entity_type in &["task", "tag", "column", "actor", "swimlane", "board"] {
+            for entity_type in &["task", "tag", "column", "actor", "board"] {
                 if let Ok(entities) = ectx.list(entity_type).await {
                     all_entities.extend(entities);
                 }
@@ -144,6 +207,8 @@ impl BoardHandle {
 
         Ok(Self {
             ctx: Arc::new(ctx),
+            store_context,
+            store_roots,
             entity_cache,
             search_index,
             _watcher: None,
@@ -197,26 +262,37 @@ impl BoardHandle {
         let search_index = self.search_index.clone();
         let board_path_str = kanban_root.display().to_string();
 
-        match watcher::start_watching(kanban_root.clone(), cache, move |evt| {
-            use tauri::Emitter;
-            // Update search index for external file changes.
-            // Use try_write to avoid blocking the notify thread if the async
-            // dispatch_command path holds the write lock concurrently.
-            if let Ok(mut idx) = search_index.try_write() {
-                watcher::sync_search_index(&mut idx, &evt);
-            }
-            let event_name = match &evt {
-                watcher::WatchEvent::EntityCreated { .. } => "entity-created",
-                watcher::WatchEvent::EntityRemoved { .. } => "entity-removed",
-                watcher::WatchEvent::EntityFieldChanged { .. } => "entity-field-changed",
-                watcher::WatchEvent::AttachmentChanged { .. } => "attachment-changed",
-            };
-            let wrapped = watcher::BoardWatchEvent {
-                event: evt,
-                board_path: board_path_str.clone(),
-            };
-            let _ = app_handle.emit(event_name, &wrapped);
-        }) {
+        match watcher::start_watching(
+            kanban_root.clone(),
+            self.store_roots.clone(),
+            cache,
+            move |evt| {
+                use tauri::Emitter;
+                // Update search index for external file changes.
+                // Use try_write to avoid blocking the notify thread if the async
+                // dispatch_command path holds the write lock concurrently.
+                if let Ok(mut idx) = search_index.try_write() {
+                    watcher::sync_search_index(&mut idx, &evt);
+                }
+                let event_name = match &evt {
+                    watcher::WatchEvent::EntityCreated { .. } => "entity-created",
+                    watcher::WatchEvent::EntityRemoved { .. } => "entity-removed",
+                    watcher::WatchEvent::EntityFieldChanged { .. } => "entity-field-changed",
+                    watcher::WatchEvent::AttachmentChanged { .. } => "attachment-changed",
+                };
+                tracing::info!(
+                    event_name,
+                    board_path = %board_path_str,
+                    event = ?evt,
+                    "watcher callback: emitting Tauri event to frontend"
+                );
+                let wrapped = watcher::BoardWatchEvent {
+                    event: evt,
+                    board_path: board_path_str.clone(),
+                };
+                let _ = app_handle.emit(event_name, &wrapped);
+            },
+        ) {
             Ok(w) => {
                 tracing::info!(
                     path = %kanban_root.display(),
@@ -392,16 +468,15 @@ impl AppState {
         // Load user command overrides from .kanban/commands/
         self.reload_command_overrides(&canonical).await;
 
-        // Sync UIState undo/redo flags from the newly opened board's undo stack
+        // Sync UIState undo/redo flags from the newly opened board's StoreContext
         // so that menu items reflect correct enabled state from the start.
         {
             let boards = self.boards.read().await;
             if let Some(handle) = boards.get(&canonical) {
-                if let Ok(ectx) = handle.ctx.entity_context().await {
-                    let stack = ectx.undo_stack().await;
-                    self.ui_state
-                        .set_undo_redo_state(stack.can_undo(), stack.can_redo());
-                }
+                self.ui_state.set_undo_redo_state(
+                    handle.store_context.can_undo().await,
+                    handle.store_context.can_redo().await,
+                );
             }
         }
 
@@ -938,8 +1013,7 @@ mod tests {
         std::fs::create_dir_all(kanban_dir.join("tasks")).unwrap();
         std::fs::create_dir_all(kanban_dir.join("tags")).unwrap();
         std::fs::create_dir_all(kanban_dir.join("actors")).unwrap();
-        std::fs::create_dir_all(kanban_dir.join("swimlanes")).unwrap();
-        std::fs::create_dir_all(kanban_dir.join("activity")).unwrap();
+        std::fs::create_dir_all(kanban_dir.join("perspectives")).unwrap();
     }
 
     #[tokio::test]

@@ -6,10 +6,8 @@ description: General-purpose coding assistant with best practices
 You are a skilled software engineer helping with coding tasks.
 
 
-{% include "_partials/detected-projects" %}
 {% include "_partials/coding-standards" %}
 {% include "_partials/tool_use" %}
-{% include "_partials/test-driven-development" %}
 {% include "_partials/git-practices" %}
 {% include "_partials/skills" %}
 

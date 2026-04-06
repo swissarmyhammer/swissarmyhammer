@@ -10,18 +10,12 @@ import {
   useCallback,
   useContext,
   useEffect,
-  useRef,
   useState,
   type ReactNode,
 } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import {
-  useActiveBoardPath,
-  backendDispatch,
-  scopeChainFromScope,
-  CommandScopeContext,
-} from "@/lib/command-scope";
+import { useDispatchCommand } from "@/lib/command-scope";
 
 /** Payload emitted by `drag-session-active`. */
 export interface DragSession {
@@ -71,12 +65,7 @@ export function useDragSession() {
 }
 
 export function DragSessionProvider({ children }: { children: ReactNode }) {
-  const boardPath = useActiveBoardPath();
-  const scope = useContext(CommandScopeContext);
-  const scopeChainRef = useRef(scopeChainFromScope(scope));
-  scopeChainRef.current = scopeChainFromScope(scope);
-  const boardPathRef = useRef(boardPath);
-  boardPathRef.current = boardPath;
+  const dispatch = useDispatchCommand();
 
   const [session, setSession] = useState<DragSession | null>(null);
   const [isSource, setIsSource] = useState(false);
@@ -116,35 +105,32 @@ export function DragSessionProvider({ children }: { children: ReactNode }) {
       taskFields: Record<string, unknown>,
       copyMode: boolean,
     ) => {
-      const bp = boardPathRef.current;
-      if (!bp) return;
       try {
-        await backendDispatch({
-          cmd: "drag.start",
+        // Board path is derived from the scope chain's store:{path} moniker
+        // by the Rust backend — no explicit boardPath arg needed.
+        await dispatch("drag.start", {
           args: {
             taskId,
             taskFields,
-            boardPath: bp,
             sourceWindowLabel: getCurrentWindow().label,
             copyMode,
           },
-          scopeChain: scopeChainRef.current,
         });
         setIsSource(true);
       } catch (e) {
         console.error("Failed to start drag session:", e);
       }
     },
-    [],
+    [dispatch],
   );
 
   const cancelSession = useCallback(async () => {
     try {
-      await backendDispatch({ cmd: "drag.cancel", scopeChain: [] }); // TODO: thread scopeChain from caller
+      await dispatch("drag.cancel");
     } catch (e) {
       console.error("Failed to cancel drag session:", e);
     }
-  }, []);
+  }, [dispatch]);
 
   const completeSession = useCallback(
     async (
@@ -156,26 +142,23 @@ export function DragSessionProvider({ children }: { children: ReactNode }) {
         copyMode?: boolean;
       },
     ) => {
-      const bp = boardPathRef.current;
-      if (!bp) return;
       try {
-        await backendDispatch({
-          cmd: "drag.complete",
+        // Target board path is derived from the scope chain's store:{path}
+        // moniker by the Rust backend — no explicit targetBoardPath arg needed.
+        await dispatch("drag.complete", {
           args: {
-            targetBoardPath: bp,
             targetColumn,
             dropIndex: options?.dropIndex ?? null,
             beforeId: options?.beforeId ?? null,
             afterId: options?.afterId ?? null,
             copyMode: options?.copyMode ?? false,
           },
-          scopeChain: scopeChainRef.current,
         });
       } catch (e) {
         console.error("Failed to complete drag session:", e);
       }
     },
-    [],
+    [dispatch],
   );
 
   return (

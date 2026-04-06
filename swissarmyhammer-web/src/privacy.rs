@@ -591,4 +591,415 @@ mod tests {
         let user_agent = manager.get_user_agent();
         assert!(user_agent.is_none());
     }
+
+    #[test]
+    fn test_instance_distributor_record_instance_use_caps_deque() {
+        let config = PrivacyConfig {
+            distribute_requests: true,
+            avoid_repeat_instances: 2,
+            ..Default::default()
+        };
+
+        let distributor = InstanceDistributor::new(&config);
+
+        // Record 3 instances with a cap of 2
+        distributor.record_instance_use("http://a.example.com");
+        distributor.record_instance_use("http://b.example.com");
+        distributor.record_instance_use("http://c.example.com");
+
+        let last_used = distributor.last_used_instances.lock().unwrap();
+        assert_eq!(
+            last_used.len(),
+            2,
+            "deque should be capped at avoid_repeat_count"
+        );
+        // Most recent entries kept (push_front, pop_back trims oldest)
+        assert_eq!(last_used[0], "http://c.example.com");
+        assert_eq!(last_used[1], "http://b.example.com");
+    }
+
+    #[test]
+    fn test_instance_distributor_record_instance_use_disabled() {
+        let config = PrivacyConfig {
+            distribute_requests: false,
+            avoid_repeat_instances: 2,
+            ..Default::default()
+        };
+
+        let distributor = InstanceDistributor::new(&config);
+        distributor.record_instance_use("http://a.example.com");
+
+        let last_used = distributor.last_used_instances.lock().unwrap();
+        assert_eq!(last_used.len(), 0, "should not record when disabled");
+    }
+
+    #[test]
+    fn test_privacy_manager_select_distributed_instance() {
+        let config = PrivacyConfig::default();
+        let manager = PrivacyManager::new(config);
+
+        let instances = vec![
+            "http://a.example.com".to_string(),
+            "http://b.example.com".to_string(),
+        ];
+
+        let selected = manager.select_distributed_instance(&instances);
+        assert!(
+            selected.is_some(),
+            "should select an instance from available list"
+        );
+        assert!(
+            instances.contains(&selected.unwrap()),
+            "selected instance should be from the available list"
+        );
+    }
+
+    #[test]
+    fn test_privacy_manager_record_instance_use() {
+        let config = PrivacyConfig {
+            avoid_repeat_instances: 2,
+            ..Default::default()
+        };
+        let manager = PrivacyManager::new(config);
+
+        // Exercise the delegation path — should not panic
+        manager.record_instance_use("http://a.example.com");
+        manager.record_instance_use("http://b.example.com");
+
+        // Verify the effect propagated through to the inner distributor
+        let last_used = manager
+            .instance_distributor
+            .last_used_instances
+            .lock()
+            .unwrap();
+        assert_eq!(last_used.len(), 2);
+    }
+
+    #[test]
+    fn test_privacy_manager_record_captcha_challenge() {
+        let config = PrivacyConfig {
+            enable_adaptive_rate_limiting: true,
+            captcha_backoff_initial_ms: 500,
+            captcha_backoff_max_ms: 5000,
+            captcha_backoff_multiplier: 2.0,
+            captcha_backoff_duration_mins: 1,
+            ..Default::default()
+        };
+        let manager = PrivacyManager::new(config);
+
+        // Exercise the delegation — should not panic and should propagate
+        manager.record_captcha_challenge();
+
+        let delay = manager.adaptive_rate_limiter.get_additional_delay();
+        assert_eq!(
+            delay.as_millis(),
+            500,
+            "captcha challenge should set initial backoff"
+        );
+    }
+
+    #[test]
+    fn test_privacy_manager_apply_privacy_headers() {
+        let config = PrivacyConfig::default();
+        let manager = PrivacyManager::new(config);
+
+        // Build a trivial request to exercise the delegation path
+        let client = reqwest::Client::new();
+        let request = client.get("http://example.com");
+        // Should return a RequestBuilder without panicking
+        let _result = manager.apply_privacy_headers(request);
+    }
+
+    // ========================================================================
+    // UserAgentRotator clone and edge cases
+    // ========================================================================
+
+    #[test]
+    fn test_user_agent_rotator_clone() {
+        let config = PrivacyConfig {
+            randomize_user_agents: false,
+            ..Default::default()
+        };
+        let rotator = UserAgentRotator::new(&config);
+
+        // Advance the index once
+        let _agent1 = rotator.get_next_user_agent();
+
+        // Clone should preserve the current_index
+        let cloned = rotator.clone();
+        let original_next = rotator.get_next_user_agent();
+        let cloned_next = cloned.get_next_user_agent();
+        assert_eq!(
+            original_next, cloned_next,
+            "Clone should have the same current_index"
+        );
+    }
+
+    #[test]
+    fn test_user_agent_rotator_empty_custom_agents_uses_defaults() {
+        let config = PrivacyConfig {
+            custom_user_agents: Some(vec![]),
+            ..Default::default()
+        };
+        let rotator = UserAgentRotator::new(&config);
+
+        // Empty custom agents should fall back to defaults
+        let agent = rotator.get_next_user_agent();
+        assert!(
+            agent.contains("Mozilla"),
+            "Empty custom agents should fall back to defaults"
+        );
+    }
+
+    #[test]
+    fn test_user_agent_rotator_sequential_rotation() {
+        let config = PrivacyConfig {
+            custom_user_agents: Some(vec![
+                "Agent/A".to_string(),
+                "Agent/B".to_string(),
+                "Agent/C".to_string(),
+            ]),
+            randomize_user_agents: false,
+            ..Default::default()
+        };
+        let rotator = UserAgentRotator::new(&config);
+
+        assert_eq!(rotator.get_next_user_agent(), "Agent/A");
+        assert_eq!(rotator.get_next_user_agent(), "Agent/B");
+        assert_eq!(rotator.get_next_user_agent(), "Agent/C");
+        // Wraps around
+        assert_eq!(rotator.get_next_user_agent(), "Agent/A");
+    }
+
+    // ========================================================================
+    // PrivacyHeaders standalone
+    // ========================================================================
+
+    #[test]
+    fn test_privacy_headers_new_and_apply() {
+        let config = PrivacyConfig::default();
+        let headers = PrivacyHeaders::new(&config);
+
+        let client = reqwest::Client::new();
+        let request = client.get("http://example.com");
+        let _result = headers.apply_privacy_headers(request);
+    }
+
+    // ========================================================================
+    // RequestJitter
+    // ========================================================================
+
+    #[test]
+    fn test_request_jitter_new() {
+        let config = PrivacyConfig {
+            enable_request_jitter: true,
+            min_request_delay_ms: 50,
+            max_request_delay_ms: 200,
+            ..Default::default()
+        };
+        let jitter = RequestJitter::new(&config);
+        assert!(jitter.enabled);
+        assert_eq!(jitter.min_delay, Duration::from_millis(50));
+        assert_eq!(jitter.max_delay, Duration::from_millis(200));
+    }
+
+    #[test]
+    fn test_request_jitter_clone() {
+        let config = PrivacyConfig::default();
+        let jitter = RequestJitter::new(&config);
+        let cloned = jitter.clone();
+        assert_eq!(jitter.enabled, cloned.enabled);
+        assert_eq!(jitter.min_delay, cloned.min_delay);
+        assert_eq!(jitter.max_delay, cloned.max_delay);
+    }
+
+    #[tokio::test]
+    async fn test_request_jitter_disabled_returns_immediately() {
+        let config = PrivacyConfig {
+            enable_request_jitter: false,
+            ..Default::default()
+        };
+        let jitter = RequestJitter::new(&config);
+        // Should return immediately without sleeping
+        let start = std::time::Instant::now();
+        jitter.apply_jitter().await;
+        assert!(
+            start.elapsed() < Duration::from_millis(50),
+            "Disabled jitter should return immediately"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_request_jitter_enabled_applies_delay() {
+        let config = PrivacyConfig {
+            enable_request_jitter: true,
+            min_request_delay_ms: 10,
+            max_request_delay_ms: 50,
+            ..Default::default()
+        };
+        let jitter = RequestJitter::new(&config);
+        let start = std::time::Instant::now();
+        jitter.apply_jitter().await;
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed >= Duration::from_millis(10),
+            "Jitter should apply at least min delay"
+        );
+    }
+
+    // ========================================================================
+    // InstanceDistributor — all recently used fallback
+    // ========================================================================
+
+    #[test]
+    fn test_instance_distributor_all_recently_used_falls_back_to_random() {
+        let config = PrivacyConfig {
+            distribute_requests: true,
+            avoid_repeat_instances: 5,
+            ..Default::default()
+        };
+        let distributor = InstanceDistributor::new(&config);
+
+        let instances = vec!["http://a.com".to_string(), "http://b.com".to_string()];
+
+        // Mark all instances as recently used
+        distributor.record_instance_use("http://a.com");
+        distributor.record_instance_use("http://b.com");
+
+        // Should still select one (random fallback)
+        let selected = distributor.select_distributed_instance(&instances);
+        assert!(selected.is_some(), "Should fall back to random selection");
+        assert!(
+            instances.contains(&selected.unwrap()),
+            "Should select from available instances"
+        );
+    }
+
+    #[test]
+    fn test_instance_distributor_prefers_unused() {
+        let config = PrivacyConfig {
+            distribute_requests: true,
+            avoid_repeat_instances: 5,
+            ..Default::default()
+        };
+        let distributor = InstanceDistributor::new(&config);
+
+        let instances = vec![
+            "http://used.com".to_string(),
+            "http://fresh.com".to_string(),
+        ];
+
+        distributor.record_instance_use("http://used.com");
+
+        // Run multiple times — should always pick the fresh one
+        for _ in 0..10 {
+            let selected = distributor.select_distributed_instance(&instances);
+            assert_eq!(
+                selected,
+                Some("http://fresh.com".to_string()),
+                "Should prefer the unused instance"
+            );
+        }
+    }
+
+    // ========================================================================
+    // AdaptiveRateLimiter — backoff duration expiry
+    // ========================================================================
+
+    #[test]
+    fn test_adaptive_rate_limiter_default_config() {
+        let config = PrivacyConfig::default();
+        assert!(config.enable_adaptive_rate_limiting);
+        assert_eq!(config.captcha_backoff_initial_ms, 1000);
+        assert_eq!(config.captcha_backoff_max_ms, 30000);
+        assert_eq!(config.captcha_backoff_multiplier, 2.0);
+        assert_eq!(config.captcha_backoff_duration_mins, 10);
+    }
+
+    #[test]
+    fn test_adaptive_rate_limiter_clone() {
+        let config = PrivacyConfig::default();
+        let limiter = AdaptiveRateLimiter::new(config);
+        limiter.record_captcha_challenge();
+        let cloned = limiter.clone();
+        let delay = cloned.get_additional_delay();
+        assert!(
+            delay.as_millis() > 0,
+            "Cloned limiter should preserve state"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_adaptive_rate_limiter_apply_adaptive_delay_no_captcha() {
+        let config = PrivacyConfig {
+            enable_adaptive_rate_limiting: true,
+            ..Default::default()
+        };
+        let limiter = AdaptiveRateLimiter::new(config);
+        // No captcha recorded, should return immediately
+        let start = std::time::Instant::now();
+        limiter.apply_adaptive_delay().await;
+        assert!(
+            start.elapsed() < Duration::from_millis(50),
+            "No captcha means no delay"
+        );
+    }
+
+    // ========================================================================
+    // PrivacyManager — full delegation tests
+    // ========================================================================
+
+    #[tokio::test]
+    async fn test_privacy_manager_apply_jitter_delegates() {
+        let config = PrivacyConfig {
+            enable_request_jitter: false,
+            enable_adaptive_rate_limiting: false,
+            ..Default::default()
+        };
+        let manager = PrivacyManager::new(config);
+
+        // Both jitter and adaptive delay disabled — should return immediately
+        let start = std::time::Instant::now();
+        manager.apply_jitter().await;
+        assert!(
+            start.elapsed() < Duration::from_millis(50),
+            "Disabled jitter + disabled adaptive should be instant"
+        );
+    }
+
+    #[test]
+    fn test_privacy_manager_clone() {
+        let config = PrivacyConfig::default();
+        let manager = PrivacyManager::new(config);
+        let cloned = manager.clone();
+
+        // Both should produce user agents
+        assert!(cloned.get_user_agent().is_some());
+    }
+
+    #[test]
+    fn test_privacy_config_custom_user_agents_none() {
+        let config = PrivacyConfig {
+            custom_user_agents: None,
+            ..Default::default()
+        };
+        assert!(config.custom_user_agents.is_none());
+    }
+
+    #[test]
+    fn test_privacy_config_serialization() {
+        let config = PrivacyConfig::default();
+        let json = serde_json::to_string(&config).unwrap();
+        let deserialized: PrivacyConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(config.rotate_user_agents, deserialized.rotate_user_agents);
+        assert_eq!(config.enable_dnt, deserialized.enable_dnt);
+        assert_eq!(
+            config.min_request_delay_ms,
+            deserialized.min_request_delay_ms
+        );
+        assert_eq!(
+            config.captcha_backoff_initial_ms,
+            deserialized.captcha_backoff_initial_ms
+        );
+    }
 }

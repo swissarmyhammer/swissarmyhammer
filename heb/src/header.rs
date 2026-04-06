@@ -128,4 +128,65 @@ mod tests {
         assert_eq!(EventCategory::Card.as_str(), "card");
         assert_eq!(EventCategory::System.as_str(), "system");
     }
+
+    #[test]
+    fn test_category_as_bytes() {
+        assert_eq!(EventCategory::Hook.as_bytes(), b"hook");
+        assert_eq!(EventCategory::Session.as_bytes(), b"session");
+        assert_eq!(EventCategory::Agent.as_bytes(), b"agent");
+        assert_eq!(EventCategory::Card.as_bytes(), b"card");
+        assert_eq!(EventCategory::System.as_bytes(), b"system");
+    }
+
+    #[test]
+    fn test_category_display() {
+        assert_eq!(format!("{}", EventCategory::Hook), "hook");
+        assert_eq!(format!("{}", EventCategory::Session), "session");
+        assert_eq!(format!("{}", EventCategory::Agent), "agent");
+        assert_eq!(format!("{}", EventCategory::Card), "card");
+        assert_eq!(format!("{}", EventCategory::System), "system");
+    }
+
+    #[test]
+    fn test_category_serde_roundtrip() {
+        let categories = vec![
+            EventCategory::Hook,
+            EventCategory::Session,
+            EventCategory::Agent,
+            EventCategory::Card,
+            EventCategory::System,
+        ];
+        for cat in &categories {
+            let json = serde_json::to_string(cat).unwrap();
+            let restored: EventCategory = serde_json::from_str(&json).unwrap();
+            assert_eq!(&restored, cat);
+        }
+    }
+
+    #[test]
+    fn test_header_fields_populated() {
+        let header = EventHeader::new(
+            "sess-2",
+            "/tmp/test",
+            EventCategory::System,
+            "error",
+            "test-source",
+        );
+        assert!(!header.id.is_empty(), "ULID should be non-empty");
+        assert_eq!(header.session_id, "sess-2");
+        assert_eq!(header.cwd, PathBuf::from("/tmp/test"));
+        assert_eq!(header.category, EventCategory::System);
+        assert_eq!(header.event_type, "error");
+        assert_eq!(header.source, "test-source");
+    }
+
+    #[test]
+    fn test_ulid_monotonic() {
+        let h1 = EventHeader::new("s", "/", EventCategory::Hook, "a", "src");
+        let h2 = EventHeader::new("s", "/", EventCategory::Hook, "b", "src");
+        assert!(
+            h2.id > h1.id,
+            "Sequential ULIDs should be monotonically increasing"
+        );
+    }
 }

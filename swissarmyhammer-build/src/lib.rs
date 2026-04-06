@@ -271,6 +271,7 @@ pub fn out_dir() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[test]
     fn test_generator_defaults() {
@@ -280,6 +281,8 @@ mod tests {
         assert_eq!(gen.output_name, "builtin_validators");
         assert_eq!(gen.function_name, "get_builtin_validators");
         assert_eq!(gen.extensions, vec!["md"]);
+        assert!(!gen.preserve_extensions);
+        assert!(gen.skip_dirs.is_empty());
     }
 
     #[test]
@@ -292,5 +295,317 @@ mod tests {
         assert_eq!(gen.source_dir, "custom/prompts");
         assert_eq!(gen.extensions, vec!["md", "liquid"]);
         assert_eq!(gen.skip_dirs, vec!["workflows"]);
+    }
+
+    #[test]
+    fn test_output_name_builder() {
+        let gen = BuiltinGenerator::new("prompts").output_name("my_prompts");
+        assert_eq!(gen.output_name, "my_prompts");
+    }
+
+    #[test]
+    fn test_function_name_builder() {
+        let gen = BuiltinGenerator::new("prompts").function_name("load_prompts");
+        assert_eq!(gen.function_name, "load_prompts");
+    }
+
+    #[test]
+    fn test_preserve_extensions_builder() {
+        let gen = BuiltinGenerator::new("skills").preserve_extensions();
+        assert!(gen.preserve_extensions);
+    }
+
+    // -- raw_string_hashes tests --
+
+    #[test]
+    fn test_raw_string_hashes_no_quotes() {
+        assert_eq!(raw_string_hashes("hello world"), "");
+    }
+
+    #[test]
+    fn test_raw_string_hashes_simple_quote() {
+        // A bare quote needs one hash to disambiguate
+        assert_eq!(raw_string_hashes("say \"hello\""), "#");
+    }
+
+    #[test]
+    fn test_raw_string_hashes_quote_followed_by_hashes() {
+        // A quote followed by two hashes needs 3 hashes to disambiguate
+        let input = "foo\"##bar";
+        assert_eq!(raw_string_hashes(input), "###");
+    }
+
+    #[test]
+    fn test_raw_string_hashes_empty_string() {
+        assert_eq!(raw_string_hashes(""), "");
+    }
+
+    #[test]
+    fn test_raw_string_hashes_multiple_quote_sequences() {
+        // A quote-hash needs 2 hashes; a bare quote needs 1 — max wins
+        let input = "a\"#b and c\"d";
+        assert_eq!(raw_string_hashes(input), "##");
+    }
+
+    // -- matches_extension tests --
+
+    #[test]
+    fn test_matches_extension_positive() {
+        let gen = BuiltinGenerator::new("prompts").extensions(&["md", "yaml"]);
+        assert!(gen.matches_extension(Path::new("foo.md")));
+        assert!(gen.matches_extension(Path::new("bar.yaml")));
+    }
+
+    #[test]
+    fn test_matches_extension_negative() {
+        let gen = BuiltinGenerator::new("prompts").extensions(&["md"]);
+        assert!(!gen.matches_extension(Path::new("foo.txt")));
+    }
+
+    #[test]
+    fn test_matches_extension_no_extension() {
+        let gen = BuiltinGenerator::new("prompts");
+        assert!(!gen.matches_extension(Path::new("Makefile")));
+    }
+
+    // -- extract_name tests --
+
+    #[test]
+    fn test_extract_name_strips_extension() {
+        let gen = BuiltinGenerator::new("prompts").extensions(&["md"]);
+        let name = gen.extract_name(Path::new("SKILL.md"), "");
+        assert_eq!(name, "SKILL");
+    }
+
+    #[test]
+    fn test_extract_name_with_prefix() {
+        let gen = BuiltinGenerator::new("prompts").extensions(&["md"]);
+        let name = gen.extract_name(Path::new("SKILL.md"), "plan");
+        assert_eq!(name, "plan/SKILL");
+    }
+
+    #[test]
+    fn test_extract_name_preserve_extensions() {
+        let gen = BuiltinGenerator::new("skills")
+            .extensions(&["md"])
+            .preserve_extensions();
+        let name = gen.extract_name(Path::new("SKILL.md"), "");
+        assert_eq!(name, "SKILL.md");
+    }
+
+    #[test]
+    fn test_extract_name_preserve_extensions_with_prefix() {
+        let gen = BuiltinGenerator::new("skills")
+            .extensions(&["md"])
+            .preserve_extensions();
+        let name = gen.extract_name(Path::new("SKILL.md"), "plan");
+        assert_eq!(name, "plan/SKILL.md");
+    }
+
+    #[test]
+    fn test_extract_name_unknown_extension_not_stripped() {
+        let gen = BuiltinGenerator::new("prompts").extensions(&["md"]);
+        // .txt is not in extensions, so strip_suffix won't match — falls back to full name
+        let name = gen.extract_name(Path::new("README.txt"), "");
+        assert_eq!(name, "README.txt");
+    }
+
+    // -- generate_code tests --
+
+    #[test]
+    fn test_generate_code_nonexistent_dir() {
+        let gen = BuiltinGenerator::new("widgets");
+        let code = gen.generate_code(Path::new("/nonexistent/dir"));
+        assert!(code.contains("pub fn get_builtin_widgets()"));
+        assert!(code.contains("vec!["));
+        // No files collected — empty vec
+        assert!(!code.contains("(\""));
+    }
+
+    #[test]
+    fn test_generate_code_with_files() {
+        let tmp = tempdir();
+        fs::write(tmp.join("alpha.md"), "# Alpha content").unwrap();
+        fs::write(tmp.join("beta.md"), "# Beta content").unwrap();
+
+        let gen = BuiltinGenerator::new("docs").extensions(&["md"]);
+        let code = gen.generate_code(&tmp);
+
+        assert!(code.contains("pub fn get_builtin_docs()"));
+        assert!(code.contains(r#"("alpha""#));
+        assert!(code.contains(r#"("beta""#));
+        assert!(code.contains("# Alpha content"));
+        assert!(code.contains("# Beta content"));
+    }
+
+    #[test]
+    fn test_generate_code_filters_by_extension() {
+        let tmp = tempdir();
+        fs::write(tmp.join("included.md"), "yes").unwrap();
+        fs::write(tmp.join("excluded.txt"), "no").unwrap();
+
+        let gen = BuiltinGenerator::new("docs").extensions(&["md"]);
+        let code = gen.generate_code(&tmp);
+
+        assert!(code.contains(r#"("included""#));
+        assert!(!code.contains("excluded"));
+    }
+
+    #[test]
+    fn test_generate_code_recursive_subdirectories() {
+        let tmp = tempdir();
+        let sub = tmp.join("subdir");
+        fs::create_dir(&sub).unwrap();
+        fs::write(sub.join("nested.md"), "nested content").unwrap();
+
+        let gen = BuiltinGenerator::new("docs").extensions(&["md"]);
+        let code = gen.generate_code(&tmp);
+
+        assert!(code.contains(r#"("subdir/nested""#));
+        assert!(code.contains("nested content"));
+    }
+
+    #[test]
+    fn test_generate_code_skip_dirs() {
+        let tmp = tempdir();
+        let skipped = tmp.join("skip_me");
+        fs::create_dir(&skipped).unwrap();
+        fs::write(skipped.join("hidden.md"), "hidden").unwrap();
+        fs::write(tmp.join("visible.md"), "visible").unwrap();
+
+        let gen = BuiltinGenerator::new("docs")
+            .extensions(&["md"])
+            .skip_dirs(&["skip_me"]);
+        let code = gen.generate_code(&tmp);
+
+        assert!(code.contains(r#"("visible""#));
+        assert!(!code.contains("hidden"));
+    }
+
+    #[test]
+    fn test_generate_code_preserve_extensions() {
+        let tmp = tempdir();
+        fs::write(tmp.join("skill.md"), "content").unwrap();
+
+        let gen = BuiltinGenerator::new("skills")
+            .extensions(&["md"])
+            .preserve_extensions();
+        let code = gen.generate_code(&tmp);
+
+        assert!(code.contains(r#"("skill.md""#));
+    }
+
+    #[test]
+    fn test_generate_code_content_with_quotes() {
+        let tmp = tempdir();
+        fs::write(tmp.join("tricky.md"), "She said \"hello\"").unwrap();
+
+        let gen = BuiltinGenerator::new("docs").extensions(&["md"]);
+        let code = gen.generate_code(&tmp);
+
+        // Should use raw string hashes to handle the embedded quotes
+        assert!(code.contains("tricky"));
+        assert!(code.contains("She said"));
+    }
+
+    #[test]
+    fn test_generate_code_multiple_extensions() {
+        let tmp = tempdir();
+        fs::write(tmp.join("a.md"), "markdown").unwrap();
+        fs::write(tmp.join("b.yaml"), "yaml content").unwrap();
+        fs::write(tmp.join("c.txt"), "ignored").unwrap();
+
+        let gen = BuiltinGenerator::new("mixed").extensions(&["md", "yaml"]);
+        let code = gen.generate_code(&tmp);
+
+        assert!(code.contains("markdown"));
+        assert!(code.contains("yaml content"));
+        assert!(!code.contains("ignored"));
+    }
+
+    #[test]
+    fn test_generate_with_env_vars() {
+        let tmp = tempdir();
+        let out = tempdir();
+        fs::write(tmp.join("test.md"), "content").unwrap();
+
+        // Set required env vars
+        env::set_var("CARGO_MANIFEST_DIR", tmp.to_str().unwrap());
+        env::set_var("OUT_DIR", out.to_str().unwrap());
+
+        let gen = BuiltinGenerator::new("test")
+            .source_dir(".")
+            .output_name("builtin_test");
+        gen.generate();
+
+        let generated = out.join("builtin_test.rs");
+        assert!(generated.exists());
+        let code = fs::read_to_string(generated).unwrap();
+        assert!(code.contains("pub fn get_builtin_test()"));
+        assert!(code.contains("content"));
+    }
+
+    #[test]
+    fn test_manifest_dir() {
+        let tmp = tempdir();
+        env::set_var("CARGO_MANIFEST_DIR", tmp.to_str().unwrap());
+        assert_eq!(manifest_dir(), tmp);
+    }
+
+    #[test]
+    fn test_out_dir() {
+        let tmp = tempdir();
+        env::set_var("OUT_DIR", tmp.to_str().unwrap());
+        assert_eq!(out_dir(), tmp);
+    }
+
+    #[test]
+    fn test_generate_code_deeply_nested() {
+        let tmp = tempdir();
+        let deep = tmp.join("a").join("b");
+        fs::create_dir_all(&deep).unwrap();
+        fs::write(deep.join("deep.md"), "deep").unwrap();
+
+        let gen = BuiltinGenerator::new("docs").extensions(&["md"]);
+        let code = gen.generate_code(&tmp);
+
+        assert!(code.contains(r#"("a/b/deep""#));
+    }
+
+    #[test]
+    fn test_collect_files_unreadable_dir_graceful() {
+        // collect_files with a non-existent path just returns without error
+        let gen = BuiltinGenerator::new("docs");
+        let mut code = String::new();
+        gen.collect_files(Path::new("/no/such/path"), "", &mut code);
+        assert!(code.is_empty());
+    }
+
+    #[test]
+    fn test_generate_code_header_comments() {
+        let gen = BuiltinGenerator::new("widgets");
+        let code = gen.generate_code(Path::new("/nonexistent"));
+
+        assert!(code.contains("Auto-generated builtin widgets"));
+        assert!(code.contains("Generated by build.rs"));
+    }
+
+    #[test]
+    fn test_raw_string_hashes_quote_at_end() {
+        // Quote at the very end of string — no chars after to count
+        assert_eq!(raw_string_hashes("end\""), "#");
+    }
+
+    /// Helper: create a temporary directory that auto-cleans on drop.
+    fn tempdir() -> PathBuf {
+        let dir = env::temp_dir().join(format!(
+            "swissarmyhammer-build-test-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        dir
     }
 }

@@ -280,4 +280,98 @@ mod tests {
         assert!(GitRepository::open(&non_repo_path).is_err());
         assert!(!utils::is_git_repository(&non_repo_path));
     }
+
+    #[test]
+    fn test_open_error_not_found() {
+        // Opening a path that is definitely not a git repository produces an error.
+        let temp_dir = TempDir::new().unwrap();
+        let result = GitRepository::open(temp_dir.path());
+        assert!(result.is_err());
+        let err_str = result.unwrap_err().to_string();
+        assert!(
+            err_str.contains("not found") || err_str.contains("repository"),
+            "unexpected error message: {err_str}"
+        );
+    }
+
+    #[test]
+    fn test_contains_path_bare_repository() {
+        // Create a bare repository and verify contains_path checks the git dir
+        // rather than a workdir (since bare repos have no workdir).
+        let temp_dir = TempDir::new().unwrap();
+        let bare_path = temp_dir.path().join("bare.git");
+        std::fs::create_dir_all(&bare_path).unwrap();
+
+        // Init a bare repository directly via git2.
+        git2::Repository::init_bare(&bare_path).expect("bare init failed");
+
+        // Open the bare repo through our wrapper.
+        let git_repo = GitRepository::open(&bare_path).expect("open bare repo failed");
+        assert!(git_repo.is_bare());
+        assert!(git_repo.workdir().is_none());
+
+        // A path inside the git dir should be contained.
+        let inside = git_repo.git_dir().join("HEAD");
+        assert!(git_repo.contains_path(&inside));
+
+        // A path outside should not be contained.
+        let outside = temp_dir.path().join("other_file.txt");
+        assert!(!git_repo.contains_path(&outside));
+    }
+
+    #[test]
+    fn test_state_normal() {
+        let (_temp_dir, repo) = setup_test_repo();
+        // A freshly initialized repo (or one with commits) should be in Clean state.
+        let state = repo.state();
+        assert_eq!(state, git2::RepositoryState::Clean);
+        assert!(repo.is_in_normal_state());
+    }
+
+    #[test]
+    fn test_utils_get_git_dir() {
+        let (_temp_dir, repo) = setup_test_repo();
+        // get_git_dir should return the .git directory path.
+        let git_dir = utils::get_git_dir(repo.path()).expect("get_git_dir failed");
+        // The returned path should end with ".git" for a normal (non-bare) repo.
+        assert!(
+            git_dir.ends_with(".git"),
+            "expected .git dir, got: {}",
+            git_dir.display()
+        );
+    }
+
+    #[test]
+    fn test_find_from_current_dir() {
+        // find_from_current_dir uses std::env::current_dir(), which is the repo
+        // being tested. We just verify it either succeeds (we're inside a git
+        // repo) or returns an error without panicking.
+        let result = GitRepository::find_from_current_dir();
+        // Either outcome is acceptable; the important thing is no panic/crash.
+        let _ = result;
+    }
+
+    #[test]
+    fn test_debug_impl() {
+        let (_temp_dir, repo) = setup_test_repo();
+        let debug_str = format!("{:?}", repo);
+        assert!(debug_str.contains("GitRepository"));
+        assert!(debug_str.contains("path"));
+    }
+
+    #[test]
+    fn test_find_from_current_dir_in_non_repo() {
+        // Change to a temp directory that is not a git repository and verify
+        // find_from_current_dir returns an error.
+        let temp_dir = TempDir::new().unwrap();
+        let original = std::env::current_dir().unwrap();
+        std::env::set_current_dir(temp_dir.path()).unwrap();
+
+        let result = GitRepository::find_from_current_dir();
+
+        // Restore cwd before asserting so a test failure doesn't leave a bad cwd.
+        std::env::set_current_dir(original).unwrap();
+
+        assert!(result.is_err());
+    }
 }

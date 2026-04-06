@@ -17,21 +17,36 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 
-/// Directories within `.kanban/` that contain entity files we care about.
-const WATCHED_SUBDIRS: &[&str] = &[
-    "tasks",
-    "tags",
-    "columns",
-    "swimlanes",
-    "actors",
-    "boards",
-    "views",
-];
-
 /// File extensions that represent entity state (not logs).
 const ENTITY_EXTENSIONS: &[&str] = &["yaml", "yml", "md"];
 
 /// An event emitted when an entity or field changes.
+/// Events emitted to the frontend when entity state changes.
+///
+/// **Architecture rule (event-architecture):** Events are thin signals with
+/// exactly two granularities:
+///
+/// 1. **Entity-level** — `EntityCreated` and `EntityRemoved` carry
+///    `(entity_type, id)`. For created entities the watcher also provides the
+///    initial `fields` read during cache population (not an extra read).
+///
+/// 2. **Field-level** — `EntityFieldChanged` carries a `Vec<FieldChange>`,
+///    one entry per changed field, each with the field name and new value.
+///    The watcher produces these from `diff_fields` by comparing the old and
+///    new file content — no `EntityContext.read()` enrichment.
+///
+/// The frontend contract:
+/// - `entity-created`: add entity to store from payload fields, or
+///   `get_entity` once if fields are empty.
+/// - `entity-field-changed`: patch individual fields from `changes`. ONE
+///   path, no branching, no re-fetch.
+/// - `entity-removed`: remove entity from store.
+///
+/// **DO NOT** add a `fields: Option<HashMap>` full-state payload to
+/// `EntityFieldChanged`. That is the enrichment anti-pattern — it requires
+/// reading the entity back after every write, is racy with deletes, and
+/// caused repeated bugs. The watcher's `diff_fields` produces exactly the
+/// granular diffs the frontend needs.
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind")]
 #[allow(clippy::enum_variant_names)]
@@ -47,16 +62,19 @@ pub enum WatchEvent {
     #[serde(rename = "entity-removed")]
     EntityRemoved { entity_type: String, id: String },
     /// One or more fields on an entity changed.
+    ///
+    /// Each `FieldChange` carries the field name and its new value.
+    /// The watcher produces these diffs from `diff_fields` — no entity
+    /// reads are needed. The frontend patches individual fields in place.
+    ///
+    /// **Architecture rule (event-architecture):** DO NOT add a `fields`
+    /// option for full-state enrichment. Events are thin signals. The
+    /// watcher's `diff_fields` produces exactly the field-level diffs needed.
     #[serde(rename = "entity-field-changed")]
     EntityFieldChanged {
         entity_type: String,
         id: String,
         changes: Vec<FieldChange>,
-        /// Full entity state (including computed fields) when available.
-        /// Populated by `dispatch_command` after reading through the entity
-        /// context; `None` for raw watcher events.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        fields: Option<HashMap<String, serde_json::Value>>,
     },
     /// An attachment file was created, modified, or deleted.
     ///
@@ -116,12 +134,14 @@ pub fn sync_search_index(
         WatchEvent::EntityFieldChanged {
             entity_type,
             id,
-            fields,
-            ..
+            changes,
         } => {
-            if let Some(fields) = fields {
-                // Merge into existing entity to preserve fields not in this event
-                idx.merge_fields(entity_type, id, fields);
+            if !changes.is_empty() {
+                let fields_map: std::collections::HashMap<String, serde_json::Value> = changes
+                    .iter()
+                    .map(|c| (c.field.clone(), c.value.clone()))
+                    .collect();
+                idx.merge_fields(entity_type, id, &fields_map);
             }
         }
         WatchEvent::EntityRemoved { id, .. } => {
@@ -152,12 +172,15 @@ pub(crate) struct CachedEntity {
 pub type EntityCache = Arc<Mutex<HashMap<PathBuf, CachedEntity>>>;
 
 /// Create a new entity cache, pre-populated by scanning entity files on disk.
-pub fn new_entity_cache(kanban_root: &Path) -> EntityCache {
+///
+/// `store_roots` is the list of directories to scan, obtained from
+/// `StoreContext::watched_roots()`. The kanban root directory is also scanned
+/// for root-level entity files (e.g. `board.yaml`).
+pub fn new_entity_cache(kanban_root: &Path, store_roots: &[PathBuf]) -> EntityCache {
     let mut map = HashMap::new();
-    for subdir in WATCHED_SUBDIRS {
-        let dir = kanban_root.join(subdir);
+    for dir in store_roots {
         if dir.is_dir() {
-            if let Ok(entries) = std::fs::read_dir(&dir) {
+            if let Ok(entries) = std::fs::read_dir(dir) {
                 for entry in entries.flatten() {
                     let path = entry.path();
                     if is_entity_file(&path) {
@@ -199,15 +222,23 @@ pub fn update_cache(cache: &EntityCache, path: &Path) {
     }
 }
 
-/// Scan all entity files in a `.kanban` directory, compare against the cache,
-/// emit events for anything that changed, and update the cache.
+/// Scan all entity files in the registered store directories, compare against
+/// the cache, emit events for anything that changed, and update the cache.
+///
+/// `store_roots` is the list of directories to scan, obtained from
+/// `StoreContext::watched_roots()`. The kanban root directory is also scanned
+/// for root-level entity files (e.g. `board.yaml`).
 ///
 /// This is used after our own command execution to produce immediate granular
 /// events without waiting for the file watcher's debounce. It also updates
 /// the cache so the watcher won't double-fire for these writes.
 ///
 /// Returns the list of events emitted.
-pub fn flush_and_emit(kanban_root: &Path, cache: &EntityCache) -> Vec<WatchEvent> {
+pub fn flush_and_emit(
+    kanban_root: &Path,
+    store_roots: &[PathBuf],
+    cache: &EntityCache,
+) -> Vec<WatchEvent> {
     let kanban_root = kanban_root
         .canonicalize()
         .unwrap_or_else(|_| kanban_root.to_path_buf());
@@ -215,10 +246,9 @@ pub fn flush_and_emit(kanban_root: &Path, cache: &EntityCache) -> Vec<WatchEvent
 
     // Collect all current entity file paths on disk
     let mut disk_paths: HashSet<PathBuf> = HashSet::new();
-    for subdir in WATCHED_SUBDIRS {
-        let dir = kanban_root.join(subdir);
+    for dir in store_roots {
         if dir.is_dir() {
-            if let Ok(entries) = std::fs::read_dir(&dir) {
+            if let Ok(entries) = std::fs::read_dir(dir) {
                 for entry in entries.flatten() {
                     let path = entry.path();
                     if is_entity_file(&path) {
@@ -270,7 +300,11 @@ enum FsAction {
     Removed(PathBuf),
 }
 
-/// Start watching the `.kanban` directory for external changes.
+/// Start watching the registered store directories for external changes.
+///
+/// `store_roots` is the list of directories to watch, obtained from
+/// `StoreContext::watched_roots()`. The kanban root is also watched for
+/// root-level entity files (e.g. `board.yaml`).
 ///
 /// Returns a `BoardWatcher` handle — dropping it stops the watcher.
 /// Hash comparison happens at debounce time (not event-receive time),
@@ -278,6 +312,7 @@ enum FsAction {
 /// fires will suppress the event.
 pub fn start_watching<F>(
     kanban_root: PathBuf,
+    store_roots: Vec<PathBuf>,
     entity_cache: EntityCache,
     on_event: F,
 ) -> Result<BoardWatcher, String>
@@ -301,12 +336,11 @@ where
     )
     .map_err(|e| format!("Failed to create file watcher: {e}"))?;
 
-    // Watch each entity subdirectory
-    for subdir in WATCHED_SUBDIRS {
-        let dir = kanban_root.join(subdir);
+    // Watch each registered store directory
+    for dir in &store_roots {
         if dir.is_dir() {
             watcher
-                .watch(&dir, RecursiveMode::NonRecursive)
+                .watch(dir, RecursiveMode::NonRecursive)
                 .map_err(|e| format!("Failed to watch {}: {e}", dir.display()))?;
 
             // Also watch .attachments/ inside entity directories for attachment file changes
@@ -434,8 +468,17 @@ fn classify_event(event: &Event, kanban_root: &Path) -> Vec<FsAction> {
         let is_att = is_attachment(path);
 
         if !is_entity && !is_att {
+            tracing::trace!(path = %path.display(), kind = ?event.kind, "classify_event: not entity/attachment, skipping");
             continue;
         }
+
+        tracing::info!(
+            path = %path.display(),
+            kind = ?event.kind,
+            is_entity,
+            is_att,
+            "classify_event: filesystem event received"
+        );
 
         // For removals, the file may not exist, so canonicalize the parent + filename
         let canonical = if path.exists() {
@@ -505,6 +548,11 @@ fn resolve_change(path: &Path, cache: &EntityCache, kanban_root: &Path) -> Optio
     match map.get(path) {
         Some(old) if old.hash == new_cached.hash => {
             // Same content — our own write or no real change
+            tracing::debug!(
+                entity_type = %entity_type,
+                id = %id,
+                "resolve_change: hash unchanged, suppressing event"
+            );
             None
         }
         Some(old) => {
@@ -524,7 +572,6 @@ fn resolve_change(path: &Path, cache: &EntityCache, kanban_root: &Path) -> Optio
                     entity_type,
                     id,
                     changes,
-                    fields: None,
                 })
             }
         }
@@ -688,6 +735,11 @@ fn json_to_field_map(value: serde_json::Value) -> Option<HashMap<String, serde_j
 }
 
 /// Map a file path to (entity_type, id).
+///
+/// The entity type is derived from the parent directory name by stripping
+/// a trailing 's' (e.g. `tasks` → `task`, `perspectives` → `perspective`).
+/// Files directly in the kanban root (e.g. `board.yaml`) use the stem as both
+/// entity type and id.
 fn path_to_entity(path: &Path, kanban_root: &Path) -> Option<(String, String)> {
     let stem = path.file_stem()?.to_str()?;
 
@@ -695,9 +747,17 @@ fn path_to_entity(path: &Path, kanban_root: &Path) -> Option<(String, String)> {
         return Some((stem.to_string(), stem.to_string()));
     }
 
-    let parent_name = path.parent()?.file_name()?.to_str()?;
+    let parent = path.parent()?;
 
-    if !WATCHED_SUBDIRS.contains(&parent_name) {
+    // Only handle direct children of the kanban root (one directory deep)
+    if parent.parent()? != kanban_root {
+        return None;
+    }
+
+    let parent_name = parent.file_name()?.to_str()?;
+
+    // Skip hidden directories (e.g. .attachments handled separately)
+    if parent_name.starts_with('.') {
         return None;
     }
 
@@ -762,15 +822,36 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tempfile::TempDir;
 
+    /// Standard subdirectories for test boards (mirrors production entity types).
+    const TEST_SUBDIRS: &[&str] = &[
+        "tasks",
+        "tags",
+        "columns",
+        "actors",
+        "boards",
+        "views",
+        "perspectives",
+    ];
+
     fn setup_kanban_dir() -> (TempDir, PathBuf) {
         let tmp = TempDir::new().unwrap();
         let kanban = tmp.path().join(".kanban");
-        for subdir in WATCHED_SUBDIRS {
+        for subdir in TEST_SUBDIRS {
             std::fs::create_dir_all(kanban.join(subdir)).unwrap();
         }
         // Canonicalize to match what the cache and watcher use internally
         let kanban = kanban.canonicalize().unwrap();
         (tmp, kanban)
+    }
+
+    /// Build the store roots list from a kanban directory (mirrors what
+    /// StoreContext::watched_roots() returns in production).
+    fn store_roots(kanban: &Path) -> Vec<PathBuf> {
+        TEST_SUBDIRS
+            .iter()
+            .map(|s| kanban.join(s))
+            .filter(|p| p.is_dir())
+            .collect()
     }
 
     // =========================================================================
@@ -964,7 +1045,8 @@ mod tests {
         std::fs::write(kanban.join("tags/bug.yaml"), "tag_name: Bug\n").unwrap();
         std::fs::write(kanban.join("tasks/abc.jsonl"), "log\n").unwrap(); // not entity
 
-        let cache = new_entity_cache(&kanban);
+        let roots = store_roots(&kanban);
+        let cache = new_entity_cache(&kanban, &roots);
         let map = cache.lock().unwrap();
         assert_eq!(map.len(), 2);
         assert!(map.contains_key(&kanban.join("tasks/abc.md")));
@@ -981,7 +1063,8 @@ mod tests {
         let path = kanban.join("tags/bug.yaml");
         std::fs::write(&path, "tag_name: Bug\ncolor: \"ff0000\"\n").unwrap();
 
-        let cache = new_entity_cache(&kanban);
+        let roots = store_roots(&kanban);
+        let cache = new_entity_cache(&kanban, &roots);
 
         // Same content → None
         assert!(resolve_change(&path, &cache, &kanban).is_none());
@@ -1035,7 +1118,8 @@ mod tests {
         let path = kanban.join("tags/old.yaml");
         std::fs::write(&path, "tag_name: old\n").unwrap();
 
-        let cache = new_entity_cache(&kanban);
+        let roots = store_roots(&kanban);
+        let cache = new_entity_cache(&kanban, &roots);
 
         let evt = resolve_removal(&path, &cache, &kanban);
         match evt {
@@ -1058,11 +1142,12 @@ mod tests {
         let task_path = kanban.join("tasks/test.md");
         std::fs::write(&task_path, "---\ntitle: Original\n---\nBody\n").unwrap();
 
-        let cache = new_entity_cache(&kanban);
+        let roots = store_roots(&kanban);
+        let cache = new_entity_cache(&kanban, &roots);
         let events: Arc<Mutex<Vec<WatchEvent>>> = Arc::new(Mutex::new(Vec::new()));
         let events_clone = events.clone();
 
-        let _watcher = start_watching(kanban.clone(), cache.clone(), move |evt| {
+        let _watcher = start_watching(kanban.clone(), roots.clone(), cache.clone(), move |evt| {
             events_clone.lock().unwrap().push(evt);
         })
         .expect("start_watching should succeed");
@@ -1098,11 +1183,12 @@ mod tests {
         let tag_path = kanban.join("tags/test.yaml");
         std::fs::write(&tag_path, "tag_name: Original\n").unwrap();
 
-        let cache = new_entity_cache(&kanban);
+        let roots = store_roots(&kanban);
+        let cache = new_entity_cache(&kanban, &roots);
         let change_count = Arc::new(AtomicUsize::new(0));
         let count_clone = change_count.clone();
 
-        let _watcher = start_watching(kanban.clone(), cache.clone(), move |_| {
+        let _watcher = start_watching(kanban.clone(), roots.clone(), cache.clone(), move |_| {
             count_clone.fetch_add(1, Ordering::SeqCst);
         })
         .expect("start_watching should succeed");
@@ -1127,11 +1213,12 @@ mod tests {
     async fn test_watcher_detects_new_file() {
         let (_tmp, kanban) = setup_kanban_dir();
 
-        let cache = new_entity_cache(&kanban);
+        let roots = store_roots(&kanban);
+        let cache = new_entity_cache(&kanban, &roots);
         let events: Arc<Mutex<Vec<WatchEvent>>> = Arc::new(Mutex::new(Vec::new()));
         let events_clone = events.clone();
 
-        let _watcher = start_watching(kanban.clone(), cache.clone(), move |evt| {
+        let _watcher = start_watching(kanban.clone(), roots.clone(), cache.clone(), move |evt| {
             events_clone.lock().unwrap().push(evt);
         })
         .expect("start_watching should succeed");
@@ -1169,11 +1256,12 @@ mod tests {
         let tag_path = kanban.join("tags/doomed.yaml");
         std::fs::write(&tag_path, "tag_name: doomed\n").unwrap();
 
-        let cache = new_entity_cache(&kanban);
+        let roots = store_roots(&kanban);
+        let cache = new_entity_cache(&kanban, &roots);
         let events: Arc<Mutex<Vec<WatchEvent>>> = Arc::new(Mutex::new(Vec::new()));
         let events_clone = events.clone();
 
-        let _watcher = start_watching(kanban.clone(), cache.clone(), move |evt| {
+        let _watcher = start_watching(kanban.clone(), roots.clone(), cache.clone(), move |evt| {
             events_clone.lock().unwrap().push(evt);
         })
         .expect("start_watching should succeed");
@@ -1198,11 +1286,12 @@ mod tests {
     #[tokio::test]
     async fn test_watcher_stops_on_drop() {
         let (_tmp, kanban) = setup_kanban_dir();
-        let cache = new_entity_cache(&kanban);
+        let roots = store_roots(&kanban);
+        let cache = new_entity_cache(&kanban, &roots);
         let change_count = Arc::new(AtomicUsize::new(0));
         let count_clone = change_count.clone();
 
-        let watcher = start_watching(kanban.clone(), cache.clone(), move |_| {
+        let watcher = start_watching(kanban.clone(), roots.clone(), cache.clone(), move |_| {
             count_clone.fetch_add(1, Ordering::SeqCst);
         })
         .expect("start_watching should succeed");
@@ -1226,12 +1315,13 @@ mod tests {
     #[test]
     fn test_flush_and_emit_detects_new_file() {
         let (_tmp, kanban) = setup_kanban_dir();
-        let cache = new_entity_cache(&kanban);
+        let roots = store_roots(&kanban);
+        let cache = new_entity_cache(&kanban, &roots);
 
         // Add a file after cache was built
         std::fs::write(kanban.join("tags/new.yaml"), "tag_name: New\n").unwrap();
 
-        let events = flush_and_emit(&kanban, &cache);
+        let events = flush_and_emit(&kanban, &roots, &cache);
         assert_eq!(events.len(), 1);
         match &events[0] {
             WatchEvent::EntityCreated {
@@ -1244,7 +1334,7 @@ mod tests {
         }
 
         // Second flush should produce no events (cache updated)
-        let events2 = flush_and_emit(&kanban, &cache);
+        let events2 = flush_and_emit(&kanban, &roots, &cache);
         assert!(
             events2.is_empty(),
             "should produce no events on second flush"
@@ -1259,7 +1349,8 @@ mod tests {
             "tag_name: Bug\ncolor: \"ff0000\"\n",
         )
         .unwrap();
-        let cache = new_entity_cache(&kanban);
+        let roots = store_roots(&kanban);
+        let cache = new_entity_cache(&kanban, &roots);
 
         // Modify a field
         std::fs::write(
@@ -1268,7 +1359,7 @@ mod tests {
         )
         .unwrap();
 
-        let events = flush_and_emit(&kanban, &cache);
+        let events = flush_and_emit(&kanban, &roots, &cache);
         assert_eq!(events.len(), 1);
         match &events[0] {
             WatchEvent::EntityFieldChanged {
@@ -1290,11 +1381,12 @@ mod tests {
     fn test_flush_and_emit_detects_removal() {
         let (_tmp, kanban) = setup_kanban_dir();
         std::fs::write(kanban.join("tags/old.yaml"), "tag_name: old\n").unwrap();
-        let cache = new_entity_cache(&kanban);
+        let roots = store_roots(&kanban);
+        let cache = new_entity_cache(&kanban, &roots);
 
         std::fs::remove_file(kanban.join("tags/old.yaml")).unwrap();
 
-        let events = flush_and_emit(&kanban, &cache);
+        let events = flush_and_emit(&kanban, &roots, &cache);
         assert_eq!(events.len(), 1);
         match &events[0] {
             WatchEvent::EntityRemoved { entity_type, id } => {
@@ -1309,9 +1401,10 @@ mod tests {
     fn test_flush_and_emit_no_changes() {
         let (_tmp, kanban) = setup_kanban_dir();
         std::fs::write(kanban.join("tags/bug.yaml"), "tag_name: Bug\n").unwrap();
-        let cache = new_entity_cache(&kanban);
+        let roots = store_roots(&kanban);
+        let cache = new_entity_cache(&kanban, &roots);
 
-        let events = flush_and_emit(&kanban, &cache);
+        let events = flush_and_emit(&kanban, &roots, &cache);
         assert!(
             events.is_empty(),
             "should produce no events when nothing changed"
@@ -1329,7 +1422,8 @@ mod tests {
             "---\ntitle: My Task\nassignees: []\n---\nOriginal body\n",
         )
         .unwrap();
-        let cache = new_entity_cache(&kanban);
+        let roots = store_roots(&kanban);
+        let cache = new_entity_cache(&kanban, &roots);
 
         // Edit the body to include a #tag reference
         std::fs::write(
@@ -1338,14 +1432,13 @@ mod tests {
         )
         .unwrap();
 
-        let events = flush_and_emit(&kanban, &cache);
+        let events = flush_and_emit(&kanban, &roots, &cache);
         assert_eq!(events.len(), 1);
         match &events[0] {
             WatchEvent::EntityFieldChanged {
                 entity_type,
                 id,
                 changes,
-                fields,
             } => {
                 assert_eq!(entity_type, "task");
                 assert_eq!(id, "task1");
@@ -1355,8 +1448,8 @@ mod tests {
                     "should detect body field change, got: {:?}",
                     changes.iter().map(|c| &c.field).collect::<Vec<_>>()
                 );
-                // fields is None for raw watcher events (enriched by dispatch_command)
-                assert!(fields.is_none());
+                // changes carry the field-level diffs
+                assert!(!changes.is_empty());
             }
             other => panic!("expected EntityFieldChanged, got {:?}", other),
         }
@@ -1372,7 +1465,8 @@ mod tests {
             "---\ntitle: Checklist\nassignees: []\n---\n- [ ] Step 1\n- [ ] Step 2\n",
         )
         .unwrap();
-        let cache = new_entity_cache(&kanban);
+        let roots = store_roots(&kanban);
+        let cache = new_entity_cache(&kanban, &roots);
 
         // Check off one item
         std::fs::write(
@@ -1381,7 +1475,7 @@ mod tests {
         )
         .unwrap();
 
-        let events = flush_and_emit(&kanban, &cache);
+        let events = flush_and_emit(&kanban, &roots, &cache);
         assert_eq!(events.len(), 1);
         match &events[0] {
             WatchEvent::EntityFieldChanged {
@@ -1406,11 +1500,12 @@ mod tests {
         let (_tmp, kanban) = setup_kanban_dir();
         std::fs::write(kanban.join("tags/test.yaml"), "tag_name: Original\n").unwrap();
 
-        let cache = new_entity_cache(&kanban);
+        let roots = store_roots(&kanban);
+        let cache = new_entity_cache(&kanban, &roots);
         let change_count = Arc::new(AtomicUsize::new(0));
         let count_clone = change_count.clone();
 
-        let _watcher = start_watching(kanban.clone(), cache.clone(), move |_| {
+        let _watcher = start_watching(kanban.clone(), roots.clone(), cache.clone(), move |_| {
             count_clone.fetch_add(1, Ordering::SeqCst);
         })
         .expect("start_watching should succeed");
@@ -1420,7 +1515,7 @@ mod tests {
         // Write a file and immediately flush_and_emit (simulates command execution).
         // This updates the cache, so the watcher's debounce should NOT fire.
         std::fs::write(kanban.join("tags/test.yaml"), "tag_name: Updated\n").unwrap();
-        let events = flush_and_emit(&kanban, &cache);
+        let events = flush_and_emit(&kanban, &roots, &cache);
         assert_eq!(events.len(), 1); // flush_and_emit returns the event
 
         tokio::time::sleep(std::time::Duration::from_millis(600)).await;
@@ -1429,6 +1524,844 @@ mod tests {
             change_count.load(Ordering::SeqCst),
             0,
             "watcher should NOT fire because flush_and_emit updated the cache"
+        );
+    }
+
+    // =========================================================================
+    // sync_search_index tests
+    // =========================================================================
+
+    #[test]
+    fn test_sync_search_index_entity_created() {
+        let mut idx = swissarmyhammer_entity_search::EntitySearchIndex::new();
+        let mut fields = HashMap::new();
+        fields.insert("title".to_string(), serde_json::json!("My Task"));
+        fields.insert("status".to_string(), serde_json::json!("open"));
+
+        let evt = WatchEvent::EntityCreated {
+            entity_type: "task".to_string(),
+            id: "ABC123".to_string(),
+            fields,
+        };
+        sync_search_index(&mut idx, &evt);
+
+        // Verify entity was added to the index
+        let results = idx.search("My Task", 10);
+        assert!(!results.is_empty(), "entity should be findable after sync");
+        assert_eq!(results[0].entity_id, "ABC123");
+    }
+
+    #[test]
+    fn test_sync_search_index_entity_field_changed_with_fields() {
+        let mut idx = swissarmyhammer_entity_search::EntitySearchIndex::new();
+
+        // First, add an entity
+        let mut initial_fields = HashMap::new();
+        initial_fields.insert("title".to_string(), serde_json::json!("Original"));
+        let create_evt = WatchEvent::EntityCreated {
+            entity_type: "task".to_string(),
+            id: "T1".to_string(),
+            fields: initial_fields,
+        };
+        sync_search_index(&mut idx, &create_evt);
+
+        // Now update it with field changes
+        let change_evt = WatchEvent::EntityFieldChanged {
+            entity_type: "task".to_string(),
+            id: "T1".to_string(),
+            changes: vec![FieldChange {
+                field: "title".to_string(),
+                value: serde_json::json!("Updated Title"),
+            }],
+        };
+        sync_search_index(&mut idx, &change_evt);
+
+        let results = idx.search("Updated Title", 10);
+        assert!(!results.is_empty(), "updated entity should be findable");
+    }
+
+    #[test]
+    fn test_sync_search_index_entity_field_changed_empty_changes_is_noop() {
+        let mut idx = swissarmyhammer_entity_search::EntitySearchIndex::new();
+
+        // Add an entity first
+        let mut fields = HashMap::new();
+        fields.insert("title".to_string(), serde_json::json!("Task"));
+        let create_evt = WatchEvent::EntityCreated {
+            entity_type: "task".to_string(),
+            id: "T2".to_string(),
+            fields,
+        };
+        sync_search_index(&mut idx, &create_evt);
+
+        // EntityFieldChanged with empty changes should be a no-op
+        let change_evt = WatchEvent::EntityFieldChanged {
+            entity_type: "task".to_string(),
+            id: "T2".to_string(),
+            changes: vec![],
+        };
+        sync_search_index(&mut idx, &change_evt);
+
+        // Entity still in index with original title
+        let results = idx.search("Task", 10);
+        assert!(!results.is_empty(), "entity should still exist");
+    }
+
+    #[test]
+    fn test_sync_search_index_entity_removed() {
+        let mut idx = swissarmyhammer_entity_search::EntitySearchIndex::new();
+
+        let mut fields = HashMap::new();
+        fields.insert("title".to_string(), serde_json::json!("Doomed"));
+        let create_evt = WatchEvent::EntityCreated {
+            entity_type: "task".to_string(),
+            id: "DOOM".to_string(),
+            fields,
+        };
+        sync_search_index(&mut idx, &create_evt);
+
+        let remove_evt = WatchEvent::EntityRemoved {
+            entity_type: "task".to_string(),
+            id: "DOOM".to_string(),
+        };
+        sync_search_index(&mut idx, &remove_evt);
+
+        let results = idx.search("Doomed", 10);
+        assert!(
+            results.is_empty() || results.iter().all(|r| r.entity_id != "DOOM"),
+            "removed entity should not be findable"
+        );
+    }
+
+    #[test]
+    fn test_sync_search_index_attachment_changed_noop() {
+        let mut idx = swissarmyhammer_entity_search::EntitySearchIndex::new();
+
+        // AttachmentChanged events should be silently ignored
+        let evt = WatchEvent::AttachmentChanged {
+            entity_type: "task".to_string(),
+            filename: "screenshot.png".to_string(),
+            removed: false,
+        };
+        sync_search_index(&mut idx, &evt);
+        // No panic, no entities added — just a no-op
+    }
+
+    // =========================================================================
+    // classify_event tests
+    // =========================================================================
+
+    #[test]
+    fn test_classify_event_create_entity() {
+        let (_tmp, kanban) = setup_kanban_dir();
+        let path = kanban.join("tasks/abc.yaml");
+        std::fs::write(&path, "title: test\n").unwrap();
+
+        let event = Event {
+            kind: EventKind::Create(notify::event::CreateKind::File),
+            paths: vec![path.clone()],
+            attrs: Default::default(),
+        };
+
+        let actions = classify_event(&event, &kanban);
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(&actions[0], FsAction::Changed(_)));
+    }
+
+    #[test]
+    fn test_classify_event_modify_entity() {
+        let (_tmp, kanban) = setup_kanban_dir();
+        let path = kanban.join("tags/bug.yaml");
+        std::fs::write(&path, "tag_name: bug\n").unwrap();
+
+        let event = Event {
+            kind: EventKind::Modify(notify::event::ModifyKind::Data(
+                notify::event::DataChange::Content,
+            )),
+            paths: vec![path.clone()],
+            attrs: Default::default(),
+        };
+
+        let actions = classify_event(&event, &kanban);
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(&actions[0], FsAction::Changed(_)));
+    }
+
+    #[test]
+    fn test_classify_event_remove_entity() {
+        let (_tmp, kanban) = setup_kanban_dir();
+        // File doesn't need to exist for Remove events
+        let path = kanban.join("tags/gone.yaml");
+
+        let event = Event {
+            kind: EventKind::Remove(notify::event::RemoveKind::File),
+            paths: vec![path.clone()],
+            attrs: Default::default(),
+        };
+
+        let actions = classify_event(&event, &kanban);
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(&actions[0], FsAction::Removed(_)));
+    }
+
+    #[test]
+    fn test_classify_event_other_kind_treated_as_changed() {
+        let (_tmp, kanban) = setup_kanban_dir();
+        let path = kanban.join("tasks/abc.yaml");
+        std::fs::write(&path, "title: test\n").unwrap();
+
+        let event = Event {
+            kind: EventKind::Other,
+            paths: vec![path.clone()],
+            attrs: Default::default(),
+        };
+
+        let actions = classify_event(&event, &kanban);
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(&actions[0], FsAction::Changed(_)));
+    }
+
+    #[test]
+    fn test_classify_event_ignores_non_entity_non_attachment() {
+        let (_tmp, kanban) = setup_kanban_dir();
+        let path = kanban.join("tasks/abc.jsonl");
+        std::fs::write(&path, "log\n").unwrap();
+
+        let event = Event {
+            kind: EventKind::Create(notify::event::CreateKind::File),
+            paths: vec![path.clone()],
+            attrs: Default::default(),
+        };
+
+        let actions = classify_event(&event, &kanban);
+        assert!(actions.is_empty(), "should ignore non-entity files");
+    }
+
+    #[test]
+    fn test_classify_event_attachment_file() {
+        let (_tmp, kanban) = setup_kanban_dir();
+        let att_dir = kanban.join("tasks/.attachments");
+        std::fs::create_dir_all(&att_dir).unwrap();
+        let path = att_dir.join("screenshot.png");
+        std::fs::write(&path, "PNG data").unwrap();
+
+        let event = Event {
+            kind: EventKind::Create(notify::event::CreateKind::File),
+            paths: vec![path.clone()],
+            attrs: Default::default(),
+        };
+
+        let actions = classify_event(&event, &kanban);
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(&actions[0], FsAction::Changed(_)));
+    }
+
+    #[test]
+    fn test_classify_event_attachment_removal() {
+        let (_tmp, kanban) = setup_kanban_dir();
+        let att_dir = kanban.join("tasks/.attachments");
+        std::fs::create_dir_all(&att_dir).unwrap();
+        // File doesn't need to exist for Remove events
+        let path = att_dir.join("deleted.png");
+
+        let event = Event {
+            kind: EventKind::Remove(notify::event::RemoveKind::File),
+            paths: vec![path.clone()],
+            attrs: Default::default(),
+        };
+
+        let actions = classify_event(&event, &kanban);
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(&actions[0], FsAction::Removed(_)));
+    }
+
+    #[test]
+    fn test_classify_event_multiple_paths() {
+        let (_tmp, kanban) = setup_kanban_dir();
+        let path1 = kanban.join("tasks/t1.yaml");
+        let path2 = kanban.join("tags/bug.yaml");
+        std::fs::write(&path1, "title: t1\n").unwrap();
+        std::fs::write(&path2, "tag_name: bug\n").unwrap();
+
+        let event = Event {
+            kind: EventKind::Modify(notify::event::ModifyKind::Data(
+                notify::event::DataChange::Content,
+            )),
+            paths: vec![path1, path2],
+            attrs: Default::default(),
+        };
+
+        let actions = classify_event(&event, &kanban);
+        assert_eq!(actions.len(), 2, "should produce one action per path");
+    }
+
+    // =========================================================================
+    // resolve_change / resolve_removal for attachments
+    // =========================================================================
+
+    #[test]
+    fn test_resolve_change_attachment() {
+        let (_tmp, kanban) = setup_kanban_dir();
+        let att_dir = kanban.join("tasks/.attachments");
+        std::fs::create_dir_all(&att_dir).unwrap();
+        let path = att_dir.join("screenshot.png");
+        std::fs::write(&path, "PNG data").unwrap();
+
+        let roots = store_roots(&kanban);
+        let cache = new_entity_cache(&kanban, &roots);
+        let evt = resolve_change(&path.canonicalize().unwrap(), &cache, &kanban);
+        match evt {
+            Some(WatchEvent::AttachmentChanged {
+                entity_type,
+                filename,
+                removed,
+            }) => {
+                assert_eq!(entity_type, "task");
+                assert_eq!(filename, "screenshot.png");
+                assert!(!removed);
+            }
+            other => panic!("expected AttachmentChanged, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_resolve_removal_attachment() {
+        let (_tmp, kanban) = setup_kanban_dir();
+        let att_dir = kanban.join("tasks/.attachments");
+        std::fs::create_dir_all(&att_dir).unwrap();
+        // Create and then remove the file
+        let path = att_dir.join("deleted.png");
+        std::fs::write(&path, "data").unwrap();
+        let canonical = path.canonicalize().unwrap();
+        std::fs::remove_file(&path).unwrap();
+
+        let roots = store_roots(&kanban);
+        let cache = new_entity_cache(&kanban, &roots);
+        let evt = resolve_removal(&canonical, &cache, &kanban);
+        match evt {
+            Some(WatchEvent::AttachmentChanged {
+                entity_type,
+                filename,
+                removed,
+            }) => {
+                assert_eq!(entity_type, "task");
+                assert_eq!(filename, "deleted.png");
+                assert!(removed);
+            }
+            other => panic!("expected AttachmentChanged removed, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_resolve_removal_untracked_entity() {
+        let (_tmp, kanban) = setup_kanban_dir();
+        // Don't create the file first, so it's never in the cache
+        let path = kanban.join("tags/phantom.yaml");
+
+        let cache = Arc::new(Mutex::new(HashMap::new()));
+        let evt = resolve_removal(&path, &cache, &kanban);
+        assert!(
+            evt.is_none(),
+            "should return None for untracked (never-cached) entity"
+        );
+    }
+
+    // =========================================================================
+    // Root-level entity file tests
+    // =========================================================================
+
+    #[test]
+    fn test_cache_population_root_level_files() {
+        let (_tmp, kanban) = setup_kanban_dir();
+        std::fs::write(kanban.join("board.yaml"), "name: My Board\n").unwrap();
+
+        let roots = store_roots(&kanban);
+        let cache = new_entity_cache(&kanban, &roots);
+        let map = cache.lock().unwrap();
+        assert!(
+            map.contains_key(&kanban.join("board.yaml")),
+            "root-level entity files should be cached"
+        );
+    }
+
+    #[test]
+    fn test_flush_and_emit_root_level_files() {
+        let (_tmp, kanban) = setup_kanban_dir();
+        let roots = store_roots(&kanban);
+        let cache = new_entity_cache(&kanban, &roots);
+
+        // Add a root-level entity file after cache was built
+        std::fs::write(kanban.join("board.yaml"), "name: My Board\n").unwrap();
+
+        let events = flush_and_emit(&kanban, &roots, &cache);
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            WatchEvent::EntityCreated {
+                entity_type,
+                id,
+                fields,
+            } => {
+                assert_eq!(entity_type, "board");
+                assert_eq!(id, "board");
+                assert_eq!(fields.get("name").unwrap(), &serde_json::json!("My Board"));
+            }
+            other => panic!("expected EntityCreated for root file, got {:?}", other),
+        }
+    }
+
+    // =========================================================================
+    // update_cache tests
+    // =========================================================================
+
+    #[test]
+    fn test_update_cache_suppresses_change_detection() {
+        let (_tmp, kanban) = setup_kanban_dir();
+        let path = kanban.join("tags/test.yaml");
+        std::fs::write(&path, "tag_name: Original\n").unwrap();
+
+        let roots = store_roots(&kanban);
+        let cache = new_entity_cache(&kanban, &roots);
+
+        // Write new content, then update cache
+        std::fs::write(&path, "tag_name: Updated\n").unwrap();
+        update_cache(&cache, &path);
+
+        // Now resolve_change should return None (cache matches)
+        assert!(
+            resolve_change(&path, &cache, &kanban).is_none(),
+            "should not detect change after update_cache"
+        );
+    }
+
+    // =========================================================================
+    // parse_entity_file edge cases
+    // =========================================================================
+
+    #[test]
+    fn test_parse_entity_file_unknown_extension() {
+        let result = parse_entity_file(Path::new("/foo/bar.txt"), "some content");
+        assert!(result.is_none(), "unknown extension should return None");
+    }
+
+    #[test]
+    fn test_parse_entity_file_yaml_extension() {
+        let result = parse_entity_file(Path::new("/foo/bar.yaml"), "name: test\n");
+        assert!(result.is_some());
+        assert_eq!(
+            result.unwrap().get("name").unwrap(),
+            &serde_json::json!("test")
+        );
+    }
+
+    #[test]
+    fn test_parse_entity_file_yml_extension() {
+        let result = parse_entity_file(Path::new("/foo/bar.yml"), "name: test\n");
+        assert!(result.is_some());
+    }
+
+    #[test]
+    fn test_parse_entity_file_md_extension() {
+        let result = parse_entity_file(Path::new("/foo/bar.md"), "---\ntitle: T\n---\nBody\n");
+        assert!(result.is_some());
+        let fields = result.unwrap();
+        assert_eq!(fields.get("title").unwrap(), &serde_json::json!("T"));
+        assert!(fields.contains_key("body"));
+    }
+
+    #[test]
+    fn test_parse_frontmatter_body_no_frontmatter() {
+        let result = parse_frontmatter_body("Just plain text with no frontmatter");
+        assert!(result.is_none(), "no --- delimiters should return None");
+    }
+
+    #[test]
+    fn test_parse_plain_yaml_scalar_returns_none() {
+        // A bare string is valid YAML but not an object — json_to_field_map returns None
+        let result = parse_plain_yaml("just a string");
+        assert!(
+            result.is_none(),
+            "non-object YAML should return None from json_to_field_map"
+        );
+    }
+
+    // =========================================================================
+    // path_to_entity edge cases
+    // =========================================================================
+
+    #[test]
+    fn test_path_to_entity_views_strips_s() {
+        let root = PathBuf::from("/project/.kanban");
+        assert_eq!(
+            path_to_entity(Path::new("/project/.kanban/views/board.yaml"), &root),
+            Some(("view".to_string(), "board".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_path_to_entity_actors_strips_s() {
+        let root = PathBuf::from("/project/.kanban");
+        assert_eq!(
+            path_to_entity(Path::new("/project/.kanban/actors/alice.yaml"), &root),
+            Some(("actor".to_string(), "alice".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_path_to_entity_boards_strips_s() {
+        let root = PathBuf::from("/project/.kanban");
+        assert_eq!(
+            path_to_entity(Path::new("/project/.kanban/boards/main.yaml"), &root),
+            Some(("board".to_string(), "main".to_string()))
+        );
+    }
+
+    // =========================================================================
+    // is_attachment edge cases
+    // =========================================================================
+
+    #[test]
+    fn test_is_attachment_no_parent() {
+        // A bare filename with no parent
+        assert!(!is_attachment(Path::new("file.png")));
+    }
+
+    // =========================================================================
+    // WatchEvent and BoardWatchEvent serialization tests
+    // =========================================================================
+
+    #[test]
+    fn test_watch_event_serialization_entity_created() {
+        let mut fields = HashMap::new();
+        fields.insert("title".to_string(), serde_json::json!("Test"));
+        let evt = WatchEvent::EntityCreated {
+            entity_type: "task".to_string(),
+            id: "T1".to_string(),
+            fields,
+        };
+        let json = serde_json::to_value(&evt).unwrap();
+        assert_eq!(json["kind"], "entity-created");
+        assert_eq!(json["entity_type"], "task");
+    }
+
+    #[test]
+    fn test_watch_event_serialization_entity_removed() {
+        let evt = WatchEvent::EntityRemoved {
+            entity_type: "tag".to_string(),
+            id: "bug".to_string(),
+        };
+        let json = serde_json::to_value(&evt).unwrap();
+        assert_eq!(json["kind"], "entity-removed");
+    }
+
+    #[test]
+    fn test_watch_event_serialization_field_changed() {
+        let evt = WatchEvent::EntityFieldChanged {
+            entity_type: "task".to_string(),
+            id: "T1".to_string(),
+            changes: vec![FieldChange {
+                field: "title".to_string(),
+                value: serde_json::json!("New"),
+            }],
+        };
+        let json = serde_json::to_value(&evt).unwrap();
+        assert_eq!(json["kind"], "entity-field-changed");
+        assert_eq!(json["changes"][0]["field"], "title");
+        assert_eq!(json["changes"][0]["value"], "New");
+    }
+
+    #[test]
+    fn test_watch_event_serialization_attachment_changed() {
+        let evt = WatchEvent::AttachmentChanged {
+            entity_type: "task".to_string(),
+            filename: "screenshot.png".to_string(),
+            removed: false,
+        };
+        let json = serde_json::to_value(&evt).unwrap();
+        assert_eq!(json["kind"], "attachment-changed");
+        assert_eq!(json["filename"], "screenshot.png");
+    }
+
+    #[test]
+    fn test_board_watch_event_flattens() {
+        let evt = BoardWatchEvent {
+            event: WatchEvent::EntityRemoved {
+                entity_type: "tag".to_string(),
+                id: "bug".to_string(),
+            },
+            board_path: "/path/to/board".to_string(),
+        };
+        let json = serde_json::to_value(&evt).unwrap();
+        assert_eq!(json["kind"], "entity-removed");
+        assert_eq!(json["board_path"], "/path/to/board");
+    }
+
+    // =========================================================================
+    // yaml_to_json edge cases
+    // =========================================================================
+
+    #[test]
+    fn test_yaml_to_json_valid() {
+        let yaml: serde_yaml_ng::Value = serde_yaml_ng::from_str("name: test\ncount: 42").unwrap();
+        let json = yaml_to_json(yaml).unwrap();
+        assert_eq!(json["name"], "test");
+        assert_eq!(json["count"], 42);
+    }
+
+    #[test]
+    fn test_json_to_field_map_non_object() {
+        // json_to_field_map should return None for non-object values
+        let val = serde_json::json!("just a string");
+        assert!(json_to_field_map(val).is_none());
+    }
+
+    // =========================================================================
+    // resolve_change with same hash (no real change)
+    // =========================================================================
+
+    #[test]
+    fn test_resolve_change_same_hash_but_different_fields_returns_none() {
+        let (_tmp, kanban) = setup_kanban_dir();
+        let path = kanban.join("tags/stable.yaml");
+        std::fs::write(&path, "tag_name: Stable\ncolor: \"aaa\"\n").unwrap();
+
+        let roots = store_roots(&kanban);
+        let cache = new_entity_cache(&kanban, &roots);
+
+        // Re-read the same file — same hash, no change
+        let evt = resolve_change(&path, &cache, &kanban);
+        assert!(evt.is_none(), "same content should produce no event");
+    }
+
+    // =========================================================================
+    // flush_and_emit with root-level field changes
+    // =========================================================================
+
+    #[test]
+    fn test_flush_and_emit_root_level_field_change() {
+        let (_tmp, kanban) = setup_kanban_dir();
+        std::fs::write(kanban.join("board.yaml"), "name: Old Name\n").unwrap();
+        let roots = store_roots(&kanban);
+        let cache = new_entity_cache(&kanban, &roots);
+
+        std::fs::write(kanban.join("board.yaml"), "name: New Name\n").unwrap();
+
+        let events = flush_and_emit(&kanban, &roots, &cache);
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            WatchEvent::EntityFieldChanged {
+                entity_type,
+                id,
+                changes,
+                ..
+            } => {
+                assert_eq!(entity_type, "board");
+                assert_eq!(id, "board");
+                assert!(changes.iter().any(|c| c.field == "name"));
+            }
+            other => panic!("expected EntityFieldChanged, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_flush_and_emit_root_level_removal() {
+        let (_tmp, kanban) = setup_kanban_dir();
+        std::fs::write(kanban.join("board.yaml"), "name: Board\n").unwrap();
+        let roots = store_roots(&kanban);
+        let cache = new_entity_cache(&kanban, &roots);
+
+        std::fs::remove_file(kanban.join("board.yaml")).unwrap();
+
+        let events = flush_and_emit(&kanban, &roots, &cache);
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            WatchEvent::EntityRemoved { entity_type, id } => {
+                assert_eq!(entity_type, "board");
+                assert_eq!(id, "board");
+            }
+            other => panic!("expected EntityRemoved, got {:?}", other),
+        }
+    }
+
+    // =========================================================================
+    // Watcher with .attachments/ directory present
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_watcher_with_attachments_dir() {
+        let (_tmp, kanban) = setup_kanban_dir();
+        // Create .attachments/ dirs so the watcher registers them
+        let att_dir = kanban.join("tasks/.attachments");
+        std::fs::create_dir_all(&att_dir).unwrap();
+
+        let roots = store_roots(&kanban);
+        let cache = new_entity_cache(&kanban, &roots);
+        let events: Arc<Mutex<Vec<WatchEvent>>> = Arc::new(Mutex::new(Vec::new()));
+        let events_clone = events.clone();
+
+        let _watcher = start_watching(kanban.clone(), roots.clone(), cache.clone(), move |evt| {
+            events_clone.lock().unwrap().push(evt);
+        })
+        .expect("start_watching should succeed with .attachments/ dir");
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        // Create an attachment file
+        std::fs::write(att_dir.join("screenshot.png"), "PNG data").unwrap();
+
+        tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+
+        let captured = events.lock().unwrap();
+        assert!(!captured.is_empty(), "should emit attachment event");
+        assert!(
+            captured.iter().any(|e| matches!(
+                e,
+                WatchEvent::AttachmentChanged {
+                    entity_type,
+                    filename,
+                    removed,
+                } if entity_type == "task" && filename == "screenshot.png" && !removed
+            )),
+            "should have AttachmentChanged event, got: {:?}",
+            *captured
+        );
+    }
+
+    #[tokio::test]
+    async fn test_watcher_detects_attachment_deletion() {
+        let (_tmp, kanban) = setup_kanban_dir();
+        let att_dir = kanban.join("tasks/.attachments");
+        std::fs::create_dir_all(&att_dir).unwrap();
+        let att_file = att_dir.join("to-delete.png");
+        std::fs::write(&att_file, "data").unwrap();
+
+        let roots = store_roots(&kanban);
+        let cache = new_entity_cache(&kanban, &roots);
+        let events: Arc<Mutex<Vec<WatchEvent>>> = Arc::new(Mutex::new(Vec::new()));
+        let events_clone = events.clone();
+
+        let _watcher = start_watching(kanban.clone(), roots.clone(), cache.clone(), move |evt| {
+            events_clone.lock().unwrap().push(evt);
+        })
+        .expect("start_watching should succeed");
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        std::fs::remove_file(&att_file).unwrap();
+
+        tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+
+        let captured = events.lock().unwrap();
+        assert!(
+            !captured.is_empty(),
+            "should emit events for attachment deletion"
+        );
+        assert!(
+            captured.iter().any(|e| matches!(
+                e,
+                WatchEvent::AttachmentChanged {
+                    entity_type,
+                    filename,
+                    removed,
+                } if entity_type == "task" && filename == "to-delete.png" && *removed
+            )),
+            "should have AttachmentChanged removed event, got: {:?}",
+            *captured
+        );
+    }
+
+    // =========================================================================
+    // resolve_change edge case: hash changed but fields identical
+    // =========================================================================
+
+    #[test]
+    fn test_resolve_change_hash_differs_but_fields_same() {
+        // When a file's hash changes (e.g., trailing whitespace) but the parsed
+        // fields are identical, resolve_change should return None.
+        let (_tmp, kanban) = setup_kanban_dir();
+        let path = kanban.join("tags/ws.yaml");
+        std::fs::write(&path, "tag_name: WS\n").unwrap();
+
+        let roots = store_roots(&kanban);
+        let cache = new_entity_cache(&kanban, &roots);
+
+        // Rewrite with trailing whitespace — different hash, same parsed fields
+        std::fs::write(&path, "tag_name: WS\n\n").unwrap();
+
+        let evt = resolve_change(&path, &cache, &kanban);
+        assert!(
+            evt.is_none(),
+            "should return None when hash changes but fields are identical"
+        );
+    }
+
+    // =========================================================================
+    // classify_event: removed file (path doesn't exist, canonicalize parent)
+    // =========================================================================
+
+    #[test]
+    fn test_classify_event_removed_file_canonicalizes_parent() {
+        let (_tmp, kanban) = setup_kanban_dir();
+        // File doesn't exist — classify_event should canonicalize parent dir
+        let path = kanban.join("tasks/removed.yaml");
+
+        let event = Event {
+            kind: EventKind::Remove(notify::event::RemoveKind::File),
+            paths: vec![path],
+            attrs: Default::default(),
+        };
+
+        let actions = classify_event(&event, &kanban);
+        assert_eq!(actions.len(), 1);
+        match &actions[0] {
+            FsAction::Removed(p) => {
+                // Should have canonicalized the parent portion
+                assert!(p.ends_with("tasks/removed.yaml"));
+            }
+            other => panic!("expected Removed, got {:?}", other),
+        }
+    }
+
+    // =========================================================================
+    // new_entity_cache with multiple subdirs containing files
+    // =========================================================================
+
+    #[test]
+    fn test_cache_population_multiple_subdirs() {
+        let (_tmp, kanban) = setup_kanban_dir();
+        std::fs::write(kanban.join("tasks/t1.md"), "---\ntitle: T1\n---\nBody\n").unwrap();
+        std::fs::write(kanban.join("tags/bug.yaml"), "tag_name: Bug\n").unwrap();
+        std::fs::write(kanban.join("columns/todo.yaml"), "name: To Do\n").unwrap();
+        std::fs::write(kanban.join("actors/alice.yaml"), "name: Alice\n").unwrap();
+        std::fs::write(kanban.join("views/board.yaml"), "name: Board\n").unwrap();
+        std::fs::write(kanban.join("board.yaml"), "name: My Board\n").unwrap();
+
+        let roots = store_roots(&kanban);
+        let cache = new_entity_cache(&kanban, &roots);
+        let map = cache.lock().unwrap();
+        assert_eq!(map.len(), 6, "should cache files from all subdirs + root");
+    }
+
+    // =========================================================================
+    // flush_and_emit: scan root-level + subdirs together
+    // =========================================================================
+
+    #[test]
+    fn test_flush_and_emit_scans_all_subdirs() {
+        let (_tmp, kanban) = setup_kanban_dir();
+        std::fs::write(kanban.join("tasks/t1.md"), "---\ntitle: T1\n---\nBody\n").unwrap();
+        std::fs::write(kanban.join("tags/bug.yaml"), "tag_name: Bug\n").unwrap();
+        let roots = store_roots(&kanban);
+        let cache = new_entity_cache(&kanban, &roots);
+
+        // Add new files in different subdirs after cache
+        std::fs::write(kanban.join("columns/done.yaml"), "name: Done\n").unwrap();
+        std::fs::write(kanban.join("board.yaml"), "name: Board\n").unwrap();
+
+        let events = flush_and_emit(&kanban, &roots, &cache);
+        assert_eq!(
+            events.len(),
+            2,
+            "should detect new files in subdirs and root"
         );
     }
 
@@ -1444,7 +2377,8 @@ mod tests {
             "---\ntitle: Card C\nposition_column: todo\nposition_ordinal: 7e80\n---\n",
         )
         .unwrap();
-        let cache = new_entity_cache(&kanban);
+        let roots = store_roots(&kanban);
+        let cache = new_entity_cache(&kanban, &roots);
 
         // Simulate task.move changing ordinal from 7e80 to 7cc0 (moved before card B)
         std::fs::write(
@@ -1453,7 +2387,7 @@ mod tests {
         )
         .unwrap();
 
-        let events = flush_and_emit(&kanban, &cache);
+        let events = flush_and_emit(&kanban, &roots, &cache);
         assert_eq!(events.len(), 1, "should detect the ordinal change");
         match &events[0] {
             WatchEvent::EntityFieldChanged {
@@ -1472,5 +2406,268 @@ mod tests {
             }
             other => panic!("expected EntityFieldChanged, got {:?}", other),
         }
+    }
+
+    /// Verify that a perspective store registered via store_roots causes
+    /// perspective file changes to be detected by the watcher.
+    ///
+    /// This test uses store_roots directly (as StoreContext::watched_roots()
+    /// would return) to confirm that perspectives are included automatically
+    /// without special-casing.
+    #[tokio::test]
+    async fn test_watcher_detects_perspective_file_changes() {
+        let (_tmp, kanban) = setup_kanban_dir();
+        // perspectives/ is already created by setup_kanban_dir via TEST_SUBDIRS
+
+        let perspective_path = kanban.join("perspectives/myview.yaml");
+        std::fs::write(&perspective_path, "name: My View\ntype: kanban\n").unwrap();
+
+        let roots = store_roots(&kanban);
+        let cache = new_entity_cache(&kanban, &roots);
+        let events: Arc<Mutex<Vec<WatchEvent>>> = Arc::new(Mutex::new(Vec::new()));
+        let events_clone = events.clone();
+
+        let _watcher = start_watching(kanban.clone(), roots.clone(), cache.clone(), move |evt| {
+            events_clone.lock().unwrap().push(evt);
+        })
+        .expect("start_watching should succeed");
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        // External edit to a perspective file
+        std::fs::write(&perspective_path, "name: My View\ntype: table\n").unwrap();
+
+        tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+
+        let captured = events.lock().unwrap();
+        assert!(
+            !captured.is_empty(),
+            "should have events for perspective file change"
+        );
+        match &captured[0] {
+            WatchEvent::EntityFieldChanged {
+                entity_type, id, ..
+            } => {
+                assert_eq!(entity_type, "perspective");
+                assert_eq!(id, "myview");
+            }
+            WatchEvent::EntityCreated {
+                entity_type, id, ..
+            } => {
+                // Also acceptable if watcher sees it as new
+                assert_eq!(entity_type, "perspective");
+                assert_eq!(id, "myview");
+            }
+            other => panic!("expected perspective event, got {:?}", other),
+        }
+    }
+
+    /// Verify that flush_and_emit detects new perspective files.
+    #[test]
+    fn test_flush_and_emit_detects_perspective_file() {
+        let (_tmp, kanban) = setup_kanban_dir();
+        let roots = store_roots(&kanban);
+        let cache = new_entity_cache(&kanban, &roots);
+
+        // Add a perspective file after cache was built
+        std::fs::write(
+            kanban.join("perspectives/board-view.yaml"),
+            "name: Board View\ntype: kanban\n",
+        )
+        .unwrap();
+
+        let events = flush_and_emit(&kanban, &roots, &cache);
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            WatchEvent::EntityCreated {
+                entity_type, id, ..
+            } => {
+                assert_eq!(entity_type, "perspective");
+                assert_eq!(id, "board-view");
+            }
+            other => panic!("expected EntityCreated for perspective, got {:?}", other),
+        }
+    }
+
+    // =========================================================================
+    // Named integration tests required by acceptance criteria
+    // These test the full start_watching → external write → callback pipeline.
+    // =========================================================================
+
+    /// Integration test: external write to an existing entity file while
+    /// `start_watching` is running fires `EntityFieldChanged` with the correct
+    /// `changes` vec containing the modified field name and value.
+    #[tokio::test]
+    async fn test_start_watching_field_change_event() {
+        let (_tmp, kanban) = setup_kanban_dir();
+
+        let tag_path = kanban.join("tags/mytag.yaml");
+        std::fs::write(&tag_path, "tag_name: Original\ncolor: \"ff0000\"\n").unwrap();
+
+        let roots = store_roots(&kanban);
+        let cache = new_entity_cache(&kanban, &roots);
+        let events: Arc<Mutex<Vec<WatchEvent>>> = Arc::new(Mutex::new(Vec::new()));
+        let events_clone = events.clone();
+
+        let _watcher = start_watching(kanban.clone(), roots.clone(), cache.clone(), move |evt| {
+            events_clone.lock().unwrap().push(evt);
+        })
+        .expect("start_watching should succeed");
+
+        // Allow the watcher to initialize before writing
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        // External write: modify a single field
+        std::fs::write(&tag_path, "tag_name: Original\ncolor: \"00ff00\"\n").unwrap();
+
+        // Wait for the debounce to fire (debounce is 200ms, sleep 600ms)
+        tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+
+        let captured = events.lock().unwrap();
+        assert!(!captured.is_empty(), "watcher should have fired an event");
+        match &captured[0] {
+            WatchEvent::EntityFieldChanged {
+                entity_type,
+                id,
+                changes,
+                ..
+            } => {
+                assert_eq!(entity_type, "tag");
+                assert_eq!(id, "mytag");
+                assert!(
+                    changes.iter().any(|c| c.field == "color"),
+                    "changes should contain 'color', got: {:?}",
+                    changes.iter().map(|c| &c.field).collect::<Vec<_>>()
+                );
+                let color_change = changes.iter().find(|c| c.field == "color").unwrap();
+                assert_eq!(color_change.value, serde_json::json!("00ff00"));
+            }
+            other => panic!("expected EntityFieldChanged, got {:?}", other),
+        }
+    }
+
+    /// Integration test: creating a new YAML entity file while `start_watching`
+    /// is running fires `EntityCreated` with the correct entity type, id, and fields.
+    #[tokio::test]
+    async fn test_start_watching_creates_entity_event() {
+        let (_tmp, kanban) = setup_kanban_dir();
+
+        let roots = store_roots(&kanban);
+        let cache = new_entity_cache(&kanban, &roots);
+        let events: Arc<Mutex<Vec<WatchEvent>>> = Arc::new(Mutex::new(Vec::new()));
+        let events_clone = events.clone();
+
+        let _watcher = start_watching(kanban.clone(), roots.clone(), cache.clone(), move |evt| {
+            events_clone.lock().unwrap().push(evt);
+        })
+        .expect("start_watching should succeed");
+
+        // Allow the watcher to initialize before writing
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        // External write: create a brand-new entity file
+        std::fs::write(
+            kanban.join("tasks/new-task.md"),
+            "---\ntitle: New Task\nassignees: []\n---\nTask body\n",
+        )
+        .unwrap();
+
+        // Wait for the debounce to fire
+        tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+
+        let captured = events.lock().unwrap();
+        assert!(!captured.is_empty(), "watcher should have fired an event");
+        match &captured[0] {
+            WatchEvent::EntityCreated {
+                entity_type,
+                id,
+                fields,
+            } => {
+                assert_eq!(entity_type, "task");
+                assert_eq!(id, "new-task");
+                assert_eq!(fields.get("title").unwrap(), &serde_json::json!("New Task"));
+            }
+            other => panic!("expected EntityCreated, got {:?}", other),
+        }
+    }
+
+    /// Integration test: deleting an entity file while `start_watching` is
+    /// running fires `EntityRemoved` with the correct entity type and id.
+    #[tokio::test]
+    async fn test_start_watching_removes_entity_event() {
+        let (_tmp, kanban) = setup_kanban_dir();
+
+        let tag_path = kanban.join("tags/deleteme.yaml");
+        std::fs::write(&tag_path, "tag_name: deleteme\n").unwrap();
+
+        let roots = store_roots(&kanban);
+        let cache = new_entity_cache(&kanban, &roots);
+        let events: Arc<Mutex<Vec<WatchEvent>>> = Arc::new(Mutex::new(Vec::new()));
+        let events_clone = events.clone();
+
+        let _watcher = start_watching(kanban.clone(), roots.clone(), cache.clone(), move |evt| {
+            events_clone.lock().unwrap().push(evt);
+        })
+        .expect("start_watching should succeed");
+
+        // Allow the watcher to initialize before deleting
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        // External removal of the entity file
+        std::fs::remove_file(&tag_path).unwrap();
+
+        // Wait for the debounce to fire
+        tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+
+        let captured = events.lock().unwrap();
+        assert!(!captured.is_empty(), "watcher should have fired an event");
+        match &captured[0] {
+            WatchEvent::EntityRemoved { entity_type, id } => {
+                assert_eq!(entity_type, "tag");
+                assert_eq!(id, "deleteme");
+            }
+            other => panic!("expected EntityRemoved, got {:?}", other),
+        }
+    }
+
+    /// Integration test: writing a file through "our own" code path (update
+    /// cache first, before the debounce fires) does NOT trigger a watcher event.
+    ///
+    /// This verifies the full async suppression pipeline:
+    /// write file → update_cache → debounce fires → hash unchanged → no event.
+    #[tokio::test]
+    async fn test_start_watching_suppresses_own_writes() {
+        let (_tmp, kanban) = setup_kanban_dir();
+
+        let tag_path = kanban.join("tags/own-write.yaml");
+        std::fs::write(&tag_path, "tag_name: Original\n").unwrap();
+
+        let roots = store_roots(&kanban);
+        let cache = new_entity_cache(&kanban, &roots);
+        let event_count = Arc::new(AtomicUsize::new(0));
+        let count_clone = event_count.clone();
+
+        let _watcher = start_watching(kanban.clone(), roots.clone(), cache.clone(), move |_| {
+            count_clone.fetch_add(1, Ordering::SeqCst);
+        })
+        .expect("start_watching should succeed");
+
+        // Allow the watcher to initialize
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        // Simulate our own write: write the file and immediately update the
+        // cache. The debounce (200ms) hasn't fired yet, so when it does, the
+        // hash will match and no event will be emitted.
+        std::fs::write(&tag_path, "tag_name: Updated\n").unwrap();
+        update_cache(&cache, &tag_path);
+
+        // Wait longer than the debounce to confirm no event fires
+        tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+
+        assert_eq!(
+            event_count.load(Ordering::SeqCst),
+            0,
+            "watcher must NOT fire for writes that update the cache first"
+        );
     }
 }

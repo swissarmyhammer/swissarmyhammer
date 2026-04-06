@@ -3,7 +3,7 @@
 use crate::context::KanbanContext;
 use crate::error::KanbanError;
 use crate::task_helpers::{enrich_all_task_entities, task_entity_to_rich_json};
-use crate::types::{ActorId, Ordinal, SwimlaneId, TagId};
+use crate::types::{ActorId, Ordinal, TagId};
 use crate::virtual_tags::default_virtual_tag_registry;
 use serde::Deserialize;
 use serde_json::Value;
@@ -17,8 +17,6 @@ use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResul
 )]
 #[derive(Debug, Default, Deserialize)]
 pub struct NextTask {
-    /// Filter by swimlane
-    pub swimlane: Option<SwimlaneId>,
     /// Filter by assignee
     pub assignee: Option<ActorId>,
     /// Filter by tag
@@ -29,16 +27,9 @@ impl NextTask {
     /// Create a new NextTask command
     pub fn new() -> Self {
         Self {
-            swimlane: None,
             assignee: None,
             tag: None,
         }
-    }
-
-    /// Filter by swimlane
-    pub fn with_swimlane(mut self, swimlane: impl Into<SwimlaneId>) -> Self {
-        self.swimlane = Some(swimlane.into());
-        self
     }
 
     /// Filter by assignee
@@ -93,13 +84,6 @@ impl Execute<KanbanContext, KanbanError> for NextTask {
                     let is_ready = t.get("ready").and_then(|v| v.as_bool()).unwrap_or(true);
                     if !is_ready {
                         return false;
-                    }
-
-                    // Filter by swimlane if specified
-                    if let Some(ref swimlane) = self.swimlane {
-                        if t.get_str("position_swimlane") != Some(swimlane.as_str()) {
-                            return false;
-                        }
                     }
 
                     // Filter by assignee if specified

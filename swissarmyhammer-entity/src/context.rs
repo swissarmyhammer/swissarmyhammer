@@ -6,19 +6,20 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use swissarmyhammer_fields::{
-    ComputeEngine, EntityDef, EntityTypeName, FieldType, FieldsContext, ValidationEngine,
+    ComputeEngine, EntityDef, FieldType, FieldsContext, ValidationEngine,
 };
+use swissarmyhammer_store::{StoreContext, StoreHandle, StoredItemId};
 use tokio::sync::RwLock;
 
 use crate::changelog::{self, ChangeEntry, FieldChange};
 use crate::entity::Entity;
 use crate::error::{EntityError, Result};
-use crate::id_types::{ChangeEntryId, EntityId, TransactionId};
+use crate::id_types::EntityId;
 use crate::io;
-use crate::undo_stack::UndoStack;
+use crate::store::EntityTypeStore;
 
 /// Root-aware I/O coordinator for dynamic entities.
 ///
@@ -29,14 +30,14 @@ pub struct EntityContext {
     fields: Arc<FieldsContext>,
     validation: Option<Arc<ValidationEngine>>,
     compute: Option<Arc<ComputeEngine>>,
-    /// Maps ChangeEntry ULID to (entity_type, entity_id) for reverse lookups.
-    changelog_index: RwLock<HashMap<ChangeEntryId, (EntityTypeName, EntityId)>>,
-    /// Active transaction ULID — when set, all ChangeEntries get this stamped.
-    current_transaction: RwLock<Option<TransactionId>>,
-    /// Maps transaction ULID to the ordered list of ChangeEntry ULIDs it contains.
-    transaction_index: RwLock<HashMap<TransactionId, Vec<ChangeEntryId>>>,
-    /// Persistent undo/redo stack tracking changelog entry IDs.
-    undo_stack: RwLock<UndoStack>,
+    /// Optional store handles for entity types.
+    /// When present, `write()` and `delete()` delegate file I/O to the store handle
+    /// instead of using the legacy `io::write_entity` / `io::trash_entity_files` path.
+    store_handles: RwLock<HashMap<String, Arc<StoreHandle<EntityTypeStore>>>>,
+    /// Optional shared StoreContext for undo/redo stack management.
+    /// When set, write/delete operations automatically push onto the undo stack.
+    /// Uses `OnceLock` so it can be set after construction through a shared reference.
+    store_context: OnceLock<Arc<StoreContext>>,
 }
 
 impl EntityContext {
@@ -45,19 +46,24 @@ impl EntityContext {
     /// - `root`: the storage root (e.g. `.kanban/`)
     /// - `fields`: the field registry containing EntityDefs
     pub fn new(root: impl Into<PathBuf>, fields: Arc<FieldsContext>) -> Self {
-        let root = root.into();
-        let undo_stack_path = root.join("undo_stack.yaml");
-        let undo_stack = UndoStack::load(&undo_stack_path).unwrap_or_default();
         Self {
-            root,
+            root: root.into(),
             fields,
             validation: None,
             compute: None,
-            changelog_index: RwLock::new(HashMap::new()),
-            current_transaction: RwLock::new(None),
-            transaction_index: RwLock::new(HashMap::new()),
-            undo_stack: RwLock::new(undo_stack),
+            store_handles: RwLock::new(HashMap::new()),
+            store_context: OnceLock::new(),
         }
+    }
+
+    /// Set the StoreContext for shared undo/redo stack management.
+    ///
+    /// When set, `write()` and `delete()` automatically push successful
+    /// operations onto the shared undo stack. Can be called through a
+    /// shared reference since it uses `OnceLock` internally. Subsequent
+    /// calls are no-ops (first write wins).
+    pub fn set_store_context(&self, ctx: Arc<StoreContext>) {
+        let _ = self.store_context.set(ctx);
     }
 
     /// Attach a validation engine. Enables field validation on write.
@@ -72,6 +78,22 @@ impl EntityContext {
         self
     }
 
+    /// Register a `StoreHandle` for an entity type.
+    ///
+    /// When registered, `write()` and `delete()` delegate file I/O to the store
+    /// handle instead of using the legacy `io::write_entity` / `io::trash_entity_files`
+    /// path. The old per-entity changelog continues to be written for activity history.
+    pub async fn register_store(
+        &self,
+        entity_type: &str,
+        handle: Arc<StoreHandle<EntityTypeStore>>,
+    ) {
+        self.store_handles
+            .write()
+            .await
+            .insert(entity_type.to_string(), handle);
+    }
+
     /// Get the storage root path.
     pub fn root(&self) -> &Path {
         &self.root
@@ -80,153 +102,6 @@ impl EntityContext {
     /// Get the FieldsContext.
     pub fn fields(&self) -> &FieldsContext {
         &self.fields
-    }
-
-    /// Rebuild changelog and transaction indexes from all `.jsonl` files on disk.
-    ///
-    /// Scans live, trash, and archive directories for each known entity type.
-    /// Call this after construction and before any undo/redo operations.
-    pub async fn rebuild_indexes(&self) -> Result<()> {
-        let mut cl_index = self.changelog_index.write().await;
-        let mut tx_index = self.transaction_index.write().await;
-
-        for entity_def in self.fields.all_entities() {
-            let entity_type = entity_def.name.as_str();
-            let base_dir = self.entity_dir(entity_type);
-
-            // Scan live, trash, and archive directories
-            let dirs = [
-                base_dir.clone(),
-                base_dir.join(".trash"),
-                base_dir.join(".archive"),
-            ];
-
-            for dir in &dirs {
-                let mut read_dir = match tokio::fs::read_dir(dir).await {
-                    Ok(rd) => rd,
-                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
-                    Err(e) => return Err(crate::error::EntityError::Io(e)),
-                };
-
-                while let Some(entry) = read_dir
-                    .next_entry()
-                    .await
-                    .map_err(crate::error::EntityError::Io)?
-                {
-                    let path = entry.path();
-                    if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
-                        continue;
-                    }
-
-                    let entries = changelog::read_changelog(&path).await?;
-                    for ce in entries {
-                        let ce_id = ce.id.clone();
-                        let et = ce.entity_type.clone();
-                        let eid = ce.entity_id.clone();
-
-                        cl_index.insert(ce_id.clone(), (et, eid));
-
-                        if let Some(tx_id) = ce.transaction_id {
-                            tx_index.entry(tx_id).or_default().push(ce_id);
-                        }
-                    }
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Generate a new transaction ULID.
-    ///
-    /// This is a static helper — it does not set the transaction on the context.
-    /// Use [`set_transaction`] to activate it.
-    pub fn generate_transaction_id() -> TransactionId {
-        TransactionId::new()
-    }
-
-    /// Set the active transaction ID.
-    ///
-    /// All subsequent `write()` and `delete()` calls will stamp this
-    /// transaction ID on their ChangeEntry and register the entry ULID
-    /// in the transaction index.
-    pub async fn set_transaction(&self, tx_id: impl Into<TransactionId>) {
-        *self.current_transaction.write().await = Some(tx_id.into());
-    }
-
-    /// Clear the active transaction ID.
-    ///
-    /// Subsequent `write()` and `delete()` calls will not stamp a transaction ID.
-    pub async fn clear_transaction(&self) {
-        *self.current_transaction.write().await = None;
-    }
-
-    /// Get the path to the undo stack YAML file.
-    pub fn undo_stack_path(&self) -> PathBuf {
-        self.root.join("undo_stack.yaml")
-    }
-
-    /// Synchronously check whether the undo stack has entries that can be undone.
-    ///
-    /// Uses `try_read()` on the tokio RwLock so this is safe to call from
-    /// synchronous code (e.g. `Command::available()`). Returns `false` if the
-    /// lock is currently held for writing.
-    pub fn can_undo(&self) -> bool {
-        self.undo_stack
-            .try_read()
-            .map(|stack| stack.can_undo())
-            .unwrap_or(false)
-    }
-
-    /// Synchronously check whether the undo stack has entries that can be redone.
-    ///
-    /// Uses `try_read()` on the tokio RwLock so this is safe to call from
-    /// synchronous code (e.g. `Command::available()`). Returns `false` if the
-    /// lock is currently held for writing.
-    pub fn can_redo(&self) -> bool {
-        self.undo_stack
-            .try_read()
-            .map(|stack| stack.can_redo())
-            .unwrap_or(false)
-    }
-
-    /// Get a read lock on the undo stack.
-    pub async fn undo_stack(&self) -> tokio::sync::RwLockReadGuard<'_, UndoStack> {
-        self.undo_stack.read().await
-    }
-
-    /// Get a write lock on the undo stack.
-    pub async fn undo_stack_mut(&self) -> tokio::sync::RwLockWriteGuard<'_, UndoStack> {
-        self.undo_stack.write().await
-    }
-
-    /// Save the current undo stack to disk.
-    pub fn save_undo_stack(&self, stack: &UndoStack) -> Result<()> {
-        stack.save(&self.undo_stack_path())
-    }
-
-    /// Push an entry onto the undo stack and save to disk.
-    ///
-    /// Uses the transaction ID as the stack entry ID if a transaction is active,
-    /// otherwise uses the changelog entry ID. The label format is
-    /// `"{op} {entity_type} {entity_id}"`.
-    async fn push_undo_stack(
-        &self,
-        entry_id: &ChangeEntryId,
-        op: &str,
-        entity_type: &str,
-        entity_id: &str,
-    ) -> Result<()> {
-        let tx_id = self.current_transaction.read().await.clone();
-        let stack_id = match &tx_id {
-            Some(tx) => tx.to_string(),
-            None => entry_id.to_string(),
-        };
-        let label = format!("{} {} {}", op, entity_type, entity_id);
-
-        let mut stack = self.undo_stack.write().await;
-        stack.push(stack_id, label);
-        self.save_undo_stack(&stack)
     }
 
     /// Look up the EntityDef for an entity type.
@@ -311,970 +186,150 @@ impl EntityContext {
     ///
     /// Returns `Ok(Some(ulid))` when changes were logged, or `Ok(None)` when
     /// no changes were detected (idempotent write).
-    pub async fn write(&self, entity: &Entity) -> Result<Option<ChangeEntryId>> {
+    pub async fn write(
+        &self,
+        entity: &Entity,
+    ) -> Result<Option<swissarmyhammer_store::UndoEntryId>> {
         let def = self.entity_def(&entity.entity_type)?;
+        let entity = self.validate_for_write(entity).await?;
+
         let dir = self.entity_dir(&entity.entity_type);
-
-        // Apply validation and strip computed fields
-        let mut entity = entity.clone();
-        let entity_type = entity.entity_type.clone();
-        let entity_id = entity.id.clone();
-        self.apply_validation(&entity_type, &mut entity).await?;
-
         let path = io::entity_file_path(&dir, &entity.id, def);
 
-        // Read previous state for diffing (if it exists)
+        // Trash attachment files that were removed during update
         let previous = io::read_entity(&path, &entity.entity_type, &entity.id, def)
             .await
             .ok();
-
-        // Write the entity
-        io::write_entity(&path, &entity, def).await?;
-
-        // Trash attachment files that were removed during update
         if let Some(ref old) = previous {
             self.trash_removed_attachments(&entity.entity_type, old, &entity)
                 .await?;
         }
 
-        // Compute and append changelog
-        let changes = match &previous {
-            Some(old) => changelog::diff_entities(old, &entity),
-            None => {
-                // Creation — all fields are Set
-                let mut changes: Vec<_> = entity
-                    .fields
-                    .iter()
-                    .map(|(k, v)| (k.clone(), FieldChange::Set { value: v.clone() }))
-                    .collect();
-                changes.sort_by(|a, b| a.0.cmp(&b.0));
-                changes
-            }
-        };
+        // Write — delegate to StoreHandle when available, otherwise
+        // fall back to the legacy io::write_entity path.
+        let store_handle = self
+            .store_handles
+            .read()
+            .await
+            .get(entity.entity_type.as_str())
+            .cloned();
 
-        if !changes.is_empty() {
-            let op = if previous.is_some() {
-                "update"
-            } else {
-                "create"
-            };
-            let mut entry = ChangeEntry::new(entity_type.clone(), entity_id.clone(), op, changes);
+        if let Some(sh) = store_handle {
+            let entry_id = sh.write(&entity).await?;
 
-            // Stamp transaction ID if one is active
-            let tx_id = self.current_transaction.read().await.clone();
-            if let Some(ref tx) = tx_id {
-                entry = entry.with_transaction_id(tx.clone());
-            }
-
-            let log_path = path.with_extension("jsonl");
-            changelog::append_changelog(&log_path, &entry).await?;
-
-            let ulid = entry.id.clone();
-            self.changelog_index
-                .write()
-                .await
-                .insert(ulid.clone(), (entity_type.clone(), entity_id.clone()));
-
-            // Register in transaction index if applicable
-            if let Some(ref tx) = tx_id {
-                self.transaction_index
-                    .write()
-                    .await
-                    .entry(tx.clone())
-                    .or_default()
-                    .push(ulid.clone());
+            // Append a legacy field-level changelog entry so that the activity
+            // log (which reads per-entity JSONL) continues to work even when
+            // I/O is delegated to a StoreHandle.
+            if entry_id.is_some() {
+                let is_create = previous.is_none();
+                let op = if is_create { "create" } else { "update" };
+                let changes = if let Some(ref old) = previous {
+                    changelog::diff_entities(old, &entity)
+                } else {
+                    entity
+                        .fields
+                        .iter()
+                        .map(|(k, v)| (k.clone(), FieldChange::Set { value: v.clone() }))
+                        .collect()
+                };
+                if !changes.is_empty() {
+                    let entry = ChangeEntry::new(
+                        entity.entity_type.as_str(),
+                        entity.id.as_str(),
+                        op,
+                        changes,
+                    );
+                    let log_path = path.with_extension("jsonl");
+                    changelog::append_changelog(&log_path, &entry).await?;
+                }
             }
 
-            // Push onto undo stack and save to disk
-            self.push_undo_stack(&ulid, op, &entity_type, &entity_id)
-                .await?;
-
-            return Ok(Some(ulid));
+            // Push onto the shared undo stack if a StoreContext is available
+            if let (Some(sc), Some(eid)) = (self.store_context.get(), &entry_id) {
+                let is_create = previous.is_none();
+                let op = if is_create { "create" } else { "update" };
+                let label = format!("{} {} {}", op, entity.entity_type, entity.id);
+                let item_id = StoredItemId::from(entity.id.as_str());
+                sc.push(*eid, label, item_id).await;
+            }
+            Ok(entry_id)
+        } else {
+            // Fallback for tests or entity types without a registered store
+            io::write_entity(&path, &entity, def).await?;
+            Ok(None)
         }
-
-        Ok(None)
     }
 
     /// Delete an entity by type and ID.
     ///
-    /// Logs a "delete" changelog entry with all fields as `Removed`,
-    /// then moves the data file and changelog to the trash directory
-    /// (`{root}/{type}s/.trash/`). The entity is no longer listed or
-    /// readable, but its files are preserved for recovery.
+    /// Moves the data file to the trash directory (`{root}/{type}s/.trash/`).
+    /// The entity is no longer listed or readable, but its files are
+    /// preserved for recovery.
     ///
-    /// Returns `Ok(Some(ulid))` when a delete changelog entry was logged,
-    /// or `Ok(None)` if the entity had no fields to record.
+    /// Returns `Ok(Some(entry_id))` when a store handle processes the
+    /// delete, or `Ok(None)` for the legacy fallback path.
     pub async fn delete(
         &self,
         entity_type: impl AsRef<str>,
         id: impl AsRef<str>,
-    ) -> Result<Option<ChangeEntryId>> {
+    ) -> Result<Option<swissarmyhammer_store::UndoEntryId>> {
         let entity_type = entity_type.as_ref();
         let id = id.as_ref();
         let def = self.entity_def(entity_type)?;
         let dir = self.entity_dir(entity_type);
         let path = io::entity_file_path(&dir, id, def);
 
-        let mut result_ulid = None;
-
-        // Read current state to log deletion
-        if let Ok(old) = io::read_entity(&path, entity_type, id, def).await {
-            // Trash attachment files before deleting the entity
-            self.trash_entity_attachments(entity_type, &old).await?;
-
-            let mut changes: Vec<_> = old
-                .fields
-                .iter()
-                .map(|(k, v)| {
-                    (
-                        k.clone(),
-                        FieldChange::Removed {
-                            old_value: v.clone(),
-                        },
-                    )
-                })
-                .collect();
-            changes.sort_by(|a, b| a.0.cmp(&b.0));
-
-            if !changes.is_empty() {
-                let mut entry = ChangeEntry::new(entity_type, id, "delete", changes);
-
-                // Stamp transaction ID if one is active
-                let tx_id = self.current_transaction.read().await.clone();
-                if let Some(ref tx) = tx_id {
-                    entry = entry.with_transaction_id(tx.clone());
-                }
-
-                let log_path = path.with_extension("jsonl");
-                changelog::append_changelog(&log_path, &entry).await?;
-
-                let ulid = entry.id.clone();
-                self.changelog_index.write().await.insert(
-                    ulid.clone(),
-                    (EntityTypeName::from(entity_type), EntityId::from(id)),
-                );
-
-                // Register in transaction index if applicable
-                if let Some(ref tx) = tx_id {
-                    self.transaction_index
-                        .write()
-                        .await
-                        .entry(tx.clone())
-                        .or_default()
-                        .push(ulid.clone());
-                }
-
-                // Push onto undo stack and save to disk
-                self.push_undo_stack(&ulid, "delete", entity_type, id)
-                    .await?;
-
-                result_ulid = Some(ulid);
-            }
+        // Read existing entity before deletion (used for attachment cleanup
+        // and legacy changelog).
+        let previous = io::read_entity(&path, entity_type, id, def).await.ok();
+        if let Some(ref old) = previous {
+            self.trash_entity_attachments(entity_type, old).await?;
         }
 
-        let trash = self.trash_dir(entity_type);
-        io::trash_entity_files(&path, &trash).await?;
-        Ok(result_ulid)
-    }
-
-    /// Undo a specific changelog operation by its ULID.
-    ///
-    /// Looks up the changelog entry, reverses its changes, and applies them.
-    /// For "update" ops, the reversed changes are applied to the current entity
-    /// and a new "undo" changelog entry is appended. For "create" ops, the entity
-    /// is deleted (moved to trash). For "delete" ops, the entity is restored from
-    /// trash.
-    ///
-    /// Returns `Ok(Some(ulid))` with the ULID of the new undo changelog entry,
-    /// or `Ok(None)` if nothing was undone.
-    ///
-    /// Returns an error if the ULID is not found in the changelog index, if
-    /// the changelog entry cannot be found, or if a text diff cannot be applied
-    /// (stale entity).
-    pub async fn undo(&self, ulid: impl AsRef<str>) -> Result<Option<ChangeEntryId>> {
-        let ulid = ulid.as_ref();
-        // 1. Check if it's a single-entity changelog entry.
-        //    Clone the result and drop the read guard before calling undo_single,
-        //    which needs write access to changelog_index.
-        let single_lookup = self.changelog_index.read().await.get(ulid).cloned();
-        if let Some((entity_type, entity_id)) = single_lookup {
-            let result = self
-                .undo_single(ulid, entity_type.as_str(), entity_id.as_str())
-                .await?;
-
-            // Record undo on the stack and save to disk
-            let mut stack = self.undo_stack.write().await;
-            stack.record_undo();
-            self.save_undo_stack(&stack)?;
-
-            return Ok(result);
-        }
-
-        // 2. Check if it's a transaction (group of entries).
-        //    Same pattern: clone and drop the read guard before calling undo_transaction.
-        let tx_lookup = self.transaction_index.read().await.get(ulid).cloned();
-        if let Some(entry_ulids) = tx_lookup {
-            let result = self.undo_transaction(ulid, &entry_ulids).await?;
-
-            // Record undo on the stack and save to disk
-            let mut stack = self.undo_stack.write().await;
-            stack.record_undo();
-            self.save_undo_stack(&stack)?;
-
-            return Ok(result);
-        }
-
-        // 3. Not found in either index
-        Err(EntityError::ChangelogEntryNotFound {
-            ulid: ulid.to_string(),
-        })
-    }
-
-    /// Undo a single changelog entry by its ULID.
-    async fn undo_single(
-        &self,
-        ulid: &str,
-        entity_type: &str,
-        entity_id: &str,
-    ) -> Result<Option<ChangeEntryId>> {
-        // Read the changelog (with trash fallback so deleted entities work)
-        let entries = self
-            .read_changelog_with_trash_fallback(entity_type, entity_id)
-            .await?;
-
-        // Find the ChangeEntry with matching id
-        let original_entry = entries
-            .iter()
-            .find(|e| e.id == ulid)
-            .ok_or_else(|| EntityError::ChangelogEntryNotFound {
-                ulid: ulid.to_string(),
-            })?
-            .clone();
-
-        match original_entry.op.as_str() {
-            "update" => {
-                self.undo_update(entity_type, entity_id, &original_entry)
-                    .await
-            }
-            "create" => {
-                self.undo_create(entity_type, entity_id, &original_entry)
-                    .await
-            }
-            "delete" => {
-                self.undo_delete(entity_type, entity_id, &original_entry)
-                    .await
-            }
-            "archive" => {
-                self.undo_archive(entity_type, entity_id, &original_entry)
-                    .await
-            }
-            "unarchive" => {
-                self.undo_unarchive(entity_type, entity_id, &original_entry)
-                    .await
-            }
-            other => Err(EntityError::UnsupportedUndoOp {
-                op: other.to_string(),
-            }),
-        }
-    }
-
-    /// Undo an entire transaction by undoing each constituent entry in reverse order.
-    ///
-    /// Returns `Ok(Some(tx_ulid))` where `tx_ulid` is the original transaction ULID,
-    /// to be used for redo.
-    ///
-    /// If an undo fails midway, attempts to roll back already-undone entries by
-    /// redoing them in forward order. Returns `TransactionPartialFailure` with
-    /// details about the failure and whether rollback succeeded.
-    async fn undo_transaction(
-        &self,
-        tx_ulid: &str,
-        entry_ulids: &[ChangeEntryId],
-    ) -> Result<Option<ChangeEntryId>> {
-        let mut completed: Vec<String> = Vec::new();
-
-        // Undo in reverse order so later writes are reversed before earlier ones
-        for ulid in entry_ulids.iter().rev() {
-            // Clone and drop the read guard before calling undo_single
-            let lookup = self
-                .changelog_index
-                .read()
-                .await
-                .get(ulid.as_str())
-                .cloned();
-            let (entity_type, entity_id) =
-                lookup.ok_or_else(|| EntityError::ChangelogEntryNotFound {
-                    ulid: ulid.to_string(),
-                })?;
-
-            match self
-                .undo_single(ulid.as_str(), entity_type.as_str(), entity_id.as_str())
-                .await
-            {
-                Ok(_) => {
-                    completed.push(ulid.to_string());
-                }
-                Err(e) => {
-                    // Attempt rollback: redo each completed entry in forward order
-                    // (reverse of the order they were undone) to restore consistency
-                    let mut rollback_succeeded = true;
-                    for done_ulid in completed.iter().rev() {
-                        let rb_lookup = self
-                            .changelog_index
-                            .read()
-                            .await
-                            .get(done_ulid.as_str())
-                            .cloned();
-                        if let Some((rb_type, rb_id)) = rb_lookup {
-                            if self
-                                .redo_single(done_ulid, rb_type.as_str(), rb_id.as_str())
-                                .await
-                                .is_err()
-                            {
-                                rollback_succeeded = false;
-                                break;
-                            }
-                        } else {
-                            rollback_succeeded = false;
-                            break;
-                        }
-                    }
-
-                    return Err(EntityError::TransactionPartialFailure {
-                        original_error: e.to_string(),
-                        completed,
-                        failed_entry: ulid.to_string(),
-                        rollback_succeeded,
-                    });
+        // Delete — delegate to StoreHandle when available, otherwise
+        // fall back to the legacy io::trash_entity_files path.
+        let store_handle = self.store_handles.read().await.get(entity_type).cloned();
+        if let Some(sh) = store_handle {
+            // Append a legacy field-level changelog entry BEFORE the store
+            // handle trashes the file, so the entry gets included in the
+            // trashed changelog and activity history remains intact.
+            if let Some(ref old) = previous {
+                let mut changes: Vec<_> = old
+                    .fields
+                    .iter()
+                    .map(|(k, v)| {
+                        (
+                            k.clone(),
+                            FieldChange::Removed {
+                                old_value: v.clone(),
+                            },
+                        )
+                    })
+                    .collect();
+                changes.sort_by(|a, b| a.0.cmp(&b.0));
+                if !changes.is_empty() {
+                    let entry = ChangeEntry::new(entity_type, id, "delete", changes);
+                    let log_path = path.with_extension("jsonl");
+                    changelog::append_changelog(&log_path, &entry).await?;
                 }
             }
+
+            let entity_id = EntityId::from(id);
+            let entry_id = sh.delete(&entity_id).await?;
+
+            // Push onto the shared undo stack if a StoreContext is available
+            if let Some(sc) = self.store_context.get() {
+                let label = format!("delete {} {}", entity_type, id);
+                let item_id = StoredItemId::from(id);
+                sc.push(entry_id, label, item_id).await;
+            }
+            Ok(Some(entry_id))
+        } else {
+            // Fallback for tests or entity types without a registered store
+            let trash = self.trash_dir(entity_type);
+            io::trash_entity_files(&path, &trash).await?;
+            Ok(None)
         }
-        Ok(Some(ChangeEntryId::from(tx_ulid)))
-    }
-
-    /// Undo an "update" operation by reversing its field changes.
-    ///
-    /// Reads the current entity, applies reversed changes, writes the entity
-    /// file directly (bypassing `self.write()` to avoid double-logging), and
-    /// appends an "undo" changelog entry with the reversed changes.
-    async fn undo_update(
-        &self,
-        entity_type: &str,
-        entity_id: &str,
-        original_entry: &ChangeEntry,
-    ) -> Result<Option<ChangeEntryId>> {
-        let def = self.entity_def(entity_type)?;
-        let dir = self.entity_dir(entity_type);
-        let path = io::entity_file_path(&dir, entity_id, def);
-
-        // Read current entity state
-        let mut entity = io::read_entity(&path, entity_type, entity_id, def).await?;
-
-        // Compute reversed changes and apply them
-        let reversed = changelog::reverse_changes(&original_entry.changes);
-        changelog::apply_changes(&mut entity, &reversed)?;
-
-        // Write entity file directly (not through self.write())
-        io::write_entity(&path, &entity, def).await?;
-
-        // Create and append the undo changelog entry
-        let undo_entry = ChangeEntry::new(entity_type, entity_id, "undo", reversed)
-            .with_undone_id(original_entry.id.clone());
-        let log_path = path.with_extension("jsonl");
-        changelog::append_changelog(&log_path, &undo_entry).await?;
-
-        let undo_ulid = undo_entry.id.clone();
-        self.changelog_index.write().await.insert(
-            undo_ulid.clone(),
-            (EntityTypeName::from(entity_type), EntityId::from(entity_id)),
-        );
-
-        Ok(Some(undo_ulid))
-    }
-
-    /// Undo a "create" operation by deleting (trashing) the entity.
-    ///
-    /// Appends an "undo" changelog entry referencing the original create,
-    /// then moves the entity files to trash.
-    async fn undo_create(
-        &self,
-        entity_type: &str,
-        entity_id: &str,
-        original_entry: &ChangeEntry,
-    ) -> Result<Option<ChangeEntryId>> {
-        let def = self.entity_def(entity_type)?;
-        let dir = self.entity_dir(entity_type);
-        let path = io::entity_file_path(&dir, entity_id, def);
-
-        // Read current state to record the removal
-        let entity = io::read_entity(&path, entity_type, entity_id, def).await?;
-        let mut changes: Vec<_> = entity
-            .fields
-            .iter()
-            .map(|(k, v)| {
-                (
-                    k.clone(),
-                    FieldChange::Removed {
-                        old_value: v.clone(),
-                    },
-                )
-            })
-            .collect();
-        changes.sort_by(|a, b| a.0.cmp(&b.0));
-
-        // Append undo changelog entry before trashing (so it goes with the files)
-        let undo_entry = ChangeEntry::new(entity_type, entity_id, "undo", changes)
-            .with_undone_id(original_entry.id.clone());
-        let log_path = path.with_extension("jsonl");
-        changelog::append_changelog(&log_path, &undo_entry).await?;
-
-        let undo_ulid = undo_entry.id.clone();
-        self.changelog_index.write().await.insert(
-            undo_ulid.clone(),
-            (EntityTypeName::from(entity_type), EntityId::from(entity_id)),
-        );
-
-        // Move files to trash
-        let trash = self.trash_dir(entity_type);
-        io::trash_entity_files(&path, &trash).await?;
-
-        Ok(Some(undo_ulid))
-    }
-
-    /// Undo a "delete" operation by restoring the entity from trash.
-    ///
-    /// Restores the entity files from trash back to live storage, then appends
-    /// an "undo" changelog entry referencing the original delete.
-    async fn undo_delete(
-        &self,
-        entity_type: &str,
-        entity_id: &str,
-        original_entry: &ChangeEntry,
-    ) -> Result<Option<ChangeEntryId>> {
-        // Restore files from trash to live storage
-        self.restore_from_trash(entity_type, entity_id).await?;
-
-        let def = self.entity_def(entity_type)?;
-        let dir = self.entity_dir(entity_type);
-        let path = io::entity_file_path(&dir, entity_id, def);
-
-        // Read the restored entity to record the restoration as Set changes
-        let entity = io::read_entity(&path, entity_type, entity_id, def).await?;
-        let mut changes: Vec<_> = entity
-            .fields
-            .iter()
-            .map(|(k, v)| (k.clone(), FieldChange::Set { value: v.clone() }))
-            .collect();
-        changes.sort_by(|a, b| a.0.cmp(&b.0));
-
-        // Append undo entry to the restored changelog
-        let undo_entry = ChangeEntry::new(entity_type, entity_id, "undo", changes)
-            .with_undone_id(original_entry.id.clone());
-        let log_path = path.with_extension("jsonl");
-        changelog::append_changelog(&log_path, &undo_entry).await?;
-
-        let undo_ulid = undo_entry.id.clone();
-        self.changelog_index.write().await.insert(
-            undo_ulid.clone(),
-            (EntityTypeName::from(entity_type), EntityId::from(entity_id)),
-        );
-
-        Ok(Some(undo_ulid))
-    }
-
-    /// Undo an "archive" operation by restoring the entity from the archive.
-    ///
-    /// Restores the entity files from the archive directory back to live storage,
-    /// then appends an "undo" changelog entry referencing the original archive.
-    /// This is structurally identical to `undo_delete()` but targets `.archive/`
-    /// instead of `.trash/`.
-    async fn undo_archive(
-        &self,
-        entity_type: &str,
-        entity_id: &str,
-        original_entry: &ChangeEntry,
-    ) -> Result<Option<ChangeEntryId>> {
-        // Restore files from archive to live storage
-        self.restore_from_archive(entity_type, entity_id).await?;
-
-        let def = self.entity_def(entity_type)?;
-        let dir = self.entity_dir(entity_type);
-        let path = io::entity_file_path(&dir, entity_id, def);
-
-        // Read the restored entity to record the restoration as Set changes
-        let entity = io::read_entity(&path, entity_type, entity_id, def).await?;
-        let mut changes: Vec<_> = entity
-            .fields
-            .iter()
-            .map(|(k, v)| (k.clone(), FieldChange::Set { value: v.clone() }))
-            .collect();
-        changes.sort_by(|a, b| a.0.cmp(&b.0));
-
-        // Append undo entry to the restored changelog
-        let undo_entry = ChangeEntry::new(entity_type, entity_id, "undo", changes)
-            .with_undone_id(original_entry.id.clone());
-        let log_path = path.with_extension("jsonl");
-        changelog::append_changelog(&log_path, &undo_entry).await?;
-
-        let undo_ulid = undo_entry.id.clone();
-        self.changelog_index.write().await.insert(
-            undo_ulid.clone(),
-            (EntityTypeName::from(entity_type), EntityId::from(entity_id)),
-        );
-
-        Ok(Some(undo_ulid))
-    }
-
-    /// Undo an "unarchive" operation by moving the entity back to the archive.
-    ///
-    /// Appends an "undo" changelog entry referencing the original unarchive,
-    /// then moves the entity files back to the archive directory. This is
-    /// structurally identical to `undo_create()` but targets `.archive/`
-    /// instead of `.trash/`.
-    async fn undo_unarchive(
-        &self,
-        entity_type: &str,
-        entity_id: &str,
-        original_entry: &ChangeEntry,
-    ) -> Result<Option<ChangeEntryId>> {
-        let def = self.entity_def(entity_type)?;
-        let dir = self.entity_dir(entity_type);
-        let path = io::entity_file_path(&dir, entity_id, def);
-
-        // Read current state to record the removal
-        let entity = io::read_entity(&path, entity_type, entity_id, def).await?;
-        let mut changes: Vec<_> = entity
-            .fields
-            .iter()
-            .map(|(k, v)| {
-                (
-                    k.clone(),
-                    FieldChange::Removed {
-                        old_value: v.clone(),
-                    },
-                )
-            })
-            .collect();
-        changes.sort_by(|a, b| a.0.cmp(&b.0));
-
-        // Append undo changelog entry before archiving (so it goes with the files)
-        let undo_entry = ChangeEntry::new(entity_type, entity_id, "undo", changes)
-            .with_undone_id(original_entry.id.clone());
-        let log_path = path.with_extension("jsonl");
-        changelog::append_changelog(&log_path, &undo_entry).await?;
-
-        let undo_ulid = undo_entry.id.clone();
-        self.changelog_index.write().await.insert(
-            undo_ulid.clone(),
-            (EntityTypeName::from(entity_type), EntityId::from(entity_id)),
-        );
-
-        // Move files to archive
-        let archive = self.archive_dir(entity_type);
-        io::trash_entity_files(&path, &archive).await?;
-
-        Ok(Some(undo_ulid))
-    }
-
-    /// Redo an "archive" operation by moving the entity back to the archive.
-    ///
-    /// The entity was originally archived, then undo restored it. Redo archives
-    /// it again (same as undo-of-unarchive), reading the current entity to build
-    /// Removed changes and appending a "redo" changelog entry before archiving.
-    async fn redo_archive(
-        &self,
-        entity_type: &str,
-        entity_id: &str,
-        original_entry: &ChangeEntry,
-    ) -> Result<Option<ChangeEntryId>> {
-        let def = self.entity_def(entity_type)?;
-        let dir = self.entity_dir(entity_type);
-        let path = io::entity_file_path(&dir, entity_id, def);
-
-        // Read current state to record the archival
-        let entity = io::read_entity(&path, entity_type, entity_id, def).await?;
-        let mut changes: Vec<_> = entity
-            .fields
-            .iter()
-            .map(|(k, v)| {
-                (
-                    k.clone(),
-                    FieldChange::Removed {
-                        old_value: v.clone(),
-                    },
-                )
-            })
-            .collect();
-        changes.sort_by(|a, b| a.0.cmp(&b.0));
-
-        // Append redo changelog entry before archiving (so it goes with the files)
-        let redo_entry = ChangeEntry::new(entity_type, entity_id, "redo", changes)
-            .with_redone_id(original_entry.id.clone());
-        let log_path = path.with_extension("jsonl");
-        changelog::append_changelog(&log_path, &redo_entry).await?;
-
-        let redo_ulid = redo_entry.id.clone();
-        self.changelog_index.write().await.insert(
-            redo_ulid.clone(),
-            (EntityTypeName::from(entity_type), EntityId::from(entity_id)),
-        );
-
-        // Move files to archive
-        let archive = self.archive_dir(entity_type);
-        io::trash_entity_files(&path, &archive).await?;
-
-        Ok(Some(redo_ulid))
-    }
-
-    /// Redo an "unarchive" operation by restoring the entity from the archive.
-    ///
-    /// The entity was originally unarchived, then undo re-archived it. Redo
-    /// restores it from the archive (same as undo-of-archive), reads the
-    /// restored entity to build Set changes, and appends a "redo" changelog entry.
-    async fn redo_unarchive(
-        &self,
-        entity_type: &str,
-        entity_id: &str,
-        original_entry: &ChangeEntry,
-    ) -> Result<Option<ChangeEntryId>> {
-        // Restore files from archive to live storage
-        self.restore_from_archive(entity_type, entity_id).await?;
-
-        let def = self.entity_def(entity_type)?;
-        let dir = self.entity_dir(entity_type);
-        let path = io::entity_file_path(&dir, entity_id, def);
-
-        // Read the restored entity to record the restoration as Set changes
-        let entity = io::read_entity(&path, entity_type, entity_id, def).await?;
-        let mut changes: Vec<_> = entity
-            .fields
-            .iter()
-            .map(|(k, v)| (k.clone(), FieldChange::Set { value: v.clone() }))
-            .collect();
-        changes.sort_by(|a, b| a.0.cmp(&b.0));
-
-        // Append redo entry to the restored changelog
-        let redo_entry = ChangeEntry::new(entity_type, entity_id, "redo", changes)
-            .with_redone_id(original_entry.id.clone());
-        let log_path = path.with_extension("jsonl");
-        changelog::append_changelog(&log_path, &redo_entry).await?;
-
-        let redo_ulid = redo_entry.id.clone();
-        self.changelog_index.write().await.insert(
-            redo_ulid.clone(),
-            (EntityTypeName::from(entity_type), EntityId::from(entity_id)),
-        );
-
-        Ok(Some(redo_ulid))
-    }
-
-    /// Redo a previously undone changelog operation by its original ULID.
-    ///
-    /// Re-applies the forward changes from the original entry. For "update"
-    /// ops the original forward changes are applied directly. For "create" ops
-    /// the entity is restored from trash (since undo trashed it). For "delete"
-    /// ops the entity is trashed again (since undo restored it).
-    ///
-    /// Returns `Ok(Some(ulid))` with the ULID of the new redo changelog entry,
-    /// or `Ok(None)` if nothing was redone.
-    ///
-    /// Returns an error if the ULID is not found in the changelog index, if
-    /// the changelog entry cannot be found, or if a text diff cannot be applied
-    /// (stale entity).
-    pub async fn redo(&self, ulid: impl AsRef<str>) -> Result<Option<ChangeEntryId>> {
-        let ulid = ulid.as_ref();
-        // 1. Check if it's a single-entity changelog entry.
-        //    Clone the result and drop the read guard before calling redo_single,
-        //    which needs write access to changelog_index.
-        let single_lookup = self.changelog_index.read().await.get(ulid).cloned();
-        if let Some((entity_type, entity_id)) = single_lookup {
-            let result = self
-                .redo_single(ulid, entity_type.as_str(), entity_id.as_str())
-                .await?;
-
-            // Record redo on the stack and save to disk
-            let mut stack = self.undo_stack.write().await;
-            stack.record_redo();
-            self.save_undo_stack(&stack)?;
-
-            return Ok(result);
-        }
-
-        // 2. Check if it's a transaction (group of entries).
-        //    Same pattern: clone and drop the read guard before calling redo_transaction.
-        let tx_lookup = self.transaction_index.read().await.get(ulid).cloned();
-        if let Some(entry_ulids) = tx_lookup {
-            let result = self.redo_transaction(ulid, &entry_ulids).await?;
-
-            // Record redo on the stack and save to disk
-            let mut stack = self.undo_stack.write().await;
-            stack.record_redo();
-            self.save_undo_stack(&stack)?;
-
-            return Ok(result);
-        }
-
-        // 3. Not found in either index
-        Err(EntityError::ChangelogEntryNotFound {
-            ulid: ulid.to_string(),
-        })
-    }
-
-    /// Redo a single changelog entry by its ULID.
-    async fn redo_single(
-        &self,
-        ulid: &str,
-        entity_type: &str,
-        entity_id: &str,
-    ) -> Result<Option<ChangeEntryId>> {
-        // Read the changelog (with trash fallback so deleted entities work)
-        let entries = self
-            .read_changelog_with_trash_fallback(entity_type, entity_id)
-            .await?;
-
-        // Find the ChangeEntry with matching id
-        let original_entry = entries
-            .iter()
-            .find(|e| e.id == ulid)
-            .ok_or_else(|| EntityError::ChangelogEntryNotFound {
-                ulid: ulid.to_string(),
-            })?
-            .clone();
-
-        match original_entry.op.as_str() {
-            "update" => {
-                self.redo_update(entity_type, entity_id, &original_entry)
-                    .await
-            }
-            "create" => {
-                self.redo_create(entity_type, entity_id, &original_entry)
-                    .await
-            }
-            "delete" => {
-                self.redo_delete(entity_type, entity_id, &original_entry)
-                    .await
-            }
-            "archive" => {
-                self.redo_archive(entity_type, entity_id, &original_entry)
-                    .await
-            }
-            "unarchive" => {
-                self.redo_unarchive(entity_type, entity_id, &original_entry)
-                    .await
-            }
-            other => Err(EntityError::UnsupportedUndoOp {
-                op: other.to_string(),
-            }),
-        }
-    }
-
-    /// Redo an entire transaction by redoing each constituent entry in forward order.
-    ///
-    /// Returns `Ok(Some(tx_ulid))` where `tx_ulid` is the original transaction ULID.
-    ///
-    /// If a redo fails midway, attempts to roll back already-redone entries by
-    /// undoing them in reverse order. Returns `TransactionPartialFailure` with
-    /// details about the failure and whether rollback succeeded.
-    async fn redo_transaction(
-        &self,
-        tx_ulid: &str,
-        entry_ulids: &[ChangeEntryId],
-    ) -> Result<Option<ChangeEntryId>> {
-        let mut completed: Vec<String> = Vec::new();
-
-        // Redo in forward order (same order they were originally executed)
-        for ulid in entry_ulids.iter() {
-            // Clone and drop the read guard before calling redo_single
-            let lookup = self
-                .changelog_index
-                .read()
-                .await
-                .get(ulid.as_str())
-                .cloned();
-            let (entity_type, entity_id) =
-                lookup.ok_or_else(|| EntityError::ChangelogEntryNotFound {
-                    ulid: ulid.to_string(),
-                })?;
-
-            match self
-                .redo_single(ulid.as_str(), entity_type.as_str(), entity_id.as_str())
-                .await
-            {
-                Ok(_) => {
-                    completed.push(ulid.to_string());
-                }
-                Err(e) => {
-                    // Attempt rollback: undo each completed entry in reverse order
-                    // to restore the pre-redo state
-                    let mut rollback_succeeded = true;
-                    for done_ulid in completed.iter().rev() {
-                        let rb_lookup = self
-                            .changelog_index
-                            .read()
-                            .await
-                            .get(done_ulid.as_str())
-                            .cloned();
-                        if let Some((rb_type, rb_id)) = rb_lookup {
-                            if self
-                                .undo_single(done_ulid, rb_type.as_str(), rb_id.as_str())
-                                .await
-                                .is_err()
-                            {
-                                rollback_succeeded = false;
-                                break;
-                            }
-                        } else {
-                            rollback_succeeded = false;
-                            break;
-                        }
-                    }
-
-                    return Err(EntityError::TransactionPartialFailure {
-                        original_error: e.to_string(),
-                        completed,
-                        failed_entry: ulid.to_string(),
-                        rollback_succeeded,
-                    });
-                }
-            }
-        }
-        Ok(Some(ChangeEntryId::from(tx_ulid)))
-    }
-
-    /// Redo an "update" operation by re-applying its forward field changes.
-    ///
-    /// Reads the current entity, applies the original forward changes (not
-    /// reversed — this is the key difference from undo), writes the entity
-    /// file directly, and appends a "redo" changelog entry.
-    async fn redo_update(
-        &self,
-        entity_type: &str,
-        entity_id: &str,
-        original_entry: &ChangeEntry,
-    ) -> Result<Option<ChangeEntryId>> {
-        let def = self.entity_def(entity_type)?;
-        let dir = self.entity_dir(entity_type);
-        let path = io::entity_file_path(&dir, entity_id, def);
-
-        // Read current entity state
-        let mut entity = io::read_entity(&path, entity_type, entity_id, def).await?;
-
-        // Apply the original forward changes directly
-        changelog::apply_changes(&mut entity, &original_entry.changes)?;
-
-        // Write entity file directly (not through self.write())
-        io::write_entity(&path, &entity, def).await?;
-
-        // Create and append the redo changelog entry
-        let redo_entry = ChangeEntry::new(
-            entity_type,
-            entity_id,
-            "redo",
-            original_entry.changes.clone(),
-        )
-        .with_redone_id(original_entry.id.clone());
-        let log_path = path.with_extension("jsonl");
-        changelog::append_changelog(&log_path, &redo_entry).await?;
-
-        let redo_ulid = redo_entry.id.clone();
-        self.changelog_index.write().await.insert(
-            redo_ulid.clone(),
-            (EntityTypeName::from(entity_type), EntityId::from(entity_id)),
-        );
-
-        Ok(Some(redo_ulid))
-    }
-
-    /// Redo a "create" operation by restoring the entity from trash.
-    ///
-    /// The entity was originally created, then undo trashed it. Redo restores
-    /// it from trash (same as undo-of-delete), reads the restored entity to
-    /// build Set changes, and appends a "redo" changelog entry.
-    async fn redo_create(
-        &self,
-        entity_type: &str,
-        entity_id: &str,
-        original_entry: &ChangeEntry,
-    ) -> Result<Option<ChangeEntryId>> {
-        // Restore files from trash to live storage
-        self.restore_from_trash(entity_type, entity_id).await?;
-
-        let def = self.entity_def(entity_type)?;
-        let dir = self.entity_dir(entity_type);
-        let path = io::entity_file_path(&dir, entity_id, def);
-
-        // Read the restored entity to record the restoration as Set changes
-        let entity = io::read_entity(&path, entity_type, entity_id, def).await?;
-        let mut changes: Vec<_> = entity
-            .fields
-            .iter()
-            .map(|(k, v)| (k.clone(), FieldChange::Set { value: v.clone() }))
-            .collect();
-        changes.sort_by(|a, b| a.0.cmp(&b.0));
-
-        // Append redo entry to the restored changelog
-        let redo_entry = ChangeEntry::new(entity_type, entity_id, "redo", changes)
-            .with_redone_id(original_entry.id.clone());
-        let log_path = path.with_extension("jsonl");
-        changelog::append_changelog(&log_path, &redo_entry).await?;
-
-        let redo_ulid = redo_entry.id.clone();
-        self.changelog_index.write().await.insert(
-            redo_ulid.clone(),
-            (EntityTypeName::from(entity_type), EntityId::from(entity_id)),
-        );
-
-        Ok(Some(redo_ulid))
-    }
-
-    /// Redo a "delete" operation by trashing the entity again.
-    ///
-    /// The entity was originally deleted, then undo restored it. Redo trashes
-    /// it again (same as undo-of-create), reading the current entity to build
-    /// Removed changes and appending a "redo" changelog entry before trashing.
-    async fn redo_delete(
-        &self,
-        entity_type: &str,
-        entity_id: &str,
-        original_entry: &ChangeEntry,
-    ) -> Result<Option<ChangeEntryId>> {
-        let def = self.entity_def(entity_type)?;
-        let dir = self.entity_dir(entity_type);
-        let path = io::entity_file_path(&dir, entity_id, def);
-
-        // Read current state to record the removal
-        let entity = io::read_entity(&path, entity_type, entity_id, def).await?;
-        let mut changes: Vec<_> = entity
-            .fields
-            .iter()
-            .map(|(k, v)| {
-                (
-                    k.clone(),
-                    FieldChange::Removed {
-                        old_value: v.clone(),
-                    },
-                )
-            })
-            .collect();
-        changes.sort_by(|a, b| a.0.cmp(&b.0));
-
-        // Append redo changelog entry before trashing (so it goes with the files)
-        let redo_entry = ChangeEntry::new(entity_type, entity_id, "redo", changes)
-            .with_redone_id(original_entry.id.clone());
-        let log_path = path.with_extension("jsonl");
-        changelog::append_changelog(&log_path, &redo_entry).await?;
-
-        let redo_ulid = redo_entry.id.clone();
-        self.changelog_index.write().await.insert(
-            redo_ulid.clone(),
-            (EntityTypeName::from(entity_type), EntityId::from(entity_id)),
-        );
-
-        // Move files to trash
-        let trash = self.trash_dir(entity_type);
-        io::trash_entity_files(&path, &trash).await?;
-
-        Ok(Some(redo_ulid))
     }
 
     /// Restore an entity from trash back to live storage.
@@ -1317,152 +372,124 @@ impl EntityContext {
 
     /// Archive an entity by type and ID.
     ///
-    /// Reads the entity, appends an "archive" changelog entry, then moves the
-    /// data file and changelog to the archive directory (`{root}/{type}s/.archive/`).
-    /// Archived entities no longer appear in `list()` but remain accessible via
-    /// `list_archived()` and `read_archived()`.
+    /// When a StoreHandle is registered for the entity type, delegates to
+    /// `StoreHandle::archive()` which records an undoable changelog entry and
+    /// moves files to `.archive/` with versioned filenames.
     ///
-    /// Returns `Ok(Some(ulid))` when an archive changelog entry was logged,
-    /// or `Ok(None)` if the entity had no fields to record.
+    /// Falls back to legacy behavior (activity-only changelog + plain file move)
+    /// when no StoreHandle is available.
+    ///
+    /// Returns `Ok(Some(entry_id))` when a store handle processes the
+    /// archive, or `Ok(None)` for the legacy fallback path.
     pub async fn archive(
         &self,
         entity_type: impl AsRef<str>,
         id: impl AsRef<str>,
-    ) -> Result<Option<ChangeEntryId>> {
+    ) -> Result<Option<swissarmyhammer_store::UndoEntryId>> {
         let entity_type = entity_type.as_ref();
         let id = id.as_ref();
         let def = self.entity_def(entity_type)?;
         let dir = self.entity_dir(entity_type);
         let path = io::entity_file_path(&dir, id, def);
 
-        let mut result_ulid = None;
-
-        // Read current state to log archival
-        if let Ok(old) = io::read_entity(&path, entity_type, id, def).await {
-            let mut changes: Vec<_> = old
-                .fields
-                .iter()
-                .map(|(k, v)| {
-                    (
-                        k.clone(),
-                        FieldChange::Removed {
-                            old_value: v.clone(),
-                        },
-                    )
-                })
-                .collect();
-            changes.sort_by(|a, b| a.0.cmp(&b.0));
-
-            if !changes.is_empty() {
-                let mut entry = ChangeEntry::new(entity_type, id, "archive", changes);
-
-                // Stamp transaction ID if one is active
-                let tx_id = self.current_transaction.read().await.clone();
-                if let Some(ref tx) = tx_id {
-                    entry = entry.with_transaction_id(tx.clone());
-                }
-
-                let log_path = path.with_extension("jsonl");
-                changelog::append_changelog(&log_path, &entry).await?;
-
-                let ulid = entry.id.clone();
-                self.changelog_index.write().await.insert(
-                    ulid.clone(),
-                    (EntityTypeName::from(entity_type), EntityId::from(id)),
-                );
-
-                // Register in transaction index if applicable
-                if let Some(ref tx) = tx_id {
-                    self.transaction_index
-                        .write()
-                        .await
-                        .entry(tx.clone())
-                        .or_default()
-                        .push(ulid.clone());
-                }
-
-                // Push onto undo stack and save to disk
-                self.push_undo_stack(&ulid, "archive", entity_type, id)
-                    .await?;
-
-                result_ulid = Some(ulid);
+        // Archive — delegate to StoreHandle when available, otherwise
+        // fall back to the legacy io::trash_entity_files path.
+        let store_handle = self.store_handles.read().await.get(entity_type).cloned();
+        if let Some(sh) = store_handle {
+            let entity_id = EntityId::from(id);
+            let entry_id = sh.archive(&entity_id).await?;
+            // Push onto the shared undo stack if a StoreContext is available
+            if let Some(sc) = self.store_context.get() {
+                let label = format!("archive {} {}", entity_type, id);
+                let item_id = StoredItemId::from(id);
+                sc.push(entry_id, label, item_id).await;
             }
-        }
+            Ok(Some(entry_id))
+        } else {
+            // Fallback: append an "archive" changelog entry for activity history
+            if let Ok(old) = io::read_entity(&path, entity_type, id, def).await {
+                let mut changes: Vec<_> = old
+                    .fields
+                    .iter()
+                    .map(|(k, v)| {
+                        (
+                            k.clone(),
+                            FieldChange::Removed {
+                                old_value: v.clone(),
+                            },
+                        )
+                    })
+                    .collect();
+                changes.sort_by(|a, b| a.0.cmp(&b.0));
 
-        let archive = self.archive_dir(entity_type);
-        io::trash_entity_files(&path, &archive).await?;
-        Ok(result_ulid)
+                if !changes.is_empty() {
+                    let entry = ChangeEntry::new(entity_type, id, "archive", changes);
+                    let log_path = path.with_extension("jsonl");
+                    changelog::append_changelog(&log_path, &entry).await?;
+                }
+            }
+
+            let archive = self.archive_dir(entity_type);
+            io::trash_entity_files(&path, &archive).await?;
+            Ok(None)
+        }
     }
 
     /// Restore an entity from the archive back to live storage.
     ///
-    /// Moves the entity data file and changelog from the archive directory
-    /// (`{root}/{type}s/.archive/`) back to the live storage directory, then
-    /// appends an "unarchive" changelog entry. The entity reappears in `list()`.
+    /// When a StoreHandle is registered for the entity type, delegates to
+    /// `StoreHandle::unarchive_latest()` which finds the most recently
+    /// archived version, restores it, and records an undoable changelog entry.
     ///
-    /// Returns `Ok(Some(ulid))` when an unarchive changelog entry was logged,
-    /// or `Ok(None)` if the entity had no fields to record after restoration.
+    /// Falls back to legacy behavior (plain file move + activity changelog)
+    /// when no StoreHandle is available.
+    ///
+    /// Returns `Ok(Some(entry_id))` when a store handle processes the
+    /// unarchive, or `Ok(None)` for the legacy fallback path.
     pub async fn unarchive(
         &self,
         entity_type: impl AsRef<str>,
         id: impl AsRef<str>,
-    ) -> Result<Option<ChangeEntryId>> {
+    ) -> Result<Option<swissarmyhammer_store::UndoEntryId>> {
         let entity_type = entity_type.as_ref();
         let id = id.as_ref();
         let def = self.entity_def(entity_type)?;
         let dir = self.entity_dir(entity_type);
         let path = io::entity_file_path(&dir, id, def);
-        let archive = self.archive_dir(entity_type);
 
-        // Restore files from archive to live storage
-        io::restore_entity_files(&path, &archive).await?;
+        // Unarchive — delegate to StoreHandle when available
+        let store_handle = self.store_handles.read().await.get(entity_type).cloned();
+        if let Some(sh) = store_handle {
+            let entity_id = EntityId::from(id);
+            let (_item, entry_id) = sh.unarchive_latest(&entity_id).await?;
+            // Push onto the shared undo stack if a StoreContext is available
+            if let Some(sc) = self.store_context.get() {
+                let label = format!("unarchive {} {}", entity_type, id);
+                let item_id = StoredItemId::from(id);
+                sc.push(entry_id, label, item_id).await;
+            }
+            Ok(Some(entry_id))
+        } else {
+            // Fallback: legacy file move + activity changelog
+            let archive = self.archive_dir(entity_type);
+            io::restore_entity_files(&path, &archive).await?;
 
-        // Read the restored entity to record the restoration as Set changes
-        let entity = io::read_entity(&path, entity_type, id, def).await?;
-        let mut changes: Vec<_> = entity
-            .fields
-            .iter()
-            .map(|(k, v)| (k.clone(), FieldChange::Set { value: v.clone() }))
-            .collect();
-        changes.sort_by(|a, b| a.0.cmp(&b.0));
+            let entity = io::read_entity(&path, entity_type, id, def).await?;
+            let mut changes: Vec<_> = entity
+                .fields
+                .iter()
+                .map(|(k, v)| (k.clone(), FieldChange::Set { value: v.clone() }))
+                .collect();
+            changes.sort_by(|a, b| a.0.cmp(&b.0));
 
-        if changes.is_empty() {
-            return Ok(None);
+            if !changes.is_empty() {
+                let entry = ChangeEntry::new(entity_type, id, "unarchive", changes);
+                let log_path = path.with_extension("jsonl");
+                changelog::append_changelog(&log_path, &entry).await?;
+            }
+
+            Ok(None)
         }
-
-        // Append unarchive entry to the restored changelog
-        let mut entry = ChangeEntry::new(entity_type, id, "unarchive", changes);
-
-        // Stamp transaction ID if one is active
-        let tx_id = self.current_transaction.read().await.clone();
-        if let Some(ref tx) = tx_id {
-            entry = entry.with_transaction_id(tx.clone());
-        }
-
-        let log_path = path.with_extension("jsonl");
-        changelog::append_changelog(&log_path, &entry).await?;
-
-        let ulid = entry.id.clone();
-        self.changelog_index.write().await.insert(
-            ulid.clone(),
-            (EntityTypeName::from(entity_type), EntityId::from(id)),
-        );
-
-        // Register in transaction index if applicable
-        if let Some(ref tx) = tx_id {
-            self.transaction_index
-                .write()
-                .await
-                .entry(tx.clone())
-                .or_default()
-                .push(ulid.clone());
-        }
-
-        // Push onto undo stack and save to disk
-        self.push_undo_stack(&ulid, "unarchive", entity_type, id)
-            .await?;
-
-        Ok(Some(ulid))
     }
 
     /// List all archived entities of a given type.
@@ -1638,22 +665,6 @@ impl EntityContext {
         Ok(entries)
     }
 
-    /// Look up which entity a changelog entry belongs to by its ULID.
-    ///
-    /// Returns `Some((entity_type, entity_id))` if the ULID is in the in-memory index,
-    /// or `None` if not found. The index is populated by `write()` and `delete()` calls
-    /// during this context's lifetime.
-    pub async fn lookup_changelog_entry(
-        &self,
-        ulid: impl AsRef<str>,
-    ) -> Option<(EntityTypeName, EntityId)> {
-        self.changelog_index
-            .read()
-            .await
-            .get(ulid.as_ref())
-            .cloned()
-    }
-
     // =========================================================================
     // Internal: validation and computation
     // =========================================================================
@@ -1661,18 +672,24 @@ impl EntityContext {
     /// Validate fields on write and strip computed fields.
     ///
     /// For each field defined on the entity type:
-    /// - Skip `Computed` fields (remove from entity — they are derived on read).
-    /// - If a validation engine is present, validate and possibly transform the value.
-    /// - If a field has a default and is missing from the entity, insert the default.
-    async fn apply_validation(
-        &self,
-        entity_type: impl AsRef<str>,
-        entity: &mut Entity,
-    ) -> Result<()> {
-        let entity_type = entity_type.as_ref();
-        let field_defs = self.fields.fields_for_entity(entity_type);
+    /// Validate and prepare an entity for writing to disk.
+    ///
+    /// This is the domain-level validation layer that runs before storage.
+    /// It clones the entity and returns a cleaned version ready for persistence:
+    ///
+    /// 1. Strips computed fields (they are derived on read, never persisted).
+    /// 2. Applies field defaults for missing non-computed fields.
+    /// 3. Runs field-level validation via the ValidationEngine (if present).
+    /// 4. Runs entity-level cross-field validation (if present).
+    ///
+    /// Callers can use this independently of `write()` to validate an entity
+    /// before passing it to a `StoreHandle`.
+    pub async fn validate_for_write(&self, entity: &Entity) -> Result<Entity> {
+        let mut entity = entity.clone();
+        let entity_type = entity.entity_type.to_string();
+        let field_defs = self.fields.fields_for_entity(&entity_type);
         if field_defs.is_empty() {
-            return Ok(());
+            return Ok(entity);
         }
 
         // Strip computed fields — they must never be persisted.
@@ -1695,7 +712,7 @@ impl EntityContext {
         }
 
         // Process attachment fields — copy source files, validate sizes.
-        let entity_type_dir = self.entity_dir(entity_type);
+        let entity_type_dir = self.entity_dir(&entity_type);
         for fd in &field_defs {
             if let FieldType::Attachment {
                 max_bytes,
@@ -1703,7 +720,7 @@ impl EntityContext {
             } = &fd.type_
             {
                 self.process_attachment_field(
-                    entity,
+                    &mut entity,
                     fd.name.as_str(),
                     *max_bytes,
                     *multiple,
@@ -1715,7 +732,7 @@ impl EntityContext {
 
         // Validate fields
         let Some(ref engine) = self.validation else {
-            return Ok(());
+            return Ok(entity);
         };
 
         // Collect field names to validate (avoid borrowing entity.fields while mutating)
@@ -1743,7 +760,7 @@ impl EntityContext {
         }
 
         // Entity-level cross-field validation (runs after all field validations)
-        let entity_def = self.entity_def(entity_type)?;
+        let entity_def = self.entity_def(&entity_type)?;
         engine
             .validate_entity(entity_def, &mut entity.fields)
             .await
@@ -1752,7 +769,7 @@ impl EntityContext {
                 message: e.to_string(),
             })?;
 
-        Ok(())
+        Ok(entity)
     }
 
     /// Process a single attachment field during validation.
@@ -2205,13 +1222,6 @@ mod tests {
         // Files moved to trash (new layout: {type}s/.trash/)
         let trash_dir = dir.path().join("tags").join(".trash");
         assert!(trash_dir.join("bug.yaml").exists());
-        assert!(trash_dir.join("bug.jsonl").exists());
-
-        // Changelog in trash includes the delete entry
-        let log_content = tokio::fs::read_to_string(trash_dir.join("bug.jsonl"))
-            .await
-            .unwrap();
-        assert!(log_content.contains("\"delete\""));
     }
 
     #[tokio::test]
@@ -2229,46 +1239,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn write_creates_changelog_on_create() {
-        let dir = TempDir::new().unwrap();
-        let fields = test_fields_context();
-        let ctx = EntityContext::new(dir.path(), fields.clone());
-
-        let mut tag = Entity::new("tag", "bug");
-        tag.set("tag_name", json!("Bug"));
-        ctx.write(&tag).await.unwrap();
-
-        let log = ctx.read_changelog("tag", "bug").await.unwrap();
-        assert_eq!(log.len(), 1);
-        assert_eq!(log[0].op, "create");
-        assert!(log[0]
-            .changes
-            .iter()
-            .all(|(_, c)| matches!(c, FieldChange::Set { .. })));
-    }
-
-    #[tokio::test]
-    async fn write_creates_changelog_on_update() {
-        let dir = TempDir::new().unwrap();
-        let fields = test_fields_context();
-        let ctx = EntityContext::new(dir.path(), fields.clone());
-
-        let mut tag = Entity::new("tag", "bug");
-        tag.set("tag_name", json!("Bug"));
-        ctx.write(&tag).await.unwrap();
-
-        // Update
-        tag.set("tag_name", json!("Bug Report"));
-        tag.set("color", json!("#ff0000"));
-        ctx.write(&tag).await.unwrap();
-
-        let log = ctx.read_changelog("tag", "bug").await.unwrap();
-        assert_eq!(log.len(), 2);
-        assert_eq!(log[0].op, "create");
-        assert_eq!(log[1].op, "update");
-    }
-
-    #[tokio::test]
     async fn changelog_path_correct() {
         let dir = TempDir::new().unwrap();
         let fields = test_fields_context();
@@ -2276,641 +1246,6 @@ mod tests {
 
         let p = ctx.changelog_path("tag", "bug").unwrap();
         assert_eq!(p, dir.path().join("tags").join("bug.jsonl"));
-    }
-
-    #[tokio::test]
-    async fn test_undo_update() {
-        let dir = TempDir::new().unwrap();
-        let fields = test_fields_context();
-        let ctx = EntityContext::new(dir.path(), fields.clone());
-
-        // Create a tag
-        let mut tag = Entity::new("tag", "bug");
-        tag.set("tag_name", json!("Bug"));
-        tag.set("color", json!("#ff0000"));
-        ctx.write(&tag).await.unwrap();
-
-        // Update it
-        tag.set("tag_name", json!("Bug Report"));
-        let update_ulid = ctx.write(&tag).await.unwrap().unwrap();
-
-        // Verify the update took effect
-        let loaded = ctx.read("tag", "bug").await.unwrap();
-        assert_eq!(loaded.get_str("tag_name"), Some("Bug Report"));
-
-        // Undo the update
-        ctx.undo(&update_ulid).await.unwrap();
-
-        // Verify the field is restored to the original value
-        let restored = ctx.read("tag", "bug").await.unwrap();
-        assert_eq!(restored.get_str("tag_name"), Some("Bug"));
-    }
-
-    #[tokio::test]
-    async fn test_undo_create() {
-        let dir = TempDir::new().unwrap();
-        let fields = test_fields_context();
-        let ctx = EntityContext::new(dir.path(), fields.clone());
-
-        // Create a tag
-        let mut tag = Entity::new("tag", "bug");
-        tag.set("tag_name", json!("Bug"));
-        let create_ulid = ctx.write(&tag).await.unwrap().unwrap();
-
-        // Verify it exists
-        assert!(ctx.read("tag", "bug").await.is_ok());
-
-        // Undo the create
-        ctx.undo(&create_ulid).await.unwrap();
-
-        // Verify the entity is gone (in trash)
-        assert!(ctx.read("tag", "bug").await.is_err());
-
-        // Verify files are in trash (new layout: {type}s/.trash/)
-        let trash_dir = dir.path().join("tags").join(".trash");
-        assert!(trash_dir.join("bug.yaml").exists());
-    }
-
-    #[tokio::test]
-    async fn test_undo_delete() {
-        let dir = TempDir::new().unwrap();
-        let fields = test_fields_context();
-        let ctx = EntityContext::new(dir.path(), fields.clone());
-
-        // Create a tag
-        let mut tag = Entity::new("tag", "bug");
-        tag.set("tag_name", json!("Bug"));
-        tag.set("color", json!("#ff0000"));
-        ctx.write(&tag).await.unwrap();
-
-        // Delete it
-        let delete_ulid = ctx.delete("tag", "bug").await.unwrap().unwrap();
-
-        // Verify it's gone
-        assert!(ctx.read("tag", "bug").await.is_err());
-
-        // Undo the delete
-        ctx.undo(&delete_ulid).await.unwrap();
-
-        // Verify the entity is back
-        let restored = ctx.read("tag", "bug").await.unwrap();
-        assert_eq!(restored.get_str("tag_name"), Some("Bug"));
-        assert_eq!(restored.get_str("color"), Some("#ff0000"));
-    }
-
-    #[tokio::test]
-    async fn test_undo_returns_ulid() {
-        let dir = TempDir::new().unwrap();
-        let fields = test_fields_context();
-        let ctx = EntityContext::new(dir.path(), fields.clone());
-
-        // Create and update
-        let mut tag = Entity::new("tag", "bug");
-        tag.set("tag_name", json!("Bug"));
-        ctx.write(&tag).await.unwrap();
-
-        tag.set("tag_name", json!("Bug Report"));
-        let update_ulid = ctx.write(&tag).await.unwrap().unwrap();
-
-        // Undo returns a new ULID
-        let undo_result = ctx.undo(&update_ulid).await.unwrap();
-        assert!(undo_result.is_some());
-
-        let undo_ulid = undo_result.unwrap();
-        // The undo ULID should be different from the original update ULID
-        assert_ne!(undo_ulid, update_ulid);
-        // It should be a valid ULID (26 chars)
-        assert_eq!(undo_ulid.len(), 26);
-    }
-
-    #[tokio::test]
-    async fn test_undo_stale_update_errors() {
-        let dir = TempDir::new().unwrap();
-        let fields = test_fields_context();
-        let ctx = EntityContext::new(dir.path(), fields.clone());
-
-        // Create a tag
-        let mut tag = Entity::new("tag", "bug");
-        tag.set("tag_name", json!("Bug"));
-        ctx.write(&tag).await.unwrap();
-
-        // Update it (change tag_name from "Bug" to "Bug Report")
-        tag.set("tag_name", json!("Bug Report"));
-        let update_ulid = ctx.write(&tag).await.unwrap().unwrap();
-
-        // Update it again (change tag_name from "Bug Report" to "Something Else")
-        tag.set("tag_name", json!("Something Else"));
-        ctx.write(&tag).await.unwrap();
-
-        // Now try to undo the first update — the undo expects to see "Bug Report"
-        // but the current value is "Something Else", so reverse-applying the
-        // TextDiff should fail because the text has been modified.
-        let result = ctx.undo(&update_ulid).await;
-        assert!(result.is_err(), "undoing a stale update should error");
-    }
-
-    #[tokio::test]
-    async fn test_undo_unknown_ulid_errors() {
-        let dir = TempDir::new().unwrap();
-        let fields = test_fields_context();
-        let ctx = EntityContext::new(dir.path(), fields.clone());
-
-        // Try to undo a ULID that doesn't exist
-        let result = ctx.undo("01NONEXISTENT000000000000").await;
-        assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
-        assert!(err.contains("not found"));
-    }
-
-    #[tokio::test]
-    async fn test_undo_changelog_has_undone_id() {
-        let dir = TempDir::new().unwrap();
-        let fields = test_fields_context();
-        let ctx = EntityContext::new(dir.path(), fields.clone());
-
-        // Create and update
-        let mut tag = Entity::new("tag", "bug");
-        tag.set("tag_name", json!("Bug"));
-        ctx.write(&tag).await.unwrap();
-
-        tag.set("tag_name", json!("Bug Report"));
-        let update_ulid = ctx.write(&tag).await.unwrap().unwrap();
-
-        // Undo the update
-        let undo_ulid = ctx.undo(&update_ulid).await.unwrap().unwrap();
-
-        // Read the changelog and find the undo entry
-        let log = ctx.read_changelog("tag", "bug").await.unwrap();
-        let undo_entry = log.iter().find(|e| e.id == undo_ulid).unwrap();
-
-        // Verify the undo entry has the correct fields
-        assert_eq!(undo_entry.op, "undo");
-        assert_eq!(undo_entry.undone_id.as_deref(), Some(update_ulid.as_str()));
-        assert_eq!(undo_entry.entity_type, "tag");
-        assert_eq!(undo_entry.entity_id, "bug");
-    }
-
-    #[tokio::test]
-    async fn test_redo_update() {
-        let dir = TempDir::new().unwrap();
-        let fields = test_fields_context();
-        let ctx = EntityContext::new(dir.path(), fields.clone());
-
-        // Create a tag
-        let mut tag = Entity::new("tag", "bug");
-        tag.set("tag_name", json!("Bug"));
-        tag.set("color", json!("#ff0000"));
-        ctx.write(&tag).await.unwrap();
-
-        // Update it
-        tag.set("tag_name", json!("Bug Report"));
-        let update_ulid = ctx.write(&tag).await.unwrap().unwrap();
-
-        // Verify the update took effect
-        let loaded = ctx.read("tag", "bug").await.unwrap();
-        assert_eq!(loaded.get_str("tag_name"), Some("Bug Report"));
-
-        // Undo the update
-        ctx.undo(&update_ulid).await.unwrap();
-
-        // Verify undo restored the original value
-        let restored = ctx.read("tag", "bug").await.unwrap();
-        assert_eq!(restored.get_str("tag_name"), Some("Bug"));
-
-        // Redo the update
-        ctx.redo(&update_ulid).await.unwrap();
-
-        // Verify the field has the updated value again
-        let redone = ctx.read("tag", "bug").await.unwrap();
-        assert_eq!(redone.get_str("tag_name"), Some("Bug Report"));
-    }
-
-    #[tokio::test]
-    async fn test_redo_create() {
-        let dir = TempDir::new().unwrap();
-        let fields = test_fields_context();
-        let ctx = EntityContext::new(dir.path(), fields.clone());
-
-        // Create a tag
-        let mut tag = Entity::new("tag", "bug");
-        tag.set("tag_name", json!("Bug"));
-        tag.set("color", json!("#ff0000"));
-        let create_ulid = ctx.write(&tag).await.unwrap().unwrap();
-
-        // Verify it exists
-        assert!(ctx.read("tag", "bug").await.is_ok());
-
-        // Undo the create (trashes it)
-        ctx.undo(&create_ulid).await.unwrap();
-
-        // Verify the entity is gone
-        assert!(ctx.read("tag", "bug").await.is_err());
-
-        // Redo the create (restores it from trash)
-        ctx.redo(&create_ulid).await.unwrap();
-
-        // Verify the entity is back
-        let restored = ctx.read("tag", "bug").await.unwrap();
-        assert_eq!(restored.get_str("tag_name"), Some("Bug"));
-        assert_eq!(restored.get_str("color"), Some("#ff0000"));
-    }
-
-    #[tokio::test]
-    async fn test_redo_delete() {
-        let dir = TempDir::new().unwrap();
-        let fields = test_fields_context();
-        let ctx = EntityContext::new(dir.path(), fields.clone());
-
-        // Create a tag
-        let mut tag = Entity::new("tag", "bug");
-        tag.set("tag_name", json!("Bug"));
-        tag.set("color", json!("#ff0000"));
-        ctx.write(&tag).await.unwrap();
-
-        // Delete it
-        let delete_ulid = ctx.delete("tag", "bug").await.unwrap().unwrap();
-
-        // Verify it's gone
-        assert!(ctx.read("tag", "bug").await.is_err());
-
-        // Undo the delete (restores it)
-        ctx.undo(&delete_ulid).await.unwrap();
-
-        // Verify it's back
-        assert!(ctx.read("tag", "bug").await.is_ok());
-
-        // Redo the delete (trashes it again)
-        ctx.redo(&delete_ulid).await.unwrap();
-
-        // Verify the entity is gone again
-        assert!(ctx.read("tag", "bug").await.is_err());
-
-        // Verify files are in trash (new layout: {type}s/.trash/)
-        let trash_dir = dir.path().join("tags").join(".trash");
-        assert!(trash_dir.join("bug.yaml").exists());
-    }
-
-    #[tokio::test]
-    async fn test_redo_returns_ulid() {
-        let dir = TempDir::new().unwrap();
-        let fields = test_fields_context();
-        let ctx = EntityContext::new(dir.path(), fields.clone());
-
-        // Create and update
-        let mut tag = Entity::new("tag", "bug");
-        tag.set("tag_name", json!("Bug"));
-        ctx.write(&tag).await.unwrap();
-
-        tag.set("tag_name", json!("Bug Report"));
-        let update_ulid = ctx.write(&tag).await.unwrap().unwrap();
-
-        // Undo the update
-        ctx.undo(&update_ulid).await.unwrap();
-
-        // Redo returns a new ULID
-        let redo_result = ctx.redo(&update_ulid).await.unwrap();
-        assert!(redo_result.is_some());
-
-        let redo_ulid = redo_result.unwrap();
-        // The redo ULID should be different from the original update ULID
-        assert_ne!(redo_ulid, update_ulid);
-        // It should be a valid ULID (26 chars)
-        assert_eq!(redo_ulid.len(), 26);
-    }
-
-    #[tokio::test]
-    async fn test_redo_stale_update_errors() {
-        let dir = TempDir::new().unwrap();
-        let fields = test_fields_context();
-        let ctx = EntityContext::new(dir.path(), fields.clone());
-
-        // Create a tag
-        let mut tag = Entity::new("tag", "bug");
-        tag.set("tag_name", json!("Bug"));
-        ctx.write(&tag).await.unwrap();
-
-        // Update it (change tag_name from "Bug" to "Bug Report")
-        tag.set("tag_name", json!("Bug Report"));
-        let update_ulid = ctx.write(&tag).await.unwrap().unwrap();
-
-        // Undo the update (back to "Bug")
-        ctx.undo(&update_ulid).await.unwrap();
-
-        // Manually modify the entity to something different
-        tag.set("tag_name", json!("Something Else"));
-        ctx.write(&tag).await.unwrap();
-
-        // Now try to redo the update — the redo expects to see "Bug"
-        // but the current value is "Something Else", so applying the
-        // TextDiff should fail because the text has been modified.
-        let result = ctx.redo(&update_ulid).await;
-        assert!(result.is_err(), "redoing a stale update should error");
-    }
-
-    #[tokio::test]
-    async fn test_redo_unknown_ulid_errors() {
-        let dir = TempDir::new().unwrap();
-        let fields = test_fields_context();
-        let ctx = EntityContext::new(dir.path(), fields.clone());
-
-        // Try to redo a ULID that doesn't exist
-        let result = ctx.redo("01NONEXISTENT000000000000").await;
-        assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
-        assert!(err.contains("not found"));
-    }
-
-    #[tokio::test]
-    async fn test_redo_changelog_has_redone_id() {
-        let dir = TempDir::new().unwrap();
-        let fields = test_fields_context();
-        let ctx = EntityContext::new(dir.path(), fields.clone());
-
-        // Create and update
-        let mut tag = Entity::new("tag", "bug");
-        tag.set("tag_name", json!("Bug"));
-        ctx.write(&tag).await.unwrap();
-
-        tag.set("tag_name", json!("Bug Report"));
-        let update_ulid = ctx.write(&tag).await.unwrap().unwrap();
-
-        // Undo the update
-        ctx.undo(&update_ulid).await.unwrap();
-
-        // Redo the update
-        let redo_ulid = ctx.redo(&update_ulid).await.unwrap().unwrap();
-
-        // Read the changelog and find the redo entry
-        let log = ctx.read_changelog("tag", "bug").await.unwrap();
-        let redo_entry = log.iter().find(|e| e.id == redo_ulid).unwrap();
-
-        // Verify the redo entry has the correct fields
-        assert_eq!(redo_entry.op, "redo");
-        assert_eq!(redo_entry.redone_id.as_deref(), Some(update_ulid.as_str()));
-        assert_eq!(redo_entry.entity_type, "tag");
-        assert_eq!(redo_entry.entity_id, "bug");
-    }
-
-    #[tokio::test]
-    async fn test_undo_redo_undo_cycle() {
-        let dir = TempDir::new().unwrap();
-        let fields = test_fields_context();
-        let ctx = EntityContext::new(dir.path(), fields.clone());
-
-        // Create a tag with initial value
-        let mut tag = Entity::new("tag", "bug");
-        tag.set("tag_name", json!("Bug"));
-        tag.set("color", json!("#ff0000"));
-        ctx.write(&tag).await.unwrap();
-
-        // Update it
-        tag.set("tag_name", json!("Bug Report"));
-        let update_ulid = ctx.write(&tag).await.unwrap().unwrap();
-
-        // Verify: "Bug Report"
-        let loaded = ctx.read("tag", "bug").await.unwrap();
-        assert_eq!(loaded.get_str("tag_name"), Some("Bug Report"));
-
-        // Undo: back to "Bug"
-        ctx.undo(&update_ulid).await.unwrap();
-        let loaded = ctx.read("tag", "bug").await.unwrap();
-        assert_eq!(loaded.get_str("tag_name"), Some("Bug"));
-
-        // Redo: forward to "Bug Report"
-        ctx.redo(&update_ulid).await.unwrap();
-        let loaded = ctx.read("tag", "bug").await.unwrap();
-        assert_eq!(loaded.get_str("tag_name"), Some("Bug Report"));
-
-        // Undo again: back to "Bug"
-        ctx.undo(&update_ulid).await.unwrap();
-        let loaded = ctx.read("tag", "bug").await.unwrap();
-        assert_eq!(loaded.get_str("tag_name"), Some("Bug"));
-
-        // Color should remain unchanged throughout all operations
-        assert_eq!(loaded.get_str("color"), Some("#ff0000"));
-    }
-
-    // =========================================================================
-    // New tests for the relocated .trash/ layout and .archive/ support
-    // =========================================================================
-
-    #[tokio::test]
-    async fn archive_dir_correct() {
-        let dir = TempDir::new().unwrap();
-        let fields = test_fields_context();
-        let ctx = EntityContext::new(dir.path(), fields.clone());
-
-        assert_eq!(
-            ctx.archive_dir("tag"),
-            dir.path().join("tags").join(".archive")
-        );
-        assert_eq!(
-            ctx.archive_dir("task"),
-            dir.path().join("tasks").join(".archive")
-        );
-    }
-
-    #[tokio::test]
-    async fn delete_moves_to_new_trash_location() {
-        let dir = TempDir::new().unwrap();
-        let fields = test_fields_context();
-        let ctx = EntityContext::new(dir.path(), fields.clone());
-
-        let mut tag = Entity::new("tag", "bug");
-        tag.set("tag_name", json!("Bug"));
-        ctx.write(&tag).await.unwrap();
-
-        ctx.delete("tag", "bug").await.unwrap();
-
-        // Entity is gone from live storage
-        assert!(ctx.read("tag", "bug").await.is_err());
-
-        // Files are in the new trash location: {type}s/.trash/
-        let trash_dir = dir.path().join("tags").join(".trash");
-        assert!(trash_dir.join("bug.yaml").exists());
-        assert!(trash_dir.join("bug.jsonl").exists());
-
-        // Old-style .trash/ at root should NOT exist
-        assert!(!dir.path().join(".trash").exists());
-    }
-
-    #[tokio::test]
-    async fn archive_moves_to_archive_dir() {
-        let dir = TempDir::new().unwrap();
-        let fields = test_fields_context();
-        let ctx = EntityContext::new(dir.path(), fields.clone());
-
-        let mut tag = Entity::new("tag", "bug");
-        tag.set("tag_name", json!("Bug"));
-        tag.set("color", json!("#ff0000"));
-        ctx.write(&tag).await.unwrap();
-
-        // Entity is visible before archiving
-        assert_eq!(ctx.list("tag").await.unwrap().len(), 1);
-
-        let archive_ulid = ctx.archive("tag", "bug").await.unwrap();
-        assert!(archive_ulid.is_some());
-
-        // Entity is gone from live storage
-        assert!(ctx.read("tag", "bug").await.is_err());
-
-        // Entity excluded from list()
-        assert_eq!(ctx.list("tag").await.unwrap().len(), 0);
-
-        // Files are in the archive directory
-        let archive_dir = dir.path().join("tags").join(".archive");
-        assert!(archive_dir.join("bug.yaml").exists());
-        assert!(archive_dir.join("bug.jsonl").exists());
-    }
-
-    #[tokio::test]
-    async fn unarchive_restores_entity() {
-        let dir = TempDir::new().unwrap();
-        let fields = test_fields_context();
-        let ctx = EntityContext::new(dir.path(), fields.clone());
-
-        let mut tag = Entity::new("tag", "bug");
-        tag.set("tag_name", json!("Bug"));
-        tag.set("color", json!("#ff0000"));
-        ctx.write(&tag).await.unwrap();
-
-        // Archive the entity
-        ctx.archive("tag", "bug").await.unwrap();
-        assert_eq!(ctx.list("tag").await.unwrap().len(), 0);
-
-        // Unarchive it
-        let unarchive_ulid = ctx.unarchive("tag", "bug").await.unwrap();
-        assert!(unarchive_ulid.is_some());
-
-        // Entity is back in live storage
-        assert_eq!(ctx.list("tag").await.unwrap().len(), 1);
-        let restored = ctx.read("tag", "bug").await.unwrap();
-        assert_eq!(restored.get_str("tag_name"), Some("Bug"));
-        assert_eq!(restored.get_str("color"), Some("#ff0000"));
-
-        // Archive directory is now empty
-        let archive_dir = dir.path().join("tags").join(".archive");
-        assert!(!archive_dir.join("bug.yaml").exists());
-    }
-
-    #[tokio::test]
-    async fn list_archived_returns_archived_only() {
-        let dir = TempDir::new().unwrap();
-        let fields = test_fields_context();
-        let ctx = EntityContext::new(dir.path(), fields.clone());
-
-        // Create two tags
-        let mut t1 = Entity::new("tag", "bug");
-        t1.set("tag_name", json!("Bug"));
-        let mut t2 = Entity::new("tag", "feature");
-        t2.set("tag_name", json!("Feature"));
-
-        ctx.write(&t1).await.unwrap();
-        ctx.write(&t2).await.unwrap();
-
-        // Archive only "bug"
-        ctx.archive("tag", "bug").await.unwrap();
-
-        // list() should only return "feature"
-        let live = ctx.list("tag").await.unwrap();
-        assert_eq!(live.len(), 1);
-        assert_eq!(live[0].id, "feature");
-
-        // list_archived() should only return "bug"
-        let archived = ctx.list_archived("tag").await.unwrap();
-        assert_eq!(archived.len(), 1);
-        assert_eq!(archived[0].id, "bug");
-    }
-
-    #[tokio::test]
-    async fn read_archived_returns_entity() {
-        let dir = TempDir::new().unwrap();
-        let fields = test_fields_context();
-        let ctx = EntityContext::new(dir.path(), fields.clone());
-
-        let mut tag = Entity::new("tag", "bug");
-        tag.set("tag_name", json!("Bug"));
-        tag.set("color", json!("#ff0000"));
-        ctx.write(&tag).await.unwrap();
-
-        ctx.archive("tag", "bug").await.unwrap();
-
-        // read() on archived entity should fail
-        assert!(ctx.read("tag", "bug").await.is_err());
-
-        // read_archived() should succeed
-        let archived = ctx.read_archived("tag", "bug").await.unwrap();
-        assert_eq!(archived.get_str("tag_name"), Some("Bug"));
-        assert_eq!(archived.get_str("color"), Some("#ff0000"));
-    }
-
-    #[tokio::test]
-    async fn archive_writes_changelog() {
-        let dir = TempDir::new().unwrap();
-        let fields = test_fields_context();
-        let ctx = EntityContext::new(dir.path(), fields.clone());
-
-        let mut tag = Entity::new("tag", "bug");
-        tag.set("tag_name", json!("Bug"));
-        ctx.write(&tag).await.unwrap();
-
-        ctx.archive("tag", "bug").await.unwrap();
-
-        // Changelog lives in the archive directory
-        let archive_log = dir.path().join("tags").join(".archive").join("bug.jsonl");
-        let content = tokio::fs::read_to_string(&archive_log).await.unwrap();
-        assert!(
-            content.contains("\"archive\""),
-            "changelog should contain archive op"
-        );
-    }
-
-    #[tokio::test]
-    async fn unarchive_writes_changelog() {
-        let dir = TempDir::new().unwrap();
-        let fields = test_fields_context();
-        let ctx = EntityContext::new(dir.path(), fields.clone());
-
-        let mut tag = Entity::new("tag", "bug");
-        tag.set("tag_name", json!("Bug"));
-        ctx.write(&tag).await.unwrap();
-
-        ctx.archive("tag", "bug").await.unwrap();
-        ctx.unarchive("tag", "bug").await.unwrap();
-
-        // After unarchive, changelog is back in live dir
-        let log = ctx.read_changelog("tag", "bug").await.unwrap();
-        assert!(
-            log.iter().any(|e| e.op == "unarchive"),
-            "changelog should contain unarchive op"
-        );
-    }
-
-    #[tokio::test]
-    async fn undo_delete_works_with_new_trash() {
-        let dir = TempDir::new().unwrap();
-        let fields = test_fields_context();
-        let ctx = EntityContext::new(dir.path(), fields.clone());
-
-        let mut tag = Entity::new("tag", "bug");
-        tag.set("tag_name", json!("Bug"));
-        tag.set("color", json!("#ff0000"));
-        ctx.write(&tag).await.unwrap();
-
-        // Delete it
-        let delete_ulid = ctx.delete("tag", "bug").await.unwrap().unwrap();
-
-        // Verify trash location is new-style
-        let trash_dir = dir.path().join("tags").join(".trash");
-        assert!(trash_dir.join("bug.yaml").exists());
-
-        // Undo the delete — should work with the new trash layout
-        ctx.undo(&delete_ulid).await.unwrap();
-
-        // Entity is restored
-        let restored = ctx.read("tag", "bug").await.unwrap();
-        assert_eq!(restored.get_str("tag_name"), Some("Bug"));
-        assert_eq!(restored.get_str("color"), Some("#ff0000"));
     }
 
     #[tokio::test]
@@ -3419,6 +1754,726 @@ mod tests {
         assert_eq!(files[1]["name"], "b.txt");
         assert_eq!(files[2]["name"], "c.txt");
     }
+
+    // -----------------------------------------------------------------------
+    // enrich_attachment_fields — targeted tests
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn enrich_attachment_fields_populates_full_metadata() {
+        let dir = TempDir::new().unwrap();
+        let fields = attachment_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields);
+
+        // Write two source files as a multiple attachment
+        let src1 = dir.path().join("image.png");
+        let src2 = dir.path().join("readme.md");
+        tokio::fs::write(&src1, b"PNG data bytes").await.unwrap();
+        tokio::fs::write(&src2, b"# Hello").await.unwrap();
+
+        let mut entity = Entity::new("item", "01ENRICH");
+        entity.set("title", json!("Enrich Test"));
+        entity.set(
+            "files",
+            json!([
+                src1.to_string_lossy().to_string(),
+                src2.to_string_lossy().to_string()
+            ]),
+        );
+        ctx.write(&entity).await.unwrap();
+
+        // Read — enrichment happens via apply_compute → enrich_attachment_fields
+        let read = ctx.read("item", "01ENRICH").await.unwrap();
+        let files = read.fields.get("files").unwrap().as_array().unwrap();
+        assert_eq!(files.len(), 2);
+
+        // Verify each enriched object has the required shape
+        for meta in files {
+            assert!(meta["id"].is_string(), "should have id");
+            assert!(meta["name"].is_string(), "should have name");
+            assert!(meta["size"].is_number(), "should have size");
+            assert!(meta["mime_type"].is_string(), "should have mime_type");
+            assert!(meta["path"].is_string(), "should have path");
+        }
+
+        assert_eq!(files[0]["name"], "image.png");
+        assert_eq!(files[0]["size"], 14); // b"PNG data bytes".len()
+        assert_eq!(files[0]["mime_type"], "image/png");
+
+        assert_eq!(files[1]["name"], "readme.md");
+        assert_eq!(files[1]["size"], 7); // b"# Hello".len()
+    }
+
+    #[tokio::test]
+    async fn enrich_attachment_fields_missing_file_silently_drops() {
+        let dir = TempDir::new().unwrap();
+        let fields = attachment_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields);
+
+        // Write one real attachment first
+        let src = dir.path().join("real.txt");
+        tokio::fs::write(&src, b"exists").await.unwrap();
+
+        let mut entity = Entity::new("item", "01MISS");
+        entity.set("title", json!("Missing File Test"));
+        entity.set("files", json!([src.to_string_lossy().to_string()]));
+        ctx.write(&entity).await.unwrap();
+
+        // Get the stored filename, then manually add a bogus one to the YAML
+        let def = ctx.entity_def("item").unwrap();
+        let path = crate::io::entity_file_path(&ctx.entity_dir("item"), "01MISS", def);
+        let raw = crate::io::read_entity(&path, "item", "01MISS", def)
+            .await
+            .unwrap();
+        let stored = raw.fields.get("files").unwrap().as_array().unwrap()[0]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        // Rewrite entity with the real stored filename plus a nonexistent one
+        let mut entity2 = Entity::new("item", "01MISS");
+        entity2.set("title", json!("Missing File Test"));
+        entity2.set("files", json!([stored.clone(), "01BOGUS-nonexistent.txt"]));
+        // Write raw to disk (bypass resolve so the bogus name stays as-is)
+        crate::io::write_entity(&path, &entity2, def).await.unwrap();
+
+        // Read with enrichment — missing file should be silently dropped
+        let read = ctx.read("item", "01MISS").await.unwrap();
+        let files = read.fields.get("files").unwrap().as_array().unwrap();
+
+        // Only the real file should appear (missing one silently skipped)
+        assert_eq!(
+            files.len(),
+            1,
+            "missing attachment should be silently dropped during enrichment"
+        );
+        assert_eq!(files[0]["name"], "real.txt");
+    }
+
+    #[tokio::test]
+    async fn enrich_attachment_fields_empty_array_unchanged() {
+        let dir = TempDir::new().unwrap();
+        let fields = attachment_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields);
+
+        let mut entity = Entity::new("item", "01EMPTY");
+        entity.set("title", json!("Empty Attachments"));
+        entity.set("files", json!([]));
+        ctx.write(&entity).await.unwrap();
+
+        let read = ctx.read("item", "01EMPTY").await.unwrap();
+        let files = read.fields.get("files").unwrap().as_array().unwrap();
+        assert!(
+            files.is_empty(),
+            "empty attachment array should remain empty after enrichment"
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_attachment_value_copies_source_to_attachments_dir() {
+        let dir = TempDir::new().unwrap();
+        let fields = attachment_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields);
+
+        let source = dir.path().join("document.pdf");
+        tokio::fs::write(&source, b"PDF content here")
+            .await
+            .unwrap();
+
+        let mut entity = Entity::new("item", "01RESOLVE");
+        entity.set("title", json!("Resolve Test"));
+        entity.set("avatar", json!(source.to_string_lossy().to_string()));
+        ctx.write(&entity).await.unwrap();
+
+        // Verify file landed in .attachments/
+        let att_dir = dir.path().join("items").join(".attachments");
+        let mut entries = tokio::fs::read_dir(&att_dir).await.unwrap();
+        let mut found = false;
+        while let Some(entry) = entries.next_entry().await.unwrap() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.ends_with("-document.pdf") {
+                found = true;
+                let contents = tokio::fs::read(entry.path()).await.unwrap();
+                assert_eq!(contents, b"PDF content here");
+            }
+        }
+        assert!(
+            found,
+            "source file should be copied to .attachments/ with ULID prefix"
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_attachment_value_existing_filename_returned_as_is() {
+        let dir = TempDir::new().unwrap();
+        let fields = attachment_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields);
+
+        // First write: copy a source file
+        let source = dir.path().join("notes.txt");
+        tokio::fs::write(&source, b"my notes").await.unwrap();
+
+        let mut entity = Entity::new("item", "01EXIST");
+        entity.set("title", json!("Existing Test"));
+        entity.set("avatar", json!(source.to_string_lossy().to_string()));
+        ctx.write(&entity).await.unwrap();
+
+        // Get the stored filename from raw YAML
+        let def = ctx.entity_def("item").unwrap();
+        let path = crate::io::entity_file_path(&ctx.entity_dir("item"), "01EXIST", def);
+        let raw = crate::io::read_entity(&path, "item", "01EXIST", def)
+            .await
+            .unwrap();
+        let stored = raw
+            .fields
+            .get("avatar")
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        // Second write: use the stored filename directly
+        let mut entity2 = Entity::new("item", "01EXIST");
+        entity2.set("title", json!("Existing Test v2"));
+        entity2.set("avatar", json!(stored.clone()));
+        ctx.write(&entity2).await.unwrap();
+
+        // Verify the stored filename didn't change (no new copy)
+        let raw2 = crate::io::read_entity(&path, "item", "01EXIST", def)
+            .await
+            .unwrap();
+        let stored2 = raw2
+            .fields
+            .get("avatar")
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert_eq!(
+            stored, stored2,
+            "stored filename should be returned as-is without creating a new copy"
+        );
+
+        // Only one file should exist in .attachments/ (no duplicates)
+        let att_dir = dir.path().join("items").join(".attachments");
+        let mut count = 0;
+        let mut entries = tokio::fs::read_dir(&att_dir).await.unwrap();
+        while let Some(entry) = entries.next_entry().await.unwrap() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if !name.starts_with('.') {
+                count += 1;
+            }
+        }
+        assert_eq!(count, 1, "should have exactly one attachment file");
+    }
+
+    // ===========================================================================
+    // Additional tests from main
+    // ===========================================================================
+
+    #[tokio::test]
+    async fn archive_dir_correct() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields.clone());
+
+        assert_eq!(
+            ctx.archive_dir("tag"),
+            dir.path().join("tags").join(".archive")
+        );
+        assert_eq!(
+            ctx.archive_dir("task"),
+            dir.path().join("tasks").join(".archive")
+        );
+    }
+
+    #[tokio::test]
+    async fn list_archived_returns_archived_only() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields.clone());
+
+        // Create two tags
+        let mut t1 = Entity::new("tag", "bug");
+        t1.set("tag_name", json!("Bug"));
+        let mut t2 = Entity::new("tag", "feature");
+        t2.set("tag_name", json!("Feature"));
+
+        ctx.write(&t1).await.unwrap();
+        ctx.write(&t2).await.unwrap();
+
+        // Archive only "bug"
+        ctx.archive("tag", "bug").await.unwrap();
+
+        // list() should only return "feature"
+        let live = ctx.list("tag").await.unwrap();
+        assert_eq!(live.len(), 1);
+        assert_eq!(live[0].id, "feature");
+
+        // list_archived() should only return "bug"
+        let archived = ctx.list_archived("tag").await.unwrap();
+        assert_eq!(archived.len(), 1);
+        assert_eq!(archived[0].id, "bug");
+    }
+
+    #[tokio::test]
+    async fn read_archived_returns_entity() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields.clone());
+
+        let mut tag = Entity::new("tag", "bug");
+        tag.set("tag_name", json!("Bug"));
+        tag.set("color", json!("#ff0000"));
+        ctx.write(&tag).await.unwrap();
+
+        ctx.archive("tag", "bug").await.unwrap();
+
+        // read() on archived entity should fail
+        assert!(ctx.read("tag", "bug").await.is_err());
+
+        // read_archived() should succeed
+        let archived = ctx.read_archived("tag", "bug").await.unwrap();
+        assert_eq!(archived.get_str("tag_name"), Some("Bug"));
+        assert_eq!(archived.get_str("color"), Some("#ff0000"));
+    }
+
+    #[tokio::test]
+    async fn archive_writes_changelog() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields.clone());
+
+        let mut tag = Entity::new("tag", "bug");
+        tag.set("tag_name", json!("Bug"));
+        ctx.write(&tag).await.unwrap();
+
+        ctx.archive("tag", "bug").await.unwrap();
+
+        // Changelog lives in the archive directory
+        let archive_log = dir.path().join("tags").join(".archive").join("bug.jsonl");
+        let content = tokio::fs::read_to_string(&archive_log).await.unwrap();
+        assert!(
+            content.contains("\"archive\""),
+            "changelog should contain archive op"
+        );
+    }
+
+    #[tokio::test]
+    async fn unarchive_writes_changelog() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields.clone());
+
+        let mut tag = Entity::new("tag", "bug");
+        tag.set("tag_name", json!("Bug"));
+        ctx.write(&tag).await.unwrap();
+
+        ctx.archive("tag", "bug").await.unwrap();
+        ctx.unarchive("tag", "bug").await.unwrap();
+
+        // After unarchive, changelog is back in live dir
+        let log = ctx.read_changelog("tag", "bug").await.unwrap();
+        assert!(
+            log.iter().any(|e| e.op == "unarchive"),
+            "changelog should contain unarchive op"
+        );
+    }
+
+    #[tokio::test]
+    async fn root_and_fields_accessors() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields.clone());
+
+        assert_eq!(ctx.root(), dir.path());
+        // fields() should return the same FieldsContext
+        assert!(ctx.fields().get_entity("tag").is_some());
+        assert!(ctx.fields().get_entity("task").is_some());
+    }
+
+    #[tokio::test]
+    async fn list_archived_with_compute_engine() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let compute = Arc::new(swissarmyhammer_fields::ComputeEngine::new());
+        let ctx = EntityContext::new(dir.path(), fields.clone()).with_compute(compute);
+
+        let mut tag = Entity::new("tag", "bug");
+        tag.set("tag_name", json!("Bug"));
+        ctx.write(&tag).await.unwrap();
+        ctx.archive("tag", "bug").await.unwrap();
+
+        // list_archived with compute engine
+        let archived = ctx.list_archived("tag").await.unwrap();
+        assert_eq!(archived.len(), 1);
+        assert_eq!(archived[0].get_str("tag_name"), Some("Bug"));
+    }
+
+    #[tokio::test]
+    async fn extract_attachment_filenames_edge_cases() {
+        // None value returns empty
+        let empty: Vec<String> = EntityContext::extract_attachment_filenames(None, false);
+        assert!(empty.is_empty());
+
+        let empty_multi: Vec<String> = EntityContext::extract_attachment_filenames(None, true);
+        assert!(empty_multi.is_empty());
+
+        // Non-string single value returns empty
+        let num = json!(42);
+        let result = EntityContext::extract_attachment_filenames(Some(&num), false);
+        assert!(result.is_empty());
+
+        // Non-string/non-array multiple value returns empty
+        let result_multi = EntityContext::extract_attachment_filenames(Some(&num), true);
+        assert!(result_multi.is_empty());
+
+        // String value for multiple returns single-element vec
+        let s = json!("filename.txt");
+        let result = EntityContext::extract_attachment_filenames(Some(&s), true);
+        assert_eq!(result, vec!["filename.txt".to_string()]);
+
+        // Array with mixed types filters non-strings
+        let arr = json!(["file1.txt", 42, "file2.txt"]);
+        let result = EntityContext::extract_attachment_filenames(Some(&arr), true);
+        assert_eq!(
+            result,
+            vec!["file1.txt".to_string(), "file2.txt".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn migrate_trash_no_op_when_old_layout_absent() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields.clone());
+
+        // No old-style trash exists; migration should be a no-op
+        ctx.migrate_trash_layout("tag").await.unwrap();
+        // Nothing should be created
+        assert!(!dir.path().join("tags").join(".trash").exists());
+    }
+
+    #[tokio::test]
+    async fn entity_def_returns_correct_definition() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields.clone());
+
+        let def = ctx.entity_def("tag").unwrap();
+        assert_eq!(def.name, "tag");
+        assert!(def.body_field.is_none());
+
+        let def = ctx.entity_def("task").unwrap();
+        assert_eq!(def.name, "task");
+        assert_eq!(def.body_field.as_deref(), Some("body"));
+    }
+
+    #[tokio::test]
+    async fn entity_def_unknown_type_errors() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields.clone());
+
+        let result = ctx.entity_def("nonexistent");
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("unknown entity type"));
+    }
+
+    #[tokio::test]
+    async fn read_changelog_empty_when_no_writes() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields.clone());
+
+        let log = ctx.read_changelog("tag", "nonexistent").await.unwrap();
+        assert!(log.is_empty());
+    }
+
+    #[tokio::test]
+    async fn read_changelog_unknown_entity_type_errors() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields.clone());
+
+        let result = ctx.read_changelog("unicorn", "x").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn changelog_path_unknown_entity_type_errors() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields.clone());
+
+        let result = ctx.changelog_path("unicorn", "x");
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn entity_path_unknown_entity_type_errors() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields.clone());
+
+        let result = ctx.entity_path("unicorn", "x");
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn list_empty_entity_type() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields.clone());
+
+        let result = ctx.list("tag").await.unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn list_unknown_entity_type_errors() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields.clone());
+
+        let result = ctx.list("unicorn").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn list_archived_empty() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields.clone());
+
+        let result = ctx.list_archived("tag").await.unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn list_archived_unknown_entity_type_errors() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields.clone());
+
+        let result = ctx.list_archived("unicorn").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn read_archived_unknown_entity_type_errors() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields.clone());
+
+        let result = ctx.read_archived("unicorn", "x").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn read_archived_not_found_errors() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields.clone());
+
+        let result = ctx.read_archived("tag", "nonexistent").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn delete_unknown_entity_type_errors() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields.clone());
+
+        let result = ctx.delete("unicorn", "x").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn archive_unknown_entity_type_errors() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields.clone());
+
+        let result = ctx.archive("unicorn", "x").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn unarchive_unknown_entity_type_errors() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields.clone());
+
+        let result = ctx.unarchive("unicorn", "x").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn restore_from_trash_unknown_entity_type_errors() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields.clone());
+
+        let result = ctx.restore_from_trash("unicorn", "x").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn restore_from_archive_unknown_entity_type_errors() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields.clone());
+
+        let result = ctx.restore_from_archive("unicorn", "x").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn migration_handles_already_existing_dest() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields.clone());
+
+        // Create old-style trash with a file
+        let old_trash = dir.path().join(".trash").join("tags");
+        tokio::fs::create_dir_all(&old_trash).await.unwrap();
+        tokio::fs::write(old_trash.join("dup.yaml"), "tag_name: Dup\n")
+            .await
+            .unwrap();
+
+        // Also create new-style trash with the same filename already present
+        let new_trash = dir.path().join("tags").join(".trash");
+        tokio::fs::create_dir_all(&new_trash).await.unwrap();
+        tokio::fs::write(new_trash.join("dup.yaml"), "tag_name: Existing\n")
+            .await
+            .unwrap();
+
+        // Migration should handle the AlreadyExists case gracefully
+        ctx.migrate_trash_layout("tag").await.unwrap();
+
+        // The new trash file should still exist (migration skips on AlreadyExists)
+        assert!(new_trash.join("dup.yaml").exists());
+    }
+
+    #[tokio::test]
+    async fn write_task_with_body_round_trips_through_context() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields.clone());
+
+        let mut task = Entity::new("task", "01TEST");
+        task.set("title", json!("Test Task"));
+        task.set(
+            "body",
+            json!("# Heading\n\nParagraph text.\n\n- Item 1\n- Item 2"),
+        );
+        ctx.write(&task).await.unwrap();
+
+        let loaded = ctx.read("task", "01TEST").await.unwrap();
+        assert_eq!(loaded.get_str("title"), Some("Test Task"));
+        assert!(loaded.get_str("body").unwrap().contains("# Heading"));
+    }
+
+    #[tokio::test]
+    async fn delete_nonexistent_entity_does_not_error() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields.clone());
+
+        // Deleting an entity that doesn't exist should succeed (moves to trash, nothing found)
+        let result = ctx.delete("tag", "nonexistent").await;
+        // It succeeds but returns None (no changelog entry since entity had no fields)
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn archive_nonexistent_entity_succeeds_with_none() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields.clone());
+
+        // Archiving entity that doesn't exist should succeed with None
+        let result = ctx.archive("tag", "nonexistent").await;
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn read_changelog_with_trash_fallback_unknown_entity_type_errors() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields.clone());
+
+        let result = ctx.read_changelog_with_trash_fallback("unicorn", "x").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn enrich_attachment_fields_without_compute_engine() {
+        // Test that attachment enrichment happens even without a compute engine
+        let dir = TempDir::new().unwrap();
+        let fields = attachment_fields_context();
+        let ctx = EntityContext::new(dir.path(), fields);
+        // No .with_compute() — but attachment enrichment should still work
+
+        let source = dir.path().join("photo.png");
+        tokio::fs::write(&source, b"png data").await.unwrap();
+
+        let mut entity = Entity::new("item", "01TEST");
+        entity.set("title", json!("Test"));
+        entity.set("avatar", json!(source.to_string_lossy().to_string()));
+        ctx.write(&entity).await.unwrap();
+
+        let read = ctx.read("item", "01TEST").await.unwrap();
+        let meta = read.fields.get("avatar").unwrap();
+        assert!(
+            meta.is_object(),
+            "attachment should be enriched without compute engine"
+        );
+        assert_eq!(meta["name"], "photo.png");
+    }
+
+    #[tokio::test]
+    async fn list_with_compute_engine_enriches_entities() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let compute = Arc::new(swissarmyhammer_fields::ComputeEngine::new());
+        let ctx = EntityContext::new(dir.path(), fields.clone()).with_compute(compute);
+
+        let mut t1 = Entity::new("tag", "t1");
+        t1.set("tag_name", json!("One"));
+        let mut t2 = Entity::new("tag", "t2");
+        t2.set("tag_name", json!("Two"));
+        ctx.write(&t1).await.unwrap();
+        ctx.write(&t2).await.unwrap();
+
+        let tags = ctx.list("tag").await.unwrap();
+        assert_eq!(tags.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn read_with_compute_engine_derives_fields() {
+        let dir = TempDir::new().unwrap();
+        let fields = test_fields_context();
+        let compute = Arc::new(swissarmyhammer_fields::ComputeEngine::new());
+        let ctx = EntityContext::new(dir.path(), fields.clone()).with_compute(compute);
+
+        let mut tag = Entity::new("tag", "bug");
+        tag.set("tag_name", json!("Bug"));
+        tag.set("color", json!("#ff0000"));
+        ctx.write(&tag).await.unwrap();
+
+        let loaded = ctx.read("tag", "bug").await.unwrap();
+        assert_eq!(loaded.get_str("tag_name"), Some("Bug"));
+    }
+
+    // -----------------------------------------------------------------------
+    // list_where tests (from kanban branch)
+    // -----------------------------------------------------------------------
 
     #[tokio::test]
     async fn list_where_filters_by_field() {

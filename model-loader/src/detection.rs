@@ -166,4 +166,45 @@ mod tests {
         assert!(!has_model_extension("README.md"));
         assert!(!has_model_extension("tokenizer.json"));
     }
+
+    #[test]
+    fn test_has_model_extension_mlpackage() {
+        assert!(has_model_extension("model.mlpackage"));
+        assert!(has_model_extension("path/to/model.mlpackage"));
+    }
+
+    #[test]
+    fn test_has_model_extension_no_extension() {
+        assert!(!has_model_extension("model"));
+        assert!(!has_model_extension(""));
+        assert!(!has_model_extension("path/to/file"));
+    }
+
+    #[test]
+    fn test_has_model_extension_case_insensitive() {
+        assert!(has_model_extension("model.GGUF"));
+        assert!(has_model_extension("model.Onnx"));
+        assert!(has_model_extension("model.SafeTensors"));
+        assert!(has_model_extension("model.BIN"));
+        assert!(has_model_extension("model.MLModel"));
+    }
+
+    #[test]
+    fn test_has_model_extension_all_supported() {
+        for ext in MODEL_EXTENSIONS {
+            let filename = format!("model.{}", ext);
+            assert!(
+                has_model_extension(&filename),
+                "Extension .{} should be recognized",
+                ext
+            );
+        }
+    }
+
+    #[test]
+    fn test_has_model_extension_double_extension() {
+        // Only the last extension matters
+        assert!(has_model_extension("model.tar.gguf"));
+        assert!(!has_model_extension("model.gguf.txt"));
+    }
 }

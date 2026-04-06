@@ -8,9 +8,7 @@ import {
 } from "react";
 import {
   CommandScopeContext,
-  resolveCommand,
-  dispatchCommand,
-  useActiveBoardPath,
+  useDispatchCommand,
   type CommandDef,
   type CommandScope,
 } from "@/lib/command-scope";
@@ -44,6 +42,15 @@ type FocusScopeOwnProps = {
   /** When false, suppresses the data-focused attribute (hides the focus bar).
    *  The scope still participates in focus/commands — only the visual indicator is hidden. */
   showFocusBar?: boolean;
+  /** When false, suppresses click/right-click/double-click event handling.
+   *  Independent of showFocusBar — a scope can handle events without showing the focus bar.
+   *  Defaults to true. */
+  handleEvents?: boolean;
+  /** When false, omits the wrapping FocusHighlight div — children render directly.
+   *  Use for table rows where a wrapping div breaks HTML structure.
+   *  The scope, moniker registration, and context still work; the caller
+   *  must attach onContextMenu etc. to their own element. */
+  renderContainer?: boolean;
 };
 
 type FocusScopeProps = FocusScopeOwnProps &
@@ -64,6 +71,8 @@ export function FocusScope({
   children,
   claimWhen,
   showFocusBar = true,
+  handleEvents = true,
+  renderContainer = true,
   ...rest
 }: FocusScopeProps) {
   const {
@@ -103,9 +112,9 @@ export function FocusScope({
 
   const handleClick = useCallback(
     (e: React.MouseEvent) => {
-      // When showFocusBar is false, don't claim focus on click — let the
+      // When handleEvents is false, don't claim focus on click — let the
       // event propagate to the parent FocusScope (e.g. grid cell, card).
-      if (!showFocusBar) return;
+      if (!handleEvents) return;
 
       // Don't change entity focus when clicking inputs/textareas/selects
       const target = e.target as HTMLElement;
@@ -117,7 +126,7 @@ export function FocusScope({
       e.stopPropagation();
       setFocus(moniker);
     },
-    [moniker, setFocus, showFocusBar],
+    [moniker, setFocus, handleEvents],
   );
 
   // Provide the scope via CommandScopeContext directly (not CommandScopeProvider)
@@ -125,14 +134,20 @@ export function FocusScope({
   return (
     <FocusScopeContext.Provider value={moniker}>
       <CommandScopeContext.Provider value={scope}>
-        <FocusScopeInner
-          moniker={moniker}
-          isDirectFocus={isDirectFocus}
-          onClick={handleClick}
-          {...rest}
-        >
-          {children}
-        </FocusScopeInner>
+        {renderContainer ? (
+          <FocusScopeInner
+            moniker={moniker}
+            isDirectFocus={isDirectFocus}
+            showFocusBar={showFocusBar}
+            handleEvents={handleEvents}
+            onClick={handleClick}
+            {...rest}
+          >
+            {children}
+          </FocusScopeInner>
+        ) : (
+          children
+        )}
       </CommandScopeContext.Provider>
     </FocusScopeContext.Provider>
   );
@@ -145,6 +160,10 @@ interface FocusScopeInnerProps extends Omit<
 > {
   moniker: string;
   isDirectFocus: boolean;
+  /** When false, hides the focus bar visual indicator. */
+  showFocusBar: boolean;
+  /** When false, suppresses click/right-click/double-click event handling. */
+  handleEvents: boolean;
   onClick: React.MouseEventHandler<HTMLElement>;
   children: ReactNode;
 }
@@ -153,40 +172,36 @@ interface FocusScopeInnerProps extends Omit<
 function FocusScopeInner({
   moniker,
   isDirectFocus,
+  showFocusBar,
+  handleEvents,
   onClick,
   children,
   ...htmlProps
 }: FocusScopeInnerProps) {
-  const scope = useContext(CommandScopeContext);
-
-  // Build scope chain (moniker walk from this scope to root) for context menu
-  const scopeChain = useMemo(() => {
-    const chain: string[] = [];
-    let current: typeof scope | null = scope;
-    while (current) {
-      if (current.moniker) chain.push(current.moniker);
-      current = current.parent;
-    }
-    return chain;
-  }, [scope]);
-
-  const contextMenuHandler = useContextMenu(scopeChain);
+  const contextMenuHandler = useContextMenu();
+  const dispatch = useDispatchCommand("ui.inspect");
   const { setFocus } = useEntityFocus();
 
   const handleContextMenu = useCallback(
     (e: React.MouseEvent) => {
+      // When handleEvents is false, let the event propagate to the parent
+      // entity scope (e.g. EntityRow).
+      if (!handleEvents) return;
+
       e.preventDefault();
       e.stopPropagation();
       setFocus(moniker);
       contextMenuHandler(e);
     },
-    [moniker, setFocus, contextMenuHandler],
+    [moniker, setFocus, contextMenuHandler, handleEvents],
   );
-
-  const boardPath = useActiveBoardPath();
 
   const handleDoubleClick = useCallback(
     (e: React.MouseEvent) => {
+      // When handleEvents is false, let the event propagate to the parent
+      // entity scope (e.g. EntityRow).
+      if (!handleEvents) return;
+
       // Skip if target is an interactive element
       const target = e.target as HTMLElement;
       const tag = target.tagName;
@@ -194,15 +209,9 @@ function FocusScopeInner({
       if (target.closest("[contenteditable]")) return;
 
       e.stopPropagation();
-
-      // ui.inspect opens the inspector panel. Double-click dispatches it
-      // to the backend which pushes onto the inspector stack.
-      const cmd = resolveCommand(scope, "ui.inspect");
-      if (cmd) {
-        dispatchCommand(cmd, boardPath, scopeChain);
-      }
+      dispatch({ target: moniker }).catch(console.error);
     },
-    [scope, boardPath, scopeChain],
+    [dispatch, moniker, handleEvents],
   );
 
   return (

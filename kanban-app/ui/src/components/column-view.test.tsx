@@ -26,7 +26,7 @@ import { EntityFocusProvider } from "@/lib/entity-focus-context";
 import { SchemaProvider } from "@/lib/schema-context";
 import { EntityStoreProvider } from "@/lib/entity-store-context";
 import { ActiveBoardPathProvider } from "@/lib/command-scope";
-import { InspectProvider } from "@/lib/inspect-context";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import type { Entity } from "@/types/kanban";
 
 /** Create a minimal column entity. */
@@ -53,11 +53,11 @@ function renderColumn(ui: React.ReactElement) {
     <EntityFocusProvider>
       <SchemaProvider>
         <EntityStoreProvider entities={{}}>
-          <ActiveBoardPathProvider value="/test/board">
-            <InspectProvider onInspect={vi.fn()} onDismiss={() => false}>
+          <TooltipProvider>
+            <ActiveBoardPathProvider value="/test/board">
               {ui}
-            </InspectProvider>
-          </ActiveBoardPathProvider>
+            </ActiveBoardPathProvider>
+          </TooltipProvider>
         </EntityStoreProvider>
       </SchemaProvider>
     </EntityFocusProvider>,
@@ -124,5 +124,22 @@ describe("ColumnView drop zones", () => {
     );
 
     expect(screen.getByText("2")).toBeTruthy();
+  });
+});
+
+describe("ColumnView add-task button", () => {
+  it("has aria-label with column name and no title attribute", () => {
+    renderColumn(
+      <ColumnView
+        column={makeColumn("col-1", "To Do")}
+        tasks={[]}
+        onAddTask={vi.fn()}
+        onDrop={vi.fn()}
+      />,
+    );
+
+    const btn = screen.getByRole("button", { name: /add task to to do/i });
+    expect(btn).toBeTruthy();
+    expect(btn.getAttribute("title")).toBeNull();
   });
 });

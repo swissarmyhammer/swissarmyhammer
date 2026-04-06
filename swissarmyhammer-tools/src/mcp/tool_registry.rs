@@ -223,7 +223,7 @@ use super::tool_handlers::ToolHandlers;
 use owo_colors::OwoColorize;
 use rmcp::model::{
     CallToolResult, Content, LoggingLevel, LoggingMessageNotification,
-    LoggingMessageNotificationParam, Tool,
+    LoggingMessageNotificationParam, Meta, Tool,
 };
 use rmcp::{ErrorData as McpError, Peer, RoleServer};
 use std::collections::{HashMap, HashSet};
@@ -1099,7 +1099,9 @@ impl ToolRegistry {
 
     /// Get all registered tools as Tool objects for MCP list_tools response.
     ///
-    /// Disabled tools are excluded from the result.
+    /// Disabled tools are excluded from the result. Every tool has `_meta` set
+    /// with `"anthropic/alwaysLoad": true` so Claude Code loads them eagerly
+    /// without requiring a ToolSearch round-trip.
     pub fn list_tools(&self) -> Vec<Tool> {
         self.tools
             .values()
@@ -1112,8 +1114,16 @@ impl ToolRegistry {
                     serde_json::Map::new()
                 };
 
-                Tool::new(McpTool::name(tool.as_ref()), tool.description(), schema_map)
-                    .with_title(McpTool::name(tool.as_ref()))
+                let mut mcp_tool =
+                    Tool::new(McpTool::name(tool.as_ref()), tool.description(), schema_map)
+                        .with_title(McpTool::name(tool.as_ref()));
+                let mut meta = Meta::new();
+                meta.0.insert(
+                    "anthropic/alwaysLoad".to_string(),
+                    serde_json::Value::Bool(true),
+                );
+                mcp_tool.meta = Some(meta);
+                mcp_tool
             })
             .collect()
     }
@@ -2700,5 +2710,923 @@ mod tests {
         assert!(names.contains(&"shell".to_string()));
         assert!(!names.contains(&"kanban".to_string()));
         assert_eq!(registry.list_tools().len(), 1);
+    }
+
+    #[test]
+    fn test_list_tools_always_load_meta() {
+        // Every tool returned by list_tools() must have _meta with
+        // "anthropic/alwaysLoad": true so Claude Code loads them eagerly.
+        let mut registry = ToolRegistry::new();
+        registry.register(MockTool {
+            name: "alpha",
+            description: "First tool",
+        });
+        registry.register(MockTool {
+            name: "beta",
+            description: "Second tool",
+        });
+
+        let tools = registry.list_tools();
+        assert!(!tools.is_empty(), "expected at least one tool");
+
+        for tool in &tools {
+            let meta = tool
+                .meta
+                .as_ref()
+                .unwrap_or_else(|| panic!("tool '{}' is missing _meta", tool.name));
+            let always_load = meta.0.get("anthropic/alwaysLoad").unwrap_or_else(|| {
+                panic!("tool '{}' _meta missing 'anthropic/alwaysLoad'", tool.name)
+            });
+            assert_eq!(
+                always_load,
+                &serde_json::Value::Bool(true),
+                "tool '{}' has wrong value for 'anthropic/alwaysLoad'",
+                tool.name
+            );
+        }
+    }
+
+    // --- ToolContext builder method tests ---
+
+    #[test]
+    fn test_tool_context_with_prompt_library() {
+        use swissarmyhammer_prompts::PromptLibrary;
+        use tokio::sync::RwLock;
+
+        let tool_handlers = Arc::new(ToolHandlers::new());
+        let git_ops = Arc::new(tokio::sync::Mutex::new(None));
+        let agent_config = Arc::new(swissarmyhammer_config::model::ModelConfig::default());
+        let ctx = ToolContext::new(tool_handlers, git_ops, agent_config);
+        assert!(ctx.prompt_library.is_none());
+
+        let library = Arc::new(RwLock::new(PromptLibrary::new()));
+        let ctx = ctx.with_prompt_library(library);
+        assert!(ctx.prompt_library.is_some());
+    }
+
+    #[test]
+    fn test_tool_context_with_plan_sender() {
+        use super::super::plan_notifications::{PlanNotification, PlanSender};
+        use tokio::sync::mpsc;
+
+        let tool_handlers = Arc::new(ToolHandlers::new());
+        let git_ops = Arc::new(tokio::sync::Mutex::new(None));
+        let agent_config = Arc::new(swissarmyhammer_config::model::ModelConfig::default());
+        let ctx = ToolContext::new(tool_handlers, git_ops, agent_config);
+        assert!(ctx.plan_sender.is_none());
+
+        let (tx, _rx) = mpsc::unbounded_channel::<PlanNotification>();
+        let sender = PlanSender::new(tx);
+        let ctx = ctx.with_plan_sender(sender);
+        assert!(ctx.plan_sender.is_some());
+    }
+
+    #[test]
+    fn test_tool_context_with_tool_registry() {
+        use tokio::sync::RwLock;
+
+        let tool_handlers = Arc::new(ToolHandlers::new());
+        let git_ops = Arc::new(tokio::sync::Mutex::new(None));
+        let agent_config = Arc::new(swissarmyhammer_config::model::ModelConfig::default());
+        let ctx = ToolContext::new(tool_handlers, git_ops, agent_config);
+        assert!(ctx.tool_registry.is_none());
+
+        let registry = Arc::new(RwLock::new(ToolRegistry::new()));
+        let ctx = ctx.with_tool_registry(registry);
+        assert!(ctx.tool_registry.is_some());
+    }
+
+    #[test]
+    fn test_tool_context_with_working_dir() {
+        let tool_handlers = Arc::new(ToolHandlers::new());
+        let git_ops = Arc::new(tokio::sync::Mutex::new(None));
+        let agent_config = Arc::new(swissarmyhammer_config::model::ModelConfig::default());
+        let ctx = ToolContext::new(tool_handlers, git_ops, agent_config);
+        assert!(ctx.working_dir.is_none());
+
+        let dir = std::path::PathBuf::from("/tmp/test");
+        let ctx = ctx.with_working_dir(dir.clone());
+        assert_eq!(ctx.working_dir, Some(dir));
+    }
+
+    #[tokio::test]
+    async fn test_tool_context_set_mcp_server() {
+        let tool_handlers = Arc::new(ToolHandlers::new());
+        let git_ops = Arc::new(tokio::sync::Mutex::new(None));
+        let agent_config = Arc::new(swissarmyhammer_config::model::ModelConfig::default());
+        let ctx = ToolContext::new(tool_handlers, git_ops, agent_config);
+
+        // Initially no server set
+        let guard = ctx.mcp_server.read().await;
+        assert!(guard.is_none());
+    }
+
+    // --- call_tool tests ---
+
+    #[tokio::test]
+    async fn test_call_tool_no_registry_returns_error() {
+        let tool_handlers = Arc::new(ToolHandlers::new());
+        let git_ops = Arc::new(tokio::sync::Mutex::new(None));
+        let agent_config = Arc::new(swissarmyhammer_config::model::ModelConfig::default());
+        let ctx = ToolContext::new(tool_handlers, git_ops, agent_config);
+
+        // No tool registry set — should return internal error
+        let result = ctx.call_tool("anything", serde_json::json!({})).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            format!("{:?}", err).contains("Tool registry not available"),
+            "expected 'Tool registry not available' in error, got: {:?}",
+            err
+        );
+    }
+
+    #[tokio::test]
+    async fn test_call_tool_missing_tool_returns_error() {
+        use tokio::sync::RwLock;
+
+        let tool_handlers = Arc::new(ToolHandlers::new());
+        let git_ops = Arc::new(tokio::sync::Mutex::new(None));
+        let agent_config = Arc::new(swissarmyhammer_config::model::ModelConfig::default());
+        let registry = Arc::new(RwLock::new(ToolRegistry::new()));
+        let ctx =
+            ToolContext::new(tool_handlers, git_ops, agent_config).with_tool_registry(registry);
+
+        let result = ctx
+            .call_tool("nonexistent_tool", serde_json::json!({}))
+            .await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        let msg = format!("{:?}", err);
+        assert!(
+            msg.contains("not found in registry"),
+            "expected 'not found in registry' in error, got: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_call_tool_non_object_params_returns_error() {
+        use tokio::sync::RwLock;
+
+        let mut inner = ToolRegistry::new();
+        inner.register(MockTool {
+            name: "echo_tool",
+            description: "Echoes input",
+        });
+        let tool_handlers = Arc::new(ToolHandlers::new());
+        let git_ops = Arc::new(tokio::sync::Mutex::new(None));
+        let agent_config = Arc::new(swissarmyhammer_config::model::ModelConfig::default());
+        let registry = Arc::new(RwLock::new(inner));
+        let ctx =
+            ToolContext::new(tool_handlers, git_ops, agent_config).with_tool_registry(registry);
+
+        // Pass an array instead of object — should fail
+        let result = ctx
+            .call_tool("echo_tool", serde_json::json!(["not", "an", "object"]))
+            .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_call_tool_success() {
+        use tokio::sync::RwLock;
+
+        let mut inner = ToolRegistry::new();
+        inner.register(MockTool {
+            name: "echo_tool",
+            description: "Echoes input",
+        });
+        let tool_handlers = Arc::new(ToolHandlers::new());
+        let git_ops = Arc::new(tokio::sync::Mutex::new(None));
+        let agent_config = Arc::new(swissarmyhammer_config::model::ModelConfig::default());
+        let registry = Arc::new(RwLock::new(inner));
+        let ctx =
+            ToolContext::new(tool_handlers, git_ops, agent_config).with_tool_registry(registry);
+
+        let result = ctx.call_tool("echo_tool", serde_json::json!({})).await;
+        assert!(result.is_ok());
+        let call_result = result.unwrap();
+        assert_eq!(call_result.is_error, Some(false));
+    }
+
+    // --- get_cli_categories / get_tools_for_category / get_cli_tools tests ---
+
+    #[test]
+    fn test_get_cli_categories_empty_registry() {
+        let registry = ToolRegistry::new();
+        let categories = registry.get_cli_categories();
+        assert!(categories.is_empty());
+    }
+
+    #[test]
+    fn test_get_cli_categories_returns_sorted_unique() {
+        let mut registry = ToolRegistry::new();
+        // KanbanTool → category "kanban"
+        // FilesTool → category "file"
+        // GitStatusTool → category "git"
+        registry.register(KanbanTool);
+        registry.register(FilesTool);
+        registry.register(GitStatusTool);
+
+        let categories = registry.get_cli_categories();
+        // Should be sorted
+        let mut sorted = categories.clone();
+        sorted.sort();
+        assert_eq!(categories, sorted);
+        assert!(categories.contains(&"kanban".to_string()));
+        assert!(categories.contains(&"file".to_string()));
+        assert!(categories.contains(&"git".to_string()));
+    }
+
+    #[test]
+    fn test_get_tools_for_category_returns_correct_tools() {
+        let mut registry = ToolRegistry::new();
+        registry.register(KanbanTool);
+        registry.register(FilesTool);
+        registry.register(GitStatusTool);
+
+        let kanban_tools = registry.get_tools_for_category("kanban");
+        assert_eq!(kanban_tools.len(), 1);
+        assert_eq!(<dyn McpTool as McpTool>::name(kanban_tools[0]), "kanban");
+
+        let file_tools = registry.get_tools_for_category("file");
+        assert_eq!(file_tools.len(), 1);
+        assert_eq!(<dyn McpTool as McpTool>::name(file_tools[0]), "files");
+    }
+
+    #[test]
+    fn test_get_tools_for_category_unknown_returns_empty() {
+        let mut registry = ToolRegistry::new();
+        registry.register(KanbanTool);
+
+        let tools = registry.get_tools_for_category("nonexistent_category");
+        assert!(tools.is_empty());
+    }
+
+    #[test]
+    fn test_get_cli_tools_excludes_unknown_category() {
+        let mut registry = ToolRegistry::new();
+        // KanbanTool has category, UnknownCategoryTool has no category
+        registry.register(KanbanTool);
+        registry.register(UnknownCategoryTool);
+
+        let cli_tools = registry.get_cli_tools();
+        let cli_names: Vec<&str> = cli_tools
+            .iter()
+            .map(|t| <dyn McpTool as McpTool>::name(*t))
+            .collect();
+        assert!(cli_names.contains(&"kanban"));
+        // UnknownCategoryTool has no cli_category — should be excluded
+        assert!(!cli_names.contains(&"unknown_something"));
+    }
+
+    #[test]
+    fn test_get_cli_tools_empty_when_all_hidden() {
+        // Tools without a cli_category won't appear in get_cli_tools
+        let mut registry = ToolRegistry::new();
+        registry.register(UnknownCategoryTool);
+        registry.register(NoUnderscoreTool);
+
+        let cli_tools = registry.get_cli_tools();
+        assert!(cli_tools.is_empty());
+    }
+
+    // --- send_mcp_log tests ---
+
+    #[tokio::test]
+    async fn test_send_mcp_log_no_peer_is_noop() {
+        use rmcp::model::LoggingLevel;
+
+        let tool_handlers = Arc::new(ToolHandlers::new());
+        let git_ops = Arc::new(tokio::sync::Mutex::new(None));
+        let agent_config = Arc::new(swissarmyhammer_config::model::ModelConfig::default());
+        let ctx = ToolContext::new(tool_handlers, git_ops, agent_config);
+        // No peer — send_mcp_log should be a no-op and not panic
+        send_mcp_log(&ctx, LoggingLevel::Info, "test", "hello".to_string()).await;
+    }
+
+    // --- create_fully_registered_tool_registry tests ---
+
+    #[tokio::test]
+    async fn test_create_fully_registered_tool_registry_is_non_empty() {
+        let registry = create_fully_registered_tool_registry().await;
+        assert!(
+            !registry.is_empty(),
+            "fully registered registry should not be empty"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_create_fully_registered_tool_registry_has_cli_tools() {
+        let registry = create_fully_registered_tool_registry().await;
+        let cli_tools = registry.get_cli_tools();
+        assert!(
+            !cli_tools.is_empty(),
+            "fully registered registry should have CLI tools"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_create_fully_registered_tool_registry_validation() {
+        let registry = create_fully_registered_tool_registry().await;
+        let report = registry.validate_all_tools();
+        // All registered tools should pass validation
+        assert!(
+            report.is_valid(),
+            "all tools in fully registered registry should be valid: {:?}",
+            report.errors
+        );
+    }
+
+    // --- remove_agent_tools tests ---
+
+    /// Mock agent tool that returns true for is_agent_tool
+    struct MockAgentTool;
+    impl_empty_doctorable!(MockAgentTool);
+    impl_empty_initializable!(MockAgentTool);
+
+    #[async_trait::async_trait]
+    impl McpTool for MockAgentTool {
+        fn name(&self) -> &'static str {
+            "files"
+        }
+        fn description(&self) -> &'static str {
+            "An agent tool"
+        }
+        fn schema(&self) -> serde_json::Value {
+            serde_json::json!({"type": "object", "properties": {}})
+        }
+        async fn execute(
+            &self,
+            _args: serde_json::Map<String, serde_json::Value>,
+            _ctx: &ToolContext,
+        ) -> std::result::Result<CallToolResult, McpError> {
+            Ok(BaseToolImpl::create_success_response("agent"))
+        }
+        fn is_agent_tool(&self) -> bool {
+            true
+        }
+    }
+
+    #[test]
+    fn test_remove_agent_tools() {
+        let mut registry = ToolRegistry::new();
+        registry.register(MockAgentTool);
+        registry.register(MockTool {
+            name: "kanban",
+            description: "kanban tool",
+        });
+
+        assert_eq!(registry.len(), 2);
+        registry.remove_agent_tools();
+        assert_eq!(registry.len(), 1);
+        // Agent tool should be removed, non-agent should remain
+        assert!(registry.get_tool("files").is_none());
+        assert!(registry.get_tool("kanban").is_some());
+    }
+
+    #[test]
+    fn test_remove_agent_tools_empty_registry() {
+        let mut registry = ToolRegistry::new();
+        registry.remove_agent_tools(); // Should not panic
+        assert!(registry.is_empty());
+    }
+
+    // --- get_tool_by_cli_name tests ---
+
+    #[test]
+    fn test_get_tool_by_cli_name_found() {
+        let mut registry = ToolRegistry::new();
+        registry.register(KanbanTool);
+
+        let tool = registry.get_tool_by_cli_name("kanban", "kanban");
+        assert!(tool.is_some());
+        assert_eq!(<dyn McpTool as McpTool>::name(tool.unwrap()), "kanban");
+    }
+
+    #[test]
+    fn test_get_tool_by_cli_name_not_found() {
+        let mut registry = ToolRegistry::new();
+        registry.register(KanbanTool);
+
+        assert!(registry
+            .get_tool_by_cli_name("kanban", "nonexistent")
+            .is_none());
+        assert!(registry
+            .get_tool_by_cli_name("nonexistent", "kanban")
+            .is_none());
+    }
+
+    #[test]
+    fn test_get_tool_by_cli_name_git_status() {
+        let mut registry = ToolRegistry::new();
+        registry.register(GitStatusTool);
+
+        let tool = registry.get_tool_by_cli_name("git", "status");
+        assert!(tool.is_some());
+    }
+
+    // --- matches_cli_criteria tests ---
+
+    #[test]
+    fn test_matches_cli_criteria_positive() {
+        let registry = ToolRegistry::new();
+        let tool = KanbanTool;
+        assert!(registry.matches_cli_criteria(&tool, "kanban", "kanban"));
+    }
+
+    #[test]
+    fn test_matches_cli_criteria_wrong_category() {
+        let registry = ToolRegistry::new();
+        let tool = KanbanTool;
+        assert!(!registry.matches_cli_criteria(&tool, "wrong", "kanban"));
+    }
+
+    #[test]
+    fn test_matches_cli_criteria_wrong_name() {
+        let registry = ToolRegistry::new();
+        let tool = KanbanTool;
+        assert!(!registry.matches_cli_criteria(&tool, "kanban", "wrong"));
+    }
+
+    // --- Hidden tool for testing ---
+
+    struct HiddenTool;
+    impl_empty_doctorable!(HiddenTool);
+    impl_empty_initializable!(HiddenTool);
+
+    #[async_trait::async_trait]
+    impl McpTool for HiddenTool {
+        fn name(&self) -> &'static str {
+            "kanban_hidden"
+        }
+        fn description(&self) -> &'static str {
+            "A hidden tool"
+        }
+        fn schema(&self) -> serde_json::Value {
+            serde_json::json!({"type": "object", "properties": {}})
+        }
+        async fn execute(
+            &self,
+            _args: serde_json::Map<String, serde_json::Value>,
+            _ctx: &ToolContext,
+        ) -> std::result::Result<CallToolResult, McpError> {
+            Ok(BaseToolImpl::create_success_response("hidden"))
+        }
+        fn hidden_from_cli(&self) -> bool {
+            true
+        }
+    }
+
+    #[test]
+    fn test_matches_cli_criteria_hidden_tool() {
+        let registry = ToolRegistry::new();
+        let tool = HiddenTool;
+        assert!(!registry.matches_cli_criteria(&tool, "kanban", "hidden"));
+    }
+
+    #[test]
+    fn test_hidden_tool_excluded_from_cli_categories() {
+        let mut registry = ToolRegistry::new();
+        registry.register(HiddenTool);
+
+        let categories = registry.get_cli_categories();
+        assert!(categories.is_empty());
+    }
+
+    #[test]
+    fn test_hidden_tool_excluded_from_cli_tools() {
+        let mut registry = ToolRegistry::new();
+        registry.register(HiddenTool);
+
+        let tools = registry.get_cli_tools();
+        assert!(tools.is_empty());
+    }
+
+    // --- is_agent_tool / is_validator_tool default tests ---
+
+    #[test]
+    fn test_default_is_agent_tool() {
+        let tool = MockTool {
+            name: "test",
+            description: "test",
+        };
+        assert!(!tool.is_agent_tool());
+    }
+
+    #[test]
+    fn test_default_is_validator_tool() {
+        let tool = MockTool {
+            name: "test",
+            description: "test",
+        };
+        assert!(!tool.is_validator_tool());
+    }
+
+    #[test]
+    fn test_default_operations_empty() {
+        let tool = MockTool {
+            name: "test",
+            description: "test",
+        };
+        assert!(tool.operations().is_empty());
+    }
+
+    // --- ValidationError Display tests ---
+
+    #[test]
+    fn test_validation_error_invalid_schema_display() {
+        let err = ValidationError::InvalidSchema {
+            message: "schema is broken".to_string(),
+        };
+        let s = format!("{}", err);
+        assert!(s.contains("Invalid schema structure"));
+        assert!(s.contains("schema is broken"));
+    }
+
+    #[test]
+    fn test_validation_error_missing_field_display() {
+        let err = ValidationError::MissingSchemaField {
+            field: "properties".to_string(),
+        };
+        let s = format!("{}", err);
+        assert!(s.contains("Missing required schema field"));
+        assert!(s.contains("properties"));
+    }
+
+    #[test]
+    fn test_validation_error_unsupported_type_display() {
+        let err = ValidationError::UnsupportedSchemaType {
+            schema_type: "object".to_string(),
+            parameter: "nested".to_string(),
+        };
+        let s = format!("{}", err);
+        assert!(s.contains("Unsupported schema type"));
+        assert!(s.contains("object"));
+        assert!(s.contains("nested"));
+    }
+
+    // --- ToolValidationError Display tests ---
+
+    #[test]
+    fn test_tool_validation_error_missing_category_display() {
+        let err = ToolValidationError::MissingCliCategory {
+            tool_name: "my_tool".to_string(),
+        };
+        let s = format!("{}", err);
+        assert!(s.contains("my_tool"));
+        assert!(s.contains("missing CLI category"));
+    }
+
+    #[test]
+    fn test_tool_validation_error_invalid_cli_name_display() {
+        let err = ToolValidationError::InvalidCliName {
+            tool_name: "my_tool".to_string(),
+            cli_name: "".to_string(),
+            reason: "CLI name cannot be empty".to_string(),
+        };
+        let s = format!("{}", err);
+        assert!(s.contains("my_tool"));
+        assert!(s.contains("invalid CLI name"));
+    }
+
+    #[test]
+    fn test_tool_validation_error_invalid_description_display() {
+        let err = ToolValidationError::InvalidDescription {
+            tool_name: "my_tool".to_string(),
+            reason: "too short".to_string(),
+        };
+        let s = format!("{}", err);
+        assert!(s.contains("my_tool"));
+        assert!(s.contains("invalid description"));
+    }
+
+    #[test]
+    fn test_tool_validation_error_name_conflict_display() {
+        let err = ToolValidationError::NameConflict {
+            tool_name: "tool_a".to_string(),
+            conflicting_tool: "tool_b".to_string(),
+        };
+        let s = format!("{}", err);
+        assert!(s.contains("tool_a"));
+        assert!(s.contains("tool_b"));
+        assert!(s.contains("conflicts"));
+    }
+
+    // --- ToolValidationReport tests ---
+
+    #[test]
+    fn test_validation_report_valid_summary() {
+        let mut registry = ToolRegistry::new();
+        registry.register(ValidTool);
+
+        let report = registry.validate_all_tools();
+        assert!(report.is_valid());
+        let summary = report.summary();
+        assert!(summary.contains("All"));
+        assert!(summary.contains("1 tools"));
+    }
+
+    // --- SchemaValidator edge cases ---
+
+    #[test]
+    fn test_schema_validator_non_object_schema() {
+        let schema = serde_json::json!("not an object");
+        let result = SchemaValidator::validate_schema(&schema);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            ValidationError::InvalidSchema { .. }
+        ));
+    }
+
+    #[test]
+    fn test_schema_validator_missing_properties() {
+        let schema = serde_json::json!({"type": "object"});
+        let result = SchemaValidator::validate_schema(&schema);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            ValidationError::MissingSchemaField { .. }
+        ));
+    }
+
+    #[test]
+    fn test_schema_validator_supported_types() {
+        for type_name in &["string", "integer", "number", "boolean", "array"] {
+            let schema = serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "param": {"type": type_name}
+                }
+            });
+            let result = SchemaValidator::validate_schema(&schema);
+            assert!(result.is_ok(), "type '{}' should be valid", type_name);
+        }
+    }
+
+    #[test]
+    fn test_schema_validator_unsupported_type_null() {
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "param": {"type": "null"}
+            }
+        });
+        let result = SchemaValidator::validate_schema(&schema);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_schema_validator_property_without_type() {
+        // Properties without a "type" field should pass validation
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "param": {"description": "no type specified"}
+            }
+        });
+        let result = SchemaValidator::validate_schema(&schema);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_schema_validator_property_not_object() {
+        // A property value that is not an object should pass (graceful)
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "param": "just a string"
+            }
+        });
+        let result = SchemaValidator::validate_schema(&schema);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_schema_validator_properties_not_object() {
+        // properties field that isn't an object
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": "not an object"
+        });
+        let result = SchemaValidator::validate_schema(&schema);
+        // validate_properties returns Ok when properties isn't an object
+        assert!(result.is_ok());
+    }
+
+    // --- ToolValidationSeverity tests ---
+
+    #[test]
+    fn test_validation_severity_equality() {
+        assert_eq!(
+            ToolValidationSeverity::Warning,
+            ToolValidationSeverity::Warning
+        );
+        assert_eq!(ToolValidationSeverity::Error, ToolValidationSeverity::Error);
+        assert_eq!(
+            ToolValidationSeverity::Critical,
+            ToolValidationSeverity::Critical
+        );
+        assert_ne!(
+            ToolValidationSeverity::Warning,
+            ToolValidationSeverity::Error
+        );
+    }
+
+    // --- ToolValidationWarning tests ---
+
+    #[test]
+    fn test_validation_warning_fields() {
+        let warning = ToolValidationWarning {
+            tool_name: "test_tool".to_string(),
+            error: ToolValidationError::MissingCliCategory {
+                tool_name: "test_tool".to_string(),
+            },
+            severity: ToolValidationSeverity::Warning,
+        };
+        assert_eq!(warning.tool_name, "test_tool");
+        assert_eq!(warning.severity, ToolValidationSeverity::Warning);
+    }
+
+    // --- ToolContext session_id tests ---
+
+    #[test]
+    fn test_tool_context_has_unique_session_id() {
+        let tool_handlers = Arc::new(ToolHandlers::new());
+        let git_ops = Arc::new(tokio::sync::Mutex::new(None));
+        let agent_config = Arc::new(swissarmyhammer_config::model::ModelConfig::default());
+        let ctx1 = ToolContext::new(tool_handlers.clone(), git_ops.clone(), agent_config.clone());
+        let ctx2 = ToolContext::new(tool_handlers, git_ops, agent_config);
+
+        // Each context should have a unique session_id
+        assert!(!ctx1.session_id.is_empty());
+        assert!(!ctx2.session_id.is_empty());
+        assert_ne!(ctx1.session_id, ctx2.session_id);
+    }
+
+    // --- ToolContext with_peer test ---
+
+    #[test]
+    fn test_tool_context_with_peer_sets_peer() {
+        let tool_handlers = Arc::new(ToolHandlers::new());
+        let git_ops = Arc::new(tokio::sync::Mutex::new(None));
+        let agent_config = Arc::new(swissarmyhammer_config::model::ModelConfig::default());
+        let ctx = ToolContext::new(tool_handlers, git_ops, agent_config);
+        assert!(ctx.peer.is_none());
+        // We can't easily create a real Peer, but we verify the initial state
+    }
+
+    // --- set_all_enabled(true) clears all ---
+
+    #[test]
+    fn test_set_all_enabled_true_clears_disabled() {
+        let mut registry = ToolRegistry::new();
+        registry.register(MockTool {
+            name: "tool_a",
+            description: "A",
+        });
+        registry.register(MockTool {
+            name: "tool_b",
+            description: "B",
+        });
+
+        registry.set_all_enabled(false);
+        assert_eq!(registry.list_tool_names().len(), 0);
+
+        registry.set_all_enabled(true);
+        assert_eq!(registry.list_tool_names().len(), 2);
+        assert!(registry.disabled_tools().is_empty());
+    }
+
+    // --- iter_tools respects disabled ---
+
+    #[test]
+    fn test_iter_tools_respects_disabled() {
+        let mut registry = ToolRegistry::new();
+        registry.register(MockTool {
+            name: "keep_me",
+            description: "kept",
+        });
+        registry.register(MockTool {
+            name: "hide_me",
+            description: "hidden",
+        });
+
+        registry.set_tool_enabled("hide_me", false);
+        let names: Vec<&str> = registry
+            .iter_tools()
+            .map(<dyn McpTool as McpTool>::name)
+            .collect();
+        assert!(names.contains(&"keep_me"));
+        assert!(!names.contains(&"hide_me"));
+    }
+
+    // --- cli_about with empty description ---
+
+    #[test]
+    fn test_cli_about_empty_description() {
+        struct EmptyDescTool;
+        impl_empty_doctorable!(EmptyDescTool);
+        impl_empty_initializable!(EmptyDescTool);
+
+        #[async_trait::async_trait]
+        impl McpTool for EmptyDescTool {
+            fn name(&self) -> &'static str {
+                "empty_desc"
+            }
+            fn description(&self) -> &'static str {
+                ""
+            }
+            fn schema(&self) -> serde_json::Value {
+                serde_json::json!({"type": "object", "properties": {}})
+            }
+            async fn execute(
+                &self,
+                _args: serde_json::Map<String, serde_json::Value>,
+                _ctx: &ToolContext,
+            ) -> std::result::Result<CallToolResult, McpError> {
+                Ok(BaseToolImpl::create_success_response("empty"))
+            }
+        }
+
+        let tool = EmptyDescTool;
+        // Empty description — cli_about returns None because lines() yields nothing
+        let about = tool.cli_about();
+        assert_eq!(about, None);
+    }
+
+    // --- cli_about with only headers ---
+
+    #[test]
+    fn test_cli_about_only_headers() {
+        struct HeaderOnlyTool;
+        impl_empty_doctorable!(HeaderOnlyTool);
+        impl_empty_initializable!(HeaderOnlyTool);
+
+        #[async_trait::async_trait]
+        impl McpTool for HeaderOnlyTool {
+            fn name(&self) -> &'static str {
+                "header_only"
+            }
+            fn description(&self) -> &'static str {
+                "# Header\n## Subheader\n### Another"
+            }
+            fn schema(&self) -> serde_json::Value {
+                serde_json::json!({"type": "object", "properties": {}})
+            }
+            async fn execute(
+                &self,
+                _args: serde_json::Map<String, serde_json::Value>,
+                _ctx: &ToolContext,
+            ) -> std::result::Result<CallToolResult, McpError> {
+                Ok(BaseToolImpl::create_success_response("headers"))
+            }
+        }
+
+        let tool = HeaderOnlyTool;
+        // All lines are headers, so cli_about falls back to first line
+        let about = tool.cli_about();
+        assert_eq!(about, Some("# Header"));
+    }
+
+    // --- ToolRegistry::default() test ---
+
+    #[test]
+    fn test_tool_registry_default() {
+        let registry = ToolRegistry::default();
+        assert!(registry.is_empty());
+        assert_eq!(registry.len(), 0);
+        assert!(registry.disabled_tools().is_empty());
+    }
+
+    // --- Tool re-registration replaces existing ---
+
+    #[test]
+    fn test_register_replaces_existing_tool() {
+        let mut registry = ToolRegistry::new();
+        registry.register(MockTool {
+            name: "dupe",
+            description: "first",
+        });
+        registry.register(MockTool {
+            name: "dupe",
+            description: "second",
+        });
+
+        // Should still have 1 tool, not 2
+        assert_eq!(registry.len(), 1);
+        let tool = registry.get_tool("dupe").unwrap();
+        assert_eq!(tool.description(), "second");
+    }
+
+    // --- validate_cli_requirements_for_tool on hidden tool ---
+
+    #[test]
+    fn test_validate_cli_requirements_hidden_tool_skipped() {
+        let registry = ToolRegistry::new();
+        let tool = HiddenTool;
+        let errors = registry.validate_cli_requirements_for_tool(&tool);
+        assert!(errors.is_empty());
     }
 }

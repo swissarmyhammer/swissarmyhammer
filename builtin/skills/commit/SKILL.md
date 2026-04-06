@@ -6,7 +6,6 @@ metadata:
   version: "{{version}}"
 ---
 
-{% include "_partials/detected-projects" %}
 {% include "_partials/coding-standards" %}
 {% include "_partials/git-practices" %}
 
@@ -20,8 +19,8 @@ Create a git commit with a well-crafted conventional commit message.
 - You MUST NOT commit scratch files that you generated, only commit source that you want in the project permanently
 - You MUST NOT miss files on the commit
   - You MUST commit all the source files modified on the current branch
-  - You MUST always include `.kanban/` directory changes — this contains project tracking data (tasks, tags, views, activity) that must be committed alongside code changes
   - You MUST check for and create if needed a sensible project specific .gitignore
+- **Kanban board**: If a `.kanban/` directory exists, ALWAYS include its changes in the same commit as the code. Task tracking lives with the code — cards created, moved, or completed during this work must ship together. Never leave `.kanban/` changes unstaged.
 
 ## Process
 
