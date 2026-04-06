@@ -1,9 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: '80'
-position_swimlane: lsp-live
+position_column: done
+position_ordinal: ffffffffffffffffffd880
 title: 'LSP-INFRA: Layered resolution, LspContext, shared types'
 ---
 ## What

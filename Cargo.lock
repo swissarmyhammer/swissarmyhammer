@@ -8601,7 +8601,6 @@ dependencies = [
  "tree-sitter",
  "ulid",
  "walkdir",
- "wiremock",
 ]
 
 [[package]]

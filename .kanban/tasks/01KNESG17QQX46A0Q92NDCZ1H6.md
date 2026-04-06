@@ -3,9 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KNESD0630BPJG3BK84KEJMJP
-position_column: todo
-position_ordinal: '8380'
-position_swimlane: lsp-live
+position_column: done
+position_ordinal: ffffffffffffffffffda80
 title: 'LSP-T1C: get_references op'
 ---
 ## What

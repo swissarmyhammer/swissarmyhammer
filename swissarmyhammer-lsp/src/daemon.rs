@@ -109,6 +109,11 @@ impl LspDaemon {
         &self.spec.command
     }
 
+    /// Return the file extensions this daemon's server handles (without dot).
+    pub fn file_extensions(&self) -> &[String] {
+        &self.spec.file_extensions
+    }
+
     /// Return a mutable reference to the JSON-RPC client, if the server is running.
     ///
     /// Returns `None` if the daemon has not been started, failed to start, or

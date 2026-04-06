@@ -3,9 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KNESD0630BPJG3BK84KEJMJP
-position_column: todo
-position_ordinal: '8280'
-position_swimlane: lsp-live
+position_column: done
+position_ordinal: ffffffffffffffffffd980
 title: 'LSP-T1B: get_hover op'
 ---
 ## What

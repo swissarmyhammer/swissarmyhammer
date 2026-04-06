@@ -3,9 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KNESD0630BPJG3BK84KEJMJP
-position_column: todo
-position_ordinal: '8180'
-position_swimlane: lsp-live
+position_column: done
+position_ordinal: ffffffffffffffffffdc80
 title: 'LSP-T1A: get_definition + get_type_definition ops'
 ---
 ## What

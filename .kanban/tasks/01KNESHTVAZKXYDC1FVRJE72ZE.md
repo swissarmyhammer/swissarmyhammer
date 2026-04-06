@@ -3,9 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KNESD0630BPJG3BK84KEJMJP
-position_column: todo
-position_ordinal: '8680'
-position_swimlane: lsp-live
+position_column: done
+position_ordinal: ffffffffffffffffffdf80
 title: 'LSP-T2C: get_diagnostics op'
 ---
 ## What

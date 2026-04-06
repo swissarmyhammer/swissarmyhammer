@@ -3,9 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KNESD0630BPJG3BK84KEJMJP
-position_column: todo
-position_ordinal: 8b80
-position_swimlane: lsp-live
+position_column: done
+position_ordinal: ffffffffffffffffffe180
 title: 'LSP-SKILL: Update lsp skill for live ops awareness'
 ---
 ## What

@@ -96,7 +96,19 @@ Read the matching resource file bundled with this skill:
 
 If the project uses multiple languages, apply all relevant sections. Language-specific findings follow the same severity levels.
 
-### 5. Produce Findings
+### 5. Architecture Review
+
+If an `ARCHITECTURE.md` file exists at the project root, read it and add an architecture alignment layer to your review:
+
+- **Does the change follow the documented architecture?** Check that new code lands in the correct module/layer/component as described in `ARCHITECTURE.md`. Flag changes that bypass documented boundaries (e.g., a handler directly calling the database when the architecture specifies a service layer).
+- **Are new components placed correctly?** If the change introduces new files, modules, or crates, verify they fit the structure described in `ARCHITECTURE.md`.
+- **Does the change require an architecture update?** If the change intentionally diverges from or extends the documented architecture (new module, new dependency direction, new service), create a finding recommending that `ARCHITECTURE.md` be updated to reflect the new state.
+
+Architecture findings use the same severity levels — a boundary violation is a **warning**, an undocumented structural addition is a **nit** unless it contradicts an explicit constraint (then **blocker**).
+
+If no `ARCHITECTURE.md` exists, skip this step.
+
+### 6. Produce Findings
 
 Organize findings by severity. Each finding must be specific and actionable.
 
@@ -110,7 +122,7 @@ Severity is informational — all findings become kanban cards.
 
 Each finding: **where** (file:line), **what**, **why** (skip for nits), and **suggestion** when non-obvious.
 
-### 6. Capture Findings as Kanban Cards
+### 7. Capture Findings as Kanban Cards
 
 Initialize the board:
 
@@ -132,7 +144,7 @@ Every finding — blocker, warning, and nit — becomes a kanban card tagged `re
 
 Add subtasks for each fix step. Every card MUST include a verification subtask.
 
-### 7. Summarize
+### 8. Summarize
 
 - One-sentence overall assessment
 - **Scope reviewed**: branch name and parent, or the revision range used (e.g. "Reviewed `HEAD~4..HEAD` on main")

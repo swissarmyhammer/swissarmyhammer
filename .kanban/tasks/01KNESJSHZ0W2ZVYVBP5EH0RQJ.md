@@ -3,9 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KNESD0630BPJG3BK84KEJMJP
-position_column: todo
-position_ordinal: '8880'
-position_swimlane: lsp-live
+position_column: done
+position_ordinal: ffffffffffffffffffdd80
 title: 'LSP-T3B: get_code_actions op'
 ---
 ## What

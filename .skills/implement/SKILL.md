@@ -37,6 +37,8 @@ metadata:
 
 Pick up the next kanban card and get it done.
 
+DO NOT deviate from the plan -- if you run into a problem, you need to stop and ask the user for guidance -- DO NOT deviate from the plan without permission from the user.
+
 ## Process
 
 ### 1. Get the next card

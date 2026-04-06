@@ -502,25 +502,7 @@ fn make_result_scored(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::{configure_connection, create_schema};
-
-    /// Create an in-memory database with the schema applied.
-    fn test_db() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        configure_connection(&conn).unwrap();
-        create_schema(&conn).unwrap();
-        conn
-    }
-
-    /// Insert an `indexed_files` row (required by foreign key constraint).
-    fn insert_file(conn: &Connection, path: &str) {
-        conn.execute(
-            "INSERT OR IGNORE INTO indexed_files (file_path, content_hash, file_size, last_seen_at)
-             VALUES (?1, X'DEADBEEF', 1024, 1000)",
-            [path],
-        )
-        .unwrap();
-    }
+    use crate::test_fixtures::{insert_file_simple as insert_file, insert_lsp_symbol, test_db};
 
     /// Insert a chunk with a symbol path into `ts_chunks`.
     fn insert_chunk(
@@ -531,34 +513,14 @@ mod tests {
         symbol_path: &str,
         text: &str,
     ) {
-        conn.execute(
-            "INSERT INTO ts_chunks (file_path, start_byte, end_byte, start_line, end_line, symbol_path, text)
-             VALUES (?1, 0, ?2, ?3, ?4, ?5, ?6)",
-            rusqlite::params![file_path, text.len() as i64, start_line, end_line, symbol_path, text],
-        )
-        .unwrap();
-    }
-
-    /// Insert an LSP symbol.
-    #[allow(clippy::too_many_arguments)]
-    fn insert_lsp_symbol(
-        conn: &Connection,
-        id: &str,
-        name: &str,
-        kind: i32,
-        file_path: &str,
-        start_line: u32,
-        start_char: u32,
-        end_line: u32,
-        end_char: u32,
-        detail: Option<&str>,
-    ) {
-        conn.execute(
-            "INSERT INTO lsp_symbols (id, name, kind, file_path, start_line, start_char, end_line, end_char, detail)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-            rusqlite::params![id, name, kind, file_path, start_line, start_char, end_line, end_char, detail],
-        )
-        .unwrap();
+        crate::test_fixtures::insert_ts_chunk(
+            conn,
+            file_path,
+            start_line as i32,
+            end_line as i32,
+            text,
+            Some(symbol_path),
+        );
     }
 
     /// Seed the database with the standard test fixtures (TS only, no LSP).

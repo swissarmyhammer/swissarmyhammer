@@ -273,23 +273,7 @@ pub fn distinct_extensions(conn: &Connection) -> Result<HashSet<String>, CodeCon
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::{configure_connection, create_schema};
-
-    fn test_db() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        configure_connection(&conn).unwrap();
-        create_schema(&conn).unwrap();
-        conn
-    }
-
-    fn insert_file(conn: &Connection, path: &str, ts_indexed: i32, lsp_indexed: i32) {
-        conn.execute(
-            "INSERT INTO indexed_files (file_path, content_hash, file_size, last_seen_at, ts_indexed, lsp_indexed)
-             VALUES (?1, X'DEADBEEF', 1024, 1000, ?2, ?3)",
-            rusqlite::params![path, ts_indexed, lsp_indexed],
-        )
-        .unwrap();
-    }
+    use crate::test_fixtures::{insert_file, test_db};
 
     fn insert_chunk(conn: &Connection, file_path: &str) {
         conn.execute(

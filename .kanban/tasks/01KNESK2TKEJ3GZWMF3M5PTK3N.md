@@ -3,9 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KNESD0630BPJG3BK84KEJMJP
-position_column: todo
-position_ordinal: '8980'
-position_swimlane: lsp-live
+position_column: done
+position_ordinal: ffffffffffffffffffe380
 title: 'LSP-T3C: workspace_symbol_live op'
 ---
 ## What

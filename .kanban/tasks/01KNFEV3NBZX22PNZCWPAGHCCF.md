@@ -1,0 +1,8 @@
+---
+assignees:
+- claude-code
+position_column: done
+position_ordinal: ffffffffffffffffffe880
+title: Duplicated helper functions across op modules (file_path_to_uri, language_id_from_path, read_source_range, uri_to_file_path, parse_lsp_range)
+---
+swissarmyhammer-code-context/src/ops/*.rs\n\nAt least 5 helper functions are duplicated across multiple op files:\n\n1. `file_path_to_uri` — duplicated in get_hover.rs, get_diagnostics.rs, get_implementations.rs (3 copies with slight differences)\n2. `language_id_from_path` — duplicated in get_hover.rs and get_diagnostics.rs (2 identical copies)\n3. `read_source_range` — duplicated in get_definition.rs and get_type_definition.rs (2 identical copies)\n4. `uri_to_file_path` — duplicated in get_definition.rs, get_implementations.rs, get_inbound_calls.rs, workspace_symbol_live.rs (4 copies)\n5. `parse_lsp_range` — duplicated in get_definition.rs and get_implementations.rs (2 copies, plus the one in layered_context.rs)\n\nSome modules already import from `get_hover` and `get_definition` (e.g., get_inbound_calls uses `get_hover::file_path_to_uri`), showing this pattern was recognized but inconsistently applied. The get_diagnostics.rs file copies both `file_path_to_uri` and `language_id_from_path` with a comment saying 'inlined here to avoid module coupling' — but other files DO cross-reference.\n\nSuggestion: Extract all shared LSP protocol helpers into a dedicated `ops/lsp_helpers.rs` module (or into `layered_context.rs` which already has `parse_from_ranges`). This eliminates divergence risk — e.g., get_implementations.rs handles relative paths differently (`file:///` with 3 slashes) than get_hover.rs (`file://` + cwd join)." #review-finding
