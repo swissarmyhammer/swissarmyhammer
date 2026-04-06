@@ -173,16 +173,15 @@ describe("RustEngineContainer", () => {
     expect(screen.getByTestId("refresh-btn")).toBeTruthy();
   });
 
-  it("entity-created event adds new entities to the store", async () => {
-    // Mock get_entity to return a task entity bag.
-    // EntityBag format: entity_type + id at top level, fields are siblings.
-    const taskBag = {
-      entity_type: "task",
-      id: "t1",
-      title: "New Task",
-    };
+  it("entity-created with populated fields adds entity without get_entity call", async () => {
+    // When the watcher provides fields in the event payload, the handler
+    // should use them directly — no IPC round-trip via get_entity.
+    let getEntityCalled = false;
     mockInvoke.mockImplementation((cmd: string) => {
-      if (cmd === "get_entity") return Promise.resolve(taskBag);
+      if (cmd === "get_entity") {
+        getEntityCalled = true;
+        return Promise.resolve({ entity_type: "task", id: "t1", title: "X" });
+      }
       if (cmd === "get_ui_state")
         return Promise.resolve({
           palette_open: false,
@@ -205,12 +204,11 @@ describe("RustEngineContainer", () => {
       );
     });
 
-    // Initially 0 tasks
     expect(screen.getByTestId("entity-store-ok").textContent).toBe(
       "entity-store-ok:0",
     );
 
-    // Emit entity-created event
+    // Emit entity-created with populated fields — fast path
     await act(async () => {
       emitTauriEvent("entity-created", {
         kind: "entity-created",
@@ -225,6 +223,61 @@ describe("RustEngineContainer", () => {
         "entity-store-ok:1",
       );
     });
+
+    // get_entity should NOT have been called — fields came from event payload
+    expect(getEntityCalled).toBe(false);
+  });
+
+  it("entity-created with empty fields falls back to get_entity", async () => {
+    // When fields are empty (store event before watcher cached), fall back
+    // to get_entity to fetch the full entity.
+    const taskBag = { entity_type: "task", id: "t1", title: "Fetched" };
+    let getEntityCalled = false;
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === "get_entity") {
+        getEntityCalled = true;
+        return Promise.resolve(taskBag);
+      }
+      if (cmd === "get_ui_state")
+        return Promise.resolve({
+          palette_open: false,
+          palette_mode: "command",
+          keymap_mode: "cua",
+          scope_chain: [],
+          open_boards: [],
+          windows: {},
+          recent_boards: [],
+        });
+      if (cmd === "list_schemas") return Promise.resolve([]);
+      return Promise.resolve(null);
+    });
+
+    await act(async () => {
+      render(
+        <RustEngineContainer>
+          <EntityStoreProbe />
+        </RustEngineContainer>,
+      );
+    });
+
+    // Emit entity-created with EMPTY fields — fallback path
+    await act(async () => {
+      emitTauriEvent("entity-created", {
+        kind: "entity-created",
+        entity_type: "task",
+        id: "t1",
+        fields: {},
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("entity-store-ok").textContent).toBe(
+        "entity-store-ok:1",
+      );
+    });
+
+    // get_entity SHOULD have been called as fallback
+    expect(getEntityCalled).toBe(true);
   });
 
   it("entity-removed event removes entities from the store", async () => {
@@ -398,19 +451,16 @@ describe("RustEngineContainer", () => {
     });
   });
 
-  it("entity-field-changed with empty fields/changes re-fetches via get_entity", async () => {
-    // Seed an entity, then emit entity-field-changed with no fields and no
-    // changes. The handler should fall back to get_entity and update the
-    // entity in the store with the re-fetched data.
-    const taskBagV1 = { entity_type: "task", id: "t1", title: "Original" };
-    const taskBagV2 = { entity_type: "task", id: "t1", title: "Re-fetched" };
+  it("entity-field-changed with empty changes is a no-op", async () => {
+    // Architecture rule: empty changes means nothing actually changed.
+    // The handler should skip the event — no patching, no re-fetch.
+    const taskBag = { entity_type: "task", id: "t1", title: "Original" };
 
     let getEntityCallCount = 0;
     mockInvoke.mockImplementation((cmd: string) => {
       if (cmd === "get_entity") {
         getEntityCallCount++;
-        // First call (seed) returns v1, subsequent calls return v2
-        return Promise.resolve(getEntityCallCount <= 1 ? taskBagV1 : taskBagV2);
+        return Promise.resolve(taskBag);
       }
       if (cmd === "get_ui_state")
         return Promise.resolve({
@@ -457,24 +507,22 @@ describe("RustEngineContainer", () => {
       expect(screen.getByTestId("task-title").textContent).toBe("Original");
     });
 
-    // Now emit entity-field-changed with EMPTY fields and changes
+    const callsBefore = getEntityCallCount;
+
+    // Emit entity-field-changed with EMPTY changes — should be skipped
     await act(async () => {
       emitTauriEvent("entity-field-changed", {
         kind: "entity-field-changed",
         entity_type: "task",
         id: "t1",
         changes: [],
-        // fields is absent — simulates the backend not enriching the event
       });
     });
 
-    // The handler should have re-fetched via get_entity, getting v2
-    await waitFor(() => {
-      expect(screen.getByTestId("task-title").textContent).toBe("Re-fetched");
-    });
-
-    // Verify get_entity was called at least twice (once for seed, once for re-fetch)
-    expect(getEntityCallCount).toBeGreaterThanOrEqual(2);
+    // Title should remain unchanged — no re-fetch triggered
+    expect(screen.getByTestId("task-title").textContent).toBe("Original");
+    // No additional get_entity calls
+    expect(getEntityCallCount).toBe(callsBefore);
   });
 
   it("entity events with mismatched board_path are ignored", async () => {

@@ -55,14 +55,19 @@ interface EntityRemovedEvent {
   board_path?: string;
 }
 
-/** Payload for entity-field-changed Tauri event. */
+/**
+ * Payload for entity-field-changed Tauri event.
+ *
+ * Architecture rule (event-architecture): events are thin signals.
+ * Each change carries ONE field name and its new value. The frontend
+ * patches individual fields in place — no full-state replacement,
+ * no get_entity re-fetch. DO NOT add a `fields` map here.
+ */
 interface EntityFieldChangedEvent {
   kind: "entity-field-changed";
   entity_type: string;
   id: string;
   changes: Array<{ field: string; value: unknown }>;
-  /** Full entity fields when the backend enriches the event (command dispatch path). */
-  fields?: Record<string, unknown>;
   board_path?: string;
 }
 
@@ -198,14 +203,30 @@ export function RustEngineContainer({ children }: RustEngineContainerProps) {
 
   // -------------------------------------------------------------------------
   // Entity event listeners
+  //
+  // Architecture rule (event-architecture): events are thin signals with
+  // exactly two granularities. Each handler has ONE code path:
+  //
+  //   entity-created  → add to store from payload fields (fast path),
+  //                      or get_entity once if fields are empty (fallback).
+  //   entity-field-changed → patch individual fields from changes array.
+  //                          No full-state replacement, no get_entity.
+  //   entity-removed  → remove from store by id.
+  //
+  // DO NOT add a full-fields replacement path or a get_entity re-fetch
+  // fallback to entity-field-changed. The watcher produces per-field diffs.
   // -------------------------------------------------------------------------
 
   useEffect(() => {
     const unlisteners = [
+      // Architecture rule (event-architecture): entity-created events carry
+      // fields from the watcher's cache population. Use them directly when
+      // available. Fall back to get_entity only when fields are empty (store
+      // event arrived before the watcher cached the file).
       listen<EntityCreatedEvent>("entity-created", (event) => {
-        const { entity_type, id, board_path } = event.payload;
+        const { entity_type, id, fields, board_path } = event.payload;
         console.warn(
-          `[entity-created] received: ${entity_type}/${id} board_path=${board_path ?? "none"}`,
+          `[entity-created] received: ${entity_type}/${id} board_path=${board_path ?? "none"} fields=${Object.keys(fields ?? {}).length}`,
         );
         if (
           board_path &&
@@ -224,6 +245,27 @@ export function RustEngineContainer({ children }: RustEngineContainerProps) {
           }
           return;
         }
+
+        // Fast path: watcher provided fields from disk — use directly.
+        if (fields && Object.keys(fields).length > 0) {
+          console.warn(
+            `[entity-created] using payload fields for ${entity_type}/${id}`,
+          );
+          const entity: Entity = {
+            id,
+            entity_type,
+            fields: fields as Record<string, unknown>,
+          };
+          setEntitiesFor(entity_type, (prev) => {
+            if (prev.some((e) => e.id === id)) {
+              return prev.map((e) => (e.id === id ? entity : e));
+            }
+            return [...prev, entity];
+          });
+          return;
+        }
+
+        // Fallback: fields empty — fetch once via get_entity.
         console.warn(
           `[entity-created] fetching ${entity_type}/${id} via get_entity`,
         );
@@ -276,10 +318,12 @@ export function RustEngineContainer({ children }: RustEngineContainerProps) {
           );
         }
       }),
+      // Architecture rule (event-architecture): ONE path. Patch individual
+      // fields from the changes array. No full-state replacement, no re-fetch.
       listen<EntityFieldChangedEvent>("entity-field-changed", (event) => {
-        const { entity_type, id, changes, fields, board_path } = event.payload;
+        const { entity_type, id, changes, board_path } = event.payload;
         console.warn(
-          `[entity-field-changed] received: ${entity_type}/${id} board_path=${board_path ?? "none"} fields=${fields ? "yes" : "no"} changes=${changes?.length ?? 0}`,
+          `[entity-field-changed] received: ${entity_type}/${id} board_path=${board_path ?? "none"} changes=${changes?.length ?? 0}`,
         );
         if (
           board_path &&
@@ -292,53 +336,24 @@ export function RustEngineContainer({ children }: RustEngineContainerProps) {
           return;
         }
 
-        // Patch the entity in place from the event payload instead of
-        // re-fetching via get_entity. This avoids replacing the entire
-        // entity array reference on every field change, which would cause
-        // derived state (cellMonikers, etc.) to rebuild and reset the
-        // grid cursor.
-        if (fields) {
-          // Backend provided full fields — use them directly.
-          setEntitiesFor(entity_type, (prev) =>
-            prev.map((e) =>
-              e.id === id ? { ...e, fields: { ...fields } } : e,
-            ),
+        if (!changes || changes.length === 0) {
+          console.warn(
+            `[entity-field-changed] SKIPPED: empty changes for ${entity_type}/${id}`,
           );
-        } else if (changes && changes.length > 0) {
-          // Patch individual changed fields.
-          setEntitiesFor(entity_type, (prev) =>
-            prev.map((e) => {
-              if (e.id !== id) return e;
-              const patched = { ...e.fields };
-              for (const { field, value } of changes) {
-                patched[field] = value;
-              }
-              return { ...e, fields: patched };
-            }),
-          );
-        } else {
-          // No fields and no changes — backend didn't enrich the event.
-          // Re-fetch the full entity so the UI stays in sync.
-          invoke<EntityBag>("get_entity", {
-            entityType: entity_type,
-            id,
-            ...(activeBoardPathRef.current
-              ? { boardPath: activeBoardPathRef.current }
-              : {}),
-          })
-            .then((bag) => {
-              const entity = entityFromBag(bag);
-              setEntitiesFor(entity_type, (prev) =>
-                prev.map((e) => (e.id === id ? entity : e)),
-              );
-            })
-            .catch((err) => {
-              console.error(
-                `[entity-field-changed] re-fetch failed for ${entity_type}/${id}:`,
-                err,
-              );
-            });
+          return;
         }
+
+        // Patch individual changed fields in place.
+        setEntitiesFor(entity_type, (prev) =>
+          prev.map((e) => {
+            if (e.id !== id) return e;
+            const patched = { ...e.fields };
+            for (const { field, value } of changes) {
+              patched[field] = value;
+            }
+            return { ...e, fields: patched };
+          }),
+        );
       }),
     ];
     return () => {

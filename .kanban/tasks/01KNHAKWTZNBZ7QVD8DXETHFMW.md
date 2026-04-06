@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: todo
-position_ordinal: 7d80
+position_ordinal: '818180'
 title: 'Bug: Column drag-and-drop snaps back before entity refresh arrives'
 ---
 ## What

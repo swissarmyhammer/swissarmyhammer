@@ -21,6 +21,32 @@ use tokio::sync::mpsc;
 const ENTITY_EXTENSIONS: &[&str] = &["yaml", "yml", "md"];
 
 /// An event emitted when an entity or field changes.
+/// Events emitted to the frontend when entity state changes.
+///
+/// **Architecture rule (event-architecture):** Events are thin signals with
+/// exactly two granularities:
+///
+/// 1. **Entity-level** — `EntityCreated` and `EntityRemoved` carry
+///    `(entity_type, id)`. For created entities the watcher also provides the
+///    initial `fields` read during cache population (not an extra read).
+///
+/// 2. **Field-level** — `EntityFieldChanged` carries a `Vec<FieldChange>`,
+///    one entry per changed field, each with the field name and new value.
+///    The watcher produces these from `diff_fields` by comparing the old and
+///    new file content — no `EntityContext.read()` enrichment.
+///
+/// The frontend contract:
+/// - `entity-created`: add entity to store from payload fields, or
+///   `get_entity` once if fields are empty.
+/// - `entity-field-changed`: patch individual fields from `changes`. ONE
+///   path, no branching, no re-fetch.
+/// - `entity-removed`: remove entity from store.
+///
+/// **DO NOT** add a `fields: Option<HashMap>` full-state payload to
+/// `EntityFieldChanged`. That is the enrichment anti-pattern — it requires
+/// reading the entity back after every write, is racy with deletes, and
+/// caused repeated bugs. The watcher's `diff_fields` produces exactly the
+/// granular diffs the frontend needs.
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind")]
 #[allow(clippy::enum_variant_names)]
@@ -36,16 +62,19 @@ pub enum WatchEvent {
     #[serde(rename = "entity-removed")]
     EntityRemoved { entity_type: String, id: String },
     /// One or more fields on an entity changed.
+    ///
+    /// Each `FieldChange` carries the field name and its new value.
+    /// The watcher produces these diffs from `diff_fields` — no entity
+    /// reads are needed. The frontend patches individual fields in place.
+    ///
+    /// **Architecture rule (event-architecture):** DO NOT add a `fields`
+    /// option for full-state enrichment. Events are thin signals. The
+    /// watcher's `diff_fields` produces exactly the field-level diffs needed.
     #[serde(rename = "entity-field-changed")]
     EntityFieldChanged {
         entity_type: String,
         id: String,
         changes: Vec<FieldChange>,
-        /// Full entity state (including computed fields) when available.
-        /// Populated by `dispatch_command` after reading through the entity
-        /// context; `None` for raw watcher events.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        fields: Option<HashMap<String, serde_json::Value>>,
     },
     /// An attachment file was created, modified, or deleted.
     ///
@@ -105,12 +134,14 @@ pub fn sync_search_index(
         WatchEvent::EntityFieldChanged {
             entity_type,
             id,
-            fields,
-            ..
+            changes,
         } => {
-            if let Some(fields) = fields {
-                // Merge into existing entity to preserve fields not in this event
-                idx.merge_fields(entity_type, id, fields);
+            if !changes.is_empty() {
+                let fields_map: std::collections::HashMap<String, serde_json::Value> = changes
+                    .iter()
+                    .map(|c| (c.field.clone(), c.value.clone()))
+                    .collect();
+                idx.merge_fields(entity_type, id, &fields_map);
             }
         }
         WatchEvent::EntityRemoved { id, .. } => {
@@ -541,7 +572,6 @@ fn resolve_change(path: &Path, cache: &EntityCache, kanban_root: &Path) -> Optio
                     entity_type,
                     id,
                     changes,
-                    fields: None,
                 })
             }
         }
@@ -1409,7 +1439,6 @@ mod tests {
                 entity_type,
                 id,
                 changes,
-                fields,
             } => {
                 assert_eq!(entity_type, "task");
                 assert_eq!(id, "task1");
@@ -1419,8 +1448,8 @@ mod tests {
                     "should detect body field change, got: {:?}",
                     changes.iter().map(|c| &c.field).collect::<Vec<_>>()
                 );
-                // fields is None for raw watcher events (enriched by dispatch_command)
-                assert!(fields.is_none());
+                // changes carry the field-level diffs
+                assert!(!changes.is_empty());
             }
             other => panic!("expected EntityFieldChanged, got {:?}", other),
         }
@@ -1536,9 +1565,7 @@ mod tests {
         };
         sync_search_index(&mut idx, &create_evt);
 
-        // Now update it with field changes (with fields present)
-        let mut updated_fields = HashMap::new();
-        updated_fields.insert("title".to_string(), serde_json::json!("Updated Title"));
+        // Now update it with field changes
         let change_evt = WatchEvent::EntityFieldChanged {
             entity_type: "task".to_string(),
             id: "T1".to_string(),
@@ -1546,7 +1573,6 @@ mod tests {
                 field: "title".to_string(),
                 value: serde_json::json!("Updated Title"),
             }],
-            fields: Some(updated_fields),
         };
         sync_search_index(&mut idx, &change_evt);
 
@@ -1555,7 +1581,7 @@ mod tests {
     }
 
     #[test]
-    fn test_sync_search_index_entity_field_changed_without_fields() {
+    fn test_sync_search_index_entity_field_changed_empty_changes_is_noop() {
         let mut idx = swissarmyhammer_entity_search::EntitySearchIndex::new();
 
         // Add an entity first
@@ -1568,15 +1594,11 @@ mod tests {
         };
         sync_search_index(&mut idx, &create_evt);
 
-        // EntityFieldChanged with fields: None should be a no-op
+        // EntityFieldChanged with empty changes should be a no-op
         let change_evt = WatchEvent::EntityFieldChanged {
             entity_type: "task".to_string(),
             id: "T2".to_string(),
-            changes: vec![FieldChange {
-                field: "title".to_string(),
-                value: serde_json::json!("New"),
-            }],
-            fields: None,
+            changes: vec![],
         };
         sync_search_index(&mut idx, &change_evt);
 
@@ -2032,7 +2054,7 @@ mod tests {
     }
 
     #[test]
-    fn test_watch_event_serialization_field_changed_no_fields() {
+    fn test_watch_event_serialization_field_changed() {
         let evt = WatchEvent::EntityFieldChanged {
             entity_type: "task".to_string(),
             id: "T1".to_string(),
@@ -2040,12 +2062,11 @@ mod tests {
                 field: "title".to_string(),
                 value: serde_json::json!("New"),
             }],
-            fields: None,
         };
         let json = serde_json::to_value(&evt).unwrap();
         assert_eq!(json["kind"], "entity-field-changed");
-        // fields should be absent (skip_serializing_if = None)
-        assert!(json.get("fields").is_none());
+        assert_eq!(json["changes"][0]["field"], "title");
+        assert_eq!(json["changes"][0]["value"], "New");
     }
 
     #[test]

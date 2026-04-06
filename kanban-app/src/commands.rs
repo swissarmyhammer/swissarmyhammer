@@ -1409,15 +1409,24 @@ pub async fn list_commands_for_scope(
 
 /// Flush entity changes for a board handle and emit events.
 ///
-/// Routes change detection through `StoreContext.flush_all()` for entity files
-/// managed by stores, then falls back to the watcher's `flush_and_emit` for
-/// non-store files (attachments). Created/changed events are enriched with the
-/// full entity fields (read back through the EntityContext) so the frontend can
-/// patch in-place without a round-trip re-fetch.
+/// **Architecture rule (event-architecture):** Events are thin signals with
+/// two granularities:
+/// - Entity-level: `(entity_type, id)` for created/removed
+/// - Field-level: `(entity_type, id, field, value)` for changes
+///
+/// The watcher produces field-level diffs by comparing file content hashes
+/// and running `diff_fields`. Store events tell us WHICH entities were
+/// written; the watcher tells us WHAT changed.
+///
+/// **DO NOT** add `EntityContext.read()` enrichment here. The watcher's
+/// `diff_fields` produces exactly the field-level diffs the frontend needs.
+/// We never read entities back just to stuff fields into events.
 async fn flush_and_emit_for_handle(app: &AppHandle, handle: &BoardHandle) {
     let kanban_root = handle.ctx.root().to_path_buf();
 
-    // 1. Get store-level change events for entity files.
+    // 1. Drain store-level change events. These tell us which entities were
+    //    written by the command that just executed, but they carry only
+    //    (store_name, id, event_kind) — no field data.
     let store_events = handle.store_context.flush_all().await;
     tracing::info!(
         store_event_count = store_events.len(),
@@ -1425,25 +1434,51 @@ async fn flush_and_emit_for_handle(app: &AppHandle, handle: &BoardHandle) {
         "store_context.flush_all result"
     );
 
-    // 2. Also flush the watcher cache so it stays in sync and we pick up
-    //    attachment changes. Entity-file events from the watcher are discarded
-    //    in favour of the store events (which are the source of truth).
+    // 2. Flush the watcher cache. The watcher scans entity files on disk,
+    //    compares against its cached hashes, and produces field-level diffs
+    //    via diff_fields. This is the source of truth for WHAT changed.
     let watcher_events =
         crate::watcher::flush_and_emit(&kanban_root, &handle.store_roots, &handle.entity_cache);
-    tracing::debug!(
+    tracing::info!(
         watcher_event_count = watcher_events.len(),
         path = %kanban_root.display(),
-        "watcher flush_and_emit (attachment passthrough)"
+        "watcher flush_and_emit result"
     );
 
-    // 3. Convert store ChangeEvents into WatchEvents.
+    // 3. Build the event list. The watcher events are primary — they carry
+    //    field-level diffs. Store events supplement with create/remove signals
+    //    that the watcher may not have (e.g. the watcher sees a new file as
+    //    EntityCreated, but the store knows the exact timing).
     //
-    // For created/changed events, read the entity back through the
-    // EntityContext so the frontend receives the full field set
-    // (including computed fields) and can patch in-place without a
-    // round-trip re-fetch via get_entity.
-    let entity_context = handle.ctx.entity_context().await.ok();
+    //    Dedup: collect watcher (entity_type, id) pairs for EntityFieldChanged
+    //    and EntityCreated. If a store event has a matching watcher event, the
+    //    watcher event wins (it has the diffs). Store-only events (no watcher
+    //    match) are emitted as thin signals.
+    let mut seen: std::collections::HashSet<(String, String)> = std::collections::HashSet::new();
     let mut events: Vec<crate::watcher::WatchEvent> = Vec::new();
+
+    // Watcher events first — they carry the field-level diffs.
+    for evt in watcher_events {
+        match &evt {
+            crate::watcher::WatchEvent::EntityFieldChanged {
+                entity_type, id, ..
+            }
+            | crate::watcher::WatchEvent::EntityCreated {
+                entity_type, id, ..
+            } => {
+                seen.insert((entity_type.clone(), id.clone()));
+            }
+            crate::watcher::WatchEvent::EntityRemoved {
+                entity_type, id, ..
+            } => {
+                seen.insert((entity_type.clone(), id.clone()));
+            }
+            crate::watcher::WatchEvent::AttachmentChanged { .. } => {}
+        }
+        events.push(evt);
+    }
+
+    // Store events — only emit if the watcher didn't already cover them.
     for se in &store_events {
         let store_name = se
             .payload()
@@ -1460,30 +1495,36 @@ async fn flush_and_emit_for_handle(app: &AppHandle, handle: &BoardHandle) {
             continue;
         }
 
-        // Read the current entity fields for enrichment.  Falls back
-        // gracefully to empty/None when the read fails (e.g. entity
-        // was just deleted).
-        let enriched_fields = if let Some(ref ectx) = entity_context {
-            ectx.read(store_name, id).await.ok().map(|e| e.fields)
-        } else {
-            None
-        };
+        let key = (store_name.to_string(), id.to_string());
+        if seen.contains(&key) {
+            // Watcher already produced a diff for this entity — skip the
+            // store event to avoid duplicates.
+            tracing::debug!(
+                entity_type = store_name,
+                id = id,
+                event = se.event_name(),
+                "store event deduped by watcher"
+            );
+            continue;
+        }
 
+        // Store event with no watcher match — emit as a thin signal.
         match se.event_name() {
             "item-created" => {
                 events.push(crate::watcher::WatchEvent::EntityCreated {
                     entity_type: store_name.to_string(),
                     id: id.to_string(),
-                    fields: enriched_fields.clone().unwrap_or_default(),
+                    fields: std::collections::HashMap::new(),
                 });
             }
             "item-changed" => {
-                events.push(crate::watcher::WatchEvent::EntityFieldChanged {
-                    entity_type: store_name.to_string(),
-                    id: id.to_string(),
-                    changes: vec![],
-                    fields: enriched_fields,
-                });
+                // The watcher didn't detect a change (hash unchanged =
+                // idempotent write). Nothing actually changed on disk.
+                tracing::debug!(
+                    entity_type = store_name,
+                    id = id,
+                    "store item-changed but watcher saw no diff — skipping"
+                );
             }
             "item-removed" => {
                 events.push(crate::watcher::WatchEvent::EntityRemoved {
@@ -1495,18 +1536,7 @@ async fn flush_and_emit_for_handle(app: &AppHandle, handle: &BoardHandle) {
         }
     }
 
-    // 4. Keep only attachment events from the watcher (stores handle entity files).
-    for evt in watcher_events {
-        if matches!(evt, crate::watcher::WatchEvent::AttachmentChanged { .. }) {
-            events.push(evt);
-        }
-    }
-
-    // 5. Sync search index and emit to frontend.
-    //
-    // Store-sourced events carry the full entity fields so the frontend can
-    // patch in-place.  The re-fetch path (get_entity) remains as a fallback
-    // for watcher-sourced events that lack enriched fields.
+    // 4. Sync search index and emit to frontend.
     {
         let board_path_str = kanban_root.display().to_string();
         let mut search_idx = handle.search_index.write().await;
