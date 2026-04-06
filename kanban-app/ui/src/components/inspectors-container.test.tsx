@@ -69,6 +69,7 @@ vi.mock("@/lib/schema-context", () => ({
     schemas: {},
     loading: false,
   }),
+  useSchemaOptional: () => undefined,
 }));
 
 vi.mock("@/lib/entity-focus-context", () => ({
