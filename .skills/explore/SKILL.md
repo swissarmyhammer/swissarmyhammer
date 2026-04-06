@@ -2,8 +2,8 @@
 name: explore
 description: Use this skill before planning or implementing when you need to understand code — how something works, why it behaves a certain way, or what a change would affect. Exploration is not done until you can articulate the test you would write. Use when the user says "explore", "investigate", "how does X work", "what would it take to change X", or when you need to understand code before acting.
 metadata:
-  author: "swissarmyhammer"
-  version: "0.12.11"
+  author: swissarmyhammer
+  version: 0.12.11
 ---
 
 # Explore
@@ -29,15 +29,15 @@ If you can't state all three, you're not done exploring.
 
 ## Process
 
-### 1. Orient — check the index
+### 1. Orient — check available layers
 
-Always start here. If the index isn't ready, nothing else will be accurate.
+Always start here. code-context provides results from multiple layers (tree-sitter index, live LSP, or both). Exploration works immediately with whatever layers are available.
 
 ```json
 {"op": "get status"}
 ```
 
-If TS indexed < 90%, wait and re-check. Don't explore with a stale index.
+Note which layers are active. If tree-sitter indexing is still in progress, live LSP ops (`get definition`, `get hover`, `search workspace_symbol`) work immediately — don't wait. If LSP is unavailable for a language, results come from tree-sitter only. Check `lsp status` if you need to know which languages have LSP support.
 
 ### 2. Survey — find the territory
 
@@ -45,6 +45,12 @@ Start broad. Use domain keywords from the user's question to find relevant symbo
 
 ```json
 {"op": "search symbol", "query": "<domain keyword>", "max_results": 15}
+```
+
+If the index is still building and `search symbol` returns sparse results, use the live alternative:
+
+```json
+{"op": "search workspace_symbol", "query": "<domain keyword>"}
 ```
 
 ```json
@@ -61,11 +67,33 @@ Once you've found the key symbols, trace how they connect.
 {"op": "get symbol", "query": "<specific symbol>"}
 ```
 
+Jump to definitions and inspect types without reading entire files:
+
+```json
+{"op": "get definition", "file_path": "<file>", "line": <line>, "character": <col>}
+```
+
+```json
+{"op": "get hover", "file_path": "<file>", "line": <line>, "character": <col>}
+```
+
+Trace call relationships in both directions:
+
 ```json
 {"op": "get callgraph", "symbol": "<symbol>", "direction": "both", "max_depth": 2}
 ```
 
-**What you're looking for**: the path data takes through the system. Who calls what, what depends on what, where the boundaries are.
+```json
+{"op": "get inbound_calls", "file_path": "<file>", "line": <line>, "character": <col>}
+```
+
+Find every usage of a symbol across the codebase:
+
+```json
+{"op": "get references", "file_path": "<file>", "line": <line>, "character": <col>}
+```
+
+**What you're looking for**: the path data takes through the system. Who calls what, what depends on what, where the boundaries are. `get inbound_calls` gives you live LSP precision for "who calls this function?", while `get callgraph` uses the indexed call edges for broader traversal.
 
 ### 4. Scope — measure the blast radius
 
@@ -73,6 +101,12 @@ Before forming a hypothesis about what to change, understand what a change would
 
 ```json
 {"op": "get blastradius", "file_path": "<target file>", "max_hops": 3}
+```
+
+Supplement blast radius with reference search — blast radius follows call edges, but `get references` also catches type usage, field access, and trait implementations:
+
+```json
+{"op": "get references", "file_path": "<file>", "line": <line>, "character": <col>}
 ```
 
 **What you're looking for**: how far a change propagates. If the blast radius surprises you, you don't understand the code well enough yet — go back to step 3.
@@ -109,16 +143,23 @@ VERIFIED: <what the code does — the behavior you confirmed>
 TESTED BY: <existing test that covers this, or "no existing test">
 ```
 
-## Using code-context, not raw file reads
+## Using code-context — layered resolution
 
-**code-context is the primary exploration tool.** It is faster, more accurate, and gives you structural information (symbols, call graphs, blast radius) that file reads cannot.
+**code-context is the primary exploration tool.** It provides both **indexed ops** (tree-sitter symbols, call graphs, blast radius) and **live LSP ops** (definitions, hover, references, inbound calls, workspace symbol search). Live ops work immediately — even before the index is fully built.
+
+Results include a `source_layer` field indicating where the data came from:
+- **lsp** — full language server precision (types, generics, trait impls)
+- **treesitter** — structural parsing from the index (fast, always available after indexing)
+- **treesitter+lsp** — combined results from both layers
+
+When you see results from tree-sitter only for a language that should have LSP support, suggest `/lsp` to check whether the language server is installed.
 
 Use raw file reads (Read, Grep, Glob) only for:
 - String literals, config values, error messages not in the symbol index
 - Files that aren't code (TOML, YAML, JSON, Markdown)
 - Confirming exact syntax when code-context gives you the location
 
-**Do not** start exploration by reading files top-to-bottom. Start with `search symbol` and `get callgraph` to find the right code, then read only what you need.
+**Do not** start exploration by reading files top-to-bottom. Start with `search symbol` (or `search workspace_symbol` if the index is building) and `get callgraph` to find the right code, then use `get definition` and `get hover` to inspect specifics without reading entire files.
 
 ## When to recurse
 

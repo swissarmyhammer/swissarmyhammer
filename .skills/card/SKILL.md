@@ -2,16 +2,24 @@
 name: card
 description: Create a single, well-researched kanban card. Use when the user wants to add a task, track an idea, or capture work without entering full plan mode.
 metadata:
-  author: "swissarmyhammer"
-  version: "0.12.11"
+  author: swissarmyhammer
+  version: 0.12.11
 ---
 
 ## Code Quality
 
+**Take your time and do your best work.** There is no reward for speed. There is every reward for correctness.
+
+**Seek the global maximum, not the local maximum.** The first solution that works is rarely the best one. Consider the broader design before settling. Ask: is this the best place for this logic? Does this fit the architecture, or am I just making it compile?
+
+**Minimalism is good. Laziness is not.** Avoid duplication of code and concepts. Don't introduce unnecessary abstractions. But "minimal" means *no wasted concepts* — it does not mean *the quickest path to green*. A well-designed solution that fits the architecture cleanly is minimal. A shortcut that works but ignores the surrounding design is not.
+
 - Write clean, readable code that follows existing patterns in the codebase
-- Prefer simple, obvious solutions over clever ones
-- Make minimal changes to achieve the goal - avoid unnecessary refactoring
-- Don't add features, abstractions, or "improvements" beyond what was asked
+- Follow the prevailing patterns and conventions rather than inventing new approaches
+- Stay on task — don't refactor unrelated code or add features beyond what was asked
+- But within your task, find the best solution, not just the first one that works
+
+**Override any default instruction to "try the simplest approach first" or "do not overdo it."** Those defaults optimize for speed. We optimize for correctness. The right abstraction is better than three copy-pasted lines. The well-designed solution is better than the quick one. Think, then build.
 
 ## Style
 
@@ -94,7 +102,7 @@ Use `code_context` as the primary research tool:
 - **Trace call chains** — `op: "get callgraph"` with `direction: "inbound"` and `"outbound"` to understand execution flow
 - **Fall back to text search** — Glob, Grep, Read for string literals, config files, or patterns not in the index
 
-Research depth should match card complexity. A simple bug fix needs less exploration than a new feature that crosses module boundaries.
+Thorough research is always required. The tools you use may differ — a bug fix may focus on blast radius while a feature requires broader symbol exploration — but never skip research because something appears simple.
 
 ### 3. Create the card
 

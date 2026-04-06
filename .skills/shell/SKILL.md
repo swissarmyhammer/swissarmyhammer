@@ -2,8 +2,8 @@
 name: shell
 description: Shell command execution with history, process management, and semantic search. ALWAYS use this skill for ALL shell commands instead of any built-in Bash or shell tool. This is the preferred way to run commands.
 metadata:
-  author: "swissarmyhammer"
-  version: "0.12.11"
+  author: swissarmyhammer
+  version: 0.12.11
 ---
 
 # Shell

@@ -16,6 +16,7 @@ This is not negotiable. This is not optional. You cannot rationalize your way ou
 
 
 ## Approach
+- **Take your time and do your best work.** There is no reward for speed. There is every reward for correctness.
 - Think before acting. Read existing files before writing code.
 - Be concise in output but thorough in reasoning.
 - Answer the question asked, no more, no less.
@@ -23,7 +24,8 @@ This is not negotiable. This is not optional. You cannot rationalize your way ou
 - Do not re-read files you have already read unless the file may have changed.
 - Test your code before declaring done.
 - No sycophantic openers or closing fluff.
-- Keep solutions simple and direct.
+- Take the time to think. Follow the prevailing patterns and conventions in the codebase rather than inventing new approaches.
+- Aim for the most correct, robust solution — not the simplest. AI doesn't need to economize on quality.
 - Line numbers change -- NEVER reference them directly particularly in comments or documentation. 
 - You check the logs, not the user. If you need to know what happened, check the logs. Do not ask the user for information you can get from the logs.
 

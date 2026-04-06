@@ -2,17 +2,19 @@
 name: tdd
 description: Use before writing any code, for any reason. Enforces strict test-driven development — RED, GREEN, REFACTOR.
 metadata:
-  author: "swissarmyhammer"
-  version: "0.12.11"
+  author: swissarmyhammer
+  version: 0.12.11
 ---
 
 # Test-Driven Development (TDD)
 
 ## Overview
 
-Write the test first. Watch it fail. Write minimal code to pass.
+Write the test first. Watch it fail. Write correct, well-designed code to pass.
 
 **Core principle:** If you didn't watch the test fail, you don't know if it tests the right thing.
+
+**Take your time and do your best work.** There is no reward for speed. There is every reward for correctness.
 
 **Violating the letter of the rules is violating the spirit of the rules.**
 
@@ -64,14 +66,13 @@ Run the test. Confirm:
 
 **Test errors?** Fix the error, re-run until it fails correctly.
 
-### GREEN — Minimal Code
+### GREEN — Correct Code
 
-Write the simplest code to pass the test. Nothing more.
+Write correct, well-designed code that passes the test and follows the codebase's prevailing patterns.
 
 - Don't add features beyond what the test requires
-- Don't refactor other code
-- Don't "improve" beyond the test
-- YAGNI — You Aren't Gonna Need It
+- Don't refactor unrelated code in this step — that's what REFACTOR is for
+- Match the style, idioms, and conventions already established in the codebase
 
 ### Verify GREEN — Watch It Pass
 
@@ -88,12 +89,13 @@ Run the test. Confirm:
 
 ### REFACTOR — Clean Up
 
-Only after green:
+Only after green — this is where you make the code excellent:
 - Remove duplication
-- Improve names
-- Extract helpers
+- Improve names and clarity
+- Extract helpers that follow existing patterns
+- Ensure the solution is robust, idiomatic, and the best version of itself
 
-Keep tests green throughout. Don't add behavior.
+Keep tests green throughout. Don't add new behavior, but do make the existing behavior bulletproof.
 
 ### Repeat
 
@@ -194,7 +196,7 @@ Before marking work complete:
 - [ ] Every new function/method has a test
 - [ ] Watched each test fail before implementing
 - [ ] Each test failed for the expected reason (feature missing, not typo)
-- [ ] Wrote minimal code to pass each test
+- [ ] Wrote correct, well-designed code to pass each test
 - [ ] All tests pass
 - [ ] Output pristine (no errors, no warnings)
 - [ ] Tests use real code (mocks only if unavoidable)
