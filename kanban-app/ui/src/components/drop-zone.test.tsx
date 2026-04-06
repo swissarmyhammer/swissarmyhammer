@@ -70,17 +70,25 @@ describe("DropZone", () => {
     expect(zone?.hasAttribute("data-drop-zone")).toBe(true);
   });
 
+  /** Dispatch a native drop event with real DataTransfer data. */
+  function dispatchDrop(element: Element, mimeType: string, data: string) {
+    const dt = new DataTransfer();
+    dt.setData(mimeType, data);
+    const event = new DragEvent("drop", {
+      bubbles: true,
+      cancelable: true,
+      dataTransfer: dt,
+    });
+    element.dispatchEvent(event);
+  }
+
   it("fires onDrop with descriptor when drop event occurs", () => {
     const onDrop = vi.fn();
     render(<DropZone descriptor={baseDescriptor} onDrop={onDrop} />);
     const zone = document.querySelector("[data-drop-zone]")!;
 
     const taskPayload = JSON.stringify({ id: "task-99", entity_type: "task" });
-    fireEvent.drop(zone, {
-      dataTransfer: {
-        getData: () => taskPayload,
-      },
-    });
+    dispatchDrop(zone, "application/x-swissarmyhammer-task", taskPayload);
 
     expect(onDrop).toHaveBeenCalledTimes(1);
     expect(onDrop).toHaveBeenCalledWith(baseDescriptor, taskPayload);
@@ -103,11 +111,7 @@ describe("DropZone", () => {
     const zone = document.querySelector("[data-drop-empty]")!;
 
     const taskPayload = JSON.stringify({ id: "task-42", entity_type: "task" });
-    fireEvent.drop(zone, {
-      dataTransfer: {
-        getData: () => taskPayload,
-      },
-    });
+    dispatchDrop(zone, "application/x-swissarmyhammer-task", taskPayload);
 
     expect(onDrop).toHaveBeenCalledTimes(1);
     expect(onDrop).toHaveBeenCalledWith(emptyDescriptor, taskPayload);

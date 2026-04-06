@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, cleanup, fireEvent } from "@testing-library/react";
+import { render, cleanup, fireEvent, act } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import { TextEditor } from "./text-editor";
 
@@ -134,17 +134,27 @@ describe("TextEditor behavior", () => {
     expect(cmContent?.textContent).toContain("test content");
   });
 
-  it("calls onCommit on blur", () => {
-    const onCommit = vi.fn();
-    const { container } = render(
+  it("calls onChange on blur", async () => {
+    const onChange = vi.fn();
+    render(
       <Wrapper>
-        <TextEditor value="blur test" onCommit={onCommit} onCancel={noop} />
+        <TextEditor
+          value="blur test"
+          onCommit={noop}
+          onCancel={noop}
+          onChange={onChange}
+        />
       </Wrapper>,
     );
-    // React onBlur requires fireEvent through the React event system
-    const cmWrapper = container.querySelector(".cm-editor")?.parentElement;
-    expect(cmWrapper).toBeTruthy();
-    fireEvent.blur(cmWrapper!);
-    expect(onCommit).toHaveBeenCalled();
+    // CM6 manages focus internally. Call blur() on the contenteditable
+    // element so CM6's DOMObserver detects the focus loss.
+    const cmContent = document.querySelector(".cm-content") as HTMLElement;
+    expect(cmContent).toBeTruthy();
+    await act(async () => {
+      cmContent.blur();
+      // CM6's DOMObserver polls focus state — give it a tick
+      await new Promise((r) => setTimeout(r, 50));
+    });
+    expect(onChange).toHaveBeenCalledWith("blur test");
   });
 });

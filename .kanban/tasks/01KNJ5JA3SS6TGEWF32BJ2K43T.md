@@ -1,9 +1,12 @@
 ---
 assignees:
 - claude-code
+depends_on:
+- 01KNJ6JKAADY7CKZS0KYW2YD7E
+- 01KNJ6KG15CNWMCS47PPASYQ51
 position_column: todo
 position_ordinal: 8f80
-title: 'Fix: tag cut/untag not working from body #tag pills or tags badge-list'
+title: 'Verify: tag cut/untag works end-to-end after field-moniker fix'
 ---
 ## What
 
@@ -52,4 +55,4 @@ The field-row monikers in `entity-inspector.tsx:267` use format `{entity.moniker
 
 ## Workflow
 
-- Use `/tdd` — write failing tests first, then implement to make them pass.
+- Use `/tdd` — write failing tests first, then implement to make them pass. #field-moniker-fix

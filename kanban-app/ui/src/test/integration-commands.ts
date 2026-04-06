@@ -15,7 +15,13 @@
  */
 
 import { execSync } from "child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, readdirSync } from "fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+  readdirSync,
+  readFileSync,
+} from "fs";
 import { tmpdir } from "os";
 import { join, resolve } from "path";
 import yaml from "js-yaml";
@@ -23,6 +29,16 @@ import type { BrowserCommand } from "vitest/node";
 
 // Resolve the kanban CLI binary from the project's debug build
 const KANBAN_BIN = resolve(__dirname, "../../../../target/debug/kanban");
+
+// Resolve builtin YAML directories relative to this file
+const DEFINITIONS_DIR = resolve(
+  __dirname,
+  "../../../../swissarmyhammer-kanban/builtin/definitions",
+);
+const BUILTIN_ENTITIES_DIR = resolve(
+  __dirname,
+  "../../../../swissarmyhammer-kanban/builtin/entities",
+);
 
 /** Run a kanban CLI command in the given directory. */
 function kanban(dir: string, cmd: string): string {
@@ -198,4 +214,42 @@ export const cleanupTestBoard: BrowserCommand<[config: { dir: string }]> = (
   } catch {
     // Best effort cleanup
   }
+};
+
+/**
+ * Load all builtin field definitions from YAML.
+ * Runs on the Node.js server side so browser tests can access filesystem data.
+ */
+export const loadFieldDefinitions: BrowserCommand<[]> = () => {
+  const files = readdirSync(DEFINITIONS_DIR).filter((f) => f.endsWith(".yaml"));
+  return files.map((f) => {
+    const content = readFileSync(join(DEFINITIONS_DIR, f), "utf-8");
+    return yaml.load(content) as Record<string, unknown>;
+  });
+};
+
+/**
+ * Load a builtin entity definition from YAML by entity type name.
+ * Runs on the Node.js server side so browser tests can access filesystem data.
+ */
+export const loadEntityDefinition: BrowserCommand<
+  [config: { entityType: string }]
+> = ({ testPath: _testPath }, config) => {
+  const filePath = join(BUILTIN_ENTITIES_DIR, `${config.entityType}.yaml`);
+  const content = readFileSync(filePath, "utf-8");
+  return yaml.load(content) as Record<string, unknown>;
+};
+
+/**
+ * Load all builtin entity definitions from YAML.
+ * Returns an array of parsed entity objects.
+ */
+export const loadAllEntityDefinitions: BrowserCommand<[]> = () => {
+  const files = readdirSync(BUILTIN_ENTITIES_DIR).filter((f) =>
+    f.endsWith(".yaml"),
+  );
+  return files.map((f) => {
+    const content = readFileSync(join(BUILTIN_ENTITIES_DIR, f), "utf-8");
+    return yaml.load(content) as Record<string, unknown>;
+  });
 };

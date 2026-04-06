@@ -11,6 +11,7 @@ import type { DisplayProps } from "./text-display";
 // Mock schema context — MarkdownFull calls useSchema().mentionableTypes
 vi.mock("@/lib/schema-context", () => ({
   useSchema: () => ({ mentionableTypes: [] }),
+  useSchemaOptional: () => undefined,
 }));
 
 // Mock entity store context — MarkdownFull calls useEntityStore().getEntities

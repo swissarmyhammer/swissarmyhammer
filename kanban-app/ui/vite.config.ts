@@ -27,6 +27,9 @@ export default defineConfig({
   test: {
     globals: true,
     projects: [
+      // Node-side tests — for tests that need filesystem access (fs, path,
+      // __dirname). Uses happy-dom instead of jsdom to avoid the
+      // ERR_REQUIRE_ASYNC_MODULE error from cssstyle's ESM dependency.
       {
         plugins: [react()],
         resolve: {
@@ -34,13 +37,14 @@ export default defineConfig({
         },
         test: {
           name: "unit",
-          include: ["src/**/*.test.{ts,tsx}"],
-          exclude: ["src/**/*.browser.test.{ts,tsx}"],
-          environment: "jsdom",
+          include: ["src/**/*.node.test.{ts,tsx}"],
+          environment: "happy-dom",
           globals: true,
           setupFiles: ["src/test/setup.ts"],
         },
       },
+      // Browser-side tests — the primary test project. Runs in real Chromium
+      // via Playwright, eliminating jsdom entirely.
       {
         plugins: [react()],
         resolve: {
@@ -53,7 +57,7 @@ export default defineConfig({
           },
         },
         optimizeDeps: {
-          entries: ["src/**/*.browser.test.{ts,tsx}"],
+          entries: ["src/**/*.test.{ts,tsx}"],
           exclude: [
             "@tauri-apps/api",
             "@tauri-apps/plugin-dialog",
@@ -62,8 +66,10 @@ export default defineConfig({
         },
         test: {
           name: "browser",
-          include: ["src/**/*.browser.test.{ts,tsx}"],
+          include: ["src/**/*.test.{ts,tsx}"],
+          exclude: ["src/**/*.node.test.{ts,tsx}"],
           globals: true,
+          setupFiles: ["src/test/setup.ts"],
           browser: {
             enabled: true,
             provider: playwright(),

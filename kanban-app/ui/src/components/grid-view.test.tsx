@@ -49,6 +49,7 @@ vi.mock("@/lib/schema-context", () => ({
     schemas: {},
     loading: false,
   }),
+  useSchemaOptional: () => undefined,
 }));
 
 vi.mock("@/lib/entity-store-context", () => ({
@@ -57,6 +58,7 @@ vi.mock("@/lib/entity-store-context", () => ({
     getEntity: () => undefined,
     subscribe: () => () => {},
   }),
+  useFieldValue: () => undefined,
 }));
 
 vi.mock("@/lib/entity-focus-context", () => ({

@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: 8c80
+position_column: done
+position_ordinal: ffffffffffffffffffffff8280
 title: Migrate unit tests from jsdom to vitest browser mode
 ---
 ## What
