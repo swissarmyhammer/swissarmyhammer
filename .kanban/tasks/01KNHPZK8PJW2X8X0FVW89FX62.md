@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: b980
+position_column: done
+position_ordinal: ffffffffffffffffffff8a80
 title: 'Coverage: IndexContext::refresh stale-file branch (index.rs, ~8 lines)'
 ---
 ## What

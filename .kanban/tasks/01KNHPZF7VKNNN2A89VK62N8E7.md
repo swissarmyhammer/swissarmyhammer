@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: b880
+position_column: done
+position_ordinal: ffffffffffffffffffff8780
 title: 'Coverage: WorkspaceWatcher::start event handling (watcher.rs, ~16 lines)'
 ---
 ## What

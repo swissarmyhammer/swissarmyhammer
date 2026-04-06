@@ -1598,4 +1598,167 @@ mod tests {
         assert_eq!(result.source_layer, SourceLayer::None);
         assert!(result.symbol.is_none());
     }
+
+    // --- ts_symbols_in_file coverage ---
+
+    /// Qualified paths with "::" produce a short name from the last segment.
+    #[test]
+    fn test_ts_symbols_in_file_extracts_name_from_qualified_path() {
+        let conn = test_db();
+        insert_file(&conn, "src/lib.rs", 1, 0);
+        insert_ts_chunk(
+            &conn,
+            "src/lib.rs",
+            10,
+            20,
+            "fn method() {}",
+            Some("module::Struct::method"),
+        );
+
+        let ctx = LayeredContext::new(&conn, None);
+        let symbols = ctx.ts_symbols_in_file("src/lib.rs");
+        assert_eq!(symbols.len(), 1);
+        assert_eq!(symbols[0].name, "method");
+        assert_eq!(
+            symbols[0].qualified_path.as_deref(),
+            Some("module::Struct::method")
+        );
+    }
+
+    /// A simple name (no "::") is returned as-is via the unwrap_or fallback.
+    #[test]
+    fn test_ts_symbols_in_file_simple_name_no_separator() {
+        let conn = test_db();
+        insert_file(&conn, "src/lib.rs", 1, 0);
+        insert_ts_chunk(
+            &conn,
+            "src/lib.rs",
+            1,
+            5,
+            "fn standalone() {}",
+            Some("standalone"),
+        );
+
+        let ctx = LayeredContext::new(&conn, None);
+        let symbols = ctx.ts_symbols_in_file("src/lib.rs");
+        assert_eq!(symbols.len(), 1);
+        assert_eq!(symbols[0].name, "standalone");
+        assert_eq!(symbols[0].qualified_path.as_deref(), Some("standalone"));
+    }
+
+    /// When no chunks have symbol_path set, returns empty vec.
+    #[test]
+    fn test_ts_symbols_in_file_empty_when_no_symbol_paths() {
+        let conn = test_db();
+        insert_file(&conn, "src/lib.rs", 1, 0);
+        // Insert chunks without symbol_path
+        insert_ts_chunk(&conn, "src/lib.rs", 1, 10, "// just a comment block", None);
+        insert_ts_chunk(&conn, "src/lib.rs", 15, 25, "let x = 42;", None);
+
+        let ctx = LayeredContext::new(&conn, None);
+        let symbols = ctx.ts_symbols_in_file("src/lib.rs");
+        assert!(symbols.is_empty());
+    }
+
+    /// When no file exists in the DB at all, returns empty vec.
+    #[test]
+    fn test_ts_symbols_in_file_empty_for_unknown_file() {
+        let conn = test_db();
+        let ctx = LayeredContext::new(&conn, None);
+        let symbols = ctx.ts_symbols_in_file("nonexistent.rs");
+        assert!(symbols.is_empty());
+    }
+
+    /// Range mapping: start_line and end_line from the DB are propagated
+    /// into the SymbolInfo range, with characters set to 0.
+    #[test]
+    fn test_ts_symbols_in_file_range_mapping() {
+        let conn = test_db();
+        insert_file(&conn, "src/lib.rs", 1, 0);
+        insert_ts_chunk(&conn, "src/lib.rs", 42, 99, "fn deep() {}", Some("deep"));
+
+        let ctx = LayeredContext::new(&conn, None);
+        let symbols = ctx.ts_symbols_in_file("src/lib.rs");
+        assert_eq!(symbols.len(), 1);
+        assert_eq!(symbols[0].range.start_line, 42);
+        assert_eq!(symbols[0].range.end_line, 99);
+        assert_eq!(symbols[0].range.start_character, 0);
+        assert_eq!(symbols[0].range.end_character, 0);
+    }
+
+    /// File path is propagated correctly into each SymbolInfo.
+    #[test]
+    fn test_ts_symbols_in_file_propagates_file_path() {
+        let conn = test_db();
+        insert_file(&conn, "src/deep/nested/module.rs", 1, 0);
+        insert_ts_chunk(
+            &conn,
+            "src/deep/nested/module.rs",
+            1,
+            10,
+            "fn func() {}",
+            Some("module::func"),
+        );
+
+        let ctx = LayeredContext::new(&conn, None);
+        let symbols = ctx.ts_symbols_in_file("src/deep/nested/module.rs");
+        assert_eq!(symbols.len(), 1);
+        assert_eq!(symbols[0].file_path, "src/deep/nested/module.rs");
+    }
+
+    /// All symbols have kind "chunk" since they come from tree-sitter chunks.
+    #[test]
+    fn test_ts_symbols_in_file_kind_is_chunk() {
+        let conn = test_db();
+        insert_file(&conn, "src/lib.rs", 1, 0);
+        insert_ts_chunk(&conn, "src/lib.rs", 1, 5, "struct Foo {}", Some("Foo"));
+        insert_ts_chunk(&conn, "src/lib.rs", 10, 20, "fn bar() {}", Some("bar"));
+
+        let ctx = LayeredContext::new(&conn, None);
+        let symbols = ctx.ts_symbols_in_file("src/lib.rs");
+        assert_eq!(symbols.len(), 2);
+        for sym in &symbols {
+            assert_eq!(sym.kind, "chunk");
+        }
+    }
+
+    /// Results are ordered by start_line (ascending).
+    #[test]
+    fn test_ts_symbols_in_file_ordered_by_start_line() {
+        let conn = test_db();
+        insert_file(&conn, "src/lib.rs", 1, 0);
+        // Insert out of order
+        insert_ts_chunk(&conn, "src/lib.rs", 50, 60, "fn last() {}", Some("last"));
+        insert_ts_chunk(&conn, "src/lib.rs", 1, 10, "fn first() {}", Some("first"));
+        insert_ts_chunk(
+            &conn,
+            "src/lib.rs",
+            25,
+            35,
+            "fn middle() {}",
+            Some("middle"),
+        );
+
+        let ctx = LayeredContext::new(&conn, None);
+        let symbols = ctx.ts_symbols_in_file("src/lib.rs");
+        assert_eq!(symbols.len(), 3);
+        assert_eq!(symbols[0].name, "first");
+        assert_eq!(symbols[1].name, "middle");
+        assert_eq!(symbols[2].name, "last");
+    }
+
+    /// Symbols from other files are not included in the results.
+    #[test]
+    fn test_ts_symbols_in_file_filters_by_file() {
+        let conn = test_db();
+        insert_file(&conn, "src/a.rs", 1, 0);
+        insert_file(&conn, "src/b.rs", 1, 0);
+        insert_ts_chunk(&conn, "src/a.rs", 1, 10, "fn in_a() {}", Some("in_a"));
+        insert_ts_chunk(&conn, "src/b.rs", 1, 10, "fn in_b() {}", Some("in_b"));
+
+        let ctx = LayeredContext::new(&conn, None);
+        let symbols = ctx.ts_symbols_in_file("src/a.rs");
+        assert_eq!(symbols.len(), 1);
+        assert_eq!(symbols[0].name, "in_a");
+    }
 }

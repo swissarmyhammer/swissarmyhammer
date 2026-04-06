@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: bd80
+position_column: done
+position_ordinal: ffffffffffffffffffff8280
 title: 'Coverage: layered_context.rs — ts_symbols_in_file pure index test'
 ---
 swissarmyhammer-code-context/src/layered_context.rs

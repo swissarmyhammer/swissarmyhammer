@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: b680
+position_column: done
+position_ordinal: ffffffffffffffffffff8880
 title: 'Coverage: write_ts_symbols_and_edges (unified.rs, ~87 lines, 0%)'
 ---
 ## What

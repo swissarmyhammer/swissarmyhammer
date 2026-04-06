@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: ba80
+position_column: done
+position_ordinal: ffffffffffffffffffff8380
 title: 'Coverage: indexing.rs — run_indexing_worker orchestration loop'
 ---
 swissarmyhammer-code-context/src/indexing.rs

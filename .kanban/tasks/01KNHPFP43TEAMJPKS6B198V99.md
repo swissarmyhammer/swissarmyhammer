@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: b180
+position_column: done
+position_ordinal: fffffffffffffffffffd80
 title: 'Coverage: daemon.rs::file_extensions accessor'
 ---
 ## What

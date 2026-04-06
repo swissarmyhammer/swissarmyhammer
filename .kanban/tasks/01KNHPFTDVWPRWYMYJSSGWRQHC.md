@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: b280
+position_column: done
+position_ordinal: ffffffffffffffffffff8580
 title: 'Coverage: daemon.rs initialize_handshake error paths'
 ---
 ## What

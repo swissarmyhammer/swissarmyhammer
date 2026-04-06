@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: bc80
+position_column: done
+position_ordinal: ffffffffffffffffffff80
 title: 'Coverage: config.rs — load_code_context_config and merge_config_stack edge cases'
 ---
 swissarmyhammer-code-context/src/config.rs
