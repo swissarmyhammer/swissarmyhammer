@@ -4,7 +4,7 @@ use crate::board::InitBoard;
 use crate::context::KanbanContext;
 use crate::perspective::{
     AddPerspective, DeletePerspective, GetPerspective, ListPerspectives, PerspectiveFieldEntry,
-    SortDirection, SortEntry, UpdatePerspective,
+    RenamePerspective, SortDirection, SortEntry, UpdatePerspective,
 };
 use swissarmyhammer_operations::Execute;
 use tempfile::TempDir;
@@ -67,18 +67,15 @@ async fn test_add_perspective() {
     let result = AddPerspective::new("Sprint Board", "board")
         .with_filter("(e) => e.Status !== \"Done\"")
         .with_group("(e) => e.Status")
-        .with_fields(vec![PerspectiveFieldEntry {
-            field: "01JMTASK0000000000TITLE00".to_string(),
-            caption: Some("Title".to_string()),
-            width: Some(200),
-            editor: None,
-            display: None,
-            sort_comparator: None,
-        }])
-        .with_sort(vec![SortEntry {
-            field: "01JMTASK0000000000PRIORTY".to_string(),
-            direction: SortDirection::Asc,
-        }])
+        .with_fields(vec![PerspectiveFieldEntry::new(
+            "01JMTASK0000000000TITLE00",
+        )
+        .with_caption("Title")
+        .with_width(200)])
+        .with_sort(vec![SortEntry::new(
+            "01JMTASK0000000000PRIORTY",
+            SortDirection::Asc,
+        )])
         .execute(&ctx)
         .await
         .into_result()
@@ -408,4 +405,106 @@ async fn test_delete_perspective_emits_item_removed_event() {
     assert_eq!(events[0].event_name(), "item-removed");
     assert_eq!(events[0].payload()["store"], "perspective");
     assert_eq!(events[0].payload()["id"], id.as_str());
+}
+
+// =========================================================================
+// Rename tests
+// =========================================================================
+
+#[tokio::test]
+async fn test_rename_perspective() {
+    let (_temp, ctx) = setup().await;
+
+    let add_result = AddPerspective::new("Original Name", "board")
+        .execute(&ctx)
+        .await
+        .into_result()
+        .unwrap();
+    let id = add_result["id"].as_str().unwrap().to_string();
+
+    let rename_result = RenamePerspective::new(&id, "New Name")
+        .execute(&ctx)
+        .await
+        .into_result()
+        .unwrap();
+
+    assert_eq!(rename_result["id"], id);
+    assert_eq!(rename_result["name"], "New Name");
+    assert_eq!(rename_result["view"], "board");
+
+    // Verify via get that the rename persisted
+    let get_result = GetPerspective::new(&id)
+        .execute(&ctx)
+        .await
+        .into_result()
+        .unwrap();
+    assert_eq!(get_result["name"], "New Name");
+}
+
+#[tokio::test]
+async fn test_rename_preserves_other_fields() {
+    let (_temp, ctx) = setup().await;
+
+    let add_result = AddPerspective::new("With Filter", "grid")
+        .with_filter("(e) => e.Status !== \"Done\"")
+        .with_group("(e) => e.Assignee")
+        .execute(&ctx)
+        .await
+        .into_result()
+        .unwrap();
+    let id = add_result["id"].as_str().unwrap().to_string();
+
+    let rename_result = RenamePerspective::new(&id, "Renamed")
+        .execute(&ctx)
+        .await
+        .into_result()
+        .unwrap();
+
+    assert_eq!(rename_result["name"], "Renamed");
+    assert_eq!(rename_result["view"], "grid");
+    assert_eq!(rename_result["filter"], "(e) => e.Status !== \"Done\"");
+    assert_eq!(rename_result["group"], "(e) => e.Assignee");
+}
+
+#[tokio::test]
+async fn test_rename_nonexistent_perspective_fails() {
+    let (_temp, ctx) = setup().await;
+
+    let result = RenamePerspective::new("01ZZZZZZZZZZZZZZZZZZZZZZZZ", "New")
+        .execute(&ctx)
+        .await
+        .into_result();
+
+    assert!(
+        result.is_err(),
+        "Rename of nonexistent perspective should fail"
+    );
+}
+
+#[tokio::test]
+async fn test_rename_is_atomic_single_operation() {
+    let (_temp, ctx) = setup().await;
+
+    let add_result = AddPerspective::new("Before", "board")
+        .execute(&ctx)
+        .await
+        .into_result()
+        .unwrap();
+    let id = add_result["id"].as_str().unwrap().to_string();
+
+    RenamePerspective::new(&id, "After")
+        .execute(&ctx)
+        .await
+        .into_result()
+        .unwrap();
+
+    // The perspective count should remain 1 (no duplicate created)
+    let list = ListPerspectives::new()
+        .execute(&ctx)
+        .await
+        .into_result()
+        .unwrap();
+    assert_eq!(list["count"], 1);
+    assert_eq!(list["perspectives"][0]["name"], "After");
+    assert_eq!(list["perspectives"][0]["id"], id);
 }

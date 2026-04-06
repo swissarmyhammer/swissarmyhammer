@@ -967,7 +967,7 @@ mod tests {
     fn parse_frontmatter_flattens_nested_objects() {
         // Legacy task files have nested position: {column, ordinal}
         // The parser should flatten them to position_column, position_ordinal
-        let content = "---\ntitle: My Task\nposition:\n  column: todo\n  ordinal: a0\n  swimlane: feature\nassignees: []\n---\nBody text\n";
+        let content = "---\ntitle: My Task\nposition:\n  column: todo\n  ordinal: a0\nassignees: []\n---\nBody text\n";
 
         let parsed =
             parse_frontmatter_body(content, "task", "01ABC", "body", Path::new("test.md")).unwrap();
@@ -975,7 +975,6 @@ mod tests {
         assert_eq!(parsed.get_str("title"), Some("My Task"));
         assert_eq!(parsed.get_str("position_column"), Some("todo"));
         assert_eq!(parsed.get_str("position_ordinal"), Some("a0"));
-        assert_eq!(parsed.get_str("position_swimlane"), Some("feature"));
         // The nested "position" key should NOT exist as a field
         assert!(parsed.get("position").is_none());
         assert_eq!(parsed.get_str("body"), Some("Body text\n"));

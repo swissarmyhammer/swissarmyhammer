@@ -226,7 +226,6 @@ export interface BoardSummary {
 export interface BoardDataResponse {
   board: EntityBag;
   columns: EntityBag[];
-  swimlanes: EntityBag[];
   tags: EntityBag[];
   summary: BoardSummary;
 }
@@ -245,7 +244,6 @@ export interface EntityListResponse {
 export interface BoardData {
   board: Entity;
   columns: Entity[];
-  swimlanes: Entity[];
   tags: Entity[];
   summary: BoardSummary;
 }
@@ -255,7 +253,6 @@ export function parseBoardData(data: BoardDataResponse): BoardData {
   return {
     board: entityFromBag(data.board),
     columns: data.columns.map(entityFromBag),
-    swimlanes: data.swimlanes.map(entityFromBag),
     tags: data.tags.map(entityFromBag),
     summary: data.summary,
   };

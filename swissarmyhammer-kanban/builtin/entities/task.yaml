@@ -85,7 +85,6 @@ fields:
   - progress
   - body
   - position_column
-  - position_swimlane
   - position_ordinal
   - attachments
   - virtual_tags

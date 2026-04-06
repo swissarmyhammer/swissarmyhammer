@@ -216,6 +216,34 @@ impl EntityContext {
 
         if let Some(sh) = store_handle {
             let entry_id = sh.write(&entity).await?;
+
+            // Append a legacy field-level changelog entry so that the activity
+            // log (which reads per-entity JSONL) continues to work even when
+            // I/O is delegated to a StoreHandle.
+            if entry_id.is_some() {
+                let is_create = previous.is_none();
+                let op = if is_create { "create" } else { "update" };
+                let changes = if let Some(ref old) = previous {
+                    changelog::diff_entities(old, &entity)
+                } else {
+                    entity
+                        .fields
+                        .iter()
+                        .map(|(k, v)| (k.clone(), FieldChange::Set { value: v.clone() }))
+                        .collect()
+                };
+                if !changes.is_empty() {
+                    let entry = ChangeEntry::new(
+                        entity.entity_type.as_str(),
+                        entity.id.as_str(),
+                        op,
+                        changes,
+                    );
+                    let log_path = path.with_extension("jsonl");
+                    changelog::append_changelog(&log_path, &entry).await?;
+                }
+            }
+
             // Push onto the shared undo stack if a StoreContext is available
             if let (Some(sc), Some(eid)) = (self.store_context.get(), &entry_id) {
                 let is_create = previous.is_none();
@@ -251,17 +279,44 @@ impl EntityContext {
         let dir = self.entity_dir(entity_type);
         let path = io::entity_file_path(&dir, id, def);
 
-        // Trash attachment files before deleting the entity
-        if let Ok(old) = io::read_entity(&path, entity_type, id, def).await {
-            self.trash_entity_attachments(entity_type, &old).await?;
+        // Read existing entity before deletion (used for attachment cleanup
+        // and legacy changelog).
+        let previous = io::read_entity(&path, entity_type, id, def).await.ok();
+        if let Some(ref old) = previous {
+            self.trash_entity_attachments(entity_type, old).await?;
         }
 
         // Delete — delegate to StoreHandle when available, otherwise
         // fall back to the legacy io::trash_entity_files path.
         let store_handle = self.store_handles.read().await.get(entity_type).cloned();
         if let Some(sh) = store_handle {
+            // Append a legacy field-level changelog entry BEFORE the store
+            // handle trashes the file, so the entry gets included in the
+            // trashed changelog and activity history remains intact.
+            if let Some(ref old) = previous {
+                let mut changes: Vec<_> = old
+                    .fields
+                    .iter()
+                    .map(|(k, v)| {
+                        (
+                            k.clone(),
+                            FieldChange::Removed {
+                                old_value: v.clone(),
+                            },
+                        )
+                    })
+                    .collect();
+                changes.sort_by(|a, b| a.0.cmp(&b.0));
+                if !changes.is_empty() {
+                    let entry = ChangeEntry::new(entity_type, id, "delete", changes);
+                    let log_path = path.with_extension("jsonl");
+                    changelog::append_changelog(&log_path, &entry).await?;
+                }
+            }
+
             let entity_id = EntityId::from(id);
             let entry_id = sh.delete(&entity_id).await?;
+
             // Push onto the shared undo stack if a StoreContext is available
             if let Some(sc) = self.store_context.get() {
                 let label = format!("delete {} {}", entity_type, id);

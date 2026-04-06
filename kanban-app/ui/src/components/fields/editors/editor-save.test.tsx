@@ -32,11 +32,11 @@ Element.prototype.scrollIntoView = vi.fn();
 
 const DEFINITIONS_DIR = path.resolve(
   __dirname,
-  "../../../../../../swissarmyhammer-kanban/builtin/fields/definitions",
+  "../../../../../../swissarmyhammer-kanban/builtin/definitions",
 );
 const ENTITIES_DIR = path.resolve(
   __dirname,
-  "../../../../../../swissarmyhammer-kanban/builtin/fields/entities",
+  "../../../../../../swissarmyhammer-kanban/builtin/entities",
 );
 
 /** Load a YAML file and return its parsed content. */
@@ -89,9 +89,7 @@ function allFieldsFor(entityType: string): FieldDef[] {
 
   return entityDef.fields
     .map((name) => defMap.get(name))
-    .filter(
-      (d): d is FieldDef => d !== undefined && d.display !== "none",
-    );
+    .filter((d): d is FieldDef => d !== undefined && d.display !== "none");
 }
 
 // ---------------------------------------------------------------------------
@@ -102,14 +100,7 @@ let KEYMAP_MODE = "cua";
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const mockInvoke = vi.fn((...args: any[]) => {
   if (args[0] === "list_entity_types")
-    return Promise.resolve([
-      "task",
-      "tag",
-      "actor",
-      "column",
-      "swimlane",
-      "board",
-    ]);
+    return Promise.resolve(["task", "tag", "actor", "column", "board"]);
   if (args[0] === "get_entity_schema") {
     // Return real schema data for the requested entity type
     const entityType = args[1]?.entityType as string;
@@ -198,7 +189,6 @@ const TEST_ENTITY: Entity = {
     depends_on: [],
     progress: { total: 2, completed: 1, percent: 50 },
     position_column: "todo",
-    position_swimlane: "default",
     position_ordinal: "ffff8000",
   },
 };
@@ -221,13 +211,6 @@ const TEST_ENTITIES: Record<string, Entity[]> = {
   ],
   column: [
     { entity_type: "column", id: "todo", fields: { name: "Todo", order: 0 } },
-  ],
-  swimlane: [
-    {
-      entity_type: "swimlane",
-      id: "default",
-      fields: { name: "Default", order: 0 },
-    },
   ],
 };
 

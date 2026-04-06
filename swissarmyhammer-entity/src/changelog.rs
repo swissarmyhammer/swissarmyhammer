@@ -63,14 +63,24 @@ pub enum FieldChange {
     },
 }
 
+/// Deserialization default for legacy changelog entries that lack `entity_type`.
+fn empty_entity_type_name() -> EntityTypeName {
+    EntityTypeName::from("")
+}
+
+/// Deserialization default for legacy changelog entries that lack `entity_id`.
+fn empty_entity_id() -> EntityId {
+    EntityId::from("")
+}
+
 /// A single change event for an entity.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ChangeEntry {
     pub id: ChangeEntryId,
     pub timestamp: DateTime<Utc>,
-    #[serde(default)]
+    #[serde(default = "empty_entity_type_name")]
     pub entity_type: EntityTypeName,
-    #[serde(default)]
+    #[serde(default = "empty_entity_id")]
     pub entity_id: EntityId,
     pub op: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]

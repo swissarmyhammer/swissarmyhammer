@@ -63,7 +63,7 @@ impl Command for DeleteEntityCmd {
             "tag" => run_op(&crate::tag::DeleteTag::new(id), &kanban).await,
             "column" => run_op(&crate::column::DeleteColumn::new(id), &kanban).await,
             "actor" => run_op(&crate::actor::DeleteActor::new(id), &kanban).await,
-            "swimlane" => run_op(&crate::swimlane::DeleteSwimlane::new(id), &kanban).await,
+            "project" => run_op(&crate::project::DeleteProject::new(id), &kanban).await,
             _ => Err(CommandError::ExecutionFailed(format!(
                 "unknown entity type for delete: '{}'",
                 entity_type
@@ -350,7 +350,7 @@ mod tests {
     }
 
     // =========================================================================
-    // DeleteEntityCmd execute — task, tag, column, actor, swimlane, unknown
+    // DeleteEntityCmd execute — task, tag, column, actor, unknown
     // =========================================================================
 
     #[tokio::test]

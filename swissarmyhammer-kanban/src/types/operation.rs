@@ -89,8 +89,6 @@ pub enum Noun {
     Tasks,
     Column,
     Columns,
-    Swimlane,
-    Swimlanes,
     Actor,
     Actors,
     Tag,
@@ -99,6 +97,8 @@ pub enum Noun {
     Comments,
     Attachment,
     Attachments,
+    Project,
+    Projects,
     Perspective,
     Perspectives,
     Archived,
@@ -113,8 +113,6 @@ impl Noun {
             Self::Tasks => "tasks",
             Self::Column => "column",
             Self::Columns => "columns",
-            Self::Swimlane => "swimlane",
-            Self::Swimlanes => "swimlanes",
             Self::Actor => "actor",
             Self::Actors => "actors",
             Self::Tag => "tag",
@@ -123,6 +121,8 @@ impl Noun {
             Self::Comments => "comments",
             Self::Attachment => "attachment",
             Self::Attachments => "attachments",
+            Self::Project => "project",
+            Self::Projects => "projects",
             Self::Perspective => "perspective",
             Self::Perspectives => "perspectives",
             Self::Archived => "archived",
@@ -137,8 +137,6 @@ impl Noun {
             "tasks" => Some(Self::Tasks),
             "column" => Some(Self::Column),
             "columns" => Some(Self::Columns),
-            "swimlane" => Some(Self::Swimlane),
-            "swimlanes" => Some(Self::Swimlanes),
             "actor" => Some(Self::Actor),
             "actors" => Some(Self::Actors),
             "tag" => Some(Self::Tag),
@@ -147,6 +145,8 @@ impl Noun {
             "comments" => Some(Self::Comments),
             "attachment" => Some(Self::Attachment),
             "attachments" => Some(Self::Attachments),
+            "project" => Some(Self::Project),
+            "projects" => Some(Self::Projects),
             "perspective" => Some(Self::Perspective),
             "perspectives" => Some(Self::Perspectives),
             "archived" => Some(Self::Archived),
@@ -251,9 +251,6 @@ pub fn is_valid_operation(verb: Verb, noun: Noun) -> bool {
         // Column operations
         (Verb::Get, Noun::Column) | (Verb::Add, Noun::Column) | (Verb::Update, Noun::Column) |
         (Verb::Delete, Noun::Column) | (Verb::List, Noun::Columns) |
-        // Swimlane operations
-        (Verb::Get, Noun::Swimlane) | (Verb::Add, Noun::Swimlane) | (Verb::Update, Noun::Swimlane) |
-        (Verb::Delete, Noun::Swimlane) | (Verb::List, Noun::Swimlanes) |
         // Actor operations
         (Verb::Get, Noun::Actor) | (Verb::Add, Noun::Actor) | (Verb::Update, Noun::Actor) |
         (Verb::Delete, Noun::Actor) | (Verb::List, Noun::Actors) |
@@ -274,6 +271,9 @@ pub fn is_valid_operation(verb: Verb, noun: Noun) -> bool {
         (Verb::Add, Noun::Attachment) | (Verb::Get, Noun::Attachment) |
         (Verb::Update, Noun::Attachment) | (Verb::Delete, Noun::Attachment) |
         (Verb::List, Noun::Attachments) |
+        // Project operations
+        (Verb::Get, Noun::Project) | (Verb::Add, Noun::Project) | (Verb::Update, Noun::Project) |
+        (Verb::Delete, Noun::Project) | (Verb::List, Noun::Projects) |
         // Perspective operations
         (Verb::Add, Noun::Perspective) | (Verb::Get, Noun::Perspective) |
         (Verb::Update, Noun::Perspective) | (Verb::Delete, Noun::Perspective) |

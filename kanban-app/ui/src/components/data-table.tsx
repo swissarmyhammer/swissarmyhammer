@@ -545,6 +545,13 @@ function GridCellScope({
   );
 }
 
+interface EntityRowProps {
+  entityMk: string;
+  isCursorRow: boolean;
+  isEditing: boolean;
+  children: React.ReactNode;
+}
+
 /**
  * Table row rendered inside a FocusScope(renderContainer=false).
  *
@@ -557,12 +564,7 @@ function EntityRow({
   isCursorRow,
   isEditing,
   children,
-}: {
-  entityMk: string;
-  isCursorRow: boolean;
-  isEditing: boolean;
-  children: React.ReactNode;
-}) {
+}: EntityRowProps) {
   const contextMenuHandler = useContextMenu();
   const { setFocus } = useEntityFocus();
 
@@ -583,16 +585,14 @@ function EntityRow({
   );
 }
 
-/** Row number selector cell. */
-function RowSelector({
-  di,
-  isCursorRow,
-  onClick,
-}: {
+interface RowSelectorProps {
   di: number;
   isCursorRow: boolean;
   onClick: () => void;
-}) {
+}
+
+/** Row number selector cell. */
+function RowSelector({ di, isCursorRow, onClick }: RowSelectorProps) {
   return (
     <TableCell
       data-testid="row-selector"

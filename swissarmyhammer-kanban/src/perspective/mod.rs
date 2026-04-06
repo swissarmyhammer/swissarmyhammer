@@ -12,6 +12,7 @@ pub mod add;
 pub mod delete;
 pub mod get;
 pub mod list;
+pub mod rename;
 pub mod update;
 
 // Re-export domain types from the standalone perspectives crate
@@ -24,6 +25,7 @@ pub use add::AddPerspective;
 pub use delete::DeletePerspective;
 pub use get::GetPerspective;
 pub use list::ListPerspectives;
+pub use rename::RenamePerspective;
 pub use update::UpdatePerspective;
 
 #[cfg(test)]

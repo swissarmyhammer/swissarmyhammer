@@ -7,11 +7,11 @@ use swissarmyhammer_commands::{Command, CommandContext, CommandError};
 /// Open the inspector for a target entity.
 ///
 /// Available when a target moniker or an inspectable scope chain entry is present.
-/// Inspectable types: task, tag, column, board, swimlane, actor.
+/// Inspectable types: task, tag, column, board, actor.
 pub struct InspectCmd;
 
 /// Entity types that are meaningful to inspect.
-const INSPECTABLE_TYPES: &[&str] = &["task", "tag", "column", "board", "swimlane", "actor"];
+const INSPECTABLE_TYPES: &[&str] = &["task", "tag", "column", "board", "actor"];
 
 /// Find the first inspectable moniker in the scope chain.
 fn first_inspectable(scope_chain: &[String]) -> Option<&str> {

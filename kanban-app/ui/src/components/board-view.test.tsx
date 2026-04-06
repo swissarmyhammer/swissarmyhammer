@@ -80,7 +80,7 @@ const board: BoardData = {
     makeColumn("col-doing", "Doing", 1),
     makeColumn("col-done", "Done", 2),
   ],
-  swimlanes: [],
+
   tags: [],
   summary: {
     total_tasks: 3,

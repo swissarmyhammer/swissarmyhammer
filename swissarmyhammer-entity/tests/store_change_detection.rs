@@ -72,11 +72,13 @@ async fn create_event_has_correct_store_and_id() {
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].event_name(), "item-created");
     assert_eq!(
-        events[0].payload()["store"], "tag",
+        events[0].payload()["store"],
+        "tag",
         "store field should be the entity type name"
     );
     assert_eq!(
-        events[0].payload()["id"], "t1",
+        events[0].payload()["id"],
+        "t1",
         "id field should be the entity ID (file stem)"
     );
 }
@@ -102,11 +104,13 @@ async fn update_event_has_correct_store_and_id() {
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].event_name(), "item-changed");
     assert_eq!(
-        events[0].payload()["store"], "tag",
+        events[0].payload()["store"],
+        "tag",
         "store field should be the entity type name"
     );
     assert_eq!(
-        events[0].payload()["id"], "tag42",
+        events[0].payload()["id"],
+        "tag42",
         "id field should be the entity ID"
     );
 }
@@ -131,11 +135,13 @@ async fn delete_event_has_correct_store_and_id() {
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].event_name(), "item-removed");
     assert_eq!(
-        events[0].payload()["store"], "tag",
+        events[0].payload()["store"],
+        "tag",
         "store field should be the entity type name"
     );
     assert_eq!(
-        events[0].payload()["id"], "tagX",
+        events[0].payload()["id"],
+        "tagX",
         "id field should be the entity ID"
     );
 }

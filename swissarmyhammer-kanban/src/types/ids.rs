@@ -10,9 +10,9 @@ use swissarmyhammer_common::define_id;
 define_id!(TaskId, "ULID-based identifier for tasks");
 define_id!(ColumnId, "Identifier for columns (slug-style)");
 define_id!(LogEntryId, "ULID-based identifier for log entries");
-define_id!(SwimlaneId, "Identifier for swimlanes (slug-style)");
 define_id!(ActorId, "Identifier for actors (people or agents)");
 define_id!(TagId, "ULID-based identifier for tags");
+define_id!(ProjectId, "Identifier for projects (slug-style)");
 
 #[cfg(test)]
 mod tests {

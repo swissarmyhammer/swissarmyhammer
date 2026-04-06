@@ -194,7 +194,7 @@ pub fn kanban_compute_engine() -> ComputeEngine {
 }
 
 /// Entity types supported by kanban lookup.
-const KNOWN_ENTITY_TYPES: &[&str] = &["task", "tag", "actor", "column", "swimlane", "attachment"];
+const KNOWN_ENTITY_TYPES: &[&str] = &["task", "tag", "actor", "column", "attachment"];
 
 /// Entity lookup backed by kanban file storage.
 ///
@@ -287,13 +287,13 @@ mod tests {
     #[test]
     fn builtin_field_definitions_load() {
         let defs = builtin_field_definitions();
-        assert_eq!(defs.len(), 24, "expected 24 builtin field definitions");
+        assert_eq!(defs.len(), 23, "expected 23 builtin field definitions");
     }
 
     #[test]
     fn builtin_entity_definitions_load() {
         let defs = builtin_entity_definitions();
-        assert_eq!(defs.len(), 8, "expected 8 builtin entity definitions");
+        assert_eq!(defs.len(), 7, "expected 7 builtin entity definitions");
     }
 
     #[test]
@@ -366,7 +366,6 @@ mod tests {
         assert_eq!(entity.mention_display_field, Some("title".into()));
         assert!(entity.fields.iter().any(|f| f == "title"));
         assert!(entity.fields.iter().any(|f| f == "position_column"));
-        assert!(entity.fields.iter().any(|f| f == "position_swimlane"));
         assert!(entity.fields.iter().any(|f| f == "position_ordinal"));
         assert!(entity.fields.iter().any(|f| f == "attachments"));
         assert!(entity.fields.iter().any(|f| f == "progress"));
@@ -420,11 +419,11 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(ctx.all_fields().len(), 24);
-        assert_eq!(ctx.all_entities().len(), 8);
+        assert_eq!(ctx.all_fields().len(), 23);
+        assert_eq!(ctx.all_entities().len(), 7);
         assert!(ctx.get_field_by_name("title").is_some());
         assert!(ctx.get_entity("task").is_some());
-        assert_eq!(ctx.fields_for_entity("task").len(), 12);
+        assert_eq!(ctx.fields_for_entity("task").len(), 11);
     }
 
     #[test]

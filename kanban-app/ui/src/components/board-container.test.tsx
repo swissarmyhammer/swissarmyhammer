@@ -54,7 +54,7 @@ const MOCK_BOARD: BoardData = {
     fields: { name: { String: "Test Board" } },
   },
   columns: [],
-  swimlanes: [],
+
   tags: [],
   summary: {
     total_tasks: 0,

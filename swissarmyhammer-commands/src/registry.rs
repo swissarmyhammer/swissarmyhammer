@@ -419,11 +419,11 @@ mod tests {
         // settings: keymap.vim, keymap.cua, keymap.emacs = 3
         // file: switchBoard, closeBoard, newBoard, openBoard = 4
         // drag: start, cancel, complete = 3
-        // perspective: load, save, delete, filter, clearFilter, group, clearGroup,
-        //             sort.set, sort.clear, sort.toggle, list = 11
+        // perspective: load, save, delete, rename, filter, clearFilter, group, clearGroup,
+        //             sort.set, sort.clear, sort.toggle, list = 12
         // attachment: open, reveal = 2
         // +1 for ui.mode.set
-        assert_eq!(registry.all_commands().len(), 57);
+        assert_eq!(registry.all_commands().len(), 58);
 
         // Spot checks
         assert!(registry.get("app.quit").is_some());
@@ -447,6 +447,7 @@ mod tests {
             "perspective.load",
             "perspective.save",
             "perspective.delete",
+            "perspective.rename",
             "perspective.filter",
             "perspective.clearFilter",
             "perspective.group",
@@ -581,11 +582,12 @@ mod tests {
         let perspective = include_str!("../builtin/commands/perspective.yaml");
         let registry = CommandsRegistry::from_yaml_sources(&[("perspective", perspective)]);
 
-        // All 11 perspective commands should parse (8 original + 3 sort)
-        assert_eq!(registry.all_commands().len(), 11);
+        // All 12 perspective commands should parse (9 original + 3 sort)
+        assert_eq!(registry.all_commands().len(), 12);
         assert!(registry.get("perspective.load").is_some());
         assert!(registry.get("perspective.save").is_some());
         assert!(registry.get("perspective.delete").is_some());
+        assert!(registry.get("perspective.rename").is_some());
         assert!(registry.get("perspective.filter").is_some());
         assert!(registry.get("perspective.clearFilter").is_some());
         assert!(registry.get("perspective.group").is_some());

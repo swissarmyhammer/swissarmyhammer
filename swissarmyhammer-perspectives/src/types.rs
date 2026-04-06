@@ -19,6 +19,7 @@ pub enum SortDirection {
 
 /// A single sort entry specifying which field to sort by and in which direction.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct SortEntry {
     /// Field ULID to sort by.
     pub field: String,
@@ -32,6 +33,7 @@ pub struct SortEntry {
 /// All override fields are optional -- when absent, the base field definition's
 /// values are used.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct PerspectiveFieldEntry {
     /// Field ULID -- survives field renames.
     pub field: String,
@@ -58,6 +60,7 @@ pub struct PerspectiveFieldEntry {
 /// functions as opaque JS strings, and sort entries. The backend stores
 /// filter/group strings verbatim; it never evaluates them.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Perspective {
     /// Unique identifier (ULID).
     pub id: String,
@@ -77,6 +80,103 @@ pub struct Perspective {
     /// Sort entries, applied in order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sort: Vec<SortEntry>,
+}
+
+impl SortEntry {
+    /// Create a new sort entry for the given field and direction.
+    pub fn new(field: impl Into<String>, direction: SortDirection) -> Self {
+        Self {
+            field: field.into(),
+            direction,
+        }
+    }
+}
+
+impl PerspectiveFieldEntry {
+    /// Create a new field entry with only the required field ULID.
+    ///
+    /// All override fields default to `None`.
+    pub fn new(field: impl Into<String>) -> Self {
+        Self {
+            field: field.into(),
+            caption: None,
+            width: None,
+            editor: None,
+            display: None,
+            sort_comparator: None,
+        }
+    }
+
+    /// Set the caption override.
+    pub fn with_caption(mut self, caption: impl Into<String>) -> Self {
+        self.caption = Some(caption.into());
+        self
+    }
+
+    /// Set the width override.
+    pub fn with_width(mut self, width: u32) -> Self {
+        self.width = Some(width);
+        self
+    }
+
+    /// Set the editor override.
+    pub fn with_editor(mut self, editor: impl Into<String>) -> Self {
+        self.editor = Some(editor.into());
+        self
+    }
+
+    /// Set the display override.
+    pub fn with_display(mut self, display: impl Into<String>) -> Self {
+        self.display = Some(display.into());
+        self
+    }
+
+    /// Set the sort comparator override.
+    pub fn with_sort_comparator(mut self, sort_comparator: impl Into<String>) -> Self {
+        self.sort_comparator = Some(sort_comparator.into());
+        self
+    }
+}
+
+impl Perspective {
+    /// Create a new perspective with the required fields.
+    ///
+    /// Optional fields (fields list, filter, group, sort) default to empty/None.
+    pub fn new(id: impl Into<String>, name: impl Into<String>, view: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            name: name.into(),
+            view: view.into(),
+            fields: Vec::new(),
+            filter: None,
+            group: None,
+            sort: Vec::new(),
+        }
+    }
+
+    /// Set the fields list.
+    pub fn with_fields(mut self, fields: Vec<PerspectiveFieldEntry>) -> Self {
+        self.fields = fields;
+        self
+    }
+
+    /// Set the filter expression.
+    pub fn with_filter(mut self, filter: impl Into<String>) -> Self {
+        self.filter = Some(filter.into());
+        self
+    }
+
+    /// Set the group-by field.
+    pub fn with_group(mut self, group: impl Into<String>) -> Self {
+        self.group = Some(group.into());
+        self
+    }
+
+    /// Set the sort entries.
+    pub fn with_sort(mut self, sort: Vec<SortEntry>) -> Self {
+        self.sort = sort;
+        self
+    }
 }
 
 #[cfg(test)]

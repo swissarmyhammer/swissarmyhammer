@@ -450,6 +450,5 @@ mod tests {
             debug_str.contains("1"),
             "debug should show extension count, got: {debug_str}"
         );
-
     }
 }

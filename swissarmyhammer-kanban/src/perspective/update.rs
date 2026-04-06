@@ -108,20 +108,20 @@ impl Execute<KanbanContext, KanbanError> for UpdatePerspective {
                 .clone();
 
             // Merge only provided fields
-            let updated = crate::perspective::Perspective {
-                id: existing.id,
-                name: self.name.clone().unwrap_or(existing.name),
-                view: self.view.clone().unwrap_or(existing.view),
-                fields: self.fields.clone().unwrap_or(existing.fields),
-                filter: match &self.filter {
-                    Some(f) => f.clone(),
-                    None => existing.filter,
-                },
-                group: match &self.group {
-                    Some(g) => g.clone(),
-                    None => existing.group,
-                },
-                sort: self.sort.clone().unwrap_or(existing.sort),
+            let mut updated = crate::perspective::Perspective::new(
+                existing.id,
+                self.name.clone().unwrap_or(existing.name),
+                self.view.clone().unwrap_or(existing.view),
+            )
+            .with_fields(self.fields.clone().unwrap_or(existing.fields))
+            .with_sort(self.sort.clone().unwrap_or(existing.sort));
+            updated.filter = match &self.filter {
+                Some(f) => f.clone(),
+                None => existing.filter,
+            };
+            updated.group = match &self.group {
+                Some(g) => g.clone(),
+                None => existing.group,
             };
 
             pctx.write(&updated).await?;

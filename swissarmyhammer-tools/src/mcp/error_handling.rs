@@ -122,6 +122,17 @@ mod tests {
     use super::*;
     use std::io;
 
+    /// RAII guard that restores the working directory on drop.
+    struct CwdGuard(Option<std::path::PathBuf>);
+
+    impl Drop for CwdGuard {
+        fn drop(&mut self) {
+            if let Some(ref dir) = self.0 {
+                let _ = std::env::set_current_dir(dir);
+            }
+        }
+    }
+
     // ---------------------------------------------------------------------------
     // ErrorHandler::is_retryable_fs_error tests
     // ---------------------------------------------------------------------------
@@ -220,7 +231,12 @@ mod tests {
 
     /// Test that `reload_prompts` succeeds with an empty library in an empty temp dir.
     #[tokio::test]
+    #[serial_test::serial(cwd)]
     async fn test_reload_prompts_empty_library_succeeds() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let _guard = CwdGuard(std::env::current_dir().ok());
+        std::env::set_current_dir(tmp.path()).unwrap();
+
         let library = Arc::new(RwLock::new(PromptLibrary::new()));
         let handler = ErrorHandler::new(library.clone());
         // reload_prompts with an empty library should succeed (loads 0 prompts)
@@ -234,7 +250,12 @@ mod tests {
 
     /// Test that calling `reload_prompts` multiple times is idempotent.
     #[tokio::test]
+    #[serial_test::serial(cwd)]
     async fn test_reload_prompts_idempotent() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let _guard = CwdGuard(std::env::current_dir().ok());
+        std::env::set_current_dir(tmp.path()).unwrap();
+
         let library = Arc::new(RwLock::new(PromptLibrary::new()));
         let handler = ErrorHandler::new(library);
         assert!(handler.reload_prompts().await.is_ok());
@@ -243,7 +264,12 @@ mod tests {
 
     /// Test that `reload_prompts` clears and reloads prompts from the library.
     #[tokio::test]
+    #[serial_test::serial(cwd)]
     async fn test_reload_prompts_clears_and_reloads() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let _guard = CwdGuard(std::env::current_dir().ok());
+        std::env::set_current_dir(tmp.path()).unwrap();
+
         let mut initial_library = PromptLibrary::new();
         initial_library
             .add(swissarmyhammer_prompts::Prompt::new("test", "test content"))

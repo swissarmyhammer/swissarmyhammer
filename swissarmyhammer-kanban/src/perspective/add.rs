@@ -87,15 +87,11 @@ impl Execute<KanbanContext, KanbanError> for AddPerspective {
             let mut pctx = pctx.write().await;
 
             let id = ulid::Ulid::new().to_string();
-            let perspective = Perspective {
-                id: id.clone(),
-                name: self.name.clone(),
-                view: self.view.clone(),
-                fields: self.fields.clone(),
-                filter: self.filter.clone(),
-                group: self.group.clone(),
-                sort: self.sort.clone(),
-            };
+            let mut perspective = Perspective::new(id, self.name.clone(), self.view.clone())
+                .with_fields(self.fields.clone())
+                .with_sort(self.sort.clone());
+            perspective.filter = self.filter.clone();
+            perspective.group = self.group.clone();
 
             pctx.write(&perspective).await?;
 

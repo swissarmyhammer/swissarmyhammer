@@ -8,7 +8,7 @@ use crate::defaults::{
     builtin_view_definitions, kanban_compute_engine, KanbanLookup,
 };
 use crate::error::{KanbanError, Result};
-use crate::types::{ActorId, ColumnId, LogEntry, SwimlaneId, TagId, TaskId};
+use crate::types::{ActorId, ColumnId, LogEntry, TagId, TaskId};
 use fs2::FileExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -242,21 +242,6 @@ impl KanbanContext {
         self.root.join("columns").join(format!("{}.jsonl", id))
     }
 
-    /// Path to swimlanes directory
-    pub fn swimlanes_dir(&self) -> PathBuf {
-        self.root.join("swimlanes")
-    }
-
-    /// Path to a swimlane's YAML file
-    pub fn swimlane_path(&self, id: &SwimlaneId) -> PathBuf {
-        self.root.join("swimlanes").join(format!("{}.yaml", id))
-    }
-
-    /// Path to a swimlane's log file
-    pub fn swimlane_log_path(&self, id: &SwimlaneId) -> PathBuf {
-        self.root.join("swimlanes").join(format!("{}.jsonl", id))
-    }
-
     /// Path to the perspectives directory
     pub fn perspectives_dir(&self) -> PathBuf {
         self.root.join("perspectives")
@@ -286,7 +271,6 @@ impl KanbanContext {
             && self.actors_dir().exists()
             && self.tags_dir().exists()
             && self.columns_dir().exists()
-            && self.swimlanes_dir().exists()
             && self.perspectives_dir().exists()
     }
 
@@ -303,7 +287,6 @@ impl KanbanContext {
         fs::create_dir_all(self.actors_dir()).await?;
         fs::create_dir_all(self.tags_dir()).await?;
         fs::create_dir_all(self.columns_dir()).await?;
-        fs::create_dir_all(self.swimlanes_dir()).await?;
         fs::create_dir_all(self.perspectives_dir()).await?;
         Ok(())
     }
@@ -353,11 +336,6 @@ impl KanbanContext {
     /// Append a log entry to a column's log
     pub async fn append_column_log(&self, id: &ColumnId, entry: &LogEntry) -> Result<()> {
         self.append_log(&self.column_log_path(id), entry).await
-    }
-
-    /// Append a log entry to a swimlane's log
-    pub async fn append_swimlane_log(&self, id: &SwimlaneId, entry: &LogEntry) -> Result<()> {
-        self.append_log(&self.swimlane_log_path(id), entry).await
     }
 
     /// Append a log entry to the board log
@@ -587,7 +565,7 @@ impl Drop for KanbanLock {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{ActorId, ColumnId, SwimlaneId, TagId, TaskId};
+    use crate::types::{ActorId, ColumnId, TagId, TaskId};
     use tempfile::TempDir;
 
     async fn setup() -> (TempDir, KanbanContext) {
@@ -743,22 +721,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_swimlane_paths() {
-        let (temp, ctx) = setup().await;
-        let root = temp.path().join(".kanban");
-
-        assert_eq!(ctx.swimlanes_dir(), root.join("swimlanes"));
-        assert_eq!(
-            ctx.swimlane_path(&SwimlaneId::from_string("backend")),
-            root.join("swimlanes").join("backend.yaml")
-        );
-        assert_eq!(
-            ctx.swimlane_log_path(&SwimlaneId::from_string("backend")),
-            root.join("swimlanes").join("backend.jsonl")
-        );
-    }
-
-    #[tokio::test]
     async fn test_ensure_directories_recreates_missing() {
         let temp = TempDir::new().unwrap();
         let kanban_dir = temp.path().join(".kanban");
@@ -803,11 +765,11 @@ mod tests {
         let ctx = KanbanContext::open(&kanban_dir).await.unwrap();
         let fields = ctx.fields().unwrap();
 
-        // Should have all 24 built-in fields
-        assert_eq!(fields.all_fields().len(), 24);
+        // Should have all 23 built-in fields
+        assert_eq!(fields.all_fields().len(), 23);
 
-        // Should have all 8 entity templates
-        assert_eq!(fields.all_entities().len(), 8);
+        // Should have all 7 entity templates
+        assert_eq!(fields.all_entities().len(), 7);
 
         // Check a specific field
         let title = fields.get_field_by_name("title").unwrap();
@@ -832,10 +794,10 @@ type:
             .await
             .unwrap();
 
-        // Open — should have 24 built-in + 1 custom = 25
+        // Open — should have 23 built-in + 1 custom = 24
         let ctx = KanbanContext::open(&kanban_dir).await.unwrap();
         let fields = ctx.fields().unwrap();
-        assert_eq!(fields.all_fields().len(), 25);
+        assert_eq!(fields.all_fields().len(), 24);
 
         // Custom field should be present
         let sprint = fields.get_field_by_name("sprint").unwrap();
@@ -869,7 +831,7 @@ type:
 
         // Entity fields should resolve to field definitions
         let task_fields = fields.fields_for_entity("task");
-        assert_eq!(task_fields.len(), 12); // title, tags, progress, assignees, depends_on, body, position_column, position_swimlane, position_ordinal, attachments, virtual_tags, filter_tags
+        assert_eq!(task_fields.len(), 11); // title, tags, progress, assignees, depends_on, body, position_column, position_ordinal, attachments, virtual_tags, filter_tags
     }
 
     // =========================================================================
@@ -1161,24 +1123,6 @@ type:
     }
 
     #[tokio::test]
-    async fn test_append_swimlane_log() {
-        let (_temp, ctx) = setup().await;
-
-        let lane_id = SwimlaneId::from_string("backend");
-        let entry = LogEntry::new(
-            "add swimlane",
-            serde_json::json!({}),
-            serde_json::json!({}),
-            None,
-            1,
-        );
-        ctx.append_swimlane_log(&lane_id, &entry).await.unwrap();
-
-        let log_path = ctx.swimlane_log_path(&lane_id);
-        assert!(log_path.exists());
-    }
-
-    #[tokio::test]
     async fn test_append_board_log() {
         let (_temp, ctx) = setup().await;
 
@@ -1341,20 +1285,6 @@ card_fields:
         let content = tokio::fs::read_to_string(&path).await.unwrap();
         let parsed: LogEntry = serde_json::from_str(content.trim()).unwrap();
         assert_eq!(parsed.op, "add column");
-    }
-
-    #[tokio::test]
-    async fn test_append_swimlane_log_writes_jsonl() {
-        let (_temp, ctx) = setup().await;
-        let lane_id = SwimlaneId::from_string("backend");
-        let entry = make_log_entry("add swimlane");
-
-        ctx.append_swimlane_log(&lane_id, &entry).await.unwrap();
-
-        let path = ctx.swimlane_log_path(&lane_id);
-        let content = tokio::fs::read_to_string(&path).await.unwrap();
-        let parsed: LogEntry = serde_json::from_str(content.trim()).unwrap();
-        assert_eq!(parsed.op, "add swimlane");
     }
 
     #[tokio::test]

@@ -35,6 +35,7 @@ pub enum ChangeOp {
 /// Stores unified diffs (forward and reverse patches) rather than full
 /// before/after text snapshots, significantly reducing storage overhead.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ChangelogEntry {
     /// Unique identifier for this changelog entry.
     pub id: UndoEntryId,

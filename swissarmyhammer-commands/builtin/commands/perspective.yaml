@@ -23,6 +23,16 @@
       from: args
   keys: {}
 
+- id: perspective.rename
+  name: Rename Perspective
+  undoable: true
+  params:
+    - name: id
+      from: args
+    - name: new_name
+      from: args
+  keys: {}
+
 - id: perspective.filter
   name: Set Filter
   scope: "entity:perspective"

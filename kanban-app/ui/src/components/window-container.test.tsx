@@ -265,7 +265,7 @@ describe("WindowContainer", () => {
         return Promise.resolve({
           board: { entity_type: "board", id: "b1", name: "New Board" },
           columns: [],
-          swimlanes: [],
+
           tags: [],
           summary: {
             total_tasks: 0,
@@ -324,7 +324,7 @@ describe("WindowContainer", () => {
         return Promise.resolve({
           board: { entity_type: "board", id: "b1", name: "Board A" },
           columns: [],
-          swimlanes: [],
+
           tags: [],
           summary: {
             total_tasks: 0,
@@ -381,7 +381,7 @@ describe("WindowContainer", () => {
         return Promise.resolve({
           board: { entity_type: "board", id: "b1", name: "Board" },
           columns: [],
-          swimlanes: [],
+
           tags: [],
           summary: {
             total_tasks: 0,
@@ -436,7 +436,6 @@ describe("WindowContainer", () => {
     const boardData = {
       board: { entity_type: "board", id: "b1", name: "Board" },
       columns: [],
-      swimlanes: [],
       tags: [],
       summary: {
         total_tasks: 0,

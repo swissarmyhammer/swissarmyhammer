@@ -127,6 +127,28 @@ impl PerspectiveContext {
         &self.perspectives
     }
 
+    /// Rename a perspective atomically.
+    ///
+    /// Looks up the perspective by ID, changes its name, and writes it back
+    /// in a single operation. This avoids the non-atomic delete + create pattern.
+    ///
+    /// Returns the updated perspective on success.
+    pub async fn rename(&mut self, id: &str, new_name: impl Into<String>) -> Result<Perspective> {
+        let idx = self
+            .id_index
+            .get(id)
+            .copied()
+            .ok_or_else(|| PerspectiveError::NotFound {
+                resource: "perspective".to_string(),
+                id: id.to_string(),
+            })?;
+
+        let mut updated = self.perspectives[idx].clone();
+        updated.name = new_name.into();
+        self.write(&updated).await?;
+        Ok(updated)
+    }
+
     /// Delete a perspective by ID and return the deleted value plus undo entry.
     ///
     /// When a `StoreHandle` is wired in, delegates file removal to it (which
@@ -987,5 +1009,42 @@ mod tests {
             .unwrap();
 
         assert_eq!(ctx.all().len(), 2);
+    }
+
+    // =========================================================================
+    // Rename tests
+    // =========================================================================
+
+    #[tokio::test]
+    async fn rename_updates_name_atomically() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().join("perspectives");
+        let (mut ctx, _handle) = setup_with_store(&dir).await;
+
+        ctx.write(&make_perspective("01AAAAAAAAAAAAAAAAAAAAAAAA", "Before"))
+            .await
+            .unwrap();
+
+        let updated = ctx
+            .rename("01AAAAAAAAAAAAAAAAAAAAAAAA", "After")
+            .await
+            .unwrap();
+        assert_eq!(updated.name, "After");
+        assert_eq!(updated.id, "01AAAAAAAAAAAAAAAAAAAAAAAA");
+
+        // In-memory cache should reflect the rename
+        assert!(ctx.get_by_name("Before").is_none());
+        assert!(ctx.get_by_name("After").is_some());
+        assert_eq!(ctx.all().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn rename_nonexistent_returns_not_found() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().join("perspectives");
+        let (mut ctx, _handle) = setup_with_store(&dir).await;
+
+        let err = ctx.rename("01ZZZZZZZZZZZZZZZZZZZZZZZZ", "New").await;
+        assert!(err.is_err());
     }
 }

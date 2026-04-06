@@ -94,7 +94,7 @@ impl Command for DeletePerspectiveCmd {
                 .map_err(|e| CommandError::ExecutionFailed(e.to_string()))?;
             let pctx = pctx.read().await;
             if let Some(p) = pctx.get_by_name(name) {
-                p.id.clone()
+                p.id.to_string()
             } else if pctx.get_by_id(name).is_some() {
                 name.to_string()
             } else {
@@ -279,10 +279,7 @@ impl Command for SetSortCmd {
             .into_iter()
             .filter(|e| e.field != field)
             .collect();
-        new_sort.push(SortEntry {
-            field: field.to_string(),
-            direction,
-        });
+        new_sort.push(SortEntry::new(field, direction));
 
         let op = UpdatePerspective::new(perspective_id).with_sort(new_sort);
         run_op(&op, &kanban).await
@@ -390,21 +387,15 @@ impl Command for ToggleSortCmd {
 
         match current_direction.as_ref() {
             None => {
-                // none → asc
-                new_sort.push(SortEntry {
-                    field: field.to_string(),
-                    direction: SortDirection::Asc,
-                });
+                // none -> asc
+                new_sort.push(SortEntry::new(field, SortDirection::Asc));
             }
             Some(SortDirection::Asc) => {
-                // asc → desc
-                new_sort.push(SortEntry {
-                    field: field.to_string(),
-                    direction: SortDirection::Desc,
-                });
+                // asc -> desc
+                new_sort.push(SortEntry::new(field, SortDirection::Desc));
             }
             Some(SortDirection::Desc) => {
-                // desc → none (already filtered out)
+                // desc -> none (already filtered out)
             }
         }
 

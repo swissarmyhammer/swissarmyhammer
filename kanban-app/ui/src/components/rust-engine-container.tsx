@@ -217,7 +217,7 @@ export function RustEngineContainer({ children }: RustEngineContainerProps) {
           );
           return;
         }
-        if (entity_type === "column" || entity_type === "swimlane") {
+        if (entity_type === "column") {
           console.warn(`[entity-created] structural type -> full refresh`);
           if (activeBoardPathRef.current) {
             refreshEntities(activeBoardPathRef.current);
@@ -266,7 +266,7 @@ export function RustEngineContainer({ children }: RustEngineContainerProps) {
           console.warn(`[entity-removed] SKIPPED: board_path mismatch`);
           return;
         }
-        if (entity_type === "column" || entity_type === "swimlane") {
+        if (entity_type === "column") {
           if (activeBoardPathRef.current) {
             refreshEntities(activeBoardPathRef.current);
           }

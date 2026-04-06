@@ -3,7 +3,7 @@
 use crate::context::KanbanContext;
 use crate::error::KanbanError;
 use crate::task_helpers::{compute_ordinal_for_neighbors, task_entity_to_json};
-use crate::types::{ColumnId, Ordinal, SwimlaneId, TaskId};
+use crate::types::{ColumnId, Ordinal, TaskId};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use swissarmyhammer_entity::Entity;
@@ -23,9 +23,6 @@ pub struct MoveTask {
     pub id: TaskId,
     /// Target column
     pub column: ColumnId,
-    /// Optional target swimlane
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub swimlane: Option<SwimlaneId>,
     /// Optional ordinal — if None, appends at end of column
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ordinal: Option<String>,
@@ -43,23 +40,6 @@ impl MoveTask {
         Self {
             id: id.into(),
             column: column.into(),
-            swimlane: None,
-            ordinal: None,
-            before_id: None,
-            after_id: None,
-        }
-    }
-
-    /// Create a MoveTask command with column and swimlane (appended at end)
-    pub fn to_column_and_swimlane(
-        id: impl Into<TaskId>,
-        column: impl Into<ColumnId>,
-        swimlane: impl Into<SwimlaneId>,
-    ) -> Self {
-        Self {
-            id: id.into(),
-            column: column.into(),
-            swimlane: Some(swimlane.into()),
             ordinal: None,
             before_id: None,
             after_id: None,
@@ -123,24 +103,6 @@ impl Execute<KanbanContext, KanbanError> for MoveTask {
                 col_entity.set("name", json!(name));
                 col_entity.set("order", json!(order));
                 ectx.write(&col_entity).await?;
-            }
-
-            // Auto-create swimlane if it doesn't exist
-            if let Some(ref swimlane_id) = self.swimlane {
-                if ectx.read("swimlane", swimlane_id.as_str()).await.is_err() {
-                    let swimlanes = ectx.list("swimlane").await?;
-                    let order = swimlanes
-                        .iter()
-                        .filter_map(|s| s.get("order").and_then(|v| v.as_u64()))
-                        .max()
-                        .map(|o| o as usize + 1)
-                        .unwrap_or(0);
-                    let name = slug_to_name(swimlane_id.as_str());
-                    let mut sl_entity = Entity::new("swimlane", swimlane_id.as_str());
-                    sl_entity.set("name", json!(name));
-                    sl_entity.set("order", json!(order));
-                    ectx.write(&sl_entity).await?;
-                }
             }
 
             // Priority: explicit ordinal > before_id/after_id placement > append
@@ -262,10 +224,7 @@ impl Execute<KanbanContext, KanbanError> for MoveTask {
                         continue;
                     }
                     let t_col = t.get_str("position_column").unwrap_or("");
-                    let t_swim = t.get_str("position_swimlane");
-                    if t_col == self.column.as_str()
-                        && t_swim == self.swimlane.as_ref().map(|s| s.as_str())
-                    {
+                    if t_col == self.column.as_str() {
                         let ord = Ordinal::from_string(
                             t.get_str("position_ordinal")
                                 .unwrap_or(Ordinal::DEFAULT_STR),
@@ -286,12 +245,6 @@ impl Execute<KanbanContext, KanbanError> for MoveTask {
 
             // Update position fields
             entity.set("position_column", json!(self.column.as_str()));
-            match &self.swimlane {
-                Some(s) => entity.set("position_swimlane", json!(s.as_str())),
-                None => {
-                    entity.remove("position_swimlane");
-                }
-            }
             entity.set("position_ordinal", json!(ordinal.as_str()));
 
             ectx.write(&entity).await?;

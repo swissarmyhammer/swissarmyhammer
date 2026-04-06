@@ -522,7 +522,7 @@ mod tests {
     }
 
     #[test]
-    #[serial_test::serial]
+    #[serial_test::serial(cwd)]
     fn test_resolve_directories_debug_branch_with_both_dirs() {
         // Exercise the debug logging branch where both global_dir and project_dirs exist.
         let temp_dir = TempDir::new().unwrap();
@@ -554,7 +554,7 @@ mod tests {
     }
 
     #[test]
-    #[serial_test::serial]
+    #[serial_test::serial(cwd)]
     fn test_resolve_project_dirs_walks_up_to_git_root() {
         let temp_dir = TempDir::new().unwrap();
         // Canonicalize to resolve symlinks (e.g. /var -> /private/var on macOS)

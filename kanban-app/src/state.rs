@@ -54,6 +54,10 @@ impl ClipboardProvider for TauriClipboardProvider {
                 // revisit if tauri-plugin-clipboard-manager ever adds structured errors.
                 let msg = e.to_string();
                 if msg.contains("empty") || msg.contains("format") {
+                    tracing::warn!(
+                        error = %e,
+                        "suppressing clipboard error matched by fragile string check"
+                    );
                     Ok(None)
                 } else {
                     Err(format!("clipboard read failed: {e}"))
@@ -193,7 +197,7 @@ impl BoardHandle {
         // Load all entities into search index
         let mut all_entities: Vec<Entity> = Vec::new();
         if let Ok(ectx) = ctx.entity_context().await {
-            for entity_type in &["task", "tag", "column", "actor", "swimlane", "board"] {
+            for entity_type in &["task", "tag", "column", "actor", "board"] {
                 if let Ok(entities) = ectx.list(entity_type).await {
                     all_entities.extend(entities);
                 }
@@ -1009,7 +1013,6 @@ mod tests {
         std::fs::create_dir_all(kanban_dir.join("tasks")).unwrap();
         std::fs::create_dir_all(kanban_dir.join("tags")).unwrap();
         std::fs::create_dir_all(kanban_dir.join("actors")).unwrap();
-        std::fs::create_dir_all(kanban_dir.join("swimlanes")).unwrap();
         std::fs::create_dir_all(kanban_dir.join("perspectives")).unwrap();
     }
 

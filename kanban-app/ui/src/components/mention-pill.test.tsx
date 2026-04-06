@@ -13,7 +13,7 @@ import type { EntityCommand } from "@/types/kanban";
 
 const ENTITIES_DIR = join(
   __dirname,
-  "../../../../swissarmyhammer-kanban/builtin/fields/entities",
+  "../../../../swissarmyhammer-kanban/builtin/entities",
 );
 
 interface EntityYaml {

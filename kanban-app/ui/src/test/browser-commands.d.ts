@@ -45,9 +45,7 @@ declare module "vitest/internal/browser" {
       name: string;
       content: string;
     }) => Promise<string>;
-    listPerspectives: (config: {
-      dir: string;
-    }) => Promise<{
+    listPerspectives: (config: { dir: string }) => Promise<{
       count: number;
       perspectives: { id: string; name: string; view: string }[];
     }>;

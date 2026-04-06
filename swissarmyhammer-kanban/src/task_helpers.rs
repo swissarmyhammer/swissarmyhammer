@@ -346,30 +346,21 @@ pub fn enrich_all_task_entities(
 ///
 /// Transforms flat entity fields into the nested format:
 /// - "body" → "description" (rename for backward compat)
-/// - position_column/position_swimlane/position_ordinal → nested "position" object
+/// - position_column/position_ordinal → nested "position" object
 /// - Adds computed fields: tags, progress
 pub fn task_entity_to_json(entity: &Entity) -> Value {
     let tags = task_tags(entity);
     let progress = task_progress(entity);
 
     let position_column = entity.get_str("position_column").unwrap_or("");
-    let position_swimlane = entity.get_str("position_swimlane");
     let position_ordinal = entity
         .get_str("position_ordinal")
         .unwrap_or(Ordinal::DEFAULT_STR);
 
-    let position = if let Some(swimlane) = position_swimlane {
-        json!({
-            "column": position_column,
-            "swimlane": swimlane,
-            "ordinal": position_ordinal,
-        })
-    } else {
-        json!({
-            "column": position_column,
-            "ordinal": position_ordinal,
-        })
-    };
+    let position = json!({
+        "column": position_column,
+        "ordinal": position_ordinal,
+    });
 
     let mut result = json!({
         "id": entity.id,
@@ -583,7 +574,6 @@ mod tests {
             0,
             0,
         );
-        e.set("position_swimlane", json!("feature"));
         let ordinal = Ordinal::after(&Ordinal::first());
         let ordinal_str = ordinal.as_str().to_string();
         e.set("position_ordinal", json!(ordinal_str));
@@ -594,7 +584,6 @@ mod tests {
         assert_eq!(result["title"], "Test Task");
         assert_eq!(result["description"], "Some #bug description");
         assert_eq!(result["position"]["column"], "todo");
-        assert_eq!(result["position"]["swimlane"], "feature");
         assert_eq!(result["position"]["ordinal"], ordinal_str);
         assert!(result["tags"].as_array().unwrap().contains(&json!("bug")));
         assert_eq!(result["assignees"], json!(["alice"]));

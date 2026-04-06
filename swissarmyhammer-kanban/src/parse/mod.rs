@@ -188,7 +188,6 @@ fn normalize_params(params: &mut Map<String, Value>) {
         (&["taskId", "task_id"], "id"),
         (&["desc", "body", "content"], "description"),
         (&["col"], "column"),
-        (&["lane"], "swimlane"),
     ];
 
     for (from_keys, to_key) in aliases {

@@ -24,6 +24,7 @@ import { BoardSelector } from "@/components/board-selector";
 import { useUIState } from "@/lib/ui-state-context";
 import appIcon from "@/assets/app-icon-32.png";
 import type { OpenBoard, BoardDataResponse, Entity } from "@/types/kanban";
+import { entityFromBag, getNum } from "@/types/kanban";
 
 const STORAGE_KEY = "quick-capture-last-board";
 
@@ -97,7 +98,7 @@ export function QuickCapture() {
     const unlisteners = [
       // The "board" check is an entity-type filter for refresh, not a field name —
       // we only reload the board list when a board entity changes, ignoring
-      // task/column/swimlane changes that don't affect the selector.
+      // task/column changes that don't affect the selector.
       listen<EntityFieldChangedEvent>("entity-field-changed", (event) => {
         if (event.payload.entity_type === "board") loadBoards();
       }),
@@ -127,11 +128,9 @@ export function QuickCapture() {
         const boardData = await invoke<BoardDataResponse>("get_board_data", {
           boardPath: selectedPath,
         });
-        const columns = [...boardData.columns].sort((a, b) => {
-          const orderA = typeof a.order === "number" ? a.order : 0;
-          const orderB = typeof b.order === "number" ? b.order : 0;
-          return orderA - orderB;
-        });
+        const columns = boardData.columns
+          .map(entityFromBag)
+          .sort((a, b) => getNum(a, "order") - getNum(b, "order"));
         const firstColumnId = columns[0]?.id;
         if (!firstColumnId) return;
 

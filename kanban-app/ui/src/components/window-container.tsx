@@ -98,7 +98,7 @@ export function useHandleSwitchBoard(): (path: string) => void {
 const BoardDataContext = createContext<BoardData | null>(null);
 
 /**
- * Returns the current board data (metadata, columns, swimlanes, etc.).
+ * Returns the current board data (metadata, columns, tags, etc.).
  * Null when no board is loaded.
  */
 export function useBoardData(): BoardData | null {

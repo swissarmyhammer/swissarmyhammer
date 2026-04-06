@@ -260,13 +260,8 @@ pub fn commands_for_scope(
                     emacs: k.emacs.clone(),
                 });
 
-                let available = check_available(
-                    &cmd.id,
-                    scope_chain,
-                    Some(moniker),
-                    command_impls,
-                    ui_state,
-                );
+                let available =
+                    check_available(&cmd.id, scope_chain, Some(moniker), command_impls, ui_state);
 
                 result.push(ResolvedCommand {
                     id: cmd.id.clone(),
@@ -1090,7 +1085,7 @@ mod tests {
     }
 
     // =========================================================================
-    // Other entity types (actor, swimlane, attachment)
+    // Other entity types (actor, attachment)
     // =========================================================================
 
     #[test]
@@ -1102,19 +1097,6 @@ mod tests {
         assert!(
             names.contains(&"Inspect Actor"),
             "actor should have Inspect Actor: {:?}",
-            names
-        );
-    }
-
-    #[test]
-    fn swimlane_scope_has_inspect() {
-        let (registry, impls, fields, ui) = setup();
-        let scope = vec!["swimlane:lane1".into()];
-        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
-        let names: Vec<&str> = cmds.iter().map(|c| c.name.as_str()).collect();
-        assert!(
-            names.contains(&"Inspect Swimlane"),
-            "swimlane should have Inspect Swimlane: {:?}",
             names
         );
     }
@@ -1979,11 +1961,7 @@ mod tests {
         // it should appear via the entity schema path with a target
         // pointing to the tag moniker (innermost match).
         let (registry, impls, fields, ui) = setup();
-        let scope = vec![
-            "tag:bug".into(),
-            "task:01X".into(),
-            "column:todo".into(),
-        ];
+        let scope = vec!["tag:bug".into(), "task:01X".into(), "column:todo".into()];
         let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
         let untag = cmds
             .iter()

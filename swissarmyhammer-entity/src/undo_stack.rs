@@ -37,12 +37,12 @@ pub struct UndoEntry {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UndoStack {
     /// Ordered list of undo entries.
-    pub entries: Vec<UndoEntry>,
+    entries: Vec<UndoEntry>,
     /// Index one past the last executed entry.
-    pub pointer: usize,
+    pointer: usize,
     /// Maximum number of entries to retain.
     #[serde(default = "default_max_size")]
-    pub max_size: usize,
+    max_size: usize,
 }
 
 fn default_max_size() -> usize {
@@ -72,6 +72,21 @@ impl UndoStack {
             pointer: 0,
             max_size,
         }
+    }
+
+    /// Returns a slice of all entries on the stack.
+    pub fn entries(&self) -> &[UndoEntry] {
+        &self.entries
+    }
+
+    /// Returns the current pointer position (one past the last executed entry).
+    pub fn pointer(&self) -> usize {
+        self.pointer
+    }
+
+    /// Returns the maximum number of entries this stack retains.
+    pub fn max_size(&self) -> usize {
+        self.max_size
     }
 
     /// Whether there is at least one entry that can be undone.

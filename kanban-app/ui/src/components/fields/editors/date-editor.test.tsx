@@ -140,12 +140,7 @@ describe("DateEditor submit/cancel ref wiring", () => {
     it("vim escapeRef cancels when no resolved date", () => {
       const onCommit = vi.fn();
       const onCancel = vi.fn();
-      const { escapeRef } = makeDateEditorRefs(
-        "vim",
-        null,
-        onCommit,
-        onCancel,
-      );
+      const { escapeRef } = makeDateEditorRefs("vim", null, onCommit, onCancel);
 
       escapeRef.current!();
 

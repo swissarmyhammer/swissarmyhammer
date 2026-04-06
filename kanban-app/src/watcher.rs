@@ -797,7 +797,6 @@ mod tests {
         "tasks",
         "tags",
         "columns",
-        "swimlanes",
         "actors",
         "boards",
         "views",
@@ -1968,15 +1967,6 @@ mod tests {
     // =========================================================================
 
     #[test]
-    fn test_path_to_entity_swimlanes_strips_s() {
-        let root = PathBuf::from("/project/.kanban");
-        assert_eq!(
-            path_to_entity(Path::new("/project/.kanban/swimlanes/main.yaml"), &root),
-            Some(("swimlane".to_string(), "main".to_string()))
-        );
-    }
-
-    #[test]
     fn test_path_to_entity_views_strips_s() {
         let root = PathBuf::from("/project/.kanban");
         assert_eq!(
@@ -2320,7 +2310,6 @@ mod tests {
         std::fs::write(kanban.join("tasks/t1.md"), "---\ntitle: T1\n---\nBody\n").unwrap();
         std::fs::write(kanban.join("tags/bug.yaml"), "tag_name: Bug\n").unwrap();
         std::fs::write(kanban.join("columns/todo.yaml"), "name: To Do\n").unwrap();
-        std::fs::write(kanban.join("swimlanes/main.yaml"), "name: Main\n").unwrap();
         std::fs::write(kanban.join("actors/alice.yaml"), "name: Alice\n").unwrap();
         std::fs::write(kanban.join("views/board.yaml"), "name: Board\n").unwrap();
         std::fs::write(kanban.join("board.yaml"), "name: My Board\n").unwrap();
@@ -2328,7 +2317,7 @@ mod tests {
         let roots = store_roots(&kanban);
         let cache = new_entity_cache(&kanban, &roots);
         let map = cache.lock().unwrap();
-        assert_eq!(map.len(), 7, "should cache files from all subdirs + root");
+        assert_eq!(map.len(), 6, "should cache files from all subdirs + root");
     }
 
     // =========================================================================

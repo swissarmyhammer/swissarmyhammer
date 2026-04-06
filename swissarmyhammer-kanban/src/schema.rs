@@ -16,7 +16,7 @@ use crate::column::{AddColumn, DeleteColumn, GetColumn, ListColumns, UpdateColum
 use crate::perspective::{
     AddPerspective, DeletePerspective, GetPerspective, ListPerspectives, UpdatePerspective,
 };
-use crate::swimlane::{AddSwimlane, DeleteSwimlane, GetSwimlane, ListSwimlanes, UpdateSwimlane};
+use crate::project::{AddProject, DeleteProject, GetProject, ListProjects, UpdateProject};
 use crate::tag::{AddTag, DeleteTag, GetTag, ListTags, UpdateTag};
 use crate::task::{
     AddTask, ArchiveTask, AssignTask, CompleteTask, DeleteTask, GetTask, ListArchived, ListTasks,
@@ -36,12 +36,6 @@ static KANBAN_OPERATIONS: LazyLock<Vec<&'static dyn Operation>> = LazyLock::new(
         Box::leak(Box::new(UpdateColumn::new(""))) as &dyn Operation,
         Box::leak(Box::new(DeleteColumn::new(""))) as &dyn Operation,
         Box::leak(Box::new(ListColumns)) as &dyn Operation,
-        // Swimlane
-        Box::leak(Box::new(AddSwimlane::new("", ""))) as &dyn Operation,
-        Box::leak(Box::new(GetSwimlane::new(""))) as &dyn Operation,
-        Box::leak(Box::new(UpdateSwimlane::new(""))) as &dyn Operation,
-        Box::leak(Box::new(DeleteSwimlane::new(""))) as &dyn Operation,
-        Box::leak(Box::new(ListSwimlanes)) as &dyn Operation,
         // Actor
         Box::leak(Box::new(AddActor::new("", ""))) as &dyn Operation,
         Box::leak(Box::new(GetActor::new(""))) as &dyn Operation,
@@ -76,6 +70,12 @@ static KANBAN_OPERATIONS: LazyLock<Vec<&'static dyn Operation>> = LazyLock::new(
         Box::leak(Box::new(UpdateAttachment::new("", ""))) as &dyn Operation,
         Box::leak(Box::new(DeleteAttachment::new("", ""))) as &dyn Operation,
         Box::leak(Box::new(ListAttachments::new(""))) as &dyn Operation,
+        // Project
+        Box::leak(Box::new(AddProject::new("", ""))) as &dyn Operation,
+        Box::leak(Box::new(GetProject::new(""))) as &dyn Operation,
+        Box::leak(Box::new(UpdateProject::new(""))) as &dyn Operation,
+        Box::leak(Box::new(DeleteProject::new(""))) as &dyn Operation,
+        Box::leak(Box::new(ListProjects)) as &dyn Operation,
         // Perspective
         Box::leak(Box::new(AddPerspective::new("", ""))) as &dyn Operation,
         Box::leak(Box::new(GetPerspective::new(""))) as &dyn Operation,
@@ -341,11 +341,6 @@ mod tests {
         assert!(op_names.contains(&"update board"), "Missing 'update board'");
         assert!(op_names.contains(&"add column"), "Missing 'add column'");
         assert!(op_names.contains(&"list columns"), "Missing 'list columns'");
-        assert!(op_names.contains(&"add swimlane"), "Missing 'add swimlane'");
-        assert!(
-            op_names.contains(&"list swimlanes"),
-            "Missing 'list swimlanes'"
-        );
         assert!(op_names.contains(&"add actor"), "Missing 'add actor'");
         assert!(op_names.contains(&"list actors"), "Missing 'list actors'");
         assert!(op_names.contains(&"add task"), "Missing 'add task'");
@@ -358,6 +353,11 @@ mod tests {
         assert!(op_names.contains(&"list tasks"), "Missing 'list tasks'");
         assert!(op_names.contains(&"add tag"), "Missing 'add tag'");
         assert!(op_names.contains(&"list tags"), "Missing 'list tags'");
+        assert!(op_names.contains(&"add project"), "Missing 'add project'");
+        assert!(
+            op_names.contains(&"list projects"),
+            "Missing 'list projects'"
+        );
     }
 
     #[test]

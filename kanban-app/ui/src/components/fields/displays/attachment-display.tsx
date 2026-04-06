@@ -10,12 +10,7 @@
  * No file content is loaded — this is purely metadata-driven.
  */
 
-import {
-  useCallback,
-  useEffect,
-  useRef,
-  type ComponentType,
-} from "react";
+import { useCallback, useEffect, useRef, type ComponentType } from "react";
 import {
   File,
   FileImage,
@@ -212,10 +207,7 @@ interface AttachmentItemInnerProps {
 }
 
 /** Inner component — double-click opens the attachment. Context menu handled by FocusScope. */
-function AttachmentItemInner({
-  attachment,
-  Icon,
-}: AttachmentItemInnerProps) {
+function AttachmentItemInner({ attachment, Icon }: AttachmentItemInnerProps) {
   const dispatch = useDispatchCommand("attachment.open");
 
   const handleDoubleClick = useCallback(() => {

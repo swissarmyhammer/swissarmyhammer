@@ -195,7 +195,7 @@ function buildBoardData(): BoardData {
       fields: { name: testBoardName },
     },
     columns: testColumns.map(columnToEntity),
-    swimlanes: [],
+
     tags: [],
     summary: testSummary,
   };

@@ -1,8 +1,8 @@
-//! AddSwimlane command
+//! AddProject command
 
 use crate::context::KanbanContext;
 use crate::error::{KanbanError, Result};
-use crate::types::SwimlaneId;
+use crate::types::ProjectId;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use swissarmyhammer_entity::Entity;
@@ -10,33 +10,51 @@ use swissarmyhammer_operations::{
     async_trait, operation, Execute, ExecutionResult, LogEntry, Operation,
 };
 
-/// Add a new swimlane to the board
+/// Add a new project to the board
 #[operation(
     verb = "add",
-    noun = "swimlane",
-    description = "Add a new swimlane to the board"
+    noun = "project",
+    description = "Add a new project to the board"
 )]
 #[derive(Debug, Deserialize, Serialize)]
-pub struct AddSwimlane {
-    /// The swimlane ID (slug)
-    pub id: SwimlaneId,
-    /// The swimlane display name
+pub struct AddProject {
+    /// The project ID (slug)
+    pub id: ProjectId,
+    /// The project display name
     pub name: String,
-    /// Optional position in swimlane order
+    /// Optional project description
+    pub description: Option<String>,
+    /// Optional display color (6-char hex without #)
+    pub color: Option<String>,
+    /// Optional position in project order
     pub order: Option<usize>,
 }
 
-impl AddSwimlane {
-    /// Create a new AddSwimlane command
-    pub fn new(id: impl Into<SwimlaneId>, name: impl Into<String>) -> Self {
+impl AddProject {
+    /// Create a new AddProject command
+    pub fn new(id: impl Into<ProjectId>, name: impl Into<String>) -> Self {
         Self {
             id: id.into(),
             name: name.into(),
+            description: None,
+            color: None,
             order: None,
         }
     }
 
-    /// Set the order (position in swimlane list)
+    /// Set the description
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+
+    /// Set the display color
+    pub fn with_color(mut self, color: impl Into<String>) -> Self {
+        self.color = Some(color.into());
+        self
+    }
+
+    /// Set the order (position in project list)
     pub fn with_order(mut self, order: usize) -> Self {
         self.order = Some(order);
         self
@@ -44,7 +62,7 @@ impl AddSwimlane {
 }
 
 #[async_trait]
-impl Execute<KanbanContext, KanbanError> for AddSwimlane {
+impl Execute<KanbanContext, KanbanError> for AddProject {
     async fn execute(&self, ctx: &KanbanContext) -> ExecutionResult<Value, KanbanError> {
         let start = std::time::Instant::now();
         let input = serde_json::to_value(self).unwrap();
@@ -53,30 +71,37 @@ impl Execute<KanbanContext, KanbanError> for AddSwimlane {
             let ectx = ctx.entity_context().await?;
 
             // Check for duplicate ID
-            if ectx.read("swimlane", self.id.as_str()).await.is_ok() {
-                return Err(KanbanError::duplicate_id("swimlane", self.id.to_string()));
+            if ectx.read("project", self.id.as_str()).await.is_ok() {
+                return Err(KanbanError::duplicate_id("project", self.id.to_string()));
             }
 
             // Determine order
             let order = if let Some(order) = self.order {
                 order
             } else {
-                let swimlanes = ectx.list("swimlane").await?;
-                swimlanes
+                let projects = ectx.list("project").await?;
+                projects
                     .iter()
-                    .filter_map(|s| s.get("order").and_then(|v| v.as_u64()))
+                    .filter_map(|p| p.get("order").and_then(|v| v.as_u64()))
                     .max()
                     .map(|o| o as usize + 1)
                     .unwrap_or(0)
             };
 
-            let mut entity = Entity::new("swimlane", self.id.as_str());
+            let mut entity = Entity::new("project", self.id.as_str());
             entity.set("name", json!(self.name));
             entity.set("order", json!(order));
 
+            if let Some(ref description) = self.description {
+                entity.set("description", json!(description));
+            }
+            if let Some(ref color) = self.color {
+                entity.set("color", json!(color));
+            }
+
             ectx.write(&entity).await?;
 
-            Ok(swimlane_entity_to_json(&entity))
+            Ok(project_entity_to_json(&entity))
         }
         .await;
 
@@ -104,11 +129,13 @@ impl Execute<KanbanContext, KanbanError> for AddSwimlane {
     }
 }
 
-/// Convert a swimlane Entity to the API JSON format
-pub(crate) fn swimlane_entity_to_json(entity: &Entity) -> Value {
+/// Convert a project Entity to the API JSON format
+pub(crate) fn project_entity_to_json(entity: &Entity) -> Value {
     json!({
         "id": entity.id,
         "name": entity.get_str("name").unwrap_or(""),
+        "description": entity.get_str("description").unwrap_or(""),
+        "color": entity.get_str("color").unwrap_or(""),
         "order": entity.get("order").and_then(|v| v.as_u64()).unwrap_or(0),
     })
 }
@@ -132,10 +159,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_add_swimlane() {
+    async fn test_add_project() {
         let (_temp, ctx) = setup().await;
 
-        let result = AddSwimlane::new("backend", "Backend")
+        let result = AddProject::new("backend", "Backend")
             .execute(&ctx)
             .await
             .into_result()
@@ -143,19 +170,40 @@ mod tests {
 
         assert_eq!(result["id"], "backend");
         assert_eq!(result["name"], "Backend");
+        assert_eq!(result["order"], 0);
     }
 
     #[tokio::test]
-    async fn test_add_swimlane_duplicate() {
+    async fn test_add_project_with_all_fields() {
         let (_temp, ctx) = setup().await;
 
-        AddSwimlane::new("backend", "Backend")
+        let result = AddProject::new("frontend", "Frontend")
+            .with_description("The frontend project")
+            .with_color("ff0000")
+            .with_order(5)
             .execute(&ctx)
             .await
             .into_result()
             .unwrap();
 
-        let result = AddSwimlane::new("backend", "Duplicate")
+        assert_eq!(result["id"], "frontend");
+        assert_eq!(result["name"], "Frontend");
+        assert_eq!(result["description"], "The frontend project");
+        assert_eq!(result["color"], "ff0000");
+        assert_eq!(result["order"], 5);
+    }
+
+    #[tokio::test]
+    async fn test_add_project_duplicate() {
+        let (_temp, ctx) = setup().await;
+
+        AddProject::new("backend", "Backend")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        let result = AddProject::new("backend", "Duplicate")
             .execute(&ctx)
             .await
             .into_result();
@@ -163,38 +211,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_add_swimlane_with_explicit_order() {
+    async fn test_add_project_auto_order() {
         let (_temp, ctx) = setup().await;
 
-        let result = AddSwimlane::new("backend", "Backend")
-            .with_order(5)
+        AddProject::new("first", "First")
             .execute(&ctx)
             .await
             .into_result()
             .unwrap();
 
-        assert_eq!(result["order"], 5);
-    }
-
-    #[tokio::test]
-    async fn test_add_swimlane_auto_order_increments() {
-        let (_temp, ctx) = setup().await;
-
-        let first = AddSwimlane::new("backend", "Backend")
+        let result = AddProject::new("second", "Second")
             .execute(&ctx)
             .await
             .into_result()
             .unwrap();
 
-        let second = AddSwimlane::new("frontend", "Frontend")
-            .execute(&ctx)
-            .await
-            .into_result()
-            .unwrap();
-
-        // Auto-order: second should be one more than first
-        let first_order = first["order"].as_u64().unwrap();
-        let second_order = second["order"].as_u64().unwrap();
-        assert!(second_order > first_order);
+        // Second project should auto-increment order
+        assert_eq!(result["order"], 1);
     }
 }

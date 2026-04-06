@@ -251,7 +251,7 @@ describe("RustEngineContainer", () => {
         return Promise.resolve({
           board: { entity_type: "board", id: "b1", name: "Board" },
           columns: [],
-          swimlanes: [],
+
           tags: [],
           summary: {
             total_tasks: 1,
@@ -576,7 +576,7 @@ describe("RustEngineContainer", () => {
         return Promise.resolve({
           board: { entity_type: "board", id: "b1", name: "Board" },
           columns: [],
-          swimlanes: [],
+
           tags: [],
           summary: {
             total_tasks: 1,

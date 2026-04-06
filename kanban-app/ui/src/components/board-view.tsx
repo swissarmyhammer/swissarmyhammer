@@ -381,7 +381,6 @@ export function BoardView({ board, tasks }: BoardViewProps) {
         const args: Record<string, unknown> = {
           id: taskId,
           column: descriptor.columnId,
-          swimlane: getStr(entity, "position_swimlane") || null,
         };
         if (descriptor.beforeId) args.before_id = descriptor.beforeId;
         if (descriptor.afterId) args.after_id = descriptor.afterId;

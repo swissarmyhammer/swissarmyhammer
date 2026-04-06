@@ -1,34 +1,35 @@
-//! DeleteSwimlane command
+//! DeleteProject command
 
 use crate::context::KanbanContext;
 use crate::error::KanbanError;
-use crate::types::SwimlaneId;
+use crate::types::ProjectId;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use swissarmyhammer_operations::{
     async_trait, operation, Execute, ExecutionResult, LogEntry, Operation,
 };
 
-/// Delete a swimlane (fails if it has tasks)
+/// Delete a project (fails if tasks reference it)
 #[operation(
     verb = "delete",
-    noun = "swimlane",
-    description = "Delete an empty swimlane"
+    noun = "project",
+    description = "Delete a project (fails if tasks reference it)"
 )]
 #[derive(Debug, Deserialize, Serialize)]
-pub struct DeleteSwimlane {
-    /// The swimlane ID to delete
-    pub id: SwimlaneId,
+pub struct DeleteProject {
+    /// The project ID to delete
+    pub id: ProjectId,
 }
 
-impl DeleteSwimlane {
-    pub fn new(id: impl Into<SwimlaneId>) -> Self {
+impl DeleteProject {
+    /// Create a new DeleteProject command
+    pub fn new(id: impl Into<ProjectId>) -> Self {
         Self { id: id.into() }
     }
 }
 
 #[async_trait]
-impl Execute<KanbanContext, KanbanError> for DeleteSwimlane {
+impl Execute<KanbanContext, KanbanError> for DeleteProject {
     async fn execute(&self, ctx: &KanbanContext) -> ExecutionResult<Value, KanbanError> {
         let start = std::time::Instant::now();
         let input = serde_json::to_value(self).unwrap();
@@ -36,26 +37,26 @@ impl Execute<KanbanContext, KanbanError> for DeleteSwimlane {
         let result = async {
             let ectx = ctx.entity_context().await?;
 
-            // Check swimlane exists
-            ectx.read("swimlane", self.id.as_str())
+            // Check project exists (read will error if not found)
+            ectx.read("project", self.id.as_str())
                 .await
                 .map_err(KanbanError::from_entity_error)?;
 
-            // Check for tasks in this swimlane
+            // Check for tasks referencing this project
             let tasks = ectx.list("task").await?;
             let task_count = tasks
                 .iter()
-                .filter(|t| t.get_str("position_swimlane") == Some(self.id.as_str()))
+                .filter(|t| t.get_str("project") == Some(self.id.as_str()))
                 .count();
 
             if task_count > 0 {
-                return Err(KanbanError::SwimlaneNotEmpty {
+                return Err(KanbanError::ProjectHasTasks {
                     id: self.id.to_string(),
                     count: task_count,
                 });
             }
 
-            ectx.delete("swimlane", self.id.as_str()).await?;
+            ectx.delete("project", self.id.as_str()).await?;
 
             Ok(serde_json::json!({
                 "deleted": true,
@@ -92,8 +93,9 @@ impl Execute<KanbanContext, KanbanError> for DeleteSwimlane {
 mod tests {
     use super::*;
     use crate::board::InitBoard;
-    use crate::swimlane::AddSwimlane;
-    use crate::task::AddTask;
+    use crate::error::KanbanError;
+    use crate::project::add::AddProject;
+    use crate::project::get::GetProject;
     use tempfile::TempDir;
 
     async fn setup() -> (TempDir, KanbanContext) {
@@ -109,16 +111,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_delete_swimlane() {
+    async fn test_delete_project_empty() {
         let (_temp, ctx) = setup().await;
 
-        AddSwimlane::new("backend", "Backend")
+        AddProject::new("backend", "Backend")
             .execute(&ctx)
             .await
             .into_result()
             .unwrap();
 
-        let result = DeleteSwimlane::new("backend")
+        let result = DeleteProject::new("backend")
             .execute(&ctx)
             .await
             .into_result()
@@ -126,40 +128,52 @@ mod tests {
 
         assert_eq!(result["deleted"], true);
         assert_eq!(result["id"], "backend");
+
+        // Verify it is gone
+        let get_result = GetProject::new("backend").execute(&ctx).await.into_result();
+        assert!(matches!(
+            get_result,
+            Err(KanbanError::ProjectNotFound { .. })
+        ));
     }
 
     #[tokio::test]
-    async fn test_delete_swimlane_not_found() {
+    async fn test_delete_project_not_found() {
         let (_temp, ctx) = setup().await;
 
-        let result = DeleteSwimlane::new("nonexistent")
+        let result = DeleteProject::new("nonexistent")
             .execute(&ctx)
             .await
             .into_result();
 
-        assert!(matches!(result, Err(KanbanError::SwimlaneNotFound { .. })));
+        assert!(matches!(result, Err(KanbanError::ProjectNotFound { .. })));
     }
 
     #[tokio::test]
-    async fn test_delete_swimlane_fails_if_has_tasks() {
+    async fn test_delete_project_with_tasks_fails() {
         let (_temp, ctx) = setup().await;
 
-        AddSwimlane::new("backend", "Backend")
+        AddProject::new("backend", "Backend")
             .execute(&ctx)
             .await
             .into_result()
             .unwrap();
 
-        // Add a task in this swimlane
-        let mut add_task = AddTask::new("Task in swimlane");
-        add_task.swimlane = Some("backend".to_string());
-        add_task.execute(&ctx).await.into_result().unwrap();
+        // Add a task that references this project
+        let ectx = ctx.entity_context().await.unwrap();
+        let mut task = swissarmyhammer_entity::Entity::new("task", "test-task-1");
+        task.set("title", serde_json::json!("A task"));
+        task.set("project", serde_json::json!("backend"));
+        task.set("position_column", serde_json::json!("todo"));
+        task.set("position_ordinal", serde_json::json!("1000"));
+        ectx.write(&task).await.unwrap();
 
-        let result = DeleteSwimlane::new("backend")
+        // Attempting to delete the project should fail
+        let result = DeleteProject::new("backend")
             .execute(&ctx)
             .await
             .into_result();
 
-        assert!(matches!(result, Err(KanbanError::SwimlaneNotEmpty { .. })));
+        assert!(matches!(result, Err(KanbanError::ProjectHasTasks { .. })));
     }
 }

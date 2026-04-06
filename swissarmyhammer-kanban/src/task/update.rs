@@ -5,7 +5,7 @@ use crate::context::KanbanContext;
 use crate::error::{KanbanError, Result};
 use crate::tag::tag_name_exists_entity;
 use crate::task_helpers::task_entity_to_json;
-use crate::types::{ActorId, SwimlaneId, TaskId};
+use crate::types::{ActorId, TaskId};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use swissarmyhammer_entity::Entity;
@@ -26,8 +26,6 @@ pub struct UpdateTask {
     pub title: Option<String>,
     /// New description (may contain #tag patterns)
     pub description: Option<String>,
-    /// New swimlane (None = don't change, Some(None) = clear, Some(Some(x)) = set)
-    pub swimlane: Option<Option<SwimlaneId>>,
     /// Replace all assignees
     pub assignees: Option<Vec<ActorId>>,
     /// Replace all dependencies
@@ -43,7 +41,6 @@ impl UpdateTask {
             id: id.into(),
             title: None,
             description: None,
-            swimlane: None,
             assignees: None,
             depends_on: None,
             attachments: None,
@@ -59,12 +56,6 @@ impl UpdateTask {
     /// Set the description
     pub fn with_description(mut self, description: impl Into<String>) -> Self {
         self.description = Some(description.into());
-        self
-    }
-
-    /// Set the swimlane
-    pub fn with_swimlane(mut self, swimlane: Option<SwimlaneId>) -> Self {
-        self.swimlane = Some(swimlane);
         self
     }
 
@@ -106,14 +97,6 @@ impl Execute<KanbanContext, KanbanError> for UpdateTask {
             }
             if let Some(desc) = &self.description {
                 entity.set("body", serde_json::json!(desc));
-            }
-            if let Some(swimlane) = &self.swimlane {
-                match swimlane {
-                    Some(s) => entity.set("position_swimlane", serde_json::json!(s)),
-                    None => {
-                        entity.remove("position_swimlane");
-                    }
-                }
             }
             if let Some(assignees) = &self.assignees {
                 entity.set("assignees", serde_json::to_value(assignees)?);
@@ -239,78 +222,6 @@ mod tests {
             .unwrap();
 
         assert_eq!(result["description"], "New description");
-    }
-
-    #[tokio::test]
-    async fn test_update_task_swimlane_set() {
-        let (_temp, ctx) = setup().await;
-
-        use crate::swimlane::AddSwimlane;
-        AddSwimlane::new("feature", "Feature")
-            .execute(&ctx)
-            .await
-            .into_result()
-            .unwrap();
-
-        let add_result = AddTask::new("Task")
-            .execute(&ctx)
-            .await
-            .into_result()
-            .unwrap();
-        let task_id = add_result["id"].as_str().unwrap();
-
-        // Set swimlane
-        let result = UpdateTask::new(task_id)
-            .with_swimlane(Some(SwimlaneId::from("feature")))
-            .execute(&ctx)
-            .await
-            .into_result()
-            .unwrap();
-
-        assert_eq!(result["position"]["swimlane"], "feature");
-    }
-
-    #[tokio::test]
-    async fn test_update_task_swimlane_clear() {
-        let (_temp, ctx) = setup().await;
-
-        use crate::swimlane::AddSwimlane;
-        use crate::task::MoveTask;
-        AddSwimlane::new("feature", "Feature")
-            .execute(&ctx)
-            .await
-            .into_result()
-            .unwrap();
-
-        let add_result = AddTask::new("Task")
-            .execute(&ctx)
-            .await
-            .into_result()
-            .unwrap();
-        let task_id = add_result["id"].as_str().unwrap();
-
-        // Move to swimlane first
-        MoveTask::to_column_and_swimlane(task_id, "todo", "feature")
-            .execute(&ctx)
-            .await
-            .into_result()
-            .unwrap();
-
-        // Clear swimlane
-        let result = UpdateTask::new(task_id)
-            .with_swimlane(None)
-            .execute(&ctx)
-            .await
-            .into_result()
-            .unwrap();
-
-        // swimlane should be null/absent
-        assert!(
-            result["position"]["swimlane"].is_null()
-                || result["position"].get("swimlane").is_none(),
-            "swimlane should be cleared, got: {:?}",
-            result["position"]["swimlane"]
-        );
     }
 
     #[tokio::test]

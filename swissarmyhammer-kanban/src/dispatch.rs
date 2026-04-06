@@ -13,7 +13,7 @@ use crate::column::{AddColumn, DeleteColumn, GetColumn, ListColumns, UpdateColum
 use crate::perspective::{
     AddPerspective, DeletePerspective, GetPerspective, ListPerspectives, UpdatePerspective,
 };
-use crate::swimlane::{AddSwimlane, DeleteSwimlane, GetSwimlane, ListSwimlanes, UpdateSwimlane};
+use crate::project::{AddProject, DeleteProject, GetProject, ListProjects, UpdateProject};
 use crate::tag::{AddTag, DeleteTag, GetTag, ListTags, UpdateTag};
 use crate::task::{
     AddTask, ArchiveTask, AssignTask, CompleteTask, DeleteTask, GetTask, ListArchived, ListTasks,
@@ -108,9 +108,6 @@ pub async fn execute_operation(
             if let Some(column) = op.get_string("column") {
                 cmd.column = Some(column.to_string());
             }
-            if let Some(swimlane) = op.get_string("swimlane") {
-                cmd.swimlane = Some(swimlane.to_string());
-            }
             if let Some(ordinal) = op.get_string("ordinal") {
                 cmd.ordinal = Some(ordinal.to_string());
             }
@@ -184,18 +181,12 @@ pub async fn execute_operation(
                     .collect();
                 cmd = cmd.with_depends_on(dep_ids);
             }
-            if let Some(swimlane) = op.get_string("swimlane") {
-                cmd = cmd.with_swimlane(Some(swimlane.into()));
-            }
             processor.process(&cmd, ctx).await
         }
         (Verb::Move, Noun::Task) => {
             let id = req(op, "id")?;
             let column = req(op, "column")?;
             let mut cmd = MoveTask::to_column(id, column);
-            if let Some(swimlane) = op.get_string("swimlane") {
-                cmd.swimlane = Some(swimlane.into());
-            }
             if let Some(ordinal) = op.get_string("ordinal") {
                 cmd.ordinal = Some(ordinal.to_string());
             }
@@ -232,9 +223,6 @@ pub async fn execute_operation(
             if let Some(tag) = op.get_string("tag") {
                 cmd = cmd.with_tag(tag);
             }
-            if let Some(swimlane) = op.get_string("swimlane") {
-                cmd = cmd.with_swimlane(swimlane);
-            }
             if let Some(assignee) = op.get_string("assignee") {
                 cmd = cmd.with_assignee(assignee);
             }
@@ -247,9 +235,6 @@ pub async fn execute_operation(
             }
             if let Some(tag) = op.get_string("tag") {
                 cmd = cmd.with_tag(tag);
-            }
-            if let Some(swimlane) = op.get_string("swimlane") {
-                cmd = cmd.with_swimlane(swimlane);
             }
             if let Some(assignee) = op.get_string("assignee") {
                 cmd = cmd.with_assignee(assignee);
@@ -269,37 +254,6 @@ pub async fn execute_operation(
             let tag = req(op, "tag")?;
             processor.process(&UntagTask::new(id, tag), ctx).await
         }
-
-        // Swimlane operations
-        (Verb::Add, Noun::Swimlane) => {
-            let id = req(op, "id")?;
-            let name = req(op, "name")?;
-            let mut cmd = AddSwimlane::new(id, name);
-            if let Some(order) = op.get_param("order").and_then(|v| v.as_u64()) {
-                cmd = cmd.with_order(order as usize);
-            }
-            processor.process(&cmd, ctx).await
-        }
-        (Verb::Get, Noun::Swimlane) => {
-            let id = req(op, "id")?;
-            processor.process(&GetSwimlane::new(id), ctx).await
-        }
-        (Verb::Update, Noun::Swimlane) => {
-            let id = req(op, "id")?;
-            let mut cmd = UpdateSwimlane::new(id);
-            if let Some(name) = op.get_string("name") {
-                cmd = cmd.with_name(name);
-            }
-            if let Some(order) = op.get_param("order").and_then(|v| v.as_u64()) {
-                cmd = cmd.with_order(order as usize);
-            }
-            processor.process(&cmd, ctx).await
-        }
-        (Verb::Delete, Noun::Swimlane) => {
-            let id = req(op, "id")?;
-            processor.process(&DeleteSwimlane::new(id), ctx).await
-        }
-        (Verb::List, Noun::Swimlanes) => processor.process(&ListSwimlanes, ctx).await,
 
         // Actor operations
         (Verb::Add, Noun::Actor) => {
@@ -416,6 +370,49 @@ pub async fn execute_operation(
             let task_id = req(op, "task_id")?;
             processor.process(&ListAttachments::new(task_id), ctx).await
         }
+
+        // Project operations
+        (Verb::Add, Noun::Project) => {
+            let id = req(op, "id")?;
+            let name = req(op, "name")?;
+            let mut cmd = AddProject::new(id, name);
+            if let Some(description) = op.get_string("description") {
+                cmd = cmd.with_description(description);
+            }
+            if let Some(color) = op.get_string("color") {
+                cmd = cmd.with_color(color);
+            }
+            if let Some(order) = op.get_param("order").and_then(|v| v.as_u64()) {
+                cmd = cmd.with_order(order as usize);
+            }
+            processor.process(&cmd, ctx).await
+        }
+        (Verb::Get, Noun::Project) => {
+            let id = req(op, "id")?;
+            processor.process(&GetProject::new(id), ctx).await
+        }
+        (Verb::Update, Noun::Project) => {
+            let id = req(op, "id")?;
+            let mut cmd = UpdateProject::new(id);
+            if let Some(name) = op.get_string("name") {
+                cmd = cmd.with_name(name);
+            }
+            if let Some(description) = op.get_string("description") {
+                cmd = cmd.with_description(description);
+            }
+            if let Some(color) = op.get_string("color") {
+                cmd = cmd.with_color(color);
+            }
+            if let Some(order) = op.get_param("order").and_then(|v| v.as_u64()) {
+                cmd = cmd.with_order(order as usize);
+            }
+            processor.process(&cmd, ctx).await
+        }
+        (Verb::Delete, Noun::Project) => {
+            let id = req(op, "id")?;
+            processor.process(&DeleteProject::new(id), ctx).await
+        }
+        (Verb::List, Noun::Projects) => processor.process(&ListProjects, ctx).await,
 
         // Perspective operations
         (Verb::Add, Noun::Perspective) => {
@@ -1167,79 +1164,6 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // Swimlane operations
-    // ------------------------------------------------------------------
-
-    #[tokio::test]
-    async fn dispatch_add_swimlane() {
-        let (_temp, ctx) = setup().await;
-
-        let ops =
-            parse_input(json!({"op": "add swimlane", "id": "team-a", "name": "Team A"})).unwrap();
-        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
-        assert_eq!(result["id"], "team-a");
-        assert_eq!(result["name"], "Team A");
-    }
-
-    #[tokio::test]
-    async fn dispatch_get_swimlane() {
-        let (_temp, ctx) = setup().await;
-
-        // Add a swimlane first
-        let ops =
-            parse_input(json!({"op": "add swimlane", "id": "team-b", "name": "Team B"})).unwrap();
-        execute_operation(&ctx, &ops[0]).await.unwrap();
-
-        let ops = parse_input(json!({"op": "get swimlane", "id": "team-b"})).unwrap();
-        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
-        assert_eq!(result["id"], "team-b");
-        assert_eq!(result["name"], "Team B");
-    }
-
-    #[tokio::test]
-    async fn dispatch_update_swimlane() {
-        let (_temp, ctx) = setup().await;
-
-        let ops =
-            parse_input(json!({"op": "add swimlane", "id": "lane", "name": "Original"})).unwrap();
-        execute_operation(&ctx, &ops[0]).await.unwrap();
-
-        let ops =
-            parse_input(json!({"op": "update swimlane", "id": "lane", "name": "Updated"})).unwrap();
-        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
-        assert_eq!(result["name"], "Updated");
-    }
-
-    #[tokio::test]
-    async fn dispatch_delete_swimlane() {
-        let (_temp, ctx) = setup().await;
-
-        let ops =
-            parse_input(json!({"op": "add swimlane", "id": "to-delete", "name": "To Delete"}))
-                .unwrap();
-        execute_operation(&ctx, &ops[0]).await.unwrap();
-
-        let ops = parse_input(json!({"op": "delete swimlane", "id": "to-delete"})).unwrap();
-        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
-        assert_eq!(result["deleted"], true);
-    }
-
-    #[tokio::test]
-    async fn dispatch_list_swimlanes() {
-        let (_temp, ctx) = setup().await;
-
-        let ops = parse_input(json!({"op": "add swimlane", "id": "s1", "name": "S1"})).unwrap();
-        execute_operation(&ctx, &ops[0]).await.unwrap();
-
-        let ops = parse_input(json!({"op": "list swimlanes"})).unwrap();
-        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
-        let swimlanes = result["swimlanes"].as_array().unwrap();
-        assert!(!swimlanes.is_empty());
-        let ids: Vec<&str> = swimlanes.iter().filter_map(|s| s["id"].as_str()).collect();
-        assert!(ids.contains(&"s1"));
-    }
-
-    // ------------------------------------------------------------------
     // Actor operations
     // ------------------------------------------------------------------
 
@@ -1570,22 +1494,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn dispatch_add_task_with_swimlane() {
-        let (_temp, ctx) = setup().await;
-
-        // Add a swimlane first
-        let ops =
-            parse_input(json!({"op": "add swimlane", "id": "lane1", "name": "Lane 1"})).unwrap();
-        execute_operation(&ctx, &ops[0]).await.unwrap();
-
-        let ops = parse_input(json!({"op": "add task", "title": "Lane task", "swimlane": "lane1"}))
-            .unwrap();
-        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
-        assert_eq!(result["title"], "Lane task");
-        assert_eq!(result["position"]["swimlane"], "lane1");
-    }
-
-    #[tokio::test]
     async fn dispatch_add_task_with_ordinal() {
         let (_temp, ctx) = setup().await;
 
@@ -1722,47 +1630,9 @@ mod tests {
         assert!(deps.iter().any(|d| d.as_str() == Some(&dep_id)));
     }
 
-    #[tokio::test]
-    async fn dispatch_update_task_with_swimlane() {
-        let (_temp, ctx) = setup().await;
-
-        let ops = parse_input(json!({"op": "add swimlane", "id": "sl1", "name": "SL1"})).unwrap();
-        execute_operation(&ctx, &ops[0]).await.unwrap();
-
-        let ops = parse_input(json!({"op": "add task", "title": "Swim task"})).unwrap();
-        let r = execute_operation(&ctx, &ops[0]).await.unwrap();
-        let task_id = r["id"].as_str().unwrap().to_string();
-
-        let ops =
-            parse_input(json!({"op": "update task", "id": task_id, "swimlane": "sl1"})).unwrap();
-        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
-        assert_eq!(result["position"]["swimlane"], "sl1");
-    }
-
     // ------------------------------------------------------------------
     // Dispatch: move task with optional fields
     // ------------------------------------------------------------------
-
-    #[tokio::test]
-    async fn dispatch_move_task_with_swimlane() {
-        let (_temp, ctx) = setup().await;
-
-        let ops =
-            parse_input(json!({"op": "add swimlane", "id": "lane2", "name": "Lane2"})).unwrap();
-        execute_operation(&ctx, &ops[0]).await.unwrap();
-
-        let ops = parse_input(json!({"op": "add task", "title": "Move swim"})).unwrap();
-        let r = execute_operation(&ctx, &ops[0]).await.unwrap();
-        let task_id = r["id"].as_str().unwrap().to_string();
-
-        let ops = parse_input(
-            json!({"op": "move task", "id": task_id, "column": "doing", "swimlane": "lane2"}),
-        )
-        .unwrap();
-        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
-        assert_eq!(result["position"]["column"], "doing");
-        assert_eq!(result["position"]["swimlane"], "lane2");
-    }
 
     #[tokio::test]
     async fn dispatch_move_task_with_ordinal() {
@@ -1852,23 +1722,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn dispatch_next_task_with_swimlane_filter() {
-        let (_temp, ctx) = setup().await;
-
-        let ops = parse_input(json!({"op": "add swimlane", "id": "team", "name": "Team"})).unwrap();
-        execute_operation(&ctx, &ops[0]).await.unwrap();
-
-        let ops =
-            parse_input(json!({"op": "add task", "title": "In swimlane", "swimlane": "team"}))
-                .unwrap();
-        execute_operation(&ctx, &ops[0]).await.unwrap();
-
-        let ops = parse_input(json!({"op": "next task", "swimlane": "team"})).unwrap();
-        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
-        assert_eq!(result["title"], "In swimlane");
-    }
-
-    #[tokio::test]
     async fn dispatch_next_task_with_assignee_filter() {
         let (_temp, ctx) = setup().await;
 
@@ -1908,23 +1761,6 @@ mod tests {
         let ops = parse_input(json!({"op": "list tasks", "tag": "bug"})).unwrap();
         let result = execute_operation(&ctx, &ops[0]).await.unwrap();
         assert_eq!(result["count"], 1);
-    }
-
-    #[tokio::test]
-    async fn dispatch_list_tasks_with_swimlane_filter() {
-        let (_temp, ctx) = setup().await;
-
-        let ops = parse_input(json!({"op": "add swimlane", "id": "core", "name": "Core"})).unwrap();
-        execute_operation(&ctx, &ops[0]).await.unwrap();
-
-        let ops = parse_input(json!({"op": "add task", "title": "Core task", "swimlane": "core"}))
-            .unwrap();
-        execute_operation(&ctx, &ops[0]).await.unwrap();
-
-        let ops = parse_input(json!({"op": "list tasks", "swimlane": "core"})).unwrap();
-        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
-        assert_eq!(result["count"], 1);
-        assert_eq!(result["tasks"][0]["title"], "Core task");
     }
 
     #[tokio::test]
@@ -2004,35 +1840,6 @@ mod tests {
         let ops = parse_input(json!({"op": "update column", "id": "todo", "order": 5})).unwrap();
         let result = execute_operation(&ctx, &ops[0]).await.unwrap();
         assert_eq!(result["order"], 5);
-    }
-
-    // ------------------------------------------------------------------
-    // Dispatch: swimlane with order
-    // ------------------------------------------------------------------
-
-    #[tokio::test]
-    async fn dispatch_add_swimlane_with_order() {
-        let (_temp, ctx) = setup().await;
-
-        let ops = parse_input(
-            json!({"op": "add swimlane", "id": "ordered", "name": "Ordered", "order": 3}),
-        )
-        .unwrap();
-        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
-        assert_eq!(result["id"], "ordered");
-        assert_eq!(result["order"], 3);
-    }
-
-    #[tokio::test]
-    async fn dispatch_update_swimlane_with_order() {
-        let (_temp, ctx) = setup().await;
-
-        let ops = parse_input(json!({"op": "add swimlane", "id": "sl", "name": "SL"})).unwrap();
-        execute_operation(&ctx, &ops[0]).await.unwrap();
-
-        let ops = parse_input(json!({"op": "update swimlane", "id": "sl", "order": 7})).unwrap();
-        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
-        assert_eq!(result["order"], 7);
     }
 
     // ------------------------------------------------------------------

@@ -11,6 +11,7 @@ pub mod drag_commands;
 pub mod entity_commands;
 pub mod file_commands;
 pub mod perspective_commands;
+pub mod project_commands;
 pub mod task_commands;
 pub mod ui_commands;
 
@@ -102,6 +103,16 @@ pub fn register_commands() -> HashMap<String, Arc<dyn Command>> {
     map.insert(
         "column.reorder".into(),
         Arc::new(column_commands::ColumnReorderCmd),
+    );
+
+    // Project commands
+    map.insert(
+        "project.add".into(),
+        Arc::new(project_commands::AddProjectCmd),
+    );
+    map.insert(
+        "project.delete".into(),
+        Arc::new(project_commands::DeleteProjectCmd),
     );
 
     // UI commands
@@ -277,9 +288,9 @@ mod tests {
         //          dismiss, undo, redo, keymap.vim, keymap.cua, keymap.emacs)
         // + 5 file (switchBoard, closeBoard, newBoard, openBoard, window.new)
         // + 3 drag + 11 perspective (8 + 3 sort) + 2 attachment (open, reveal) = 55
-        // + 1 ui.mode.set = 56
+        // + 2 project (add, delete) + 1 ui.mode.set = 58
         // Note: clipboard entries are duplicated in the source but HashMap deduplicates.
-        assert_eq!(cmds.len(), 56);
+        assert_eq!(cmds.len(), 58);
     }
 
     // =========================================================================

@@ -88,6 +88,37 @@ You can list, update, or delete tags as the project evolves:
 
 Deleting a tag automatically removes it from all tasks.
 
+## Using Projects to Group Tasks
+
+Projects let you group related tasks under a shared initiative. Create a project for each plan or workstream, then assign tasks to it.
+
+### Creating a Project
+
+```json
+{"op": "add project", "id": "auth-migration", "name": "Auth Migration", "description": "Migrate from session to JWT auth", "color": "0066cc"}
+```
+
+Each project needs an `id` (slug) and `name`. Optional fields: `description`, `color` (6-char hex, no `#`), `order` (position).
+
+### Managing Projects
+
+```json
+{"op": "list projects"}
+{"op": "get project", "id": "auth-migration"}
+{"op": "update project", "id": "auth-migration", "name": "JWT Auth Migration"}
+{"op": "delete project", "id": "auth-migration"}
+```
+
+Deleting a project fails if tasks still reference it -- reassign or complete those tasks first.
+
+### Workflow
+
+When starting a plan with multiple related tasks:
+
+1. Create a project for the initiative
+2. Create tasks and group them under the project
+3. Use projects to filter and focus work in the UI
+
 ## Guidelines
 
 - Each kanban card can have subtasks — you need to do all of these subtasks to complete the card

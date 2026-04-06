@@ -39,7 +39,7 @@ export function PerspectiveTabBar() {
     usePerspectives();
   const { activeView } = useViews();
   const dispatchPerspectiveSave = useDispatchCommand("perspective.save");
-  const dispatchPerspectiveDelete = useDispatchCommand("perspective.delete");
+  const dispatchPerspectiveRename = useDispatchCommand("perspective.rename");
 
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
@@ -84,28 +84,21 @@ export function PerspectiveTabBar() {
     requestAnimationFrame(() => inputRef.current?.select());
   }, []);
 
-  /** Commit the rename by saving the perspective with the new name. */
+  /** Commit the rename atomically via the backend rename command. */
   const commitRename = useCallback(
     async (id: string, oldName: string) => {
       const newName = renameValue.trim();
       setRenamingId(null);
       if (!newName || newName === oldName) return;
 
-      // Delete old name then save with new name, keeping the same view kind.
-      const perspective = perspectives.find((p) => p.id === id);
-      if (!perspective) return;
-
       try {
-        await dispatchPerspectiveDelete({ args: { name: oldName } });
-        await dispatchPerspectiveSave({
-          args: { name: newName, view: perspective.view },
-        });
+        await dispatchPerspectiveRename({ args: { id, new_name: newName } });
         await refresh();
       } catch (e) {
         console.error("Failed to rename perspective:", e);
       }
     },
-    [renameValue, perspectives, refresh],
+    [renameValue, dispatchPerspectiveRename, refresh],
   );
 
   // Don't render when there's no active view.

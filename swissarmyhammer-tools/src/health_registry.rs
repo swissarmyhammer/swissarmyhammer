@@ -227,6 +227,7 @@ mod tests {
     /// by creating a temp directory with markdown files and running with it
     /// as the current directory.
     #[test]
+    #[serial_test::serial(cwd)]
     fn test_prompt_health_checker_with_local_prompts_directory() {
         let tmp = TempDir::new().unwrap();
         let prompts_dir = tmp.path().join(".prompts");
@@ -276,6 +277,7 @@ mod tests {
     /// Test that PromptHealthChecker detects YAML parsing errors when a prompt file
     /// has invalid YAML frontmatter.
     #[test]
+    #[serial_test::serial(cwd)]
     fn test_prompt_health_checker_detects_yaml_errors() {
         let tmp = TempDir::new().unwrap();
         let prompts_dir = tmp.path().join(".prompts");

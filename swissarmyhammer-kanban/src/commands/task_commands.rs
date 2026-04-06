@@ -52,8 +52,6 @@ impl Command for AddTaskCmd {
 ///   server-side from neighbor ordinals via `compute_ordinal_for_drop`), or
 /// - `before_id` and/or `after_id` args (task IDs of the neighbors; ordinal is
 ///   computed server-side from their ordinals).
-///
-/// Optional: `swimlane` arg.
 pub struct MoveTaskCmd;
 
 #[async_trait]
@@ -249,10 +247,6 @@ impl Command for MoveTaskCmd {
             let ordinal =
                 crate::task_helpers::compute_ordinal_for_drop(&column_tasks, drop_index as usize);
             op = op.with_ordinal(ordinal.as_str());
-        }
-
-        if let Some(swimlane) = ctx.arg("swimlane").and_then(|v| v.as_str()) {
-            op.swimlane = Some(swimlane.into());
         }
 
         run_op(&op, &kanban).await
@@ -695,39 +689,6 @@ mod tests {
         );
         let result = cmd.execute(&ctx).await.unwrap();
         assert_eq!(result["position"]["column"], "doing");
-    }
-
-    #[tokio::test]
-    async fn move_task_cmd_with_swimlane() {
-        let (_temp, kctx) = setup().await;
-        // Create a swimlane
-        crate::swimlane::AddSwimlane::new("lane", "Lane")
-            .execute(&kctx)
-            .await
-            .into_result()
-            .unwrap();
-
-        let add_result = AddTask::new("Lane move")
-            .execute(&kctx)
-            .await
-            .into_result()
-            .unwrap();
-        let task_id = add_result["id"].as_str().unwrap().to_string();
-        let kanban = Arc::new(kctx);
-        let cmd = MoveTaskCmd;
-
-        let mut args = HashMap::new();
-        args.insert("column".into(), serde_json::json!("doing"));
-        args.insert("swimlane".into(), serde_json::json!("lane"));
-        let ctx = make_ctx(
-            Arc::clone(&kanban),
-            vec![format!("task:{task_id}")],
-            None,
-            args,
-        );
-        let result = cmd.execute(&ctx).await.unwrap();
-        assert_eq!(result["position"]["column"], "doing");
-        assert_eq!(result["position"]["swimlane"], "lane");
     }
 
     #[tokio::test]

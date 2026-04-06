@@ -83,13 +83,7 @@ export function BadgeListDisplay({ field, value, entity, mode }: DisplayProps) {
         return buildMoniker(targetEntityType ?? "tag", val);
       }
     });
-  }, [
-    values,
-    isComputedSlug,
-    targetEntities,
-    displayField,
-    targetEntityType,
-  ]);
+  }, [values, isComputedSlug, targetEntities, displayField, targetEntityType]);
 
   // Build claimWhen predicates so nav.left/nav.right moves focus between pills.
   const pillClaimPredicates = useMemo(() => {
