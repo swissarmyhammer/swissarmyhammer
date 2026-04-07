@@ -1520,13 +1520,43 @@ async fn flush_and_emit_for_handle(app: &AppHandle, handle: &BoardHandle) {
                 });
             }
             "item-changed" => {
-                // The watcher didn't detect a change (hash unchanged =
-                // idempotent write). Nothing actually changed on disk.
-                tracing::debug!(
-                    entity_type = store_name,
-                    id = id,
-                    "store item-changed but watcher saw no diff — skipping"
-                );
+                // The watcher didn't produce an event for this entity.
+                // This can happen when the async file watcher's debounce
+                // fires between the command write and this synchronous flush,
+                // consuming the change and updating the cache. Read the
+                // entity's current fields from disk and emit a synthetic
+                // EntityFieldChanged so that enrich_computed_fields can
+                // append computed fields (tags, progress, etc.).
+                if let Some(fields) = crate::watcher::read_entity_fields_from_disk(
+                    &kanban_root,
+                    &handle.store_roots,
+                    store_name,
+                    id,
+                ) {
+                    let changes: Vec<crate::watcher::FieldChange> = fields
+                        .into_iter()
+                        .map(|(field, value)| crate::watcher::FieldChange { field, value })
+                        .collect();
+                    if !changes.is_empty() {
+                        tracing::info!(
+                            entity_type = store_name,
+                            id = id,
+                            change_count = changes.len(),
+                            "store item-changed: async watcher race recovery, emitting synthetic event"
+                        );
+                        events.push(crate::watcher::WatchEvent::EntityFieldChanged {
+                            entity_type: store_name.to_string(),
+                            id: id.to_string(),
+                            changes,
+                        });
+                    }
+                } else {
+                    tracing::debug!(
+                        entity_type = store_name,
+                        id = id,
+                        "store item-changed but could not read entity from disk — skipping"
+                    );
+                }
             }
             "item-removed" => {
                 events.push(crate::watcher::WatchEvent::EntityRemoved {
@@ -1616,8 +1646,9 @@ async fn enrich_computed_fields(
             continue;
         }
 
-        // Read the entity through EntityContext to get derived computed values.
-        let entity = match ectx.read(entity_type, id).await {
+        // Read the entity through EntityContext to get ComputeEngine-derived values
+        // (e.g. tags from parse-body-tags, progress from parse-body-progress).
+        let mut entity = match ectx.read(entity_type, id).await {
             Ok(e) => e,
             Err(e) => {
                 tracing::warn!(
@@ -1629,20 +1660,73 @@ async fn enrich_computed_fields(
             }
         };
 
+        // For task entities, run the full enrichment pipeline which sets
+        // virtual_tags, filter_tags, ready, blocked_by, blocks, etc.
+        // The ComputeEngine stubs for these fields return empty arrays;
+        // the real values come from enrich_task_entity.
+        if entity_type == "task" {
+            let all_tasks = match ectx.list("task").await {
+                Ok(t) => t,
+                Err(e) => {
+                    tracing::warn!(
+                        "enrich_computed_fields: failed to list tasks for enrichment: {e}"
+                    );
+                    vec![]
+                }
+            };
+            let mut columns = ectx.list("column").await.unwrap_or_default();
+            columns.sort_by_key(|c| c.get("order").and_then(|v| v.as_u64()).unwrap_or(0) as usize);
+            let terminal_id = columns
+                .last()
+                .map(|c| c.id.to_string())
+                .unwrap_or_else(|| "done".to_string());
+            let registry = default_virtual_tag_registry();
+            enrich_task_entity(&mut entity, &all_tasks, &terminal_id, registry);
+        }
+
         // Append computed field values that aren't already in the changes.
         let existing: std::collections::HashSet<String> =
             changes.iter().map(|c| c.field.clone()).collect();
-        for name in computed_names {
-            if existing.contains(name) {
+        let raw_change_count = changes.len();
+        for name in &computed_names {
+            if existing.contains(*name) {
+                tracing::debug!(
+                    entity_type = entity_type,
+                    id = id,
+                    field = *name,
+                    "enrich_computed_fields: computed field already in changes, skipping"
+                );
                 continue;
             }
-            if let Some(value) = entity.fields.get(name) {
+            if let Some(value) = entity.fields.get(*name) {
+                tracing::info!(
+                    entity_type = entity_type,
+                    id = id,
+                    field = *name,
+                    value = %value,
+                    "enrich_computed_fields: appending computed field"
+                );
                 changes.push(crate::watcher::FieldChange {
                     field: name.to_string(),
                     value: value.clone(),
                 });
+            } else {
+                tracing::warn!(
+                    entity_type = entity_type,
+                    id = id,
+                    field = *name,
+                    "enrich_computed_fields: computed field not present in entity"
+                );
             }
         }
+        tracing::info!(
+            entity_type = entity_type,
+            id = id,
+            raw_changes = raw_change_count,
+            enriched_changes = changes.len(),
+            computed_fields = ?computed_names,
+            "enrich_computed_fields: done"
+        );
     }
 
     events

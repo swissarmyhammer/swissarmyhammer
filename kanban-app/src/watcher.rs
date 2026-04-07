@@ -214,7 +214,6 @@ pub fn new_entity_cache(kanban_root: &Path, store_roots: &[PathBuf]) -> EntityCa
 ///
 /// Call this from command execution paths so the watcher knows
 /// the content we just wrote and doesn't treat it as an external change.
-#[cfg(test)]
 pub fn update_cache(cache: &EntityCache, path: &Path) {
     let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     if let Some(cached) = cache_file(&canonical) {
@@ -222,6 +221,44 @@ pub fn update_cache(cache: &EntityCache, path: &Path) {
             map.insert(canonical, cached);
         }
     }
+}
+
+/// Read the current (persisted) fields for an entity from disk.
+///
+/// Searches the store roots for the entity file matching `entity_type` and `id`,
+/// parses it, and returns the raw field map. Returns `None` if the entity file
+/// is not found or cannot be parsed.
+///
+/// This is used to construct synthetic `EntityFieldChanged` events when the
+/// async file watcher has already consumed a change (race recovery).
+pub fn read_entity_fields_from_disk(
+    kanban_root: &Path,
+    store_roots: &[PathBuf],
+    entity_type: &str,
+    id: &str,
+) -> Option<HashMap<String, serde_json::Value>> {
+    // Entity files live in <kanban_root>/<entity_type>s/<id>.<ext>
+    let dir_name = format!("{entity_type}s");
+    for root in store_roots {
+        if root.file_name().and_then(|n| n.to_str()) == Some(&dir_name) {
+            for ext in ENTITY_EXTENSIONS {
+                let path = root.join(format!("{id}.{ext}"));
+                if path.exists() {
+                    let content = std::fs::read_to_string(&path).ok()?;
+                    return parse_entity_file(&path, &content);
+                }
+            }
+        }
+    }
+    // Root-level entity files (e.g. board.yaml)
+    for ext in ENTITY_EXTENSIONS {
+        let path = kanban_root.join(format!("{id}.{ext}"));
+        if path.exists() {
+            let content = std::fs::read_to_string(&path).ok()?;
+            return parse_entity_file(&path, &content);
+        }
+    }
+    None
 }
 
 /// Deduplicate a list of watch events, keeping the last occurrence per
