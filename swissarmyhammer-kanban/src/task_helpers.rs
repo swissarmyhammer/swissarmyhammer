@@ -235,33 +235,42 @@ pub fn enrich_task_entity(
     entity.set("filter_tags", json!(union));
 }
 
-/// Enrich all task entities in a single O(N) pass using pre-built indexes.
+/// Pre-built indexes for O(1) per-task dependency lookups during batch enrichment.
+struct DependencyIndexes {
+    /// dep_id -> list of task_ids that depend on it (i.e. "blocks")
+    blocks: HashMap<String, Vec<String>>,
+    /// task_id -> list of dep_ids it depends on
+    depends_on: HashMap<String, Vec<String>>,
+    /// task_id -> position_column value
+    positions: HashMap<String, String>,
+    /// Lightweight entity stubs for virtual tag evaluation.
+    ///
+    /// Strategies need an immutable `&[Entity]` while we mutate each entity in
+    /// the enrichment loop, but they only read `id`, `position_column`, and
+    /// `depends_on` from the slice. Stubs contain only those fields, avoiding
+    /// full clones of large descriptions.
+    stubs: Vec<Entity>,
+}
+
+/// Build dependency, position, and stub indexes from a task entity slice.
 ///
-/// This is the batch alternative to calling `enrich_task_entity` in a loop,
-/// which would be O(N^2) because each call scans all tasks for dependency
-/// lookups. This function pre-builds `blocks` and `depends_on` indexes so
-/// the per-task enrichment is O(1).
-pub fn enrich_all_task_entities(
-    entities: &mut [Entity],
-    terminal_column_id: &str,
-    registry: &VirtualTagRegistry,
-) {
-    // Build dependency index: dep_id -> list of task_ids that depend on it (i.e. "blocks")
-    let mut blocks_index: HashMap<String, Vec<String>> = HashMap::new();
-    let mut depends_on_index: HashMap<String, Vec<String>> = HashMap::new();
+/// Returns indexes that enable O(1) per-task lookups for blocks, depends_on,
+/// position columns, and virtual tag evaluation during batch enrichment.
+fn build_dependency_indexes(entities: &[Entity]) -> DependencyIndexes {
+    let mut blocks: HashMap<String, Vec<String>> = HashMap::new();
+    let mut depends_on: HashMap<String, Vec<String>> = HashMap::new();
 
     for entity in entities.iter() {
         let deps = entity.get_string_list("depends_on");
         for dep_id in &deps {
-            blocks_index
+            blocks
                 .entry(dep_id.clone())
                 .or_default()
                 .push(entity.id.to_string());
         }
-        depends_on_index.insert(entity.id.to_string(), deps);
+        depends_on.insert(entity.id.to_string(), deps);
     }
 
-    // Build position map for ready/blocked computation
     let positions: HashMap<String, String> = entities
         .iter()
         .map(|e| {
@@ -272,13 +281,6 @@ pub fn enrich_all_task_entities(
         })
         .collect();
 
-    // Build lightweight entity stubs for virtual tag evaluation.
-    //
-    // Strategies need an immutable `&[Entity]` while we mutate each entity in
-    // the loop below, but they only read `id`, `position_column`, and
-    // `depends_on` from the slice. Instead of cloning every entity (which
-    // duplicates all fields including large descriptions), we build minimal
-    // stubs containing only the fields strategies actually inspect.
     let stubs: Vec<Entity> = entities
         .iter()
         .map(|e| {
@@ -293,52 +295,87 @@ pub fn enrich_all_task_entities(
         })
         .collect();
 
-    for entity in entities.iter_mut() {
-        let progress = task_progress(entity);
-        entity.set("progress_fraction", json!(progress));
+    DependencyIndexes {
+        blocks,
+        depends_on,
+        positions,
+        stubs,
+    }
+}
 
-        // Ready: all deps in terminal column
-        let deps = depends_on_index
-            .get(&entity.id.to_string())
-            .cloned()
-            .unwrap_or_default();
-        let blocked_by: Vec<String> = deps
-            .iter()
-            .filter(|dep_id| {
-                positions
-                    .get(*dep_id)
-                    .map(|col| col != terminal_column_id)
-                    .unwrap_or(true) // Missing dependency = blocked (safer default)
-            })
-            .cloned()
-            .collect();
-        let ready = blocked_by.is_empty();
-        entity.set("ready", json!(ready));
-        entity.set("blocked_by", json!(blocked_by));
+/// Enrich a single task entity using pre-built indexes.
+///
+/// Sets progress_fraction, ready, blocked_by, blocks, virtual_tags, and
+/// filter_tags fields. Uses the indexes for O(1) dependency lookups instead
+/// of scanning the full task list.
+fn enrich_task_from_indexes(
+    entity: &mut Entity,
+    indexes: &DependencyIndexes,
+    terminal_column_id: &str,
+    registry: &VirtualTagRegistry,
+) {
+    entity.set("progress_fraction", json!(task_progress(entity)));
 
-        // Blocks: tasks that depend on this one
-        let blocks = blocks_index
-            .get(&entity.id.to_string())
-            .cloned()
-            .unwrap_or_default();
-        entity.set("blocks", json!(blocks));
+    // Ready: all deps in terminal column
+    let deps = indexes
+        .depends_on
+        .get(&entity.id.to_string())
+        .cloned()
+        .unwrap_or_default();
+    let blocked_by: Vec<String> = deps
+        .iter()
+        .filter(|dep_id| {
+            indexes
+                .positions
+                .get(*dep_id)
+                .map(|col| col != terminal_column_id)
+                .unwrap_or(true) // Missing dependency = blocked (safer default)
+        })
+        .cloned()
+        .collect();
+    entity.set("ready", json!(blocked_by.is_empty()));
+    entity.set("blocked_by", json!(blocked_by));
 
-        // Virtual tags: evaluate strategies against lightweight stubs
-        let mut vtag_ctx = EntityFilterContext::for_entity(entity, &stubs);
-        vtag_ctx.insert(TerminalColumnId(terminal_column_id.to_string()));
-        let virtual_slugs = registry.evaluate(&vtag_ctx);
-        entity.set("virtual_tags", json!(virtual_slugs));
+    // Blocks: tasks that depend on this one
+    let blocks = indexes
+        .blocks
+        .get(&entity.id.to_string())
+        .cloned()
+        .unwrap_or_default();
+    entity.set("blocks", json!(blocks));
 
-        // filter_tags: union of body-parsed tags + virtual tags
-        let body_tags = entity.get_string_list("tags");
-        let mut union: Vec<String> = body_tags;
-        let existing: HashSet<String> = union.iter().cloned().collect();
-        for slug in &virtual_slugs {
-            if !existing.contains(slug) {
-                union.push(slug.clone());
-            }
+    // Virtual tags: evaluate strategies against lightweight stubs
+    let mut vtag_ctx = EntityFilterContext::for_entity(entity, &indexes.stubs);
+    vtag_ctx.insert(TerminalColumnId(terminal_column_id.to_string()));
+    let virtual_slugs = registry.evaluate(&vtag_ctx);
+    entity.set("virtual_tags", json!(virtual_slugs));
+
+    // filter_tags: union of body-parsed tags + virtual tags
+    let body_tags = entity.get_string_list("tags");
+    let mut union: Vec<String> = body_tags;
+    let existing: HashSet<String> = union.iter().cloned().collect();
+    for slug in &virtual_slugs {
+        if !existing.contains(slug) {
+            union.push(slug.clone());
         }
-        entity.set("filter_tags", json!(union));
+    }
+    entity.set("filter_tags", json!(union));
+}
+
+/// Enrich all task entities in a single O(N) pass using pre-built indexes.
+///
+/// This is the batch alternative to calling `enrich_task_entity` in a loop,
+/// which would be O(N^2) because each call scans all tasks for dependency
+/// lookups. This function pre-builds `blocks` and `depends_on` indexes so
+/// the per-task enrichment is O(1).
+pub fn enrich_all_task_entities(
+    entities: &mut [Entity],
+    terminal_column_id: &str,
+    registry: &VirtualTagRegistry,
+) {
+    let indexes = build_dependency_indexes(entities);
+    for entity in entities.iter_mut() {
+        enrich_task_from_indexes(entity, &indexes, terminal_column_id, registry);
     }
 }
 
@@ -398,6 +435,42 @@ pub fn task_entity_to_rich_json(entity: &Entity) -> Value {
     result["filter_tags"] = json!(entity.get_string_list("filter_tags"));
 
     result
+}
+
+/// Adapter that maps filter DSL atoms to enriched task entity fields.
+///
+/// Uses `filter_tags` (union of body tags + virtual tags) for `#tag` lookups,
+/// `assignees` for `@user` lookups, and `depends_on` + `id` for `^ref` lookups.
+/// Entities must be enriched (via `enrich_task_entity` or `enrich_all_task_entities`)
+/// before evaluation — unenriched entities won't have `filter_tags`.
+pub struct TaskFilterAdapter<'a> {
+    /// The enriched task entity to evaluate against.
+    pub entity: &'a Entity,
+}
+
+impl<'a> swissarmyhammer_filter_expr::FilterContext for TaskFilterAdapter<'a> {
+    fn has_tag(&self, tag: &str) -> bool {
+        self.entity
+            .get_string_list("filter_tags")
+            .iter()
+            .any(|t| t.eq_ignore_ascii_case(tag))
+    }
+
+    fn has_assignee(&self, user: &str) -> bool {
+        self.entity
+            .get_string_list("assignees")
+            .iter()
+            .any(|a| a.eq_ignore_ascii_case(user))
+    }
+
+    fn has_ref(&self, id: &str) -> bool {
+        self.entity.id.as_ref() == id
+            || self
+                .entity
+                .get_string_list("depends_on")
+                .iter()
+                .any(|r| r == id)
+    }
 }
 
 #[cfg(test)]
