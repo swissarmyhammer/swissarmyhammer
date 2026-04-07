@@ -1,9 +1,8 @@
 //! AddTask command
 
-use crate::auto_color;
 use crate::context::KanbanContext;
 use crate::error::{KanbanError, Result};
-use crate::tag::tag_name_exists_entity;
+use crate::task_helpers;
 use crate::task_helpers::task_entity_to_json;
 use crate::types::{ActorId, Ordinal, TaskId};
 use serde::{Deserialize, Serialize};
@@ -38,6 +37,8 @@ pub struct AddTask {
     /// Task IDs this task depends on
     #[serde(default)]
     pub depends_on: Vec<TaskId>,
+    /// Project this task belongs to (reference to a project entity ID)
+    pub project: Option<String>,
 }
 
 impl AddTask {
@@ -50,6 +51,7 @@ impl AddTask {
             ordinal: None,
             assignees: Vec::new(),
             depends_on: Vec::new(),
+            project: None,
         }
     }
 
@@ -77,6 +79,68 @@ impl AddTask {
         self.depends_on = deps;
         self
     }
+
+    /// Set the project reference
+    pub fn with_project(mut self, project: impl Into<String>) -> Self {
+        self.project = Some(project.into());
+        self
+    }
+}
+
+/// Resolve which column to place a new task in.
+///
+/// Uses the explicit column if provided, otherwise finds the first column
+/// (lowest order) on the board.
+async fn resolve_column(
+    explicit: &Option<String>,
+    ectx: &swissarmyhammer_entity::EntityContext,
+) -> Result<String> {
+    match explicit {
+        Some(col) => Ok(col.clone()),
+        None => {
+            let columns = ectx.list("column").await?;
+            let first = columns
+                .iter()
+                .min_by_key(|c| c.get("order").and_then(|v| v.as_u64()).unwrap_or(0))
+                .ok_or_else(|| KanbanError::parse("board has no columns — cannot add task"))?;
+            Ok(first.id.to_string())
+        }
+    }
+}
+
+/// Compute the ordinal for appending a task at the end of a column.
+///
+/// Uses the explicit ordinal if provided, otherwise scans existing tasks
+/// in the target column and returns an ordinal after the last one.
+async fn compute_append_ordinal(
+    explicit: &Option<String>,
+    column: &str,
+    ectx: &swissarmyhammer_entity::EntityContext,
+) -> Result<String> {
+    match explicit {
+        Some(ord) => Ok(ord.clone()),
+        None => {
+            let tasks = ectx.list("task").await?;
+            let last_ordinal = tasks.iter().fold(None::<Ordinal>, |acc, t| {
+                if t.get_str("position_column").unwrap_or("") != column {
+                    return acc;
+                }
+                let ord = Ordinal::from_string(
+                    t.get_str("position_ordinal")
+                        .unwrap_or(Ordinal::DEFAULT_STR),
+                );
+                Some(match acc {
+                    None => ord,
+                    Some(ref prev) if ord > *prev => ord,
+                    Some(prev) => prev,
+                })
+            });
+            Ok(match last_ordinal {
+                Some(last) => Ordinal::after(&last).as_str().to_string(),
+                None => Ordinal::first().as_str().to_string(),
+            })
+        }
+    }
 }
 
 #[async_trait]
@@ -87,52 +151,9 @@ impl Execute<KanbanContext, KanbanError> for AddTask {
 
         let result: Result<Value> = async {
             let ectx = ctx.entity_context().await?;
+            let column = resolve_column(&self.column, &ectx).await?;
+            let ordinal = compute_append_ordinal(&self.ordinal, &column, &ectx).await?;
 
-            // Determine column
-            let column = match &self.column {
-                Some(col) => col.clone(),
-                None => {
-                    let columns = ectx.list("column").await?;
-                    let first = columns
-                        .iter()
-                        .min_by_key(|c| c.get("order").and_then(|v| v.as_u64()).unwrap_or(0))
-                        .ok_or_else(|| {
-                            KanbanError::parse("board has no columns — cannot add task")
-                        })?;
-                    first.id.to_string()
-                }
-            };
-
-            // Calculate ordinal at end of target column
-            let ordinal = match &self.ordinal {
-                Some(ord) => ord.clone(),
-                None => {
-                    let tasks = ectx.list("task").await?;
-                    let mut last_ordinal: Option<Ordinal> = None;
-
-                    for t in &tasks {
-                        let t_col = t.get_str("position_column").unwrap_or("");
-                        if t_col == column {
-                            let ord_str = t
-                                .get_str("position_ordinal")
-                                .unwrap_or(Ordinal::DEFAULT_STR);
-                            let ord = Ordinal::from_string(ord_str);
-                            last_ordinal = Some(match last_ordinal {
-                                None => ord,
-                                Some(ref o) if ord > *o => ord,
-                                Some(o) => o,
-                            });
-                        }
-                    }
-
-                    match last_ordinal {
-                        Some(last) => Ordinal::after(&last).as_str().to_string(),
-                        None => Ordinal::first().as_str().to_string(),
-                    }
-                }
-            };
-
-            // Create entity
             let task_id = TaskId::new();
             let mut entity = Entity::new("task", task_id.as_str());
             entity.set("title", json!(self.title));
@@ -146,23 +167,12 @@ impl Execute<KanbanContext, KanbanError> for AddTask {
             if !self.depends_on.is_empty() {
                 entity.set("depends_on", serde_json::to_value(&self.depends_on)?);
             }
+            if let Some(project) = &self.project {
+                entity.set("project", json!(project));
+            }
 
             ectx.write(&entity).await?;
-
-            // Auto-create Tag entities for any #tag patterns in description.
-            // Parse directly from body — the computed `tags` field isn't populated yet.
-            let body = entity.get_str("body").unwrap_or("");
-            let tags = crate::tag_parser::parse_tags(body);
-            for tag_name in &tags {
-                if !tag_name_exists_entity(&ectx, tag_name).await {
-                    let color = auto_color::auto_color(tag_name).to_string();
-                    let tag_id = ulid::Ulid::new().to_string();
-                    let mut tag_entity = Entity::new("tag", tag_id.as_str());
-                    tag_entity.set("tag_name", json!(tag_name));
-                    tag_entity.set("color", json!(color));
-                    ectx.write(&tag_entity).await?;
-                }
-            }
+            task_helpers::auto_create_body_tags(&entity, &ectx).await?;
 
             Ok(task_entity_to_json(&entity))
         }
@@ -327,5 +337,53 @@ mod tests {
 
         // Second should be after first
         assert!(ordinal2 > ordinal1);
+    }
+
+    #[tokio::test]
+    async fn test_add_task_project_field_null_when_unset() {
+        let (_temp, ctx) = setup().await;
+
+        let result = AddTask::new("Task without project")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        assert!(
+            result.get("project").is_some(),
+            "project field should be present in task JSON"
+        );
+        assert!(
+            result["project"].is_null(),
+            "project should be null when unset"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_add_task_with_project() {
+        let (_temp, ctx) = setup().await;
+
+        // Create a project entity first
+        use crate::project::AddProject;
+        let project = AddProject::new("my-project", "My Project")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let project_id = project["id"].as_str().unwrap();
+
+        // Create a task with that project
+        let result = AddTask::new("Task with project")
+            .with_project(project_id)
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        assert_eq!(
+            result["project"].as_str().unwrap(),
+            project_id,
+            "task should have the project set"
+        );
     }
 }

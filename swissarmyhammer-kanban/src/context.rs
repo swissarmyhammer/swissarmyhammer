@@ -831,7 +831,7 @@ type:
 
         // Entity fields should resolve to field definitions
         let task_fields = fields.fields_for_entity("task");
-        assert_eq!(task_fields.len(), 11); // title, tags, progress, assignees, depends_on, body, position_column, position_ordinal, attachments, virtual_tags, filter_tags
+        assert_eq!(task_fields.len(), 12); // title, tags, project, progress, assignees, depends_on, body, position_column, position_ordinal, attachments, virtual_tags, filter_tags
     }
 
     // =========================================================================

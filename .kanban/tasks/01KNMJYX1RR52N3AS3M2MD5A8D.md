@@ -30,6 +30,8 @@ The fix: replace the `<input>` with the `TextEditor` CM6 component from `@/compo
 
 `commitRename` currently reads `renameValue` from React state via closure. Since `TextEditor.onCommit` passes the final text directly, refactor `commitRename` to accept the new name as a parameter instead of relying on stale state.
 
+Visually this needs to look much more like one of our fields with a 
+
 ## Acceptance Criteria
 - [ ] Perspective tab rename uses CM6 TextEditor, not a plain `<input>`
 - [ ] In vim mode: Escape from insert mode preserves text (goes to normal), Escape from normal commits the rename
