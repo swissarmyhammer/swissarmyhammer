@@ -15,6 +15,7 @@ import {
   horizontalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { emit } from "@tauri-apps/api/event";
+import { toast } from "sonner";
 import type { DropZoneDescriptor } from "@/lib/drop-zones";
 import {
   CommandScopeProvider,
@@ -29,7 +30,6 @@ import { useEntityFocus } from "@/lib/entity-focus-context";
 function defaultTaskTitle(_columnName: string): string {
   return "New task";
 }
-import { moniker, fieldMoniker } from "@/lib/moniker";
 import { useEntityCommands } from "@/lib/entity-commands";
 import { useDragSession } from "@/lib/drag-session-context";
 import { useActivePerspective } from "@/components/perspective-container";
@@ -39,6 +39,8 @@ import { getStr, getNum } from "@/types/kanban";
 interface BoardViewProps {
   board: BoardData;
   tasks: Entity[];
+  /** When rendered inside a GroupSection, the group value for this slice. */
+  groupValue?: string;
 }
 
 type ColumnLayout = Map<string, string[]>;
@@ -56,9 +58,9 @@ interface TaskDragState {
  * left/right/first/last, and each predicate evaluates whether it should claim
  * focus. No push-based cursor state is needed.
  */
-export function BoardView({ board, tasks }: BoardViewProps) {
+export function BoardView({ board, tasks, groupValue }: BoardViewProps) {
   const { startSession, cancelSession, completeSession } = useDragSession();
-  const boardMoniker = moniker("board", "board");
+  const boardMoniker = board.board.moniker;
   const boardCommands = useEntityCommands("board", "board");
   const dispatch = useDispatchCommand();
   const dispatchInspect = useDispatchCommand("ui.inspect");
@@ -106,9 +108,10 @@ export function BoardView({ board, tasks }: BoardViewProps) {
       ids.sort((a, b) => {
         const ta = taskMap.get(a)!;
         const tb = taskMap.get(b)!;
-        // When a group field is active, cluster by group value first,
-        // then by ordinal within each group.
-        if (groupField) {
+        // When a group field is active and we're NOT inside a group section,
+        // cluster by group value first, then by ordinal within each group.
+        // When groupValue is set, tasks are already pre-filtered to one group.
+        if (groupField && groupValue === undefined) {
           const ga = String(ta.fields[groupField] ?? "");
           const gb = String(tb.fields[groupField] ?? "");
           const groupCmp = ga.localeCompare(gb);
@@ -120,7 +123,7 @@ export function BoardView({ board, tasks }: BoardViewProps) {
       });
     }
     return map;
-  }, [columns, filteredTasks, taskMap, groupField]);
+  }, [columns, filteredTasks, taskMap, groupField, groupValue]);
 
   // Pre-resolved task entity arrays per column — memoized so that React.memo
   // on ColumnView sees stable references and skips re-renders on cursor moves.
@@ -153,11 +156,11 @@ export function BoardView({ board, tasks }: BoardViewProps) {
       const taskIds = baseLayout.get(col.id) ?? [];
       map.set(
         col.id,
-        taskIds.map((id) => moniker("task", id)),
+        taskIds.map((id) => taskMap.get(id)?.moniker ?? `task:${id}`),
       );
     }
     return map;
-  }, [columns, baseLayout]);
+  }, [columns, baseLayout, taskMap]);
 
   /** All task monikers on the board — used for nav.first/nav.last. */
   const allBoardTaskMonikers = useMemo(() => {
@@ -172,8 +175,8 @@ export function BoardView({ board, tasks }: BoardViewProps) {
   const allBoardHeaderMonikers = useMemo(() => {
     const set = new Set<string>();
     for (const col of columns) {
-      set.add(moniker("column", col.id));
-      set.add(fieldMoniker("column", col.id, "name"));
+      set.add(col.moniker);
+      set.add(`${col.moniker}.name`);
     }
     return set;
   }, [columns]);
@@ -212,7 +215,7 @@ export function BoardView({ board, tasks }: BoardViewProps) {
     }
     // All columns empty — focus first column header
     if (columns.length > 0) {
-      setFocus(moniker("column", columns[0].id));
+      setFocus(columns[0].moniker);
     }
   }, [columns, columnTaskMonikers, setFocus]);
 
@@ -291,6 +294,11 @@ export function BoardView({ board, tasks }: BoardViewProps) {
   );
   const currentColumnOrder = virtualColumnOrder ?? columnIdList;
 
+  // Clear virtual column order when real data catches up from the backend.
+  useEffect(() => {
+    setVirtualColumnOrder(null);
+  }, [columnIdList]);
+
   // --- HTML5 task drag state ---
   const [taskDrag, setTaskDrag] = useState<TaskDragState | null>(null);
 
@@ -365,9 +373,10 @@ export function BoardView({ board, tasks }: BoardViewProps) {
         await dispatch("column.reorder", {
           args: { id: activeId, target_index: newIndex },
         });
+        // Keep virtualColumnOrder alive — columns stay in dragged position
+        // until the entity store refresh arrives and columnIdList updates.
       } catch (e) {
         console.error("Failed to reorder columns:", e);
-      } finally {
         setVirtualColumnOrder(null);
       }
     },
@@ -462,14 +471,19 @@ export function BoardView({ board, tasks }: BoardViewProps) {
       const col = columnMap.get(columnId);
       const title = defaultTaskTitle(col ? getStr(col, "name") : "");
       try {
-        await dispatch("task.add", {
+        const result = (await dispatch("task.add", {
           args: { title, column: columnId },
-        });
+        })) as { id?: string } | undefined;
+        // Focus the new task so it scrolls into view and is ready for editing
+        if (result?.id) {
+          setFocus(`task:${result.id}`);
+        }
       } catch (e) {
-        console.error("Failed to add task:", e);
+        const msg = e instanceof Error ? e.message : String(e);
+        toast.error(`Failed to add task: ${msg}`);
       }
     },
-    [columnMap],
+    [columnMap, setFocus],
   );
   handleAddTaskRef.current = handleAddTask;
 
@@ -529,7 +543,7 @@ export function BoardView({ board, tasks }: BoardViewProps) {
                       }
                       leftColumnHeaderMoniker={
                         prevColId
-                          ? fieldMoniker("column", prevColId, "name")
+                          ? `${columnMap.get(prevColId)?.moniker ?? `column:${prevColId}`}.name`
                           : null
                       }
                       rightColumnTaskMonikers={
@@ -539,7 +553,7 @@ export function BoardView({ board, tasks }: BoardViewProps) {
                       }
                       rightColumnHeaderMoniker={
                         nextColId
-                          ? fieldMoniker("column", nextColId, "name")
+                          ? `${columnMap.get(nextColId)?.moniker ?? `column:${nextColId}`}.name`
                           : null
                       }
                       allBoardTaskMonikers={allBoardTaskMonikers}

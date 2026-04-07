@@ -9,7 +9,7 @@ import {
 
 /** Helper to build a minimal Entity with given fields. */
 function entity(id: string, fields: Record<string, unknown>): Entity {
-  return { entity_type: "task", id, fields };
+  return { entity_type: "task", id, moniker: `task:${id}`, fields };
 }
 
 describe("evaluateFilter", () => {

@@ -60,6 +60,7 @@ function makeWrapper() {
 const makeEntity = (fields: Record<string, unknown>): Entity => ({
   entity_type: "task",
   id: "test-id",
+  moniker: "task:test-id",
   fields,
 });
 
@@ -143,6 +144,7 @@ describe("useEntityCommands", () => {
     const entity: Entity = {
       entity_type: "task",
       id: "task-1",
+      moniker: "task:task-1",
       fields: { title: "Fix bug" },
     };
     const { result } = renderHook(

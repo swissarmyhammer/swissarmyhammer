@@ -55,7 +55,7 @@ export function GroupedBoardView({ board, tasks }: GroupedBoardViewProps) {
 
   // Grouped view — vertical stack of collapsible sections
   return (
-    <div className="flex flex-col flex-1 min-h-0 overflow-y-auto px-2 py-1">
+    <div className="flex flex-col flex-1 min-h-0 overflow-y-auto">
       {groups.map((bucket) => (
         <GroupSection
           key={bucket.value}

@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: '8980'
+position_column: done
+position_ordinal: ffffffffffffffffffffff8480
 title: Wire GroupedBoardView into ViewContainer and fix BoardView groupValue prop
 ---
 ## What

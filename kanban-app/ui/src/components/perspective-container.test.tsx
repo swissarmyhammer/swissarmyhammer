@@ -178,13 +178,24 @@ describe("PerspectiveContainer", () => {
     });
 
     const entities: Entity[] = [
-      { id: "t1", entity_type: "task", fields: { Status: "open", Title: "B" } },
+      {
+        id: "t1",
+        entity_type: "task",
+        moniker: "task:t1",
+        fields: { Status: "open", Title: "B" },
+      },
       {
         id: "t2",
         entity_type: "task",
+        moniker: "task:t2",
         fields: { Status: "closed", Title: "A" },
       },
-      { id: "t3", entity_type: "task", fields: { Status: "open", Title: "A" } },
+      {
+        id: "t3",
+        entity_type: "task",
+        moniker: "task:t3",
+        fields: { Status: "open", Title: "A" },
+      },
     ];
 
     /** Probe that applies filter and sort. */

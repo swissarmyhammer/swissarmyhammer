@@ -157,6 +157,7 @@ describe("progress-ring integration", () => {
     const boardEntity: Entity = {
       entity_type: "board",
       id: "board",
+      moniker: "board:board",
       fields: {
         name: "My Board",
         percent_complete: { done: 3, total: 10, percent: 30 },
@@ -188,6 +189,7 @@ describe("progress-ring integration", () => {
     const taskEntity: Entity = {
       entity_type: "task",
       id: "task-1",
+      moniker: "task:task-1",
       fields: {
         title: "My Task",
         body: "- [x] done\n- [ ] todo",
@@ -219,6 +221,7 @@ describe("progress-ring integration", () => {
     const boardEntity: Entity = {
       entity_type: "board",
       id: "board",
+      moniker: "board:board",
       fields: {
         name: "Empty Board",
         percent_complete: { done: 0, total: 0, percent: 0 },

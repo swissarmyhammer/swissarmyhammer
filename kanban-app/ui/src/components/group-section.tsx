@@ -36,23 +36,26 @@ export function GroupSection({ bucket, board, groupField }: GroupSectionProps) {
   const [collapsed, setCollapsed] = useState(false);
 
   return (
-    <div className="flex flex-col min-h-0 border border-border rounded-lg mb-2">
+    <div className="shrink-0">
+      <div className="h-px bg-border mx-3" />
       <button
         type="button"
         aria-label={bucket.label}
-        className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-foreground hover:bg-muted/50 rounded-t-lg transition-colors w-full text-left"
+        className="flex items-center gap-2 px-3 py-1 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors w-full text-left"
         onClick={() => setCollapsed((c) => !c)}
       >
         {collapsed ? (
-          <ChevronRight className="h-4 w-4 text-muted-foreground" />
+          <ChevronRight className="h-3.5 w-3.5" />
         ) : (
-          <ChevronDown className="h-4 w-4 text-muted-foreground" />
+          <ChevronDown className="h-3.5 w-3.5" />
         )}
         <span>{bucket.label}</span>
-        <Badge variant="secondary">{bucket.tasks.length}</Badge>
+        <Badge variant="secondary" className="text-xs px-1.5 py-0">
+          {bucket.tasks.length}
+        </Badge>
       </button>
       {!collapsed && (
-        <div className="flex flex-col flex-1 min-h-0">
+        <div style={{ maxHeight: "calc(100vh - 6rem)" }}>
           <BoardView
             board={board}
             tasks={bucket.tasks}

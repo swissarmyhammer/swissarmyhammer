@@ -29,14 +29,25 @@ function makeTask(id: string, column: string): Entity {
   return {
     id,
     entity_type: "task",
+    moniker: `task:${id}`,
     fields: { title: `Task ${id}`, position_column: column },
   };
 }
 
 const board: BoardData = {
-  board: { id: "b1", entity_type: "board", fields: { name: "Board" } },
+  board: {
+    id: "b1",
+    entity_type: "board",
+    moniker: "board:b1",
+    fields: { name: "Board" },
+  },
   columns: [
-    { id: "todo", entity_type: "column", fields: { name: "Todo", order: 0 } },
+    {
+      id: "todo",
+      entity_type: "column",
+      moniker: "column:todo",
+      fields: { name: "Todo", order: 0 },
+    },
   ],
   tags: [],
   summary: {

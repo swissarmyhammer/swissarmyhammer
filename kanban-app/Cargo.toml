@@ -16,6 +16,7 @@ path = "src/main.rs"
 
 [dependencies]
 swissarmyhammer-kanban = { workspace = true }
+swissarmyhammer-fields = { workspace = true }
 swissarmyhammer-commands = { workspace = true }
 swissarmyhammer-common = { workspace = true }
 swissarmyhammer-directory = { workspace = true }

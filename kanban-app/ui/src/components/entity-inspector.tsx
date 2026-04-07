@@ -16,7 +16,6 @@ import type { FieldDef, Entity } from "@/types/kanban";
 import { FocusScope } from "@/components/focus-scope";
 import { useEntityFocus } from "@/lib/entity-focus-context";
 import { useIsFocused, type ClaimPredicate } from "@/lib/entity-focus-context";
-import { fieldMoniker } from "@/lib/moniker";
 import { icons, HelpCircle } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
@@ -89,11 +88,8 @@ export function EntityInspector({ entity, navRef }: EntityInspectorProps) {
 
   /** Monikers for all navigable fields, in flat order. */
   const fieldMonikers = useMemo(
-    () =>
-      navigableFields.map((f) =>
-        fieldMoniker(entity.entity_type, entity.id, f.name),
-      ),
-    [navigableFields, entity.entity_type, entity.id],
+    () => navigableFields.map((f) => `${entity.moniker}.${f.name}`),
+    [navigableFields, entity.moniker],
   );
 
   /** ClaimWhen predicates for each field at index i. */
@@ -160,6 +156,8 @@ export function EntityInspector({ entity, navRef }: EntityInspectorProps) {
   // Focus the first field on mount, restore previous focus on unmount.
   // No claim stack — just direct setFocus. claimWhen handles all subsequent navigation.
   const { setFocus, focusedMoniker } = useEntityFocus();
+  const setFocusRef = useRef(setFocus);
+  setFocusRef.current = setFocus;
   const prevFocusRef = useRef<string | null>(null);
   const mountedRef = useRef(false);
   const firstFieldMoniker = fieldMonikers[0];
@@ -171,13 +169,13 @@ export function EntityInspector({ entity, navRef }: EntityInspectorProps) {
       prevFocusRef.current = focusedMoniker;
       mountedRef.current = true;
     }
-    setFocus(firstFieldMoniker);
+    setFocusRef.current(firstFieldMoniker);
     return () => {
-      setFocus(prevFocusRef.current);
+      setFocusRef.current(prevFocusRef.current);
       mountedRef.current = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [firstFieldMoniker, setFocus]);
+  }, [firstFieldMoniker]);
 
   if (fields.length === 0) {
     return <p className="text-sm text-muted-foreground">Loading schema...</p>;
@@ -266,7 +264,7 @@ function FieldRow({
   const [editing, setEditing] = useState(false);
 
   const editable = isEditable(field);
-  const scopeMoniker = fieldMoniker(entity.entity_type, entity.id, field.name);
+  const scopeMoniker = `${entity.moniker}.${field.name}`;
   const isFocused = useIsFocused(scopeMoniker);
   const shouldEdit = isFocused && inspectorMode === "edit" && editable;
 

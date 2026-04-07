@@ -123,11 +123,13 @@ const ACTOR_ENTITIES: Entity[] = [
   {
     entity_type: "actor",
     id: "alice-id",
+    moniker: "actor:alice-id",
     fields: { name: "alice", color: "3366cc" },
   },
   {
     entity_type: "actor",
     id: "bob-id",
+    moniker: "actor:bob-id",
     fields: { name: "bob", color: "cc3366" },
   },
 ];
@@ -136,11 +138,13 @@ const TAG_ENTITIES: Entity[] = [
   {
     entity_type: "tag",
     id: "tag-bug",
+    moniker: "tag:tag-bug",
     fields: { tag_name: "bug", color: "ff0000" },
   },
   {
     entity_type: "tag",
     id: "tag-feat",
+    moniker: "tag:tag-feat",
     fields: { tag_name: "feature", color: "00ff00" },
   },
 ];
@@ -388,6 +392,7 @@ describe("MultiSelectEditor", () => {
     const taskEntity: Entity = {
       entity_type: "task",
       id: "task-1",
+      moniker: "task:task-1",
       fields: { title: "Test task", body: "Fix #bug issue" },
     };
 

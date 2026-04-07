@@ -16,7 +16,6 @@ import {
   useCallback,
   useContext,
   useEffect,
-  useMemo,
   useRef,
   useState,
   type ReactNode,
@@ -254,6 +253,7 @@ export function RustEngineContainer({ children }: RustEngineContainerProps) {
           const entity: Entity = {
             id,
             entity_type,
+            moniker: `${entity_type}:${id}`,
             fields: fields as Record<string, unknown>,
           };
           setEntitiesFor(entity_type, (prev) => {
@@ -343,17 +343,35 @@ export function RustEngineContainer({ children }: RustEngineContainerProps) {
           return;
         }
 
-        // Patch individual changed fields in place.
-        setEntitiesFor(entity_type, (prev) =>
-          prev.map((e) => {
+        // Patch individual changed fields in place (upsert if not yet in store).
+        setEntitiesFor(entity_type, (prev) => {
+          let found = false;
+          const next = prev.map((e) => {
             if (e.id !== id) return e;
+            found = true;
             const patched = { ...e.fields };
             for (const { field, value } of changes) {
               patched[field] = value;
             }
             return { ...e, fields: patched };
-          }),
-        );
+          });
+          if (!found) {
+            // Race recovery: field-changed arrived before entity-created.
+            // Construct entity from the changes so the patch isn't lost.
+            const fields: Record<string, unknown> = {};
+            for (const { field, value } of changes) {
+              fields[field] = value;
+            }
+            console.warn(
+              `[entity-field-changed] entity ${entity_type}/${id} not in store, upserting`,
+            );
+            return [
+              ...next,
+              { entity_type, id, moniker: `${entity_type}:${id}`, fields },
+            ];
+          }
+          return next;
+        });
       }),
     ];
     return () => {
@@ -363,15 +381,13 @@ export function RustEngineContainer({ children }: RustEngineContainerProps) {
     };
   }, [refreshEntities, setEntitiesFor]);
 
-  const entityStore = useMemo(() => entitiesByType, [entitiesByType]);
-
   return (
     <CommandScopeProvider commands={[]} moniker="engine">
       <RefreshEntitiesContext.Provider value={refreshEntities}>
         <SetEntitiesByTypeContext.Provider value={setEntitiesByType}>
           <EngineActiveBoardPathContext.Provider value={setActiveBoardPath}>
             <SchemaProvider>
-              <EntityStoreProvider entities={entityStore}>
+              <EntityStoreProvider entities={entitiesByType}>
                 <EntityFocusProvider>
                   <FieldUpdateProvider>
                     <UIStateProvider>

@@ -13,7 +13,6 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { moniker, fieldMoniker } from "@/lib/moniker";
 import { useEntityCommands } from "@/lib/entity-commands";
 import { useSchema } from "@/lib/schema-context";
 import {
@@ -105,10 +104,9 @@ export const ColumnView = memo(function ColumnView({
   isFirstColumn = false,
   isLastColumn = false,
 }: ColumnViewProps) {
-  const columnMoniker = moniker("column", column.id);
-  const columnNameMoniker = fieldMoniker("column", column.id, "name");
+  const columnMoniker = column.moniker;
+  const columnNameMoniker = `${column.moniker}.name`;
   const dispatchTaskMove = useDispatchCommand("task.move");
-  const dispatchTaskAdd = useDispatchCommand("task.add");
   const { getFieldDef } = useSchema();
   const nameFieldDef = getFieldDef("column", "name");
   const [editingName, setEditingName] = useState(false);
@@ -203,10 +201,7 @@ export const ColumnView = memo(function ColumnView({
   // --- Compute claimWhen predicates for header and each card ---
 
   /** Monikers for tasks in this column, in display order. */
-  const taskMonikers = useMemo(
-    () => tasks.map((t) => moniker("task", t.id)),
-    [tasks],
-  );
+  const taskMonikers = useMemo(() => tasks.map((t) => t.moniker), [tasks]);
 
   /**
    * Helper: returns true if the focused moniker belongs to any card or header
@@ -469,9 +464,7 @@ export const ColumnView = memo(function ColumnView({
                     // correct scope chain (column:todo → board:board) in UIState.
                     // The Rust resolve_entity_id reads the scope chain to find the column.
                     setFocus(columnMoniker);
-                    dispatchTaskAdd({
-                      args: { title: "New task", column: column.id },
-                    }).catch(console.error);
+                    onAddTask!(column.id);
                   }}
                 >
                   <Plus className="h-4 w-4" />

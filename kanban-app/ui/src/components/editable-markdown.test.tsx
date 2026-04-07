@@ -10,6 +10,7 @@ import type { Entity } from "@/types/kanban";
 const mockTag: Entity = {
   id: "tag-bug",
   entity_type: "tag",
+  moniker: "tag:tag-bug",
   fields: { tag_name: "bug", color: "ff0000" },
 };
 
@@ -69,7 +70,7 @@ function makeProps(
       type: { kind: "text" },
     } as DisplayProps["field"],
     value,
-    entity: { entity_type: "task", id: "t1", fields: {} },
+    entity: { entity_type: "task", id: "t1", moniker: "task:t1", fields: {} },
     mode,
     onCommit,
   };

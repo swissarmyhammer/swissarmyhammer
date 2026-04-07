@@ -10,6 +10,15 @@ use swissarmyhammer_fields::EntityTypeName;
 
 use crate::id_types::EntityId;
 
+/// Where the entity was loaded from: live storage, archive, or trash.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum EntityLocation {
+    #[default]
+    Live,
+    Archive,
+    Trash,
+}
+
 /// A dynamic, field-driven entity.
 ///
 /// The `entity_type` identifies the kind (e.g. "task", "tag") and determines
@@ -20,6 +29,7 @@ pub struct Entity {
     pub entity_type: EntityTypeName,
     pub id: EntityId,
     pub fields: HashMap<String, Value>,
+    pub location: EntityLocation,
 }
 
 impl Default for Entity {
@@ -28,6 +38,7 @@ impl Default for Entity {
             entity_type: EntityTypeName::from(""),
             id: EntityId::from(""),
             fields: HashMap::new(),
+            location: EntityLocation::default(),
         }
     }
 }
@@ -39,6 +50,18 @@ impl Entity {
             entity_type: entity_type.into(),
             id: id.into(),
             fields: HashMap::new(),
+            location: EntityLocation::default(),
+        }
+    }
+
+    /// Return the canonical moniker string for this entity.
+    ///
+    /// Live: "type:id", Archive: "type:id:archive", Trash: "type:id:trash"
+    pub fn moniker(&self) -> String {
+        match self.location {
+            EntityLocation::Live => format!("{}:{}", self.entity_type, self.id),
+            EntityLocation::Archive => format!("{}:{}:archive", self.entity_type, self.id),
+            EntityLocation::Trash => format!("{}:{}:trash", self.entity_type, self.id),
         }
     }
 
@@ -105,6 +128,7 @@ impl Entity {
             "entity_type".into(),
             Value::String(self.entity_type.to_string()),
         );
+        map.insert("moniker".into(), Value::String(self.moniker()));
         Value::Object(map)
     }
 }
@@ -165,6 +189,41 @@ mod tests {
         assert_eq!(json["entity_type"], "task");
         assert_eq!(json["title"], "Hello");
         assert_eq!(json["count"], 5);
+        assert_eq!(json["moniker"], "task:01ABC");
+    }
+
+    #[test]
+    fn moniker_live() {
+        let e = Entity::new("task", "01ABC");
+        assert_eq!(e.moniker(), "task:01ABC");
+    }
+
+    #[test]
+    fn moniker_archive() {
+        let mut e = Entity::new("task", "01ABC");
+        e.location = EntityLocation::Archive;
+        assert_eq!(e.moniker(), "task:01ABC:archive");
+    }
+
+    #[test]
+    fn moniker_trash() {
+        let mut e = Entity::new("task", "01ABC");
+        e.location = EntityLocation::Trash;
+        assert_eq!(e.moniker(), "task:01ABC:trash");
+    }
+
+    #[test]
+    fn to_json_archive_moniker() {
+        let mut e = Entity::new("task", "01ABC");
+        e.location = EntityLocation::Archive;
+        let json = e.to_json();
+        assert_eq!(json["moniker"], "task:01ABC:archive");
+    }
+
+    #[test]
+    fn default_location_is_live() {
+        let e = Entity::new("task", "01ABC");
+        assert_eq!(e.location, EntityLocation::Live);
     }
 
     #[test]

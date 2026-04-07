@@ -1,0 +1,3 @@
+color: bfd4f2
+description: Cards related to fixing field-row monikers that shadow entity monikers in scope chain
+tag_name: field-moniker-fix

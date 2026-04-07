@@ -207,7 +207,12 @@ import { CommandScopeProvider } from "@/lib/command-scope";
 import type { Entity } from "@/types/kanban";
 
 function makeEntity(fields: Record<string, unknown> = {}): Entity {
-  return { entity_type: "task", id: "test-id", fields };
+  return {
+    entity_type: "task",
+    id: "test-id",
+    moniker: "task:test-id",
+    fields,
+  };
 }
 
 async function renderInspector(entity: Entity, tagEntities: Entity[] = []) {
@@ -317,6 +322,7 @@ describe("EntityInspector", () => {
       {
         entity_type: "tag",
         id: "tag-bug",
+        moniker: "tag:tag-bug",
         fields: { tag_name: "bug", color: "ff0000" },
       },
     ]);
@@ -339,6 +345,7 @@ describe("EntityInspector", () => {
       {
         entity_type: "tag",
         id: "tag-ui",
+        moniker: "tag:tag-ui",
         fields: { tag_name: "ui", color: "1d76db", description: "UI" },
       },
     ];
@@ -361,6 +368,7 @@ describe("EntityInspector", () => {
       {
         entity_type: "tag",
         id: "tag-ui",
+        moniker: "tag:tag-ui",
         fields: { tag_name: "ui", color: "1d76db", description: "" },
       },
     ];
@@ -424,6 +432,7 @@ describe("EntityInspector", () => {
       {
         entity_type: "tag",
         id: "tag-ui",
+        moniker: "tag:tag-ui",
         fields: { tag_name: "ui", color: "1d76db", description: "UI" },
       },
     ];

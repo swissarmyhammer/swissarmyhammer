@@ -69,10 +69,16 @@ vi.mock("@/lib/schema-context", () => ({
     schemas: {},
     loading: false,
   }),
+  useSchemaOptional: () => undefined,
 }));
 
 vi.mock("@/lib/entity-focus-context", () => ({
   useRestoreFocus: vi.fn(),
+  useEntityFocus: () => ({
+    focusedMoniker: null,
+    setFocusedMoniker: vi.fn(),
+  }),
+  useIsFocused: () => false,
 }));
 
 // ---------------------------------------------------------------------------

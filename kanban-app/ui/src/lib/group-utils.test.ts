@@ -4,7 +4,7 @@ import { computeGroups } from "./group-utils";
 
 /** Helper to build a minimal Entity for testing. */
 function makeTask(id: string, fields: Record<string, unknown>): Entity {
-  return { entity_type: "task", id, fields };
+  return { entity_type: "task", id, moniker: `task:${id}`, fields };
 }
 
 /** Helper to build a minimal FieldDef. */

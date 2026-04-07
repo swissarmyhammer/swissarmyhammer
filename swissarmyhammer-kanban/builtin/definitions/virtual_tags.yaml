@@ -9,5 +9,6 @@ type:
   entity: tag
   commit_display_names: true
 icon: zap
-display: none
+section: header
+display: virtual-badge-list
 editor: none

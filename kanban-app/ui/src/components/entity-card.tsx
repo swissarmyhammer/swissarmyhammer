@@ -4,7 +4,6 @@ import { FocusScope } from "@/components/focus-scope";
 import { Field } from "@/components/fields/field";
 import { useSchema } from "@/lib/schema-context";
 import { useEntityCommands } from "@/lib/entity-commands";
-import { moniker } from "@/lib/moniker";
 import { useDispatchCommand, type CommandDef } from "@/lib/command-scope";
 import {
   Tooltip,
@@ -67,7 +66,7 @@ export const EntityCard = memo(
     const { getSchema } = useSchema();
     const schema = getSchema(entity.entity_type);
 
-    const entityMoniker = moniker(entity.entity_type, entity.id);
+    const entityMoniker = entity.moniker;
 
     const cardFields = useMemo(
       () => (schema?.fields ?? []).filter((f) => f.section === "header"),

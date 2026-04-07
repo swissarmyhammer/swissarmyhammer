@@ -3,7 +3,6 @@ import { useDispatchCommand } from "@/lib/command-scope";
 import { useGrid } from "@/hooks/use-grid";
 import { useSchema } from "@/lib/schema-context";
 import { useEntityStore } from "@/lib/entity-store-context";
-import { fieldMoniker } from "@/lib/moniker";
 import {
   useEntityFocus,
   type ClaimPredicate,
@@ -82,16 +81,12 @@ export function GridView({ view }: GridViewProps) {
     const map = new Map<string, { row: number; col: number }>();
     for (let r = 0; r < entities.length; r++) {
       for (let c = 0; c < columns.length; c++) {
-        const mk = fieldMoniker(
-          entityType,
-          entities[r].id,
-          columns[c].field.name,
-        );
+        const mk = `${entities[r].moniker}.${columns[c].field.name}`;
         map.set(mk, { row: r, col: c });
       }
     }
     return map;
-  }, [entities, columns, entityType]);
+  }, [entities, columns]);
 
   /**
    * Build the flat list of cell monikers in row-major order.
@@ -99,9 +94,9 @@ export function GridView({ view }: GridViewProps) {
    */
   const cellMonikers = useMemo(() => {
     return entities.map((entity) =>
-      columns.map((col) => fieldMoniker(entityType, entity.id, col.field.name)),
+      columns.map((col) => `${entity.moniker}.${col.field.name}`),
     );
-  }, [entities, columns, entityType]);
+  }, [entities, columns]);
 
   /**
    * Derive the grid cursor position from the currently focused moniker.

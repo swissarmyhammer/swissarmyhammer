@@ -32,8 +32,9 @@ const ENTITY_EXTENSIONS: &[&str] = &["yaml", "yml", "md"];
 ///
 /// 2. **Field-level** — `EntityFieldChanged` carries a `Vec<FieldChange>`,
 ///    one entry per changed field, each with the field name and new value.
-///    The watcher produces these from `diff_fields` by comparing the old and
-///    new file content — no `EntityContext.read()` enrichment.
+///    The watcher produces raw diffs from `diff_fields` by comparing the old
+///    and new file content. Computed fields (not on disk) are appended by
+///    `enrich_computed_fields` in commands.rs after the watcher runs.
 ///
 /// The frontend contract:
 /// - `entity-created`: add entity to store from payload fields, or
@@ -45,8 +46,8 @@ const ENTITY_EXTENSIONS: &[&str] = &["yaml", "yml", "md"];
 /// **DO NOT** add a `fields: Option<HashMap>` full-state payload to
 /// `EntityFieldChanged`. That is the enrichment anti-pattern — it requires
 /// reading the entity back after every write, is racy with deletes, and
-/// caused repeated bugs. The watcher's `diff_fields` produces exactly the
-/// granular diffs the frontend needs.
+/// caused repeated bugs. Field-changed events carry only the specific fields
+/// that changed (raw diffs from the watcher + computed fields from enrichment).
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind")]
 #[allow(clippy::enum_variant_names)]
@@ -64,12 +65,13 @@ pub enum WatchEvent {
     /// One or more fields on an entity changed.
     ///
     /// Each `FieldChange` carries the field name and its new value.
-    /// The watcher produces these diffs from `diff_fields` — no entity
-    /// reads are needed. The frontend patches individual fields in place.
+    /// The watcher produces raw diffs from `diff_fields`. Computed fields
+    /// (not stored on disk) are appended by `enrich_computed_fields` after
+    /// the watcher runs. The frontend patches individual fields in place.
     ///
     /// **Architecture rule (event-architecture):** DO NOT add a `fields`
-    /// option for full-state enrichment. Events are thin signals. The
-    /// watcher's `diff_fields` produces exactly the field-level diffs needed.
+    /// option for full-state enrichment. Events are thin signals carrying
+    /// only changed fields (raw diffs + derived computed fields).
     #[serde(rename = "entity-field-changed")]
     EntityFieldChanged {
         entity_type: String,
@@ -220,6 +222,49 @@ pub fn update_cache(cache: &EntityCache, path: &Path) {
             map.insert(canonical, cached);
         }
     }
+}
+
+/// Deduplicate a list of watch events, keeping the last occurrence per
+/// (entity_type, id) key. Attachment events are keyed separately so they
+/// don't collide with entity events for the same entity_type.
+///
+/// Uses borrowed references for the lookup set to avoid cloning strings.
+fn dedup_events(events: Vec<WatchEvent>) -> Vec<WatchEvent> {
+    // Walk backwards so the first insertion per key marks the chronologically
+    // last event. The `bool` discriminates attachment keys from entity keys.
+    let mut seen = HashSet::<(&str, &str, bool)>::new();
+    let mut keep_indices = HashSet::<usize>::with_capacity(events.len());
+    for idx in (0..events.len()).rev() {
+        let key: (&str, &str, bool) = match &events[idx] {
+            WatchEvent::EntityCreated {
+                entity_type, id, ..
+            }
+            | WatchEvent::EntityRemoved { entity_type, id }
+            | WatchEvent::EntityFieldChanged {
+                entity_type, id, ..
+            } => (entity_type.as_str(), id.as_str(), false),
+            WatchEvent::AttachmentChanged {
+                entity_type,
+                filename,
+                ..
+            } => (entity_type.as_str(), filename.as_str(), true),
+        };
+        if seen.insert(key) {
+            keep_indices.insert(idx);
+        }
+    }
+
+    events
+        .into_iter()
+        .enumerate()
+        .filter_map(|(i, evt)| {
+            if keep_indices.contains(&i) {
+                Some(evt)
+            } else {
+                None
+            }
+        })
+        .collect()
 }
 
 /// Scan all entity files in the registered store directories, compare against
@@ -421,23 +466,10 @@ where
                             }
                         }
 
-                        // Deduplicate by (entity_type, id/filename)
-                        let mut seen: HashMap<(String, String), WatchEvent> = HashMap::new();
-                        for evt in events {
-                            let key = match &evt {
-                                WatchEvent::EntityCreated { entity_type, id, .. } |
-                                WatchEvent::EntityRemoved { entity_type, id } |
-                                WatchEvent::EntityFieldChanged { entity_type, id, .. } => {
-                                    (entity_type.clone(), id.clone())
-                                }
-                                WatchEvent::AttachmentChanged { entity_type, filename, .. } => {
-                                    (format!("attachment:{}", entity_type), filename.clone())
-                                }
-                            };
-                            seen.insert(key, evt);
-                        }
-                        for evt in seen.into_values() {
-                            tracing::info!(event = ?evt, "file watcher: emitting event");
+                        // Deduplicate by (entity_type, id/filename), keeping last per key
+                        let deduped = dedup_events(events);
+                        for evt in deduped {
+                            tracing::debug!(event = ?evt, "file watcher: emitting event");
                             (on_event)(evt);
                         }
                         last_emit = now;
@@ -2669,5 +2701,95 @@ mod tests {
             0,
             "watcher must NOT fire for writes that update the cache first"
         );
+    }
+
+    #[test]
+    fn test_dedup_events_keeps_last_per_entity() {
+        let events = vec![
+            WatchEvent::EntityFieldChanged {
+                entity_type: "task".into(),
+                id: "aaa".into(),
+                changes: vec![FieldChange {
+                    field: "title".into(),
+                    value: serde_json::json!("mid"),
+                }],
+            },
+            WatchEvent::EntityCreated {
+                entity_type: "column".into(),
+                id: "bbb".into(),
+                fields: HashMap::new(),
+            },
+            WatchEvent::EntityFieldChanged {
+                entity_type: "task".into(),
+                id: "aaa".into(),
+                changes: vec![FieldChange {
+                    field: "title".into(),
+                    value: serde_json::json!("final"),
+                }],
+            },
+        ];
+
+        let deduped = dedup_events(events);
+        assert_eq!(
+            deduped.len(),
+            2,
+            "duplicate (task, aaa) should be collapsed"
+        );
+
+        // The last event for (task, aaa) should win
+        let task_evt = deduped
+            .iter()
+            .find(|e| matches!(e, WatchEvent::EntityFieldChanged { id, .. } if id == "aaa"))
+            .expect("should have task aaa event");
+        match task_evt {
+            WatchEvent::EntityFieldChanged { changes, .. } => {
+                assert_eq!(
+                    changes[0].value,
+                    serde_json::json!("final"),
+                    "last event should win"
+                );
+            }
+            _ => panic!("expected EntityFieldChanged"),
+        }
+    }
+
+    #[test]
+    fn test_dedup_events_handles_attachments() {
+        let events = vec![
+            WatchEvent::AttachmentChanged {
+                entity_type: "task".into(),
+                filename: "img.png".into(),
+                removed: false,
+            },
+            WatchEvent::EntityCreated {
+                entity_type: "task".into(),
+                id: "aaa".into(),
+                fields: HashMap::new(),
+            },
+            WatchEvent::AttachmentChanged {
+                entity_type: "task".into(),
+                filename: "img.png".into(),
+                removed: true,
+            },
+        ];
+
+        let deduped = dedup_events(events);
+        assert_eq!(deduped.len(), 2);
+
+        // Last attachment event should win (removed: true)
+        let att_evt = deduped
+            .iter()
+            .find(|e| matches!(e, WatchEvent::AttachmentChanged { .. }))
+            .expect("should have attachment event");
+        assert!(
+            matches!(att_evt, WatchEvent::AttachmentChanged { removed: true, .. }),
+            "last attachment event (removed=true) should win"
+        );
+    }
+
+    #[test]
+    fn test_dedup_events_empty_input() {
+        let deduped = dedup_events(vec![]);
+        assert!(deduped.is_empty());
     }
 }

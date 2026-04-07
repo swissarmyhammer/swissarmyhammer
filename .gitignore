@@ -113,6 +113,10 @@ mirdan-lock.json
 **/ui/dist/
 **/.vite/
 
+# Vitest browser-mode artifacts (failure screenshots, attachments)
+**/.vitest-attachments/
+**/__screenshots__/
+
 
 .github/copilot/
 

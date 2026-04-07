@@ -15,7 +15,7 @@ use swissarmyhammer_store::{StoreContext, StoreHandle, StoredItemId};
 use tokio::sync::RwLock;
 
 use crate::changelog::{self, ChangeEntry, FieldChange};
-use crate::entity::Entity;
+use crate::entity::{Entity, EntityLocation};
 use crate::error::{EntityError, Result};
 use crate::id_types::EntityId;
 use crate::io;
@@ -501,6 +501,9 @@ impl EntityContext {
         let def = self.entity_def(entity_type)?;
         let dir = self.archive_dir(entity_type);
         let mut entities = io::read_entity_dir(&dir, entity_type, def).await?;
+        for entity in &mut entities {
+            entity.location = EntityLocation::Archive;
+        }
         if self.compute.is_some() {
             let query_fn = self.build_entity_query_fn();
             for entity in &mut entities {
@@ -525,6 +528,7 @@ impl EntityContext {
         let def = self.entity_def(entity_type)?;
         let path = io::entity_file_path(&self.archive_dir(entity_type), id, def);
         let mut entity = io::read_entity(&path, entity_type, id, def).await?;
+        entity.location = EntityLocation::Archive;
         self.apply_compute(entity_type, &mut entity).await?;
         Ok(entity)
     }

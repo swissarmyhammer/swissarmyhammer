@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, act } from "@testing-library/react";
+import {
+  render,
+  screen,
+  fireEvent,
+  act,
+  waitFor,
+} from "@testing-library/react";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const TASK_SCHEMA = {
@@ -117,6 +123,7 @@ function makeEntity(fieldOverrides: Record<string, unknown> = {}): Entity {
   return {
     entity_type: "task",
     id: "task-1",
+    moniker: "task:task-1",
     fields: {
       title: "Hello **world**",
       body: "",
@@ -239,26 +246,31 @@ describe("EntityCard", () => {
       });
     });
 
-    // Blur triggers commit
+    // CM6 manages focus internally. Call blur() on the contenteditable
+    // element so CM6's DOMObserver detects the focus loss.
     const cmContent = container.querySelector(".cm-content") as HTMLElement;
     await act(async () => {
-      fireEvent.blur(cmContent);
+      cmContent.blur();
+      // CM6's DOMObserver polls focus state — give it a tick
+      await new Promise((r) => setTimeout(r, 50));
     });
 
-    const updateCall = mockInvoke.mock.calls.find(
-      (call) =>
-        call[0] === "dispatch_command" &&
-        (call[1] as Record<string, unknown>)?.cmd === "entity.update_field",
-    );
-    expect(updateCall).toBeTruthy();
-    expect(updateCall![1]).toMatchObject({
-      cmd: "entity.update_field",
-      args: {
-        entity_type: "task",
-        id: "task-1",
-        field_name: "title",
-        value: "defect",
-      },
+    await waitFor(() => {
+      const call = mockInvoke.mock.calls.find(
+        (c) =>
+          c[0] === "dispatch_command" &&
+          (c[1] as Record<string, unknown>)?.cmd === "entity.update_field",
+      );
+      expect(call).toBeTruthy();
+      expect(call![1]).toMatchObject({
+        cmd: "entity.update_field",
+        args: {
+          entity_type: "task",
+          id: "task-1",
+          field_name: "title",
+          value: "defect",
+        },
+      });
     });
   });
 

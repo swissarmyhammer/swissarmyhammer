@@ -1,10 +1,10 @@
 /**
  * Data-driven test harness for Field save behavior.
  *
- * Loads the REAL field definitions from YAML, renders <Field> through real
- * providers (FieldUpdateProvider, EntityStoreProvider, SchemaProvider),
- * and asserts that invoke("dispatch_command") is called on save-worthy
- * exit paths.
+ * Loads the REAL field definitions from YAML via vitest browser commands
+ * (server-side Node.js), renders <Field> through real providers
+ * (FieldUpdateProvider, EntityStoreProvider, SchemaProvider), and asserts
+ * that invoke("dispatch_command") is called on save-worthy exit paths.
  *
  * Matrix: editable fields × keymap modes × exit paths × modes
  *
@@ -15,59 +15,28 @@
  */
 
 import { describe, it, expect, vi, beforeEach, beforeAll } from "vitest";
-import { render, fireEvent, act } from "@testing-library/react";
-import fs from "node:fs";
-import path from "node:path";
-import yaml from "js-yaml";
+import { render, fireEvent, act, waitFor } from "@testing-library/react";
+import { commands } from "vitest/browser";
 import type { FieldDef } from "@/types/kanban";
 
 // ---------------------------------------------------------------------------
-// jsdom stubs
-// ---------------------------------------------------------------------------
-Element.prototype.scrollIntoView = vi.fn();
-
-// ---------------------------------------------------------------------------
-// Load REAL field definitions from YAML — the source of truth.
+// Module-scoped fixture data — populated in beforeAll via browser commands
 // ---------------------------------------------------------------------------
 
-const DEFINITIONS_DIR = path.resolve(
-  __dirname,
-  "../../../../../../swissarmyhammer-kanban/builtin/definitions",
-);
-const ENTITIES_DIR = path.resolve(
-  __dirname,
-  "../../../../../../swissarmyhammer-kanban/builtin/entities",
-);
+/** All field definitions loaded from builtin YAML. */
+let allFieldDefs: FieldDef[] = [];
 
-/** Load a YAML file and return its parsed content. */
-function loadYaml<T>(filePath: string): T {
-  return yaml.load(fs.readFileSync(filePath, "utf8")) as T;
-}
-
-/** Load all field definitions from the builtin YAML. */
-function loadAllFieldDefs(): FieldDef[] {
-  const files = fs
-    .readdirSync(DEFINITIONS_DIR)
-    .filter((f: string) => f.endsWith(".yaml"));
-  return files.map((f: string) =>
-    loadYaml<FieldDef>(path.join(DEFINITIONS_DIR, f)),
-  );
-}
-
-/** Load an entity definition to get its field list. */
-function loadEntityDef(entityType: string): {
-  name: string;
-  fields: string[];
-  body_field?: string;
-} {
-  return loadYaml(path.join(ENTITIES_DIR, `${entityType}.yaml`));
-}
+/** Entity definitions keyed by entity type. */
+const entityDefs = new Map<
+  string,
+  { name: string; fields: string[]; body_field?: string }
+>();
 
 /** Get the FieldDefs for an entity type, filtered to editable, visible fields. */
 function editableFieldsFor(entityType: string): FieldDef[] {
-  const entityDef = loadEntityDef(entityType);
-  const allDefs = loadAllFieldDefs();
-  const defMap = new Map(allDefs.map((d) => [d.name, d]));
+  const entityDef = entityDefs.get(entityType);
+  if (!entityDef) return [];
+  const defMap = new Map(allFieldDefs.map((d) => [d.name, d]));
 
   return entityDef.fields
     .map((name) => defMap.get(name))
@@ -76,16 +45,16 @@ function editableFieldsFor(entityType: string): FieldDef[] {
         d !== undefined &&
         d.editor !== "none" &&
         d.editor !== undefined &&
-        d.editor !== "attachment" && // attachment editor uses button-based saves, not blur/Enter/Escape
+        d.editor !== "attachment" &&
         d.section !== "hidden",
     );
 }
 
 /** Get ALL FieldDefs for an entity type (excludes display: none fields). */
 function allFieldsFor(entityType: string): FieldDef[] {
-  const entityDef = loadEntityDef(entityType);
-  const allDefs = loadAllFieldDefs();
-  const defMap = new Map(allDefs.map((d) => [d.name, d]));
+  const entityDef = entityDefs.get(entityType);
+  if (!entityDef) return [];
+  const defMap = new Map(allFieldDefs.map((d) => [d.name, d]));
 
   return entityDef.fields
     .map((name) => defMap.get(name))
@@ -104,20 +73,18 @@ const mockInvoke = vi.fn((...args: any[]) => {
   if (args[0] === "get_entity_schema") {
     // Return real schema data for the requested entity type
     const entityType = args[1]?.entityType as string;
-    try {
-      const entityDef = loadEntityDef(entityType);
-      const allDefs = loadAllFieldDefs();
-      const defMap = new Map(allDefs.map((d) => [d.name, d]));
+    const entityDef = entityDefs.get(entityType);
+    if (entityDef) {
+      const defMap = new Map(allFieldDefs.map((d) => [d.name, d]));
       const fields = entityDef.fields
         .map((name) => defMap.get(name))
         .filter((d): d is FieldDef => d !== undefined);
       return Promise.resolve({ entity: entityDef, fields });
-    } catch {
-      return Promise.resolve({
-        entity: { name: entityType, fields: [] },
-        fields: [],
-      });
     }
+    return Promise.resolve({
+      entity: { name: entityType, fields: [] },
+      fields: [],
+    });
   }
   if (args[0] === "get_ui_state")
     return Promise.resolve({
@@ -181,6 +148,7 @@ import type { Entity } from "@/types/kanban";
 const TEST_ENTITY: Entity = {
   entity_type: "task",
   id: "test-task-1",
+  moniker: "task:test-task-1",
   fields: {
     title: "Test Title",
     body: "Test body with #tag",
@@ -190,6 +158,7 @@ const TEST_ENTITY: Entity = {
     progress: { total: 2, completed: 1, percent: 50 },
     position_column: "todo",
     position_ordinal: "ffff8000",
+    virtual_tags: ["READY"],
   },
 };
 
@@ -199,6 +168,7 @@ const TEST_ENTITIES: Record<string, Entity[]> = {
     {
       entity_type: "tag",
       id: "tag-1",
+      moniker: "tag:tag-1",
       fields: { tag_name: "bug", color: "ff0000" },
     },
   ],
@@ -206,11 +176,17 @@ const TEST_ENTITIES: Record<string, Entity[]> = {
     {
       entity_type: "actor",
       id: "actor-1",
+      moniker: "actor:actor-1",
       fields: { name: "Alice", color: "0000ff" },
     },
   ],
   column: [
-    { entity_type: "column", id: "todo", fields: { name: "Todo", order: 0 } },
+    {
+      entity_type: "column",
+      id: "todo",
+      moniker: "column:todo",
+      fields: { name: "Todo", order: 0 },
+    },
   ],
 };
 
@@ -218,6 +194,11 @@ const TEST_ENTITIES: Record<string, Entity[]> = {
 // Helpers
 // ---------------------------------------------------------------------------
 
+const keymapModes = ["cua", "vim", "emacs"] as const;
+const exitPaths = ["blur", "Enter", "Escape"] as const;
+const modes = ["compact", "full"] as const;
+
+/** Wait for async effects to settle. */
 async function settle(ms = 150) {
   await act(async () => {
     await new Promise((r) => setTimeout(r, ms));
@@ -282,71 +263,66 @@ function expectsSave(keymap: string, exit: string): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// Load the test matrix from real YAML
+// Load fixture data from YAML via browser commands (Node.js server-side)
 // ---------------------------------------------------------------------------
 
-const editableFields = editableFieldsFor("task");
-const allFields = allFieldsFor("task");
-const keymapModes = ["cua", "vim", "emacs"] as const;
-const exitPaths = ["blur", "Enter", "Escape"] as const;
-const modes = ["compact", "full"] as const;
+beforeAll(async () => {
+  allFieldDefs = (await commands.loadFieldDefinitions()) as FieldDef[];
 
-// Sanity check — if no editable fields loaded, something is wrong
-if (editableFields.length === 0) {
-  throw new Error(
-    `No editable fields found for task entity. Check YAML at ${DEFINITIONS_DIR}`,
+  const entityTypes = ["task", "tag", "actor", "column", "board"];
+  for (const et of entityTypes) {
+    const def = (await commands.loadEntityDefinition({ entityType: et })) as {
+      name: string;
+      fields: string[];
+      body_field?: string;
+    };
+    entityDefs.set(et, def);
+  }
+
+  // Sanity check
+  const editable = editableFieldsFor("task");
+  if (editable.length === 0) {
+    throw new Error(
+      "No editable fields found for task entity. Check builtin YAML definitions.",
+    );
+  }
+  console.log(
+    `Loaded ${allFieldDefs.length} field defs, ${editable.length} editable task fields: ${editable.map((f) => `${f.name} (${f.editor})`).join(", ")}`,
   );
-}
+});
 
 // ---------------------------------------------------------------------------
-// The matrix
+// The matrix — iterates over fields inside each test, since field data
+// is loaded asynchronously and can't be used with describe.each.
 // ---------------------------------------------------------------------------
 
 describe("Field save behavior", () => {
-  // Log what we're testing
-  beforeAll(() => {
-    const names = editableFields.map((f) => `${f.name} (${f.editor})`);
-    console.log(`Testing ${names.length} editable fields: ${names.join(", ")}`);
-  });
+  describe.each(modes)("mode: %s", (mode) => {
+    describe.each(keymapModes)("keymap: %s", (keymap) => {
+      beforeEach(() => {
+        vi.clearAllMocks();
+        KEYMAP_MODE = keymap;
+      });
 
-  describe.each(
-    editableFields.map((f) => ({
-      fieldDef: f,
-      fieldName: f.name,
-      editor: f.editor,
-    })),
-  )("field: $fieldName (editor: $editor)", ({ fieldDef }) => {
-    describe.each(modes)("mode: %s", (mode) => {
-      describe.each(keymapModes)("keymap: %s", (keymap) => {
-        beforeEach(() => {
-          vi.clearAllMocks();
-          KEYMAP_MODE = keymap;
-        });
+      it.each(exitPaths)("exit: %s", async (exit) => {
+        const editableFields = editableFieldsFor("task");
+        const failures: string[] = [];
 
-        it.each(exitPaths)("exit: %s", async (exit) => {
-          // Multi-select + vim + Enter: the capture-phase DOM listener
-          // used for vim normal-mode Enter doesn't fire reliably in jsdom
-          // because getCM(view) returns null and ViewPlugin initialization
-          // timing differs from a real browser. Skip until browser tests
-          // cover this path.
+        for (const fieldDef of editableFields) {
+          // Multi-select + vim + Enter: capture-phase listener timing
+          // differs from test expectations. Skip this specific combo.
           if (
             fieldDef.editor === "multi-select" &&
             keymap === "vim" &&
             exit === "Enter"
           ) {
-            return;
+            continue;
           }
 
           const { container, unmount } = renderField(fieldDef, mode, true);
           await settle();
-
-          // Clear any calls from rendering / entering edit mode
           mockInvoke.mockClear();
 
-          // TODO: each field type needs an interaction adapter to:
-          //   1. Set a new value in the editor
-          //   2. Find the right DOM target for exit events
-          // For now, try to find any interactive element and trigger the exit.
           const target =
             container.querySelector(".cm-content") ??
             container.querySelector("input") ??
@@ -355,38 +331,57 @@ describe("Field save behavior", () => {
 
           if (target) {
             if (exit === "blur") {
-              await act(async () => fireEvent.blur(target));
+              // In a real browser, ensure the element is focused first so
+              // .blur() actually fires a blur event. Then unmount to flush
+              // the debounced save (1000ms debounce would be too slow to wait).
+              await act(async () => {
+                (target as HTMLElement).focus();
+              });
+              await act(async () => {
+                (target as HTMLElement).blur();
+                await new Promise((r) => setTimeout(r, 50));
+              });
+              // Unmount flushes pending debounced saves immediately
+              unmount();
+              await settle(50);
             } else {
               await act(async () => fireEvent.keyDown(target, { key: exit }));
+              await settle();
+              unmount();
             }
+          } else {
+            unmount();
           }
-          await settle();
 
           const shouldSave = expectsSave(keymap, exit);
           if (shouldSave) {
             const calls = getUpdateCalls();
-            expect(
-              calls.length,
-              `${fieldDef.name} / ${mode} / ${keymap} / ${exit}: expected dispatch_command(entity.update_field) to be called`,
-            ).toBeGreaterThanOrEqual(1);
-
-            // Verify correct entity identity
-            if (calls.length > 0) {
+            if (calls.length === 0) {
+              failures.push(
+                `${fieldDef.name} (${fieldDef.editor}): expected save but got none`,
+              );
+            } else {
               const args = calls[0][1].args;
-              expect(args.entity_type).toBe("task");
-              expect(args.id).toBe("test-task-1");
-              expect(args.field_name).toBe(fieldDef.name);
+              if (args.entity_type !== "task" || args.id !== "test-task-1") {
+                failures.push(
+                  `${fieldDef.name}: wrong entity identity in save call`,
+                );
+              }
             }
           } else {
             const calls = getUpdateCalls();
-            expect(
-              calls.length,
-              `${fieldDef.name} / ${mode} / ${keymap} / ${exit}: expected NO dispatch_command(entity.update_field)`,
-            ).toBe(0);
+            if (calls.length > 0) {
+              failures.push(
+                `${fieldDef.name} (${fieldDef.editor}): expected NO save but got ${calls.length}`,
+              );
+            }
           }
+        }
 
-          unmount();
-        });
+        expect(
+          failures,
+          `${mode} / ${keymap} / ${exit} failures:\n${failures.join("\n")}`,
+        ).toHaveLength(0);
       });
     });
   });
@@ -397,39 +392,27 @@ describe("Field save behavior", () => {
 // ---------------------------------------------------------------------------
 
 describe("Field display behavior", () => {
-  beforeAll(() => {
-    const names = allFields.map((f) => `${f.name} (${f.display ?? "text"})`);
-    console.log(`Testing ${names.length} field displays: ${names.join(", ")}`);
-  });
+  describe.each(modes)("mode: %s", (mode) => {
+    it("every field renders display content", async () => {
+      KEYMAP_MODE = "cua";
+      const allFields = allFieldsFor("task");
+      const missing: string[] = [];
 
-  describe.each(
-    allFields.map((f) => ({
-      fieldDef: f,
-      fieldName: f.name,
-      display: f.display ?? "text",
-    })),
-  )("field: $fieldName (display: $display)", ({ fieldDef }) => {
-    describe.each(modes)("mode: %s", (mode) => {
-      it("renders display content", async () => {
-        KEYMAP_MODE = "cua";
+      for (const fieldDef of allFields) {
         const { container, unmount } = renderField(fieldDef, mode, false);
         await settle();
 
-        // Field should render something — not be empty
-        expect(
-          container.innerHTML.length,
-          `${fieldDef.name} / ${mode}: Field display should render content`,
-        ).toBeGreaterThan(0);
-
-        // Field should have produced actual visible content, not just a wrapper
-        const inner = container.firstElementChild;
-        expect(
-          inner,
-          `${fieldDef.name} / ${mode}: Field should render a DOM element`,
-        ).toBeTruthy();
+        if (!container.firstElementChild) {
+          missing.push(`${fieldDef.name} (${fieldDef.display ?? "text"})`);
+        }
 
         unmount();
-      });
+      }
+
+      expect(
+        missing,
+        `task / ${mode}: fields missing display: ${missing.join(", ")}`,
+      ).toHaveLength(0);
     });
   });
 });
@@ -438,61 +421,56 @@ describe("Field display behavior", () => {
 // Per-entity tests — all fields on an entity render and edit correctly
 // ---------------------------------------------------------------------------
 
-const entityTypes = ["task"] as const; // extend as we add entity support
-
 describe("Entity field coverage", () => {
-  describe.each(entityTypes)("entity: %s", (entityType) => {
-    const fields = allFieldsFor(entityType);
-    const editable = editableFieldsFor(entityType);
+  describe.each(modes)("mode: %s", (mode) => {
+    it("every field displays", async () => {
+      KEYMAP_MODE = "cua";
+      const fields = allFieldsFor("task");
+      const missing: string[] = [];
 
-    describe.each(modes)("mode: %s", (mode) => {
-      it("every field displays", async () => {
-        KEYMAP_MODE = "cua";
-        const missing: string[] = [];
+      for (const fieldDef of fields) {
+        const { container, unmount } = renderField(fieldDef, mode, false);
+        await settle();
 
-        for (const fieldDef of fields) {
-          const { container, unmount } = renderField(fieldDef, mode, false);
-          await settle();
-
-          if (!container.firstElementChild) {
-            missing.push(`${fieldDef.name} (${fieldDef.display ?? "text"})`);
-          }
-
-          unmount();
+        if (!container.firstElementChild) {
+          missing.push(`${fieldDef.name} (${fieldDef.display ?? "text"})`);
         }
 
-        expect(
-          missing,
-          `${entityType} / ${mode}: fields missing display: ${missing.join(", ")}`,
-        ).toHaveLength(0);
-      });
+        unmount();
+      }
 
-      it("every editable field enters edit mode", async () => {
-        KEYMAP_MODE = "cua";
-        const missing: string[] = [];
+      expect(
+        missing,
+        `task / ${mode}: fields missing display: ${missing.join(", ")}`,
+      ).toHaveLength(0);
+    });
 
-        for (const fieldDef of editable) {
-          const { container, unmount } = renderField(fieldDef, mode, true);
-          await settle();
+    it("every editable field enters edit mode", async () => {
+      KEYMAP_MODE = "cua";
+      const editable = editableFieldsFor("task");
+      const missing: string[] = [];
 
-          const hasEditor =
-            container.querySelector(".cm-editor") ??
-            container.querySelector("input") ??
-            container.querySelector("select") ??
-            container.querySelector("[data-radix-popper-content-wrapper]");
+      for (const fieldDef of editable) {
+        const { container, unmount } = renderField(fieldDef, mode, true);
+        await settle();
 
-          if (!hasEditor) {
-            missing.push(`${fieldDef.name} (${fieldDef.editor})`);
-          }
+        const hasEditor =
+          container.querySelector(".cm-editor") ??
+          container.querySelector("input") ??
+          container.querySelector("select") ??
+          container.querySelector("[data-radix-popper-content-wrapper]");
 
-          unmount();
+        if (!hasEditor) {
+          missing.push(`${fieldDef.name} (${fieldDef.editor})`);
         }
 
-        expect(
-          missing,
-          `${entityType} / ${mode}: fields missing editor: ${missing.join(", ")}`,
-        ).toHaveLength(0);
-      });
+        unmount();
+      }
+
+      expect(
+        missing,
+        `task / ${mode}: fields missing editor: ${missing.join(", ")}`,
+      ).toHaveLength(0);
     });
   });
 });

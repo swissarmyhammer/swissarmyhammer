@@ -3,6 +3,7 @@ import {
   useContext,
   useMemo,
   useCallback,
+  useState,
   type ReactNode,
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
@@ -34,6 +35,61 @@ export function ActiveBoardPathProvider({
 /** Read the per-window active board path. */
 export function useActiveBoardPath(): string | undefined {
   return useContext(ActiveBoardPathContext);
+}
+
+// ---------------------------------------------------------------------------
+// CommandBusy context — tracks whether any dispatch_command IPC is in-flight
+// ---------------------------------------------------------------------------
+
+/** Shape of the busy-tracking state exposed via context. */
+export interface CommandBusyState {
+  /** True when at least one backend dispatch_command call is in-flight. */
+  isBusy: boolean;
+}
+
+const CommandBusyContext = createContext<CommandBusyState>({ isBusy: false });
+
+/**
+ * Internal context for the busy-state setter.
+ *
+ * Separated from the read context so that only `useDispatchCommand` (which
+ * needs the setter) re-renders when the setter reference changes, while
+ * pure consumers of `isBusy` only re-render on value changes.
+ */
+const CommandBusySetterContext = createContext<
+  React.Dispatch<React.SetStateAction<number>>
+>(() => {});
+
+/** Props for the command busy provider. */
+export interface CommandBusyProviderProps {
+  children: ReactNode;
+}
+
+/**
+ * Tracks the number of in-flight backend dispatch_command calls and
+ * exposes `isBusy` (count > 0) via React context.
+ *
+ * Wrap this around the component tree that needs busy awareness — typically
+ * at the same level as `ActiveBoardPathProvider`.
+ */
+export function CommandBusyProvider({ children }: CommandBusyProviderProps) {
+  const [inflightCount, setInflightCount] = useState(0);
+  const busyState = useMemo<CommandBusyState>(
+    () => ({ isBusy: inflightCount > 0 }),
+    [inflightCount],
+  );
+  return (
+    <CommandBusySetterContext.Provider value={setInflightCount}>
+      <CommandBusyContext.Provider value={busyState}>
+        {children}
+      </CommandBusyContext.Provider>
+    </CommandBusySetterContext.Provider>
+  );
+}
+
+/** Read whether any backend command is currently in-flight. */
+export function useCommandBusy(): CommandBusyState {
+  return useContext(CommandBusyContext);
 }
 
 /** Definition of a single command that can be registered in a scope. */
@@ -265,6 +321,7 @@ export function useDispatchCommand(presetCmd?: string) {
   const treeScope = useContext(CommandScopeContext);
   const focusedScope = useContext(FocusedScopeContext);
   const boardPath = useContext(ActiveBoardPathContext);
+  const setInflightCount = useContext(CommandBusySetterContext);
 
   // Prefer focused scope (includes entity + window monikers) over tree scope
   // (just the component's position in the React tree). When nothing is focused,
@@ -301,15 +358,20 @@ export function useDispatchCommand(presetCmd?: string) {
         return;
       }
 
-      // Backend dispatch — invoke Tauri IPC directly
-      return invoke("dispatch_command", {
-        cmd: cmdId,
-        target: opts.target,
-        args: opts.args,
-        scopeChain: chain,
-        ...(boardPath ? { boardPath } : {}),
-      });
+      // Backend dispatch — invoke Tauri IPC directly, tracking busy state
+      setInflightCount((c) => c + 1);
+      try {
+        return await invoke("dispatch_command", {
+          cmd: cmdId,
+          target: opts.target,
+          args: opts.args,
+          scopeChain: chain,
+          ...(boardPath ? { boardPath } : {}),
+        });
+      } finally {
+        setInflightCount((c) => c - 1);
+      }
     },
-    [presetCmd, effectiveScope, boardPath],
+    [presetCmd, effectiveScope, boardPath, setInflightCount],
   );
 }

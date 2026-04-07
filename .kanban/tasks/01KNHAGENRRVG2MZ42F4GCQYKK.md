@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: 7c80
+position_column: done
+position_ordinal: fffffffffffffffffffffd80
 title: entity.unarchive should only be available for archived entities
 ---
 ## What

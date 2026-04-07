@@ -150,6 +150,8 @@ export interface EntitySchema {
 export interface Entity {
   entity_type: string;
   id: string;
+  /** Canonical moniker from the backend (e.g. "task:01ABC" or "task:01ABC:archive"). */
+  moniker: string;
   fields: Record<string, unknown>;
 }
 
@@ -193,16 +195,17 @@ export function getBool(
 // convert between that flat format and the Entity interface.
 // ---------------------------------------------------------------------------
 
-/** Raw entity bag from Entity::to_json() — flat JSON with entity_type + id + fields. */
+/** Raw entity bag from Entity::to_json() — flat JSON with entity_type + id + moniker + fields. */
 export type EntityBag = Record<string, unknown> & {
   entity_type: string;
   id: string;
+  moniker: string;
 };
 
 /** Convert a flat entity bag from the backend into an Entity. */
 export function entityFromBag(bag: EntityBag): Entity {
-  const { entity_type, id, ...fields } = bag;
-  return { entity_type, id, fields };
+  const { entity_type, id, moniker, ...fields } = bag;
+  return { entity_type, id, moniker, fields };
 }
 
 // ---------------------------------------------------------------------------

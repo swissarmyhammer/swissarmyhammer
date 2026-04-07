@@ -158,6 +158,19 @@
   left: -0.25rem;
 }
 
+/* Indeterminate progress bar — slides a bar left-to-right continuously */
+@keyframes indeterminate {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(300%);
+  }
+}
+.animate-indeterminate {
+  animation: indeterminate 1.5s ease-in-out infinite;
+}
+
 /* CM6 autocomplete — prevent long completions from overflowing the viewport */
 .cm-tooltip.cm-tooltip-autocomplete > ul > li {
   overflow: hidden;

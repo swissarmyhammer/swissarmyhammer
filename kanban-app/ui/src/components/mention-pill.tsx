@@ -98,7 +98,8 @@ export function MentionPill({
         : displayName
       : description;
   const entityId = entity?.id ?? slug;
-  const scopeMoniker = focusMoniker ?? moniker(entityType, entityId);
+  const scopeMoniker =
+    focusMoniker ?? entity?.moniker ?? moniker(entityType, entityId);
 
   // Build the local task.untag extra command — only for tags on a specific task
   const extraCommands = useMemo<CommandDef[] | undefined>(() => {

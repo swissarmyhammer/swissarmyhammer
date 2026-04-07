@@ -13,7 +13,9 @@ vi.mock("@tauri-apps/api/window", () => ({
 import {
   CommandScopeProvider,
   ActiveBoardPathProvider,
+  CommandBusyProvider,
   useActiveBoardPath,
+  useCommandBusy,
   resolveCommand,
   useAvailableCommands,
   collectAvailableCommands,
@@ -561,5 +563,181 @@ describe("useDispatchCommand", () => {
       scopeChain: ["task:abc", "column:todo", "window:board-2"],
       boardPath: "/boards/nested",
     });
+  });
+});
+
+/* ---------- CommandBusyProvider / useCommandBusy ---------- */
+
+describe("CommandBusyProvider", () => {
+  /** Wrapper providing CommandBusyProvider + ActiveBoardPathProvider + scope. */
+  function busyWrapper(
+    cmds: CommandDef[] = [],
+    boardPath = "/boards/test",
+  ): ({ children }: { children: ReactNode }) => ReactNode {
+    return ({ children }: { children: ReactNode }) => (
+      <CommandBusyProvider>
+        <ActiveBoardPathProvider value={boardPath}>
+          <CommandScopeProvider commands={cmds}>
+            {children}
+          </CommandScopeProvider>
+        </ActiveBoardPathProvider>
+      </CommandBusyProvider>
+    );
+  }
+
+  it("isBusy is false when no commands are in-flight", () => {
+    const { result } = renderHook(() => useCommandBusy(), {
+      wrapper: busyWrapper(),
+    });
+    expect(result.current.isBusy).toBe(false);
+  });
+
+  it("isBusy transitions true during backend dispatch and false after", async () => {
+    const { invoke } = await import("@tauri-apps/api/core");
+
+    // Create a deferred promise so we can control when invoke resolves
+    let resolveInvoke!: (v: unknown) => void;
+    (invoke as ReturnType<typeof vi.fn>).mockImplementation((cmd: string) => {
+      if (cmd === "dispatch_command") {
+        return new Promise((resolve) => {
+          resolveInvoke = resolve;
+        });
+      }
+      return Promise.resolve();
+    });
+
+    const { result } = renderHook(
+      () => ({
+        busy: useCommandBusy(),
+        dispatch: useDispatchCommand(),
+      }),
+      { wrapper: busyWrapper() },
+    );
+
+    expect(result.current.busy.isBusy).toBe(false);
+
+    // Start the dispatch but don't await — capture the promise
+    let dispatchPromise: Promise<unknown>;
+    act(() => {
+      dispatchPromise = result.current.dispatch("test.cmd");
+    });
+
+    // After the synchronous part of dispatch, isBusy should be true
+    expect(result.current.busy.isBusy).toBe(true);
+
+    // Now resolve the invoke
+    await act(async () => {
+      resolveInvoke({ ok: true });
+      await dispatchPromise!;
+    });
+
+    expect(result.current.busy.isBusy).toBe(false);
+  });
+
+  it("isBusy returns to false even when dispatch rejects", async () => {
+    const { invoke } = await import("@tauri-apps/api/core");
+
+    let rejectInvoke!: (e: Error) => void;
+    (invoke as ReturnType<typeof vi.fn>).mockImplementation((cmd: string) => {
+      if (cmd === "dispatch_command") {
+        return new Promise((_resolve, reject) => {
+          rejectInvoke = reject;
+        });
+      }
+      return Promise.resolve();
+    });
+
+    const { result } = renderHook(
+      () => ({
+        busy: useCommandBusy(),
+        dispatch: useDispatchCommand(),
+      }),
+      { wrapper: busyWrapper() },
+    );
+
+    let dispatchPromise: Promise<unknown>;
+    act(() => {
+      dispatchPromise = result.current.dispatch("fail.cmd");
+    });
+
+    expect(result.current.busy.isBusy).toBe(true);
+
+    await act(async () => {
+      rejectInvoke(new Error("backend error"));
+      try {
+        await dispatchPromise!;
+      } catch {
+        // expected
+      }
+    });
+
+    expect(result.current.busy.isBusy).toBe(false);
+  });
+
+  it("isBusy stays true when multiple commands are in-flight", async () => {
+    const { invoke } = await import("@tauri-apps/api/core");
+
+    const resolvers: Array<(v: unknown) => void> = [];
+    (invoke as ReturnType<typeof vi.fn>).mockImplementation((cmd: string) => {
+      if (cmd === "dispatch_command") {
+        return new Promise((resolve) => {
+          resolvers.push(resolve);
+        });
+      }
+      return Promise.resolve();
+    });
+
+    const { result } = renderHook(
+      () => ({
+        busy: useCommandBusy(),
+        dispatch: useDispatchCommand(),
+      }),
+      { wrapper: busyWrapper() },
+    );
+
+    // Dispatch two commands
+    let p1: Promise<unknown>;
+    let p2: Promise<unknown>;
+    act(() => {
+      p1 = result.current.dispatch("cmd.a");
+      p2 = result.current.dispatch("cmd.b");
+    });
+
+    expect(result.current.busy.isBusy).toBe(true);
+
+    // Resolve first — still busy because second is in-flight
+    await act(async () => {
+      resolvers[0]({ ok: true });
+      await p1!;
+    });
+    expect(result.current.busy.isBusy).toBe(true);
+
+    // Resolve second — now idle
+    await act(async () => {
+      resolvers[1]({ ok: true });
+      await p2!;
+    });
+    expect(result.current.busy.isBusy).toBe(false);
+  });
+
+  it("frontend-only commands do not trigger busy state", async () => {
+    const executeFn = vi.fn();
+    const cmds = [cmd("local.action", { execute: executeFn })];
+
+    const { result } = renderHook(
+      () => ({
+        busy: useCommandBusy(),
+        dispatch: useDispatchCommand(),
+      }),
+      { wrapper: busyWrapper(cmds) },
+    );
+
+    await act(async () => {
+      await result.current.dispatch("local.action");
+    });
+
+    // isBusy should never have been true — frontend execute doesn't go through IPC
+    expect(result.current.busy.isBusy).toBe(false);
+    expect(executeFn).toHaveBeenCalledOnce();
   });
 });

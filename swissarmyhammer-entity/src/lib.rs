@@ -30,7 +30,7 @@ pub mod watcher;
 
 pub use cache::{CachedEntity, EntityCache};
 pub use context::EntityContext;
-pub use entity::Entity;
+pub use entity::{Entity, EntityLocation};
 pub use error::{EntityError, Result};
 pub use events::EntityEvent;
 pub use filter::EntityFilterContext;

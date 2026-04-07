@@ -11,6 +11,7 @@ import type { DisplayProps } from "./text-display";
 // Mock schema context — MarkdownFull calls useSchema().mentionableTypes
 vi.mock("@/lib/schema-context", () => ({
   useSchema: () => ({ mentionableTypes: [] }),
+  useSchemaOptional: () => undefined,
 }));
 
 // Mock entity store context — MarkdownFull calls useEntityStore().getEntities
@@ -30,7 +31,7 @@ function makeProps(
       type: { kind: "text" },
     } as DisplayProps["field"],
     value,
-    entity: { entity_type: "task", id: "t1", fields: {} },
+    entity: { entity_type: "task", id: "t1", moniker: "task:t1", fields: {} },
     mode,
     onCommit,
   };

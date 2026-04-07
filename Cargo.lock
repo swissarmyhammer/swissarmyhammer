@@ -3958,6 +3958,7 @@ dependencies = [
  "swissarmyhammer-directory",
  "swissarmyhammer-entity",
  "swissarmyhammer-entity-search",
+ "swissarmyhammer-fields",
  "swissarmyhammer-kanban",
  "swissarmyhammer-perspectives",
  "swissarmyhammer-store",

@@ -57,7 +57,7 @@ export function Avatar({ actorId, size = "md", className }: AvatarProps) {
   const avatar = actor ? getStr(actor, "avatar") : undefined;
 
   const sizeClass = SIZES[size];
-  const scopeMoniker = moniker("actor", actorId);
+  const scopeMoniker = actor?.moniker ?? moniker("actor", actorId);
 
   const commands = useEntityCommands("actor", actorId, actor ?? undefined);
 

@@ -24,7 +24,6 @@ import { cn } from "@/lib/utils";
 import { useContextMenu } from "@/lib/context-menu";
 import { useDispatchCommand, type CommandDef } from "@/lib/command-scope";
 import { FocusScope } from "@/components/focus-scope";
-import { moniker } from "@/lib/moniker";
 import { Field } from "@/components/fields/field";
 import type { UseGridReturn } from "@/hooks/use-grid";
 import {
@@ -380,7 +379,7 @@ export function DataTable({
             // Data row -- use data-row index (di) for grid cursor, not visual index (ri)
             const di = dataRowIndices[ri];
             const entity = row.original;
-            const entityMk = moniker(entity.entity_type, entity.id);
+            const entityMk = entity.moniker;
             const rowCommands = rowEntityCommands?.(entity) ?? [];
             return (
               <FocusScope

@@ -75,16 +75,19 @@ const ENTITIES: Entity[] = [
   {
     entity_type: "task",
     id: "t1",
+    moniker: "task:t1",
     fields: { title: "Task 1", status: "todo" },
   },
   {
     entity_type: "task",
     id: "t2",
+    moniker: "task:t2",
     fields: { title: "Task 2", status: "done" },
   },
   {
     entity_type: "task",
     id: "t3",
+    moniker: "task:t3",
     fields: { title: "Task 3", status: "todo" },
   },
 ];
@@ -111,7 +114,7 @@ function stubRowCommands(entity: Entity): CommandDef[] {
     {
       id: "ui.inspect",
       name: `Inspect ${entity.entity_type}`,
-      target: `${entity.entity_type}:${entity.id}`,
+      target: entity.moniker,
       contextMenu: true,
     },
   ];

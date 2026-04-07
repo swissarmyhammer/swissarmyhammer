@@ -68,6 +68,11 @@ function renderShell(children?: React.ReactNode) {
   );
 }
 
+/** Platform-aware Mod key: metaKey on Mac, ctrlKey elsewhere. */
+const MOD_KEY = /Mac|iPhone|iPad|iPod/.test(navigator.platform)
+  ? "metaKey"
+  : "ctrlKey";
+
 describe("AppShell", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -104,12 +109,11 @@ describe("AppShell", () => {
     mockInvoke.mockClear();
 
     // CUA mode is the default (mocked invoke returns "cua")
-    // Mod on non-Mac is Ctrl
     await act(async () => {
       fireEvent.keyDown(document, {
         key: "P",
         code: "KeyP",
-        ctrlKey: true,
+        [MOD_KEY]: true,
         shiftKey: true,
       });
     });
@@ -247,12 +251,12 @@ describe("AppShell", () => {
     const closeBoardItem = screen.getByTestId("cmd-file.closeBoard");
     expect(closeBoardItem).toBeTruthy();
 
-    // Simulate Cmd+W (CUA mode, non-Mac = Ctrl+W)
+    // Simulate Mod+W (Cmd on Mac, Ctrl elsewhere)
     await act(async () => {
       fireEvent.keyDown(document, {
         key: "w",
         code: "KeyW",
-        ctrlKey: true,
+        [MOD_KEY]: true,
       });
     });
 
@@ -332,12 +336,12 @@ describe("AppShell", () => {
 
     mockInvoke.mockClear();
 
-    // Simulate Ctrl+Z
+    // Simulate Mod+Z (Cmd on Mac, Ctrl elsewhere)
     await act(async () => {
       fireEvent.keyDown(document, {
         key: "z",
         code: "KeyZ",
-        ctrlKey: true,
+        [MOD_KEY]: true,
       });
     });
 

@@ -51,6 +51,7 @@ const MOCK_BOARD: BoardData = {
   board: {
     entity_type: "board",
     id: "b1",
+    moniker: "board:b1",
     fields: { name: { String: "Test Board" } },
   },
   columns: [],
@@ -114,6 +115,39 @@ describe("BoardContainer", () => {
     expect(screen.getByRole("status")).toBeTruthy();
     // Children should NOT be visible
     expect(screen.queryByTestId("child")).toBeNull();
+  });
+
+  it("loading spinner container uses h-screen for viewport centering", () => {
+    mockLoading.mockReturnValue(true);
+
+    render(
+      <EntityFocusProvider>
+        <BoardContainer>
+          <span>child</span>
+        </BoardContainer>
+      </EntityFocusProvider>,
+    );
+
+    const status = screen.getByRole("status");
+    expect(status.className).toContain("h-screen");
+    expect(status.className).not.toContain("flex-1");
+  });
+
+  it("no-board placeholder uses h-screen for viewport centering", () => {
+    mockBoardData.mockReturnValue(null);
+    mockLoading.mockReturnValue(false);
+
+    render(
+      <EntityFocusProvider>
+        <BoardContainer>
+          <span>child</span>
+        </BoardContainer>
+      </EntityFocusProvider>,
+    );
+
+    const main = screen.getByText("No board loaded").closest("main")!;
+    expect(main.className).toContain("h-screen");
+    expect(main.className).not.toContain("flex-1");
   });
 
   it("renders placeholder when no board is loaded and not loading", () => {
