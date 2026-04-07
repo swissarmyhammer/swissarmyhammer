@@ -110,7 +110,8 @@ export function BoardView({ board, tasks, groupValue }: BoardViewProps) {
         const tb = taskMap.get(b)!;
         // When a group field is active and we're NOT inside a group section,
         // cluster by group value first, then by ordinal within each group.
-        // When groupValue is set, tasks are already pre-filtered to one group.
+        // groupValue is undefined when no grouping is active (top-level board);
+        // present (even empty string) when inside a GroupSection.
         if (groupField && groupValue === undefined) {
           const ga = String(ta.fields[groupField] ?? "");
           const gb = String(tb.fields[groupField] ?? "");

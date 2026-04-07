@@ -11,7 +11,11 @@ import {
 } from "@/components/fields/field";
 import { VirtualTagDisplay } from "@/components/fields/displays/virtual-tag-display";
 
-/** Adapter that bridges FieldDisplayProps to VirtualTagDisplay. */
+/**
+ * Adapter that narrows FieldDisplayProps (fieldDef, entityType, entityId, value)
+ * down to VirtualTagDisplayProps (value only). Virtual tags use a static color
+ * map rather than entity lookups, so the extra props are unused.
+ */
 function VirtualBadgeListAdapter({ value }: FieldDisplayProps) {
   return <VirtualTagDisplay value={value} />;
 }

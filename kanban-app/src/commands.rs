@@ -1699,7 +1699,7 @@ async fn enrich_computed_fields(
                 continue;
             }
             if let Some(value) = entity.fields.get(*name) {
-                tracing::info!(
+                tracing::debug!(
                     entity_type = entity_type,
                     id = id,
                     field = *name,
@@ -1719,7 +1719,7 @@ async fn enrich_computed_fields(
                 );
             }
         }
-        tracing::info!(
+        tracing::debug!(
             entity_type = entity_type,
             id = id,
             raw_changes = raw_change_count,

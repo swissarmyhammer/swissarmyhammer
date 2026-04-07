@@ -58,7 +58,9 @@ export function parseFieldMoniker(m: string): {
   // parsed.id is "entityType:entityId", split on first colon
   const colonIdx = parsed.id.indexOf(":");
   if (colonIdx === -1) {
-    throw new Error(`Invalid field moniker (no entity id): "${m}"`);
+    throw new Error(
+      `Invalid field moniker (missing entity type:id separator): "${m}"`,
+    );
   }
   return {
     entityType: parsed.id.slice(0, colonIdx),

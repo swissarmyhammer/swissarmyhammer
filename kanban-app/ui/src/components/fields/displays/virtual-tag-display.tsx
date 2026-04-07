@@ -10,6 +10,11 @@ import {
  * These mirror the Rust DEFAULT_REGISTRY in virtual_tags.rs.
  * Virtual tags are computed server-side; the frontend only needs
  * slug, color, and tooltip text.
+ *
+ * TODO: Serve virtual tag metadata from the backend (via schema or a
+ * companion endpoint) instead of duplicating it here. If the Rust side
+ * adds a new virtual tag or changes a color, this map must be updated
+ * manually. See: swissarmyhammer-kanban/src/virtual_tags.rs
  */
 const VIRTUAL_TAG_META: Record<string, { color: string; description: string }> =
   {
