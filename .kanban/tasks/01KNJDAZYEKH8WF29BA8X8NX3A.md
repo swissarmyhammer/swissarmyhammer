@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KNJDAAZQ4B6PFGR9N1Z7A7YJ
-position_column: todo
-position_ordinal: '8580'
+position_column: done
+position_ordinal: ffffffffffffffffffffff8a80
 position_swimlane: null
 title: 'FILTER-5: Add virtual tags to filter editor autocomplete (shared CM6 infra)'
 ---

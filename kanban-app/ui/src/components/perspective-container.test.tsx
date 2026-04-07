@@ -142,7 +142,7 @@ describe("PerspectiveContainer", () => {
       id: "p2",
       name: "Bugs Only",
       view: "board",
-      filter: "Status === 'bug'",
+      filter: "#bug",
     };
     mockUsePerspectives.mockReturnValue({
       perspectives: [perspective],
@@ -162,12 +162,11 @@ describe("PerspectiveContainer", () => {
     expect(screen.getByTestId("active-perspective-id").textContent).toBe("p2");
   });
 
-  it("provides applyFilter and applySort helpers via context", () => {
+  it("provides applySort helper via context", () => {
     const perspective: PerspectiveDef = {
       id: "p1",
       name: "Default",
       view: "board",
-      filter: "Status === 'open'",
       sort: [{ field: "Title", direction: "asc" }],
     };
     mockUsePerspectives.mockReturnValue({
@@ -182,27 +181,20 @@ describe("PerspectiveContainer", () => {
         id: "t1",
         entity_type: "task",
         moniker: "task:t1",
-        fields: { Status: "open", Title: "B" },
+        fields: { Title: "B" },
       },
       {
         id: "t2",
         entity_type: "task",
         moniker: "task:t2",
-        fields: { Status: "closed", Title: "A" },
-      },
-      {
-        id: "t3",
-        entity_type: "task",
-        moniker: "task:t3",
-        fields: { Status: "open", Title: "A" },
+        fields: { Title: "A" },
       },
     ];
 
-    /** Probe that applies filter and sort. */
-    function FilterSortProbe() {
-      const { applyFilter, applySort } = useActivePerspective();
-      const filtered = applyFilter(entities);
-      const sorted = applySort(filtered);
+    /** Probe that applies sort. */
+    function SortProbe() {
+      const { applySort } = useActivePerspective();
+      const sorted = applySort(entities);
       return (
         <span data-testid="result">{sorted.map((e) => e.id).join(",")}</span>
       );
@@ -211,13 +203,13 @@ describe("PerspectiveContainer", () => {
     render(
       <EntityFocusProvider>
         <PerspectiveContainer>
-          <FilterSortProbe />
+          <SortProbe />
         </PerspectiveContainer>
       </EntityFocusProvider>,
     );
 
-    // Should filter to only open (t1, t3) and sort by Title asc (A before B)
-    expect(screen.getByTestId("result").textContent).toBe("t3,t1");
+    // Sort by Title asc: A before B
+    expect(screen.getByTestId("result").textContent).toBe("t2,t1");
   });
 
   it("provides groupField from the active perspective", () => {

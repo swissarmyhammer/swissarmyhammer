@@ -139,3 +139,4 @@ ane-embedding/convert/output/
 **/.shell/
 .claude/worktrees
 .swissarmyhammer
+.avp/log

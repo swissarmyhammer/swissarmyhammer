@@ -25,6 +25,7 @@ swissarmyhammer-entity-search = { workspace = true }
 swissarmyhammer-entity = { workspace = true }
 swissarmyhammer-perspectives = { workspace = true }
 swissarmyhammer-store = { workspace = true }
+swissarmyhammer-filter-expr = { workspace = true }
 tauri = { version = "2", features = ["macos-private-api", "devtools"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-log = { version = "2", features = ["tracing"] }

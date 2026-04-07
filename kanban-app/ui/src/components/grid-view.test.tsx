@@ -27,7 +27,7 @@ vi.mock("@tauri-apps/api/window", () => ({
 const mockActivePerspective = vi.hoisted(() =>
   vi.fn(() => ({
     activePerspective: null,
-    applyFilter: (entities: unknown[]) => entities,
+
     applySort: (entities: unknown[]) => entities,
     groupField: undefined,
   })),
@@ -102,7 +102,7 @@ describe("GridView", () => {
   it("renders without crash when activePerspective is null", () => {
     mockActivePerspective.mockReturnValue({
       activePerspective: null,
-      applyFilter: (entities: unknown[]) => entities,
+  
       applySort: (entities: unknown[]) => entities,
       groupField: undefined,
     });
@@ -129,7 +129,7 @@ describe("GridView", () => {
         name: "Default",
         sort: [{ field: "title", direction: "asc" }],
       },
-      applyFilter: (entities: unknown[]) => entities,
+  
       applySort: (entities: unknown[]) => entities,
       groupField: undefined,
     });

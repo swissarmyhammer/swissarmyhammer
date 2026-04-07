@@ -12,6 +12,22 @@ use crate::perspective::{
 use async_trait::async_trait;
 use serde_json::Value;
 use swissarmyhammer_commands::{Command, CommandContext, CommandError};
+use swissarmyhammer_filter_expr;
+
+/// Validate a filter expression string, returning a `CommandError` if invalid.
+///
+/// Empty strings are allowed (treated as "no filter"). Non-empty strings must
+/// parse as a valid filter DSL expression.
+fn validate_filter(filter: &str) -> Result<(), CommandError> {
+    if filter.trim().is_empty() {
+        return Ok(());
+    }
+    swissarmyhammer_filter_expr::parse(filter).map_err(|errors| {
+        let messages: Vec<String> = errors.iter().map(|e| e.message.clone()).collect();
+        CommandError::ExecutionFailed(format!("invalid filter expression: {}", messages.join("; ")))
+    })?;
+    Ok(())
+}
 
 /// Load a perspective by name, returning its full configuration.
 ///
@@ -61,6 +77,10 @@ impl Command for SavePerspectiveCmd {
 
         let filter = ctx.arg("filter").and_then(|v| v.as_str()).map(String::from);
         let group = ctx.arg("group").and_then(|v| v.as_str()).map(String::from);
+
+        if let Some(ref f) = filter {
+            validate_filter(f)?;
+        }
 
         let mut add_op = AddPerspective::new(name, view);
         add_op.filter = filter;
@@ -136,6 +156,8 @@ impl Command for SetFilterCmd {
             .arg("filter")
             .and_then(|v| v.as_str())
             .ok_or_else(|| CommandError::MissingArg("filter".into()))?;
+
+        validate_filter(filter)?;
 
         let op = UpdatePerspective::new(perspective_id).with_filter(Some(filter.to_string()));
         run_op(&op, &kanban).await
@@ -636,6 +658,104 @@ mod tests {
         let result = ToggleSortCmd.execute(&cmd_ctx).await.unwrap();
         let sort = result["sort"].as_array();
         assert!(sort.is_none() || sort.unwrap().is_empty());
+    }
+
+    // ── Filter validation tests ──────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_set_filter_cmd_accepts_valid_dsl() {
+        let (_temp, ctx) = setup().await;
+        let kanban = Arc::new(ctx);
+        let pid = create_perspective(&kanban, "Filter Test").await;
+
+        let mut args = HashMap::new();
+        args.insert("perspective_id".into(), Value::String(pid.clone()));
+        args.insert("filter".into(), Value::String("#bug && @will".into()));
+        let cmd_ctx = make_ctx_with_scope(
+            Arc::clone(&kanban),
+            args,
+            vec![format!("perspective:{pid}")],
+        );
+        let result = SetFilterCmd.execute(&cmd_ctx).await;
+        assert!(result.is_ok(), "valid DSL should be accepted");
+        assert_eq!(result.unwrap()["filter"], "#bug && @will");
+    }
+
+    #[tokio::test]
+    async fn test_set_filter_cmd_rejects_invalid_expression() {
+        let (_temp, ctx) = setup().await;
+        let kanban = Arc::new(ctx);
+        let pid = create_perspective(&kanban, "Filter Test").await;
+
+        let mut args = HashMap::new();
+        args.insert("perspective_id".into(), Value::String(pid.clone()));
+        args.insert(
+            "filter".into(),
+            Value::String("invalid $$$ garbage".into()),
+        );
+        let cmd_ctx = make_ctx_with_scope(
+            Arc::clone(&kanban),
+            args,
+            vec![format!("perspective:{pid}")],
+        );
+        let result = SetFilterCmd.execute(&cmd_ctx).await;
+        assert!(result.is_err(), "invalid expression should be rejected");
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("invalid filter expression"),
+            "error should mention invalid filter: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_set_filter_cmd_rejects_old_js_expression() {
+        let (_temp, ctx) = setup().await;
+        let kanban = Arc::new(ctx);
+        let pid = create_perspective(&kanban, "Filter Test").await;
+
+        let mut args = HashMap::new();
+        args.insert("perspective_id".into(), Value::String(pid.clone()));
+        args.insert(
+            "filter".into(),
+            Value::String("Status !== \"Done\"".into()),
+        );
+        let cmd_ctx = make_ctx_with_scope(
+            Arc::clone(&kanban),
+            args,
+            vec![format!("perspective:{pid}")],
+        );
+        let result = SetFilterCmd.execute(&cmd_ctx).await;
+        assert!(
+            result.is_err(),
+            "old JS expressions should be rejected as invalid"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_save_perspective_cmd_validates_filter() {
+        let (_temp, ctx) = setup().await;
+        let kanban = Arc::new(ctx);
+
+        // Valid DSL filter should work
+        let mut args = HashMap::new();
+        args.insert("name".into(), Value::String("Valid".into()));
+        args.insert("view".into(), Value::String("board".into()));
+        args.insert("filter".into(), Value::String("#bug || #feature".into()));
+        let cmd_ctx = make_ctx(Arc::clone(&kanban), args);
+        let result = SavePerspectiveCmd.execute(&cmd_ctx).await;
+        assert!(result.is_ok(), "valid DSL filter should be accepted on save");
+
+        // Invalid filter should fail
+        let mut args = HashMap::new();
+        args.insert("name".into(), Value::String("Invalid".into()));
+        args.insert("view".into(), Value::String("board".into()));
+        args.insert("filter".into(), Value::String("$$garbage".into()));
+        let cmd_ctx = make_ctx(Arc::clone(&kanban), args);
+        let result = SavePerspectiveCmd.execute(&cmd_ctx).await;
+        assert!(
+            result.is_err(),
+            "invalid filter should be rejected on save"
+        );
     }
 
     #[tokio::test]

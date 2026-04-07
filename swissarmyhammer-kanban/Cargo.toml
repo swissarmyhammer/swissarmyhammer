@@ -30,6 +30,7 @@ swissarmyhammer-perspectives = { workspace = true }
 swissarmyhammer-operations = { workspace = true }
 swissarmyhammer-commands = { workspace = true }
 swissarmyhammer-store = { workspace = true }
+swissarmyhammer-filter-expr = { workspace = true }
 
 include_dir = { workspace = true }
 fractional_index = "2.0.2"

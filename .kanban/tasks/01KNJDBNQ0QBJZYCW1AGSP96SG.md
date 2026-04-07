@@ -4,8 +4,8 @@ assignees:
 depends_on:
 - 01KNJD8P8KPJK4HN8JCDKEH724
 - 01KNJDAAZQ4B6PFGR9N1Z7A7YJ
-position_column: todo
-position_ordinal: '8680'
+position_column: done
+position_ordinal: ffffffffffffffffffffff8b80
 position_swimlane: null
 title: 'FILTER-6: Remove JS eval path + cleanup'
 ---
