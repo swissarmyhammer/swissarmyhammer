@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: todo
-position_ordinal: 8b80
+position_ordinal: '9380'
 title: Profile and fix slow task.move roundtrip on large boards
 ---
 ## What

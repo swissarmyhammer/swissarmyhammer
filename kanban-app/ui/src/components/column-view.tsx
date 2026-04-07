@@ -107,7 +107,6 @@ export const ColumnView = memo(function ColumnView({
   const columnMoniker = column.moniker;
   const columnNameMoniker = `${column.moniker}.name`;
   const dispatchTaskMove = useDispatchCommand("task.move");
-  const dispatchTaskAdd = useDispatchCommand("task.add");
   const { getFieldDef } = useSchema();
   const nameFieldDef = getFieldDef("column", "name");
   const [editingName, setEditingName] = useState(false);
@@ -465,9 +464,7 @@ export const ColumnView = memo(function ColumnView({
                     // correct scope chain (column:todo → board:board) in UIState.
                     // The Rust resolve_entity_id reads the scope chain to find the column.
                     setFocus(columnMoniker);
-                    dispatchTaskAdd({
-                      args: { title: "New task", column: column.id },
-                    }).catch(console.error);
+                    onAddTask!(column.id);
                   }}
                 >
                   <Plus className="h-4 w-4" />

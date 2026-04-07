@@ -236,7 +236,7 @@ use the skill tool to load the full instructions, then follow them.
 
 - **kanban**: Execute the next task from the kanban board. Use when the user wants to make progress on planned work by implementing the next available todo item. (local)
 
-- **lsp**: Diagnose and install missing LSP servers for your project. Use when the user says "lsp", "language servers", "check lsp", or wants to ensure code intelligence is fully working. (local)
+- **lsp**: Diagnose and install missing LSP servers for your project. Use when the user says "lsp", "language servers", "check lsp", or wants to ensure code intelligence is fully working. Also use when live code intelligence ops (get_hover, get_completions, go to definition) return degraded results from the tree-sitter layer instead of LSP, or when you see "no code intelligence", "can't go to definition", "no type info available", or "source_layer: TreeSitter" on ops that should have full LSP data. (local)
 
 - **map**: Generate a visual architecture overview of the codebase with Mermaid diagrams. Produces ARCHITECTURE.md at repo root. Use when the user says "map", "architecture", "overview", or wants to understand the codebase structure. (local)
 

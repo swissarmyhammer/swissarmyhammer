@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: '9080'
+position_column: doing
+position_ordinal: '80'
 title: Introduce `field:` moniker namespace in moniker.ts and Rust parse_moniker
 ---
 ## What

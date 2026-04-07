@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { moniker, fieldMoniker, parseMoniker } from "./moniker";
+import {
+  moniker,
+  fieldMoniker,
+  parseMoniker,
+  parseFieldMoniker,
+} from "./moniker";
 
 describe("moniker", () => {
   it("builds type:id string", () => {
@@ -13,8 +18,8 @@ describe("moniker", () => {
 });
 
 describe("fieldMoniker", () => {
-  it("builds type:id.field string", () => {
-    expect(fieldMoniker("task", "abc", "title")).toBe("task:abc.title");
+  it("builds field:type:id.field string", () => {
+    expect(fieldMoniker("task", "abc", "title")).toBe("field:task:abc.title");
   });
 });
 
@@ -30,7 +35,15 @@ describe("parseMoniker", () => {
     });
   });
 
-  it("parses field-level moniker", () => {
+  it("parses field-level moniker with field: prefix", () => {
+    expect(parseMoniker("field:task:abc.title")).toEqual({
+      type: "field",
+      id: "task:abc",
+      field: "title",
+    });
+  });
+
+  it("parses old-style field-level moniker", () => {
     expect(parseMoniker("task:abc.title")).toEqual({
       type: "task",
       id: "abc",
@@ -56,5 +69,31 @@ describe("parseMoniker", () => {
 
   it("throws on empty id", () => {
     expect(() => parseMoniker("task:")).toThrow("empty id");
+  });
+});
+
+describe("parseFieldMoniker", () => {
+  it("extracts entityType, entityId, and field", () => {
+    expect(parseFieldMoniker("field:task:abc.title")).toEqual({
+      entityType: "task",
+      entityId: "abc",
+      field: "title",
+    });
+  });
+
+  it("handles description field", () => {
+    expect(parseFieldMoniker("field:task:01ABC.description")).toEqual({
+      entityType: "task",
+      entityId: "01ABC",
+      field: "description",
+    });
+  });
+
+  it("throws on non-field moniker", () => {
+    expect(() => parseFieldMoniker("task:abc")).toThrow("not a field moniker");
+  });
+
+  it("throws on missing field", () => {
+    expect(() => parseFieldMoniker("field:task:abc")).toThrow("no field");
   });
 });

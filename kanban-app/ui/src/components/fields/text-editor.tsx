@@ -195,7 +195,7 @@ export function TextEditor({
     if (!editorRef.current?.view) return;
     const text = editorRef.current.view.state.doc.toString();
     if (text !== valueRef.current) {
-      onCommitRef.current(text);
+      onChangeRef.current?.(text);
     }
   }, []);
   const saveInPlaceRef = useRef(saveInPlace);
@@ -288,9 +288,13 @@ export function TextEditor({
     [mode, changeExtension, extraExtensions],
   );
 
-  // Stable onBlur — reads from ref
+  // Stable onBlur — save without exiting edit mode.
+  // onChange feeds the debounced save in Field.
   const handleBlur = useCallback(() => {
-    commitAndExitRef.current();
+    if (!committedRef.current && editorRef.current?.view) {
+      const text = editorRef.current.view.state.doc.toString();
+      onChangeRef.current?.(text);
+    }
   }, []);
 
   return (

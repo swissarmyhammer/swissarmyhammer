@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 
 // --- Mocks ---
 vi.mock("@tauri-apps/api/core", () => ({
@@ -147,5 +147,33 @@ describe("ColumnView add-task button", () => {
     const btn = screen.getByRole("button", { name: /add task to to do/i });
     expect(btn).toBeTruthy();
     expect(btn.getAttribute("title")).toBeNull();
+  });
+
+  it("calls onAddTask with column id when clicked", () => {
+    const onAddTask = vi.fn();
+    renderColumn(
+      <ColumnView
+        column={makeColumn("col-1", "To Do")}
+        tasks={[]}
+        onAddTask={onAddTask}
+        onDrop={vi.fn()}
+      />,
+    );
+
+    const btn = screen.getByRole("button", { name: /add task to to do/i });
+    fireEvent.click(btn);
+    expect(onAddTask).toHaveBeenCalledWith("col-1");
+  });
+
+  it("does not render add button when onAddTask is not provided", () => {
+    renderColumn(
+      <ColumnView
+        column={makeColumn("col-1", "To Do")}
+        tasks={[]}
+        onDrop={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: /add task/i })).toBeNull();
   });
 });
