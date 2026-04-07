@@ -77,8 +77,8 @@ vi.mock("@/lib/ui-state-context", () => ({
 }));
 
 // Mock view components — we verify which one renders, not their internals.
-vi.mock("@/components/board-view", () => ({
-  BoardView: () => <div data-testid="board-view">BoardView</div>,
+vi.mock("@/components/grouped-board-view", () => ({
+  GroupedBoardView: () => <div data-testid="board-view">BoardView</div>,
 }));
 
 vi.mock("@/components/grid-view", () => ({

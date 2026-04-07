@@ -19,7 +19,7 @@
 import { useMemo, type ReactNode } from "react";
 import { useViews } from "@/lib/views-context";
 import { CommandScopeProvider } from "@/lib/command-scope";
-import { BoardView } from "@/components/board-view";
+import { GroupedBoardView } from "@/components/grouped-board-view";
 import { GridView } from "@/components/grid-view";
 import { useBoardData } from "@/components/window-container";
 import { useEntitiesByType } from "@/components/rust-engine-container";
@@ -84,7 +84,7 @@ function ActiveViewRenderer({
   tasks,
 }: ActiveViewRendererProps) {
   if (!activeView || activeView.kind === "board") {
-    return <BoardView board={board} tasks={tasks} />;
+    return <GroupedBoardView board={board} tasks={tasks} />;
   }
 
   if (activeView.kind === "grid") {
