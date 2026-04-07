@@ -630,7 +630,7 @@ No other text editor component should be introduced. CM6's extension system hand
 
 1. **State in Rust, presentation in React.** React never owns authoritative state. It reads from the backend, renders, and dispatches commands back.
 2. **Commands in Rust.** All command logic lives in Rust. Never construct command objects or compute command results client-side.
-3. **`useDispatchCommand` is the only dispatch mechanism.** Never call `backendDispatch()` directly — it bypasses the scope chain.
+3. **`useDispatchCommand` is the only dispatch mechanism.** Every command execution — keybindings, palette, context menus, drag-and-drop, programmatic triggers — must flow through `useDispatchCommand`. This is what gives us busy tracking (`inflightCount`), scope chain resolution, and client-side command handling. When commands originate from Rust (native menus, context menus), emit a Tauri event back to the frontend and let it dispatch — never call `dispatch_command_internal` directly from the Rust side. Direct `invoke()` is allowed only for read-only queries (`get_entity`, `list_views`, etc.).
 4. **No new `#[tauri::command]` mutations.** All state changes go through `dispatch_command`.
 5. **UI interprets Field metadata.** Never hardcode field-specific rendering logic in React. The YAML field properties drive rendering.
 6. **No module-level dispatch functions.** Trace to the owning component and use the hook there.
