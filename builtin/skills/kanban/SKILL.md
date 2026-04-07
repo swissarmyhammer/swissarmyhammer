@@ -21,8 +21,9 @@ When the user asks you to track work, create a todo list, or remember tasks — 
 ## Process
 
 1. Get the next task: use `kanban` with `op: "next task"` to find the next actionable card. This searches all non-done columns for ready tasks.
-   - To filter by tag: `op: "next task"`, `tag: "<tag-id>"`
-   - To filter by assignee: `op: "next task"`, `assignee: "<actor-id>"`
+   - To filter by tag: `op: "next task"`, `filter: "#review-finding"`
+   - To filter by assignee: `op: "next task"`, `filter: "@alice"`
+   - To combine: `op: "next task"`, `filter: "#bug && @alice"`
 2. Move it to doing: use `kanban` with `op: "move task"`, `id: "<task-id>"`, `column: "doing"`
 3. Read the task details: use `kanban` with `op: "get task"`, `id: "<task-id>"` to see description and subtasks
 4. **Work through each subtask and check it off immediately**:
@@ -34,22 +35,44 @@ When the user asks you to track work, create a todo list, or remember tasks — 
 
 ## Filtering Work
 
-### By Tag
+### Filter DSL
 
-Use `next task` with a `tag` filter to pick up specific kinds of work one card at a time:
+All filtering uses a small expression language with these atoms and operators:
+
+| Syntax | Meaning |
+|--------|---------|
+| `#tag` | Match tasks with this tag (includes virtual tags: READY, BLOCKED, BLOCKING) |
+| `@user` | Match tasks assigned to this user |
+| `^card-id` | Match tasks referencing this card (via depends_on or own id) |
+| `&&` / `and` | Both sides must match |
+| `\|\|` / `or` | Either side must match |
+| `!` / `not` | Negate the following expression |
+| `()` | Grouping |
+| Adjacent atoms | Implicit AND: `#bug @alice` = `#bug && @alice` |
+
+### Picking Up Work
+
+Use `next task` with a `filter` to pick up specific kinds of work one card at a time:
 
 ```json
-{"op": "next task", "tag": "review-finding"}
+{"op": "next task", "filter": "#review-finding"}
+{"op": "next task", "filter": "@alice"}
+{"op": "next task", "filter": "#bug && @alice"}
 ```
 
-This is the preferred way to work through tagged cards — it returns one ready card at a time and excludes done cards automatically.
+This is the preferred way to work through cards — it returns one ready card at a time and excludes done cards automatically.
 
-**Never call `list tasks` with no parameters** — there is no good reason to dump every task. Always use a filter (`column`, `tag`, `assignee`, `ready`) or use `next task` to get one card at a time:
+### Listing Tasks
+
+**Never call `list tasks` with no parameters** — there is no good reason to dump every task. Always use a `filter` or `column`, or use `next task` to get one card at a time:
 
 ```json
 {"op": "list tasks", "column": "todo"}
-{"op": "list tasks", "tag": "bug"}
-{"op": "list tasks", "ready": true}
+{"op": "list tasks", "filter": "#bug"}
+{"op": "list tasks", "filter": "#READY"}
+{"op": "list tasks", "filter": "#bug && @alice"}
+{"op": "list tasks", "filter": "#bug || #feature"}
+{"op": "list tasks", "filter": "!#done && #READY"}
 ```
 
 Note: `list tasks` automatically excludes done tasks unless you explicitly request `column: "done"`.
