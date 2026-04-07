@@ -2,8 +2,8 @@
 name: detected-projects
 description: Discover project types, build commands, test commands, and language-specific guidelines for the current workspace. Use early in any session before making changes.
 metadata:
-  author: "swissarmyhammer"
-  version: "0.12.11"
+  author: swissarmyhammer
+  version: 0.12.11
 ---
 
 # Project Detection

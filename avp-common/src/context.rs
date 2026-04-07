@@ -389,27 +389,7 @@ impl AvpContext {
 
             tracing::debug!("Agent created in {:.2}s", start.elapsed().as_secs_f64());
 
-            // Bridge the broadcast::Receiver into a NotificationSender
-            // (NotificationSender provides per-session subscribe semantics)
-            let (notifier, _) =
-                claude_agent::NotificationSender::new(NOTIFICATION_CHANNEL_CAPACITY);
-            let notifier = Arc::new(notifier);
-            let notifier_clone = Arc::clone(&notifier);
-            tokio::spawn(async move {
-                let mut rx = handle.notification_rx;
-                loop {
-                    match rx.recv().await {
-                        Ok(notification) => {
-                            let _ = notifier_clone.send_update(notification).await;
-                        }
-                        Err(broadcast::error::RecvError::Lagged(n)) => {
-                            tracing::warn!(skipped = n, "agent notification forwarder lagged");
-                        }
-                        Err(broadcast::error::RecvError::Closed) => break,
-                    }
-                }
-            });
-
+            let notifier = Self::bridge_notifications(handle.notification_rx);
             *guard = Some(AgentHandle {
                 agent: handle.agent,
                 notifier,
@@ -418,6 +398,30 @@ impl AvpContext {
 
         let handle = guard.as_ref().unwrap();
         Ok((Arc::clone(&handle.agent), Arc::clone(&handle.notifier)))
+    }
+
+    /// Bridge a broadcast receiver into a NotificationSender with per-session subscribe.
+    fn bridge_notifications(
+        notification_rx: broadcast::Receiver<SessionNotification>,
+    ) -> Arc<claude_agent::NotificationSender> {
+        let (notifier, _) = claude_agent::NotificationSender::new(NOTIFICATION_CHANNEL_CAPACITY);
+        let notifier = Arc::new(notifier);
+        let notifier_clone = Arc::clone(&notifier);
+        tokio::spawn(async move {
+            let mut rx = notification_rx;
+            loop {
+                match rx.recv().await {
+                    Ok(notification) => {
+                        let _ = notifier_clone.send_update(notification).await;
+                    }
+                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!(skipped = n, "agent notification forwarder lagged");
+                    }
+                    Err(broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        });
+        notifier
     }
 
     /// Get the project AVP directory path.
@@ -657,6 +661,7 @@ impl AvpContext {
         hook_type: HookType,
         input: &serde_json::Value,
         changed_files: Option<&[String]>,
+        raw_diffs: Option<&[crate::turn::FileDiff]>,
     ) -> Vec<ExecutedRuleSet> {
         if rulesets.is_empty() {
             return Vec::new();
@@ -667,7 +672,7 @@ impl AvpContext {
         }
 
         let results = self
-            .run_rulesets_with_fallback(rulesets, hook_type, input, changed_files)
+            .run_rulesets_with_fallback(rulesets, hook_type, input, changed_files, raw_diffs)
             .await;
 
         self.log_ruleset_results(&results, hook_type);
@@ -681,9 +686,16 @@ impl AvpContext {
         hook_type: HookType,
         input: &serde_json::Value,
         changed_files: Option<&[String]>,
+        raw_diffs: Option<&[crate::turn::FileDiff]>,
     ) -> Vec<ExecutedRuleSet> {
         match self
-            .execute_rulesets_with_cached_runner(rulesets, hook_type, input, changed_files)
+            .execute_rulesets_with_cached_runner(
+                rulesets,
+                hook_type,
+                input,
+                changed_files,
+                raw_diffs,
+            )
             .await
         {
             Ok(results) => results,
@@ -716,6 +728,7 @@ impl AvpContext {
         hook_type: HookType,
         input: &serde_json::Value,
         changed_files: Option<&[String]>,
+        raw_diffs: Option<&[crate::turn::FileDiff]>,
     ) -> Result<Vec<ExecutedRuleSet>, AvpError> {
         let mut guard = self.runner_cache.lock().await;
 
@@ -736,7 +749,7 @@ impl AvpContext {
             hook_type
         );
         Ok(runner
-            .execute_rulesets(rulesets, hook_type, input, changed_files)
+            .execute_rulesets(rulesets, hook_type, input, changed_files, raw_diffs)
             .await)
     }
 
@@ -971,13 +984,13 @@ mod tests {
 
         // Test failed validator
         let failed_event = ValidatorEvent {
-            name: "safe-commands",
+            name: "input-validation",
             passed: false,
             message: "Dangerous command detected",
             hook_type: "PreToolUse",
         };
 
-        assert_eq!(failed_event.name, "safe-commands");
+        assert_eq!(failed_event.name, "input-validation");
         assert!(!failed_event.passed);
         assert_eq!(failed_event.message, "Dangerous command detected");
     }

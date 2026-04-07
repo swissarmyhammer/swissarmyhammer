@@ -22,11 +22,11 @@ serde.workspace = true
 serde_json.workspace = true
 serde_yaml_ng.workspace = true
 regex.workspace = true
-model-context-protocol-extras = { path = "../model-context-protocol-extras" }
-swissarmyhammer-common = { path = "../swissarmyhammer-common" }
+model-context-protocol-extras = { workspace = true }
+swissarmyhammer-common = { workspace = true }
 
 [dev-dependencies]
-avp-common = { path = "../avp-common" }
+avp-common = { workspace = true }
 tempfile.workspace = true
 tokio = { workspace = true, features = ["sync", "rt", "net", "process", "time", "macros"] }
 

@@ -6,11 +6,11 @@ edition = "2021"
 [dependencies]
 # Embedding backends
 llama-embedding = { workspace = true }
-model-embedding = { path = "../model-embedding" }
+model-embedding = { workspace = true }
 model-loader = { workspace = true }
 
 # Config: model resolution + platform selection
-swissarmyhammer-config = { path = "../swissarmyhammer-config" }
+swissarmyhammer-config = { workspace = true }
 
 # Fundamentals
 async-trait = { workspace = true }
@@ -18,7 +18,7 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-ane-embedding = { path = "../ane-embedding" }
+ane-embedding = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }

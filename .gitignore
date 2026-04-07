@@ -36,6 +36,9 @@ test_output.log
 test_output.txt
 mcp.log
 
+# Coverage
+lcov.info
+
 # Scratch files
 CODE_REVIEW.md
 TEST_FAILURES.md

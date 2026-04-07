@@ -253,4 +253,168 @@ install_hint: "install it"
         assert_eq!(spec.health_check_interval_secs, 60);
         assert!(spec.icon.is_none());
     }
+
+    /// Mutex to serialize tests that change the current working directory.
+    static CWD_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// RAII guard that restores CWD on drop.
+    struct CwdGuard {
+        original: std::path::PathBuf,
+        _lock: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl CwdGuard {
+        /// Acquire the CWD lock and change to `new_dir`. Restores on drop.
+        fn set(new_dir: &Path) -> Self {
+            let lock = CWD_MUTEX.lock().unwrap();
+            let original = std::env::current_dir().unwrap();
+            std::env::set_current_dir(new_dir).unwrap();
+            Self {
+                original,
+                _lock: lock,
+            }
+        }
+    }
+
+    impl Drop for CwdGuard {
+        fn drop(&mut self) {
+            let _ = std::env::set_current_dir(&self.original);
+        }
+    }
+
+    /// Helper to write a valid LSP YAML spec file into a directory.
+    fn write_yaml_spec(dir: &Path, filename: &str, command: &str, lang: &str, ext: &str) {
+        let content = format!(
+            r#"project_types:
+  - rust
+command: "{command}"
+args: ["--stdio"]
+language_ids: ["{lang}"]
+file_extensions: ["{ext}"]
+install_hint: "install {command}"
+icon: "X"
+"#
+        );
+        std::fs::write(dir.join(filename), content).unwrap();
+    }
+
+    #[test]
+    fn test_load_lsp_servers_from_cwd_builtin_dir() {
+        // Set up a temp dir with builtin/lsp containing valid YAML specs
+        let tmp = tempfile::tempdir().unwrap();
+        let lsp_dir = tmp.path().join("builtin").join("lsp");
+        std::fs::create_dir_all(&lsp_dir).unwrap();
+
+        write_yaml_spec(&lsp_dir, "alpha.yaml", "alpha-lsp", "alpha", "al");
+        write_yaml_spec(&lsp_dir, "beta.yml", "beta-lsp", "beta", "be");
+
+        // Change CWD so load_lsp_servers finds builtin/lsp
+        let _guard = CwdGuard::set(tmp.path());
+
+        let servers = load_lsp_servers();
+
+        // Should have loaded from YAML, not fallen back to hardcoded rust-analyzer
+        assert_eq!(servers.len(), 2);
+        let commands: Vec<&str> = servers.iter().map(|s| s.command.as_str()).collect();
+        assert!(commands.contains(&"alpha-lsp"));
+        assert!(commands.contains(&"beta-lsp"));
+        // The hardcoded rust-analyzer should NOT be present
+        assert!(!commands.contains(&"rust-analyzer"));
+    }
+
+    #[test]
+    fn test_load_lsp_servers_skips_non_yaml_files() {
+        // Only .yaml and .yml should be loaded; other extensions are ignored
+        let tmp = tempfile::tempdir().unwrap();
+        let lsp_dir = tmp.path().join("builtin").join("lsp");
+        std::fs::create_dir_all(&lsp_dir).unwrap();
+
+        write_yaml_spec(&lsp_dir, "good.yaml", "good-lsp", "good", "gd");
+        // Write a .txt file that should be skipped
+        std::fs::write(lsp_dir.join("readme.txt"), "not a spec").unwrap();
+        // Write a .json file that should be skipped
+        std::fs::write(lsp_dir.join("config.json"), "{}").unwrap();
+
+        let _guard = CwdGuard::set(tmp.path());
+
+        let servers = load_lsp_servers();
+        assert_eq!(servers.len(), 1);
+        assert_eq!(servers[0].command, "good-lsp");
+    }
+
+    #[test]
+    fn test_load_lsp_servers_skips_invalid_yaml_loads_valid() {
+        // A directory with one valid and one invalid YAML file should load only the valid one
+        let tmp = tempfile::tempdir().unwrap();
+        let lsp_dir = tmp.path().join("builtin").join("lsp");
+        std::fs::create_dir_all(&lsp_dir).unwrap();
+
+        write_yaml_spec(&lsp_dir, "valid.yaml", "valid-lsp", "v", "vl");
+        std::fs::write(lsp_dir.join("broken.yaml"), "not: valid: yaml: [[[").unwrap();
+
+        let _guard = CwdGuard::set(tmp.path());
+
+        let servers = load_lsp_servers();
+        // The valid one should be loaded; the broken one skipped
+        assert_eq!(servers.len(), 1);
+        assert_eq!(servers[0].command, "valid-lsp");
+    }
+
+    #[test]
+    fn test_load_lsp_servers_verifies_spec_fields() {
+        // Verify that all fields from the YAML are correctly deserialized
+        let tmp = tempfile::tempdir().unwrap();
+        let lsp_dir = tmp.path().join("builtin").join("lsp");
+        std::fs::create_dir_all(&lsp_dir).unwrap();
+
+        std::fs::write(
+            lsp_dir.join("detailed.yaml"),
+            r#"project_types:
+  - python
+command: "pyright"
+args: ["--stdio", "--verbose"]
+language_ids: ["python"]
+file_extensions: ["py", "pyi"]
+startup_timeout_secs: 45
+health_check_interval_secs: 120
+install_hint: "pip install pyright"
+icon: "S"
+"#,
+        )
+        .unwrap();
+
+        let _guard = CwdGuard::set(tmp.path());
+
+        let servers = load_lsp_servers();
+        assert_eq!(servers.len(), 1);
+        let spec = &servers[0];
+        assert_eq!(spec.command, "pyright");
+        assert_eq!(spec.args, vec!["--stdio", "--verbose"]);
+        assert_eq!(spec.language_ids, vec!["python"]);
+        assert_eq!(spec.file_extensions, vec!["py", "pyi"]);
+        assert_eq!(spec.startup_timeout_secs, 45);
+        assert_eq!(spec.health_check_interval_secs, 120);
+        assert_eq!(spec.install_hint, "pip install pyright");
+        assert_eq!(spec.icon, Some("S".to_string()));
+        assert_eq!(
+            spec.project_types,
+            vec![swissarmyhammer_project_detection::ProjectType::Python]
+        );
+    }
+
+    #[test]
+    fn test_load_lsp_servers_empty_dir_tries_next_path() {
+        // An existing but empty builtin/lsp dir doesn't short-circuit; the loader
+        // continues to the next candidate path (e.g. CARGO_MANIFEST_DIR-relative).
+        let tmp = tempfile::tempdir().unwrap();
+        let lsp_dir = tmp.path().join("builtin").join("lsp");
+        std::fs::create_dir_all(&lsp_dir).unwrap();
+
+        let _guard = CwdGuard::set(tmp.path());
+
+        let servers = load_lsp_servers();
+        // Empty CWD-relative dir is skipped; later paths or the hardcoded fallback
+        // still produce results, so we should get at least one server.
+        assert!(!servers.is_empty());
+    }
 }

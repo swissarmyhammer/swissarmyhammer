@@ -175,23 +175,7 @@ fn load_embedded_chunks(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::{configure_connection, create_schema};
-
-    fn test_db() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        configure_connection(&conn).unwrap();
-        create_schema(&conn).unwrap();
-        conn
-    }
-
-    fn insert_file(conn: &Connection, path: &str) {
-        conn.execute(
-            "INSERT OR IGNORE INTO indexed_files (file_path, content_hash, file_size, last_seen_at)
-             VALUES (?1, X'DEADBEEF', 1024, 1000)",
-            [path],
-        )
-        .unwrap();
-    }
+    use crate::test_fixtures::{insert_file_simple as insert_file, test_db};
 
     fn insert_chunk_with_embedding(
         conn: &Connection,

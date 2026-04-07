@@ -78,7 +78,7 @@ Only exception: if the card description explicitly says **auto-continue** or **c
 
 - One card at a time. Don't try to do multiple cards in one pass.
 - Do the work. No excuses, no "too complex". Find a way.
-- Don't over-engineer — write the simplest code that works.
+- Follow the coding standards — correct, robust, well-designed code that follows prevailing patterns.
 - Don't refactor unrelated code while implementing.
 - Stay focused on the task you were given.
 - ALL tests must pass before you report success. Zero failures, zero warnings.

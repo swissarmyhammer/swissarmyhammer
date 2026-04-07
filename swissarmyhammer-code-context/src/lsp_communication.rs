@@ -185,7 +185,7 @@ impl LspJsonRpcClient {
     /// read is bounded by [`LSP_REQUEST_TIMEOUT`] — if no matching response
     /// arrives within that window an `LspError` is returned instead of
     /// blocking indefinitely.
-    fn send_request(&mut self, method: &str, params: Value) -> Result<Value, CodeContextError> {
+    pub fn send_request(&mut self, method: &str, params: Value) -> Result<Value, CodeContextError> {
         // Format JSON-RPC 2.0 request
         let request = json!({
             "jsonrpc": "2.0",
@@ -246,14 +246,49 @@ impl LspJsonRpcClient {
                 if id.as_u64() == Some(expected_id as u64) {
                     return Ok(response);
                 }
+                // Server-initiated requests or stale responses — skip and keep reading
                 warn!(
-                    "Unexpected response id: expected {}, got {}",
-                    expected_id, id
+                    "Unexpected response id: expected {}, got {} (method: {}). Skipping.",
+                    expected_id,
+                    id,
+                    response
+                        .get("method")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("none")
                 );
+                continue;
             }
-
-            return Ok(response);
         }
+    }
+
+    /// Send a JSON-RPC notification (fire-and-forget, no response expected).
+    ///
+    /// Per the JSON-RPC 2.0 spec, notifications omit the `id` field and the
+    /// server must not reply. This avoids the timeout penalty of `send_request`
+    /// for methods like `textDocument/didOpen` and `textDocument/didClose`.
+    pub fn send_notification(
+        &mut self,
+        method: &str,
+        params: Value,
+    ) -> Result<(), CodeContextError> {
+        let notification = json!({
+            "jsonrpc": "2.0",
+            "method": method,
+            "params": params,
+        });
+
+        let json_str = notification.to_string();
+        let msg = format!("Content-Length: {}\r\n\r\n{}", json_str.len(), json_str);
+
+        self.stdin
+            .write_all(msg.as_bytes())
+            .map_err(|e| CodeContextError::LspError(format!("write notification failed: {}", e)))?;
+        self.stdin
+            .flush()
+            .map_err(|e| CodeContextError::LspError(format!("flush notification failed: {}", e)))?;
+
+        debug!("Sent LSP notification: {}", method);
+        Ok(())
     }
 
     /// Block until the stdout pipe has data available, or the deadline expires.
@@ -1879,8 +1914,9 @@ send_msg({"jsonrpc": "2.0", "id": req["id"], "result": {"capabilities": {}}})
 
     #[test]
     fn test_send_request_accepts_mismatched_id_response() {
-        // When the server returns a response with a different ID than expected,
-        // send_request should still return that response (after logging a warning).
+        // When the server returns a response with a wrong ID first, then the
+        // correct one, send_request should skip the wrong ID and return the
+        // correct response.
         let script = r#"
 import sys, json
 
@@ -1904,9 +1940,13 @@ def send_msg(obj):
 
 # Read the request
 req = read_msg()
+req_id = req.get("id", 1)
 
-# Send response with a different ID (e.g., id=999)
-send_msg({"jsonrpc": "2.0", "id": 999, "result": {"capabilities": {}}})
+# Send response with a different ID first (server-initiated request)
+send_msg({"jsonrpc": "2.0", "id": 999, "method": "workspace/diagnostic/refresh"})
+
+# Then send the correct response
+send_msg({"jsonrpc": "2.0", "id": req_id, "result": {"capabilities": {}}})
 "#;
 
         let mut child = std::process::Command::new("python3")
@@ -1922,11 +1962,12 @@ send_msg({"jsonrpc": "2.0", "id": 999, "result": {"capabilities": {}}})
         let stdout = child.stdout.take().unwrap();
 
         let mut client = LspJsonRpcClient::new(stdin, stdout);
-        // initialize() calls send_request, which should accept the mismatched response
+        // initialize() calls send_request — should skip the wrong-ID message
+        // and return the correct response
         let result = client.initialize(Path::new("/workspace"));
         assert!(
             result.is_ok(),
-            "should succeed even with mismatched ID: {:?}",
+            "should skip mismatched ID and find correct response: {:?}",
             result
         );
 

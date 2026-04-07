@@ -29,11 +29,11 @@ thiserror = { workspace = true }
 async-trait = { workspace = true }
 
 # SwissArmyHammer common functionality
-swissarmyhammer-common = { path = "../swissarmyhammer-common" }
-swissarmyhammer-shell = { path = "../swissarmyhammer-shell" }
-swissarmyhammer-templating = { path = "../swissarmyhammer-templating" }
+swissarmyhammer-common = { workspace = true }
+swissarmyhammer-shell = { workspace = true }
+swissarmyhammer-templating = { workspace = true }
 
-swissarmyhammer-prompts = { path = "../swissarmyhammer-prompts" }
+swissarmyhammer-prompts = { workspace = true }
 
 # Template engine (legacy - being phased out)
 liquid = { workspace = true }
@@ -81,12 +81,12 @@ which = { workspace = true }
 
 # Git operations
 git2 = { workspace = true }
-swissarmyhammer-git = { path = "../swissarmyhammer-git" }
+swissarmyhammer-git = { workspace = true }
 
 # Common utilities
 
 # Configuration support
-swissarmyhammer-config = { path = "../swissarmyhammer-config" }
+swissarmyhammer-config = { workspace = true }
 
 
 
@@ -129,8 +129,8 @@ rstest = { workspace = true }
 test-log = { workspace = true }
 
 futures = { workspace = true }
-swissarmyhammer-config = { path = "../swissarmyhammer-config" }
-swissarmyhammer-tools = { path = "../swissarmyhammer-tools" }
+swissarmyhammer-config = { workspace = true }
+swissarmyhammer-tools = { workspace = true }
 
 [lib]
 name = "swissarmyhammer"

@@ -5,12 +5,6 @@
         "serve"
       ],
       "command": "sah"
-    },
-    "shelltool": {
-      "args": [
-        "serve"
-      ],
-      "command": "shelltool"
     }
   }
 }

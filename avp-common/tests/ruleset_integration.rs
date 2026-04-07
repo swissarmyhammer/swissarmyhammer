@@ -23,11 +23,11 @@ fn test_load_builtin_rulesets() {
     let mut loader = ValidatorLoader::new();
     load_builtins(&mut loader);
 
-    // Should have loaded at least 4 RuleSets
-    // (security-rules, command-safety, code-quality, test-integrity)
+    // Should have loaded at least 3 RuleSets
+    // (security-rules, code-quality, test-integrity)
     assert!(
-        loader.ruleset_count() >= 4,
-        "Should have at least 4 builtin RuleSets, got {}",
+        loader.ruleset_count() >= 3,
+        "Should have at least 3 builtin RuleSets, got {}",
         loader.ruleset_count()
     );
 
@@ -35,10 +35,6 @@ fn test_load_builtin_rulesets() {
     assert!(
         loader.get_ruleset("security-rules").is_some(),
         "Should have security-rules"
-    );
-    assert!(
-        loader.get_ruleset("command-safety").is_some(),
-        "Should have command-safety"
     );
     assert!(
         loader.get_ruleset("code-quality").is_some(),
@@ -317,18 +313,22 @@ fn test_ruleset_matching() {
     );
 
     let matching = loader.matching_rulesets(&ctx);
-
-    // Should match security-rules, code-quality, test-integrity
-    // (rust-conventions removed, replaced by dtolnay project validator)
     let names: Vec<&str> = matching.iter().map(|rs| rs.name()).collect();
 
+    // security-rules stays PostToolUse and should match
     assert!(
         names.contains(&"security-rules"),
         "security-rules should match PostToolUse + Write + .rs"
     );
+
+    // code-quality and test-integrity are now Stop triggers and should NOT match PostToolUse
     assert!(
-        names.contains(&"code-quality"),
-        "code-quality should match PostToolUse + Write + .rs"
+        !names.contains(&"code-quality"),
+        "code-quality should NOT match PostToolUse (migrated to Stop)"
+    );
+    assert!(
+        !names.contains(&"test-integrity"),
+        "test-integrity should NOT match PostToolUse (migrated to Stop)"
     );
     assert!(
         !names.contains(&"rust-conventions"),
@@ -337,11 +337,11 @@ fn test_ruleset_matching() {
 }
 
 #[test]
-fn test_ruleset_matching_bash_command() {
+fn test_ruleset_matching_bash_command_no_pre_tool_use_builtins() {
     let mut loader = ValidatorLoader::new();
     load_builtins(&mut loader);
 
-    // Test matching for PreToolUse + Bash
+    // Test matching for PreToolUse + Bash — no builtin validators target this anymore
     let ctx = avp_common::validator::MatchContext::from_json(
         avp_common::types::HookType::PreToolUse,
         &serde_json::json!({
@@ -351,14 +351,7 @@ fn test_ruleset_matching_bash_command() {
     );
 
     let matching = loader.matching_rulesets(&ctx);
-
-    // Should match command-safety
     let names: Vec<&str> = matching.iter().map(|rs| rs.name()).collect();
-
-    assert!(
-        names.contains(&"command-safety"),
-        "command-safety should match PreToolUse + Bash"
-    );
 
     // Should NOT match security-rules (wrong trigger)
     assert!(

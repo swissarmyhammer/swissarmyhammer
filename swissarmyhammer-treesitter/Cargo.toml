@@ -50,7 +50,7 @@ tree-sitter-sequel = { workspace = true }
 # Standard dependencies
 thiserror = { workspace = true }
 anyhow = { workspace = true }
-swissarmyhammer-common = { path = "../swissarmyhammer-common" }
+swissarmyhammer-common = { workspace = true }
 
 # Async and concurrency
 tokio = { workspace = true }
@@ -76,13 +76,13 @@ rusqlite = { workspace = true }
 swissarmyhammer-leader-election = { workspace = true }
 
 # Embedding trait + cosine similarity
-model-embedding = { path = "../model-embedding" }
+model-embedding = { workspace = true }
 
 # Embedding support (platform-aware: ANE on Apple Silicon, llama.cpp elsewhere)
-swissarmyhammer-embedding = { path = "../swissarmyhammer-embedding" }
+swissarmyhammer-embedding = { workspace = true }
 
 # Code context integration for symbol extraction and edge generation
-swissarmyhammer-code-context = { path = "../swissarmyhammer-code-context" }
+swissarmyhammer-code-context = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

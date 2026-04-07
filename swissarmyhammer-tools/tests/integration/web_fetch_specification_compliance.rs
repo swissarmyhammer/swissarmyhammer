@@ -275,61 +275,6 @@ async fn test_fetch_dispatch_metadata_endpoint_returns_error() {
     assert!(result.is_err(), "AWS IMDS URL should be blocked");
 }
 
-/// Dispatch a fetch to a live mock HTTP server and verify the result is Ok.
-///
-/// NOTE: wiremock binds to localhost/127.0.0.1 which is blocked by the SSRF
-/// security guard.  The underlying WebFetcher layer (tested in
-/// swissarmyhammer-web) covers this path with its own integration tests.
-/// We mark this test #[ignore] to avoid a false failure in the regular suite.
-#[tokio::test]
-#[ignore = "wiremock binds to 127.0.0.1 which is blocked by SSRF guard; covered in swissarmyhammer-web tests"]
-async fn test_fetch_dispatch_with_mock_server_returns_ok() {
-    use swissarmyhammer_tools::mcp::tool_registry::McpTool;
-    use swissarmyhammer_tools::mcp::tools::web::WebTool;
-    use wiremock::matchers::{method, path};
-    use wiremock::{Mock, MockServer, ResponseTemplate};
-
-    let mock_server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/page"))
-        .respond_with(ResponseTemplate::new(200).set_body_string(
-            "<html><head><title>Test Page</title></head><body><h1>Hello</h1><p>World</p></body></html>",
-        ))
-        .mount(&mock_server)
-        .await;
-
-    let url = format!("{}/page", mock_server.uri());
-    let tool = WebTool::new();
-    let ctx = make_context().await;
-
-    let mut args = serde_json::Map::new();
-    args.insert("op".to_string(), json!("fetch url"));
-    args.insert("url".to_string(), json!(url));
-    args.insert("timeout".to_string(), json!(10));
-
-    let result = tool.execute(args, &ctx).await;
-    assert!(
-        result.is_ok(),
-        "successful fetch from mock server should return Ok, got: {:?}",
-        result.err()
-    );
-    let call_result = result.unwrap();
-    assert_eq!(
-        call_result.is_error,
-        Some(false),
-        "call result should not be an error"
-    );
-    // The response should contain some markdown content
-    let text = match &call_result.content[0].raw {
-        rmcp::model::RawContent::Text(t) => &t.text,
-        _ => panic!("expected text content"),
-    };
-    assert!(
-        !text.is_empty(),
-        "fetch result markdown should not be empty"
-    );
-}
-
 // ── execute_search integration via WebTool ───────────────────────────────
 
 /// Search dispatch with a too-long query returns an error (no network needed).

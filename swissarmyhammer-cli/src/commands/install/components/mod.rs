@@ -874,33 +874,50 @@ fn render_skill_instructions(
 
 /// Format a Skill back into SKILL.md content (frontmatter + body).
 fn format_skill_md(skill: &swissarmyhammer_skills::Skill) -> String {
-    let mut content = String::from("---\n");
-    content.push_str(&format!("name: {}\n", skill.name));
-    content.push_str(&format!("description: {}\n", skill.description));
+    // Build a frontmatter map and let serde_yaml_ng handle proper escaping/quoting
+    let mut frontmatter = serde_yaml_ng::Mapping::new();
+    frontmatter.insert(
+        serde_yaml_ng::Value::String("name".to_string()),
+        serde_yaml_ng::Value::String(skill.name.to_string()),
+    );
+    frontmatter.insert(
+        serde_yaml_ng::Value::String("description".to_string()),
+        serde_yaml_ng::Value::String(skill.description.clone()),
+    );
 
     if !skill.allowed_tools.is_empty() {
         let tools = skill.allowed_tools.join(" ");
-        content.push_str(&format!("allowed-tools: \"{}\"\n", tools));
+        frontmatter.insert(
+            serde_yaml_ng::Value::String("allowed-tools".to_string()),
+            serde_yaml_ng::Value::String(tools),
+        );
     }
 
     if let Some(ref license) = skill.license {
-        content.push_str(&format!("license: {}\n", license));
+        frontmatter.insert(
+            serde_yaml_ng::Value::String("license".to_string()),
+            serde_yaml_ng::Value::String(license.clone()),
+        );
     }
 
     if !skill.metadata.is_empty() {
-        content.push_str("metadata:\n");
+        let mut meta_map = serde_yaml_ng::Mapping::new();
         let mut keys: Vec<_> = skill.metadata.keys().collect();
         keys.sort();
         for key in keys {
-            content.push_str(&format!("  {}: \"{}\"\n", key, skill.metadata[key]));
+            meta_map.insert(
+                serde_yaml_ng::Value::String(key.clone()),
+                serde_yaml_ng::Value::String(skill.metadata[key].clone()),
+            );
         }
+        frontmatter.insert(
+            serde_yaml_ng::Value::String("metadata".to_string()),
+            serde_yaml_ng::Value::Mapping(meta_map),
+        );
     }
 
-    content.push_str("---\n\n");
-    content.push_str(&skill.instructions);
-    content.push('\n');
-
-    content
+    let yaml = serde_yaml_ng::to_string(&frontmatter).unwrap_or_default();
+    format!("---\n{}---\n\n{}\n", yaml, skill.instructions)
 }
 
 // ── AgentDeployment (priority 31) ────────────────────────────────────

@@ -109,6 +109,11 @@ impl LspDaemon {
         &self.spec.command
     }
 
+    /// Return the file extensions this daemon's server handles (without dot).
+    pub fn file_extensions(&self) -> &[String] {
+        &self.spec.file_extensions
+    }
+
     /// Return a mutable reference to the JSON-RPC client, if the server is running.
     ///
     /// Returns `None` if the daemon has not been started, failed to start, or
@@ -1482,5 +1487,426 @@ mod tests {
             "expected at least 1s backoff delay, got: {elapsed:?}"
         );
         assert_eq!(daemon.state(), LspDaemonState::NotFound);
+    }
+
+    // -- file_extensions accessor test ----------------------------------------
+
+    #[test]
+    fn test_file_extensions_accessor() {
+        let mut spec = test_spec("some-lsp");
+        spec.file_extensions = vec!["rs".to_string(), "toml".to_string(), "lock".to_string()];
+        let daemon = LspDaemon::new(spec, PathBuf::from("/tmp"));
+        assert_eq!(
+            daemon.file_extensions(),
+            &["rs".to_string(), "toml".to_string(), "lock".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_file_extensions_empty() {
+        let mut spec = test_spec("some-lsp");
+        spec.file_extensions = vec![];
+        let daemon = LspDaemon::new(spec, PathBuf::from("/tmp"));
+        assert!(daemon.file_extensions().is_empty());
+    }
+
+    // -- send_jsonrpc_message write failure test ------------------------------
+
+    /// An async writer that always returns an I/O error on write.
+    struct FailingWriter;
+
+    impl tokio::io::AsyncWrite for FailingWriter {
+        fn poll_write(
+            self: std::pin::Pin<&mut Self>,
+            _cx: &mut std::task::Context<'_>,
+            _buf: &[u8],
+        ) -> std::task::Poll<std::io::Result<usize>> {
+            std::task::Poll::Ready(Err(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "simulated write failure",
+            )))
+        }
+
+        fn poll_flush(
+            self: std::pin::Pin<&mut Self>,
+            _cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            std::task::Poll::Ready(Err(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "simulated flush failure",
+            )))
+        }
+
+        fn poll_shutdown(
+            self: std::pin::Pin<&mut Self>,
+            _cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            std::task::Poll::Ready(Ok(()))
+        }
+    }
+
+    #[tokio::test]
+    async fn test_send_jsonrpc_write_failure() {
+        let msg = json!({"jsonrpc": "2.0", "method": "test"});
+        let mut writer = FailingWriter;
+        let result = send_jsonrpc_message(&mut writer, &msg).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("write header"),
+            "expected write header error, got: {err}"
+        );
+    }
+
+    // -- initialize_handshake error path tests --------------------------------
+    //
+    // These use Python one-liners as mock LSP servers. The Python script reads
+    // the incoming JSON-RPC request, then sends a malformed response.
+
+    /// Helper: build a spec that runs a Python script as the LSP server.
+    fn python_mock_spec(script: &str) -> OwnedLspServerSpec {
+        OwnedLspServerSpec {
+            project_types: vec![],
+            command: "python3".to_string(),
+            args: vec!["-c".to_string(), script.to_string()],
+            language_ids: vec!["test".to_string()],
+            file_extensions: vec!["txt".to_string()],
+            startup_timeout_secs: 5,
+            health_check_interval_secs: 60,
+            install_hint: "N/A".to_string(),
+            icon: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_initialize_handshake_bad_json_response() {
+        // Python script reads the initialize request, then responds with
+        // valid Content-Length framing but invalid JSON body.
+        let script = r#"
+import sys
+# Read the incoming request: headers then body
+headers = ''
+while True:
+    line = sys.stdin.readline()
+    if line.strip() == '':
+        break
+    headers += line
+# Extract content length and read body
+import re
+m = re.search(r'Content-Length:\s*(\d+)', headers)
+if m:
+    body = sys.stdin.read(int(m.group(1)))
+# Send bad JSON with valid framing
+bad = 'this is not json at all!!!'
+sys.stdout.write(f'Content-Length: {len(bad)}\r\n\r\n{bad}')
+sys.stdout.flush()
+"#;
+        let spec = python_mock_spec(script);
+        let workspace = tempfile::tempdir().expect("workspace tempdir");
+        let mut daemon = LspDaemon::new(spec, workspace.path().to_path_buf());
+
+        let result = daemon.start().await;
+        assert!(result.is_err(), "expected start to fail with bad JSON");
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, LspError::HandshakeFailed(_)),
+            "expected HandshakeFailed, got: {err:?}"
+        );
+        let msg = err.to_string();
+        assert!(
+            msg.contains("json decode") || msg.contains("json"),
+            "expected JSON decode error in message, got: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_initialize_handshake_missing_content_length_response() {
+        // Python script reads the request, then sends a response without
+        // the Content-Length header (just raw JSON after blank line).
+        let script = r#"
+import sys, re
+headers = ''
+while True:
+    line = sys.stdin.readline()
+    if line.strip() == '':
+        break
+    headers += line
+m = re.search(r'Content-Length:\s*(\d+)', headers)
+if m:
+    body = sys.stdin.read(int(m.group(1)))
+# Send without Content-Length header -- just newline then body
+sys.stdout.write('\r\n')
+sys.stdout.flush()
+# Then close stdout so the reader gets EOF
+sys.stdout.close()
+"#;
+        let spec = python_mock_spec(script);
+        let workspace = tempfile::tempdir().expect("workspace tempdir");
+        let mut daemon = LspDaemon::new(spec, workspace.path().to_path_buf());
+
+        let result = daemon.start().await;
+        assert!(
+            result.is_err(),
+            "expected start to fail without Content-Length"
+        );
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, LspError::HandshakeFailed(_)),
+            "expected HandshakeFailed, got: {err:?}"
+        );
+        let msg = err.to_string();
+        assert!(
+            msg.contains("Content-Length") || msg.contains("EOF") || msg.contains("missing"),
+            "expected missing Content-Length or EOF error, got: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_initialize_handshake_truncated_body() {
+        // Python script reads the request, then sends a Content-Length
+        // that's larger than the actual body, causing an EOF during read.
+        let script = r#"
+import sys, re
+headers = ''
+while True:
+    line = sys.stdin.readline()
+    if line.strip() == '':
+        break
+    headers += line
+m = re.search(r'Content-Length:\s*(\d+)', headers)
+if m:
+    body = sys.stdin.read(int(m.group(1)))
+# Claim 1000 bytes but only send 5
+sys.stdout.write('Content-Length: 1000\r\n\r\nhello')
+sys.stdout.flush()
+sys.stdout.close()
+"#;
+        let spec = python_mock_spec(script);
+        let workspace = tempfile::tempdir().expect("workspace tempdir");
+        let mut daemon = LspDaemon::new(spec, workspace.path().to_path_buf());
+
+        let result = daemon.start().await;
+        assert!(
+            result.is_err(),
+            "expected start to fail with truncated body"
+        );
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, LspError::HandshakeFailed(_)),
+            "expected HandshakeFailed, got: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_initialize_handshake_process_exits_with_stderr() {
+        // Python script writes to stderr then exits without responding,
+        // exercising the stderr capture path in initialize_handshake.
+        let script = r#"
+import sys
+sys.stderr.write('mock LSP fatal error: config not found\n')
+sys.stderr.flush()
+sys.exit(1)
+"#;
+        let spec = python_mock_spec(script);
+        let workspace = tempfile::tempdir().expect("workspace tempdir");
+        let mut daemon = LspDaemon::new(spec, workspace.path().to_path_buf());
+
+        let result = daemon.start().await;
+        assert!(result.is_err(), "expected start to fail when process exits");
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, LspError::HandshakeFailed(_) | LspError::Timeout(_)),
+            "expected HandshakeFailed or Timeout, got: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_initialize_handshake_wrong_id_still_succeeds() {
+        // initialize_handshake does NOT validate the response ID. This test
+        // documents that behavior: a response with id:999 is accepted because
+        // the code only checks framing, not content.
+        let script = r#"
+import sys, re, json
+headers = ''
+while True:
+    line = sys.stdin.readline()
+    if line.strip() == '':
+        break
+    headers += line
+m = re.search(r'Content-Length:\s*(\d+)', headers)
+if m:
+    body = sys.stdin.read(int(m.group(1)))
+# Respond with wrong id
+resp = json.dumps({"jsonrpc": "2.0", "id": 999, "result": {"capabilities": {}}})
+sys.stdout.write(f'Content-Length: {len(resp)}\r\n\r\n{resp}')
+sys.stdout.flush()
+# Read the initialized notification
+headers2 = ''
+while True:
+    line = sys.stdin.readline()
+    if line.strip() == '':
+        break
+    headers2 += line
+m2 = re.search(r'Content-Length:\s*(\d+)', headers2)
+if m2:
+    body2 = sys.stdin.read(int(m2.group(1)))
+# Keep stdin open briefly so pipes don't break
+import time
+time.sleep(0.5)
+"#;
+        let spec = python_mock_spec(script);
+        let workspace = tempfile::tempdir().expect("workspace tempdir");
+        let mut daemon = LspDaemon::new(spec, workspace.path().to_path_buf());
+
+        let result = daemon.start().await;
+        // This succeeds because initialize_handshake doesn't validate the ID
+        assert!(
+            result.is_ok(),
+            "expected wrong-id response to be accepted (no ID validation), got: {result:?}"
+        );
+
+        daemon.shutdown().await;
+    }
+
+    // -- health_check + restart_with_backoff edge case tests ------------------
+
+    #[tokio::test]
+    async fn test_health_check_detects_naturally_exiting_process() {
+        // Spawn a process that exits after a short delay. Verify health_check
+        // detects the exit and transitions to Failed.
+        let workspace = tempfile::tempdir().expect("workspace tempdir");
+        let child = Command::new("python3")
+            .args(["-c", "import time; time.sleep(0.2)"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .expect("spawn python");
+
+        let spec = cat_spec();
+        let mut daemon = LspDaemon::new(spec, workspace.path().to_path_buf());
+        daemon.child = Some(child);
+
+        // Initially alive
+        assert!(daemon.health_check());
+
+        // Wait for the process to exit naturally
+        tokio::time::sleep(Duration::from_millis(500)).await;
+
+        // health_check should detect the exit
+        assert!(!daemon.health_check());
+        assert!(
+            matches!(daemon.state(), LspDaemonState::Failed { .. }),
+            "expected Failed after natural exit, got: {:?}",
+            daemon.state()
+        );
+        // Verify failure reason mentions process exit
+        if let LspDaemonState::Failed { reason, .. } = daemon.state() {
+            assert!(
+                reason.contains("process exited"),
+                "expected 'process exited' in reason, got: {reason}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_health_check_clears_client_on_exit() {
+        // When a process exits, health_check should clear the shared client.
+        let workspace = tempfile::tempdir().expect("workspace tempdir");
+        let child = Command::new("true")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .expect("spawn true");
+
+        let spec = immediately_exiting_spec();
+        let mut daemon = LspDaemon::new(spec, workspace.path().to_path_buf());
+        daemon.child = Some(child);
+
+        // Wait for process to exit
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        // health_check should detect exit and clear client
+        assert!(!daemon.health_check());
+        assert!(daemon.child.is_none());
+        assert!(daemon.client().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_restart_with_backoff_sleeps_before_restart() {
+        // Verify that restart_with_backoff introduces a delay before
+        // attempting restart. We use a nonexistent binary so start() fails
+        // fast, and measure wall time to confirm the backoff delay.
+        let spec = test_spec("nonexistent-lsp-binary-abc123xyz");
+        let mut daemon = LspDaemon::new(spec, PathBuf::from("/tmp"));
+        daemon.consecutive_failures = 0; // first failure: 1s backoff
+
+        let start = std::time::Instant::now();
+        let result = daemon.restart_with_backoff().await;
+        let elapsed = start.elapsed();
+
+        assert!(result.is_err());
+        // Should have waited ~1s (backoff for attempt 0)
+        assert!(
+            elapsed >= Duration::from_millis(800),
+            "expected at least ~1s backoff delay, got: {elapsed:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_restart_with_backoff_gives_up_at_max_failures() {
+        // When consecutive_failures >= MAX_CONSECUTIVE_FAILURES, restart
+        // should return an error immediately without sleeping.
+        let spec = test_spec("nonexistent-lsp-binary-abc123xyz");
+        let mut daemon = LspDaemon::new(spec, PathBuf::from("/tmp"));
+        daemon.consecutive_failures = MAX_CONSECUTIVE_FAILURES;
+
+        let start = std::time::Instant::now();
+        let result = daemon.restart_with_backoff().await;
+        let elapsed = start.elapsed();
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("too many consecutive failures"),
+            "expected 'too many consecutive failures', got: {err}"
+        );
+        // Should return immediately, not sleep
+        assert!(
+            elapsed < Duration::from_millis(100),
+            "expected immediate return, got: {elapsed:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_health_check_multiple_calls_after_exit() {
+        // After a process has exited and been detected by health_check,
+        // subsequent calls should also return false (child is now None).
+        let workspace = tempfile::tempdir().expect("workspace tempdir");
+        let child = Command::new("true")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .expect("spawn true");
+
+        let spec = immediately_exiting_spec();
+        let mut daemon = LspDaemon::new(spec, workspace.path().to_path_buf());
+        daemon.child = Some(child);
+
+        // Wait for exit
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        // First call detects exit
+        assert!(!daemon.health_check());
+        assert_eq!(daemon.consecutive_failures, 1);
+
+        // Second call: child is None, returns false but doesn't increment failures
+        assert!(!daemon.health_check());
+        assert_eq!(daemon.consecutive_failures, 1); // unchanged
     }
 }

@@ -266,13 +266,13 @@ fn test_full_precedence_chain_builtin_user_project() {
         .unwrap();
 
     // Verify final state
-    // Builtin-only RuleSets should still exist
+    // Builtin-only RuleSets should still exist (use code-quality since security-rules gets overridden below)
     assert!(
-        loader.get_ruleset("command-safety").is_some(),
-        "Builtin command-safety should exist"
+        loader.get_ruleset("code-quality").is_some(),
+        "Builtin code-quality should exist"
     );
     assert_eq!(
-        loader.get_ruleset("command-safety").unwrap().source,
+        loader.get_ruleset("code-quality").unwrap().source,
         ValidatorSource::Builtin
     );
 

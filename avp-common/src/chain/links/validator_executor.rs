@@ -74,6 +74,67 @@ impl<I: ValidatorMatchInfo> ValidatorExecutorLink<I> {
         }
     }
 
+    /// Load accumulated diffs from sidecar files for Stop hooks.
+    ///
+    /// Reads all `.diff` files from `.avp/turn_diffs/<session_id>/` and converts
+    /// them into `FileDiff` structs. Returns `None` if no diffs are found.
+    fn load_diffs_from_sidecar(&self, input: &I) -> Option<Vec<crate::turn::FileDiff>> {
+        let session_id = input.session_id();
+        let all_diffs = self.turn_state.load_all_diffs(session_id);
+        if all_diffs.is_empty() {
+            return None;
+        }
+
+        let diffs: Vec<crate::turn::FileDiff> = all_diffs
+            .into_iter()
+            .map(|(path, diff_text)| {
+                // Detect new files by checking for the standard unified diff marker
+                let is_new_file = diff_text.contains("--- /dev/null");
+                crate::turn::FileDiff {
+                    path: std::path::PathBuf::from(&path),
+                    diff_text,
+                    is_new_file,
+                    is_binary: false,
+                }
+            })
+            .collect();
+
+        tracing::debug!(
+            "ValidatorExecutorLink: Loaded {} diffs from sidecar for session {}",
+            diffs.len(),
+            session_id
+        );
+
+        Some(diffs)
+    }
+
+    /// Collect diffs from the appropriate source and prepare context for validators.
+    ///
+    /// PostToolUse: diffs from ChainContext (set by PostToolUseFileTracker), prepared inline.
+    /// Stop: diffs from sidecar files, passed raw for per-ruleset filtering in the runner.
+    fn prepare_diffs(
+        &self,
+        input: &I,
+        hook_type: HookType,
+        ctx: &mut ChainContext,
+        input_json: serde_json::Value,
+    ) -> (serde_json::Value, Option<Vec<crate::turn::FileDiff>>) {
+        let chain_diffs: Option<Vec<crate::turn::FileDiff>> = ctx.get(CTX_FILE_DIFFS);
+        let sidecar_diffs = if chain_diffs.is_none() && hook_type == HookType::Stop {
+            self.load_diffs_from_sidecar(input)
+        } else {
+            None
+        };
+        let effective_diffs = chain_diffs.as_deref().or(sidecar_diffs.as_deref());
+
+        if hook_type == HookType::Stop {
+            (input_json, effective_diffs.map(|d| d.to_vec()))
+        } else {
+            let prepared = crate::turn::prepare_validator_context(input_json, effective_diffs);
+            (prepared, None)
+        }
+    }
+
     /// Handle RuleSet results, returning appropriate ChainResult.
     ///
     /// This produces agent-agnostic output with validator block info.
@@ -128,13 +189,19 @@ impl<I: ValidatorMatchInfo> ValidatorExecutorLink<I> {
 }
 
 /// Build a MatchContext from input implementing ValidatorMatchInfo.
-fn build_match_context<I: ValidatorMatchInfo>(input: &I) -> MatchContext {
+fn build_match_context<I: ValidatorMatchInfo>(
+    input: &I,
+    changed_files: Option<Vec<String>>,
+) -> MatchContext {
     let mut ctx = MatchContext::new(input.hook_type());
     if let Some(tool) = input.tool_name() {
         ctx = ctx.with_tool(tool);
     }
     if let Some(file) = input.file_path() {
         ctx = ctx.with_file(file);
+    }
+    if let Some(files) = changed_files {
+        ctx = ctx.with_changed_files(files);
     }
     ctx
 }
@@ -251,23 +318,20 @@ where
 {
     async fn process(&self, input: &I, ctx: &mut ChainContext) -> ChainResult {
         let hook_type = input.hook_type();
-        let match_ctx = build_match_context(input);
-
-        // Use new RuleSet architecture
+        let changed_files = self.load_changed_files_for_stop(input);
+        let match_ctx = build_match_context(input, changed_files.clone());
         let rulesets = self.loader.matching_rulesets(&match_ctx);
 
         if rulesets.is_empty() {
             tracing::trace!("ValidatorExecutorLink: No RuleSets for {:?}", hook_type);
             return ChainResult::continue_empty();
         }
-
         tracing::debug!(
             "ValidatorExecutorLink: Executing {} RuleSets for {:?}",
             rulesets.len(),
             hook_type
         );
 
-        let changed_files = self.load_changed_files_for_stop(input);
         let input_json = match serde_json::to_value(input) {
             Ok(json) => json,
             Err(e) => {
@@ -276,9 +340,7 @@ where
             }
         };
 
-        // Enrich the context: strip bloated fields, embed diffs as text
-        let diffs: Option<Vec<crate::turn::FileDiff>> = ctx.get(CTX_FILE_DIFFS);
-        let context_value = crate::turn::prepare_validator_context(input_json, diffs.as_deref());
+        let (context_value, raw_diffs) = self.prepare_diffs(input, hook_type, ctx, input_json);
 
         let results = self
             .context
@@ -287,6 +349,7 @@ where
                 hook_type,
                 &context_value,
                 changed_files.as_deref(),
+                raw_diffs.as_deref(),
             )
             .await;
 
@@ -705,7 +768,7 @@ mod tests {
         }))
         .unwrap();
 
-        let ctx = build_match_context(&input);
+        let ctx = build_match_context(&input, None);
         assert_eq!(ctx.hook_type, HookType::PreToolUse);
         assert_eq!(ctx.tool_name.as_deref(), Some("Write"));
         assert_eq!(ctx.file_path.as_deref(), Some("/src/lib.rs"));
@@ -722,9 +785,27 @@ mod tests {
         }))
         .unwrap();
 
-        let ctx = build_match_context(&input);
+        let ctx = build_match_context(&input, None);
         assert_eq!(ctx.hook_type, HookType::Stop);
         assert!(ctx.tool_name.is_none());
         assert!(ctx.file_path.is_none());
+        assert!(ctx.changed_files.is_none());
+    }
+
+    #[test]
+    fn test_build_match_context_with_changed_files() {
+        let input: crate::types::StopInput = serde_json::from_value(serde_json::json!({
+            "session_id": "s",
+            "transcript_path": "/p",
+            "cwd": "/c",
+            "permission_mode": "default",
+            "hook_event_name": "Stop"
+        }))
+        .unwrap();
+
+        let files = vec!["foo.rs".to_string(), "bar.ts".to_string()];
+        let ctx = build_match_context(&input, Some(files.clone()));
+        assert_eq!(ctx.hook_type, HookType::Stop);
+        assert_eq!(ctx.changed_files, Some(files));
     }
 }

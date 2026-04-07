@@ -17,8 +17,8 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 ulid = { workspace = true }
 async-trait = { workspace = true }
-swissarmyhammer-common = { path = "../swissarmyhammer-common" }
-swissarmyhammer-js = { path = "../swissarmyhammer-js" }
+swissarmyhammer-common = { workspace = true }
+swissarmyhammer-js = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

@@ -22,7 +22,7 @@ chrono = { workspace = true, features = ["serde"] }
 serde = { workspace = true, features = ["derive"] }
 
 # Internal dependencies
-swissarmyhammer-common = { path = "../swissarmyhammer-common" }
+swissarmyhammer-common = { workspace = true }
 
 [dev-dependencies]
 tempfile.workspace = true

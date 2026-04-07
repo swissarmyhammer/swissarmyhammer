@@ -31,17 +31,17 @@ fs2 = { workspace = true }
 similar = { workspace = true }
 
 # Git root finding and directory management
-swissarmyhammer-common = { path = "../swissarmyhammer-common" }
-swissarmyhammer-directory = { path = "../swissarmyhammer-directory" }
+swissarmyhammer-common = { workspace = true }
+swissarmyhammer-directory = { workspace = true }
 
 # Prompts and templating for validator execution
-swissarmyhammer-prompts = { path = "../swissarmyhammer-prompts" }
-swissarmyhammer-config = { path = "../swissarmyhammer-config" }
-swissarmyhammer-templating = { path = "../swissarmyhammer-templating" }
+swissarmyhammer-prompts = { workspace = true }
+swissarmyhammer-config = { workspace = true }
+swissarmyhammer-templating = { workspace = true }
 
 # Agent creation (unified: claude-agent + llama-agent)
-swissarmyhammer-agent = { path = "../swissarmyhammer-agent" }
-claude-agent = { path = "../claude-agent" }
+swissarmyhammer-agent = { workspace = true }
+claude-agent = { workspace = true }
 agent-client-protocol = { workspace = true }
 uuid = { workspace = true }
 
@@ -58,10 +58,10 @@ which = { workspace = true }
 dirs = { workspace = true }
 
 [build-dependencies]
-swissarmyhammer-build = { path = "../swissarmyhammer-build" }
+swissarmyhammer-build = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
 serial_test = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
-agent-client-protocol-extras = { path = "../agent-client-protocol-extras" }
+agent-client-protocol-extras = { workspace = true }

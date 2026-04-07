@@ -141,27 +141,9 @@ fn qualified_path_from_id(id: &str, file_path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::{configure_connection, create_schema};
+    use crate::test_fixtures::{insert_file_simple as insert_file, test_db};
 
-    /// Create an in-memory database with the schema applied.
-    fn test_db() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        configure_connection(&conn).unwrap();
-        create_schema(&conn).unwrap();
-        conn
-    }
-
-    /// Insert an `indexed_files` row.
-    fn insert_file(conn: &Connection, path: &str) {
-        conn.execute(
-            "INSERT OR IGNORE INTO indexed_files (file_path, content_hash, file_size, last_seen_at)
-             VALUES (?1, X'DEADBEEF', 1024, 1000)",
-            [path],
-        )
-        .unwrap();
-    }
-
-    /// Insert an LSP symbol.
+    /// Insert an LSP symbol (without detail, for list_symbol tests).
     #[allow(clippy::too_many_arguments)]
     fn insert_lsp_symbol(
         conn: &Connection,
@@ -174,15 +156,21 @@ mod tests {
         end_line: u32,
         end_char: u32,
     ) {
-        conn.execute(
-            "INSERT INTO lsp_symbols (id, name, kind, file_path, start_line, start_char, end_line, end_char)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            rusqlite::params![id, name, kind, file_path, start_line, start_char, end_line, end_char],
-        )
-        .unwrap();
+        crate::test_fixtures::insert_lsp_symbol(
+            conn,
+            id,
+            name,
+            kind,
+            file_path,
+            start_line as i32,
+            start_char as i32,
+            end_line as i32,
+            end_char as i32,
+            None,
+        );
     }
 
-    /// Insert a ts_chunks row with a symbol_path.
+    /// Insert a ts_chunks row with a required symbol_path.
     fn insert_ts_chunk(
         conn: &Connection,
         file_path: &str,
@@ -190,12 +178,14 @@ mod tests {
         end_line: u32,
         symbol_path: &str,
     ) {
-        conn.execute(
-            "INSERT INTO ts_chunks (file_path, start_byte, end_byte, start_line, end_line, symbol_path, text)
-             VALUES (?1, 0, 100, ?2, ?3, ?4, 'source text')",
-            rusqlite::params![file_path, start_line, end_line, symbol_path],
-        )
-        .unwrap();
+        crate::test_fixtures::insert_ts_chunk(
+            conn,
+            file_path,
+            start_line as i32,
+            end_line as i32,
+            "source text",
+            Some(symbol_path),
+        );
     }
 
     /// Seed the database with standard test fixtures.

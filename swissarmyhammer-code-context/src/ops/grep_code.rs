@@ -180,27 +180,9 @@ fn load_chunks(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::{configure_connection, create_schema};
+    use crate::test_fixtures::{insert_file_simple as insert_file, test_db};
 
-    /// Create an in-memory database with the schema applied.
-    fn test_db() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        configure_connection(&conn).unwrap();
-        create_schema(&conn).unwrap();
-        conn
-    }
-
-    /// Insert an indexed_files row (required by foreign key constraint).
-    fn insert_file(conn: &Connection, path: &str) {
-        conn.execute(
-            "INSERT OR IGNORE INTO indexed_files (file_path, content_hash, file_size, last_seen_at)
-             VALUES (?1, X'DEADBEEF', 1024, 1000)",
-            [path],
-        )
-        .unwrap();
-    }
-
-    /// Insert a chunk into ts_chunks.
+    /// Insert a chunk into ts_chunks (parameter order: symbol_path before text).
     fn insert_chunk(
         conn: &Connection,
         file_path: &str,
@@ -209,12 +191,14 @@ mod tests {
         symbol_path: Option<&str>,
         text: &str,
     ) {
-        conn.execute(
-            "INSERT INTO ts_chunks (file_path, start_byte, end_byte, start_line, end_line, symbol_path, text)
-             VALUES (?1, 0, ?2, ?3, ?4, ?5, ?6)",
-            rusqlite::params![file_path, text.len() as i64, start_line, end_line, symbol_path, text],
-        )
-        .unwrap();
+        crate::test_fixtures::insert_ts_chunk(
+            conn,
+            file_path,
+            start_line as i32,
+            end_line as i32,
+            text,
+            symbol_path,
+        );
     }
 
     #[test]

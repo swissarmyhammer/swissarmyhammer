@@ -25,9 +25,9 @@ tracing = { workspace = true }
 tokio = { workspace = true }
 
 # SwissArmyHammer domain dependencies
-swissarmyhammer-common = { path = "../swissarmyhammer-common" }
-swissarmyhammer-templating = { path = "../swissarmyhammer-templating" }
-swissarmyhammer-config = { path = "../swissarmyhammer-config" }
+swissarmyhammer-common = { workspace = true }
+swissarmyhammer-templating = { workspace = true }
+swissarmyhammer-config = { workspace = true }
 
 # File system and utilities
 walkdir = { workspace = true }
@@ -50,10 +50,10 @@ liquid = { workspace = true }
 include_dir = { workspace = true }
 
 [build-dependencies]
-swissarmyhammer-build = { path = "../swissarmyhammer-build" }
+swissarmyhammer-build = { workspace = true }
 
 [dev-dependencies]
-markdowndown = { path = "../markdowndown" }
+markdowndown = { workspace = true }
 tempfile = { workspace = true }
 tokio-test = { workspace = true }
 serial_test = { workspace = true }

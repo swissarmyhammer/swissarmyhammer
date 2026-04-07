@@ -22,13 +22,13 @@ async-trait = { workspace = true }
 open = "5"
 
 # Local workspace dependencies
-swissarmyhammer-common = { path = "../swissarmyhammer-common" }
-swissarmyhammer-fields = { path = "../swissarmyhammer-fields" }
-swissarmyhammer-entity = { path = "../swissarmyhammer-entity" }
-swissarmyhammer-views = { path = "../swissarmyhammer-views" }
+swissarmyhammer-common = { workspace = true }
+swissarmyhammer-fields = { workspace = true }
+swissarmyhammer-entity = { workspace = true }
+swissarmyhammer-views = { workspace = true }
 swissarmyhammer-perspectives = { path = "../swissarmyhammer-perspectives" }
 swissarmyhammer-operations = { workspace = true }
-swissarmyhammer-commands = { path = "../swissarmyhammer-commands" }
+swissarmyhammer-commands = { workspace = true }
 swissarmyhammer-store = { path = "../swissarmyhammer-store" }
 
 include_dir = { workspace = true }

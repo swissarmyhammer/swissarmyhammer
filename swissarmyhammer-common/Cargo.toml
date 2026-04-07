@@ -39,7 +39,7 @@ colored.workspace = true
 indicatif.workspace = true
 
 # Directory management (shared with AVP)
-swissarmyhammer-directory = { path = "../swissarmyhammer-directory" }
+swissarmyhammer-directory = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

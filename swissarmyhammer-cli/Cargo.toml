@@ -30,24 +30,24 @@ path = "src/generate_docs.rs"
 
 [dependencies]
 # Library dependencies
-swissarmyhammer = { path = "../swissarmyhammer" }
-swissarmyhammer-doctor = { path = "../swissarmyhammer-doctor" }
-swissarmyhammer-tools = { path = "../swissarmyhammer-tools" }
-swissarmyhammer-code-context = { path = "../swissarmyhammer-code-context" }
-swissarmyhammer-lsp = { path = "../swissarmyhammer-lsp" }
-swissarmyhammer-project-detection = { path = "../swissarmyhammer-project-detection" }
-swissarmyhammer-config = { path = "../swissarmyhammer-config" }
-swissarmyhammer-common = { path = "../swissarmyhammer-common" }
-swissarmyhammer-git = { path = "../swissarmyhammer-git" }
-swissarmyhammer-operations = { path = "../swissarmyhammer-operations" }
-swissarmyhammer-skills = { path = "../swissarmyhammer-skills" }
-swissarmyhammer-agent = { path = "../swissarmyhammer-agent" }
-swissarmyhammer-agents = { path = "../swissarmyhammer-agents" }
-swissarmyhammer-statusline = { path = "../swissarmyhammer-statusline" }
-avp-common = { path = "../avp-common" }
-swissarmyhammer-prompts = { path = "../swissarmyhammer-prompts" }
-mirdan = { path = "../mirdan" }
-swissarmyhammer-templating = { path = "../swissarmyhammer-templating" }
+swissarmyhammer = { workspace = true }
+swissarmyhammer-doctor = { workspace = true }
+swissarmyhammer-tools = { workspace = true }
+swissarmyhammer-code-context = { workspace = true }
+swissarmyhammer-lsp = { workspace = true }
+swissarmyhammer-project-detection = { workspace = true }
+swissarmyhammer-config = { workspace = true }
+swissarmyhammer-common = { workspace = true }
+swissarmyhammer-git = { workspace = true }
+swissarmyhammer-operations = { workspace = true }
+swissarmyhammer-skills = { workspace = true }
+swissarmyhammer-agent = { workspace = true }
+swissarmyhammer-agents = { workspace = true }
+swissarmyhammer-statusline = { workspace = true }
+avp-common = { workspace = true }
+swissarmyhammer-prompts = { workspace = true }
+mirdan = { workspace = true }
+swissarmyhammer-templating = { workspace = true }
 
 llama-agent = { workspace = true }
 
