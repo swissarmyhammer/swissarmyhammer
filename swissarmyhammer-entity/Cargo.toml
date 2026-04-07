@@ -20,7 +20,7 @@ async-trait = { workspace = true }
 swissarmyhammer-common = { workspace = true }
 swissarmyhammer-commands = { workspace = true }
 swissarmyhammer-fields = { workspace = true }
-swissarmyhammer-store = { path = "../swissarmyhammer-store" }
+swissarmyhammer-store = { workspace = true }
 diffy = { workspace = true }
 mime_guess = "2"
 notify = { workspace = true }

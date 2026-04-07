@@ -263,11 +263,13 @@ swissarmyhammer-kanban = { path = "swissarmyhammer-kanban" }
 swissarmyhammer-mcp-proxy = { path = "swissarmyhammer-mcp-proxy" }
 swissarmyhammer-merge = { path = "swissarmyhammer-merge" }
 swissarmyhammer-modes = { path = "swissarmyhammer-modes" }
+swissarmyhammer-perspectives = { path = "swissarmyhammer-perspectives" }
 swissarmyhammer-project-detection = { path = "swissarmyhammer-project-detection" }
 swissarmyhammer-prompts = { path = "swissarmyhammer-prompts" }
 swissarmyhammer-shell = { path = "swissarmyhammer-shell" }
 swissarmyhammer-skills = { path = "swissarmyhammer-skills" }
 swissarmyhammer-statusline = { path = "swissarmyhammer-statusline" }
+swissarmyhammer-store = { path = "swissarmyhammer-store" }
 swissarmyhammer-templating = { path = "swissarmyhammer-templating" }
 swissarmyhammer-tools = { path = "swissarmyhammer-tools" }
 swissarmyhammer-treesitter = { path = "swissarmyhammer-treesitter" }
