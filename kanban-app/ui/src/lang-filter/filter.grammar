@@ -1,0 +1,54 @@
+// Filter DSL grammar for the kanban perspective filter editor.
+//
+// Atoms: #tag, @mention, ^ref
+// Operators: && / and, || / or, ! / not
+// Grouping: ( )
+// Implicit AND: adjacent atoms without operator
+
+@top FilterExpr { expr+ }
+
+@precedence { not @right, and @left, or @left }
+
+expr { atom | Not | And | Or | Group }
+
+atom { Tag | Mention | Ref }
+
+Not { (Bang | notKw) !not expr }
+
+And {
+  expr !and AndOp expr
+}
+
+Or {
+  expr !or OrOp expr
+}
+
+Group { "(" expr ")" }
+
+AndOp { AmpAmp | andKw }
+
+OrOp { PipePipe | orKw }
+
+notKw { @specialize[@name=not]<word, "not"> | @specialize[@name=not]<word, "NOT"> }
+
+andKw { @specialize[@name=and]<word, "and"> | @specialize[@name=and]<word, "AND"> }
+
+orKw { @specialize[@name=or]<word, "or"> | @specialize[@name=or]<word, "OR"> }
+
+@external propSource highlighting from "./highlight"
+
+@tokens {
+  Tag { "#" $[\-a-zA-Z0-9_.]+ }
+  Mention { "@" $[\-a-zA-Z0-9_.]+ }
+  Ref { "^" $[\-a-zA-Z0-9_.]+ }
+  Bang { "!" }
+  AmpAmp { "&&" }
+  PipePipe { "||" }
+  word { $[a-zA-Z]+ }
+  space { $[ \t\n\r]+ }
+  @precedence { Tag, Mention, Ref, AmpAmp, PipePipe, word }
+}
+
+@skip { space }
+
+@detectDelim

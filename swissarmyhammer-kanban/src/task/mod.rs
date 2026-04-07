@@ -9,6 +9,7 @@ mod cut;
 mod delete;
 mod get;
 mod list;
+mod shared;
 mod mv;
 mod next;
 mod paste;

@@ -2,12 +2,14 @@
 // Entity command definitions
 // ---------------------------------------------------------------------------
 
+/** Keymap bindings for an entity command, keyed by input mode. */
 export interface EntityCommandKeys {
   readonly vim?: string;
   readonly cua?: string;
   readonly emacs?: string;
 }
 
+/** A command defined on an entity type in the YAML schema. */
 export interface EntityCommand {
   readonly id: string;
   readonly name: string;
@@ -19,12 +21,14 @@ export interface EntityCommand {
 // View definitions
 // ---------------------------------------------------------------------------
 
+/** Keymap bindings for a view command, keyed by input mode. */
 export interface ViewCommandKeys {
   readonly vim?: string;
   readonly cua?: string;
   readonly emacs?: string;
 }
 
+/** A command defined on a view in the YAML schema. */
 export interface ViewCommand {
   readonly id: string;
   readonly name: string;
@@ -32,6 +36,7 @@ export interface ViewCommand {
   readonly keys?: ViewCommandKeys;
 }
 
+/** Definition of a UI view (board, grid, etc.) from the YAML schema. */
 export interface ViewDef {
   readonly id: string;
   readonly name: string;
@@ -46,6 +51,7 @@ export interface ViewDef {
 // Perspective definitions
 // ---------------------------------------------------------------------------
 
+/** A field column entry within a perspective's field list. */
 export interface PerspectiveFieldEntry {
   readonly field: string;
   readonly caption?: string;
@@ -55,11 +61,13 @@ export interface PerspectiveFieldEntry {
   readonly sort_comparator?: string;
 }
 
+/** A sort entry within a perspective — field name + direction. */
 export interface PerspectiveSortEntry {
   readonly field: string;
   readonly direction: "asc" | "desc";
 }
 
+/** A saved perspective defining view, filter, sort, group, and field layout. */
 export interface PerspectiveDef {
   readonly id: string;
   readonly name: string;
@@ -75,12 +83,14 @@ export interface PerspectiveDef {
 // Board types
 // ---------------------------------------------------------------------------
 
+/** A currently open board, as returned by the backend. */
 export interface OpenBoard {
   path: string;
   is_active: boolean;
   name: string;
 }
 
+/** A recently opened board from the MRU list. */
 export interface RecentBoard {
   path: string;
   name: string;
@@ -96,6 +106,7 @@ export interface RecentBoard {
 // (e.g. "options" for select, "derive" for computed, "entity" for reference).
 // ---------------------------------------------------------------------------
 
+/** An option value for select-type fields. */
 export interface SelectOption {
   value: string;
   label?: string;
@@ -110,6 +121,7 @@ export interface FieldType {
   [key: string]: unknown;
 }
 
+/** Schema definition for a single entity field (from YAML). */
 export interface FieldDef {
   id: string;
   name: string;
@@ -130,6 +142,7 @@ export interface FieldDef {
   validate?: string;
 }
 
+/** Schema definition for an entity type (from YAML). */
 export interface EntityDef {
   name: string;
   icon?: string;
@@ -213,6 +226,7 @@ export function entityFromBag(bag: EntityBag): Entity {
 // Board summary — aggregate counts returned by get_board_data
 // ---------------------------------------------------------------------------
 
+/** Aggregate counts for a board — tasks by status, actor totals, etc. */
 export interface BoardSummary {
   total_tasks: number;
   total_actors: number;

@@ -72,6 +72,7 @@ export function useActivePerspective(): ActivePerspectiveContextValue {
 // Container
 // ---------------------------------------------------------------------------
 
+/** Props for the PerspectiveContainer — wraps children with active perspective context and scope. */
 interface PerspectiveContainerProps {
   children: ReactNode;
 }

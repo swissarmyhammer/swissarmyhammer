@@ -1,0 +1,16 @@
+[package]
+name = "swissarmyhammer-filter-expr"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Filter expression DSL parser and evaluator for SwissArmyHammer kanban"
+
+[dependencies]
+chumsky = "0.11"
+thiserror = { workspace = true }
+
+[dev-dependencies]
