@@ -12,3 +12,4 @@ import "./multi-select";
 import "./progress";
 import "./progress-ring";
 import "./attachment";
+import "./virtual-badge-list";

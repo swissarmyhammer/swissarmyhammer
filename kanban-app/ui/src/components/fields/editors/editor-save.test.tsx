@@ -158,6 +158,7 @@ const TEST_ENTITY: Entity = {
     progress: { total: 2, completed: 1, percent: 50 },
     position_column: "todo",
     position_ordinal: "ffff8000",
+    virtual_tags: ["READY"],
   },
 };
 
