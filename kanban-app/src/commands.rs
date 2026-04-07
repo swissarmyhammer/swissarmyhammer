@@ -29,6 +29,8 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use swissarmyhammer_entity::Entity;
+use swissarmyhammer_filter_expr::FilterContext;
 use swissarmyhammer_kanban::task_helpers::{enrich_all_task_entities, enrich_task_entity};
 use swissarmyhammer_kanban::virtual_tags::default_virtual_tag_registry;
 use tauri::menu::{ContextMenu, MenuBuilder};
@@ -188,16 +190,102 @@ pub async fn list_entity_types(
     Ok(json!(names))
 }
 
+/// Adapter that maps filter DSL atoms to entity fields.
+///
+/// Uses `filter_tags` (union of body tags + virtual tags) for `#tag` lookups,
+/// `assignees` for `@user` lookups, and `depends_on` + `id` for `^ref` lookups.
+struct EntityFilterAdapter<'a> {
+    entity: &'a Entity,
+}
+
+impl<'a> FilterContext for EntityFilterAdapter<'a> {
+    fn has_tag(&self, tag: &str) -> bool {
+        self.entity
+            .get_string_list("filter_tags")
+            .iter()
+            .any(|t| t.eq_ignore_ascii_case(tag))
+    }
+
+    fn has_assignee(&self, user: &str) -> bool {
+        self.entity
+            .get_string_list("assignees")
+            .iter()
+            .any(|a| a.eq_ignore_ascii_case(user))
+    }
+
+    fn has_ref(&self, id: &str) -> bool {
+        self.entity.id.as_ref() == id
+            || self
+                .entity
+                .get_string_list("depends_on")
+                .iter()
+                .any(|r| r == id)
+    }
+}
+
+/// Enrich task entities with computed fields and sort by position.
+///
+/// Loads columns to determine the terminal column, then batch-enriches tasks
+/// with readiness, dependency, and virtual tag data. Finally sorts by
+/// (column, ordinal) so the frontend can trust the order.
+async fn enrich_and_sort_tasks(
+    entities: &mut Vec<Entity>,
+    ectx: &swissarmyhammer_entity::EntityContext,
+    entity_type: &str,
+) -> Result<(), String> {
+    let mut columns = ectx
+        .list("column")
+        .await
+        .map_err(|e| format!("list_entities({}): {}", entity_type, e))?;
+    columns.sort_by_key(|c| c.get("order").and_then(|v| v.as_u64()).unwrap_or(0) as usize);
+    let terminal_id = columns
+        .last()
+        .map(|c| c.id.to_string())
+        .unwrap_or_else(|| "done".to_string());
+
+    let registry = default_virtual_tag_registry();
+    enrich_all_task_entities(entities, &terminal_id, registry);
+
+    entities.sort_by(|a, b| {
+        let col_a = a.get_str("position_column").unwrap_or("");
+        let col_b = b.get_str("position_column").unwrap_or("");
+        col_a.cmp(col_b).then_with(|| {
+            let ord_a = a.get_str("position_ordinal").unwrap_or("a0");
+            let ord_b = b.get_str("position_ordinal").unwrap_or("a0");
+            ord_a.cmp(ord_b)
+        })
+    });
+    Ok(())
+}
+
+/// Apply a filter DSL expression to an entity list, retaining only matches.
+///
+/// Parses the filter string and evaluates it against each entity via
+/// `EntityFilterAdapter`. Returns an error if the expression is invalid.
+fn apply_filter(entities: &mut Vec<Entity>, filter_str: &str) -> Result<(), String> {
+    let expr = swissarmyhammer_filter_expr::parse(filter_str).map_err(|errors| {
+        let msgs: Vec<String> = errors.iter().map(|e| e.message.clone()).collect();
+        format!("invalid filter expression: {}", msgs.join("; "))
+    })?;
+    entities.retain(|e| expr.matches(&EntityFilterAdapter { entity: e }));
+    Ok(())
+}
+
 /// List all entities of a given type, returning raw entity bags.
 ///
 /// For tasks, enriches each entity with computed fields: `ready`, `blocked_by`,
 /// `blocks`, and `progress_fraction`. Other entity types are returned as-is.
+///
+/// When `filter` is provided, parses it as a filter DSL expression and returns
+/// only entities that match. Empty or whitespace-only filters are treated as
+/// no filter (all entities returned).
 ///
 /// Returns `{ entities: [...], count: N }`.
 #[tauri::command]
 pub async fn list_entities(
     state: State<'_, AppState>,
     entity_type: String,
+    filter: Option<String>,
     board_path: Option<String>,
 ) -> Result<Value, String> {
     let handle = resolve_handle(&state, board_path).await?;
@@ -212,31 +300,11 @@ pub async fn list_entities(
         .map_err(|e| format!("list_entities({}): {}", entity_type, e))?;
 
     if entity_type == "task" {
-        // Need terminal column for readiness computation
-        let mut columns = ectx
-            .list("column")
-            .await
-            .map_err(|e| format!("list_entities({}): {}", entity_type, e))?;
-        columns.sort_by_key(|c| c.get("order").and_then(|v| v.as_u64()).unwrap_or(0) as usize);
-        let terminal_id = columns
-            .last()
-            .map(|c| c.id.to_string())
-            .unwrap_or_else(|| "done".to_string());
+        enrich_and_sort_tasks(&mut entities, &ectx, &entity_type).await?;
+    }
 
-        // Batch-enrich in O(N) using pre-built dependency indexes
-        let registry = default_virtual_tag_registry();
-        enrich_all_task_entities(&mut entities, &terminal_id, registry);
-
-        // Sort by position so the frontend can trust the order
-        entities.sort_by(|a, b| {
-            let col_a = a.get_str("position_column").unwrap_or("");
-            let col_b = b.get_str("position_column").unwrap_or("");
-            col_a.cmp(col_b).then_with(|| {
-                let ord_a = a.get_str("position_ordinal").unwrap_or("a0");
-                let ord_b = b.get_str("position_ordinal").unwrap_or("a0");
-                ord_a.cmp(ord_b)
-            })
-        });
+    if let Some(filter_str) = filter.as_deref().filter(|f| !f.trim().is_empty()) {
+        apply_filter(&mut entities, filter_str)?;
     }
 
     let json_entities: Vec<Value> = entities.iter().map(|e| e.to_json()).collect();
@@ -1858,5 +1926,98 @@ mod tests {
             .unwrap_or("");
         assert!(store_name.is_empty());
         assert!(id.is_empty());
+    }
+
+    // ── EntityFilterAdapter tests ──────────────────────────────────
+
+    use super::EntityFilterAdapter;
+    use swissarmyhammer_entity::Entity;
+    use swissarmyhammer_filter_expr::FilterContext;
+
+    /// Build a task entity with the given filter_tags, assignees, and depends_on.
+    fn make_entity(
+        id: &str,
+        filter_tags: &[&str],
+        assignees: &[&str],
+        depends_on: &[&str],
+    ) -> Entity {
+        let mut e = Entity::new("task", id);
+        e.set(
+            "filter_tags",
+            serde_json::json!(filter_tags),
+        );
+        e.set("assignees", serde_json::json!(assignees));
+        e.set("depends_on", serde_json::json!(depends_on));
+        e
+    }
+
+    #[test]
+    fn adapter_has_tag_matches_filter_tags() {
+        let e = make_entity("t1", &["bug", "READY"], &[], &[]);
+        let adapter = EntityFilterAdapter { entity: &e };
+        assert!(adapter.has_tag("bug"));
+        assert!(adapter.has_tag("READY"));
+        assert!(!adapter.has_tag("feature"));
+    }
+
+    #[test]
+    fn adapter_has_tag_case_insensitive() {
+        let e = make_entity("t1", &["READY"], &[], &[]);
+        let adapter = EntityFilterAdapter { entity: &e };
+        assert!(adapter.has_tag("ready"));
+        assert!(adapter.has_tag("Ready"));
+    }
+
+    #[test]
+    fn adapter_has_assignee() {
+        let e = make_entity("t1", &[], &["alice", "bob"], &[]);
+        let adapter = EntityFilterAdapter { entity: &e };
+        assert!(adapter.has_assignee("alice"));
+        assert!(adapter.has_assignee("bob"));
+        assert!(!adapter.has_assignee("carol"));
+    }
+
+    #[test]
+    fn adapter_has_assignee_case_insensitive() {
+        let e = make_entity("t1", &[], &["Alice"], &[]);
+        let adapter = EntityFilterAdapter { entity: &e };
+        assert!(adapter.has_assignee("alice"));
+    }
+
+    #[test]
+    fn adapter_has_ref_matches_depends_on() {
+        let e = make_entity("t1", &[], &[], &["dep1", "dep2"]);
+        let adapter = EntityFilterAdapter { entity: &e };
+        assert!(adapter.has_ref("dep1"));
+        assert!(adapter.has_ref("dep2"));
+        assert!(!adapter.has_ref("dep3"));
+    }
+
+    #[test]
+    fn adapter_has_ref_matches_own_id() {
+        let e = make_entity("t1", &[], &[], &[]);
+        let adapter = EntityFilterAdapter { entity: &e };
+        assert!(adapter.has_ref("t1"));
+    }
+
+    #[test]
+    fn adapter_end_to_end_with_filter_expr() {
+        let e = make_entity("t1", &["bug", "READY"], &["will"], &["dep1"]);
+        let adapter = EntityFilterAdapter { entity: &e };
+
+        let expr = swissarmyhammer_filter_expr::parse("#bug && @will").unwrap();
+        assert!(expr.matches(&adapter));
+
+        let expr = swissarmyhammer_filter_expr::parse("#bug && @alice").unwrap();
+        assert!(!expr.matches(&adapter));
+
+        let expr = swissarmyhammer_filter_expr::parse("#READY").unwrap();
+        assert!(expr.matches(&adapter));
+
+        let expr = swissarmyhammer_filter_expr::parse("!#done").unwrap();
+        assert!(expr.matches(&adapter));
+
+        let expr = swissarmyhammer_filter_expr::parse("^dep1").unwrap();
+        assert!(expr.matches(&adapter));
     }
 }

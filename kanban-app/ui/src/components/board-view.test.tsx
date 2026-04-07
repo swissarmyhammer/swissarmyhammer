@@ -26,7 +26,6 @@ vi.mock("@tauri-apps/api/event", () => ({
 vi.mock("@/components/perspective-container", () => ({
   useActivePerspective: () => ({
     activePerspective: null,
-    applyFilter: (entities: unknown[]) => entities,
     applySort: (entities: unknown[]) => entities,
     groupField: undefined,
   }),

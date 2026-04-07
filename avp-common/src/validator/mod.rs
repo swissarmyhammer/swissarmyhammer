@@ -78,9 +78,10 @@ pub use loader::{DirectoryInfo, ValidatorDiagnostics, ValidatorLoader};
 pub use parser::{parse_rule, parse_ruleset_directory, parse_ruleset_manifest, parse_validator};
 pub use runner::ValidatorRunner;
 pub use types::{
-    ExecutedRuleSet, ExecutedValidator, MatchContext, Rule, RuleFrontmatter, RuleResult, RuleSet,
-    RuleSetManifest, RuleSetMetadata, Severity, Validator, ValidatorFrontmatter, ValidatorMatch,
-    ValidatorResult, ValidatorSource,
+    compile_glob_patterns, matches_any_pattern, ExecutedRuleSet, ExecutedValidator, MatchContext,
+    Rule, RuleFrontmatter, RuleResult, RuleSet, RuleSetManifest, RuleSetMetadata, Severity,
+    Validator, ValidatorFrontmatter, ValidatorMatch, ValidatorResult, ValidatorSource,
+    GLOB_MATCH_OPTIONS,
 };
 
 /// Adapter that allows validators to be used as Liquid template partials.

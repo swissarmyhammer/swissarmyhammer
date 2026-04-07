@@ -157,7 +157,7 @@ Tasks can depend on other tasks. A task is only "ready" when all its dependencie
 kanban op: "add task", title: "Deploy to production", depends_on: ["<build_task_id>", "<test_task_id>"]
 ```
 
-The `next task` operation automatically returns only ready tasks (those with no incomplete dependencies) from any non-done column. It supports `tag`, `swimlane`, and `assignee` filters — use these to focus on specific work (e.g., `op: "next task", tag: "review-finding"`).
+The `next task` operation automatically returns only ready tasks (those with no incomplete dependencies) from any non-done column. It supports `tag` and `assignee` filters — use these to focus on specific work (e.g., `op: "next task", tag: "review-finding"`).
 
 ### Columns and Organization
 

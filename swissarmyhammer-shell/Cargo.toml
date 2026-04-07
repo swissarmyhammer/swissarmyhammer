@@ -9,13 +9,13 @@ description = "Shell command execution security, hardening, and performance moni
 
 [dependencies]
 # Core error handling and shared types
-swissarmyhammer-common = { path = "../swissarmyhammer-common" }
+swissarmyhammer-common = { workspace = true }
 
 # Configuration loading (may be needed for security policies)
-swissarmyhammer-config = { path = "../swissarmyhammer-config" }
+swissarmyhammer-config = { workspace = true }
 
 # Directory stacking for shell config overlay (builtin → user → project)
-swissarmyhammer-directory = { path = "../swissarmyhammer-directory" }
+swissarmyhammer-directory = { workspace = true }
 
 # Core dependencies
 regex = { workspace = true }

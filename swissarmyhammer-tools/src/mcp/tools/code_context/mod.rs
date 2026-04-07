@@ -29,8 +29,11 @@ use rmcp::ErrorData as McpError;
 use std::path::Path;
 use swissarmyhammer_code_context::{
     BlastRadiusOptions, BlockingStatus, BuildLayer, CallGraphDirection, CallGraphOptions,
-    CodeContextWorkspace, FindDuplicatesOptions, GetSymbolOptions, GrepOptions, IndexLayer,
-    QueryAstOptions, SearchCodeOptions, SearchSymbolOptions,
+    CodeContextWorkspace, DiagnosticSeverity, FindDuplicatesOptions, GetCodeActionsOptions,
+    GetDefinitionOptions, GetDiagnosticsOptions, GetHoverOptions, GetImplementationsOptions,
+    GetInboundCallsOptions, GetReferencesOptions, GetSymbolOptions, GetTypeDefinitionOptions,
+    GrepOptions, IndexLayer, LayeredContext, QueryAstOptions, SearchCodeOptions,
+    SearchSymbolOptions, WorkspaceSymbolLiveOptions,
 };
 use swissarmyhammer_common::utils::find_git_repository_root_from;
 use swissarmyhammer_operations::{Operation, ParamMeta, ParamType};
@@ -40,6 +43,51 @@ use swissarmyhammer_operations::{Operation, ParamMeta, ParamType};
 pub(crate) static LSP_SUPERVISOR: std::sync::OnceLock<
     std::sync::Arc<tokio::sync::Mutex<swissarmyhammer_lsp::LspSupervisorManager>>,
 > = std::sync::OnceLock::new();
+
+/// Look up the `SharedLspClient` for a file by matching its extension against
+/// the running LSP daemons in the global supervisor.
+///
+/// Returns `None` when the supervisor is not initialised, no daemon handles the
+/// file's extension, or the supervisor lock cannot be acquired (e.g. contention).
+fn lsp_client_for_file(file_path: &str) -> Option<swissarmyhammer_code_context::SharedLspClient> {
+    let ext = std::path::Path::new(file_path)
+        .extension()
+        .and_then(|e| e.to_str())?;
+    let sup = LSP_SUPERVISOR.get()?;
+    let guard = sup.try_lock().ok()?;
+    for name in guard.daemon_names() {
+        if let Some(daemon) = guard.get_daemon(&name) {
+            if daemon
+                .file_extensions()
+                .iter()
+                .any(|e| e.eq_ignore_ascii_case(ext))
+            {
+                return Some(daemon.shared_client());
+            }
+        }
+    }
+    None
+}
+
+/// Return the first available `SharedLspClient` from any running daemon.
+///
+/// Useful for workspace-wide LSP requests (e.g. `workspace/symbol`) that are
+/// not scoped to a single file extension.
+fn any_lsp_client() -> Option<swissarmyhammer_code_context::SharedLspClient> {
+    let sup = LSP_SUPERVISOR.get()?;
+    let guard = sup.try_lock().ok()?;
+    for name in guard.daemon_names() {
+        if let Some(daemon) = guard.get_daemon(&name) {
+            if matches!(
+                daemon.state(),
+                swissarmyhammer_lsp::LspDaemonState::Running { .. }
+            ) {
+                return Some(daemon.shared_client());
+            }
+        }
+    }
+    None
+}
 
 // ---------------------------------------------------------------------------
 // Operation structs with Operation trait impls
@@ -196,6 +244,72 @@ impl Operation for GetCallgraph {
     }
     fn parameters(&self) -> &'static [ParamMeta] {
         GET_CALLGRAPH_PARAMS
+    }
+}
+
+/// Operation metadata for inbound calls (who calls this function?).
+#[derive(Debug, Default)]
+pub struct GetInboundCalls;
+
+static GET_INBOUND_CALLS_PARAMS: &[ParamMeta] = &[
+    ParamMeta::new("file_path")
+        .description("Path to the file containing the target symbol")
+        .param_type(ParamType::String)
+        .required(),
+    ParamMeta::new("line")
+        .description("Zero-based line number of the target symbol")
+        .param_type(ParamType::Integer)
+        .required(),
+    ParamMeta::new("character")
+        .description("Zero-based character offset within the line")
+        .param_type(ParamType::Integer)
+        .required(),
+    ParamMeta::new("depth")
+        .description("Recursive depth for caller traversal, 1-5 (default: 1)")
+        .param_type(ParamType::Integer),
+];
+
+impl Operation for GetInboundCalls {
+    fn verb(&self) -> &'static str {
+        "get"
+    }
+    fn noun(&self) -> &'static str {
+        "inbound_calls"
+    }
+    fn description(&self) -> &'static str {
+        "Find all callers of a function at a given position (who calls this?)"
+    }
+    fn parameters(&self) -> &'static [ParamMeta] {
+        GET_INBOUND_CALLS_PARAMS
+    }
+}
+
+/// Operation metadata for live workspace symbol search.
+#[derive(Debug, Default)]
+pub struct WorkspaceSymbolLive;
+
+static WORKSPACE_SYMBOL_LIVE_PARAMS: &[ParamMeta] = &[
+    ParamMeta::new("query")
+        .description("The symbol name or text to search for across the workspace")
+        .param_type(ParamType::String)
+        .required(),
+    ParamMeta::new("max_results")
+        .description("Maximum number of results to return (default: 50)")
+        .param_type(ParamType::Integer),
+];
+
+impl Operation for WorkspaceSymbolLive {
+    fn verb(&self) -> &'static str {
+        "search"
+    }
+    fn noun(&self) -> &'static str {
+        "workspace_symbol"
+    }
+    fn description(&self) -> &'static str {
+        "Live workspace symbol search with layered resolution (live LSP, then LSP index, then tree-sitter)"
+    }
+    fn parameters(&self) -> &'static [ParamMeta] {
+        WORKSPACE_SYMBOL_LIVE_PARAMS
     }
 }
 
@@ -451,6 +565,307 @@ impl Operation for DetectProjects {
     }
 }
 
+/// Operation metadata for previewing rename edits.
+#[derive(Debug, Default)]
+pub struct GetRenameEdits;
+
+static GET_RENAME_EDITS_PARAMS: &[ParamMeta] = &[
+    ParamMeta::new("file_path")
+        .description("Path to the file containing the symbol to rename")
+        .param_type(ParamType::String)
+        .required(),
+    ParamMeta::new("line")
+        .description("Zero-based line number of the symbol")
+        .param_type(ParamType::Integer)
+        .required(),
+    ParamMeta::new("character")
+        .description("Zero-based character offset within the line")
+        .param_type(ParamType::Integer)
+        .required(),
+    ParamMeta::new("new_name")
+        .description("The new name for the symbol")
+        .param_type(ParamType::String)
+        .required(),
+];
+
+impl Operation for GetRenameEdits {
+    fn verb(&self) -> &'static str {
+        "get"
+    }
+    fn noun(&self) -> &'static str {
+        "rename_edits"
+    }
+    fn description(&self) -> &'static str {
+        "Preview rename edits without applying them (live LSP only). Returns can_rename: false when no LSP is available."
+    }
+    fn parameters(&self) -> &'static [ParamMeta] {
+        GET_RENAME_EDITS_PARAMS
+    }
+}
+
+/// Operation metadata for getting file diagnostics.
+#[derive(Debug, Default)]
+pub struct GetDiagnostics;
+
+static GET_DIAGNOSTICS_PARAMS: &[ParamMeta] = &[
+    ParamMeta::new("file_path")
+        .description("Path to the file to get diagnostics for")
+        .param_type(ParamType::String)
+        .required(),
+    ParamMeta::new("severity_filter")
+        .description(
+            "Only return diagnostics at or above this severity: 'error', 'warning', 'info', 'hint'. Omit for all.",
+        )
+        .param_type(ParamType::String),
+];
+
+impl Operation for GetDiagnostics {
+    fn verb(&self) -> &'static str {
+        "get"
+    }
+    fn noun(&self) -> &'static str {
+        "diagnostics"
+    }
+    fn description(&self) -> &'static str {
+        "Get errors and warnings for a file (live LSP only). Returns empty when no LSP is available."
+    }
+    fn parameters(&self) -> &'static [ParamMeta] {
+        GET_DIAGNOSTICS_PARAMS
+    }
+}
+
+/// Operation metadata for go-to-definition.
+#[derive(Debug, Default)]
+pub struct GetDefinition;
+
+static GET_DEFINITION_PARAMS: &[ParamMeta] = &[
+    ParamMeta::new("file_path")
+        .description("Path to the file containing the symbol")
+        .param_type(ParamType::String)
+        .required(),
+    ParamMeta::new("line")
+        .description("Zero-based line number of the symbol")
+        .param_type(ParamType::Integer)
+        .required(),
+    ParamMeta::new("character")
+        .description("Zero-based character offset within the line")
+        .param_type(ParamType::Integer)
+        .required(),
+    ParamMeta::new("include_source")
+        .description("Whether to include source text at each definition location (default: true)")
+        .param_type(ParamType::Boolean),
+];
+
+impl Operation for GetDefinition {
+    fn verb(&self) -> &'static str {
+        "get"
+    }
+    fn noun(&self) -> &'static str {
+        "definition"
+    }
+    fn description(&self) -> &'static str {
+        "Go to definition with layered resolution (live LSP, LSP index, tree-sitter)"
+    }
+    fn parameters(&self) -> &'static [ParamMeta] {
+        GET_DEFINITION_PARAMS
+    }
+}
+
+/// Operation metadata for go-to-type-definition.
+#[derive(Debug, Default)]
+pub struct GetTypeDefinition;
+
+static GET_TYPE_DEFINITION_PARAMS: &[ParamMeta] = &[
+    ParamMeta::new("file_path")
+        .description("Path to the file containing the symbol")
+        .param_type(ParamType::String)
+        .required(),
+    ParamMeta::new("line")
+        .description("Zero-based line number of the symbol")
+        .param_type(ParamType::Integer)
+        .required(),
+    ParamMeta::new("character")
+        .description("Zero-based character offset within the line")
+        .param_type(ParamType::Integer)
+        .required(),
+    ParamMeta::new("include_source")
+        .description("Whether to include source text at each definition location (default: true)")
+        .param_type(ParamType::Boolean),
+];
+
+impl Operation for GetTypeDefinition {
+    fn verb(&self) -> &'static str {
+        "get"
+    }
+    fn noun(&self) -> &'static str {
+        "type_definition"
+    }
+    fn description(&self) -> &'static str {
+        "Go to type definition (live LSP only). Returns empty when no LSP is available."
+    }
+    fn parameters(&self) -> &'static [ParamMeta] {
+        GET_TYPE_DEFINITION_PARAMS
+    }
+}
+
+/// Operation metadata for hover information.
+#[derive(Debug, Default)]
+pub struct GetHover;
+
+static GET_HOVER_PARAMS: &[ParamMeta] = &[
+    ParamMeta::new("file_path")
+        .description("Path to the file containing the symbol")
+        .param_type(ParamType::String)
+        .required(),
+    ParamMeta::new("line")
+        .description("Zero-based line number of the symbol")
+        .param_type(ParamType::Integer)
+        .required(),
+    ParamMeta::new("character")
+        .description("Zero-based character offset within the line")
+        .param_type(ParamType::Integer)
+        .required(),
+];
+
+impl Operation for GetHover {
+    fn verb(&self) -> &'static str {
+        "get"
+    }
+    fn noun(&self) -> &'static str {
+        "hover"
+    }
+    fn description(&self) -> &'static str {
+        "Get hover information (type signature, docs) with layered resolution (live LSP, LSP index, tree-sitter)"
+    }
+    fn parameters(&self) -> &'static [ParamMeta] {
+        GET_HOVER_PARAMS
+    }
+}
+
+/// Operation metadata for find-all-references.
+#[derive(Debug, Default)]
+pub struct GetReferences;
+
+static GET_REFERENCES_PARAMS: &[ParamMeta] = &[
+    ParamMeta::new("file_path")
+        .description("Path to the file containing the symbol")
+        .param_type(ParamType::String)
+        .required(),
+    ParamMeta::new("line")
+        .description("Zero-based line number of the symbol")
+        .param_type(ParamType::Integer)
+        .required(),
+    ParamMeta::new("character")
+        .description("Zero-based character offset within the line")
+        .param_type(ParamType::Integer)
+        .required(),
+    ParamMeta::new("include_declaration")
+        .description("Whether to include the declaration itself in results (default: true)")
+        .param_type(ParamType::Boolean),
+    ParamMeta::new("max_results")
+        .description("Maximum number of references to return")
+        .param_type(ParamType::Integer),
+];
+
+impl Operation for GetReferences {
+    fn verb(&self) -> &'static str {
+        "get"
+    }
+    fn noun(&self) -> &'static str {
+        "references"
+    }
+    fn description(&self) -> &'static str {
+        "Find all references to a symbol with layered resolution (live LSP, LSP index, tree-sitter)"
+    }
+    fn parameters(&self) -> &'static [ParamMeta] {
+        GET_REFERENCES_PARAMS
+    }
+}
+
+/// Operation metadata for find-implementations.
+#[derive(Debug, Default)]
+pub struct GetImplementations;
+
+static GET_IMPLEMENTATIONS_PARAMS: &[ParamMeta] = &[
+    ParamMeta::new("file_path")
+        .description("Path to the file containing the trait/interface symbol")
+        .param_type(ParamType::String)
+        .required(),
+    ParamMeta::new("line")
+        .description("Zero-based line number of the symbol")
+        .param_type(ParamType::Integer)
+        .required(),
+    ParamMeta::new("character")
+        .description("Zero-based character offset within the line")
+        .param_type(ParamType::Integer)
+        .required(),
+    ParamMeta::new("max_results")
+        .description("Maximum number of implementation locations to return")
+        .param_type(ParamType::Integer),
+];
+
+impl Operation for GetImplementations {
+    fn verb(&self) -> &'static str {
+        "get"
+    }
+    fn noun(&self) -> &'static str {
+        "implementations"
+    }
+    fn description(&self) -> &'static str {
+        "Find implementations of a trait/interface with layered resolution (live LSP, tree-sitter heuristic)"
+    }
+    fn parameters(&self) -> &'static [ParamMeta] {
+        GET_IMPLEMENTATIONS_PARAMS
+    }
+}
+
+/// Operation metadata for code actions (quickfixes, refactors).
+#[derive(Debug, Default)]
+pub struct GetCodeActions;
+
+static GET_CODE_ACTIONS_PARAMS: &[ParamMeta] = &[
+    ParamMeta::new("file_path")
+        .description("Path to the file to get code actions for")
+        .param_type(ParamType::String)
+        .required(),
+    ParamMeta::new("start_line")
+        .description("Zero-based start line of the range to query")
+        .param_type(ParamType::Integer)
+        .required(),
+    ParamMeta::new("start_character")
+        .description("Zero-based start character offset")
+        .param_type(ParamType::Integer)
+        .required(),
+    ParamMeta::new("end_line")
+        .description("Zero-based end line of the range to query")
+        .param_type(ParamType::Integer)
+        .required(),
+    ParamMeta::new("end_character")
+        .description("Zero-based end character offset")
+        .param_type(ParamType::Integer)
+        .required(),
+    ParamMeta::new("filter_kind")
+        .description(
+            "Optional filter for code action kinds (e.g. [\"quickfix\", \"refactor\", \"source\"])",
+        )
+        .param_type(ParamType::Array),
+];
+
+impl Operation for GetCodeActions {
+    fn verb(&self) -> &'static str {
+        "get"
+    }
+    fn noun(&self) -> &'static str {
+        "code_actions"
+    }
+    fn description(&self) -> &'static str {
+        "Get code actions (quickfixes, refactors) for a range (live LSP only). Returns empty when no LSP is available."
+    }
+    fn parameters(&self) -> &'static [ParamMeta] {
+        GET_CODE_ACTIONS_PARAMS
+    }
+}
+
 // Static operation instances for schema generation
 static GET_SYMBOL_OP: Lazy<GetSymbol> = Lazy::new(GetSymbol::default);
 static SEARCH_SYMBOL_OP: Lazy<SearchSymbol> = Lazy::new(SearchSymbol::default);
@@ -466,6 +881,17 @@ static SEARCH_CODE_OP: Lazy<SearchCode> = Lazy::new(SearchCode::default);
 static FIND_DUPLICATES_OP: Lazy<FindDuplicates> = Lazy::new(FindDuplicates::default);
 static QUERY_AST_OP: Lazy<QueryAst> = Lazy::new(QueryAst::default);
 static DETECT_PROJECTS_OP: Lazy<DetectProjects> = Lazy::new(DetectProjects::default);
+static GET_RENAME_EDITS_OP: Lazy<GetRenameEdits> = Lazy::new(GetRenameEdits::default);
+static GET_DIAGNOSTICS_OP: Lazy<GetDiagnostics> = Lazy::new(GetDiagnostics::default);
+static GET_INBOUND_CALLS_OP: Lazy<GetInboundCalls> = Lazy::new(GetInboundCalls::default);
+static WORKSPACE_SYMBOL_LIVE_OP: Lazy<WorkspaceSymbolLive> =
+    Lazy::new(WorkspaceSymbolLive::default);
+static GET_DEFINITION_OP: Lazy<GetDefinition> = Lazy::new(GetDefinition::default);
+static GET_TYPE_DEFINITION_OP: Lazy<GetTypeDefinition> = Lazy::new(GetTypeDefinition::default);
+static GET_HOVER_OP: Lazy<GetHover> = Lazy::new(GetHover::default);
+static GET_REFERENCES_OP: Lazy<GetReferences> = Lazy::new(GetReferences::default);
+static GET_IMPLEMENTATIONS_OP: Lazy<GetImplementations> = Lazy::new(GetImplementations::default);
+static GET_CODE_ACTIONS_OP: Lazy<GetCodeActions> = Lazy::new(GetCodeActions::default);
 
 static CODE_CONTEXT_OPERATIONS: Lazy<Vec<&'static dyn Operation>> = Lazy::new(|| {
     vec![
@@ -483,6 +909,16 @@ static CODE_CONTEXT_OPERATIONS: Lazy<Vec<&'static dyn Operation>> = Lazy::new(||
         &*CLEAR_STATUS_OP as &dyn Operation,
         &*LSP_STATUS_OP as &dyn Operation,
         &*DETECT_PROJECTS_OP as &dyn Operation,
+        &*GET_RENAME_EDITS_OP as &dyn Operation,
+        &*GET_DIAGNOSTICS_OP as &dyn Operation,
+        &*GET_INBOUND_CALLS_OP as &dyn Operation,
+        &*WORKSPACE_SYMBOL_LIVE_OP as &dyn Operation,
+        &*GET_DEFINITION_OP as &dyn Operation,
+        &*GET_TYPE_DEFINITION_OP as &dyn Operation,
+        &*GET_HOVER_OP as &dyn Operation,
+        &*GET_REFERENCES_OP as &dyn Operation,
+        &*GET_IMPLEMENTATIONS_OP as &dyn Operation,
+        &*GET_CODE_ACTIONS_OP as &dyn Operation,
     ]
 });
 
@@ -728,13 +1164,25 @@ impl McpTool for CodeContextTool {
             "clear status" => execute_clear_status(context),
             "lsp status" => execute_lsp_status(context),
             "detect projects" => detect::execute_detect(&arguments, context).await,
+            "get rename_edits" => execute_get_rename_edits(&arguments, context),
+            "get diagnostics" => execute_get_diagnostics(&arguments, context),
+            "get inbound_calls" => execute_get_inbound_calls(&arguments, context),
+            "search workspace_symbol" => {
+                execute_workspace_symbol_live(&arguments, context)
+            }
+            "get definition" => execute_get_definition(&arguments, context),
+            "get type_definition" => execute_get_type_definition(&arguments, context),
+            "get hover" => execute_get_hover(&arguments, context),
+            "get references" => execute_get_references(&arguments, context),
+            "get implementations" => execute_get_implementations(&arguments, context),
+            "get code_actions" => execute_get_code_actions(&arguments, context),
             "" => Err(McpError::invalid_params(
-                "Missing 'op' field. Valid operations: 'get symbol', 'search symbol', 'list symbols', 'grep code', 'search code', 'find duplicates', 'query ast', 'get callgraph', 'get blastradius', 'get status', 'build status', 'clear status', 'lsp status', 'detect projects'.",
+                "Missing 'op' field. Valid operations: 'get symbol', 'search symbol', 'list symbols', 'grep code', 'search code', 'find duplicates', 'query ast', 'get callgraph', 'get blastradius', 'get status', 'build status', 'clear status', 'lsp status', 'detect projects', 'get rename_edits', 'get diagnostics', 'get inbound_calls', 'search workspace_symbol', 'get definition', 'get type_definition', 'get hover', 'get references', 'get implementations', 'get code_actions'.",
                 None,
             )),
             other => Err(McpError::invalid_params(
                 format!(
-                    "Unknown operation '{}'. Valid operations: 'get symbol', 'search symbol', 'list symbols', 'grep code', 'search code', 'find duplicates', 'query ast', 'get callgraph', 'get blastradius', 'get status', 'build status', 'clear status', 'lsp status', 'detect projects'",
+                    "Unknown operation '{}'. Valid operations: 'get symbol', 'search symbol', 'list symbols', 'grep code', 'search code', 'find duplicates', 'query ast', 'get callgraph', 'get blastradius', 'get status', 'build status', 'clear status', 'lsp status', 'detect projects', 'get rename_edits', 'get diagnostics', 'get inbound_calls', 'search workspace_symbol', 'get definition', 'get type_definition', 'get hover', 'get references', 'get implementations', 'get code_actions'",
                     other
                 ),
                 None,
@@ -1659,6 +2107,467 @@ fn execute_lsp_status(context: &ToolContext) -> Result<CallToolResult, McpError>
     json_result(&result)
 }
 
+/// Execute the "get rename_edits" operation.
+///
+/// Previews a rename at the given position without applying edits.
+/// Returns `can_rename: false` when no live LSP is available.
+fn execute_get_rename_edits(
+    args: &serde_json::Map<String, serde_json::Value>,
+    context: &ToolContext,
+) -> Result<CallToolResult, McpError> {
+    let file_path = args
+        .get("file_path")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| McpError::invalid_params("Missing required parameter 'file_path'", None))?;
+
+    let line = args
+        .get("line")
+        .and_then(|v| v.as_u64())
+        .ok_or_else(|| McpError::invalid_params("Missing required parameter 'line'", None))?
+        as u32;
+
+    let character = args
+        .get("character")
+        .and_then(|v| v.as_u64())
+        .ok_or_else(|| McpError::invalid_params("Missing required parameter 'character'", None))?
+        as u32;
+
+    let new_name = args
+        .get("new_name")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| McpError::invalid_params("Missing required parameter 'new_name'", None))?;
+
+    let opts = swissarmyhammer_code_context::GetRenameEditsOptions {
+        file_path: file_path.to_string(),
+        line,
+        character,
+        new_name: new_name.to_string(),
+    };
+
+    let ws = open_workspace(context)?;
+    let db = ws.db();
+    let client = lsp_client_for_file(file_path);
+    let ctx = swissarmyhammer_code_context::LayeredContext::new(&db, client.as_ref());
+
+    let result =
+        swissarmyhammer_code_context::get_rename_edits(&ctx, &opts).map_err(context_err)?;
+    json_result(&result)
+}
+
+/// Execute the "get diagnostics" operation.
+///
+/// Returns errors and warnings for a file via live LSP pull diagnostics.
+/// Returns empty when no live LSP is available.
+fn execute_get_diagnostics(
+    args: &serde_json::Map<String, serde_json::Value>,
+    context: &ToolContext,
+) -> Result<CallToolResult, McpError> {
+    let file_path = args
+        .get("file_path")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| McpError::invalid_params("Missing required parameter 'file_path'", None))?;
+
+    let severity_filter = args
+        .get("severity_filter")
+        .and_then(|v| v.as_str())
+        .map(|s| match s.to_lowercase().as_str() {
+            "error" => DiagnosticSeverity::Error,
+            "warning" => DiagnosticSeverity::Warning,
+            "info" => DiagnosticSeverity::Info,
+            "hint" => DiagnosticSeverity::Hint,
+            _ => DiagnosticSeverity::Hint,
+        });
+
+    let opts = GetDiagnosticsOptions {
+        file_path: file_path.to_string(),
+        severity_filter,
+    };
+
+    let ws = open_workspace(context)?;
+    let db = ws.db();
+    let client = lsp_client_for_file(file_path);
+    let ctx = LayeredContext::new(&db, client.as_ref());
+
+    let result = swissarmyhammer_code_context::get_diagnostics(&ctx, &opts).map_err(context_err)?;
+    json_result(&result)
+}
+
+/// Execute the "get inbound_calls" operation.
+///
+/// Finds all callers of a function at the given position using layered
+/// resolution (live LSP call hierarchy, then LSP index, then tree-sitter).
+fn execute_get_inbound_calls(
+    args: &serde_json::Map<String, serde_json::Value>,
+    context: &ToolContext,
+) -> Result<CallToolResult, McpError> {
+    let file_path = args
+        .get("file_path")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| McpError::invalid_params("Missing required parameter 'file_path'", None))?;
+
+    let line = args
+        .get("line")
+        .and_then(|v| v.as_u64())
+        .ok_or_else(|| McpError::invalid_params("Missing required parameter 'line'", None))?
+        as u32;
+
+    let character = args
+        .get("character")
+        .and_then(|v| v.as_u64())
+        .ok_or_else(|| McpError::invalid_params("Missing required parameter 'character'", None))?
+        as u32;
+
+    let depth = args.get("depth").and_then(|v| v.as_u64()).unwrap_or(1) as u32;
+
+    let opts = GetInboundCallsOptions {
+        file_path: file_path.to_string(),
+        line,
+        character,
+        depth,
+    };
+
+    let ws = open_workspace(context)?;
+    let db = ws.db();
+    let client = lsp_client_for_file(file_path);
+    let ctx = LayeredContext::new(&db, client.as_ref());
+
+    let result =
+        swissarmyhammer_code_context::get_inbound_calls(&ctx, &opts).map_err(context_err)?;
+    json_result(&result)
+}
+
+/// Execute the "search workspace_symbol" operation.
+///
+/// Live workspace symbol search with layered resolution: live LSP
+/// workspace/symbol, then LSP index, then tree-sitter chunks.
+fn execute_workspace_symbol_live(
+    args: &serde_json::Map<String, serde_json::Value>,
+    context: &ToolContext,
+) -> Result<CallToolResult, McpError> {
+    let query = args
+        .get("query")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| McpError::invalid_params("Missing required parameter 'query'", None))?;
+
+    let max_results = args
+        .get("max_results")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(50) as usize;
+
+    let opts = WorkspaceSymbolLiveOptions {
+        query: query.to_string(),
+        max_results,
+    };
+
+    let ws = open_workspace(context)?;
+    let db = ws.db();
+    let client = any_lsp_client();
+    let ctx = LayeredContext::new(&db, client.as_ref());
+
+    let result =
+        swissarmyhammer_code_context::workspace_symbol_live(&ctx, &opts).map_err(context_err)?;
+    json_result(&result)
+}
+
+/// Execute the "get definition" operation.
+///
+/// Go-to-definition with layered resolution: live LSP, LSP index, tree-sitter.
+fn execute_get_definition(
+    args: &serde_json::Map<String, serde_json::Value>,
+    context: &ToolContext,
+) -> Result<CallToolResult, McpError> {
+    let file_path = args
+        .get("file_path")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| McpError::invalid_params("Missing required parameter 'file_path'", None))?;
+
+    let line = args
+        .get("line")
+        .and_then(|v| v.as_u64())
+        .ok_or_else(|| McpError::invalid_params("Missing required parameter 'line'", None))?
+        as u32;
+
+    let character = args
+        .get("character")
+        .and_then(|v| v.as_u64())
+        .ok_or_else(|| McpError::invalid_params("Missing required parameter 'character'", None))?
+        as u32;
+
+    let include_source = args
+        .get("include_source")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+
+    let opts = GetDefinitionOptions {
+        file_path: file_path.to_string(),
+        line,
+        character,
+        include_source,
+    };
+
+    let ws = open_workspace(context)?;
+    let db = ws.db();
+    let client = lsp_client_for_file(file_path);
+    let ctx = LayeredContext::new(&db, client.as_ref());
+
+    let result = swissarmyhammer_code_context::get_definition(&ctx, &opts).map_err(context_err)?;
+    json_result(&result)
+}
+
+/// Execute the "get type_definition" operation.
+///
+/// Go-to-type-definition via live LSP only. Returns empty when no LSP is available.
+fn execute_get_type_definition(
+    args: &serde_json::Map<String, serde_json::Value>,
+    context: &ToolContext,
+) -> Result<CallToolResult, McpError> {
+    let file_path = args
+        .get("file_path")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| McpError::invalid_params("Missing required parameter 'file_path'", None))?;
+
+    let line = args
+        .get("line")
+        .and_then(|v| v.as_u64())
+        .ok_or_else(|| McpError::invalid_params("Missing required parameter 'line'", None))?
+        as u32;
+
+    let character = args
+        .get("character")
+        .and_then(|v| v.as_u64())
+        .ok_or_else(|| McpError::invalid_params("Missing required parameter 'character'", None))?
+        as u32;
+
+    let include_source = args
+        .get("include_source")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+
+    let opts = GetTypeDefinitionOptions {
+        file_path: file_path.to_string(),
+        line,
+        character,
+        include_source,
+    };
+
+    let ws = open_workspace(context)?;
+    let db = ws.db();
+    let client = lsp_client_for_file(file_path);
+    let ctx = LayeredContext::new(&db, client.as_ref());
+
+    let result =
+        swissarmyhammer_code_context::get_type_definition(&ctx, &opts).map_err(context_err)?;
+    json_result(&result)
+}
+
+/// Execute the "get hover" operation.
+///
+/// Returns hover information (type signature, docs) with layered resolution.
+fn execute_get_hover(
+    args: &serde_json::Map<String, serde_json::Value>,
+    context: &ToolContext,
+) -> Result<CallToolResult, McpError> {
+    let file_path = args
+        .get("file_path")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| McpError::invalid_params("Missing required parameter 'file_path'", None))?;
+
+    let line = args
+        .get("line")
+        .and_then(|v| v.as_u64())
+        .ok_or_else(|| McpError::invalid_params("Missing required parameter 'line'", None))?
+        as u32;
+
+    let character = args
+        .get("character")
+        .and_then(|v| v.as_u64())
+        .ok_or_else(|| McpError::invalid_params("Missing required parameter 'character'", None))?
+        as u32;
+
+    let opts = GetHoverOptions {
+        file_path: file_path.to_string(),
+        line,
+        character,
+    };
+
+    let ws = open_workspace(context)?;
+    let db = ws.db();
+    let client = lsp_client_for_file(file_path);
+    tracing::debug!(file_path = %file_path, client = client.is_some(), "get_hover: client lookup");
+    let ctx = LayeredContext::new(&db, client.as_ref());
+    tracing::debug!(
+        has_live_lsp = ctx.has_live_lsp(),
+        "get_hover: context created"
+    );
+
+    let result = swissarmyhammer_code_context::get_hover(&ctx, &opts).map_err(context_err)?;
+    tracing::debug!(source_layer = ?result.as_ref().map(|r| &r.source_layer), "get_hover: result");
+    json_result(&result)
+}
+
+/// Execute the "get references" operation.
+///
+/// Finds all references to a symbol with layered resolution.
+fn execute_get_references(
+    args: &serde_json::Map<String, serde_json::Value>,
+    context: &ToolContext,
+) -> Result<CallToolResult, McpError> {
+    let file_path = args
+        .get("file_path")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| McpError::invalid_params("Missing required parameter 'file_path'", None))?;
+
+    let line = args
+        .get("line")
+        .and_then(|v| v.as_u64())
+        .ok_or_else(|| McpError::invalid_params("Missing required parameter 'line'", None))?
+        as u32;
+
+    let character = args
+        .get("character")
+        .and_then(|v| v.as_u64())
+        .ok_or_else(|| McpError::invalid_params("Missing required parameter 'character'", None))?
+        as u32;
+
+    let include_declaration = args
+        .get("include_declaration")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+
+    let max_results = args
+        .get("max_results")
+        .and_then(|v| v.as_u64())
+        .map(|n| n as usize);
+
+    let opts = GetReferencesOptions {
+        file_path: file_path.to_string(),
+        line,
+        character,
+        include_declaration,
+        max_results,
+    };
+
+    let ws = open_workspace(context)?;
+    let db = ws.db();
+    let client = lsp_client_for_file(file_path);
+    let ctx = LayeredContext::new(&db, client.as_ref());
+
+    let result = swissarmyhammer_code_context::get_references(&ctx, &opts).map_err(context_err)?;
+    json_result(&result)
+}
+
+/// Execute the "get implementations" operation.
+///
+/// Finds implementations of a trait/interface with layered resolution.
+fn execute_get_implementations(
+    args: &serde_json::Map<String, serde_json::Value>,
+    context: &ToolContext,
+) -> Result<CallToolResult, McpError> {
+    let file_path = args
+        .get("file_path")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| McpError::invalid_params("Missing required parameter 'file_path'", None))?;
+
+    let line = args
+        .get("line")
+        .and_then(|v| v.as_u64())
+        .ok_or_else(|| McpError::invalid_params("Missing required parameter 'line'", None))?
+        as u32;
+
+    let character = args
+        .get("character")
+        .and_then(|v| v.as_u64())
+        .ok_or_else(|| McpError::invalid_params("Missing required parameter 'character'", None))?
+        as u32;
+
+    let max_results = args
+        .get("max_results")
+        .and_then(|v| v.as_u64())
+        .map(|n| n as usize);
+
+    let opts = GetImplementationsOptions {
+        file_path: file_path.to_string(),
+        line,
+        character,
+        max_results,
+    };
+
+    let ws = open_workspace(context)?;
+    let db = ws.db();
+    let client = lsp_client_for_file(file_path);
+    let ctx = LayeredContext::new(&db, client.as_ref());
+
+    let result =
+        swissarmyhammer_code_context::get_implementations(&ctx, &opts).map_err(context_err)?;
+    json_result(&result)
+}
+
+/// Execute the "get code_actions" operation.
+///
+/// Returns code actions (quickfixes, refactors) for a range via live LSP.
+/// Returns empty when no LSP is available.
+fn execute_get_code_actions(
+    args: &serde_json::Map<String, serde_json::Value>,
+    context: &ToolContext,
+) -> Result<CallToolResult, McpError> {
+    let file_path = args
+        .get("file_path")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| McpError::invalid_params("Missing required parameter 'file_path'", None))?;
+
+    let start_line = args
+        .get("start_line")
+        .and_then(|v| v.as_u64())
+        .ok_or_else(|| McpError::invalid_params("Missing required parameter 'start_line'", None))?
+        as u32;
+
+    let start_character = args
+        .get("start_character")
+        .and_then(|v| v.as_u64())
+        .ok_or_else(|| {
+            McpError::invalid_params("Missing required parameter 'start_character'", None)
+        })? as u32;
+
+    let end_line = args
+        .get("end_line")
+        .and_then(|v| v.as_u64())
+        .ok_or_else(|| McpError::invalid_params("Missing required parameter 'end_line'", None))?
+        as u32;
+
+    let end_character = args
+        .get("end_character")
+        .and_then(|v| v.as_u64())
+        .ok_or_else(|| {
+            McpError::invalid_params("Missing required parameter 'end_character'", None)
+        })? as u32;
+
+    let filter_kind = args.get("filter_kind").and_then(|v| {
+        v.as_array().map(|arr| {
+            arr.iter()
+                .filter_map(|item| item.as_str().map(String::from))
+                .collect()
+        })
+    });
+
+    let opts = GetCodeActionsOptions {
+        file_path: file_path.to_string(),
+        start_line,
+        start_character,
+        end_line,
+        end_character,
+        filter_kind,
+    };
+
+    let ws = open_workspace(context)?;
+    let db = ws.db();
+    let client = lsp_client_for_file(file_path);
+    let ctx = LayeredContext::new(&db, client.as_ref());
+
+    let result =
+        swissarmyhammer_code_context::get_code_actions(&ctx, &opts).map_err(context_err)?;
+    json_result(&result)
+}
+
 /// Register the code_context tool with the registry.
 pub fn register_code_context_tools(registry: &mut ToolRegistry) {
     registry.register(CodeContextTool::new());
@@ -1696,7 +2605,7 @@ mod tests {
     fn test_code_context_tool_has_operations() {
         let tool = CodeContextTool::new();
         let ops = tool.operations();
-        assert_eq!(ops.len(), 14);
+        assert_eq!(ops.len(), 24);
         assert!(ops.iter().any(|o| o.op_string() == "get symbol"));
         assert!(ops.iter().any(|o| o.op_string() == "search symbol"));
         assert!(ops.iter().any(|o| o.op_string() == "list symbols"));
@@ -1711,6 +2620,18 @@ mod tests {
         assert!(ops.iter().any(|o| o.op_string() == "clear status"));
         assert!(ops.iter().any(|o| o.op_string() == "lsp status"));
         assert!(ops.iter().any(|o| o.op_string() == "detect projects"));
+        assert!(ops.iter().any(|o| o.op_string() == "get rename_edits"));
+        assert!(ops.iter().any(|o| o.op_string() == "get diagnostics"));
+        assert!(ops.iter().any(|o| o.op_string() == "get inbound_calls"));
+        assert!(ops
+            .iter()
+            .any(|o| o.op_string() == "search workspace_symbol"));
+        assert!(ops.iter().any(|o| o.op_string() == "get definition"));
+        assert!(ops.iter().any(|o| o.op_string() == "get type_definition"));
+        assert!(ops.iter().any(|o| o.op_string() == "get hover"));
+        assert!(ops.iter().any(|o| o.op_string() == "get references"));
+        assert!(ops.iter().any(|o| o.op_string() == "get implementations"));
+        assert!(ops.iter().any(|o| o.op_string() == "get code_actions"));
     }
 
     #[test]
@@ -1746,7 +2667,7 @@ mod tests {
         let op_schemas = schema["x-operation-schemas"]
             .as_array()
             .expect("should have x-operation-schemas");
-        assert_eq!(op_schemas.len(), 14);
+        assert_eq!(op_schemas.len(), 24);
     }
 
     #[tokio::test]

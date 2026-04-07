@@ -26,6 +26,20 @@ import { slugify } from "@/lib/slugify";
 import type { Entity } from "@/types/kanban";
 import { getStr } from "@/types/kanban";
 
+/** Virtual tag names defined by the backend VirtualTagRegistry. */
+const VIRTUAL_TAG_SLUGS = ["READY", "BLOCKED", "BLOCKING"] as const;
+
+/** Color used for virtual tags in autocomplete (distinct from real tags). */
+const VIRTUAL_TAG_COLOR = "7c3aed";
+
+/** Options for controlling autocomplete behavior in different editor contexts. */
+export interface MentionExtensionOptions {
+  /** Include virtual tags (READY, BLOCKED, BLOCKING) in `#` completions. */
+  includeVirtualTags?: boolean;
+  /** Include `@user` and `^ref` completion sources for the filter editor. */
+  includeFilterSigils?: boolean;
+}
+
 // ---------------------------------------------------------------------------
 // Pre-built mention infrastructure per entity type (created once per prefix).
 // Keyed by "prefix:entityType" — bounded by schema-defined mentionable types.
@@ -117,14 +131,43 @@ function buildAsyncSearch(
 }
 
 /**
+ * Build a search function that includes virtual tag entries alongside real results.
+ *
+ * Wraps an existing async search, prepending virtual tag matches (READY,
+ * BLOCKED, BLOCKING) that pass the query filter. Virtual tags are styled
+ * distinctly via a dedicated color.
+ */
+function buildVirtualTagSearch(
+  baseSearch: (query: string) => Promise<MentionSearchResult[]>,
+): (query: string) => Promise<MentionSearchResult[]> {
+  return async (query: string) => {
+    const virtualResults: MentionSearchResult[] = VIRTUAL_TAG_SLUGS
+      .filter((slug) => !query || slug.toLowerCase().includes(query.toLowerCase()))
+      .map((slug) => ({
+        slug,
+        displayName: `${slug} (virtual)`,
+        color: VIRTUAL_TAG_COLOR,
+      }));
+    const realResults = await baseSearch(query);
+    return [...virtualResults, ...realResults];
+  };
+}
+
+/**
  * Build CM6 extensions for mention decorations, autocomplete, and tooltips.
+ *
+ * @param options — controls which completion sources are active:
+ *   - `includeVirtualTags`: add READY/BLOCKED/BLOCKING to `#` completions
+ *   - `includeFilterSigils`: add `@user` and `^ref` completion sources
  *
  * Returns a stable Extension[] that only changes when mentionable entity data changes.
  * Returns an empty array when there are no mentionable types in the schema.
  */
-export function useMentionExtensions(): Extension[] {
+export function useMentionExtensions(options?: MentionExtensionOptions): Extension[] {
   const { mentionableTypes } = useSchema();
   const { getEntities } = useEntityStore();
+  const includeVirtualTags = options?.includeVirtualTags ?? false;
+  const includeFilterSigils = options?.includeFilterSigils ?? false;
 
   const mentionData = useMemo(() => {
     return mentionableTypes.map((mt) => {
@@ -147,18 +190,29 @@ export function useMentionExtensions(): Extension[] {
       if (md.colorMap.size === 0) continue;
       const decoInfra = getDecoInfra(md.prefix, md.entityType);
       exts.push(decoInfra.extension(md.colorMap));
-      completionSources.push(
-        createMentionCompletionSource(
-          md.prefix,
-          buildAsyncSearch(md.entityType),
-        ),
-      );
+
+      const baseSearch = buildAsyncSearch(md.entityType);
+      const search = (includeVirtualTags && md.prefix === "#")
+        ? buildVirtualTagSearch(baseSearch)
+        : baseSearch;
+      completionSources.push(createMentionCompletionSource(md.prefix, search));
+
       const tooltipInfraInstance = getTooltipInfra(md.prefix, md.entityType);
       exts.push(tooltipInfraInstance.extension(md.metaMap));
     }
+
+    if (includeFilterSigils) {
+      completionSources.push(
+        createMentionCompletionSource("@", buildAsyncSearch("actor")),
+      );
+      completionSources.push(
+        createMentionCompletionSource("^", buildAsyncSearch("task")),
+      );
+    }
+
     if (completionSources.length > 0) {
       exts.push(createMentionAutocomplete(completionSources));
     }
     return exts;
-  }, [mentionData]);
+  }, [mentionData, includeVirtualTags, includeFilterSigils]);
 }

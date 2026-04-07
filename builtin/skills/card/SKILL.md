@@ -34,7 +34,7 @@ Use `code_context` as the primary research tool:
 - **Trace call chains** — `op: "get callgraph"` with `direction: "inbound"` and `"outbound"` to understand execution flow
 - **Fall back to text search** — Glob, Grep, Read for string literals, config files, or patterns not in the index
 
-Research depth should match card complexity. A simple bug fix needs less exploration than a new feature that crosses module boundaries.
+Thorough research is always required. The tools you use may differ — a bug fix may focus on blast radius while a feature requires broader symbol exploration — but never skip research because something appears simple.
 
 ### 3. Create the card
 

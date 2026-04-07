@@ -31,6 +31,15 @@ vi.mock("@/lib/ui-state-context", () => ({
   useUIState: () => ({ keymap_mode: "cua" }),
 }));
 
+// Mock schema and entity store for useMentionExtensions (used by filter editor).
+vi.mock("@/lib/schema-context", () => ({
+  useSchema: () => ({ mentionableTypes: [] }),
+}));
+
+vi.mock("@/lib/entity-store-context", () => ({
+  useEntityStore: () => ({ getEntities: () => [] }),
+}));
+
 import { FilterEditor } from "./filter-editor";
 
 describe("FilterEditor", () => {
@@ -51,10 +60,13 @@ describe("FilterEditor", () => {
     expect(screen.getByTestId("filter-editor")).toBeDefined();
   });
 
-  it("renders help text", () => {
+  it("renders help text with DSL syntax reference", () => {
     render(<FilterEditor {...defaultProps} />);
 
-    expect(screen.getByText("Enter to save, Escape to cancel")).toBeDefined();
+    // Help text includes DSL syntax and save/cancel instructions (split across elements)
+    const editor = screen.getByTestId("filter-editor");
+    expect(editor.textContent).toContain("Enter to save");
+    expect(editor.textContent).toContain("#tag");
   });
 
   it("does not show clear button when filter is empty", () => {
@@ -64,7 +76,7 @@ describe("FilterEditor", () => {
   });
 
   it("shows clear button when filter is non-empty", () => {
-    render(<FilterEditor {...defaultProps} filter='Status !== "Done"' />);
+    render(<FilterEditor {...defaultProps} filter='#bug && @will' />);
 
     expect(screen.getByLabelText("Clear filter")).toBeDefined();
   });
@@ -73,7 +85,7 @@ describe("FilterEditor", () => {
     const onClose = vi.fn();
     render(
       <FilterEditor
-        filter='Status !== "Done"'
+        filter='#bug && @will'
         perspectiveId="p1"
         onClose={onClose}
       />,
@@ -95,7 +107,7 @@ describe("FilterEditor", () => {
     const onClose = vi.fn();
     render(
       <FilterEditor
-        filter='Status !== "Done"'
+        filter='#bug && @will'
         perspectiveId="p1"
         onClose={onClose}
       />,

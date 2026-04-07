@@ -71,7 +71,7 @@ pub struct Perspective {
     /// Ordered list of field entries (defines column order).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub fields: Vec<PerspectiveFieldEntry>,
-    /// Opaque filter function string (JS expression). Stored, not evaluated.
+    /// Filter DSL expression (e.g. `#bug && @will`). Validated on save, evaluated server-side.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub filter: Option<String>,
     /// Group-by field name. Stored as a plain field name string, consumed by the UI as a TanStack Table grouping column ID.

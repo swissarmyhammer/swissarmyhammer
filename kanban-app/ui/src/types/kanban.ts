@@ -65,6 +65,7 @@ export interface PerspectiveDef {
   readonly name: string;
   readonly view: string;
   readonly fields?: readonly PerspectiveFieldEntry[];
+  /** Filter DSL expression (e.g. `#bug && @will`). Evaluated server-side. */
   readonly filter?: string;
   readonly group?: string;
   readonly sort?: readonly PerspectiveSortEntry[];

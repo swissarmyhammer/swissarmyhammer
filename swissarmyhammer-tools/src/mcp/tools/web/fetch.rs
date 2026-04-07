@@ -237,38 +237,6 @@ mod tests {
         );
     }
 
-    /// A fetch that reaches an unreachable host must return a non-error `CallToolResult`
-    /// with `is_error: true` (the tool converts network failures to error results, not Err).
-    ///
-    /// Marked #[ignore] because waiting for the TCP timeout takes ~11 seconds;
-    /// the underlying FetchError mapping is already exercised in
-    /// swissarmyhammer-web/src/fetch.rs unit tests.
-    #[tokio::test]
-    #[ignore = "requires TCP timeout (~11s); FetchError mapping covered in swissarmyhammer-web tests"]
-    async fn test_execute_fetch_unreachable_host_returns_error_result() {
-        let ctx = test_context().await;
-        // 192.0.2.1 is TEST-NET-1 (RFC 5737) — non-routable, so the fetch will time out
-        // or be blocked by the SSRF guard.  Either an MCP Err or an Ok(is_error) is fine.
-        let mut args = fetch_args("https://192.0.2.1/page");
-        // Shorten the timeout so the test doesn't hang for 30s
-        args.insert(
-            "timeout".to_string(),
-            serde_json::Value::Number(serde_json::Number::from(1u64)),
-        );
-        let result = execute_fetch(args, &ctx).await;
-        // Either the SSRF guard blocks it (Err) or the fetch fails (Ok with is_error)
-        match result {
-            Err(_) => { /* SSRF guard blocked — acceptable */ }
-            Ok(call_result) => {
-                assert_eq!(
-                    call_result.is_error,
-                    Some(true),
-                    "unreachable host should produce an error result"
-                );
-            }
-        }
-    }
-
     // ── FetchUrl operation metadata ──────────────────────────────────────────
 
     #[test]

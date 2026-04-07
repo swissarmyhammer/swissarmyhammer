@@ -10,7 +10,7 @@ homepage.workspace = true
 
 [dependencies]
 agent-client-protocol.workspace = true
-agent-client-protocol-extras = { path = "../agent-client-protocol-extras" }
+agent-client-protocol-extras = { workspace = true }
 tokio.workspace = true
 tokio-stream = { workspace = true, features = ["sync"] }
 serde.workspace = true
@@ -18,7 +18,7 @@ serde_json.workspace = true
 anyhow.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
-swissarmyhammer-common = { path = "../swissarmyhammer-common" }
+swissarmyhammer-common = { workspace = true }
 
 [dev-dependencies]
 async-trait.workspace = true
@@ -26,7 +26,7 @@ tracing-subscriber.workspace = true
 tempfile.workspace = true
 test-log.workspace = true
 llama-agent = { workspace = true }
-claude-agent = { path = "../claude-agent" }
+claude-agent = { workspace = true }
 futures.workspace = true
 tokio-util = { workspace = true, features = ["compat"] }
 piper = { workspace = true }

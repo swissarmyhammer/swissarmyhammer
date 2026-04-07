@@ -10,7 +10,7 @@ homepage.workspace = true
 
 [dependencies]
 swissarmyhammer-leader-election = { workspace = true }
-swissarmyhammer-directory = { path = "../swissarmyhammer-directory" }
+swissarmyhammer-directory = { workspace = true }
 rusqlite = { workspace = true }
 tracing = { workspace = true }
 thiserror = { workspace = true }
@@ -23,7 +23,7 @@ serde_yaml_ng = { workspace = true }
 sha2 = { workspace = true }
 lsp-types = { workspace = true }
 serde_json = { workspace = true }
-model-embedding = { path = "../model-embedding" }
+model-embedding = { workspace = true }
 tree-sitter = { workspace = true }
 
 [dev-dependencies]

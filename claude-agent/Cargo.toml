@@ -13,8 +13,8 @@ test = false  # Disable lib cfg(test) modules - need ACP 0.9.0 fixes
 
 [dependencies]
 agent-client-protocol = { workspace = true }
-agent-client-protocol-extras = { path = "../agent-client-protocol-extras" }
-model-context-protocol-extras = { path = "../model-context-protocol-extras" }
+agent-client-protocol-extras = { workspace = true }
+model-context-protocol-extras = { workspace = true }
 rmcp = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true }
@@ -37,12 +37,12 @@ url = { workspace = true }
 infer = { workspace = true }
 once_cell = { workspace = true }
 typed-builder = { workspace = true }
-swissarmyhammer-common = { path = "../swissarmyhammer-common" }
-swissarmyhammer-kanban = { path = "../swissarmyhammer-kanban" }
-swissarmyhammer-modes = { path = "../swissarmyhammer-modes" }
-swissarmyhammer-agents = { path = "../swissarmyhammer-agents" }
-swissarmyhammer-prompts = { path = "../swissarmyhammer-prompts" }
-swissarmyhammer-config = { path = "../swissarmyhammer-config" }
+swissarmyhammer-common = { workspace = true }
+swissarmyhammer-kanban = { workspace = true }
+swissarmyhammer-modes = { workspace = true }
+swissarmyhammer-agents = { workspace = true }
+swissarmyhammer-prompts = { workspace = true }
+swissarmyhammer-config = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 nix = { workspace = true }

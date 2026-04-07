@@ -1,18 +1,18 @@
 /**
- * Inline CM6 JavaScript editor for perspective filter expressions.
+ * Inline CM6 editor for perspective filter expressions using the filter DSL.
  *
  * Rendered inside a Radix Popover anchored to a filter icon on the
  * perspective tab bar. Uses the same CM6 infrastructure as text-editor.tsx:
  * shadcnTheme, keymapExtension, and buildSubmitCancelExtensions.
  *
- * The filter expression is a JS snippet evaluated via `new Function()` —
- * field names are available as local variables (e.g. `Status !== "Done"`).
+ * The filter expression uses the kanban filter DSL (`#tag && @user || !#done`).
  * Invalid expressions show an inline error message with a red border.
  */
 
 import { memo, useCallback, useMemo, useRef, useState } from "react";
 import CodeMirror, { type ReactCodeMirrorRef } from "@uiw/react-codemirror";
-import { javascript } from "@codemirror/lang-javascript";
+import { filterLanguage } from "@/lang-filter";
+import { parser as filterParser } from "@/lang-filter/parser";
 import { EditorView } from "@codemirror/view";
 import { Compartment } from "@codemirror/state";
 import { getCM, Vim } from "@replit/codemirror-vim";
@@ -21,7 +21,11 @@ import { useUIState } from "@/lib/ui-state-context";
 import { shadcnTheme, keymapExtension } from "@/lib/cm-keymap";
 import { buildSubmitCancelExtensions } from "@/lib/cm-submit-cancel";
 import { useDispatchCommand } from "@/lib/command-scope";
+import { useMentionExtensions } from "@/hooks/use-mention-extensions";
 import { cn } from "@/lib/utils";
+
+/** Max retry attempts when waiting for vim mode to initialize on the CM instance. */
+const MAX_VIM_INSERT_ATTEMPTS = 20;
 
 /** Static basicSetup config — mirrors text-editor.tsx. */
 const BASIC_SETUP = {
@@ -78,123 +82,109 @@ const StableCodeMirror = memo(function StableCodeMirror({
 });
 
 /**
- * Validate a filter expression by attempting to compile it via `new Function()`.
+ * Validate a filter expression by parsing it with the Lezer grammar.
  *
- * Returns null if the expression is valid, or an error message string.
+ * Walks the parse tree looking for error nodes. Returns null if the expression
+ * is valid, or an error message string describing the problem.
  */
 function validateFilter(expression: string): string | null {
   if (!expression.trim()) return null;
-  try {
-    // eslint-disable-next-line no-new-func
-    new Function("fields", `with(fields) { return (${expression}); }`);
-    return null;
-  } catch (err) {
-    return err instanceof Error ? err.message : String(err);
-  }
+  const tree = filterParser.parse(expression);
+  let error: string | null = null;
+  tree.iterate({
+    enter(node) {
+      if (node.type.isError && !error) {
+        error = "Invalid filter expression";
+      }
+    },
+  });
+  return error;
 }
 
 /**
- * CM6 JavaScript editor for editing perspective filter expressions.
+ * Hook for filter editor commit/dispatch callbacks.
  *
- * - Enter saves the filter via `perspective.filter` command
- * - Escape cancels without saving
- * - Clear button removes the filter via `perspective.clearFilter` command
- * - Invalid expressions show a red border and error message
+ * Manages the committed guard, dispatches filter/clearFilter commands,
+ * and validates input before saving.
  */
-export function FilterEditor({
-  filter,
-  perspectiveId,
-  onClose,
-}: FilterEditorProps) {
-  const editorRef = useRef<ReactCodeMirrorRef>(null);
-  const keymapCompartment = useRef(new Compartment());
-  const { keymap_mode: mode } = useUIState();
+function useFilterCommit(
+  perspectiveId: string,
+  onClose: () => void,
+  editorRef: React.RefObject<ReactCodeMirrorRef | null>,
+) {
   const dispatchFilter = useDispatchCommand("perspective.filter");
   const dispatchClearFilter = useDispatchCommand("perspective.clearFilter");
-
   const [error, setError] = useState<string | null>(null);
-
-  // Capture initial value so the memo wrapper sees a stable string reference.
-  const initialValueRef = useRef(filter);
-
-  // Refs for stable callbacks
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
   const committedRef = useRef(false);
 
-  /** Submit the filter expression to the backend. */
   const handleSubmit = useCallback(() => {
     if (committedRef.current) return;
-    const text = editorRef.current?.view
-      ? editorRef.current.view.state.doc.toString()
-      : "";
-
+    const text = editorRef.current?.view?.state.doc.toString() ?? "";
     const trimmed = text.trim();
 
-    // Empty submit = clear filter
     if (!trimmed) {
       committedRef.current = true;
-      dispatchClearFilter({
-        args: { perspective_id: perspectiveId },
-      }).catch(console.error);
+      dispatchClearFilter({ args: { perspective_id: perspectiveId } }).catch(console.error);
       onCloseRef.current();
       return;
     }
 
-    // Validate before saving
     const validationError = validateFilter(trimmed);
-    if (validationError) {
-      setError(validationError);
-      return;
-    }
+    if (validationError) { setError(validationError); return; }
 
     committedRef.current = true;
-    dispatchFilter({
-      args: { filter: trimmed, perspective_id: perspectiveId },
-    }).catch(console.error);
+    dispatchFilter({ args: { filter: trimmed, perspective_id: perspectiveId } }).catch(console.error);
     onCloseRef.current();
   }, [perspectiveId]);
 
-  /** Cancel without saving. */
   const handleCancel = useCallback(() => {
     if (committedRef.current) return;
     committedRef.current = true;
     onCloseRef.current();
   }, []);
 
-  /** Clear the filter entirely. */
   const handleClear = useCallback(() => {
     if (committedRef.current) return;
     committedRef.current = true;
-    dispatchClearFilter({
-      args: { perspective_id: perspectiveId },
-    }).catch(console.error);
+    dispatchClearFilter({ args: { perspective_id: perspectiveId } }).catch(console.error);
     onCloseRef.current();
   }, [perspectiveId]);
 
-  // Stable refs for submit/cancel extensions
+  const clearError = useCallback(() => setError(null), []);
+
+  return { error, clearError, handleSubmit, handleCancel, handleClear };
+}
+
+/**
+ * Hook that builds the CM6 extension array and vim auto-insert handler.
+ *
+ * Composes the keymap, filter language, submit/cancel bindings, and
+ * error-clearing listener into a single extension array.
+ */
+function useFilterExtensions(
+  handleSubmit: () => void,
+  handleCancel: () => void,
+  clearError: () => void,
+) {
+  const keymapCompartment = useRef(new Compartment());
+  const { keymap_mode: mode } = useUIState();
+
   const submitRef = useRef<(() => void) | null>(null);
   submitRef.current = handleSubmit;
   const cancelRef = useRef<(() => void) | null>(null);
-  cancelRef.current =
-    mode === "vim" ? () => handleSubmit() : () => handleCancel();
+  cancelRef.current = mode === "vim" ? () => handleSubmit() : () => handleCancel();
 
   const handleCreateEditor = useCallback(
     (view: EditorView) => {
       if (mode !== "vim") return;
-      const cm = getCM(view);
-      if (!cm) return;
-      // Auto-enter insert mode so user can type immediately.
-      let cancelled = false;
       let attempts = 0;
       const tryEnterInsert = () => {
-        if (cancelled || attempts > 20) return;
+        if (attempts > MAX_VIM_INSERT_ATTEMPTS) return;
         attempts++;
         const c = getCM(view);
-        if (!c) {
-          requestAnimationFrame(tryEnterInsert);
-          return;
-        }
+        if (!c) { requestAnimationFrame(tryEnterInsert); return; }
         if (!c.state?.vim?.insertMode) {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           Vim.handleKey(c as any, "i", "mapping");
@@ -205,30 +195,45 @@ export function FilterEditor({
     [mode],
   );
 
-  // Clear error when user types
+  const mentionExts = useMentionExtensions({
+    includeVirtualTags: true,
+    includeFilterSigils: true,
+  });
+
   const changeExtension = useMemo(
-    () => [
-      EditorView.updateListener.of((update) => {
-        if (update.docChanged) setError(null);
-      }),
-    ],
-    [],
+    () => [EditorView.updateListener.of((update) => { if (update.docChanged) clearError(); })],
+    [clearError],
   );
 
   const extensions = useMemo(
     () => [
       keymapCompartment.current.of(keymapExtension(mode)),
-      javascript(),
-      ...buildSubmitCancelExtensions({
-        mode,
-        onSubmitRef: submitRef,
-        onCancelRef: cancelRef,
-        singleLine: true,
-      }),
+      filterLanguage(),
+      ...mentionExts,
+      ...buildSubmitCancelExtensions({ mode, onSubmitRef: submitRef, onCancelRef: cancelRef, singleLine: true }),
       ...changeExtension,
     ],
-    [mode, changeExtension],
+    [mode, mentionExts, changeExtension],
   );
+
+  return { handleCreateEditor, extensions };
+}
+
+/**
+ * CM6 editor for editing perspective filter DSL expressions.
+ *
+ * - Enter saves the filter via `perspective.filter` command
+ * - Escape cancels without saving
+ * - Clear button removes the filter via `perspective.clearFilter` command
+ * - Invalid expressions show a red border and error message
+ */
+export function FilterEditor({ filter, perspectiveId, onClose }: FilterEditorProps) {
+  const editorRef = useRef<ReactCodeMirrorRef>(null);
+  const initialValueRef = useRef(filter);
+  const { error, clearError, handleSubmit, handleCancel, handleClear } =
+    useFilterCommit(perspectiveId, onClose, editorRef);
+  const { handleCreateEditor, extensions } =
+    useFilterExtensions(handleSubmit, handleCancel, clearError);
 
   return (
     <div className="w-80" data-testid="filter-editor">
@@ -258,7 +263,7 @@ export function FilterEditor({
           initialValue={initialValueRef.current}
           onCreateEditor={handleCreateEditor}
           extensions={extensions}
-          placeholder='Status !== "Done"'
+          placeholder="#bug && @will"
           className="text-xs"
         />
       </div>
@@ -268,7 +273,8 @@ export function FilterEditor({
         </p>
       )}
       <p className="text-xs text-muted-foreground/70 mt-1">
-        Enter to save, Escape to cancel
+        #tag @user ^ref, &&/and, ||/or, !/not, () &mdash; Enter to save, Esc to
+        cancel
       </p>
     </div>
   );

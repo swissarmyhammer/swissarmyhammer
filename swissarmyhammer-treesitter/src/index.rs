@@ -2643,4 +2643,112 @@ mod tests {
         // Should not find nonexistent file
         assert!(!context.contains("/nonexistent.rs"));
     }
+
+    // =========================================================================
+    // Tests for IndexContext::refresh stale-file branch
+    // (coverage card 01KNHPZK8PJW2X8X0FVW89FX62)
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_refresh_reparses_modified_file() {
+        let dir = TempDir::new().expect("should create temp dir");
+
+        // Write initial source
+        let file_path = dir.path().join("target.rs");
+        std::fs::write(&file_path, "fn original() { let x = 1; }")
+            .expect("should write initial file");
+
+        // Index the file
+        let config = IndexConfig {
+            embedding_enabled: false,
+            ..Default::default()
+        };
+        let mut context = IndexContext::new(dir.path()).with_config(config);
+        context.scan().await.expect("scan should succeed");
+
+        // Verify original content is indexed
+        let parsed = context
+            .get(&file_path)
+            .expect("file should be in index after scan");
+        assert!(
+            parsed.source.contains("original"),
+            "source should contain 'original' before modification"
+        );
+        let original_hash = parsed.content_hash;
+
+        // Modify the file on disk with different content
+        std::fs::write(&file_path, "fn modified() { let y = 2; let z = 3; }")
+            .expect("should write modified file");
+
+        // Call refresh to re-parse the modified file
+        let refreshed = context
+            .refresh(&file_path)
+            .await
+            .expect("refresh should succeed");
+
+        // Verify the refreshed content reflects the modification
+        assert!(
+            refreshed.source.contains("modified"),
+            "refreshed source should contain 'modified', got: {}",
+            refreshed.source
+        );
+        assert!(
+            !refreshed.source.contains("original"),
+            "refreshed source should not contain 'original'"
+        );
+
+        // Verify the content hash changed
+        assert_ne!(
+            refreshed.content_hash, original_hash,
+            "content hash should differ after modifying the file"
+        );
+
+        // Verify the index was updated (get returns updated content)
+        let updated = context
+            .get(&file_path)
+            .expect("file should still be in index after refresh");
+        assert!(
+            updated.source.contains("modified"),
+            "index should reflect modified content after refresh"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_refresh_updates_parse_tree() {
+        let dir = TempDir::new().expect("should create temp dir");
+
+        // Write initial source with one function
+        let file_path = dir.path().join("evolve.rs");
+        std::fs::write(&file_path, "fn alpha() {}").expect("should write initial file");
+
+        let config = IndexConfig {
+            embedding_enabled: false,
+            ..Default::default()
+        };
+        let mut context = IndexContext::new(dir.path()).with_config(config);
+        context.scan().await.expect("scan should succeed");
+
+        // Modify the file to have two functions
+        std::fs::write(&file_path, "fn alpha() {}\nfn beta() {}")
+            .expect("should write modified file");
+
+        let refreshed = context
+            .refresh(&file_path)
+            .await
+            .expect("refresh should succeed");
+
+        // The parse tree should have two function_item nodes
+        let root = refreshed.tree.root_node();
+        let mut function_count = 0;
+        let mut cursor = root.walk();
+        for child in root.children(&mut cursor) {
+            if child.kind() == "function_item" {
+                function_count += 1;
+            }
+        }
+        assert_eq!(
+            function_count, 2,
+            "refreshed parse tree should contain 2 function_item nodes"
+        );
+    }
 }

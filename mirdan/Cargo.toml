@@ -13,13 +13,13 @@ path = "src/lib.rs"
 
 [dependencies]
 # Shared doctor infrastructure
-swissarmyhammer-doctor = { path = "../swissarmyhammer-doctor" }
+swissarmyhammer-doctor = { workspace = true }
 
 # Git detection
-swissarmyhammer-common = { path = "../swissarmyhammer-common" }
+swissarmyhammer-common = { workspace = true }
 
 # XDG directory helpers
-swissarmyhammer-directory = { path = "../swissarmyhammer-directory" }
+swissarmyhammer-directory = { workspace = true }
 
 # Serialization
 serde = { workspace = true }

@@ -7,12 +7,12 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
+    "generate:grammar": "lezer-generator src/lang-filter/filter.grammar -o src/lang-filter/parser.js",
     "test": "vitest run",
     "test:watch": "vitest"
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.20.1",
-    "@codemirror/lang-javascript": "^6.2.5",
     "@codemirror/lang-markdown": "^6.5.0",
     "@codemirror/language-data": "^6.5.2",
     "@codemirror/state": "^6.6.0",
@@ -46,6 +46,7 @@
     "unist-util-visit": "^5.1.0"
   },
   "devDependencies": {
+    "@lezer/generator": "^1.8.0",
     "@tailwindcss/vite": "^4.2.1",
     "@testing-library/dom": "^10.4.1",
     "@testing-library/jest-dom": "^6.9.1",

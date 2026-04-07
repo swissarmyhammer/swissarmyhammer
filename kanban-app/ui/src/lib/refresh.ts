@@ -17,6 +17,7 @@ import type {
 import { entityFromBag, parseBoardData } from "@/types/kanban";
 import type { BoardData, Entity } from "@/types/kanban";
 
+/** Structured result from a board state refresh operation. */
 export interface RefreshResult {
   openBoards: OpenBoard[];
   boardData: BoardData | null;
@@ -29,9 +30,12 @@ export interface RefreshResult {
  *
  * @param boardPath — optional board path to scope queries to a specific board
  *   (for multi-window support). When omitted, the backend uses the global active board.
+ * @param taskFilter — optional filter DSL expression to apply server-side when
+ *   listing tasks (e.g. `"#bug && @will"`). When omitted, all tasks are returned.
  */
 export async function refreshBoards(
   boardPath?: string,
+  taskFilter?: string,
 ): Promise<RefreshResult> {
   // Always fetch open boards independently — this must not be coupled
   // to get_board_data or list_entities via Promise.all.
@@ -51,6 +55,7 @@ export async function refreshBoards(
       invoke<BoardDataResponse>("get_board_data", bp),
       invoke<EntityListResponse>("list_entities", {
         entityType: "task",
+        ...(taskFilter ? { filter: taskFilter } : {}),
         ...bp,
       }),
       invoke<EntityListResponse>("list_entities", {

@@ -26,7 +26,6 @@ let mockFieldDefs: import("@/types/kanban").FieldDef[] = [];
 vi.mock("@/components/perspective-container", () => ({
   useActivePerspective: () => ({
     activePerspective: null,
-    applyFilter: (entities: unknown[]) => entities,
     applySort: (entities: unknown[]) => entities,
     groupField: mockGroupField,
   }),

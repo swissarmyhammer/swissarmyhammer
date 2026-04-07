@@ -483,5 +483,91 @@ settings:
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert_eq!(err.pattern, "[invalid(regex");
+        assert_eq!(err.reason, "Bad pattern");
+        // Display impl should include both pattern and source
+        let display = format!("{}", err);
+        assert!(
+            display.contains("[invalid(regex"),
+            "Display should include the pattern"
+        );
+    }
+
+    #[test]
+    fn test_load_with_two_overlay_dirs_exercises_user_source() {
+        // When 2+ overlay paths are provided, the first path gets FileSource::User
+        // and subsequent paths get FileSource::Local. This exercises the User branch.
+        let temp = tempfile::TempDir::new().unwrap();
+
+        // First overlay dir (will be FileSource::User)
+        let user_dir = temp.path().join("user_overlay");
+        std::fs::create_dir_all(&user_dir).unwrap();
+        std::fs::write(
+            user_dir.join("config.yaml"),
+            r#"
+stderr_filters:
+  - pattern: 'user-level noise'
+    reason: "User-level filter"
+settings:
+  stderr_log_level: "trace"
+"#,
+        )
+        .unwrap();
+
+        // Second overlay dir (will be FileSource::Local)
+        let local_dir = temp.path().join("local_overlay");
+        std::fs::create_dir_all(&local_dir).unwrap();
+        std::fs::write(
+            local_dir.join("config.yaml"),
+            r#"
+stderr_filters:
+  - pattern: 'project-level noise'
+    reason: "Project-level filter"
+settings:
+  stderr_log_level: "off"
+"#,
+        )
+        .unwrap();
+
+        let config = load_code_context_config_from_paths(&[user_dir, local_dir]);
+
+        // Both user and local filters should be present (additive)
+        assert!(
+            config
+                .stderr_filters
+                .iter()
+                .any(|r| r.pattern == "user-level noise"),
+            "User overlay filter should be present"
+        );
+        assert!(
+            config
+                .stderr_filters
+                .iter()
+                .any(|r| r.pattern == "project-level noise"),
+            "Local overlay filter should be present"
+        );
+        // Later layer's settings win (local overrides user)
+        assert_eq!(config.settings.stderr_log_level, "off");
+    }
+
+    #[test]
+    fn test_merge_config_stack_none_branch_uses_builtin_fallback() {
+        // When the VFS has no entries for CONFIG_NAME (not even builtin),
+        // merge_config_stack should fall back to parsing BUILTIN_CONFIG_YAML.
+        let vfs = VirtualFileSystem::<DirConfig>::new("code-context");
+        // Do NOT add builtin -- get_stack("config") returns None
+
+        let config = merge_config_stack(&vfs);
+
+        // Should still produce a valid config from the BUILTIN_CONFIG_YAML fallback
+        let expected = parse_code_context_config(BUILTIN_CONFIG_YAML).unwrap();
+        assert_eq!(
+            config.stderr_filters.len(),
+            expected.stderr_filters.len(),
+            "Fallback should produce the same filters as parsing BUILTIN_CONFIG_YAML"
+        );
+        assert_eq!(
+            config.settings.stderr_log_level,
+            expected.settings.stderr_log_level
+        );
     }
 }

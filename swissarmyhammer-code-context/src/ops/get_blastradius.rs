@@ -236,25 +236,7 @@ fn find_inbound_callers(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::{configure_connection, create_schema};
-
-    /// Create an in-memory database with the schema applied.
-    fn test_db() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        configure_connection(&conn).unwrap();
-        create_schema(&conn).unwrap();
-        conn
-    }
-
-    /// Insert an `indexed_files` row.
-    fn insert_file(conn: &Connection, path: &str) {
-        conn.execute(
-            "INSERT OR IGNORE INTO indexed_files (file_path, content_hash, file_size, last_seen_at)
-             VALUES (?1, X'DEADBEEF', 1024, 1000)",
-            [path],
-        )
-        .unwrap();
-    }
+    use crate::test_fixtures::{insert_file_simple as insert_file, test_db};
 
     /// Insert an LSP symbol.
     fn insert_symbol(conn: &Connection, id: &str, name: &str, kind: i32, file_path: &str) {

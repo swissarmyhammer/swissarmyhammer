@@ -134,6 +134,48 @@ async fn test_perspective_lifecycle_integration() {
     );
 }
 
+/// Round-trip a perspective with a DSL filter expression through
+/// add → get → update to verify the filter is stored and retrieved correctly.
+#[tokio::test]
+async fn test_perspective_dsl_filter_round_trip() {
+    let (_temp, ctx) = setup().await;
+
+    // Add with a DSL filter
+    let added = dispatch(
+        &ctx,
+        json!({
+            "op": "add perspective",
+            "name": "Bug Board",
+            "view": "board",
+            "filter": "#bug && @will"
+        }),
+    )
+    .await;
+
+    let id = added["id"].as_str().unwrap();
+    assert_eq!(added["filter"], "#bug && @will");
+
+    // Get it back — filter should be preserved
+    let got = dispatch(&ctx, json!({"op": "get perspective", "id": id})).await;
+    assert_eq!(got["filter"], "#bug && @will");
+
+    // Update to a different DSL filter
+    let updated = dispatch(
+        &ctx,
+        json!({
+            "op": "update perspective",
+            "id": id,
+            "filter": "!#done || #READY"
+        }),
+    )
+    .await;
+    assert_eq!(updated["filter"], "!#done || #READY");
+
+    // Get again to confirm persistence
+    let got2 = dispatch(&ctx, json!({"op": "get perspective", "id": id})).await;
+    assert_eq!(got2["filter"], "!#done || #READY");
+}
+
 /// Prove the full pipeline: add perspectives with StoreHandle wired in,
 /// then list returns them AND StoreHandle has pending change events.
 #[tokio::test]

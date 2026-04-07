@@ -11,11 +11,11 @@ description = "Unified ACP agent creation and execution for SwissArmyHammer"
 
 [dependencies]
 agent-client-protocol.workspace = true
-agent-client-protocol-extras = { path = "../agent-client-protocol-extras" }
-claude-agent = { path = "../claude-agent" }
-llama-agent = { path = "../llama-agent" }
-swissarmyhammer-common = { path = "../swissarmyhammer-common" }
-swissarmyhammer-config = { path = "../swissarmyhammer-config" }
+agent-client-protocol-extras = { workspace = true }
+claude-agent = { workspace = true }
+llama-agent = { workspace = true }
+swissarmyhammer-common = { workspace = true }
+swissarmyhammer-config = { workspace = true }
 thiserror.workspace = true
 tokio = { workspace = true, features = ["sync", "rt", "time"] }
 tokio-util.workspace = true

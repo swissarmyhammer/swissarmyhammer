@@ -9,10 +9,10 @@ description = "Text embedding using CoreML for Apple Neural Engine"
 [dependencies]
 async-trait = { workspace = true }
 half = "2"
-llama-common = { path = "../llama-common" }
+llama-common = { workspace = true }
 md5 = { workspace = true }
-model-embedding = { path = "../model-embedding" }
-model-loader = { path = "../model-loader" }
+model-embedding = { workspace = true }
+model-loader = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 thiserror = { workspace = true }
 tokenizers = { version = "0.21", default-features = false, features = ["onig"] }

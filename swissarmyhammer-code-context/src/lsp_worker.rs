@@ -1146,4 +1146,97 @@ mod tests {
         handle.join().unwrap();
         assert!(flag.load(Ordering::Relaxed));
     }
+
+    // -- extension_to_language_id: "hh" extension (C++ header variant) --
+
+    #[test]
+    fn test_extension_to_language_id_hh_falls_through_to_plaintext() {
+        // "hh" is in LSP_CAPABLE_EXTENSIONS and clangd supports it, but
+        // extension_to_language_id does not have an explicit match arm for it.
+        // This documents the current behavior: "hh" maps to "plaintext".
+        assert_eq!(
+            extension_to_language_id(Path::new("header.hh")),
+            "plaintext",
+            "hh extension currently falls through to plaintext"
+        );
+    }
+
+    // -- query_lsp_dirty_files: paths with dots in directory names --
+
+    #[test]
+    fn test_query_lsp_dirty_files_dotted_path_prefix() {
+        // Files like "foo.bar/baz.rs" have dots before the extension.
+        // The LIKE pattern "%.rs" should still match only the extension.
+        let db = create_test_db();
+        insert_test_file(&db, "foo.bar/baz.rs");
+        insert_test_file(&db, "foo.bar/baz.py");
+
+        let dirty = query_lsp_dirty_files(&db, 100, &["rs"]).unwrap();
+        assert_eq!(dirty.len(), 1);
+        assert_eq!(dirty[0], "foo.bar/baz.rs");
+    }
+
+    #[test]
+    fn test_query_lsp_dirty_files_double_extension() {
+        // A file like "foo.test.rs" has a double extension. The LIKE "%.rs"
+        // pattern should still match it.
+        let db = create_test_db();
+        insert_test_file(&db, "src/foo.test.rs");
+        insert_test_file(&db, "src/foo.test.py");
+
+        let dirty = query_lsp_dirty_files(&db, 100, &["rs"]).unwrap();
+        assert_eq!(dirty.len(), 1);
+        assert_eq!(dirty[0], "src/foo.test.rs");
+    }
+
+    // -- spawn_lsp_indexing_worker: None client + dirty files + immediate shutdown --
+
+    #[test]
+    fn test_spawn_worker_none_client_dirty_files_immediate_shutdown() {
+        // Spawn the worker with dirty files and a None client, then immediately
+        // signal shutdown. The thread should not panic and files should remain
+        // unindexed since no LSP client was available to process them.
+        let workspace_root = std::env::temp_dir();
+        let db = create_shared_test_db();
+        {
+            let conn = db.lock().unwrap();
+            insert_test_file(&conn, "src/test_file.rs");
+        }
+        let db_check = Arc::clone(&db);
+
+        let client: SharedLspClient = Arc::new(Mutex::new(None));
+        let config = LspWorkerConfig {
+            batch_size: 10,
+            client_unavailable_sleep: Duration::from_millis(1),
+            idle_sleep: Duration::from_millis(1),
+        };
+        let shutdown = new_shutdown_flag();
+        // Set shutdown before spawning so the worker exits as soon as possible
+        shutdown.store(true, Ordering::Relaxed);
+
+        let handle = spawn_lsp_indexing_worker(
+            workspace_root,
+            db,
+            client,
+            config,
+            "rust-analyzer".to_string(),
+            shutdown,
+        );
+
+        handle.join().expect("Worker thread should not panic");
+
+        // The file should still be unindexed because the client was None
+        let conn = db_check.lock().unwrap();
+        let unindexed: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM indexed_files WHERE lsp_indexed = 0",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            unindexed, 1,
+            "File should remain unindexed when client is None and shutdown is immediate"
+        );
+    }
 }

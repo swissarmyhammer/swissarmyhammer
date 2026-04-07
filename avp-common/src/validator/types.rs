@@ -86,6 +86,11 @@ pub struct MatchContext {
     /// - SessionStart: source
     /// - SubagentStart/Stop: subagent_type or name
     pub event_context: Option<String>,
+
+    /// Accumulated changed files during the turn (for Stop hooks).
+    /// When present, Stop hooks with file glob patterns match against
+    /// these paths instead of bypassing file matching entirely.
+    pub changed_files: Option<Vec<String>>,
 }
 
 impl MatchContext {
@@ -96,6 +101,7 @@ impl MatchContext {
             tool_name: None,
             file_path: None,
             event_context: None,
+            changed_files: None,
         }
     }
 
@@ -114,6 +120,12 @@ impl MatchContext {
     /// Set the event context for triggerMatcher.
     pub fn with_event_context(mut self, context: impl Into<String>) -> Self {
         self.event_context = Some(context.into());
+        self
+    }
+
+    /// Set the accumulated changed files (for Stop hooks).
+    pub fn with_changed_files(mut self, files: Vec<String>) -> Self {
+        self.changed_files = Some(files);
         self
     }
 
@@ -148,6 +160,7 @@ impl MatchContext {
             tool_name,
             file_path,
             event_context,
+            changed_files: None,
         }
     }
 }
@@ -419,26 +432,47 @@ impl Validator {
     }
 
     /// Check if the file path matches any of the file glob patterns.
+    ///
+    /// For Stop hooks with file patterns, matches against `changed_files`
+    /// from the turn rather than a single file path. Stop hooks without
+    /// file patterns still run unconditionally (backward compat).
     fn matches_files(&self, match_criteria: &ValidatorMatch, ctx: &MatchContext) -> bool {
-        // Skip file matching for Stop hooks - they always run regardless of files
-        if match_criteria.files.is_empty() || ctx.hook_type == HookType::Stop {
+        if match_criteria.files.is_empty() {
             return true;
+        }
+
+        // For Stop hooks, match against accumulated changed files
+        if ctx.hook_type == HookType::Stop {
+            return Self::matches_changed_files(
+                &match_criteria.files,
+                ctx.changed_files.as_deref(),
+            );
         }
 
         let Some(path) = &ctx.file_path else {
             return false;
         };
 
-        let match_options = glob::MatchOptions {
-            case_sensitive: false,
-            ..Default::default()
-        };
+        let compiled = compile_glob_patterns(&match_criteria.files);
+        matches_any_pattern(path, &compiled)
+    }
 
-        match_criteria.files.iter().any(|pattern| {
-            glob::Pattern::new(pattern)
-                .map(|p| p.matches_with(path, match_options))
-                .unwrap_or(false)
-        })
+    /// Check if any changed file matches any of the glob patterns.
+    ///
+    /// Returns false if no changed files are provided (the validator
+    /// requires file matches but has nothing to match against).
+    fn matches_changed_files(patterns: &[String], changed_files: Option<&[String]>) -> bool {
+        let Some(files) = changed_files else {
+            return false;
+        };
+        if files.is_empty() {
+            return false;
+        }
+
+        let compiled = compile_glob_patterns(patterns);
+        files
+            .iter()
+            .any(|file| matches_any_pattern(file, &compiled))
     }
 }
 
@@ -806,26 +840,29 @@ impl RuleSet {
     }
 
     /// Check if the file path matches any of the file glob patterns.
+    ///
+    /// For Stop hooks with file patterns, matches against `changed_files`
+    /// from the turn rather than a single file path. Stop hooks without
+    /// file patterns still run unconditionally (backward compat).
     fn matches_files(&self, match_criteria: &ValidatorMatch, ctx: &MatchContext) -> bool {
-        // Skip file matching for Stop hooks
-        if match_criteria.files.is_empty() || ctx.hook_type == HookType::Stop {
+        if match_criteria.files.is_empty() {
             return true;
+        }
+
+        // For Stop hooks, match against accumulated changed files
+        if ctx.hook_type == HookType::Stop {
+            return Validator::matches_changed_files(
+                &match_criteria.files,
+                ctx.changed_files.as_deref(),
+            );
         }
 
         let Some(path) = &ctx.file_path else {
             return false;
         };
 
-        let match_options = glob::MatchOptions {
-            case_sensitive: false,
-            ..Default::default()
-        };
-
-        match_criteria.files.iter().any(|pattern| {
-            glob::Pattern::new(pattern)
-                .map(|p| p.matches_with(path, match_options))
-                .unwrap_or(false)
-        })
+        let compiled = compile_glob_patterns(&match_criteria.files);
+        matches_any_pattern(path, &compiled)
     }
 }
 
@@ -892,6 +929,53 @@ impl ExecutedRuleSet {
             .filter(|r| r.is_blocking())
             .collect()
     }
+}
+
+/// Standard match options for glob pattern matching across all validator contexts.
+///
+/// Uses case-insensitive matching with default settings for everything else.
+/// This ensures consistent behavior across all glob matching call sites.
+pub const GLOB_MATCH_OPTIONS: glob::MatchOptions = glob::MatchOptions {
+    case_sensitive: false,
+    require_literal_separator: false,
+    require_literal_leading_dot: false,
+};
+
+/// Pre-compile a slice of glob pattern strings into `glob::Pattern` objects.
+///
+/// Invalid patterns are silently skipped. Compiling patterns once avoids
+/// repeated parsing when matching against many file paths.
+///
+/// # Arguments
+///
+/// * `patterns` - String glob patterns (e.g., `["*.ts", "src/**/*.rs"]`)
+///
+/// # Returns
+///
+/// A vector of successfully compiled `glob::Pattern` objects.
+pub fn compile_glob_patterns(patterns: &[String]) -> Vec<glob::Pattern> {
+    patterns
+        .iter()
+        .filter_map(|p| glob::Pattern::new(p).ok())
+        .collect()
+}
+
+/// Check whether a path matches any of the pre-compiled glob patterns.
+///
+/// Uses case-insensitive matching via [`GLOB_MATCH_OPTIONS`].
+///
+/// # Arguments
+///
+/// * `path` - The file path string to test
+/// * `compiled` - Pre-compiled glob patterns from [`compile_glob_patterns`]
+///
+/// # Returns
+///
+/// `true` if the path matches at least one pattern.
+pub fn matches_any_pattern(path: &str, compiled: &[glob::Pattern]) -> bool {
+    compiled
+        .iter()
+        .any(|p| p.matches_with(path, GLOB_MATCH_OPTIONS))
 }
 
 #[cfg(test)]
@@ -1037,6 +1121,119 @@ mod tests {
         assert!(validator.matches(&MatchContext::new(HookType::PostToolUse).with_file("Test.Ts")));
         assert!(!validator.matches(&MatchContext::new(HookType::PostToolUse).with_file("test.js")));
         assert!(!validator.matches(&MatchContext::new(HookType::PostToolUse)));
+    }
+
+    #[test]
+    fn test_validator_stop_with_files_matches_changed_rs() {
+        // Stop hook with files: ["*.rs"] + changed_files ["foo.rs"] -> matches
+        let validator = Validator {
+            frontmatter: ValidatorFrontmatter {
+                name: "test".to_string(),
+                description: "Test validator".to_string(),
+                severity: Severity::Error,
+                trigger: HookType::Stop,
+                match_criteria: Some(ValidatorMatch {
+                    tools: vec![],
+                    files: vec!["*.rs".to_string()],
+                }),
+                trigger_matcher: None,
+                tags: vec![],
+                once: false,
+                timeout: 30,
+            },
+            body: String::new(),
+            source: ValidatorSource::Builtin,
+            path: PathBuf::from("test.md"),
+        };
+
+        // Matching changed file
+        assert!(validator.matches(
+            &MatchContext::new(HookType::Stop).with_changed_files(vec!["foo.rs".to_string()])
+        ));
+    }
+
+    #[test]
+    fn test_validator_stop_with_files_no_match_py() {
+        // Stop hook with files: ["*.rs"] + changed_files ["foo.py"] -> no match
+        let validator = Validator {
+            frontmatter: ValidatorFrontmatter {
+                name: "test".to_string(),
+                description: "Test validator".to_string(),
+                severity: Severity::Error,
+                trigger: HookType::Stop,
+                match_criteria: Some(ValidatorMatch {
+                    tools: vec![],
+                    files: vec!["*.rs".to_string()],
+                }),
+                trigger_matcher: None,
+                tags: vec![],
+                once: false,
+                timeout: 30,
+            },
+            body: String::new(),
+            source: ValidatorSource::Builtin,
+            path: PathBuf::from("test.md"),
+        };
+
+        assert!(!validator.matches(
+            &MatchContext::new(HookType::Stop).with_changed_files(vec!["foo.py".to_string()])
+        ));
+    }
+
+    #[test]
+    fn test_validator_stop_empty_files_backward_compat() {
+        // Stop hook with empty files + any changed_files -> matches (backward compat)
+        let validator = Validator {
+            frontmatter: ValidatorFrontmatter {
+                name: "test".to_string(),
+                description: "Test validator".to_string(),
+                severity: Severity::Error,
+                trigger: HookType::Stop,
+                match_criteria: Some(ValidatorMatch {
+                    tools: vec![],
+                    files: vec![],
+                }),
+                trigger_matcher: None,
+                tags: vec![],
+                once: false,
+                timeout: 30,
+            },
+            body: String::new(),
+            source: ValidatorSource::Builtin,
+            path: PathBuf::from("test.md"),
+        };
+
+        assert!(validator.matches(
+            &MatchContext::new(HookType::Stop).with_changed_files(vec!["anything.txt".to_string()])
+        ));
+        // Also matches with no changed files at all
+        assert!(validator.matches(&MatchContext::new(HookType::Stop)));
+    }
+
+    #[test]
+    fn test_validator_stop_with_files_no_changed_files() {
+        // Stop hook with files: ["*.rs"] + no changed_files -> no match
+        let validator = Validator {
+            frontmatter: ValidatorFrontmatter {
+                name: "test".to_string(),
+                description: "Test validator".to_string(),
+                severity: Severity::Error,
+                trigger: HookType::Stop,
+                match_criteria: Some(ValidatorMatch {
+                    tools: vec![],
+                    files: vec!["*.rs".to_string()],
+                }),
+                trigger_matcher: None,
+                tags: vec![],
+                once: false,
+                timeout: 30,
+            },
+            body: String::new(),
+            source: ValidatorSource::Builtin,
+            path: PathBuf::from("test.md"),
+        };
+
+        assert!(!validator.matches(&MatchContext::new(HookType::Stop)));
     }
 
     #[test]
@@ -1449,8 +1646,7 @@ mod tests {
     }
 
     #[test]
-    fn test_ruleset_matches_stop_skips_file_filter() {
-        // Stop hook RuleSets skip file matching
+    fn test_ruleset_stop_with_files_matches_changed_files() {
         let rs = make_ruleset(
             HookType::Stop,
             Some(ValidatorMatch {
@@ -1459,7 +1655,35 @@ mod tests {
             }),
             None,
         );
-        // Should match even without file path, because Stop skips file matching
+
+        // Stop hook with file patterns + matching changed file -> matches
+        assert!(rs.matches(
+            &MatchContext::new(HookType::Stop).with_changed_files(vec!["app.ts".to_string()])
+        ));
+
+        // Stop hook with file patterns + non-matching changed file -> no match
+        assert!(!rs.matches(
+            &MatchContext::new(HookType::Stop).with_changed_files(vec!["app.py".to_string()])
+        ));
+
+        // Stop hook with file patterns + no changed files -> no match
+        assert!(!rs.matches(&MatchContext::new(HookType::Stop)));
+
+        // Stop hook with file patterns + empty changed files -> no match
+        assert!(!rs.matches(&MatchContext::new(HookType::Stop).with_changed_files(vec![])));
+    }
+
+    #[test]
+    fn test_ruleset_stop_without_files_always_matches() {
+        // Stop hook WITHOUT file patterns still runs unconditionally (backward compat)
+        let rs = make_ruleset(
+            HookType::Stop,
+            Some(ValidatorMatch {
+                tools: vec![],
+                files: vec![],
+            }),
+            None,
+        );
         assert!(rs.matches(&MatchContext::new(HookType::Stop)));
     }
 
@@ -1768,5 +1992,45 @@ mod tests {
             frontmatter.match_criteria.is_none(),
             "Stop validators should not get default file patterns"
         );
+    }
+
+    #[test]
+    fn test_compile_glob_patterns_valid() {
+        let patterns = vec!["*.rs".to_string(), "src/**/*.ts".to_string()];
+        let compiled = compile_glob_patterns(&patterns);
+        assert_eq!(compiled.len(), 2);
+    }
+
+    #[test]
+    fn test_compile_glob_patterns_skips_invalid() {
+        let patterns = vec!["*.rs".to_string(), "[invalid".to_string()];
+        let compiled = compile_glob_patterns(&patterns);
+        assert_eq!(compiled.len(), 1);
+    }
+
+    #[test]
+    fn test_compile_glob_patterns_empty() {
+        let compiled = compile_glob_patterns(&[]);
+        assert!(compiled.is_empty());
+    }
+
+    #[test]
+    fn test_matches_any_pattern_basic() {
+        let compiled = compile_glob_patterns(&["*.rs".to_string(), "*.ts".to_string()]);
+        assert!(matches_any_pattern("main.rs", &compiled));
+        assert!(matches_any_pattern("index.ts", &compiled));
+        assert!(!matches_any_pattern("style.css", &compiled));
+    }
+
+    #[test]
+    fn test_matches_any_pattern_case_insensitive() {
+        let compiled = compile_glob_patterns(&["*.RS".to_string()]);
+        assert!(matches_any_pattern("main.rs", &compiled));
+        assert!(matches_any_pattern("main.RS", &compiled));
+    }
+
+    #[test]
+    fn test_matches_any_pattern_empty_patterns() {
+        assert!(!matches_any_pattern("anything.rs", &[]));
     }
 }
