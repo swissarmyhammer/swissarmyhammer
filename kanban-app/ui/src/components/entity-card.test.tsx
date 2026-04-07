@@ -177,7 +177,7 @@ describe("EntityCard", () => {
     expect(screen.getByText("Hello **world**")).toBeTruthy();
   });
 
-  it("(i) button dispatches ui.inspect to the backend with entity in scope chain", async () => {
+  it("(i) button dispatches ui.inspect with explicit target moniker", async () => {
     currentEntity = makeEntity();
     const { container } = await renderWithProvider(
       <EntityCard entity={currentEntity} />,
@@ -187,19 +187,16 @@ describe("EntityCard", () => {
     await act(async () => {
       fireEvent.click(inspectBtn);
     });
-    // Inspect dispatches directly to the backend via backendDispatch,
-    // bypassing frontend scope-chain resolution.
     const inspectCall = mockInvoke.mock.calls.find(
       (c: unknown[]) =>
         c[0] === "dispatch_command" &&
         (c[1] as Record<string, unknown>)?.cmd === "ui.inspect",
     );
     expect(inspectCall).toBeTruthy();
-    // The scope chain must include the entity moniker as the first entry
-    // so the backend's first_inspectable() resolves the correct entity.
+    // Target must be passed explicitly so the backend uses ctx.target
+    // instead of walking the scope chain (which depends on focus state).
     const params = inspectCall![1] as Record<string, unknown>;
-    const scopeChain = params.scopeChain as string[];
-    expect(scopeChain[0]).toBe("task:task-1");
+    expect(params.target).toBe("task:task-1");
   });
 
   it("(i) button always renders", async () => {

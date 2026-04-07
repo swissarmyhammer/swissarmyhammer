@@ -137,7 +137,7 @@ export const EntityCard = memo(
               );
             })}
           </div>
-          <InspectButton />
+          <InspectButton moniker={entityMoniker} />
         </div>
       </FocusScope>
     );
@@ -145,13 +145,13 @@ export const EntityCard = memo(
 );
 
 /**
- * Dispatches ui.inspect to the backend via the unified dispatch hook.
+ * Dispatches ui.inspect with an explicit target moniker.
  *
- * The scope chain from context already includes the entity moniker
- * (e.g. ["task:abc", "column:todo", "board:board", "window:main"]),
- * so the backend's first_inspectable() finds the correct entity.
+ * The target is passed directly so the backend uses ctx.target rather than
+ * walking the scope chain (which comes from FocusedScopeContext and may
+ * point to a previously-focused entity, not this card).
  */
-function InspectButton() {
+function InspectButton({ moniker }: { moniker: string }) {
   const dispatch = useDispatchCommand("ui.inspect");
   return (
     <Tooltip>
@@ -162,7 +162,7 @@ function InspectButton() {
           className="shrink-0 mt-0.5 p-0.5 rounded text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted transition-colors"
           onClick={(e) => {
             e.stopPropagation();
-            dispatch().catch(console.error);
+            dispatch({ target: moniker }).catch(console.error);
           }}
         >
           <Info className="h-3.5 w-3.5" />
