@@ -213,6 +213,18 @@ pub fn register_commands() -> HashMap<String, Arc<dyn Command>> {
         "perspective.sort.toggle".into(),
         Arc::new(perspective_commands::ToggleSortCmd),
     );
+    map.insert(
+        "perspective.next".into(),
+        Arc::new(perspective_commands::NextPerspectiveCmd),
+    );
+    map.insert(
+        "perspective.prev".into(),
+        Arc::new(perspective_commands::PrevPerspectiveCmd),
+    );
+    map.insert(
+        "perspective.goto".into(),
+        Arc::new(perspective_commands::GotoPerspectiveCmd),
+    );
 
     // App commands
     map.insert("app.quit".into(), Arc::new(app_commands::QuitCmd));
@@ -287,10 +299,10 @@ mod tests {
         // + 12 app (quit, about, help, command, palette, search,
         //          dismiss, undo, redo, keymap.vim, keymap.cua, keymap.emacs)
         // + 5 file (switchBoard, closeBoard, newBoard, openBoard, window.new)
-        // + 3 drag + 11 perspective (8 + 3 sort) + 2 attachment (open, reveal) = 55
-        // + 2 project (add, delete) + 1 ui.mode.set = 58
+        // + 3 drag + 14 perspective (8 + 3 sort + 2 next/prev + 1 goto) + 2 attachment (open, reveal) = 58
+        // + 2 project (add, delete) + 1 ui.mode.set = 61
         // Note: clipboard entries are duplicated in the source but HashMap deduplicates.
-        assert_eq!(cmds.len(), 58);
+        assert_eq!(cmds.len(), 61);
     }
 
     // =========================================================================

@@ -420,10 +420,10 @@ mod tests {
         // file: switchBoard, closeBoard, newBoard, openBoard = 4
         // drag: start, cancel, complete = 3
         // perspective: load, save, delete, rename, filter, clearFilter, group, clearGroup,
-        //             sort.set, sort.clear, sort.toggle, list = 12
+        //             sort.set, sort.clear, sort.toggle, next, prev, goto, list = 15
         // attachment: open, reveal = 2
         // +1 for ui.mode.set
-        assert_eq!(registry.all_commands().len(), 58);
+        assert_eq!(registry.all_commands().len(), 61);
 
         // Spot checks
         assert!(registry.get("app.quit").is_some());
@@ -582,8 +582,8 @@ mod tests {
         let perspective = include_str!("../builtin/commands/perspective.yaml");
         let registry = CommandsRegistry::from_yaml_sources(&[("perspective", perspective)]);
 
-        // All 12 perspective commands should parse (9 original + 3 sort)
-        assert_eq!(registry.all_commands().len(), 12);
+        // All 15 perspective commands should parse (9 original + 3 sort + 2 next/prev + 1 goto)
+        assert_eq!(registry.all_commands().len(), 15);
         assert!(registry.get("perspective.load").is_some());
         assert!(registry.get("perspective.save").is_some());
         assert!(registry.get("perspective.delete").is_some());
@@ -595,6 +595,9 @@ mod tests {
         assert!(registry.get("perspective.sort.set").is_some());
         assert!(registry.get("perspective.sort.clear").is_some());
         assert!(registry.get("perspective.sort.toggle").is_some());
+        assert!(registry.get("perspective.next").is_some());
+        assert!(registry.get("perspective.prev").is_some());
+        assert!(registry.get("perspective.goto").is_some());
         assert!(registry.get("perspective.list").is_some());
 
         // Load/save/delete should have a 'name' param
