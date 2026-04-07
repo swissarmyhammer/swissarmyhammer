@@ -195,12 +195,14 @@ pub fn commands_for_scope(
             continue;
         };
 
-        // Strip field suffix from cell monikers: "tag-1.color" → "tag-1".
-        // Grid cells produce monikers like "tag:tag-1.color" but the entity
-        // id is just "tag-1". Use the base moniker for target and dedup so
-        // the command palette dispatches inspect with a valid entity id.
-        let base_id = entity_id.split('.').next().unwrap_or(entity_id);
-        let entity_moniker = format!("{entity_type}:{base_id}");
+        // Field monikers ("field:task:abc.title") are not entities — skip them.
+        // The frontend prefixes field-level FocusScopes with "field:" so they
+        // don't masquerade as entity monikers in the scope chain.
+        if entity_type == "field" {
+            continue;
+        }
+
+        let entity_moniker = format!("{entity_type}:{entity_id}");
 
         // Entity schema commands (from entity YAML definitions).
         // Two passes: (1) commands declared directly on this entity type,
@@ -1882,18 +1884,17 @@ mod tests {
     }
 
     // =========================================================================
-    // Cell moniker field suffix stripping
+    // Field monikers are skipped in scope chain
     // =========================================================================
 
     #[test]
-    fn cell_moniker_inspect_target_strips_field_suffix() {
-        // When a grid cell is focused, the scope chain contains a field-
-        // qualified moniker like "tag:tag-1.color". The inspect command
-        // target should use the base entity id "tag:tag-1", not the raw
-        // cell moniker, so the inspector can look up the entity.
+    fn field_moniker_skipped_inspect_targets_entity() {
+        // With the `field:` prefix, grid cell monikers like
+        // "field:tag:tag-1.color" are skipped entirely. The inspect command
+        // targets the real entity moniker "tag:tag-1".
         let (registry, impls, fields, ui) = setup();
         let scope = vec![
-            "tag:tag-1.color".into(),
+            "field:tag:tag-1.color".into(),
             "tag:tag-1".into(),
             "board:board".into(),
         ];
@@ -1904,18 +1905,17 @@ mod tests {
         assert_eq!(
             inspect.unwrap().target.as_deref(),
             Some("tag:tag-1"),
-            "inspect target should be base entity moniker, not cell moniker"
+            "inspect target should be the entity moniker, not the field moniker"
         );
     }
 
     #[test]
-    fn cell_moniker_dedup_emits_one_inspect() {
-        // The cell moniker "tag:tag-1.color" and row moniker "tag:tag-1"
-        // should both resolve to entity_moniker "tag:tag-1", so dedup
-        // produces only one inspect command (not two).
+    fn field_moniker_dedup_emits_one_inspect() {
+        // "field:tag:tag-1.color" is skipped, so only "tag:tag-1" produces
+        // commands — exactly one inspect command.
         let (registry, impls, fields, ui) = setup();
         let scope = vec![
-            "tag:tag-1.color".into(),
+            "field:tag:tag-1.color".into(),
             "tag:tag-1".into(),
             "board:board".into(),
         ];
@@ -1994,5 +1994,43 @@ mod tests {
                 a.menu_name
             );
         }
+    }
+
+    // =========================================================================
+    // Field monikers are skipped
+    // =========================================================================
+
+    #[test]
+    fn field_moniker_in_scope_does_not_produce_entity_commands() {
+        // A scope chain with "field:task:abc.title" should not generate commands
+        // for a phantom entity "abc.title" — the field moniker is skipped entirely.
+        let (registry, impls, fields, ui) = setup();
+        let scope = vec![
+            "field:task:abc.title".into(),
+            "task:abc".into(),
+            "column:todo".into(),
+            "board:my-board".into(),
+        ];
+        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
+
+        // No command should target the field moniker
+        for cmd in &cmds {
+            if let Some(target) = &cmd.target {
+                assert!(
+                    !target.starts_with("field:"),
+                    "command '{}' should not target a field moniker, got: {}",
+                    cmd.id,
+                    target
+                );
+            }
+        }
+
+        // Task commands should still be present (from the real task:abc moniker)
+        let names: Vec<&str> = cmds.iter().map(|c| c.name.as_str()).collect();
+        assert!(
+            names.contains(&"Inspect Task"),
+            "real task commands should still appear: {:?}",
+            names
+        );
     }
 }

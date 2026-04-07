@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KNJ6HNYNBT3FAGDBYDEGNXPY
-position_column: todo
-position_ordinal: '9180'
+position_column: done
+position_ordinal: ffffffffffffffffffffff8680
 title: Migrate frontend field-moniker consumers to `field:` namespace
 ---
 ## What

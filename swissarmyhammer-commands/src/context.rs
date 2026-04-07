@@ -278,6 +278,39 @@ mod tests {
         assert!(parse_moniker("type:").is_none());
     }
 
+    #[test]
+    fn field_moniker_parses_as_field_type() {
+        // "field:task:abc.title" splits on first colon → ("field", "task:abc.title")
+        let (t, id) = parse_moniker("field:task:abc.title").unwrap();
+        assert_eq!(t, "field");
+        assert_eq!(id, "task:abc.title");
+    }
+
+    #[test]
+    fn has_in_scope_ignores_field_monikers() {
+        // Field monikers have entity_type "field", so has_in_scope("task")
+        // should not match "field:task:abc.title".
+        let ctx = test_ctx(&["field:task:abc.title", "task:abc", "column:todo"]);
+        assert!(ctx.has_in_scope("task"), "real task moniker should match");
+        assert!(
+            ctx.has_in_scope("field"),
+            "field type matches field moniker"
+        );
+        assert_eq!(
+            ctx.resolve_entity_id("task"),
+            Some("abc"),
+            "resolve_entity_id should return the real task id, not the field moniker's rest"
+        );
+    }
+
+    #[test]
+    fn has_in_scope_false_with_only_field_moniker() {
+        // If only a field moniker is in scope, has_in_scope("task") should be false.
+        let ctx = test_ctx(&["field:task:abc.title"]);
+        assert!(!ctx.has_in_scope("task"));
+        assert!(ctx.has_in_scope("field"));
+    }
+
     // --- extension tests ---
 
     #[derive(Debug)]

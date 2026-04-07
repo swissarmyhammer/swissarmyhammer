@@ -259,6 +259,29 @@ mod tests {
             .with_ui_state(ui)
     }
 
+    #[test]
+    fn first_inspectable_skips_field_monikers() {
+        // "field:task:abc.title" has entity_type "field", which is not in
+        // INSPECTABLE_TYPES, so it should be skipped.
+        let scope = vec![
+            "field:task:abc.title".to_string(),
+            "task:abc".to_string(),
+            "column:todo".to_string(),
+        ];
+        let result = first_inspectable(&scope);
+        assert_eq!(
+            result,
+            Some("task:abc"),
+            "should skip field moniker and find task"
+        );
+    }
+
+    #[test]
+    fn first_inspectable_returns_none_for_only_field_monikers() {
+        let scope = vec!["field:task:abc.title".to_string()];
+        assert!(first_inspectable(&scope).is_none());
+    }
+
     #[tokio::test]
     async fn set_app_mode_changes_ui_state() {
         let ctx = ctx_with_mode_arg("command");

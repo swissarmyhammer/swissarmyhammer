@@ -4,8 +4,8 @@ assignees:
 depends_on:
 - 01KNJ6JKAADY7CKZS0KYW2YD7E
 - 01KNJ6KG15CNWMCS47PPASYQ51
-position_column: todo
-position_ordinal: 8f80
+position_column: done
+position_ordinal: ffffffffffffffffffffff8880
 title: 'Verify: tag cut/untag works end-to-end after field-moniker fix'
 ---
 ## What

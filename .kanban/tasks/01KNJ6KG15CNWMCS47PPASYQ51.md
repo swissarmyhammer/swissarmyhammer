@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KNJ6HNYNBT3FAGDBYDEGNXPY
-position_column: todo
-position_ordinal: '9280'
+position_column: done
+position_ordinal: ffffffffffffffffffffff8780
 title: Update Rust backend to handle `field:` monikers in scope chain
 ---
 ## What
