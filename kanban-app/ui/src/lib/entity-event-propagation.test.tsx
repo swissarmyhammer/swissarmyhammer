@@ -430,6 +430,56 @@ describe("entity event propagation", () => {
     );
   });
 
+  it("entity-field-changed with multiple fields: patches body and tags together", async () => {
+    // Simulates what happens after PasteTag: the backend sends body + tags changes
+    mockInvoke.mockImplementation(
+      (cmd: string, args: Record<string, string>) => {
+        if (cmd === "get_entity" && args.id === "task-1") {
+          return Promise.resolve({
+            entity_type: "task",
+            id: "task-1",
+            body: "Fix #bug",
+            tags: ["bug"],
+          });
+        }
+        return Promise.resolve({});
+      },
+    );
+
+    const { result } = renderHook(() => useEntityStore(), {
+      wrapper: EntityEventWrapper,
+    });
+    await act(async () => {});
+
+    // Seed the store with initial task
+    await fireEvent("entity-created", {
+      kind: "entity-created",
+      entity_type: "task",
+      id: "task-1",
+      fields: { body: "Fix #bug", tags: ["bug"] },
+    });
+    await act(async () => {});
+
+    const before = result.current.getEntity("task", "task-1");
+    expect(before?.fields.tags).toEqual(["bug"]);
+
+    // Simulate paste-tag enriched event: body updated + tags re-derived
+    await fireEvent("entity-field-changed", {
+      kind: "entity-field-changed",
+      entity_type: "task",
+      id: "task-1",
+      changes: [
+        { field: "body", value: "Fix #bug #urgent" },
+        { field: "tags", value: ["bug", "urgent"] },
+      ],
+    });
+    await act(async () => {});
+
+    const after = result.current.getEntity("task", "task-1");
+    expect(after?.fields.body).toBe("Fix #bug #urgent");
+    expect(after?.fields.tags).toEqual(["bug", "urgent"]);
+  });
+
   it("verify listen is called for all three event names", async () => {
     // This ensures the useEffect runs and registers all listeners
     renderHook(() => useEntityStore(), { wrapper: EntityEventWrapper });

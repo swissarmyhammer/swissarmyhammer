@@ -174,7 +174,9 @@ describe("InspectorFocusBridge", () => {
       await new Promise((r) => setTimeout(r, 50));
     });
     // EntityInspector's mount effect sets focus to the first field moniker
-    expect(getByTestId("focus-monitor").textContent).toBe("task:test-id.title");
+    expect(getByTestId("focus-monitor").textContent).toBe(
+      "field:task:test-id.title",
+    );
   });
 
   it("restores previous focus on unmount", async () => {
@@ -190,7 +192,9 @@ describe("InspectorFocusBridge", () => {
       await new Promise((r) => setTimeout(r, 50));
     });
     // Inspector is focused — mount effect set focus to the first field
-    expect(getByTestId("focus-monitor").textContent).toBe("task:test-id.title");
+    expect(getByTestId("focus-monitor").textContent).toBe(
+      "field:task:test-id.title",
+    );
 
     // Close the inspector
     await act(async () => {

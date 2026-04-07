@@ -12,6 +12,7 @@ import { CommandScopeProvider, type CommandDef } from "@/lib/command-scope";
 import { useActivePerspective } from "@/components/perspective-container";
 import { DataTable, type DataTableColumn } from "@/components/data-table";
 import { Field } from "@/components/fields/field";
+import { fieldMoniker } from "@/lib/moniker";
 import type { ViewDef, Entity, FieldDef } from "@/types/kanban";
 
 /**
@@ -134,7 +135,11 @@ function useGridLayout(view: ViewDef) {
     const map = new Map<string, { row: number; col: number }>();
     for (let r = 0; r < entities.length; r++) {
       for (let c = 0; c < columns.length; c++) {
-        const mk = `${entities[r].moniker}.${columns[c].field.name}`;
+        const mk = fieldMoniker(
+          entities[r].entity_type,
+          entities[r].id,
+          columns[c].field.name,
+        );
         map.set(mk, { row: r, col: c });
       }
     }
@@ -146,8 +151,8 @@ function useGridLayout(view: ViewDef) {
    * cellMonikers[row][col] = moniker string.
    */
   const cellMonikers = useMemo(() => {
-    return entities.map((entity) =>
-      columns.map((col) => `${entity.moniker}.${col.field.name}`),
+    return entities.map((e) =>
+      columns.map((col) => fieldMoniker(e.entity_type, e.id, col.field.name)),
     );
   }, [entities, columns]);
 

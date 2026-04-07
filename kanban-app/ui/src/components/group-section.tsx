@@ -55,7 +55,7 @@ export function GroupSection({ bucket, board, groupField }: GroupSectionProps) {
         </Badge>
       </button>
       {!collapsed && (
-        <div style={{ maxHeight: "calc(100vh - 6rem)" }}>
+        <div className="flex-1 min-h-0 overflow-auto">
           <BoardView
             board={board}
             tasks={bucket.tasks}
