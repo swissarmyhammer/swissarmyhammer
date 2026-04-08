@@ -675,7 +675,6 @@ describe("CommandPalette search mode", () => {
     const { container, unmount } = renderSearchPalette(
       true,
       onClose,
-      onInspect,
     );
 
     const view = getCMView(container);

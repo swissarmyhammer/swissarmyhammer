@@ -15,7 +15,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, beforeAll } from "vitest";
-import { render, fireEvent, act, waitFor } from "@testing-library/react";
+import { render, fireEvent, act } from "@testing-library/react";
 import { commands } from "vitest/browser";
 import type { FieldDef } from "@/types/kanban";
 
@@ -267,7 +267,7 @@ function expectsSave(keymap: string, exit: string): boolean {
 // ---------------------------------------------------------------------------
 
 beforeAll(async () => {
-  allFieldDefs = (await commands.loadFieldDefinitions()) as FieldDef[];
+  allFieldDefs = (await commands.loadFieldDefinitions()) as unknown as FieldDef[];
 
   const entityTypes = ["task", "tag", "actor", "column", "board"];
   for (const et of entityTypes) {

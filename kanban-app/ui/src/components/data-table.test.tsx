@@ -220,13 +220,8 @@ describe("DataTable grouping sync", () => {
       </EntityFocusProvider>,
     );
 
-    // With grouping, there should be group header rows (fewer data rows visible at top level)
-    const groupedRows = container.querySelectorAll("tbody tr");
-    const hasGroupHeaders = Array.from(groupedRows).some(
-      (row) => row.querySelector("[data-group-header]") !== null,
-    );
-
-    // Re-render with grouping cleared
+    // With grouping active, re-render with grouping cleared
+    // to verify the table returns to a flat layout.
     rerender(
       <EntityFocusProvider>
         <DataTable

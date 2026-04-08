@@ -17,7 +17,7 @@ interface SlidePanelProps {
  */
 export function SlidePanel({
   open,
-  onClose,
+  onClose: _onClose,
   style,
   children,
 }: SlidePanelProps) {

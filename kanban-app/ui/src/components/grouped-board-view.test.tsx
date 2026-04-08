@@ -128,7 +128,7 @@ describe("GroupedBoardView", () => {
       {
         id: "project",
         name: "project",
-        kind: "string",
+        type: { kind: "string" },
       } as import("@/types/kanban").FieldDef,
     ];
     BoardViewMock.mockClear();
@@ -156,7 +156,7 @@ describe("GroupedBoardView", () => {
       {
         id: "project",
         name: "project",
-        kind: "string",
+        type: { kind: "string" },
       } as import("@/types/kanban").FieldDef,
     ];
     BoardViewMock.mockClear();
@@ -182,7 +182,7 @@ describe("GroupedBoardView", () => {
       {
         id: "project",
         name: "project",
-        kind: "string",
+        type: { kind: "string" },
       } as import("@/types/kanban").FieldDef,
     ];
     BoardViewMock.mockClear();
@@ -205,7 +205,7 @@ describe("GroupedBoardView", () => {
       {
         id: "project",
         name: "project",
-        kind: "string",
+        type: { kind: "string" },
       } as import("@/types/kanban").FieldDef,
     ];
     BoardViewMock.mockClear();
@@ -234,7 +234,7 @@ describe("GroupedBoardView", () => {
       {
         id: "project",
         name: "project",
-        kind: "string",
+        type: { kind: "string" },
       } as import("@/types/kanban").FieldDef,
     ];
     BoardViewMock.mockClear();
@@ -268,7 +268,7 @@ describe("GroupedBoardView", () => {
       {
         id: "project",
         name: "project",
-        kind: "string",
+        type: { kind: "string" },
       } as import("@/types/kanban").FieldDef,
     ];
     BoardViewMock.mockClear();
@@ -309,7 +309,7 @@ describe("GroupedBoardView", () => {
       {
         id: "project",
         name: "project",
-        kind: "string",
+        type: { kind: "string" },
       } as import("@/types/kanban").FieldDef,
     ];
     BoardViewMock.mockClear();
@@ -348,7 +348,7 @@ describe("GroupedBoardView", () => {
       {
         id: "project",
         name: "project",
-        kind: "string",
+        type: { kind: "string" },
       } as import("@/types/kanban").FieldDef,
     ];
     BoardViewMock.mockClear();
@@ -368,7 +368,7 @@ describe("GroupedBoardView", () => {
       {
         id: "project",
         name: "project",
-        kind: "string",
+        type: { kind: "string" },
       } as import("@/types/kanban").FieldDef,
     ];
     BoardViewMock.mockClear();

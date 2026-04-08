@@ -15,7 +15,7 @@ vi.mock("@tauri-apps/api/window", () => ({
 
 // Import after mocks
 import { AppModeContainer, useAppMode } from "./app-mode-container";
-import { CommandScopeProvider, CommandScopeContext } from "@/lib/command-scope";
+import { CommandScopeContext } from "@/lib/command-scope";
 import { useContext } from "react";
 
 // ---------------------------------------------------------------------------

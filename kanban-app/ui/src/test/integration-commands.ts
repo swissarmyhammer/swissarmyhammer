@@ -17,7 +17,6 @@
 import { execSync } from "child_process";
 import {
   mkdtempSync,
-  mkdirSync,
   writeFileSync,
   readdirSync,
   readFileSync,

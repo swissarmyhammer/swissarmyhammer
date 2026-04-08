@@ -50,5 +50,10 @@ declare module "vitest/internal/browser" {
       perspectives: { id: string; name: string; view: string }[];
     }>;
     cleanupTestBoard: (config: { dir: string }) => Promise<void>;
+    loadFieldDefinitions: () => Promise<Record<string, unknown>[]>;
+    loadEntityDefinition: (config: {
+      entityType: string;
+    }) => Promise<Record<string, unknown>>;
+    loadAllEntityDefinitions: () => Promise<Record<string, unknown>[]>;
   }
 }

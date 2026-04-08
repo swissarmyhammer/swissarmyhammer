@@ -365,41 +365,6 @@ describe("AttachmentEditor", () => {
     });
 
     it("fires onChange with dropped paths appended to existing attachments", () => {
-      // Capture the callback registered by AttachmentEditor via registerDropTarget
-      let capturedCallback: ((paths: string[]) => void) | null = null;
-
-      const CapturingDropProvider = ({
-        children,
-      }: {
-        children: React.ReactNode;
-      }) => {
-        // Minimal provider that captures the registered drop callback
-        const contextValue = {
-          isDragging: false,
-          paths: null as string[] | null,
-          registerDropTarget: (cb: (paths: string[]) => void) => {
-            capturedCallback = cb;
-          },
-          unregisterDropTarget: () => {
-            capturedCallback = null;
-          },
-        };
-        // Access the context via the same import used by the component
-        const { createElement } = require("react");
-        // Re-create a provider using the FileDropProvider's context shape
-        const FileDropContext =
-          require("@/lib/file-drop-context").__FileDropContext;
-        if (FileDropContext) {
-          return createElement(
-            FileDropContext.Provider,
-            { value: contextValue },
-            children,
-          );
-        }
-        // Fallback: render with real provider (callback captured via mock)
-        return <>{children}</>;
-      };
-
       const onChange = vi.fn();
 
       // Use the real FileDropProvider but spy on its registerDropTarget

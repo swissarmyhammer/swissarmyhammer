@@ -12,7 +12,9 @@ const { mockInvoke, mockListen, mockWindowListen, listeners, windowListeners } =
   vi.hoisted(() => {
     const listeners = new Map<string, ListenCallback[]>();
     const windowListeners = new Map<string, ListenCallback[]>();
-    const mockInvoke = vi.fn((cmd: string) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const mockInvoke = vi.fn((..._args: any[]): Promise<any> => {
+      const cmd = _args[0] as string;
       if (cmd === "get_ui_state")
         return Promise.resolve({
           palette_open: false,
@@ -80,10 +82,7 @@ vi.mock("@tauri-apps/api/window", () => ({
 }));
 
 // Import after mocks
-import {
-  RustEngineContainer,
-  useRefreshEntities,
-} from "./rust-engine-container";
+import { RustEngineContainer } from "./rust-engine-container";
 import {
   WindowContainer,
   useOpenBoards,

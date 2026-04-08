@@ -61,7 +61,7 @@ export function GroupedBoardView({ board, tasks }: GroupedBoardViewProps) {
           key={bucket.value}
           bucket={bucket}
           board={board}
-          groupField={groupField}
+          groupField={groupField!}
         />
       ))}
     </div>

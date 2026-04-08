@@ -27,9 +27,5 @@ export function patchBoardData(
   if (entityType === "column") {
     return { ...board, columns: replaceById(board.columns) };
   }
-  if (entityType === "swimlane") {
-    return { ...board, swimlanes: replaceById(board.swimlanes) };
-  }
-
   return null;
 }

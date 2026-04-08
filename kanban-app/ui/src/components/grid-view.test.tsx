@@ -26,10 +26,10 @@ vi.mock("@tauri-apps/api/window", () => ({
 
 const mockActivePerspective = vi.hoisted(() =>
   vi.fn(() => ({
-    activePerspective: null,
+    activePerspective: null as { id: string; name: string; sort?: { field: string; direction: string }[] } | null,
 
     applySort: (entities: unknown[]) => entities,
-    groupField: undefined,
+    groupField: undefined as string | undefined,
   })),
 );
 
