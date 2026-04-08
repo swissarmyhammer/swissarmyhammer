@@ -1942,10 +1942,7 @@ mod tests {
         depends_on: &[&str],
     ) -> Entity {
         let mut e = Entity::new("task", id);
-        e.set(
-            "filter_tags",
-            serde_json::json!(filter_tags),
-        );
+        e.set("filter_tags", serde_json::json!(filter_tags));
         e.set("assignees", serde_json::json!(assignees));
         e.set("depends_on", serde_json::json!(depends_on));
         e

@@ -24,7 +24,10 @@ fn validate_filter(filter: &str) -> Result<(), CommandError> {
     }
     swissarmyhammer_filter_expr::parse(filter).map_err(|errors| {
         let messages: Vec<String> = errors.iter().map(|e| e.message.clone()).collect();
-        CommandError::ExecutionFailed(format!("invalid filter expression: {}", messages.join("; ")))
+        CommandError::ExecutionFailed(format!(
+            "invalid filter expression: {}",
+            messages.join("; ")
+        ))
     })?;
     Ok(())
 }
@@ -464,6 +467,40 @@ impl Command for PrevPerspectiveCmd {
     }
 }
 
+/// Resolve the view kind for perspective cycling.
+///
+/// Resolution order: explicit `view_kind` arg > scope chain `view:{id}` moniker
+/// looked up against the views registry > `"board"` default. When invoked via
+/// keybinding or command palette no args are passed, so the scope chain fallback
+/// is the primary path.
+async fn resolve_view_kind(ctx: &CommandContext, kanban: &KanbanContext) -> String {
+    if let Some(explicit) = ctx.arg("view_kind").and_then(|v| v.as_str()) {
+        return explicit.to_string();
+    }
+
+    let view_id = ctx.scope_chain.iter().find_map(|m| m.strip_prefix("view:"));
+
+    if let Some(kind) = resolve_kind_from_view_id(view_id, kanban).await {
+        return kind;
+    }
+
+    "board".to_string()
+}
+
+/// Look up a view ID in the views registry and return its kind as a string.
+async fn resolve_kind_from_view_id(
+    view_id: Option<&str>,
+    kanban: &KanbanContext,
+) -> Option<String> {
+    let view_id = view_id?;
+    let views_lock = kanban.views()?;
+    let views = views_lock.read().await;
+    let view_def = views.get_by_id(view_id)?;
+    serde_json::to_value(&view_def.kind)
+        .ok()
+        .and_then(|v| v.as_str().map(String::from))
+}
+
 /// Direction for perspective cycling.
 enum CycleDirection {
     Next,
@@ -486,7 +523,7 @@ async fn cycle_perspective(
         .as_ref()
         .ok_or_else(|| CommandError::ExecutionFailed("UIState not available".into()))?;
 
-    let view_kind = ctx.require_arg_str("view_kind")?;
+    let view_kind = resolve_view_kind(ctx, &kanban).await;
     let window_label = ctx.window_label_from_scope().unwrap_or("main");
     let current_id = ui.active_perspective_id(window_label);
 
@@ -556,9 +593,9 @@ impl Command for GotoPerspectiveCmd {
             .map_err(|e| CommandError::ExecutionFailed(e.to_string()))?;
         let pctx = pctx.read().await;
 
-        let perspective = pctx.get_by_id(id).ok_or_else(|| {
-            CommandError::ExecutionFailed(format!("perspective not found: {id}"))
-        })?;
+        let perspective = pctx
+            .get_by_id(id)
+            .ok_or_else(|| CommandError::ExecutionFailed(format!("perspective not found: {id}")))?;
 
         // If view_kind is specified, validate it matches.
         if let Some(expected) = view_kind {
@@ -855,10 +892,7 @@ mod tests {
 
         let mut args = HashMap::new();
         args.insert("perspective_id".into(), Value::String(pid.clone()));
-        args.insert(
-            "filter".into(),
-            Value::String("invalid $$$ garbage".into()),
-        );
+        args.insert("filter".into(), Value::String("invalid $$$ garbage".into()));
         let cmd_ctx = make_ctx_with_scope(
             Arc::clone(&kanban),
             args,
@@ -881,10 +915,7 @@ mod tests {
 
         let mut args = HashMap::new();
         args.insert("perspective_id".into(), Value::String(pid.clone()));
-        args.insert(
-            "filter".into(),
-            Value::String("Status !== \"Done\"".into()),
-        );
+        args.insert("filter".into(), Value::String("Status !== \"Done\"".into()));
         let cmd_ctx = make_ctx_with_scope(
             Arc::clone(&kanban),
             args,
@@ -909,7 +940,10 @@ mod tests {
         args.insert("filter".into(), Value::String("#bug || #feature".into()));
         let cmd_ctx = make_ctx(Arc::clone(&kanban), args);
         let result = SavePerspectiveCmd.execute(&cmd_ctx).await;
-        assert!(result.is_ok(), "valid DSL filter should be accepted on save");
+        assert!(
+            result.is_ok(),
+            "valid DSL filter should be accepted on save"
+        );
 
         // Invalid filter should fail
         let mut args = HashMap::new();
@@ -918,10 +952,7 @@ mod tests {
         args.insert("filter".into(), Value::String("$$garbage".into()));
         let cmd_ctx = make_ctx(Arc::clone(&kanban), args);
         let result = SavePerspectiveCmd.execute(&cmd_ctx).await;
-        assert!(
-            result.is_err(),
-            "invalid filter should be rejected on save"
-        );
+        assert!(result.is_err(), "invalid filter should be rejected on save");
     }
 
     #[tokio::test]
@@ -1090,6 +1121,84 @@ mod tests {
         let ctx = CommandContext::new("test", vec![], None, HashMap::new());
         assert!(NextPerspectiveCmd.available(&ctx));
         assert!(PrevPerspectiveCmd.available(&ctx));
+    }
+
+    /// Create a KanbanContext with views initialized (via `open`).
+    async fn setup_with_views() -> (TempDir, KanbanContext) {
+        let temp = TempDir::new().unwrap();
+        let kanban_dir = temp.path().join(".kanban");
+        std::fs::create_dir_all(&kanban_dir).unwrap();
+        let ctx = KanbanContext::open(&kanban_dir).await.unwrap();
+        InitBoard::new("Test")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        (temp, ctx)
+    }
+
+    /// Build a CommandContext with scope chain, UI state, and args.
+    fn make_ctx_with_scope_and_ui(
+        kanban: Arc<KanbanContext>,
+        args: HashMap<String, Value>,
+        scope_chain: Vec<String>,
+        ui: Arc<swissarmyhammer_commands::UIState>,
+    ) -> CommandContext {
+        let mut ctx = CommandContext::new("test", scope_chain, None, args);
+        ctx.set_extension(kanban);
+        ctx.ui_state = Some(ui);
+        ctx
+    }
+
+    #[tokio::test]
+    async fn test_next_perspective_derives_view_kind_from_scope_chain() {
+        let (_temp, ctx) = setup_with_views().await;
+        let kanban = Arc::new(ctx);
+        let ui = Arc::new(swissarmyhammer_commands::UIState::new());
+
+        // Create board perspectives
+        let id_a = create_perspective_with_view(&kanban, "A", "board").await;
+        let id_b = create_perspective_with_view(&kanban, "B", "board").await;
+
+        ui.set_active_perspective("main", &id_a);
+
+        // Invoke without view_kind arg, but with view:01JMVIEW0000000000BOARD0 in scope chain
+        let scope = vec!["view:01JMVIEW0000000000BOARD0".to_string()];
+        let cmd_ctx =
+            make_ctx_with_scope_and_ui(Arc::clone(&kanban), HashMap::new(), scope, Arc::clone(&ui));
+        let result = NextPerspectiveCmd.execute(&cmd_ctx).await.unwrap();
+
+        assert!(result != Value::Null, "should cycle, not return null");
+        assert_eq!(ui.active_perspective_id("main"), id_b);
+    }
+
+    #[tokio::test]
+    async fn test_next_perspective_explicit_view_kind_overrides_scope() {
+        let (_temp, ctx) = setup_with_views().await;
+        let kanban = Arc::new(ctx);
+        let ui = Arc::new(swissarmyhammer_commands::UIState::new());
+
+        // Create board and grid perspectives
+        let _id_board_a = create_perspective_with_view(&kanban, "BoardA", "board").await;
+        let _id_board_b = create_perspective_with_view(&kanban, "BoardB", "board").await;
+        let id_grid_a = create_perspective_with_view(&kanban, "GridA", "grid").await;
+        let id_grid_b = create_perspective_with_view(&kanban, "GridB", "grid").await;
+
+        ui.set_active_perspective("main", &id_grid_a);
+
+        // Scope chain says board view, but explicit arg says "grid" — explicit wins
+        let scope = vec!["view:01JMVIEW0000000000BOARD0".to_string()];
+        let mut args = HashMap::new();
+        args.insert("view_kind".into(), Value::String("grid".into()));
+        let cmd_ctx = make_ctx_with_scope_and_ui(Arc::clone(&kanban), args, scope, Arc::clone(&ui));
+        let result = NextPerspectiveCmd.execute(&cmd_ctx).await.unwrap();
+
+        assert!(result != Value::Null, "should cycle grid perspectives");
+        assert_eq!(
+            ui.active_perspective_id("main"),
+            id_grid_b,
+            "explicit view_kind=grid should override scope chain's board view"
+        );
     }
 
     // =========================================================================

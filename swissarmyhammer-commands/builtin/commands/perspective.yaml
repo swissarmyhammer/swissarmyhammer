@@ -117,18 +117,12 @@
 
 - id: perspective.next
   name: Next Perspective
-  params:
-    - name: view_kind
-      from: args
   keys:
     cua: "Mod+]"
     vim: "gt"
 
 - id: perspective.prev
   name: Previous Perspective
-  params:
-    - name: view_kind
-      from: args
   keys:
     cua: "Mod+["
     vim: "gT"

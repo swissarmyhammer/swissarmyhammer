@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: 7f80
+position_column: done
+position_ordinal: ffffffffffffffffffffff9980
 title: 'Fix perspective.next/prev: derive view_kind from UIState instead of requiring it as arg'
 ---
 ## What

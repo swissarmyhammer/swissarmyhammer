@@ -13,7 +13,11 @@ pub struct ParseError {
 
 impl std::fmt::Display for ParseError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} at {}..{}", self.message, self.span.start, self.span.end)
+        write!(
+            f,
+            "{} at {}..{}",
+            self.message, self.span.start, self.span.end
+        )
     }
 }
 
@@ -58,15 +62,17 @@ fn binary_op<'src>(
 fn atom_and_not<'src>(
     expr: impl Parser<'src, &'src str, Expr, extra::Err<Rich<'src, char>>> + Clone,
 ) -> impl Parser<'src, &'src str, Expr, extra::Err<Rich<'src, char>>> + Clone {
-    let body = any()
-        .filter(is_body_char)
-        .repeated()
-        .at_least(1)
-        .to_slice();
+    let body = any().filter(is_body_char).repeated().at_least(1).to_slice();
 
-    let tag = just('#').ignore_then(body).map(|s: &str| Expr::Tag(s.to_string()));
-    let mention = just('@').ignore_then(body).map(|s: &str| Expr::Assignee(s.to_string()));
-    let reference = just('^').ignore_then(body).map(|s: &str| Expr::Ref(s.to_string()));
+    let tag = just('#')
+        .ignore_then(body)
+        .map(|s: &str| Expr::Tag(s.to_string()));
+    let mention = just('@')
+        .ignore_then(body)
+        .map(|s: &str| Expr::Assignee(s.to_string()));
+    let reference = just('^')
+        .ignore_then(body)
+        .map(|s: &str| Expr::Ref(s.to_string()));
     let group = expr.delimited_by(just('(').padded(), just(')').padded());
     let atom = choice((tag, mention, reference, group)).padded();
 
@@ -87,8 +93,7 @@ fn atom_and_not<'src>(
 /// atom      = "#" body | "@" body | "^" body | "(" expr ")"
 /// body      = [^ \t\n\r#@^()&|!]+
 /// ```
-fn filter_parser<'src>(
-) -> impl Parser<'src, &'src str, Expr, extra::Err<Rich<'src, char>>> {
+fn filter_parser<'src>() -> impl Parser<'src, &'src str, Expr, extra::Err<Rich<'src, char>>> {
     recursive(|expr| {
         let not_expr = atom_and_not(expr);
         let and_op = binary_op("&&", "and", "AND");
@@ -100,10 +105,11 @@ fn filter_parser<'src>(
         );
 
         let or_op = binary_op("||", "or", "OR");
-        and_expr.clone().foldl(
-            or_op.ignore_then(and_expr).repeated(),
-            |lhs, rhs| Expr::Or(Box::new(lhs), Box::new(rhs)),
-        )
+        and_expr
+            .clone()
+            .foldl(or_op.ignore_then(and_expr).repeated(), |lhs, rhs| {
+                Expr::Or(Box::new(lhs), Box::new(rhs))
+            })
     })
 }
 
@@ -136,14 +142,12 @@ pub fn parse(input: &str) -> Result<Expr, Vec<ParseError>> {
         Err(errors)
     } else {
         // The parser succeeded; unwrap the output.
-        result
-            .into_output()
-            .ok_or_else(|| {
-                vec![ParseError {
-                    message: "unexpected parse failure".to_string(),
-                    span: 0..input.len(),
-                }]
-            })
+        result.into_output().ok_or_else(|| {
+            vec![ParseError {
+                message: "unexpected parse failure".to_string(),
+                span: 0..input.len(),
+            }]
+        })
     }
 }
 
@@ -180,10 +184,7 @@ mod tests {
 
     #[test]
     fn tag_with_underscores() {
-        assert_eq!(
-            parse("#my_tag").unwrap(),
-            Expr::Tag("my_tag".into())
-        );
+        assert_eq!(parse("#my_tag").unwrap(), Expr::Tag("my_tag".into()));
     }
 
     // ── NOT operator ────────────────────────────────────────────────
@@ -362,10 +363,7 @@ mod tests {
 
     #[test]
     fn nested_grouping() {
-        assert_eq!(
-            parse("((#a))").unwrap(),
-            Expr::Tag("a".into())
-        );
+        assert_eq!(parse("((#a))").unwrap(), Expr::Tag("a".into()));
     }
 
     // ── Keyword operator full expression ────────────────────────────
