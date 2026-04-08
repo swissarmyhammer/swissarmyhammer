@@ -3,11 +3,7 @@ import { Filter, Group, Plus } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { usePerspectives } from "@/lib/perspective-context";
 import { useViews } from "@/lib/views-context";
-import {
-  useDispatchCommand,
-  CommandScopeProvider,
-  type CommandScope,
-} from "@/lib/command-scope";
+import { useDispatchCommand, CommandScopeProvider } from "@/lib/command-scope";
 import { useContextMenu } from "@/lib/context-menu";
 import { moniker } from "@/lib/moniker";
 import {

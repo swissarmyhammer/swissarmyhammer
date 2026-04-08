@@ -2,10 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
-import {
-  EntityFocusProvider,
-  useEntityFocus,
-} from "@/lib/entity-focus-context";
+import { EntityFocusProvider } from "@/lib/entity-focus-context";
 import { DragSessionProvider } from "@/lib/drag-session-context";
 import { SchemaProvider } from "@/lib/schema-context";
 import { EntityStoreProvider } from "@/lib/entity-store-context";
@@ -37,17 +34,6 @@ vi.mock("@tauri-apps/api/window", () => ({
     listen: vi.fn(() => Promise.resolve(() => {})),
   }),
 }));
-
-/** Helper to read registered scopes from the entity focus provider. */
-function ScopeProbe({
-  onScope,
-}: {
-  onScope: (getScope: (m: string) => unknown) => void;
-}) {
-  const { getScope } = useEntityFocus();
-  onScope(getScope);
-  return null;
-}
 
 function makeColumn(id: string, name: string, order: number): Entity {
   return {

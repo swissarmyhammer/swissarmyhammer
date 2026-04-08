@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, cleanup, fireEvent, act } from "@testing-library/react";
+import { render, cleanup, act } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import { TextEditor } from "./text-editor";
 

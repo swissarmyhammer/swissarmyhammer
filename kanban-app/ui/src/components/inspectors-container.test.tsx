@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, fireEvent } from "@testing-library/react";
 
 // ---------------------------------------------------------------------------
 // Tauri API mocks — must come before component imports.
@@ -86,7 +86,7 @@ vi.mock("@/lib/entity-focus-context", () => ({
 // ---------------------------------------------------------------------------
 
 const mockEntitiesByType = vi.hoisted(() =>
-  vi.fn<[], Record<string, unknown[]>>(() => ({})),
+  vi.fn<() => Record<string, unknown[]>>(() => ({})),
 );
 
 vi.mock("@/components/rust-engine-container", () => ({

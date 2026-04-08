@@ -32,7 +32,11 @@ interface GroupSectionProps {
  * @param board - Board data shared across all group sections.
  * @param groupField - The field name used for grouping.
  */
-export function GroupSection({ bucket, board, groupField }: GroupSectionProps) {
+export function GroupSection({
+  bucket,
+  board,
+  groupField: _groupField,
+}: GroupSectionProps) {
   const [collapsed, setCollapsed] = useState(false);
 
   return (

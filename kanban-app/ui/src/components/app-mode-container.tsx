@@ -19,11 +19,7 @@
 
 import { type ReactNode } from "react";
 import { CommandScopeProvider } from "@/lib/command-scope";
-import {
-  AppModeProvider,
-  useAppMode,
-  type AppMode,
-} from "@/lib/app-mode-context";
+import { AppModeProvider, useAppMode } from "@/lib/app-mode-context";
 
 // Re-export useAppMode so consumers can import from this container
 export { useAppMode, type AppMode } from "@/lib/app-mode-context";

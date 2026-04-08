@@ -20,7 +20,6 @@ function makeBoardData(overrides: Partial<BoardData> = {}): BoardData {
       makeEntity("column", "col-1", { name: "To Do", order: 0 }),
       makeEntity("column", "col-2", { name: "Done", order: 1 }),
     ],
-    swimlanes: [makeEntity("swimlane", "sw-1", { name: "Default", order: 0 })],
     tags: [makeEntity("tag", "tag-1", { name: "bug" })],
     summary: {
       total_tasks: 0,
@@ -58,21 +57,6 @@ describe("patchBoardData", () => {
     const col = result!.columns.find((c) => c.id === "col-1");
     expect(col).toBeDefined();
     expect(col!.fields.name).toBe("Backlog");
-  });
-
-  it("patches a swimlane in BoardData.swimlanes by id", () => {
-    const board = makeBoardData();
-    const updated = makeEntity("swimlane", "sw-1", {
-      name: "Urgent",
-      order: 0,
-    });
-
-    const result = patchBoardData(board, "swimlane", "sw-1", updated);
-
-    expect(result).not.toBe(null);
-    const sw = result!.swimlanes.find((s) => s.id === "sw-1");
-    expect(sw).toBeDefined();
-    expect(sw!.fields.name).toBe("Urgent");
   });
 
   it("returns null for non-structural entity types (e.g. task)", () => {
@@ -116,7 +100,6 @@ describe("patchBoardData", () => {
     const result = patchBoardData(board, "column", "col-1", updated);
 
     expect(result!.board).toBe(board.board);
-    expect(result!.swimlanes).toBe(board.swimlanes);
     expect(result!.tags).toBe(board.tags);
     expect(result!.summary).toBe(board.summary);
   });

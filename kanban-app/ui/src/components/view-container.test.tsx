@@ -48,12 +48,12 @@ vi.mock("@/lib/views-context", () => ({
 // Mock window-container hooks — ViewContainer reads board data from these.
 // ---------------------------------------------------------------------------
 
-const mockBoardData = vi.hoisted(() => vi.fn<[], BoardData | null>(() => null));
+const mockBoardData = vi.hoisted(() => vi.fn<() => BoardData | null>(() => null));
 const mockActiveBoardPath = vi.hoisted(() =>
-  vi.fn<[], string | undefined>(() => undefined),
+  vi.fn<() => string | undefined>(() => undefined),
 );
 const mockEntitiesByType = vi.hoisted(() =>
-  vi.fn<[], Record<string, Entity[]>>(() => ({})),
+  vi.fn<() => Record<string, Entity[]>>(() => ({})),
 );
 
 vi.mock("@/components/window-container", () => ({

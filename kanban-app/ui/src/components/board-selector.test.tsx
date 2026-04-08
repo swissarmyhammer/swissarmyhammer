@@ -106,7 +106,7 @@ describe("BoardSelector", () => {
     const switchBoardCalls = mockInvoke.mock.calls.filter(
       (args) =>
         args[0] === "dispatch_command" &&
-        String(args[1]?.command ?? "").includes("switchBoard"),
+        String((args[1] as Record<string, unknown>)?.command ?? "").includes("switchBoard"),
     );
     expect(switchBoardCalls).toHaveLength(0);
   });

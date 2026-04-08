@@ -10,7 +10,9 @@ type ListenCallback = (event: { payload: unknown }) => void;
 
 const { mockInvoke, mockListen, listeners } = vi.hoisted(() => {
   const listeners = new Map<string, ListenCallback[]>();
-  const mockInvoke = vi.fn((cmd: string) => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const mockInvoke = vi.fn((..._args: any[]): Promise<any> => {
+    const cmd = _args[0] as string;
     if (cmd === "get_ui_state")
       return Promise.resolve({
         palette_open: false,
@@ -385,7 +387,7 @@ describe("RustEngineContainer", () => {
     };
 
     let fetchCount = 0;
-    mockInvoke.mockImplementation((cmd: string, args?: unknown) => {
+    mockInvoke.mockImplementation((cmd: string, _args?: unknown) => {
       if (cmd === "get_entity") {
         fetchCount++;
         // First fetch returns v1, subsequent returns v2

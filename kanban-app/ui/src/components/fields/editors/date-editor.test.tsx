@@ -11,12 +11,11 @@
  * the DateEditor-specific ref wiring at the component level.
  */
 
-import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { EditorView } from "@codemirror/view";
 import { EditorState } from "@codemirror/state";
 import { vim, getCM, Vim } from "@replit/codemirror-vim";
 import { buildSubmitCancelExtensions } from "@/lib/cm-submit-cancel";
-import { keymapExtension } from "@/lib/cm-keymap";
 
 // Suppress console.log from debug logging
 vi.spyOn(console, "log").mockImplementation(() => {});

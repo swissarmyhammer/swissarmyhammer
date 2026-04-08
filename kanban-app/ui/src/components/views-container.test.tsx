@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { useContext } from "react";
-import { CommandScopeContext, scopeChainFromScope } from "@/lib/command-scope";
+import { CommandScopeContext } from "@/lib/command-scope";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
 import type { ViewDef } from "@/types/kanban";
 

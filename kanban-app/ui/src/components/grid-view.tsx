@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useDispatchCommand } from "@/lib/command-scope";
+import { useDispatchCommand, type DispatchOptions } from "@/lib/command-scope";
 import { useGrid } from "@/hooks/use-grid";
 import { useSchema } from "@/lib/schema-context";
 import { useEntityStore } from "@/lib/entity-store-context";
@@ -32,30 +32,55 @@ function buildCellPredicates(
   const predicates: ClaimPredicate[] = [];
 
   if (ri > 0)
-    predicates.push({ command: "nav.down", when: (f) => f === cellMonikers[ri - 1][ci] });
+    predicates.push({
+      command: "nav.down",
+      when: (f) => f === cellMonikers[ri - 1][ci],
+    });
   if (ri < rowCount - 1)
-    predicates.push({ command: "nav.up", when: (f) => f === cellMonikers[ri + 1][ci] });
+    predicates.push({
+      command: "nav.up",
+      when: (f) => f === cellMonikers[ri + 1][ci],
+    });
   if (ci > 0)
-    predicates.push({ command: "nav.right", when: (f) => f === cellMonikers[ri][ci - 1] });
+    predicates.push({
+      command: "nav.right",
+      when: (f) => f === cellMonikers[ri][ci - 1],
+    });
   if (ci < colCount - 1)
-    predicates.push({ command: "nav.left", when: (f) => f === cellMonikers[ri][ci + 1] });
+    predicates.push({
+      command: "nav.left",
+      when: (f) => f === cellMonikers[ri][ci + 1],
+    });
 
   if (ci === 0)
-    predicates.push({ command: "nav.rowStart", when: (f) => {
-      const pos = f ? cellMonikerMap.get(f) : undefined;
-      return pos !== undefined && pos.row === ri && pos.col !== 0;
-    }});
+    predicates.push({
+      command: "nav.rowStart",
+      when: (f) => {
+        const pos = f ? cellMonikerMap.get(f) : undefined;
+        return pos !== undefined && pos.row === ri && pos.col !== 0;
+      },
+    });
   if (ci === colCount - 1)
-    predicates.push({ command: "nav.rowEnd", when: (f) => {
-      const pos = f ? cellMonikerMap.get(f) : undefined;
-      return pos !== undefined && pos.row === ri && pos.col !== colCount - 1;
-    }});
+    predicates.push({
+      command: "nav.rowEnd",
+      when: (f) => {
+        const pos = f ? cellMonikerMap.get(f) : undefined;
+        return pos !== undefined && pos.row === ri && pos.col !== colCount - 1;
+      },
+    });
 
   const isGridCell = (mk: string | null) => !!mk && cellMonikerMap.has(mk);
   if (ri === 0 && ci === 0)
-    predicates.push({ command: "nav.first", when: (f) => isGridCell(f) && f !== cellMonikers[0][0] });
+    predicates.push({
+      command: "nav.first",
+      when: (f) => isGridCell(f) && f !== cellMonikers[0][0],
+    });
   if (ri === rowCount - 1 && ci === colCount - 1)
-    predicates.push({ command: "nav.last", when: (f) => isGridCell(f) && f !== cellMonikers[rowCount - 1][colCount - 1] });
+    predicates.push({
+      command: "nav.last",
+      when: (f) =>
+        isGridCell(f) && f !== cellMonikers[rowCount - 1][colCount - 1],
+    });
 
   return predicates;
 }
@@ -83,18 +108,37 @@ function useGridData(view: ViewDef) {
   const schemaCommands = getEntityCommands(entityType);
 
   const { activePerspective, applySort, groupField } = useActivePerspective();
-  const entities = useMemo(() => applySort(rawEntities), [applySort, rawEntities]);
-  const grouping = useMemo<string[] | undefined>(() => (groupField ? [groupField] : undefined), [groupField]);
+  const entities = useMemo(
+    () => applySort(rawEntities),
+    [applySort, rawEntities],
+  );
+  const grouping = useMemo<string[] | undefined>(
+    () => (groupField ? [groupField] : undefined),
+    [groupField],
+  );
 
   const columns = useMemo<DataTableColumn[]>(() => {
     const fieldNames = view.card_fields ?? [];
-    if (fieldNames.length === 0) return fields.filter((f) => f.section !== "hidden").map((f) => ({ field: f }));
+    if (fieldNames.length === 0)
+      return fields
+        .filter((f) => f.section !== "hidden")
+        .map((f) => ({ field: f }));
     const fieldMap = new Map<string, FieldDef>();
     for (const f of fields) fieldMap.set(f.name, f);
-    return fieldNames.map((name) => fieldMap.get(name)).filter((f): f is FieldDef => f !== undefined).map((f) => ({ field: f }));
+    return fieldNames
+      .map((name) => fieldMap.get(name))
+      .filter((f): f is FieldDef => f !== undefined)
+      .map((f) => ({ field: f }));
   }, [view.card_fields, fields]);
 
-  return { entityType, entities, columns, grouping, schemaCommands, activePerspective };
+  return {
+    entityType,
+    entities,
+    columns,
+    grouping,
+    schemaCommands,
+    activePerspective,
+  };
 }
 
 /**
@@ -105,7 +149,9 @@ function useGridData(view: ViewDef) {
  */
 function useGridNavigation(entities: Entity[], columns: DataTableColumn[]) {
   const [visibleRowCount, setVisibleRowCount] = useState(entities.length);
-  useEffect(() => { setVisibleRowCount(entities.length); }, [entities.length]);
+  useEffect(() => {
+    setVisibleRowCount(entities.length);
+  }, [entities.length]);
 
   const { focusedMoniker, setFocus, broadcastNavCommand } = useEntityFocus();
 
@@ -113,14 +159,24 @@ function useGridNavigation(entities: Entity[], columns: DataTableColumn[]) {
     const map = new Map<string, { row: number; col: number }>();
     for (let r = 0; r < entities.length; r++) {
       for (let c = 0; c < columns.length; c++) {
-        map.set(fieldMoniker(entities[r].entity_type, entities[r].id, columns[c].field.name), { row: r, col: c });
+        map.set(
+          fieldMoniker(
+            entities[r].entity_type,
+            entities[r].id,
+            columns[c].field.name,
+          ),
+          { row: r, col: c },
+        );
       }
     }
     return map;
   }, [entities, columns]);
 
   const cellMonikers = useMemo(
-    () => entities.map((e) => columns.map((col) => fieldMoniker(e.entity_type, e.id, col.field.name))),
+    () =>
+      entities.map((e) =>
+        columns.map((col) => fieldMoniker(e.entity_type, e.id, col.field.name)),
+      ),
     [entities, columns],
   );
 
@@ -129,42 +185,96 @@ function useGridNavigation(entities: Entity[], columns: DataTableColumn[]) {
     return cellMonikerMap.get(focusedMoniker) ?? null;
   }, [focusedMoniker, cellMonikerMap]);
 
-  const grid = useGrid({ rowCount: visibleRowCount, colCount: columns.length, cursor: derivedCursor ?? undefined });
+  const grid = useGrid({
+    rowCount: visibleRowCount,
+    colCount: columns.length,
+    cursor: derivedCursor ?? undefined,
+  });
 
   const firstCellMoniker = cellMonikers[0]?.[0] ?? null;
   const hasInitialFocusRef = useRef(false);
   useEffect(() => {
     if (!firstCellMoniker || hasInitialFocusRef.current) return;
-    if (!derivedCursor) { setFocus(firstCellMoniker); hasInitialFocusRef.current = true; }
+    if (!derivedCursor) {
+      setFocus(firstCellMoniker);
+      hasInitialFocusRef.current = true;
+    }
   }, [firstCellMoniker, setFocus, derivedCursor]);
 
   const claimPredicates = useMemo(() => {
     const rowCount = cellMonikers.length;
     const colCount = columns.length;
     return cellMonikers.map((row, ri) =>
-      row.map((_, ci) => buildCellPredicates(ri, ci, cellMonikers, cellMonikerMap, rowCount, colCount)),
+      row.map((_, ci) =>
+        buildCellPredicates(
+          ri,
+          ci,
+          cellMonikers,
+          cellMonikerMap,
+          rowCount,
+          colCount,
+        ),
+      ),
     );
   }, [cellMonikers, cellMonikerMap, columns.length]);
 
-  return { setVisibleRowCount, grid, cellMonikers, claimPredicates, setFocus, broadcastNavCommand };
+  return {
+    setVisibleRowCount,
+    grid,
+    cellMonikers,
+    claimPredicates,
+    setFocus,
+    broadcastNavCommand,
+  };
 }
 
 /** Build a navigation command that broadcasts a nav event. */
-function navCmd(id: string, name: string, navEvent: string, broadcastRef: React.RefObject<(cmd: string) => void>, keys?: CommandDef["keys"]): CommandDef {
+function navCmd(
+  id: string,
+  name: string,
+  navEvent: string,
+  broadcastRef: React.RefObject<(cmd: string) => void>,
+  keys?: CommandDef["keys"],
+): CommandDef {
   return { id, name, keys, execute: () => broadcastRef.current(navEvent) };
 }
 
 /** Build navigation CommandDefs for the grid. */
-function buildGridNavCommands(broadcastRef: React.RefObject<(cmd: string) => void>): CommandDef[] {
+function buildGridNavCommands(
+  broadcastRef: React.RefObject<(cmd: string) => void>,
+): CommandDef[] {
   return [
-    navCmd("grid.moveUp", "Move Up", "nav.up", broadcastRef, { vim: "k", cua: "ArrowUp" }),
-    navCmd("grid.moveDown", "Move Down", "nav.down", broadcastRef, { vim: "j", cua: "ArrowDown" }),
-    navCmd("grid.moveLeft", "Move Left", "nav.left", broadcastRef, { vim: "h", cua: "ArrowLeft" }),
-    navCmd("grid.moveRight", "Move Right", "nav.right", broadcastRef, { vim: "l", cua: "ArrowRight" }),
-    navCmd("grid.moveToRowStart", "Row Start", "nav.rowStart", broadcastRef, { vim: "0", cua: "Home" }),
-    navCmd("grid.moveToRowEnd", "Row End", "nav.rowEnd", broadcastRef, { vim: "$", cua: "End" }),
-    navCmd("grid.firstCell", "First Cell", "nav.first", broadcastRef, { cua: "Mod+Home" }),
-    navCmd("grid.lastCell", "Last Cell", "nav.last", broadcastRef, { vim: "Shift+G", cua: "Mod+End" }),
+    navCmd("grid.moveUp", "Move Up", "nav.up", broadcastRef, {
+      vim: "k",
+      cua: "ArrowUp",
+    }),
+    navCmd("grid.moveDown", "Move Down", "nav.down", broadcastRef, {
+      vim: "j",
+      cua: "ArrowDown",
+    }),
+    navCmd("grid.moveLeft", "Move Left", "nav.left", broadcastRef, {
+      vim: "h",
+      cua: "ArrowLeft",
+    }),
+    navCmd("grid.moveRight", "Move Right", "nav.right", broadcastRef, {
+      vim: "l",
+      cua: "ArrowRight",
+    }),
+    navCmd("grid.moveToRowStart", "Row Start", "nav.rowStart", broadcastRef, {
+      vim: "0",
+      cua: "Home",
+    }),
+    navCmd("grid.moveToRowEnd", "Row End", "nav.rowEnd", broadcastRef, {
+      vim: "$",
+      cua: "End",
+    }),
+    navCmd("grid.firstCell", "First Cell", "nav.first", broadcastRef, {
+      cua: "Mod+Home",
+    }),
+    navCmd("grid.lastCell", "Last Cell", "nav.last", broadcastRef, {
+      vim: "Shift+G",
+      cua: "Mod+End",
+    }),
     navCmd("nav.first", "First Cell", "nav.first", broadcastRef),
     navCmd("nav.last", "Last Cell", "nav.last", broadcastRef),
   ];
@@ -175,29 +285,71 @@ function buildGridEditCommands(
   gridRef: React.RefObject<ReturnType<typeof useGrid>>,
   entities: Entity[],
   entityType: string,
-  dispatch: ReturnType<typeof useDispatchCommand>,
+  dispatch: (cmd: string, opts?: DispatchOptions) => Promise<unknown>,
 ): CommandDef[] {
   return [
-    { id: "grid.edit", name: "Edit Cell", keys: { vim: "i", cua: "Enter" }, execute: () => gridRef.current.enterEdit() },
-    { id: "grid.editEnter", name: "Edit Cell (Enter)", keys: { vim: "Enter" }, execute: () => gridRef.current.enterEdit() },
-    { id: "grid.exitEdit", name: "Exit Edit", execute: () => {
-      if (gridRef.current.mode === "edit") gridRef.current.exitEdit();
-      else if (gridRef.current.mode === "visual") gridRef.current.exitVisual();
-    }},
-    { id: "grid.toggleVisual", name: "Toggle Visual Mode", keys: { vim: "v" }, execute: () => {
-      if (gridRef.current.mode === "visual") gridRef.current.exitVisual();
-      else gridRef.current.enterVisual();
-    }},
-    { id: "grid.deleteRow", name: "Delete Row", execute: () => {
-      const row = gridRef.current.cursor.row;
-      if (row >= 0 && row < entities.length) {
-        dispatch(`${entityType}.archive`, { args: { id: entities[row].id } }).catch((err) => console.error("Failed to delete row:", err));
-      }
-    }},
-    { id: "grid.newBelow", name: "New Row Below", keys: { vim: "o", cua: "Mod+Enter" },
-      execute: () => { dispatch(`${entityType}.add`, { args: { title: `New ${entityType}` } }).catch((err) => console.error("Failed to add row:", err)); } },
-    { id: "grid.newAbove", name: "New Row Above", keys: { vim: "O", cua: "Mod+Shift+Enter" },
-      execute: () => { dispatch(`${entityType}.add`, { args: { title: `New ${entityType}` } }).catch((err) => console.error("Failed to add row:", err)); } },
+    {
+      id: "grid.edit",
+      name: "Edit Cell",
+      keys: { vim: "i", cua: "Enter" },
+      execute: () => gridRef.current.enterEdit(),
+    },
+    {
+      id: "grid.editEnter",
+      name: "Edit Cell (Enter)",
+      keys: { vim: "Enter" },
+      execute: () => gridRef.current.enterEdit(),
+    },
+    {
+      id: "grid.exitEdit",
+      name: "Exit Edit",
+      execute: () => {
+        if (gridRef.current.mode === "edit") gridRef.current.exitEdit();
+        else if (gridRef.current.mode === "visual")
+          gridRef.current.exitVisual();
+      },
+    },
+    {
+      id: "grid.toggleVisual",
+      name: "Toggle Visual Mode",
+      keys: { vim: "v" },
+      execute: () => {
+        if (gridRef.current.mode === "visual") gridRef.current.exitVisual();
+        else gridRef.current.enterVisual();
+      },
+    },
+    {
+      id: "grid.deleteRow",
+      name: "Delete Row",
+      execute: () => {
+        const row = gridRef.current.cursor.row;
+        if (row >= 0 && row < entities.length) {
+          dispatch(`${entityType}.archive`, {
+            args: { id: entities[row].id },
+          }).catch((err) => console.error("Failed to delete row:", err));
+        }
+      },
+    },
+    {
+      id: "grid.newBelow",
+      name: "New Row Below",
+      keys: { vim: "o", cua: "Mod+Enter" },
+      execute: () => {
+        dispatch(`${entityType}.add`, {
+          args: { title: `New ${entityType}` },
+        }).catch((err) => console.error("Failed to add row:", err));
+      },
+    },
+    {
+      id: "grid.newAbove",
+      name: "New Row Above",
+      keys: { vim: "O", cua: "Mod+Shift+Enter" },
+      execute: () => {
+        dispatch(`${entityType}.add`, {
+          args: { title: `New ${entityType}` },
+        }).catch((err) => console.error("Failed to add row:", err));
+      },
+    },
   ];
 }
 
@@ -209,7 +361,7 @@ function useGridCommands(
   grid: ReturnType<typeof useGrid>,
   entities: Entity[],
   entityType: string,
-  dispatch: ReturnType<typeof useDispatchCommand>,
+  dispatch: (cmd: string, opts?: DispatchOptions) => Promise<unknown>,
 ): CommandDef[] {
   const broadcastRef = useRef(broadcastNavCommand);
   broadcastRef.current = broadcastNavCommand;
@@ -217,7 +369,10 @@ function useGridCommands(
   gridRef.current = grid;
 
   return useMemo<CommandDef[]>(
-    () => [...buildGridNavCommands(broadcastRef), ...buildGridEditCommands(gridRef, entities, entityType, dispatch)],
+    () => [
+      ...buildGridNavCommands(broadcastRef),
+      ...buildGridEditCommands(gridRef, entities, entityType, dispatch),
+    ],
     [entities, entityType],
   );
 }
@@ -304,19 +459,29 @@ function useGridCallbacks(
  * to useGridCallbacks, and rendering to DataTable.
  */
 /** Status bar showing row count, grid mode, and cursor position. */
-function GridStatusBar({ rowCount, mode, cursor }: {
+function GridStatusBar({
+  rowCount,
+  mode,
+  cursor,
+}: {
   rowCount: number;
   mode: string;
   cursor: { row: number; col: number };
 }) {
-  const label = mode === "edit" ? "EDIT" : mode === "visual" ? "VISUAL" : "NORMAL";
+  const label =
+    mode === "edit" ? "EDIT" : mode === "visual" ? "VISUAL" : "NORMAL";
   return (
     <div className="flex items-center px-4 py-1.5 border-b border-border bg-muted/30 text-xs text-muted-foreground gap-3">
       <span>{rowCount} rows</span>
       <span className="text-muted-foreground/50">|</span>
       <span>{label}</span>
       {rowCount > 0 && (
-        <><span className="text-muted-foreground/50">|</span><span>R{cursor.row + 1}:C{cursor.col + 1}</span></>
+        <>
+          <span className="text-muted-foreground/50">|</span>
+          <span>
+            R{cursor.row + 1}:C{cursor.col + 1}
+          </span>
+        </>
       )}
     </div>
   );
@@ -325,25 +490,65 @@ function GridStatusBar({ rowCount, mode, cursor }: {
 /** Grid (spreadsheet-style) view for entities. */
 export function GridView({ view }: GridViewProps) {
   const dispatch = useDispatchCommand();
-  const { entityType, entities, columns, grouping, schemaCommands, activePerspective } = useGridData(view);
-  const { setVisibleRowCount, grid, cellMonikers, claimPredicates, setFocus, broadcastNavCommand } =
-    useGridNavigation(entities, columns);
-  const gridCommands = useGridCommands(broadcastNavCommand, grid, entities, entityType, dispatch);
+  const {
+    entityType,
+    entities,
+    columns,
+    grouping,
+    schemaCommands,
+    activePerspective,
+  } = useGridData(view);
+  const {
+    setVisibleRowCount,
+    grid,
+    cellMonikers,
+    claimPredicates,
+    setFocus,
+    broadcastNavCommand,
+  } = useGridNavigation(entities, columns);
+  const gridCommands = useGridCommands(
+    broadcastNavCommand,
+    grid,
+    entities,
+    entityType,
+    dispatch,
+  );
   const { handleCellClick, buildRowEntityCommands, renderEditor } =
     useGridCallbacks(cellMonikers, setFocus, schemaCommands, entityType);
 
   if (!view.entity_type) {
-    console.warn(`[GridView] view "${view.name ?? view.id}" has no entity_type`);
-    return (<main className="flex-1 flex items-center justify-center text-muted-foreground text-sm">View is missing an entity_type definition.</main>);
+    console.warn(
+      `[GridView] view "${view.name ?? view.id}" has no entity_type`,
+    );
+    return (
+      <main className="flex-1 flex items-center justify-center text-muted-foreground text-sm">
+        View is missing an entity_type definition.
+      </main>
+    );
   }
 
   return (
     <CommandScopeProvider commands={gridCommands}>
       <main className="flex-1 flex flex-col min-h-0">
-        <GridStatusBar rowCount={entities.length} mode={grid.mode} cursor={grid.cursor} />
-        <DataTable columns={columns} rows={entities} grid={grid} cellMonikers={cellMonikers} claimPredicates={claimPredicates}
-          onCellClick={handleCellClick} renderEditor={renderEditor} grouping={grouping} onVisibleRowCount={setVisibleRowCount}
-          rowEntityCommands={buildRowEntityCommands} perspectiveSort={activePerspective?.sort} perspectiveId={activePerspective?.id} />
+        <GridStatusBar
+          rowCount={entities.length}
+          mode={grid.mode}
+          cursor={grid.cursor}
+        />
+        <DataTable
+          columns={columns}
+          rows={entities}
+          grid={grid}
+          cellMonikers={cellMonikers}
+          claimPredicates={claimPredicates}
+          onCellClick={handleCellClick}
+          renderEditor={renderEditor}
+          grouping={grouping}
+          onVisibleRowCount={setVisibleRowCount}
+          rowEntityCommands={buildRowEntityCommands}
+          perspectiveSort={activePerspective?.sort}
+          perspectiveId={activePerspective?.id}
+        />
       </main>
     </CommandScopeProvider>
   );

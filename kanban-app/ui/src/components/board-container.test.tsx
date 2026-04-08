@@ -28,10 +28,10 @@ vi.mock("@tauri-apps/api/window", () => ({
 // Mock WindowContainer hooks — BoardContainer reads these.
 // ---------------------------------------------------------------------------
 
-const mockBoardData = vi.hoisted(() => vi.fn<[], BoardData | null>(() => null));
-const mockLoading = vi.hoisted(() => vi.fn<[], boolean>(() => false));
+const mockBoardData = vi.hoisted(() => vi.fn<() => BoardData | null>(() => null));
+const mockLoading = vi.hoisted(() => vi.fn<() => boolean>(() => false));
 const mockActiveBoardPath = vi.hoisted(() =>
-  vi.fn<[], string | undefined>(() => undefined),
+  vi.fn<() => string | undefined>(() => undefined),
 );
 
 vi.mock("@/components/window-container", () => ({

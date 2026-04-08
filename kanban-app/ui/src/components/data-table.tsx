@@ -87,7 +87,7 @@ export function DataTable({
   cellMonikers,
   claimPredicates,
   onCellClick,
-  onRowContextMenu,
+  onRowContextMenu: _onRowContextMenu,
   renderEditor,
   grouping: groupingProp,
   onVisibleRowCount,
