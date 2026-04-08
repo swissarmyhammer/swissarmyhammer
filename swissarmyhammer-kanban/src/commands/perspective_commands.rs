@@ -24,7 +24,10 @@ fn validate_filter(filter: &str) -> Result<(), CommandError> {
     }
     swissarmyhammer_filter_expr::parse(filter).map_err(|errors| {
         let messages: Vec<String> = errors.iter().map(|e| e.message.clone()).collect();
-        CommandError::ExecutionFailed(format!("invalid filter expression: {}", messages.join("; ")))
+        CommandError::ExecutionFailed(format!(
+            "invalid filter expression: {}",
+            messages.join("; ")
+        ))
     })?;
     Ok(())
 }
@@ -689,10 +692,7 @@ mod tests {
 
         let mut args = HashMap::new();
         args.insert("perspective_id".into(), Value::String(pid.clone()));
-        args.insert(
-            "filter".into(),
-            Value::String("invalid $$$ garbage".into()),
-        );
+        args.insert("filter".into(), Value::String("invalid $$$ garbage".into()));
         let cmd_ctx = make_ctx_with_scope(
             Arc::clone(&kanban),
             args,
@@ -715,10 +715,7 @@ mod tests {
 
         let mut args = HashMap::new();
         args.insert("perspective_id".into(), Value::String(pid.clone()));
-        args.insert(
-            "filter".into(),
-            Value::String("Status !== \"Done\"".into()),
-        );
+        args.insert("filter".into(), Value::String("Status !== \"Done\"".into()));
         let cmd_ctx = make_ctx_with_scope(
             Arc::clone(&kanban),
             args,
@@ -743,7 +740,10 @@ mod tests {
         args.insert("filter".into(), Value::String("#bug || #feature".into()));
         let cmd_ctx = make_ctx(Arc::clone(&kanban), args);
         let result = SavePerspectiveCmd.execute(&cmd_ctx).await;
-        assert!(result.is_ok(), "valid DSL filter should be accepted on save");
+        assert!(
+            result.is_ok(),
+            "valid DSL filter should be accepted on save"
+        );
 
         // Invalid filter should fail
         let mut args = HashMap::new();
@@ -752,10 +752,7 @@ mod tests {
         args.insert("filter".into(), Value::String("$$garbage".into()));
         let cmd_ctx = make_ctx(Arc::clone(&kanban), args);
         let result = SavePerspectiveCmd.execute(&cmd_ctx).await;
-        assert!(
-            result.is_err(),
-            "invalid filter should be rejected on save"
-        );
+        assert!(result.is_err(), "invalid filter should be rejected on save");
     }
 
     #[tokio::test]

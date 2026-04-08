@@ -153,20 +153,32 @@ mod tests {
     async fn test_delete_project_with_tasks_fails() {
         let (_temp, ctx) = setup().await;
 
-        AddProject::new("backend", "Backend")
+        let add_result = AddProject::new("backend", "Backend")
             .execute(&ctx)
             .await
-            .into_result()
-            .unwrap();
+            .into_result();
+        eprintln!("AddProject result: {:?}", add_result);
+        add_result.unwrap();
+
+        // Verify project was created
+        let ectx = ctx.entity_context().await.unwrap();
+        let proj = ectx.read("project", "backend").await;
+        eprintln!("Project after create: {:?}", proj);
 
         // Add a task that references this project
-        let ectx = ctx.entity_context().await.unwrap();
         let mut task = swissarmyhammer_entity::Entity::new("task", "test-task-1");
         task.set("title", serde_json::json!("A task"));
         task.set("project", serde_json::json!("backend"));
         task.set("position_column", serde_json::json!("todo"));
         task.set("position_ordinal", serde_json::json!("1000"));
-        ectx.write(&task).await.unwrap();
+        let write_result = ectx.write(&task).await;
+        eprintln!("Task write result: {:?}", write_result);
+        write_result.unwrap();
+
+        // Read back the task to verify project field was stored
+        let read_task = ectx.read("task", "test-task-1").await.unwrap();
+        eprintln!("Task after read: {:?}", read_task);
+        eprintln!("Task project field: {:?}", read_task.get_str("project"));
 
         // Attempting to delete the project should fail
         let result = DeleteProject::new("backend")

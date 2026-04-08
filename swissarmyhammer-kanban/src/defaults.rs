@@ -194,7 +194,7 @@ pub fn kanban_compute_engine() -> ComputeEngine {
 }
 
 /// Entity types supported by kanban lookup.
-const KNOWN_ENTITY_TYPES: &[&str] = &["task", "tag", "actor", "column", "attachment"];
+const KNOWN_ENTITY_TYPES: &[&str] = &["task", "tag", "actor", "column", "attachment", "project"];
 
 /// Entity lookup backed by kanban file storage.
 ///
@@ -369,6 +369,7 @@ mod tests {
         assert!(entity.fields.iter().any(|f| f == "position_ordinal"));
         assert!(entity.fields.iter().any(|f| f == "attachments"));
         assert!(entity.fields.iter().any(|f| f == "progress"));
+        assert!(entity.fields.iter().any(|f| f == "project"));
     }
 
     #[test]
@@ -423,7 +424,7 @@ mod tests {
         assert_eq!(ctx.all_entities().len(), 7);
         assert!(ctx.get_field_by_name("title").is_some());
         assert!(ctx.get_entity("task").is_some());
-        assert_eq!(ctx.fields_for_entity("task").len(), 11);
+        assert_eq!(ctx.fields_for_entity("task").len(), 12);
     }
 
     #[test]

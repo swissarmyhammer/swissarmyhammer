@@ -113,33 +113,71 @@ Deleting a tag automatically removes it from all tasks.
 
 ## Using Projects to Group Tasks
 
-Projects let you group related tasks under a shared initiative. Create a project for each plan or workstream, then assign tasks to it.
+Projects let you organize related tasks under a shared initiative. Create a project for each plan or workstream.
 
 ### Creating a Project
 
 ```json
-{"op": "add project", "id": "auth-migration", "name": "Auth Migration", "description": "Migrate from session to JWT auth", "color": "0066cc"}
+{"op": "add project", "id": "auth-migration", "name": "Auth Migration"}
+{"op": "add project", "id": "frontend", "name": "Frontend", "description": "Frontend redesign", "color": "ff0000", "order": 5}
 ```
 
-Each project needs an `id` (slug) and `name`. Optional fields: `description`, `color` (6-char hex, no `#`), `order` (position).
+Required fields: `id` (slug) and `name`. Optional fields: `description`, `color` (6-char hex, no `#`), `order` (position in project list).
 
-### Managing Projects
+**Auto-ordering**: When `order` is omitted, projects auto-increment — the first project gets order 0, the next gets 1, and so on. Specify `order` explicitly to control positioning.
+
+**Duplicate detection**: Creating a project with an existing `id` returns an error. Choose unique slugs.
+
+### Getting a Project
+
+```json
+{"op": "get project", "id": "auth-migration"}
+```
+
+Returns `{id, name, description, color, order}`. Returns a `ProjectNotFound` error if the ID doesn't exist.
+
+### Updating a Project
+
+```json
+{"op": "update project", "id": "auth-migration", "name": "JWT Auth Migration"}
+{"op": "update project", "id": "auth-migration", "description": "New desc", "color": "aabbcc", "order": 42}
+```
+
+All fields except `id` are optional — only provided fields are changed. Updating with no fields succeeds and returns the current values.
+
+### Listing Projects
 
 ```json
 {"op": "list projects"}
-{"op": "get project", "id": "auth-migration"}
-{"op": "update project", "id": "auth-migration", "name": "JWT Auth Migration"}
+```
+
+Returns `{projects: [...], count: N}` sorted by `order` ascending.
+
+### Deleting a Project
+
+```json
 {"op": "delete project", "id": "auth-migration"}
 ```
 
-Deleting a project fails if tasks still reference it -- reassign or complete those tasks first.
+Returns `{deleted: true, id: "..."}` on success. **Fails with `ProjectHasTasks` if any tasks reference the project** — reassign or complete those tasks first.
+
+### Assigning Tasks to Projects
+
+Set the `project` field when creating or updating a task:
+
+```json
+{"op": "add task", "title": "Implement JWT refresh", "project": "auth-migration"}
+{"op": "update task", "id": "<task-id>", "project": "frontend"}
+```
+
+Tasks without a project have an empty `project` field. The task response always includes `"project": "<slug>"` (or `""` if unset).
 
 ### Workflow
 
 When starting a plan with multiple related tasks:
 
 1. Create a project for the initiative
-2. Create tasks and group them under the project
+2. Create tasks with the `project` field set to the project ID
 3. Use projects to filter and focus work in the UI
 
 ## Guidelines

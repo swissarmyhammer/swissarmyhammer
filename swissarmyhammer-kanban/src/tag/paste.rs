@@ -265,8 +265,14 @@ mod tests {
         let ectx = ctx.entity_context().await.unwrap();
         let task = ectx.read("task", task_id).await.unwrap();
         let tags_before = task_tags(&task);
-        assert!(tags_before.contains(&"bug".to_string()), "should have #bug before paste");
-        assert!(tags_before.contains(&"feature".to_string()), "should have #feature before paste");
+        assert!(
+            tags_before.contains(&"bug".to_string()),
+            "should have #bug before paste"
+        );
+        assert!(
+            tags_before.contains(&"feature".to_string()),
+            "should have #feature before paste"
+        );
 
         // Paste a new tag
         let clip = make_tag_clipboard("urgent", "ff0000");
@@ -280,7 +286,10 @@ mod tests {
         // Re-read and verify ALL tags are present (old + new)
         let task = ectx.read("task", task_id).await.unwrap();
         let tags_after = task_tags(&task);
-        assert!(tags_after.contains(&"bug".to_string()), "should still have #bug after paste");
+        assert!(
+            tags_after.contains(&"bug".to_string()),
+            "should still have #bug after paste"
+        );
         assert!(
             tags_after.contains(&"feature".to_string()),
             "should still have #feature after paste"

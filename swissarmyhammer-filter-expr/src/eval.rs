@@ -61,7 +61,10 @@ mod tests {
 
     #[test]
     fn tag_positive() {
-        assert!(evaluate(&Expr::Tag("bug".into()), &mock(&["bug"], &[], &[])));
+        assert!(evaluate(
+            &Expr::Tag("bug".into()),
+            &mock(&["bug"], &[], &[])
+        ));
     }
 
     #[test]

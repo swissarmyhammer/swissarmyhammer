@@ -81,6 +81,7 @@ fields:
   - title
   - tags
   - assignees
+  - project
   - depends_on
   - progress
   - body

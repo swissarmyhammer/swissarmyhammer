@@ -113,6 +113,29 @@ async fn execute_column_operation(
 /// Parses title (required), description, column, ordinal, assignees, and
 /// depends_on from the operation. Assignees fall back to the operation's actor
 /// when no explicit assignee list is provided.
+/// Resolve assignees from explicit list, single value, or operation actor fallback.
+fn resolve_assignees(op: &KanbanOperation) -> Vec<ActorId> {
+    let explicit: Vec<ActorId> = op
+        .get_param("assignees")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(ActorId::from_string))
+                .collect()
+        })
+        .or_else(|| {
+            op.get_string("assignee")
+                .map(|a| vec![ActorId::from_string(a)])
+        })
+        .unwrap_or_default();
+
+    if explicit.is_empty() {
+        op.actor.iter().cloned().collect()
+    } else {
+        explicit
+    }
+}
+
 async fn dispatch_add_task(
     processor: &KanbanOperationProcessor,
     ctx: &KanbanContext,
@@ -130,30 +153,7 @@ async fn dispatch_add_task(
         cmd.ordinal = Some(ordinal.to_string());
     }
 
-    // Parse assignees from explicit list, single value, or fall back to op actor.
-    let explicit_assignees: Vec<ActorId> = op
-        .get_param("assignees")
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|v| v.as_str().map(ActorId::from_string))
-                .collect()
-        })
-        .or_else(|| {
-            op.get_string("assignee")
-                .map(|a| vec![ActorId::from_string(a)])
-        })
-        .unwrap_or_default();
-
-    let assignees = if explicit_assignees.is_empty() {
-        match &op.actor {
-            Some(actor) => vec![actor.clone()],
-            None => Vec::new(),
-        }
-    } else {
-        explicit_assignees
-    };
-
+    let assignees = resolve_assignees(op);
     if !assignees.is_empty() {
         cmd = cmd.with_assignees(assignees);
     }
@@ -168,13 +168,17 @@ async fn dispatch_add_task(
         }
     }
 
+    if let Some(project) = op.get_string("project") {
+        cmd = cmd.with_project(project);
+    }
+
     processor.process(&cmd, ctx).await
 }
 
 /// Build and execute an `UpdateTask` command from operation parameters.
 ///
-/// Parses id (required), title, description, assignees, and depends_on from
-/// the operation.
+/// Parses id (required), title, description, assignees, depends_on, and
+/// project from the operation.
 async fn dispatch_update_task(
     processor: &KanbanOperationProcessor,
     ctx: &KanbanContext,
@@ -203,6 +207,9 @@ async fn dispatch_update_task(
             .filter_map(|v| v.as_str().map(TaskId::from_string))
             .collect();
         cmd = cmd.with_depends_on(dep_ids);
+    }
+    if let Some(project) = op.get_string("project") {
+        cmd = cmd.with_project(project);
     }
     processor.process(&cmd, ctx).await
 }
@@ -460,36 +467,31 @@ async fn execute_tag_operation(
     }
 }
 
-/// Dispatch project operations (add, get, update, delete, list).
+/// Parse an optional `order` param as usize.
+fn parse_order(op: &KanbanOperation) -> Option<usize> {
+    op.get_param("order")
+        .and_then(|v| v.as_u64())
+        .map(|v| v as usize)
+}
+
 /// Dispatch project operations (add, get, update, delete, list).
 async fn execute_project_operation(
     processor: &KanbanOperationProcessor,
     ctx: &KanbanContext,
     op: &KanbanOperation,
 ) -> Result<Value, KanbanError> {
-    let order = || op.get_param("order").and_then(|v| v.as_u64()).map(|v| v as usize);
-
     match (op.verb, op.noun) {
-        (Verb::Add, Noun::Project) => {
-            let mut cmd = AddProject::new(req(op, "id")?, req(op, "name")?);
-            if let Some(d) = op.get_string("description") { cmd = cmd.with_description(d); }
-            if let Some(c) = op.get_string("color") { cmd = cmd.with_color(c); }
-            if let Some(o) = order() { cmd = cmd.with_order(o); }
-            processor.process(&cmd, ctx).await
-        }
+        (Verb::Add, Noun::Project) => dispatch_add_project(processor, ctx, op).await,
         (Verb::Get, Noun::Project) => {
-            processor.process(&GetProject::new(req(op, "id")?), ctx).await
+            processor
+                .process(&GetProject::new(req(op, "id")?), ctx)
+                .await
         }
-        (Verb::Update, Noun::Project) => {
-            let mut cmd = UpdateProject::new(req(op, "id")?);
-            if let Some(n) = op.get_string("name") { cmd = cmd.with_name(n); }
-            if let Some(d) = op.get_string("description") { cmd = cmd.with_description(d); }
-            if let Some(c) = op.get_string("color") { cmd = cmd.with_color(c); }
-            if let Some(o) = order() { cmd = cmd.with_order(o); }
-            processor.process(&cmd, ctx).await
-        }
+        (Verb::Update, Noun::Project) => dispatch_update_project(processor, ctx, op).await,
         (Verb::Delete, Noun::Project) => {
-            processor.process(&DeleteProject::new(req(op, "id")?), ctx).await
+            processor
+                .process(&DeleteProject::new(req(op, "id")?), ctx)
+                .await
         }
         (Verb::List, Noun::Projects) => processor.process(&ListProjects, ctx).await,
         _ => Err(KanbanError::parse(format!(
@@ -497,6 +499,45 @@ async fn execute_project_operation(
             op.verb, op.noun
         ))),
     }
+}
+
+async fn dispatch_add_project(
+    processor: &KanbanOperationProcessor,
+    ctx: &KanbanContext,
+    op: &KanbanOperation,
+) -> Result<Value, KanbanError> {
+    let mut cmd = AddProject::new(req(op, "id")?, req(op, "name")?);
+    if let Some(d) = op.get_string("description") {
+        cmd = cmd.with_description(d);
+    }
+    if let Some(c) = op.get_string("color") {
+        cmd = cmd.with_color(c);
+    }
+    if let Some(o) = parse_order(op) {
+        cmd = cmd.with_order(o);
+    }
+    processor.process(&cmd, ctx).await
+}
+
+async fn dispatch_update_project(
+    processor: &KanbanOperationProcessor,
+    ctx: &KanbanContext,
+    op: &KanbanOperation,
+) -> Result<Value, KanbanError> {
+    let mut cmd = UpdateProject::new(req(op, "id")?);
+    if let Some(n) = op.get_string("name") {
+        cmd = cmd.with_name(n);
+    }
+    if let Some(d) = op.get_string("description") {
+        cmd = cmd.with_description(d);
+    }
+    if let Some(c) = op.get_string("color") {
+        cmd = cmd.with_color(c);
+    }
+    if let Some(o) = parse_order(op) {
+        cmd = cmd.with_order(o);
+    }
+    processor.process(&cmd, ctx).await
 }
 
 /// Parse a JSON array param into a `Vec<T>`, returning a `KanbanError` on failure.
@@ -521,33 +562,17 @@ async fn execute_perspective_operation(
     op: &KanbanOperation,
 ) -> Result<Value, KanbanError> {
     match (op.verb, op.noun) {
-        (Verb::Add, Noun::Perspective) => {
-            let mut cmd = AddPerspective::new(req(op, "name")?, req(op, "view")?);
-            if let Some(f) = parse_json_array(op, "fields")? { cmd = cmd.with_fields(f); }
-            if let Some(v) = op.get_string("filter") { cmd = cmd.with_filter(v); }
-            if let Some(v) = op.get_string("group") { cmd = cmd.with_group(v); }
-            if let Some(s) = parse_json_array(op, "sort")? { cmd = cmd.with_sort(s); }
-            processor.process(&cmd, ctx).await
-        }
+        (Verb::Add, Noun::Perspective) => dispatch_add_perspective(processor, ctx, op).await,
         (Verb::Get, Noun::Perspective) => {
-            processor.process(&GetPerspective::new(req(op, "id")?), ctx).await
+            processor
+                .process(&GetPerspective::new(req(op, "id")?), ctx)
+                .await
         }
-        (Verb::Update, Noun::Perspective) => {
-            let mut cmd = UpdatePerspective::new(req(op, "id")?);
-            if let Some(n) = op.get_string("name") { cmd = cmd.with_name(n); }
-            if let Some(v) = op.get_string("view") { cmd = cmd.with_view(v); }
-            if let Some(f) = parse_json_array(op, "fields")? { cmd = cmd.with_fields(f); }
-            if op.params.contains_key("filter") {
-                cmd = cmd.with_filter(op.get_string("filter").map(|s| s.to_string()));
-            }
-            if op.params.contains_key("group") {
-                cmd = cmd.with_group(op.get_string("group").map(|s| s.to_string()));
-            }
-            if let Some(s) = parse_json_array(op, "sort")? { cmd = cmd.with_sort(s); }
-            processor.process(&cmd, ctx).await
-        }
+        (Verb::Update, Noun::Perspective) => dispatch_update_perspective(processor, ctx, op).await,
         (Verb::Delete, Noun::Perspective) => {
-            processor.process(&DeletePerspective::new(req(op, "id")?), ctx).await
+            processor
+                .process(&DeletePerspective::new(req(op, "id")?), ctx)
+                .await
         }
         (Verb::List, Noun::Perspectives) => processor.process(&ListPerspectives::new(), ctx).await,
         _ => Err(KanbanError::parse(format!(
@@ -557,6 +582,54 @@ async fn execute_perspective_operation(
     }
 }
 
+async fn dispatch_add_perspective(
+    processor: &KanbanOperationProcessor,
+    ctx: &KanbanContext,
+    op: &KanbanOperation,
+) -> Result<Value, KanbanError> {
+    let mut cmd = AddPerspective::new(req(op, "name")?, req(op, "view")?);
+    if let Some(f) = parse_json_array(op, "fields")? {
+        cmd = cmd.with_fields(f);
+    }
+    if let Some(v) = op.get_string("filter") {
+        cmd = cmd.with_filter(v);
+    }
+    if let Some(v) = op.get_string("group") {
+        cmd = cmd.with_group(v);
+    }
+    if let Some(s) = parse_json_array(op, "sort")? {
+        cmd = cmd.with_sort(s);
+    }
+    processor.process(&cmd, ctx).await
+}
+
+async fn dispatch_update_perspective(
+    processor: &KanbanOperationProcessor,
+    ctx: &KanbanContext,
+    op: &KanbanOperation,
+) -> Result<Value, KanbanError> {
+    let mut cmd = UpdatePerspective::new(req(op, "id")?);
+    if let Some(n) = op.get_string("name") {
+        cmd = cmd.with_name(n);
+    }
+    if let Some(v) = op.get_string("view") {
+        cmd = cmd.with_view(v);
+    }
+    if let Some(f) = parse_json_array(op, "fields")? {
+        cmd = cmd.with_fields(f);
+    }
+    if op.params.contains_key("filter") {
+        cmd = cmd.with_filter(op.get_string("filter").map(|s| s.to_string()));
+    }
+    if op.params.contains_key("group") {
+        cmd = cmd.with_group(op.get_string("group").map(|s| s.to_string()));
+    }
+    if let Some(s) = parse_json_array(op, "sort")? {
+        cmd = cmd.with_sort(s);
+    }
+    processor.process(&cmd, ctx).await
+}
+
 /// Dispatch attachment operations (add, get, update, delete, list).
 async fn execute_attachment_operation(
     processor: &KanbanOperationProcessor,
@@ -564,33 +637,67 @@ async fn execute_attachment_operation(
     op: &KanbanOperation,
 ) -> Result<Value, KanbanError> {
     match op.verb {
-        Verb::Add => {
-            let mut cmd = AddAttachment::new(req(op, "task_id")?, req(op, "name")?, req(op, "path")?);
-            if let Some(mime) = op.get_string("mime_type") { cmd = cmd.with_mime_type(mime); }
-            if let Some(size) = op.get_param("size").and_then(|v| v.as_u64()) { cmd = cmd.with_size(size); }
-            processor.process(&cmd, ctx).await
-        }
+        Verb::Add => dispatch_add_attachment(processor, ctx, op).await,
         Verb::Get => {
-            processor.process(&GetAttachment::new(req(op, "task_id")?, req(op, "id")?), ctx).await
+            processor
+                .process(
+                    &GetAttachment::new(req(op, "task_id")?, req(op, "id")?),
+                    ctx,
+                )
+                .await
         }
-        Verb::Update => {
-            let mut cmd = UpdateAttachment::new(req(op, "task_id")?, req(op, "id")?);
-            if let Some(name) = op.get_string("name") { cmd = cmd.with_name(name); }
-            if let Some(mime) = op.get_string("mime_type") { cmd = cmd.with_mime_type(mime); }
-            if let Some(size) = op.get_param("size").and_then(|v| v.as_u64()) { cmd = cmd.with_size(size); }
-            processor.process(&cmd, ctx).await
-        }
+        Verb::Update => dispatch_update_attachment(processor, ctx, op).await,
         Verb::Delete => {
-            processor.process(&DeleteAttachment::new(req(op, "task_id")?, req(op, "id")?), ctx).await
+            processor
+                .process(
+                    &DeleteAttachment::new(req(op, "task_id")?, req(op, "id")?),
+                    ctx,
+                )
+                .await
         }
         Verb::List => {
-            processor.process(&ListAttachments::new(req(op, "task_id")?), ctx).await
+            processor
+                .process(&ListAttachments::new(req(op, "task_id")?), ctx)
+                .await
         }
         _ => Err(KanbanError::parse(format!(
             "unsupported operation: {} {}",
             op.verb, op.noun
         ))),
     }
+}
+
+async fn dispatch_add_attachment(
+    processor: &KanbanOperationProcessor,
+    ctx: &KanbanContext,
+    op: &KanbanOperation,
+) -> Result<Value, KanbanError> {
+    let mut cmd = AddAttachment::new(req(op, "task_id")?, req(op, "name")?, req(op, "path")?);
+    if let Some(mime) = op.get_string("mime_type") {
+        cmd = cmd.with_mime_type(mime);
+    }
+    if let Some(size) = op.get_param("size").and_then(|v| v.as_u64()) {
+        cmd = cmd.with_size(size);
+    }
+    processor.process(&cmd, ctx).await
+}
+
+async fn dispatch_update_attachment(
+    processor: &KanbanOperationProcessor,
+    ctx: &KanbanContext,
+    op: &KanbanOperation,
+) -> Result<Value, KanbanError> {
+    let mut cmd = UpdateAttachment::new(req(op, "task_id")?, req(op, "id")?);
+    if let Some(name) = op.get_string("name") {
+        cmd = cmd.with_name(name);
+    }
+    if let Some(mime) = op.get_string("mime_type") {
+        cmd = cmd.with_mime_type(mime);
+    }
+    if let Some(size) = op.get_param("size").and_then(|v| v.as_u64()) {
+        cmd = cmd.with_size(size);
+    }
+    processor.process(&cmd, ctx).await
 }
 
 /// Execute a parsed kanban operation against a context.
