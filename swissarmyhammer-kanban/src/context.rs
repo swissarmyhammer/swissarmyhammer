@@ -1157,7 +1157,7 @@ type:
         let entries: Vec<_> = std::fs::read_dir(&views_root)
             .unwrap()
             .filter_map(|e| e.ok())
-            .filter(|e| e.path().extension().map_or(false, |ext| ext == "yaml"))
+            .filter(|e| e.path().extension().is_some_and(|ext| ext == "yaml"))
             .collect();
         assert!(
             !entries.is_empty(),

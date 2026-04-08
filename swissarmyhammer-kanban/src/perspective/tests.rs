@@ -83,7 +83,7 @@ async fn test_add_perspective() {
 
     assert_eq!(result["name"], "Sprint Board");
     assert_eq!(result["view"], "board");
-    assert!(result["id"].as_str().unwrap().len() > 0);
+    assert!(!result["id"].as_str().unwrap().is_empty());
     assert_eq!(result["fields"].as_array().unwrap().len(), 1);
     assert_eq!(result["fields"][0]["caption"], "Title");
     assert!(result["filter"].as_str().unwrap().contains("Done"));
@@ -102,12 +102,12 @@ async fn test_add_perspective_minimal() {
 
     assert_eq!(result["name"], "Default");
     assert_eq!(result["view"], "grid");
-    assert!(result["id"].as_str().unwrap().len() > 0);
+    assert!(!result["id"].as_str().unwrap().is_empty());
     // Optional fields should be empty/null
-    assert!(result["fields"].as_array().map_or(true, |a| a.is_empty()));
+    assert!(result["fields"].as_array().is_none_or(|a| a.is_empty()));
     assert!(result["filter"].is_null());
     assert!(result["group"].is_null());
-    assert!(result["sort"].as_array().map_or(true, |a| a.is_empty()));
+    assert!(result["sort"].as_array().is_none_or(|a| a.is_empty()));
 }
 
 #[tokio::test]

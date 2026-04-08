@@ -183,10 +183,7 @@ mod tests {
         let attachments = task.get("attachments");
         let is_empty = attachments.is_none()
             || attachments.unwrap().is_null()
-            || attachments
-                .unwrap()
-                .as_array()
-                .map_or(true, |a| a.is_empty());
+            || attachments.unwrap().as_array().is_none_or(|a| a.is_empty());
         assert!(is_empty);
     }
 
@@ -207,10 +204,7 @@ mod tests {
         let attachments = task.get("attachments");
         let is_empty = attachments.is_none()
             || attachments.unwrap().is_null()
-            || attachments
-                .unwrap()
-                .as_array()
-                .map_or(true, |a| a.is_empty());
+            || attachments.unwrap().as_array().is_none_or(|a| a.is_empty());
         assert!(is_empty);
     }
 

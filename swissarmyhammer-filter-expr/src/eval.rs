@@ -47,7 +47,7 @@ mod tests {
             self.assignees.iter().any(|a| a.eq_ignore_ascii_case(user))
         }
         fn has_ref(&self, id: &str) -> bool {
-            self.refs.iter().any(|r| *r == id)
+            self.refs.contains(&id)
         }
     }
 

@@ -8,4 +8,4 @@ executor:
     model:
       source: !HuggingFace
         repo: "unsloth/Qwen3-Coder-Next-GGUF"
-        filename: "Qwen3-Coder-Next-IQ4_NL.gguf"
+        filename: "Qwen3-Coder-Next-MXFP4_MOE.gguf"

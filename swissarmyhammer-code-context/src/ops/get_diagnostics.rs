@@ -316,7 +316,6 @@ fn empty_result() -> DiagnosticsResult {
 mod tests {
     use super::*;
     use crate::test_fixtures::test_db;
-    use rusqlite::Connection;
 
     // --- publishDiagnostics notification parsing ---
 
@@ -607,7 +606,7 @@ mod tests {
 
     #[test]
     fn test_counts_computed_correctly() {
-        let diagnostics = vec![
+        let diagnostics = [
             Diagnostic {
                 range: LspRange {
                     start_line: 0,
