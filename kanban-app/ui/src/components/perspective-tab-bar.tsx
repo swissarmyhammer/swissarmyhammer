@@ -1,4 +1,11 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import {
+  forwardRef,
+  useCallback,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { Filter, Group, Plus } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { usePerspectives } from "@/lib/perspective-context";
@@ -16,7 +23,10 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { FilterEditor } from "@/components/filter-editor";
+import {
+  FilterEditor,
+  type FilterEditorHandle,
+} from "@/components/filter-editor";
 import { GroupSelector } from "@/components/group-selector";
 import { TextEditor } from "@/components/fields/text-editor";
 import { useSchema } from "@/lib/schema-context";
@@ -42,12 +52,17 @@ function usePerspectiveRename() {
       setRenamingId(null);
       const trimmed = newName.trim();
       if (!trimmed || trimmed === oldName) {
-        console.warn("[rename] skipped — name unchanged or empty", { trimmed, oldName });
+        console.warn("[rename] skipped — name unchanged or empty", {
+          trimmed,
+          oldName,
+        });
         return;
       }
-
       try {
-        console.warn("[rename] dispatching perspective.rename", { id, new_name: trimmed });
+        console.warn("[rename] dispatching perspective.rename", {
+          id,
+          new_name: trimmed,
+        });
         await dispatchPerspectiveRename({ args: { id, new_name: trimmed } });
         await refresh();
         console.warn("[rename] dispatch succeeded");
@@ -59,8 +74,46 @@ function usePerspectiveRename() {
   );
 
   const cancelRename = useCallback(() => setRenamingId(null), []);
-
   return { renamingId, startRename, commitRename, cancelRename };
+}
+
+// ---------------------------------------------------------------------------
+// Tab bar state hook — derived state and refs for PerspectiveTabBar
+// ---------------------------------------------------------------------------
+
+/**
+ * Collects all derived state, refs, and callbacks needed by PerspectiveTabBar.
+ *
+ * Extracted so the component JSX stays within readable length.
+ */
+function usePerspectiveTabBar() {
+  const { perspectives, activePerspective, setActivePerspectiveId } =
+    usePerspectives();
+  const { activeView } = useViews();
+  const { renamingId, startRename, commitRename, cancelRename } =
+    usePerspectiveRename();
+  const filterEditorRef = useRef<FilterEditorHandle>(null);
+  const handleFilterFocus = useCallback(() => {
+    filterEditorRef.current?.focus();
+  }, []);
+  const viewKind = activeView?.kind ?? "board";
+  const filteredPerspectives = useMemo(
+    () => perspectives.filter((p) => p.view === viewKind),
+    [perspectives, viewKind],
+  );
+  return {
+    activeView,
+    activePerspective,
+    setActivePerspectiveId,
+    filteredPerspectives,
+    viewKind,
+    filterEditorRef,
+    handleFilterFocus,
+    renamingId,
+    startRename,
+    commitRename,
+    cancelRename,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -70,55 +123,127 @@ function usePerspectiveRename() {
 /**
  * A compact tab bar that shows perspectives for the current view kind.
  *
- * Sits between the NavBar and the view content area. Each tab shows a
- * perspective name; clicking switches the active perspective. A "+" button
- * at the end creates a new perspective for the current view kind.
+ * Layout: tabs on the left (scrollable) + filter formula bar on the right.
+ * The formula bar is an always-visible CM6 editor for the active perspective's
+ * filter expression — analogous to Excel's formula bar. Clicking the filter
+ * icon button on the active tab moves focus into the formula bar.
  *
- * Right-click on a tab opens a native OS context menu via the backend command
- * system. Double-click on a tab starts inline rename.
+ * Sits between the NavBar and the view content area.
  */
 export function PerspectiveTabBar() {
-  const { perspectives, activePerspective, setActivePerspectiveId } =
-    usePerspectives();
-  const { activeView } = useViews();
-  const { renamingId, startRename, commitRename, cancelRename } =
-    usePerspectiveRename();
-
-  const viewKind = activeView?.kind ?? "board";
-  const filteredPerspectives = useMemo(
-    () => perspectives.filter((p) => p.view === viewKind),
-    [perspectives, viewKind],
-  );
+  const {
+    activeView,
+    activePerspective,
+    setActivePerspectiveId,
+    filteredPerspectives,
+    viewKind,
+    filterEditorRef,
+    handleFilterFocus,
+    renamingId,
+    startRename,
+    commitRename,
+    cancelRename,
+  } = usePerspectiveTabBar();
 
   if (!activeView) return null;
 
   return (
-    <div className="flex items-center border-b bg-muted/20 px-1 h-8 shrink-0 gap-0.5 overflow-x-auto">
-      {filteredPerspectives.map((p) => (
-        <CommandScopeProvider
-          key={p.id}
-          commands={[]}
-          moniker={moniker("perspective", p.id)}
-        >
-          <PerspectiveTab
-            id={p.id}
-            name={p.name}
-            filter={p.filter}
-            group={p.group}
-            isActive={activePerspective?.id === p.id}
-            isRenaming={renamingId === p.id}
+    <div className="flex items-center border-b bg-muted/20 px-1 h-8 shrink-0">
+      {/* Left: scrollable perspective tabs + add button */}
+      <div className="flex items-center gap-0.5 overflow-x-auto shrink-0 max-w-[60%]">
+        {filteredPerspectives.map((p) => (
+          <ScopedPerspectiveTab
+            key={p.id}
+            perspective={p}
+            activePerspectiveId={activePerspective?.id}
+            renamingId={renamingId}
             onSelect={() => setActivePerspectiveId(p.id)}
             onDoubleClick={() => startRename(p.id)}
             onRenameCommit={(text) => commitRename(p.id, p.name, text)}
             onRenameCancel={cancelRename}
+            onFilterFocus={handleFilterFocus}
           />
-        </CommandScopeProvider>
-      ))}
-      <AddPerspectiveButton
-        filteredPerspectives={filteredPerspectives}
-        viewKind={viewKind}
-      />
+        ))}
+        <AddPerspectiveButton
+          filteredPerspectives={filteredPerspectives}
+          viewKind={viewKind}
+        />
+      </div>
+      {/* Right: filter formula bar — always visible when a perspective is active */}
+      {activePerspective && (
+        <FilterFormulaBar
+          key={activePerspective.id}
+          ref={filterEditorRef}
+          filter={activePerspective.filter}
+          perspectiveId={activePerspective.id}
+        />
+      )}
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Scoped perspective tab — CommandScopeProvider + PerspectiveTab together
+// ---------------------------------------------------------------------------
+
+/** Minimal perspective shape used within the tab bar render tree. */
+interface Perspective {
+  id: string;
+  name: string;
+  view: string;
+  filter?: string;
+  group?: string;
+}
+
+/** Props for a perspective tab rendered inside its own CommandScopeProvider. */
+interface ScopedPerspectiveTabProps {
+  perspective: Perspective;
+  /** ID of the currently active perspective, used to compute `isActive`. */
+  activePerspectiveId: string | undefined;
+  /** ID of the perspective currently being renamed, or null if none. */
+  renamingId: string | null;
+  onSelect: () => void;
+  onDoubleClick: () => void;
+  onRenameCommit: (newName: string) => void;
+  onRenameCancel: () => void;
+  /** Called when the filter icon button is clicked — focuses the formula bar. */
+  onFilterFocus: () => void;
+}
+
+/**
+ * Wraps a single perspective tab in its CommandScopeProvider.
+ *
+ * Extracted from the PerspectiveTabBar map to keep the parent component concise.
+ */
+function ScopedPerspectiveTab({
+  perspective,
+  activePerspectiveId,
+  renamingId,
+  onSelect,
+  onDoubleClick,
+  onRenameCommit,
+  onRenameCancel,
+  onFilterFocus,
+}: ScopedPerspectiveTabProps) {
+  return (
+    <CommandScopeProvider
+      commands={[]}
+      moniker={moniker("perspective", perspective.id)}
+    >
+      <PerspectiveTab
+        id={perspective.id}
+        name={perspective.name}
+        filter={perspective.filter}
+        group={perspective.group}
+        isActive={activePerspectiveId === perspective.id}
+        isRenaming={renamingId === perspective.id}
+        onSelect={onSelect}
+        onDoubleClick={onDoubleClick}
+        onRenameCommit={onRenameCommit}
+        onRenameCancel={onRenameCancel}
+        onFilterFocus={onFilterFocus}
+      />
+    </CommandScopeProvider>
   );
 }
 
@@ -168,6 +293,7 @@ function AddPerspectiveButton({
 // useContextMenu sees the perspective scope and builds the correct chain.
 // ---------------------------------------------------------------------------
 
+/** Props for an individual perspective tab button and its inline action buttons. */
 interface PerspectiveTabProps {
   id: string;
   name: string;
@@ -180,21 +306,32 @@ interface PerspectiveTabProps {
   /** Called with the new name text when the rename editor commits. */
   onRenameCommit: (newName: string) => void;
   onRenameCancel: () => void;
+  /** Called when the filter icon button is clicked — focuses the formula bar. */
+  onFilterFocus: () => void;
 }
 
 /**
  * Individual perspective tab that uses the backend command system for
- * context menus. Owns its own filter/group popover state.
+ * context menus. Renders an inline filter focus button for the active tab
+ * that moves keyboard focus into the formula bar (no popover).
  *
  * Must be rendered inside a CommandScopeProvider with a perspective
  * moniker so the scope chain is correct.
  */
 function PerspectiveTab({
-  id, name, filter, group, isActive, isRenaming,
-  onSelect, onDoubleClick, onRenameCommit, onRenameCancel,
+  id,
+  name,
+  filter,
+  group,
+  isActive,
+  isRenaming,
+  onSelect,
+  onDoubleClick,
+  onRenameCommit,
+  onRenameCancel,
+  onFilterFocus,
 }: PerspectiveTabProps) {
   const handleContextMenu = useContextMenu();
-  const [filterOpen, setFilterOpen] = useState(false);
   const [groupOpen, setGroupOpen] = useState(false);
 
   const { getSchema } = useSchema();
@@ -218,12 +355,7 @@ function PerspectiveTab({
         onRenameCancel={onRenameCancel}
       />
       {isActive && (
-        <FilterPopoverButton
-          filter={filter}
-          perspectiveId={id}
-          open={filterOpen}
-          onOpenChange={setFilterOpen}
-        />
+        <FilterFocusButton filter={filter} onFocus={onFilterFocus} />
       )}
       {isActive && (
         <GroupPopoverButton
@@ -238,11 +370,21 @@ function PerspectiveTab({
   );
 }
 
-/** The clickable tab button — shows the perspective name or a CM6 rename editor. */
+/**
+ * The clickable tab button — shows the perspective name or a CM6 rename editor.
+ *
+ * When `isRenaming` is true, renders `InlineRenameEditor` in place of the
+ * name text so the user can type a new name directly in the tab.
+ */
 function TabButton({
-  name, isActive, isRenaming,
-  onSelect, onDoubleClick, onContextMenu,
-  onRenameCommit, onRenameCancel,
+  name,
+  isActive,
+  isRenaming,
+  onSelect,
+  onDoubleClick,
+  onContextMenu,
+  onRenameCommit,
+  onRenameCancel,
 }: {
   name: string;
   isActive: boolean;
@@ -278,6 +420,46 @@ function TabButton({
   );
 }
 
+// ---------------------------------------------------------------------------
+// Rename guard hook and inline rename editor
+// ---------------------------------------------------------------------------
+
+/**
+ * Creates guarded commit and cancel callbacks for inline rename.
+ *
+ * The committedRef prevents double-fire from concurrent blur + Enter events.
+ */
+function useRenameGuards(
+  onCommit: (text: string) => void,
+  onCancel: () => void,
+) {
+  const committedRef = useRef(false);
+
+  const guardedCommit = useCallback(
+    (text: string) => {
+      console.warn("[rename] guardedCommit called", {
+        text,
+        alreadyCommitted: committedRef.current,
+      });
+      if (committedRef.current) return;
+      committedRef.current = true;
+      onCommit(text);
+    },
+    [onCommit],
+  );
+
+  const guardedCancel = useCallback(() => {
+    console.warn("[rename] guardedCancel called", {
+      alreadyCommitted: committedRef.current,
+    });
+    if (committedRef.current) return;
+    committedRef.current = true;
+    onCancel();
+  }, [onCancel]);
+
+  return { guardedCommit, guardedCancel };
+}
+
 /**
  * Inline CM6 rename editor — uses TextEditor with singleLine mode.
  *
@@ -296,25 +478,7 @@ function InlineRenameEditor({
   onCancel: () => void;
 }) {
   const latestTextRef = useRef(name);
-  const committedRef = useRef(false);
-
-  const guardedCommit = useCallback(
-    (text: string) => {
-      console.warn("[rename] guardedCommit called", { text, alreadyCommitted: committedRef.current });
-      if (committedRef.current) return;
-      committedRef.current = true;
-      onCommit(text);
-    },
-    [onCommit],
-  );
-
-  const guardedCancel = useCallback(() => {
-    console.warn("[rename] guardedCancel called", { alreadyCommitted: committedRef.current });
-    if (committedRef.current) return;
-    committedRef.current = true;
-    onCancel();
-  }, [onCancel]);
-
+  const { guardedCommit, guardedCancel } = useRenameGuards(onCommit, onCancel);
   const trackText = useCallback((text: string) => {
     latestTextRef.current = text;
   }, []);
@@ -341,58 +505,110 @@ function InlineRenameEditor({
 }
 
 // ---------------------------------------------------------------------------
-// Filter and group popover buttons
+// Filter focus button — clicking moves focus into the formula bar (no popover)
 // ---------------------------------------------------------------------------
 
-/** Filter icon button with popover for the active perspective. */
-function FilterPopoverButton({
+/**
+ * Filter icon button on the active tab.
+ *
+ * Does NOT open a popover. Instead, clicking calls `onFocus` which focuses
+ * the formula bar CM6 editor to the right of the tabs.
+ */
+function FilterFocusButton({
   filter,
-  perspectiveId,
-  open,
-  onOpenChange,
+  onFocus,
 }: {
   filter?: string;
-  perspectiveId: string;
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
+  onFocus: () => void;
 }) {
   const hasFilter = Boolean(filter);
   return (
-    <Popover open={open} onOpenChange={onOpenChange}>
-      <PopoverTrigger asChild>
-        <button
-          aria-label="Filter"
-          className={cn(
-            "inline-flex items-center justify-center h-5 w-5 rounded transition-colors -ml-1",
-            hasFilter
-              ? "text-primary"
-              : "text-muted-foreground/50 hover:text-muted-foreground",
-          )}
-          onClick={(e) => e.stopPropagation()}
-        >
-          <Filter
-            className="h-3 w-3"
-            fill={hasFilter ? "currentColor" : "none"}
-          />
-        </button>
-      </PopoverTrigger>
-      <PopoverContent
-        align="start"
-        sideOffset={4}
-        className="p-3 w-auto"
-        onOpenAutoFocus={(e) => e.preventDefault()}
-      >
-        <FilterEditor
-          filter={filter ?? ""}
-          perspectiveId={perspectiveId}
-          onClose={() => onOpenChange(false)}
-        />
-      </PopoverContent>
-    </Popover>
+    <button
+      aria-label="Filter"
+      className={cn(
+        "inline-flex items-center justify-center h-5 w-5 rounded transition-colors -ml-1",
+        hasFilter
+          ? "text-primary"
+          : "text-muted-foreground/50 hover:text-muted-foreground",
+      )}
+      onClick={(e) => {
+        e.stopPropagation();
+        onFocus();
+      }}
+    >
+      <Filter className="h-3 w-3" fill={hasFilter ? "currentColor" : "none"} />
+    </button>
   );
 }
 
-/** Group-by icon button with popover for the active perspective. */
+// ---------------------------------------------------------------------------
+// Filter formula bar — always-visible CM6 filter editor in the right region
+// ---------------------------------------------------------------------------
+
+/** Props for the always-visible filter formula bar in the tab bar's right region. */
+interface FilterFormulaBarProps {
+  /** Current filter expression for the active perspective. */
+  filter?: string;
+  /** Perspective ID to dispatch filter commands against. */
+  perspectiveId: string;
+}
+
+/**
+ * Excel-style filter formula bar embedded in the right side of the tab bar.
+ *
+ * Always visible when a perspective is active. Contains a Filter icon and
+ * a borderless CM6 filter editor with placeholder text. Exposes `focus()`
+ * via forwardRef so the parent can focus the editor when the filter button
+ * is clicked.
+ *
+ * Uses `key={perspectiveId}` on the parent to remount when switching
+ * perspectives, ensuring the CM6 initial value reflects the new perspective.
+ */
+const FilterFormulaBar = forwardRef<FilterEditorHandle, FilterFormulaBarProps>(
+  function FilterFormulaBar({ filter, perspectiveId }, ref) {
+    const editorRef = useRef<FilterEditorHandle>(null);
+
+    // Forward focus to the inner editor handle so parents can call focus().
+    useImperativeHandle(
+      ref,
+      () => ({
+        focus() {
+          editorRef.current?.focus();
+        },
+      }),
+      [],
+    );
+
+    return (
+      <div
+        data-testid="filter-formula-bar"
+        className="flex items-center gap-1.5 flex-1 min-w-0 border-l border-border/50 pl-2 ml-1 cursor-text"
+        onClick={() => editorRef.current?.focus()}
+      >
+        <Filter
+          className="h-3.5 w-3.5 shrink-0 text-muted-foreground/60"
+          aria-hidden="true"
+        />
+        <FilterEditor
+          ref={editorRef}
+          filter={filter ?? ""}
+          perspectiveId={perspectiveId}
+        />
+      </div>
+    );
+  },
+);
+
+// ---------------------------------------------------------------------------
+// Group popover button — unchanged from original
+// ---------------------------------------------------------------------------
+
+/**
+ * Group-by icon button with popover for the active perspective.
+ *
+ * Opens a `GroupSelector` in a Radix Popover anchored below the button.
+ * Highlighted in primary color when a group is active on the perspective.
+ */
 function GroupPopoverButton({
   group,
   perspectiveId,

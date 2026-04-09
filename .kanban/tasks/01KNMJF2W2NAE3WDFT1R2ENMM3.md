@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: 7f8180
+position_column: done
+position_ordinal: ffffffffffffffffffffffa080
 title: Make FilterEditor autosave and match field editing vim/keymap behavior
 ---
 ## What

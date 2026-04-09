@@ -31,14 +31,19 @@ vi.mock("@tauri-apps/plugin-log", () => ({
 const mockSetActivePerspectiveId = vi.fn();
 const mockRefresh = vi.fn(() => Promise.resolve());
 
+/** Shape of a perspective in the mock context — includes optional filter/group. */
+type MockPerspective = {
+  id: string;
+  name: string;
+  view: string;
+  filter?: string;
+  group?: string;
+};
+
 // Mock the perspectives context so we can control perspectives list.
 let mockPerspectivesValue = {
-  perspectives: [] as Array<{ id: string; name: string; view: string }>,
-  activePerspective: null as {
-    id: string;
-    name: string;
-    view: string;
-  } | null,
+  perspectives: [] as MockPerspective[],
+  activePerspective: null as MockPerspective | null,
   setActivePerspectiveId: mockSetActivePerspectiveId,
   refresh: mockRefresh,
 };
@@ -63,6 +68,11 @@ vi.mock("@/lib/views-context", () => ({
 const mockContextMenuHandler = vi.fn();
 vi.mock("@/lib/context-menu", () => ({
   useContextMenu: () => mockContextMenuHandler,
+}));
+
+// Mock useEntityStore — needed by useMentionExtensions (used in FilterEditor).
+vi.mock("@/lib/entity-store-context", () => ({
+  useEntityStore: () => ({ getEntities: () => [] }),
 }));
 
 // Mock useSchema — returns empty schema by default.
@@ -354,7 +364,10 @@ describe("PerspectiveTabBar", () => {
   }
 
   /** Replace the CM6 document text and wait for onChange to propagate. */
-  async function replaceDocText(view: import("@codemirror/view").EditorView, text: string) {
+  async function replaceDocText(
+    view: import("@codemirror/view").EditorView,
+    text: string,
+  ) {
     await act(async () => {
       view.dispatch({
         changes: { from: 0, to: view.state.doc.length, insert: text },
@@ -396,8 +409,12 @@ describe("PerspectiveTabBar", () => {
     const cmContent = container.querySelector(".cm-content") as HTMLElement;
     await pressKey(cmContent, "Enter");
 
-    expect(container.querySelector(".cm-editor")).toBeNull();
-    expect(mockInvoke).toHaveBeenCalledWith("dispatch_command", renameCall("New Name"));
+    // Rename editor is gone; only the formula bar's CM6 editor remains
+    expect(container.querySelectorAll(".cm-editor").length).toBe(1);
+    expect(mockInvoke).toHaveBeenCalledWith(
+      "dispatch_command",
+      renameCall("New Name"),
+    );
   });
 
   it("CUA rename: Escape cancels without dispatching rename", async () => {
@@ -408,8 +425,12 @@ describe("PerspectiveTabBar", () => {
     const cmContent = container.querySelector(".cm-content") as HTMLElement;
     await pressKey(cmContent, "Escape");
 
-    expect(container.querySelector(".cm-editor")).toBeNull();
-    expect(mockInvoke).not.toHaveBeenCalledWith("dispatch_command", renameCall("New Name"));
+    // Rename editor is gone; only the formula bar's CM6 editor remains
+    expect(container.querySelectorAll(".cm-editor").length).toBe(1);
+    expect(mockInvoke).not.toHaveBeenCalledWith(
+      "dispatch_command",
+      renameCall("New Name"),
+    );
   });
 
   it("vim rename: Enter after text change dispatches perspective.rename", async () => {
@@ -420,8 +441,12 @@ describe("PerspectiveTabBar", () => {
     const cmContent = container.querySelector(".cm-content") as HTMLElement;
     await pressKey(cmContent, "Enter");
 
-    expect(container.querySelector(".cm-editor")).toBeNull();
-    expect(mockInvoke).toHaveBeenCalledWith("dispatch_command", renameCall("New Name"));
+    // Rename editor is gone; only the formula bar's CM6 editor remains
+    expect(container.querySelectorAll(".cm-editor").length).toBe(1);
+    expect(mockInvoke).toHaveBeenCalledWith(
+      "dispatch_command",
+      renameCall("New Name"),
+    );
   });
 
   it("vim rename: Escape after text change commits (dispatches rename)", async () => {
@@ -433,8 +458,12 @@ describe("PerspectiveTabBar", () => {
     const cmContent = container.querySelector(".cm-content") as HTMLElement;
     await pressKey(cmContent, "Escape");
 
-    expect(container.querySelector(".cm-editor")).toBeNull();
-    expect(mockInvoke).toHaveBeenCalledWith("dispatch_command", renameCall("New Name"));
+    // Rename editor is gone; only the formula bar's CM6 editor remains
+    expect(container.querySelectorAll(".cm-editor").length).toBe(1);
+    expect(mockInvoke).toHaveBeenCalledWith(
+      "dispatch_command",
+      renameCall("New Name"),
+    );
   });
 
   it("emacs rename: Enter after text change dispatches perspective.rename", async () => {
@@ -445,8 +474,12 @@ describe("PerspectiveTabBar", () => {
     const cmContent = container.querySelector(".cm-content") as HTMLElement;
     await pressKey(cmContent, "Enter");
 
-    expect(container.querySelector(".cm-editor")).toBeNull();
-    expect(mockInvoke).toHaveBeenCalledWith("dispatch_command", renameCall("New Name"));
+    // Rename editor is gone; only the formula bar's CM6 editor remains
+    expect(container.querySelectorAll(".cm-editor").length).toBe(1);
+    expect(mockInvoke).toHaveBeenCalledWith(
+      "dispatch_command",
+      renameCall("New Name"),
+    );
   });
 
   it("emacs rename: Escape cancels without dispatching rename", async () => {
@@ -457,7 +490,146 @@ describe("PerspectiveTabBar", () => {
     const cmContent = container.querySelector(".cm-content") as HTMLElement;
     await pressKey(cmContent, "Escape");
 
-    expect(container.querySelector(".cm-editor")).toBeNull();
-    expect(mockInvoke).not.toHaveBeenCalledWith("dispatch_command", renameCall("New Name"));
+    // Rename editor is gone; only the formula bar's CM6 editor remains
+    expect(container.querySelectorAll(".cm-editor").length).toBe(1);
+    expect(mockInvoke).not.toHaveBeenCalledWith(
+      "dispatch_command",
+      renameCall("New Name"),
+    );
+  });
+
+  // =========================================================================
+  // Filter formula bar — always-visible CM6 editor in the right of the tab bar
+  // =========================================================================
+
+  describe("Filter formula bar", () => {
+    it("renders filter editor inline (not in a popover) when a perspective is active", () => {
+      mockPerspectivesValue = {
+        ...mockPerspectivesValue,
+        perspectives: [{ id: "p1", name: "Sprint View", view: "board" }],
+        activePerspective: { id: "p1", name: "Sprint View", view: "board" },
+      };
+
+      renderTabBar();
+
+      // FilterEditor should be present without clicking anything
+      expect(screen.getByTestId("filter-editor")).toBeDefined();
+    });
+
+    it("does not render filter editor when no perspective is active", () => {
+      mockPerspectivesValue = {
+        ...mockPerspectivesValue,
+        perspectives: [{ id: "p1", name: "Sprint View", view: "board" }],
+        activePerspective: null,
+      };
+
+      renderTabBar();
+
+      expect(screen.queryByTestId("filter-editor")).toBeNull();
+    });
+
+    it("shows cm-placeholder in formula bar when filter is empty", () => {
+      mockPerspectivesValue = {
+        ...mockPerspectivesValue,
+        perspectives: [{ id: "p1", name: "Sprint View", view: "board" }],
+        activePerspective: { id: "p1", name: "Sprint View", view: "board" },
+      };
+
+      const { container } = renderTabBar();
+
+      const placeholder = container.querySelector(".cm-placeholder");
+      expect(placeholder).toBeTruthy();
+    });
+
+    it("filter icon button is highlighted (text-primary) when active perspective has a filter", () => {
+      mockPerspectivesValue = {
+        ...mockPerspectivesValue,
+        perspectives: [
+          { id: "p1", name: "Sprint View", view: "board", filter: "#bug" },
+        ],
+        activePerspective: {
+          id: "p1",
+          name: "Sprint View",
+          view: "board",
+          filter: "#bug",
+        },
+      };
+
+      renderTabBar();
+
+      // Use exact match to distinguish "Filter" (tab icon) from "Clear filter" (formula bar)
+      const filterButton = screen.getByRole("button", { name: "Filter" });
+      expect(filterButton.className).toContain("text-primary");
+    });
+
+    it("filter button click does not open a popover", () => {
+      mockPerspectivesValue = {
+        ...mockPerspectivesValue,
+        perspectives: [{ id: "p1", name: "Sprint View", view: "board" }],
+        activePerspective: { id: "p1", name: "Sprint View", view: "board" },
+      };
+
+      renderTabBar();
+
+      const filterButton = screen.getByRole("button", { name: /filter/i });
+      fireEvent.click(filterButton);
+
+      // No Radix popover/dialog should appear in the DOM
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+
+    it("clicking the filter button on the active tab focuses the formula bar CM6 editor", () => {
+      mockPerspectivesValue = {
+        ...mockPerspectivesValue,
+        perspectives: [{ id: "p1", name: "Sprint View", view: "board" }],
+        activePerspective: { id: "p1", name: "Sprint View", view: "board" },
+      };
+
+      const { container } = renderTabBar();
+
+      const filterButton = screen.getByRole("button", { name: "Filter" });
+      fireEvent.click(filterButton);
+
+      // After clicking filter button, the CM6 content area should have focus
+      const cmContent = container.querySelector(".cm-content") as HTMLElement;
+      expect(cmContent).toBeTruthy();
+      expect(document.activeElement).toBe(cmContent);
+    });
+
+    it("clicking the formula bar container area focuses the CM6 editor", () => {
+      mockPerspectivesValue = {
+        ...mockPerspectivesValue,
+        perspectives: [{ id: "p1", name: "Sprint View", view: "board" }],
+        activePerspective: { id: "p1", name: "Sprint View", view: "board" },
+      };
+
+      const { container } = renderTabBar();
+
+      // Click the formula bar container (outside the CM editor itself)
+      const formulaBar = container.querySelector(
+        '[data-testid="filter-formula-bar"]',
+      ) as HTMLElement;
+      expect(formulaBar).toBeTruthy();
+      fireEvent.click(formulaBar);
+
+      const cmContent = container.querySelector(".cm-content") as HTMLElement;
+      expect(document.activeElement).toBe(cmContent);
+    });
+
+    it("formula bar container has cursor-text class to signal it is editable", () => {
+      mockPerspectivesValue = {
+        ...mockPerspectivesValue,
+        perspectives: [{ id: "p1", name: "Sprint View", view: "board" }],
+        activePerspective: { id: "p1", name: "Sprint View", view: "board" },
+      };
+
+      const { container } = renderTabBar();
+
+      const formulaBar = container.querySelector(
+        '[data-testid="filter-formula-bar"]',
+      );
+      expect(formulaBar).toBeTruthy();
+      expect(formulaBar?.className).toContain("cursor-text");
+    });
   });
 });

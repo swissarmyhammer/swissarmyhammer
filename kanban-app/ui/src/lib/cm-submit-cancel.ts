@@ -14,6 +14,7 @@
 
 import { keymap, ViewPlugin } from "@codemirror/view";
 import { Prec, type Extension } from "@codemirror/state";
+import { completionStatus } from "@codemirror/autocomplete";
 import { getCM } from "@replit/codemirror-vim";
 
 /** Generic ref type — avoids importing React in this utility. */
@@ -105,6 +106,8 @@ function buildVimEnterExtension(
           {
             key: "Enter",
             run: (view) => {
+              // Yield to autocomplete so Enter accepts the selected completion.
+              if (completionStatus(view.state) === "active") return false;
               const text = view.state.doc.toString();
               if (text.length > 0) onSubmitRef.current?.();
               return true;
@@ -121,6 +124,8 @@ function buildVimEnterExtension(
         if (event.key !== "Enter") return;
         const cm = getCM(view);
         if (cm?.state?.vim?.insertMode) return;
+        // Yield to autocomplete so Enter accepts the selected completion.
+        if (completionStatus(view.state) === "active") return;
         const text = view.state.doc.toString();
         if (text.length > 0) {
           event.preventDefault();
@@ -129,7 +134,11 @@ function buildVimEnterExtension(
         }
       };
       view.dom.addEventListener("keydown", handler, true);
-      return { destroy() { view.dom.removeEventListener("keydown", handler, true); } };
+      return {
+        destroy() {
+          view.dom.removeEventListener("keydown", handler, true);
+        },
+      };
     }),
   ];
 }
@@ -185,13 +194,23 @@ function buildCuaExtensions(
       keymap.of([
         {
           key: "Escape",
-          run: () => { onCancelRef.current?.(); return true; },
+          run: () => {
+            onCancelRef.current?.();
+            return true;
+          },
         },
         ...(singleLine
-          ? [{
-              key: "Enter",
-              run: () => { onSubmitRef.current?.(); return true; },
-            }]
+          ? [
+              {
+                key: "Enter",
+                run: (view: import("@codemirror/view").EditorView) => {
+                  // Yield to autocomplete so Enter accepts the selected completion.
+                  if (completionStatus(view.state) === "active") return false;
+                  onSubmitRef.current?.();
+                  return true;
+                },
+              },
+            ]
           : []),
       ]),
     ),
