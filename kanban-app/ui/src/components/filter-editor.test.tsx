@@ -186,6 +186,28 @@ describe("FilterEditor", () => {
       );
     });
 
+    it("dispatches filter for implicit AND expression (#paper #READY)", async () => {
+      const { container } = render(
+        <FilterEditor filter="" perspectiveId="p1" />,
+      );
+      const view = await getEditorView(container);
+
+      await act(async () => {
+        view.dispatch({
+          changes: { from: 0, to: view.state.doc.length, insert: "#paper #READY" },
+        });
+        await new Promise((r) => setTimeout(r, 400));
+      });
+
+      expect(mockInvoke).toHaveBeenCalledWith(
+        "dispatch_command",
+        expect.objectContaining({
+          cmd: "perspective.filter",
+          args: { filter: "#paper #READY", perspective_id: "p1" },
+        }),
+      );
+    });
+
     it("vim Escape from insert mode dispatches filter immediately (save-in-place)", async () => {
       mockKeymapMode = "vim";
       const { container } = render(

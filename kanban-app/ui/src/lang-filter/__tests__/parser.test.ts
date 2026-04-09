@@ -151,4 +151,12 @@ describe("filter grammar parser", () => {
     expect(hasError("(#a || #b) && #c")).toBe(false);
     expect(hasError("not #done and @will or #bug")).toBe(false);
   });
+
+  // ── Implicit AND ────────────────────────────────────────────────
+
+  it("implicit AND: adjacent atoms without operator parse without errors", () => {
+    expect(hasError("#paper #READY")).toBe(false);
+    expect(hasError("#a #b #c")).toBe(false);
+    expect(hasError("#bug @alice")).toBe(false);
+  });
 });
