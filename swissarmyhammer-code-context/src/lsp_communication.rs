@@ -3,6 +3,7 @@
 //! Handles JSON-RPC protocol with LSP server processes.
 //! Sends requests for symbols and collects results for database persistence.
 
+use crate::lsp_indexer::FlatSymbol;
 use rusqlite::Connection;
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Write};
@@ -186,22 +187,32 @@ impl LspJsonRpcClient {
     /// arrives within that window an `LspError` is returned instead of
     /// blocking indefinitely.
     pub fn send_request(&mut self, method: &str, params: Value) -> Result<Value, CodeContextError> {
-        // Format JSON-RPC 2.0 request
+        let expected_id = self.request_id;
+        self.request_id += 1;
+
+        self.write_jsonrpc_request(method, params, expected_id)?;
+        debug!("Sent LSP request: {} (id={})", method, expected_id);
+
+        self.read_matching_response(method, expected_id)
+    }
+
+    /// Format and write a JSON-RPC 2.0 request with Content-Length framing.
+    fn write_jsonrpc_request(
+        &mut self,
+        method: &str,
+        params: Value,
+        id: u32,
+    ) -> Result<(), CodeContextError> {
         let request = json!({
             "jsonrpc": "2.0",
             "method": method,
             "params": params,
-            "id": self.request_id,
+            "id": id,
         });
 
-        let expected_id = self.request_id;
-        self.request_id += 1;
-
-        // Encode with Content-Length header
         let json_str = request.to_string();
         let msg = format!("Content-Length: {}\r\n\r\n{}", json_str.len(), json_str);
 
-        // Write request
         self.stdin
             .write_all(msg.as_bytes())
             .map_err(|e| CodeContextError::LspError(format!("write failed: {}", e)))?;
@@ -209,15 +220,21 @@ impl LspJsonRpcClient {
             .flush()
             .map_err(|e| CodeContextError::LspError(format!("flush failed: {}", e)))?;
 
-        debug!("Sent LSP request: {} (id={})", method, expected_id);
+        Ok(())
+    }
 
-        // Read response — loop to skip notifications (no "id" field).
-        // Each iteration polls the fd for readability before attempting a
-        // blocking read, enforcing LSP_REQUEST_TIMEOUT across the entire loop.
+    /// Read JSON-RPC messages until one with a matching `id` arrives.
+    ///
+    /// Notifications (no `id`) and responses with mismatched IDs are skipped.
+    /// The entire read loop is bounded by [`LSP_REQUEST_TIMEOUT`].
+    fn read_matching_response(
+        &mut self,
+        method: &str,
+        expected_id: u32,
+    ) -> Result<Value, CodeContextError> {
         let deadline = Instant::now() + LSP_REQUEST_TIMEOUT;
 
         loop {
-            // Wait for data to be available, respecting the deadline
             self.wait_for_readable(deadline).map_err(|_| {
                 CodeContextError::LspError(format!(
                     "LSP request '{}' (id={}) timed out after {}s",
@@ -229,34 +246,9 @@ impl LspJsonRpcClient {
 
             let response = read_jsonrpc_response(&mut self.reader)?;
 
-            // Notifications have no "id" field — skip them
-            if response.get("id").is_none() {
-                trace!(
-                    "Skipping LSP notification: {}",
-                    response
-                        .get("method")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("unknown")
-                );
-                continue;
-            }
-
-            // Verify response ID matches
-            if let Some(id) = response.get("id") {
-                if id.as_u64() == Some(expected_id as u64) {
-                    return Ok(response);
-                }
-                // Server-initiated requests or stale responses — skip and keep reading
-                warn!(
-                    "Unexpected response id: expected {}, got {} (method: {}). Skipping.",
-                    expected_id,
-                    id,
-                    response
-                        .get("method")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("none")
-                );
-                continue;
+            match classify_response(&response, expected_id) {
+                ResponseMatch::Match => return Ok(response),
+                ResponseMatch::Notification | ResponseMatch::Mismatch => continue,
             }
         }
     }
@@ -594,62 +586,13 @@ impl LspJsonRpcClient {
 
         let mut all_edges = Vec::new();
 
-        // For each callable symbol, prepare call hierarchy and get outgoing calls
         for sym in &flat {
             use lsp_types::SymbolKind;
             match sym.kind {
                 SymbolKind::FUNCTION | SymbolKind::METHOD | SymbolKind::CONSTRUCTOR => {}
                 _ => continue,
             }
-
-            // Prepare call hierarchy at the symbol's position
-            let prepare_params = json!({
-                "textDocument": { "uri": &uri },
-                "position": { "line": sym.start_line, "character": sym.start_char }
-            });
-
-            let prepare_response =
-                match self.send_request("textDocument/prepareCallHierarchy", prepare_params) {
-                    Ok(r) => r,
-                    Err(_) => continue, // Server may not support call hierarchy
-                };
-
-            let items = parse_call_hierarchy_items(&prepare_response)?;
-            if items.is_empty() {
-                continue;
-            }
-
-            // Get outgoing calls for the first (primary) item
-            let outgoing_params = json!({
-                "item": serde_json::to_value(&items[0])
-                    .map_err(|e| CodeContextError::LspError(format!("serialize item: {}", e)))?
-            });
-
-            let outgoing_response =
-                match self.send_request("callHierarchy/outgoingCalls", outgoing_params) {
-                    Ok(r) => r,
-                    Err(_) => continue,
-                };
-
-            let outgoing_calls = parse_outgoing_calls(&outgoing_response)?;
-
-            for call in &outgoing_calls {
-                let callee_file = uri_to_relative_path(call.to.uri.as_str(), file_path);
-                let callee_qpath = call.to.name.clone();
-                let callee_id = format!("lsp:{}:{}", callee_file, callee_qpath);
-
-                let from_ranges_json =
-                    serde_json::to_string(&call.from_ranges).unwrap_or_else(|_| "[]".to_string());
-
-                all_edges.push(CallEdge {
-                    caller_id: sym.id.clone(),
-                    callee_id,
-                    caller_file: relative_path.to_string(),
-                    callee_file,
-                    from_ranges: from_ranges_json,
-                    source: "lsp".to_string(),
-                });
-            }
+            self.collect_edges_for_symbol(&uri, sym, file_path, relative_path, &mut all_edges)?;
         }
 
         debug!(
@@ -672,6 +615,61 @@ impl LspJsonRpcClient {
             return Ok(0);
         }
         write_edges(conn, relative_path, &edges)
+    }
+
+    /// Collect outgoing call edges for a single callable symbol.
+    fn collect_edges_for_symbol(
+        &mut self,
+        uri: &str,
+        sym: &FlatSymbol,
+        file_path: &Path,
+        relative_path: &str,
+        edges: &mut Vec<CallEdge>,
+    ) -> Result<(), CodeContextError> {
+        let prepare_params = json!({
+            "textDocument": { "uri": uri },
+            "position": { "line": sym.start_line, "character": sym.start_char }
+        });
+
+        let prepare_response =
+            match self.send_request("textDocument/prepareCallHierarchy", prepare_params) {
+                Ok(r) => r,
+                Err(_) => return Ok(()),
+            };
+
+        let items = parse_call_hierarchy_items(&prepare_response)?;
+        if items.is_empty() {
+            return Ok(());
+        }
+
+        let outgoing_params = json!({
+            "item": serde_json::to_value(&items[0])
+                .map_err(|e| CodeContextError::LspError(format!("serialize item: {}", e)))?
+        });
+
+        let outgoing_response =
+            match self.send_request("callHierarchy/outgoingCalls", outgoing_params) {
+                Ok(r) => r,
+                Err(_) => return Ok(()),
+            };
+
+        for call in &parse_outgoing_calls(&outgoing_response)? {
+            let callee_file = uri_to_relative_path(call.to.uri.as_str(), file_path);
+            let callee_id = format!("lsp:{}:{}", callee_file, call.to.name);
+            let from_ranges_json =
+                serde_json::to_string(&call.from_ranges).unwrap_or_else(|_| "[]".to_string());
+
+            edges.push(CallEdge {
+                caller_id: sym.id.clone(),
+                callee_id,
+                caller_file: relative_path.to_string(),
+                callee_file,
+                from_ranges: from_ranges_json,
+                source: "lsp".to_string(),
+            });
+        }
+
+        Ok(())
     }
 }
 
@@ -780,6 +778,45 @@ fn poll_fd(fd: std::os::unix::io::RawFd, timeout_ms: i32) -> i32 {
     // non-negative timeout. The fd is owned by ChildStdout which outlives
     // this call.
     unsafe { poll(&mut pfd as *mut PollFd, 1, timeout_ms) }
+}
+
+/// Classification of an incoming JSON-RPC message relative to an expected ID.
+enum ResponseMatch {
+    /// The response `id` matches the expected ID.
+    Match,
+    /// A notification (no `id` field) — should be skipped.
+    Notification,
+    /// A response with a mismatched `id` — should be skipped.
+    Mismatch,
+}
+
+/// Classify a JSON-RPC response as matching, a notification, or mismatched.
+fn classify_response(response: &Value, expected_id: u32) -> ResponseMatch {
+    match response.get("id") {
+        None => {
+            trace!(
+                "Skipping LSP notification: {}",
+                response
+                    .get("method")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown")
+            );
+            ResponseMatch::Notification
+        }
+        Some(id) if id.as_u64() == Some(expected_id as u64) => ResponseMatch::Match,
+        Some(id) => {
+            warn!(
+                "Unexpected response id: expected {}, got {} (method: {}). Skipping.",
+                expected_id,
+                id,
+                response
+                    .get("method")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("none")
+            );
+            ResponseMatch::Mismatch
+        }
+    }
 }
 
 /// Read a single JSON-RPC message from a reader using Content-Length framing.

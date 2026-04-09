@@ -120,6 +120,40 @@ fn run_lsp_indexing_loop(
     shutdown: &AtomicBool,
 ) -> Result<(), CodeContextError> {
     let extensions = lsp_supported_extensions(server_name);
+    log_worker_startup(server_name, workspace_root, extensions);
+
+    let mut total_indexed = 0u64;
+
+    loop {
+        if shutdown.load(Ordering::Relaxed) {
+            info!(server = %server_name, "LSP indexing worker shutting down ({} files indexed)", total_indexed);
+            return Ok(());
+        }
+
+        let dirty_files = query_lsp_dirty_batch(db, config, extensions)?;
+        if dirty_files.is_empty() {
+            thread::sleep(config.idle_sleep);
+            continue;
+        }
+
+        let Some(mut guard) = acquire_lsp_client(client, config, server_name) else {
+            continue;
+        };
+        let lsp_client = guard.as_mut().unwrap();
+
+        info!(server = %server_name, "LSP indexing: processing {} dirty files", dirty_files.len());
+        total_indexed += process_lsp_batch(lsp_client, db, workspace_root, &dirty_files);
+
+        info!(
+            server = %server_name,
+            "LSP indexing: batch complete, {} files indexed so far",
+            total_indexed
+        );
+    }
+}
+
+/// Log worker startup with extension information.
+fn log_worker_startup(server_name: &str, workspace_root: &Path, extensions: &[&str]) {
     info!(
         server = %server_name,
         extensions = ?extensions,
@@ -135,81 +169,83 @@ fn run_lsp_indexing_loop(
             server_name
         );
     }
+}
 
-    let mut total_indexed = 0u64;
+/// Query a batch of files that need LSP indexing.
+fn query_lsp_dirty_batch(
+    db: &SharedDb,
+    config: &LspWorkerConfig,
+    extensions: &[&str],
+) -> Result<Vec<String>, CodeContextError> {
+    let conn = db.lock().unwrap_or_else(|p| p.into_inner());
+    query_lsp_dirty_files(&conn, config.batch_size, extensions)
+}
 
-    loop {
-        if shutdown.load(Ordering::Relaxed) {
-            info!(server = %server_name, "LSP indexing worker shutting down ({} files indexed)", total_indexed);
-            return Ok(());
+/// Attempt to acquire the shared LSP client.
+///
+/// Returns `Some(guard)` when the client is available and the inner `Option`
+/// is `Some`. Returns `None` (after sleeping) when the client is absent,
+/// signaling the caller to retry on the next loop iteration.
+fn acquire_lsp_client<'a>(
+    client: &'a SharedLspClient,
+    config: &LspWorkerConfig,
+    server_name: &str,
+) -> Option<std::sync::MutexGuard<'a, Option<LspJsonRpcClient>>> {
+    let guard = match client.lock() {
+        Ok(g) => g,
+        Err(poisoned) => {
+            warn!(server = %server_name, "LSP client mutex poisoned, recovering");
+            poisoned.into_inner()
         }
+    };
 
-        // 1. Query dirty files filtered to extensions this server handles
-        let dirty_files = {
-            let conn = db.lock().unwrap_or_else(|p| p.into_inner());
-            query_lsp_dirty_files(&conn, config.batch_size, extensions)?
-        };
+    if guard.is_none() {
+        drop(guard);
+        debug!(server = %server_name, "LSP client not available, sleeping");
+        thread::sleep(config.client_unavailable_sleep);
+        return None;
+    }
 
-        if dirty_files.is_empty() {
-            thread::sleep(config.idle_sleep);
-            continue;
-        }
+    Some(guard)
+}
 
-        // 2. Try to get the client
-        let mut guard = match client.lock() {
-            Ok(g) => g,
-            Err(poisoned) => {
-                warn!(server = %server_name, "LSP client mutex poisoned, recovering");
-                poisoned.into_inner()
+/// Process a batch of files through the LSP client, returning the count indexed.
+///
+/// Files that fail are still marked as indexed to prevent infinite retry loops.
+fn process_lsp_batch(
+    lsp_client: &mut LspJsonRpcClient,
+    db: &SharedDb,
+    workspace_root: &Path,
+    dirty_files: &[String],
+) -> u64 {
+    let mut count = 0u64;
+
+    for relative_path in dirty_files {
+        let full_path = workspace_root.join(relative_path);
+
+        match index_single_file(lsp_client, db, &full_path, relative_path) {
+            Ok(symbol_count) => {
+                count += 1;
+                debug!(
+                    "LSP indexed {} ({} symbols, {} total in batch)",
+                    relative_path, symbol_count, count
+                );
             }
-        };
-
-        let lsp_client = match guard.as_mut() {
-            Some(c) => c,
-            None => {
-                // Client not available (daemon not started or restarting)
-                drop(guard);
-                debug!(server = %server_name, "LSP client not available, sleeping");
-                thread::sleep(config.client_unavailable_sleep);
-                continue;
-            }
-        };
-
-        info!(server = %server_name, "LSP indexing: processing {} dirty files", dirty_files.len());
-
-        // 3. Process each file sequentially (LSP is single-threaded I/O)
-        for relative_path in &dirty_files {
-            let full_path = workspace_root.join(relative_path);
-
-            match index_single_file(lsp_client, db, &full_path, relative_path) {
-                Ok(symbol_count) => {
-                    total_indexed += 1;
-                    debug!(
-                        "LSP indexed {} ({} symbols, {} total files)",
-                        relative_path, symbol_count, total_indexed
+            Err(e) => {
+                warn!("LSP indexing failed for {}: {}", relative_path, e);
+                let conn = db.lock().unwrap_or_else(|p| p.into_inner());
+                if let Err(mark_err) = mark_lsp_indexed(&conn, relative_path) {
+                    warn!(
+                        "Failed to mark {} as lsp_indexed after error: {}",
+                        relative_path, mark_err
                     );
                 }
-                Err(e) => {
-                    warn!("LSP indexing failed for {}: {}", relative_path, e);
-                    // Still mark as indexed to prevent infinite retry
-                    let conn = db.lock().unwrap_or_else(|p| p.into_inner());
-                    if let Err(mark_err) = mark_lsp_indexed(&conn, relative_path) {
-                        warn!(
-                            "Failed to mark {} as lsp_indexed after error: {}",
-                            relative_path, mark_err
-                        );
-                    }
-                    total_indexed += 1;
-                }
+                count += 1;
             }
         }
-
-        info!(
-            server = %server_name,
-            "LSP indexing: batch complete, {} files indexed so far",
-            total_indexed
-        );
     }
+
+    count
 }
 
 /// Index a single file via LSP: didOpen, documentSymbol, persist, mark indexed.

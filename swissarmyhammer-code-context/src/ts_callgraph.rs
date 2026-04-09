@@ -260,7 +260,18 @@ pub fn generate_ts_call_edges(
         ensure_ts_symbols(conn, cf)?;
     }
 
-    // For each call site, find the enclosing chunk's symbol_path to use as the caller.
+    let edges = map_call_sites_to_edges(conn, file_path, &call_sites, &resolved)?;
+    Ok(edges)
+}
+
+/// Map each call site to at most one [`CallEdge`] by finding the enclosing
+/// chunk (caller) and the first matching resolved callee.
+fn map_call_sites_to_edges(
+    conn: &Connection,
+    file_path: &str,
+    call_sites: &[CallSite],
+    resolved: &[ResolvedCallee],
+) -> Result<Vec<CallEdge>, CodeContextError> {
     let mut caller_stmt = conn.prepare_cached(
         "SELECT symbol_path FROM ts_chunks
          WHERE file_path = ?1 AND symbol_path IS NOT NULL
@@ -270,53 +281,57 @@ pub fn generate_ts_call_edges(
     )?;
 
     let mut edges = Vec::new();
-
-    for site in &call_sites {
-        // Find the tightest enclosing chunk for this call site.
-        let caller_symbol: Option<String> = caller_stmt
-            .query_row(
-                rusqlite::params![file_path, site.start_byte as i64, site.end_byte as i64],
-                |row| row.get(0),
-            )
-            .ok();
-
-        let caller_symbol = match caller_symbol {
-            Some(s) => s,
-            None => continue, // Call site is not inside a known chunk.
-        };
-
-        let caller_id = format!("ts:{file_path}:{caller_symbol}");
-
-        // Find all resolved callees matching this call site's name.
-        for resolved in resolved
-            .iter()
-            .filter(|r| r.callee_name == site.callee_name)
-        {
-            let callee_id = format!("ts:{}:{}", resolved.file_path, resolved.symbol_path);
-
-            // Skip self-edges.
-            if caller_id == callee_id {
-                continue;
-            }
-
-            let from_ranges = format!("[[{},{},{},{}]]", site.start_line, 0, site.end_line, 0);
-
-            edges.push(CallEdge {
-                caller_id,
-                callee_id,
-                caller_file: file_path.to_string(),
-                callee_file: resolved.file_path.clone(),
-                from_ranges,
-                source: "treesitter".to_string(),
-            });
-
-            // Only take the first matching callee per call site to keep edges
-            // manageable; the first match by DB ordering is deterministic.
-            break;
+    for site in call_sites {
+        if let Some(edge) = build_edge_for_site(&mut caller_stmt, file_path, site, resolved)? {
+            edges.push(edge);
         }
     }
-
     Ok(edges)
+}
+
+/// Build a single [`CallEdge`] for one call site, or `None` if the site has
+/// no enclosing chunk or no matching callee.
+fn build_edge_for_site(
+    caller_stmt: &mut rusqlite::CachedStatement<'_>,
+    file_path: &str,
+    site: &CallSite,
+    resolved: &[ResolvedCallee],
+) -> Result<Option<CallEdge>, CodeContextError> {
+    let caller_symbol: Option<String> = caller_stmt
+        .query_row(
+            rusqlite::params![file_path, site.start_byte as i64, site.end_byte as i64],
+            |row| row.get(0),
+        )
+        .ok();
+
+    let caller_symbol = match caller_symbol {
+        Some(s) => s,
+        None => return Ok(None),
+    };
+
+    let caller_id = format!("ts:{file_path}:{caller_symbol}");
+
+    // Take the first matching callee (deterministic by DB ordering).
+    for r in resolved
+        .iter()
+        .filter(|r| r.callee_name == site.callee_name)
+    {
+        let callee_id = format!("ts:{}:{}", r.file_path, r.symbol_path);
+        if caller_id == callee_id {
+            continue; // Skip self-edges.
+        }
+        let from_ranges = format!("[[{},{},{},{}]]", site.start_line, 0, site.end_line, 0);
+        return Ok(Some(CallEdge {
+            caller_id,
+            callee_id,
+            caller_file: file_path.to_string(),
+            callee_file: r.file_path.clone(),
+            from_ranges,
+            source: "treesitter".to_string(),
+        }));
+    }
+
+    Ok(None)
 }
 
 /// Write tree-sitter heuristic edges for a file, replacing any previous

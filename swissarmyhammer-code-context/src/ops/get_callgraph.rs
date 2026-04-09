@@ -102,8 +102,6 @@ pub fn get_callgraph(
     options: &CallGraphOptions,
 ) -> Result<CallGraph, CodeContextError> {
     let max_depth = options.max_depth.clamp(1, 5);
-
-    // Resolve the root symbol.
     let root = resolve_symbol(conn, &options.symbol)?;
 
     let mut visited_ids: HashSet<String> = HashSet::new();
@@ -112,7 +110,6 @@ pub fn get_callgraph(
     let mut all_edges: Vec<CallGraphEdge> = Vec::new();
     let mut all_nodes: Vec<CallGraphNode> = vec![root.clone()];
 
-    // BFS frontier: (symbol_id, current_depth)
     let mut queue: VecDeque<(String, u32)> = VecDeque::new();
     queue.push_back((root.symbol_id.clone(), 0));
 
@@ -120,34 +117,16 @@ pub fn get_callgraph(
         if depth >= max_depth {
             continue;
         }
-
         let edges = fetch_edges(conn, &current_id, options.direction, depth + 1)?;
-
         for edge in edges {
-            // Determine the "next" node to follow.
-            let next_id = match options.direction {
-                CallGraphDirection::Inbound => &edge.caller.symbol_id,
-                CallGraphDirection::Outbound => &edge.callee.symbol_id,
-                CallGraphDirection::Both => {
-                    // Follow whichever side is new.
-                    if !visited_ids.contains(&edge.callee.symbol_id) {
-                        &edge.callee.symbol_id
-                    } else {
-                        &edge.caller.symbol_id
-                    }
-                }
-            };
-
-            if visited_ids.insert(next_id.clone()) {
-                let next_node = if next_id == &edge.caller.symbol_id {
-                    edge.caller.clone()
-                } else {
-                    edge.callee.clone()
-                };
-                all_nodes.push(next_node);
-                queue.push_back((next_id.clone(), depth + 1));
-            }
-
+            expand_edge(
+                &edge,
+                options.direction,
+                &mut visited_ids,
+                &mut all_nodes,
+                &mut queue,
+                depth,
+            );
             all_edges.push(edge);
         }
     }
@@ -157,6 +136,39 @@ pub fn get_callgraph(
         edges: all_edges,
         nodes: all_nodes,
     })
+}
+
+/// Process a single edge during BFS: determine the next node, add it if new,
+/// and enqueue it for further traversal.
+fn expand_edge(
+    edge: &CallGraphEdge,
+    direction: CallGraphDirection,
+    visited: &mut HashSet<String>,
+    nodes: &mut Vec<CallGraphNode>,
+    queue: &mut VecDeque<(String, u32)>,
+    depth: u32,
+) {
+    let next_id = match direction {
+        CallGraphDirection::Inbound => &edge.caller.symbol_id,
+        CallGraphDirection::Outbound => &edge.callee.symbol_id,
+        CallGraphDirection::Both => {
+            if !visited.contains(&edge.callee.symbol_id) {
+                &edge.callee.symbol_id
+            } else {
+                &edge.caller.symbol_id
+            }
+        }
+    };
+
+    if visited.insert(next_id.clone()) {
+        let next_node = if next_id == &edge.caller.symbol_id {
+            edge.caller.clone()
+        } else {
+            edge.callee.clone()
+        };
+        nodes.push(next_node);
+        queue.push_back((next_id.clone(), depth + 1));
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -257,6 +269,51 @@ fn resolve_by_name(conn: &Connection, name: &str) -> Result<CallGraphNode, CodeC
     )))
 }
 
+/// Which side of a call edge to match against.
+enum EdgeSide {
+    Caller,
+    Callee,
+}
+
+/// Query call edges where `symbol_id` matches the specified side.
+fn query_edges_by_side(
+    conn: &Connection,
+    side: EdgeSide,
+    symbol_id: &str,
+    depth: u32,
+) -> Result<Vec<CallGraphEdge>, CodeContextError> {
+    let filter = match side {
+        EdgeSide::Caller => "e.caller_id = ?1",
+        EdgeSide::Callee => "e.callee_id = ?1",
+    };
+    let sql = format!(
+        "SELECT e.caller_id, c1.name, e.caller_file, \
+                e.callee_id, c2.name, e.callee_file, e.source \
+         FROM lsp_call_edges e \
+         JOIN lsp_symbols c1 ON c1.id = e.caller_id \
+         JOIN lsp_symbols c2 ON c2.id = e.callee_id \
+         WHERE {filter}"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map([symbol_id], |row| {
+        Ok(CallGraphEdge {
+            caller: CallGraphNode {
+                symbol_id: row.get(0)?,
+                name: row.get(1)?,
+                file_path: row.get(2)?,
+            },
+            callee: CallGraphNode {
+                symbol_id: row.get(3)?,
+                name: row.get(4)?,
+                file_path: row.get(5)?,
+            },
+            source: row.get(6)?,
+            depth,
+        })
+    })?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+}
+
 /// Fetch edges adjacent to a symbol in the requested direction.
 fn fetch_edges(
     conn: &Connection,
@@ -267,69 +324,20 @@ fn fetch_edges(
     let mut edges = Vec::new();
 
     if direction == CallGraphDirection::Outbound || direction == CallGraphDirection::Both {
-        // symbol is the caller -- find callees.
-        let mut stmt = conn.prepare(
-            "SELECT e.caller_id, c1.name, e.caller_file, \
-                    e.callee_id, c2.name, e.callee_file, e.source \
-             FROM lsp_call_edges e \
-             JOIN lsp_symbols c1 ON c1.id = e.caller_id \
-             JOIN lsp_symbols c2 ON c2.id = e.callee_id \
-             WHERE e.caller_id = ?1",
-        )?;
-
-        let rows = stmt.query_map([symbol_id], |row| {
-            Ok(CallGraphEdge {
-                caller: CallGraphNode {
-                    symbol_id: row.get(0)?,
-                    name: row.get(1)?,
-                    file_path: row.get(2)?,
-                },
-                callee: CallGraphNode {
-                    symbol_id: row.get(3)?,
-                    name: row.get(4)?,
-                    file_path: row.get(5)?,
-                },
-                source: row.get(6)?,
-                depth,
-            })
-        })?;
-
-        for row in rows {
-            edges.push(row?);
-        }
+        edges.extend(query_edges_by_side(
+            conn,
+            EdgeSide::Caller,
+            symbol_id,
+            depth,
+        )?);
     }
-
     if direction == CallGraphDirection::Inbound || direction == CallGraphDirection::Both {
-        // symbol is the callee -- find callers.
-        let mut stmt = conn.prepare(
-            "SELECT e.caller_id, c1.name, e.caller_file, \
-                    e.callee_id, c2.name, e.callee_file, e.source \
-             FROM lsp_call_edges e \
-             JOIN lsp_symbols c1 ON c1.id = e.caller_id \
-             JOIN lsp_symbols c2 ON c2.id = e.callee_id \
-             WHERE e.callee_id = ?1",
-        )?;
-
-        let rows = stmt.query_map([symbol_id], |row| {
-            Ok(CallGraphEdge {
-                caller: CallGraphNode {
-                    symbol_id: row.get(0)?,
-                    name: row.get(1)?,
-                    file_path: row.get(2)?,
-                },
-                callee: CallGraphNode {
-                    symbol_id: row.get(3)?,
-                    name: row.get(4)?,
-                    file_path: row.get(5)?,
-                },
-                source: row.get(6)?,
-                depth,
-            })
-        })?;
-
-        for row in rows {
-            edges.push(row?);
-        }
+        edges.extend(query_edges_by_side(
+            conn,
+            EdgeSide::Callee,
+            symbol_id,
+            depth,
+        )?);
     }
 
     Ok(edges)

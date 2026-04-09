@@ -80,88 +80,104 @@ fn run_indexing_worker(
         workspace_root.display()
     );
 
-    // Work queue loop: keep checking for dirty files indefinitely
-    // This allows the worker to index files that are discovered after startup
-    let mut indexed_count = 0;
+    // Work queue loop: keep checking for dirty files indefinitely.
+    // This allows the worker to index files that are discovered after startup.
+    let mut indexed_count = 0u64;
     loop {
-        // Query dirty files (ts_indexed = 0) in batches
         let dirty_files = query_dirty_files(db, config.batch_size)?;
 
         if !dirty_files.is_empty() {
             info!("code-context: processing {} dirty files", dirty_files.len());
 
-            // Process files in parallel using rayon
-            // Parse files using tree-sitter and extract chunks
-            let results: Vec<_> = dirty_files
-                .par_iter()
-                .with_max_len(config.max_parallel_tasks)
-                .map(|file_path| {
-                    let full_path = workspace_root.join(file_path);
-                    if !full_path.exists() {
-                        warn!("File not found: {}", file_path);
-                        return (file_path.clone(), vec![]);
-                    }
+            let results = parse_batch_parallel(workspace_root, &dirty_files, &config);
+            indexed_count += persist_batch_results(db, results);
 
-                    // Parse file and extract chunks
-                    match parse_and_extract_chunks(&full_path) {
-                        Ok(chunks) => {
-                            debug!("Extracted {} chunks from {}", chunks.len(), file_path);
-                            (file_path.clone(), chunks)
-                        }
-                        Err(e) => {
-                            warn!("Failed to parse {}: {}", file_path, e);
-                            (file_path.clone(), vec![])
-                        }
-                    }
-                })
-                .collect();
-
-            // Write results back to database (each call locks the shared connection briefly)
-            for (file_path, chunks) in results {
-                if chunks.is_empty() {
-                    debug!(
-                        "Skipping {} - no chunks extracted, marking indexed to avoid retry loop",
-                        file_path
-                    );
-                    if let Err(e) = mark_ts_indexed(db, &file_path) {
-                        warn!("Failed to mark {} as indexed: {}", file_path, e);
-                    }
-                    continue;
-                }
-
-                if let Err(e) = write_ts_chunks(db, &file_path, &chunks) {
-                    warn!("Failed to write chunks for {}: {}", file_path, e);
-                    // Mark as indexed anyway to avoid infinite retry loop
-                    if let Err(e2) = mark_ts_indexed(db, &file_path) {
-                        warn!(
-                            "Failed to mark {} as indexed after chunk write error: {}",
-                            file_path, e2
-                        );
-                    }
-                    continue;
-                }
-
-                if let Err(e) = mark_ts_indexed(db, &file_path) {
-                    warn!("Failed to mark {} as indexed: {}", file_path, e);
-                } else {
-                    indexed_count += 1;
-                    debug!(
-                        "Successfully indexed {} with {} chunks",
-                        file_path,
-                        chunks.len()
-                    );
-                }
-            }
             info!(
                 "code-context: indexed {} files so far (batch complete)",
                 indexed_count
             );
         }
 
-        // Sleep before next iteration (allows new files to be discovered)
-        // In production, this would be longer; in tests we use shorter intervals
+        // Sleep before next iteration (allows new files to be discovered).
+        // In production this would be longer; in tests we use shorter intervals.
         thread::sleep(Duration::from_millis(100));
     }
+}
+
+/// Parse a batch of files in parallel using rayon, returning (path, chunks) pairs.
+fn parse_batch_parallel(
+    workspace_root: &Path,
+    dirty_files: &[String],
+    config: &IndexingConfig,
+) -> Vec<(String, Vec<(usize, String)>)> {
+    dirty_files
+        .par_iter()
+        .with_max_len(config.max_parallel_tasks)
+        .map(|file_path| {
+            let full_path = workspace_root.join(file_path);
+            if !full_path.exists() {
+                warn!("File not found: {}", file_path);
+                return (file_path.clone(), vec![]);
+            }
+
+            match parse_and_extract_chunks(&full_path) {
+                Ok(chunks) => {
+                    debug!("Extracted {} chunks from {}", chunks.len(), file_path);
+                    (file_path.clone(), chunks)
+                }
+                Err(e) => {
+                    warn!("Failed to parse {}: {}", file_path, e);
+                    (file_path.clone(), vec![])
+                }
+            }
+        })
+        .collect()
+}
+
+/// Write parsed chunks to the database and mark files as indexed.
+///
+/// Returns the number of files successfully indexed in this batch.
+/// Files with empty chunks or write failures are still marked as indexed
+/// to avoid infinite retry loops.
+fn persist_batch_results(db: &SharedDb, results: Vec<(String, Vec<(usize, String)>)>) -> u64 {
+    let mut count = 0u64;
+
+    for (file_path, chunks) in results {
+        if chunks.is_empty() {
+            debug!(
+                "Skipping {} - no chunks extracted, marking indexed to avoid retry loop",
+                file_path
+            );
+            if let Err(e) = mark_ts_indexed(db, &file_path) {
+                warn!("Failed to mark {} as indexed: {}", file_path, e);
+            }
+            continue;
+        }
+
+        if let Err(e) = write_ts_chunks(db, &file_path, &chunks) {
+            warn!("Failed to write chunks for {}: {}", file_path, e);
+            if let Err(e2) = mark_ts_indexed(db, &file_path) {
+                warn!(
+                    "Failed to mark {} as indexed after chunk write error: {}",
+                    file_path, e2
+                );
+            }
+            continue;
+        }
+
+        if let Err(e) = mark_ts_indexed(db, &file_path) {
+            warn!("Failed to mark {} as indexed: {}", file_path, e);
+        } else {
+            count += 1;
+            debug!(
+                "Successfully indexed {} with {} chunks",
+                file_path,
+                chunks.len()
+            );
+        }
+    }
+
+    count
 }
 
 /// Query files that need tree-sitter indexing (ts_indexed=0).

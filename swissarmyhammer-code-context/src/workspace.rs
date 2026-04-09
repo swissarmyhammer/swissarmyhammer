@@ -101,65 +101,69 @@ impl CodeContextWorkspace {
 
         match election.elect().map_err(CodeContextError::Election)? {
             ElectionOutcome::Leader(guard) => {
-                tracing::info!(
-                    "Becoming code-context leader for {}",
-                    workspace_root.display()
-                );
-
-                let conn = Connection::open(&db_path)?;
-                db::configure_connection(&conn)?;
-                db::create_schema(&conn)?;
-
-                // Populate indexed_files table by scanning the workspace
-                // This must happen before spawning the indexing worker so it has files to process
-                crate::startup_cleanup(&conn, workspace_root)?;
-
-                let db = Arc::new(Mutex::new(conn));
-
-                Ok(Self {
-                    mode: WorkspaceMode::Leader { db, _guard: guard },
-                    workspace_root: workspace_root.to_path_buf(),
-                    context_dir,
-                })
+                Self::open_as_leader(workspace_root, context_dir, &db_path, guard)
             }
             ElectionOutcome::Follower(follower) => {
-                tracing::debug!(
-                    "Joining as code-context follower for {}",
-                    workspace_root.display()
-                );
-
-                // Wait for the leader to create the DB file before opening it
-                // read-only. On the very first run the file may not exist yet.
-                // SQLite read-only open does not create the file, so we retry
-                // with a short backoff (up to ~5 seconds) until it appears.
-                let flags = rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
-                    | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX;
-                let mut attempts = 0u32;
-                let db = loop {
-                    match Connection::open_with_flags(&db_path, flags) {
-                        Ok(conn) => break conn,
-                        Err(e) if attempts < 10 => {
-                            tracing::debug!(
-                                attempt = attempts + 1,
-                                path = %db_path.display(),
-                                error = %e,
-                                "follower waiting for leader to create DB file",
-                            );
-                            attempts += 1;
-                            std::thread::sleep(std::time::Duration::from_millis(500));
-                        }
-                        Err(e) => return Err(e.into()),
-                    }
-                };
-                db::configure_connection(&db)?;
-
-                Ok(Self {
-                    mode: WorkspaceMode::Follower { db, follower },
-                    workspace_root: workspace_root.to_path_buf(),
-                    context_dir,
-                })
+                Self::open_as_follower(workspace_root, context_dir, &db_path, follower)
             }
         }
+    }
+
+    /// Initialize a leader workspace: create the database, run schema
+    /// migrations, and populate the indexed-files table.
+    fn open_as_leader(
+        workspace_root: &Path,
+        context_dir: PathBuf,
+        db_path: &Path,
+        guard: LeaderGuard,
+    ) -> Result<Self, CodeContextError> {
+        tracing::info!(
+            "Becoming code-context leader for {}",
+            workspace_root.display()
+        );
+
+        let conn = Connection::open(db_path)?;
+        db::configure_connection(&conn)?;
+        db::create_schema(&conn)?;
+
+        // Populate indexed_files table by scanning the workspace.
+        // This must happen before spawning the indexing worker so it has files to process.
+        crate::startup_cleanup(&conn, workspace_root)?;
+
+        let db = Arc::new(Mutex::new(conn));
+
+        Ok(Self {
+            mode: WorkspaceMode::Leader { db, _guard: guard },
+            workspace_root: workspace_root.to_path_buf(),
+            context_dir,
+        })
+    }
+
+    /// Initialize a follower workspace: wait for the leader to create the
+    /// database file, then open a read-only connection.
+    ///
+    /// On the very first run the file may not exist yet. SQLite read-only
+    /// open does not create the file, so we retry with a short backoff
+    /// (up to ~5 seconds) until it appears.
+    fn open_as_follower(
+        workspace_root: &Path,
+        context_dir: PathBuf,
+        db_path: &Path,
+        follower: FollowerGuard,
+    ) -> Result<Self, CodeContextError> {
+        tracing::debug!(
+            "Joining as code-context follower for {}",
+            workspace_root.display()
+        );
+
+        let db = open_readonly_with_retry(db_path)?;
+        db::configure_connection(&db)?;
+
+        Ok(Self {
+            mode: WorkspaceMode::Follower { db, follower },
+            workspace_root: workspace_root.to_path_buf(),
+            context_dir,
+        })
     }
 
     /// Whether this workspace is the leader
@@ -243,6 +247,31 @@ impl CodeContextWorkspace {
     /// Path to the `.code-context/` directory
     pub fn context_dir(&self) -> &Path {
         &self.context_dir
+    }
+}
+
+/// Open a read-only SQLite connection, retrying with backoff until the file
+/// appears. Gives the leader up to ~5 seconds to create the database.
+fn open_readonly_with_retry(db_path: &Path) -> Result<Connection, CodeContextError> {
+    let flags =
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX;
+    let mut attempts = 0u32;
+
+    loop {
+        match Connection::open_with_flags(db_path, flags) {
+            Ok(conn) => return Ok(conn),
+            Err(e) if attempts < 10 => {
+                tracing::debug!(
+                    attempt = attempts + 1,
+                    path = %db_path.display(),
+                    error = %e,
+                    "follower waiting for leader to create DB file",
+                );
+                attempts += 1;
+                std::thread::sleep(std::time::Duration::from_millis(500));
+            }
+            Err(e) => return Err(e.into()),
+        }
     }
 }
 

@@ -2,6 +2,9 @@
 //!
 //! Manages spawning and communicating with language servers (e.g., rust-analyzer)
 //! to extract symbol definitions and track call edges.
+//!
+//! Loads server configurations from YAML files, falling back to hardcoded
+//! defaults if YAML configs are not available.
 
 use std::env;
 use std::path::{Path, PathBuf};
@@ -10,6 +13,102 @@ use std::time::Duration;
 use tracing::{debug, info, warn};
 
 use crate::error::CodeContextError;
+use serde::{Deserialize, Serialize};
+use std::sync::LazyLock;
+
+/// Owned LSP server specification loaded from YAML configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OwnedLspServerSpec {
+    /// Language identifiers this server handles
+    pub language_ids: Vec<String>,
+    /// Binary name to invoke (looked up via `which`)
+    pub command: String,
+    /// Command-line arguments
+    pub args: Vec<String>,
+    /// How long to wait for server startup (in seconds)
+    #[serde(default = "default_startup_timeout")]
+    pub startup_timeout_secs: u64,
+}
+
+fn default_startup_timeout() -> u64 {
+    30
+}
+
+/// Candidate directories where builtin LSP YAML files might live.
+fn lsp_config_search_paths() -> Vec<PathBuf> {
+    vec![
+        Path::new("builtin/lsp").to_path_buf(),
+        std::env::current_exe()
+            .ok()
+            .and_then(|exe| exe.parent().map(|p| p.join("builtin/lsp")))
+            .unwrap_or_default(),
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap_or(Path::new("."))
+            .join("builtin/lsp"),
+    ]
+}
+
+/// Load all YAML server specs from a single directory.
+fn load_servers_from_dir(lsp_dir: &Path) -> Vec<OwnedLspServerSpec> {
+    let entries = match std::fs::read_dir(lsp_dir) {
+        Ok(e) => e,
+        Err(_) => return Vec::new(),
+    };
+    let mut servers = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let is_yaml = path
+            .extension()
+            .map(|e| e == "yaml" || e == "yml")
+            .unwrap_or(false);
+        if !is_yaml {
+            continue;
+        }
+        match load_single_server(&path) {
+            Ok(spec) => {
+                debug!("Loaded LSP server config: {}", spec.command);
+                servers.push(spec);
+            }
+            Err(e) => {
+                warn!("Failed to load LSP server config {:?}: {}", path, e);
+            }
+        }
+    }
+    servers
+}
+
+/// Load all LSP server specifications from the builtin YAML files.
+fn load_lsp_servers() -> Vec<OwnedLspServerSpec> {
+    for lsp_dir in lsp_config_search_paths() {
+        if !lsp_dir.exists() {
+            debug!("LSP config dir not found at {:?}", lsp_dir);
+            continue;
+        }
+        let servers = load_servers_from_dir(&lsp_dir);
+        if !servers.is_empty() {
+            return servers;
+        }
+    }
+
+    debug!("No YAML LSP configs found, using hardcoded rust-analyzer");
+    vec![OwnedLspServerSpec {
+        command: "rust-analyzer".to_string(),
+        args: vec![],
+        language_ids: vec!["rust".to_string()],
+        startup_timeout_secs: 30,
+    }]
+}
+
+/// Load a single LSP server specification from a YAML file.
+fn load_single_server(path: &Path) -> Result<OwnedLspServerSpec, Box<dyn std::error::Error>> {
+    let contents = std::fs::read_to_string(path)?;
+    let spec: OwnedLspServerSpec = serde_yaml_ng::from_str(&contents)?;
+    Ok(spec)
+}
+
+/// Lazy-initialized registry of LSP server specs loaded from YAML files
+static LSP_REGISTRY: LazyLock<Vec<OwnedLspServerSpec>> = LazyLock::new(load_lsp_servers);
 
 /// Configuration for starting an LSP server.
 #[derive(Debug, Clone)]
@@ -84,8 +183,11 @@ pub fn detect_rust_analyzer() -> Option<PathBuf> {
 
 /// Start an LSP server for the given language.
 ///
+/// Looks up the language in the loaded YAML configurations. If found, creates
+/// a server configuration; otherwise returns an error handle with unsupported message.
+///
 /// # Arguments
-/// * `language` - Language to start server for (e.g., "rust")
+/// * `language` - Language to start server for (e.g., "rust", "python")
 /// * `project_root` - Root directory of the project
 ///
 /// # Returns
@@ -93,14 +195,20 @@ pub fn detect_rust_analyzer() -> Option<PathBuf> {
 pub fn start_lsp_server(language: &str, project_root: &Path) -> LspServerHandle {
     debug!("Starting LSP server for language: {}", language);
 
-    let config = match language {
-        "rust" => create_rust_analyzer_config(),
-        _ => {
-            warn!("Unsupported language: {}", language);
+    let config = match find_config_for_language(language) {
+        Some(spec) => create_config_from_spec(language, spec),
+        None => {
+            warn!(
+                "No LSP server configuration found for language: {}",
+                language
+            );
             return LspServerHandle {
                 language: language.to_string(),
                 started: false,
-                error: Some(format!("Unsupported language: {}", language)),
+                error: Some(format!(
+                    "No LSP server configuration found for language: {}",
+                    language
+                )),
             };
         }
     };
@@ -130,17 +238,33 @@ pub fn start_lsp_server(language: &str, project_root: &Path) -> LspServerHandle 
     }
 }
 
-/// Create configuration for rust-analyzer.
-fn create_rust_analyzer_config() -> LspServerConfig {
+/// Find the LSP server configuration for the given language.
+///
+/// Searches the loaded registry of YAML configurations for a server that
+/// handles the given language. Returns the first matching specification.
+fn find_config_for_language(language: &str) -> Option<OwnedLspServerSpec> {
+    LSP_REGISTRY
+        .iter()
+        .find(|spec| spec.language_ids.contains(&language.to_string()))
+        .cloned()
+}
+
+/// Create an LspServerConfig from an OwnedLspServerSpec.
+///
+/// Converts the YAML-loaded specification into a configuration ready for spawning.
+fn create_config_from_spec(language: &str, spec: OwnedLspServerSpec) -> LspServerConfig {
     LspServerConfig {
-        language: "rust".to_string(),
-        executable: PathBuf::from("rust-analyzer"),
-        args: vec![],
-        init_timeout: 30,
+        language: language.to_string(),
+        executable: PathBuf::from(&spec.command),
+        args: spec.args.clone(),
+        init_timeout: spec.startup_timeout_secs,
     }
 }
 
 /// Spawn an LSP server process.
+///
+/// Resolves the executable (checking the filesystem first, then PATH),
+/// spawns the process, and verifies it doesn't exit immediately.
 ///
 /// # Arguments
 /// * `config` - Server configuration
@@ -149,88 +273,66 @@ fn create_rust_analyzer_config() -> LspServerConfig {
 /// # Returns
 /// Result indicating success or error
 fn spawn_server(config: &LspServerConfig, project_root: &Path) -> Result<(), CodeContextError> {
-    use std::io;
+    let exe_path = resolve_executable(&config.executable)?;
+    spawn_and_verify(&exe_path, &config.args, project_root)
+}
 
-    // Check if executable exists
-    if !config.executable.exists() {
-        // Try to find it in PATH
-        if let Some(exe_path) =
-            find_executable(config.executable.file_name().unwrap().to_str().unwrap())
-        {
-            // Executable found in PATH, use that
-            let mut cmd = Command::new(&exe_path);
-            cmd.current_dir(project_root)
-                .stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped());
+/// Resolve the executable path: use as-is if the file exists on disk,
+/// otherwise search PATH. Returns an error if not found anywhere.
+fn resolve_executable(executable: &Path) -> Result<PathBuf, CodeContextError> {
+    if executable.exists() {
+        return Ok(executable.to_path_buf());
+    }
 
-            for arg in &config.args {
-                cmd.arg(arg);
-            }
+    let name = executable
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default();
 
-            // Spawn but don't wait - we just want to verify it starts
-            match cmd.spawn() {
-                Ok(mut child) => {
-                    debug!("LSP server process spawned with PID: {:?}", child.id());
+    find_executable(name).ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("LSP server executable not found: {}", executable.display()),
+        )
+        .into()
+    })
+}
 
-                    // Try to wait briefly with timeout to catch immediate errors
-                    // In a real implementation, this would establish JSON-RPC communication
-                    std::thread::sleep(Duration::from_millis(100));
+/// Spawn a child process and verify it stays alive past a brief grace period.
+///
+/// The process is spawned with piped stdio (stdin, stdout, stderr) so
+/// a JSON-RPC client can be attached later. If the process exits within
+/// 100 ms it is treated as a startup failure.
+fn spawn_and_verify(
+    exe_path: &Path,
+    args: &[String],
+    project_root: &Path,
+) -> Result<(), CodeContextError> {
+    let mut cmd = Command::new(exe_path);
+    cmd.current_dir(project_root)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
 
-                    // Check if process is still running
-                    match child.try_wait() {
-                        Ok(Some(_)) => {
-                            Err(io::Error::other("LSP server process exited immediately"))?
-                        }
-                        Ok(None) => {
-                            // Process still running, good!
-                            // In a production implementation, we'd establish stdio channels here
-                            debug!("LSP server process is running");
-                            Ok(())
-                        }
-                        Err(e) => Err(e)?,
-                    }
-                }
-                Err(e) => Err(e)?,
-            }
-        } else {
-            Err(io::Error::new(
-                io::ErrorKind::NotFound,
-                format!(
-                    "LSP server executable not found: {}",
-                    config.executable.display()
-                ),
-            ))?
+    for arg in args {
+        cmd.arg(arg);
+    }
+
+    let mut child = cmd.spawn()?;
+    debug!("LSP server process spawned with PID: {:?}", child.id());
+
+    // Brief wait to catch immediate startup failures
+    std::thread::sleep(Duration::from_millis(100));
+
+    match child.try_wait() {
+        Ok(Some(_)) => Err(std::io::Error::other(
+            "LSP server process exited immediately",
+        ))?,
+        Ok(None) => {
+            debug!("LSP server process is running");
+            Ok(())
         }
-    } else {
-        let mut cmd = Command::new(&config.executable);
-        cmd.current_dir(project_root)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-
-        for arg in &config.args {
-            cmd.arg(arg);
-        }
-
-        match cmd.spawn() {
-            Ok(mut child) => {
-                debug!("LSP server process spawned with PID: {:?}", child.id());
-
-                // Brief wait to catch immediate errors
-                std::thread::sleep(Duration::from_millis(100));
-
-                match child.try_wait() {
-                    Ok(Some(_)) => Err(io::Error::other("LSP server process exited immediately"))?,
-                    Ok(None) => {
-                        debug!("LSP server process is running");
-                        Ok(())
-                    }
-                    Err(e) => Err(e)?,
-                }
-            }
-            Err(e) => Err(e)?,
-        }
+        Err(e) => Err(e)?,
     }
 }
 
@@ -260,14 +362,17 @@ mod tests {
     }
 
     #[test]
-    fn test_unsupported_language() {
+    fn test_unsupported_language_no_config_found() {
         let tmp = tempfile::tempdir().unwrap();
         let result = start_lsp_server("unsupported_lang", tmp.path());
         assert!(!result.started, "Unsupported language should fail to start");
         assert!(result.error.is_some(), "Error message should be provided");
         assert!(
-            result.error.unwrap().contains("Unsupported language"),
-            "Error should mention unsupported language"
+            result
+                .error
+                .unwrap()
+                .contains("No LSP server configuration found"),
+            "Error should mention configuration not found"
         );
     }
 
@@ -280,20 +385,26 @@ mod tests {
     }
 
     #[test]
-    fn test_rust_analyzer_config() {
-        let config = create_rust_analyzer_config();
-        assert_eq!(config.language, "rust");
-        assert_eq!(config.executable.file_name().unwrap(), "rust-analyzer");
-        assert_eq!(config.init_timeout, 30);
+    fn test_find_config_for_rust() {
+        let config = find_config_for_language("rust");
+        assert!(
+            config.is_some(),
+            "Should find rust configuration in loaded registry"
+        );
+        let spec = config.unwrap();
+        assert_eq!(spec.command, "rust-analyzer");
+        assert!(spec.language_ids.contains(&"rust".to_string()));
     }
 
     #[test]
-    fn test_default_config() {
-        let config = LspServerConfig::default();
-        assert_eq!(config.language, "rust");
-        assert_eq!(config.executable, PathBuf::from("rust-analyzer"));
-        assert!(config.args.is_empty());
-        assert_eq!(config.init_timeout, 30);
+    fn test_lsp_registry_has_rust() {
+        // Verify that the loaded registry includes rust-analyzer
+        let servers = &*LSP_REGISTRY;
+        assert!(!servers.is_empty(), "LSP registry should not be empty");
+        assert!(
+            servers.iter().any(|s| s.command == "rust-analyzer"),
+            "Registry should include rust-analyzer"
+        );
     }
 
     #[test]
@@ -362,17 +473,15 @@ mod tests {
     }
 
     #[test]
-    fn test_start_lsp_server_rust_without_analyzer() {
-        // If rust-analyzer is not installed, start_lsp_server("rust", ...) should
-        // return a handle with started=false and an error. If it IS installed,
-        // the process will be spawned (and may or may not succeed).
+    fn test_start_lsp_server_rust_configuration_loaded() {
+        // Verify that rust language configuration is loaded from YAML registry
         let tmp = tempfile::tempdir().unwrap();
         let result = start_lsp_server("rust", tmp.path());
-        // Regardless of whether rust-analyzer is installed, the handle should have
-        // the correct language field.
+        // The language field should always match the request
         assert_eq!(result.language, "rust");
-        // We can't assert started true/false since it depends on the environment,
-        // but we verify the fields are consistent.
+        // Whether it starts depends on if rust-analyzer is installed, but the
+        // configuration should have been found and attempted to start.
+        // We verify consistency: if started=true then error=None, else error=Some
         if result.started {
             assert!(result.error.is_none());
         } else {
@@ -437,7 +546,7 @@ mod tests {
                 .error
                 .as_ref()
                 .unwrap()
-                .contains("Unsupported language"),
+                .contains("No LSP server configuration found"),
             "Expected 'Unsupported language' in error, got: {:?}",
             handle.error
         );
