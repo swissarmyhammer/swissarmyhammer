@@ -58,7 +58,10 @@ members = [
     "swissarmyhammer-entity",
     "swissarmyhammer-entity-search",
     "swissarmyhammer-views",
+    "swissarmyhammer-perspectives",
+    "swissarmyhammer-filter-expr",
     "swissarmyhammer-merge",
+    "swissarmyhammer-store",
     "swissarmyhammer-commands",
     "benches/embedding_benchmark",
     "crates/swissarmyhammer-sem",
@@ -255,17 +258,20 @@ swissarmyhammer-embedding = { path = "swissarmyhammer-embedding" }
 swissarmyhammer-entity = { path = "swissarmyhammer-entity" }
 swissarmyhammer-entity-search = { path = "swissarmyhammer-entity-search" }
 swissarmyhammer-fields = { path = "swissarmyhammer-fields" }
+swissarmyhammer-filter-expr = { path = "swissarmyhammer-filter-expr" }
 swissarmyhammer-git = { path = "swissarmyhammer-git" }
 swissarmyhammer-js = { path = "swissarmyhammer-js" }
 swissarmyhammer-kanban = { path = "swissarmyhammer-kanban" }
 swissarmyhammer-mcp-proxy = { path = "swissarmyhammer-mcp-proxy" }
 swissarmyhammer-merge = { path = "swissarmyhammer-merge" }
 swissarmyhammer-modes = { path = "swissarmyhammer-modes" }
+swissarmyhammer-perspectives = { path = "swissarmyhammer-perspectives" }
 swissarmyhammer-project-detection = { path = "swissarmyhammer-project-detection" }
 swissarmyhammer-prompts = { path = "swissarmyhammer-prompts" }
 swissarmyhammer-shell = { path = "swissarmyhammer-shell" }
 swissarmyhammer-skills = { path = "swissarmyhammer-skills" }
 swissarmyhammer-statusline = { path = "swissarmyhammer-statusline" }
+swissarmyhammer-store = { path = "swissarmyhammer-store" }
 swissarmyhammer-templating = { path = "swissarmyhammer-templating" }
 swissarmyhammer-tools = { path = "swissarmyhammer-tools" }
 swissarmyhammer-treesitter = { path = "swissarmyhammer-treesitter" }

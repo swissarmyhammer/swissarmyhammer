@@ -136,7 +136,6 @@ mod tests {
     use super::*;
     use crate::layered_context::{LspRange, TextEdit};
     use crate::test_fixtures::test_db;
-    use rusqlite::Connection;
 
     // --- can_rename: false when no live LSP ---
 

@@ -249,6 +249,59 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_paste_tag_preserves_existing_tags() {
+        let (_temp, ctx) = setup().await;
+
+        // Create a task that already has tags in the body
+        let task_result = AddTask::new("Multi-tagged task")
+            .with_description("Fix #bug and add #feature")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let task_id = task_result["id"].as_str().unwrap();
+
+        // Verify existing tags are present
+        let ectx = ctx.entity_context().await.unwrap();
+        let task = ectx.read("task", task_id).await.unwrap();
+        let tags_before = task_tags(&task);
+        assert!(
+            tags_before.contains(&"bug".to_string()),
+            "should have #bug before paste"
+        );
+        assert!(
+            tags_before.contains(&"feature".to_string()),
+            "should have #feature before paste"
+        );
+
+        // Paste a new tag
+        let clip = make_tag_clipboard("urgent", "ff0000");
+        let result = PasteTag::new(task_id, clip)
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        assert_eq!(result["pasted"], true);
+
+        // Re-read and verify ALL tags are present (old + new)
+        let task = ectx.read("task", task_id).await.unwrap();
+        let tags_after = task_tags(&task);
+        assert!(
+            tags_after.contains(&"bug".to_string()),
+            "should still have #bug after paste"
+        );
+        assert!(
+            tags_after.contains(&"feature".to_string()),
+            "should still have #feature after paste"
+        );
+        assert!(
+            tags_after.contains(&"urgent".to_string()),
+            "should have #urgent after paste"
+        );
+        assert_eq!(tags_after.len(), 3, "should have exactly 3 tags");
+    }
+
+    #[tokio::test]
     async fn test_paste_tag_wrong_entity_type_fails() {
         let (_temp, ctx) = setup().await;
 

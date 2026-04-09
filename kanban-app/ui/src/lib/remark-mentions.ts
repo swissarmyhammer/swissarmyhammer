@@ -5,7 +5,7 @@
  * Parameterized by prefix character and HTML element name.
  */
 import type { Root, Text, PhrasingContent } from "mdast";
-import { visit } from "unist-util-visit";
+import { visit, SKIP } from "unist-util-visit";
 import { findMentionsInText } from "@/lib/mention-finder";
 
 /** Custom AST node for a mention pill */
@@ -71,6 +71,10 @@ export function remarkMentions(
       }
 
       parent.children.splice(index, 1, ...parts);
+      // Skip past the nodes we just inserted so visit doesn't re-enter
+      // them (the pill's child text still contains the prefix+slug which
+      // would match again, causing infinite recursion).
+      return [SKIP, index + parts.length] as const;
     });
   };
 }

@@ -1,0 +1,13 @@
+id: "00000000000000000000000010"
+name: project
+description: Project this task belongs to
+type:
+  kind: reference
+  entity: project
+  multiple: false
+icon: folder
+editor: multi-select
+display: badge-list
+width: 150
+section: header
+groupable: true

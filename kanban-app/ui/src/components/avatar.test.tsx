@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
+import { act } from "react";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(() => Promise.resolve("ok")),
@@ -20,7 +21,7 @@ import { Avatar } from "./avatar";
 import { SchemaProvider } from "@/lib/schema-context";
 import { EntityStoreProvider } from "@/lib/entity-store-context";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
-import { InspectProvider } from "@/lib/inspect-context";
+
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { Entity } from "@/types/kanban";
 
@@ -31,13 +32,11 @@ function renderAvatar(
   size?: "sm" | "md" | "lg",
 ) {
   return render(
-    <TooltipProvider>
+    <TooltipProvider delayDuration={0}>
       <SchemaProvider>
         <EntityStoreProvider entities={{ actor: actors }}>
           <EntityFocusProvider>
-            <InspectProvider onInspect={() => {}} onDismiss={() => false}>
-              <Avatar actorId={actorId} size={size} />
-            </InspectProvider>
+            <Avatar actorId={actorId} size={size} />
           </EntityFocusProvider>
         </EntityStoreProvider>
       </SchemaProvider>
@@ -54,6 +53,7 @@ function makeActor(
   return {
     entity_type: "actor",
     id,
+    moniker: `actor:${id}`,
     fields: {
       name,
       ...overrides,
@@ -142,5 +142,35 @@ describe("Avatar", () => {
     renderAvatar("bob", [actor]);
 
     expect(screen.getByText("B")).toBeTruthy();
+  });
+
+  it("initials avatar has aria-label with actor name", () => {
+    const actor = makeActor("alice", "Alice Smith");
+    renderAvatar("alice", [actor]);
+
+    expect(screen.getByLabelText("Alice Smith")).toBeTruthy();
+  });
+
+  it("image avatar has aria-label with actor name", () => {
+    const actor = makeActor("alice", "Alice Smith", { avatar: DATA_URI });
+    renderAvatar("alice", [actor]);
+
+    expect(screen.getByLabelText("Alice Smith")).toBeTruthy();
+  });
+
+  it("shows tooltip with actor name on hover", async () => {
+    const actor = makeActor("alice", "Alice Smith");
+    renderAvatar("alice", [actor]);
+
+    const trigger = screen.getByLabelText("Alice Smith");
+
+    // Radix tooltip needs pointerMove + mouseEnter inside act with a small delay
+    await act(async () => {
+      fireEvent.pointerMove(trigger, { clientX: 10, clientY: 10 });
+      fireEvent.mouseEnter(trigger);
+      await new Promise((r) => setTimeout(r, 100));
+    });
+
+    expect(screen.getByRole("tooltip")).toBeTruthy();
   });
 });

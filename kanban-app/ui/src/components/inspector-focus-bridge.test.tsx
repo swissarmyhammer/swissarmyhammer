@@ -72,14 +72,19 @@ import {
   EntityFocusProvider,
   useEntityFocus,
 } from "@/lib/entity-focus-context";
-import { InspectProvider } from "@/lib/inspect-context";
+
 import { FieldUpdateProvider } from "@/lib/field-update-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { Entity } from "@/types/kanban";
 import { useState } from "react";
 
 function makeEntity(fields: Record<string, unknown> = {}): Entity {
-  return { entity_type: "task", id: "test-id", fields };
+  return {
+    entity_type: "task",
+    id: "test-id",
+    moniker: "task:test-id",
+    fields,
+  };
 }
 
 /** Reads focusedMoniker and renders it as text for test assertions. */
@@ -114,11 +119,9 @@ function Providers({ children }: { children: React.ReactNode }) {
           entities={{ task: [makeEntity({ title: "T", body: "B" })] }}
         >
           <EntityFocusProvider>
-            <InspectProvider onInspect={() => {}} onDismiss={() => false}>
-              <FieldUpdateProvider>
-                <UIStateProvider>{children}</UIStateProvider>
-              </FieldUpdateProvider>
-            </InspectProvider>
+            <FieldUpdateProvider>
+              <UIStateProvider>{children}</UIStateProvider>
+            </FieldUpdateProvider>
           </EntityFocusProvider>
         </EntityStoreProvider>
       </SchemaProvider>
@@ -171,7 +174,9 @@ describe("InspectorFocusBridge", () => {
       await new Promise((r) => setTimeout(r, 50));
     });
     // EntityInspector's mount effect sets focus to the first field moniker
-    expect(getByTestId("focus-monitor").textContent).toBe("task:test-id.title");
+    expect(getByTestId("focus-monitor").textContent).toBe(
+      "field:task:test-id.title",
+    );
   });
 
   it("restores previous focus on unmount", async () => {
@@ -187,7 +192,9 @@ describe("InspectorFocusBridge", () => {
       await new Promise((r) => setTimeout(r, 50));
     });
     // Inspector is focused — mount effect set focus to the first field
-    expect(getByTestId("focus-monitor").textContent).toBe("task:test-id.title");
+    expect(getByTestId("focus-monitor").textContent).toBe(
+      "field:task:test-id.title",
+    );
 
     // Close the inspector
     await act(async () => {
@@ -207,6 +214,16 @@ describe("InspectorFocusBridge", () => {
     ).toBeTruthy();
     expect(
       container.querySelector('[data-testid="field-row-body"]'),
+    ).toBeTruthy();
+  });
+
+  it("renders entity FocusScope with the entity moniker", async () => {
+    const { container } = await renderBridge(
+      makeEntity({ title: "T", body: "B" }),
+    );
+    // FocusScope adds data-moniker attribute; the inspector's entity scope should be present
+    expect(
+      container.querySelector('[data-moniker="task:test-id"]'),
     ).toBeTruthy();
   });
 });

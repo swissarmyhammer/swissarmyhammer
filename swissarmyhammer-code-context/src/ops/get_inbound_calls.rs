@@ -217,7 +217,6 @@ fn fetch_incoming_calls_recursive(
     }
 
     let response = ctx.lsp_request("callHierarchy/incomingCalls", json!({ "item": item.json }))?;
-
     let response = match response {
         Some(v) if !v.is_null() => v,
         _ => return Ok(Vec::new()),
@@ -225,39 +224,44 @@ fn fetch_incoming_calls_recursive(
 
     let incoming = parse_incoming_calls(&response);
     let mut entries = Vec::new();
-
     for call in incoming {
-        let visit_key = format!("{}:{}", call.from_item.uri, call.from_item.name);
-        if !visited.insert(visit_key) {
-            continue; // avoid cycles
+        if let Some(entry) = resolve_incoming_call(ctx, call, max_depth, current_depth, visited)? {
+            entries.push(entry);
         }
+    }
+    Ok(entries)
+}
 
-        let file_path = uri_to_file_path(&call.from_item.uri);
-
-        // Recurse if depth allows
-        let sub_callers = if current_depth < max_depth {
-            fetch_incoming_calls_recursive(
-                ctx,
-                &call.from_item,
-                max_depth,
-                current_depth + 1,
-                visited,
-            )?
-        } else {
-            Vec::new()
-        };
-
-        entries.push(InboundCallEntry {
-            symbol_name: call.from_item.name.clone(),
-            file_path,
-            range: call.from_item.range.clone(),
-            call_sites: call.from_ranges,
-            depth: current_depth,
-            callers: sub_callers,
-        });
+/// Convert a single parsed `IncomingCall` into an `InboundCallEntry`,
+/// performing cycle detection and optional recursion into sub-callers.
+///
+/// Returns `None` if the caller was already visited (cycle).
+fn resolve_incoming_call(
+    ctx: &LayeredContext,
+    call: IncomingCall,
+    max_depth: u32,
+    current_depth: u32,
+    visited: &mut HashSet<String>,
+) -> Result<Option<InboundCallEntry>, CodeContextError> {
+    let visit_key = format!("{}:{}", call.from_item.uri, call.from_item.name);
+    if !visited.insert(visit_key) {
+        return Ok(None);
     }
 
-    Ok(entries)
+    let sub_callers = if current_depth < max_depth {
+        fetch_incoming_calls_recursive(ctx, &call.from_item, max_depth, current_depth + 1, visited)?
+    } else {
+        Vec::new()
+    };
+
+    Ok(Some(InboundCallEntry {
+        symbol_name: call.from_item.name.clone(),
+        file_path: uri_to_file_path(&call.from_item.uri),
+        range: call.from_item.range.clone(),
+        call_sites: call.from_ranges,
+        depth: current_depth,
+        callers: sub_callers,
+    }))
 }
 
 /// A parsed incoming call from LSP `callHierarchy/incomingCalls`.
@@ -447,53 +451,15 @@ fn try_treesitter(
     let symbol = find_ts_symbol_at_cursor(ctx, opts)
         .or_else(|| ctx.find_symbol(&opts.file_path, opts.line, opts.character))?;
 
-    // ts_callers_of matches the caller's name (not the callee's), so we
-    // also check lsp_callers_of with the symbol's qualified_path/name as ID
-    // since tree-sitter edges share the lsp_call_edges table.
     let symbol_id = symbol.qualified_path.as_deref().unwrap_or(&symbol.name);
-
-    // Try callers via index (includes treesitter-sourced edges)
     let callers = ctx.lsp_callers_of(symbol_id);
-
     if callers.is_empty() {
         return None;
     }
 
-    let entries: Vec<InboundCallEntry> = callers
+    let entries = callers
         .into_iter()
-        .map(|edge| {
-            // For tree-sitter fallback, limit recursion depth
-            let sub_callers = if depth > 1 {
-                let sub_id = edge
-                    .symbol
-                    .qualified_path
-                    .as_deref()
-                    .unwrap_or(&edge.symbol.name);
-                let sub_edges = ctx.lsp_callers_of(sub_id);
-                sub_edges
-                    .into_iter()
-                    .map(|sub| InboundCallEntry {
-                        symbol_name: sub.symbol.name,
-                        file_path: sub.symbol.file_path,
-                        range: sub.symbol.range,
-                        call_sites: sub.call_sites,
-                        depth: 2,
-                        callers: Vec::new(),
-                    })
-                    .collect()
-            } else {
-                Vec::new()
-            };
-
-            InboundCallEntry {
-                symbol_name: edge.symbol.name,
-                file_path: edge.symbol.file_path,
-                range: edge.symbol.range,
-                call_sites: edge.call_sites,
-                depth: 1,
-                callers: sub_callers,
-            }
-        })
+        .map(|edge| call_edge_to_entry(ctx, edge, depth))
         .collect();
 
     Some(InboundCallsResult {
@@ -501,6 +467,44 @@ fn try_treesitter(
         callers: entries,
         source_layer: SourceLayer::TreeSitter,
     })
+}
+
+/// Convert a [`CallEdgeInfo`] from the index into an [`InboundCallEntry`],
+/// optionally recursing one level to gather sub-callers when `depth > 1`.
+fn call_edge_to_entry(
+    ctx: &LayeredContext,
+    edge: crate::layered_context::CallEdgeInfo,
+    depth: u32,
+) -> InboundCallEntry {
+    let sub_callers = if depth > 1 {
+        let sub_id = edge
+            .symbol
+            .qualified_path
+            .as_deref()
+            .unwrap_or(&edge.symbol.name);
+        ctx.lsp_callers_of(sub_id)
+            .into_iter()
+            .map(|sub| InboundCallEntry {
+                symbol_name: sub.symbol.name,
+                file_path: sub.symbol.file_path,
+                range: sub.symbol.range,
+                call_sites: sub.call_sites,
+                depth: 2,
+                callers: Vec::new(),
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    InboundCallEntry {
+        symbol_name: edge.symbol.name,
+        file_path: edge.symbol.file_path,
+        range: edge.symbol.range,
+        call_sites: edge.call_sites,
+        depth: 1,
+        callers: sub_callers,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -533,6 +537,7 @@ mod tests {
     use rusqlite::Connection;
 
     /// Insert an LSP symbol (without detail, for inbound_calls tests).
+    #[allow(clippy::too_many_arguments)]
     fn insert_lsp_symbol(
         conn: &Connection,
         id: &str,

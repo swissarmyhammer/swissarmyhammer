@@ -31,7 +31,13 @@ interface AttachmentEditorProps extends EditorProps {
  */
 function isValidElement(v: unknown): v is AttachmentMeta | string {
   if (typeof v === "string") return true;
-  if (v != null && typeof v === "object" && "id" in v && typeof (v as Record<string, unknown>).id === "string") return true;
+  if (
+    v != null &&
+    typeof v === "object" &&
+    "id" in v &&
+    typeof (v as Record<string, unknown>).id === "string"
+  )
+    return true;
   return false;
 }
 
@@ -122,9 +128,7 @@ export function AttachmentEditor({
     <div
       data-file-drop-zone
       className={`flex flex-col gap-1.5 w-full rounded transition-all ${
-        isDragging
-          ? "ring-2 ring-primary bg-primary/5"
-          : ""
+        isDragging ? "ring-2 ring-primary bg-primary/5" : ""
       }`}
     >
       {attachments.length === 0 && (

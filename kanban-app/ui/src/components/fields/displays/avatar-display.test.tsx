@@ -20,7 +20,7 @@ import { AvatarDisplay } from "./avatar-display";
 import { SchemaProvider } from "@/lib/schema-context";
 import { EntityStoreProvider } from "@/lib/entity-store-context";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
-import { InspectProvider } from "@/lib/inspect-context";
+
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { Entity } from "@/types/kanban";
 
@@ -31,9 +31,7 @@ function renderDisplay(value: unknown, actors: Entity[] = []) {
       <SchemaProvider>
         <EntityStoreProvider entities={{ actor: actors }}>
           <EntityFocusProvider>
-            <InspectProvider onInspect={() => {}} onDismiss={() => false}>
-              <AvatarDisplay value={value} />
-            </InspectProvider>
+            <AvatarDisplay value={value} />
           </EntityFocusProvider>
         </EntityStoreProvider>
       </SchemaProvider>
@@ -46,7 +44,12 @@ function makeActor(
   name: string,
   overrides: Record<string, unknown> = {},
 ): Entity {
-  return { entity_type: "actor", id, fields: { name, ...overrides } };
+  return {
+    entity_type: "actor",
+    id,
+    moniker: `actor:${id}`,
+    fields: { name, ...overrides },
+  };
 }
 
 const DATA_URI = "data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=";

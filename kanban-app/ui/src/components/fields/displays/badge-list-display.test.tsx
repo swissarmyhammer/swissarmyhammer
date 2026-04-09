@@ -16,11 +16,13 @@ const mockTags = [
   {
     id: "tag-1",
     entity_type: "tag",
+    moniker: "tag:tag-1",
     fields: { tag_name: "bugfix", color: "ff0000" },
   },
   {
     id: "tag-2",
     entity_type: "tag",
+    moniker: "tag:tag-2",
     fields: { tag_name: "feature", color: "00ff00" },
   },
 ];
@@ -63,7 +65,7 @@ vi.mock("@/lib/entity-focus-context", () => ({
 
 import { BadgeListDisplay } from "./badge-list-display";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { InspectProvider } from "@/lib/inspect-context";
+
 import type { Entity, FieldDef } from "@/types/kanban";
 
 const tagField: FieldDef = {
@@ -75,6 +77,7 @@ const tagField: FieldDef = {
 const taskEntity: Entity = {
   id: "task-1",
   entity_type: "task",
+  moniker: "task:task-1",
   fields: { tags: ["bugfix", "feature"] },
 };
 
@@ -85,14 +88,12 @@ function renderDisplay(
 ) {
   return render(
     <TooltipProvider>
-      <InspectProvider onInspect={() => {}} onDismiss={() => false}>
-        <BadgeListDisplay
-          field={tagField}
-          value={overrides.value ?? ["bugfix", "feature"]}
-          entity={taskEntity}
-          mode="full"
-        />
-      </InspectProvider>
+      <BadgeListDisplay
+        field={tagField}
+        value={overrides.value ?? ["bugfix", "feature"]}
+        entity={taskEntity}
+        mode="full"
+      />
     </TooltipProvider>,
   );
 }

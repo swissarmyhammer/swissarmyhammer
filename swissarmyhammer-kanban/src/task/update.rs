@@ -1,11 +1,10 @@
 //! UpdateTask command
 
-use crate::auto_color;
 use crate::context::KanbanContext;
 use crate::error::{KanbanError, Result};
-use crate::tag::tag_name_exists_entity;
+use crate::task::shared::auto_create_body_tags;
 use crate::task_helpers::task_entity_to_json;
-use crate::types::{ActorId, SwimlaneId, TaskId};
+use crate::types::{ActorId, TaskId};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use swissarmyhammer_entity::Entity;
@@ -26,14 +25,14 @@ pub struct UpdateTask {
     pub title: Option<String>,
     /// New description (may contain #tag patterns)
     pub description: Option<String>,
-    /// New swimlane (None = don't change, Some(None) = clear, Some(Some(x)) = set)
-    pub swimlane: Option<Option<SwimlaneId>>,
     /// Replace all assignees
     pub assignees: Option<Vec<ActorId>>,
     /// Replace all dependencies
     pub depends_on: Option<Vec<TaskId>>,
     /// Replace all attachment IDs (array of entity ID strings)
     pub attachments: Option<Value>,
+    /// Set the project this task belongs to
+    pub project: Option<String>,
 }
 
 impl UpdateTask {
@@ -43,10 +42,10 @@ impl UpdateTask {
             id: id.into(),
             title: None,
             description: None,
-            swimlane: None,
             assignees: None,
             depends_on: None,
             attachments: None,
+            project: None,
         }
     }
 
@@ -59,12 +58,6 @@ impl UpdateTask {
     /// Set the description
     pub fn with_description(mut self, description: impl Into<String>) -> Self {
         self.description = Some(description.into());
-        self
-    }
-
-    /// Set the swimlane
-    pub fn with_swimlane(mut self, swimlane: Option<SwimlaneId>) -> Self {
-        self.swimlane = Some(swimlane);
         self
     }
 
@@ -85,6 +78,35 @@ impl UpdateTask {
         self.attachments = Some(attachments);
         self
     }
+
+    /// Set the project this task belongs to
+    pub fn with_project(mut self, project: impl Into<String>) -> Self {
+        self.project = Some(project.into());
+        self
+    }
+
+    /// Apply all set fields to the entity.
+    fn apply_to(&self, entity: &mut Entity) -> std::result::Result<(), serde_json::Error> {
+        if let Some(title) = &self.title {
+            entity.set("title", serde_json::json!(title));
+        }
+        if let Some(desc) = &self.description {
+            entity.set("body", serde_json::json!(desc));
+        }
+        if let Some(assignees) = &self.assignees {
+            entity.set("assignees", serde_json::to_value(assignees)?);
+        }
+        if let Some(deps) = &self.depends_on {
+            entity.set("depends_on", serde_json::to_value(deps)?);
+        }
+        if let Some(attachments) = &self.attachments {
+            entity.set("attachments", attachments.clone());
+        }
+        if let Some(project) = &self.project {
+            entity.set("project", serde_json::json!(project));
+        }
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -100,48 +122,9 @@ impl Execute<KanbanContext, KanbanError> for UpdateTask {
                 .await
                 .map_err(KanbanError::from_entity_error)?;
 
-            // Apply updates
-            if let Some(title) = &self.title {
-                entity.set("title", serde_json::json!(title));
-            }
-            if let Some(desc) = &self.description {
-                entity.set("body", serde_json::json!(desc));
-            }
-            if let Some(swimlane) = &self.swimlane {
-                match swimlane {
-                    Some(s) => entity.set("position_swimlane", serde_json::json!(s)),
-                    None => {
-                        entity.remove("position_swimlane");
-                    }
-                }
-            }
-            if let Some(assignees) = &self.assignees {
-                entity.set("assignees", serde_json::to_value(assignees)?);
-            }
-            if let Some(deps) = &self.depends_on {
-                entity.set("depends_on", serde_json::to_value(deps)?);
-            }
-            if let Some(attachments) = &self.attachments {
-                entity.set("attachments", attachments.clone());
-            }
-
+            self.apply_to(&mut entity)?;
             ectx.write(&entity).await?;
-
-            // Auto-create Tag entities for any new #tag patterns in description.
-            // Parse directly from body — the computed `tags` field may be stale.
-            let body = entity.get_str("body").unwrap_or("");
-            let tags = crate::tag_parser::parse_tags(body);
-            for tag_name in &tags {
-                if !tag_name_exists_entity(&ectx, tag_name).await {
-                    let color = auto_color::auto_color(tag_name).to_string();
-                    let tag_id = ulid::Ulid::new().to_string();
-                    let mut tag_entity = Entity::new("tag", tag_id.as_str());
-                    tag_entity.set("tag_name", serde_json::json!(tag_name));
-                    tag_entity.set("color", serde_json::json!(color));
-                    ectx.write(&tag_entity).await?;
-                }
-            }
-
+            auto_create_body_tags(&ectx, &entity).await?;
             Ok(task_entity_to_json(&entity))
         }
         .await;
@@ -242,78 +225,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_update_task_swimlane_set() {
-        let (_temp, ctx) = setup().await;
-
-        use crate::swimlane::AddSwimlane;
-        AddSwimlane::new("feature", "Feature")
-            .execute(&ctx)
-            .await
-            .into_result()
-            .unwrap();
-
-        let add_result = AddTask::new("Task")
-            .execute(&ctx)
-            .await
-            .into_result()
-            .unwrap();
-        let task_id = add_result["id"].as_str().unwrap();
-
-        // Set swimlane
-        let result = UpdateTask::new(task_id)
-            .with_swimlane(Some(SwimlaneId::from("feature")))
-            .execute(&ctx)
-            .await
-            .into_result()
-            .unwrap();
-
-        assert_eq!(result["position"]["swimlane"], "feature");
-    }
-
-    #[tokio::test]
-    async fn test_update_task_swimlane_clear() {
-        let (_temp, ctx) = setup().await;
-
-        use crate::swimlane::AddSwimlane;
-        use crate::task::MoveTask;
-        AddSwimlane::new("feature", "Feature")
-            .execute(&ctx)
-            .await
-            .into_result()
-            .unwrap();
-
-        let add_result = AddTask::new("Task")
-            .execute(&ctx)
-            .await
-            .into_result()
-            .unwrap();
-        let task_id = add_result["id"].as_str().unwrap();
-
-        // Move to swimlane first
-        MoveTask::to_column_and_swimlane(task_id, "todo", "feature")
-            .execute(&ctx)
-            .await
-            .into_result()
-            .unwrap();
-
-        // Clear swimlane
-        let result = UpdateTask::new(task_id)
-            .with_swimlane(None)
-            .execute(&ctx)
-            .await
-            .into_result()
-            .unwrap();
-
-        // swimlane should be null/absent
-        assert!(
-            result["position"]["swimlane"].is_null()
-                || result["position"].get("swimlane").is_none(),
-            "swimlane should be cleared, got: {:?}",
-            result["position"]["swimlane"]
-        );
-    }
-
-    #[tokio::test]
     async fn test_update_task_assignees_replace() {
         let (_temp, ctx) = setup().await;
 
@@ -369,6 +280,74 @@ mod tests {
         let ids = op.affected_resource_ids(&value);
         assert_eq!(ids.len(), 1);
         assert_eq!(ids[0], task_id);
+    }
+
+    #[tokio::test]
+    async fn test_update_task_set_project() {
+        let (_temp, ctx) = setup().await;
+
+        use crate::project::AddProject;
+        AddProject::new("backend", "Backend")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        let add_result = AddTask::new("Task")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let task_id = add_result["id"].as_str().unwrap();
+
+        // Task starts with no project
+        assert_eq!(add_result["project"], "");
+
+        // Set the project
+        let result = UpdateTask::new(task_id)
+            .with_project("backend")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        assert_eq!(result["project"], "backend");
+    }
+
+    #[tokio::test]
+    async fn test_update_task_change_project() {
+        let (_temp, ctx) = setup().await;
+
+        use crate::project::AddProject;
+        AddProject::new("backend", "Backend")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        AddProject::new("frontend", "Frontend")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        let add_result = AddTask::new("Task")
+            .with_project("backend")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let task_id = add_result["id"].as_str().unwrap();
+        assert_eq!(add_result["project"], "backend");
+
+        // Change to a different project
+        let result = UpdateTask::new(task_id)
+            .with_project("frontend")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        assert_eq!(result["project"], "frontend");
     }
 
     #[tokio::test]

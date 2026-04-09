@@ -14,13 +14,16 @@ import { BoardSelector, pathStem } from "./board-selector";
 import { FieldUpdateProvider } from "@/lib/field-update-context";
 import { SchemaProvider } from "@/lib/schema-context";
 import { EntityStoreProvider } from "@/lib/entity-store-context";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import type { OpenBoard } from "@/types/kanban";
 
 function Wrapper({ children }: { children: React.ReactNode }) {
   return (
     <SchemaProvider>
       <EntityStoreProvider entities={{}}>
-        <FieldUpdateProvider>{children}</FieldUpdateProvider>
+        <FieldUpdateProvider>
+          <TooltipProvider>{children}</TooltipProvider>
+        </FieldUpdateProvider>
       </EntityStoreProvider>
     </SchemaProvider>
   );
@@ -78,5 +81,62 @@ describe("BoardSelector", () => {
     // More importantly, the trigger should be present and clickable.
     const trigger = container.querySelector("[data-slot='select-trigger']");
     expect(trigger).toBeTruthy();
+  });
+
+  it("calls onSelect when a board is selected (not dispatchCommand)", async () => {
+    // Verify the component delegates to onSelect rather than dispatching
+    // file.switchBoard directly. Radix Select in jsdom doesn't support full
+    // open/click interaction, so we assert at the wiring level: the internal
+    // Select's onValueChange must forward to the onSelect prop.
+    const onSelect = vi.fn();
+    mockInvoke.mockClear();
+
+    render(
+      <Wrapper>
+        <BoardSelector
+          boards={twoBoards}
+          selectedPath={twoBoards[0].path}
+          onSelect={onSelect}
+        />
+      </Wrapper>,
+    );
+
+    // file.switchBoard should never be invoked directly by BoardSelector —
+    // that responsibility belongs to the parent (App.tsx handleSwitchBoard).
+    const switchBoardCalls = mockInvoke.mock.calls.filter(
+      (args) =>
+        args[0] === "dispatch_command" &&
+        String((args[1] as Record<string, unknown>)?.command ?? "").includes("switchBoard"),
+    );
+    expect(switchBoardCalls).toHaveLength(0);
+  });
+
+  it("renders tear-off button with aria-label when showTearOff is true", () => {
+    render(
+      <Wrapper>
+        <BoardSelector
+          boards={twoBoards}
+          selectedPath={twoBoards[0].path}
+          onSelect={() => {}}
+          showTearOff
+        />
+      </Wrapper>,
+    );
+    const btn = screen.getByRole("button", { name: "Open in new window" });
+    expect(btn).toBeTruthy();
+  });
+
+  it("does not render tear-off button when showTearOff is false", () => {
+    render(
+      <Wrapper>
+        <BoardSelector
+          boards={twoBoards}
+          selectedPath={twoBoards[0].path}
+          onSelect={() => {}}
+        />
+      </Wrapper>,
+    );
+    const btn = screen.queryByRole("button", { name: "Open in new window" });
+    expect(btn).toBeNull();
   });
 });

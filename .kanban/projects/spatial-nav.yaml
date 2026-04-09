@@ -1,0 +1,3 @@
+description: Replace manual claimWhen predicates with automatic XY-coordinate spatial navigation in FocusScope. Each scope registers its DOM rect; nav commands find the nearest focusable item by geometry, scoped by layer.
+name: Spatial Focus Navigation
+order: 2

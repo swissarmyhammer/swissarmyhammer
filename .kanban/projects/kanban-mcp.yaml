@@ -1,0 +1,3 @@
+description: Add serve/init/deinit/doctor to kanban-cli so it can run as a standalone MCP server, exposing the single kanban operation tool over stdio
+name: kanban-cli MCP Server
+order: 3

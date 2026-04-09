@@ -1,0 +1,53 @@
+---
+assignees:
+- claude-code
+position_column: todo
+position_ordinal: '8380'
+title: Paste Tag command missing from context menu when tag pill is innermost scope
+---
+## What
+
+`entity.paste` is only declared in `task.yaml` — not in `tag.yaml`. When a tag pill is the innermost scope (right-click on a tag pill on the board card or in the inspector), the scope chain is `["tag:X", "task:T", "column:C"]`. Because `entity.paste` does not exist in the tag schema, `commands_for_scope` generates it from the task scope entry with `target: "task:T"` — which is correct execution-wise.
+
+However, **two related gaps** cause "Paste Tag" to be absent or broken:
+
+### Gap 1 — `entity.paste` missing from `tag.yaml`
+
+Because the tag entity doesn't declare `entity.paste`, the command is not shown in the context menu when right-clicking a tag entity in the **Tags Grid** view (scope `["tag:X", "board:board"]`). There is no task in that scope chain so `PasteCmd.available()` returns false. This is actually correct — you can't paste a tag onto a tag entity. But the user experiences it as "paste tag doesn't work from the tags grid."
+
+The real fix here is: paste tag should only be available when a TASK is in scope, regardless of whether a tag is innermost. That's already enforced by `PasteCmd.available()`. No schema change needed — this is working as designed and just needs a test to document the constraint.
+
+### Gap 2 — Paste Tag not available via keyboard (`Mod+V`) when tag pill is focused
+
+`entity.paste` with `keys: { cua: Mod+V, vim: p }` is registered by `useEntityCommands` in the **task** entity's `FocusScope`. When a tag pill is focused and the user presses `Mod+V`, the keybinding handler resolves through the command scope chain from the tag FocusScope outward. If the task `FocusScope` is not an ancestor in the command scope chain (e.g., in contexts where the tag pill is not inside a task card's `FocusScope`), the keybinding is not found and paste silently fails.
+
+In the **inspector**, this was fully broken before the `InspectorFocusBridge` fix (commit: today's session). After that fix, the task `FocusScope` wraps the inspector, so `Mod+V` should now resolve correctly. Needs a test to lock this in.
+
+In the **board card**, the tag pill is always inside `EntityCard`'s `FocusScope(task:T)` so `Mod+V` works.
+
+### Fix
+
+1. Add `entity.paste` to `tag.yaml` schema commands with `context_menu: true` and `keys: { cua: Mod+V, vim: p }`. This makes paste reachable from the tag pill's own keybinding entry in the scope chain — the backend `PasteCmd.available()` still guards that a task must be in scope, so it will only be enabled when a task is an ancestor.
+
+2. Add a test in `scope_commands.rs` verifying that when scope is `["tag:X", "task:T"]` with clipboard_type="tag", exactly one "Paste Tag" command appears, it has `target: "task:T"`, and `available: true`.
+
+3. Add a test verifying paste is NOT available when scope is `["tag:X"]` only (no task ancestor).
+
+### Files to modify
+
+- `swissarmyhammer-kanban/builtin/fields/entities/tag.yaml` — add `entity.paste` command entry
+- `swissarmyhammer-kanban/src/scope_commands.rs` — add tests (no logic change needed)
+
+## Acceptance Criteria
+
+- [ ] Right-clicking a tag pill (scope `["tag:X", "task:T", ...]`) shows "Paste Tag" when a tag is on the clipboard
+- [ ] `Mod+V` with a tag pill focused (both on board card and in inspector) triggers Paste Tag  
+- [ ] Right-clicking a tag entity in the tags grid (scope `["tag:X", "board:board"]`) does NOT show Paste Tag (no task in scope)
+- [ ] Paste Tag executes correctly — the tag is appended to the task body, not the tag entity
+
+## Tests
+
+- [ ] `scope_commands.rs`: `paste_tag_available_when_tag_pill_on_task` — scope `["tag:X", "task:T", "column:C"]`, clipboard="tag" → one "Paste Tag" with `target: "task:T"`, available=true
+- [ ] `scope_commands.rs`: `paste_tag_not_available_tag_only_scope` — scope `["tag:X", "board:board"]`, clipboard="tag" → `entity.paste` absent or available=false
+- [ ] `scope_commands.rs`: `paste_tag_keybinding_reachable_from_tag_scope` — verify `entity.paste` has `keys.cua = "Mod+V"` in the resolved command when tag is innermost
+- [ ] Run: `cargo nextest run --package swissarmyhammer-kanban` — all tests pass

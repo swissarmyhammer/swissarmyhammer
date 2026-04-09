@@ -3331,7 +3331,7 @@ pub fn multiply(a: i32, b: i32) -> i32 {
         for entry in std::fs::read_dir(dir).expect("should read dir") {
             let entry = entry.expect("should read dir entry");
             let path = entry.path();
-            if path.extension().map_or(true, |e| e != "rs") {
+            if path.extension().is_none_or(|e| e != "rs") {
                 continue;
             }
             let source = std::fs::read_to_string(&path).expect("should read source");

@@ -34,16 +34,19 @@ const mockTags = [
   {
     id: "tag-1",
     entity_type: "tag",
+    moniker: "tag:tag-1",
     fields: { tag_name: "bugfix", color: "ff0000" },
   },
   {
     id: "tag-2",
     entity_type: "tag",
+    moniker: "tag:tag-2",
     fields: { tag_name: "feature", color: "00ff00" },
   },
   {
     id: "tag-3",
     entity_type: "tag",
+    moniker: "tag:tag-3",
     fields: { tag_name: "docs", color: "0000ff" },
   },
 ];
@@ -78,7 +81,7 @@ import {
   useEntityFocus,
 } from "@/lib/entity-focus-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { InspectProvider } from "@/lib/inspect-context";
+
 import type { Entity, FieldDef } from "@/types/kanban";
 
 const tagField: FieldDef = {
@@ -96,12 +99,14 @@ const refField: FieldDef = {
 const taskEntity: Entity = {
   id: "task-1",
   entity_type: "task",
+  moniker: "task:task-1",
   fields: { tags: ["bugfix", "feature", "docs"] },
 };
 
 const refEntity: Entity = {
   id: "task-1",
   entity_type: "task",
+  moniker: "task:task-1",
   fields: { depends_on: ["task-dep-A", "task-dep-B"] },
 };
 
@@ -155,16 +160,14 @@ function NavHarness({
   return (
     <EntityFocusProvider>
       <TooltipProvider>
-        <InspectProvider onInspect={() => {}} onDismiss={() => false}>
-          <FocusScope moniker={parentMoniker} commands={[]}>
-            <BadgeListDisplay
-              field={tagField}
-              value={values}
-              entity={taskEntity}
-              mode="full"
-            />
-          </FocusScope>
-        </InspectProvider>
+        <FocusScope moniker={parentMoniker} commands={[]}>
+          <BadgeListDisplay
+            field={tagField}
+            value={values}
+            entity={taskEntity}
+            mode="full"
+          />
+        </FocusScope>
       </TooltipProvider>
       <FocusMonitor />
       <SetFocusButton moniker={parentMoniker} />
@@ -187,16 +190,14 @@ function RefNavHarness({
   return (
     <EntityFocusProvider>
       <TooltipProvider>
-        <InspectProvider onInspect={() => {}} onDismiss={() => false}>
-          <FocusScope moniker={parentMoniker} commands={[]}>
-            <BadgeListDisplay
-              field={refField}
-              value={values}
-              entity={refEntity}
-              mode="full"
-            />
-          </FocusScope>
-        </InspectProvider>
+        <FocusScope moniker={parentMoniker} commands={[]}>
+          <BadgeListDisplay
+            field={refField}
+            value={values}
+            entity={refEntity}
+            mode="full"
+          />
+        </FocusScope>
       </TooltipProvider>
       <FocusMonitor />
       <SetFocusButton moniker={parentMoniker} />
@@ -228,9 +229,7 @@ describe("BadgeListDisplay pill navigation", () => {
       getByTestId("nav-right").click();
       await new Promise((r) => setTimeout(r, 0));
     });
-    expect(getByTestId("focus-monitor").textContent).toBe(
-      "field:tags/tag:tag-1",
-    );
+    expect(getByTestId("focus-monitor").textContent).toBe("tag:tag-1");
   });
 
   it("nav.right from first pill focuses second pill", async () => {
@@ -251,17 +250,13 @@ describe("BadgeListDisplay pill navigation", () => {
       getByTestId("nav-right").click();
       await new Promise((r) => setTimeout(r, 0));
     });
-    expect(getByTestId("focus-monitor").textContent).toBe(
-      "field:tags/tag:tag-1",
-    );
+    expect(getByTestId("focus-monitor").textContent).toBe("tag:tag-1");
 
     await act(async () => {
       getByTestId("nav-right").click();
       await new Promise((r) => setTimeout(r, 0));
     });
-    expect(getByTestId("focus-monitor").textContent).toBe(
-      "field:tags/tag:tag-2",
-    );
+    expect(getByTestId("focus-monitor").textContent).toBe("tag:tag-2");
   });
 
   it("nav.right from last pill leaves focus unchanged (clamp)", async () => {
@@ -290,18 +285,14 @@ describe("BadgeListDisplay pill navigation", () => {
       getByTestId("nav-right").click();
       await new Promise((r) => setTimeout(r, 0));
     });
-    expect(getByTestId("focus-monitor").textContent).toBe(
-      "field:tags/tag:tag-3",
-    );
+    expect(getByTestId("focus-monitor").textContent).toBe("tag:tag-3");
 
     // One more nav.right — should stay on last pill
     await act(async () => {
       getByTestId("nav-right").click();
       await new Promise((r) => setTimeout(r, 0));
     });
-    expect(getByTestId("focus-monitor").textContent).toBe(
-      "field:tags/tag:tag-3",
-    );
+    expect(getByTestId("focus-monitor").textContent).toBe("tag:tag-3");
   });
 
   it("nav.left from second pill focuses first pill", async () => {
@@ -326,18 +317,14 @@ describe("BadgeListDisplay pill navigation", () => {
       getByTestId("nav-right").click();
       await new Promise((r) => setTimeout(r, 0));
     });
-    expect(getByTestId("focus-monitor").textContent).toBe(
-      "field:tags/tag:tag-2",
-    );
+    expect(getByTestId("focus-monitor").textContent).toBe("tag:tag-2");
 
     // nav.left → first pill
     await act(async () => {
       getByTestId("nav-left").click();
       await new Promise((r) => setTimeout(r, 0));
     });
-    expect(getByTestId("focus-monitor").textContent).toBe(
-      "field:tags/tag:tag-1",
-    );
+    expect(getByTestId("focus-monitor").textContent).toBe("tag:tag-1");
   });
 
   it("nav.left from first pill leaves focus unchanged (clamp)", async () => {
@@ -358,18 +345,14 @@ describe("BadgeListDisplay pill navigation", () => {
       getByTestId("nav-right").click();
       await new Promise((r) => setTimeout(r, 0));
     });
-    expect(getByTestId("focus-monitor").textContent).toBe(
-      "field:tags/tag:tag-1",
-    );
+    expect(getByTestId("focus-monitor").textContent).toBe("tag:tag-1");
 
     // nav.left — first pill has no nav.left predicate, so focus stays
     await act(async () => {
       getByTestId("nav-left").click();
       await new Promise((r) => setTimeout(r, 0));
     });
-    expect(getByTestId("focus-monitor").textContent).toBe(
-      "field:tags/tag:tag-1",
-    );
+    expect(getByTestId("focus-monitor").textContent).toBe("tag:tag-1");
   });
 });
 
@@ -395,26 +378,20 @@ describe("BadgeListDisplay reference-field pill navigation", () => {
       getByTestId("nav-right").click();
       await new Promise((r) => setTimeout(r, 0));
     });
-    expect(getByTestId("focus-monitor").textContent).toBe(
-      "field:depends_on/task:task-dep-A",
-    );
+    expect(getByTestId("focus-monitor").textContent).toBe("task:task-dep-A");
 
     // nav.right → second pill: task:task-dep-B
     await act(async () => {
       getByTestId("nav-right").click();
       await new Promise((r) => setTimeout(r, 0));
     });
-    expect(getByTestId("focus-monitor").textContent).toBe(
-      "field:depends_on/task:task-dep-B",
-    );
+    expect(getByTestId("focus-monitor").textContent).toBe("task:task-dep-B");
 
     // nav.left → back to first pill
     await act(async () => {
       getByTestId("nav-left").click();
       await new Promise((r) => setTimeout(r, 0));
     });
-    expect(getByTestId("focus-monitor").textContent).toBe(
-      "field:depends_on/task:task-dep-A",
-    );
+    expect(getByTestId("focus-monitor").textContent).toBe("task:task-dep-A");
   });
 });

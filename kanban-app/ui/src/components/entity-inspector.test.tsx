@@ -195,18 +195,24 @@ vi.mock("@tauri-apps/plugin-log", () => ({
 
 import "@/components/fields/registrations";
 import { EntityInspector } from "./entity-inspector";
+import { InspectorFocusBridge } from "./inspector-focus-bridge";
 import { UIStateProvider } from "@/lib/ui-state-context";
 import { SchemaProvider } from "@/lib/schema-context";
 import { EntityStoreProvider } from "@/lib/entity-store-context";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
-import { InspectProvider } from "@/lib/inspect-context";
+
 import { FieldUpdateProvider } from "@/lib/field-update-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { CommandScopeProvider } from "@/lib/command-scope";
 import type { Entity } from "@/types/kanban";
 
 function makeEntity(fields: Record<string, unknown> = {}): Entity {
-  return { entity_type: "task", id: "test-id", fields };
+  return {
+    entity_type: "task",
+    id: "test-id",
+    moniker: "task:test-id",
+    fields,
+  };
 }
 
 async function renderInspector(entity: Entity, tagEntities: Entity[] = []) {
@@ -215,15 +221,39 @@ async function renderInspector(entity: Entity, tagEntities: Entity[] = []) {
       <SchemaProvider>
         <EntityStoreProvider entities={{ task: [entity], tag: tagEntities }}>
           <EntityFocusProvider>
-            <InspectProvider onInspect={() => {}} onDismiss={() => false}>
-              <FieldUpdateProvider>
-                <UIStateProvider>
-                  <CommandScopeProvider commands={[]}>
-                    <EntityInspector entity={entity} />
-                  </CommandScopeProvider>
-                </UIStateProvider>
-              </FieldUpdateProvider>
-            </InspectProvider>
+            <FieldUpdateProvider>
+              <UIStateProvider>
+                <CommandScopeProvider commands={[]}>
+                  <EntityInspector entity={entity} />
+                </CommandScopeProvider>
+              </UIStateProvider>
+            </FieldUpdateProvider>
+          </EntityFocusProvider>
+        </EntityStoreProvider>
+      </SchemaProvider>
+    </TooltipProvider>,
+  );
+  // Wait for async schema load
+  await act(async () => {
+    await new Promise((r) => setTimeout(r, 50));
+  });
+  return result;
+}
+
+async function renderViaInspectorBridge(
+  entity: Entity,
+  tagEntities: Entity[] = [],
+) {
+  const result = render(
+    <TooltipProvider>
+      <SchemaProvider>
+        <EntityStoreProvider entities={{ task: [entity], tag: tagEntities }}>
+          <EntityFocusProvider>
+            <FieldUpdateProvider>
+              <UIStateProvider>
+                <InspectorFocusBridge entity={entity} />
+              </UIStateProvider>
+            </FieldUpdateProvider>
           </EntityFocusProvider>
         </EntityStoreProvider>
       </SchemaProvider>
@@ -292,6 +322,7 @@ describe("EntityInspector", () => {
       {
         entity_type: "tag",
         id: "tag-bug",
+        moniker: "tag:tag-bug",
         fields: { tag_name: "bug", color: "ff0000" },
       },
     ]);
@@ -314,6 +345,7 @@ describe("EntityInspector", () => {
       {
         entity_type: "tag",
         id: "tag-ui",
+        moniker: "tag:tag-ui",
         fields: { tag_name: "ui", color: "1d76db", description: "UI" },
       },
     ];
@@ -336,6 +368,7 @@ describe("EntityInspector", () => {
       {
         entity_type: "tag",
         id: "tag-ui",
+        moniker: "tag:tag-ui",
         fields: { tag_name: "ui", color: "1d76db", description: "" },
       },
     ];
@@ -392,5 +425,36 @@ describe("EntityInspector", () => {
     );
     const focused = container.querySelectorAll("[data-focused]");
     expect(focused.length).toBe(1);
+  });
+
+  it("tag pill in inspector has entity moniker as ancestor scope when using InspectorFocusBridge", async () => {
+    const tags = [
+      {
+        entity_type: "tag",
+        id: "tag-ui",
+        moniker: "tag:tag-ui",
+        fields: { tag_name: "ui", color: "1d76db", description: "UI" },
+      },
+    ];
+    const { container } = await renderViaInspectorBridge(
+      makeEntity({ body: "Fix #ui bug" }),
+      tags,
+    );
+
+    const bodyRow = container.querySelector('[data-testid="field-row-body"]');
+    expect(bodyRow).toBeTruthy();
+    // The entity FocusScope wraps the inspector — verify data-moniker="task:test-id" is present
+    const entityScope = container.querySelector(
+      '[data-moniker="task:test-id"]',
+    );
+    expect(
+      entityScope,
+      "Entity FocusScope with task:test-id moniker should exist",
+    ).toBeTruthy();
+    // The body row (containing the tag pill) should be inside the entity scope
+    expect(
+      entityScope!.contains(bodyRow),
+      "body row (with tag pill) should be inside the entity scope",
+    ).toBe(true);
   });
 });

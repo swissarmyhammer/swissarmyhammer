@@ -1,6 +1,6 @@
 import { icons, LayoutGrid } from "lucide-react";
 import { useViews } from "@/lib/views-context";
-import { useExecuteCommand } from "@/lib/command-scope";
+import { useDispatchCommand } from "@/lib/command-scope";
 import { cn } from "@/lib/utils";
 import {
   Tooltip,
@@ -27,7 +27,7 @@ function viewIcon(view: ViewDef) {
 
 export function LeftNav() {
   const { views, activeView } = useViews();
-  const executeCommand = useExecuteCommand();
+  const dispatch = useDispatchCommand();
 
   if (views.length === 0) return null;
 
@@ -39,7 +39,7 @@ export function LeftNav() {
           <Tooltip key={view.id}>
             <TooltipTrigger asChild>
               <button
-                onClick={() => executeCommand(`view.switch:${view.id}`)}
+                onClick={() => dispatch(`view.switch:${view.id}`)}
                 className={cn(
                   "flex items-center justify-center rounded-md p-1.5 transition-colors",
                   isActive

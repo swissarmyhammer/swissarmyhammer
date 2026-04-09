@@ -30,6 +30,7 @@ macro_rules! define_id {
         #[serde(transparent)]
         pub struct $name(pub String);
 
+        #[allow(clippy::new_without_default)]
         impl $name {
             /// Create a new ID with a fresh ULID.
             pub fn new() -> Self {
@@ -44,12 +45,6 @@ macro_rules! define_id {
             /// Get the inner string value.
             pub fn as_str(&self) -> &str {
                 &self.0
-            }
-        }
-
-        impl Default for $name {
-            fn default() -> Self {
-                Self::new()
             }
         }
 
@@ -105,6 +100,13 @@ macro_rules! define_id {
         impl PartialEq<String> for $name {
             fn eq(&self, other: &String) -> bool {
                 self.0 == *other
+            }
+        }
+
+        impl std::str::FromStr for $name {
+            type Err = std::convert::Infallible;
+            fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+                Ok(Self(s.to_string()))
             }
         }
     };

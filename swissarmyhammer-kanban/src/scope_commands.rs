@@ -185,25 +185,63 @@ pub fn commands_for_scope(
     let mut seen: HashSet<(String, Option<String>)> = HashSet::new();
 
     let clipboard_type = ui_state.clipboard_entity_type();
+    let all_registry_cmds = registry.available_commands(scope_chain);
 
-    // 1. Walk scope chain: for each entity moniker, get its schema commands
-    if let Some(fields) = fields {
-        for moniker in scope_chain {
-            let Some((entity_type, _entity_id)) = moniker.split_once(':') else {
-                continue;
-            };
-            let Some(entity_def) = fields.get_entity(entity_type) else {
-                continue;
-            };
+    // Walk scope chain in order (innermost first). For each moniker, emit
+    // entity schema commands then scoped registry commands. This ensures
+    // commands appear in scope order: attachment before task before global.
+    for moniker in scope_chain {
+        let Some((entity_type, entity_id)) = moniker.split_once(':') else {
+            continue;
+        };
 
-            for cmd in &entity_def.commands {
-                let key = (cmd.id.clone(), Some(moniker.clone()));
+        // Field monikers ("field:task:abc.title") are not entities — skip them.
+        // The frontend prefixes field-level FocusScopes with "field:" so they
+        // don't masquerade as entity monikers in the scope chain.
+        if entity_type == "field" {
+            continue;
+        }
+
+        let entity_moniker = format!("{entity_type}:{entity_id}");
+
+        // Entity schema commands (from entity YAML definitions).
+        // Two passes: (1) commands declared directly on this entity type,
+        // (2) commands from ANY entity definition whose `scope` field
+        // references this entity type (e.g. task.add on task entity with
+        // scope "entity:column" when processing a column moniker).
+        if let Some(fields) = fields {
+            let scope_bare_et = entity_type;
+            let scope_prefixed_et = format!("entity:{entity_type}");
+
+            let direct_cmds: Vec<_> = fields
+                .get_entity(entity_type)
+                .map(|e| e.commands.iter().collect())
+                .unwrap_or_default();
+
+            let scoped_cmds: Vec<_> = fields
+                .all_entities()
+                .iter()
+                .flat_map(|e| e.commands.iter())
+                .filter(|cmd| {
+                    cmd.scope.as_deref().is_some_and(|s| {
+                        s.split(',').any(|r| {
+                            let r = r.trim();
+                            r == scope_bare_et || r == scope_prefixed_et
+                        })
+                    })
+                })
+                .collect();
+
+            for cmd in direct_cmds.into_iter().chain(scoped_cmds) {
+                if cmd.visible == Some(false) {
+                    continue;
+                }
+                let key = (cmd.id.clone(), Some(entity_moniker.clone()));
                 if seen.contains(&key) {
                     continue;
                 }
                 seen.insert(key);
 
-                // Resolve name template
                 let tpl = TemplateParams {
                     entity_type: if cmd.id == "entity.paste" {
                         clipboard_type.as_deref().unwrap_or("entity")
@@ -213,8 +251,11 @@ pub fn commands_for_scope(
                     ..Default::default()
                 };
                 let name = resolve_name_template(&cmd.name, &tpl);
+                let menu_name = cmd
+                    .menu_name
+                    .as_ref()
+                    .map(|mn| resolve_name_template(mn, &tpl));
 
-                // Convert entity command keys to registry KeysDef
                 let keys = cmd.keys.as_ref().map(|k| KeysDef {
                     vim: k.vim.clone(),
                     cua: k.cua.clone(),
@@ -227,8 +268,8 @@ pub fn commands_for_scope(
                 result.push(ResolvedCommand {
                     id: cmd.id.clone(),
                     name,
-                    menu_name: None,
-                    target: Some(moniker.clone()),
+                    menu_name,
+                    target: Some(entity_moniker.clone()),
                     group: entity_type.to_string(),
                     context_menu: cmd.context_menu,
                     keys,
@@ -236,12 +277,65 @@ pub fn commands_for_scope(
                 });
             }
         }
+
+        // Registry commands scoped to this entity type (e.g. attachment.open
+        // with scope "attachment" or "entity:attachment"). These appear right
+        // after the entity schema commands for the same scope level.
+        let scope_bare = entity_type;
+        let scope_prefixed = format!("entity:{entity_type}");
+        for cmd_def in &all_registry_cmds {
+            if !cmd_def.visible {
+                continue;
+            }
+            // Only include commands whose scope mentions THIS specific type
+            let matches_this_type = cmd_def.scope.as_deref().is_some_and(|s| {
+                s.split(',').any(|r| {
+                    let r = r.trim();
+                    r == scope_bare || r == scope_prefixed
+                })
+            });
+            if !matches_this_type {
+                continue;
+            }
+
+            let key = (cmd_def.id.clone(), None);
+            if seen.contains(&key) {
+                continue;
+            }
+            seen.insert(key);
+
+            let tpl = TemplateParams {
+                entity_type: if cmd_def.id == "entity.paste" {
+                    clipboard_type.as_deref().unwrap_or("entity")
+                } else {
+                    entity_type
+                },
+                ..Default::default()
+            };
+            let name = resolve_name_template(&cmd_def.name, &tpl);
+            let menu_name = cmd_def
+                .menu_name
+                .as_ref()
+                .map(|mn| resolve_name_template(mn, &tpl));
+
+            let available =
+                check_available(&cmd_def.id, scope_chain, None, command_impls, ui_state);
+
+            result.push(ResolvedCommand {
+                id: cmd_def.id.clone(),
+                name,
+                menu_name,
+                target: None,
+                group: entity_type.to_string(),
+                context_menu: cmd_def.context_menu,
+                keys: cmd_def.keys.clone(),
+                available,
+            });
+        }
     }
 
-    // 2. Add registry commands (global + scoped that match the current scope chain)
-    let available_from_registry = registry.available_commands(scope_chain);
-    for cmd_def in available_from_registry {
-        // Skip invisible commands
+    // Global (unscoped) registry commands — appear after all scoped commands.
+    for cmd_def in &all_registry_cmds {
         if !cmd_def.visible {
             continue;
         }
@@ -252,7 +346,6 @@ pub fn commands_for_scope(
         }
         seen.insert(key);
 
-        // Resolve name using innermost entity type from scope chain
         let innermost_type = scope_chain
             .first()
             .and_then(|m| m.split_once(':').map(|(t, _)| t))
@@ -271,8 +364,6 @@ pub fn commands_for_scope(
             .as_ref()
             .map(|mn| resolve_name_template(mn, &tpl));
 
-        let keys = cmd_def.keys.clone();
-
         let available = check_available(&cmd_def.id, scope_chain, None, command_impls, ui_state);
 
         result.push(ResolvedCommand {
@@ -282,7 +373,7 @@ pub fn commands_for_scope(
             target: None,
             group: "global".to_string(),
             context_menu: cmd_def.context_menu,
-            keys,
+            keys: cmd_def.keys.clone(),
             available,
         });
     }
@@ -361,17 +452,18 @@ pub fn commands_for_scope(
         }
     }
 
-    // 4. Deduplicate: same (id, name) → keep innermost (first seen).
-    // "Copy Tag" and "Copy Task" have the same ID but different names → both kept.
-    // "Paste Tag" on task and "Paste Tag" on column have the same name → innermost kept.
+    // 4. Deduplicate: same id → keep innermost (first seen).
+    // When a command like "entity.cut" appears in both tag and task scopes, only
+    // the innermost (tag) version is shown. To act on the task, right-click the
+    // task card directly. This prevents confusing menus that show both "Cut Tag"
+    // and "Cut Task" when right-clicking a tag pill.
     {
-        let mut seen_names: HashSet<(String, String)> = HashSet::new();
+        let mut seen_ids: HashSet<String> = HashSet::new();
         result.retain(|c| {
-            let key = (c.id.clone(), c.name.clone());
-            if seen_names.contains(&key) {
+            if seen_ids.contains(&c.id) {
                 return false;
             }
-            seen_names.insert(key);
+            seen_ids.insert(c.id.clone());
             true
         });
     }
@@ -525,7 +617,10 @@ mod tests {
     // =========================================================================
 
     #[test]
-    fn tag_on_task_has_both_copy_tag_and_copy_task() {
+    fn tag_on_task_has_only_tag_copy_cut_inspect() {
+        // With dedup-by-id (innermost wins), right-clicking a tag pill shows
+        // only the tag-level commands for shared IDs like entity.copy, entity.cut,
+        // entity.inspect. The task-level versions are suppressed.
         let (registry, impls, fields, ui) = setup();
         let scope = vec![
             "tag:bug".into(),
@@ -536,14 +631,10 @@ mod tests {
         let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
         let names: Vec<&str> = cmds.iter().map(|c| c.name.as_str()).collect();
 
+        // Innermost (tag) versions are present
         assert!(
             names.contains(&"Copy Tag"),
             "should have Copy Tag: {:?}",
-            names
-        );
-        assert!(
-            names.contains(&"Copy Task"),
-            "should have Copy Task: {:?}",
             names
         );
         assert!(
@@ -552,18 +643,25 @@ mod tests {
             names
         );
         assert!(
-            names.contains(&"Cut Task"),
-            "should have Cut Task: {:?}",
-            names
-        );
-        assert!(
             names.contains(&"Inspect Tag"),
             "should have Inspect Tag: {:?}",
             names
         );
+
+        // Outer (task) versions are suppressed by dedup-by-id
         assert!(
-            names.contains(&"Inspect Task"),
-            "should have Inspect Task: {:?}",
+            !names.contains(&"Copy Task"),
+            "should NOT have Copy Task (deduped by id, tag wins): {:?}",
+            names
+        );
+        assert!(
+            !names.contains(&"Cut Task"),
+            "should NOT have Cut Task (deduped by id, tag wins): {:?}",
+            names
+        );
+        assert!(
+            !names.contains(&"Inspect Task"),
+            "should NOT have Inspect Task (deduped by id, tag wins): {:?}",
             names
         );
     }
@@ -903,11 +1001,30 @@ mod tests {
         ];
         let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
 
+        // With dedup-by-id (innermost wins), the tag scope wins for entity.copy.
+        // "Copy Tag" appears with target "tag:01TAG"; "Copy Task" is deduped away.
         let copy_tag = cmds.iter().find(|c| c.name == "Copy Tag").unwrap();
         assert_eq!(copy_tag.target.as_deref(), Some("tag:01TAG"));
 
-        let copy_task = cmds.iter().find(|c| c.name == "Copy Task").unwrap();
-        assert_eq!(copy_task.target.as_deref(), Some("task:01TASK"));
+        let copy_task = cmds.iter().find(|c| c.name == "Copy Task");
+        assert!(
+            copy_task.is_none(),
+            "Copy Task should be deduped away when tag is innermost scope"
+        );
+
+        // Task-only scope to verify task target is correct when no tag present
+        let task_only_scope = vec!["task:01TASK".into(), "column:todo".into()];
+        let task_cmds = commands_for_scope(
+            &task_only_scope,
+            &registry,
+            &impls,
+            Some(&fields),
+            &ui,
+            false,
+            None,
+        );
+        let copy_task_direct = task_cmds.iter().find(|c| c.name == "Copy Task").unwrap();
+        assert_eq!(copy_task_direct.target.as_deref(), Some("task:01TASK"));
 
         let inspect_col = cmds.iter().find(|c| c.name == "Inspect Column");
         if let Some(ic) = inspect_col {
@@ -970,7 +1087,7 @@ mod tests {
     }
 
     // =========================================================================
-    // Other entity types (actor, swimlane, attachment)
+    // Other entity types (actor, attachment)
     // =========================================================================
 
     #[test]
@@ -982,19 +1099,6 @@ mod tests {
         assert!(
             names.contains(&"Inspect Actor"),
             "actor should have Inspect Actor: {:?}",
-            names
-        );
-    }
-
-    #[test]
-    fn swimlane_scope_has_inspect() {
-        let (registry, impls, fields, ui) = setup();
-        let scope = vec!["swimlane:lane1".into()];
-        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
-        let names: Vec<&str> = cmds.iter().map(|c| c.name.as_str()).collect();
-        assert!(
-            names.contains(&"Inspect Swimlane"),
-            "swimlane should have Inspect Swimlane: {:?}",
             names
         );
     }
@@ -1548,6 +1652,385 @@ mod tests {
         assert!(
             !ids.iter().any(|id| id.starts_with("window.focus:")),
             "no window commands without dynamic sources"
+        );
+    }
+
+    // =========================================================================
+    // Perspective scope
+    // =========================================================================
+
+    #[test]
+    fn perspective_scope_has_filter_and_group_commands() {
+        let (registry, impls, fields, ui) = setup();
+        let scope = vec!["perspective:01ABC".into(), "board:my-board".into()];
+        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
+        let ids: Vec<&str> = cmds.iter().map(|c| c.id.as_str()).collect();
+
+        assert!(
+            ids.contains(&"perspective.filter"),
+            "perspective scope should have perspective.filter: {:?}",
+            ids
+        );
+        assert!(
+            ids.contains(&"perspective.group"),
+            "perspective scope should have perspective.group: {:?}",
+            ids
+        );
+    }
+
+    #[test]
+    fn perspective_commands_not_available_without_perspective_in_scope() {
+        let (registry, impls, fields, ui) = setup();
+        let scope = vec![
+            "task:01X".into(),
+            "column:todo".into(),
+            "board:my-board".into(),
+        ];
+        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
+        let ids: Vec<&str> = cmds.iter().map(|c| c.id.as_str()).collect();
+
+        assert!(
+            !ids.contains(&"perspective.filter"),
+            "perspective.filter should NOT appear without perspective in scope: {:?}",
+            ids
+        );
+    }
+
+    // =========================================================================
+    // Dedup-by-id: innermost scope wins for shared command IDs
+    // =========================================================================
+
+    #[test]
+    fn dedup_by_id_tag_task_scope_only_one_cut_command() {
+        // entity.cut appears in both tag and task schemas.
+        // With scope ["tag:X", "task:Y"], only the innermost (tag) cut should appear.
+        let (registry, impls, fields, ui) = setup();
+        let scope = vec![
+            "tag:some-tag".into(),
+            "task:01TASK".into(),
+            "column:todo".into(),
+            "board:my-board".into(),
+        ];
+        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
+
+        let cut_cmds: Vec<_> = cmds.iter().filter(|c| c.id == "entity.cut").collect();
+        assert_eq!(
+            cut_cmds.len(),
+            1,
+            "entity.cut should appear exactly once (innermost wins): {:?}",
+            cut_cmds.iter().map(|c| &c.name).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            cut_cmds[0].name, "Cut Tag",
+            "the single cut command should be 'Cut Tag' (tag is innermost): {:?}",
+            cut_cmds[0]
+        );
+        assert_eq!(
+            cut_cmds[0].target.as_deref(),
+            Some("tag:some-tag"),
+            "cut target should be the tag"
+        );
+    }
+
+    #[test]
+    fn dedup_by_id_task_only_scope_shows_cut_task() {
+        // When the scope has no tag, "Cut Task" should appear normally.
+        let (registry, impls, fields, ui) = setup();
+        let scope = vec![
+            "task:01TASK".into(),
+            "column:todo".into(),
+            "board:my-board".into(),
+        ];
+        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
+
+        let cut_cmds: Vec<_> = cmds.iter().filter(|c| c.id == "entity.cut").collect();
+        assert_eq!(
+            cut_cmds.len(),
+            1,
+            "entity.cut should appear exactly once: {:?}",
+            cut_cmds
+        );
+        assert_eq!(
+            cut_cmds[0].name, "Cut Task",
+            "only task in scope → should show 'Cut Task'"
+        );
+        assert_eq!(
+            cut_cmds[0].target.as_deref(),
+            Some("task:01TASK"),
+            "cut target should be the task"
+        );
+    }
+
+    #[test]
+    fn dedup_by_id_applies_to_copy_and_inspect_too() {
+        // Verify that entity.copy and entity.inspect also follow dedup-by-id,
+        // showing only the innermost (tag) version when both tag and task are in scope.
+        let (registry, impls, fields, ui) = setup();
+        let scope = vec![
+            "tag:some-tag".into(),
+            "task:01TASK".into(),
+            "column:todo".into(),
+        ];
+        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
+
+        // entity.copy — only tag version
+        let copy_cmds: Vec<_> = cmds.iter().filter(|c| c.id == "entity.copy").collect();
+        assert_eq!(
+            copy_cmds.len(),
+            1,
+            "entity.copy should appear exactly once: {:?}",
+            copy_cmds.iter().map(|c| &c.name).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            copy_cmds[0].name, "Copy Tag",
+            "entity.copy should show 'Copy Tag'"
+        );
+
+        // ui.inspect — only tag version
+        let inspect_cmds: Vec<_> = cmds.iter().filter(|c| c.id == "ui.inspect").collect();
+        assert_eq!(
+            inspect_cmds.len(),
+            1,
+            "ui.inspect should appear exactly once: {:?}",
+            inspect_cmds.iter().map(|c| &c.name).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            inspect_cmds[0].name, "Inspect Tag",
+            "ui.inspect should show 'Inspect Tag'"
+        );
+    }
+
+    // =========================================================================
+    // Scope ordering — innermost scope commands first
+    // =========================================================================
+
+    #[test]
+    fn attachment_commands_appear_before_task_commands() {
+        let (registry, impls, fields, ui) = setup();
+        let scope = vec![
+            "attachment:/path/to/file.png".into(),
+            "task:01X".into(),
+            "column:todo".into(),
+        ];
+        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, true, None);
+        let ids: Vec<&str> = cmds.iter().map(|c| c.id.as_str()).collect();
+
+        // attachment.open and attachment.reveal should be present
+        assert!(
+            ids.contains(&"attachment.open"),
+            "attachment.open should be in context menu"
+        );
+        assert!(
+            ids.contains(&"attachment.reveal"),
+            "attachment.reveal should be in context menu"
+        );
+
+        // They should appear before any task commands
+        let open_pos = ids.iter().position(|&id| id == "attachment.open").unwrap();
+        let reveal_pos = ids
+            .iter()
+            .position(|&id| id == "attachment.reveal")
+            .unwrap();
+
+        // Find the first task-level command
+        let first_task_pos = ids
+            .iter()
+            .position(|&id| id.starts_with("entity.") || id.starts_with("task."));
+
+        if let Some(task_pos) = first_task_pos {
+            assert!(
+                open_pos < task_pos,
+                "attachment.open (pos {open_pos}) should appear before first task command (pos {task_pos})"
+            );
+            assert!(
+                reveal_pos < task_pos,
+                "attachment.reveal (pos {reveal_pos}) should appear before first task command (pos {task_pos})"
+            );
+        }
+    }
+
+    #[test]
+    fn attachment_commands_grouped_as_attachment_not_global() {
+        let (registry, impls, fields, ui) = setup();
+        let scope = vec!["attachment:/path/to/file.png".into(), "task:01X".into()];
+        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
+
+        let open_cmd = cmds.iter().find(|c| c.id == "attachment.open");
+        assert!(open_cmd.is_some(), "attachment.open should exist");
+        assert_eq!(
+            open_cmd.unwrap().group,
+            "attachment",
+            "attachment.open should have group 'attachment', not 'global'"
+        );
+    }
+
+    #[test]
+    fn tag_commands_appear_before_task_commands_in_context_menu() {
+        let (registry, impls, fields, ui) = setup();
+        let scope = vec!["tag:bug".into(), "task:01X".into(), "column:todo".into()];
+        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, true, None);
+        let groups: Vec<&str> = cmds.iter().map(|c| c.group.as_str()).collect();
+
+        // First commands should be tag-grouped, then task-grouped
+        let first_tag = groups.iter().position(|&g| g == "tag");
+        let first_task = groups.iter().position(|&g| g == "task");
+
+        if let (Some(tag_pos), Some(task_pos)) = (first_tag, first_task) {
+            assert!(
+                tag_pos < task_pos,
+                "tag commands (pos {tag_pos}) should appear before task commands (pos {task_pos})"
+            );
+        }
+    }
+
+    // =========================================================================
+    // Field monikers are skipped in scope chain
+    // =========================================================================
+
+    #[test]
+    fn field_moniker_skipped_inspect_targets_entity() {
+        // With the `field:` prefix, grid cell monikers like
+        // "field:tag:tag-1.color" are skipped entirely. The inspect command
+        // targets the real entity moniker "tag:tag-1".
+        let (registry, impls, fields, ui) = setup();
+        let scope = vec![
+            "field:tag:tag-1.color".into(),
+            "tag:tag-1".into(),
+            "board:board".into(),
+        ];
+        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
+
+        let inspect = cmds.iter().find(|c| c.id == "ui.inspect");
+        assert!(inspect.is_some(), "should have inspect command");
+        assert_eq!(
+            inspect.unwrap().target.as_deref(),
+            Some("tag:tag-1"),
+            "inspect target should be the entity moniker, not the field moniker"
+        );
+    }
+
+    #[test]
+    fn field_moniker_dedup_emits_one_inspect() {
+        // "field:tag:tag-1.color" is skipped, so only "tag:tag-1" produces
+        // commands — exactly one inspect command.
+        let (registry, impls, fields, ui) = setup();
+        let scope = vec![
+            "field:tag:tag-1.color".into(),
+            "tag:tag-1".into(),
+            "board:board".into(),
+        ];
+        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
+
+        let inspect_cmds: Vec<_> = cmds.iter().filter(|c| c.id == "ui.inspect").collect();
+        assert_eq!(
+            inspect_cmds.len(),
+            1,
+            "should have exactly one inspect command, got {}: {:?}",
+            inspect_cmds.len(),
+            inspect_cmds.iter().map(|c| &c.target).collect::<Vec<_>>()
+        );
+    }
+
+    // =========================================================================
+    // Entity schema as primary source for scoped commands
+    // =========================================================================
+
+    #[test]
+    fn task_add_from_entity_schema_has_target() {
+        // task.add is declared on the task entity with scope "entity:column".
+        // When column:todo is in scope, it should appear via the entity schema
+        // path with a target pointing to the column moniker.
+        let (registry, impls, fields, ui) = setup();
+        let scope = vec!["column:todo".into(), "board:board".into()];
+        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
+        let task_add = cmds
+            .iter()
+            .find(|c| c.id == "task.add")
+            .expect("task.add should be in resolved commands");
+        assert_eq!(
+            task_add.target.as_deref(),
+            Some("column:todo"),
+            "task.add should have target from entity schema path"
+        );
+    }
+
+    #[test]
+    fn task_untag_from_entity_schema_has_target() {
+        // task.untag is declared on the task entity with scope
+        // "entity:tag,entity:task". When both tag and task are in scope,
+        // it should appear via the entity schema path with a target
+        // pointing to the tag moniker (innermost match).
+        let (registry, impls, fields, ui) = setup();
+        let scope = vec!["tag:bug".into(), "task:01X".into(), "column:todo".into()];
+        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
+        let untag = cmds
+            .iter()
+            .find(|c| c.id == "task.untag")
+            .expect("task.untag should be in resolved commands");
+        assert!(
+            untag.target.is_some(),
+            "task.untag should have a target from entity schema path"
+        );
+    }
+
+    #[test]
+    fn entity_schema_commands_carry_menu_name() {
+        // Commands resolved via the entity schema block should carry
+        // menu_name from EntityCommand.menu_name, not hardcode None.
+        let (registry, impls, fields, ui) = setup();
+        let scope = vec![
+            "task:01X".into(),
+            "column:todo".into(),
+            "board:board".into(),
+        ];
+        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
+
+        // entity.archive has no explicit menu_name in YAML so should be None
+        let archive = cmds.iter().find(|c| c.id == "entity.archive");
+        if let Some(a) = archive {
+            assert!(
+                a.menu_name.is_none(),
+                "entity.archive should have no menu_name: {:?}",
+                a.menu_name
+            );
+        }
+    }
+
+    // =========================================================================
+    // Field monikers are skipped
+    // =========================================================================
+
+    #[test]
+    fn field_moniker_in_scope_does_not_produce_entity_commands() {
+        // A scope chain with "field:task:abc.title" should not generate commands
+        // for a phantom entity "abc.title" — the field moniker is skipped entirely.
+        let (registry, impls, fields, ui) = setup();
+        let scope = vec![
+            "field:task:abc.title".into(),
+            "task:abc".into(),
+            "column:todo".into(),
+            "board:my-board".into(),
+        ];
+        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
+
+        // No command should target the field moniker
+        for cmd in &cmds {
+            if let Some(target) = &cmd.target {
+                assert!(
+                    !target.starts_with("field:"),
+                    "command '{}' should not target a field moniker, got: {}",
+                    cmd.id,
+                    target
+                );
+            }
+        }
+
+        // Task commands should still be present (from the real task:abc moniker)
+        let names: Vec<&str> = cmds.iter().map(|c| c.name.as_str()).collect();
+        assert!(
+            names.contains(&"Inspect Task"),
+            "real task commands should still appear: {:?}",
+            names
         );
     }
 }

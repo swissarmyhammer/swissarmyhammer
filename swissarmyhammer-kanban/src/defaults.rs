@@ -1,8 +1,9 @@
 //! Built-in field definitions and entity templates for kanban.
 //!
-//! Builtin YAML files are embedded from `builtin/fields/` at compile time via
-//! `include_dir!`. At runtime, these are merged with local overrides from
-//! `.kanban/fields/` to produce the full field registry.
+//! Builtin YAML files are embedded from `builtin/definitions/` and
+//! `builtin/entities/` at compile time via `include_dir!`. At runtime,
+//! these are merged with local overrides from `.kanban/definitions/` and
+//! `.kanban/entities/` to produce the full field registry.
 //!
 //! `KanbanLookup` implements `EntityLookup` for kanban entity stores,
 //! enabling reference field validation to prune dangling IDs.
@@ -19,10 +20,14 @@ use crate::tag_parser;
 use crate::task_helpers;
 
 /// Builtin field definition YAML files, embedded at compile time.
-static BUILTIN_DEFINITIONS: Dir = include_dir!("$CARGO_MANIFEST_DIR/builtin/fields/definitions");
+///
+/// Each builtin field uses a zero-padded sentinel ID (e.g. `00000000000000000000000001`)
+/// that sorts before any real ULID. The last two characters encode the builtin field
+/// code. See `builtin/definitions/*.yaml` for the full set.
+static BUILTIN_DEFINITIONS: Dir = include_dir!("$CARGO_MANIFEST_DIR/builtin/definitions");
 
 /// Builtin entity definition YAML files, embedded at compile time.
-static BUILTIN_ENTITIES: Dir = include_dir!("$CARGO_MANIFEST_DIR/builtin/fields/entities");
+static BUILTIN_ENTITIES: Dir = include_dir!("$CARGO_MANIFEST_DIR/builtin/entities");
 
 /// Builtin view definition YAML files, embedded at compile time.
 static BUILTIN_VIEWS: Dir = include_dir!("$CARGO_MANIFEST_DIR/builtin/views");
@@ -171,11 +176,25 @@ pub fn kanban_compute_engine() -> ComputeEngine {
         }),
     );
 
+    // compute-virtual-tags: stub — returns empty array.
+    // Populated by the enrichment pipeline in a later card.
+    engine.register(
+        "compute-virtual-tags",
+        Box::new(|_fields| Box::pin(async { serde_json::Value::Array(vec![]) })),
+    );
+
+    // compute-filter-tags: stub — returns empty array.
+    // Will compute tags ∪ virtual_tags once the enrichment pipeline lands.
+    engine.register(
+        "compute-filter-tags",
+        Box::new(|_fields| Box::pin(async { serde_json::Value::Array(vec![]) })),
+    );
+
     engine
 }
 
 /// Entity types supported by kanban lookup.
-const KNOWN_ENTITY_TYPES: &[&str] = &["task", "tag", "actor", "column", "swimlane"];
+const KNOWN_ENTITY_TYPES: &[&str] = &["task", "tag", "actor", "column", "attachment", "project"];
 
 /// Entity lookup backed by kanban file storage.
 ///
@@ -268,13 +287,13 @@ mod tests {
     #[test]
     fn builtin_field_definitions_load() {
         let defs = builtin_field_definitions();
-        assert_eq!(defs.len(), 17, "expected 17 builtin field definitions");
+        assert_eq!(defs.len(), 23, "expected 23 builtin field definitions");
     }
 
     #[test]
     fn builtin_entity_definitions_load() {
         let defs = builtin_entity_definitions();
-        assert_eq!(defs.len(), 6, "expected 6 builtin entity definitions");
+        assert_eq!(defs.len(), 7, "expected 7 builtin entity definitions");
     }
 
     #[test]
@@ -347,10 +366,10 @@ mod tests {
         assert_eq!(entity.mention_display_field, Some("title".into()));
         assert!(entity.fields.iter().any(|f| f == "title"));
         assert!(entity.fields.iter().any(|f| f == "position_column"));
-        assert!(entity.fields.iter().any(|f| f == "position_swimlane"));
         assert!(entity.fields.iter().any(|f| f == "position_ordinal"));
         assert!(entity.fields.iter().any(|f| f == "attachments"));
         assert!(entity.fields.iter().any(|f| f == "progress"));
+        assert!(entity.fields.iter().any(|f| f == "project"));
     }
 
     #[test]
@@ -401,11 +420,11 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(ctx.all_fields().len(), 17);
-        assert_eq!(ctx.all_entities().len(), 6);
+        assert_eq!(ctx.all_fields().len(), 23);
+        assert_eq!(ctx.all_entities().len(), 7);
         assert!(ctx.get_field_by_name("title").is_some());
         assert!(ctx.get_entity("task").is_some());
-        assert_eq!(ctx.fields_for_entity("task").len(), 10);
+        assert_eq!(ctx.fields_for_entity("task").len(), 12);
     }
 
     #[test]
@@ -426,13 +445,13 @@ mod tests {
 
         match &field.type_ {
             swissarmyhammer_fields::FieldType::Attachment {
-                multiple,
                 max_bytes,
+                multiple,
             } => {
                 assert!(multiple, "attachments field should have multiple: true");
                 assert_eq!(
                     *max_bytes, 104_857_600,
-                    "attachments max_bytes should be 100 MB"
+                    "attachments max_bytes should be 100 MiB"
                 );
             }
             other => panic!("expected FieldType::Attachment, got {:?}", other),
@@ -494,6 +513,7 @@ mod tests {
             icon: None,
             section: None,
             validate: None,
+            groupable: None,
         };
 
         let mut fields = HashMap::new();
@@ -529,6 +549,7 @@ mod tests {
             icon: None,
             section: None,
             validate: None,
+            groupable: None,
         };
 
         let mut fields = HashMap::new();
@@ -566,6 +587,7 @@ mod tests {
             icon: None,
             section: None,
             validate: None,
+            groupable: None,
         };
 
         let mut fields = HashMap::new();
@@ -620,6 +642,7 @@ mod tests {
             icon: None,
             section: None,
             validate: None,
+            groupable: None,
         };
 
         let fields = HashMap::new(); // No body field

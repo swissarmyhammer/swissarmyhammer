@@ -53,6 +53,16 @@
       from: scope_chain
       entity_type: task
 
+- id: task.doThisNext
+  name: Do This Next
+  scope: "entity:task"
+  undoable: true
+  context_menu: true
+  params:
+    - name: task
+      from: scope_chain
+      entity_type: task
+
 - id: entity.update_field
   name: Update Field
   undoable: true

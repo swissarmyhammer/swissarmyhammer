@@ -21,8 +21,9 @@ When the user asks you to track work, create a todo list, or remember tasks — 
 ## Process
 
 1. Get the next task: use `kanban` with `op: "next task"` to find the next actionable card. This searches all non-done columns for ready tasks.
-   - To filter by tag: `op: "next task"`, `tag: "<tag-id>"`
-   - To filter by assignee: `op: "next task"`, `assignee: "<actor-id>"`
+   - To filter by tag: `op: "next task"`, `filter: "#review-finding"`
+   - To filter by assignee: `op: "next task"`, `filter: "@alice"`
+   - To combine: `op: "next task"`, `filter: "#bug && @alice"`
 2. Move it to doing: use `kanban` with `op: "move task"`, `id: "<task-id>"`, `column: "doing"`
 3. Read the task details: use `kanban` with `op: "get task"`, `id: "<task-id>"` to see description and subtasks
 4. **Work through each subtask and check it off immediately**:
@@ -34,22 +35,44 @@ When the user asks you to track work, create a todo list, or remember tasks — 
 
 ## Filtering Work
 
-### By Tag
+### Filter DSL
 
-Use `next task` with a `tag` filter to pick up specific kinds of work one card at a time:
+All filtering uses a small expression language with these atoms and operators:
+
+| Syntax | Meaning |
+|--------|---------|
+| `#tag` | Match tasks with this tag (includes virtual tags: READY, BLOCKED, BLOCKING) |
+| `@user` | Match tasks assigned to this user |
+| `^card-id` | Match tasks referencing this card (via depends_on or own id) |
+| `&&` / `and` | Both sides must match |
+| `\|\|` / `or` | Either side must match |
+| `!` / `not` | Negate the following expression |
+| `()` | Grouping |
+| Adjacent atoms | Implicit AND: `#bug @alice` = `#bug && @alice` |
+
+### Picking Up Work
+
+Use `next task` with a `filter` to pick up specific kinds of work one card at a time:
 
 ```json
-{"op": "next task", "tag": "review-finding"}
+{"op": "next task", "filter": "#review-finding"}
+{"op": "next task", "filter": "@alice"}
+{"op": "next task", "filter": "#bug && @alice"}
 ```
 
-This is the preferred way to work through tagged cards — it returns one ready card at a time and excludes done cards automatically.
+This is the preferred way to work through cards — it returns one ready card at a time and excludes done cards automatically.
 
-**Never call `list tasks` with no parameters** — there is no good reason to dump every task. Always use a filter (`column`, `tag`, `assignee`, `ready`) or use `next task` to get one card at a time:
+### Listing Tasks
+
+**Never call `list tasks` with no parameters** — there is no good reason to dump every task. Always use a `filter` or `column`, or use `next task` to get one card at a time:
 
 ```json
 {"op": "list tasks", "column": "todo"}
-{"op": "list tasks", "tag": "bug"}
-{"op": "list tasks", "ready": true}
+{"op": "list tasks", "filter": "#bug"}
+{"op": "list tasks", "filter": "#READY"}
+{"op": "list tasks", "filter": "#bug && @alice"}
+{"op": "list tasks", "filter": "#bug || #feature"}
+{"op": "list tasks", "filter": "!#done && #READY"}
 ```
 
 Note: `list tasks` automatically excludes done tasks unless you explicitly request `column: "done"`.
@@ -87,6 +110,75 @@ You can list, update, or delete tags as the project evolves:
 ```
 
 Deleting a tag automatically removes it from all tasks.
+
+## Using Projects to Group Tasks
+
+Projects let you organize related tasks under a shared initiative. Create a project for each plan or workstream.
+
+### Creating a Project
+
+```json
+{"op": "add project", "id": "auth-migration", "name": "Auth Migration"}
+{"op": "add project", "id": "frontend", "name": "Frontend", "description": "Frontend redesign", "color": "ff0000", "order": 5}
+```
+
+Required fields: `id` (slug) and `name`. Optional fields: `description`, `color` (6-char hex, no `#`), `order` (position in project list).
+
+**Auto-ordering**: When `order` is omitted, projects auto-increment — the first project gets order 0, the next gets 1, and so on. Specify `order` explicitly to control positioning.
+
+**Duplicate detection**: Creating a project with an existing `id` returns an error. Choose unique slugs.
+
+### Getting a Project
+
+```json
+{"op": "get project", "id": "auth-migration"}
+```
+
+Returns `{id, name, description, color, order}`. Returns a `ProjectNotFound` error if the ID doesn't exist.
+
+### Updating a Project
+
+```json
+{"op": "update project", "id": "auth-migration", "name": "JWT Auth Migration"}
+{"op": "update project", "id": "auth-migration", "description": "New desc", "color": "aabbcc", "order": 42}
+```
+
+All fields except `id` are optional — only provided fields are changed. Updating with no fields succeeds and returns the current values.
+
+### Listing Projects
+
+```json
+{"op": "list projects"}
+```
+
+Returns `{projects: [...], count: N}` sorted by `order` ascending.
+
+### Deleting a Project
+
+```json
+{"op": "delete project", "id": "auth-migration"}
+```
+
+Returns `{deleted: true, id: "..."}` on success. **Fails with `ProjectHasTasks` if any tasks reference the project** — reassign or complete those tasks first.
+
+### Assigning Tasks to Projects
+
+Set the `project` field when creating or updating a task:
+
+```json
+{"op": "add task", "title": "Implement JWT refresh", "project": "auth-migration"}
+{"op": "update task", "id": "<task-id>", "project": "frontend"}
+```
+
+Tasks without a project have an empty `project` field. The task response always includes `"project": "<slug>"` (or `""` if unset).
+
+### Workflow
+
+When starting a plan with multiple related tasks:
+
+1. Create a project for the initiative
+2. Create tasks with the `project` field set to the project ID
+3. Use projects to filter and focus work in the UI
 
 ## Guidelines
 

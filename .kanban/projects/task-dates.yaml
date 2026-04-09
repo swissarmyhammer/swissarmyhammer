@@ -1,0 +1,3 @@
+description: 'Add date fields to tasks: user-set (Due, Scheduled) and system-set (Created, Updated, Started, Completed). Derive Started/Completed from existing JSONL changelog.'
+name: Task Dates
+order: 1

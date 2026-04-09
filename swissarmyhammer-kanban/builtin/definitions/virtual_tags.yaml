@@ -1,0 +1,14 @@
+# Sentinel ID: builtin field definitions use zero-padded IDs that sort before
+# real ULIDs. The last two characters are the builtin field code.
+id: "0000000000000000000000000W"
+name: virtual_tags
+description: Computed virtual tags based on task state
+type:
+  kind: computed
+  derive: compute-virtual-tags
+  entity: tag
+  commit_display_names: true
+icon: zap
+section: header
+display: virtual-badge-list
+editor: none

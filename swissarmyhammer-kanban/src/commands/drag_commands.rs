@@ -14,7 +14,10 @@ use swissarmyhammer_commands::{Command, CommandContext, CommandError, DragSessio
 /// Returns a `DragStart` result that the Tauri dispatch layer uses to emit
 /// the `drag-session-active` event to all windows.
 ///
-/// Required args: `taskId`, `boardPath`
+/// The source board path is derived from the scope chain's `store:{path}`
+/// moniker — no explicit `boardPath` arg is needed.
+///
+/// Required args: `taskId`
 /// Optional args: `sourceWindowLabel` (defaults to "main"), `taskFields`, `copyMode`
 pub struct DragStartCmd;
 
@@ -43,12 +46,22 @@ impl Command for DragStartCmd {
             .ok_or_else(|| CommandError::MissingArg("taskId".into()))?
             .to_string();
 
+        // Derive board path from scope chain's store:{path} moniker.
+        // Falls back to explicit boardPath arg for backwards compatibility.
         let source_board_path = ctx
-            .args
-            .get("boardPath")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| CommandError::MissingArg("boardPath".into()))?
-            .to_string();
+            .resolve_store_path()
+            .map(|s| s.to_string())
+            .or_else(|| {
+                ctx.args
+                    .get("boardPath")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+            })
+            .ok_or_else(|| {
+                CommandError::ExecutionFailed(
+                    "No store path in scope chain and no boardPath arg".into(),
+                )
+            })?;
 
         let source_window_label = ctx
             .args
@@ -107,6 +120,9 @@ impl Command for DragStartCmd {
 /// Reads the active drag session from UIState, determines whether the drop is
 /// same-board or cross-board, and returns a `DragComplete` result payload.
 ///
+/// The target board path is derived from the scope chain's `store:{path}`
+/// moniker — no explicit `targetBoardPath` arg is needed.
+///
 /// **Same-board**: performs the task.move operation directly via `MoveTaskCmd`
 /// logic using the `KanbanContext` extension.
 ///
@@ -115,7 +131,7 @@ impl Command for DragStartCmd {
 /// calls `swissarmyhammer_kanban::cross_board::transfer_task()` with both board
 /// handles, then emits the appropriate events.
 ///
-/// Required args: `targetBoardPath`, `targetColumn`
+/// Required args: `targetColumn`
 /// Optional args: `dropIndex`, `beforeId`, `afterId`, `copyMode`
 pub struct DragCompleteCmd;
 
@@ -140,12 +156,22 @@ impl Command for DragCompleteCmd {
             .take_drag()
             .ok_or_else(|| CommandError::ExecutionFailed("No active drag session".into()))?;
 
+        // Derive target board path from scope chain's store:{path} moniker.
+        // Falls back to explicit targetBoardPath arg for backwards compatibility.
         let target_board_path = ctx
-            .args
-            .get("targetBoardPath")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| CommandError::MissingArg("targetBoardPath".into()))?
-            .to_string();
+            .resolve_store_path()
+            .map(|s| s.to_string())
+            .or_else(|| {
+                ctx.args
+                    .get("targetBoardPath")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+            })
+            .ok_or_else(|| {
+                CommandError::ExecutionFailed(
+                    "No store path in scope chain and no targetBoardPath arg".into(),
+                )
+            })?;
 
         let target_column = ctx
             .args

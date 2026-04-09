@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, fireEvent, act } from "@testing-library/react";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -41,12 +41,19 @@ vi.mock("@tauri-apps/plugin-log", () => ({
 }));
 
 import { EditorView } from "@codemirror/view";
+import { EditorState } from "@codemirror/state";
+import {
+  vim as vimExt,
+  getCM as getCMVim,
+  Vim as VimApi,
+} from "@replit/codemirror-vim";
+import { buildSubmitCancelExtensions } from "@/lib/cm-submit-cancel";
 import { MultiSelectEditor } from "./multi-select-editor";
 import { UIStateProvider } from "@/lib/ui-state-context";
 import { SchemaProvider } from "@/lib/schema-context";
 import { EntityStoreProvider } from "@/lib/entity-store-context";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
-import { InspectProvider } from "@/lib/inspect-context";
+
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { Entity, FieldDef } from "@/types/kanban";
 
@@ -116,11 +123,13 @@ const ACTOR_ENTITIES: Entity[] = [
   {
     entity_type: "actor",
     id: "alice-id",
+    moniker: "actor:alice-id",
     fields: { name: "alice", color: "3366cc" },
   },
   {
     entity_type: "actor",
     id: "bob-id",
+    moniker: "actor:bob-id",
     fields: { name: "bob", color: "cc3366" },
   },
 ];
@@ -129,11 +138,13 @@ const TAG_ENTITIES: Entity[] = [
   {
     entity_type: "tag",
     id: "tag-bug",
+    moniker: "tag:tag-bug",
     fields: { tag_name: "bug", color: "ff0000" },
   },
   {
     entity_type: "tag",
     id: "tag-feat",
+    moniker: "tag:tag-feat",
     fields: { tag_name: "feature", color: "00ff00" },
   },
 ];
@@ -172,18 +183,16 @@ function renderMultiSelect(
       <SchemaProvider>
         <EntityStoreProvider entities={entities}>
           <EntityFocusProvider>
-            <InspectProvider onInspect={() => {}} onDismiss={() => false}>
-              <UIStateProvider>
-                <MultiSelectEditor
-                  field={props.field}
-                  value={props.value}
-                  onCommit={props.onCommit}
-                  onCancel={props.onCancel}
-                  entity={props.entity}
-                  mode="compact"
-                />
-              </UIStateProvider>
-            </InspectProvider>
+            <UIStateProvider>
+              <MultiSelectEditor
+                field={props.field}
+                value={props.value}
+                onCommit={props.onCommit}
+                onCancel={props.onCancel}
+                entity={props.entity}
+                mode="compact"
+              />
+            </UIStateProvider>
           </EntityFocusProvider>
         </EntityStoreProvider>
       </SchemaProvider>
@@ -383,6 +392,7 @@ describe("MultiSelectEditor", () => {
     const taskEntity: Entity = {
       entity_type: "task",
       id: "task-1",
+      moniker: "task:task-1",
       fields: { title: "Test task", body: "Fix #bug issue" },
     };
 
@@ -540,6 +550,171 @@ describe("MultiSelectEditor", () => {
       });
 
       expect(onCommit).toHaveBeenCalledWith([]);
+    });
+  });
+
+  describe("vim mode submit/cancel via buildSubmitCancelExtensions", () => {
+    /**
+     * Integration tests verifying that MultiSelectEditor's ref wiring
+     * works correctly with buildSubmitCancelExtensions and the vim extension.
+     *
+     * These mirror the pattern from date-editor.test.tsx: create a real CM6
+     * EditorView with vim + buildSubmitCancelExtensions, then verify keydown
+     * behavior in normal vs insert mode.
+     */
+
+    let cleanup: () => void;
+
+    afterEach(() => {
+      cleanup?.();
+    });
+
+    /**
+     * Replicate the ref setup from MultiSelectEditor to test in isolation.
+     *
+     * submitRef: Enter always commits
+     * escapeRef: vim → commit, CUA → cancel
+     */
+    function makeMultiSelectRefs(
+      mode: string,
+      onCommit: () => void,
+      onCancel: () => void,
+    ) {
+      const commitRef = { current: onCommit };
+      const cancelRef = { current: onCancel };
+
+      const submitRef = { current: null as (() => void) | null };
+      submitRef.current = () => commitRef.current();
+
+      const escapeRef = { current: null as (() => void) | null };
+      escapeRef.current =
+        mode === "vim" ? () => commitRef.current() : () => cancelRef.current();
+
+      return { submitRef, escapeRef };
+    }
+
+    /** Create a minimal CM6 EditorView with extensions and initial doc. */
+    function createEditor(
+      extensions: import("@codemirror/state").Extension[],
+      doc = "",
+    ) {
+      const parent = document.createElement("div");
+      document.body.appendChild(parent);
+      const view = new EditorView({
+        state: EditorState.create({ doc, extensions }),
+        parent,
+      });
+      return {
+        view,
+        parent,
+        cleanup: () => {
+          view.destroy();
+          parent.remove();
+        },
+      };
+    }
+
+    /** Simulate a keydown event on a target element. */
+    function simulateKeydown(target: HTMLElement, key: string) {
+      target.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    }
+
+    it("vim normal-mode Escape commits", () => {
+      const onCommit = vi.fn();
+      const onCancel = vi.fn();
+      const { submitRef, escapeRef } = makeMultiSelectRefs(
+        "vim",
+        onCommit,
+        onCancel,
+      );
+
+      const extensions = [
+        vimExt(),
+        ...buildSubmitCancelExtensions({
+          mode: "vim",
+          onSubmitRef: submitRef,
+          onCancelRef: escapeRef,
+          singleLine: true,
+        }),
+      ];
+      const { view, cleanup: c } = createEditor(extensions, "@alice ");
+      cleanup = c;
+
+      // Verify normal mode
+      const cm = getCMVim(view);
+      expect(cm!.state.vim?.insertMode).toBeFalsy();
+
+      // Escape in normal mode → escapeRef → commit
+      simulateKeydown(view.contentDOM, "Escape");
+
+      expect(onCommit).toHaveBeenCalled();
+      expect(onCancel).not.toHaveBeenCalled();
+    });
+
+    it("vim insert-mode Escape does NOT commit or cancel", () => {
+      const onCommit = vi.fn();
+      const onCancel = vi.fn();
+      const { submitRef, escapeRef } = makeMultiSelectRefs(
+        "vim",
+        onCommit,
+        onCancel,
+      );
+
+      const extensions = [
+        vimExt(),
+        ...buildSubmitCancelExtensions({
+          mode: "vim",
+          onSubmitRef: submitRef,
+          onCancelRef: escapeRef,
+          singleLine: true,
+        }),
+      ];
+      const { view, cleanup: c } = createEditor(extensions, "@alice ");
+      cleanup = c;
+
+      // Enter insert mode
+      const cm = getCMVim(view);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      VimApi.handleKey(cm as any, "i", "mapping");
+      expect(cm!.state.vim?.insertMode).toBe(true);
+
+      // Escape in insert mode → vim exits to normal, no commit/cancel
+      simulateKeydown(view.contentDOM, "Escape");
+
+      expect(onCommit).not.toHaveBeenCalled();
+      expect(onCancel).not.toHaveBeenCalled();
+    });
+
+    it("vim normal-mode Enter commits", () => {
+      const onCommit = vi.fn();
+      const onCancel = vi.fn();
+      const { submitRef, escapeRef } = makeMultiSelectRefs(
+        "vim",
+        onCommit,
+        onCancel,
+      );
+
+      const extensions = [
+        vimExt(),
+        ...buildSubmitCancelExtensions({
+          mode: "vim",
+          onSubmitRef: submitRef,
+          onCancelRef: escapeRef,
+          singleLine: true,
+        }),
+      ];
+      const { view, cleanup: c } = createEditor(extensions, "@alice ");
+      cleanup = c;
+
+      simulateKeydown(view.dom, "Enter");
+
+      expect(onCommit).toHaveBeenCalled();
     });
   });
 });

@@ -13,24 +13,30 @@ use swissarmyhammer_tools::mcp::{
     unified_server::{start_mcp_server_with_options, McpServerMode},
 };
 
-/// Helper to start a server and client with agent_mode setting
+/// Helper to start a server and client with agent_mode setting.
+///
+/// Uses a temp directory as working_dir so that local `.skills/` overrides
+/// (which contain pre-rendered templates) do not mask builtin skills that
+/// still have raw Liquid templates like `{{arguments}}`.
 async fn setup(
     agent_mode: bool,
 ) -> (
     swissarmyhammer_tools::mcp::unified_server::McpServerHandle,
     rmcp::service::RunningService<rmcp::RoleClient, rmcp::model::ClientInfo>,
+    tempfile::TempDir,
 ) {
+    let temp = tempfile::TempDir::new().expect("Failed to create temp dir");
     let server = start_mcp_server_with_options(
         McpServerMode::Http { port: None },
         None,
         None,
-        None,
+        Some(temp.path().to_path_buf()),
         agent_mode,
     )
     .await
     .expect("Failed to start MCP server");
     let client = create_test_client(server.url()).await;
-    (server, client)
+    (server, client, temp)
 }
 
 /// Helper to teardown server and client
@@ -50,7 +56,7 @@ fn skill_params(args: serde_json::Value) -> CallToolRequestParams {
 
 #[tokio::test]
 async fn test_builtin_skills_discovered_via_list() {
-    let (server, client) = setup(true).await;
+    let (server, client, _temp) = setup(true).await;
 
     let result = client
         .call_tool(skill_params(serde_json::json!({"op": "list skill"})))
@@ -77,7 +83,7 @@ async fn test_builtin_skills_discovered_via_list() {
 
 #[tokio::test]
 async fn test_use_skill_returns_instructions() {
-    let (server, client) = setup(true).await;
+    let (server, client, _temp) = setup(true).await;
 
     let result = client
         .call_tool(skill_params(
@@ -108,7 +114,7 @@ async fn test_use_skill_returns_instructions() {
 
 #[tokio::test]
 async fn test_search_skill_finds_matches() {
-    let (server, client) = setup(true).await;
+    let (server, client, _temp) = setup(true).await;
 
     let result = client
         .call_tool(skill_params(
@@ -135,7 +141,7 @@ async fn test_search_skill_finds_matches() {
 
 #[tokio::test]
 async fn test_search_skill_no_matches() {
-    let (server, client) = setup(true).await;
+    let (server, client, _temp) = setup(true).await;
 
     let result = client
         .call_tool(skill_params(
@@ -164,7 +170,7 @@ async fn test_search_skill_no_matches() {
 #[tokio::test]
 async fn test_skill_tool_agent_mode_gating() {
     // With agent_mode=true, skill tool should be present
-    let (server_agent, client_agent) = setup(true).await;
+    let (server_agent, client_agent, _temp1) = setup(true).await;
     let tools = client_agent
         .list_tools(Default::default())
         .await
@@ -177,7 +183,7 @@ async fn test_skill_tool_agent_mode_gating() {
     teardown(server_agent, client_agent).await;
 
     // With agent_mode=false, skill tool should be absent
-    let (server_no_agent, client_no_agent) = setup(false).await;
+    let (server_no_agent, client_no_agent, _temp2) = setup(false).await;
     let tools = client_no_agent
         .list_tools(Default::default())
         .await
@@ -192,7 +198,7 @@ async fn test_skill_tool_agent_mode_gating() {
 
 #[tokio::test]
 async fn test_get_verb_backward_compat() {
-    let (server, client) = setup(true).await;
+    let (server, client, _temp) = setup(true).await;
 
     // "get skill" should still work (backward compat, routes to Use)
     let result = client
@@ -227,7 +233,7 @@ const PLAN_BODY_MARKER: &str = "kanban";
 
 #[tokio::test]
 async fn test_skill_invoke_by_name_returns_body_content() {
-    let (server, client) = setup(true).await;
+    let (server, client, _temp) = setup(true).await;
 
     // Invoke the plan skill by name
     let result = client
@@ -266,7 +272,7 @@ async fn test_skill_invoke_by_name_returns_body_content() {
 /// The test skill is now a thin dispatcher that delegates to a tester subagent.
 #[tokio::test]
 async fn test_skill_test_returns_body_content() {
-    let (server, client) = setup(true).await;
+    let (server, client, _temp) = setup(true).await;
 
     let result = client
         .call_tool(skill_params(
@@ -305,8 +311,12 @@ async fn test_skill_test_returns_body_content() {
 }
 
 #[tokio::test]
+#[serial_test::serial(cwd)]
 async fn test_use_skill_with_arguments_renders_in_output() {
-    let (server, client) = setup(true).await;
+    let temp = tempfile::TempDir::new().expect("Failed to create temp dir");
+    let _guard = swissarmyhammer_common::test_utils::CurrentDirGuard::new(temp.path())
+        .expect("Failed to change CWD");
+    let (server, client, _temp) = setup(true).await;
 
     // Invoke the card skill with arguments — verifies the MCP pipeline accepts
     // and passes through the "arguments" parameter without error.
@@ -361,7 +371,7 @@ async fn test_use_skill_with_arguments_renders_in_output() {
 
 #[tokio::test]
 async fn test_skill_invoke_via_shorthand() {
-    let (server, client) = setup(true).await;
+    let (server, client, _temp) = setup(true).await;
 
     // Use the shorthand form (just name, no explicit verb)
     let result = client

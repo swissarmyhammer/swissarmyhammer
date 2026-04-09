@@ -122,10 +122,30 @@ export function useDebouncedSave(
     [delayMs],
   );
 
-  // Cleanup on unmount
+  // Flush pending save on unmount so attachment adds (and other field
+  // changes) are never silently dropped when the editor closes before
+  // the debounce timer fires.
   useEffect(() => {
     return () => {
-      if (timerRef.current !== null) {
+      if (hasPendingRef.current) {
+        if (timerRef.current !== null) {
+          clearTimeout(timerRef.current);
+          timerRef.current = null;
+        }
+        const value = pendingValueRef.current;
+        hasPendingRef.current = false;
+        pendingValueRef.current = undefined;
+        updateFieldRef
+          .current(
+            entityTypeRef.current,
+            entityIdRef.current,
+            fieldNameRef.current,
+            value,
+          )
+          .catch((e: unknown) =>
+            warn(`autosave flush on unmount failed: ${e}`),
+          );
+      } else if (timerRef.current !== null) {
         clearTimeout(timerRef.current);
         timerRef.current = null;
       }

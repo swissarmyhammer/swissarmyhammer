@@ -2,8 +2,9 @@
 
 use crate::context::KanbanContext;
 use crate::error::KanbanError;
-use crate::task_helpers::task_entity_to_rich_json;
+use crate::task_helpers::{enrich_task_entity, task_entity_to_rich_json};
 use crate::types::TaskId;
+use crate::virtual_tags::default_virtual_tag_registry;
 use serde::Deserialize;
 use serde_json::Value;
 use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResult};
@@ -46,11 +47,11 @@ impl Execute<KanbanContext, KanbanError> for GetTask {
                 .map(|c| c.id.as_str())
                 .unwrap_or("done");
 
-            Ok(task_entity_to_rich_json(
-                &entity,
-                &all_tasks,
-                terminal_column,
-            ))
+            let registry = default_virtual_tag_registry();
+            let mut entity = entity;
+            enrich_task_entity(&mut entity, &all_tasks, terminal_column, registry);
+
+            Ok(task_entity_to_rich_json(&entity))
         }
         .await
         {

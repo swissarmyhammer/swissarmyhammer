@@ -896,6 +896,7 @@ mod tests {
 
     /// Test that `start_watching` succeeds with a mock callback and sets up the debouncer.
     #[tokio::test]
+    #[serial_test::serial(cwd)]
     async fn test_file_watcher_start_watching_sets_up_debouncer() {
         let cb = MockCallback::new();
         let mut watcher = FileWatcher::new();
@@ -916,6 +917,7 @@ mod tests {
 
     /// Test that calling `start_watching` twice replaces the previous watcher.
     #[tokio::test]
+    #[serial_test::serial(cwd)]
     async fn test_file_watcher_start_watching_replaces_previous() {
         let cb = MockCallback::new();
         let mut watcher = FileWatcher::new();

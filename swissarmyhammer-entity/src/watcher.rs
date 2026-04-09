@@ -252,11 +252,11 @@ mod tests {
     }
 
     #[test]
-    fn parse_entity_path_swimlane() {
+    fn parse_entity_path_project() {
         let root = Path::new("/project/.kanban");
-        let path = Path::new("/project/.kanban/swimlanes/feature.yaml");
+        let path = Path::new("/project/.kanban/projects/feature.yaml");
         let (t, id) = parse_entity_path(root, path).unwrap();
-        assert_eq!(t, "swimlane");
+        assert_eq!(t, "project");
         assert_eq!(id, "feature");
     }
 

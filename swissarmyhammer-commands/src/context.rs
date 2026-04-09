@@ -145,6 +145,15 @@ impl CommandContext {
     pub fn target_moniker(&self) -> Option<(&str, &str)> {
         self.target.as_deref().and_then(parse_moniker)
     }
+
+    /// Extract the store path from a `store:` moniker in the scope chain.
+    ///
+    /// The frontend injects a `store:{canonicalPath}` moniker via
+    /// `StoreContainer`, so the scope chain carries the board's filesystem
+    /// path. Returns `None` when no `store:` moniker is present.
+    pub fn resolve_store_path(&self) -> Option<&str> {
+        self.resolve_entity_id("store")
+    }
 }
 
 /// Parse a "type:id" moniker string into (entity_type, id).
@@ -269,6 +278,39 @@ mod tests {
         assert!(parse_moniker("type:").is_none());
     }
 
+    #[test]
+    fn field_moniker_parses_as_field_type() {
+        // "field:task:abc.title" splits on first colon → ("field", "task:abc.title")
+        let (t, id) = parse_moniker("field:task:abc.title").unwrap();
+        assert_eq!(t, "field");
+        assert_eq!(id, "task:abc.title");
+    }
+
+    #[test]
+    fn has_in_scope_ignores_field_monikers() {
+        // Field monikers have entity_type "field", so has_in_scope("task")
+        // should not match "field:task:abc.title".
+        let ctx = test_ctx(&["field:task:abc.title", "task:abc", "column:todo"]);
+        assert!(ctx.has_in_scope("task"), "real task moniker should match");
+        assert!(
+            ctx.has_in_scope("field"),
+            "field type matches field moniker"
+        );
+        assert_eq!(
+            ctx.resolve_entity_id("task"),
+            Some("abc"),
+            "resolve_entity_id should return the real task id, not the field moniker's rest"
+        );
+    }
+
+    #[test]
+    fn has_in_scope_false_with_only_field_moniker() {
+        // If only a field moniker is in scope, has_in_scope("task") should be false.
+        let ctx = test_ctx(&["field:task:abc.title"]);
+        assert!(!ctx.has_in_scope("task"));
+        assert!(ctx.has_in_scope("field"));
+    }
+
     // --- extension tests ---
 
     #[derive(Debug)]
@@ -377,6 +419,38 @@ mod tests {
     fn window_label_from_scope_empty_chain() {
         let ctx = test_ctx(&[]);
         assert_eq!(ctx.window_label_from_scope(), None);
+    }
+
+    // --- resolve_store_path tests ---
+
+    #[test]
+    fn resolve_store_path_finds_path() {
+        let ctx = test_ctx(&[
+            "task:t1",
+            "column:todo",
+            "store:/Users/me/.kanban",
+            "window:main",
+        ]);
+        assert_eq!(ctx.resolve_store_path(), Some("/Users/me/.kanban"));
+    }
+
+    #[test]
+    fn resolve_store_path_returns_none_when_missing() {
+        let ctx = test_ctx(&["task:t1", "column:todo", "window:main"]);
+        assert_eq!(ctx.resolve_store_path(), None);
+    }
+
+    #[test]
+    fn resolve_store_path_empty_chain() {
+        let ctx = test_ctx(&[]);
+        assert_eq!(ctx.resolve_store_path(), None);
+    }
+
+    #[test]
+    fn resolve_store_path_with_colons_in_path() {
+        // Windows paths could contain colons (e.g. C:\...)
+        let ctx = test_ctx(&["store:C:\\Users\\me\\.kanban", "window:main"]);
+        assert_eq!(ctx.resolve_store_path(), Some("C:\\Users\\me\\.kanban"));
     }
 
     // --- Debug impl tests ---

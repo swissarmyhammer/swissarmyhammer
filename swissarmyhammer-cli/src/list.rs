@@ -271,6 +271,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_color_coding_when_terminal() {
         use colored::control;
 
@@ -391,6 +392,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_display_table_dynamic_source() {
         use colored::control;
 
@@ -491,6 +493,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_display_table_legend_shown_for_tty() {
         use colored::control;
         control::set_override(true);

@@ -278,6 +278,7 @@ mod tests {
             icon: None,
             section: None,
             validate: None,
+            groupable: None,
         }
     }
 
@@ -736,9 +737,46 @@ mod tests {
         assert_eq!(result.unwrap(), numeric_value);
     }
 
-    /// Non-array, non-null value for a multiple reference should pass through unchanged.
+    /// JS validation failure produces a `ValidationFailed` error with the correct field name.
     #[tokio::test]
-    async fn reference_non_array_for_multiple_returns_unchanged() {
+    async fn run_js_validation_error_contains_field_name() {
+        let engine = ValidationEngine::new();
+        let mut field = make_field("my_field", FieldType::Text { single_line: true });
+        field.validate = Some(r#"throw new Error("bad value");"#.to_string());
+
+        let result = engine
+            .validate(&field, serde_json::json!("x"), &HashMap::new())
+            .await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("my_field"),
+            "error should contain the field name, got: {msg}"
+        );
+        assert!(
+            msg.contains("bad value"),
+            "error should contain the JS error message, got: {msg}"
+        );
+    }
+
+    /// JS validation that returns a transformed value exercises the success path of run_js_validation.
+    #[tokio::test]
+    async fn run_js_validation_transforms_value() {
+        let engine = ValidationEngine::new();
+        let mut field = make_field("amount", FieldType::Text { single_line: true });
+        field.validate = Some(r#"return String(Number(ctx.value) * 2);"#.to_string());
+
+        let result = engine
+            .validate(&field, serde_json::json!("21"), &HashMap::new())
+            .await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), serde_json::json!("42"));
+    }
+
+    /// Reference validation with a non-array value for a multiple reference passes through unchanged.
+    #[tokio::test]
+    async fn reference_multiple_non_array_passes_through() {
         let lookup = MockLookup::new().with_entities(
             "task",
             vec![serde_json::json!({"id": "task_001", "title": "First"})],
@@ -753,18 +791,171 @@ mod tests {
             },
         );
 
-        // A plain number is neither array nor null — should pass through
-        let numeric_value = serde_json::json!(99);
+        // A string (not an array) for a multiple reference — passes through unchanged
+        let value = serde_json::json!("not_an_array");
         let result = engine
-            .validate(&field, numeric_value.clone(), &HashMap::new())
+            .validate(&field, value.clone(), &HashMap::new())
             .await;
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), numeric_value);
+        assert_eq!(result.unwrap(), value);
+    }
+
+    /// Reference validation with an empty array returns an empty array (no dangling IDs to prune).
+    #[tokio::test]
+    async fn reference_multiple_empty_array() {
+        let lookup = MockLookup::new().with_entities(
+            "task",
+            vec![serde_json::json!({"id": "task_001", "title": "First"})],
+        );
+        let engine = ValidationEngine::new().with_lookup(lookup);
+
+        let field = make_field(
+            "depends_on",
+            FieldType::Reference {
+                entity: "task".into(),
+                multiple: true,
+            },
+        );
+
+        let result = engine
+            .validate(&field, serde_json::json!([]), &HashMap::new())
+            .await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), serde_json::json!([]));
+    }
+
+    /// Reference validation where ALL IDs are dangling returns an empty array.
+    #[tokio::test]
+    async fn reference_multiple_all_dangling() {
+        let lookup = MockLookup::new().with_entities("task", vec![]);
+        let engine = ValidationEngine::new().with_lookup(lookup);
+
+        let field = make_field(
+            "depends_on",
+            FieldType::Reference {
+                entity: "task".into(),
+                multiple: true,
+            },
+        );
+
+        let value = serde_json::json!(["ghost_1", "ghost_2"]);
+        let result = engine.validate(&field, value, &HashMap::new()).await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), serde_json::json!([]));
+    }
+
+    /// Single reference with null value passes through as null.
+    #[tokio::test]
+    async fn reference_single_null_passes_through() {
+        let lookup = MockLookup::new().with_entities(
+            "actor",
+            vec![serde_json::json!({"id": "alice", "name": "Alice"})],
+        );
+        let engine = ValidationEngine::new().with_lookup(lookup);
+
+        let field = make_field(
+            "assignee",
+            FieldType::Reference {
+                entity: "actor".into(),
+                multiple: false,
+            },
+        );
+
+        let result = engine
+            .validate(&field, serde_json::Value::Null, &HashMap::new())
+            .await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), serde_json::Value::Null);
+    }
+
+    /// validate_entity error contains the entity name prefixed with "entity:".
+    #[tokio::test]
+    async fn validate_entity_error_contains_entity_name() {
+        let engine = ValidationEngine::new();
+        let entity_def = EntityDef {
+            name: "my_entity".into(),
+            icon: None,
+            body_field: None,
+            fields: vec!["title".into()],
+            validate: Some(r#"throw new Error("cross-field check failed");"#.to_string()),
+            mention_prefix: None,
+            mention_display_field: None,
+            search_display_field: None,
+            commands: vec![],
+        };
+        let mut fields = HashMap::new();
+        fields.insert("title".to_string(), serde_json::json!("Test"));
+
+        let result = engine.validate_entity(&entity_def, &mut fields).await;
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("entity:my_entity"),
+            "error should contain 'entity:my_entity', got: {msg}"
+        );
+        assert!(
+            msg.contains("cross-field check failed"),
+            "error should contain the JS message, got: {msg}"
+        );
+    }
+
+    /// validate_entity that returns a non-object value does not modify the fields map.
+    #[tokio::test]
+    async fn validate_entity_non_object_result_no_merge() {
+        let engine = ValidationEngine::new();
+        let entity_def = EntityDef {
+            name: "task".into(),
+            icon: None,
+            body_field: None,
+            fields: vec!["title".into()],
+            validate: Some(r#"return "ok";"#.to_string()),
+            mention_prefix: None,
+            mention_display_field: None,
+            search_display_field: None,
+            commands: vec![],
+        };
+        let mut fields = HashMap::new();
+        fields.insert("title".to_string(), serde_json::json!("Hello"));
+
+        let result = engine.validate_entity(&entity_def, &mut fields).await;
+        assert!(result.is_ok());
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields.get("title").unwrap(), &serde_json::json!("Hello"));
+    }
+
+    /// validate_entity merges returned fields, including adding new keys.
+    #[tokio::test]
+    async fn validate_entity_merges_new_fields() {
+        let engine = ValidationEngine::new();
+        let entity_def = EntityDef {
+            name: "task".into(),
+            icon: None,
+            body_field: None,
+            fields: vec!["title".into(), "computed".into()],
+            validate: Some(
+                r#"
+                return { computed: ctx.fields.title + " (auto)", title: ctx.fields.title };
+                "#
+                .to_string(),
+            ),
+            mention_prefix: None,
+            mention_display_field: None,
+            search_display_field: None,
+            commands: vec![],
+        };
+        let mut fields = HashMap::new();
+        fields.insert("title".to_string(), serde_json::json!("My Task"));
+
+        let result = engine.validate_entity(&entity_def, &mut fields).await;
+        assert!(result.is_ok());
+        assert_eq!(
+            fields.get("computed").unwrap(),
+            &serde_json::json!("My Task (auto)")
+        );
     }
 
     #[test]
     fn validation_engine_default_creates_empty() {
-        // The default engine has no lookup, but should be constructible
         let _engine = ValidationEngine::default();
     }
 }

@@ -89,15 +89,18 @@ pub enum Noun {
     Tasks,
     Column,
     Columns,
-    Swimlane,
-    Swimlanes,
     Actor,
     Actors,
     Tag,
     Tags,
     Comment,
     Comments,
-    Activity,
+    Attachment,
+    Attachments,
+    Project,
+    Projects,
+    Perspective,
+    Perspectives,
     Archived,
 }
 
@@ -110,15 +113,18 @@ impl Noun {
             Self::Tasks => "tasks",
             Self::Column => "column",
             Self::Columns => "columns",
-            Self::Swimlane => "swimlane",
-            Self::Swimlanes => "swimlanes",
             Self::Actor => "actor",
             Self::Actors => "actors",
             Self::Tag => "tag",
             Self::Tags => "tags",
             Self::Comment => "comment",
             Self::Comments => "comments",
-            Self::Activity => "activity",
+            Self::Attachment => "attachment",
+            Self::Attachments => "attachments",
+            Self::Project => "project",
+            Self::Projects => "projects",
+            Self::Perspective => "perspective",
+            Self::Perspectives => "perspectives",
             Self::Archived => "archived",
         }
     }
@@ -131,15 +137,18 @@ impl Noun {
             "tasks" => Some(Self::Tasks),
             "column" => Some(Self::Column),
             "columns" => Some(Self::Columns),
-            "swimlane" => Some(Self::Swimlane),
-            "swimlanes" => Some(Self::Swimlanes),
             "actor" => Some(Self::Actor),
             "actors" => Some(Self::Actors),
             "tag" => Some(Self::Tag),
             "tags" => Some(Self::Tags),
             "comment" => Some(Self::Comment),
             "comments" => Some(Self::Comments),
-            "activity" => Some(Self::Activity),
+            "attachment" => Some(Self::Attachment),
+            "attachments" => Some(Self::Attachments),
+            "project" => Some(Self::Project),
+            "projects" => Some(Self::Projects),
+            "perspective" => Some(Self::Perspective),
+            "perspectives" => Some(Self::Perspectives),
             "archived" => Some(Self::Archived),
             _ => None,
         }
@@ -242,9 +251,6 @@ pub fn is_valid_operation(verb: Verb, noun: Noun) -> bool {
         // Column operations
         (Verb::Get, Noun::Column) | (Verb::Add, Noun::Column) | (Verb::Update, Noun::Column) |
         (Verb::Delete, Noun::Column) | (Verb::List, Noun::Columns) |
-        // Swimlane operations
-        (Verb::Get, Noun::Swimlane) | (Verb::Add, Noun::Swimlane) | (Verb::Update, Noun::Swimlane) |
-        (Verb::Delete, Noun::Swimlane) | (Verb::List, Noun::Swimlanes) |
         // Actor operations
         (Verb::Get, Noun::Actor) | (Verb::Add, Noun::Actor) | (Verb::Update, Noun::Actor) |
         (Verb::Delete, Noun::Actor) | (Verb::List, Noun::Actors) |
@@ -261,8 +267,17 @@ pub fn is_valid_operation(verb: Verb, noun: Noun) -> bool {
         // Comment operations
         (Verb::Get, Noun::Comment) | (Verb::Add, Noun::Comment) | (Verb::Update, Noun::Comment) |
         (Verb::Delete, Noun::Comment) | (Verb::List, Noun::Comments) |
-        // Activity
-        (Verb::List, Noun::Activity)
+        // Attachment operations
+        (Verb::Add, Noun::Attachment) | (Verb::Get, Noun::Attachment) |
+        (Verb::Update, Noun::Attachment) | (Verb::Delete, Noun::Attachment) |
+        (Verb::List, Noun::Attachments) |
+        // Project operations
+        (Verb::Get, Noun::Project) | (Verb::Add, Noun::Project) | (Verb::Update, Noun::Project) |
+        (Verb::Delete, Noun::Project) | (Verb::List, Noun::Projects) |
+        // Perspective operations
+        (Verb::Add, Noun::Perspective) | (Verb::Get, Noun::Perspective) |
+        (Verb::Update, Noun::Perspective) | (Verb::Delete, Noun::Perspective) |
+        (Verb::List, Noun::Perspectives)
     )
 }
 
@@ -302,6 +317,28 @@ mod tests {
         // Invalid combinations
         assert!(!is_valid_operation(Verb::Move, Noun::Board));
         assert!(!is_valid_operation(Verb::Init, Noun::Task));
+    }
+
+    #[test]
+    fn test_noun_parsing_perspective() {
+        assert_eq!(Noun::parse("perspective"), Some(Noun::Perspective));
+        assert_eq!(Noun::parse("perspectives"), Some(Noun::Perspectives));
+        assert_eq!(Noun::parse("Perspective"), Some(Noun::Perspective));
+        assert_eq!(Noun::parse("PERSPECTIVES"), Some(Noun::Perspectives));
+    }
+
+    #[test]
+    fn test_valid_perspective_operations() {
+        assert!(is_valid_operation(Verb::Add, Noun::Perspective));
+        assert!(is_valid_operation(Verb::Get, Noun::Perspective));
+        assert!(is_valid_operation(Verb::Update, Noun::Perspective));
+        assert!(is_valid_operation(Verb::Delete, Noun::Perspective));
+        assert!(is_valid_operation(Verb::List, Noun::Perspectives));
+
+        // Invalid combinations
+        assert!(!is_valid_operation(Verb::Move, Noun::Perspective));
+        assert!(!is_valid_operation(Verb::Complete, Noun::Perspective));
+        assert!(!is_valid_operation(Verb::Init, Noun::Perspective));
     }
 
     #[test]

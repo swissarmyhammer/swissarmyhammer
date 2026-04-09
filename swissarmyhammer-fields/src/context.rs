@@ -84,7 +84,7 @@ impl FieldsContext {
     /// Each entry is `(name, yaml_content)`. Definitions and entities are
     /// provided separately. The writable_root is where modifications are persisted.
     ///
-    /// ```rust,ignore
+    /// ```text
     /// let ctx = FieldsContext::from_yaml_sources(
     ///     root.join("fields"),
     ///     &[("title", title_yaml), ("body", body_yaml)],
@@ -156,7 +156,7 @@ impl FieldsContext {
 
     /// Open or create a fields directory. Returns a builder.
     ///
-    /// ```rust,ignore
+    /// ```text
     /// let ctx = FieldsContext::open(path).build().await?;
     /// ```
     pub fn open(root: impl Into<PathBuf>) -> FieldsContextBuilder {
@@ -453,6 +453,7 @@ mod tests {
             icon: None,
             section: None,
             validate: None,
+            groupable: None,
         }
     }
 
@@ -603,6 +604,57 @@ type:
                 .description,
             Some("Version 2".into())
         );
+    }
+
+    #[test]
+    fn from_yaml_sources_entity_override_replaces_earlier() {
+        let entity_v1 = r#"
+name: task
+body_field: body
+fields:
+  - title
+"#;
+        let entity_v2 = r#"
+name: task
+body_field: description
+fields:
+  - title
+  - status
+"#;
+
+        let ctx = FieldsContext::from_yaml_sources(
+            PathBuf::from("/tmp/test"),
+            &[],
+            &[("task", entity_v1), ("task", entity_v2)],
+        )
+        .unwrap();
+
+        assert_eq!(ctx.all_entities().len(), 1);
+        let entity = ctx.get_entity("task").unwrap();
+        assert_eq!(entity.body_field, Some("description".into()));
+        assert_eq!(entity.fields.len(), 2);
+    }
+
+    #[test]
+    fn from_yaml_sources_skips_invalid_entity_yaml_and_excludes_bad_key() {
+        let good_entity = r#"
+name: task
+body_field: body
+fields:
+  - title
+"#;
+        let bad_entity = "this is not valid entity yaml: [[[";
+
+        let ctx = FieldsContext::from_yaml_sources(
+            PathBuf::from("/tmp/test"),
+            &[],
+            &[("task", good_entity), ("bad", bad_entity)],
+        )
+        .unwrap();
+
+        assert_eq!(ctx.all_entities().len(), 1);
+        assert!(ctx.get_entity("task").is_some());
+        assert!(ctx.get_entity("bad").is_none());
     }
 
     #[test]
@@ -864,6 +916,7 @@ type:
                 icon: None,
                 section: None,
                 validate: None,
+                groupable: None,
             })
             .collect();
 
@@ -1132,9 +1185,34 @@ fields:
         assert!(result.is_empty());
     }
 
+    // --- Additional coverage tests ---
+
+    #[test]
+    fn resolve_name_to_id_returns_none_for_unknown() {
+        let ctx = FieldsContext::from_yaml_sources(PathBuf::from("/tmp/test"), &[], &[]).unwrap();
+        assert!(ctx.resolve_name_to_id("nonexistent").is_none());
+    }
+
+    #[test]
+    fn get_field_by_name_returns_none_for_unknown() {
+        let ctx = FieldsContext::from_yaml_sources(PathBuf::from("/tmp/test"), &[], &[]).unwrap();
+        assert!(ctx.get_field_by_name("nonexistent").is_none());
+    }
+
+    #[test]
+    fn get_field_by_id_returns_none_for_unknown() {
+        let ctx = FieldsContext::from_yaml_sources(PathBuf::from("/tmp/test"), &[], &[]).unwrap();
+        assert!(ctx.get_field_by_id("00000000000000000000000099").is_none());
+    }
+
+    #[test]
+    fn get_entity_returns_none_for_unknown() {
+        let ctx = FieldsContext::from_yaml_sources(PathBuf::from("/tmp/test"), &[], &[]).unwrap();
+        assert!(ctx.get_entity("nonexistent").is_none());
+    }
+
     #[test]
     fn from_yaml_sources_skips_invalid_entity_yaml() {
-        // Invalid entity YAML should be skipped (warn logged), not error.
         let title_yaml = r#"
 id: "00000000000000000000000001"
 name: title
@@ -1152,6 +1230,46 @@ type:
         // The field parsed fine, but the invalid entity was skipped
         assert_eq!(ctx.all_fields().len(), 1);
         assert!(ctx.all_entities().is_empty());
+    }
+
+    #[test]
+    fn from_yaml_sources_definitions_only() {
+        let yaml = r#"
+id: "00000000000000000000000001"
+name: title
+type:
+  kind: text
+  single_line: true
+"#;
+        let ctx =
+            FieldsContext::from_yaml_sources(PathBuf::from("/tmp/test"), &[("title", yaml)], &[])
+                .unwrap();
+
+        assert_eq!(ctx.all_fields().len(), 1);
+        assert!(ctx.all_entities().is_empty());
+    }
+
+    #[test]
+    fn from_yaml_sources_entities_only() {
+        let yaml = r#"
+name: task
+fields:
+  - title
+"#;
+        let ctx =
+            FieldsContext::from_yaml_sources(PathBuf::from("/tmp/test"), &[], &[("task", yaml)])
+                .unwrap();
+
+        assert!(ctx.all_fields().is_empty());
+        assert_eq!(ctx.all_entities().len(), 1);
+    }
+
+    #[test]
+    fn from_yaml_sources_empty_inputs() {
+        let ctx = FieldsContext::from_yaml_sources(PathBuf::from("/tmp/test"), &[], &[]).unwrap();
+        assert!(ctx.all_fields().is_empty());
+        assert!(ctx.all_entities().is_empty());
+        assert_eq!(ctx.root(), Path::new("/tmp/test"));
     }
 
     #[tokio::test]
@@ -1195,6 +1313,69 @@ type:
         assert_eq!(ctx.get_entity("task").unwrap().fields.len(), 3);
     }
 
+    #[tokio::test]
+    async fn entity_persistence_survives_reopen() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().join("fields");
+
+        {
+            let mut ctx = FieldsContext::open(&root).build().await.unwrap();
+            ctx.write_entity(&EntityDef {
+                name: "task".into(),
+                icon: None,
+                body_field: Some("body".into()),
+                fields: vec!["title".into()],
+                validate: None,
+                mention_prefix: None,
+                mention_display_field: None,
+                search_display_field: None,
+                commands: vec![],
+            })
+            .await
+            .unwrap();
+        }
+
+        let ctx = FieldsContext::open(&root).build().await.unwrap();
+        assert_eq!(ctx.all_entities().len(), 1);
+        let entity = ctx.get_entity("task").unwrap();
+        assert_eq!(entity.body_field, Some("body".into()));
+        assert_eq!(entity.fields, vec!["title".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn open_loads_preexisting_definitions_from_disk() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().join("fields");
+        let defs_dir = root.join("definitions");
+        let entities_dir = root.join("entities");
+        std::fs::create_dir_all(&defs_dir).unwrap();
+        std::fs::create_dir_all(&entities_dir).unwrap();
+        std::fs::create_dir_all(root.join("lib")).unwrap();
+
+        let field_yaml = r#"
+id: "00000000000000000000000001"
+name: priority
+type:
+  kind: text
+  single_line: true
+"#;
+        let entity_yaml = r#"
+name: issue
+fields:
+  - priority
+"#;
+        std::fs::write(defs_dir.join("priority.yaml"), field_yaml).unwrap();
+        std::fs::write(entities_dir.join("issue.yaml"), entity_yaml).unwrap();
+
+        let ctx = FieldsContext::open(&root).build().await.unwrap();
+        assert_eq!(ctx.all_fields().len(), 1);
+        assert!(ctx.get_field_by_name("priority").is_some());
+        assert!(ctx.get_field_by_id("00000000000000000000000001").is_some());
+        assert_eq!(ctx.all_entities().len(), 1);
+        assert!(ctx.get_entity("issue").is_some());
+        assert_eq!(ctx.fields_for_entity("issue").len(), 1);
+    }
+
     #[test]
     fn entity_types_depending_on_finds_computed_field_deps() {
         // Set up a computed field that depends on "tag" entity type
@@ -1218,7 +1399,6 @@ type:
         let task_entity_yaml = r#"
 name: task
 fields:
-  - title
   - tags
 "#;
         let tag_entity_yaml = r#"
@@ -1243,14 +1423,95 @@ fields:
     }
 
     #[test]
+    fn definition_path_and_entity_path_format() {
+        let ctx =
+            FieldsContext::from_yaml_sources(PathBuf::from("/root/fields"), &[], &[]).unwrap();
+        assert_eq!(
+            ctx.definition_path("title"),
+            PathBuf::from("/root/fields/definitions/title.yaml")
+        );
+        assert_eq!(
+            ctx.entity_path("task"),
+            PathBuf::from("/root/fields/entities/task.yaml")
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_last_field_leaves_empty() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().join("fields");
+        let mut ctx = FieldsContext::open(&root).build().await.unwrap();
+
+        let f1 = make_test_field("only");
+        let id = f1.id.clone();
+        ctx.write_field(&f1).await.unwrap();
+        ctx.delete_field(&id).await.unwrap();
+
+        assert!(ctx.all_fields().is_empty());
+        assert!(ctx.get_field_by_name("only").is_none());
+        assert!(ctx.get_field_by_id(&id).is_none());
+    }
+
+    #[test]
+    fn load_yaml_dir_skips_unreadable_entries() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path();
+        std::fs::write(dir.join("good.yaml"), "name: good").unwrap();
+        std::fs::create_dir(dir.join("subdir.yaml")).unwrap();
+
+        let entries = load_yaml_dir(dir);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].0, "good");
+    }
+
+    #[test]
     fn load_yaml_dir_skips_unreadable_dir() {
-        // A path that exists as a file (not a dir) should return empty
         let tmp = TempDir::new().unwrap();
         let file_path = tmp.path().join("not_a_dir.txt");
         std::fs::write(&file_path, "hello").unwrap();
 
-        // read_dir on a file returns an error, which triggers the early return
         let result = load_yaml_dir(&file_path);
         assert!(result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn multiple_entities_index_correctly() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().join("fields");
+        let mut ctx = FieldsContext::open(&root).build().await.unwrap();
+
+        for name in &["task", "issue", "epic"] {
+            let entity = EntityDef {
+                name: (*name).into(),
+                icon: None,
+                body_field: None,
+                fields: vec![],
+                validate: None,
+                mention_prefix: None,
+                mention_display_field: None,
+                search_display_field: None,
+                commands: vec![],
+            };
+            ctx.write_entity(&entity).await.unwrap();
+        }
+
+        assert_eq!(ctx.all_entities().len(), 3);
+        for name in &["task", "issue", "epic"] {
+            assert!(ctx.get_entity(name).is_some());
+        }
+    }
+
+    #[tokio::test]
+    async fn resolve_name_to_id_after_write() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().join("fields");
+        let mut ctx = FieldsContext::open(&root).build().await.unwrap();
+
+        let field = make_test_field("priority");
+        let id = field.id.clone();
+        ctx.write_field(&field).await.unwrap();
+
+        assert_eq!(ctx.resolve_name_to_id("priority"), Some(&id));
+        assert!(ctx.resolve_name_to_id("nonexistent").is_none());
     }
 }

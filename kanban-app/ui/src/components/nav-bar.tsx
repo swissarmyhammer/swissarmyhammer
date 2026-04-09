@@ -1,34 +1,37 @@
 import { Info, Search } from "lucide-react";
 import { BoardSelector } from "@/components/board-selector";
 import { Field } from "@/components/fields/field";
+import {
+  Tooltip,
+  TooltipTrigger,
+  TooltipContent,
+} from "@/components/ui/tooltip";
 import { useSchema } from "@/lib/schema-context";
-import { useInspect } from "@/lib/inspect-context";
-import { dispatchCommand, useExecuteCommand } from "@/lib/command-scope";
-import { moniker } from "@/lib/moniker";
-import type { BoardData, OpenBoard } from "@/types/kanban";
+import { useDispatchCommand, useCommandBusy } from "@/lib/command-scope";
+import {
+  useBoardData,
+  useOpenBoards,
+  useActiveBoardPath,
+  useHandleSwitchBoard,
+} from "@/components/window-container";
 
-interface NavBarProps {
-  board: BoardData | null;
-  openBoards: OpenBoard[];
-  /** Currently active board path for this window. */
-  activeBoardPath?: string;
-  /** Switch this window to a different board. */
-  onSwitchBoard: (path: string) => void;
-}
-
-export function NavBar({
-  board,
-  openBoards,
-  activeBoardPath,
-  onSwitchBoard,
-}: NavBarProps) {
-  const executeCommand = useExecuteCommand();
-  const inspectEntity = useInspect();
+/**
+ * Top-level navigation bar. Reads board data, open boards, active path,
+ * and switch-board handler from WindowContainer context -- takes no props.
+ */
+export function NavBar() {
+  const board = useBoardData();
+  const openBoards = useOpenBoards();
+  const activeBoardPath = useActiveBoardPath();
+  const onSwitchBoard = useHandleSwitchBoard();
+  const dispatchInspect = useDispatchCommand("ui.inspect");
+  const dispatchSearch = useDispatchCommand("app.search");
   const { getFieldDef } = useSchema();
   const percentFieldDef = getFieldDef("board", "percent_complete");
+  const { isBusy } = useCommandBusy();
 
   return (
-    <header className="flex h-12 items-center border-b px-4 gap-3">
+    <header className="relative flex h-12 items-center border-b px-4 gap-3">
       <BoardSelector
         boards={openBoards}
         selectedPath={
@@ -39,21 +42,23 @@ export function NavBar({
         showTearOff
       />
       {board && (
-        <button
-          type="button"
-          className="p-1 rounded text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted transition-colors"
-          onClick={() => {
-            const target = moniker("board", "board");
-            dispatchCommand({
-              id: "entity.inspect",
-              name: "Inspect Board",
-              execute: () => inspectEntity(target),
-            });
-          }}
-          title="Inspect board"
-        >
-          <Info className="h-4 w-4" />
-        </button>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              aria-label="Inspect board"
+              className="p-1 rounded text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted transition-colors"
+              onClick={() => {
+                dispatchInspect({ target: board.board.moniker }).catch(
+                  console.error,
+                );
+              }}
+            >
+              <Info className="h-4 w-4" />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">Inspect board</TooltipContent>
+        </Tooltip>
       )}
       {board && percentFieldDef && (
         <Field
@@ -64,14 +69,28 @@ export function NavBar({
           editing={false}
         />
       )}
-      <button
-        type="button"
-        className="ml-auto p-1 rounded text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted transition-colors"
-        onClick={() => executeCommand("app.search")}
-        title="Search"
-      >
-        <Search className="h-4 w-4" />
-      </button>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            type="button"
+            aria-label="Search"
+            className="ml-auto p-1 rounded text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted transition-colors"
+            onClick={() => dispatchSearch().catch(console.error)}
+          >
+            <Search className="h-4 w-4" />
+          </button>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">Search</TooltipContent>
+      </Tooltip>
+      {isBusy && (
+        <div
+          role="progressbar"
+          aria-label="Command in progress"
+          className="absolute bottom-0 left-0 right-0 h-0.5 overflow-hidden"
+        >
+          <div className="h-full w-1/3 bg-primary animate-indeterminate" />
+        </div>
+      )}
     </header>
   );
 }

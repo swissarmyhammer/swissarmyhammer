@@ -8,6 +8,11 @@
  */
 
 import { FocusScope } from "@/components/focus-scope";
+import {
+  Tooltip,
+  TooltipTrigger,
+  TooltipContent,
+} from "@/components/ui/tooltip";
 import { useEntityStore } from "@/lib/entity-store-context";
 import { useEntityCommands } from "@/lib/entity-commands";
 import { useSchema } from "@/lib/schema-context";
@@ -52,20 +57,20 @@ export function Avatar({ actorId, size = "md", className }: AvatarProps) {
   const avatar = actor ? getStr(actor, "avatar") : undefined;
 
   const sizeClass = SIZES[size];
-  const scopeMoniker = moniker("actor", actorId);
+  const scopeMoniker = actor?.moniker ?? moniker("actor", actorId);
 
   const commands = useEntityCommands("actor", actorId, actor ?? undefined);
 
-  const inner = avatar ? (
+  const element = avatar ? (
     <img
       src={avatar}
       alt={name}
-      title={name}
+      aria-label={name}
       className={`${sizeClass} rounded-full object-cover shrink-0 ${className ?? ""}`}
     />
   ) : (
     <span
-      title={name}
+      aria-label={name}
       className={`${sizeClass} rounded-full shrink-0 inline-flex items-center justify-center font-medium leading-none ${className ?? ""}`}
       style={{
         backgroundColor: `#${color}`,
@@ -74,6 +79,13 @@ export function Avatar({ actorId, size = "md", className }: AvatarProps) {
     >
       {initials(name)}
     </span>
+  );
+
+  const inner = (
+    <Tooltip>
+      <TooltipTrigger asChild>{element}</TooltipTrigger>
+      <TooltipContent side="top">{name}</TooltipContent>
+    </Tooltip>
   );
 
   return (

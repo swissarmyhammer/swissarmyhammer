@@ -52,8 +52,6 @@ impl Command for AddTaskCmd {
 ///   server-side from neighbor ordinals via `compute_ordinal_for_drop`), or
 /// - `before_id` and/or `after_id` args (task IDs of the neighbors; ordinal is
 ///   computed server-side from their ordinals).
-///
-/// Optional: `swimlane` arg.
 pub struct MoveTaskCmd;
 
 #[async_trait]
@@ -251,10 +249,6 @@ impl Command for MoveTaskCmd {
             op = op.with_ordinal(ordinal.as_str());
         }
 
-        if let Some(swimlane) = ctx.arg("swimlane").and_then(|v| v.as_str()) {
-            op.swimlane = Some(swimlane.into());
-        }
-
         run_op(&op, &kanban).await
     }
 }
@@ -281,6 +275,89 @@ impl Command for UntagTaskCmd {
             .ok_or_else(|| CommandError::MissingScope("tag".into()))?;
 
         let op = crate::task::UntagTask::new(task_id, tag_name);
+
+        run_op(&op, &kanban).await
+    }
+}
+
+/// Move a task to the top of the todo (first) column.
+///
+/// Requires `task` in the scope chain. Finds the first column on the board,
+/// loads the first task in that column, and dispatches a `MoveTask` with
+/// `before_id` set to that first task so the target lands at position zero.
+pub struct DoThisNextCmd;
+
+#[async_trait]
+impl Command for DoThisNextCmd {
+    fn available(&self, ctx: &CommandContext) -> bool {
+        ctx.has_in_scope("task")
+    }
+
+    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+        let kanban = ctx.require_extension::<KanbanContext>()?;
+
+        let task_id = ctx
+            .resolve_entity_id("task")
+            .ok_or_else(|| CommandError::MissingScope("task".into()))?;
+
+        // Find the first column (todo) on the board.
+        let ectx = kanban
+            .entity_context()
+            .await
+            .map_err(|e| CommandError::ExecutionFailed(e.to_string()))?;
+
+        let columns = ectx
+            .list("column")
+            .await
+            .map_err(|e| CommandError::ExecutionFailed(e.to_string()))?;
+
+        let mut sorted_columns = columns;
+        sorted_columns.sort_by(|a, b| {
+            let oa = a.get_str("order").unwrap_or("0");
+            let ob = b.get_str("order").unwrap_or("0");
+            oa.cmp(ob)
+        });
+
+        let todo_column = sorted_columns
+            .first()
+            .ok_or_else(|| CommandError::ExecutionFailed("no columns on board".into()))?;
+        let todo_col_id = todo_column.id.as_str();
+
+        // Find the first task in the todo column (by ordinal).
+        let all_tasks = ectx
+            .list("task")
+            .await
+            .map_err(|e| CommandError::ExecutionFailed(e.to_string()))?;
+
+        let mut todo_tasks: Vec<_> = all_tasks
+            .into_iter()
+            .filter(|t| {
+                t.get_str("position_column") == Some(todo_col_id) && t.id.as_str() != task_id
+            })
+            .collect();
+        todo_tasks.sort_by(|a, b| {
+            let oa = a
+                .get_str("position_ordinal")
+                .unwrap_or(Ordinal::DEFAULT_STR);
+            let ob = b
+                .get_str("position_ordinal")
+                .unwrap_or(Ordinal::DEFAULT_STR);
+            oa.cmp(ob)
+        });
+
+        let mut op = crate::task::MoveTask::to_column(task_id, todo_col_id.to_string());
+
+        // Place before the first task in todo, if any.
+        if let Some(first_task) = todo_tasks.first() {
+            let first_ord = Ordinal::from_string(
+                first_task
+                    .get_str("position_ordinal")
+                    .unwrap_or(Ordinal::DEFAULT_STR),
+            );
+            let ordinal =
+                crate::task_helpers::compute_ordinal_for_neighbors(None, Some(&first_ord));
+            op = op.with_ordinal(ordinal.as_str());
+        }
 
         run_op(&op, &kanban).await
     }
@@ -612,39 +689,6 @@ mod tests {
         );
         let result = cmd.execute(&ctx).await.unwrap();
         assert_eq!(result["position"]["column"], "doing");
-    }
-
-    #[tokio::test]
-    async fn move_task_cmd_with_swimlane() {
-        let (_temp, kctx) = setup().await;
-        // Create a swimlane
-        crate::swimlane::AddSwimlane::new("lane", "Lane")
-            .execute(&kctx)
-            .await
-            .into_result()
-            .unwrap();
-
-        let add_result = AddTask::new("Lane move")
-            .execute(&kctx)
-            .await
-            .into_result()
-            .unwrap();
-        let task_id = add_result["id"].as_str().unwrap().to_string();
-        let kanban = Arc::new(kctx);
-        let cmd = MoveTaskCmd;
-
-        let mut args = HashMap::new();
-        args.insert("column".into(), serde_json::json!("doing"));
-        args.insert("swimlane".into(), serde_json::json!("lane"));
-        let ctx = make_ctx(
-            Arc::clone(&kanban),
-            vec![format!("task:{task_id}")],
-            None,
-            args,
-        );
-        let result = cmd.execute(&ctx).await.unwrap();
-        assert_eq!(result["position"]["column"], "doing");
-        assert_eq!(result["position"]["swimlane"], "lane");
     }
 
     #[tokio::test]

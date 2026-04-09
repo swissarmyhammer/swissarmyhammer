@@ -1,0 +1,34 @@
+name: tag
+icon: tag
+mention_prefix: "#"
+mention_display_field: tag_name
+mention_color_field: color
+search_display_field: tag_name
+commands:
+  - id: ui.inspect
+    name: "Inspect {{entity.type}}"
+    context_menu: true
+  - id: entity.archive
+    name: "Archive {{entity.type}}"
+    context_menu: true
+  - id: entity.copy
+    name: "Copy {{entity.type}}"
+    context_menu: true
+    keys:
+      cua: Mod+C
+      vim: "y"
+  - id: entity.cut
+    name: "Cut {{entity.type}}"
+    context_menu: true
+    keys:
+      cua: Mod+X
+      vim: x
+  - id: tag.update
+    name: Update Tag
+    scope: "entity:tag"
+    undoable: true
+    visible: false
+fields:
+  - tag_name
+  - color
+  - description

@@ -14,7 +14,7 @@ import { EntityIcon } from "@/components/entity-icon";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
-import { backendDispatch } from "@/lib/command-scope";
+import { useDispatchCommand } from "@/lib/command-scope";
 import { EditorView } from "@codemirror/view";
 import { getCM } from "@replit/codemirror-vim";
 import { Plus } from "lucide-react";
@@ -22,9 +22,9 @@ import { Button } from "@/components/ui/button";
 import { TextEditor } from "@/components/fields/text-editor";
 import { BoardSelector } from "@/components/board-selector";
 import { useUIState } from "@/lib/ui-state-context";
-import { dispatchCommand } from "@/lib/command-scope";
 import appIcon from "@/assets/app-icon-32.png";
 import type { OpenBoard, BoardDataResponse, Entity } from "@/types/kanban";
+import { entityFromBag, getNum } from "@/types/kanban";
 
 const STORAGE_KEY = "quick-capture-last-board";
 
@@ -36,6 +36,9 @@ interface EntityFieldChangedEvent {
 }
 
 export function QuickCapture() {
+  const dispatchDismiss = useDispatchCommand("app.dismiss");
+  const dispatchTaskAdd = useDispatchCommand("task.add");
+  const dispatchSwitchBoard = useDispatchCommand("file.switchBoard");
   const [boards, setBoards] = useState<OpenBoard[]>([]);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
@@ -66,7 +69,12 @@ export function QuickCapture() {
   // kanban data model — every board has exactly one entity with these values.
   const selected = boards.find((b) => b.path === selectedPath);
   const boardEntity: Entity | undefined = selected
-    ? { entity_type: "board", id: "board", fields: { name: selected.name } }
+    ? {
+        entity_type: "board",
+        id: "board",
+        moniker: "board:board",
+        fields: { name: selected.name },
+      }
     : undefined;
 
   useEffect(() => {
@@ -95,7 +103,7 @@ export function QuickCapture() {
     const unlisteners = [
       // The "board" check is an entity-type filter for refresh, not a field name —
       // we only reload the board list when a board entity changes, ignoring
-      // task/column/swimlane changes that don't affect the selector.
+      // task/column changes that don't affect the selector.
       listen<EntityFieldChangedEvent>("entity-field-changed", (event) => {
         if (event.payload.entity_type === "board") loadBoards();
       }),
@@ -112,12 +120,8 @@ export function QuickCapture() {
   }, [loadBoards]);
 
   const hideWindow = useCallback(() => {
-    dispatchCommand({
-      id: "app.dismiss",
-      name: "Dismiss Quick Capture",
-      execute: () => getCurrentWindow().hide(),
-    });
-  }, []);
+    dispatchDismiss().catch(console.error);
+  }, [dispatchDismiss]);
 
   const handleSubmit = useCallback(
     async (text: string) => {
@@ -129,39 +133,22 @@ export function QuickCapture() {
         const boardData = await invoke<BoardDataResponse>("get_board_data", {
           boardPath: selectedPath,
         });
-        const columns = [...boardData.columns].sort((a, b) => {
-          const orderA = typeof a.order === "number" ? a.order : 0;
-          const orderB = typeof b.order === "number" ? b.order : 0;
-          return orderA - orderB;
-        });
+        const columns = boardData.columns
+          .map(entityFromBag)
+          .sort((a, b) => getNum(a, "order") - getNum(b, "order"));
         const firstColumnId = columns[0]?.id;
         if (!firstColumnId) return;
 
-        await dispatchCommand({
-          id: "task.add",
-          name: "Quick Capture Add Task",
-          execute: () => {
-            backendDispatch({
-              cmd: "task.add",
-              args: { column: firstColumnId, title: text.trim() },
-              boardPath: selectedPath,
-            });
-          },
+        await dispatchTaskAdd({
+          args: { column: firstColumnId, title: text.trim() },
         });
 
         localStorage.setItem(STORAGE_KEY, selectedPath);
 
         // If we switched to a different board for the add, restore the previous active
         if (active && active.path !== selectedPath) {
-          await dispatchCommand({
-            id: "file.switchBoard",
-            name: "Restore Active Board",
-            execute: () => {
-              backendDispatch({
-                cmd: "file.switchBoard",
-                args: { path: active.path },
-              });
-          },
+          await dispatchSwitchBoard({
+            args: { path: active.path },
           }).catch(() => {});
         }
       } catch (err) {

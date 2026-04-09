@@ -4,11 +4,16 @@
 //! This is the single source of truth for operation dispatch, used by both the MCP tool
 //! and the standalone kanban CLI.
 
-use crate::activity::ListActivity;
 use crate::actor::{AddActor, DeleteActor, GetActor, ListActors, UpdateActor};
+use crate::attachment::{
+    AddAttachment, DeleteAttachment, GetAttachment, ListAttachments, UpdateAttachment,
+};
 use crate::board::{GetBoard, InitBoard, UpdateBoard};
 use crate::column::{AddColumn, DeleteColumn, GetColumn, ListColumns, UpdateColumn};
-use crate::swimlane::{AddSwimlane, DeleteSwimlane, GetSwimlane, ListSwimlanes, UpdateSwimlane};
+use crate::perspective::{
+    AddPerspective, DeletePerspective, GetPerspective, ListPerspectives, UpdatePerspective,
+};
+use crate::project::{AddProject, DeleteProject, GetProject, ListProjects, UpdateProject};
 use crate::tag::{AddTag, DeleteTag, GetTag, ListTags, UpdateTag};
 use crate::task::{
     AddTask, ArchiveTask, AssignTask, CompleteTask, DeleteTask, GetTask, ListArchived, ListTasks,
@@ -24,22 +29,14 @@ fn req<'a>(op: &'a KanbanOperation, key: &str) -> Result<&'a str, KanbanError> {
         .ok_or_else(|| KanbanError::parse(format!("missing required field: {}", key)))
 }
 
-/// Execute a parsed kanban operation against a context.
-///
-/// This is the central dispatch function that maps `(Verb, Noun)` pairs
-/// to concrete operation structs and executes them via the processor.
-pub async fn execute_operation(
+/// Dispatch board operations (init, get, update).
+async fn execute_board_operation(
+    processor: &KanbanOperationProcessor,
     ctx: &KanbanContext,
     op: &KanbanOperation,
 ) -> Result<Value, KanbanError> {
-    let processor = match &op.actor {
-        Some(actor) => KanbanOperationProcessor::with_actor(actor.to_string()),
-        None => KanbanOperationProcessor::new(),
-    };
-
-    match (op.verb, op.noun) {
-        // Board operations
-        (Verb::Init, Noun::Board) => {
+    match op.verb {
+        Verb::Init => {
             let name = req(op, "name")?;
             let mut cmd = InitBoard::new(name);
             if let Some(desc) = op.get_string("description") {
@@ -47,11 +44,11 @@ pub async fn execute_operation(
             }
             processor.process(&cmd, ctx).await
         }
-        (Verb::Get, Noun::Board) => {
+        Verb::Get => {
             let include_counts = op.get_bool("include_counts").unwrap_or(true);
             processor.process(&GetBoard { include_counts }, ctx).await
         }
-        (Verb::Update, Noun::Board) => {
+        Verb::Update => {
             let mut cmd = UpdateBoard::new();
             if let Some(name) = op.get_string("name") {
                 cmd = cmd.with_name(name);
@@ -61,8 +58,20 @@ pub async fn execute_operation(
             }
             processor.process(&cmd, ctx).await
         }
+        _ => Err(KanbanError::parse(format!(
+            "unsupported operation: {} {}",
+            op.verb, op.noun
+        ))),
+    }
+}
 
-        // Column operations
+/// Dispatch column operations (add, get, update, delete, list).
+async fn execute_column_operation(
+    processor: &KanbanOperationProcessor,
+    ctx: &KanbanContext,
+    op: &KanbanOperation,
+) -> Result<Value, KanbanError> {
+    match (op.verb, op.noun) {
         (Verb::Add, Noun::Column) => {
             let id = req(op, "id")?;
             let name = req(op, "name")?;
@@ -92,105 +101,161 @@ pub async fn execute_operation(
             processor.process(&DeleteColumn::new(id), ctx).await
         }
         (Verb::List, Noun::Columns) => processor.process(&ListColumns, ctx).await,
+        _ => Err(KanbanError::parse(format!(
+            "unsupported operation: {} {}",
+            op.verb, op.noun
+        ))),
+    }
+}
 
-        // Task operations
-        (Verb::Add, Noun::Task) => {
-            let title = req(op, "title")?;
-            let mut cmd = AddTask::new(title);
-            if let Some(desc) = op.get_string("description") {
-                cmd = cmd.with_description(desc);
-            }
-            if let Some(column) = op.get_string("column") {
-                cmd.column = Some(column.to_string());
-            }
-            if let Some(swimlane) = op.get_string("swimlane") {
-                cmd.swimlane = Some(swimlane.to_string());
-            }
-            if let Some(ordinal) = op.get_string("ordinal") {
-                cmd.ordinal = Some(ordinal.to_string());
-            }
+/// Build and execute an `AddTask` command from operation parameters.
+///
+/// Parses title (required), description, column, ordinal, assignees, and
+/// depends_on from the operation. Assignees fall back to the operation's actor
+/// when no explicit assignee list is provided.
+/// Resolve assignees from explicit list, single value, or operation actor fallback.
+fn resolve_assignees(op: &KanbanOperation) -> Vec<ActorId> {
+    let explicit: Vec<ActorId> = op
+        .get_param("assignees")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(ActorId::from_string))
+                .collect()
+        })
+        .or_else(|| {
+            op.get_string("assignee")
+                .map(|a| vec![ActorId::from_string(a)])
+        })
+        .unwrap_or_default();
 
-            // Parse assignees
-            let explicit_assignees: Vec<ActorId> = op
-                .get_param("assignees")
-                .and_then(|v| v.as_array())
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|v| v.as_str().map(ActorId::from_string))
-                        .collect()
-                })
-                .or_else(|| {
-                    op.get_string("assignee")
-                        .map(|a| vec![ActorId::from_string(a)])
-                })
-                .unwrap_or_default();
+    if explicit.is_empty() {
+        op.actor.iter().cloned().collect()
+    } else {
+        explicit
+    }
+}
 
-            let assignees = if explicit_assignees.is_empty() {
-                match &op.actor {
-                    Some(actor) => vec![actor.clone()],
-                    None => Vec::new(),
-                }
-            } else {
-                explicit_assignees
-            };
+async fn dispatch_add_task(
+    processor: &KanbanOperationProcessor,
+    ctx: &KanbanContext,
+    op: &KanbanOperation,
+) -> Result<Value, KanbanError> {
+    let title = req(op, "title")?;
+    let mut cmd = AddTask::new(title);
+    if let Some(desc) = op.get_string("description") {
+        cmd = cmd.with_description(desc);
+    }
+    if let Some(column) = op.get_string("column") {
+        cmd.column = Some(column.to_string());
+    }
+    if let Some(ordinal) = op.get_string("ordinal") {
+        cmd.ordinal = Some(ordinal.to_string());
+    }
 
-            if !assignees.is_empty() {
-                cmd = cmd.with_assignees(assignees);
-            }
+    let assignees = resolve_assignees(op);
+    if !assignees.is_empty() {
+        cmd = cmd.with_assignees(assignees);
+    }
 
-            if let Some(deps) = op.get_param("depends_on").and_then(|v| v.as_array()) {
-                let dep_ids: Vec<TaskId> = deps
-                    .iter()
-                    .filter_map(|v| v.as_str().map(TaskId::from_string))
-                    .collect();
-                if !dep_ids.is_empty() {
-                    cmd = cmd.with_depends_on(dep_ids);
-                }
-            }
-
-            processor.process(&cmd, ctx).await
+    if let Some(deps) = op.get_param("depends_on").and_then(|v| v.as_array()) {
+        let dep_ids: Vec<TaskId> = deps
+            .iter()
+            .filter_map(|v| v.as_str().map(TaskId::from_string))
+            .collect();
+        if !dep_ids.is_empty() {
+            cmd = cmd.with_depends_on(dep_ids);
         }
-        (Verb::Get, Noun::Task) => {
+    }
+
+    if let Some(project) = op.get_string("project") {
+        cmd = cmd.with_project(project);
+    }
+
+    processor.process(&cmd, ctx).await
+}
+
+/// Build and execute an `UpdateTask` command from operation parameters.
+///
+/// Parses id (required), title, description, assignees, depends_on, and
+/// project from the operation.
+async fn dispatch_update_task(
+    processor: &KanbanOperationProcessor,
+    ctx: &KanbanContext,
+    op: &KanbanOperation,
+) -> Result<Value, KanbanError> {
+    let id = req(op, "id")?;
+    let mut cmd = UpdateTask::new(id);
+    if let Some(title) = op.get_string("title") {
+        cmd = cmd.with_title(title);
+    }
+    if let Some(desc) = op.get_string("description") {
+        cmd = cmd.with_description(desc);
+    }
+    if let Some(assignees) = op.get_param("assignees").and_then(|v| v.as_array()) {
+        let ids: Vec<ActorId> = assignees
+            .iter()
+            .filter_map(|v| v.as_str().map(|s| s.into()))
+            .collect();
+        if !ids.is_empty() {
+            cmd = cmd.with_assignees(ids);
+        }
+    }
+    if let Some(deps) = op.get_param("depends_on").and_then(|v| v.as_array()) {
+        let dep_ids: Vec<TaskId> = deps
+            .iter()
+            .filter_map(|v| v.as_str().map(TaskId::from_string))
+            .collect();
+        cmd = cmd.with_depends_on(dep_ids);
+    }
+    if let Some(project) = op.get_string("project") {
+        cmd = cmd.with_project(project);
+    }
+    processor.process(&cmd, ctx).await
+}
+
+/// Dispatch task CRUD operations: add, get, update, delete, complete.
+///
+/// Delegates to [`dispatch_add_task`] and [`dispatch_update_task`] for the
+/// longer Add and Update arms; handles Get, Delete, and Complete inline.
+async fn execute_task_crud_operation(
+    processor: &KanbanOperationProcessor,
+    ctx: &KanbanContext,
+    op: &KanbanOperation,
+) -> Result<Value, KanbanError> {
+    match op.verb {
+        Verb::Add => dispatch_add_task(processor, ctx, op).await,
+        Verb::Get => {
             let id = req(op, "id")?;
             processor.process(&GetTask::new(id), ctx).await
         }
-        (Verb::Update, Noun::Task) => {
+        Verb::Update => dispatch_update_task(processor, ctx, op).await,
+        Verb::Delete => {
             let id = req(op, "id")?;
-            let mut cmd = UpdateTask::new(id);
-            if let Some(title) = op.get_string("title") {
-                cmd = cmd.with_title(title);
-            }
-            if let Some(desc) = op.get_string("description") {
-                cmd = cmd.with_description(desc);
-            }
-            if let Some(assignees) = op.get_param("assignees").and_then(|v| v.as_array()) {
-                let ids: Vec<ActorId> = assignees
-                    .iter()
-                    .filter_map(|v| v.as_str().map(|s| s.into()))
-                    .collect();
-                if !ids.is_empty() {
-                    cmd = cmd.with_assignees(ids);
-                }
-            }
-            if let Some(deps) = op.get_param("depends_on").and_then(|v| v.as_array()) {
-                let dep_ids: Vec<TaskId> = deps
-                    .iter()
-                    .filter_map(|v| v.as_str().map(TaskId::from_string))
-                    .collect();
-                cmd = cmd.with_depends_on(dep_ids);
-            }
-            if let Some(swimlane) = op.get_string("swimlane") {
-                cmd = cmd.with_swimlane(Some(swimlane.into()));
-            }
-            processor.process(&cmd, ctx).await
+            processor.process(&DeleteTask::new(id), ctx).await
         }
-        (Verb::Move, Noun::Task) => {
+        Verb::Complete => {
+            let id = req(op, "id")?;
+            processor.process(&CompleteTask::new(id), ctx).await
+        }
+        _ => Err(KanbanError::parse(format!(
+            "unsupported operation: {} {}",
+            op.verb, op.noun
+        ))),
+    }
+}
+
+/// Dispatch task movement operations: move, archive, unarchive.
+async fn execute_task_movement_operation(
+    processor: &KanbanOperationProcessor,
+    ctx: &KanbanContext,
+    op: &KanbanOperation,
+) -> Result<Value, KanbanError> {
+    match op.verb {
+        Verb::Move => {
             let id = req(op, "id")?;
             let column = req(op, "column")?;
             let mut cmd = MoveTask::to_column(id, column);
-            if let Some(swimlane) = op.get_string("swimlane") {
-                cmd.swimlane = Some(swimlane.into());
-            }
             if let Some(ordinal) = op.get_string("ordinal") {
                 cmd.ordinal = Some(ordinal.to_string());
             }
@@ -202,101 +267,121 @@ pub async fn execute_operation(
             }
             processor.process(&cmd, ctx).await
         }
-        (Verb::Delete, Noun::Task) => {
+        Verb::Archive => {
             let id = req(op, "id")?;
-            processor.process(&DeleteTask::new(id), ctx).await
+            processor.process(&ArchiveTask::new(id), ctx).await
         }
-        (Verb::Complete, Noun::Task) => {
+        Verb::Unarchive => {
             let id = req(op, "id")?;
-            processor.process(&CompleteTask::new(id), ctx).await
+            processor.process(&UnarchiveTask::new(id), ctx).await
         }
-        (Verb::Assign, Noun::Task) => {
+        _ => Err(KanbanError::parse(format!(
+            "unsupported operation: {} {}",
+            op.verb, op.noun
+        ))),
+    }
+}
+
+/// Dispatch task assignment and tagging operations: assign, unassign, tag, untag.
+async fn execute_task_assignment_operation(
+    processor: &KanbanOperationProcessor,
+    ctx: &KanbanContext,
+    op: &KanbanOperation,
+) -> Result<Value, KanbanError> {
+    match op.verb {
+        Verb::Assign => {
             let id = req(op, "id")?;
             let assignee = req(op, "assignee")?;
             processor.process(&AssignTask::new(id, assignee), ctx).await
         }
-        (Verb::Unassign, Noun::Task) => {
+        Verb::Unassign => {
             let id = req(op, "id")?;
             let assignee = req(op, "assignee")?;
             processor
                 .process(&UnassignTask::new(id, assignee), ctx)
                 .await
         }
-        (Verb::Next, Noun::Task) => {
-            let mut cmd = NextTask::new();
-            if let Some(tag) = op.get_string("tag") {
-                cmd = cmd.with_tag(tag);
-            }
-            if let Some(swimlane) = op.get_string("swimlane") {
-                cmd = cmd.with_swimlane(swimlane);
-            }
-            if let Some(assignee) = op.get_string("assignee") {
-                cmd = cmd.with_assignee(assignee);
-            }
-            processor.process(&cmd, ctx).await
-        }
-        (Verb::List, Noun::Tasks) => {
-            let mut cmd = ListTasks::new();
-            if let Some(column) = op.get_string("column") {
-                cmd = cmd.with_column(column);
-            }
-            if let Some(tag) = op.get_string("tag") {
-                cmd = cmd.with_tag(tag);
-            }
-            if let Some(swimlane) = op.get_string("swimlane") {
-                cmd = cmd.with_swimlane(swimlane);
-            }
-            if let Some(assignee) = op.get_string("assignee") {
-                cmd = cmd.with_assignee(assignee);
-            }
-            if let Some(ready) = op.get_param("ready").and_then(|v| v.as_bool()) {
-                cmd = cmd.with_ready(ready);
-            }
-            processor.process(&cmd, ctx).await
-        }
-        (Verb::Tag, Noun::Task) => {
+        Verb::Tag => {
             let id = req(op, "id")?;
             let tag = req(op, "tag")?;
             processor.process(&TagTask::new(id, tag), ctx).await
         }
-        (Verb::Untag, Noun::Task) => {
+        Verb::Untag => {
             let id = req(op, "id")?;
             let tag = req(op, "tag")?;
             processor.process(&UntagTask::new(id, tag), ctx).await
         }
+        _ => Err(KanbanError::parse(format!(
+            "unsupported operation: {} {}",
+            op.verb, op.noun
+        ))),
+    }
+}
 
-        // Swimlane operations
-        (Verb::Add, Noun::Swimlane) => {
-            let id = req(op, "id")?;
-            let name = req(op, "name")?;
-            let mut cmd = AddSwimlane::new(id, name);
-            if let Some(order) = op.get_param("order").and_then(|v| v.as_u64()) {
-                cmd = cmd.with_order(order as usize);
+/// Dispatch task query operations: list, next.
+async fn execute_task_query_operation(
+    processor: &KanbanOperationProcessor,
+    ctx: &KanbanContext,
+    op: &KanbanOperation,
+) -> Result<Value, KanbanError> {
+    match op.verb {
+        Verb::Next => {
+            let mut cmd = NextTask::new();
+            if let Some(filter) = op.get_string("filter") {
+                cmd = cmd.with_filter(filter);
             }
             processor.process(&cmd, ctx).await
         }
-        (Verb::Get, Noun::Swimlane) => {
-            let id = req(op, "id")?;
-            processor.process(&GetSwimlane::new(id), ctx).await
-        }
-        (Verb::Update, Noun::Swimlane) => {
-            let id = req(op, "id")?;
-            let mut cmd = UpdateSwimlane::new(id);
-            if let Some(name) = op.get_string("name") {
-                cmd = cmd.with_name(name);
+        Verb::List => {
+            let mut cmd = ListTasks::new();
+            if let Some(column) = op.get_string("column") {
+                cmd = cmd.with_column(column);
             }
-            if let Some(order) = op.get_param("order").and_then(|v| v.as_u64()) {
-                cmd = cmd.with_order(order as usize);
+            if let Some(filter) = op.get_string("filter") {
+                cmd = cmd.with_filter(filter);
             }
             processor.process(&cmd, ctx).await
         }
-        (Verb::Delete, Noun::Swimlane) => {
-            let id = req(op, "id")?;
-            processor.process(&DeleteSwimlane::new(id), ctx).await
-        }
-        (Verb::List, Noun::Swimlanes) => processor.process(&ListSwimlanes, ctx).await,
+        _ => Err(KanbanError::parse(format!(
+            "unsupported operation: {} {}",
+            op.verb, op.noun
+        ))),
+    }
+}
 
-        // Actor operations
+/// Dispatch task operations by delegating to category-specific handlers.
+///
+/// Routes each verb to one of: CRUD, movement, assignment/tagging, or query.
+async fn execute_task_operation(
+    processor: &KanbanOperationProcessor,
+    ctx: &KanbanContext,
+    op: &KanbanOperation,
+) -> Result<Value, KanbanError> {
+    match op.verb {
+        Verb::Add | Verb::Get | Verb::Update | Verb::Delete | Verb::Complete => {
+            execute_task_crud_operation(processor, ctx, op).await
+        }
+        Verb::Move | Verb::Archive | Verb::Unarchive => {
+            execute_task_movement_operation(processor, ctx, op).await
+        }
+        Verb::Assign | Verb::Unassign | Verb::Tag | Verb::Untag => {
+            execute_task_assignment_operation(processor, ctx, op).await
+        }
+        Verb::Next | Verb::List => execute_task_query_operation(processor, ctx, op).await,
+        _ => Err(KanbanError::parse(format!(
+            "unsupported operation: {} {}",
+            op.verb, op.noun
+        ))),
+    }
+}
+
+/// Dispatch actor operations (add, get, update, delete, list).
+async fn execute_actor_operation(
+    processor: &KanbanOperationProcessor,
+    ctx: &KanbanContext,
+    op: &KanbanOperation,
+) -> Result<Value, KanbanError> {
+    match (op.verb, op.noun) {
         (Verb::Add, Noun::Actor) => {
             let id = req(op, "id")?;
             let name = req(op, "name")?;
@@ -324,8 +409,20 @@ pub async fn execute_operation(
             processor.process(&DeleteActor::new(id), ctx).await
         }
         (Verb::List, Noun::Actors) => processor.process(&ListActors, ctx).await,
+        _ => Err(KanbanError::parse(format!(
+            "unsupported operation: {} {}",
+            op.verb, op.noun
+        ))),
+    }
+}
 
-        // Tag operations (board-level)
+/// Dispatch board-level tag operations (add, get, update, delete, list).
+async fn execute_tag_operation(
+    processor: &KanbanOperationProcessor,
+    ctx: &KanbanContext,
+    op: &KanbanOperation,
+) -> Result<Value, KanbanError> {
+    match (op.verb, op.noun) {
         (Verb::Add, Noun::Tag) => {
             let name = op
                 .get_string("name")
@@ -363,27 +460,273 @@ pub async fn execute_operation(
             processor.process(&DeleteTag::new(id), ctx).await
         }
         (Verb::List, Noun::Tags) => processor.process(&ListTags::default(), ctx).await,
+        _ => Err(KanbanError::parse(format!(
+            "unsupported operation: {} {}",
+            op.verb, op.noun
+        ))),
+    }
+}
 
-        // Activity operations
-        (Verb::List, Noun::Activity) => {
-            let mut cmd = ListActivity::default();
-            if let Some(limit) = op.get_param("limit").and_then(|v| v.as_u64()) {
-                cmd = cmd.with_limit(limit as usize);
-            }
-            processor.process(&cmd, ctx).await
-        }
+/// Parse an optional `order` param as usize.
+fn parse_order(op: &KanbanOperation) -> Option<usize> {
+    op.get_param("order")
+        .and_then(|v| v.as_u64())
+        .map(|v| v as usize)
+}
 
-        // Archive operations
-        (Verb::Archive, Noun::Task) => {
-            let id = req(op, "id")?;
-            processor.process(&ArchiveTask::new(id), ctx).await
+/// Dispatch project operations (add, get, update, delete, list).
+async fn execute_project_operation(
+    processor: &KanbanOperationProcessor,
+    ctx: &KanbanContext,
+    op: &KanbanOperation,
+) -> Result<Value, KanbanError> {
+    match (op.verb, op.noun) {
+        (Verb::Add, Noun::Project) => dispatch_add_project(processor, ctx, op).await,
+        (Verb::Get, Noun::Project) => {
+            processor
+                .process(&GetProject::new(req(op, "id")?), ctx)
+                .await
         }
-        (Verb::Unarchive, Noun::Task) => {
-            let id = req(op, "id")?;
-            processor.process(&UnarchiveTask::new(id), ctx).await
+        (Verb::Update, Noun::Project) => dispatch_update_project(processor, ctx, op).await,
+        (Verb::Delete, Noun::Project) => {
+            processor
+                .process(&DeleteProject::new(req(op, "id")?), ctx)
+                .await
         }
-        (Verb::List, Noun::Archived) => processor.process(&ListArchived, ctx).await,
+        (Verb::List, Noun::Projects) => processor.process(&ListProjects, ctx).await,
+        _ => Err(KanbanError::parse(format!(
+            "unsupported operation: {} {}",
+            op.verb, op.noun
+        ))),
+    }
+}
 
+async fn dispatch_add_project(
+    processor: &KanbanOperationProcessor,
+    ctx: &KanbanContext,
+    op: &KanbanOperation,
+) -> Result<Value, KanbanError> {
+    let mut cmd = AddProject::new(req(op, "id")?, req(op, "name")?);
+    if let Some(d) = op.get_string("description") {
+        cmd = cmd.with_description(d);
+    }
+    if let Some(c) = op.get_string("color") {
+        cmd = cmd.with_color(c);
+    }
+    if let Some(o) = parse_order(op) {
+        cmd = cmd.with_order(o);
+    }
+    processor.process(&cmd, ctx).await
+}
+
+async fn dispatch_update_project(
+    processor: &KanbanOperationProcessor,
+    ctx: &KanbanContext,
+    op: &KanbanOperation,
+) -> Result<Value, KanbanError> {
+    let mut cmd = UpdateProject::new(req(op, "id")?);
+    if let Some(n) = op.get_string("name") {
+        cmd = cmd.with_name(n);
+    }
+    if let Some(d) = op.get_string("description") {
+        cmd = cmd.with_description(d);
+    }
+    if let Some(c) = op.get_string("color") {
+        cmd = cmd.with_color(c);
+    }
+    if let Some(o) = parse_order(op) {
+        cmd = cmd.with_order(o);
+    }
+    processor.process(&cmd, ctx).await
+}
+
+/// Parse a JSON array param into a `Vec<T>`, returning a `KanbanError` on failure.
+fn parse_json_array<T: serde::de::DeserializeOwned>(
+    op: &KanbanOperation,
+    key: &str,
+) -> Result<Option<Vec<T>>, KanbanError> {
+    match op.get_param(key) {
+        Some(val) => {
+            let items = serde_json::from_value(val.clone())
+                .map_err(|e| KanbanError::parse(format!("invalid {}: {}", key, e)))?;
+            Ok(Some(items))
+        }
+        None => Ok(None),
+    }
+}
+
+/// Dispatch perspective operations (add, get, update, delete, list).
+async fn execute_perspective_operation(
+    processor: &KanbanOperationProcessor,
+    ctx: &KanbanContext,
+    op: &KanbanOperation,
+) -> Result<Value, KanbanError> {
+    match (op.verb, op.noun) {
+        (Verb::Add, Noun::Perspective) => dispatch_add_perspective(processor, ctx, op).await,
+        (Verb::Get, Noun::Perspective) => {
+            processor
+                .process(&GetPerspective::new(req(op, "id")?), ctx)
+                .await
+        }
+        (Verb::Update, Noun::Perspective) => dispatch_update_perspective(processor, ctx, op).await,
+        (Verb::Delete, Noun::Perspective) => {
+            processor
+                .process(&DeletePerspective::new(req(op, "id")?), ctx)
+                .await
+        }
+        (Verb::List, Noun::Perspectives) => processor.process(&ListPerspectives::new(), ctx).await,
+        _ => Err(KanbanError::parse(format!(
+            "unsupported operation: {} {}",
+            op.verb, op.noun
+        ))),
+    }
+}
+
+async fn dispatch_add_perspective(
+    processor: &KanbanOperationProcessor,
+    ctx: &KanbanContext,
+    op: &KanbanOperation,
+) -> Result<Value, KanbanError> {
+    let mut cmd = AddPerspective::new(req(op, "name")?, req(op, "view")?);
+    if let Some(f) = parse_json_array(op, "fields")? {
+        cmd = cmd.with_fields(f);
+    }
+    if let Some(v) = op.get_string("filter") {
+        cmd = cmd.with_filter(v);
+    }
+    if let Some(v) = op.get_string("group") {
+        cmd = cmd.with_group(v);
+    }
+    if let Some(s) = parse_json_array(op, "sort")? {
+        cmd = cmd.with_sort(s);
+    }
+    processor.process(&cmd, ctx).await
+}
+
+async fn dispatch_update_perspective(
+    processor: &KanbanOperationProcessor,
+    ctx: &KanbanContext,
+    op: &KanbanOperation,
+) -> Result<Value, KanbanError> {
+    let mut cmd = UpdatePerspective::new(req(op, "id")?);
+    if let Some(n) = op.get_string("name") {
+        cmd = cmd.with_name(n);
+    }
+    if let Some(v) = op.get_string("view") {
+        cmd = cmd.with_view(v);
+    }
+    if let Some(f) = parse_json_array(op, "fields")? {
+        cmd = cmd.with_fields(f);
+    }
+    if op.params.contains_key("filter") {
+        cmd = cmd.with_filter(op.get_string("filter").map(|s| s.to_string()));
+    }
+    if op.params.contains_key("group") {
+        cmd = cmd.with_group(op.get_string("group").map(|s| s.to_string()));
+    }
+    if let Some(s) = parse_json_array(op, "sort")? {
+        cmd = cmd.with_sort(s);
+    }
+    processor.process(&cmd, ctx).await
+}
+
+/// Dispatch attachment operations (add, get, update, delete, list).
+async fn execute_attachment_operation(
+    processor: &KanbanOperationProcessor,
+    ctx: &KanbanContext,
+    op: &KanbanOperation,
+) -> Result<Value, KanbanError> {
+    match op.verb {
+        Verb::Add => dispatch_add_attachment(processor, ctx, op).await,
+        Verb::Get => {
+            processor
+                .process(
+                    &GetAttachment::new(req(op, "task_id")?, req(op, "id")?),
+                    ctx,
+                )
+                .await
+        }
+        Verb::Update => dispatch_update_attachment(processor, ctx, op).await,
+        Verb::Delete => {
+            processor
+                .process(
+                    &DeleteAttachment::new(req(op, "task_id")?, req(op, "id")?),
+                    ctx,
+                )
+                .await
+        }
+        Verb::List => {
+            processor
+                .process(&ListAttachments::new(req(op, "task_id")?), ctx)
+                .await
+        }
+        _ => Err(KanbanError::parse(format!(
+            "unsupported operation: {} {}",
+            op.verb, op.noun
+        ))),
+    }
+}
+
+async fn dispatch_add_attachment(
+    processor: &KanbanOperationProcessor,
+    ctx: &KanbanContext,
+    op: &KanbanOperation,
+) -> Result<Value, KanbanError> {
+    let mut cmd = AddAttachment::new(req(op, "task_id")?, req(op, "name")?, req(op, "path")?);
+    if let Some(mime) = op.get_string("mime_type") {
+        cmd = cmd.with_mime_type(mime);
+    }
+    if let Some(size) = op.get_param("size").and_then(|v| v.as_u64()) {
+        cmd = cmd.with_size(size);
+    }
+    processor.process(&cmd, ctx).await
+}
+
+async fn dispatch_update_attachment(
+    processor: &KanbanOperationProcessor,
+    ctx: &KanbanContext,
+    op: &KanbanOperation,
+) -> Result<Value, KanbanError> {
+    let mut cmd = UpdateAttachment::new(req(op, "task_id")?, req(op, "id")?);
+    if let Some(name) = op.get_string("name") {
+        cmd = cmd.with_name(name);
+    }
+    if let Some(mime) = op.get_string("mime_type") {
+        cmd = cmd.with_mime_type(mime);
+    }
+    if let Some(size) = op.get_param("size").and_then(|v| v.as_u64()) {
+        cmd = cmd.with_size(size);
+    }
+    processor.process(&cmd, ctx).await
+}
+
+/// Execute a parsed kanban operation against a context.
+///
+/// This is the central dispatch function that maps `(Verb, Noun)` pairs
+/// to concrete operation structs and executes them via the processor.
+pub async fn execute_operation(
+    ctx: &KanbanContext,
+    op: &KanbanOperation,
+) -> Result<Value, KanbanError> {
+    let processor = match &op.actor {
+        Some(actor) => KanbanOperationProcessor::with_actor(actor.to_string()),
+        None => KanbanOperationProcessor::new(),
+    };
+
+    match op.noun {
+        Noun::Board => execute_board_operation(&processor, ctx, op).await,
+        Noun::Column | Noun::Columns => execute_column_operation(&processor, ctx, op).await,
+        Noun::Task | Noun::Tasks => execute_task_operation(&processor, ctx, op).await,
+        Noun::Actor | Noun::Actors => execute_actor_operation(&processor, ctx, op).await,
+        Noun::Tag | Noun::Tags => execute_tag_operation(&processor, ctx, op).await,
+        Noun::Project | Noun::Projects => execute_project_operation(&processor, ctx, op).await,
+        Noun::Perspective | Noun::Perspectives => {
+            execute_perspective_operation(&processor, ctx, op).await
+        }
+        Noun::Attachment | Noun::Attachments => {
+            execute_attachment_operation(&processor, ctx, op).await
+        }
+        Noun::Archived => processor.process(&ListArchived, ctx).await,
         _ => Err(KanbanError::parse(format!(
             "unsupported operation: {} {}",
             op.verb, op.noun
@@ -615,6 +958,369 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
+
+    // ── Perspective operations ─────────────────────────────────────
+
+    #[tokio::test]
+    async fn dispatch_add_perspective() {
+        let (_temp, ctx) = setup().await;
+
+        let op = KanbanOperation::new(Verb::Add, Noun::Perspective, {
+            let mut m = serde_json::Map::new();
+            m.insert("name".into(), json!("Sprint View"));
+            m.insert("view".into(), json!("board"));
+            m
+        });
+        let result = execute_operation(&ctx, &op).await.unwrap();
+        assert_eq!(result["name"], "Sprint View");
+        assert_eq!(result["view"], "board");
+        assert!(result["id"].as_str().is_some());
+    }
+
+    #[tokio::test]
+    async fn dispatch_get_perspective() {
+        let (_temp, ctx) = setup().await;
+
+        // Add a perspective first
+        let op = KanbanOperation::new(Verb::Add, Noun::Perspective, {
+            let mut m = serde_json::Map::new();
+            m.insert("name".into(), json!("My View"));
+            m.insert("view".into(), json!("grid"));
+            m
+        });
+        let added = execute_operation(&ctx, &op).await.unwrap();
+        let id = added["id"].as_str().unwrap().to_string();
+
+        // Get by ID
+        let op = KanbanOperation::new(Verb::Get, Noun::Perspective, {
+            let mut m = serde_json::Map::new();
+            m.insert("id".into(), json!(id));
+            m
+        });
+        let result = execute_operation(&ctx, &op).await.unwrap();
+        assert_eq!(result["name"], "My View");
+        assert_eq!(result["view"], "grid");
+    }
+
+    #[tokio::test]
+    async fn dispatch_list_perspectives() {
+        let (_temp, ctx) = setup().await;
+
+        // Add two perspectives
+        for name in &["View A", "View B"] {
+            let op = KanbanOperation::new(Verb::Add, Noun::Perspective, {
+                let mut m = serde_json::Map::new();
+                m.insert("name".into(), json!(name));
+                m.insert("view".into(), json!("board"));
+                m
+            });
+            execute_operation(&ctx, &op).await.unwrap();
+        }
+
+        // List all
+        let op = KanbanOperation::new(Verb::List, Noun::Perspectives, serde_json::Map::new());
+        let result = execute_operation(&ctx, &op).await.unwrap();
+        assert_eq!(result["count"], 2);
+        let perspectives = result["perspectives"].as_array().unwrap();
+        assert_eq!(perspectives.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn dispatch_update_perspective() {
+        let (_temp, ctx) = setup().await;
+
+        // Add a perspective
+        let op = KanbanOperation::new(Verb::Add, Noun::Perspective, {
+            let mut m = serde_json::Map::new();
+            m.insert("name".into(), json!("Old Name"));
+            m.insert("view".into(), json!("board"));
+            m
+        });
+        let added = execute_operation(&ctx, &op).await.unwrap();
+        let id = added["id"].as_str().unwrap().to_string();
+
+        // Update the name
+        let op = KanbanOperation::new(Verb::Update, Noun::Perspective, {
+            let mut m = serde_json::Map::new();
+            m.insert("id".into(), json!(id));
+            m.insert("name".into(), json!("New Name"));
+            m.insert("view".into(), json!("grid"));
+            m
+        });
+        let result = execute_operation(&ctx, &op).await.unwrap();
+        assert_eq!(result["name"], "New Name");
+        assert_eq!(result["view"], "grid");
+    }
+
+    #[tokio::test]
+    async fn dispatch_delete_perspective() {
+        let (_temp, ctx) = setup().await;
+
+        // Add a perspective
+        let op = KanbanOperation::new(Verb::Add, Noun::Perspective, {
+            let mut m = serde_json::Map::new();
+            m.insert("name".into(), json!("Doomed"));
+            m.insert("view".into(), json!("board"));
+            m
+        });
+        let added = execute_operation(&ctx, &op).await.unwrap();
+        let id = added["id"].as_str().unwrap().to_string();
+
+        // Delete it
+        let op = KanbanOperation::new(Verb::Delete, Noun::Perspective, {
+            let mut m = serde_json::Map::new();
+            m.insert("id".into(), json!(id));
+            m
+        });
+        let result = execute_operation(&ctx, &op).await.unwrap();
+        assert_eq!(result["deleted"], true);
+
+        // Verify it's gone
+        let op = KanbanOperation::new(Verb::Get, Noun::Perspective, {
+            let mut m = serde_json::Map::new();
+            m.insert("id".into(), json!(id));
+            m
+        });
+        let result = execute_operation(&ctx, &op).await;
+        assert!(result.is_err(), "deleted perspective should not be found");
+    }
+
+    #[tokio::test]
+    async fn dispatch_perspective_full_lifecycle() {
+        let (_temp, ctx) = setup().await;
+
+        // Add
+        let op = KanbanOperation::new(Verb::Add, Noun::Perspective, {
+            let mut m = serde_json::Map::new();
+            m.insert("name".into(), json!("Lifecycle Test"));
+            m.insert("view".into(), json!("board"));
+            m.insert("filter".into(), json!("(e) => e.Status !== 'Done'"));
+            m
+        });
+        let added = execute_operation(&ctx, &op).await.unwrap();
+        let id = added["id"].as_str().unwrap().to_string();
+        assert_eq!(added["name"], "Lifecycle Test");
+        assert_eq!(added["filter"], "(e) => e.Status !== 'Done'");
+
+        // Get
+        let op = KanbanOperation::new(Verb::Get, Noun::Perspective, {
+            let mut m = serde_json::Map::new();
+            m.insert("id".into(), json!(&id));
+            m
+        });
+        let got = execute_operation(&ctx, &op).await.unwrap();
+        assert_eq!(got["name"], "Lifecycle Test");
+
+        // Update
+        let op = KanbanOperation::new(Verb::Update, Noun::Perspective, {
+            let mut m = serde_json::Map::new();
+            m.insert("id".into(), json!(&id));
+            m.insert("name".into(), json!("Updated Lifecycle"));
+            m.insert("group".into(), json!("(e) => e.Assignee"));
+            m
+        });
+        let updated = execute_operation(&ctx, &op).await.unwrap();
+        assert_eq!(updated["name"], "Updated Lifecycle");
+        assert_eq!(updated["group"], "(e) => e.Assignee");
+        // Filter should be preserved
+        assert_eq!(updated["filter"], "(e) => e.Status !== 'Done'");
+
+        // List
+        let op = KanbanOperation::new(Verb::List, Noun::Perspectives, serde_json::Map::new());
+        let listed = execute_operation(&ctx, &op).await.unwrap();
+        assert_eq!(listed["count"], 1);
+
+        // Delete
+        let op = KanbanOperation::new(Verb::Delete, Noun::Perspective, {
+            let mut m = serde_json::Map::new();
+            m.insert("id".into(), json!(&id));
+            m
+        });
+        let deleted = execute_operation(&ctx, &op).await.unwrap();
+        assert_eq!(deleted["deleted"], true);
+
+        // Verify empty
+        let op = KanbanOperation::new(Verb::List, Noun::Perspectives, serde_json::Map::new());
+        let listed = execute_operation(&ctx, &op).await.unwrap();
+        assert_eq!(listed["count"], 0);
+    }
+
+    #[tokio::test]
+    async fn dispatch_update_perspective_clear_filter_and_group_via_null() {
+        let (_temp, ctx) = setup().await;
+
+        // Add a perspective with filter and group set
+        let op = KanbanOperation::new(Verb::Add, Noun::Perspective, {
+            let mut m = serde_json::Map::new();
+            m.insert("name".into(), json!("Null Clear Test"));
+            m.insert("view".into(), json!("board"));
+            m.insert("filter".into(), json!("(e) => e.Status !== 'Done'"));
+            m.insert("group".into(), json!("(e) => e.Assignee"));
+            m
+        });
+        let added = execute_operation(&ctx, &op).await.unwrap();
+        let id = added["id"].as_str().unwrap().to_string();
+        assert_eq!(added["filter"], "(e) => e.Status !== 'Done'");
+        assert_eq!(added["group"], "(e) => e.Assignee");
+
+        // Update with filter: null and group: null to clear them
+        let op = KanbanOperation::new(Verb::Update, Noun::Perspective, {
+            let mut m = serde_json::Map::new();
+            m.insert("id".into(), json!(&id));
+            m.insert("filter".into(), Value::Null);
+            m.insert("group".into(), Value::Null);
+            m
+        });
+        let updated = execute_operation(&ctx, &op).await.unwrap();
+        assert!(
+            updated.get("filter").is_none() || updated["filter"].is_null(),
+            "filter should be cleared (null or absent), got: {:?}",
+            updated.get("filter")
+        );
+        assert!(
+            updated.get("group").is_none() || updated["group"].is_null(),
+            "group should be cleared (null or absent), got: {:?}",
+            updated.get("group")
+        );
+
+        // Verify via get that the clear persisted
+        let op = KanbanOperation::new(Verb::Get, Noun::Perspective, {
+            let mut m = serde_json::Map::new();
+            m.insert("id".into(), json!(&id));
+            m
+        });
+        let got = execute_operation(&ctx, &op).await.unwrap();
+        assert!(
+            got.get("filter").is_none() || got["filter"].is_null(),
+            "filter should remain cleared after re-fetch, got: {:?}",
+            got.get("filter")
+        );
+        assert!(
+            got.get("group").is_none() || got["group"].is_null(),
+            "group should remain cleared after re-fetch, got: {:?}",
+            got.get("group")
+        );
+    }
+
+    /// Passing malformed `fields` JSON to `add perspective` should return a parse error
+    /// instead of silently dropping the value.
+    #[tokio::test]
+    async fn dispatch_add_perspective_malformed_fields_returns_error() {
+        let (_temp, ctx) = setup().await;
+
+        let op = KanbanOperation::new(Verb::Add, Noun::Perspective, {
+            let mut m = serde_json::Map::new();
+            m.insert("name".into(), json!("Bad Fields"));
+            m.insert("view".into(), json!("board"));
+            // fields should be an array of PerspectiveFieldEntry, not a string
+            m.insert("fields".into(), json!("not-an-array"));
+            m
+        });
+        let result = execute_operation(&ctx, &op).await;
+        assert!(
+            result.is_err(),
+            "malformed fields should produce an error, not be silently dropped"
+        );
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(
+            err_msg.contains("invalid fields"),
+            "error should mention 'invalid fields', got: {err_msg}"
+        );
+    }
+
+    /// Passing malformed `sort` JSON to `add perspective` should return a parse error.
+    #[tokio::test]
+    async fn dispatch_add_perspective_malformed_sort_returns_error() {
+        let (_temp, ctx) = setup().await;
+
+        let op = KanbanOperation::new(Verb::Add, Noun::Perspective, {
+            let mut m = serde_json::Map::new();
+            m.insert("name".into(), json!("Bad Sort"));
+            m.insert("view".into(), json!("board"));
+            // sort should be an array of SortEntry, not a number
+            m.insert("sort".into(), json!(42));
+            m
+        });
+        let result = execute_operation(&ctx, &op).await;
+        assert!(
+            result.is_err(),
+            "malformed sort should produce an error, not be silently dropped"
+        );
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(
+            err_msg.contains("invalid sort"),
+            "error should mention 'invalid sort', got: {err_msg}"
+        );
+    }
+
+    /// Passing malformed `fields` JSON to `update perspective` should return a parse error.
+    #[tokio::test]
+    async fn dispatch_update_perspective_malformed_fields_returns_error() {
+        let (_temp, ctx) = setup().await;
+
+        // Create a valid perspective first
+        let op = KanbanOperation::new(Verb::Add, Noun::Perspective, {
+            let mut m = serde_json::Map::new();
+            m.insert("name".into(), json!("Valid"));
+            m.insert("view".into(), json!("board"));
+            m
+        });
+        let added = execute_operation(&ctx, &op).await.unwrap();
+        let id = added["id"].as_str().unwrap().to_string();
+
+        // Update with malformed fields
+        let op = KanbanOperation::new(Verb::Update, Noun::Perspective, {
+            let mut m = serde_json::Map::new();
+            m.insert("id".into(), json!(id));
+            m.insert("fields".into(), json!({"wrong": "shape"}));
+            m
+        });
+        let result = execute_operation(&ctx, &op).await;
+        assert!(
+            result.is_err(),
+            "malformed fields on update should produce an error"
+        );
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(
+            err_msg.contains("invalid fields"),
+            "error should mention 'invalid fields', got: {err_msg}"
+        );
+    }
+
+    /// Passing malformed `sort` JSON to `update perspective` should return a parse error.
+    #[tokio::test]
+    async fn dispatch_update_perspective_malformed_sort_returns_error() {
+        let (_temp, ctx) = setup().await;
+
+        // Create a valid perspective first
+        let op = KanbanOperation::new(Verb::Add, Noun::Perspective, {
+            let mut m = serde_json::Map::new();
+            m.insert("name".into(), json!("Valid"));
+            m.insert("view".into(), json!("board"));
+            m
+        });
+        let added = execute_operation(&ctx, &op).await.unwrap();
+        let id = added["id"].as_str().unwrap().to_string();
+
+        // Update with malformed sort
+        let op = KanbanOperation::new(Verb::Update, Noun::Perspective, {
+            let mut m = serde_json::Map::new();
+            m.insert("id".into(), json!(id));
+            m.insert("sort".into(), json!("not-an-array"));
+            m
+        });
+        let result = execute_operation(&ctx, &op).await;
+        assert!(
+            result.is_err(),
+            "malformed sort on update should produce an error"
+        );
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(
+            err_msg.contains("invalid sort"),
+            "error should mention 'invalid sort', got: {err_msg}"
+        );
+    }
+
     // Board operations
     // ------------------------------------------------------------------
 
@@ -691,79 +1397,6 @@ mod tests {
         assert!(ids.contains(&"todo"));
         assert!(ids.contains(&"doing"));
         assert!(ids.contains(&"done"));
-    }
-
-    // ------------------------------------------------------------------
-    // Swimlane operations
-    // ------------------------------------------------------------------
-
-    #[tokio::test]
-    async fn dispatch_add_swimlane() {
-        let (_temp, ctx) = setup().await;
-
-        let ops =
-            parse_input(json!({"op": "add swimlane", "id": "team-a", "name": "Team A"})).unwrap();
-        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
-        assert_eq!(result["id"], "team-a");
-        assert_eq!(result["name"], "Team A");
-    }
-
-    #[tokio::test]
-    async fn dispatch_get_swimlane() {
-        let (_temp, ctx) = setup().await;
-
-        // Add a swimlane first
-        let ops =
-            parse_input(json!({"op": "add swimlane", "id": "team-b", "name": "Team B"})).unwrap();
-        execute_operation(&ctx, &ops[0]).await.unwrap();
-
-        let ops = parse_input(json!({"op": "get swimlane", "id": "team-b"})).unwrap();
-        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
-        assert_eq!(result["id"], "team-b");
-        assert_eq!(result["name"], "Team B");
-    }
-
-    #[tokio::test]
-    async fn dispatch_update_swimlane() {
-        let (_temp, ctx) = setup().await;
-
-        let ops =
-            parse_input(json!({"op": "add swimlane", "id": "lane", "name": "Original"})).unwrap();
-        execute_operation(&ctx, &ops[0]).await.unwrap();
-
-        let ops =
-            parse_input(json!({"op": "update swimlane", "id": "lane", "name": "Updated"})).unwrap();
-        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
-        assert_eq!(result["name"], "Updated");
-    }
-
-    #[tokio::test]
-    async fn dispatch_delete_swimlane() {
-        let (_temp, ctx) = setup().await;
-
-        let ops =
-            parse_input(json!({"op": "add swimlane", "id": "to-delete", "name": "To Delete"}))
-                .unwrap();
-        execute_operation(&ctx, &ops[0]).await.unwrap();
-
-        let ops = parse_input(json!({"op": "delete swimlane", "id": "to-delete"})).unwrap();
-        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
-        assert_eq!(result["deleted"], true);
-    }
-
-    #[tokio::test]
-    async fn dispatch_list_swimlanes() {
-        let (_temp, ctx) = setup().await;
-
-        let ops = parse_input(json!({"op": "add swimlane", "id": "s1", "name": "S1"})).unwrap();
-        execute_operation(&ctx, &ops[0]).await.unwrap();
-
-        let ops = parse_input(json!({"op": "list swimlanes"})).unwrap();
-        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
-        let swimlanes = result["swimlanes"].as_array().unwrap();
-        assert!(!swimlanes.is_empty());
-        let ids: Vec<&str> = swimlanes.iter().filter_map(|s| s["id"].as_str()).collect();
-        assert!(ids.contains(&"s1"));
     }
 
     // ------------------------------------------------------------------
@@ -1079,36 +1712,6 @@ mod tests {
     // Activity operations
     // ------------------------------------------------------------------
 
-    #[tokio::test]
-    async fn dispatch_list_activity() {
-        let (_temp, ctx) = setup().await;
-
-        // Add a task to generate activity
-        let ops = parse_input(json!({"op": "add task", "title": "Activity task"})).unwrap();
-        execute_operation(&ctx, &ops[0]).await.unwrap();
-
-        let ops = parse_input(json!({"op": "list activity"})).unwrap();
-        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
-        assert!(result["entries"].is_array(), "should return entries array");
-    }
-
-    #[tokio::test]
-    async fn dispatch_list_activity_with_limit() {
-        let (_temp, ctx) = setup().await;
-
-        // Generate multiple activity entries
-        for i in 0..5 {
-            let ops =
-                parse_input(json!({"op": "add task", "title": format!("Task {}", i)})).unwrap();
-            execute_operation(&ctx, &ops[0]).await.unwrap();
-        }
-
-        let ops = parse_input(json!({"op": "list activity", "limit": 2})).unwrap();
-        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
-        let entries = result["entries"].as_array().unwrap();
-        assert!(entries.len() <= 2, "limit should cap results at 2");
-    }
-
     // ------------------------------------------------------------------
     // Dispatch: add task with optional fields
     // ------------------------------------------------------------------
@@ -1124,22 +1727,6 @@ mod tests {
         let result = execute_operation(&ctx, &ops[0]).await.unwrap();
         assert_eq!(result["title"], "Described");
         assert_eq!(result["description"], "Some detail");
-    }
-
-    #[tokio::test]
-    async fn dispatch_add_task_with_swimlane() {
-        let (_temp, ctx) = setup().await;
-
-        // Add a swimlane first
-        let ops =
-            parse_input(json!({"op": "add swimlane", "id": "lane1", "name": "Lane 1"})).unwrap();
-        execute_operation(&ctx, &ops[0]).await.unwrap();
-
-        let ops = parse_input(json!({"op": "add task", "title": "Lane task", "swimlane": "lane1"}))
-            .unwrap();
-        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
-        assert_eq!(result["title"], "Lane task");
-        assert_eq!(result["position"]["swimlane"], "lane1");
     }
 
     #[tokio::test]
@@ -1279,47 +1866,9 @@ mod tests {
         assert!(deps.iter().any(|d| d.as_str() == Some(&dep_id)));
     }
 
-    #[tokio::test]
-    async fn dispatch_update_task_with_swimlane() {
-        let (_temp, ctx) = setup().await;
-
-        let ops = parse_input(json!({"op": "add swimlane", "id": "sl1", "name": "SL1"})).unwrap();
-        execute_operation(&ctx, &ops[0]).await.unwrap();
-
-        let ops = parse_input(json!({"op": "add task", "title": "Swim task"})).unwrap();
-        let r = execute_operation(&ctx, &ops[0]).await.unwrap();
-        let task_id = r["id"].as_str().unwrap().to_string();
-
-        let ops =
-            parse_input(json!({"op": "update task", "id": task_id, "swimlane": "sl1"})).unwrap();
-        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
-        assert_eq!(result["position"]["swimlane"], "sl1");
-    }
-
     // ------------------------------------------------------------------
     // Dispatch: move task with optional fields
     // ------------------------------------------------------------------
-
-    #[tokio::test]
-    async fn dispatch_move_task_with_swimlane() {
-        let (_temp, ctx) = setup().await;
-
-        let ops =
-            parse_input(json!({"op": "add swimlane", "id": "lane2", "name": "Lane2"})).unwrap();
-        execute_operation(&ctx, &ops[0]).await.unwrap();
-
-        let ops = parse_input(json!({"op": "add task", "title": "Move swim"})).unwrap();
-        let r = execute_operation(&ctx, &ops[0]).await.unwrap();
-        let task_id = r["id"].as_str().unwrap().to_string();
-
-        let ops = parse_input(
-            json!({"op": "move task", "id": task_id, "column": "doing", "swimlane": "lane2"}),
-        )
-        .unwrap();
-        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
-        assert_eq!(result["position"]["column"], "doing");
-        assert_eq!(result["position"]["swimlane"], "lane2");
-    }
 
     #[tokio::test]
     async fn dispatch_move_task_with_ordinal() {
@@ -1403,26 +1952,9 @@ mod tests {
         let ops = parse_input(json!({"op": "tag task", "id": task_id, "tag": "priority"})).unwrap();
         execute_operation(&ctx, &ops[0]).await.unwrap();
 
-        let ops = parse_input(json!({"op": "next task", "tag": "priority"})).unwrap();
+        let ops = parse_input(json!({"op": "next task", "filter": "#priority"})).unwrap();
         let result = execute_operation(&ctx, &ops[0]).await.unwrap();
         assert_eq!(result["title"], "Tagged task");
-    }
-
-    #[tokio::test]
-    async fn dispatch_next_task_with_swimlane_filter() {
-        let (_temp, ctx) = setup().await;
-
-        let ops = parse_input(json!({"op": "add swimlane", "id": "team", "name": "Team"})).unwrap();
-        execute_operation(&ctx, &ops[0]).await.unwrap();
-
-        let ops =
-            parse_input(json!({"op": "add task", "title": "In swimlane", "swimlane": "team"}))
-                .unwrap();
-        execute_operation(&ctx, &ops[0]).await.unwrap();
-
-        let ops = parse_input(json!({"op": "next task", "swimlane": "team"})).unwrap();
-        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
-        assert_eq!(result["title"], "In swimlane");
     }
 
     #[tokio::test]
@@ -1442,7 +1974,7 @@ mod tests {
             parse_input(json!({"op": "assign task", "id": task_id, "assignee": "dev"})).unwrap();
         execute_operation(&ctx, &ops[0]).await.unwrap();
 
-        let ops = parse_input(json!({"op": "next task", "assignee": "dev"})).unwrap();
+        let ops = parse_input(json!({"op": "next task", "filter": "@dev"})).unwrap();
         let result = execute_operation(&ctx, &ops[0]).await.unwrap();
         assert_eq!(result["title"], "Assigned next");
     }
@@ -1465,23 +1997,6 @@ mod tests {
         let ops = parse_input(json!({"op": "list tasks", "tag": "bug"})).unwrap();
         let result = execute_operation(&ctx, &ops[0]).await.unwrap();
         assert_eq!(result["count"], 1);
-    }
-
-    #[tokio::test]
-    async fn dispatch_list_tasks_with_swimlane_filter() {
-        let (_temp, ctx) = setup().await;
-
-        let ops = parse_input(json!({"op": "add swimlane", "id": "core", "name": "Core"})).unwrap();
-        execute_operation(&ctx, &ops[0]).await.unwrap();
-
-        let ops = parse_input(json!({"op": "add task", "title": "Core task", "swimlane": "core"}))
-            .unwrap();
-        execute_operation(&ctx, &ops[0]).await.unwrap();
-
-        let ops = parse_input(json!({"op": "list tasks", "swimlane": "core"})).unwrap();
-        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
-        assert_eq!(result["count"], 1);
-        assert_eq!(result["tasks"][0]["title"], "Core task");
     }
 
     #[tokio::test]
@@ -1522,7 +2037,7 @@ mod tests {
         execute_operation(&ctx, &ops[0]).await.unwrap();
 
         // List only ready tasks
-        let ops = parse_input(json!({"op": "list tasks", "ready": true})).unwrap();
+        let ops = parse_input(json!({"op": "list tasks", "filter": "#READY"})).unwrap();
         let result = execute_operation(&ctx, &ops[0]).await.unwrap();
         // Only the blocker should be ready
         let titles: Vec<&str> = result["tasks"]
@@ -1561,35 +2076,6 @@ mod tests {
         let ops = parse_input(json!({"op": "update column", "id": "todo", "order": 5})).unwrap();
         let result = execute_operation(&ctx, &ops[0]).await.unwrap();
         assert_eq!(result["order"], 5);
-    }
-
-    // ------------------------------------------------------------------
-    // Dispatch: swimlane with order
-    // ------------------------------------------------------------------
-
-    #[tokio::test]
-    async fn dispatch_add_swimlane_with_order() {
-        let (_temp, ctx) = setup().await;
-
-        let ops = parse_input(
-            json!({"op": "add swimlane", "id": "ordered", "name": "Ordered", "order": 3}),
-        )
-        .unwrap();
-        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
-        assert_eq!(result["id"], "ordered");
-        assert_eq!(result["order"], 3);
-    }
-
-    #[tokio::test]
-    async fn dispatch_update_swimlane_with_order() {
-        let (_temp, ctx) = setup().await;
-
-        let ops = parse_input(json!({"op": "add swimlane", "id": "sl", "name": "SL"})).unwrap();
-        execute_operation(&ctx, &ops[0]).await.unwrap();
-
-        let ops = parse_input(json!({"op": "update swimlane", "id": "sl", "order": 7})).unwrap();
-        let result = execute_operation(&ctx, &ops[0]).await.unwrap();
-        assert_eq!(result["order"], 7);
     }
 
     // ------------------------------------------------------------------

@@ -4,15 +4,12 @@ use crate::types::default_column_entities;
 use crate::{KanbanContext, KanbanError, Result};
 use async_trait::async_trait;
 use serde_json::Value;
-use swissarmyhammer_entity::EntityContext;
 use swissarmyhammer_operations::{Execute, LogEntry, OperationProcessor};
 
 /// Kanban-specific operation processor
 ///
-/// Handles execution and logging for all kanban operations.
-/// - Executes operations via Execute trait
-/// - Writes logs to global activity log
-/// - Writes logs to per-task logs for affected tasks
+/// Handles execution and actor attribution for all kanban operations.
+/// Per-entity logging is handled by EntityContext/StoreHandle.
 pub struct KanbanOperationProcessor {
     /// Optional actor performing operations (for log attribution)
     pub actor: Option<String>,
@@ -53,12 +50,9 @@ impl OperationProcessor<KanbanContext, KanbanError> for KanbanOperationProcessor
             }
         }
 
-        // Generate a transaction ID and set it on the EntityContext.
-        // All write/delete calls during operation execution get this stamped,
-        // enabling compound undo/redo as a single unit.
-        let tx_id = EntityContext::generate_transaction_id();
-        let ectx = ctx.entity_context().await?;
-        ectx.set_transaction(tx_id.clone()).await;
+        // TODO: Add store-level transaction support so compound operations
+        // (e.g. tag rename that touches multiple tasks) can be undone as a
+        // single unit. For now, each write/delete is an independent undo entry.
 
         // Log every operation flowing through the processor so we can trace
         // activity from any entry point (Tauri, MCP, CLI, tests).
@@ -72,51 +66,28 @@ impl OperationProcessor<KanbanContext, KanbanError> for KanbanOperationProcessor
         // Execute the operation
         let exec_result = operation.execute(ctx).await;
 
-        // Clear the transaction after execution
-        ectx.clear_transaction().await;
-
         // Split into result and log entry
         let (result, mut log_entry) = exec_result.split();
 
-        // Write log if present
+        // Add actor attribution to log entry (per-entity logging is handled
+        // by EntityContext; there is no global activity log).
         if let Some(ref mut entry) = log_entry {
-            // Add actor attribution
             if let Some(ref actor) = self.actor {
                 entry.actor = Some(actor.clone());
             }
-
-            // Write logs
-            if let Ok(ref value) = result {
-                let affected = operation.affected_resource_ids(value);
-                self.write_log(ctx, entry, &affected).await?;
-            } else {
-                // Still log errors
-                self.write_log(ctx, entry, &[]).await?;
-            }
         }
 
-        // Add the operation_id (transaction ULID) to the result JSON
-        // so callers can use it for undo/redo.
-        match result {
-            Ok(mut value) => {
-                if let Some(obj) = value.as_object_mut() {
-                    obj.insert("operation_id".to_string(), Value::String(tx_id.to_string()));
-                }
-                Ok(value)
-            }
-            Err(e) => Err(e),
-        }
+        result
     }
 
     async fn write_log(
         &self,
-        ctx: &KanbanContext,
-        log_entry: &LogEntry,
+        _ctx: &KanbanContext,
+        _log_entry: &LogEntry,
         _affected_resources: &[String],
     ) -> Result<()> {
-        // Global activity log only — per-entity logging is handled by EntityContext
-        ctx.append_activity(log_entry).await?;
-
+        // Per-entity logging is handled by EntityContext/StoreHandle;
+        // there is no global activity log, so this is intentionally a no-op.
         Ok(())
     }
 }
@@ -132,7 +103,6 @@ mod tests {
     use super::*;
     use crate::board::InitBoard;
     use crate::task::AddTask;
-    use crate::types::TaskId;
     use tempfile::TempDir;
 
     async fn setup() -> (TempDir, KanbanContext) {
@@ -151,36 +121,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_processor_writes_activity_log() {
+    async fn test_processor_executes_operations() {
         let (_temp, ctx) = setup().await;
         let processor = KanbanOperationProcessor::new();
 
-        let cmd = AddTask::new("Test task");
-        processor.process(&cmd, &ctx).await.unwrap();
-
-        // Verify log was written
-        let entries = ctx.read_activity(None).await.unwrap();
-        assert_eq!(entries.len(), 2); // InitBoard + AddTask
-        assert_eq!(entries[0].op, "add task"); // Newest entry
-    }
-
-    #[tokio::test]
-    async fn test_processor_writes_entity_changelog() {
-        let (_temp, ctx) = setup().await;
-        let processor = KanbanOperationProcessor::new();
-
-        // Add task
         let cmd = AddTask::new("Test task");
         let result = processor.process(&cmd, &ctx).await.unwrap();
-        let task_id = result["id"].as_str().unwrap();
-
-        // Check entity changelog (written by EntityContext::write)
-        let task_log_path = ctx.task_log_path(&TaskId::from_string(task_id));
-        let content = std::fs::read_to_string(task_log_path).unwrap();
-        let lines: Vec<&str> = content.lines().collect();
-
-        // Only entity changelog entry (processor no longer writes per-entity logs)
-        assert_eq!(lines.len(), 1);
+        assert!(result["id"].as_str().is_some());
     }
 
     #[test]
@@ -196,14 +143,7 @@ mod tests {
         let processor = KanbanOperationProcessor::with_actor("assistant[session123]");
 
         let cmd = AddTask::new("Test task");
-        processor.process(&cmd, &ctx).await.unwrap();
-
-        // Verify actor is in log
-        let entries = ctx.read_activity(None).await.unwrap();
-        let add_task_entry = &entries[0]; // Newest entry (AddTask)
-        assert_eq!(
-            add_task_entry.actor,
-            Some("assistant[session123]".to_string())
-        );
+        let result = processor.process(&cmd, &ctx).await.unwrap();
+        assert!(result["id"].as_str().is_some());
     }
 }

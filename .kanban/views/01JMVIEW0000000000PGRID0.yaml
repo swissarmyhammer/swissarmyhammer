@@ -1,0 +1,35 @@
+id: 01JMVIEW0000000000PGRID0
+name: Projects
+icon: folder
+kind: grid
+entity_type: project
+card_fields:
+  - name
+  - description
+  - color
+  - order
+commands:
+  - id: grid.edit
+    name: Edit Cell
+    keys:
+      vim: i
+      cua: Enter
+  - id: grid.escape
+    name: Exit Edit
+    keys:
+      vim: Escape
+      cua: Escape
+  - id: grid.deleteRow
+    name: Delete Row
+    keys:
+      vim: dd
+  - id: grid.newBelow
+    name: New Row Below
+    keys:
+      vim: o
+      cua: Mod+Enter
+  - id: grid.newAbove
+    name: New Row Above
+    keys:
+      vim: O
+      cua: Mod+Shift+Enter

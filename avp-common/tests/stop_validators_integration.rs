@@ -77,10 +77,12 @@ fn test_stop_rulesets_retain_file_patterns() {
     // to filter against accumulated changed files
     for ruleset in stop_rulesets {
         if ruleset.name() == "code-quality" || ruleset.name() == "test-integrity" {
-            let match_criteria = ruleset.manifest.match_criteria.as_ref().expect(&format!(
-                "Stop RuleSet '{}' should have match criteria with file patterns",
-                ruleset.name()
-            ));
+            let match_criteria = ruleset.manifest.match_criteria.as_ref().unwrap_or_else(|| {
+                panic!(
+                    "Stop RuleSet '{}' should have match criteria with file patterns",
+                    ruleset.name()
+                )
+            });
             assert!(
                 !match_criteria.files.is_empty(),
                 "Stop RuleSet '{}' should retain file patterns for filtering changed files",

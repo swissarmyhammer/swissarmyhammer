@@ -8,13 +8,14 @@ use crate::defaults::{
     builtin_view_definitions, kanban_compute_engine, KanbanLookup,
 };
 use crate::error::{KanbanError, Result};
-use crate::types::{ActorId, ColumnId, LogEntry, SwimlaneId, TagId, TaskId};
+use crate::types::{ActorId, ColumnId, LogEntry, TagId, TaskId};
 use fs2::FileExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use swissarmyhammer_entity::changelog::ChangeEntry;
 use swissarmyhammer_entity::{Entity, EntityContext};
 use swissarmyhammer_fields::{load_yaml_dir, DeriveRegistry, FieldsContext, ValidationEngine};
+use swissarmyhammer_perspectives::PerspectiveContext;
 use swissarmyhammer_views::{ViewsChangelog, ViewsContext};
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
@@ -36,6 +37,8 @@ pub struct KanbanContext {
     views: Option<RwLock<ViewsContext>>,
     /// View changelog (populated via `open()`, None when created via `new()`)
     views_changelog: Option<ViewsChangelog>,
+    /// Perspective registry — lazy-initialized on first access.
+    perspectives: OnceCell<RwLock<PerspectiveContext>>,
     /// Derive handlers for computed field read/write
     derive_registry: Arc<DeriveRegistry>,
 }
@@ -68,6 +71,7 @@ impl KanbanContext {
             entities: OnceCell::new(),
             views: None,
             views_changelog: None,
+            perspectives: OnceCell::new(),
             derive_registry: Arc::new(crate::derive_handlers::kanban_derive_registry()),
         }
     }
@@ -75,20 +79,16 @@ impl KanbanContext {
     /// Create a fully-initialized context with field registry.
     ///
     /// Loads builtin field/entity YAML definitions (embedded at compile time),
-    /// then merges with any local overrides from `.kanban/fields/`.
+    /// then merges with any local overrides from `.kanban/definitions/` and
+    /// `.kanban/entities/`.
     pub async fn open(root: impl Into<PathBuf>) -> Result<Self> {
         let root = root.into();
 
-        // Ensure fields directory structure exists for local overrides
-        let fields_root = root.join("fields");
-        fs::create_dir_all(fields_root.join("definitions")).await?;
-        fs::create_dir_all(fields_root.join("entities")).await?;
+        // Ensure definitions/ and entities/ exist for local overrides
+        fs::create_dir_all(root.join("definitions")).await?;
+        fs::create_dir_all(root.join("entities")).await?;
 
         let (fields, entities) = Self::build_entity_context(&root)?;
-        // Rebuild changelog/transaction indexes so undo/redo survives restart.
-        if let Err(e) = entities.rebuild_indexes().await {
-            tracing::warn!("Failed to rebuild changelog indexes: {e}");
-        }
         let cell = OnceCell::new();
         cell.set(Arc::new(entities)).ok();
 
@@ -100,6 +100,14 @@ impl KanbanContext {
         let views = Self::build_views_context(&views_root)?;
         let views_changelog = ViewsChangelog::new(root.join("views.jsonl"));
 
+        // Build perspectives context
+        let perspectives_dir = root.join("perspectives");
+        fs::create_dir_all(&perspectives_dir).await?;
+        let perspectives = PerspectiveContext::open(&perspectives_dir).await?;
+
+        let persp_cell = OnceCell::new();
+        persp_cell.set(RwLock::new(perspectives)).ok();
+
         let context_name = Self::derive_context_name(&root);
         Ok(Self {
             root,
@@ -108,6 +116,7 @@ impl KanbanContext {
             entities: cell,
             views: Some(RwLock::new(views)),
             views_changelog: Some(views_changelog),
+            perspectives: persp_cell,
             derive_registry: Arc::new(crate::derive_handlers::kanban_derive_registry()),
         })
     }
@@ -148,6 +157,17 @@ impl KanbanContext {
     /// Access the view changelog, if initialized.
     pub fn views_changelog(&self) -> Option<&ViewsChangelog> {
         self.views_changelog.as_ref()
+    }
+
+    /// Access the perspective registry lock, lazy-initializing on first call.
+    pub async fn perspective_context(&self) -> Result<&RwLock<PerspectiveContext>> {
+        self.perspectives
+            .get_or_try_init(|| async {
+                let dir = self.perspectives_dir();
+                let ctx = PerspectiveContext::open(dir).await?;
+                Ok::<RwLock<PerspectiveContext>, KanbanError>(RwLock::new(ctx))
+            })
+            .await
     }
 
     // =========================================================================
@@ -222,29 +242,9 @@ impl KanbanContext {
         self.root.join("columns").join(format!("{}.jsonl", id))
     }
 
-    /// Path to swimlanes directory
-    pub fn swimlanes_dir(&self) -> PathBuf {
-        self.root.join("swimlanes")
-    }
-
-    /// Path to a swimlane's YAML file
-    pub fn swimlane_path(&self, id: &SwimlaneId) -> PathBuf {
-        self.root.join("swimlanes").join(format!("{}.yaml", id))
-    }
-
-    /// Path to a swimlane's log file
-    pub fn swimlane_log_path(&self, id: &SwimlaneId) -> PathBuf {
-        self.root.join("swimlanes").join(format!("{}.jsonl", id))
-    }
-
-    /// Path to the activity directory
-    pub fn activity_dir(&self) -> PathBuf {
-        self.root.join("activity")
-    }
-
-    /// Path to the current activity log
-    pub fn activity_path(&self) -> PathBuf {
-        self.root.join("activity").join("current.jsonl")
+    /// Path to the perspectives directory
+    pub fn perspectives_dir(&self) -> PathBuf {
+        self.root.join("perspectives")
     }
 
     /// Path to the lock file
@@ -271,8 +271,7 @@ impl KanbanContext {
             && self.actors_dir().exists()
             && self.tags_dir().exists()
             && self.columns_dir().exists()
-            && self.swimlanes_dir().exists()
-            && self.activity_dir().exists()
+            && self.perspectives_dir().exists()
     }
 
     /// Create the directory structure for a new board
@@ -288,8 +287,7 @@ impl KanbanContext {
         fs::create_dir_all(self.actors_dir()).await?;
         fs::create_dir_all(self.tags_dir()).await?;
         fs::create_dir_all(self.columns_dir()).await?;
-        fs::create_dir_all(self.swimlanes_dir()).await?;
-        fs::create_dir_all(self.activity_dir()).await?;
+        fs::create_dir_all(self.perspectives_dir()).await?;
         Ok(())
     }
 
@@ -305,14 +303,6 @@ impl KanbanContext {
     }
 
     // =========================================================================
-    // Activity logging
-    // =========================================================================
-
-    /// Append a log entry to the global activity log
-    pub async fn append_activity(&self, entry: &LogEntry) -> Result<()> {
-        self.append_log(&self.activity_path(), entry).await
-    }
-
     /// Append a log entry to a task's log
     pub async fn append_task_log(&self, task_id: &TaskId, entry: &LogEntry) -> Result<()> {
         self.append_log(&self.task_log_path(task_id), entry).await
@@ -348,11 +338,6 @@ impl KanbanContext {
         self.append_log(&self.column_log_path(id), entry).await
     }
 
-    /// Append a log entry to a swimlane's log
-    pub async fn append_swimlane_log(&self, id: &SwimlaneId, entry: &LogEntry) -> Result<()> {
-        self.append_log(&self.swimlane_log_path(id), entry).await
-    }
-
     /// Append a log entry to the board log
     pub async fn append_board_log(&self, entry: &LogEntry) -> Result<()> {
         self.append_log(&self.board_log_path(), entry).await
@@ -373,30 +358,6 @@ impl KanbanContext {
         file.flush().await?;
 
         Ok(())
-    }
-
-    /// Read activity log entries (from current.jsonl)
-    pub async fn read_activity(&self, limit: Option<usize>) -> Result<Vec<LogEntry>> {
-        let path = self.activity_path();
-        if !path.exists() {
-            return Ok(Vec::new());
-        }
-
-        let content = fs::read_to_string(&path).await?;
-        let mut entries: Vec<LogEntry> = content
-            .lines()
-            .filter(|line| !line.is_empty())
-            .filter_map(|line| serde_json::from_str(line).ok())
-            .collect();
-
-        // Reverse to get newest first
-        entries.reverse();
-
-        if let Some(limit) = limit {
-            entries.truncate(limit);
-        }
-
-        Ok(entries)
     }
 
     // =========================================================================
@@ -424,17 +385,15 @@ impl KanbanContext {
     /// Build a FieldsContext + EntityContext from builtin and local field definitions.
     ///
     /// Loads builtin YAML definitions (embedded at compile time), then merges
-    /// with any local overrides from `.kanban/fields/`. Does NOT create directories
-    /// — callers that need dirs should ensure them beforehand.
+    /// with any local overrides from `.kanban/definitions/` and `.kanban/entities/`.
+    /// Does NOT create directories — callers that need dirs should ensure them beforehand.
     fn build_entity_context(root: &Path) -> Result<(Arc<FieldsContext>, EntityContext)> {
-        let fields_root = root.join("fields");
-
         let builtin_defs = builtin_field_definitions();
         let builtin_entities = builtin_entity_definitions();
 
         // Load local overrides (returns empty vec if dirs don't exist)
-        let local_defs = load_yaml_dir(&fields_root.join("definitions"));
-        let local_entities = load_yaml_dir(&fields_root.join("entities"));
+        let local_defs = load_yaml_dir(&root.join("definitions"));
+        let local_entities = load_yaml_dir(&root.join("entities"));
 
         let mut all_defs: Vec<(&str, &str)> = builtin_defs.clone();
         let local_def_refs: Vec<(&str, &str)> = local_defs
@@ -451,7 +410,7 @@ impl KanbanContext {
         all_entities.extend(local_entity_refs);
 
         let fields = Arc::new(
-            FieldsContext::from_yaml_sources(fields_root, &all_defs, &all_entities)
+            FieldsContext::from_yaml_sources(root, &all_defs, &all_entities)
                 .map_err(|e| KanbanError::FieldsError(e.to_string()))?,
         );
 
@@ -606,7 +565,7 @@ impl Drop for KanbanLock {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{ColumnId, SwimlaneId};
+    use crate::types::{ActorId, ColumnId, TagId, TaskId};
     use tempfile::TempDir;
 
     async fn setup() -> (TempDir, KanbanContext) {
@@ -705,7 +664,7 @@ mod tests {
         assert!(ctx.tasks_dir().exists());
         assert!(ctx.actors_dir().exists());
         assert!(ctx.tags_dir().exists());
-        assert!(ctx.activity_dir().exists());
+        assert!(ctx.perspectives_dir().exists());
     }
 
     #[tokio::test]
@@ -762,22 +721,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_swimlane_paths() {
-        let (temp, ctx) = setup().await;
-        let root = temp.path().join(".kanban");
-
-        assert_eq!(ctx.swimlanes_dir(), root.join("swimlanes"));
-        assert_eq!(
-            ctx.swimlane_path(&SwimlaneId::from_string("backend")),
-            root.join("swimlanes").join("backend.yaml")
-        );
-        assert_eq!(
-            ctx.swimlane_log_path(&SwimlaneId::from_string("backend")),
-            root.join("swimlanes").join("backend.jsonl")
-        );
-    }
-
-    #[tokio::test]
     async fn test_ensure_directories_recreates_missing() {
         let temp = TempDir::new().unwrap();
         let kanban_dir = temp.path().join(".kanban");
@@ -805,10 +748,9 @@ mod tests {
 
         let ctx = KanbanContext::open(&kanban_dir).await.unwrap();
 
-        // fields/ directory should exist
-        assert!(kanban_dir.join("fields").exists());
-        assert!(kanban_dir.join("fields/definitions").exists());
-        assert!(kanban_dir.join("fields/entities").exists());
+        // definitions/ and entities/ should exist as top-level siblings
+        assert!(kanban_dir.join("definitions").exists());
+        assert!(kanban_dir.join("entities").exists());
 
         // fields() should return Some
         assert!(ctx.fields().is_some());
@@ -823,11 +765,11 @@ mod tests {
         let ctx = KanbanContext::open(&kanban_dir).await.unwrap();
         let fields = ctx.fields().unwrap();
 
-        // Should have all 17 built-in fields
-        assert_eq!(fields.all_fields().len(), 17);
+        // Should have all 23 built-in fields
+        assert_eq!(fields.all_fields().len(), 23);
 
-        // Should have all 6 entity templates
-        assert_eq!(fields.all_entities().len(), 6);
+        // Should have all 7 entity templates
+        assert_eq!(fields.all_entities().len(), 7);
 
         // Check a specific field
         let title = fields.get_field_by_name("title").unwrap();
@@ -838,7 +780,7 @@ mod tests {
     async fn test_open_preserves_customizations() {
         let temp = TempDir::new().unwrap();
         let kanban_dir = temp.path().join(".kanban");
-        let fields_defs_dir = kanban_dir.join("fields/definitions");
+        let fields_defs_dir = kanban_dir.join("definitions");
         std::fs::create_dir_all(&fields_defs_dir).unwrap();
 
         // Manually add a custom field to definitions/
@@ -852,10 +794,10 @@ type:
             .await
             .unwrap();
 
-        // Open — should have 17 built-in + 1 custom = 18
+        // Open — should have 23 built-in + 1 custom = 24
         let ctx = KanbanContext::open(&kanban_dir).await.unwrap();
         let fields = ctx.fields().unwrap();
-        assert_eq!(fields.all_fields().len(), 18);
+        assert_eq!(fields.all_fields().len(), 24);
 
         // Custom field should be present
         let sprint = fields.get_field_by_name("sprint").unwrap();
@@ -889,7 +831,7 @@ type:
 
         // Entity fields should resolve to field definitions
         let task_fields = fields.fields_for_entity("task");
-        assert_eq!(task_fields.len(), 10); // title, tags, progress, assignees, depends_on, body, position_column, position_swimlane, position_ordinal, attachments
+        assert_eq!(task_fields.len(), 12); // title, tags, assignees, project, depends_on, progress, body, position_column, position_ordinal, attachments, virtual_tags, filter_tags
     }
 
     // =========================================================================
@@ -970,23 +912,6 @@ type:
     }
 
     #[tokio::test]
-    async fn test_generic_entity_changelog_on_create_and_update() {
-        let (_temp, ctx) = setup_with_fields().await;
-
-        let mut tag = swissarmyhammer_entity::Entity::new("tag", "bug");
-        tag.set("tag_name", serde_json::json!("Bug"));
-        ctx.write_entity_generic(&tag).await.unwrap();
-
-        tag.set("tag_name", serde_json::json!("Bug Report"));
-        ctx.write_entity_generic(&tag).await.unwrap();
-
-        let log = ctx.read_entity_changelog("tag", "bug").await.unwrap();
-        assert_eq!(log.len(), 2);
-        assert_eq!(log[0].op, "create");
-        assert_eq!(log[1].op, "update");
-    }
-
-    #[tokio::test]
     async fn test_entity_error_for_unknown_type() {
         let (_temp, ctx) = setup_with_fields().await;
         assert!(ctx.read_entity_generic("unicorn", "xyz").await.is_err());
@@ -1063,6 +988,206 @@ type:
         let views_dir = kanban_dir.join("views");
         let board_file = views_dir.join("01JMVIEW0000000000BOARD0.yaml");
         assert!(board_file.exists(), "board view should be seeded to disk");
+    }
+
+    // =========================================================================
+    // find() tests
+    // =========================================================================
+
+    #[test]
+    fn find_discovers_kanban_dir_in_current() {
+        let temp = TempDir::new().unwrap();
+        let kanban_dir = temp.path().join(".kanban");
+        std::fs::create_dir_all(&kanban_dir).unwrap();
+
+        let ctx = KanbanContext::find(temp.path()).unwrap();
+        assert_eq!(ctx.root(), kanban_dir);
+    }
+
+    #[test]
+    fn find_walks_up_to_parent_directory() {
+        let temp = TempDir::new().unwrap();
+        let kanban_dir = temp.path().join(".kanban");
+        std::fs::create_dir_all(&kanban_dir).unwrap();
+
+        // Start search from a nested subdirectory
+        let nested = temp.path().join("src").join("lib").join("deep");
+        std::fs::create_dir_all(&nested).unwrap();
+
+        let ctx = KanbanContext::find(&nested).unwrap();
+        assert_eq!(ctx.root(), kanban_dir);
+    }
+
+    #[test]
+    fn find_returns_error_when_no_kanban_dir() {
+        let temp = TempDir::new().unwrap();
+        // No .kanban directory created
+        let result = KanbanContext::find(temp.path());
+        assert!(matches!(result, Err(KanbanError::NotInitialized { .. })));
+    }
+
+    #[test]
+    fn find_uses_closest_kanban_dir() {
+        let temp = TempDir::new().unwrap();
+        // Create .kanban at root
+        let root_kanban = temp.path().join(".kanban");
+        std::fs::create_dir_all(&root_kanban).unwrap();
+
+        // Create .kanban in a subdirectory (closer to search start)
+        let sub_kanban = temp.path().join("sub").join(".kanban");
+        std::fs::create_dir_all(&sub_kanban).unwrap();
+
+        let ctx = KanbanContext::find(temp.path().join("sub")).unwrap();
+        assert_eq!(ctx.root(), sub_kanban);
+    }
+
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_append_task_log() {
+        let (_temp, ctx) = setup().await;
+
+        let task_id = TaskId::new();
+        let entry = LogEntry::new(
+            "update task",
+            serde_json::json!({"id": task_id.to_string()}),
+            serde_json::json!({}),
+            Some("alice".into()),
+            5,
+        );
+        ctx.append_task_log(&task_id, &entry).await.unwrap();
+
+        // Verify the file was created at the expected path
+        let log_path = ctx.task_log_path(&task_id);
+        assert!(log_path.exists());
+
+        // Read back and verify content
+        let content = tokio::fs::read_to_string(&log_path).await.unwrap();
+        let parsed: LogEntry = serde_json::from_str(content.trim()).unwrap();
+        assert_eq!(parsed.op, "update task");
+        assert_eq!(parsed.actor, Some("alice".into()));
+    }
+
+    #[tokio::test]
+    async fn test_append_tag_log() {
+        let (_temp, ctx) = setup().await;
+
+        let tag_id = TagId::new();
+        let entry = LogEntry::new(
+            "add tag",
+            serde_json::json!({}),
+            serde_json::json!({}),
+            None,
+            1,
+        );
+        ctx.append_tag_log(&tag_id, &entry).await.unwrap();
+
+        let log_path = ctx.tag_log_path(&tag_id);
+        assert!(log_path.exists());
+    }
+
+    #[tokio::test]
+    async fn test_append_actor_log() {
+        let (_temp, ctx) = setup().await;
+
+        let actor_id = ActorId::from_string("bob");
+        let entry = LogEntry::new(
+            "add actor",
+            serde_json::json!({}),
+            serde_json::json!({}),
+            None,
+            1,
+        );
+        ctx.append_actor_log(&actor_id, &entry).await.unwrap();
+
+        let log_path = ctx.actor_log_path(&actor_id);
+        assert!(log_path.exists());
+    }
+
+    #[tokio::test]
+    async fn test_append_column_log() {
+        let (_temp, ctx) = setup().await;
+
+        let col_id = ColumnId::from_string("doing");
+        let entry = LogEntry::new(
+            "add column",
+            serde_json::json!({}),
+            serde_json::json!({}),
+            None,
+            1,
+        );
+        ctx.append_column_log(&col_id, &entry).await.unwrap();
+
+        let log_path = ctx.column_log_path(&col_id);
+        assert!(log_path.exists());
+    }
+
+    #[tokio::test]
+    async fn test_append_board_log() {
+        let (_temp, ctx) = setup().await;
+
+        let entry = LogEntry::new(
+            "update board",
+            serde_json::json!({}),
+            serde_json::json!({}),
+            None,
+            1,
+        );
+        ctx.append_board_log(&entry).await.unwrap();
+
+        let log_path = ctx.board_log_path();
+        assert!(log_path.exists());
+    }
+
+    // =========================================================================
+    // seed_builtin_views tests
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_seed_builtin_views_writes_yaml_files() {
+        let temp = TempDir::new().unwrap();
+        let views_root = temp.path().join("views");
+        std::fs::create_dir_all(&views_root).unwrap();
+
+        KanbanContext::seed_builtin_views(&views_root)
+            .await
+            .unwrap();
+
+        // At least one view file should have been written
+        let entries: Vec<_> = std::fs::read_dir(&views_root)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().is_some_and(|ext| ext == "yaml"))
+            .collect();
+        assert!(
+            !entries.is_empty(),
+            "seed_builtin_views should write at least one YAML file"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_seed_builtin_views_does_not_overwrite_existing() {
+        let temp = TempDir::new().unwrap();
+        let views_root = temp.path().join("views");
+        std::fs::create_dir_all(&views_root).unwrap();
+
+        // Seed once
+        KanbanContext::seed_builtin_views(&views_root)
+            .await
+            .unwrap();
+
+        // Overwrite a view file with custom content
+        let board_path = views_root.join("01JMVIEW0000000000BOARD0.yaml");
+        assert!(board_path.exists());
+        std::fs::write(&board_path, "custom: content\n").unwrap();
+
+        // Seed again - should not overwrite
+        KanbanContext::seed_builtin_views(&views_root)
+            .await
+            .unwrap();
+
+        let content = std::fs::read_to_string(&board_path).unwrap();
+        assert_eq!(content, "custom: content\n");
     }
 
     #[tokio::test]
@@ -1160,20 +1285,6 @@ card_fields:
         let content = tokio::fs::read_to_string(&path).await.unwrap();
         let parsed: LogEntry = serde_json::from_str(content.trim()).unwrap();
         assert_eq!(parsed.op, "add column");
-    }
-
-    #[tokio::test]
-    async fn test_append_swimlane_log_writes_jsonl() {
-        let (_temp, ctx) = setup().await;
-        let lane_id = SwimlaneId::from_string("backend");
-        let entry = make_log_entry("add swimlane");
-
-        ctx.append_swimlane_log(&lane_id, &entry).await.unwrap();
-
-        let path = ctx.swimlane_log_path(&lane_id);
-        let content = tokio::fs::read_to_string(&path).await.unwrap();
-        let parsed: LogEntry = serde_json::from_str(content.trim()).unwrap();
-        assert_eq!(parsed.op, "add swimlane");
     }
 
     #[tokio::test]

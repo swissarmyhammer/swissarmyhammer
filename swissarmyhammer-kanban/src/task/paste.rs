@@ -174,13 +174,7 @@ impl Execute<KanbanContext, KanbanError> for PasteTask {
                 .ok_or_else(|| KanbanError::parse("clipboard fields is not an object"))?;
 
             // Fields to copy from the source entity
-            let copy_fields = [
-                "title",
-                "body",
-                "assignees",
-                "depends_on",
-                "position_swimlane",
-            ];
+            let copy_fields = ["title", "body", "assignees", "depends_on"];
 
             for field_name in &copy_fields {
                 if let Some(value) = fields_obj.get(*field_name) {

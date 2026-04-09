@@ -146,15 +146,13 @@ impl Command for CloseBoardCmd {
             .unwrap_or_else(|_| std::path::PathBuf::from(&raw_path));
         let path = canonical.display().to_string();
 
-        ui.remove_open_board(&path);
-        // Also remove the raw form in case the stored path wasn't canonical
-        if path != raw_path {
-            ui.remove_open_board(&raw_path);
-        }
+        // Do NOT call ui.remove_open_board() here — the Tauri handler
+        // decides based on whether other windows still show this board.
 
         Ok(json!({
             "BoardClose": {
                 "path": path,
+                "window_label": window_label,
             }
         }))
     }
@@ -254,7 +252,6 @@ mod tests {
 
         let result = SwitchBoardCmd.execute(&ctx).await.unwrap();
 
-        // Result should have BoardSwitch with correct path
         let switch = &result["BoardSwitch"];
         assert_eq!(switch["path"].as_str(), Some("/tmp/myboard/.kanban"));
         assert_eq!(
@@ -292,7 +289,6 @@ mod tests {
         let mut args = HashMap::new();
         args.insert("path".into(), json!("/tmp/board/.kanban"));
         let ctx = CommandContext::new("file.switchBoard", vec![], None, args);
-        // No ui_state set
         let result = SwitchBoardCmd.execute(&ctx).await;
         assert!(
             result.is_err(),
@@ -324,7 +320,6 @@ mod tests {
     #[tokio::test]
     async fn close_board_cmd_with_explicit_path() {
         let ui = Arc::new(UIState::new());
-        // First open/register the board so there's something to close
         let path = "/tmp/closeable/.kanban";
         ui.add_open_board(path);
 
@@ -333,7 +328,6 @@ mod tests {
         let ctx = make_ctx(Arc::clone(&ui), vec![], args);
 
         let result = CloseBoardCmd.execute(&ctx).await.unwrap();
-        // Result should identify the closed board
         assert!(result["BoardClose"]["path"].as_str().is_some());
     }
 
@@ -343,7 +337,6 @@ mod tests {
         let path = "/tmp/window-board/.kanban";
         ui.set_window_board("main", path);
 
-        // No path arg — should resolve from window board
         let ctx = make_ctx(Arc::clone(&ui), vec!["window:main".into()], HashMap::new());
         let result = CloseBoardCmd.execute(&ctx).await.unwrap();
         assert!(result["BoardClose"]["path"].as_str().is_some());
@@ -362,7 +355,6 @@ mod tests {
     #[tokio::test]
     async fn close_board_cmd_no_path_and_no_window_board_returns_error() {
         let ui = Arc::new(UIState::new());
-        // No path arg, no window board configured
         let ctx = make_ctx(Arc::clone(&ui), vec![], HashMap::new());
         let result = CloseBoardCmd.execute(&ctx).await;
         assert!(

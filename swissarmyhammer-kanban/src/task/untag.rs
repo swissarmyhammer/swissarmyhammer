@@ -43,8 +43,22 @@ impl Execute<KanbanContext, KanbanError> for UntagTask {
         let input = serde_json::to_value(self).unwrap();
 
         let result: Result<Value> = async {
-            let slug = tag_parser::normalize_slug(&self.tag);
             let ectx = ctx.entity_context().await?;
+
+            // Resolve tag: may be a slug ("bug") or an entity ID (ULID).
+            // If it looks like a ULID and we can read the tag entity, use its tag_name.
+            let slug =
+                if self.tag.len() == 26 && self.tag.chars().all(|c| c.is_ascii_alphanumeric()) {
+                    // Looks like a ULID — try to resolve to tag_name
+                    match ectx.read("tag", &self.tag).await {
+                        Ok(tag_entity) => tag_parser::normalize_slug(
+                            tag_entity.get_str("tag_name").unwrap_or(&self.tag),
+                        ),
+                        Err(_) => tag_parser::normalize_slug(&self.tag),
+                    }
+                } else {
+                    tag_parser::normalize_slug(&self.tag)
+                };
             let mut entity = ectx.read("task", self.id.as_str()).await?;
 
             // Check if tag is present in body

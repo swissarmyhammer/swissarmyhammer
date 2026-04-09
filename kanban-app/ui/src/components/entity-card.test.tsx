@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, act } from "@testing-library/react";
+import {
+  render,
+  screen,
+  fireEvent,
+  act,
+  waitFor,
+} from "@testing-library/react";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const TASK_SCHEMA = {
@@ -108,7 +114,7 @@ import { SchemaProvider } from "@/lib/schema-context";
 import { EntityStoreProvider } from "@/lib/entity-store-context";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
 import { FieldUpdateProvider } from "@/lib/field-update-context";
-import { InspectProvider } from "@/lib/inspect-context";
+
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { Entity } from "@/types/kanban";
 
@@ -117,6 +123,7 @@ function makeEntity(fieldOverrides: Record<string, unknown> = {}): Entity {
   return {
     entity_type: "task",
     id: "task-1",
+    moniker: "task:task-1",
     fields: {
       title: "Hello **world**",
       body: "",
@@ -130,8 +137,6 @@ function makeEntity(fieldOverrides: Record<string, unknown> = {}): Entity {
   };
 }
 
-const mockOnInspect = vi.fn();
-
 /** Track the current entity so the store can find it via useFieldValue. */
 let currentEntity: Entity = makeEntity();
 
@@ -141,11 +146,9 @@ function renderCard(ui: React.ReactElement) {
       <SchemaProvider>
         <EntityStoreProvider entities={{ task: [currentEntity], tag: [] }}>
           <EntityFocusProvider>
-            <InspectProvider onInspect={mockOnInspect} onDismiss={() => false}>
-              <FieldUpdateProvider>
-                <UIStateProvider>{ui}</UIStateProvider>
-              </FieldUpdateProvider>
-            </InspectProvider>
+            <FieldUpdateProvider>
+              <UIStateProvider>{ui}</UIStateProvider>
+            </FieldUpdateProvider>
           </EntityFocusProvider>
         </EntityStoreProvider>
       </SchemaProvider>
@@ -165,7 +168,6 @@ async function renderWithProvider(ui: React.ReactElement) {
 describe("EntityCard", () => {
   beforeEach(() => {
     mockInvoke.mockClear();
-    mockOnInspect.mockClear();
   });
 
   it("renders title as text via Field display", async () => {
@@ -175,14 +177,26 @@ describe("EntityCard", () => {
     expect(screen.getByText("Hello **world**")).toBeTruthy();
   });
 
-  it("(i) button calls inspectEntity with correct moniker", async () => {
+  it("(i) button dispatches ui.inspect with explicit target moniker", async () => {
     currentEntity = makeEntity();
     const { container } = await renderWithProvider(
       <EntityCard entity={currentEntity} />,
     );
-    const inspectBtn = container.querySelector("button[title='Inspect']")!;
-    fireEvent.click(inspectBtn);
-    expect(mockOnInspect).toHaveBeenCalledWith("task", "task-1");
+    mockInvoke.mockClear();
+    const inspectBtn = container.querySelector("button[aria-label='Inspect']")!;
+    await act(async () => {
+      fireEvent.click(inspectBtn);
+    });
+    const inspectCall = mockInvoke.mock.calls.find(
+      (c: unknown[]) =>
+        c[0] === "dispatch_command" &&
+        (c[1] as Record<string, unknown>)?.cmd === "ui.inspect",
+    );
+    expect(inspectCall).toBeTruthy();
+    // Target must be passed explicitly so the backend uses ctx.target
+    // instead of walking the scope chain (which depends on focus state).
+    const params = inspectCall![1] as Record<string, unknown>;
+    expect(params.target).toBe("task:task-1");
   });
 
   it("(i) button always renders", async () => {
@@ -190,7 +204,9 @@ describe("EntityCard", () => {
     const { container } = await renderWithProvider(
       <EntityCard entity={currentEntity} />,
     );
-    expect(container.querySelector("button[title='Inspect']")).not.toBeNull();
+    expect(
+      container.querySelector("button[aria-label='Inspect']"),
+    ).not.toBeNull();
   });
 
   it("enters edit mode when title is clicked", async () => {
@@ -227,26 +243,31 @@ describe("EntityCard", () => {
       });
     });
 
-    // Blur triggers commit
+    // CM6 manages focus internally. Call blur() on the contenteditable
+    // element so CM6's DOMObserver detects the focus loss.
     const cmContent = container.querySelector(".cm-content") as HTMLElement;
     await act(async () => {
-      fireEvent.blur(cmContent);
+      cmContent.blur();
+      // CM6's DOMObserver polls focus state — give it a tick
+      await new Promise((r) => setTimeout(r, 50));
     });
 
-    const updateCall = mockInvoke.mock.calls.find(
-      (call) =>
-        call[0] === "dispatch_command" &&
-        (call[1] as Record<string, unknown>)?.cmd === "entity.update_field",
-    );
-    expect(updateCall).toBeTruthy();
-    expect(updateCall![1]).toEqual({
-      cmd: "entity.update_field",
-      args: {
-        entity_type: "task",
-        id: "task-1",
-        field_name: "title",
-        value: "defect",
-      },
+    await waitFor(() => {
+      const call = mockInvoke.mock.calls.find(
+        (c) =>
+          c[0] === "dispatch_command" &&
+          (c[1] as Record<string, unknown>)?.cmd === "entity.update_field",
+      );
+      expect(call).toBeTruthy();
+      expect(call![1]).toMatchObject({
+        cmd: "entity.update_field",
+        args: {
+          entity_type: "task",
+          id: "task-1",
+          field_name: "title",
+          value: "defect",
+        },
+      });
     });
   });
 
@@ -261,14 +282,18 @@ describe("EntityCard", () => {
       // Flush the promise chain (list_commands_for_scope → show_context_menu)
       await new Promise((r) => setTimeout(r, 50));
     });
-    // Context menu item id should include the target: "entity.inspect:task:task-1"
+    // Context menu items carry cmd + target as separate fields
     const ctxCall = mockInvoke.mock.calls.find(
       (c) => c[0] === "show_context_menu",
     );
     expect(ctxCall).toBeTruthy();
-    const items = ctxCall![1].items as { id: string; name: string }[];
+    const items = ctxCall![1].items as {
+      cmd: string;
+      target?: string;
+      name: string;
+    }[];
     expect(
-      items.find((i) => i.id === "ui.inspect:task:task-1"),
+      items.find((i) => i.cmd === "ui.inspect" && i.target === "task:task-1"),
     ).toBeTruthy();
   });
 
@@ -277,10 +302,16 @@ describe("EntityCard", () => {
     const { container } = await renderWithProvider(
       <EntityCard entity={currentEntity} />,
     );
+    mockInvoke.mockClear();
     const card = container.querySelector(".rounded-md")!;
     fireEvent.click(card);
-    // Click on card body should not call inspect — only the (i) button does
-    expect(mockOnInspect).not.toHaveBeenCalled();
+    // Click on card body should not dispatch ui.inspect — only the (i) button does
+    const inspectCall = mockInvoke.mock.calls.find(
+      (c: unknown[]) =>
+        c[0] === "dispatch_command" &&
+        (c[1] as Record<string, unknown>)?.cmd === "ui.inspect",
+    );
+    expect(inspectCall).toBeUndefined();
   });
 
   describe("progress bar", () => {

@@ -52,6 +52,7 @@ describe("UndoProvider", () => {
 
     expect(mockInvoke).toHaveBeenCalledWith("dispatch_command", {
       cmd: "app.undo",
+      scopeChain: [],
     });
   });
 
@@ -64,6 +65,7 @@ describe("UndoProvider", () => {
 
     expect(mockInvoke).toHaveBeenCalledWith("dispatch_command", {
       cmd: "app.redo",
+      scopeChain: [],
     });
   });
 

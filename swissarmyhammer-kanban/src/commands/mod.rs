@@ -10,6 +10,8 @@ pub mod column_commands;
 pub mod drag_commands;
 pub mod entity_commands;
 pub mod file_commands;
+pub mod perspective_commands;
+pub mod project_commands;
 pub mod task_commands;
 pub mod ui_commands;
 
@@ -46,6 +48,10 @@ pub fn register_commands() -> HashMap<String, Arc<dyn Command>> {
     map.insert("task.add".into(), Arc::new(task_commands::AddTaskCmd));
     map.insert("task.move".into(), Arc::new(task_commands::MoveTaskCmd));
     map.insert("task.untag".into(), Arc::new(task_commands::UntagTaskCmd));
+    map.insert(
+        "task.doThisNext".into(),
+        Arc::new(task_commands::DoThisNextCmd),
+    );
     map.insert("task.delete".into(), Arc::new(task_commands::DeleteTaskCmd));
 
     // Clipboard commands
@@ -99,6 +105,16 @@ pub fn register_commands() -> HashMap<String, Arc<dyn Command>> {
         Arc::new(column_commands::ColumnReorderCmd),
     );
 
+    // Project commands
+    map.insert(
+        "project.add".into(),
+        Arc::new(project_commands::AddProjectCmd),
+    );
+    map.insert(
+        "project.delete".into(),
+        Arc::new(project_commands::DeleteProjectCmd),
+    );
+
     // UI commands
     map.insert("ui.inspect".into(), Arc::new(ui_commands::InspectCmd));
     map.insert(
@@ -121,7 +137,12 @@ pub fn register_commands() -> HashMap<String, Arc<dyn Command>> {
         "ui.view.set".into(),
         Arc::new(ui_commands::SetActiveViewCmd),
     );
+    map.insert(
+        "ui.perspective.set".into(),
+        Arc::new(ui_commands::SetActivePerspectiveCmd),
+    );
     map.insert("ui.setFocus".into(), Arc::new(ui_commands::SetFocusCmd));
+    map.insert("ui.mode.set".into(), Arc::new(ui_commands::SetAppModeCmd));
 
     // Drag session commands
     map.insert("drag.start".into(), Arc::new(drag_commands::DragStartCmd));
@@ -146,6 +167,52 @@ pub fn register_commands() -> HashMap<String, Arc<dyn Command>> {
         Arc::new(file_commands::OpenBoardCmd),
     );
     map.insert("window.new".into(), Arc::new(file_commands::NewWindowCmd));
+
+    // Perspective commands
+    map.insert(
+        "perspective.load".into(),
+        Arc::new(perspective_commands::LoadPerspectiveCmd),
+    );
+    map.insert(
+        "perspective.save".into(),
+        Arc::new(perspective_commands::SavePerspectiveCmd),
+    );
+    map.insert(
+        "perspective.delete".into(),
+        Arc::new(perspective_commands::DeletePerspectiveCmd),
+    );
+    map.insert(
+        "perspective.filter".into(),
+        Arc::new(perspective_commands::SetFilterCmd),
+    );
+    map.insert(
+        "perspective.clearFilter".into(),
+        Arc::new(perspective_commands::ClearFilterCmd),
+    );
+    map.insert(
+        "perspective.group".into(),
+        Arc::new(perspective_commands::SetGroupCmd),
+    );
+    map.insert(
+        "perspective.clearGroup".into(),
+        Arc::new(perspective_commands::ClearGroupCmd),
+    );
+    map.insert(
+        "perspective.list".into(),
+        Arc::new(perspective_commands::ListPerspectivesCmd),
+    );
+    map.insert(
+        "perspective.sort.set".into(),
+        Arc::new(perspective_commands::SetSortCmd),
+    );
+    map.insert(
+        "perspective.sort.clear".into(),
+        Arc::new(perspective_commands::ClearSortCmd),
+    );
+    map.insert(
+        "perspective.sort.toggle".into(),
+        Arc::new(perspective_commands::ToggleSortCmd),
+    );
 
     // App commands
     map.insert("app.quit".into(), Arc::new(app_commands::QuitCmd));
@@ -215,13 +282,15 @@ mod tests {
     #[test]
     fn register_commands_returns_expected_count() {
         let cmds = register_commands();
-        // 4 task + 3 clipboard + 4 entity + 1 tag + 1 column + 7 UI
+        // 5 task (add, move, untag, doThisNext, delete) + 3 clipboard
+        // + 4 entity + 1 tag + 1 column + 8 UI
         // + 12 app (quit, about, help, command, palette, search,
         //          dismiss, undo, redo, keymap.vim, keymap.cua, keymap.emacs)
         // + 5 file (switchBoard, closeBoard, newBoard, openBoard, window.new)
-        // + 3 drag + 2 attachment (open, reveal) = 42
+        // + 3 drag + 11 perspective (8 + 3 sort) + 2 attachment (open, reveal) = 55
+        // + 2 project (add, delete) + 1 ui.mode.set = 58
         // Note: clipboard entries are duplicated in the source but HashMap deduplicates.
-        assert_eq!(cmds.len(), 42);
+        assert_eq!(cmds.len(), 58);
     }
 
     // =========================================================================
@@ -257,6 +326,22 @@ mod tests {
         let cmds = register_commands();
         let cmd = cmds.get("task.move").unwrap();
         let ctx = ctx_scope(&["column:todo"]);
+        assert!(!cmd.available(&ctx));
+    }
+
+    #[test]
+    fn do_this_next_available_with_task_in_scope() {
+        let cmds = register_commands();
+        let cmd = cmds.get("task.doThisNext").unwrap();
+        let ctx = ctx_scope(&["task:01ABC", "column:doing"]);
+        assert!(cmd.available(&ctx));
+    }
+
+    #[test]
+    fn do_this_next_not_available_without_task() {
+        let cmds = register_commands();
+        let cmd = cmds.get("task.doThisNext").unwrap();
+        let ctx = ctx_scope(&["column:doing"]);
         assert!(!cmd.available(&ctx));
     }
 
@@ -357,10 +442,10 @@ mod tests {
     }
 
     #[test]
-    fn unarchive_entity_available_with_target() {
+    fn unarchive_entity_available_with_archive_target() {
         let cmds = register_commands();
         let cmd = cmds.get("entity.unarchive").unwrap();
-        let ctx = ctx_with(&[], Some("task:01ABC"), None);
+        let ctx = ctx_with(&[], Some("task:01ABC:archive"), None);
         assert!(cmd.available(&ctx));
     }
 

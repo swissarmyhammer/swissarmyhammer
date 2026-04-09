@@ -16,7 +16,7 @@ import {
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { backendDispatch } from "@/lib/command-scope";
+import { useDispatchCommand } from "@/lib/command-scope";
 
 /** The shape of the undo state exposed to consumers. */
 interface UndoState {
@@ -67,6 +67,8 @@ async function fetchUndoState(): Promise<{
 export function UndoProvider({ children }: { children: ReactNode }) {
   const [canUndo, setCanUndo] = useState(false);
   const [canRedo, setCanRedo] = useState(false);
+  const dispatchUndo = useDispatchCommand("app.undo");
+  const dispatchRedo = useDispatchCommand("app.redo");
 
   /** Refresh undo/redo availability from the backend. */
   const refreshState = useCallback(async () => {
@@ -76,8 +78,6 @@ export function UndoProvider({ children }: { children: ReactNode }) {
   }, []);
 
   // Fetch initial state and subscribe to all entity mutation events.
-  // The backend emits three distinct events — there is no single
-  // "entity-changed" umbrella event.
   useEffect(() => {
     refreshState();
     const events = [
@@ -96,14 +96,14 @@ export function UndoProvider({ children }: { children: ReactNode }) {
   }, [refreshState]);
 
   const undo = useCallback(async () => {
-    await backendDispatch({ cmd: "app.undo" });
+    await dispatchUndo();
     await refreshState();
-  }, [refreshState]);
+  }, [dispatchUndo, refreshState]);
 
   const redo = useCallback(async () => {
-    await backendDispatch({ cmd: "app.redo" });
+    await dispatchRedo();
     await refreshState();
-  }, [refreshState]);
+  }, [dispatchRedo, refreshState]);
 
   const value: UndoState = { undo, redo, canUndo, canRedo };
 

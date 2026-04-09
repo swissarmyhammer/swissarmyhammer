@@ -75,7 +75,7 @@ vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(() => Promise.resolve(() => {})),
 }));
 vi.mock("@tauri-apps/api/window", () => ({
-  getCurrentWindow: () => ({ label: "main" }),
+  getCurrentWindow: () => ({ label: "main", setFocus: vi.fn() }),
 }));
 
 // Mock codemirror-vim: getCM returns a cm object, Vim.handleKey is the spy
@@ -96,7 +96,6 @@ import { CommandPalette } from "./command-palette";
 import { CommandScopeProvider, type CommandDef } from "@/lib/command-scope";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
 import { UIStateProvider } from "@/lib/ui-state-context";
-import { InspectProvider } from "@/lib/inspect-context";
 
 const getCMMock = vi.mocked(getCM);
 const handleKeyMock = vi.mocked(Vim.handleKey);
@@ -186,19 +185,17 @@ describe("CommandPalette", () => {
   });
 
   it("executes a command when its item is clicked", async () => {
-    const invokeMock = vi.mocked(invoke);
     const onClose = vi.fn();
     await act(async () => {
       renderPalette(true, onClose);
     });
-    invokeMock.mockClear();
     fireEvent.click(screen.getByText("Save File"));
-    // Clicking a backend command dispatches via invoke, not a local execute fn
-    const dispatchCall = invokeMock.mock.calls.find(
-      ([cmd]) => cmd === "dispatch_command",
-    );
-    expect(dispatchCall).toBeDefined();
-    expect((dispatchCall![1] as Record<string, unknown>).cmd).toBe("save-file");
+    // The command resolves through the scope chain. Since TEST_COMMANDS
+    // register "save-file" with an execute handler, it runs client-side.
+    // In production, palette commands come from the backend without execute
+    // handlers, so they dispatch to Rust via IPC instead.
+    const saveCmd = TEST_COMMANDS.find((c) => c.id === "save-file")!;
+    expect(saveCmd.execute).toHaveBeenCalled();
     expect(onClose).toHaveBeenCalled();
   });
 
@@ -208,25 +205,36 @@ describe("CommandPalette", () => {
     expect(list.getAttribute("role")).toBe("listbox");
   });
 
-  it("does not pass windowLabel when dispatching a command via invoke", async () => {
+  it("dispatches to backend when command has no execute handler", async () => {
     const invokeMock = vi.mocked(invoke);
 
+    // Render with NO commands in scope — palette commands come from backend
+    // mock (list_commands_for_scope) and have no execute handlers.
     const onClose = vi.fn();
     await act(async () => {
-      renderPalette(true, onClose);
+      render(
+        <EntityFocusProvider>
+          <UIStateProvider>
+            <CommandScopeProvider commands={[]}>
+              <CommandPalette open={true} onClose={onClose} />
+            </CommandScopeProvider>
+          </UIStateProvider>
+        </EntityFocusProvider>,
+      );
     });
     invokeMock.mockClear();
-    // Click the first command ("Open File")
     fireEvent.click(screen.getByText("Open File"));
 
-    // Find the dispatch_command call
+    // Command not in React scope → dispatches to backend via invoke
     const dispatchCall = invokeMock.mock.calls.find(
       ([cmd]) => cmd === "dispatch_command",
     );
     expect(dispatchCall).toBeDefined();
     const [, args] = dispatchCall!;
+    expect((args as Record<string, unknown>).cmd).toBe("open-file");
     // windowLabel should NOT be present — scope chain carries window identity
     expect((args as Record<string, unknown>).windowLabel).toBeUndefined();
+    expect(onClose).toHaveBeenCalled();
   });
 });
 
@@ -350,6 +358,91 @@ describe("CommandPalette vim insert mode", () => {
     );
   });
 
+  it("vim normal mode: Escape closes palette", async () => {
+    vi.mocked(invoke).mockImplementation((cmd: string) => {
+      if (cmd === "get_ui_state")
+        return Promise.resolve({
+          palette_open: false,
+          palette_mode: "command",
+          keymap_mode: "vim",
+          scope_chain: [],
+          open_boards: [],
+          windows: {},
+          recent_boards: [],
+        });
+      if (cmd === "list_commands_for_scope") return Promise.resolve([]);
+      return Promise.resolve(null);
+    });
+
+    // getCM returns normal mode (insertMode is falsy)
+    getCMMock.mockReturnValue({ state: { vim: {} } } as any);
+
+    const onClose = vi.fn();
+    await act(async () => {
+      renderPalette(true, onClose);
+    });
+    await act(async () => {
+      flushRAF(25);
+    });
+
+    // Find the .cm-editor element and dispatch Escape through the DOM
+    const cmEditor = document.querySelector(".cm-editor") as HTMLElement;
+    expect(cmEditor).toBeTruthy();
+
+    // The two-phase handler uses capture+bubble on .cm-editor's DOM element.
+    // Fire keydown on the cm-content (child) so it bubbles through cm-editor.
+    const cmContent = document.querySelector(".cm-content") as HTMLElement;
+    expect(cmContent).toBeTruthy();
+
+    await act(async () => {
+      cmContent.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+      );
+    });
+
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it("vim insert mode: Escape does NOT close palette", async () => {
+    vi.mocked(invoke).mockImplementation((cmd: string) => {
+      if (cmd === "get_ui_state")
+        return Promise.resolve({
+          palette_open: false,
+          palette_mode: "command",
+          keymap_mode: "vim",
+          scope_chain: [],
+          open_boards: [],
+          windows: {},
+          recent_boards: [],
+        });
+      if (cmd === "list_commands_for_scope") return Promise.resolve([]);
+      return Promise.resolve(null);
+    });
+
+    // getCM returns insert mode
+    getCMMock.mockReturnValue({ state: { vim: { insertMode: true } } } as any);
+
+    const onClose = vi.fn();
+    await act(async () => {
+      renderPalette(true, onClose);
+    });
+    await act(async () => {
+      flushRAF(25);
+    });
+
+    const cmContent = document.querySelector(".cm-content") as HTMLElement;
+    expect(cmContent).toBeTruthy();
+
+    await act(async () => {
+      cmContent.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+      );
+    });
+
+    // Should NOT close — Escape in insert mode just exits to normal mode
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
   it("stops retrying after cancellation (palette closes)", async () => {
     vi.mocked(invoke).mockImplementation((cmd: string) => {
       if (cmd === "get_ui_state")
@@ -393,19 +486,13 @@ describe("CommandPalette vim insert mode", () => {
 // Search mode tests
 // ---------------------------------------------------------------------------
 
-function renderSearchPalette(
-  open: boolean,
-  onClose = vi.fn(),
-  onInspect = vi.fn(),
-) {
+function renderSearchPalette(open: boolean, onClose = vi.fn()) {
   return render(
     <EntityFocusProvider>
       <UIStateProvider>
-        <InspectProvider onInspect={onInspect} onDismiss={() => false}>
-          <CommandScopeProvider commands={[]}>
-            <CommandPalette open={open} onClose={onClose} mode="search" />
-          </CommandScopeProvider>
-        </InspectProvider>
+        <CommandScopeProvider commands={[]}>
+          <CommandPalette open={open} onClose={onClose} mode="search" />
+        </CommandScopeProvider>
       </UIStateProvider>
     </EntityFocusProvider>,
   );
@@ -588,7 +675,6 @@ describe("CommandPalette search mode", () => {
     const { container, unmount } = renderSearchPalette(
       true,
       onClose,
-      onInspect,
     );
 
     const view = getCMView(container);

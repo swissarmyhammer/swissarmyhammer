@@ -629,14 +629,28 @@ files:
     #[serial]
     fn test_load_all_succeeds_with_empty_directories() {
         let temp_dir = TempDir::new().unwrap();
-        // Point XDG_DATA_HOME at an empty temp dir so the VFS finds no files.
+        // Point XDG_DATA_HOME and HOME at the empty temp dir so the VFS
+        // finds no files from the real user/project directories.
         let old_xdg = std::env::var("XDG_DATA_HOME").ok();
+        let old_home = std::env::var("HOME").ok();
         std::env::set_var("XDG_DATA_HOME", temp_dir.path());
+        std::env::set_var("HOME", temp_dir.path());
+        // Change cwd to the empty temp dir so the VFS does not discover
+        // project-level files from the real working directory.
+        let old_cwd = std::env::current_dir().ok();
+        let _ = std::env::set_current_dir(temp_dir.path());
 
         let mut expander = YamlExpander::<SwissarmyhammerConfig>::new();
         let result = expander.load_all();
 
         // Restore env
+        if let Some(cwd) = old_cwd {
+            let _ = std::env::set_current_dir(cwd);
+        }
+        match old_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
         match old_xdg {
             Some(v) => std::env::set_var("XDG_DATA_HOME", v),
             None => std::env::remove_var("XDG_DATA_HOME"),
@@ -715,12 +729,25 @@ files:
         fs::write(sah_dir.join("data.json"), r#"{"key": "value"}"#).unwrap();
 
         let old_xdg = std::env::var("XDG_DATA_HOME").ok();
+        let old_home = std::env::var("HOME").ok();
         std::env::set_var("XDG_DATA_HOME", temp_dir.path());
+        std::env::set_var("HOME", temp_dir.path());
+        // Change cwd to the temp dir so the VFS does not discover
+        // project-level files from the real working directory.
+        let old_cwd = std::env::current_dir().ok();
+        let _ = std::env::set_current_dir(temp_dir.path());
 
         let mut expander = YamlExpander::<SwissarmyhammerConfig>::new();
         let result = expander.load_all();
 
         // Restore env
+        if let Some(cwd) = old_cwd {
+            let _ = std::env::set_current_dir(cwd);
+        }
+        match old_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
         match old_xdg {
             Some(v) => std::env::set_var("XDG_DATA_HOME", v),
             None => std::env::remove_var("XDG_DATA_HOME"),

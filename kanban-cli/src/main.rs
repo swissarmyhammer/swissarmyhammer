@@ -122,7 +122,7 @@ async fn execute_kanban_operation(arguments: serde_json::Map<String, Value>) -> 
         match swissarmyhammer_kanban::dispatch::execute_operation(&ctx, op).await {
             Ok(result) => {
                 let output =
-                    serde_json::to_string_pretty(&result).unwrap_or_else(|_| result.to_string());
+                    serde_yaml_ng::to_string(&result).unwrap_or_else(|_| result.to_string());
                 println!("{}", output);
             }
             Err(e) => {

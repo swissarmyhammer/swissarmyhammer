@@ -325,7 +325,7 @@ impl Execute<KanbanContext, KanbanError> for InitBoard {
                 "name": self.name,
                 "description": self.description,
                 "columns": columns_json,
-                "swimlanes": [],
+                "projects": [],
             }))
         }
         .await;

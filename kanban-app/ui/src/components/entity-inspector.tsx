@@ -160,6 +160,8 @@ export function EntityInspector({ entity, navRef }: EntityInspectorProps) {
   // Focus the first field on mount, restore previous focus on unmount.
   // No claim stack — just direct setFocus. claimWhen handles all subsequent navigation.
   const { setFocus, focusedMoniker } = useEntityFocus();
+  const setFocusRef = useRef(setFocus);
+  setFocusRef.current = setFocus;
   const prevFocusRef = useRef<string | null>(null);
   const mountedRef = useRef(false);
   const firstFieldMoniker = fieldMonikers[0];
@@ -171,13 +173,13 @@ export function EntityInspector({ entity, navRef }: EntityInspectorProps) {
       prevFocusRef.current = focusedMoniker;
       mountedRef.current = true;
     }
-    setFocus(firstFieldMoniker);
+    setFocusRef.current(firstFieldMoniker);
     return () => {
-      setFocus(prevFocusRef.current);
+      setFocusRef.current(prevFocusRef.current);
       mountedRef.current = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [firstFieldMoniker, setFocus]);
+  }, [firstFieldMoniker]);
 
   if (fields.length === 0) {
     return <p className="text-sm text-muted-foreground">Loading schema...</p>;

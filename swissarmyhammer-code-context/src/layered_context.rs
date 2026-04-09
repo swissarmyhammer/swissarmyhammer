@@ -31,6 +31,27 @@ fn unwrap_lsp_result(response: Value) -> Result<Value, CodeContextError> {
     // Return the result field if present, otherwise the whole response
     Ok(response.get("result").cloned().unwrap_or(response))
 }
+
+/// Send a single LSP request, log the outcome, and unwrap the result envelope.
+///
+/// Factored out of `lsp_request_with_document` so the didOpen/didClose lifecycle
+/// can be handled by `lsp_multi_request_with_document`.
+fn send_and_unwrap_lsp_request(
+    rpc: &mut LspJsonRpcClient,
+    method: &str,
+    params: Value,
+) -> Result<Value, CodeContextError> {
+    tracing::debug!(method = %method, "lsp_request_with_document");
+    let response = rpc.send_request(method, params);
+    match &response {
+        Ok(v) => {
+            tracing::debug!(response = %serde_json::to_string(v).unwrap_or_default(), "lsp_request_with_document OK")
+        }
+        Err(e) => tracing::warn!(error = %e, "lsp_request_with_document ERR"),
+    }
+    unwrap_lsp_result(response?)
+}
+
 use crate::lsp_communication::LspJsonRpcClient;
 use crate::lsp_worker::SharedLspClient;
 use crate::ops::lsp_helpers::{file_path_to_uri, language_id_from_path};
@@ -243,54 +264,12 @@ impl<'a> LayeredContext<'a> {
         method: &str,
         params: Value,
     ) -> Result<Option<Value>, CodeContextError> {
-        let client = match self.lsp_client {
-            Some(c) => c,
-            None => return Ok(None),
-        };
-        let mut guard = client
-            .lock()
-            .map_err(|e| CodeContextError::LspError(format!("failed to lock LSP client: {}", e)))?;
-        let rpc = match guard.as_mut() {
-            Some(rpc) => rpc,
-            None => return Ok(None),
-        };
-
-        let uri = file_path_to_uri(file_path);
-        let text = std::fs::read_to_string(file_path).unwrap_or_default();
-        let lang = language_id_from_path(file_path);
-
-        // didOpen
-        rpc.send_notification(
-            "textDocument/didOpen",
-            serde_json::json!({
-                "textDocument": {
-                    "uri": uri,
-                    "languageId": lang,
-                    "version": 1,
-                    "text": text
-                }
-            }),
-        )?;
-
-        // The actual request
-        tracing::debug!(uri = %uri, method = %method, text_len = text.len(), "lsp_request_with_document");
-        let response = rpc.send_request(method, params);
-        match &response {
-            Ok(v) => {
-                tracing::debug!(response = %serde_json::to_string(v).unwrap_or_default().chars().take(300).collect::<String>(), "lsp_request_with_document OK")
-            }
-            Err(e) => tracing::warn!(error = %e, "lsp_request_with_document ERR"),
-        }
-
-        // didClose -- always sent, even if the request failed
-        let _ = rpc.send_notification(
-            "textDocument/didClose",
-            serde_json::json!({
-                "textDocument": { "uri": uri }
-            }),
-        );
-
-        Ok(Some(unwrap_lsp_result(response?)?))
+        // Delegate to lsp_multi_request_with_document so the
+        // lock/didOpen/didClose lifecycle is handled in one place.
+        let method = method.to_owned();
+        self.lsp_multi_request_with_document(file_path, |rpc| {
+            send_and_unwrap_lsp_request(rpc, &method, params)
+        })
     }
 
     /// Execute multiple LSP requests wrapped in a single didOpen/didClose sequence,
@@ -772,6 +751,7 @@ mod tests {
     use crate::test_fixtures::{insert_call_edge, insert_file, insert_ts_chunk, test_db};
 
     /// Insert an LSP symbol (without detail, for layered_context tests).
+    #[allow(clippy::too_many_arguments)]
     fn insert_lsp_symbol(
         conn: &Connection,
         id: &str,

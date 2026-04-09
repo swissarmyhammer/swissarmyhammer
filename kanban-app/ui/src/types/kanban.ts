@@ -2,12 +2,14 @@
 // Entity command definitions
 // ---------------------------------------------------------------------------
 
+/** Keymap bindings for an entity command, keyed by input mode. */
 export interface EntityCommandKeys {
   readonly vim?: string;
   readonly cua?: string;
   readonly emacs?: string;
 }
 
+/** A command defined on an entity type in the YAML schema. */
 export interface EntityCommand {
   readonly id: string;
   readonly name: string;
@@ -19,12 +21,14 @@ export interface EntityCommand {
 // View definitions
 // ---------------------------------------------------------------------------
 
+/** Keymap bindings for a view command, keyed by input mode. */
 export interface ViewCommandKeys {
   readonly vim?: string;
   readonly cua?: string;
   readonly emacs?: string;
 }
 
+/** A command defined on a view in the YAML schema. */
 export interface ViewCommand {
   readonly id: string;
   readonly name: string;
@@ -32,6 +36,7 @@ export interface ViewCommand {
   readonly keys?: ViewCommandKeys;
 }
 
+/** Definition of a UI view (board, grid, etc.) from the YAML schema. */
 export interface ViewDef {
   readonly id: string;
   readonly name: string;
@@ -43,15 +48,49 @@ export interface ViewDef {
 }
 
 // ---------------------------------------------------------------------------
+// Perspective definitions
+// ---------------------------------------------------------------------------
+
+/** A field column entry within a perspective's field list. */
+export interface PerspectiveFieldEntry {
+  readonly field: string;
+  readonly caption?: string;
+  readonly width?: number;
+  readonly editor?: string;
+  readonly display?: string;
+  readonly sort_comparator?: string;
+}
+
+/** A sort entry within a perspective — field name + direction. */
+export interface PerspectiveSortEntry {
+  readonly field: string;
+  readonly direction: "asc" | "desc";
+}
+
+/** A saved perspective defining view, filter, sort, group, and field layout. */
+export interface PerspectiveDef {
+  readonly id: string;
+  readonly name: string;
+  readonly view: string;
+  readonly fields?: readonly PerspectiveFieldEntry[];
+  /** Filter DSL expression (e.g. `#bug && @will`). Evaluated server-side. */
+  readonly filter?: string;
+  readonly group?: string;
+  readonly sort?: readonly PerspectiveSortEntry[];
+}
+
+// ---------------------------------------------------------------------------
 // Board types
 // ---------------------------------------------------------------------------
 
+/** A currently open board, as returned by the backend. */
 export interface OpenBoard {
   path: string;
   is_active: boolean;
   name: string;
 }
 
+/** A recently opened board from the MRU list. */
 export interface RecentBoard {
   path: string;
   name: string;
@@ -67,6 +106,7 @@ export interface RecentBoard {
 // (e.g. "options" for select, "derive" for computed, "entity" for reference).
 // ---------------------------------------------------------------------------
 
+/** An option value for select-type fields. */
 export interface SelectOption {
   value: string;
   label?: string;
@@ -81,6 +121,7 @@ export interface FieldType {
   [key: string]: unknown;
 }
 
+/** Schema definition for a single entity field (from YAML). */
 export interface FieldDef {
   id: string;
   name: string;
@@ -96,9 +137,12 @@ export interface FieldDef {
   sort?: string;
   filter?: string;
   group?: string;
+  /** Whether this field can be used as a group-by target in perspectives. */
+  groupable?: boolean;
   validate?: string;
 }
 
+/** Schema definition for an entity type (from YAML). */
 export interface EntityDef {
   name: string;
   icon?: string;
@@ -120,6 +164,8 @@ export interface EntitySchema {
 export interface Entity {
   entity_type: string;
   id: string;
+  /** Canonical moniker from the backend (e.g. "task:01ABC" or "task:01ABC:archive"). */
+  moniker: string;
   fields: Record<string, unknown>;
 }
 
@@ -163,22 +209,24 @@ export function getBool(
 // convert between that flat format and the Entity interface.
 // ---------------------------------------------------------------------------
 
-/** Raw entity bag from Entity::to_json() — flat JSON with entity_type + id + fields. */
+/** Raw entity bag from Entity::to_json() — flat JSON with entity_type + id + moniker + fields. */
 export type EntityBag = Record<string, unknown> & {
   entity_type: string;
   id: string;
+  moniker: string;
 };
 
 /** Convert a flat entity bag from the backend into an Entity. */
 export function entityFromBag(bag: EntityBag): Entity {
-  const { entity_type, id, ...fields } = bag;
-  return { entity_type, id, fields };
+  const { entity_type, id, moniker, ...fields } = bag;
+  return { entity_type, id, moniker, fields };
 }
 
 // ---------------------------------------------------------------------------
 // Board summary — aggregate counts returned by get_board_data
 // ---------------------------------------------------------------------------
 
+/** Aggregate counts for a board — tasks by status, actor totals, etc. */
 export interface BoardSummary {
   total_tasks: number;
   total_actors: number;
@@ -196,7 +244,6 @@ export interface BoardSummary {
 export interface BoardDataResponse {
   board: EntityBag;
   columns: EntityBag[];
-  swimlanes: EntityBag[];
   tags: EntityBag[];
   summary: BoardSummary;
 }
@@ -215,7 +262,6 @@ export interface EntityListResponse {
 export interface BoardData {
   board: Entity;
   columns: Entity[];
-  swimlanes: Entity[];
   tags: Entity[];
   summary: BoardSummary;
 }
@@ -225,7 +271,6 @@ export function parseBoardData(data: BoardDataResponse): BoardData {
   return {
     board: entityFromBag(data.board),
     columns: data.columns.map(entityFromBag),
-    swimlanes: data.swimlanes.map(entityFromBag),
     tags: data.tags.map(entityFromBag),
     summary: data.summary,
   };

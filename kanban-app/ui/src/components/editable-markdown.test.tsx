@@ -10,6 +10,7 @@ import type { Entity } from "@/types/kanban";
 const mockTag: Entity = {
   id: "tag-bug",
   entity_type: "tag",
+  moniker: "tag:tag-bug",
   fields: { tag_name: "bug", color: "ff0000" },
 };
 
@@ -53,7 +54,7 @@ vi.mock("@/lib/entity-store-context", () => ({
 
 import { MarkdownDisplay } from "@/components/fields/displays/markdown-display";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
-import { InspectProvider } from "@/lib/inspect-context";
+
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { DisplayProps } from "@/components/fields/displays/text-display";
 
@@ -69,7 +70,7 @@ function makeProps(
       type: { kind: "text" },
     } as DisplayProps["field"],
     value,
-    entity: { entity_type: "task", id: "t1", fields: {} },
+    entity: { entity_type: "task", id: "t1", moniker: "task:t1", fields: {} },
     mode,
     onCommit,
   };
@@ -80,9 +81,7 @@ function renderMarkdown(value: string) {
   return render(
     <TooltipProvider>
       <EntityFocusProvider>
-        <InspectProvider onInspect={vi.fn()} onDismiss={() => false}>
-          <MarkdownDisplay {...makeProps(value, "full")} />
-        </InspectProvider>
+        <MarkdownDisplay {...makeProps(value, "full")} />
       </EntityFocusProvider>
     </TooltipProvider>,
   );

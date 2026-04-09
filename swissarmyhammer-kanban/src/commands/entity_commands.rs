@@ -63,7 +63,7 @@ impl Command for DeleteEntityCmd {
             "tag" => run_op(&crate::tag::DeleteTag::new(id), &kanban).await,
             "column" => run_op(&crate::column::DeleteColumn::new(id), &kanban).await,
             "actor" => run_op(&crate::actor::DeleteActor::new(id), &kanban).await,
-            "swimlane" => run_op(&crate::swimlane::DeleteSwimlane::new(id), &kanban).await,
+            "project" => run_op(&crate::project::DeleteProject::new(id), &kanban).await,
             _ => Err(CommandError::ExecutionFailed(format!(
                 "unknown entity type for delete: '{}'",
                 entity_type
@@ -81,7 +81,9 @@ pub struct ArchiveEntityCmd;
 #[async_trait]
 impl Command for ArchiveEntityCmd {
     fn available(&self, ctx: &CommandContext) -> bool {
-        ctx.target.is_some()
+        ctx.target
+            .as_deref()
+            .is_some_and(|t| !t.ends_with(":archive"))
     }
 
     async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
@@ -123,16 +125,20 @@ pub struct UnarchiveEntityCmd;
 #[async_trait]
 impl Command for UnarchiveEntityCmd {
     fn available(&self, ctx: &CommandContext) -> bool {
-        ctx.target.is_some()
+        ctx.target
+            .as_deref()
+            .is_some_and(|t| t.ends_with(":archive"))
     }
 
     async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
         let kanban = ctx.require_extension::<KanbanContext>()?;
 
-        let moniker = ctx
+        let raw_moniker = ctx
             .target
             .as_deref()
             .ok_or_else(|| CommandError::MissingArg("target".into()))?;
+        // Strip the ":archive" suffix added by the archive view
+        let moniker = raw_moniker.strip_suffix(":archive").unwrap_or(raw_moniker);
         let (entity_type, id) =
             parse_moniker(moniker).ok_or_else(|| CommandError::InvalidMoniker(moniker.into()))?;
 
@@ -350,7 +356,7 @@ mod tests {
     }
 
     // =========================================================================
-    // DeleteEntityCmd execute — task, tag, column, actor, swimlane, unknown
+    // DeleteEntityCmd execute — task, tag, column, actor, unknown
     // =========================================================================
 
     #[tokio::test]
@@ -506,6 +512,17 @@ mod tests {
         assert!(!ArchiveEntityCmd.available(&ctx));
     }
 
+    #[test]
+    fn archive_entity_not_available_for_archived_entity() {
+        let ctx = CommandContext::new(
+            "entity.archive",
+            vec![],
+            Some("task:01ABC:archive".into()),
+            HashMap::new(),
+        );
+        assert!(!ArchiveEntityCmd.available(&ctx));
+    }
+
     // =========================================================================
     // ArchiveEntityCmd execute
     // =========================================================================
@@ -579,14 +596,25 @@ mod tests {
     // =========================================================================
 
     #[test]
-    fn unarchive_entity_available_when_target_set() {
+    fn unarchive_entity_available_when_target_has_archived_suffix() {
+        let ctx = CommandContext::new(
+            "entity.unarchive",
+            vec![],
+            Some("task:01ABC:archive".into()),
+            HashMap::new(),
+        );
+        assert!(UnarchiveEntityCmd.available(&ctx));
+    }
+
+    #[test]
+    fn unarchive_entity_not_available_for_live_entity() {
         let ctx = CommandContext::new(
             "entity.unarchive",
             vec![],
             Some("task:01ABC".into()),
             HashMap::new(),
         );
-        assert!(UnarchiveEntityCmd.available(&ctx));
+        assert!(!UnarchiveEntityCmd.available(&ctx));
     }
 
     #[test]
@@ -619,7 +647,7 @@ mod tests {
         let kanban = Arc::new(ctx);
         let cmd_ctx = make_ctx(
             Arc::clone(&kanban),
-            Some(format!("task:{}", task_id)),
+            Some(format!("task:{}:archive", task_id)),
             vec![],
             HashMap::new(),
         );
@@ -641,7 +669,7 @@ mod tests {
         let kanban = Arc::new(ctx);
         let cmd_ctx = make_ctx(
             Arc::clone(&kanban),
-            Some("column:todo".into()),
+            Some("column:todo:archive".into()),
             vec![],
             HashMap::new(),
         );

@@ -3,8 +3,8 @@ import {
   useContext,
   useMemo,
   useCallback,
+  useState,
   type ReactNode,
-  useRef,
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
@@ -35,6 +35,61 @@ export function ActiveBoardPathProvider({
 /** Read the per-window active board path. */
 export function useActiveBoardPath(): string | undefined {
   return useContext(ActiveBoardPathContext);
+}
+
+// ---------------------------------------------------------------------------
+// CommandBusy context — tracks whether any dispatch_command IPC is in-flight
+// ---------------------------------------------------------------------------
+
+/** Shape of the busy-tracking state exposed via context. */
+export interface CommandBusyState {
+  /** True when at least one backend dispatch_command call is in-flight. */
+  isBusy: boolean;
+}
+
+const CommandBusyContext = createContext<CommandBusyState>({ isBusy: false });
+
+/**
+ * Internal context for the busy-state setter.
+ *
+ * Separated from the read context so that only `useDispatchCommand` (which
+ * needs the setter) re-renders when the setter reference changes, while
+ * pure consumers of `isBusy` only re-render on value changes.
+ */
+const CommandBusySetterContext = createContext<
+  React.Dispatch<React.SetStateAction<number>>
+>(() => {});
+
+/** Props for the command busy provider. */
+export interface CommandBusyProviderProps {
+  children: ReactNode;
+}
+
+/**
+ * Tracks the number of in-flight backend dispatch_command calls and
+ * exposes `isBusy` (count > 0) via React context.
+ *
+ * Wrap this around the component tree that needs busy awareness — typically
+ * at the same level as `ActiveBoardPathProvider`.
+ */
+export function CommandBusyProvider({ children }: CommandBusyProviderProps) {
+  const [inflightCount, setInflightCount] = useState(0);
+  const busyState = useMemo<CommandBusyState>(
+    () => ({ isBusy: inflightCount > 0 }),
+    [inflightCount],
+  );
+  return (
+    <CommandBusySetterContext.Provider value={setInflightCount}>
+      <CommandBusyContext.Provider value={busyState}>
+        {children}
+      </CommandBusyContext.Provider>
+    </CommandBusySetterContext.Provider>
+  );
+}
+
+/** Read whether any backend command is currently in-flight. */
+export function useCommandBusy(): CommandBusyState {
+  return useContext(CommandBusyContext);
 }
 
 /** Definition of a single command that can be registered in a scope. */
@@ -79,6 +134,35 @@ export interface CommandScope {
 }
 
 export const CommandScopeContext = createContext<CommandScope | null>(null);
+
+/**
+ * Context for the currently focused entity's scope.
+ *
+ * Defined here (in command-scope) so useDispatchCommand can read it without
+ * importing from entity-focus-context (which would create a circular dep).
+ * Provided by EntityFocusProvider in entity-focus-context.tsx.
+ *
+ * When populated, useDispatchCommand prefers this over CommandScopeContext
+ * for scope chain computation — ensuring dispatched commands carry the
+ * focused entity's full scope chain (e.g. task:abc → column:todo → window:main).
+ */
+export const FocusedScopeContext = createContext<CommandScope | null>(null);
+
+/**
+ * Walk the scope chain from innermost to root, collecting monikers.
+ *
+ * Returns an array like `["task:abc", "column:todo", "window:board-2"]`.
+ * Scopes without monikers are skipped.
+ */
+export function scopeChainFromScope(scope: CommandScope | null): string[] {
+  const chain: string[] = [];
+  let current = scope;
+  while (current) {
+    if (current.moniker) chain.push(current.moniker);
+    current = current.parent;
+  }
+  return chain;
+}
 
 interface CommandScopeProviderProps {
   /** Commands to register in this scope. */
@@ -202,77 +286,92 @@ export function useAvailableCommands(): CommandAtDepth[] {
   return useMemo(() => collectAvailableCommands(scope), [scope]);
 }
 
-/**
- * Dispatch a command to the Rust backend.
- *
- * This is the single path for all frontend → backend command dispatch.
- * Every call site that previously used `invoke("dispatch_command", ...)`
- * directly should use this helper instead.
- *
- * Window identity is determined by the `board_path` parameter that
- * `dispatchCommand` passes through to the backend.
- *
- * @param params - The parameters to pass to `dispatch_command`.
- * @returns The raw JSON value returned by the backend.
- */
-export async function backendDispatch(
-  params: Record<string, unknown>,
-): Promise<unknown> {
-  return invoke("dispatch_command", params);
+// ---------------------------------------------------------------------------
+// useDispatchCommand — unified dispatch hook
+// ---------------------------------------------------------------------------
+
+/** Options for dispatching a command via useDispatchCommand. */
+export interface DispatchOptions {
+  /** Additional arguments to pass to the backend command handler. */
+  args?: Record<string, unknown>;
+  /** Target moniker (e.g. "task:abc") to associate with the dispatch. */
+  target?: string;
 }
 
 /**
- * Execute a command. If `execute` is set, calls it directly.
- * Otherwise dispatches to Rust by command id via backendDispatch().
+ * Unified hook for dispatching commands from React components.
  *
- * @param boardPath — optional per-window board path for multi-window dispatch.
- *   When provided, Rust routes the command to the correct board instead of the
- *   global "last-used" active board.
+ * Automatically reads the scope chain and board path from context.
+ * Commands registered in scope with an `execute` handler run client-side;
+ * all others are forwarded to the Rust backend via `dispatch_command`.
+ *
+ * @overload Ad-hoc dispatch: returns a function that takes a command ID and options.
  */
-export async function dispatchCommand(
-  cmd: CommandDef,
-  boardPath?: string,
-): Promise<void> {
-  if (cmd.execute) {
-    // Log to Rust backend so every command appears in the unified log
-    Promise.resolve(
-      invoke("log_command", { cmd: cmd.id, target: cmd.target }),
-    ).catch(() => {});
-    await cmd.execute();
-  } else {
-    // Dispatch to Rust by command ID (dispatch_command logs internally)
-    await backendDispatch({
-      cmd: cmd.id,
-      target: cmd.target,
-      args: cmd.args,
-      ...(boardPath ? { boardPath } : {}),
-    });
-  }
-}
-
+export function useDispatchCommand(): (
+  cmd: string,
+  opts?: DispatchOptions,
+) => Promise<unknown>;
 /**
- * Returns a function that resolves a command id through the current scope
- * chain and executes it.
- *
- * @returns An async function `(id: string) => Promise<boolean>`.
- *          Resolves to `true` if the command was found and executed,
- *          `false` otherwise.
+ * @overload Pre-bound dispatch: returns a function that takes just options.
  */
-export function useExecuteCommand(): (id: string) => Promise<boolean> {
-  const scope = useContext(CommandScopeContext);
+export function useDispatchCommand(
+  cmd: string,
+): (opts?: DispatchOptions) => Promise<unknown>;
+export function useDispatchCommand(presetCmd?: string) {
+  const treeScope = useContext(CommandScopeContext);
+  const focusedScope = useContext(FocusedScopeContext);
   const boardPath = useContext(ActiveBoardPathContext);
-  // Store in ref so the callback always sees the latest value without
-  // re-creating on every board path change.
-  const boardPathRef = useRef(boardPath);
-  boardPathRef.current = boardPath;
+  const setInflightCount = useContext(CommandBusySetterContext);
+
+  // Prefer focused scope (includes entity + window monikers) over tree scope
+  // (just the component's position in the React tree). When nothing is focused,
+  // fall back to tree scope.
+  const effectiveScope = focusedScope ?? treeScope;
 
   return useCallback(
-    async (id: string): Promise<boolean> => {
-      const cmd = resolveCommand(scope, id);
-      if (cmd === null) return false;
-      await dispatchCommand(cmd, boardPathRef.current);
-      return true;
+    async (
+      cmdOrOpts?: string | DispatchOptions,
+      maybeOpts?: DispatchOptions,
+    ): Promise<unknown> => {
+      let cmdId: string;
+      let opts: DispatchOptions;
+      if (presetCmd) {
+        cmdId = presetCmd;
+        opts = (cmdOrOpts as DispatchOptions) ?? {};
+      } else {
+        cmdId = cmdOrOpts as string;
+        opts = maybeOpts ?? {};
+      }
+
+      const chain = scopeChainFromScope(effectiveScope);
+
+      // Try frontend execute handler first
+      const resolved = resolveCommand(effectiveScope, cmdId);
+      if (resolved?.execute) {
+        Promise.resolve(
+          invoke("log_command", {
+            cmd: cmdId,
+            target: opts.target ?? resolved.target,
+          }),
+        ).catch(() => {});
+        await resolved.execute();
+        return;
+      }
+
+      // Backend dispatch — invoke Tauri IPC directly, tracking busy state
+      setInflightCount((c) => c + 1);
+      try {
+        return await invoke("dispatch_command", {
+          cmd: cmdId,
+          target: opts.target,
+          args: opts.args,
+          scopeChain: chain,
+          ...(boardPath ? { boardPath } : {}),
+        });
+      } finally {
+        setInflightCount((c) => c - 1);
+      }
     },
-    [scope],
+    [presetCmd, effectiveScope, boardPath, setInflightCount],
   );
 }

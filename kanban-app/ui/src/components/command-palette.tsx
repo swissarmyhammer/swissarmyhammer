@@ -1,28 +1,15 @@
-import {
-  useCallback,
-  useContext,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import CodeMirror, { type ReactCodeMirrorRef } from "@uiw/react-codemirror";
-import { keymap, EditorView } from "@codemirror/view";
+import { keymap } from "@codemirror/view";
 import { Compartment } from "@codemirror/state";
 import { getCM, Vim } from "@replit/codemirror-vim";
-import { backendDispatch } from "@/lib/command-scope";
-import {
-  CommandScopeContext,
-  resolveCommand,
-  dispatchCommand,
-  type CommandAtDepth,
-} from "@/lib/command-scope";
+import { buildSubmitCancelExtensions } from "@/lib/cm-submit-cancel";
+import { useDispatchCommand, type CommandAtDepth } from "@/lib/command-scope";
 import { useUIState } from "@/lib/ui-state-context";
 import { shadcnTheme, keymapExtension } from "@/lib/cm-keymap";
 import { fuzzyMatch } from "@/lib/fuzzy-filter";
-import { useInspectOptional } from "@/lib/inspect-context";
 import { moniker } from "@/lib/moniker";
 import { useEntityCommands } from "@/lib/entity-commands";
 import { FocusScope } from "@/components/focus-scope";
@@ -78,6 +65,7 @@ export function CommandPalette({
   const keymapCompartment = useRef(new Compartment());
   const listRef = useRef<HTMLDivElement>(null);
   const { keymap_mode: mode, scope_chain: scopeChain } = useUIState();
+  const dispatch = useDispatchCommand();
 
   /** Shape returned by the backend. */
   interface ResolvedCommand {
@@ -118,10 +106,11 @@ export function CommandPalette({
     [backendCommands],
   );
 
-  // Inspect hook for search mode (only used in search mode)
-  const inspectEntity = useInspectOptional();
+  // Dispatch inspect for search mode — dispatches to the backend via
+  // the standard command system, which updates UIState inspector_stack.
+  const dispatchInspect = useDispatchCommand("ui.inspect");
 
-  // Reset state when palette opens
+  // Reset state when palette opens.
   useEffect(() => {
     if (open) {
       setFilter("");
@@ -230,13 +219,11 @@ export function CommandPalette({
     const entry = filteredCommands[selectedIndex];
     if (entry) {
       onClose();
-      backendDispatch({
-        cmd: entry.command.id,
+      dispatch(entry.command.id, {
         target: entry.command.target,
-        scopeChain: scopeChain ?? [],
       }).catch(console.error);
     }
-  }, [filteredCommands, selectedIndex, onClose]);
+  }, [filteredCommands, selectedIndex, onClose, dispatch]);
 
   // Execute the selected entity result (search mode)
   const executeSelectedResult = useCallback(() => {
@@ -251,15 +238,9 @@ export function CommandPalette({
     if (result.entity_type === "board" && onSwitchBoard) {
       onSwitchBoard(result.entity_id);
     }
-    if (inspectEntity) {
-      const entityMoniker = moniker(result.entity_type, result.entity_id);
-      dispatchCommand({
-        id: "entity.inspect",
-        name: "Inspect Entity",
-        execute: () => inspectEntity(entityMoniker),
-      });
-    }
-  }, [searchResults, selectedIndex, onClose, inspectEntity, onSwitchBoard]);
+    const entityMoniker = moniker(result.entity_type, result.entity_id);
+    dispatchInspect({ target: entityMoniker }).catch(console.error);
+  }, [searchResults, selectedIndex, onClose, dispatchInspect, onSwitchBoard]);
 
   const executeSelected =
     paletteMode === "search" ? executeSelectedResult : executeSelectedCommand;
@@ -308,19 +289,21 @@ export function CommandPalette({
     prevModeRef.current = mode;
   }, [mode, open]);
 
-  // CM6 extensions for the single-line filter input
+  // CM6 extensions for the single-line filter input.
+  // Submit/cancel (Enter/Escape) is handled by the shared helper which
+  // correctly supports vim's two-phase Escape (insert → normal, normal → cancel).
   const extensions = useMemo(
     () => [
       keymapCompartment.current.of(keymapExtension(mode)),
-      // Navigation and execution keybindings (highest priority)
+      ...buildSubmitCancelExtensions({
+        mode,
+        onSubmitRef: executeSelectedRef,
+        onCancelRef: onCloseRef,
+        singleLine: true,
+        alwaysSubmitOnEnter: true,
+      }),
+      // Arrow key navigation is palette-specific, not submit/cancel
       keymap.of([
-        {
-          key: "Enter",
-          run: () => {
-            executeSelectedRef.current();
-            return true;
-          },
-        },
         {
           key: "ArrowDown",
           run: () => {
@@ -336,30 +319,6 @@ export function CommandPalette({
           },
         },
       ]),
-      // Escape handling: in vim mode, check vim state — if in insert mode,
-      // let vim handle Escape (exits to normal mode). If already in normal
-      // mode, close the palette. In CUA/emacs, Escape always closes.
-      EditorView.domEventHandlers({
-        keydown(event, view) {
-          if (event.key === "Escape") {
-            if (mode !== "vim") {
-              onCloseRef.current();
-              return true;
-            }
-            // Check vim state: if in insert mode, let vim exit to normal
-            const cm = getCM(view);
-            const vimState = cm?.state?.vim;
-            if (vimState?.insertMode) {
-              // Let vim handle it — will exit insert mode
-              return false;
-            }
-            // Already in normal mode — close the palette
-            onCloseRef.current();
-            return true;
-          }
-          return false;
-        },
-      }),
     ],
     [mode],
   );
@@ -381,9 +340,10 @@ export function CommandPalette({
       data-testid="command-palette-backdrop"
       className="fixed inset-0 z-50 bg-black/50"
       onClick={onClose}
+      tabIndex={-1}
       onKeyDown={(e) => {
-        // Catch Escape on the backdrop itself (e.g. when focus is outside CM6)
         if (e.key === "Escape") {
+          console.warn("[palette] ESC on backdrop — dismissing");
           onClose();
         }
       }}
@@ -445,7 +405,9 @@ export function CommandPalette({
                       ${index === selectedIndex ? "bg-accent text-accent-foreground" : "hover:bg-accent/50"}`}
                   onClick={() => {
                     onClose();
-                    dispatchCommand(entry.command);
+                    dispatch(entry.command.id, {
+                      target: entry.command.target,
+                    }).catch(console.error);
                   }}
                   onMouseEnter={() => setSelectedIndex(index)}
                 >
@@ -570,7 +532,7 @@ function SearchResultRow({
   onClose: () => void;
   onHoverIndex: (index: number) => void;
 }) {
-  const scope = useContext(CommandScopeContext);
+  const dispatch = useDispatchCommand("entity.inspect");
   return (
     <div
       role="option"
@@ -579,11 +541,8 @@ function SearchResultRow({
       className={`flex cursor-pointer items-center gap-2 px-3 py-1.5 text-sm
         ${index === selectedIndex ? "bg-accent text-accent-foreground" : "hover:bg-accent/50"}`}
       onClick={() => {
-        const cmd = resolveCommand(scope, "entity.inspect");
-        if (cmd) {
-          onClose();
-          dispatchCommand(cmd);
-        }
+        onClose();
+        dispatch({ target: entityMoniker }).catch(console.error);
       }}
       onMouseEnter={() => onHoverIndex(index)}
     >

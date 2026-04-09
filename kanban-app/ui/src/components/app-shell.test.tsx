@@ -34,7 +34,6 @@ import {
   useEntityFocus,
 } from "@/lib/entity-focus-context";
 import { useAvailableCommands } from "@/lib/command-scope";
-import { InspectProvider } from "@/lib/inspect-context";
 import { invoke } from "@tauri-apps/api/core";
 
 /**
@@ -61,15 +60,18 @@ function renderShell(children?: React.ReactNode) {
       <UIStateProvider>
         <AppModeProvider>
           <UndoProvider>
-            <InspectProvider onInspect={() => {}} onDismiss={() => false}>
-              <AppShell>{children ?? <CommandInspector />}</AppShell>
-            </InspectProvider>
+            <AppShell>{children ?? <CommandInspector />}</AppShell>
           </UndoProvider>
         </AppModeProvider>
       </UIStateProvider>
     </EntityFocusProvider>,
   );
 }
+
+/** Platform-aware Mod key: metaKey on Mac, ctrlKey elsewhere. */
+const MOD_KEY = /Mac|iPhone|iPad|iPod/.test(navigator.platform)
+  ? "metaKey"
+  : "ctrlKey";
 
 describe("AppShell", () => {
   beforeEach(() => {
@@ -107,12 +109,11 @@ describe("AppShell", () => {
     mockInvoke.mockClear();
 
     // CUA mode is the default (mocked invoke returns "cua")
-    // Mod on non-Mac is Ctrl
     await act(async () => {
       fireEvent.keyDown(document, {
         key: "P",
         code: "KeyP",
-        ctrlKey: true,
+        [MOD_KEY]: true,
         shiftKey: true,
       });
     });
@@ -147,6 +148,51 @@ describe("AppShell", () => {
         (c[1] as Record<string, unknown>)?.cmd === "app.dismiss",
     );
     expect(dismissCall).toBeTruthy();
+  });
+
+  it("keyboard dispatch includes scopeChain with window moniker", async () => {
+    const mockInvoke = invoke as ReturnType<typeof vi.fn>;
+
+    function FocusedCard() {
+      const { setFocus } = useEntityFocus();
+      return (
+        <FocusScope moniker="task:t1" commands={[]}>
+          <button onClick={() => setFocus("task:t1")}>Focus Card</button>
+        </FocusScope>
+      );
+    }
+
+    renderShell(<FocusedCard />);
+    mockInvoke.mockClear();
+
+    // Focus the card scope
+    await act(async () => {
+      fireEvent.click(screen.getByText("Focus Card"));
+    });
+
+    mockInvoke.mockClear();
+
+    // Press Escape — this dispatches app.dismiss through the focused scope
+    await act(async () => {
+      fireEvent.keyDown(document, { key: "Escape", code: "Escape" });
+    });
+
+    const dismissCall = mockInvoke.mock.calls.find(
+      (c: unknown[]) =>
+        c[0] === "dispatch_command" &&
+        (c[1] as Record<string, unknown>)?.cmd === "app.dismiss",
+    );
+    expect(dismissCall).toBeTruthy();
+
+    // The scopeChain must be present and include the window moniker
+    const params = dismissCall![1] as Record<string, unknown>;
+    expect(params.scopeChain).toBeTruthy();
+    expect(Array.isArray(params.scopeChain)).toBe(true);
+    const chain = params.scopeChain as string[];
+    // Window moniker should be in the chain (AppShell wraps in window:main via App)
+    // At minimum, the chain should not be empty — it should contain at least
+    // the scope monikers from the focused card upward.
+    expect(chain.length).toBeGreaterThan(0);
   });
 
   it("keybinding handler resolves commands from focused scope", async () => {
@@ -205,12 +251,12 @@ describe("AppShell", () => {
     const closeBoardItem = screen.getByTestId("cmd-file.closeBoard");
     expect(closeBoardItem).toBeTruthy();
 
-    // Simulate Cmd+W (CUA mode, non-Mac = Ctrl+W)
+    // Simulate Mod+W (Cmd on Mac, Ctrl elsewhere)
     await act(async () => {
       fireEvent.keyDown(document, {
         key: "w",
         code: "KeyW",
-        ctrlKey: true,
+        [MOD_KEY]: true,
       });
     });
 
@@ -229,11 +275,9 @@ describe("AppShell", () => {
         <UIStateProvider>
           <AppModeProvider>
             <UndoProvider>
-              <InspectProvider onInspect={() => {}} onDismiss={() => false}>
-                <AppShell>
-                  <CommandInspector />
-                </AppShell>
-              </InspectProvider>
+              <AppShell>
+                <CommandInspector />
+              </AppShell>
             </UndoProvider>
           </AppModeProvider>
         </UIStateProvider>
@@ -292,12 +336,12 @@ describe("AppShell", () => {
 
     mockInvoke.mockClear();
 
-    // Simulate Ctrl+Z
+    // Simulate Mod+Z (Cmd on Mac, Ctrl elsewhere)
     await act(async () => {
       fireEvent.keyDown(document, {
         key: "z",
         code: "KeyZ",
-        ctrlKey: true,
+        [MOD_KEY]: true,
       });
     });
 

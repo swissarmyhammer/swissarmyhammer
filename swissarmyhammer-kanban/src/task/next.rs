@@ -2,13 +2,15 @@
 
 use crate::context::KanbanContext;
 use crate::error::KanbanError;
-use crate::task_helpers::{task_entity_to_rich_json, task_is_ready, task_tags};
-use crate::types::{ActorId, Ordinal, SwimlaneId, TagId};
+use crate::task::shared::parse_filter_expr;
+use crate::task_helpers::{enrich_all_task_entities, task_entity_to_rich_json, TaskFilterAdapter};
+use crate::types::Ordinal;
+use crate::virtual_tags::default_virtual_tag_registry;
 use serde::Deserialize;
 use serde_json::Value;
 use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResult};
 
-/// Get the next actionable task
+/// Get the next actionable task.
 #[operation(
     verb = "next",
     noun = "task",
@@ -16,41 +18,75 @@ use swissarmyhammer_operations::{async_trait, operation, Execute, ExecutionResul
 )]
 #[derive(Debug, Default, Deserialize)]
 pub struct NextTask {
-    /// Filter by swimlane
-    pub swimlane: Option<SwimlaneId>,
-    /// Filter by assignee
-    pub assignee: Option<ActorId>,
-    /// Filter by tag
-    pub tag: Option<TagId>,
+    /// Filter DSL expression (e.g. `#bug`).
+    pub filter: Option<String>,
 }
 
 impl NextTask {
-    /// Create a new NextTask command
+    /// Create a new NextTask command with no filter.
     pub fn new() -> Self {
-        Self {
-            swimlane: None,
-            assignee: None,
-            tag: None,
+        Self::default()
+    }
+
+    /// Set a filter DSL expression.
+    pub fn with_filter(mut self, filter: impl Into<String>) -> Self {
+        self.filter = Some(filter.into());
+        self
+    }
+}
+
+/// Build a column-id to ordering-index map for positional sorting.
+fn build_column_order(
+    columns: &[swissarmyhammer_entity::Entity],
+) -> std::collections::HashMap<&str, usize> {
+    columns
+        .iter()
+        .enumerate()
+        .map(|(i, c)| (c.id.as_str(), i))
+        .collect()
+}
+
+/// Check whether a task is actionable: not done, ready, and passes the DSL filter.
+fn is_actionable(
+    t: &swissarmyhammer_entity::Entity,
+    terminal_column: &str,
+    expr: &Option<swissarmyhammer_filter_expr::Expr>,
+) -> bool {
+    if t.get_str("position_column") == Some(terminal_column) {
+        return false;
+    }
+    if !t.get("ready").and_then(|v| v.as_bool()).unwrap_or(true) {
+        return false;
+    }
+    if let Some(ref e) = expr {
+        if !e.matches(&TaskFilterAdapter { entity: t }) {
+            return false;
         }
     }
+    true
+}
 
-    /// Filter by swimlane
-    pub fn with_swimlane(mut self, swimlane: impl Into<SwimlaneId>) -> Self {
-        self.swimlane = Some(swimlane.into());
-        self
-    }
-
-    /// Filter by assignee
-    pub fn with_assignee(mut self, assignee: impl Into<ActorId>) -> Self {
-        self.assignee = Some(assignee.into());
-        self
-    }
-
-    /// Filter by tag
-    pub fn with_tag(mut self, tag: impl Into<TagId>) -> Self {
-        self.tag = Some(tag.into());
-        self
-    }
+/// Compare two tasks by column order, then by ordinal within column.
+fn compare_by_position(
+    a: &swissarmyhammer_entity::Entity,
+    b: &swissarmyhammer_entity::Entity,
+    column_order: &std::collections::HashMap<&str, usize>,
+) -> std::cmp::Ordering {
+    let col_a = column_order
+        .get(a.get_str("position_column").unwrap_or(""))
+        .unwrap_or(&0);
+    let col_b = column_order
+        .get(b.get_str("position_column").unwrap_or(""))
+        .unwrap_or(&0);
+    let ord_a = Ordinal::from_string(
+        a.get_str("position_ordinal")
+            .unwrap_or(Ordinal::DEFAULT_STR),
+    );
+    let ord_b = Ordinal::from_string(
+        b.get_str("position_ordinal")
+            .unwrap_or(Ordinal::DEFAULT_STR),
+    );
+    col_a.cmp(col_b).then(ord_a.cmp(&ord_b))
 }
 
 #[async_trait]
@@ -59,86 +95,29 @@ impl Execute<KanbanContext, KanbanError> for NextTask {
         match async {
             let ectx = ctx.entity_context().await?;
             let all_columns = ectx.list("column").await?;
-            let all_tasks = ectx.list("task").await?;
+            let mut all_tasks = ectx.list("task").await?;
 
-            // Get terminal column (highest order) — tasks here are done
             let terminal_column = all_columns
                 .iter()
                 .max_by_key(|c| c.get("order").and_then(|v| v.as_u64()).unwrap_or(0))
                 .map(|c| c.id.as_str())
                 .unwrap_or("done");
 
-            // Get column ordering for sorting candidates
-            let column_order: std::collections::HashMap<&str, usize> = all_columns
-                .iter()
-                .enumerate()
-                .map(|(i, c)| (c.id.as_str(), i))
-                .collect();
+            let registry = default_virtual_tag_registry();
+            enrich_all_task_entities(&mut all_tasks, terminal_column, registry);
 
-            // Filter to tasks not in terminal column that are ready
+            let expr = parse_filter_expr(self.filter.as_deref())?;
+            let column_order = build_column_order(&all_columns);
+
             let mut candidates: Vec<&swissarmyhammer_entity::Entity> = all_tasks
                 .iter()
-                .filter(|t| {
-                    // Must not be in terminal column
-                    if t.get_str("position_column") == Some(terminal_column) {
-                        return false;
-                    }
-
-                    // Must be ready (all deps complete)
-                    if !task_is_ready(t, &all_tasks, terminal_column) {
-                        return false;
-                    }
-
-                    // Filter by swimlane if specified
-                    if let Some(ref swimlane) = self.swimlane {
-                        if t.get_str("position_swimlane") != Some(swimlane.as_str()) {
-                            return false;
-                        }
-                    }
-
-                    // Filter by assignee if specified
-                    if let Some(ref assignee) = self.assignee {
-                        if !t
-                            .get_string_list("assignees")
-                            .contains(&assignee.to_string())
-                        {
-                            return false;
-                        }
-                    }
-
-                    // Filter by tag if specified
-                    if let Some(ref tag) = self.tag {
-                        if !task_tags(t).contains(&tag.to_string()) {
-                            return false;
-                        }
-                    }
-
-                    true
-                })
+                .filter(|t| is_actionable(t, terminal_column, &expr))
                 .collect();
 
-            // Sort by column order first, then ordinal within column
-            candidates.sort_by(|a, b| {
-                let col_a = column_order
-                    .get(a.get_str("position_column").unwrap_or(""))
-                    .unwrap_or(&0);
-                let col_b = column_order
-                    .get(b.get_str("position_column").unwrap_or(""))
-                    .unwrap_or(&0);
-                let ord_a = Ordinal::from_string(
-                    a.get_str("position_ordinal")
-                        .unwrap_or(Ordinal::DEFAULT_STR),
-                );
-                let ord_b = Ordinal::from_string(
-                    b.get_str("position_ordinal")
-                        .unwrap_or(Ordinal::DEFAULT_STR),
-                );
-                col_a.cmp(col_b).then(ord_a.cmp(&ord_b))
-            });
+            candidates.sort_by(|a, b| compare_by_position(a, b, &column_order));
 
-            // Return the first (oldest by position)
             match candidates.first() {
-                Some(task) => Ok(task_entity_to_rich_json(task, &all_tasks, terminal_column)),
+                Some(task) => Ok(task_entity_to_rich_json(task)),
                 None => Ok(Value::Null),
             }
         }
@@ -164,20 +143,17 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let kanban_dir = temp.path().join(".kanban");
         let ctx = KanbanContext::new(kanban_dir);
-
         InitBoard::new("Test")
             .execute(&ctx)
             .await
             .into_result()
             .unwrap();
-
         (temp, ctx)
     }
 
     #[tokio::test]
     async fn test_next_task_empty() {
         let (_temp, ctx) = setup().await;
-
         let result = NextTask::new().execute(&ctx).await.into_result().unwrap();
         assert!(result.is_null());
     }
@@ -185,7 +161,6 @@ mod tests {
     #[tokio::test]
     async fn test_next_task_returns_first() {
         let (_temp, ctx) = setup().await;
-
         AddTask::new("Task 1")
             .execute(&ctx)
             .await
@@ -204,18 +179,14 @@ mod tests {
     #[tokio::test]
     async fn test_next_task_skips_blocked() {
         use crate::types::TaskId;
-
         let (_temp, ctx) = setup().await;
 
-        // Create a task that blocks another
-        let result1 = AddTask::new("Blocker")
+        let r1 = AddTask::new("Blocker")
             .execute(&ctx)
             .await
             .into_result()
             .unwrap();
-        let id1 = result1["id"].as_str().unwrap();
-
-        // Create a blocked task
+        let id1 = r1["id"].as_str().unwrap();
         AddTask::new("Blocked")
             .with_depends_on(vec![TaskId::from_string(id1)])
             .execute(&ctx)
@@ -223,16 +194,13 @@ mod tests {
             .into_result()
             .unwrap();
 
-        // Next should return the blocker (the blocked one isn't ready)
         let result = NextTask::new().execute(&ctx).await.into_result().unwrap();
         assert_eq!(result["title"], "Blocker");
     }
 
     #[tokio::test]
-    async fn test_next_task_filters_by_tag() {
+    async fn test_next_task_filter_by_tag() {
         let (_temp, ctx) = setup().await;
-
-        // Create tasks - one with a #bug tag in description, one without
         AddTask::new("Untagged task")
             .execute(&ctx)
             .await
@@ -245,22 +213,22 @@ mod tests {
             .into_result()
             .unwrap();
 
-        // Without tag filter, returns first task (untagged)
+        // Without filter, returns first task
         let result = NextTask::new().execute(&ctx).await.into_result().unwrap();
         assert_eq!(result["title"], "Untagged task");
 
-        // With tag filter, skips untagged and returns the bug task
+        // With filter, skips untagged
         let result = NextTask::new()
-            .with_tag("bug")
+            .with_filter("#bug")
             .execute(&ctx)
             .await
             .into_result()
             .unwrap();
         assert_eq!(result["title"], "Bug task");
 
-        // With non-matching tag, returns null
+        // Non-matching filter returns null
         let result = NextTask::new()
-            .with_tag("feature")
+            .with_filter("#feature")
             .execute(&ctx)
             .await
             .into_result()
@@ -271,28 +239,22 @@ mod tests {
     #[tokio::test]
     async fn test_next_task_ignores_done() {
         let (_temp, ctx) = setup().await;
-
-        let result1 = AddTask::new("Done task")
+        let r1 = AddTask::new("Done task")
             .execute(&ctx)
             .await
             .into_result()
             .unwrap();
-        let id1 = result1["id"].as_str().unwrap();
-
         AddTask::new("Todo task")
             .execute(&ctx)
             .await
             .into_result()
             .unwrap();
-
-        // Move first task to done
-        MoveTask::to_column(id1, "done")
+        MoveTask::to_column(r1["id"].as_str().unwrap(), "done")
             .execute(&ctx)
             .await
             .into_result()
             .unwrap();
 
-        // Next should return the todo task
         let result = NextTask::new().execute(&ctx).await.into_result().unwrap();
         assert_eq!(result["title"], "Todo task");
     }
@@ -300,97 +262,72 @@ mod tests {
     #[tokio::test]
     async fn test_next_task_searches_all_non_done_columns() {
         let (_temp, ctx) = setup().await;
-
-        // Create three tasks
         let r1 = AddTask::new("Task in todo")
             .execute(&ctx)
             .await
             .into_result()
             .unwrap();
-        let id1 = r1["id"].as_str().unwrap();
-
         let r2 = AddTask::new("Task in doing")
             .execute(&ctx)
             .await
             .into_result()
             .unwrap();
-        let id2 = r2["id"].as_str().unwrap();
-
         let r3 = AddTask::new("Task in done")
             .execute(&ctx)
             .await
             .into_result()
             .unwrap();
-        let id3 = r3["id"].as_str().unwrap();
 
-        // Spread tasks across columns: todo, doing, done
-        MoveTask::to_column(id2, "doing")
+        MoveTask::to_column(r2["id"].as_str().unwrap(), "doing")
             .execute(&ctx)
             .await
             .into_result()
             .unwrap();
-        MoveTask::to_column(id3, "done")
+        MoveTask::to_column(r3["id"].as_str().unwrap(), "done")
             .execute(&ctx)
             .await
             .into_result()
             .unwrap();
 
-        // next task should return the todo task first (earlier column)
         let result = NextTask::new().execute(&ctx).await.into_result().unwrap();
         assert_eq!(result["title"], "Task in todo");
 
-        // Move the todo task to done — now only "doing" has a live task
-        MoveTask::to_column(id1, "done")
+        MoveTask::to_column(r1["id"].as_str().unwrap(), "done")
             .execute(&ctx)
             .await
             .into_result()
             .unwrap();
-
-        // next task should return the doing task (not skip it)
         let result = NextTask::new().execute(&ctx).await.into_result().unwrap();
         assert_eq!(result["title"], "Task in doing");
 
-        // Move the doing task to done — board is empty of actionable tasks
-        MoveTask::to_column(id2, "done")
+        MoveTask::to_column(r2["id"].as_str().unwrap(), "done")
             .execute(&ctx)
             .await
             .into_result()
             .unwrap();
-
-        // next task should return null — all tasks are done
         let result = NextTask::new().execute(&ctx).await.into_result().unwrap();
-        assert!(
-            result.is_null(),
-            "Expected null when all tasks are done, got: {result}"
-        );
+        assert!(result.is_null());
     }
 
     #[tokio::test]
     async fn test_next_task_prefers_earlier_column() {
         let (_temp, ctx) = setup().await;
-
-        // Create two tasks and put them in different non-done columns
         let r1 = AddTask::new("Doing task")
             .execute(&ctx)
             .await
             .into_result()
             .unwrap();
-        let id1 = r1["id"].as_str().unwrap();
-
         AddTask::new("Todo task")
             .execute(&ctx)
             .await
             .into_result()
             .unwrap();
-
-        // Move first task to doing (column index 1), second stays in todo (column index 0)
-        MoveTask::to_column(id1, "doing")
+        MoveTask::to_column(r1["id"].as_str().unwrap(), "doing")
             .execute(&ctx)
             .await
             .into_result()
             .unwrap();
 
-        // next task should return the todo task (earlier column wins)
         let result = NextTask::new().execute(&ctx).await.into_result().unwrap();
         assert_eq!(result["title"], "Todo task");
     }
@@ -398,62 +335,85 @@ mod tests {
     #[tokio::test]
     async fn test_next_task_skips_archived() {
         let (_temp, ctx) = setup().await;
-
-        // Create 2 tasks — first is archived, second should be returned
         let r1 = AddTask::new("Task 1 (to archive)")
             .execute(&ctx)
             .await
             .into_result()
             .unwrap();
-        let id1 = r1["id"].as_str().unwrap().to_string();
-
         AddTask::new("Task 2 (active)")
             .execute(&ctx)
             .await
             .into_result()
             .unwrap();
 
-        // Archive the first task via the entity context
         let ectx = ctx.entity_context().await.unwrap();
-        ectx.archive("task", &id1).await.unwrap();
+        ectx.archive("task", r1["id"].as_str().unwrap())
+            .await
+            .unwrap();
 
-        // next task should skip the archived one and return the second
         let result = NextTask::new().execute(&ctx).await.into_result().unwrap();
-        assert_eq!(
-            result["title"], "Task 2 (active)",
-            "next task should skip archived task and return the second"
-        );
+        assert_eq!(result["title"], "Task 2 (active)");
     }
 
     #[tokio::test]
     async fn test_next_task_all_archived_returns_null() {
         let (_temp, ctx) = setup().await;
-
-        // Create 2 tasks and archive both
         let r1 = AddTask::new("Task 1")
             .execute(&ctx)
             .await
             .into_result()
             .unwrap();
-        let id1 = r1["id"].as_str().unwrap().to_string();
-
         let r2 = AddTask::new("Task 2")
             .execute(&ctx)
             .await
             .into_result()
             .unwrap();
-        let id2 = r2["id"].as_str().unwrap().to_string();
 
-        // Archive both tasks
         let ectx = ctx.entity_context().await.unwrap();
-        ectx.archive("task", &id1).await.unwrap();
-        ectx.archive("task", &id2).await.unwrap();
+        ectx.archive("task", r1["id"].as_str().unwrap())
+            .await
+            .unwrap();
+        ectx.archive("task", r2["id"].as_str().unwrap())
+            .await
+            .unwrap();
 
-        // next task should return null — no active tasks remain
         let result = NextTask::new().execute(&ctx).await.into_result().unwrap();
-        assert!(
-            result.is_null(),
-            "next task should return null when all tasks are archived, got: {result}"
-        );
+        assert!(result.is_null());
+    }
+
+    #[tokio::test]
+    async fn test_next_task_filter_with_assignee() {
+        let (_temp, ctx) = setup().await;
+        use crate::actor::AddActor;
+        use crate::task::AssignTask;
+
+        AddActor::new("alice", "Alice")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let r1 = AddTask::new("Alice's task")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        AddTask::new("Unassigned")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        AssignTask::new(r1["id"].as_str().unwrap(), "alice")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        let result = NextTask::new()
+            .with_filter("@alice")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        assert_eq!(result["title"], "Alice's task");
     }
 }

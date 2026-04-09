@@ -124,7 +124,7 @@ import { UIStateProvider } from "@/lib/ui-state-context";
 import { SchemaProvider } from "@/lib/schema-context";
 import { EntityStoreProvider } from "@/lib/entity-store-context";
 import { EntityFocusProvider } from "@/lib/entity-focus-context";
-import { InspectProvider } from "@/lib/inspect-context";
+
 import { FieldUpdateProvider } from "@/lib/field-update-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { Entity } from "@/types/kanban";
@@ -141,11 +141,9 @@ function Providers({
       <SchemaProvider>
         <EntityStoreProvider entities={entities}>
           <EntityFocusProvider>
-            <InspectProvider onInspect={() => {}} onDismiss={() => false}>
-              <FieldUpdateProvider>
-                <UIStateProvider>{children}</UIStateProvider>
-              </FieldUpdateProvider>
-            </InspectProvider>
+            <FieldUpdateProvider>
+              <UIStateProvider>{children}</UIStateProvider>
+            </FieldUpdateProvider>
           </EntityFocusProvider>
         </EntityStoreProvider>
       </SchemaProvider>
@@ -159,6 +157,7 @@ describe("progress-ring integration", () => {
     const boardEntity: Entity = {
       entity_type: "board",
       id: "board",
+      moniker: "board:board",
       fields: {
         name: "My Board",
         percent_complete: { done: 3, total: 10, percent: 30 },
@@ -190,6 +189,7 @@ describe("progress-ring integration", () => {
     const taskEntity: Entity = {
       entity_type: "task",
       id: "task-1",
+      moniker: "task:task-1",
       fields: {
         title: "My Task",
         body: "- [x] done\n- [ ] todo",
@@ -221,6 +221,7 @@ describe("progress-ring integration", () => {
     const boardEntity: Entity = {
       entity_type: "board",
       id: "board",
+      moniker: "board:board",
       fields: {
         name: "Empty Board",
         percent_complete: { done: 0, total: 0, percent: 0 },

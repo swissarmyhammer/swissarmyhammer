@@ -54,7 +54,7 @@ describe("refreshBoards", () => {
         return Promise.resolve({
           board: { id: "board", entity_type: "board", name: "Board A" },
           columns: [],
-          swimlanes: [],
+
           tags: [],
           summary: {
             total_tasks: 0,
@@ -81,7 +81,6 @@ describe("refreshBoards", () => {
     expect(result.entitiesByType!.board).toHaveLength(1);
     expect(result.entitiesByType!.board[0].entity_type).toBe("board");
     expect(result.entitiesByType!.column).toHaveLength(0);
-    expect(result.entitiesByType!.swimlane).toHaveLength(0);
     expect(result.entitiesByType!.tag).toHaveLength(0);
     expect(result.entitiesByType!.task).toHaveLength(0);
     expect(result.entitiesByType!.actor).toHaveLength(0);
@@ -100,7 +99,7 @@ describe("refreshBoards", () => {
         return Promise.resolve({
           board: { id: "board", entity_type: "board", name: "Board B" },
           columns: [],
-          swimlanes: [],
+
           tags: [],
           summary: {
             total_tasks: 0,
@@ -148,7 +147,7 @@ describe("refreshBoards", () => {
         return Promise.resolve({
           board: { id: "board", entity_type: "board", name: "Board A" },
           columns: [],
-          swimlanes: [],
+
           tags: [],
           summary: {
             total_tasks: 0,
@@ -189,7 +188,7 @@ describe("refreshBoards", () => {
         return Promise.resolve({
           board: { id: "board", entity_type: "board", name: "Board B" },
           columns: [],
-          swimlanes: [],
+
           tags: [],
           summary: {
             total_tasks: 0,

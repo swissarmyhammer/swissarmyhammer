@@ -69,7 +69,7 @@ impl Execute<KanbanContext, KanbanError> for CompleteTask {
                 }
             }
 
-            // Update position to done column (preserving swimlane)
+            // Update position to done column
             entity.set("position_column", serde_json::json!(terminal.id.as_str()));
             entity.set(
                 "position_ordinal",
@@ -160,46 +160,6 @@ mod tests {
 
         // Task should now be in done column
         assert_eq!(result["position"]["column"], "done");
-    }
-
-    #[tokio::test]
-    async fn test_complete_task_preserves_swimlane() {
-        let (_temp, ctx) = setup().await;
-
-        // Add a swimlane
-        use crate::swimlane::AddSwimlane;
-        AddSwimlane::new("feature", "Feature")
-            .execute(&ctx)
-            .await
-            .into_result()
-            .unwrap();
-
-        // Add a task and move it to the swimlane
-        let add_result = AddTask::new("Task with swimlane")
-            .execute(&ctx)
-            .await
-            .into_result()
-            .unwrap();
-        let task_id = add_result["id"].as_str().unwrap();
-
-        // Move to doing column with swimlane
-        use crate::task::MoveTask;
-        MoveTask::to_column_and_swimlane(task_id, "doing", "feature")
-            .execute(&ctx)
-            .await
-            .into_result()
-            .unwrap();
-
-        // Complete the task
-        let result = CompleteTask::new(task_id)
-            .execute(&ctx)
-            .await
-            .into_result()
-            .unwrap();
-
-        // Should be in done column but preserve swimlane
-        assert_eq!(result["position"]["column"], "done");
-        assert_eq!(result["position"]["swimlane"], "feature");
     }
 
     #[tokio::test]

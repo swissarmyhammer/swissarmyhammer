@@ -1,0 +1,10 @@
+id: "0000000000000000000000000Q"
+name: attachment_size
+description: File size in bytes
+type:
+  kind: number
+icon: hard-drive
+editor: none
+display: number
+sort: numeric
+width: 100

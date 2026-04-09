@@ -1,23 +1,15 @@
-import {
-  forwardRef,
-  memo,
-  useCallback,
-  useContext,
-  useMemo,
-  useState,
-} from "react";
+import { forwardRef, memo, useCallback, useMemo, useState } from "react";
 import { GripVertical, Info, icons } from "lucide-react";
 import { FocusScope } from "@/components/focus-scope";
 import { Field } from "@/components/fields/field";
 import { useSchema } from "@/lib/schema-context";
 import { useEntityCommands } from "@/lib/entity-commands";
-import { moniker } from "@/lib/moniker";
+import { useDispatchCommand, type CommandDef } from "@/lib/command-scope";
 import {
-  CommandScopeContext,
-  resolveCommand,
-  dispatchCommand,
-  type CommandDef,
-} from "@/lib/command-scope";
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import type { ClaimPredicate } from "@/lib/entity-focus-context";
 import type { Entity, FieldDef } from "@/types/kanban";
 
@@ -74,7 +66,7 @@ export const EntityCard = memo(
     const { getSchema } = useSchema();
     const schema = getSchema(entity.entity_type);
 
-    const entityMoniker = moniker(entity.entity_type, entity.id);
+    const entityMoniker = entity.moniker;
 
     const cardFields = useMemo(
       () => (schema?.fields ?? []).filter((f) => f.section === "header"),
@@ -145,28 +137,38 @@ export const EntityCard = memo(
               );
             })}
           </div>
-          <InspectButton />
+          <InspectButton moniker={entityMoniker} />
         </div>
       </FocusScope>
     );
   }),
 );
 
-/** Dispatches entity.inspect through the scope chain instead of calling inspectEntity directly. */
-function InspectButton() {
-  const scope = useContext(CommandScopeContext);
+/**
+ * Dispatches ui.inspect with an explicit target moniker.
+ *
+ * The target is passed directly so the backend uses ctx.target rather than
+ * walking the scope chain (which comes from FocusedScopeContext and may
+ * point to a previously-focused entity, not this card).
+ */
+function InspectButton({ moniker }: { moniker: string }) {
+  const dispatch = useDispatchCommand("ui.inspect");
   return (
-    <button
-      type="button"
-      className="shrink-0 mt-0.5 p-0.5 rounded text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted transition-colors"
-      onClick={(e) => {
-        e.stopPropagation();
-        const cmd = resolveCommand(scope, "ui.inspect");
-        if (cmd) dispatchCommand(cmd);
-      }}
-      title="Inspect"
-    >
-      <Info className="h-3.5 w-3.5" />
-    </button>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          aria-label="Inspect"
+          className="shrink-0 mt-0.5 p-0.5 rounded text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted transition-colors"
+          onClick={(e) => {
+            e.stopPropagation();
+            dispatch({ target: moniker }).catch(console.error);
+          }}
+        >
+          <Info className="h-3.5 w-3.5" />
+        </button>
+      </TooltipTrigger>
+      <TooltipContent>Inspect</TooltipContent>
+    </Tooltip>
   );
 }

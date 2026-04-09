@@ -12,6 +12,7 @@ mod list;
 mod mv;
 mod next;
 mod paste;
+mod shared;
 mod tag;
 mod unassign;
 mod untag;

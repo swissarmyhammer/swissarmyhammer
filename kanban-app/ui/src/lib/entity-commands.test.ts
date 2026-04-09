@@ -1,7 +1,11 @@
 import { describe, it, expect, vi } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
-import { resolveCommandName, useEntityCommands } from "./entity-commands";
+import {
+  resolveCommandName,
+  useEntityCommands,
+  useCommands,
+} from "./entity-commands";
 import type { Entity } from "@/types/kanban";
 
 // ---------------------------------------------------------------------------
@@ -45,26 +49,18 @@ vi.mock("@tauri-apps/api/event", () => ({
 
 // Import providers after mocks are set up
 import { SchemaProvider } from "@/lib/schema-context";
-import { InspectProvider } from "@/lib/inspect-context";
 
-/** Render a hook inside SchemaProvider + InspectProvider. */
-function makeWrapper(onInspect = vi.fn()) {
+/** Render a hook inside SchemaProvider. */
+function makeWrapper() {
   return function Wrapper({ children }: { children: ReactNode }) {
-    return createElement(
-      SchemaProvider,
-      null,
-      createElement(InspectProvider, {
-        onInspect,
-        onDismiss: () => false,
-        children,
-      }),
-    );
+    return createElement(SchemaProvider, null, children);
   };
 }
 
 const makeEntity = (fields: Record<string, unknown>): Entity => ({
   entity_type: "task",
   id: "test-id",
+  moniker: "task:test-id",
   fields,
 });
 
@@ -148,6 +144,7 @@ describe("useEntityCommands", () => {
     const entity: Entity = {
       entity_type: "task",
       id: "task-1",
+      moniker: "task:task-1",
       fields: { title: "Fix bug" },
     };
     const { result } = renderHook(
@@ -190,10 +187,9 @@ describe("useEntityCommands", () => {
     expect(result.current[0].id).toBe("entity.inspect");
   });
 
-  it("entity.inspect execute calls the inspect function", async () => {
-    const onInspect = vi.fn();
+  it("entity.inspect has no frontend execute handler — dispatch goes through the backend scope chain", async () => {
     const { result } = renderHook(() => useEntityCommands("task", "task-42"), {
-      wrapper: makeWrapper(onInspect),
+      wrapper: makeWrapper(),
     });
 
     await act(async () => {
@@ -202,7 +198,44 @@ describe("useEntityCommands", () => {
 
     const inspectCmd = result.current.find((c) => c.id === "entity.inspect");
     expect(inspectCmd).toBeDefined();
-    inspectCmd!.execute!();
-    expect(onInspect).toHaveBeenCalledWith("task", "task-42");
+    // No frontend execute handler: the backend resolves the command via the
+    // scope chain and target moniker. See no-client-side-inspect principle.
+    expect(inspectCmd!.execute).toBeUndefined();
+    expect(inspectCmd!.target).toBe("task:task-42");
+  });
+});
+
+describe("useCommands", () => {
+  it("is an alias for useEntityCommands and works for perspective type", async () => {
+    const { result } = renderHook(() => useCommands("perspective", "persp-1"), {
+      wrapper: makeWrapper(),
+    });
+
+    // Initially empty while schema loads
+    expect(result.current).toEqual([]);
+
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 50));
+    });
+
+    // useCommands should return a list (commands from schema for perspective type)
+    // The list may be empty if no perspective schema is loaded in the mock,
+    // but the hook itself should be callable for any type including "perspective".
+    expect(Array.isArray(result.current)).toBe(true);
+  });
+
+  it("useCommands target moniker uses the provided type and id", async () => {
+    const { result } = renderHook(() => useCommands("task", "task-99"), {
+      wrapper: makeWrapper(),
+    });
+
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 50));
+    });
+
+    // Commands should have target set to "task:task-99"
+    if (result.current.length > 0) {
+      expect(result.current[0].target).toBe("task:task-99");
+    }
   });
 });

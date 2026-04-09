@@ -10,7 +10,7 @@
  * No file content is loaded — this is purely metadata-driven.
  */
 
-import { useCallback, useContext, useEffect, useMemo, useRef, type ComponentType } from "react";
+import { useCallback, useEffect, useRef, type ComponentType } from "react";
 import {
   File,
   FileImage,
@@ -22,17 +22,9 @@ import {
   FileArchive,
   Paperclip,
 } from "lucide-react";
-import {
-  backendDispatch,
-  CommandScopeProvider,
-  CommandScopeContext,
-  resolveCommand,
-  dispatchCommand,
-  useActiveBoardPath,
-  type CommandDef,
-} from "@/lib/command-scope";
+import { useDispatchCommand } from "@/lib/command-scope";
+import { FocusScope } from "@/components/focus-scope";
 import { useFileDrop, type DropCallback } from "@/lib/file-drop-context";
-import { useContextMenu } from "@/lib/context-menu";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -105,16 +97,49 @@ const CODE_MIME_TYPES = new Set([
 
 /** Code-related file extensions. */
 const CODE_EXTENSIONS = new Set([
-  "js", "jsx", "ts", "tsx", "py", "rs", "go", "java", "c", "cpp", "h",
-  "hpp", "cs", "rb", "php", "swift", "kt", "scala", "sh", "bash", "zsh",
-  "lua", "r", "json", "xml", "yaml", "yml", "toml",
+  "js",
+  "jsx",
+  "ts",
+  "tsx",
+  "py",
+  "rs",
+  "go",
+  "java",
+  "c",
+  "cpp",
+  "h",
+  "hpp",
+  "cs",
+  "rb",
+  "php",
+  "swift",
+  "kt",
+  "scala",
+  "sh",
+  "bash",
+  "zsh",
+  "lua",
+  "r",
+  "json",
+  "xml",
+  "yaml",
+  "yml",
+  "toml",
 ]);
 
 /** Spreadsheet file extensions. */
 const SPREADSHEET_EXTENSIONS = new Set(["csv", "xls", "xlsx", "ods"]);
 
 /** Archive file extensions. */
-const ARCHIVE_EXTENSIONS = new Set(["zip", "tar", "gz", "bz2", "7z", "rar", "xz"]);
+const ARCHIVE_EXTENSIONS = new Set([
+  "zip",
+  "tar",
+  "gz",
+  "bz2",
+  "7z",
+  "rar",
+  "xz",
+]);
 
 /**
  * Select the appropriate lucide icon component based on MIME type and file extension.
@@ -163,80 +188,36 @@ export function getFileIcon(
  */
 export function AttachmentItem({ attachment }: AttachmentItemProps) {
   const Icon = getFileIcon(attachment.mime_type, attachment.name);
-  const boardPath = useActiveBoardPath();
-
-  const scopeChain = useMemo(
-    () => [`attachment:${attachment.path}`],
-    [attachment.path],
-  );
-
-  // Register commands in the frontend scope so resolveCommand works
-  // for double-click, same as useEntityCommands does for entity cards.
-  // The execute callbacks dispatch to the backend with the scope chain
-  // so the Rust impls can resolve the path.
-  const commands = useMemo<CommandDef[]>(
-    () => [
-      {
-        id: "attachment.open",
-        name: "Open",
-        contextMenu: true,
-        execute: () => {
-          backendDispatch({
-            cmd: "attachment.open",
-            scopeChain,
-            ...(boardPath ? { boardPath } : {}),
-          }).catch(console.error);
-        },
-      },
-      {
-        id: "attachment.reveal",
-        name: "Show in Finder",
-        contextMenu: true,
-        execute: () => {
-          backendDispatch({
-            cmd: "attachment.reveal",
-            scopeChain,
-            ...(boardPath ? { boardPath } : {}),
-          }).catch(console.error);
-        },
-      },
-    ],
-    [scopeChain, boardPath],
-  );
 
   return (
-    <CommandScopeProvider commands={commands} moniker={`attachment:${attachment.path}`}>
-      <AttachmentItemInner attachment={attachment} scopeChain={scopeChain} Icon={Icon} />
-    </CommandScopeProvider>
+    <FocusScope
+      moniker={`attachment:${attachment.path}`}
+      commands={[]}
+      className="min-w-0"
+    >
+      <AttachmentItemInner attachment={attachment} Icon={Icon} />
+    </FocusScope>
   );
 }
 
-/** Props for the inner attachment item that lives inside a CommandScopeProvider. */
+/** Props for the inner attachment item that lives inside the FocusScope. */
 interface AttachmentItemInnerProps {
   attachment: AttachmentMeta;
-  scopeChain: string[];
   Icon: ComponentType<{ className?: string; size?: number }>;
 }
 
-/** Inner component that has access to the command scope for resolving double-click. */
-function AttachmentItemInner({
-  attachment,
-  scopeChain,
-  Icon,
-}: AttachmentItemInnerProps) {
-  const scope = useContext(CommandScopeContext);
-  const onContextMenu = useContextMenu(scopeChain);
+/** Inner component — double-click opens the attachment. Context menu handled by FocusScope. */
+function AttachmentItemInner({ attachment, Icon }: AttachmentItemInnerProps) {
+  const dispatch = useDispatchCommand("attachment.open");
 
   const handleDoubleClick = useCallback(() => {
-    const cmd = resolveCommand(scope, "attachment.open");
-    if (cmd) dispatchCommand(cmd);
-  }, [scope]);
+    dispatch().catch(console.error);
+  }, [dispatch]);
 
   return (
     <div
       className="flex items-center gap-2 min-w-0 cursor-pointer"
       onDoubleClick={handleDoubleClick}
-      onContextMenu={onContextMenu}
     >
       <Icon className="shrink-0 text-muted-foreground" size={16} />
       <span className="truncate text-sm">{attachment.name}</span>
@@ -254,8 +235,10 @@ export function AttachmentDisplay({
   onCommit,
 }: AttachmentDisplayProps) {
   const attachment = value as AttachmentMeta | null | undefined;
-  const hasAttachment = attachment && typeof attachment === "object" && "name" in attachment;
-  const { isDragging, registerDropTarget, unregisterDropTarget } = useFileDrop();
+  const hasAttachment =
+    attachment && typeof attachment === "object" && "name" in attachment;
+  const { isDragging, registerDropTarget, unregisterDropTarget } =
+    useFileDrop();
 
   const onCommitRef = useRef(onCommit);
   onCommitRef.current = onCommit;
@@ -305,7 +288,8 @@ export function AttachmentListDisplay({
   onCommit,
 }: AttachmentListDisplayProps) {
   const attachments = Array.isArray(value) ? (value as AttachmentMeta[]) : [];
-  const { isDragging, registerDropTarget, unregisterDropTarget } = useFileDrop();
+  const { isDragging, registerDropTarget, unregisterDropTarget } =
+    useFileDrop();
 
   const onCommitRef = useRef(onCommit);
   onCommitRef.current = onCommit;
