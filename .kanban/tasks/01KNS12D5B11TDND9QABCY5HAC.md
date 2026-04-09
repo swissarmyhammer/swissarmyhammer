@@ -12,9 +12,11 @@ title: 'kanban-cli: implement registry.rs — KanbanMcpRegistration for init/dei
 
 Create `kanban-cli/src/registry.rs` — the init/deinit component registry for kanban.
 
-Model exactly on `shelltool-cli/src/registry.rs`.
+Two `Initializable` components, matching shelltool's pattern:
 
-`KanbanMcpRegistration` implements `Initializable` and registers/unregisters `kanban serve` in all detected agent MCP config files via `mirdan`.
+### Component 1: `KanbanMcpRegistration` (priority 10)
+
+Registers/unregisters `kanban serve` as an MCP server in all detected agent configs via mirdan. Model on `ShelltoolMcpRegistration` in `shelltool-cli/src/registry.rs`.
 
 ```rust
 pub struct KanbanMcpRegistration;
@@ -23,34 +25,55 @@ impl Initializable for KanbanMcpRegistration {
     fn name(&self) -> &str { "kanban-mcp-registration" }
     fn category(&self) -> &str { "configuration" }
     fn priority(&self) -> i32 { 10 }
-    fn init(&self, scope: &InitScope, reporter: &dyn InitReporter) -> Vec<InitResult> {
-        // mirdan::agents::load_agents_config() → get_detected_agents()
-        // McpServerEntry { command: "kanban", args: ["serve"], env: {} }
-        // mirdan::mcp_config::register_mcp_server(path, servers_key, "kanban", &entry)
-    }
-    fn deinit(...) -> Vec<InitResult> {
-        // mirdan::mcp_config::unregister_mcp_server(path, servers_key, "kanban")
-    }
-}
-
-pub fn register_all(registry: &mut InitRegistry) {
-    registry.register(KanbanMcpRegistration);
+    fn init(...) { /* mirdan::mcp_config::register_mcp_server */ }
+    fn deinit(...) { /* mirdan::mcp_config::unregister_mcp_server */ }
 }
 ```
 
-Note: shelltool's `register_all` also registers `ShellExecuteTool` for skill deployment. Kanban has no equivalent skill-deployment component, so `register_all` only registers the MCP registration component.
+### Component 2: `KanbanSkillDeployment` (priority 20)
+
+Deploys/removes the builtin `kanban` skill to all detected agents. Model on `ShellExecuteTool`'s `Initializable` impl in `swissarmyhammer-tools/src/mcp/tools/shell/mod.rs`.
+
+```rust
+pub struct KanbanSkillDeployment;
+
+impl Initializable for KanbanSkillDeployment {
+    fn name(&self) -> &str { "kanban-skill-deployment" }
+    fn category(&self) -> &str { "skills" }
+    fn priority(&self) -> i32 { 20 }
+    fn init(...) {
+        // 1. swissarmyhammer_skills::SkillResolver::new().resolve_builtins().get("kanban")
+        // 2. Render {{version}} in skill.instructions via swissarmyhammer_templating
+        // 3. Write rendered SKILL.md to temp dir
+        // 4. mirdan::install::deploy_skill_to_agents("kanban", &skill_dir, None, false)
+    }
+    fn deinit(...) {
+        // mirdan::install::uninstall_skill("kanban", None, false)
+    }
+}
+```
+
+### Wire-up
+
+```rust
+pub fn register_all(registry: &mut InitRegistry) {
+    registry.register(KanbanMcpRegistration);
+    registry.register(KanbanSkillDeployment);
+}
+```
 
 ## Acceptance Criteria
-- [ ] `kanban init` registers `kanban` in detected agent MCP configs
-- [ ] `kanban deinit` removes it idempotently
+- [ ] `kanban init` registers `kanban` MCP server in detected agent configs
+- [ ] `kanban init` deploys the kanban skill to `.claude/skills/kanban/` (or agent equivalent)
+- [ ] `kanban deinit` removes MCP registration idempotently
+- [ ] `kanban deinit` removes the kanban skill from agents
 - [ ] `cargo check -p kanban-cli` passes
 
 ## Tests
-- [ ] Unit test: `KanbanMcpRegistration::name()` returns `"kanban-mcp-registration"`
-- [ ] Unit test: `KanbanMcpRegistration::priority()` returns `10`
-- [ ] Unit test: `register_all` populates registry with exactly 1 component
-- [ ] Unit test: `init` returns exactly 1 result
-- [ ] Unit test: `deinit` returns exactly 1 result
+- [ ] Unit test: `KanbanMcpRegistration::name()` returns `"kanban-mcp-registration"`, priority 10
+- [ ] Unit test: `KanbanSkillDeployment::name()` returns `"kanban-skill-deployment"`, priority 20
+- [ ] Unit test: `register_all` populates registry with exactly 2 components
+- [ ] Unit test: both `init` and `deinit` return at least 1 result each
 - [ ] Test file: `kanban-cli/src/registry.rs` in `#[cfg(test)]` module
 
 ## Workflow
