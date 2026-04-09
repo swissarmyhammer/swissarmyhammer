@@ -22,7 +22,7 @@ Replace the current `focusedMoniker` React state with an event-driven **focus cl
 React → Rust (all return Ok/Err, nothing else):
   spatial_register(key, moniker, rect, layer_key)   — FocusScope mount/resize
   spatial_unregister(key)                            — FocusScope unmount
-  spatial_navigate(direction)                        — keyboard nav
+  spatial_navigate(key, direction)                   — keyboard nav (from key, in direction)
   spatial_focus(key)                                 — click / programmatic
   spatial_push_layer(key, name)                      — FocusLayer mount
   spatial_pop_layer(key)                             — FocusLayer unmount
@@ -31,30 +31,24 @@ Rust → React (Tauri event):
   "focus-changed" { prev_key: Option<String>, next_key: Option<String> }
 ```
 
-`spatial_navigate` reads the current `focused_key` from Rust's own state, runs the beam test + scoring, updates `focused_key` to the winner, and emits `"focus-changed"`. No return value needed.
-
-`spatial_focus(key)` sets `focused_key` directly and emits `"focus-changed"`. Used for clicks and programmatic focus.
-
 ### React side
 
 **Global event listener** (in EntityFocusProvider):
 
 ```typescript
 listen("focus-changed", ({ prev_key, next_key }) => {
-  if (prev_key) claimRegistry.get(prev_key)?.(false);  // one re-render
-  if (next_key) claimRegistry.get(next_key)?.(true);    // one re-render
+  if (prev_key) claimRegistry.get(prev_key)?.(false);
+  if (next_key) claimRegistry.get(next_key)?.(true);
 });
 ```
 
 **FocusScope**:
 - Generates ULID key: `const key = useRef(ulid()).current`
-- Registers in claim registry: `registry.set(key, (focused) => setIsFocused(focused))`
-- On mount/resize: `invoke("spatial_register", { key, moniker, ...rect, layer_key })`
-- On unmount: `invoke("spatial_unregister", { key })`
+- Registers in claim registry: `registry.set(key, setIsFocused)`
 - On click: `invoke("spatial_focus", { key })` — fire and forget
 - Local `const [isFocused, setIsFocused] = useState(false)` driven by claim callback
 
-**No focusedMoniker state in React.** No ref. No pub/sub. React doesn't track who's focused — it just responds to events from Rust.
+**No focusedMoniker state in React.** React doesn't track who's focused — it just responds to events from Rust.
 
 ### Moniker is separate
 
@@ -64,7 +58,7 @@ When a FocusScope receives `claim(true)`, it knows its own moniker. It can separ
 
 **`SpatialState`** (or extend UIState):
 - `focused_key: Option<String>`
-- On `spatial_navigate`: resolve direction → update `focused_key` → emit event
+- On `spatial_navigate(key, direction)`: resolve → update `focused_key` → emit event
 - On `spatial_focus(key)`: update `focused_key` → emit event
 - On `spatial_unregister(key)`: if key == focused_key, clear focus → emit event
 
@@ -85,19 +79,88 @@ When a FocusScope receives `claim(true)`, it knows its own moniker. It can separ
 - [ ] Focus change triggers exactly 2 FocusScope re-renders via event callback
 - [ ] All Tauri invokes return Ok/Err only — no focus data in return values
 - [ ] Focus changes flow through Rust event: click → Rust → event → React claim
-- [ ] Keyboard nav: React invokes `spatial_navigate(direction)` → Rust emits event → React claims
+- [ ] Keyboard nav: React invokes `spatial_navigate(key, direction)` → Rust emits event → React claims
 - [ ] No `focusedMoniker` state in React — Rust owns focus state
+- [ ] Event listener cleaned up on EntityFocusProvider unmount
 - [ ] `cargo test` passes, `pnpm vitest run` passes
 
 ## Tests
-- [ ] `entity-focus-context.test.tsx` — claim registry: register, event fires, correct callbacks called
-- [ ] `entity-focus-context.test.tsx` — unregistered key in event is a no-op
-- [ ] `focus-scope.test.tsx` — FocusScope registers claim on mount, unregisters on unmount
-- [ ] `focus-scope.test.tsx` — click invokes spatial_focus with key, not moniker
-- [ ] `Rust unit tests` — spatial_focus updates focused_key and emits event
-- [ ] `Rust unit tests` — spatial_navigate updates focused_key and emits event
-- [ ] `Rust unit tests` — spatial_unregister of focused key clears focus and emits event
-- [ ] Run `cargo test` and `cd kanban-app/ui && npx vitest run` — all pass
+
+### Rust unit tests (`swissarmyhammer-commands/src/spatial_state.rs` or similar)
+
+```rust
+#[test]
+fn spatial_focus_updates_focused_key_and_emits_event() {
+    // Given: empty state
+    // When: spatial_focus("key-abc")
+    // Then: state.focused_key == Some("key-abc")
+    // And: emitted event == FocusChanged { prev_key: None, next_key: Some("key-abc") }
+}
+
+#[test]
+fn spatial_focus_emits_prev_and_next() {
+    // Given: focused_key == Some("key-1")
+    // When: spatial_focus("key-2")
+    // Then: event == FocusChanged { prev_key: Some("key-1"), next_key: Some("key-2") }
+}
+
+#[test]
+fn spatial_unregister_focused_key_clears_focus() {
+    // Given: focused_key == Some("key-1"), key-1 is registered
+    // When: spatial_unregister("key-1")
+    // Then: focused_key == None
+    // And: event == FocusChanged { prev_key: Some("key-1"), next_key: None }
+}
+
+#[test]
+fn spatial_unregister_non_focused_key_no_event() {
+    // Given: focused_key == Some("key-1"), key-2 is registered
+    // When: spatial_unregister("key-2")
+    // Then: focused_key still Some("key-1"), no event emitted
+}
+```
+
+### React unit tests (`kanban-app/ui/src/lib/entity-focus-context.test.tsx`)
+
+Mock setup:
+```typescript
+vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => Promise.resolve()) }));
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn((_event, callback) => {
+    // Store callback so tests can fire events manually
+    (listen as any).__callback = callback;
+    return Promise.resolve(() => {}); // unsub function
+  }),
+}));
+```
+
+```
+test: "claim registry calls previous callback with false and next with true on focus-changed event"
+  setup: render EntityFocusProvider with two FocusScopes (key-A, key-B)
+  act: fire focus-changed event { prev_key: null, next_key: "key-A" }
+  assert: FocusScope A has data-focused attribute, B does not
+  act: fire focus-changed event { prev_key: "key-A", next_key: "key-B" }
+  assert: FocusScope A no longer data-focused, FocusScope B has data-focused
+
+test: "unregistered key in focus-changed event is a no-op"
+  setup: render EntityFocusProvider with one FocusScope (key-A)
+  act: fire focus-changed event { prev_key: "nonexistent", next_key: "key-A" }
+  assert: no error thrown, FocusScope A has data-focused
+
+test: "FocusScope click invokes spatial_focus with its key"
+  setup: render FocusScope inside EntityFocusProvider + FocusLayer
+  act: click the FocusScope element
+  assert: invoke called with ("spatial_focus", { key: <the ULID> })
+
+test: "EntityFocusProvider unmount cleans up event listener"
+  setup: render then unmount EntityFocusProvider
+  assert: the unsub function returned by listen() was called
+
+test: "FocusScope unmount removes from claim registry"
+  setup: render FocusScope, capture its key
+  act: unmount FocusScope, then fire focus-changed { next_key: <captured key> }
+  assert: no error, no state update (callback was unregistered)
+```
 
 ## Workflow
 - Use `/tdd` — write failing tests first, then implement to make them pass.
