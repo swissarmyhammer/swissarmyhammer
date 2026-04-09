@@ -123,7 +123,6 @@ pub fn get_type_definition(
 mod tests {
     use super::*;
     use crate::test_fixtures::test_db;
-    use rusqlite::Connection;
 
     // --- No live LSP returns empty, not error ---
 

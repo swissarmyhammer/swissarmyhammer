@@ -229,7 +229,7 @@ impl<'a> FilterContext for EntityFilterAdapter<'a> {
 /// with readiness, dependency, and virtual tag data. Finally sorts by
 /// (column, ordinal) so the frontend can trust the order.
 async fn enrich_and_sort_tasks(
-    entities: &mut Vec<Entity>,
+    entities: &mut [Entity],
     ectx: &swissarmyhammer_entity::EntityContext,
     entity_type: &str,
 ) -> Result<(), String> {

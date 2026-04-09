@@ -831,7 +831,7 @@ type:
 
         // Entity fields should resolve to field definitions
         let task_fields = fields.fields_for_entity("task");
-        assert_eq!(task_fields.len(), 12); // title, tags, project, progress, assignees, depends_on, body, position_column, position_ordinal, attachments, virtual_tags, filter_tags
+        assert_eq!(task_fields.len(), 12); // title, tags, assignees, project, depends_on, progress, body, position_column, position_ordinal, attachments, virtual_tags, filter_tags
     }
 
     // =========================================================================
@@ -1157,7 +1157,7 @@ type:
         let entries: Vec<_> = std::fs::read_dir(&views_root)
             .unwrap()
             .filter_map(|e| e.ok())
-            .filter(|e| e.path().extension().map_or(false, |ext| ext == "yaml"))
+            .filter(|e| e.path().extension().is_some_and(|ext| ext == "yaml"))
             .collect();
         assert!(
             !entries.is_empty(),

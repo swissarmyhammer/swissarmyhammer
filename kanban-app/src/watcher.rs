@@ -214,6 +214,7 @@ pub fn new_entity_cache(kanban_root: &Path, store_roots: &[PathBuf]) -> EntityCa
 ///
 /// Call this from command execution paths so the watcher knows
 /// the content we just wrote and doesn't treat it as an external change.
+#[cfg(test)]
 pub fn update_cache(cache: &EntityCache, path: &Path) {
     let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     if let Some(cached) = cache_file(&canonical) {

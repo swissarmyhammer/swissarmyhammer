@@ -407,6 +407,7 @@ pub fn task_entity_to_json(entity: &Entity) -> Value {
         "tags": tags,
         "assignees": entity.get_string_list("assignees"),
         "depends_on": entity.get_string_list("depends_on"),
+        "project": entity.get_str("project").unwrap_or(""),
         "progress": progress,
     });
 

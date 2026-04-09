@@ -62,6 +62,41 @@ impl UpdateAttachment {
         self.size = Some(size);
         self
     }
+
+    /// Verify ownership, apply field updates, and return the updated JSON.
+    async fn apply(&self, ctx: &KanbanContext) -> Result<Value> {
+        let ectx = ctx.entity_context().await?;
+
+        let task = ectx.read("task", self.task_id.as_str()).await?;
+        if !task.get_string_list("attachments").contains(&self.id) {
+            return Err(KanbanError::NotFound {
+                resource: "attachment".to_string(),
+                id: self.id.to_string(),
+            });
+        }
+
+        let mut attachment = ectx
+            .read("attachment", &self.id)
+            .await
+            .map_err(KanbanError::from_entity_error)?;
+
+        if let Some(name) = &self.name {
+            attachment.set("attachment_name", json!(name));
+        }
+        if let Some(mime_type) = &self.mime_type {
+            attachment.set("attachment_mime_type", json!(mime_type));
+        }
+        if let Some(size) = self.size {
+            attachment.set("attachment_size", json!(size));
+        }
+
+        ectx.write(&attachment).await?;
+
+        Ok(json!({
+            "attachment": attachment_entity_to_json(&attachment),
+            "task_id": self.task_id.to_string()
+        }))
+    }
 }
 
 #[async_trait]
@@ -69,44 +104,7 @@ impl Execute<KanbanContext, KanbanError> for UpdateAttachment {
     async fn execute(&self, ctx: &KanbanContext) -> ExecutionResult<Value, KanbanError> {
         let start = std::time::Instant::now();
         let input = serde_json::to_value(self).unwrap();
-
-        let result: Result<Value> = async {
-            let ectx = ctx.entity_context().await?;
-
-            // Verify the task owns this attachment
-            let task = ectx.read("task", self.task_id.as_str()).await?;
-            if !task.get_string_list("attachments").contains(&self.id) {
-                return Err(KanbanError::NotFound {
-                    resource: "attachment".to_string(),
-                    id: self.id.to_string(),
-                });
-            }
-
-            // Read the attachment entity
-            let mut attachment = ectx
-                .read("attachment", &self.id)
-                .await
-                .map_err(KanbanError::from_entity_error)?;
-
-            // Update only provided fields
-            if let Some(name) = &self.name {
-                attachment.set("attachment_name", json!(name));
-            }
-            if let Some(mime_type) = &self.mime_type {
-                attachment.set("attachment_mime_type", json!(mime_type));
-            }
-            if let Some(size) = self.size {
-                attachment.set("attachment_size", json!(size));
-            }
-
-            ectx.write(&attachment).await?;
-
-            Ok(json!({
-                "attachment": attachment_entity_to_json(&attachment),
-                "task_id": self.task_id.to_string()
-            }))
-        }
-        .await;
+        let result = self.apply(ctx).await;
 
         let duration_ms = start.elapsed().as_millis() as u64;
 
@@ -246,10 +244,7 @@ mod tests {
         let attachments = task.get("attachments");
         let is_empty = attachments.is_none()
             || attachments.unwrap().is_null()
-            || attachments
-                .unwrap()
-                .as_array()
-                .map_or(true, |a| a.is_empty());
+            || attachments.unwrap().as_array().is_none_or(|a| a.is_empty());
         assert!(is_empty);
     }
 

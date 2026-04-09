@@ -67,8 +67,10 @@ mod tests {
 
     #[test]
     fn result_type_alias() {
-        let ok: Result<i32> = Ok(42);
-        assert_eq!(ok.unwrap(), 42);
+        fn make_ok() -> Result<i32> {
+            Ok(42)
+        }
+        assert_eq!(make_ok().unwrap(), 42);
 
         let err: Result<i32> = Err(PerspectiveError::not_found("test", "1"));
         assert!(err.is_err());

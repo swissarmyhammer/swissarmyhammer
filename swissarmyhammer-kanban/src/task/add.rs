@@ -2,7 +2,7 @@
 
 use crate::context::KanbanContext;
 use crate::error::{KanbanError, Result};
-use crate::task_helpers;
+use crate::task::shared::auto_create_body_tags;
 use crate::task_helpers::task_entity_to_json;
 use crate::types::{ActorId, Ordinal, TaskId};
 use serde::{Deserialize, Serialize};
@@ -37,7 +37,7 @@ pub struct AddTask {
     /// Task IDs this task depends on
     #[serde(default)]
     pub depends_on: Vec<TaskId>,
-    /// Project this task belongs to (reference to a project entity ID)
+    /// Project this task belongs to
     pub project: Option<String>,
 }
 
@@ -80,65 +80,47 @@ impl AddTask {
         self
     }
 
-    /// Set the project reference
+    /// Set the project
     pub fn with_project(mut self, project: impl Into<String>) -> Self {
         self.project = Some(project.into());
         self
     }
-}
 
-/// Resolve which column to place a new task in.
-///
-/// Uses the explicit column if provided, otherwise finds the first column
-/// (lowest order) on the board.
-async fn resolve_column(
-    explicit: &Option<String>,
-    ectx: &swissarmyhammer_entity::EntityContext,
-) -> Result<String> {
-    match explicit {
-        Some(col) => Ok(col.clone()),
-        None => {
-            let columns = ectx.list("column").await?;
-            let first = columns
-                .iter()
-                .min_by_key(|c| c.get("order").and_then(|v| v.as_u64()).unwrap_or(0))
-                .ok_or_else(|| KanbanError::parse("board has no columns — cannot add task"))?;
-            Ok(first.id.to_string())
+    /// Resolve the target column, falling back to the first board column.
+    async fn resolve_column(&self, ectx: &swissarmyhammer_entity::EntityContext) -> Result<String> {
+        match &self.column {
+            Some(col) => Ok(col.clone()),
+            None => {
+                let columns = ectx.list("column").await?;
+                let first = columns
+                    .iter()
+                    .min_by_key(|c| c.get("order").and_then(|v| v.as_u64()).unwrap_or(0))
+                    .ok_or_else(|| KanbanError::parse("board has no columns — cannot add task"))?;
+                Ok(first.id.to_string())
+            }
         }
     }
-}
 
-/// Compute the ordinal for appending a task at the end of a column.
-///
-/// Uses the explicit ordinal if provided, otherwise scans existing tasks
-/// in the target column and returns an ordinal after the last one.
-async fn compute_append_ordinal(
-    explicit: &Option<String>,
-    column: &str,
-    ectx: &swissarmyhammer_entity::EntityContext,
-) -> Result<String> {
-    match explicit {
-        Some(ord) => Ok(ord.clone()),
-        None => {
-            let tasks = ectx.list("task").await?;
-            let last_ordinal = tasks.iter().fold(None::<Ordinal>, |acc, t| {
-                if t.get_str("position_column").unwrap_or("") != column {
-                    return acc;
-                }
-                let ord = Ordinal::from_string(
-                    t.get_str("position_ordinal")
-                        .unwrap_or(Ordinal::DEFAULT_STR),
-                );
-                Some(match acc {
-                    None => ord,
-                    Some(ref prev) if ord > *prev => ord,
-                    Some(prev) => prev,
+    /// Resolve the ordinal, falling back to appending at the end of the column.
+    async fn resolve_ordinal(
+        &self,
+        ectx: &swissarmyhammer_entity::EntityContext,
+        column: &str,
+    ) -> Result<String> {
+        match &self.ordinal {
+            Some(ord) => Ok(ord.clone()),
+            None => {
+                let tasks = ectx.list("task").await?;
+                let last_ordinal = tasks
+                    .iter()
+                    .filter(|t| t.get_str("position_column").unwrap_or("") == column)
+                    .filter_map(|t| t.get_str("position_ordinal").map(Ordinal::from_string))
+                    .max();
+                Ok(match last_ordinal {
+                    Some(last) => Ordinal::after(&last).as_str().to_string(),
+                    None => Ordinal::first().as_str().to_string(),
                 })
-            });
-            Ok(match last_ordinal {
-                Some(last) => Ordinal::after(&last).as_str().to_string(),
-                None => Ordinal::first().as_str().to_string(),
-            })
+            }
         }
     }
 }
@@ -151,8 +133,8 @@ impl Execute<KanbanContext, KanbanError> for AddTask {
 
         let result: Result<Value> = async {
             let ectx = ctx.entity_context().await?;
-            let column = resolve_column(&self.column, &ectx).await?;
-            let ordinal = compute_append_ordinal(&self.ordinal, &column, &ectx).await?;
+            let column = self.resolve_column(&ectx).await?;
+            let ordinal = self.resolve_ordinal(&ectx, &column).await?;
 
             let task_id = TaskId::new();
             let mut entity = Entity::new("task", task_id.as_str());
@@ -167,13 +149,12 @@ impl Execute<KanbanContext, KanbanError> for AddTask {
             if !self.depends_on.is_empty() {
                 entity.set("depends_on", serde_json::to_value(&self.depends_on)?);
             }
-            if let Some(project) = &self.project {
+            if let Some(ref project) = self.project {
                 entity.set("project", json!(project));
             }
 
             ectx.write(&entity).await?;
-            task_helpers::auto_create_body_tags(&entity, &ectx).await?;
-
+            auto_create_body_tags(&ectx, &entity).await?;
             Ok(task_entity_to_json(&entity))
         }
         .await;
@@ -314,6 +295,7 @@ mod tests {
             "error message should mention missing columns, got: {err}"
         );
     }
+
 
     #[tokio::test]
     async fn test_add_multiple_tasks_ordering() {

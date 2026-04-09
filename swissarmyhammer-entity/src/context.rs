@@ -2538,7 +2538,7 @@ mod tests {
                     let allowed = fctx.get::<std::collections::HashSet<String>>().unwrap();
                     entity
                         .get_str("tag_name")
-                        .map_or(false, |name| allowed.contains(name))
+                        .is_some_and(|name| allowed.contains(name))
                 },
             )
             .await

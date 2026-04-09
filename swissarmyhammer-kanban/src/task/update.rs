@@ -2,7 +2,7 @@
 
 use crate::context::KanbanContext;
 use crate::error::{KanbanError, Result};
-use crate::task_helpers;
+use crate::task::shared::auto_create_body_tags;
 use crate::task_helpers::task_entity_to_json;
 use crate::types::{ActorId, TaskId};
 use serde::{Deserialize, Serialize};
@@ -31,8 +31,8 @@ pub struct UpdateTask {
     pub depends_on: Option<Vec<TaskId>>,
     /// Replace all attachment IDs (array of entity ID strings)
     pub attachments: Option<Value>,
-    /// Project this task belongs to (reference to a project entity ID, null to clear)
-    pub project: Option<Value>,
+    /// Set the project this task belongs to
+    pub project: Option<String>,
 }
 
 impl UpdateTask {
@@ -79,34 +79,34 @@ impl UpdateTask {
         self
     }
 
-    /// Set the project reference (use Value::Null to clear)
-    pub fn with_project(mut self, project: Value) -> Self {
-        self.project = Some(project);
+    /// Set the project this task belongs to
+    pub fn with_project(mut self, project: impl Into<String>) -> Self {
+        self.project = Some(project.into());
         self
     }
-}
 
-/// Apply the optional field updates from an UpdateTask to an entity.
-fn apply_task_updates(entity: &mut Entity, update: &UpdateTask) -> Result<()> {
-    if let Some(title) = &update.title {
-        entity.set("title", serde_json::json!(title));
+    /// Apply all set fields to the entity.
+    fn apply_to(&self, entity: &mut Entity) -> std::result::Result<(), serde_json::Error> {
+        if let Some(title) = &self.title {
+            entity.set("title", serde_json::json!(title));
+        }
+        if let Some(desc) = &self.description {
+            entity.set("body", serde_json::json!(desc));
+        }
+        if let Some(assignees) = &self.assignees {
+            entity.set("assignees", serde_json::to_value(assignees)?);
+        }
+        if let Some(deps) = &self.depends_on {
+            entity.set("depends_on", serde_json::to_value(deps)?);
+        }
+        if let Some(attachments) = &self.attachments {
+            entity.set("attachments", attachments.clone());
+        }
+        if let Some(project) = &self.project {
+            entity.set("project", serde_json::json!(project));
+        }
+        Ok(())
     }
-    if let Some(desc) = &update.description {
-        entity.set("body", serde_json::json!(desc));
-    }
-    if let Some(assignees) = &update.assignees {
-        entity.set("assignees", serde_json::to_value(assignees)?);
-    }
-    if let Some(deps) = &update.depends_on {
-        entity.set("depends_on", serde_json::to_value(deps)?);
-    }
-    if let Some(attachments) = &update.attachments {
-        entity.set("attachments", attachments.clone());
-    }
-    if let Some(project) = &update.project {
-        entity.set("project", project.clone());
-    }
-    Ok(())
 }
 
 #[async_trait]
@@ -122,10 +122,9 @@ impl Execute<KanbanContext, KanbanError> for UpdateTask {
                 .await
                 .map_err(KanbanError::from_entity_error)?;
 
-            apply_task_updates(&mut entity, self)?;
+            self.apply_to(&mut entity)?;
             ectx.write(&entity).await?;
-            task_helpers::auto_create_body_tags(&entity, &ectx).await?;
-
+            auto_create_body_tags(&ectx, &entity).await?;
             Ok(task_entity_to_json(&entity))
         }
         .await;
@@ -284,6 +283,74 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_update_task_set_project() {
+        let (_temp, ctx) = setup().await;
+
+        use crate::project::AddProject;
+        AddProject::new("backend", "Backend")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        let add_result = AddTask::new("Task")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let task_id = add_result["id"].as_str().unwrap();
+
+        // Task starts with no project (null, not empty string)
+        assert!(add_result["project"].is_null());
+
+        // Set the project
+        let result = UpdateTask::new(task_id)
+            .with_project("backend")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        assert_eq!(result["project"], "backend");
+    }
+
+    #[tokio::test]
+    async fn test_update_task_change_project() {
+        let (_temp, ctx) = setup().await;
+
+        use crate::project::AddProject;
+        AddProject::new("backend", "Backend")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        AddProject::new("frontend", "Frontend")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        let add_result = AddTask::new("Task")
+            .with_project("backend")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let task_id = add_result["id"].as_str().unwrap();
+        assert_eq!(add_result["project"], "backend");
+
+        // Change to a different project
+        let result = UpdateTask::new(task_id)
+            .with_project("frontend")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        assert_eq!(result["project"], "frontend");
+    }
+
+    #[tokio::test]
     async fn test_update_task_multiple_dependencies() {
         let (_temp, ctx) = setup().await;
 
@@ -325,78 +392,4 @@ mod tests {
         assert!(dep_strs.contains(&id_b), "should contain task B");
     }
 
-    #[tokio::test]
-    async fn test_update_task_set_project() {
-        let (_temp, ctx) = setup().await;
-
-        use crate::project::AddProject;
-
-        // Create a project
-        let project = AddProject::new("my-project", "My Project")
-            .execute(&ctx)
-            .await
-            .into_result()
-            .unwrap();
-        let project_id = project["id"].as_str().unwrap();
-
-        // Create a task (no project)
-        let task = AddTask::new("Task")
-            .execute(&ctx)
-            .await
-            .into_result()
-            .unwrap();
-        let task_id = task["id"].as_str().unwrap();
-        assert!(task["project"].is_null(), "initially null");
-
-        // Set the project
-        let result = UpdateTask::new(task_id)
-            .with_project(serde_json::json!(project_id))
-            .execute(&ctx)
-            .await
-            .into_result()
-            .unwrap();
-
-        assert_eq!(
-            result["project"].as_str().unwrap(),
-            project_id,
-            "project should be set after update"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_update_task_clear_project() {
-        let (_temp, ctx) = setup().await;
-
-        use crate::project::AddProject;
-
-        // Create a project and a task with that project
-        let project = AddProject::new("my-project", "My Project")
-            .execute(&ctx)
-            .await
-            .into_result()
-            .unwrap();
-        let project_id = project["id"].as_str().unwrap();
-
-        let task = AddTask::new("Task")
-            .with_project(project_id)
-            .execute(&ctx)
-            .await
-            .into_result()
-            .unwrap();
-        let task_id = task["id"].as_str().unwrap();
-        assert_eq!(task["project"].as_str().unwrap(), project_id);
-
-        // Clear the project by setting to null
-        let result = UpdateTask::new(task_id)
-            .with_project(serde_json::Value::Null)
-            .execute(&ctx)
-            .await
-            .into_result()
-            .unwrap();
-
-        assert!(
-            result["project"].is_null(),
-            "project should be null after clearing"
-        );
-    }
 }

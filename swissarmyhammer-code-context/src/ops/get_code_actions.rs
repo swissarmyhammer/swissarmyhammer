@@ -329,7 +329,6 @@ mod tests {
     use super::*;
     use crate::layered_context::LspRange;
     use crate::test_fixtures::test_db;
-    use rusqlite::Connection;
 
     // --- No live LSP returns empty, not error ---
 
@@ -476,7 +475,7 @@ mod tests {
         let mut actions = parse_code_actions(&response);
 
         // Filter to quickfix only
-        let kinds = vec!["quickfix".to_string()];
+        let kinds = ["quickfix".to_string()];
         actions.retain(|a| {
             a.kind
                 .as_ref()
@@ -509,7 +508,7 @@ mod tests {
         let mut actions = parse_code_actions(&response);
 
         // Filter to all refactor kinds (prefix match)
-        let kinds = vec!["refactor".to_string()];
+        let kinds = ["refactor".to_string()];
         actions.retain(|a| {
             a.kind
                 .as_ref()

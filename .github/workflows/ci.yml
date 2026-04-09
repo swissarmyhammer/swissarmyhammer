@@ -5,7 +5,7 @@ on:
     branches:
       - "*"
     tags-ignore:
-      - '**[0-9]+.[0-9]+.[0-9]+*'
+      - "**[0-9]+.[0-9]+.[0-9]+*"
   workflow_dispatch:
 
 env:
@@ -24,8 +24,9 @@ jobs:
       - name: Install rust-analyzer
         run: rustup component add rust-analyzer
       - uses: Swatinem/rust-cache@v2
-      - name: Install dependencies
-        run: cargo install --locked cargo-nextest
+        with:
+          shared-key: "swissarmyhammer-ci"
+      - uses: taiki-e/install-action@nextest
       - name: Ensure Chromium is available
         run: |
           if ! command -v chromium &>/dev/null && ! [ -d "/Applications/Chromium.app" ] && ! [ -d "/Applications/Google Chrome.app" ]; then
@@ -46,6 +47,8 @@ jobs:
           submodules: recursive
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "swissarmyhammer-ci"
       - name: Build kanban CLI (needed by browser integration tests)
         run: cargo build -p kanban-cli
       - uses: actions/setup-node@v4
@@ -90,8 +93,10 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "swissarmyhammer-ci"
       - name: Linting
-        run: cargo clippy -- -D warnings
+        run: cargo clippy --all-targets --all-features -- -D warnings
 
   examples:
     name: Run all examples
@@ -102,6 +107,8 @@ jobs:
           submodules: recursive
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "swissarmyhammer-ci"
       - name: Build examples
         run: |
           cargo metadata --format-version 1 \
