@@ -237,6 +237,17 @@ export interface BoardSummary {
 }
 
 // ---------------------------------------------------------------------------
+// Virtual tag metadata — served by the backend VirtualTagRegistry
+// ---------------------------------------------------------------------------
+
+/** Metadata for a virtual tag (READY, BLOCKED, BLOCKING) from the backend. */
+export interface VirtualTagMeta {
+  slug: string;
+  color: string;
+  description: string;
+}
+
+// ---------------------------------------------------------------------------
 // Response shapes
 // ---------------------------------------------------------------------------
 
@@ -245,6 +256,7 @@ export interface BoardDataResponse {
   board: EntityBag;
   columns: EntityBag[];
   tags: EntityBag[];
+  virtual_tag_meta?: VirtualTagMeta[];
   summary: BoardSummary;
 }
 
@@ -263,6 +275,7 @@ export interface BoardData {
   board: Entity;
   columns: Entity[];
   tags: Entity[];
+  virtualTagMeta: VirtualTagMeta[];
   summary: BoardSummary;
 }
 
@@ -272,6 +285,7 @@ export function parseBoardData(data: BoardDataResponse): BoardData {
     board: entityFromBag(data.board),
     columns: data.columns.map(entityFromBag),
     tags: data.tags.map(entityFromBag),
+    virtualTagMeta: data.virtual_tag_meta ?? [],
     summary: data.summary,
   };
 }

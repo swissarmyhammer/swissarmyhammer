@@ -501,6 +501,58 @@ pub async fn search_entities(
     Ok(json!(output))
 }
 
+/// Count tasks and ready tasks per column.
+fn count_tasks_by_column(
+    tasks: &[Entity],
+    terminal_id: &str,
+) -> (HashMap<String, usize>, HashMap<String, usize>) {
+    let mut counts: HashMap<String, usize> = HashMap::new();
+    let mut ready_counts: HashMap<String, usize> = HashMap::new();
+    for task in tasks {
+        let col = task.get_str("position_column").unwrap_or("todo").to_string();
+        *counts.entry(col.clone()).or_insert(0) += 1;
+        if swissarmyhammer_kanban::task_helpers::task_is_ready(task, tasks, terminal_id) {
+            *ready_counts.entry(col).or_insert(0) += 1;
+        }
+    }
+    (counts, ready_counts)
+}
+
+/// Serialize columns with injected task_count and ready_count fields.
+fn serialize_columns_with_counts(
+    columns: &[Entity],
+    counts: &HashMap<String, usize>,
+    ready_counts: &HashMap<String, usize>,
+) -> Vec<Value> {
+    columns.iter().map(|col| {
+        let mut e = col.clone();
+        e.set("task_count", json!(counts.get(col.id.as_str()).copied().unwrap_or(0)));
+        e.set("ready_count", json!(ready_counts.get(col.id.as_str()).copied().unwrap_or(0)));
+        e.to_json()
+    }).collect()
+}
+
+/// Build the summary object for get_board_data.
+fn build_board_summary(
+    board: &Entity,
+    total_tasks: usize,
+    total_actors: usize,
+    ready_counts: &HashMap<String, usize>,
+) -> Value {
+    let ready_tasks: usize = ready_counts.values().sum();
+    let pc = board.get("percent_complete").cloned().unwrap_or(json!(null));
+    let done_tasks = pc.get("done").and_then(|v| v.as_u64()).unwrap_or(0);
+    let percent_complete = pc.get("percent").and_then(|v| v.as_u64()).unwrap_or(0);
+    json!({
+        "total_tasks": total_tasks,
+        "total_actors": total_actors,
+        "ready_tasks": ready_tasks,
+        "blocked_tasks": total_tasks - ready_tasks,
+        "done_tasks": done_tasks,
+        "percent_complete": percent_complete,
+    })
+}
+
 /// Get the board data with all entities as raw entity bags.
 ///
 /// Columns and tags are returned as `Entity::to_json()` with
@@ -512,101 +564,37 @@ pub async fn get_board_data(
     board_path: Option<String>,
 ) -> Result<Value, String> {
     let handle = resolve_handle(&state, board_path).await?;
-    let ectx = handle
-        .ctx
-        .entity_context()
-        .await
+    let ectx = handle.ctx.entity_context().await
         .map_err(|e| format!("get_board_data: {}", e))?;
 
-    // Read board entity
-    let board = ectx
-        .read("board", "board")
-        .await
+    let board = ectx.read("board", "board").await
         .map_err(|e| format!("get_board_data: {}", e))?;
-
-    // Read and sort columns by order
-    let mut columns = ectx
-        .list("column")
-        .await
+    let mut columns = ectx.list("column").await
         .map_err(|e| format!("get_board_data: {}", e))?;
     columns.sort_by_key(|c| c.get("order").and_then(|v| v.as_u64()).unwrap_or(0) as usize);
-
-    // Read tags
-    let tags = ectx
-        .list("tag")
-        .await
+    let tags = ectx.list("tag").await
         .map_err(|e| format!("get_board_data: {}", e))?;
-
-    // Read all tasks for counting
-    let all_tasks = ectx
-        .list("task")
-        .await
+    let all_tasks = ectx.list("task").await
         .map_err(|e| format!("get_board_data: {}", e))?;
+    let total_actors = ectx.list("actor").await
+        .map_err(|e| format!("get_board_data: {}", e))?.len();
+
     let terminal_id = columns.last().map(|c| c.id.as_str()).unwrap_or("done");
-
-    // Count tasks per column, and ready tasks per column
-    let mut column_counts: HashMap<String, usize> = HashMap::new();
-    let mut column_ready_counts: HashMap<String, usize> = HashMap::new();
-    for task in &all_tasks {
-        let col = task
-            .get_str("position_column")
-            .unwrap_or("todo")
-            .to_string();
-        *column_counts.entry(col.clone()).or_insert(0) += 1;
-        if swissarmyhammer_kanban::task_helpers::task_is_ready(task, &all_tasks, terminal_id) {
-            *column_ready_counts.entry(col).or_insert(0) += 1;
-        }
-    }
-
-    // Serialize columns with injected task_count and ready_count
-    let columns_json: Vec<Value> = columns
-        .iter()
-        .map(|col| {
-            let mut e = col.clone();
-            let count = column_counts.get(col.id.as_str()).copied().unwrap_or(0);
-            let ready = column_ready_counts
-                .get(col.id.as_str())
-                .copied()
-                .unwrap_or(0);
-            e.set("task_count", json!(count));
-            e.set("ready_count", json!(ready));
-            e.to_json()
-        })
-        .collect();
-
-    // Serialize tags (no task_count — removed to avoid O(tasks × tags) scanning)
+    let (counts, ready_counts) = count_tasks_by_column(&all_tasks, terminal_id);
+    let columns_json = serialize_columns_with_counts(&columns, &counts, &ready_counts);
     let tags_json: Vec<Value> = tags.iter().map(|tag| tag.to_json()).collect();
-
-    // Compute summary counts
-    let total_tasks = all_tasks.len();
-    // Sum pre-computed column ready counts instead of re-scanning all tasks
-    let ready_tasks: usize = column_ready_counts.values().sum();
-    let total_actors = ectx
-        .list("actor")
-        .await
-        .map_err(|e| format!("get_board_data: {}", e))?
-        .len();
-
-    // Extract percent_complete from the board entity's computed field
-    let pc = board
-        .get("percent_complete")
-        .cloned()
-        .unwrap_or(json!(null));
-    let done_tasks = pc.get("done").and_then(|v| v.as_u64()).unwrap_or(0);
-    let percent_complete = pc.get("percent").and_then(|v| v.as_u64()).unwrap_or(0);
+    let summary = build_board_summary(&board, all_tasks.len(), total_actors, &ready_counts);
+    let virtual_tag_meta: Vec<Value> = default_virtual_tag_registry()
+        .metadata().into_iter()
+        .map(|m| json!({ "slug": m.slug, "color": m.color, "description": m.description }))
+        .collect();
 
     Ok(json!({
         "board": board.to_json(),
         "columns": columns_json,
         "tags": tags_json,
-        "summary": {
-            "total_tasks": total_tasks,
-            "total_actors": total_actors,
-            "ready_tasks": ready_tasks,
-            "blocked_tasks": total_tasks - ready_tasks,
-            "done_tasks": done_tasks,
-            "percent_complete": percent_complete,
-        }
+        "virtual_tag_meta": virtual_tag_meta,
+        "summary": summary,
     }))
 }
 

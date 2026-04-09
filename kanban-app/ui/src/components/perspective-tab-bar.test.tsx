@@ -75,6 +75,11 @@ vi.mock("@/lib/entity-store-context", () => ({
   useEntityStore: () => ({ getEntities: () => [] }),
 }));
 
+// Mock board data context — provides virtual tag metadata from the backend.
+vi.mock("@/components/window-container", () => ({
+  useBoardData: () => ({ virtualTagMeta: [] }),
+}));
+
 // Mock useSchema — returns empty schema by default.
 vi.mock("@/lib/schema-context", () => ({
   useSchema: () => ({

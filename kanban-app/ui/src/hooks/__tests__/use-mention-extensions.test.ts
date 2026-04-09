@@ -64,6 +64,17 @@ vi.mock("@/lib/entity-store-context", () => ({
   useEntityStore: () => ({ getEntities: mockGetEntities }),
 }));
 
+// Mock board data context — provides virtual tag metadata from the backend.
+vi.mock("@/components/window-container", () => ({
+  useBoardData: () => ({
+    virtualTagMeta: [
+      { slug: "READY", color: "0e8a16", description: "No unmet deps" },
+      { slug: "BLOCKED", color: "e36209", description: "Has unmet deps" },
+      { slug: "BLOCKING", color: "d73a4a", description: "Others depend on this" },
+    ],
+  }),
+}));
+
 import { renderHook } from "@testing-library/react";
 import { useMentionExtensions } from "../use-mention-extensions";
 

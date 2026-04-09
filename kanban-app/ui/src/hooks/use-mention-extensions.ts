@@ -11,6 +11,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type { Extension } from "@codemirror/state";
 import { useSchema } from "@/lib/schema-context";
 import { useEntityStore } from "@/lib/entity-store-context";
+import { useBoardData } from "@/components/window-container";
 import { createMentionDecorations } from "@/lib/cm-mention-decorations";
 import {
   createMentionCompletionSource,
@@ -23,17 +24,11 @@ import {
   type MentionMeta,
 } from "@/lib/cm-mention-tooltip";
 import { slugify } from "@/lib/slugify";
-import type { Entity } from "@/types/kanban";
+import type { Entity, VirtualTagMeta } from "@/types/kanban";
 import { getStr } from "@/types/kanban";
 
 /** Debounce delay for mention search queries against the Tauri backend. */
 const MENTION_SEARCH_DEBOUNCE_MS = 150;
-
-/** Virtual tag names defined by the backend VirtualTagRegistry. */
-const VIRTUAL_TAG_SLUGS = ["READY", "BLOCKED", "BLOCKING"] as const;
-
-/** Color used for virtual tags in autocomplete (distinct from real tags). */
-const VIRTUAL_TAG_COLOR = "7c3aed";
 
 /** Options for controlling autocomplete behavior in different editor contexts. */
 export interface MentionExtensionOptions {
@@ -139,46 +134,37 @@ function buildAsyncSearch(
 /**
  * Build a search function that includes virtual tag entries alongside real results.
  *
- * Wraps an existing async search, prepending virtual tag matches (READY,
- * BLOCKED, BLOCKING) that pass the query filter. Virtual tags are styled
- * distinctly via a dedicated color.
+ * Wraps an existing async search, prepending virtual tag matches that pass the
+ * query filter. Colors come from the backend VirtualTagRegistry metadata.
  */
 function buildVirtualTagSearch(
   baseSearch: (query: string) => Promise<MentionSearchResult[]>,
+  vtMeta: VirtualTagMeta[],
 ): (query: string) => Promise<MentionSearchResult[]> {
   return async (query: string) => {
-    const virtualResults: MentionSearchResult[] = VIRTUAL_TAG_SLUGS.filter(
-      (slug) => !query || slug.toLowerCase().includes(query.toLowerCase()),
-    ).map((slug) => ({
-      slug,
-      displayName: `${slug} (virtual)`,
-      color: VIRTUAL_TAG_COLOR,
-    }));
+    const virtualResults: MentionSearchResult[] = vtMeta
+      .filter((m) => !query || m.slug.toLowerCase().includes(query.toLowerCase()))
+      .map((m) => ({
+        slug: m.slug,
+        displayName: `${m.slug} (virtual)`,
+        color: m.color,
+      }));
     const realResults = await baseSearch(query);
     return [...virtualResults, ...realResults];
   };
 }
 
-/** Merge virtual tag slugs into a color map so they receive pill decorations. */
-function mergeVirtualTags(base: Map<string, string>): Map<string, string> {
+/** Merge virtual tag entries into a color map so they receive pill decorations. */
+function mergeVirtualTagColors(base: Map<string, string>, vtMeta: VirtualTagMeta[]): Map<string, string> {
   const merged = new Map(base);
-  for (const slug of VIRTUAL_TAG_SLUGS) {
-    merged.set(slug, VIRTUAL_TAG_COLOR);
-  }
+  for (const m of vtMeta) merged.set(m.slug, m.color);
   return merged;
 }
 
-/** Merge virtual tag slugs into a meta map so they receive tooltip support. */
-function mergeVirtualTagMeta(
-  base: Map<string, MentionMeta>,
-): Map<string, MentionMeta> {
+/** Merge virtual tag entries into a meta map so they receive tooltip support. */
+function mergeVirtualTagTooltips(base: Map<string, MentionMeta>, vtMeta: VirtualTagMeta[]): Map<string, MentionMeta> {
   const merged = new Map(base);
-  for (const slug of VIRTUAL_TAG_SLUGS) {
-    merged.set(slug, {
-      color: VIRTUAL_TAG_COLOR,
-      description: `${slug} (virtual tag)`,
-    });
-  }
+  for (const m of vtMeta) merged.set(m.slug, { color: m.color, description: m.description });
   return merged;
 }
 
@@ -195,13 +181,14 @@ interface MentionDatum {
  * Pure function that assembles the CM6 extension array from mention data.
  *
  * Builds decoration, autocomplete, and tooltip extensions for each mentionable
- * type. Merges virtual tags and filter sigil sources when the corresponding
- * options are enabled.
+ * type. Merges virtual tags (using backend metadata) and filter sigil sources
+ * when the corresponding options are enabled.
  */
 function buildMentionExtensions(
   mentionData: MentionDatum[],
   includeVirtualTags: boolean,
   includeFilterSigils: boolean,
+  vtMeta: VirtualTagMeta[],
 ): Extension[] {
   const exts: Extension[] = [];
   const completionSources: Array<
@@ -209,15 +196,15 @@ function buildMentionExtensions(
   > = [];
 
   for (const md of mentionData) {
-    const addVirtual = includeVirtualTags && md.prefix === "#";
-    const colorMap = addVirtual ? mergeVirtualTags(md.colorMap) : md.colorMap;
-    const metaMap = addVirtual ? mergeVirtualTagMeta(md.metaMap) : md.metaMap;
+    const addVirtual = includeVirtualTags && md.prefix === "#" && vtMeta.length > 0;
+    const colorMap = addVirtual ? mergeVirtualTagColors(md.colorMap, vtMeta) : md.colorMap;
+    const metaMap = addVirtual ? mergeVirtualTagTooltips(md.metaMap, vtMeta) : md.metaMap;
 
     if (colorMap.size === 0) continue;
     exts.push(getDecoInfra(md.prefix, md.entityType).extension(colorMap));
 
     const baseSearch = buildAsyncSearch(md.entityType);
-    const search = addVirtual ? buildVirtualTagSearch(baseSearch) : baseSearch;
+    const search = addVirtual ? buildVirtualTagSearch(baseSearch, vtMeta) : baseSearch;
     completionSources.push(createMentionCompletionSource(md.prefix, search));
 
     exts.push(getTooltipInfra(md.prefix, md.entityType).extension(metaMap));
@@ -252,8 +239,10 @@ export function useMentionExtensions(
 ): Extension[] {
   const { mentionableTypes } = useSchema();
   const { getEntities } = useEntityStore();
+  const boardData = useBoardData();
   const includeVirtualTags = options?.includeVirtualTags ?? false;
   const includeFilterSigils = options?.includeFilterSigils ?? false;
+  const vtMeta = boardData?.virtualTagMeta ?? [];
 
   const mentionData = useMemo(() => {
     return mentionableTypes.map((mt) => {
@@ -272,7 +261,8 @@ export function useMentionExtensions(
         mentionData,
         includeVirtualTags,
         includeFilterSigils,
+        vtMeta,
       ),
-    [mentionData, includeVirtualTags, includeFilterSigils],
+    [mentionData, includeVirtualTags, includeFilterSigils, vtMeta],
   );
 }
