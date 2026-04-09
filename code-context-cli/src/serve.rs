@@ -100,16 +100,21 @@ impl ServerHandler for CodeContextServer {
 ///
 /// # Errors
 ///
-/// Returns an error string if the server fails to start or encounters a fatal error.
-pub async fn run_serve() -> Result<(), String> {
+/// Returns an error if the server fails to start or encounters a fatal error.
+/// The error chain preserves the original cause for debugging.
+pub async fn run_serve() -> anyhow::Result<()> {
+    use anyhow::Context;
     use rmcp::serve_server;
     use rmcp::transport::io::stdio;
 
     let server = CodeContextServer::new();
     let running = serve_server(server, stdio())
         .await
-        .map_err(|e| e.to_string())?;
-    running.waiting().await.map_err(|e| e.to_string())?;
+        .context("starting MCP stdio server")?;
+    running
+        .waiting()
+        .await
+        .context("MCP server terminated unexpectedly")?;
     Ok(())
 }
 

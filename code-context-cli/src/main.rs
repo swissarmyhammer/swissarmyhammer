@@ -15,6 +15,7 @@
 use clap::Parser;
 use std::sync::{Arc, Mutex};
 use swissarmyhammer_common::lifecycle::{InitRegistry, InitScope};
+use swissarmyhammer_common::logging::FileWriterGuard;
 use swissarmyhammer_common::reporter::CliReporter;
 use swissarmyhammer_directory::{CodeContextConfig, DirectoryConfig};
 use tracing_subscriber::layer::SubscriberExt;
@@ -31,64 +32,23 @@ mod skill;
 
 use cli::{Cli, Commands, InstallTarget};
 
-/// Writer that flushes and syncs on every write for reliable log output.
+/// Build an `EnvFilter` based on whether debug mode is enabled.
+fn make_filter(debug: bool) -> EnvFilter {
+    if debug {
+        EnvFilter::new(
+            "code_context_cli=debug,swissarmyhammer_tools=debug,swissarmyhammer_code_context=debug",
+        )
+    } else {
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("rmcp=warn,debug"))
+    }
+}
+
+/// Initialize tracing with file-based logging to `.code-context/mcp.log`.
 ///
-/// Wraps a shared file handle behind `Arc<Mutex<_>>` so that the tracing
-/// subscriber can clone writers across threads while guaranteeing each
-/// write is immediately flushed and synced to disk.
-struct FileWriterGuard {
-    file: Arc<Mutex<std::fs::File>>,
-}
-
-impl FileWriterGuard {
-    /// Create a new guard wrapping the given shared file handle.
-    fn new(file: Arc<Mutex<std::fs::File>>) -> Self {
-        Self { file }
-    }
-}
-
-impl std::io::Write for FileWriterGuard {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        let mut file = self.file.lock().expect("log file mutex poisoned");
-        let result = file.write(buf)?;
-        file.flush()?;
-        file.sync_all()?;
-        Ok(result)
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        let mut file = self.file.lock().expect("log file mutex poisoned");
-        file.flush()?;
-        file.sync_all()
-    }
-}
-
-#[tokio::main]
-async fn main() {
-    // Show banner for interactive help invocations.
-    {
-        let args: Vec<String> = std::env::args().collect();
-        if banner::should_show_banner(&args) {
-            banner::print_banner();
-        }
-    }
-
-    let cli = Cli::parse();
-
-    // Configure tracing: file-based logging to .code-context/mcp.log,
-    // matching the sah and shelltool approach of flush-on-every-write.
-    let make_filter = || -> EnvFilter {
-        if cli.debug {
-            EnvFilter::new(
-                "code_context_cli=debug,swissarmyhammer_tools=debug,swissarmyhammer_code_context=debug",
-            )
-        } else {
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("rmcp=warn,debug"))
-        }
-    };
-
+/// Falls back to stderr if the log file cannot be created.
+fn init_tracing(debug: bool) {
     let log_dir = std::path::PathBuf::from(CodeContextConfig::DIR_NAME);
-    let log_configured = if std::fs::create_dir_all(&log_dir).is_ok() {
+    if std::fs::create_dir_all(&log_dir).is_ok() {
         let log_file_path = log_dir.join("mcp.log");
         if let Ok(file) = std::fs::File::create(&log_file_path) {
             let shared_file = Arc::new(Mutex::new(file));
@@ -99,25 +59,29 @@ async fn main() {
                     let file = shared_file.clone();
                     Box::new(FileWriterGuard::new(file)) as Box<dyn std::io::Write>
                 })
-                .with_filter(make_filter());
+                .with_filter(make_filter(debug));
             tracing_subscriber::registry().with(file_layer).init();
-            true
-        } else {
-            false
+            return;
         }
-    } else {
-        false
-    };
-
-    // Fallback to stderr if file logging couldn't be set up
-    if !log_configured {
-        let stderr_layer = tracing_subscriber::fmt::layer()
-            .with_target(false)
-            .with_ansi(false)
-            .with_writer(std::io::stderr)
-            .with_filter(make_filter());
-        tracing_subscriber::registry().with(stderr_layer).init();
     }
+    // Fallback to stderr if file logging couldn't be set up.
+    let stderr_layer = tracing_subscriber::fmt::layer()
+        .with_target(false)
+        .with_ansi(false)
+        .with_writer(std::io::stderr)
+        .with_filter(make_filter(debug));
+    tracing_subscriber::registry().with(stderr_layer).init();
+}
+
+#[tokio::main]
+async fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    if banner::should_show_banner(&args) {
+        banner::print_banner();
+    }
+
+    let cli = Cli::parse();
+    init_tracing(cli.debug);
 
     let exit_code = dispatch_command(cli).await;
     std::process::exit(exit_code);
@@ -133,7 +97,7 @@ async fn dispatch_command(cli: Cli) -> i32 {
         Commands::Serve => match serve::run_serve().await {
             Ok(()) => 0,
             Err(e) => {
-                eprintln!("Error: {e}");
+                eprintln!("Error: {e:#}");
                 1
             }
         },

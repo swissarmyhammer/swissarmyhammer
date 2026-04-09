@@ -20,7 +20,10 @@ use crate::cli::{
 };
 
 /// Convenience: insert an optional value into args if present.
-fn insert_opt<V: Into<Value> + Clone>(args: &mut Map<String, Value>, key: &str, val: &Option<V>) {
+fn insert_opt<V>(args: &mut Map<String, Value>, key: &str, val: &Option<V>)
+where
+    V: Clone + Into<Value>,
+{
     if let Some(v) = val {
         args.insert(key.into(), v.clone().into());
     }
@@ -33,8 +36,53 @@ fn insert_position(args: &mut Map<String, Value>, file_path: &str, line: &u64, c
     args.insert("character".into(), json!(character));
 }
 
-/// Build args for position-based LSP get operations (definition, hover, references, etc.).
-fn build_get_lsp_args(cmd: &GetCommands) -> Map<String, Value> {
+/// Build args for analysis/index get operations (symbol, callgraph, blastradius, diagnostics).
+fn build_get_analysis_args(cmd: &GetCommands) -> Map<String, Value> {
+    let mut args = Map::new();
+    match cmd {
+        GetCommands::Symbol { query, max_results } => {
+            args.insert("op".into(), json!("get symbol"));
+            args.insert("query".into(), json!(query));
+            insert_opt(&mut args, "max_results", max_results);
+        }
+        GetCommands::Callgraph {
+            symbol,
+            direction,
+            max_depth,
+        } => {
+            args.insert("op".into(), json!("get callgraph"));
+            args.insert("symbol".into(), json!(symbol));
+            insert_opt(&mut args, "direction", direction);
+            insert_opt(&mut args, "max_depth", max_depth);
+        }
+        GetCommands::Blastradius {
+            file_path,
+            symbol,
+            max_hops,
+        } => {
+            args.insert("op".into(), json!("get blastradius"));
+            args.insert("file_path".into(), json!(file_path));
+            insert_opt(&mut args, "symbol", symbol);
+            insert_opt(&mut args, "max_hops", max_hops);
+        }
+        GetCommands::Status => {
+            args.insert("op".into(), json!("get status"));
+        }
+        GetCommands::Diagnostics {
+            file_path,
+            severity_filter,
+        } => {
+            args.insert("op".into(), json!("get diagnostics"));
+            args.insert("file_path".into(), json!(file_path));
+            insert_opt(&mut args, "severity_filter", severity_filter);
+        }
+        _ => unreachable!("non-analysis get command routed to build_get_analysis_args"),
+    }
+    args
+}
+
+/// Build args for simple position-based LSP ops (definition, type_definition, hover).
+fn build_get_position_args(cmd: &GetCommands) -> Map<String, Value> {
     let mut args = Map::new();
     match cmd {
         GetCommands::Definition {
@@ -61,6 +109,15 @@ fn build_get_lsp_args(cmd: &GetCommands) -> Map<String, Value> {
             args.insert("op".into(), json!("get hover"));
             insert_position(&mut args, file_path, line, character);
         }
+        _ => unreachable!("non-position get command routed to build_get_position_args"),
+    }
+    args
+}
+
+/// Build args for position-based LSP ops with extra optional parameters.
+fn build_get_position_extended_args(cmd: &GetCommands) -> Map<String, Value> {
+    let mut args = Map::new();
+    match cmd {
         GetCommands::References {
             file_path,
             line,
@@ -103,6 +160,15 @@ fn build_get_lsp_args(cmd: &GetCommands) -> Map<String, Value> {
             insert_position(&mut args, file_path, line, character);
             args.insert("new_name".into(), json!(new_name));
         }
+        _ => unreachable!("non-position-extended get command"),
+    }
+    args
+}
+
+/// Build args for the code_actions range-based LSP operation.
+fn build_get_code_actions_args(cmd: &GetCommands) -> Map<String, Value> {
+    let mut args = Map::new();
+    match cmd {
         GetCommands::CodeActions {
             file_path,
             start_line,
@@ -119,57 +185,12 @@ fn build_get_lsp_args(cmd: &GetCommands) -> Map<String, Value> {
             args.insert("end_character".into(), json!(end_character));
             insert_opt(&mut args, "filter_kind", filter_kind);
         }
-        _ => unreachable!("non-LSP get command passed to build_get_lsp_args"),
+        _ => unreachable!("non-code-actions command"),
     }
     args
 }
 
-/// Build args for analysis and index get operations (symbol, callgraph, blastradius, etc.).
-fn build_get_analysis_args(cmd: &GetCommands) -> Map<String, Value> {
-    let mut args = Map::new();
-    match cmd {
-        GetCommands::Symbol { query, max_results } => {
-            args.insert("op".into(), json!("get symbol"));
-            args.insert("query".into(), json!(query));
-            insert_opt(&mut args, "max_results", max_results);
-        }
-        GetCommands::Callgraph {
-            symbol,
-            direction,
-            max_depth,
-        } => {
-            args.insert("op".into(), json!("get callgraph"));
-            args.insert("symbol".into(), json!(symbol));
-            insert_opt(&mut args, "direction", direction);
-            insert_opt(&mut args, "max_depth", max_depth);
-        }
-        GetCommands::Blastradius {
-            file_path,
-            symbol,
-            max_hops,
-        } => {
-            args.insert("op".into(), json!("get blastradius"));
-            args.insert("file_path".into(), json!(file_path));
-            insert_opt(&mut args, "symbol", symbol);
-            insert_opt(&mut args, "max_hops", max_hops);
-        }
-        GetCommands::Status => {
-            args.insert("op".into(), json!("get status"));
-        }
-        GetCommands::Diagnostics {
-            file_path,
-            severity_filter,
-        } => {
-            args.insert("op".into(), json!("get diagnostics"));
-            args.insert("file_path".into(), json!(file_path));
-            insert_opt(&mut args, "severity_filter", severity_filter);
-        }
-        _ => unreachable!("non-analysis get command passed to build_get_analysis_args"),
-    }
-    args
-}
-
-/// Build args for any get subcommand, dispatching to the appropriate builder.
+/// Route a get subcommand to the appropriate builder.
 fn build_get_args(cmd: &GetCommands) -> Map<String, Value> {
     match cmd {
         GetCommands::Symbol { .. }
@@ -177,7 +198,14 @@ fn build_get_args(cmd: &GetCommands) -> Map<String, Value> {
         | GetCommands::Blastradius { .. }
         | GetCommands::Status
         | GetCommands::Diagnostics { .. } => build_get_analysis_args(cmd),
-        _ => build_get_lsp_args(cmd),
+        GetCommands::Definition { .. }
+        | GetCommands::TypeDefinition { .. }
+        | GetCommands::Hover { .. } => build_get_position_args(cmd),
+        GetCommands::References { .. }
+        | GetCommands::Implementations { .. }
+        | GetCommands::InboundCalls { .. }
+        | GetCommands::RenameEdits { .. } => build_get_position_extended_args(cmd),
+        GetCommands::CodeActions { .. } => build_get_code_actions_args(cmd),
     }
 }
 
@@ -274,9 +302,10 @@ fn build_find_args(cmd: &FindCommands) -> Map<String, Value> {
     args
 }
 
-fn build_simple_args(cmd: &Commands) -> Map<String, Value> {
+/// Build args for simple single-variant command groups (list, build, clear, lsp, detect).
+fn build_simple_args(command: &Commands) -> Map<String, Value> {
     let mut args = Map::new();
-    match cmd {
+    match command {
         Commands::List { command } => match command {
             ListCommands::Symbols { file_path } => {
                 args.insert("op".into(), json!("list symbols"));
@@ -311,7 +340,7 @@ fn build_simple_args(cmd: &Commands) -> Map<String, Value> {
                 insert_opt(&mut args, "include_guidelines", include_guidelines);
             }
         },
-        _ => {}
+        _ => unreachable!("non-simple command routed to build_simple_args"),
     }
     args
 }
@@ -321,6 +350,9 @@ fn build_simple_args(cmd: &Commands) -> Map<String, Value> {
 /// Returns `Some(map)` for operation commands that should be dispatched to the
 /// `CodeContextTool`, or `None` for lifecycle commands (`Serve`, `Init`, etc.)
 /// that are handled elsewhere.
+///
+/// All `Commands` variants are listed explicitly so that adding a new variant
+/// produces a compiler error instead of silently falling through a wildcard.
 pub fn build_args(command: &Commands) -> Option<Map<String, Value>> {
     match command {
         Commands::Serve
@@ -333,7 +365,11 @@ pub fn build_args(command: &Commands) -> Option<Map<String, Value>> {
         Commands::Grep { command } => Some(build_grep_args(command)),
         Commands::Query { command } => Some(build_query_args(command)),
         Commands::Find { command } => Some(build_find_args(command)),
-        _ => Some(build_simple_args(command)),
+        Commands::List { .. }
+        | Commands::Build { .. }
+        | Commands::Clear { .. }
+        | Commands::Lsp { .. }
+        | Commands::Detect { .. } => Some(build_simple_args(command)),
     }
 }
 
@@ -836,5 +872,57 @@ mod tests {
         assert_eq!(args.get("op").unwrap(), "search workspace_symbol");
         assert_eq!(args.get("query").unwrap(), "Config");
         assert_eq!(args.get("max_results").unwrap(), 25);
+    }
+
+    // -- Integration tests for run_operation end-to-end --
+
+    /// End-to-end test: `get status` with text output through the full pipeline.
+    ///
+    /// Verifies the complete path: CLI arg parsing -> build_args -> ToolContext
+    /// creation -> CodeContextTool::execute -> Content::Text extraction -> exit code.
+    /// Uses a temporary directory as the working directory so the tool creates a
+    /// fresh (empty) workspace and returns status with zero counts.
+    #[tokio::test]
+    #[serial_test::serial(cwd)]
+    async fn test_run_operation_get_status() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let _guard = swissarmyhammer_common::test_utils::CurrentDirGuard::new(tmp.path()).unwrap();
+
+        let cmd = parse_command(&["get", "status"]);
+        let exit_code = run_operation(&cmd, false).await;
+        assert_eq!(
+            exit_code, 0,
+            "get status should succeed even with an empty index"
+        );
+    }
+
+    /// End-to-end test: `get status` with JSON output mode.
+    ///
+    /// Verifies the JSON serialization path through run_operation: the result is
+    /// serialized via `serde_json::to_string_pretty` and printed to stdout, and
+    /// the exit code is 0.
+    #[tokio::test]
+    #[serial_test::serial(cwd)]
+    async fn test_run_operation_get_status_json() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let _guard = swissarmyhammer_common::test_utils::CurrentDirGuard::new(tmp.path()).unwrap();
+
+        let cmd = parse_command(&["get", "status"]);
+        let exit_code = run_operation(&cmd, true).await;
+        assert_eq!(
+            exit_code, 0,
+            "get status with json output should succeed even with an empty index"
+        );
+    }
+
+    /// End-to-end test: lifecycle commands return exit code 1 when passed to
+    /// run_operation (they should be handled elsewhere).
+    #[tokio::test]
+    async fn test_run_operation_rejects_lifecycle_commands() {
+        let exit_code = run_operation(&Commands::Serve, false).await;
+        assert_eq!(
+            exit_code, 1,
+            "lifecycle commands should return exit code 1 from run_operation"
+        );
     }
 }

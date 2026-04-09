@@ -266,8 +266,45 @@ mod tests {
     }
 
     #[test]
+    fn test_check_lsp_status() {
+        let mut doctor = CodeContextDoctor::new();
+        doctor.check_lsp_status();
+
+        // The number of checks depends on detected project types in the working
+        // directory. Every check that is produced must be structurally valid:
+        // non-empty name, non-empty message, and a recognized status.
+        for check in doctor.checks() {
+            assert!(!check.name.is_empty(), "check name must not be empty");
+            assert!(!check.message.is_empty(), "check message must not be empty");
+            assert!(
+                check.status == CheckStatus::Ok || check.status == CheckStatus::Warning,
+                "LSP check status should be Ok or Warning, got {:?}",
+                check.status
+            );
+            // All LSP checks are prefixed with "LSP: "
+            assert!(
+                check.name.starts_with("LSP: "),
+                "expected LSP check name to start with 'LSP: ', got {:?}",
+                check.name
+            );
+        }
+    }
+
+    #[test]
     fn test_default() {
         let doctor = CodeContextDoctor::default();
         assert!(doctor.checks().is_empty());
+    }
+
+    #[test]
+    fn test_run_doctor() {
+        let exit_code = run_doctor(false);
+        assert!(exit_code <= 2);
+    }
+
+    #[test]
+    fn test_run_doctor_verbose() {
+        let exit_code = run_doctor(true);
+        assert!(exit_code <= 2);
     }
 }

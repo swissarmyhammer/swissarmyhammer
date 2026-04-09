@@ -1,7 +1,6 @@
 {
-  "mcpServers": {}
-}
- "code-context": {
+  "mcpServers": {
+    "code-context": {
       "args": [
         "serve"
       ],

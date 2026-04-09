@@ -63,12 +63,17 @@ fn resolve_agent_targets(scope: &InitScope) -> Result<Vec<AgentMcpTarget>, Strin
 pub struct CodeContextMcpRegistration;
 
 impl Initializable for CodeContextMcpRegistration {
+    /// The component name shown in init/deinit output.
     fn name(&self) -> &str {
         "code-context-mcp-registration"
     }
+
+    /// Component category: configuration.
     fn category(&self) -> &str {
         "configuration"
     }
+
+    /// Priority 10 — runs before CodeContextTool (priority 22).
     fn priority(&self) -> i32 {
         10
     }

@@ -34,6 +34,7 @@ pub mod health;
 pub mod id_types;
 pub mod interactive_prompts;
 pub mod lifecycle;
+pub mod logging;
 pub mod mcp_errors;
 pub mod parameter_conditions;
 pub mod parameters;
@@ -97,6 +98,9 @@ pub use prompt_visibility::{is_prompt_partial, is_prompt_visible};
 
 // Re-export reporter types for convenience
 pub use reporter::{CliReporter, InitEvent, InitReporter, NullReporter};
+
+// Re-export logging utilities for convenience
+pub use logging::FileWriterGuard;
 
 // Re-export test utilities for convenience (when testing)
 pub use test_utils::{acquire_semantic_db_lock, create_temp_dir, ProcessGuard};
