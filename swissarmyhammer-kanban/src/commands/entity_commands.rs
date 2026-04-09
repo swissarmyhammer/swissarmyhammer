@@ -292,6 +292,29 @@ impl Command for AttachmentRevealCmd {
     }
 }
 
+/// Delete an attachment from a task.
+///
+/// Always available (all parameters come from args).
+/// Required args: `task_id`, `id`.
+pub struct AttachmentDeleteCmd;
+
+#[async_trait]
+impl Command for AttachmentDeleteCmd {
+    fn available(&self, _ctx: &CommandContext) -> bool {
+        true
+    }
+
+    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+        let kanban = ctx.require_extension::<KanbanContext>()?;
+
+        let task_id = ctx.require_arg_str("task_id")?;
+        let id = ctx.require_arg_str("id")?;
+        let op = crate::attachment::DeleteAttachment::new(task_id, id);
+
+        run_op(&op, &kanban).await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

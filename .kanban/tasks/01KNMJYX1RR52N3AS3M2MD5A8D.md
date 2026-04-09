@@ -1,50 +1,45 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: '80'
+position_column: done
+position_ordinal: ffffffffffffffffffffff9a80
 title: Replace plain <input> with TextEditor (CM6) for perspective tab rename
 ---
 ## What
 
-`kanban-app/ui/src/components/perspective-tab-bar.tsx:233-244` uses a plain `<input>` for inline perspective rename. This breaks vim mode — Escape calls `onRenameCancel()` (discards the edit) instead of committing the value.
+`perspective.rename` is defined in YAML (`swissarmyhammer-commands/builtin/commands/perspective.yaml:26-34`) but has NO Rust `Command` impl and is NOT registered in `swissarmyhammer-kanban/src/commands/mod.rs`. The `RenamePerspective` operation exists at `swissarmyhammer-kanban/src/perspective/rename.rs` but nothing wires it to the command dispatch.
 
-The fix: replace the `<input>` with the `TextEditor` CM6 component from `@/components/fields/text-editor`. `TextEditor` already handles vim semantics correctly:
-- Escape from insert → normal mode: `saveInPlace` fires `onChange` (preserves text)
-- Escape from normal mode: `semanticCancel` → `commitAndExit` → `onCommit` (commits and exits in vim mode)
-- Enter: `semanticSubmit` → `onCommit` (commits and exits)
-- Blur: fires `onChange` (preserves text)
+### Fix
 
-### Files to modify
+Follow the `DeletePerspectiveCmd` pattern (perspective_commands.rs:100-138):
 
-- `kanban-app/ui/src/components/perspective-tab-bar.tsx` — Replace `<input>` block (lines 233-244) with `<TextEditor>`. Wire props:
-  - `value={renameValue}`
-  - `onCommit={(text) => { setRenameValue(text); commitRename(p.id, p.name); }}` — or refactor `commitRename` to accept the new name directly instead of reading `renameValue` state
-  - `onCancel={onRenameCancel}`
-  - `onChange={onRenameChange}` — keeps local state in sync for debounce
-  - `popup={false}` — starts in normal mode for vim
-  - Remove `inputRef` (no longer needed — CM6 manages its own focus)
-  - Remove `onRenameChange` from `PerspectiveTabProps` if no longer needed as a separate prop
+1. **Add `RenamePerspectiveCmd`** to `swissarmyhammer-kanban/src/commands/perspective_commands.rs`:
+   - Extract `id` and `new_name` from `ctx.require_arg_str()`
+   - Construct `RenamePerspective::new(id, new_name)`
+   - Call `run_op(&op, &kanban).await`
 
-### Design note
+2. **Register** in `swissarmyhammer-kanban/src/commands/mod.rs` after the `perspective.delete` entry (~line 183):
+   ```rust
+   map.insert(\"perspective.rename\".into(), Arc::new(perspective_commands::RenamePerspectiveCmd));
+   ```
 
-`commitRename` currently reads `renameValue` from React state via closure. Since `TextEditor.onCommit` passes the final text directly, refactor `commitRename` to accept the new name as a parameter instead of relying on stale state.
+3. **Update count** in `register_commands_returns_expected_count` test (mod.rs:295) from 61 to 62.
 
-Visually this needs to look much more like one of our fields with a 
+4. **Remove diagnostic logging** from `rename.rs` (the `tracing::warn!` lines added during debugging).
 
 ## Acceptance Criteria
-- [ ] Perspective tab rename uses CM6 TextEditor, not a plain `<input>`
-- [ ] In vim mode: Escape from insert mode preserves text (goes to normal), Escape from normal commits the rename
-- [ ] In CUA/emacs mode: Escape cancels (discards), Enter commits
-- [ ] Blur commits the rename (same as field editing)
-- [ ] Double-click on tab opens inline CM6 editor with the current name
+- [ ] `RenamePerspectiveCmd` struct exists with `Command` trait impl
+- [ ] `perspective.rename` registered in command map
+- [ ] Dispatching `perspective.rename` with `{id, new_name}` renames the perspective
+- [ ] Command count test updated to 62
 
 ## Tests
-- [ ] Update `kanban-app/ui/src/components/perspective-tab-bar.test.tsx` — existing rename tests should pass with the new editor
-- [ ] Add test: double-click tab renders CM6 editor (assert `.cm-editor` presence instead of `<input>`)
-- [ ] Run `pnpm vitest run perspective-tab-bar` — all tests pass
+- [ ] `test_rename_perspective_cmd`: create perspective via SavePerspectiveCmd, rename via RenamePerspectiveCmd, verify new name in result
+- [ ] `test_rename_perspective_cmd_not_found`: rename nonexistent ID returns error
+- [ ] `cargo nextest run -p swissarmyhammer-kanban perspective` — all pass
+- [ ] `cargo nextest run -p swissarmyhammer-kanban register_commands` — passes with count 62
 
 ## Workflow
-- Use `/tdd` — write failing tests first, then implement to make them pass.
+- Use `/tdd` — write failing test first, then implement.
 
 #bug

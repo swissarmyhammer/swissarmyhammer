@@ -76,6 +76,25 @@ vi.mock("@/lib/schema-context", () => ({
   }),
 }));
 
+// Mock useUIState — required by TextEditor (CM6 keymap selection).
+// Mutable so tests can switch between CUA/vim/emacs.
+let mockKeymapMode = "cua";
+
+const mockUIState = () => ({
+  keymap_mode: mockKeymapMode,
+  scope_chain: [],
+  open_boards: [],
+  has_clipboard: false,
+  clipboard_entity_type: null,
+  windows: {},
+  recent_boards: [],
+});
+
+vi.mock("@/lib/ui-state-context", () => ({
+  useUIState: () => mockUIState(),
+  useUIStateLoading: () => ({ state: mockUIState(), loading: false }),
+}));
+
 import { PerspectiveTabBar } from "./perspective-tab-bar";
 
 /** Renders PerspectiveTabBar inside the required TooltipProvider. */
@@ -90,6 +109,7 @@ function renderTabBar(delayDuration = 100) {
 describe("PerspectiveTabBar", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockKeymapMode = "cua";
     mockPerspectivesValue = {
       perspectives: [],
       activePerspective: null,
@@ -239,22 +259,39 @@ describe("PerspectiveTabBar", () => {
     expect(screen.queryByText("Delete")).toBeNull();
   });
 
-  it("starts inline rename on double-click", () => {
+  it("starts inline rename on double-click with CM6 editor", () => {
     mockPerspectivesValue = {
       ...mockPerspectivesValue,
       perspectives: [{ id: "p1", name: "Sprint View", view: "board" }],
       activePerspective: { id: "p1", name: "Sprint View", view: "board" },
     };
 
-    renderTabBar();
+    const { container } = renderTabBar();
 
     const tab = screen.getByText("Sprint View");
     fireEvent.doubleClick(tab);
 
-    // After double-click, an input should appear for renaming
-    const input = screen.getByDisplayValue("Sprint View");
-    expect(input).toBeDefined();
-    expect(input.tagName).toBe("INPUT");
+    // After double-click, a CM6 editor should appear (not a plain <input>)
+    const cmEditor = container.querySelector(".cm-editor");
+    expect(cmEditor).toBeTruthy();
+    expect(container.querySelector("input")).toBeNull();
+  });
+
+  it("renders CM6 editor with the perspective name as initial value", () => {
+    mockPerspectivesValue = {
+      ...mockPerspectivesValue,
+      perspectives: [{ id: "p1", name: "My View", view: "board" }],
+      activePerspective: { id: "p1", name: "My View", view: "board" },
+    };
+
+    const { container } = renderTabBar();
+
+    const tab = screen.getByText("My View");
+    fireEvent.doubleClick(tab);
+
+    // CM6 renders the text inside .cm-content
+    const cmContent = container.querySelector(".cm-content");
+    expect(cmContent?.textContent).toContain("My View");
   });
 
   it("shows a tooltip on hover of the add-perspective button", async () => {
@@ -281,5 +318,146 @@ describe("PerspectiveTabBar", () => {
 
     const addButton = screen.getByRole("button", { name: /add perspective/i });
     expect(addButton.getAttribute("title")).toBeNull();
+  });
+
+  // =========================================================================
+  // Rename integration — Enter/Escape across keymap modes
+  // =========================================================================
+
+  /**
+   * Opens the inline rename editor for a perspective named "Original" and
+   * returns the CM6 EditorView (via EditorView.findFromDOM) so tests can
+   * modify the document before pressing Enter/Escape.
+   */
+  async function setupRenameEditor(keymapMode: string) {
+    mockKeymapMode = keymapMode;
+    mockPerspectivesValue = {
+      ...mockPerspectivesValue,
+      perspectives: [{ id: "p1", name: "Original", view: "board" }],
+      activePerspective: { id: "p1", name: "Original", view: "board" },
+    };
+    const result = renderTabBar();
+    const tab = screen.getByText("Original");
+    fireEvent.doubleClick(tab);
+
+    const cmEditor = result.container.querySelector(
+      ".cm-editor",
+    ) as HTMLElement;
+    expect(cmEditor).toBeTruthy();
+
+    // Get the CM6 EditorView — same pattern as entity-card.test.tsx
+    const { EditorView } = await import("@codemirror/view");
+    const view = EditorView.findFromDOM(cmEditor);
+    expect(view).toBeTruthy();
+
+    return { ...result, view: view!, cmEditor };
+  }
+
+  /** Replace the CM6 document text and wait for onChange to propagate. */
+  async function replaceDocText(view: import("@codemirror/view").EditorView, text: string) {
+    await act(async () => {
+      view.dispatch({
+        changes: { from: 0, to: view.state.doc.length, insert: text },
+      });
+      // Allow onChange listener tick to propagate
+      await new Promise((r) => setTimeout(r, 20));
+    });
+  }
+
+  /** Dispatch a keydown on the given target and wait for effects. */
+  async function pressKey(target: HTMLElement, key: string) {
+    await act(async () => {
+      target.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+      await new Promise((r) => setTimeout(r, 50));
+    });
+  }
+
+  /** Expected mockInvoke shape for a successful rename dispatch. */
+  const renameCall = (newName: string) =>
+    expect.objectContaining({
+      cmd: "perspective.rename",
+      args: expect.objectContaining({
+        id: "p1",
+        new_name: newName,
+      }),
+    });
+
+  it("CUA rename: Enter after text change dispatches perspective.rename", async () => {
+    const { view, container } = await setupRenameEditor("cua");
+    await replaceDocText(view, "New Name");
+    mockInvoke.mockClear();
+
+    const cmContent = container.querySelector(".cm-content") as HTMLElement;
+    await pressKey(cmContent, "Enter");
+
+    expect(container.querySelector(".cm-editor")).toBeNull();
+    expect(mockInvoke).toHaveBeenCalledWith("dispatch_command", renameCall("New Name"));
+  });
+
+  it("CUA rename: Escape cancels without dispatching rename", async () => {
+    const { view, container } = await setupRenameEditor("cua");
+    await replaceDocText(view, "New Name");
+    mockInvoke.mockClear();
+
+    const cmContent = container.querySelector(".cm-content") as HTMLElement;
+    await pressKey(cmContent, "Escape");
+
+    expect(container.querySelector(".cm-editor")).toBeNull();
+    expect(mockInvoke).not.toHaveBeenCalledWith("dispatch_command", renameCall("New Name"));
+  });
+
+  it("vim rename: Enter after text change dispatches perspective.rename", async () => {
+    const { view, container } = await setupRenameEditor("vim");
+    await replaceDocText(view, "New Name");
+    mockInvoke.mockClear();
+
+    const cmContent = container.querySelector(".cm-content") as HTMLElement;
+    await pressKey(cmContent, "Enter");
+
+    expect(container.querySelector(".cm-editor")).toBeNull();
+    expect(mockInvoke).toHaveBeenCalledWith("dispatch_command", renameCall("New Name"));
+  });
+
+  it("vim rename: Escape after text change commits (dispatches rename)", async () => {
+    const { view, container } = await setupRenameEditor("vim");
+    await replaceDocText(view, "New Name");
+    mockInvoke.mockClear();
+
+    // Vim Escape from normal mode routes to commitAndExit, not cancel
+    const cmContent = container.querySelector(".cm-content") as HTMLElement;
+    await pressKey(cmContent, "Escape");
+
+    expect(container.querySelector(".cm-editor")).toBeNull();
+    expect(mockInvoke).toHaveBeenCalledWith("dispatch_command", renameCall("New Name"));
+  });
+
+  it("emacs rename: Enter after text change dispatches perspective.rename", async () => {
+    const { view, container } = await setupRenameEditor("emacs");
+    await replaceDocText(view, "New Name");
+    mockInvoke.mockClear();
+
+    const cmContent = container.querySelector(".cm-content") as HTMLElement;
+    await pressKey(cmContent, "Enter");
+
+    expect(container.querySelector(".cm-editor")).toBeNull();
+    expect(mockInvoke).toHaveBeenCalledWith("dispatch_command", renameCall("New Name"));
+  });
+
+  it("emacs rename: Escape cancels without dispatching rename", async () => {
+    const { view, container } = await setupRenameEditor("emacs");
+    await replaceDocText(view, "New Name");
+    mockInvoke.mockClear();
+
+    const cmContent = container.querySelector(".cm-content") as HTMLElement;
+    await pressKey(cmContent, "Escape");
+
+    expect(container.querySelector(".cm-editor")).toBeNull();
+    expect(mockInvoke).not.toHaveBeenCalledWith("dispatch_command", renameCall("New Name"));
   });
 });

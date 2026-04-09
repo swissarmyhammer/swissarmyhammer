@@ -47,7 +47,6 @@ impl Execute<KanbanContext, KanbanError> for RenamePerspective {
             let mut pctx = pctx.write().await;
 
             let updated = pctx.rename(&self.id, &self.new_name).await?;
-
             Ok(perspective_to_json(&updated))
         }
         .await;

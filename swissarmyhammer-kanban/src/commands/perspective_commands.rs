@@ -6,8 +6,8 @@
 use super::run_op;
 use crate::context::KanbanContext;
 use crate::perspective::{
-    AddPerspective, DeletePerspective, GetPerspective, ListPerspectives, SortDirection, SortEntry,
-    UpdatePerspective,
+    AddPerspective, DeletePerspective, GetPerspective, ListPerspectives, RenamePerspective,
+    SortDirection, SortEntry, UpdatePerspective,
 };
 use async_trait::async_trait;
 use serde_json::Value;
@@ -132,6 +132,26 @@ impl Command for DeletePerspectiveCmd {
         };
 
         let op = DeletePerspective::new(id);
+        run_op(&op, &kanban).await
+    }
+}
+
+/// Rename a perspective.
+///
+/// Required args: `id` (perspective ULID), `new_name` (the new name).
+pub struct RenamePerspectiveCmd;
+
+#[async_trait]
+impl Command for RenamePerspectiveCmd {
+    fn available(&self, _ctx: &CommandContext) -> bool {
+        true
+    }
+
+    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+        let kanban = ctx.require_extension::<KanbanContext>()?;
+        let id = ctx.require_arg_str("id")?;
+        let new_name = ctx.require_arg_str("new_name")?;
+        let op = RenamePerspective::new(id, new_name);
         run_op(&op, &kanban).await
     }
 }
@@ -1275,5 +1295,42 @@ mod tests {
     async fn test_goto_perspective_always_available() {
         let ctx = CommandContext::new("test", vec![], None, HashMap::new());
         assert!(GotoPerspectiveCmd.available(&ctx));
+    }
+
+    // =========================================================================
+    // Rename perspective
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_rename_perspective_cmd() {
+        let (_temp, ctx) = setup().await;
+        let kanban = Arc::new(ctx);
+
+        // Create a perspective
+        let id = create_perspective(&kanban, "Old Name").await;
+
+        // Rename it
+        let mut args = HashMap::new();
+        args.insert("id".into(), Value::String(id.clone()));
+        args.insert("new_name".into(), Value::String("New Name".into()));
+        let cmd_ctx = make_ctx(Arc::clone(&kanban), args);
+        let result = RenamePerspectiveCmd.execute(&cmd_ctx).await.unwrap();
+
+        // Verify the result contains the new name
+        assert_eq!(result["name"].as_str().unwrap(), "New Name");
+    }
+
+    #[tokio::test]
+    async fn test_rename_perspective_cmd_not_found() {
+        let (_temp, ctx) = setup().await;
+        let kanban = Arc::new(ctx);
+
+        let mut args = HashMap::new();
+        args.insert("id".into(), Value::String("nonexistent".into()));
+        args.insert("new_name".into(), Value::String("Whatever".into()));
+        let cmd_ctx = make_ctx(Arc::clone(&kanban), args);
+        let result = RenamePerspectiveCmd.execute(&cmd_ctx).await;
+
+        assert!(result.is_err());
     }
 }
