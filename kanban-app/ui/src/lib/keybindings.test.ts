@@ -353,6 +353,26 @@ describe("createKeyHandler", () => {
     expect(executeCommand).toHaveBeenCalledWith("task.toggleCollapse");
   });
 
+  it("handles vim gt sequence → perspective.next", () => {
+    const handler = createKeyHandler("vim", executeCommand);
+
+    handler(fakeKeyEvent("g"));
+    expect(executeCommand).not.toHaveBeenCalled();
+
+    handler(fakeKeyEvent("t"));
+    expect(executeCommand).toHaveBeenCalledWith("perspective.next");
+  });
+
+  it("handles vim gT (Shift+T) sequence → perspective.prev", () => {
+    const handler = createKeyHandler("vim", executeCommand);
+
+    handler(fakeKeyEvent("g"));
+    expect(executeCommand).not.toHaveBeenCalled();
+
+    handler(fakeKeyEvent("T", { shiftKey: true }));
+    expect(executeCommand).toHaveBeenCalledWith("perspective.prev");
+  });
+
   it("clears pending buffer after 500ms timeout", () => {
     const handler = createKeyHandler("vim", executeCommand);
 

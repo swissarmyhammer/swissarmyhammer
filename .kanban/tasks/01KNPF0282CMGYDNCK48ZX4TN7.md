@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: 7d80
+position_column: done
+position_ordinal: ffffffffffffffffffffffa980
 title: Fix `gt`/`gT` vim keybindings for perspective navigation
 ---
 ## What
