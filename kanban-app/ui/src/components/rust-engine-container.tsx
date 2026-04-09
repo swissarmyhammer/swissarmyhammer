@@ -74,7 +74,7 @@ interface EntityFieldChangedEvent {
 // RefreshEntities context — lets the parent trigger entity refresh
 // ---------------------------------------------------------------------------
 
-type RefreshEntitiesFn = (boardPath: string) => Promise<RefreshResult>;
+type RefreshEntitiesFn = (boardPath: string, taskFilter?: string) => Promise<RefreshResult>;
 
 const RefreshEntitiesContext = createContext<RefreshEntitiesFn>(async () => ({
   openBoards: [],
@@ -184,9 +184,9 @@ export function RustEngineContainer({ children }: RustEngineContainerProps) {
    * so the caller can also use openBoards and boardData.
    */
   const refreshEntities = useCallback(
-    async (boardPath: string): Promise<RefreshResult> => {
+    async (boardPath: string, taskFilter?: string): Promise<RefreshResult> => {
       activeBoardPathRef.current = boardPath;
-      const result = await refreshBoards(boardPath);
+      const result = await refreshBoards(boardPath, taskFilter);
       if (result.entitiesByType) {
         setEntitiesByType(result.entitiesByType);
       }
@@ -200,187 +200,170 @@ export function RustEngineContainer({ children }: RustEngineContainerProps) {
     activeBoardPathRef.current = path;
   }, []);
 
-  // -------------------------------------------------------------------------
-  // Entity event listeners
-  //
-  // Architecture rule (event-architecture): events are thin signals with
-  // exactly two granularities. Each handler has ONE code path:
-  //
-  //   entity-created  → add to store from payload fields (fast path),
-  //                      or get_entity once if fields are empty (fallback).
-  //   entity-field-changed → patch individual fields from changes array.
-  //                          No full-state replacement, no get_entity.
-  //   entity-removed  → remove from store by id.
-  //
-  // DO NOT add a full-fields replacement path or a get_entity re-fetch
-  // fallback to entity-field-changed. The watcher produces per-field diffs.
-  // -------------------------------------------------------------------------
+  useEntityEventListeners(activeBoardPathRef, refreshEntities, setEntitiesFor);
 
+  return (
+    <EngineProviderStack
+      refreshEntities={refreshEntities}
+      setEntitiesByType={setEntitiesByType}
+      setActiveBoardPath={setActiveBoardPath}
+      entitiesByType={entitiesByType}
+    >
+      {children}
+    </EngineProviderStack>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Entity event listeners — extracted from RustEngineContainer for readability
+//
+// Architecture rule (event-architecture): events are thin signals with
+// exactly two granularities. Each handler has ONE code path:
+//
+//   entity-created       → add from payload fields (fast) or get_entity (fallback)
+//   entity-field-changed → patch individual fields from changes array
+//   entity-removed       → remove from store by id
+//
+// DO NOT add full-state replacement or get_entity re-fetch to field-changed.
+// ---------------------------------------------------------------------------
+
+/** Deps shared by all entity event handlers. */
+interface EventHandlerDeps {
+  activeBoardPathRef: React.RefObject<string | undefined>;
+  refreshEntities: RefreshEntitiesFn;
+  setEntitiesFor: (type: string, updater: (prev: Entity[]) => Entity[]) => void;
+}
+
+/** Check if an event's board_path matches the active board. */
+function isBoardMismatch(boardPath: string | undefined, activeRef: React.RefObject<string | undefined>): boolean {
+  return !!(boardPath && activeRef.current && boardPath !== activeRef.current);
+}
+
+/**
+ * Handle entity-created events.
+ *
+ * Fast path: use payload fields directly when available.
+ * Fallback: fetch via get_entity when fields are empty.
+ */
+function handleEntityCreated(payload: EntityCreatedEvent, deps: EventHandlerDeps): void {
+  const { entity_type, id, fields, board_path } = payload;
+  if (isBoardMismatch(board_path, deps.activeBoardPathRef)) return;
+
+  if (entity_type === "column") {
+    if (deps.activeBoardPathRef.current) deps.refreshEntities(deps.activeBoardPathRef.current);
+    return;
+  }
+
+  if (fields && Object.keys(fields).length > 0) {
+    const entity: Entity = { id, entity_type, moniker: `${entity_type}:${id}`, fields: fields as Record<string, unknown> };
+    deps.setEntitiesFor(entity_type, (prev) =>
+      prev.some((e) => e.id === id) ? prev.map((e) => (e.id === id ? entity : e)) : [...prev, entity],
+    );
+    return;
+  }
+
+  invoke<EntityBag>("get_entity", {
+    entityType: entity_type, id,
+    ...(deps.activeBoardPathRef.current ? { boardPath: deps.activeBoardPathRef.current } : {}),
+  })
+    .then((bag) => {
+      const entity = entityFromBag(bag);
+      deps.setEntitiesFor(entity_type, (prev) =>
+        prev.some((e) => e.id === id) ? prev.map((e) => (e.id === id ? entity : e)) : [...prev, entity],
+      );
+    })
+    .catch((err) => console.error(`[entity-created] Failed to fetch ${entity_type}/${id}:`, err));
+}
+
+/**
+ * Handle entity-removed events.
+ *
+ * Structural types (column) trigger a full refresh; others are removed by ID.
+ */
+function handleEntityRemoved(payload: EntityRemovedEvent, deps: EventHandlerDeps): void {
+  const { entity_type, id, board_path } = payload;
+  if (isBoardMismatch(board_path, deps.activeBoardPathRef)) return;
+
+  if (entity_type === "column") {
+    if (deps.activeBoardPathRef.current) deps.refreshEntities(deps.activeBoardPathRef.current);
+  } else {
+    deps.setEntitiesFor(entity_type, (prev) => prev.filter((e) => e.id !== id));
+  }
+}
+
+/**
+ * Handle entity-field-changed events.
+ *
+ * Patches individual fields in place. If the entity isn't in the store yet
+ * (race with entity-created), upserts from the changes array.
+ */
+function handleEntityFieldChanged(payload: EntityFieldChangedEvent, deps: EventHandlerDeps): void {
+  const { entity_type, id, changes, board_path } = payload;
+  if (isBoardMismatch(board_path, deps.activeBoardPathRef)) return;
+  if (!changes || changes.length === 0) return;
+
+  deps.setEntitiesFor(entity_type, (prev) => {
+    let found = false;
+    const next = prev.map((e) => {
+      if (e.id !== id) return e;
+      found = true;
+      const patched = { ...e.fields };
+      for (const { field, value } of changes) patched[field] = value;
+      return { ...e, fields: patched };
+    });
+    if (!found) {
+      const fields: Record<string, unknown> = {};
+      for (const { field, value } of changes) fields[field] = value;
+      return [...next, { entity_type, id, moniker: `${entity_type}:${id}`, fields }];
+    }
+    return next;
+  });
+}
+
+/**
+ * Hook that subscribes to Tauri entity events and dispatches to handlers.
+ *
+ * Listens for entity-created, entity-removed, and entity-field-changed events
+ * and cleans up subscriptions on unmount.
+ */
+function useEntityEventListeners(
+  activeBoardPathRef: React.RefObject<string | undefined>,
+  refreshEntities: RefreshEntitiesFn,
+  setEntitiesFor: (type: string, updater: (prev: Entity[]) => Entity[]) => void,
+): void {
   useEffect(() => {
+    const deps: EventHandlerDeps = { activeBoardPathRef, refreshEntities, setEntitiesFor };
     const unlisteners = [
-      // Architecture rule (event-architecture): entity-created events carry
-      // fields from the watcher's cache population. Use them directly when
-      // available. Fall back to get_entity only when fields are empty (store
-      // event arrived before the watcher cached the file).
-      listen<EntityCreatedEvent>("entity-created", (event) => {
-        const { entity_type, id, fields, board_path } = event.payload;
-        console.warn(
-          `[entity-created] received: ${entity_type}/${id} board_path=${board_path ?? "none"} fields=${Object.keys(fields ?? {}).length}`,
-        );
-        if (
-          board_path &&
-          activeBoardPathRef.current &&
-          board_path !== activeBoardPathRef.current
-        ) {
-          console.warn(
-            `[entity-created] SKIPPED: board_path mismatch (active=${activeBoardPathRef.current})`,
-          );
-          return;
-        }
-        if (entity_type === "column") {
-          console.warn(`[entity-created] structural type -> full refresh`);
-          if (activeBoardPathRef.current) {
-            refreshEntities(activeBoardPathRef.current);
-          }
-          return;
-        }
-
-        // Fast path: watcher provided fields from disk — use directly.
-        if (fields && Object.keys(fields).length > 0) {
-          console.warn(
-            `[entity-created] using payload fields for ${entity_type}/${id}`,
-          );
-          const entity: Entity = {
-            id,
-            entity_type,
-            moniker: `${entity_type}:${id}`,
-            fields: fields as Record<string, unknown>,
-          };
-          setEntitiesFor(entity_type, (prev) => {
-            if (prev.some((e) => e.id === id)) {
-              return prev.map((e) => (e.id === id ? entity : e));
-            }
-            return [...prev, entity];
-          });
-          return;
-        }
-
-        // Fallback: fields empty — fetch once via get_entity.
-        console.warn(
-          `[entity-created] fetching ${entity_type}/${id} via get_entity`,
-        );
-        invoke<EntityBag>("get_entity", {
-          entityType: entity_type,
-          id,
-          ...(activeBoardPathRef.current
-            ? { boardPath: activeBoardPathRef.current }
-            : {}),
-        })
-          .then((bag) => {
-            const entity = entityFromBag(bag);
-            console.warn(
-              `[entity-created] fetched ${entity_type}/${id}, fields: ${Object.keys(entity.fields).join(",")}`,
-            );
-            setEntitiesFor(entity_type, (prev) => {
-              if (prev.some((e) => e.id === id)) {
-                return prev.map((e) => (e.id === id ? entity : e));
-              }
-              return [...prev, entity];
-            });
-          })
-          .catch((err) => {
-            console.error(
-              `[entity-created] Failed to fetch ${entity_type}/${id}:`,
-              err,
-            );
-          });
-      }),
-      listen<EntityRemovedEvent>("entity-removed", (event) => {
-        const { entity_type, id, board_path } = event.payload;
-        console.warn(
-          `[entity-removed] received: ${entity_type}/${id} board_path=${board_path ?? "none"}`,
-        );
-        if (
-          board_path &&
-          activeBoardPathRef.current &&
-          board_path !== activeBoardPathRef.current
-        ) {
-          console.warn(`[entity-removed] SKIPPED: board_path mismatch`);
-          return;
-        }
-        if (entity_type === "column") {
-          if (activeBoardPathRef.current) {
-            refreshEntities(activeBoardPathRef.current);
-          }
-        } else {
-          setEntitiesFor(entity_type, (prev) =>
-            prev.filter((e) => e.id !== id),
-          );
-        }
-      }),
-      // Architecture rule (event-architecture): ONE path. Patch individual
-      // fields from the changes array. No full-state replacement, no re-fetch.
-      listen<EntityFieldChangedEvent>("entity-field-changed", (event) => {
-        const { entity_type, id, changes, board_path } = event.payload;
-        console.warn(
-          `[entity-field-changed] received: ${entity_type}/${id} board_path=${board_path ?? "none"} changes=${changes?.length ?? 0}`,
-        );
-        if (
-          board_path &&
-          activeBoardPathRef.current &&
-          board_path !== activeBoardPathRef.current
-        ) {
-          console.warn(
-            `[entity-field-changed] SKIPPED: board_path mismatch (active=${activeBoardPathRef.current})`,
-          );
-          return;
-        }
-
-        if (!changes || changes.length === 0) {
-          console.warn(
-            `[entity-field-changed] SKIPPED: empty changes for ${entity_type}/${id}`,
-          );
-          return;
-        }
-
-        // Patch individual changed fields in place (upsert if not yet in store).
-        setEntitiesFor(entity_type, (prev) => {
-          let found = false;
-          const next = prev.map((e) => {
-            if (e.id !== id) return e;
-            found = true;
-            const patched = { ...e.fields };
-            for (const { field, value } of changes) {
-              patched[field] = value;
-            }
-            return { ...e, fields: patched };
-          });
-          if (!found) {
-            // Race recovery: field-changed arrived before entity-created.
-            // Construct entity from the changes so the patch isn't lost.
-            const fields: Record<string, unknown> = {};
-            for (const { field, value } of changes) {
-              fields[field] = value;
-            }
-            console.warn(
-              `[entity-field-changed] entity ${entity_type}/${id} not in store, upserting`,
-            );
-            return [
-              ...next,
-              { entity_type, id, moniker: `${entity_type}:${id}`, fields },
-            ];
-          }
-          return next;
-        });
-      }),
+      listen<EntityCreatedEvent>("entity-created", (e) => handleEntityCreated(e.payload, deps)),
+      listen<EntityRemovedEvent>("entity-removed", (e) => handleEntityRemoved(e.payload, deps)),
+      listen<EntityFieldChangedEvent>("entity-field-changed", (e) => handleEntityFieldChanged(e.payload, deps)),
     ];
-    return () => {
-      for (const p of unlisteners) {
-        p.then((fn: () => void) => fn());
-      }
-    };
-  }, [refreshEntities, setEntitiesFor]);
+    return () => { for (const p of unlisteners) p.then((fn: () => void) => fn()); };
+  }, [activeBoardPathRef, refreshEntities, setEntitiesFor]);
+}
 
+// ---------------------------------------------------------------------------
+// Provider stack — extracted from RustEngineContainer JSX
+// ---------------------------------------------------------------------------
+
+/** Props for the extracted provider stack. */
+interface EngineProviderStackProps {
+  refreshEntities: RefreshEntitiesFn;
+  setEntitiesByType: SetEntitiesByTypeFn;
+  setActiveBoardPath: SetActiveBoardPathFn;
+  entitiesByType: Record<string, Entity[]>;
+  children: ReactNode;
+}
+
+/**
+ * Nested provider stack for the Rust engine container.
+ *
+ * Wraps children with all engine-level contexts: command scope, schema,
+ * entity store, entity focus, field update, UI state, and undo providers.
+ */
+function EngineProviderStack({
+  refreshEntities, setEntitiesByType, setActiveBoardPath, entitiesByType, children,
+}: EngineProviderStackProps) {
   return (
     <CommandScopeProvider commands={[]} moniker="engine">
       <RefreshEntitiesContext.Provider value={refreshEntities}>
