@@ -423,4 +423,92 @@ mod tests {
             assert!(path.exists());
         }
     }
+
+    #[test]
+    fn test_start_lsp_server_unavailable_language_returns_not_started() {
+        // start_lsp_server for a language with no registered config should
+        // return a handle with started=false and an error describing why.
+        let tmp = tempfile::tempdir().unwrap();
+        let handle = start_lsp_server("brainfuck", tmp.path());
+        assert!(!handle.started);
+        assert_eq!(handle.language, "brainfuck");
+        assert!(
+            handle
+                .error
+                .as_ref()
+                .unwrap()
+                .contains("Unsupported language"),
+            "Expected 'Unsupported language' in error, got: {:?}",
+            handle.error
+        );
+    }
+
+    #[test]
+    fn test_find_executable_ls_returns_some() {
+        // 'ls' is a standard executable on Unix systems. Verify find_executable
+        // returns Some with a path that actually exists on disk, exercising the
+        // debug log on the success path.
+        let result = find_executable("ls");
+        assert!(result.is_some(), "'ls' should be found in PATH");
+        let path = result.unwrap();
+        assert!(path.exists(), "Returned path should exist on disk");
+        assert!(path.is_file(), "Returned path should be a file");
+    }
+
+    #[test]
+    fn test_spawn_server_exe_exits_immediately_error_message() {
+        // Use an absolute path to 'true' (which exits immediately) to exercise
+        // the direct-executable branch (config.executable.exists() == true).
+        // Verifies the specific "exited immediately" error message via the
+        // inner io::Error (CodeContextError::Io wraps it with Display "IO error").
+        let true_path = find_executable("true");
+        if let Some(abs_path) = true_path {
+            let config = LspServerConfig {
+                language: "test".to_string(),
+                executable: abs_path,
+                args: vec![],
+                init_timeout: 5,
+            };
+            let tmp = tempfile::tempdir().unwrap();
+            let result = spawn_server(&config, tmp.path());
+            assert!(
+                result.is_err(),
+                "Process that exits immediately should error"
+            );
+            let err = result.unwrap_err();
+            // CodeContextError::Io Display is just "IO error"; check the source chain
+            // for the actual io::Error message.
+            let inner_msg = std::error::Error::source(&err)
+                .map(|e| e.to_string())
+                .unwrap_or_default();
+            assert!(
+                inner_msg.contains("exited immediately"),
+                "Inner error should mention 'exited immediately', got: {}",
+                inner_msg
+            );
+        }
+    }
+
+    #[test]
+    fn test_spawn_server_absolute_path_process_stays_alive() {
+        // Find the absolute path to 'sleep' and use it directly, exercising
+        // the else branch where config.executable.exists() is true and the
+        // process stays alive (try_wait returns Ok(None)).
+        let sleep_path = find_executable("sleep");
+        if let Some(abs_path) = sleep_path {
+            let config = LspServerConfig {
+                language: "test".to_string(),
+                executable: abs_path,
+                args: vec!["10".to_string()],
+                init_timeout: 5,
+            };
+            let tmp = tempfile::tempdir().unwrap();
+            let result = spawn_server(&config, tmp.path());
+            assert!(
+                result.is_ok(),
+                "Process that stays alive should succeed: {:?}",
+                result.err()
+            );
+        }
+    }
 }

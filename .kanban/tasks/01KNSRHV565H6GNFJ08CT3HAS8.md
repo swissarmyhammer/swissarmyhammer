@@ -1,0 +1,8 @@
+---
+assignees:
+- claude-code
+position_column: done
+position_ordinal: ffffffffffffffffffffaa80
+title: Add tests for layered_context.rs database query callbacks
+---
+layered_context.rs (multiple functions)\n\nCoverage: 56.8% (187/329 lines)\n\nUncovered functions/blocks that only need DB rows inserted (no mock LSP):\n\n1. `unwrap_lsp_result` (lines 23-33) - 4 uncovered lines\n   Test: value with `error` field → Err; value with `result` → Ok(result); plain value → Ok(value)\n\n2. `ts_symbols_in_file` (lines 533-566) - uncovered query_map callback\n   Test: Insert ts_chunks with non-null symbol_path, verify SymbolInfo returned\n\n3. `ts_chunks_matching` (lines 569-589) - uncovered query_map callback\n   Test: Insert ts_chunks matching LIKE pattern, verify ChunkInfo returned\n\n4. `ts_callers_of` (lines 592-628) - uncovered query\n   Test: Insert lsp_call_edge with source='treesitter', verify CallEdgeInfo\n\n5. `lsp_callers_of` (lines 451-461) / `query_call_edges` - uncovered callback\n   Test: Insert lsp_call_edge linking two symbols, call lsp_callers_of\n\n6. `enrich_location` (lines 636-670) - both LSP index and treesitter paths\n   Test: (a) LSP symbol covering range → SourceLayer::LspIndex; (b) ts_chunk covering range → SourceLayer::TreeSitter\n\n7. `layer_notice` (lines 687-698) - two match arms\n   Test: layer_notice(LspIndex) and layer_notice(TreeSitter) → verify Some(string)\n\n#coverage-gap #coverage-gap

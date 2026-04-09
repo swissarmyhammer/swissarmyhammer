@@ -557,6 +557,271 @@ mod tests {
         );
     }
 
+    // --- try_lsp_index: include_source branch ---
+
+    #[test]
+    fn test_lsp_index_include_source_nonexistent_file() {
+        // When include_source is true but the file doesn't exist on disk,
+        // read_source_range returns None so source_text should be None.
+        let conn = test_db();
+        insert_file(&conn, "nonexistent/path.rs", 0, 1);
+        insert_lsp_symbol(
+            &conn,
+            "sym1",
+            "MyStruct",
+            5, // class
+            Some("pub struct MyStruct"),
+            "nonexistent/path.rs",
+            10,
+            0,
+            25,
+            1,
+        );
+
+        let ctx = LayeredContext::new(&conn, None);
+        let opts = GetDefinitionOptions {
+            file_path: "nonexistent/path.rs".to_string(),
+            line: 15,
+            character: 0,
+            include_source: true,
+        };
+        let result = get_definition(&ctx, &opts).unwrap();
+        assert_eq!(result.source_layer, SourceLayer::LspIndex);
+        assert_eq!(result.locations.len(), 1);
+        // File doesn't exist on disk, so source_text is None
+        assert!(result.locations[0].source_text.is_none());
+        assert!(result.locations[0].symbol.is_some());
+        assert_eq!(
+            result.locations[0].symbol.as_ref().unwrap().name,
+            "MyStruct"
+        );
+    }
+
+    #[test]
+    fn test_lsp_index_include_source_real_file() {
+        // When include_source is true and the file exists, source_text is populated.
+        let conn = test_db();
+
+        // Create a real temporary file so read_source_range can read it
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("test_src.rs");
+        std::fs::write(
+            &file_path,
+            "line0\nline1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\nline9\nline10\n",
+        )
+        .unwrap();
+        let file_path_str = file_path.to_str().unwrap();
+
+        insert_file(&conn, file_path_str, 0, 1);
+        insert_lsp_symbol(
+            &conn,
+            "sym_real",
+            "greet",
+            12, // function
+            Some("fn greet()"),
+            file_path_str,
+            2,
+            0,
+            5,
+            1,
+        );
+
+        let ctx = LayeredContext::new(&conn, None);
+        let opts = GetDefinitionOptions {
+            file_path: file_path_str.to_string(),
+            line: 3,
+            character: 0,
+            include_source: true,
+        };
+        let result = get_definition(&ctx, &opts).unwrap();
+        assert_eq!(result.source_layer, SourceLayer::LspIndex);
+        assert_eq!(result.locations.len(), 1);
+        // File exists, so source_text should be Some containing lines 2..=5
+        let src = result.locations[0].source_text.as_ref().unwrap();
+        assert!(src.contains("line2"));
+        assert!(src.contains("line5"));
+    }
+
+    // --- try_parse_location_link: targetRange fallback ---
+
+    #[test]
+    fn test_parse_location_link_target_range_only() {
+        // When targetSelectionRange is absent, targetRange should be used.
+        let response = serde_json::json!([
+            {
+                "targetUri": "file:///src/models.rs",
+                "targetRange": {
+                    "start": { "line": 20, "character": 0 },
+                    "end": { "line": 30, "character": 1 }
+                }
+            }
+        ]);
+        let locations = parse_definition_locations(&response);
+        assert_eq!(locations.len(), 1);
+        assert_eq!(locations[0].file_path, "/src/models.rs");
+        // Should fall back to targetRange since targetSelectionRange is absent
+        assert_eq!(locations[0].range.start_line, 20);
+        assert_eq!(locations[0].range.start_character, 0);
+        assert_eq!(locations[0].range.end_line, 30);
+        assert_eq!(locations[0].range.end_character, 1);
+    }
+
+    #[test]
+    fn test_parse_location_link_prefers_selection_range_over_target_range() {
+        // Verify that targetSelectionRange takes precedence when both are present.
+        let response = serde_json::json!([
+            {
+                "targetUri": "file:///src/handler.rs",
+                "targetRange": {
+                    "start": { "line": 0, "character": 0 },
+                    "end": { "line": 50, "character": 1 }
+                },
+                "targetSelectionRange": {
+                    "start": { "line": 10, "character": 4 },
+                    "end": { "line": 10, "character": 18 }
+                }
+            }
+        ]);
+        let locations = parse_definition_locations(&response);
+        assert_eq!(locations.len(), 1);
+        // targetSelectionRange should win
+        assert_eq!(locations[0].range.start_line, 10);
+        assert_eq!(locations[0].range.start_character, 4);
+        assert_eq!(locations[0].range.end_line, 10);
+        assert_eq!(locations[0].range.end_character, 18);
+    }
+
+    #[test]
+    fn test_parse_location_link_missing_both_ranges() {
+        // When both targetSelectionRange and targetRange are absent, parsing fails.
+        let response = serde_json::json!([
+            {
+                "targetUri": "file:///src/orphan.rs"
+            }
+        ]);
+        let locations = parse_definition_locations(&response);
+        assert!(locations.is_empty());
+    }
+
+    #[test]
+    fn test_parse_location_link_missing_target_uri() {
+        // When targetUri is absent, parsing should fail entirely.
+        let response = serde_json::json!([
+            {
+                "targetRange": {
+                    "start": { "line": 1, "character": 0 },
+                    "end": { "line": 5, "character": 1 }
+                }
+            }
+        ]);
+        let locations = parse_definition_locations(&response);
+        assert!(locations.is_empty());
+    }
+
+    // --- No-live-LSP fallback paths ---
+
+    #[test]
+    fn test_no_live_lsp_skips_to_lsp_index() {
+        // With no LSP client at all (None), has_live_lsp() returns false
+        // and the code falls through to the LSP index layer.
+        let conn = test_db();
+        insert_file(&conn, "src/service.rs", 0, 1);
+        insert_lsp_symbol(
+            &conn,
+            "svc_sym",
+            "handle_request",
+            12,
+            Some("fn handle_request()"),
+            "src/service.rs",
+            0,
+            0,
+            15,
+            1,
+        );
+
+        // Explicitly pass None for lsp_client -- no live LSP
+        let ctx = LayeredContext::new(&conn, None);
+        assert!(!ctx.has_live_lsp());
+
+        let opts = GetDefinitionOptions {
+            file_path: "src/service.rs".to_string(),
+            line: 5,
+            character: 0,
+            include_source: false,
+        };
+        let result = get_definition(&ctx, &opts).unwrap();
+        // Should skip live LSP and land on LSP index
+        assert_eq!(result.source_layer, SourceLayer::LspIndex);
+        assert_eq!(
+            result.locations[0].symbol.as_ref().unwrap().name,
+            "handle_request"
+        );
+    }
+
+    #[test]
+    fn test_no_live_lsp_falls_through_to_treesitter() {
+        // With no LSP client and no LSP index data, falls through to tree-sitter.
+        let conn = test_db();
+        insert_file(&conn, "src/utils.rs", 1, 0);
+        insert_ts_chunk(
+            &conn,
+            "src/utils.rs",
+            0,
+            10,
+            "fn helper() -> String { String::new() }",
+        );
+
+        let ctx = LayeredContext::new(&conn, None);
+        assert!(!ctx.has_live_lsp());
+
+        let opts = GetDefinitionOptions {
+            file_path: "src/utils.rs".to_string(),
+            line: 5,
+            character: 0,
+            include_source: false,
+        };
+        let result = get_definition(&ctx, &opts).unwrap();
+        assert_eq!(result.source_layer, SourceLayer::TreeSitter);
+    }
+
+    #[test]
+    fn test_no_live_lsp_empty_mutex_falls_through() {
+        // An LSP client mutex exists but contains None (no connected server).
+        // has_live_lsp() should return false, skipping the live layer.
+        use std::sync::{Arc, Mutex};
+
+        let conn = test_db();
+        insert_file(&conn, "src/app.rs", 0, 1);
+        insert_lsp_symbol(
+            &conn,
+            "app_sym",
+            "main",
+            12,
+            Some("fn main()"),
+            "src/app.rs",
+            0,
+            0,
+            20,
+            1,
+        );
+
+        // Create a SharedLspClient (Arc<Mutex<Option<...>>>) containing None
+        let empty_client: crate::lsp_worker::SharedLspClient = Arc::new(Mutex::new(None));
+        let ctx = LayeredContext::new(&conn, Some(&empty_client));
+        assert!(!ctx.has_live_lsp());
+
+        let opts = GetDefinitionOptions {
+            file_path: "src/app.rs".to_string(),
+            line: 10,
+            character: 0,
+            include_source: false,
+        };
+        let result = get_definition(&ctx, &opts).unwrap();
+        // Even with a mutex present, no server inside means skip live LSP
+        assert_eq!(result.source_layer, SourceLayer::LspIndex);
+        assert_eq!(result.locations[0].symbol.as_ref().unwrap().name, "main");
+    }
+
     // --- GetDefinitionResult serialization ---
 
     #[test]

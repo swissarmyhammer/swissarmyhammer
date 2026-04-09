@@ -490,4 +490,158 @@ mod tests {
         assert_eq!(language_id_from_path("script.py"), "python");
         assert_eq!(language_id_from_path("readme.txt"), "plaintext");
     }
+
+    // --- No-live-LSP falls through to treesitter ---
+
+    #[test]
+    fn no_live_lsp_falls_through_to_treesitter() {
+        // When a SharedLspClient exists but wraps None (no connected LSP process),
+        // has_live_lsp() returns false and get_implementations should skip the
+        // live layer entirely, falling back to tree-sitter heuristic search.
+        use std::sync::{Arc, Mutex};
+
+        let conn = crate::test_fixtures::test_db();
+        crate::test_fixtures::insert_file(&conn, "src/shapes.rs", 1, 0);
+
+        // LSP symbol so find_symbol resolves the name "Renderable" at cursor
+        crate::test_fixtures::insert_lsp_symbol(
+            &conn,
+            "sym:renderable",
+            "Renderable",
+            11,
+            "src/shapes.rs",
+            0,
+            0,
+            5,
+            1,
+            None,
+        );
+
+        // A tree-sitter chunk containing "impl Renderable"
+        crate::test_fixtures::insert_ts_chunk(
+            &conn,
+            "src/shapes.rs",
+            10,
+            20,
+            "impl Renderable for Circle { fn render(&self) {} }",
+            Some("shapes::CircleRenderable"),
+        );
+
+        // SharedLspClient present but wrapping None -- no connected LSP server
+        let empty_client: crate::lsp_worker::SharedLspClient = Arc::new(Mutex::new(None));
+        let ctx = LayeredContext::new(&conn, Some(&empty_client));
+        assert!(!ctx.has_live_lsp());
+
+        let opts = GetImplementationsOptions {
+            file_path: "src/shapes.rs".to_string(),
+            line: 2,
+            character: 6,
+            max_results: None,
+        };
+
+        let result = get_implementations(&ctx, &opts).unwrap();
+        // Should fall through to tree-sitter, not return SourceLayer::None
+        assert_eq!(result.source_layer, SourceLayer::TreeSitter);
+        assert_eq!(result.implementations.len(), 1);
+        assert!(result.implementations[0]
+            .source_text
+            .as_ref()
+            .unwrap()
+            .contains("impl Renderable"));
+    }
+
+    // --- parse_locations: single LocationLink object (not array) ---
+
+    #[test]
+    fn parse_single_location_link_not_array() {
+        // When the LSP response is a single LocationLink object (not wrapped in
+        // an array), parse_locations should still extract it. This exercises the
+        // Object → try_parse_location fails → try_parse_location_link succeeds path.
+        let value = serde_json::json!({
+            "targetUri": "file:///src/widget.rs",
+            "targetRange": {
+                "start": { "line": 10, "character": 0 },
+                "end": { "line": 20, "character": 1 }
+            },
+            "targetSelectionRange": {
+                "start": { "line": 10, "character": 4 },
+                "end": { "line": 10, "character": 10 }
+            }
+        });
+        let locs = parse_locations(&value);
+        assert_eq!(locs.len(), 1);
+        assert_eq!(locs[0].file_path, "/src/widget.rs");
+        // Should prefer targetSelectionRange
+        assert_eq!(locs[0].range.start_line, 10);
+        assert_eq!(locs[0].range.start_character, 4);
+        assert_eq!(locs[0].range.end_line, 10);
+        assert_eq!(locs[0].range.end_character, 10);
+    }
+
+    // --- parse_locations: non-object, non-array, non-null value ---
+
+    #[test]
+    fn parse_locations_unexpected_type_returns_empty() {
+        // When the LSP response is an unexpected JSON type (e.g. a string or
+        // boolean), parse_locations should silently return an empty vec.
+        let string_value = serde_json::json!("unexpected");
+        assert!(parse_locations(&string_value).is_empty());
+
+        let bool_value = serde_json::json!(true);
+        assert!(parse_locations(&bool_value).is_empty());
+
+        let number_value = serde_json::json!(42);
+        assert!(parse_locations(&number_value).is_empty());
+    }
+
+    // --- SharedLspClient with None → verify fallthrough ---
+
+    #[test]
+    fn shared_lsp_client_with_none_returns_empty_when_no_treesitter() {
+        // When a SharedLspClient exists but wraps None (no connected LSP
+        // process) and no tree-sitter data is available, get_implementations
+        // should return an empty result with SourceLayer::None -- not an error.
+        use std::sync::{Arc, Mutex};
+
+        let conn = crate::test_fixtures::test_db();
+        let shared: crate::lsp_worker::SharedLspClient = Arc::new(Mutex::new(None));
+        let ctx = LayeredContext::new(&conn, Some(&shared));
+
+        let opts = GetImplementationsOptions {
+            file_path: "/nonexistent.rs".to_string(),
+            line: 0,
+            character: 0,
+            max_results: None,
+        };
+
+        let result = get_implementations(&ctx, &opts).unwrap();
+        assert!(
+            result.implementations.is_empty(),
+            "SharedLspClient(None) should behave like no LSP"
+        );
+        assert_eq!(result.source_layer, SourceLayer::None);
+    }
+
+    // --- parse_locations: LocationLink without targetSelectionRange ---
+
+    #[test]
+    fn parse_single_location_link_falls_back_to_target_range() {
+        // When a LocationLink has no targetSelectionRange, the parser should
+        // fall back to targetRange. This tests the or_else fallback in
+        // try_parse_location_link.
+        let value = serde_json::json!({
+            "targetUri": "file:///src/models.rs",
+            "targetRange": {
+                "start": { "line": 30, "character": 0 },
+                "end": { "line": 40, "character": 1 }
+            }
+        });
+        let locs = parse_locations(&value);
+        assert_eq!(locs.len(), 1);
+        assert_eq!(locs[0].file_path, "/src/models.rs");
+        assert_eq!(locs[0].range.start_line, 30);
+        assert_eq!(locs[0].range.start_character, 0);
+        assert_eq!(locs[0].range.end_line, 40);
+        assert_eq!(locs[0].range.end_character, 1);
+    }
 }

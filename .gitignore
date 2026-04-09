@@ -131,6 +131,9 @@ ane-embedding/convert/output/
 # SAH runtime state
 **/.sah/
 
+# AVP runtime state
+.avp/
+
 # Shell tool runtime state
 **/.shell/
 .claude/worktrees

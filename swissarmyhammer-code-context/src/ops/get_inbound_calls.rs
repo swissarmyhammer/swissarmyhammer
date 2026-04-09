@@ -1131,4 +1131,864 @@ mod tests {
         );
         assert_eq!(result.callers[0].callers[0].callers[0].depth, 3);
     }
+
+    // --- cross_reference_with_index ---
+
+    #[test]
+    fn test_cross_reference_with_index_appends_indexed_callers() {
+        // When live LSP returns zero callers, cross_reference_with_index should
+        // pick up callers from the persisted call edge index and append them.
+        let conn = test_db();
+        insert_file(&conn, "src/target.rs", 0, 1);
+        insert_file(&conn, "src/caller.rs", 0, 1);
+
+        // Target symbol at cursor -- lsp_symbols_by_name will find it.
+        insert_lsp_symbol(
+            &conn,
+            "sym:target",
+            "process",
+            12,
+            "src/target.rs",
+            10,
+            0,
+            25,
+            1,
+        );
+        // Caller symbol needed for the JOIN in lsp_callers_of.
+        insert_lsp_symbol(
+            &conn,
+            "sym:indexed_caller",
+            "bootstrap",
+            12,
+            "src/caller.rs",
+            1,
+            0,
+            20,
+            1,
+        );
+
+        let from_ranges = r#"[{"start":{"line":8,"character":4},"end":{"line":8,"character":20}}]"#;
+        insert_call_edge(
+            &conn,
+            "sym:indexed_caller",
+            "sym:target",
+            "src/caller.rs",
+            "src/target.rs",
+            "lsp",
+            from_ranges,
+        );
+
+        let ctx = LayeredContext::new(&conn, None);
+
+        // Pass an empty callers vec — the function should append the indexed caller.
+        let callers = cross_reference_with_index(&ctx, "process", "src/target.rs", Vec::new());
+
+        assert_eq!(
+            callers.len(),
+            1,
+            "expected one indexed caller to be appended"
+        );
+        assert_eq!(callers[0].symbol_name, "bootstrap");
+        assert_eq!(callers[0].file_path, "src/caller.rs");
+        assert_eq!(callers[0].depth, 1);
+        assert_eq!(callers[0].call_sites.len(), 1);
+        assert_eq!(callers[0].call_sites[0].start_line, 8);
+    }
+
+    #[test]
+    fn test_cross_reference_with_index_skips_already_present() {
+        // When a caller is already in the live LSP results, cross_reference
+        // should not duplicate it.
+        let conn = test_db();
+        insert_file(&conn, "src/target.rs", 0, 1);
+        insert_file(&conn, "src/caller.rs", 0, 1);
+
+        insert_lsp_symbol(
+            &conn,
+            "sym:target",
+            "process",
+            12,
+            "src/target.rs",
+            10,
+            0,
+            25,
+            1,
+        );
+        insert_lsp_symbol(
+            &conn,
+            "sym:caller",
+            "bootstrap",
+            12,
+            "src/caller.rs",
+            1,
+            0,
+            20,
+            1,
+        );
+
+        insert_call_edge(
+            &conn,
+            "sym:caller",
+            "sym:target",
+            "src/caller.rs",
+            "src/target.rs",
+            "lsp",
+            "[]",
+        );
+
+        let ctx = LayeredContext::new(&conn, None);
+
+        // Pre-populate callers with a caller named "bootstrap" (same as index).
+        let existing = vec![InboundCallEntry {
+            symbol_name: "bootstrap".to_string(),
+            file_path: "src/caller.rs".to_string(),
+            range: LspRange {
+                start_line: 1,
+                start_character: 0,
+                end_line: 20,
+                end_character: 1,
+            },
+            call_sites: Vec::new(),
+            depth: 1,
+            callers: Vec::new(),
+        }];
+
+        let callers = cross_reference_with_index(&ctx, "process", "src/target.rs", existing);
+
+        assert_eq!(
+            callers.len(),
+            1,
+            "should not duplicate caller already present"
+        );
+        assert_eq!(callers[0].symbol_name, "bootstrap");
+    }
+
+    #[test]
+    fn test_cross_reference_with_index_no_matching_symbol() {
+        // When lsp_symbols_by_name finds no symbol for the target, the
+        // function should return the callers list unchanged.
+        let conn = test_db();
+        insert_file(&conn, "src/target.rs", 0, 1);
+
+        let ctx = LayeredContext::new(&conn, None);
+
+        let callers = cross_reference_with_index(&ctx, "nonexistent", "src/target.rs", Vec::new());
+
+        assert!(
+            callers.is_empty(),
+            "should return empty when no symbol in index"
+        );
+    }
+
+    // --- try_lsp_index direct tests ---
+
+    #[test]
+    fn test_try_lsp_index_returns_some_when_callers_exist() {
+        // Insert symbol at cursor + call edge → try_lsp_index returns
+        // Some(InboundCallsResult) with SourceLayer::LspIndex.
+        let conn = test_db();
+        insert_file(&conn, "src/target.rs", 0, 1);
+        insert_file(&conn, "src/caller.rs", 0, 1);
+
+        // Place the symbol at cursor position (line 10, covering lines 5-15)
+        insert_lsp_symbol(
+            &conn,
+            "sym:target",
+            "serve",
+            12,
+            "src/target.rs",
+            5,
+            0,
+            15,
+            1,
+        );
+        insert_lsp_symbol(
+            &conn,
+            "sym:caller",
+            "main",
+            12,
+            "src/caller.rs",
+            1,
+            0,
+            20,
+            1,
+        );
+
+        let from_ranges =
+            r#"[{"start":{"line":12,"character":4},"end":{"line":12,"character":15}}]"#;
+        insert_call_edge(
+            &conn,
+            "sym:caller",
+            "sym:target",
+            "src/caller.rs",
+            "src/target.rs",
+            "lsp",
+            from_ranges,
+        );
+
+        let ctx = LayeredContext::new(&conn, None);
+        let opts = GetInboundCallsOptions {
+            file_path: "src/target.rs".to_string(),
+            line: 10,
+            character: 0,
+            depth: 1,
+        };
+
+        let result = try_lsp_index(&ctx, &opts, 1);
+        assert!(result.is_some(), "expected Some when callers exist");
+        let result = result.unwrap();
+        assert_eq!(result.source_layer, SourceLayer::LspIndex);
+        assert_eq!(result.target, "serve");
+        assert_eq!(result.callers.len(), 1);
+        assert_eq!(result.callers[0].symbol_name, "main");
+        assert_eq!(result.callers[0].call_sites.len(), 1);
+        assert_eq!(result.callers[0].call_sites[0].start_line, 12);
+    }
+
+    #[test]
+    fn test_try_lsp_index_returns_none_when_no_symbol() {
+        // No LSP symbol at cursor → try_lsp_index returns None.
+        let conn = test_db();
+        insert_file(&conn, "src/empty.rs", 0, 1);
+
+        let ctx = LayeredContext::new(&conn, None);
+        let opts = GetInboundCallsOptions {
+            file_path: "src/empty.rs".to_string(),
+            line: 5,
+            character: 0,
+            depth: 1,
+        };
+
+        assert!(
+            try_lsp_index(&ctx, &opts, 1).is_none(),
+            "expected None when no symbol at cursor"
+        );
+    }
+
+    #[test]
+    fn test_try_lsp_index_returns_none_when_no_callers() {
+        // Symbol exists at cursor but no call edges point to it.
+        let conn = test_db();
+        insert_file(&conn, "src/lonely.rs", 0, 1);
+
+        insert_lsp_symbol(
+            &conn,
+            "sym:lonely",
+            "lonely_fn",
+            12,
+            "src/lonely.rs",
+            1,
+            0,
+            10,
+            1,
+        );
+
+        let ctx = LayeredContext::new(&conn, None);
+        let opts = GetInboundCallsOptions {
+            file_path: "src/lonely.rs".to_string(),
+            line: 5,
+            character: 0,
+            depth: 1,
+        };
+
+        assert!(
+            try_lsp_index(&ctx, &opts, 1).is_none(),
+            "expected None when symbol exists but has no callers"
+        );
+    }
+
+    // --- try_treesitter direct tests ---
+
+    #[test]
+    fn test_try_treesitter_returns_some_with_treesitter_layer() {
+        // Insert ts_chunk + treesitter-sourced call edge. Place the LSP symbol
+        // far from cursor so try_lsp_index won't find it, but the ts_chunk
+        // covers the cursor so find_ts_symbol_at_cursor succeeds.
+        let conn = test_db();
+        insert_file(&conn, "src/target.rs", 1, 0);
+        insert_file(&conn, "src/caller.rs", 1, 0);
+
+        // ts_chunk covering cursor at line 10 (lines 5-15)
+        insert_ts_chunk(
+            &conn,
+            "src/target.rs",
+            5,
+            15,
+            "fn handle() { /* body */ }",
+            Some("target::handle"),
+        );
+
+        // LSP symbols needed for the call edge JOIN. Place target at lines
+        // 50-60 so lsp_symbol_at at line 10 misses it.
+        insert_lsp_symbol(
+            &conn,
+            "target::handle",
+            "handle",
+            12,
+            "src/target.rs",
+            50,
+            0,
+            60,
+            1,
+        );
+        insert_lsp_symbol(
+            &conn,
+            "ts:dispatcher",
+            "dispatch",
+            12,
+            "src/caller.rs",
+            1,
+            0,
+            10,
+            1,
+        );
+
+        insert_call_edge(
+            &conn,
+            "ts:dispatcher",
+            "target::handle",
+            "src/caller.rs",
+            "src/target.rs",
+            "treesitter",
+            "[]",
+        );
+
+        let ctx = LayeredContext::new(&conn, None);
+        let opts = GetInboundCallsOptions {
+            file_path: "src/target.rs".to_string(),
+            line: 10,
+            character: 0,
+            depth: 1,
+        };
+
+        let result = try_treesitter(&ctx, &opts, 1);
+        assert!(
+            result.is_some(),
+            "expected Some when treesitter callers exist"
+        );
+        let result = result.unwrap();
+        assert_eq!(result.source_layer, SourceLayer::TreeSitter);
+        assert_eq!(result.target, "handle");
+        assert_eq!(result.callers.len(), 1);
+        assert_eq!(result.callers[0].symbol_name, "dispatch");
+        assert_eq!(result.callers[0].depth, 1);
+        assert!(result.callers[0].callers.is_empty());
+    }
+
+    #[test]
+    fn test_try_treesitter_returns_none_when_no_chunk() {
+        // No ts_chunk at cursor → find_ts_symbol_at_cursor returns None.
+        let conn = test_db();
+        insert_file(&conn, "src/empty.rs", 1, 0);
+
+        let ctx = LayeredContext::new(&conn, None);
+        let opts = GetInboundCallsOptions {
+            file_path: "src/empty.rs".to_string(),
+            line: 5,
+            character: 0,
+            depth: 1,
+        };
+
+        assert!(
+            try_treesitter(&ctx, &opts, 1).is_none(),
+            "expected None when no ts_chunk at cursor"
+        );
+    }
+
+    // --- No-live-LSP fallback path (integration) ---
+
+    #[test]
+    fn test_no_live_lsp_falls_through_to_lsp_index() {
+        // When no live LSP client is configured, the entry point should skip
+        // the live LSP layer and fall through to the LSP index layer.
+        let conn = test_db();
+        insert_file(&conn, "src/target.rs", 0, 1);
+        insert_file(&conn, "src/caller.rs", 0, 1);
+
+        insert_lsp_symbol(
+            &conn,
+            "sym:target",
+            "compute",
+            12,
+            "src/target.rs",
+            5,
+            0,
+            15,
+            1,
+        );
+        insert_lsp_symbol(
+            &conn,
+            "sym:caller",
+            "orchestrate",
+            12,
+            "src/caller.rs",
+            1,
+            0,
+            20,
+            1,
+        );
+
+        insert_call_edge(
+            &conn,
+            "sym:caller",
+            "sym:target",
+            "src/caller.rs",
+            "src/target.rs",
+            "lsp",
+            "[]",
+        );
+
+        // No LSP client → ctx.has_live_lsp() is false
+        let ctx = LayeredContext::new(&conn, None);
+        let opts = GetInboundCallsOptions {
+            file_path: "src/target.rs".to_string(),
+            line: 10,
+            character: 0,
+            depth: 1,
+        };
+
+        let result = get_inbound_calls(&ctx, &opts).unwrap();
+        assert_eq!(
+            result.source_layer,
+            SourceLayer::LspIndex,
+            "should fall through to LspIndex when no live LSP"
+        );
+        assert_eq!(result.target, "compute");
+        assert_eq!(result.callers.len(), 1);
+        assert_eq!(result.callers[0].symbol_name, "orchestrate");
+    }
+
+    #[test]
+    fn test_no_live_lsp_falls_through_to_treesitter() {
+        // When no live LSP client is configured and no LSP symbol at cursor,
+        // should fall through to the tree-sitter layer.
+        let conn = test_db();
+        insert_file(&conn, "src/target.rs", 1, 0);
+        insert_file(&conn, "src/caller.rs", 1, 0);
+
+        // ts_chunk at cursor so find_ts_symbol_at_cursor succeeds
+        insert_ts_chunk(
+            &conn,
+            "src/target.rs",
+            5,
+            15,
+            "fn render() {}",
+            Some("target::render"),
+        );
+
+        // LSP symbol far from cursor (lines 50-60) so lsp_symbol_at misses
+        insert_lsp_symbol(
+            &conn,
+            "target::render",
+            "render",
+            12,
+            "src/target.rs",
+            50,
+            0,
+            60,
+            1,
+        );
+        insert_lsp_symbol(
+            &conn,
+            "ts:view",
+            "update_view",
+            12,
+            "src/caller.rs",
+            1,
+            0,
+            10,
+            1,
+        );
+
+        insert_call_edge(
+            &conn,
+            "ts:view",
+            "target::render",
+            "src/caller.rs",
+            "src/target.rs",
+            "treesitter",
+            "[]",
+        );
+
+        let ctx = LayeredContext::new(&conn, None);
+        let opts = GetInboundCallsOptions {
+            file_path: "src/target.rs".to_string(),
+            line: 10,
+            character: 0,
+            depth: 1,
+        };
+
+        let result = get_inbound_calls(&ctx, &opts).unwrap();
+        assert_eq!(
+            result.source_layer,
+            SourceLayer::TreeSitter,
+            "should fall through to TreeSitter when no LSP symbol at cursor"
+        );
+        assert_eq!(result.target, "render");
+        assert_eq!(result.callers.len(), 1);
+        assert_eq!(result.callers[0].symbol_name, "update_view");
+    }
+
+    // --- Live LSP with mock server ---
+
+    /// Spawn a Python process that acts as a mock LSP server.
+    ///
+    /// The script reads JSON-RPC messages from stdin and sends back canned
+    /// responses loaded from a JSON file. `null` entries consume a
+    /// notification without replying; non-null entries reply to a request.
+    fn spawn_mock_lsp(responses: &[serde_json::Value]) -> std::process::Child {
+        let temp_dir = tempfile::tempdir().expect("failed to create temp dir for mock LSP");
+        let response_file = temp_dir.path().join("mock_responses.json");
+        std::fs::write(&response_file, serde_json::to_string(responses).unwrap())
+            .expect("failed to write mock responses file");
+
+        let script = "\
+            import sys, json, os\n\
+            def read_msg():\n\
+            \tcl = None\n\
+            \twhile True:\n\
+            \t\tline = sys.stdin.readline()\n\
+            \t\tif not line: return None\n\
+            \t\tline = line.strip()\n\
+            \t\tif not line: break\n\
+            \t\tif line.startswith('Content-Length:'):\n\
+            \t\t\tcl = int(line.split(':', 1)[1].strip())\n\
+            \tif cl is None: return None\n\
+            \tbody = sys.stdin.read(cl)\n\
+            \treturn json.loads(body)\n\
+            def send_msg(obj):\n\
+            \ts = json.dumps(obj)\n\
+            \tsys.stdout.write(f'Content-Length: {len(s)}\\r\\n\\r\\n{s}')\n\
+            \tsys.stdout.flush()\n\
+            with open(os.environ['MOCK_RESPONSE_FILE']) as f:\n\
+            \tresponses = json.load(f)\n\
+            for resp in responses:\n\
+            \tread_msg()\n\
+            \tif resp is not None:\n\
+            \t\tsend_msg(resp)\n";
+
+        // Leak the tempdir so it outlives the child process.
+        std::mem::forget(temp_dir);
+
+        std::process::Command::new("python3")
+            .arg("-c")
+            .arg(script)
+            .env("MOCK_RESPONSE_FILE", &response_file)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("failed to spawn mock LSP python3 process")
+    }
+
+    /// Create a `SharedLspClient` from a mock LSP child process.
+    fn mock_lsp_client(child: &mut std::process::Child) -> crate::lsp_worker::SharedLspClient {
+        use crate::lsp_communication::LspJsonRpcClient;
+        let stdin = child.stdin.take().unwrap();
+        let stdout = child.stdout.take().unwrap();
+        let client = LspJsonRpcClient::new(stdin, stdout);
+        std::sync::Arc::new(std::sync::Mutex::new(Some(client)))
+    }
+
+    /// Create a temp file so `lsp_request_with_document` can read it.
+    fn create_temp_source_file() -> tempfile::TempDir {
+        use std::io::Write;
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        let file = dir.path().join("test.rs");
+        let mut f = std::fs::File::create(&file).unwrap();
+        writeln!(f, "fn main() {{}}").unwrap();
+        dir
+    }
+
+    #[test]
+    fn test_try_live_lsp_returns_callers() {
+        // Mock LSP returns a prepareCallHierarchy item, then an incomingCalls
+        // response with one caller.
+        //
+        // Protocol sequence:
+        // 1. didOpen notification (null — consume, don't reply)
+        // 2. prepareCallHierarchy request → response with one item
+        // 3. didClose notification (null — consume, don't reply)
+        // 4. incomingCalls request → response with one caller
+        let prepare_response = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": [{
+                "name": "process",
+                "kind": 12,
+                "uri": "file:///test.rs",
+                "range": {
+                    "start": { "line": 0, "character": 0 },
+                    "end": { "line": 0, "character": 14 }
+                },
+                "selectionRange": {
+                    "start": { "line": 0, "character": 3 },
+                    "end": { "line": 0, "character": 10 }
+                }
+            }]
+        });
+
+        let incoming_response = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "result": [{
+                "from": {
+                    "name": "caller_fn",
+                    "kind": 12,
+                    "uri": "file:///caller.rs",
+                    "range": {
+                        "start": { "line": 5, "character": 0 },
+                        "end": { "line": 10, "character": 1 }
+                    }
+                },
+                "fromRanges": [{
+                    "start": { "line": 7, "character": 4 },
+                    "end": { "line": 7, "character": 11 }
+                }]
+            }]
+        });
+
+        let responses = vec![
+            serde_json::Value::Null, // didOpen notification
+            prepare_response,        // prepareCallHierarchy request
+            serde_json::Value::Null, // didClose notification
+            incoming_response,       // incomingCalls request
+        ];
+
+        let mut child = spawn_mock_lsp(&responses);
+        let shared = mock_lsp_client(&mut child);
+
+        let temp_dir = create_temp_source_file();
+        let file_path = temp_dir.path().join("test.rs");
+
+        let conn = test_db();
+        let ctx = LayeredContext::new(&conn, Some(&shared));
+        let opts = GetInboundCallsOptions {
+            file_path: file_path.to_str().unwrap().to_string(),
+            line: 0,
+            character: 5,
+            depth: 1,
+        };
+
+        let result = try_live_lsp(&ctx, &opts, 1).unwrap();
+        assert!(result.is_some(), "expected Some from live LSP");
+        let result = result.unwrap();
+        assert_eq!(result.source_layer, SourceLayer::LiveLsp);
+        assert_eq!(result.target, "process");
+        assert_eq!(result.callers.len(), 1);
+        assert_eq!(result.callers[0].symbol_name, "caller_fn");
+        assert_eq!(result.callers[0].call_sites.len(), 1);
+        assert_eq!(result.callers[0].call_sites[0].start_line, 7);
+
+        let _ = child.wait();
+    }
+
+    #[test]
+    fn test_try_live_lsp_null_prepare_returns_none() {
+        // Mock LSP returns null for prepareCallHierarchy → try_live_lsp
+        // returns Ok(None).
+        let null_prepare = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": null
+        });
+
+        let responses = vec![
+            serde_json::Value::Null, // didOpen notification
+            null_prepare,            // prepareCallHierarchy returns null
+            serde_json::Value::Null, // didClose notification
+        ];
+
+        let mut child = spawn_mock_lsp(&responses);
+        let shared = mock_lsp_client(&mut child);
+
+        let temp_dir = create_temp_source_file();
+        let file_path = temp_dir.path().join("test.rs");
+
+        let conn = test_db();
+        let ctx = LayeredContext::new(&conn, Some(&shared));
+        let opts = GetInboundCallsOptions {
+            file_path: file_path.to_str().unwrap().to_string(),
+            line: 0,
+            character: 5,
+            depth: 1,
+        };
+
+        let result = try_live_lsp(&ctx, &opts, 1).unwrap();
+        assert!(
+            result.is_none(),
+            "expected None when prepareCallHierarchy returns null"
+        );
+
+        let _ = child.wait();
+    }
+
+    #[test]
+    fn test_try_live_lsp_empty_prepare_returns_none() {
+        // Mock LSP returns an empty array for prepareCallHierarchy → None.
+        let empty_prepare = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": []
+        });
+
+        let responses = vec![
+            serde_json::Value::Null, // didOpen notification
+            empty_prepare,           // prepareCallHierarchy returns []
+            serde_json::Value::Null, // didClose notification
+        ];
+
+        let mut child = spawn_mock_lsp(&responses);
+        let shared = mock_lsp_client(&mut child);
+
+        let temp_dir = create_temp_source_file();
+        let file_path = temp_dir.path().join("test.rs");
+
+        let conn = test_db();
+        let ctx = LayeredContext::new(&conn, Some(&shared));
+        let opts = GetInboundCallsOptions {
+            file_path: file_path.to_str().unwrap().to_string(),
+            line: 0,
+            character: 5,
+            depth: 1,
+        };
+
+        let result = try_live_lsp(&ctx, &opts, 1).unwrap();
+        assert!(
+            result.is_none(),
+            "expected None when prepareCallHierarchy returns empty array"
+        );
+
+        let _ = child.wait();
+    }
+
+    #[test]
+    fn test_try_live_lsp_with_cross_reference() {
+        // Mock LSP returns a caller via incomingCalls, and the index has an
+        // additional caller that was not returned by live LSP. The cross-
+        // reference should merge both.
+        let prepare_response = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": [{
+                "name": "target_fn",
+                "kind": 12,
+                "uri": "file:///test.rs",
+                "range": {
+                    "start": { "line": 0, "character": 0 },
+                    "end": { "line": 0, "character": 14 }
+                },
+                "selectionRange": {
+                    "start": { "line": 0, "character": 3 },
+                    "end": { "line": 0, "character": 10 }
+                }
+            }]
+        });
+
+        let incoming_response = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "result": [{
+                "from": {
+                    "name": "live_caller",
+                    "kind": 12,
+                    "uri": "file:///live.rs",
+                    "range": {
+                        "start": { "line": 1, "character": 0 },
+                        "end": { "line": 5, "character": 1 }
+                    }
+                },
+                "fromRanges": [{
+                    "start": { "line": 3, "character": 4 },
+                    "end": { "line": 3, "character": 15 }
+                }]
+            }]
+        });
+
+        let responses = vec![
+            serde_json::Value::Null, // didOpen
+            prepare_response,        // prepareCallHierarchy
+            serde_json::Value::Null, // didClose
+            incoming_response,       // incomingCalls
+        ];
+
+        let mut child = spawn_mock_lsp(&responses);
+        let shared = mock_lsp_client(&mut child);
+
+        let temp_dir = create_temp_source_file();
+        let file_path = temp_dir.path().join("test.rs");
+        let file_path_str = file_path.to_str().unwrap().to_string();
+
+        let conn = test_db();
+        insert_file(&conn, &file_path_str, 0, 1);
+        insert_file(&conn, "src/indexed_caller.rs", 0, 1);
+
+        // Index has a symbol matching "target_fn" in the same file
+        insert_lsp_symbol(
+            &conn,
+            "sym:target_fn",
+            "target_fn",
+            12,
+            &file_path_str,
+            0,
+            0,
+            14,
+            1,
+        );
+        insert_lsp_symbol(
+            &conn,
+            "sym:indexed_caller",
+            "indexed_caller",
+            12,
+            "src/indexed_caller.rs",
+            1,
+            0,
+            10,
+            1,
+        );
+
+        insert_call_edge(
+            &conn,
+            "sym:indexed_caller",
+            "sym:target_fn",
+            "src/indexed_caller.rs",
+            &file_path_str,
+            "lsp",
+            "[]",
+        );
+
+        let ctx = LayeredContext::new(&conn, Some(&shared));
+        let opts = GetInboundCallsOptions {
+            file_path: file_path_str,
+            line: 0,
+            character: 5,
+            depth: 1,
+        };
+
+        let result = try_live_lsp(&ctx, &opts, 1).unwrap();
+        assert!(result.is_some(), "expected Some from live LSP");
+        let result = result.unwrap();
+        assert_eq!(result.source_layer, SourceLayer::LiveLsp);
+        assert_eq!(result.target, "target_fn");
+
+        // Should have both the live caller and the indexed caller
+        assert_eq!(
+            result.callers.len(),
+            2,
+            "expected 2 callers: 1 live + 1 indexed"
+        );
+
+        let names: Vec<&str> = result
+            .callers
+            .iter()
+            .map(|c| c.symbol_name.as_str())
+            .collect();
+        assert!(names.contains(&"live_caller"), "should contain live_caller");
+        assert!(
+            names.contains(&"indexed_caller"),
+            "should contain indexed_caller from cross-reference"
+        );
+
+        let _ = child.wait();
+    }
 }

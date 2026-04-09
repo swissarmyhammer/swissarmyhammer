@@ -1239,4 +1239,301 @@ mod tests {
             "File should remain unindexed when client is None and shutdown is immediate"
         );
     }
+
+    // -- index_single_file with mock LSP client tests --
+
+    /// Spawn a mock LSP process that reads a notification (didOpen), responds
+    /// to a request (documentSymbol), then reads a notification (didClose).
+    ///
+    /// The mock expects exactly this sequence:
+    /// 1. Read one message (didOpen notification) — no reply
+    /// 2. Read one message (documentSymbol request) — reply with `response`
+    /// 3. Read one message (didClose notification) — no reply
+    ///
+    /// The response JSON is written to a temp file. The file path is passed
+    /// via the `MOCK_RESPONSE_FILE` environment variable so neither JSON nor
+    /// the path is ever interpolated into the Python source code.
+    fn spawn_mock_lsp_for_index_single_file(
+        response: serde_json::Value,
+        response_file: &std::path::Path,
+    ) -> std::process::Child {
+        // Write the response JSON to a file the Python script will read
+        std::fs::write(response_file, response.to_string())
+            .expect("failed to write mock response file");
+
+        // The script reads the response file path from an env var, avoiding
+        // any interpolation of untrusted data into Python source code.
+        let script = "\
+            import sys, json, os\n\
+            def read_msg():\n\
+            \tcl = None\n\
+            \twhile True:\n\
+            \t\tline = sys.stdin.readline()\n\
+            \t\tif not line: return None\n\
+            \t\tline = line.strip()\n\
+            \t\tif not line: break\n\
+            \t\tif line.startswith('Content-Length:'):\n\
+            \t\t\tcl = int(line.split(':', 1)[1].strip())\n\
+            \tif cl is None: return None\n\
+            \tbody = sys.stdin.read(cl)\n\
+            \treturn json.loads(body)\n\
+            def send_msg(obj):\n\
+            \ts = json.dumps(obj)\n\
+            \tsys.stdout.write(f'Content-Length: {len(s)}\\r\\n\\r\\n{s}')\n\
+            \tsys.stdout.flush()\n\
+            with open(os.environ['MOCK_RESPONSE_FILE']) as f:\n\
+            \tresponse = json.load(f)\n\
+            read_msg()\n\
+            read_msg()\n\
+            send_msg(response)\n\
+            read_msg()\n";
+
+        std::process::Command::new("python3")
+            .arg("-c")
+            .arg(script)
+            .env("MOCK_RESPONSE_FILE", response_file)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("failed to spawn mock LSP python3 process for index_single_file")
+    }
+
+    #[test]
+    fn test_index_single_file_with_mock_lsp_persists_symbols() {
+        // Verify that index_single_file reads a temp file, talks to a mock LSP
+        // server, persists the returned symbols, and marks lsp_indexed = 1.
+        use std::io::Write;
+
+        let symbol_response = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": [
+                {
+                    "name": "my_function",
+                    "kind": 12,
+                    "range": {"start": {"line": 0, "character": 0}, "end": {"line": 2, "character": 1}},
+                    "selectionRange": {"start": {"line": 0, "character": 3}, "end": {"line": 0, "character": 14}}
+                }
+            ]
+        });
+
+        // Create a real temp dir for both the source file and mock response file
+        let temp_dir = tempfile::tempdir().unwrap();
+        let file_path = temp_dir.path().join("demo.rs");
+        {
+            let mut f = std::fs::File::create(&file_path).unwrap();
+            writeln!(f, "fn my_function() {{}}").unwrap();
+        }
+        let response_file = temp_dir.path().join("mock_response.json");
+
+        let db = create_test_db();
+        let relative_path = "src/demo.rs";
+        insert_test_file(&db, relative_path);
+        let shared_db: SharedDb = Arc::new(Mutex::new(db));
+
+        let mut child = spawn_mock_lsp_for_index_single_file(symbol_response, &response_file);
+        let stdin = child.stdin.take().unwrap();
+        let stdout = child.stdout.take().unwrap();
+        let mut client = LspJsonRpcClient::new(stdin, stdout);
+
+        let result = index_single_file(&mut client, &shared_db, &file_path, relative_path);
+        assert!(
+            result.is_ok(),
+            "index_single_file should succeed: {:?}",
+            result
+        );
+        let symbol_count = result.unwrap();
+        assert_eq!(symbol_count, 1, "should have persisted 1 symbol");
+
+        // Verify lsp_indexed was marked
+        let conn = shared_db.lock().unwrap();
+        let lsp: i64 = conn
+            .query_row(
+                "SELECT lsp_indexed FROM indexed_files WHERE file_path = ?1",
+                [relative_path],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(lsp, 1, "lsp_indexed should be 1 after successful indexing");
+
+        // Verify symbol was written to lsp_symbols
+        let sym_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM lsp_symbols WHERE file_path = ?1",
+                [relative_path],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(sym_count, 1, "1 symbol should be persisted in lsp_symbols");
+
+        let _ = child.wait();
+    }
+
+    #[test]
+    fn test_index_single_file_missing_file_returns_io_error() {
+        // When the file doesn't exist on disk, index_single_file should return
+        // an I/O error before any LSP interaction occurs.
+        use serde_json::json;
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let response_file = temp_dir.path().join("mock_response.json");
+
+        // The mock won't be used because the file read fails first,
+        // but we still need a valid LspJsonRpcClient.
+        let symbol_response = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": []
+        });
+
+        let mut child = spawn_mock_lsp_for_index_single_file(symbol_response, &response_file);
+        let stdin = child.stdin.take().unwrap();
+        let stdout = child.stdout.take().unwrap();
+        let mut client = LspJsonRpcClient::new(stdin, stdout);
+
+        let db = create_test_db();
+        insert_test_file(&db, "nonexistent.rs");
+        let shared_db: SharedDb = Arc::new(Mutex::new(db));
+
+        let result = index_single_file(
+            &mut client,
+            &shared_db,
+            Path::new("/definitely/nonexistent/path/demo.rs"),
+            "nonexistent.rs",
+        );
+        assert!(
+            result.is_err(),
+            "index_single_file should fail with I/O error for missing file"
+        );
+
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+
+    // -- Poison recovery tests --
+
+    #[test]
+    fn test_loop_recovers_from_poisoned_client_mutex() {
+        // When a thread panics while holding the client mutex lock, the mutex
+        // becomes poisoned. The worker loop should recover via `into_inner`
+        // and continue operating. Here we poison the mutex, insert dirty files,
+        // and verify the loop doesn't panic — it should recover and find
+        // the client is None (since we poison with None), then sleep and retry.
+        let workspace_root = std::env::temp_dir();
+        let db = create_shared_test_db();
+        {
+            let conn = db.lock().unwrap();
+            insert_test_file(&conn, "src/poison_test.rs");
+        }
+
+        let client: SharedLspClient = Arc::new(Mutex::new(None));
+
+        // Poison the mutex by panicking in a thread that holds the lock
+        let client_clone = Arc::clone(&client);
+        let poison_handle = thread::spawn(move || {
+            let _guard = client_clone.lock().unwrap();
+            panic!("intentional panic to poison the mutex");
+        });
+        // The thread panicked — wait for it to finish
+        let _ = poison_handle.join();
+
+        // Verify the mutex is actually poisoned
+        assert!(
+            client.lock().is_err(),
+            "Client mutex should be poisoned after thread panic"
+        );
+
+        let config = LspWorkerConfig {
+            batch_size: 10,
+            client_unavailable_sleep: Duration::from_millis(5),
+            idle_sleep: Duration::from_millis(5),
+        };
+        let shutdown = new_shutdown_flag();
+        let shutdown_clone = Arc::clone(&shutdown);
+
+        let handle = thread::spawn(move || {
+            run_lsp_indexing_loop(
+                &workspace_root,
+                &db,
+                &client,
+                &config,
+                "rust-analyzer",
+                &shutdown,
+            )
+        });
+
+        // Give the loop time to hit the poisoned mutex and recover
+        thread::sleep(Duration::from_millis(50));
+        shutdown_clone.store(true, Ordering::Relaxed);
+
+        let result = handle
+            .join()
+            .expect("Worker thread should not panic on poisoned mutex");
+        assert!(
+            result.is_ok(),
+            "Loop should return Ok after recovering from poisoned client mutex"
+        );
+    }
+
+    #[test]
+    fn test_loop_recovers_from_poisoned_db_mutex() {
+        // The DB mutex can also be poisoned (unwrap_or_else on line 149).
+        // Verify the loop recovers from a poisoned DB mutex too.
+        let workspace_root = std::env::temp_dir();
+
+        // Create a shared DB and poison its mutex
+        let db = create_shared_test_db();
+
+        // Insert a file before poisoning
+        {
+            let conn = db.lock().unwrap();
+            insert_test_file(&conn, "src/db_poison.rs");
+        }
+
+        // Poison the DB mutex
+        let db_clone = Arc::clone(&db);
+        let poison_handle = thread::spawn(move || {
+            let _guard = db_clone.lock().unwrap();
+            panic!("intentional panic to poison the DB mutex");
+        });
+        let _ = poison_handle.join();
+
+        assert!(
+            db.lock().is_err(),
+            "DB mutex should be poisoned after thread panic"
+        );
+
+        let client: SharedLspClient = Arc::new(Mutex::new(None));
+        let config = LspWorkerConfig {
+            batch_size: 10,
+            client_unavailable_sleep: Duration::from_millis(5),
+            idle_sleep: Duration::from_millis(5),
+        };
+        let shutdown = new_shutdown_flag();
+        let shutdown_clone = Arc::clone(&shutdown);
+
+        let handle = thread::spawn(move || {
+            run_lsp_indexing_loop(
+                &workspace_root,
+                &db,
+                &client,
+                &config,
+                "rust-analyzer",
+                &shutdown,
+            )
+        });
+
+        // Give the loop time to recover from the poisoned DB mutex and process
+        thread::sleep(Duration::from_millis(50));
+        shutdown_clone.store(true, Ordering::Relaxed);
+
+        let result = handle
+            .join()
+            .expect("Worker thread should not panic on poisoned DB mutex");
+        assert!(
+            result.is_ok(),
+            "Loop should return Ok after recovering from poisoned DB mutex"
+        );
+    }
 }

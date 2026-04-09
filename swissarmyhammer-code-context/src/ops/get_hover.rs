@@ -548,6 +548,140 @@ mod tests {
         assert_eq!(language_id_from_path("noext"), "plaintext");
     }
 
+    // --- parse_hover_contents edge cases ---
+
+    #[test]
+    fn test_parse_hover_contents_marked_string_empty_language() {
+        // When an array item has {language: "", value: "..."}, the value should
+        // be returned without backtick wrapping (empty language means plain text).
+        let response = serde_json::json!({
+            "contents": [
+                { "language": "", "value": "some code here" }
+            ]
+        });
+        let result = parse_hover_contents(&response);
+        assert_eq!(result, "some code here");
+        assert!(
+            !result.contains("```"),
+            "empty language should not produce backtick fencing"
+        );
+    }
+
+    #[test]
+    fn test_parse_hover_contents_mixed_empty_and_nonempty_language() {
+        // Verify empty-language and non-empty-language items are handled
+        // correctly when mixed in the same array.
+        let response = serde_json::json!({
+            "contents": [
+                { "language": "rust", "value": "fn typed()" },
+                { "language": "", "value": "plain text" }
+            ]
+        });
+        let result = parse_hover_contents(&response);
+        assert!(result.contains("```rust\nfn typed()\n```"));
+        assert!(result.contains("plain text"));
+        assert!(
+            !result.contains("```\nplain text"),
+            "empty-language item should not get backtick fencing"
+        );
+    }
+
+    #[test]
+    fn test_parse_hover_contents_unrecognized_items_skipped() {
+        // Array items that are neither strings nor {language, value} objects
+        // should be silently skipped.
+        let response = serde_json::json!({
+            "contents": [
+                42,
+                true,
+                null,
+                { "random": "data without value key" },
+                "valid string item"
+            ]
+        });
+        let result = parse_hover_contents(&response);
+        // Only the valid string item should survive.
+        assert_eq!(result, "valid string item");
+    }
+
+    #[test]
+    fn test_parse_hover_contents_all_items_unrecognized() {
+        // When every array item is unrecognized, the result should be empty.
+        let response = serde_json::json!({
+            "contents": [
+                42,
+                null,
+                { "unexpected": "shape" },
+                false
+            ]
+        });
+        let result = parse_hover_contents(&response);
+        assert!(
+            result.is_empty(),
+            "all-unrecognized array should produce empty string"
+        );
+    }
+
+    // --- try_live_lsp graceful degradation ---
+
+    #[test]
+    fn test_try_live_lsp_skipped_when_shared_client_contains_none() {
+        // When a SharedLspClient is present but contains None (no connected
+        // process), has_live_lsp() returns false and get_hover should fall
+        // through to index layers without error.
+        let conn = test_db();
+        insert_file(&conn, "src/main.rs", 0, 0);
+
+        let shared: crate::lsp_worker::SharedLspClient =
+            std::sync::Arc::new(std::sync::Mutex::new(None));
+        let ctx = LayeredContext::new(&conn, Some(&shared));
+
+        let opts = GetHoverOptions {
+            file_path: "src/main.rs".to_string(),
+            line: 1,
+            character: 0,
+        };
+        // No index data exists, so the result should be None (graceful fall-through).
+        let result = get_hover(&ctx, &opts).unwrap();
+        assert!(
+            result.is_none(),
+            "should fall through all layers and return None"
+        );
+    }
+
+    #[test]
+    fn test_try_live_lsp_skipped_falls_to_lsp_index() {
+        // When has_live_lsp() is false but LSP index data exists, the hover
+        // result should come from the LSP index layer.
+        let conn = test_db();
+        insert_file(&conn, "src/main.rs", 0, 1);
+        insert_lsp_symbol(
+            &conn,
+            "sym1",
+            "example",
+            12,
+            Some("fn example() -> bool"),
+            "src/main.rs",
+            1,
+            0,
+            10,
+            1,
+        );
+
+        let shared: crate::lsp_worker::SharedLspClient =
+            std::sync::Arc::new(std::sync::Mutex::new(None));
+        let ctx = LayeredContext::new(&conn, Some(&shared));
+
+        let opts = GetHoverOptions {
+            file_path: "src/main.rs".to_string(),
+            line: 5,
+            character: 0,
+        };
+        let result = get_hover(&ctx, &opts).unwrap().unwrap();
+        assert_eq!(result.source_layer, SourceLayer::LspIndex);
+        assert_eq!(result.contents, "fn example() -> bool");
+    }
+
     // --- HoverResult serialization ---
 
     #[test]

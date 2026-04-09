@@ -570,4 +570,88 @@ settings:
             expected.settings.stderr_log_level
         );
     }
+
+    /// RAII guard that restores the working directory on drop.
+    struct CwdGuard {
+        original: PathBuf,
+    }
+
+    impl CwdGuard {
+        fn new(target: &std::path::Path) -> Self {
+            let original = std::env::current_dir().expect("failed to get current dir");
+            std::env::set_current_dir(target).expect("failed to set current dir");
+            Self { original }
+        }
+    }
+
+    impl Drop for CwdGuard {
+        fn drop(&mut self) {
+            let _ = std::env::set_current_dir(&self.original);
+        }
+    }
+
+    #[test]
+    fn test_load_code_context_config_returns_builtin_in_temp_dir() {
+        // Call the real load_code_context_config() from a temp directory that has
+        // no .code-context/ overlay. The function should still succeed and return
+        // the builtin config with non-empty stderr filters.
+        let temp = tempfile::TempDir::new().unwrap();
+        let _guard = CwdGuard::new(temp.path());
+
+        let config = load_code_context_config();
+
+        assert!(
+            !config.stderr_filters.is_empty(),
+            "load_code_context_config() should return builtin stderr filter patterns"
+        );
+        // Verify the builtin config matches what we'd get by parsing the constant directly
+        let expected = parse_code_context_config(BUILTIN_CONFIG_YAML).unwrap();
+        assert_eq!(
+            config.stderr_filters.len(),
+            expected.stderr_filters.len(),
+            "Should have the same number of filters as the builtin config"
+        );
+        assert_eq!(config.settings.stderr_log_level, "debug");
+    }
+
+    #[test]
+    fn test_load_from_paths_single_nonexistent_dir_continues() {
+        // A single non-existent overlay path should not cause an error — the
+        // function should silently skip it and return the builtin config.
+        // With a single path, the code takes the FileSource::Local branch (i == 0
+        // but overlay_paths.len() == 1), verifying that code path.
+        let config = load_code_context_config_from_paths(&[PathBuf::from(
+            "/tmp/definitely-does-not-exist-code-context-test",
+        )]);
+
+        assert!(
+            !config.stderr_filters.is_empty(),
+            "Should still have builtin filters after skipping a non-existent dir"
+        );
+        let expected = parse_code_context_config(BUILTIN_CONFIG_YAML).unwrap();
+        assert_eq!(config.stderr_filters.len(), expected.stderr_filters.len());
+    }
+
+    #[test]
+    fn test_merge_config_stack_all_invalid_yaml_returns_default() {
+        // When every entry in the VFS stack contains unparseable YAML,
+        // merge_config_stack should warn for each, then fall back to
+        // CodeContextConfigYaml::default() via unwrap_or_default().
+        let mut vfs = VirtualFileSystem::<DirConfig>::new("code-context");
+        // Add entries with invalid YAML content instead of real config
+        vfs.add_builtin(CONFIG_NAME, "this: is: not: valid: [[[");
+
+        let config = merge_config_stack(&vfs);
+
+        // All entries failed to parse, so config should be the Default
+        assert!(
+            config.stderr_filters.is_empty(),
+            "Default config should have no stderr filters"
+        );
+        assert_eq!(
+            config.settings.stderr_log_level, "debug",
+            "Default settings should use 'debug' log level"
+        );
+        assert_eq!(config, CodeContextConfigYaml::default());
+    }
 }

@@ -1761,4 +1761,664 @@ mod tests {
         assert_eq!(symbols.len(), 1);
         assert_eq!(symbols[0].name, "in_a");
     }
+
+    // --- unwrap_lsp_result ---
+
+    /// A JSON-RPC response with an `error` field is converted to Err.
+    #[test]
+    fn test_unwrap_lsp_result_error_field_returns_err() {
+        let response = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "error": {
+                "code": -32600,
+                "message": "Invalid request"
+            }
+        });
+        let result = unwrap_lsp_result(response);
+        assert!(result.is_err());
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(
+            err_msg.contains("Invalid request"),
+            "error message should contain the LSP error text, got: {}",
+            err_msg
+        );
+    }
+
+    /// An error field without a `message` sub-field falls back to "unknown LSP error".
+    #[test]
+    fn test_unwrap_lsp_result_error_without_message() {
+        let response = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "error": { "code": -32600 }
+        });
+        let result = unwrap_lsp_result(response);
+        assert!(result.is_err());
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(
+            err_msg.contains("unknown LSP error"),
+            "should fall back to 'unknown LSP error', got: {}",
+            err_msg
+        );
+    }
+
+    /// A JSON-RPC response with a `result` field extracts just that field.
+    #[test]
+    fn test_unwrap_lsp_result_extracts_result_field() {
+        let response = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": { "contents": "hover info" }
+        });
+        let value = unwrap_lsp_result(response).unwrap();
+        assert_eq!(value, serde_json::json!({ "contents": "hover info" }));
+    }
+
+    /// A response with neither `error` nor `result` is returned as-is.
+    #[test]
+    fn test_unwrap_lsp_result_plain_value_returned_as_is() {
+        let response = serde_json::json!({ "some_field": 42 });
+        let value = unwrap_lsp_result(response.clone()).unwrap();
+        assert_eq!(value, response);
+    }
+
+    /// A null `result` field is correctly extracted (not treated as absent).
+    #[test]
+    fn test_unwrap_lsp_result_null_result_field() {
+        let response = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": null
+        });
+        let value = unwrap_lsp_result(response).unwrap();
+        assert!(value.is_null());
+    }
+
+    // --- lsp_callers_of ---
+
+    /// lsp_callers_of returns caller symbols with correct fields and call sites.
+    #[test]
+    fn test_lsp_callers_of_returns_caller_symbols() {
+        let conn = test_db();
+        insert_file(&conn, "src/main.rs", 1, 1);
+        insert_file(&conn, "src/lib.rs", 1, 1);
+
+        // The callee (target) symbol
+        insert_lsp_symbol(
+            &conn,
+            "sym:target",
+            "process",
+            12,
+            "src/lib.rs",
+            1,
+            0,
+            10,
+            1,
+        );
+        // Two caller symbols
+        insert_lsp_symbol(
+            &conn,
+            "sym:caller_a",
+            "run_main",
+            12,
+            "src/main.rs",
+            1,
+            0,
+            20,
+            1,
+        );
+        insert_lsp_symbol(
+            &conn,
+            "sym:caller_b",
+            "do_setup",
+            6,
+            "src/main.rs",
+            25,
+            0,
+            40,
+            1,
+        );
+
+        // Edges: caller_a -> target and caller_b -> target
+        let ranges_a = r#"[{"start":{"line":5,"character":4},"end":{"line":5,"character":11}}]"#;
+        insert_call_edge(
+            &conn,
+            "sym:caller_a",
+            "sym:target",
+            "src/main.rs",
+            "src/lib.rs",
+            "lsp",
+            ranges_a,
+        );
+        insert_call_edge(
+            &conn,
+            "sym:caller_b",
+            "sym:target",
+            "src/main.rs",
+            "src/lib.rs",
+            "lsp",
+            "[]",
+        );
+
+        let ctx = LayeredContext::new(&conn, None);
+        let callers = ctx.lsp_callers_of("sym:target");
+
+        assert_eq!(callers.len(), 2);
+
+        let names: Vec<&str> = callers.iter().map(|c| c.symbol.name.as_str()).collect();
+        assert!(names.contains(&"run_main"));
+        assert!(names.contains(&"do_setup"));
+
+        // Verify call sites parsed correctly for caller_a
+        let a = callers
+            .iter()
+            .find(|c| c.symbol.name == "run_main")
+            .unwrap();
+        assert_eq!(a.call_sites.len(), 1);
+        assert_eq!(a.call_sites[0].start_line, 5);
+        assert_eq!(a.call_sites[0].start_character, 4);
+        assert_eq!(a.symbol.kind, "function");
+        assert_eq!(a.symbol.file_path, "src/main.rs");
+        assert_eq!(a.symbol.range.start_line, 1);
+        assert_eq!(a.symbol.range.end_line, 20);
+
+        // Verify kind translation for method (kind=6)
+        let b = callers
+            .iter()
+            .find(|c| c.symbol.name == "do_setup")
+            .unwrap();
+        assert_eq!(b.symbol.kind, "method");
+        assert!(b.call_sites.is_empty());
+    }
+
+    /// lsp_callers_of returns empty when no edges point to the callee.
+    #[test]
+    fn test_lsp_callers_of_returns_empty_when_no_edges() {
+        let conn = test_db();
+        insert_file(&conn, "src/lib.rs", 1, 1);
+        insert_lsp_symbol(
+            &conn,
+            "sym:orphan",
+            "orphan_fn",
+            12,
+            "src/lib.rs",
+            1,
+            0,
+            5,
+            1,
+        );
+
+        let ctx = LayeredContext::new(&conn, None);
+        let callers = ctx.lsp_callers_of("sym:orphan");
+        assert!(callers.is_empty());
+    }
+
+    /// lsp_callers_of parses multiple call sites from a single edge.
+    #[test]
+    fn test_lsp_callers_of_parses_multiple_call_sites() {
+        let conn = test_db();
+        insert_file(&conn, "src/main.rs", 1, 1);
+        insert_file(&conn, "src/lib.rs", 1, 1);
+
+        insert_lsp_symbol(
+            &conn,
+            "sym:caller",
+            "multi_caller",
+            12,
+            "src/main.rs",
+            1,
+            0,
+            50,
+            1,
+        );
+        insert_lsp_symbol(
+            &conn,
+            "sym:callee",
+            "target_fn",
+            12,
+            "src/lib.rs",
+            1,
+            0,
+            10,
+            1,
+        );
+
+        let ranges = r#"[{"start":{"line":10,"character":4},"end":{"line":10,"character":13}},{"start":{"line":30,"character":8},"end":{"line":30,"character":17}}]"#;
+        insert_call_edge(
+            &conn,
+            "sym:caller",
+            "sym:callee",
+            "src/main.rs",
+            "src/lib.rs",
+            "lsp",
+            ranges,
+        );
+
+        let ctx = LayeredContext::new(&conn, None);
+        let callers = ctx.lsp_callers_of("sym:callee");
+        assert_eq!(callers.len(), 1);
+        assert_eq!(callers[0].call_sites.len(), 2);
+        assert_eq!(callers[0].call_sites[0].start_line, 10);
+        assert_eq!(callers[0].call_sites[1].start_line, 30);
+    }
+
+    /// lsp_callers_of includes the symbol's detail field when present.
+    #[test]
+    fn test_lsp_callers_of_includes_detail() {
+        let conn = test_db();
+        insert_file(&conn, "src/main.rs", 1, 1);
+        insert_file(&conn, "src/lib.rs", 1, 1);
+
+        // Insert caller with detail via the full fixture helper
+        crate::test_fixtures::insert_lsp_symbol(
+            &conn,
+            "sym:detailed",
+            "handler",
+            6,
+            "src/main.rs",
+            1,
+            0,
+            15,
+            1,
+            Some("impl Server"),
+        );
+        insert_lsp_symbol(
+            &conn,
+            "sym:target",
+            "process",
+            12,
+            "src/lib.rs",
+            1,
+            0,
+            10,
+            1,
+        );
+
+        insert_call_edge(
+            &conn,
+            "sym:detailed",
+            "sym:target",
+            "src/main.rs",
+            "src/lib.rs",
+            "lsp",
+            "[]",
+        );
+
+        let ctx = LayeredContext::new(&conn, None);
+        let callers = ctx.lsp_callers_of("sym:target");
+        assert_eq!(callers.len(), 1);
+        assert_eq!(callers[0].symbol.detail.as_deref(), Some("impl Server"));
+    }
+
+    // --- ts_chunks_matching additional coverage ---
+
+    /// ts_chunks_matching returns all ChunkInfo fields correctly.
+    #[test]
+    fn test_ts_chunks_matching_verifies_all_fields() {
+        let conn = test_db();
+        insert_file(&conn, "src/main.rs", 1, 0);
+        insert_ts_chunk(
+            &conn,
+            "src/main.rs",
+            10,
+            25,
+            "fn process_data(input: &str) -> Result<()> { Ok(()) }",
+            Some("process_data"),
+        );
+
+        let ctx = LayeredContext::new(&conn, None);
+        let results = ctx.ts_chunks_matching("process_data", 10);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].file_path, "src/main.rs");
+        assert_eq!(results[0].start_line, 10);
+        assert_eq!(results[0].end_line, 25);
+        assert!(results[0].text.contains("process_data"));
+    }
+
+    /// ts_chunks_matching respects the limit parameter.
+    #[test]
+    fn test_ts_chunks_matching_respects_limit() {
+        let conn = test_db();
+        insert_file(&conn, "src/main.rs", 1, 0);
+        insert_ts_chunk(&conn, "src/main.rs", 1, 5, "fn alpha() {}", None);
+        insert_ts_chunk(&conn, "src/main.rs", 10, 15, "fn alpha_beta() {}", None);
+        insert_ts_chunk(&conn, "src/main.rs", 20, 25, "fn alpha_gamma() {}", None);
+
+        let ctx = LayeredContext::new(&conn, None);
+        let results = ctx.ts_chunks_matching("alpha", 2);
+        assert_eq!(results.len(), 2);
+    }
+
+    /// ts_chunks_matching returns results from multiple files.
+    #[test]
+    fn test_ts_chunks_matching_across_files() {
+        let conn = test_db();
+        insert_file(&conn, "src/a.rs", 1, 0);
+        insert_file(&conn, "src/b.rs", 1, 0);
+        insert_ts_chunk(&conn, "src/a.rs", 1, 5, "fn shared_name() {}", None);
+        insert_ts_chunk(&conn, "src/b.rs", 1, 5, "fn shared_name() {}", None);
+
+        let ctx = LayeredContext::new(&conn, None);
+        let results = ctx.ts_chunks_matching("shared_name", 10);
+        assert_eq!(results.len(), 2);
+
+        let paths: Vec<&str> = results.iter().map(|r| r.file_path.as_str()).collect();
+        assert!(paths.contains(&"src/a.rs"));
+        assert!(paths.contains(&"src/b.rs"));
+    }
+
+    /// ts_chunks_matching returns empty when nothing matches.
+    #[test]
+    fn test_ts_chunks_matching_no_match() {
+        let conn = test_db();
+        insert_file(&conn, "src/main.rs", 1, 0);
+        insert_ts_chunk(&conn, "src/main.rs", 1, 5, "fn foo() {}", None);
+
+        let ctx = LayeredContext::new(&conn, None);
+        let results = ctx.ts_chunks_matching("nonexistent_text", 10);
+        assert!(results.is_empty());
+    }
+
+    // --- ts_symbols_in_file: verify detail is always None ---
+
+    /// ts_symbols_in_file always sets detail to None since ts_chunks has no detail column.
+    #[test]
+    fn test_ts_symbols_in_file_detail_is_none() {
+        let conn = test_db();
+        insert_file(&conn, "src/lib.rs", 1, 0);
+        insert_ts_chunk(
+            &conn,
+            "src/lib.rs",
+            1,
+            10,
+            "impl Foo { fn bar() {} }",
+            Some("Foo::bar"),
+        );
+
+        let ctx = LayeredContext::new(&conn, None);
+        let symbols = ctx.ts_symbols_in_file("src/lib.rs");
+        assert_eq!(symbols.len(), 1);
+        assert!(
+            symbols[0].detail.is_none(),
+            "ts_symbols_in_file should always set detail to None"
+        );
+    }
+
+    // --- enrich_location: verify LSP index symbol fields in detail ---
+
+    /// enrich_location via LSP index returns SourceLayer::LspIndex with full symbol fields.
+    #[test]
+    fn test_enrich_location_lsp_index_symbol_fields() {
+        let conn = test_db();
+        insert_file(&conn, "src/main.rs", 1, 1);
+        crate::test_fixtures::insert_lsp_symbol(
+            &conn,
+            "sym:enrich",
+            "handle_request",
+            6,
+            "src/main.rs",
+            10,
+            4,
+            30,
+            5,
+            Some("impl Server"),
+        );
+
+        let ctx = LayeredContext::new(&conn, None);
+        let range = LspRange {
+            start_line: 15,
+            start_character: 0,
+            end_line: 15,
+            end_character: 0,
+        };
+        let result = ctx.enrich_location("src/main.rs", &range);
+        assert_eq!(result.source_layer, SourceLayer::LspIndex);
+
+        let sym = result.symbol.expect("should have symbol");
+        assert_eq!(sym.name, "handle_request");
+        assert_eq!(sym.kind, "method");
+        assert_eq!(sym.detail.as_deref(), Some("impl Server"));
+        assert_eq!(sym.file_path, "src/main.rs");
+        assert_eq!(sym.range.start_line, 10);
+        assert_eq!(sym.range.start_character, 4);
+        assert_eq!(sym.range.end_line, 30);
+        assert_eq!(sym.range.end_character, 5);
+    }
+
+    // --- Mock LSP helpers for live-path tests ---
+
+    /// Spawn a Python process that acts as a mock LSP server.
+    ///
+    /// The script reads JSON-RPC messages from stdin and sends back canned
+    /// responses loaded from a JSON file. Each entry in the responses array is
+    /// either `null` (read a notification, no reply) or a JSON-RPC response
+    /// object (read a request, reply with this object).
+    fn spawn_mock_lsp(responses: &[serde_json::Value]) -> std::process::Child {
+        let temp_dir = tempfile::tempdir().expect("failed to create temp dir for mock LSP");
+        let response_file = temp_dir.path().join("mock_responses.json");
+        std::fs::write(&response_file, serde_json::to_string(responses).unwrap())
+            .expect("failed to write mock responses file");
+
+        let script = "\
+            import sys, json, os\n\
+            def read_msg():\n\
+            \tcl = None\n\
+            \twhile True:\n\
+            \t\tline = sys.stdin.readline()\n\
+            \t\tif not line: return None\n\
+            \t\tline = line.strip()\n\
+            \t\tif not line: break\n\
+            \t\tif line.startswith('Content-Length:'):\n\
+            \t\t\tcl = int(line.split(':', 1)[1].strip())\n\
+            \tif cl is None: return None\n\
+            \tbody = sys.stdin.read(cl)\n\
+            \treturn json.loads(body)\n\
+            def send_msg(obj):\n\
+            \ts = json.dumps(obj)\n\
+            \tsys.stdout.write(f'Content-Length: {len(s)}\\r\\n\\r\\n{s}')\n\
+            \tsys.stdout.flush()\n\
+            with open(os.environ['MOCK_RESPONSE_FILE']) as f:\n\
+            \tresponses = json.load(f)\n\
+            for resp in responses:\n\
+            \tread_msg()\n\
+            \tif resp is not None:\n\
+            \t\tsend_msg(resp)\n";
+
+        // Keep the tempdir alive for the lifetime of the child process.
+        std::mem::forget(temp_dir);
+
+        std::process::Command::new("python3")
+            .arg("-c")
+            .arg(script)
+            .env("MOCK_RESPONSE_FILE", &response_file)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("failed to spawn mock LSP python3 process")
+    }
+
+    /// Create a `SharedLspClient` from a mock LSP child process.
+    fn mock_lsp_client(child: &mut std::process::Child) -> SharedLspClient {
+        use crate::lsp_communication::LspJsonRpcClient;
+        let stdin = child.stdin.take().unwrap();
+        let stdout = child.stdout.take().unwrap();
+        let client = LspJsonRpcClient::new(stdin, stdout);
+        std::sync::Arc::new(std::sync::Mutex::new(Some(client)))
+    }
+
+    /// Create a temp directory with a `test.rs` file so that
+    /// `lsp_request_with_document` / `lsp_multi_request_with_document` can
+    /// read the file content when building the didOpen notification.
+    fn create_temp_source_file() -> tempfile::TempDir {
+        use std::io::Write;
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        let file = dir.path().join("test.rs");
+        let mut f = std::fs::File::create(&file).unwrap();
+        writeln!(f, "fn main() {{}}").unwrap();
+        dir
+    }
+
+    // --- Layer 1: Live LSP — mock-based tests ---
+
+    #[test]
+    fn test_lsp_request_with_mock_returns_response() {
+        // The mock LSP reads one request and replies with a canned response.
+        let hover_response = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": { "contents": "fn main()" }
+        });
+        let responses = vec![hover_response];
+
+        let mut child = spawn_mock_lsp(&responses);
+        let shared = mock_lsp_client(&mut child);
+
+        let conn = test_db();
+        let ctx = LayeredContext::new(&conn, Some(&shared));
+        let result = ctx
+            .lsp_request("textDocument/hover", serde_json::json!({}))
+            .unwrap();
+
+        assert!(result.is_some());
+        let value = result.unwrap();
+        assert_eq!(value["contents"], "fn main()");
+    }
+
+    #[test]
+    fn test_lsp_notify_with_mock_succeeds() {
+        // The mock LSP reads one notification (null = no reply).
+        let responses = vec![serde_json::Value::Null];
+
+        let mut child = spawn_mock_lsp(&responses);
+        let shared = mock_lsp_client(&mut child);
+
+        let conn = test_db();
+        let ctx = LayeredContext::new(&conn, Some(&shared));
+        ctx.lsp_notify("textDocument/didOpen", serde_json::json!({}))
+            .unwrap();
+    }
+
+    #[test]
+    fn test_lsp_notify_returns_ok_when_inner_client_is_none() {
+        let conn = test_db();
+        let shared: SharedLspClient = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let ctx = LayeredContext::new(&conn, Some(&shared));
+        ctx.lsp_notify("textDocument/didOpen", serde_json::json!({}))
+            .unwrap();
+    }
+
+    #[test]
+    fn test_lsp_request_with_document_returns_response() {
+        // Protocol: didOpen (notification) -> hover (request+response) -> didClose (notification)
+        let hover_response = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": { "contents": "fn main()" }
+        });
+        let responses = vec![
+            serde_json::Value::Null, // didOpen notification
+            hover_response,          // hover request
+            serde_json::Value::Null, // didClose notification
+        ];
+
+        let mut child = spawn_mock_lsp(&responses);
+        let shared = mock_lsp_client(&mut child);
+
+        let temp_dir = create_temp_source_file();
+        let file_path = temp_dir.path().join("test.rs");
+
+        let conn = test_db();
+        let ctx = LayeredContext::new(&conn, Some(&shared));
+        let result = ctx
+            .lsp_request_with_document(
+                file_path.to_str().unwrap(),
+                "textDocument/hover",
+                serde_json::json!({}),
+            )
+            .unwrap();
+
+        assert!(result.is_some());
+        let value = result.unwrap();
+        assert_eq!(value["contents"], "fn main()");
+    }
+
+    #[test]
+    fn test_lsp_request_with_document_returns_none_when_no_client() {
+        let conn = test_db();
+        let ctx = LayeredContext::new(&conn, None);
+        let result = ctx
+            .lsp_request_with_document("src/main.rs", "textDocument/hover", serde_json::json!({}))
+            .unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_lsp_request_with_document_returns_none_when_inner_client_is_none() {
+        let conn = test_db();
+        let shared: SharedLspClient = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let ctx = LayeredContext::new(&conn, Some(&shared));
+        let result = ctx
+            .lsp_request_with_document("src/main.rs", "textDocument/hover", serde_json::json!({}))
+            .unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_lsp_multi_request_with_document_calls_closure() {
+        // Protocol: didOpen (notification) -> request (request+response) -> didClose (notification)
+        let response = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": [1, 2, 3]
+        });
+        let responses = vec![
+            serde_json::Value::Null, // didOpen notification
+            response,                // request from closure
+            serde_json::Value::Null, // didClose notification
+        ];
+
+        let mut child = spawn_mock_lsp(&responses);
+        let shared = mock_lsp_client(&mut child);
+
+        let temp_dir = create_temp_source_file();
+        let file_path = temp_dir.path().join("test.rs");
+
+        let conn = test_db();
+        let ctx = LayeredContext::new(&conn, Some(&shared));
+        let result = ctx
+            .lsp_multi_request_with_document(file_path.to_str().unwrap(), |rpc| {
+                let resp = rpc.send_request("textDocument/references", serde_json::json!({}))?;
+                Ok(unwrap_lsp_result(resp)?)
+            })
+            .unwrap();
+
+        assert!(result.is_some());
+        let value = result.unwrap();
+        assert_eq!(value, serde_json::json!([1, 2, 3]));
+    }
+
+    #[test]
+    fn test_lsp_multi_request_with_document_returns_none_when_no_client() {
+        let conn = test_db();
+        let ctx = LayeredContext::new(&conn, None);
+        let result: Result<Option<Value>, _> =
+            ctx.lsp_multi_request_with_document("src/main.rs", |_rpc| {
+                panic!("closure should not be called when no client");
+            });
+        assert!(result.unwrap().is_none());
+    }
+
+    #[test]
+    fn test_lsp_multi_request_with_document_returns_none_when_inner_client_is_none() {
+        let conn = test_db();
+        let shared: SharedLspClient = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let ctx = LayeredContext::new(&conn, Some(&shared));
+        let result: Result<Option<Value>, _> =
+            ctx.lsp_multi_request_with_document("src/main.rs", |_rpc| {
+                panic!("closure should not be called when inner client is None");
+            });
+        assert!(result.unwrap().is_none());
+    }
 }

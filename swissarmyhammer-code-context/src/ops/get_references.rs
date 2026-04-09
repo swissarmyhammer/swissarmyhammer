@@ -706,4 +706,505 @@ mod tests {
         let id3 = extract_identifier_at_line(text, 100, 0);
         assert!(id3.is_none());
     }
+
+    // -----------------------------------------------------------------------
+    // Edge-case tests for try_lsp_index and helpers
+    // -----------------------------------------------------------------------
+
+    /// When a call edge has empty `from_ranges` (no call site positions),
+    /// the caller symbol's own range should be used as the reference location.
+    #[test]
+    fn test_lsp_index_empty_from_ranges_uses_symbol_range() {
+        let conn = test_db();
+        insert_file(&conn, "src/lib.rs");
+        insert_file(&conn, "src/caller.rs");
+
+        // Callee symbol at a known position
+        insert_symbol(
+            &conn,
+            "lsp:src/lib.rs:target_fn",
+            "target_fn",
+            12,
+            "src/lib.rs",
+            0,
+            10,
+        );
+
+        // Caller symbol with a distinct range (lines 5..25)
+        insert_symbol(
+            &conn,
+            "lsp:src/caller.rs:invoker",
+            "invoker",
+            12,
+            "src/caller.rs",
+            5,
+            25,
+        );
+
+        // Call edge with empty from_ranges: no specific call site positions
+        insert_edge(
+            &conn,
+            "lsp:src/caller.rs:invoker",
+            "lsp:src/lib.rs:target_fn",
+            "src/caller.rs",
+            "src/lib.rs",
+            "[]", // empty array
+        );
+
+        let ctx = LayeredContext::new(&conn, None);
+
+        let options = GetReferencesOptions {
+            file_path: "src/lib.rs".to_string(),
+            line: 0,
+            character: 0,
+            include_declaration: false,
+            max_results: None,
+        };
+
+        let result = get_references(&ctx, &options).unwrap();
+
+        assert_eq!(
+            result.source_layer,
+            SourceLayer::LspIndex,
+            "should resolve via LSP index layer"
+        );
+        assert_eq!(result.references.len(), 1, "should find one reference");
+
+        // With empty from_ranges the reference location falls back to the
+        // caller symbol's own range (start_line=5, start_char=0).
+        let r = &result.references[0];
+        assert_eq!(r.file_path, "src/caller.rs");
+        assert_eq!(r.range.start_line, 5, "should use symbol start_line");
+        assert_eq!(r.range.start_character, 0, "should use symbol start_char");
+        assert_eq!(r.range.end_line, 25, "should use symbol end_line");
+        assert_eq!(r.range.end_character, 0, "should use symbol end_char");
+    }
+
+    /// When a symbol exists but has no callers, `try_lsp_index` returns None
+    /// and the query falls through to tree-sitter.
+    #[test]
+    fn test_lsp_index_no_callers_falls_through_to_treesitter() {
+        let conn = test_db();
+        insert_file(&conn, "src/lib.rs");
+
+        // A symbol exists but no call edges reference it
+        insert_symbol(
+            &conn,
+            "lsp:src/lib.rs:orphan_fn",
+            "orphan_fn",
+            12,
+            "src/lib.rs",
+            0,
+            10,
+        );
+
+        // Add a tree-sitter chunk so the treesitter layer can match
+        insert_chunk(
+            &conn,
+            "src/lib.rs",
+            0,
+            10,
+            "fn orphan_fn() {\n    // body\n}",
+            Some("orphan_fn"),
+        );
+
+        let ctx = LayeredContext::new(&conn, None);
+
+        let options = GetReferencesOptions {
+            file_path: "src/lib.rs".to_string(),
+            line: 0,
+            character: 0,
+            include_declaration: false,
+            max_results: None,
+        };
+
+        let result = get_references(&ctx, &options).unwrap();
+
+        // With no callers, the LSP index layer returns None and
+        // tree-sitter takes over.
+        assert_eq!(
+            result.source_layer,
+            SourceLayer::TreeSitter,
+            "should fall through to tree-sitter when no callers exist"
+        );
+        assert!(
+            result.total_count >= 1,
+            "tree-sitter should find the chunk matching orphan_fn"
+        );
+    }
+
+    /// Mixed call edges: one caller has specific call sites, another has
+    /// empty from_ranges. Both should appear in the results with the correct
+    /// reference locations.
+    #[test]
+    fn test_lsp_index_mixed_call_sites_and_empty_ranges() {
+        let conn = test_db();
+        insert_file(&conn, "src/lib.rs");
+        insert_file(&conn, "src/a.rs");
+        insert_file(&conn, "src/b.rs");
+
+        // Target callee
+        insert_symbol(
+            &conn,
+            "lsp:src/lib.rs:do_work",
+            "do_work",
+            12,
+            "src/lib.rs",
+            0,
+            10,
+        );
+
+        // Caller A: has specific call site at line 8
+        insert_symbol(
+            &conn,
+            "lsp:src/a.rs:caller_a",
+            "caller_a",
+            12,
+            "src/a.rs",
+            0,
+            20,
+        );
+        let ranges_a = r#"[{"start":{"line":8,"character":4},"end":{"line":8,"character":11}}]"#;
+        insert_edge(
+            &conn,
+            "lsp:src/a.rs:caller_a",
+            "lsp:src/lib.rs:do_work",
+            "src/a.rs",
+            "src/lib.rs",
+            ranges_a,
+        );
+
+        // Caller B: has empty from_ranges (symbol range at lines 3..15)
+        insert_symbol(
+            &conn,
+            "lsp:src/b.rs:caller_b",
+            "caller_b",
+            12,
+            "src/b.rs",
+            3,
+            15,
+        );
+        insert_edge(
+            &conn,
+            "lsp:src/b.rs:caller_b",
+            "lsp:src/lib.rs:do_work",
+            "src/b.rs",
+            "src/lib.rs",
+            "[]",
+        );
+
+        let ctx = LayeredContext::new(&conn, None);
+
+        let options = GetReferencesOptions {
+            file_path: "src/lib.rs".to_string(),
+            line: 0,
+            character: 0,
+            include_declaration: false,
+            max_results: None,
+        };
+
+        let result = get_references(&ctx, &options).unwrap();
+        assert_eq!(result.source_layer, SourceLayer::LspIndex);
+        assert_eq!(
+            result.references.len(),
+            2,
+            "should find two references (one per caller)"
+        );
+
+        // Find the reference from caller A (specific call site)
+        let ref_a = result
+            .references
+            .iter()
+            .find(|r| r.file_path == "src/a.rs")
+            .expect("should have reference from src/a.rs");
+        assert_eq!(ref_a.range.start_line, 8, "caller_a: call site line");
+        assert_eq!(ref_a.range.start_character, 4, "caller_a: call site char");
+
+        // Find the reference from caller B (symbol range fallback)
+        let ref_b = result
+            .references
+            .iter()
+            .find(|r| r.file_path == "src/b.rs")
+            .expect("should have reference from src/b.rs");
+        assert_eq!(ref_b.range.start_line, 3, "caller_b: symbol start_line");
+        assert_eq!(ref_b.range.end_line, 15, "caller_b: symbol end_line");
+    }
+
+    /// A caller with multiple call sites should produce one reference per
+    /// call site, not one per caller.
+    #[test]
+    fn test_lsp_index_multiple_call_sites_per_caller() {
+        let conn = test_db();
+        insert_file(&conn, "src/lib.rs");
+        insert_file(&conn, "src/caller.rs");
+
+        insert_symbol(
+            &conn,
+            "lsp:src/lib.rs:target",
+            "target",
+            12,
+            "src/lib.rs",
+            0,
+            5,
+        );
+
+        insert_symbol(
+            &conn,
+            "lsp:src/caller.rs:multi_caller",
+            "multi_caller",
+            12,
+            "src/caller.rs",
+            0,
+            30,
+        );
+
+        // Two distinct call sites in the same caller
+        let from_ranges = r#"[
+            {"start":{"line":5,"character":4},"end":{"line":5,"character":10}},
+            {"start":{"line":15,"character":8},"end":{"line":15,"character":14}}
+        ]"#;
+        insert_edge(
+            &conn,
+            "lsp:src/caller.rs:multi_caller",
+            "lsp:src/lib.rs:target",
+            "src/caller.rs",
+            "src/lib.rs",
+            from_ranges,
+        );
+
+        let ctx = LayeredContext::new(&conn, None);
+
+        let options = GetReferencesOptions {
+            file_path: "src/lib.rs".to_string(),
+            line: 0,
+            character: 0,
+            include_declaration: false,
+            max_results: None,
+        };
+
+        let result = get_references(&ctx, &options).unwrap();
+        assert_eq!(result.source_layer, SourceLayer::LspIndex);
+        assert_eq!(
+            result.references.len(),
+            2,
+            "each call site should produce a separate reference"
+        );
+        assert_eq!(result.references[0].range.start_line, 5);
+        assert_eq!(result.references[1].range.start_line, 15);
+
+        // Both are in the same file, so by_file should group them
+        assert_eq!(
+            result.by_file.len(),
+            1,
+            "both call sites are in the same file"
+        );
+        assert_eq!(result.by_file[0].references.len(), 2);
+    }
+
+    // -----------------------------------------------------------------------
+    // Edge-case tests for parse_lsp_locations
+    // -----------------------------------------------------------------------
+
+    /// A non-array response (e.g., null or object) returns no locations.
+    #[test]
+    fn test_parse_lsp_locations_non_array() {
+        assert!(parse_lsp_locations(&serde_json::json!(null)).is_empty());
+        assert!(parse_lsp_locations(&serde_json::json!({})).is_empty());
+        assert!(parse_lsp_locations(&serde_json::json!("not an array")).is_empty());
+    }
+
+    /// Malformed entries within the array are silently skipped.
+    #[test]
+    fn test_parse_lsp_locations_skips_malformed_entries() {
+        let response = serde_json::json!([
+            // Valid entry
+            {
+                "uri": "file:///src/ok.rs",
+                "range": {
+                    "start": { "line": 1, "character": 2 },
+                    "end": { "line": 1, "character": 10 }
+                }
+            },
+            // Missing uri
+            {
+                "range": {
+                    "start": { "line": 5, "character": 0 },
+                    "end": { "line": 5, "character": 5 }
+                }
+            },
+            // Missing range
+            {
+                "uri": "file:///src/bad.rs"
+            },
+            // Missing start in range
+            {
+                "uri": "file:///src/bad2.rs",
+                "range": {
+                    "end": { "line": 3, "character": 0 }
+                }
+            },
+            // Another valid entry
+            {
+                "uri": "file:///src/also_ok.rs",
+                "range": {
+                    "start": { "line": 20, "character": 0 },
+                    "end": { "line": 20, "character": 8 }
+                }
+            }
+        ]);
+
+        let locations = parse_lsp_locations(&response);
+        assert_eq!(locations.len(), 2, "only two valid entries should survive");
+        assert_eq!(locations[0].0, "/src/ok.rs");
+        assert_eq!(locations[1].0, "/src/also_ok.rs");
+    }
+
+    /// An empty LSP array returns no locations.
+    #[test]
+    fn test_parse_lsp_locations_empty_array() {
+        let locations = parse_lsp_locations(&serde_json::json!([]));
+        assert!(locations.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // Edge-case tests for extract_identifier_at_line
+    // -----------------------------------------------------------------------
+
+    /// The identifier extractor picks the longest token on the line.
+    #[test]
+    fn test_extract_identifier_prefers_longest_token() {
+        // "fn" (2 chars) vs "my_longer_name" (14 chars) vs "i32" (3 chars)
+        let text = "fn my_longer_name(x: i32) {}";
+        let id = extract_identifier_at_line(text, 0, 0);
+        assert_eq!(
+            id,
+            Some("my_longer_name".to_string()),
+            "should pick the longest word-like token"
+        );
+    }
+
+    /// Lines with only non-identifier characters return None.
+    #[test]
+    fn test_extract_identifier_no_identifiers_on_line() {
+        let text = "    // comment\n{{{}}}\n";
+        // Line 1 is "{{{}}}" which has no alphanumeric tokens
+        let id = extract_identifier_at_line(text, 1, 0);
+        assert!(id.is_none(), "line with only braces has no identifiers");
+    }
+
+    /// The chunk_start_line offset is correctly applied.
+    #[test]
+    fn test_extract_identifier_with_offset() {
+        let text = "fn foo() {}\nfn bar_baz() {}";
+        // chunk starts at line 100, so target_line=101 means line index 1
+        let id = extract_identifier_at_line(text, 101, 100);
+        assert_eq!(id, Some("bar_baz".to_string()));
+    }
+
+    // -----------------------------------------------------------------------
+    // Edge-case tests for build_result
+    // -----------------------------------------------------------------------
+
+    /// When max_results is None, no truncation occurs.
+    #[test]
+    fn test_build_result_no_truncation() {
+        let refs: Vec<ReferenceLocation> = (0..5)
+            .map(|i| ReferenceLocation {
+                file_path: "src/f.rs".to_string(),
+                range: LspRange {
+                    start_line: i,
+                    start_character: 0,
+                    end_line: i,
+                    end_character: 5,
+                },
+                enclosing_symbol: None,
+            })
+            .collect();
+
+        let result = build_result(refs, None, SourceLayer::LspIndex);
+        assert_eq!(result.total_count, 5);
+        assert_eq!(result.references.len(), 5, "no truncation when None");
+    }
+
+    /// When max_results exceeds the actual count, all results are kept.
+    #[test]
+    fn test_build_result_max_exceeds_count() {
+        let refs = vec![ReferenceLocation {
+            file_path: "src/only.rs".to_string(),
+            range: LspRange {
+                start_line: 0,
+                start_character: 0,
+                end_line: 0,
+                end_character: 5,
+            },
+            enclosing_symbol: None,
+        }];
+
+        let result = build_result(refs, Some(100), SourceLayer::TreeSitter);
+        assert_eq!(result.total_count, 1);
+        assert_eq!(result.references.len(), 1, "no truncation when max > count");
+    }
+
+    // -----------------------------------------------------------------------
+    // Edge-case tests for malformed from_ranges in call edges
+    // -----------------------------------------------------------------------
+
+    /// Malformed JSON in from_ranges (not valid JSON) causes parse_from_ranges
+    /// to return an empty vec, which means the caller symbol's range is used.
+    #[test]
+    fn test_lsp_index_malformed_from_ranges_uses_symbol_range() {
+        let conn = test_db();
+        insert_file(&conn, "src/lib.rs");
+        insert_file(&conn, "src/caller.rs");
+
+        insert_symbol(
+            &conn,
+            "lsp:src/lib.rs:target_fn",
+            "target_fn",
+            12,
+            "src/lib.rs",
+            0,
+            10,
+        );
+
+        insert_symbol(
+            &conn,
+            "lsp:src/caller.rs:bad_ranges_caller",
+            "bad_ranges_caller",
+            12,
+            "src/caller.rs",
+            7,
+            18,
+        );
+
+        // Malformed JSON that will fail to parse
+        insert_edge(
+            &conn,
+            "lsp:src/caller.rs:bad_ranges_caller",
+            "lsp:src/lib.rs:target_fn",
+            "src/caller.rs",
+            "src/lib.rs",
+            "not valid json at all",
+        );
+
+        let ctx = LayeredContext::new(&conn, None);
+
+        let options = GetReferencesOptions {
+            file_path: "src/lib.rs".to_string(),
+            line: 0,
+            character: 0,
+            include_declaration: false,
+            max_results: None,
+        };
+
+        let result = get_references(&ctx, &options).unwrap();
+        assert_eq!(result.source_layer, SourceLayer::LspIndex);
+        assert_eq!(result.references.len(), 1);
+
+        // Malformed from_ranges parses as empty → symbol range is used
+        let r = &result.references[0];
+        assert_eq!(r.file_path, "src/caller.rs");
+        assert_eq!(r.range.start_line, 7, "should use symbol start_line");
+        assert_eq!(r.range.end_line, 18, "should use symbol end_line");
+    }
 }

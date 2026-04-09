@@ -433,4 +433,199 @@ mod tests {
         let ws3 = CodeContextWorkspace::open(dir.path()).unwrap();
         assert!(!ws3.is_leader());
     }
+
+    #[test]
+    fn test_follower_db_returns_owned_dbref_that_can_query() {
+        let dir = tempfile::tempdir().unwrap();
+        let _leader = CodeContextWorkspace::open(dir.path()).unwrap();
+
+        let follower = CodeContextWorkspace::open(dir.path()).unwrap();
+        assert!(!follower.is_leader());
+
+        // Follower's db() returns DbRef::Owned which derefs to &Connection.
+        // Verify it can execute read queries through the Deref impl.
+        let tables: Vec<String> = follower
+            .db()
+            .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+
+        assert!(tables.contains(&"indexed_files".to_string()));
+        assert!(tables.contains(&"ts_chunks".to_string()));
+    }
+
+    #[test]
+    fn test_follower_reads_leader_data() {
+        let dir = tempfile::tempdir().unwrap();
+        let leader = CodeContextWorkspace::open(dir.path()).unwrap();
+
+        // Leader writes a row
+        leader
+            .db()
+            .execute(
+                "INSERT INTO indexed_files (file_path, content_hash, file_size, last_seen_at)
+                 VALUES ('test.rs', X'AABB', 42, 9999)",
+                [],
+            )
+            .unwrap();
+
+        // Follower opens and reads through its DbRef::Owned path
+        let follower = CodeContextWorkspace::open(dir.path()).unwrap();
+        assert!(!follower.is_leader());
+
+        let count: i64 = follower
+            .db()
+            .query_row(
+                "SELECT COUNT(*) FROM indexed_files WHERE file_path = 'test.rs'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn test_workspace_mode_debug_follower() {
+        let dir = tempfile::tempdir().unwrap();
+        let _leader = CodeContextWorkspace::open(dir.path()).unwrap();
+
+        let follower = CodeContextWorkspace::open(dir.path()).unwrap();
+        assert!(!follower.is_leader());
+
+        let debug_str = format!("{:?}", follower);
+        assert!(
+            debug_str.contains("Follower"),
+            "expected 'Follower' in debug output, got: {debug_str}"
+        );
+        assert!(debug_str.contains("CodeContextWorkspace"));
+    }
+
+    #[test]
+    fn test_dbref_debug_shared() {
+        let dir = tempfile::tempdir().unwrap();
+        let leader = CodeContextWorkspace::open(dir.path()).unwrap();
+        assert!(leader.is_leader());
+
+        let db_ref = leader.db();
+        let debug_str = format!("{:?}", db_ref);
+        assert!(
+            debug_str.contains("DbRef::Shared"),
+            "expected 'DbRef::Shared' in debug output, got: {debug_str}"
+        );
+    }
+
+    #[test]
+    fn test_dbref_debug_owned() {
+        let dir = tempfile::tempdir().unwrap();
+        let _leader = CodeContextWorkspace::open(dir.path()).unwrap();
+
+        let follower = CodeContextWorkspace::open(dir.path()).unwrap();
+        assert!(!follower.is_leader());
+
+        let db_ref = follower.db();
+        let debug_str = format!("{:?}", db_ref);
+        assert!(
+            debug_str.contains("DbRef::Owned"),
+            "expected 'DbRef::Owned' in debug output, got: {debug_str}"
+        );
+    }
+
+    #[test]
+    fn test_try_promote_shared_db_is_functional() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // Write a file so startup_cleanup has something to discover
+        fs::write(dir.path().join("hello.rs"), "fn main() {}").unwrap();
+
+        let leader = CodeContextWorkspace::open(dir.path()).unwrap();
+        let mut follower = CodeContextWorkspace::open(dir.path()).unwrap();
+        assert!(!follower.is_leader());
+        drop(leader);
+
+        // Promote and get the shared DB handle
+        let shared_db = follower
+            .try_promote()
+            .unwrap()
+            .expect("promotion should succeed");
+
+        // The shared DB should allow writes
+        {
+            let conn = shared_db.lock().expect("mutex not poisoned");
+            conn.execute(
+                "INSERT INTO indexed_files (file_path, content_hash, file_size, last_seen_at)
+                 VALUES ('promoted_test.rs', X'CCDD', 100, 5555)",
+                [],
+            )
+            .unwrap();
+        }
+
+        // Read it back through the workspace's own db() accessor
+        let count: i64 = follower
+            .db()
+            .query_row(
+                "SELECT COUNT(*) FROM indexed_files WHERE file_path = 'promoted_test.rs'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn test_try_promote_runs_startup_cleanup() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // Create a source file before any workspace opens
+        fs::write(dir.path().join("lib.rs"), "pub fn init() {}").unwrap();
+
+        let leader = CodeContextWorkspace::open(dir.path()).unwrap();
+        let mut follower = CodeContextWorkspace::open(dir.path()).unwrap();
+        drop(leader);
+
+        let _shared = follower
+            .try_promote()
+            .unwrap()
+            .expect("promotion should succeed");
+
+        // startup_cleanup discovers workspace files and populates indexed_files.
+        // Verify the file was discovered.
+        let count: i64 = follower
+            .db()
+            .query_row("SELECT COUNT(*) FROM indexed_files", [], |r| r.get(0))
+            .unwrap();
+        assert!(
+            count >= 1,
+            "startup_cleanup should have discovered at least one file, found {count}"
+        );
+    }
+
+    #[test]
+    fn test_follower_retry_succeeds_when_db_exists() {
+        // When a leader has already created the DB, the follower retry loop
+        // should succeed on the first attempt (no retries needed).
+        // This exercises the Ok(conn) => break path in the retry loop.
+        let dir = tempfile::tempdir().unwrap();
+        let _leader = CodeContextWorkspace::open(dir.path()).unwrap();
+
+        // DB file exists because the leader created it
+        let db_path = dir.path().join(".code-context").join("index.db");
+        assert!(db_path.exists(), "leader should have created the DB file");
+
+        // Follower open should succeed immediately through the retry loop
+        let follower = CodeContextWorkspace::open(dir.path()).unwrap();
+        assert!(!follower.is_leader());
+
+        // Verify the follower's connection is usable
+        let result: String = follower
+            .db()
+            .query_row("SELECT sqlite_version()", [], |r| r.get(0))
+            .unwrap();
+        assert!(
+            !result.is_empty(),
+            "should get a valid SQLite version string"
+        );
+    }
 }
