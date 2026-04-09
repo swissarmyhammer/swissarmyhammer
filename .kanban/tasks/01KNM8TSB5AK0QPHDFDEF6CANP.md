@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: todo
-position_ordinal: 9c80
+position_ordinal: '80'
 title: Add tooltips to field icons in EntityCard and extract shared icon utilities
 ---
 ## What

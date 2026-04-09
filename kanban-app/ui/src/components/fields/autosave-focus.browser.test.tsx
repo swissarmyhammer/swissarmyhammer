@@ -18,10 +18,12 @@ import { page, userEvent } from "vitest/browser";
 // Tauri mocks — must be before component imports
 // ---------------------------------------------------------------------------
 
-const mockInvoke = vi.fn(async () => null);
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const mockInvoke = vi.fn(async (..._args: any[]) => null);
 
 vi.mock("@tauri-apps/api/core", () => ({
-  invoke: (...a: [string, any?]) => mockInvoke(...a),
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  invoke: (...a: any[]) => mockInvoke(...a),
 }));
 vi.mock("@tauri-apps/api/event", () => ({
   emit: vi.fn(() => Promise.resolve()),
@@ -107,7 +109,7 @@ function TestHarness({ onDoneSpy }: { onDoneSpy?: () => void }) {
   }, [onDoneSpy]);
 
   return (
-    <ActiveBoardPathProvider path="/test/board">
+    <ActiveBoardPathProvider value="/test/board">
       <SchemaProvider>
         <EntityStoreProvider entities={{ task: [TASK_ENTITY] }}>
           <EntityFocusProvider>
@@ -139,7 +141,8 @@ function TestHarness({ onDoneSpy }: { onDoneSpy?: () => void }) {
 describe("autosave does not disrupt editor state", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockInvoke.mockImplementation(async (cmd: string) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    mockInvoke.mockImplementation(async (cmd: string, ..._args: any[]) => {
       if (cmd === "list_entity_types") return ["task"];
       if (cmd === "get_entity_schema") return TASK_SCHEMA;
       if (cmd === "list_commands_for_scope") return { commands: [] };
