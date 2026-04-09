@@ -8,8 +8,8 @@ depends_on:
 - 01KNS1Y49EX2CZJQ38WGM23954
 - 01KNS1YN0KDTXK1ACA1NBS48XJ
 - 01KNS1Z702R8FS8QQMA0J3MTB2
-position_column: todo
-position_ordinal: '8980'
+position_column: done
+position_ordinal: ffffffffffffffffffff9680
 project: code-context-cli
 title: Wire up main.rs — tracing, dispatch, and banner
 ---

@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KNS1Y49EX2CZJQ38WGM23954
-position_column: todo
-position_ordinal: '8780'
+position_column: done
+position_ordinal: ffffffffffffffffffff9580
 project: code-context-cli
 title: Create code-context builtin skill and implement skill command
 ---

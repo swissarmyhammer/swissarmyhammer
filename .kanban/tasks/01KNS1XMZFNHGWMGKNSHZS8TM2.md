@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KNS1WP3ZEAKNNAD6G3WAGSEK
-position_column: todo
-position_ordinal: '8580'
+position_column: done
+position_ordinal: ffffffffffffffffffff9280
 project: code-context-cli
 title: Implement doctor command for code-context CLI
 ---

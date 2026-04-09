@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KNS1TQR2C3TYG1G8STEYZPA5
-position_column: todo
-position_ordinal: '8380'
+position_column: done
+position_ordinal: ffffffffffffffffffff9080
 project: code-context-cli
 title: Implement CLI definition (clap structure) for code-context
 ---

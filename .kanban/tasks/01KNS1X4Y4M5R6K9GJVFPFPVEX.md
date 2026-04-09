@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KNS1WP3ZEAKNNAD6G3WAGSEK
-position_column: todo
-position_ordinal: '8480'
+position_column: done
+position_ordinal: ffffffffffffffffffff9380
 project: code-context-cli
 title: Implement serve command — CodeContextServer MCP server
 ---

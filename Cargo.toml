@@ -64,6 +64,7 @@ members = [
     "crates/swissarmyhammer-sem",
     "heb",
     "shelltool-cli",
+    "code-context-cli",
 ]
 resolver = "2"
 

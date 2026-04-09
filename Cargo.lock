@@ -1190,6 +1190,35 @@ dependencies = [
 ]
 
 [[package]]
+name = "code-context-cli"
+version = "0.12.11"
+dependencies = [
+ "async-trait",
+ "clap",
+ "clap-markdown",
+ "clap_complete",
+ "clap_mangen",
+ "dirs",
+ "mirdan",
+ "rmcp",
+ "serde_json",
+ "swissarmyhammer-code-context",
+ "swissarmyhammer-common",
+ "swissarmyhammer-config",
+ "swissarmyhammer-directory",
+ "swissarmyhammer-doctor",
+ "swissarmyhammer-lsp",
+ "swissarmyhammer-project-detection",
+ "swissarmyhammer-skills",
+ "swissarmyhammer-templating",
+ "swissarmyhammer-tools",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "colorchoice"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"

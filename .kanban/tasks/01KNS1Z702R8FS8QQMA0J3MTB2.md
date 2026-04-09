@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KNS1WP3ZEAKNNAD6G3WAGSEK
-position_column: todo
-position_ordinal: '8880'
+position_column: done
+position_ordinal: ffffffffffffffffffff9480
 project: code-context-cli
 title: Implement operations executor — run code-context ops from CLI
 ---

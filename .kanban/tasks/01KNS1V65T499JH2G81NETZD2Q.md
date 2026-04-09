@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: '8180'
+position_column: done
+position_ordinal: ffffffffffffffffffff8b80
 project: code-context-cli
 title: Create code-context.png icon from source image
 ---

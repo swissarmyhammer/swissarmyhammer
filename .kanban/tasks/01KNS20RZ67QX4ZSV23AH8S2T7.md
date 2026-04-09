@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KNS205FV6083EVT3SDGM75KH
-position_column: todo
-position_ordinal: 8a80
+position_column: done
+position_ordinal: ffffffffffffffffffff9780
 project: code-context-cli
 title: Write README and installation documentation for code-context-cli
 ---

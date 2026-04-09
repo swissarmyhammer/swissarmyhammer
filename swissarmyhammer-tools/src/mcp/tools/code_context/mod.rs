@@ -923,7 +923,7 @@ static CODE_CONTEXT_OPERATIONS: Lazy<Vec<&'static dyn Operation>> = Lazy::new(||
 });
 
 /// Unified code context tool providing symbol lookup, search, and graph operations.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct CodeContextTool;
 
 impl CodeContextTool {
