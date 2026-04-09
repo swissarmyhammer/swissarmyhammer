@@ -26,6 +26,9 @@ import { slugify } from "@/lib/slugify";
 import type { Entity } from "@/types/kanban";
 import { getStr } from "@/types/kanban";
 
+/** Debounce delay for mention search queries against the Tauri backend. */
+const MENTION_SEARCH_DEBOUNCE_MS = 150;
+
 /** Virtual tag names defined by the backend VirtualTagRegistry. */
 const VIRTUAL_TAG_SLUGS = ["READY", "BLOCKED", "BLOCKING"] as const;
 
@@ -127,7 +130,10 @@ function buildAsyncSearch(
     }
   };
 
-  return createDebouncedSearch({ search: rawSearch, delayMs: 150 });
+  return createDebouncedSearch({
+    search: rawSearch,
+    delayMs: MENTION_SEARCH_DEBOUNCE_MS,
+  });
 }
 
 /**
@@ -141,16 +147,94 @@ function buildVirtualTagSearch(
   baseSearch: (query: string) => Promise<MentionSearchResult[]>,
 ): (query: string) => Promise<MentionSearchResult[]> {
   return async (query: string) => {
-    const virtualResults: MentionSearchResult[] = VIRTUAL_TAG_SLUGS
-      .filter((slug) => !query || slug.toLowerCase().includes(query.toLowerCase()))
-      .map((slug) => ({
-        slug,
-        displayName: `${slug} (virtual)`,
-        color: VIRTUAL_TAG_COLOR,
-      }));
+    const virtualResults: MentionSearchResult[] = VIRTUAL_TAG_SLUGS.filter(
+      (slug) => !query || slug.toLowerCase().includes(query.toLowerCase()),
+    ).map((slug) => ({
+      slug,
+      displayName: `${slug} (virtual)`,
+      color: VIRTUAL_TAG_COLOR,
+    }));
     const realResults = await baseSearch(query);
     return [...virtualResults, ...realResults];
   };
+}
+
+/** Merge virtual tag slugs into a color map so they receive pill decorations. */
+function mergeVirtualTags(base: Map<string, string>): Map<string, string> {
+  const merged = new Map(base);
+  for (const slug of VIRTUAL_TAG_SLUGS) {
+    merged.set(slug, VIRTUAL_TAG_COLOR);
+  }
+  return merged;
+}
+
+/** Merge virtual tag slugs into a meta map so they receive tooltip support. */
+function mergeVirtualTagMeta(
+  base: Map<string, MentionMeta>,
+): Map<string, MentionMeta> {
+  const merged = new Map(base);
+  for (const slug of VIRTUAL_TAG_SLUGS) {
+    merged.set(slug, {
+      color: VIRTUAL_TAG_COLOR,
+      description: `${slug} (virtual tag)`,
+    });
+  }
+  return merged;
+}
+
+/** Enriched mention data with color and meta maps built from entities. */
+interface MentionDatum {
+  prefix: string;
+  entityType: string;
+  displayField: string;
+  colorMap: Map<string, string>;
+  metaMap: Map<string, MentionMeta>;
+}
+
+/**
+ * Pure function that assembles the CM6 extension array from mention data.
+ *
+ * Builds decoration, autocomplete, and tooltip extensions for each mentionable
+ * type. Merges virtual tags and filter sigil sources when the corresponding
+ * options are enabled.
+ */
+function buildMentionExtensions(
+  mentionData: MentionDatum[],
+  includeVirtualTags: boolean,
+  includeFilterSigils: boolean,
+): Extension[] {
+  const exts: Extension[] = [];
+  const completionSources: Array<
+    ReturnType<typeof createMentionCompletionSource>
+  > = [];
+
+  for (const md of mentionData) {
+    const addVirtual = includeVirtualTags && md.prefix === "#";
+    const colorMap = addVirtual ? mergeVirtualTags(md.colorMap) : md.colorMap;
+    const metaMap = addVirtual ? mergeVirtualTagMeta(md.metaMap) : md.metaMap;
+
+    if (colorMap.size === 0) continue;
+    exts.push(getDecoInfra(md.prefix, md.entityType).extension(colorMap));
+
+    const baseSearch = buildAsyncSearch(md.entityType);
+    const search = addVirtual ? buildVirtualTagSearch(baseSearch) : baseSearch;
+    completionSources.push(createMentionCompletionSource(md.prefix, search));
+
+    exts.push(getTooltipInfra(md.prefix, md.entityType).extension(metaMap));
+  }
+
+  if (includeFilterSigils) {
+    completionSources.push(
+      createMentionCompletionSource("@", buildAsyncSearch("actor")),
+    );
+    completionSources.push(
+      createMentionCompletionSource("^", buildAsyncSearch("task")),
+    );
+  }
+  if (completionSources.length > 0) {
+    exts.push(createMentionAutocomplete(completionSources));
+  }
+  return exts;
 }
 
 /**
@@ -163,7 +247,9 @@ function buildVirtualTagSearch(
  * Returns a stable Extension[] that only changes when mentionable entity data changes.
  * Returns an empty array when there are no mentionable types in the schema.
  */
-export function useMentionExtensions(options?: MentionExtensionOptions): Extension[] {
+export function useMentionExtensions(
+  options?: MentionExtensionOptions,
+): Extension[] {
   const { mentionableTypes } = useSchema();
   const { getEntities } = useEntityStore();
   const includeVirtualTags = options?.includeVirtualTags ?? false;
@@ -174,45 +260,19 @@ export function useMentionExtensions(options?: MentionExtensionOptions): Extensi
       const entities = getEntities(mt.entityType);
       return {
         ...mt,
-        entities,
         colorMap: buildColorMap(entities, mt.displayField),
         metaMap: buildMetaMap(entities, mt.displayField),
       };
     });
   }, [mentionableTypes, getEntities]);
 
-  return useMemo((): Extension[] => {
-    const exts: Extension[] = [];
-    const completionSources: Array<
-      ReturnType<typeof createMentionCompletionSource>
-    > = [];
-    for (const md of mentionData) {
-      if (md.colorMap.size === 0) continue;
-      const decoInfra = getDecoInfra(md.prefix, md.entityType);
-      exts.push(decoInfra.extension(md.colorMap));
-
-      const baseSearch = buildAsyncSearch(md.entityType);
-      const search = (includeVirtualTags && md.prefix === "#")
-        ? buildVirtualTagSearch(baseSearch)
-        : baseSearch;
-      completionSources.push(createMentionCompletionSource(md.prefix, search));
-
-      const tooltipInfraInstance = getTooltipInfra(md.prefix, md.entityType);
-      exts.push(tooltipInfraInstance.extension(md.metaMap));
-    }
-
-    if (includeFilterSigils) {
-      completionSources.push(
-        createMentionCompletionSource("@", buildAsyncSearch("actor")),
-      );
-      completionSources.push(
-        createMentionCompletionSource("^", buildAsyncSearch("task")),
-      );
-    }
-
-    if (completionSources.length > 0) {
-      exts.push(createMentionAutocomplete(completionSources));
-    }
-    return exts;
-  }, [mentionData, includeVirtualTags, includeFilterSigils]);
+  return useMemo(
+    () =>
+      buildMentionExtensions(
+        mentionData,
+        includeVirtualTags,
+        includeFilterSigils,
+      ),
+    [mentionData, includeVirtualTags, includeFilterSigils],
+  );
 }

@@ -3,6 +3,9 @@
  *
  * Uses the parser + highlightTree to confirm that each atom type and operator
  * receives the expected highlight tag from the styleTags configuration.
+ *
+ * Tags and mentions are NOT syntax-highlighted — they get their visual styling
+ * from the mention decoration system (colored pills), not from Lezer tags.
  */
 
 import { describe, it, expect } from "vitest";
@@ -20,14 +23,14 @@ function getHighlightClasses(input: string): string[] {
 }
 
 describe("filter grammar highlighting", () => {
-  it("highlights tags with tok-typeName class", () => {
+  it("does NOT highlight tags (decoration system handles them)", () => {
     const classes = getHighlightClasses("#bug");
-    expect(classes.some((c) => c.includes("tok-typeName") && c.includes("#bug"))).toBe(true);
+    expect(classes.some((c) => c.includes("tok-typeName") && c.includes("#bug"))).toBe(false);
   });
 
-  it("highlights mentions with tok-variableName class", () => {
+  it("does NOT highlight mentions (decoration system handles them)", () => {
     const classes = getHighlightClasses("@alice");
-    expect(classes.some((c) => c.includes("tok-variableName") && c.includes("@alice"))).toBe(true);
+    expect(classes.some((c) => c.includes("tok-variableName") && c.includes("@alice"))).toBe(false);
   });
 
   it("highlights refs with tok-link class", () => {
@@ -57,10 +60,10 @@ describe("filter grammar highlighting", () => {
     expect(classes.some((c) => c.includes("tok-keyword") && c.includes("or"))).toBe(true);
   });
 
-  it("applies distinct classes to all parts of a complex expression", () => {
+  it("complex expression: operators highlighted, tags/mentions not", () => {
     const classes = getHighlightClasses("#bug && @will || !#done");
-    expect(classes.some((c) => c.includes("tok-typeName"))).toBe(true);
-    expect(classes.some((c) => c.includes("tok-variableName"))).toBe(true);
+    expect(classes.some((c) => c.includes("tok-typeName"))).toBe(false);
+    expect(classes.some((c) => c.includes("tok-variableName"))).toBe(false);
     expect(classes.some((c) => c.includes("tok-operator"))).toBe(true);
   });
 });
