@@ -2,7 +2,7 @@
 assignees:
 - claude-code
 position_column: todo
-position_ordinal: '9e80'
+position_ordinal: 7f80
 title: Restyle FilterEditor as inline field row (icon + editor, no border box)
 ---
 ## What
