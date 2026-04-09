@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: doing
-position_ordinal: '80'
+position_column: done
+position_ordinal: ffffffffffffffffffffffa580
 title: 'Bug: Filter bar syntax highlighting paints tags green, overriding mention decoration colors'
 ---
 ## What
