@@ -119,6 +119,9 @@ turn_state/
 # Session-scoped sidecar diff files (ephemeral, per-turn)
 turn_diffs/
 
+# Pre-execution file snapshots (ephemeral, per-turn)
+turn_pre/
+
 # Keep validators/ directory (should be committed)
 "#;
 
