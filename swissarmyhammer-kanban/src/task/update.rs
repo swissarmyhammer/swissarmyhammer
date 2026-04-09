@@ -391,5 +391,4 @@ mod tests {
         assert!(dep_strs.contains(&id_a), "should contain task A");
         assert!(dep_strs.contains(&id_b), "should contain task B");
     }
-
 }
