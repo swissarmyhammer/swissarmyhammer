@@ -59,6 +59,55 @@ fn update_window_title(app: &AppHandle, label: &str, board_name: Option<&str>) {
     }
 }
 
+/// Gather view info from an optional board handle for dynamic commands.
+fn gather_views(handle: Option<&BoardHandle>) -> Vec<swissarmyhammer_kanban::scope_commands::ViewInfo> {
+    use swissarmyhammer_kanban::scope_commands::ViewInfo;
+    let Some(handle) = handle else { return vec![] };
+    let Some(views_lock) = handle.ctx.views() else { return vec![] };
+    let Ok(vc) = views_lock.try_read() else { return vec![] };
+    vc.all_views().iter().map(|v| ViewInfo { id: v.id.clone(), name: v.name.clone() }).collect()
+}
+
+/// Gather window info from Tauri for dynamic commands.
+fn gather_windows(app: &tauri::AppHandle) -> Vec<swissarmyhammer_kanban::scope_commands::WindowInfo> {
+    use swissarmyhammer_kanban::scope_commands::WindowInfo;
+    app.webview_windows().iter().filter_map(|(label, w)| {
+        let title = w.title().ok()?;
+        if title.is_empty() || !w.is_visible().unwrap_or(false) { return None; }
+        Some(WindowInfo { label: label.clone(), title, focused: w.is_focused().unwrap_or(false) })
+    }).collect()
+}
+
+/// Resolve the active view kind (e.g. "board", "grid") from the UIState and views context.
+fn resolve_active_view_kind(handle: Option<&BoardHandle>, ui_state: &swissarmyhammer_commands::UIState) -> Option<String> {
+    let handle = handle?;
+    let active_id = ui_state.active_view_id("main");
+    if active_id.is_empty() { return None; }
+    let views_lock = handle.ctx.views()?;
+    let vc = views_lock.try_read().ok()?;
+    let view = vc.all_views().iter().find(|v| v.id == active_id)?;
+    Some(serde_json::to_value(&view.kind).ok()?.as_str()?.to_string())
+}
+
+/// Gather perspective info from an optional board handle for dynamic commands.
+///
+/// When `view_kind` is provided, only perspectives matching that view kind are
+/// returned. This prevents duplicate "Default" entries across view kinds.
+async fn gather_perspectives(
+    handle: Option<&BoardHandle>,
+    view_kind: Option<&str>,
+) -> Vec<swissarmyhammer_kanban::scope_commands::PerspectiveInfo> {
+    use swissarmyhammer_kanban::scope_commands::PerspectiveInfo;
+    let Some(handle) = handle else { return vec![] };
+    let Ok(pctx) = handle.ctx.perspective_context().await else { return vec![] };
+    let Ok(pc) = pctx.try_read() else { return vec![] };
+    pc.all()
+        .iter()
+        .filter(|p| view_kind.is_none_or(|vk| p.view == vk))
+        .map(|p| PerspectiveInfo { id: p.id.clone(), name: p.name.clone(), view: p.view.clone() })
+        .collect()
+}
+
 /// Read the board entity's display name from the entity context.
 ///
 /// Returns the `name` field of the board entity (entity type "board", id "board").
@@ -996,6 +1045,92 @@ pub async fn dispatch_command(
 /// # Parameters
 /// - `app` - Tauri application handle for event emission
 /// - `state` - Application state with command registry, impls, and board handles
+/// Maximum number of prefix rewrites before we reject the command.
+const MAX_REWRITE_DEPTH: u8 = 1;
+
+/// Rewrite result from the dynamic prefix loop.
+struct RewriteResult {
+    cmd: String,
+    args: Option<Value>,
+    board_path: Option<String>,
+    /// If set, return this value immediately (e.g. for window.focus side-effects).
+    early_return: Option<Value>,
+}
+
+/// Rewrite dynamic palette command prefixes to their canonical forms.
+///
+/// Handles `window.focus:*` (pure side-effect, returns early), `view.switch:*`,
+/// `board.switch:*`, and `perspective.goto:*` by stripping the prefix and
+/// injecting the suffix as an arg. Preserves all input validation (ASCII-only,
+/// 128-char limit, bounded rewrite depth).
+fn rewrite_dynamic_prefix(
+    app: &AppHandle,
+    cmd: &str,
+    args: Option<Value>,
+    board_path: Option<String>,
+    target: &Option<String>,
+    scope_chain: &Option<Vec<String>>,
+) -> Result<RewriteResult, String> {
+    if cmd.is_empty() || cmd.len() > 128 || !cmd.is_ascii() {
+        return Err(format!("Invalid command ID: {:?}", cmd));
+    }
+
+    let mut effective_cmd = cmd.to_owned();
+    let mut effective_args = args;
+    let mut effective_board_path = board_path;
+
+    for depth in 0..=MAX_REWRITE_DEPTH {
+        tracing::info!(cmd = %effective_cmd, target = ?target, args = ?effective_args,
+            scope_chain = ?scope_chain, board_path = ?effective_board_path, "command");
+
+        if let Some(label) = effective_cmd.strip_prefix("window.focus:") {
+            let label = label.to_string();
+            tracing::info!(label = %label, "window.focus — bringing window to front");
+            if let Some(window) = app.get_webview_window(&label) {
+                let _ = window.unminimize();
+                let _ = window.set_focus();
+            }
+            return Ok(RewriteResult {
+                cmd: effective_cmd, args: effective_args, board_path: effective_board_path,
+                early_return: Some(json!({ "WindowFocus": label })),
+            });
+        }
+
+        let rewrite = if let Some(suffix) = effective_cmd.strip_prefix("view.switch:") {
+            Some(("ui.view.set", "view_id", suffix.to_string(), false))
+        } else if let Some(suffix) = effective_cmd.strip_prefix("board.switch:") {
+            // Reject path traversal attempts — board paths must be absolute without `..`.
+            if suffix.contains("..") || !std::path::Path::new(suffix).is_absolute() {
+                return Err(format!("Invalid board path in command: {:?}", suffix));
+            }
+            Some(("file.switchBoard", "path", suffix.to_string(), true))
+        } else if let Some(suffix) = effective_cmd.strip_prefix("perspective.goto:") {
+            Some(("ui.perspective.set", "perspective_id", suffix.to_string(), false))
+        } else {
+            None
+        };
+
+        if let Some((new_cmd, arg_key, arg_val, update_board_path)) = rewrite {
+            if depth >= MAX_REWRITE_DEPTH {
+                return Err(format!("Command rewrite depth exceeded for: {}", effective_cmd));
+            }
+            let mut merged = match effective_args {
+                Some(Value::Object(map)) => map,
+                _ => serde_json::Map::new(),
+            };
+            merged.insert(arg_key.into(), Value::String(arg_val.clone()));
+            if update_board_path { effective_board_path = Some(arg_val); }
+            effective_cmd = new_cmd.to_owned();
+            effective_args = Some(Value::Object(merged));
+            continue;
+        }
+
+        break;
+    }
+
+    Ok(RewriteResult { cmd: effective_cmd, args: effective_args, board_path: effective_board_path, early_return: None })
+}
+
 /// - `cmd` - Command ID string (e.g. "task.move")
 /// - `scope_chain` - Optional explicit scope; falls back to stored UIState focus
 /// - `target` - Optional target entity ID
@@ -1010,86 +1145,15 @@ pub(crate) async fn dispatch_command_internal(
     args: Option<Value>,
     board_path: Option<String>,
 ) -> Result<Value, String> {
-    /// Maximum number of prefix rewrites before we reject the command.
-    /// One rewrite is sufficient for all known dynamic prefixes
-    /// (`view.switch:*` -> `ui.view.set`, `board.switch:*` -> `file.switchBoard`).
-    const MAX_REWRITE_DEPTH: u8 = 1;
-
-    // Validate command ID: non-empty, reasonable length, ASCII-only
-    if cmd.is_empty() || cmd.len() > 128 || !cmd.is_ascii() {
-        return Err(format!("Invalid command ID: {:?}", cmd));
+    // Rewrite dynamic prefixes (view.switch:*, board.switch:*, perspective.goto:*)
+    // to canonical commands with merged args. Also validates command ID.
+    let rw = rewrite_dynamic_prefix(app, cmd, args, board_path, &target, &scope_chain)?;
+    if let Some(result) = rw.early_return {
+        return Ok(result);
     }
-
-    // --- Prefix rewrite loop ---
-    // Dynamic palette commands (view.switch:*, board.switch:*) are rewritten
-    // to their canonical command IDs with merged args. The loop runs at most
-    // MAX_REWRITE_DEPTH times to prevent unbounded recursion.
-    let mut effective_cmd = cmd.to_owned();
-    let mut effective_args = args;
-    let mut effective_board_path = board_path;
-
-    for depth in 0..=MAX_REWRITE_DEPTH {
-        tracing::info!(
-            cmd = %effective_cmd,
-            target = ?target,
-            args = ?effective_args,
-            scope_chain = ?scope_chain,
-            board_path = ?effective_board_path,
-            "command"
-        );
-
-        // `window.focus:*` — pure OS-level side-effect (unminimize + set focus).
-        // Returns early without entering the standard result-processing pipeline
-        // because window focus has no undo, UIState, or entity implications.
-        if let Some(label) = effective_cmd.strip_prefix("window.focus:") {
-            tracing::info!(label = %label, "window.focus — bringing window to front");
-            if let Some(window) = app.get_webview_window(label) {
-                let _ = window.unminimize();
-                let _ = window.set_focus();
-            }
-            return Ok(json!({ "WindowFocus": label }));
-        }
-
-        if let Some(view_id) = effective_cmd.strip_prefix("view.switch:") {
-            if depth >= MAX_REWRITE_DEPTH {
-                return Err(format!(
-                    "Command rewrite depth exceeded for: {}",
-                    effective_cmd
-                ));
-            }
-            tracing::info!(view_id = %view_id, "redirecting view.switch to ui.view.set");
-            let mut merged_args = match effective_args {
-                Some(Value::Object(map)) => map,
-                _ => serde_json::Map::new(),
-            };
-            merged_args.insert("view_id".into(), Value::String(view_id.to_string()));
-            effective_cmd = "ui.view.set".to_owned();
-            effective_args = Some(Value::Object(merged_args));
-            continue;
-        }
-
-        if let Some(board_path_suffix) = effective_cmd.strip_prefix("board.switch:") {
-            if depth >= MAX_REWRITE_DEPTH {
-                return Err(format!(
-                    "Command rewrite depth exceeded for: {}",
-                    effective_cmd
-                ));
-            }
-            tracing::info!(board_path = %board_path_suffix, "redirecting board.switch to file.switchBoard");
-            let mut merged_args = match effective_args {
-                Some(Value::Object(map)) => map,
-                _ => serde_json::Map::new(),
-            };
-            merged_args.insert("path".into(), Value::String(board_path_suffix.to_string()));
-            effective_board_path = Some(board_path_suffix.to_string());
-            effective_cmd = "file.switchBoard".to_owned();
-            effective_args = Some(Value::Object(merged_args));
-            continue;
-        }
-
-        // No prefix matched — proceed with normal dispatch.
-        break;
-    }
+    let effective_cmd = rw.cmd;
+    let effective_args = rw.args;
+    let effective_board_path = rw.board_path;
 
     // Resolve scope chain: explicit > stored focus
     let scope = match scope_chain {
@@ -1474,24 +1538,9 @@ pub async fn list_commands_for_scope(
 
     // Build dynamic sources: views from the active board, open boards from UIState.
     let dynamic = {
-        use swissarmyhammer_kanban::scope_commands::{
-            BoardInfo, DynamicSources, ViewInfo, WindowInfo,
-        };
+        use swissarmyhammer_kanban::scope_commands::{BoardInfo, DynamicSources};
 
-        // Gather views from the active board handle
-        let mut views = Vec::new();
-        if let Some(handle) = active_handle.as_ref() {
-            if let Some(views_lock) = handle.ctx.views() {
-                if let Ok(vc) = views_lock.try_read() {
-                    for v in vc.all_views() {
-                        views.push(ViewInfo {
-                            id: v.id.clone(),
-                            name: v.name.clone(),
-                        });
-                    }
-                }
-            }
-        }
+        let views = gather_views(active_handle.as_deref());
 
         // Gather open boards from UIState, enriched with entity display names.
         let open_paths = state.ui_state.open_boards();
@@ -1526,27 +1575,17 @@ pub async fn list_commands_for_scope(
         }
         drop(boards_lock);
 
-        // Gather open windows from Tauri
-        let windows: Vec<WindowInfo> = app
-            .webview_windows()
-            .iter()
-            .filter_map(|(label, w)| {
-                let title = w.title().ok()?;
-                if title.is_empty() || !w.is_visible().unwrap_or(false) {
-                    return None;
-                }
-                Some(WindowInfo {
-                    label: label.clone(),
-                    title,
-                    focused: w.is_focused().unwrap_or(false),
-                })
-            })
-            .collect();
+        let windows = gather_windows(&app);
+
+        // Gather perspectives filtered by the active view kind
+        let view_kind = resolve_active_view_kind(active_handle.as_deref(), &state.ui_state);
+        let perspectives = gather_perspectives(active_handle.as_deref(), view_kind.as_deref()).await;
 
         DynamicSources {
             views,
             boards,
             windows,
+            perspectives,
         }
     };
 

@@ -129,6 +129,7 @@
 
 - id: perspective.goto
   name: Go to Perspective
+  visible: false
   params:
     - name: id
       from: args
