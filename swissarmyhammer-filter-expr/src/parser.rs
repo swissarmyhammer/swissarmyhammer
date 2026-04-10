@@ -145,13 +145,12 @@ pub fn parse(input: &str) -> Result<Expr, Vec<ParseError>> {
             .collect();
         Err(errors)
     } else {
-        // The parser succeeded; unwrap the output.
-        result.into_output().ok_or_else(|| {
-            vec![ParseError {
-                message: "unexpected parse failure".to_string(),
-                span: 0..input.len(),
-            }]
-        })
+        // Safety: chumsky's ParseResult::into_output() returns Some when has_errors()
+        // is false. We already checked !has_errors() above, so this unwrap cannot panic
+        // unless chumsky violates its own invariants.
+        Ok(result
+            .into_output()
+            .expect("chumsky parser returned no errors and no output"))
     }
 }
 
@@ -503,6 +502,43 @@ mod tests {
         assert!(!errors.is_empty());
         // Span should be within the input range
         assert!(errors[0].span.start <= 2);
+    }
+
+    // ── Display impl ────────────────────────────────────────────────
+
+    #[test]
+    fn display_impl_format() {
+        // Lock down the exact format string of `ParseError::Display`. A
+        // synthesized error keeps the assertion independent of chumsky's
+        // own error message wording.
+        let err = ParseError {
+            message: "oops".into(),
+            span: 3..7,
+        };
+        assert_eq!(format!("{err}"), "oops at 3..7");
+    }
+
+    #[test]
+    fn display_impl_from_real_parse_error() {
+        // Format an error obtained through the real parser path, mirroring
+        // how callers surface a `ParseError` via `{err}` formatting. The
+        // exact prefix is chumsky's output (not part of our public API), so
+        // assert only the trailing positional shape we control.
+        let errors = parse("$$").unwrap_err();
+        let formatted = format!("{}", errors[0]);
+        assert!(
+            formatted.contains(" at "),
+            "expected ' at ' separator in {formatted:?}"
+        );
+        let suffix = formatted.rsplit(" at ").next().unwrap();
+        let (start, end) = suffix
+            .split_once("..")
+            .unwrap_or_else(|| panic!("expected 'start..end' suffix in {formatted:?}"));
+        start
+            .parse::<usize>()
+            .unwrap_or_else(|_| panic!("expected numeric start in {formatted:?}"));
+        end.parse::<usize>()
+            .unwrap_or_else(|_| panic!("expected numeric end in {formatted:?}"));
     }
 
     // ── Whitespace handling ─────────────────────────────────────────
