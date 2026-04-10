@@ -41,10 +41,33 @@ vi.mock("@/lib/perspective-context", () => ({
   usePerspectives: () => mockUsePerspectives(),
 }));
 
-// Mock ui-state-context for transitive dependencies.
+// Mock ui-state-context for transitive dependencies. `rust-engine-container`
+// is pulled in via `PerspectiveContainer` → `useRefreshEntities`, and it
+// imports `UIStateProvider` directly, so the mock must expose a stub for it
+// as well.
 vi.mock("@/lib/ui-state-context", () => ({
   useUIState: () => ({ windows: {} }),
+  UIStateProvider: ({ children }: { children: unknown }) => children,
 }));
+
+// `PerspectiveContainer` now calls `useRefreshEntities`; stub it so the test
+// does not need a live rust-engine provider tree.
+vi.mock("@/components/rust-engine-container", () => ({
+  useRefreshEntities: () => () => Promise.resolve({ entities: {} }),
+}));
+
+// `PerspectiveContainer` also reads the active board path via
+// `useActiveBoardPath`; stub it so no board context is required.
+vi.mock("@/lib/command-scope", async () => {
+  const actual =
+    await vi.importActual<typeof import("@/lib/command-scope")>(
+      "@/lib/command-scope",
+    );
+  return {
+    ...actual,
+    useActiveBoardPath: () => undefined,
+  };
+});
 
 // Import after mocks
 import {

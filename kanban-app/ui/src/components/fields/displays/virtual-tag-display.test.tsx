@@ -1,6 +1,62 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { TooltipProvider } from "@/components/ui/tooltip";
+
+// `virtual-tag-display.tsx` pulls metadata from `useBoardData()` which is
+// backed by `window-container.tsx`. That module calls `getCurrentWindow()`
+// at load time, so we stub the whole transitive chain here.
+vi.mock("@tauri-apps/api/window", () => ({
+  getCurrentWindow: () => ({
+    label: "main",
+    listen: vi.fn(() => Promise.resolve(() => {})),
+  }),
+}));
+
+// Stub `useBoardData` to provide the virtual-tag metadata that used to live
+// in a hardcoded map on the frontend. These values mirror the Rust
+// `DEFAULT_REGISTRY` in `virtual_tags.rs`.
+vi.mock("@/components/window-container", async () => {
+  const actual =
+    await vi.importActual<typeof import("@/components/window-container")>(
+      "@/components/window-container",
+    );
+  return {
+    ...actual,
+    useBoardData: () => ({
+      board: {
+        id: "stub-board",
+        entity_type: "board",
+        moniker: "board:stub",
+        fields: {},
+      },
+      columns: [],
+      tags: [],
+      virtualTagMeta: [
+        {
+          slug: "READY",
+          color: "0e8a16",
+          description: "Task has no unmet dependencies",
+        },
+        {
+          slug: "BLOCKED",
+          color: "e36209",
+          description: "Task has at least one unmet dependency",
+        },
+        {
+          slug: "BLOCKING",
+          color: "d73a4a",
+          description: "Other tasks depend on this one",
+        },
+      ],
+      summary: {
+        total: 0,
+        by_column: {},
+        by_tag: {},
+      },
+    }),
+  };
+});
+
 import { VirtualTagDisplay } from "./virtual-tag-display";
 
 /** Wrap in TooltipProvider since VirtualTagDisplay uses Tooltip. */

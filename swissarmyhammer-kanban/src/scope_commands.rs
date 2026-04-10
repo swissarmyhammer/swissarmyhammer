@@ -189,44 +189,83 @@ fn emit_dynamic_commands(
     for view in &dyn_src.views {
         let cmd_id = format!("view.switch:{}", view.id);
         let key = (cmd_id.clone(), None);
-        if seen.contains(&key) { continue; }
+        if seen.contains(&key) {
+            continue;
+        }
         seen.insert(key);
         result.push(ResolvedCommand {
-            id: cmd_id, name: format!("Switch to {}", view.name), menu_name: None,
-            target: None, group: "view".into(), context_menu: false, keys: None, available: true,
+            id: cmd_id,
+            name: format!("Switch to {}", view.name),
+            menu_name: None,
+            target: None,
+            group: "view".into(),
+            context_menu: false,
+            keys: None,
+            available: true,
         });
     }
     for board in &dyn_src.boards {
         let cmd_id = format!("board.switch:{}", board.path);
         let key = (cmd_id.clone(), None);
-        if seen.contains(&key) { continue; }
+        if seen.contains(&key) {
+            continue;
+        }
         seen.insert(key);
-        let tpl = TemplateParams { entity_type: "board", entity_name: &board.entity_name, context_name: &board.context_name };
-        let name = resolve_name_template("Switch to Board: {{entity.display_name}} ({{entity.context.display_name}})", &tpl);
+        let tpl = TemplateParams {
+            entity_type: "board",
+            entity_name: &board.entity_name,
+            context_name: &board.context_name,
+        };
+        let name = resolve_name_template(
+            "Switch to Board: {{entity.display_name}} ({{entity.context.display_name}})",
+            &tpl,
+        );
         let menu_name = resolve_name_template("{{entity.context.display_name}}", &tpl);
         result.push(ResolvedCommand {
-            id: cmd_id, name, menu_name: Some(menu_name),
-            target: None, group: "board".into(), context_menu: false, keys: None, available: true,
+            id: cmd_id,
+            name,
+            menu_name: Some(menu_name),
+            target: None,
+            group: "board".into(),
+            context_menu: false,
+            keys: None,
+            available: true,
         });
     }
     for window in &dyn_src.windows {
         let cmd_id = format!("window.focus:{}", window.label);
         let key = (cmd_id.clone(), None);
-        if seen.contains(&key) { continue; }
+        if seen.contains(&key) {
+            continue;
+        }
         seen.insert(key);
         result.push(ResolvedCommand {
-            id: cmd_id, name: window.title.clone(), menu_name: Some(window.title.clone()),
-            target: None, group: "window".into(), context_menu: false, keys: None, available: true,
+            id: cmd_id,
+            name: window.title.clone(),
+            menu_name: Some(window.title.clone()),
+            target: None,
+            group: "window".into(),
+            context_menu: false,
+            keys: None,
+            available: true,
         });
     }
     for perspective in &dyn_src.perspectives {
         let cmd_id = format!("perspective.goto:{}", perspective.id);
         let key = (cmd_id.clone(), None);
-        if seen.contains(&key) { continue; }
+        if seen.contains(&key) {
+            continue;
+        }
         seen.insert(key);
         result.push(ResolvedCommand {
-            id: cmd_id, name: format!("Go to Perspective: {}", perspective.name), menu_name: None,
-            target: None, group: "perspective".into(), context_menu: false, keys: None, available: true,
+            id: cmd_id,
+            name: format!("Go to Perspective: {}", perspective.name),
+            menu_name: None,
+            target: None,
+            group: "perspective".into(),
+            context_menu: false,
+            keys: None,
+            available: true,
         });
     }
 }
@@ -1443,16 +1482,40 @@ mod tests {
         let scope = vec!["board:my-board".into()];
         let dynamic = DynamicSources {
             perspectives: vec![
-                PerspectiveInfo { id: "p1".into(), name: "Alpha".into(), view: "board".into() },
-                PerspectiveInfo { id: "p2".into(), name: "Beta".into(), view: "board".into() },
+                PerspectiveInfo {
+                    id: "p1".into(),
+                    name: "Alpha".into(),
+                    view: "board".into(),
+                },
+                PerspectiveInfo {
+                    id: "p2".into(),
+                    name: "Beta".into(),
+                    view: "board".into(),
+                },
             ],
             ..Default::default()
         };
-        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, Some(&dynamic));
+        let cmds = commands_for_scope(
+            &scope,
+            &registry,
+            &impls,
+            Some(&fields),
+            &ui,
+            false,
+            Some(&dynamic),
+        );
         let ids: Vec<&str> = cmds.iter().map(|c| c.id.as_str()).collect();
 
-        assert!(ids.contains(&"perspective.goto:p1"), "should have p1: {:?}", ids);
-        assert!(ids.contains(&"perspective.goto:p2"), "should have p2: {:?}", ids);
+        assert!(
+            ids.contains(&"perspective.goto:p1"),
+            "should have p1: {:?}",
+            ids
+        );
+        assert!(
+            ids.contains(&"perspective.goto:p2"),
+            "should have p2: {:?}",
+            ids
+        );
 
         let p1 = cmds.iter().find(|c| c.id == "perspective.goto:p1").unwrap();
         assert_eq!(p1.name, "Go to Perspective: Alpha");
@@ -1464,12 +1527,22 @@ mod tests {
         let (registry, impls, fields, ui) = setup();
         let scope = vec!["board:my-board".into()];
         let dynamic = DynamicSources {
-            perspectives: vec![
-                PerspectiveInfo { id: "p1".into(), name: "Alpha".into(), view: "board".into() },
-            ],
+            perspectives: vec![PerspectiveInfo {
+                id: "p1".into(),
+                name: "Alpha".into(),
+                view: "board".into(),
+            }],
             ..Default::default()
         };
-        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, true, Some(&dynamic));
+        let cmds = commands_for_scope(
+            &scope,
+            &registry,
+            &impls,
+            Some(&fields),
+            &ui,
+            true,
+            Some(&dynamic),
+        );
         let ids: Vec<&str> = cmds.iter().map(|c| c.id.as_str()).collect();
 
         assert!(

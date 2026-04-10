@@ -1162,8 +1162,8 @@ fn hello() {
 
     #[test]
     fn test_spawn_indexing_worker_processes_dirty_files() {
-        /// Spawn the real indexing worker and verify it processes dirty files,
-        /// writes ts_chunks, and marks files as indexed.
+        // Spawn the real indexing worker and verify it processes dirty files,
+        // writes ts_chunks, and marks files as indexed.
         let db = create_test_db();
         let temp_dir = TempDir::new().unwrap();
 
@@ -1249,9 +1249,9 @@ fn hello() {
 
     #[test]
     fn test_spawn_indexing_worker_handles_mixed_file_states() {
-        /// Spawn the real worker with a mix of existing files, missing files,
-        /// and binary files. All should be marked indexed regardless of
-        /// whether chunks were produced.
+        // Spawn the real worker with a mix of existing files, missing files,
+        // and binary files. All should be marked indexed regardless of
+        // whether chunks were produced.
         let db = create_test_db();
         let temp_dir = TempDir::new().unwrap();
 
@@ -1263,11 +1263,7 @@ fn hello() {
         .unwrap();
 
         // One binary file (invalid UTF-8)
-        fs::write(
-            temp_dir.path().join("binary.dat"),
-            &[0xFF, 0xFE, 0x00, 0x01],
-        )
-        .unwrap();
+        fs::write(temp_dir.path().join("binary.dat"), [0xFF, 0xFE, 0x00, 0x01]).unwrap();
 
         // Register all three: real, binary, and a ghost file (not on disk)
         insert_test_file(&db, "real.rs");
@@ -1332,9 +1328,9 @@ fn hello() {
 
     #[test]
     fn test_run_indexing_worker_db_error_propagates() {
-        /// When the database is broken, run_indexing_worker should return an
-        /// error rather than silently continuing. This covers the Err branch
-        /// in spawn_indexing_worker (lines 60-61).
+        // When the database is broken, run_indexing_worker should return an
+        // error rather than silently continuing. This covers the Err branch
+        // in spawn_indexing_worker (lines 60-61).
         let db = create_test_db();
         let temp_dir = TempDir::new().unwrap();
 
@@ -1355,10 +1351,10 @@ fn hello() {
 
     #[test]
     fn test_parse_and_extract_chunks_large_file_single_chunk_with_start_byte_zero() {
-        /// A file larger than CHUNK_SIZE (1000 bytes) currently produces exactly
-        /// one chunk with start_byte=0, because the implementation uses a
-        /// simple "return entire content" strategy. This test documents that
-        /// behaviour explicitly and verifies the chunk metadata.
+        // A file larger than CHUNK_SIZE (1000 bytes) currently produces exactly
+        // one chunk with start_byte=0, because the implementation uses a
+        // simple "return entire content" strategy. This test documents that
+        // behaviour explicitly and verifies the chunk metadata.
         let temp_dir = TempDir::new().unwrap();
         let file_path = temp_dir.path().join("big.rs");
 
@@ -1396,8 +1392,8 @@ fn hello() {
 
     #[test]
     fn test_spawn_indexing_worker_writes_correct_chunk_metadata() {
-        /// Verify that the worker writes correct metadata (start_byte,
-        /// end_byte, start_line, end_line, text) into ts_chunks.
+        // Verify that the worker writes correct metadata (start_byte,
+        // end_byte, start_line, end_line, text) into ts_chunks.
         let db = create_test_db();
         let temp_dir = TempDir::new().unwrap();
 

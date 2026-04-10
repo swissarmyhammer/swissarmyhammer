@@ -2370,7 +2370,7 @@ mod tests {
         let result = ctx
             .lsp_multi_request_with_document(file_path.to_str().unwrap(), |rpc| {
                 let resp = rpc.send_request("textDocument/references", serde_json::json!({}))?;
-                Ok(unwrap_lsp_result(resp)?)
+                unwrap_lsp_result(resp)
             })
             .unwrap();
 

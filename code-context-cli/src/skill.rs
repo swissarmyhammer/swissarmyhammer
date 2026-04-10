@@ -208,7 +208,7 @@ mod tests {
         let resolver = swissarmyhammer_skills::SkillResolver::new();
         let builtins = resolver.resolve_builtins();
         assert!(
-            builtins.get("code-context").is_some(),
+            builtins.contains_key("code-context"),
             "builtin 'code-context' skill should exist"
         );
     }
@@ -218,7 +218,7 @@ mod tests {
         let resolver = swissarmyhammer_skills::SkillResolver::new();
         let builtins = resolver.resolve_builtins();
         assert!(
-            builtins.get("lsp").is_some(),
+            builtins.contains_key("lsp"),
             "builtin 'lsp' skill should exist"
         );
     }

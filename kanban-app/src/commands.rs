@@ -60,18 +60,32 @@ fn update_window_title(app: &AppHandle, label: &str, board_name: Option<&str>) {
 }
 
 /// Gather view info from an optional board handle for dynamic commands.
-fn gather_views(handle: Option<&BoardHandle>) -> Vec<swissarmyhammer_kanban::scope_commands::ViewInfo> {
+fn gather_views(
+    handle: Option<&BoardHandle>,
+) -> Vec<swissarmyhammer_kanban::scope_commands::ViewInfo> {
     use swissarmyhammer_kanban::scope_commands::ViewInfo;
     let Some(handle) = handle else { return vec![] };
-    let Some(views_lock) = handle.ctx.views() else { return vec![] };
-    let Ok(vc) = views_lock.try_read() else { return vec![] };
-    vc.all_views().iter().map(|v| ViewInfo { id: v.id.clone(), name: v.name.clone() }).collect()
+    let Some(views_lock) = handle.ctx.views() else {
+        return vec![];
+    };
+    let Ok(vc) = views_lock.try_read() else {
+        return vec![];
+    };
+    vc.all_views()
+        .iter()
+        .map(|v| ViewInfo {
+            id: v.id.clone(),
+            name: v.name.clone(),
+        })
+        .collect()
 }
 
 /// Gather open board info from UIState for dynamic commands.
 async fn gather_boards(
     ui_state: &swissarmyhammer_commands::UIState,
-    boards: &tokio::sync::RwLock<std::collections::HashMap<std::path::PathBuf, std::sync::Arc<BoardHandle>>>,
+    boards: &tokio::sync::RwLock<
+        std::collections::HashMap<std::path::PathBuf, std::sync::Arc<BoardHandle>>,
+    >,
 ) -> Vec<swissarmyhammer_kanban::scope_commands::BoardInfo> {
     use swissarmyhammer_kanban::scope_commands::BoardInfo;
     let open_paths = ui_state.open_boards();
@@ -79,34 +93,63 @@ async fn gather_boards(
     let mut result = Vec::new();
     for path in &open_paths {
         let p = std::path::Path::new(path);
-        let dir_name = p.parent().and_then(|parent| parent.file_name())
-            .and_then(|n| n.to_str()).unwrap_or("Board").to_string();
+        let dir_name = p
+            .parent()
+            .and_then(|parent| parent.file_name())
+            .and_then(|n| n.to_str())
+            .unwrap_or("Board")
+            .to_string();
         let entity_name = match boards_lock.get(p) {
-            Some(handle) => board_display_name(handle).await.unwrap_or_else(|| dir_name.clone()),
+            Some(handle) => board_display_name(handle)
+                .await
+                .unwrap_or_else(|| dir_name.clone()),
             None => dir_name.clone(),
         };
-        let context_name = boards_lock.get(p)
-            .map(|h| h.ctx.name().to_string()).unwrap_or_else(|| dir_name.clone());
-        result.push(BoardInfo { path: path.clone(), name: dir_name, entity_name, context_name });
+        let context_name = boards_lock
+            .get(p)
+            .map(|h| h.ctx.name().to_string())
+            .unwrap_or_else(|| dir_name.clone());
+        result.push(BoardInfo {
+            path: path.clone(),
+            name: dir_name,
+            entity_name,
+            context_name,
+        });
     }
     result
 }
 
 /// Gather window info from Tauri for dynamic commands.
-fn gather_windows(app: &tauri::AppHandle) -> Vec<swissarmyhammer_kanban::scope_commands::WindowInfo> {
+fn gather_windows(
+    app: &tauri::AppHandle,
+) -> Vec<swissarmyhammer_kanban::scope_commands::WindowInfo> {
     use swissarmyhammer_kanban::scope_commands::WindowInfo;
-    app.webview_windows().iter().filter_map(|(label, w)| {
-        let title = w.title().ok()?;
-        if title.is_empty() || !w.is_visible().unwrap_or(false) { return None; }
-        Some(WindowInfo { label: label.clone(), title, focused: w.is_focused().unwrap_or(false) })
-    }).collect()
+    app.webview_windows()
+        .iter()
+        .filter_map(|(label, w)| {
+            let title = w.title().ok()?;
+            if title.is_empty() || !w.is_visible().unwrap_or(false) {
+                return None;
+            }
+            Some(WindowInfo {
+                label: label.clone(),
+                title,
+                focused: w.is_focused().unwrap_or(false),
+            })
+        })
+        .collect()
 }
 
 /// Resolve the active view kind (e.g. "board", "grid") from the UIState and views context.
-fn resolve_active_view_kind(handle: Option<&BoardHandle>, ui_state: &swissarmyhammer_commands::UIState) -> Option<String> {
+fn resolve_active_view_kind(
+    handle: Option<&BoardHandle>,
+    ui_state: &swissarmyhammer_commands::UIState,
+) -> Option<String> {
     let handle = handle?;
     let active_id = ui_state.active_view_id("main");
-    if active_id.is_empty() { return None; }
+    if active_id.is_empty() {
+        return None;
+    }
     let views_lock = handle.ctx.views()?;
     let vc = views_lock.try_read().ok()?;
     let view = vc.all_views().iter().find(|v| v.id == active_id)?;
@@ -123,12 +166,20 @@ async fn gather_perspectives(
 ) -> Vec<swissarmyhammer_kanban::scope_commands::PerspectiveInfo> {
     use swissarmyhammer_kanban::scope_commands::PerspectiveInfo;
     let Some(handle) = handle else { return vec![] };
-    let Ok(pctx) = handle.ctx.perspective_context().await else { return vec![] };
-    let Ok(pc) = pctx.try_read() else { return vec![] };
+    let Ok(pctx) = handle.ctx.perspective_context().await else {
+        return vec![];
+    };
+    let Ok(pc) = pctx.try_read() else {
+        return vec![];
+    };
     pc.all()
         .iter()
         .filter(|p| view_kind.is_none_or(|vk| p.view == vk))
-        .map(|p| PerspectiveInfo { id: p.id.clone(), name: p.name.clone(), view: p.view.clone() })
+        .map(|p| PerspectiveInfo {
+            id: p.id.clone(),
+            name: p.name.clone(),
+            view: p.view.clone(),
+        })
         .collect()
 }
 
@@ -1050,25 +1101,6 @@ pub async fn dispatch_command(
     dispatch_command_internal(&app, &state, &cmd, scope_chain, target, args, board_path).await
 }
 
-/// Internal dispatch — single path for all state-mutating command execution.
-///
-/// This is the single path for all state-mutating command execution.
-/// It handles: command lookup, context building, execution, undo tracking,
-/// entity flush, event emission, and UIState change broadcasting.
-///
-/// Dynamic prefix commands (`view.switch:*`, `board.switch:*`) are rewritten
-/// to their canonical command IDs via a single-pass loop. The rewrite is
-/// limited to one iteration (`MAX_REWRITE_DEPTH`) to prevent unbounded
-/// recursion from malformed command chains like `board.switch:board.switch:…`.
-///
-/// The `window.focus:*` prefix is a pure side-effect (unminimize + focus) that
-/// returns early without entering the standard result-processing pipeline.
-/// This is intentional: window focus is OS-level and has no undo, UIState, or
-/// entity implications.
-///
-/// # Parameters
-/// - `app` - Tauri application handle for event emission
-/// - `state` - Application state with command registry, impls, and board handles
 /// Maximum number of prefix rewrites before we reject the command.
 const MAX_REWRITE_DEPTH: u8 = 1;
 
@@ -1101,7 +1133,12 @@ fn match_dynamic_prefix(cmd: &str) -> Result<Option<(&str, &str, String, bool)>,
         }
         Ok(Some(("file.switchBoard", "path", suffix.to_string(), true)))
     } else if let Some(suffix) = cmd.strip_prefix("perspective.goto:") {
-        Ok(Some(("ui.perspective.set", "perspective_id", suffix.to_string(), false)))
+        Ok(Some((
+            "ui.perspective.set",
+            "perspective_id",
+            suffix.to_string(),
+            false,
+        )))
     } else {
         Ok(None)
     }
@@ -1135,16 +1172,30 @@ fn rewrite_dynamic_prefix(
 
         if let Some(label) = effective_cmd.strip_prefix("window.focus:") {
             let result = handle_window_focus(app, label);
-            return Ok(RewriteResult { cmd: effective_cmd, args: effective_args, board_path: effective_board_path, early_return: Some(result) });
+            return Ok(RewriteResult {
+                cmd: effective_cmd,
+                args: effective_args,
+                board_path: effective_board_path,
+                early_return: Some(result),
+            });
         }
 
-        if let Some((new_cmd, arg_key, arg_val, update_bp)) = match_dynamic_prefix(&effective_cmd)? {
+        if let Some((new_cmd, arg_key, arg_val, update_bp)) = match_dynamic_prefix(&effective_cmd)?
+        {
             if depth >= MAX_REWRITE_DEPTH {
-                return Err(format!("Command rewrite depth exceeded for: {}", effective_cmd));
+                return Err(format!(
+                    "Command rewrite depth exceeded for: {}",
+                    effective_cmd
+                ));
             }
-            let mut merged = match effective_args { Some(Value::Object(map)) => map, _ => serde_json::Map::new() };
+            let mut merged = match effective_args {
+                Some(Value::Object(map)) => map,
+                _ => serde_json::Map::new(),
+            };
             merged.insert(arg_key.into(), Value::String(arg_val.clone()));
-            if update_bp { effective_board_path = Some(arg_val); }
+            if update_bp {
+                effective_board_path = Some(arg_val);
+            }
             effective_cmd = new_cmd.to_owned();
             effective_args = Some(Value::Object(merged));
             continue;
@@ -1153,9 +1204,33 @@ fn rewrite_dynamic_prefix(
         break;
     }
 
-    Ok(RewriteResult { cmd: effective_cmd, args: effective_args, board_path: effective_board_path, early_return: None })
+    Ok(RewriteResult {
+        cmd: effective_cmd,
+        args: effective_args,
+        board_path: effective_board_path,
+        early_return: None,
+    })
 }
 
+/// Internal dispatch — single path for all state-mutating command execution.
+///
+/// This is the single path for all state-mutating command execution.
+/// It handles: command lookup, context building, execution, undo tracking,
+/// entity flush, event emission, and UIState change broadcasting.
+///
+/// Dynamic prefix commands (`view.switch:*`, `board.switch:*`) are rewritten
+/// to their canonical command IDs via a single-pass loop. The rewrite is
+/// limited to one iteration (`MAX_REWRITE_DEPTH`) to prevent unbounded
+/// recursion from malformed command chains like `board.switch:board.switch:…`.
+///
+/// The `window.focus:*` prefix is a pure side-effect (unminimize + focus) that
+/// returns early without entering the standard result-processing pipeline.
+/// This is intentional: window focus is OS-level and has no undo, UIState, or
+/// entity implications.
+///
+/// # Parameters
+/// - `app` - Tauri application handle for event emission
+/// - `state` - Application state with command registry, impls, and board handles
 /// - `cmd` - Command ID string (e.g. "task.move")
 /// - `scope_chain` - Optional explicit scope; falls back to stored UIState focus
 /// - `target` - Optional target entity ID
@@ -1567,8 +1642,14 @@ pub async fn list_commands_for_scope(
         let boards = gather_boards(&state.ui_state, &state.boards).await;
         let windows = gather_windows(&app);
         let view_kind = resolve_active_view_kind(active_handle.as_deref(), &state.ui_state);
-        let perspectives = gather_perspectives(active_handle.as_deref(), view_kind.as_deref()).await;
-        DynamicSources { views, boards, windows, perspectives }
+        let perspectives =
+            gather_perspectives(active_handle.as_deref(), view_kind.as_deref()).await;
+        DynamicSources {
+            views,
+            boards,
+            windows,
+            perspectives,
+        }
     };
 
     let result = swissarmyhammer_kanban::scope_commands::commands_for_scope(

@@ -611,10 +611,12 @@ mod tests {
         assert!(filter.params.iter().any(|p| p.name == "filter"));
         assert!(filter.params.iter().any(|p| p.name == "perspective_id"));
 
-        // All perspective commands should be visible (default true) except perspective.list
+        // Most perspective commands are visible by default, but two are
+        // explicitly hidden: `perspective.list` (meta) and `perspective.goto`
+        // (a template that is dynamically expanded into palette entries).
         for cmd in registry.all_commands() {
-            if cmd.id == "perspective.list" {
-                assert!(!cmd.visible, "perspective.list should not be visible");
+            if cmd.id == "perspective.list" || cmd.id == "perspective.goto" {
+                assert!(!cmd.visible, "{} should not be visible", cmd.id);
             } else {
                 assert!(cmd.visible, "{} should be visible", cmd.id);
             }
