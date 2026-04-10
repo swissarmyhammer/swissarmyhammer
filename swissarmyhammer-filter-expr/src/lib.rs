@@ -216,6 +216,10 @@ mod tests {
 
     #[test]
     fn parse_error_on_invalid_input() {
+        // `$$garbage` fails because the first `$` is consumed as the project
+        // sigil, then the body parser needs at least one non-sigil char, but
+        // the next char is another `$` (excluded from body chars). So the
+        // project atom fails to parse.
         let result = parse("$$garbage");
         assert!(result.is_err());
     }
