@@ -68,6 +68,30 @@ fn gather_views(handle: Option<&BoardHandle>) -> Vec<swissarmyhammer_kanban::sco
     vc.all_views().iter().map(|v| ViewInfo { id: v.id.clone(), name: v.name.clone() }).collect()
 }
 
+/// Gather open board info from UIState for dynamic commands.
+async fn gather_boards(
+    ui_state: &swissarmyhammer_commands::UIState,
+    boards: &tokio::sync::RwLock<std::collections::HashMap<std::path::PathBuf, std::sync::Arc<BoardHandle>>>,
+) -> Vec<swissarmyhammer_kanban::scope_commands::BoardInfo> {
+    use swissarmyhammer_kanban::scope_commands::BoardInfo;
+    let open_paths = ui_state.open_boards();
+    let boards_lock = boards.read().await;
+    let mut result = Vec::new();
+    for path in &open_paths {
+        let p = std::path::Path::new(path);
+        let dir_name = p.parent().and_then(|parent| parent.file_name())
+            .and_then(|n| n.to_str()).unwrap_or("Board").to_string();
+        let entity_name = match boards_lock.get(p) {
+            Some(handle) => board_display_name(handle).await.unwrap_or_else(|| dir_name.clone()),
+            None => dir_name.clone(),
+        };
+        let context_name = boards_lock.get(p)
+            .map(|h| h.ctx.name().to_string()).unwrap_or_else(|| dir_name.clone());
+        result.push(BoardInfo { path: path.clone(), name: dir_name, entity_name, context_name });
+    }
+    result
+}
+
 /// Gather window info from Tauri for dynamic commands.
 fn gather_windows(app: &tauri::AppHandle) -> Vec<swissarmyhammer_kanban::scope_commands::WindowInfo> {
     use swissarmyhammer_kanban::scope_commands::WindowInfo;
@@ -1057,6 +1081,32 @@ struct RewriteResult {
     early_return: Option<Value>,
 }
 
+/// Handle `window.focus:*` — pure OS side-effect with no undo/UIState implications.
+fn handle_window_focus(app: &AppHandle, label: &str) -> Value {
+    tracing::info!(label = %label, "window.focus — bringing window to front");
+    if let Some(window) = app.get_webview_window(label) {
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+    json!({ "WindowFocus": label })
+}
+
+/// Match a dynamic command prefix and return (new_cmd, arg_key, arg_value, updates_board_path).
+fn match_dynamic_prefix(cmd: &str) -> Result<Option<(&str, &str, String, bool)>, String> {
+    if let Some(suffix) = cmd.strip_prefix("view.switch:") {
+        Ok(Some(("ui.view.set", "view_id", suffix.to_string(), false)))
+    } else if let Some(suffix) = cmd.strip_prefix("board.switch:") {
+        if suffix.contains("..") || !std::path::Path::new(suffix).is_absolute() {
+            return Err(format!("Invalid board path in command: {:?}", suffix));
+        }
+        Ok(Some(("file.switchBoard", "path", suffix.to_string(), true)))
+    } else if let Some(suffix) = cmd.strip_prefix("perspective.goto:") {
+        Ok(Some(("ui.perspective.set", "perspective_id", suffix.to_string(), false)))
+    } else {
+        Ok(None)
+    }
+}
+
 /// Rewrite dynamic palette command prefixes to their canonical forms.
 ///
 /// Handles `window.focus:*` (pure side-effect, returns early), `view.switch:*`,
@@ -1084,42 +1134,17 @@ fn rewrite_dynamic_prefix(
             scope_chain = ?scope_chain, board_path = ?effective_board_path, "command");
 
         if let Some(label) = effective_cmd.strip_prefix("window.focus:") {
-            let label = label.to_string();
-            tracing::info!(label = %label, "window.focus — bringing window to front");
-            if let Some(window) = app.get_webview_window(&label) {
-                let _ = window.unminimize();
-                let _ = window.set_focus();
-            }
-            return Ok(RewriteResult {
-                cmd: effective_cmd, args: effective_args, board_path: effective_board_path,
-                early_return: Some(json!({ "WindowFocus": label })),
-            });
+            let result = handle_window_focus(app, label);
+            return Ok(RewriteResult { cmd: effective_cmd, args: effective_args, board_path: effective_board_path, early_return: Some(result) });
         }
 
-        let rewrite = if let Some(suffix) = effective_cmd.strip_prefix("view.switch:") {
-            Some(("ui.view.set", "view_id", suffix.to_string(), false))
-        } else if let Some(suffix) = effective_cmd.strip_prefix("board.switch:") {
-            // Reject path traversal attempts — board paths must be absolute without `..`.
-            if suffix.contains("..") || !std::path::Path::new(suffix).is_absolute() {
-                return Err(format!("Invalid board path in command: {:?}", suffix));
-            }
-            Some(("file.switchBoard", "path", suffix.to_string(), true))
-        } else if let Some(suffix) = effective_cmd.strip_prefix("perspective.goto:") {
-            Some(("ui.perspective.set", "perspective_id", suffix.to_string(), false))
-        } else {
-            None
-        };
-
-        if let Some((new_cmd, arg_key, arg_val, update_board_path)) = rewrite {
+        if let Some((new_cmd, arg_key, arg_val, update_bp)) = match_dynamic_prefix(&effective_cmd)? {
             if depth >= MAX_REWRITE_DEPTH {
                 return Err(format!("Command rewrite depth exceeded for: {}", effective_cmd));
             }
-            let mut merged = match effective_args {
-                Some(Value::Object(map)) => map,
-                _ => serde_json::Map::new(),
-            };
+            let mut merged = match effective_args { Some(Value::Object(map)) => map, _ => serde_json::Map::new() };
             merged.insert(arg_key.into(), Value::String(arg_val.clone()));
-            if update_board_path { effective_board_path = Some(arg_val); }
+            if update_bp { effective_board_path = Some(arg_val); }
             effective_cmd = new_cmd.to_owned();
             effective_args = Some(Value::Object(merged));
             continue;
@@ -1536,57 +1561,14 @@ pub async fn list_commands_for_scope(
 
     let registry = state.commands_registry.read().await;
 
-    // Build dynamic sources: views from the active board, open boards from UIState.
     let dynamic = {
-        use swissarmyhammer_kanban::scope_commands::{BoardInfo, DynamicSources};
-
+        use swissarmyhammer_kanban::scope_commands::DynamicSources;
         let views = gather_views(active_handle.as_deref());
-
-        // Gather open boards from UIState, enriched with entity display names.
-        let open_paths = state.ui_state.open_boards();
-        let boards_lock = state.boards.read().await;
-        let mut boards: Vec<BoardInfo> = Vec::new();
-        for path in &open_paths {
-            let p = std::path::Path::new(path);
-            // Filesystem fallback: parent directory name.
-            let dir_name = p
-                .parent()
-                .and_then(|parent| parent.file_name())
-                .and_then(|n| n.to_str())
-                .unwrap_or("Board")
-                .to_string();
-            // Read entity display name from the board entity's `name` field.
-            let entity_name = match boards_lock.get(p) {
-                Some(handle) => board_display_name(handle)
-                    .await
-                    .unwrap_or_else(|| dir_name.clone()),
-                None => dir_name.clone(),
-            };
-            let context_name = boards_lock
-                .get(p)
-                .map(|h| h.ctx.name().to_string())
-                .unwrap_or_else(|| dir_name.clone());
-            boards.push(BoardInfo {
-                path: path.clone(),
-                name: dir_name,
-                entity_name,
-                context_name,
-            });
-        }
-        drop(boards_lock);
-
+        let boards = gather_boards(&state.ui_state, &state.boards).await;
         let windows = gather_windows(&app);
-
-        // Gather perspectives filtered by the active view kind
         let view_kind = resolve_active_view_kind(active_handle.as_deref(), &state.ui_state);
         let perspectives = gather_perspectives(active_handle.as_deref(), view_kind.as_deref()).await;
-
-        DynamicSources {
-            views,
-            boards,
-            windows,
-            perspectives,
-        }
+        DynamicSources { views, boards, windows, perspectives }
     };
 
     let result = swissarmyhammer_kanban::scope_commands::commands_for_scope(

@@ -219,6 +219,104 @@ describe("FilterEditor", () => {
       );
     });
 
+    // =======================================================================
+    // Enter/Escape commit tests — these MUST NEVER be removed or weakened.
+    // They guard the primary save paths for the filter bar.
+    // =======================================================================
+
+    it("Enter key dispatches perspective.filter immediately (not debounced)", async () => {
+      const { container } = render(
+        <FilterEditor filter="" perspectiveId="p1" />,
+      );
+      const view = await getEditorView(container);
+
+      // Type a filter
+      await act(async () => {
+        view.dispatch({
+          changes: { from: 0, to: view.state.doc.length, insert: "#bug" },
+        });
+        await new Promise((r) => setTimeout(r, 20));
+      });
+
+      mockInvoke.mockClear();
+
+      // Press Enter on the CM6 content area
+      const cmContent = container.querySelector(".cm-content") as HTMLElement;
+      await act(async () => {
+        cmContent.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
+        );
+        await new Promise((r) => setTimeout(r, 50));
+      });
+
+      // Must dispatch immediately — not after 300ms debounce
+      expect(mockInvoke).toHaveBeenCalledWith(
+        "dispatch_command",
+        expect.objectContaining({
+          cmd: "perspective.filter",
+          args: { filter: "#bug", perspective_id: "p1" },
+        }),
+      );
+    });
+
+    it("Enter key dispatches perspective.clearFilter when text is empty", async () => {
+      const { container } = render(
+        <FilterEditor filter="#existing" perspectiveId="p1" />,
+      );
+      const view = await getEditorView(container);
+
+      // Clear the text
+      await act(async () => {
+        view.dispatch({
+          changes: { from: 0, to: view.state.doc.length, insert: "" },
+        });
+        await new Promise((r) => setTimeout(r, 20));
+      });
+
+      mockInvoke.mockClear();
+
+      const cmContent = container.querySelector(".cm-content") as HTMLElement;
+      await act(async () => {
+        cmContent.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
+        );
+        await new Promise((r) => setTimeout(r, 50));
+      });
+
+      expect(mockInvoke).toHaveBeenCalledWith(
+        "dispatch_command",
+        expect.objectContaining({
+          cmd: "perspective.clearFilter",
+          args: { perspective_id: "p1" },
+        }),
+      );
+    });
+
+    it("CUA Escape dispatches onClose callback", async () => {
+      const onClose = vi.fn();
+      const { container } = render(
+        <FilterEditor filter="" perspectiveId="p1" onClose={onClose} />,
+      );
+      const view = await getEditorView(container);
+
+      await act(async () => {
+        view.dispatch({
+          changes: { from: 0, to: view.state.doc.length, insert: "#bug" },
+        });
+        await new Promise((r) => setTimeout(r, 20));
+      });
+
+      const cmContent = container.querySelector(".cm-content") as HTMLElement;
+      await act(async () => {
+        cmContent.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+        );
+        await new Promise((r) => setTimeout(r, 50));
+      });
+
+      expect(onClose).toHaveBeenCalled();
+    });
+
     it("vim Escape from insert mode dispatches filter immediately (save-in-place)", async () => {
       mockKeymapMode = "vim";
       const { container } = render(
