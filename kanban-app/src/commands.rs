@@ -510,28 +510,41 @@ pub async fn search_mentions(
         .await
         .map_err(|e| e.to_string())?;
 
-    // Look up the mention_display_field for this entity type
+    let display_field = mention_display_field_for(&ectx, &entity_type)?;
+    let entities = ectx.list(&entity_type).await.map_err(|e| e.to_string())?;
+    let matches = filter_mention_candidates(&entities, &query, display_field);
+    Ok(json!(matches))
+}
+
+/// Resolve the `mention_display_field` for `entity_type` from the field
+/// registry, defaulting to `"name"` when the entity definition doesn't set
+/// one explicitly.
+fn mention_display_field_for<'a>(
+    ectx: &'a swissarmyhammer_entity::EntityContext,
+    entity_type: &str,
+) -> Result<&'a str, String> {
     let fields_ctx = ectx.fields();
     let entity_def = fields_ctx
-        .get_entity(&entity_type)
+        .get_entity(entity_type)
         .ok_or_else(|| format!("Unknown entity type: {}", entity_type))?;
-
-    let display_field = entity_def
+    Ok(entity_def
         .mention_display_field
-        .as_ref()
-        .map(|f| f.as_str())
-        .unwrap_or("name");
+        .as_deref()
+        .unwrap_or("name"))
+}
 
-    let entities = ectx.list(&entity_type).await.map_err(|e| e.to_string())?;
-
+/// Filter `entities` down to the first 20 whose display field or ID
+/// case-insensitively contains `query`, projecting each surviving entity
+/// into the `{id, display_name, color, avatar}` shape the CM6 autocomplete
+/// popup renders. An empty `query` returns the first 20 entities as-is.
+fn filter_mention_candidates(entities: &[Entity], query: &str, display_field: &str) -> Vec<Value> {
     let query_lower = query.to_lowercase();
-    let matches: Vec<Value> = entities
+    entities
         .iter()
         .filter(|e| {
             if query_lower.is_empty() {
                 return true;
             }
-            // Match on display field or entity ID
             let display = e.get_str(display_field).unwrap_or("");
             let id = e.id.as_str();
             display.to_lowercase().contains(&query_lower)
@@ -546,9 +559,7 @@ pub async fn search_mentions(
                 "avatar": e.get_str("avatar"),
             })
         })
-        .collect();
-
-    Ok(json!(matches))
+        .collect()
 }
 
 /// Build a single search-result JSON row from an entity plus a score.
@@ -732,6 +743,46 @@ pub async fn get_board_data(
         .await
         .map_err(|e| format!("get_board_data: {}", e))?;
 
+    let BoardEntities {
+        board,
+        columns,
+        tags,
+        all_tasks,
+        total_actors,
+    } = load_board_entities(&ectx).await?;
+
+    let terminal_id = columns.last().map(|c| c.id.as_str()).unwrap_or("done");
+    let (counts, ready_counts) = count_tasks_by_column(&all_tasks, terminal_id);
+    let columns_json = serialize_columns_with_counts(&columns, &counts, &ready_counts);
+    let tags_json: Vec<Value> = tags.iter().map(|tag| tag.to_json()).collect();
+    let summary = build_board_summary(&board, all_tasks.len(), total_actors, &ready_counts);
+    let virtual_tag_meta = virtual_tag_meta_json();
+
+    Ok(json!({
+        "board": board.to_json(),
+        "columns": columns_json,
+        "tags": tags_json,
+        "virtual_tag_meta": virtual_tag_meta,
+        "summary": summary,
+    }))
+}
+
+/// Every entity set `get_board_data` needs, loaded in one place so the
+/// command body can focus on projecting them into the response shape.
+struct BoardEntities {
+    board: swissarmyhammer_entity::Entity,
+    columns: Vec<swissarmyhammer_entity::Entity>,
+    tags: Vec<swissarmyhammer_entity::Entity>,
+    all_tasks: Vec<swissarmyhammer_entity::Entity>,
+    total_actors: usize,
+}
+
+/// Load every entity collection `get_board_data` needs from the entity
+/// context: the board row, sorted columns, tags, all tasks, and the actor
+/// count (used by the summary). Columns come back pre-sorted by `order`.
+async fn load_board_entities(
+    ectx: &swissarmyhammer_entity::EntityContext,
+) -> Result<BoardEntities, String> {
     let board = ectx
         .read("board", "board")
         .await
@@ -754,25 +805,23 @@ pub async fn get_board_data(
         .await
         .map_err(|e| format!("get_board_data: {}", e))?
         .len();
+    Ok(BoardEntities {
+        board,
+        columns,
+        tags,
+        all_tasks,
+        total_actors,
+    })
+}
 
-    let terminal_id = columns.last().map(|c| c.id.as_str()).unwrap_or("done");
-    let (counts, ready_counts) = count_tasks_by_column(&all_tasks, terminal_id);
-    let columns_json = serialize_columns_with_counts(&columns, &counts, &ready_counts);
-    let tags_json: Vec<Value> = tags.iter().map(|tag| tag.to_json()).collect();
-    let summary = build_board_summary(&board, all_tasks.len(), total_actors, &ready_counts);
-    let virtual_tag_meta: Vec<Value> = default_virtual_tag_registry()
+/// Serialize every virtual tag from the default registry into the JSON
+/// shape the frontend `BoardData.virtualTagMeta` wants.
+fn virtual_tag_meta_json() -> Vec<Value> {
+    default_virtual_tag_registry()
         .metadata()
         .into_iter()
         .map(|m| json!({ "slug": m.slug, "color": m.color, "description": m.description }))
-        .collect();
-
-    Ok(json!({
-        "board": board.to_json(),
-        "columns": columns_json,
-        "tags": tags_json,
-        "virtual_tag_meta": virtual_tag_meta,
-        "summary": summary,
-    }))
+        .collect()
 }
 
 /// Quit the application.
@@ -1124,7 +1173,9 @@ fn handle_window_focus(app: &AppHandle, label: &str) -> Value {
 }
 
 /// Match a dynamic command prefix and return (new_cmd, arg_key, arg_value, updates_board_path).
-fn match_dynamic_prefix(cmd: &str) -> Result<Option<(&str, &str, String, bool)>, String> {
+fn match_dynamic_prefix(
+    cmd: &str,
+) -> Result<Option<(&'static str, &'static str, String, bool)>, String> {
     if let Some(suffix) = cmd.strip_prefix("view.switch:") {
         Ok(Some(("ui.view.set", "view_id", suffix.to_string(), false)))
     } else if let Some(suffix) = cmd.strip_prefix("board.switch:") {
@@ -1161,7 +1212,6 @@ fn rewrite_dynamic_prefix(
     if cmd.is_empty() || cmd.len() > 128 || !cmd.is_ascii() {
         return Err(format!("Invalid command ID: {:?}", cmd));
     }
-
     let mut effective_cmd = cmd.to_owned();
     let mut effective_args = args;
     let mut effective_board_path = board_path;
@@ -1170,38 +1220,28 @@ fn rewrite_dynamic_prefix(
         tracing::info!(cmd = %effective_cmd, target = ?target, args = ?effective_args,
             scope_chain = ?scope_chain, board_path = ?effective_board_path, "command");
 
-        if let Some(label) = effective_cmd.strip_prefix("window.focus:") {
-            let result = handle_window_focus(app, label);
-            return Ok(RewriteResult {
-                cmd: effective_cmd,
-                args: effective_args,
-                board_path: effective_board_path,
-                early_return: Some(result),
-            });
+        if effective_cmd.starts_with("window.focus:") {
+            return Ok(run_window_focus(
+                app,
+                effective_cmd,
+                effective_args,
+                effective_board_path,
+            ));
         }
-
-        if let Some((new_cmd, arg_key, arg_val, update_bp)) = match_dynamic_prefix(&effective_cmd)?
-        {
-            if depth >= MAX_REWRITE_DEPTH {
-                return Err(format!(
-                    "Command rewrite depth exceeded for: {}",
-                    effective_cmd
-                ));
-            }
-            let mut merged = match effective_args {
-                Some(Value::Object(map)) => map,
-                _ => serde_json::Map::new(),
-            };
-            merged.insert(arg_key.into(), Value::String(arg_val.clone()));
-            if update_bp {
-                effective_board_path = Some(arg_val);
-            }
-            effective_cmd = new_cmd.to_owned();
-            effective_args = Some(Value::Object(merged));
-            continue;
+        let Some(rewrite) = match_dynamic_prefix(&effective_cmd)? else {
+            break;
+        };
+        if depth >= MAX_REWRITE_DEPTH {
+            return Err(format!(
+                "Command rewrite depth exceeded for: {effective_cmd}"
+            ));
         }
-
-        break;
+        apply_prefix_rewrite(
+            rewrite,
+            &mut effective_cmd,
+            &mut effective_args,
+            &mut effective_board_path,
+        );
     }
 
     Ok(RewriteResult {
@@ -1210,6 +1250,51 @@ fn rewrite_dynamic_prefix(
         board_path: effective_board_path,
         early_return: None,
     })
+}
+
+/// Execute the `window.focus:*` side-effect and package it as a
+/// `RewriteResult` whose `early_return` is populated so the dispatcher
+/// short-circuits the normal pipeline.
+fn run_window_focus(
+    app: &AppHandle,
+    effective_cmd: String,
+    effective_args: Option<Value>,
+    effective_board_path: Option<String>,
+) -> RewriteResult {
+    let label = effective_cmd
+        .strip_prefix("window.focus:")
+        .expect("caller checked prefix")
+        .to_owned();
+    let result = handle_window_focus(app, &label);
+    RewriteResult {
+        cmd: effective_cmd,
+        args: effective_args,
+        board_path: effective_board_path,
+        early_return: Some(result),
+    }
+}
+
+/// Apply one `match_dynamic_prefix` result: rewrite `effective_cmd` to the
+/// canonical form, merge the dynamic argument into `effective_args`, and
+/// (when the prefix implies a board change) also rewrite
+/// `effective_board_path` so downstream multi-window targeting is correct.
+fn apply_prefix_rewrite(
+    rewrite: (&'static str, &'static str, String, bool),
+    effective_cmd: &mut String,
+    effective_args: &mut Option<Value>,
+    effective_board_path: &mut Option<String>,
+) {
+    let (new_cmd, arg_key, arg_val, update_bp) = rewrite;
+    let mut merged = match effective_args.take() {
+        Some(Value::Object(map)) => map,
+        _ => serde_json::Map::new(),
+    };
+    merged.insert(arg_key.into(), Value::String(arg_val.clone()));
+    if update_bp {
+        *effective_board_path = Some(arg_val);
+    }
+    *effective_cmd = new_cmd.to_owned();
+    *effective_args = Some(Value::Object(merged));
 }
 
 /// Internal dispatch — single path for all state-mutating command execution.
@@ -1850,19 +1935,42 @@ async fn flush_and_emit_for_handle(app: &AppHandle, handle: &BoardHandle) {
         "watcher flush_and_emit result"
     );
 
-    // 3. Build the event list. The watcher events are primary — they carry
-    //    field-level diffs. Store events supplement with create/remove signals
-    //    that the watcher may not have (e.g. the watcher sees a new file as
-    //    EntityCreated, but the store knows the exact timing).
+    // 3. Merge watcher + store events. Watcher events win on dedup because
+    //    they carry field-level diffs; store events provide create/remove
+    //    signals the watcher may have missed.
+    let (mut events, seen) = collect_watcher_events_with_seen(watcher_events);
+    merge_store_events_into_events(
+        &mut events,
+        &store_events,
+        &seen,
+        &kanban_root,
+        &handle.store_roots,
+    );
+
+    // 4. Enrich field-changed events with computed field values.
     //
-    //    Dedup: collect watcher (entity_type, id) pairs for EntityFieldChanged
-    //    and EntityCreated. If a store event has a matching watcher event, the
-    //    watcher event wins (it has the diffs). Store-only events (no watcher
-    //    match) are emitted as thin signals.
+    // Computed fields (tags, progress, etc.) are derived at read time by
+    // the ComputeEngine — they don't exist on disk, so the watcher's
+    // diff_fields never sees them. For each EntityFieldChanged, read the
+    // entity through EntityContext (which runs derive_all) and append any
+    // computed fields whose values differ from the raw diff.
+    let events = enrich_computed_fields(&handle.ctx, events).await;
+
+    sync_and_emit_events(app, handle, &kanban_root, events).await;
+}
+
+/// Walk a watcher-event vec into an owned vec plus a dedup set of
+/// `(entity_type, id)` pairs for every entity-level event. The set is used
+/// by `merge_store_events_into_events` to skip store events the watcher
+/// already produced a diff for.
+fn collect_watcher_events_with_seen(
+    watcher_events: Vec<crate::watcher::WatchEvent>,
+) -> (
+    Vec<crate::watcher::WatchEvent>,
+    std::collections::HashSet<(String, String)>,
+) {
     let mut seen: std::collections::HashSet<(String, String)> = std::collections::HashSet::new();
     let mut events: Vec<crate::watcher::WatchEvent> = Vec::new();
-
-    // Watcher events first — they carry the field-level diffs.
     for evt in watcher_events {
         match &evt {
             crate::watcher::WatchEvent::EntityFieldChanged {
@@ -1870,10 +1978,8 @@ async fn flush_and_emit_for_handle(app: &AppHandle, handle: &BoardHandle) {
             }
             | crate::watcher::WatchEvent::EntityCreated {
                 entity_type, id, ..
-            } => {
-                seen.insert((entity_type.clone(), id.clone()));
             }
-            crate::watcher::WatchEvent::EntityRemoved {
+            | crate::watcher::WatchEvent::EntityRemoved {
                 entity_type, id, ..
             } => {
                 seen.insert((entity_type.clone(), id.clone()));
@@ -1882,9 +1988,21 @@ async fn flush_and_emit_for_handle(app: &AppHandle, handle: &BoardHandle) {
         }
         events.push(evt);
     }
+    (events, seen)
+}
 
-    // Store events — only emit if the watcher didn't already cover them.
-    for se in &store_events {
+/// Append every store event to `events` as a thin `WatchEvent` unless the
+/// watcher already produced a diff for the same `(entity_type, id)`. Drops
+/// events with empty store name/id and delegates the `item-changed`
+/// race-recovery path to `synthesize_item_changed_event`.
+fn merge_store_events_into_events(
+    events: &mut Vec<crate::watcher::WatchEvent>,
+    store_events: &[swissarmyhammer_store::ChangeEvent],
+    seen: &std::collections::HashSet<(String, String)>,
+    kanban_root: &std::path::Path,
+    store_roots: &[std::path::PathBuf],
+) {
+    for se in store_events {
         let store_name = se
             .payload()
             .get("store")
@@ -1899,11 +2017,7 @@ async fn flush_and_emit_for_handle(app: &AppHandle, handle: &BoardHandle) {
             tracing::warn!(event_name = %se.event_name(), "dropping store event with empty store_name or id");
             continue;
         }
-
-        let key = (store_name.to_string(), id.to_string());
-        if seen.contains(&key) {
-            // Watcher already produced a diff for this entity — skip the
-            // store event to avoid duplicates.
+        if seen.contains(&(store_name.to_string(), id.to_string())) {
             tracing::debug!(
                 entity_type = store_name,
                 id = id,
@@ -1912,92 +2026,101 @@ async fn flush_and_emit_for_handle(app: &AppHandle, handle: &BoardHandle) {
             );
             continue;
         }
-
-        // Store event with no watcher match — emit as a thin signal.
-        match se.event_name() {
-            "item-created" => {
-                events.push(crate::watcher::WatchEvent::EntityCreated {
-                    entity_type: store_name.to_string(),
-                    id: id.to_string(),
-                    fields: std::collections::HashMap::new(),
-                });
-            }
-            "item-changed" => {
-                // The watcher didn't produce an event for this entity.
-                // This can happen when the async file watcher's debounce
-                // fires between the command write and this synchronous flush,
-                // consuming the change and updating the cache. Read the
-                // entity's current fields from disk and emit a synthetic
-                // EntityFieldChanged so that enrich_computed_fields can
-                // append computed fields (tags, progress, etc.).
-                if let Some(fields) = crate::watcher::read_entity_fields_from_disk(
-                    &kanban_root,
-                    &handle.store_roots,
-                    store_name,
-                    id,
-                ) {
-                    let changes: Vec<crate::watcher::FieldChange> = fields
-                        .into_iter()
-                        .map(|(field, value)| crate::watcher::FieldChange { field, value })
-                        .collect();
-                    if !changes.is_empty() {
-                        tracing::info!(
-                            entity_type = store_name,
-                            id = id,
-                            change_count = changes.len(),
-                            "store item-changed: async watcher race recovery, emitting synthetic event"
-                        );
-                        events.push(crate::watcher::WatchEvent::EntityFieldChanged {
-                            entity_type: store_name.to_string(),
-                            id: id.to_string(),
-                            changes,
-                        });
-                    }
-                } else {
-                    tracing::debug!(
-                        entity_type = store_name,
-                        id = id,
-                        "store item-changed but could not read entity from disk — skipping"
-                    );
-                }
-            }
-            "item-removed" => {
-                events.push(crate::watcher::WatchEvent::EntityRemoved {
-                    entity_type: store_name.to_string(),
-                    id: id.to_string(),
-                });
-            }
-            _ => {}
+        if let Some(evt) =
+            store_event_to_watch_event(se.event_name(), store_name, id, kanban_root, store_roots)
+        {
+            events.push(evt);
         }
     }
+}
 
-    // 4. Enrich field-changed events with computed field values.
-    //
-    // Computed fields (tags, progress, etc.) are derived at read time by
-    // the ComputeEngine — they don't exist on disk, so the watcher's
-    // diff_fields never sees them. For each EntityFieldChanged, read the
-    // entity through EntityContext (which runs derive_all) and append any
-    // computed fields whose values differ from the raw diff.
-    let events = enrich_computed_fields(&handle.ctx, events).await;
+/// Translate a single store event into a thin `WatchEvent`. `item-changed`
+/// handles the async-watcher race by reading the entity's current fields
+/// from disk (see `synthesize_item_changed_event` for details); other
+/// event kinds translate to empty-field created/removed signals.
+fn store_event_to_watch_event(
+    event_name: &str,
+    store_name: &str,
+    id: &str,
+    kanban_root: &std::path::Path,
+    store_roots: &[std::path::PathBuf],
+) -> Option<crate::watcher::WatchEvent> {
+    match event_name {
+        "item-created" => Some(crate::watcher::WatchEvent::EntityCreated {
+            entity_type: store_name.to_string(),
+            id: id.to_string(),
+            fields: std::collections::HashMap::new(),
+        }),
+        "item-changed" => synthesize_item_changed_event(store_name, id, kanban_root, store_roots),
+        "item-removed" => Some(crate::watcher::WatchEvent::EntityRemoved {
+            entity_type: store_name.to_string(),
+            id: id.to_string(),
+        }),
+        _ => None,
+    }
+}
 
-    // 5. Sync search index and emit to frontend.
-    {
-        let board_path_str = kanban_root.display().to_string();
-        let mut search_idx = handle.search_index.write().await;
-        for evt in events {
-            crate::watcher::sync_search_index(&mut search_idx, &evt);
-            let event_name = match &evt {
-                crate::watcher::WatchEvent::EntityCreated { .. } => "entity-created",
-                crate::watcher::WatchEvent::EntityRemoved { .. } => "entity-removed",
-                crate::watcher::WatchEvent::EntityFieldChanged { .. } => "entity-field-changed",
-                crate::watcher::WatchEvent::AttachmentChanged { .. } => "attachment-changed",
-            };
-            let wrapped = crate::watcher::BoardWatchEvent {
-                event: evt,
-                board_path: board_path_str.clone(),
-            };
-            let _ = app.emit(event_name, &wrapped);
-        }
+/// Recover from the async-watcher race where the debounced watcher
+/// consumed an `item-changed` event before this synchronous flush got a
+/// chance to see it. Reads the entity's current fields straight from disk
+/// so the downstream enrichment pipeline can still emit tags/progress/etc.
+fn synthesize_item_changed_event(
+    store_name: &str,
+    id: &str,
+    kanban_root: &std::path::Path,
+    store_roots: &[std::path::PathBuf],
+) -> Option<crate::watcher::WatchEvent> {
+    let fields =
+        crate::watcher::read_entity_fields_from_disk(kanban_root, store_roots, store_name, id)?;
+    let changes: Vec<crate::watcher::FieldChange> = fields
+        .into_iter()
+        .map(|(field, value)| crate::watcher::FieldChange { field, value })
+        .collect();
+    if changes.is_empty() {
+        tracing::debug!(
+            entity_type = store_name,
+            id = id,
+            "store item-changed but could not read entity from disk — skipping"
+        );
+        return None;
+    }
+    tracing::info!(
+        entity_type = store_name,
+        id = id,
+        change_count = changes.len(),
+        "store item-changed: async watcher race recovery, emitting synthetic event"
+    );
+    Some(crate::watcher::WatchEvent::EntityFieldChanged {
+        entity_type: store_name.to_string(),
+        id: id.to_string(),
+        changes,
+    })
+}
+
+/// Write every event into the search index and forward it to the frontend
+/// as the matching Tauri event. Wraps each event with the board path so
+/// the frontend can route it to the correct window.
+async fn sync_and_emit_events(
+    app: &AppHandle,
+    handle: &BoardHandle,
+    kanban_root: &std::path::Path,
+    events: Vec<crate::watcher::WatchEvent>,
+) {
+    let board_path_str = kanban_root.display().to_string();
+    let mut search_idx = handle.search_index.write().await;
+    for evt in events {
+        crate::watcher::sync_search_index(&mut search_idx, &evt);
+        let event_name = match &evt {
+            crate::watcher::WatchEvent::EntityCreated { .. } => "entity-created",
+            crate::watcher::WatchEvent::EntityRemoved { .. } => "entity-removed",
+            crate::watcher::WatchEvent::EntityFieldChanged { .. } => "entity-field-changed",
+            crate::watcher::WatchEvent::AttachmentChanged { .. } => "attachment-changed",
+        };
+        let wrapped = crate::watcher::BoardWatchEvent {
+            event: evt,
+            board_path: board_path_str.clone(),
+        };
+        let _ = app.emit(event_name, &wrapped);
     }
 }
 
