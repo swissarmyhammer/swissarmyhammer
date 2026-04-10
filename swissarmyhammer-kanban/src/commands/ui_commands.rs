@@ -219,6 +219,26 @@ impl Command for SetAppModeCmd {
     }
 }
 
+/// Enter inline rename mode for the active perspective tab.
+///
+/// No-op on the backend — exists in the registry so the command palette can
+/// discover it.  The frontend resolves the local `execute` handler registered
+/// in `AppShell`'s global commands, so this never actually runs.
+pub struct StartRenamePerspectiveCmd;
+
+#[async_trait]
+impl Command for StartRenamePerspectiveCmd {
+    fn available(&self, _ctx: &CommandContext) -> bool {
+        true
+    }
+
+    async fn execute(&self, _ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+        // Intentional no-op — the frontend intercepts this command before it
+        // reaches the backend.  Return null so the caller sees success.
+        Ok(Value::Null)
+    }
+}
+
 /// Set the active view by ID.
 ///
 /// Always available. Required arg: `view_id`.

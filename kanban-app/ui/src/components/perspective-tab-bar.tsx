@@ -1,6 +1,7 @@
 import {
   forwardRef,
   useCallback,
+  useEffect,
   useImperativeHandle,
   useMemo,
   useRef,
@@ -31,6 +32,38 @@ import { GroupSelector } from "@/components/group-selector";
 import { TextEditor } from "@/components/fields/text-editor";
 import { useSchema } from "@/lib/schema-context";
 import type { FieldDef } from "@/types/kanban";
+
+// ---------------------------------------------------------------------------
+// Start-rename callback registry — bridges AppShell command dispatch to the
+// PerspectiveTabBar component that owns the rename state.
+// ---------------------------------------------------------------------------
+
+type StartRenameCallback = () => void;
+const startRenameCallbacks = new Set<StartRenameCallback>();
+
+/**
+ * Subscribe to "start rename" signals.
+ *
+ * Called by `usePerspectiveTabBar` to enter rename mode when the command
+ * palette (or any other source) dispatches `ui.perspective.startRename`.
+ *
+ * @returns An unsubscribe function.
+ */
+export function onStartRename(cb: StartRenameCallback): () => void {
+  startRenameCallbacks.add(cb);
+  return () => {
+    startRenameCallbacks.delete(cb);
+  };
+}
+
+/**
+ * Trigger all registered "start rename" callbacks.
+ *
+ * Intended to be called from AppShell's global command handler (or tests).
+ */
+export function triggerStartRename(): void {
+  for (const cb of startRenameCallbacks) cb();
+}
 
 // ---------------------------------------------------------------------------
 // Rename hook — encapsulates inline rename state and dispatch
@@ -101,6 +134,17 @@ function usePerspectiveTabBar() {
     () => perspectives.filter((p) => p.view === viewKind),
     [perspectives, viewKind],
   );
+
+  // Subscribe to the module-level start-rename signal so the command palette
+  // (via AppShell's global command) can trigger inline rename mode.
+  useEffect(() => {
+    return onStartRename(() => {
+      if (activePerspective) {
+        startRename(activePerspective.id);
+      }
+    });
+  }, [activePerspective, startRename]);
+
   return {
     activeView,
     activePerspective,

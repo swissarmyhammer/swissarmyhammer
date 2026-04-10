@@ -145,6 +145,10 @@ pub fn register_commands() -> HashMap<String, Arc<dyn Command>> {
         "ui.perspective.set".into(),
         Arc::new(ui_commands::SetActivePerspectiveCmd),
     );
+    map.insert(
+        "ui.perspective.startRename".into(),
+        Arc::new(ui_commands::StartRenamePerspectiveCmd),
+    );
     map.insert("ui.setFocus".into(), Arc::new(ui_commands::SetFocusCmd));
     map.insert("ui.mode.set".into(), Arc::new(ui_commands::SetAppModeCmd));
 
@@ -303,15 +307,15 @@ mod tests {
     fn register_commands_returns_expected_count() {
         let cmds = register_commands();
         // 5 task (add, move, untag, doThisNext, delete) + 3 clipboard
-        // + 4 entity + 1 tag + 1 column + 8 UI
+        // + 4 entity + 1 tag + 1 column + 9 UI (+ startRename)
         // + 12 app (quit, about, help, command, palette, search,
         //          dismiss, undo, redo, keymap.vim, keymap.cua, keymap.emacs)
         // + 5 file (switchBoard, closeBoard, newBoard, openBoard, window.new)
         // + 3 drag + 15 perspective (8 + 3 sort + 2 next/prev + 1 goto + 1 rename)
         // + 3 attachment (open, reveal, delete)
-        // + 2 project (add, delete) + 1 ui.mode.set = 63
+        // + 2 project (add, delete) + 1 ui.mode.set = 64
         // Note: clipboard entries are duplicated in the source but HashMap deduplicates.
-        assert_eq!(cmds.len(), 63);
+        assert_eq!(cmds.len(), 64);
     }
 
     // =========================================================================
