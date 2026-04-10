@@ -1251,60 +1251,130 @@ pub(crate) async fn dispatch_command_internal(
     if let Some(result) = rw.early_return {
         return Ok(result);
     }
-    let effective_cmd = rw.cmd;
-    let effective_args = rw.args;
-    let effective_board_path = rw.board_path;
-
-    // Resolve scope chain: explicit > stored focus
-    let scope = match scope_chain {
-        Some(sc) => sc,
-        None => state.ui_state.scope_chain(),
-    };
+    let scope = scope_chain.unwrap_or_else(|| state.ui_state.scope_chain());
     tracing::debug!(scope = ?scope, "resolved scope chain");
+    let effective_cmd = rw.cmd;
+    let undoable = lookup_undoable(state, &effective_cmd).await?;
+    let (ctx, active_handle) = build_dispatch_context(
+        state,
+        app,
+        effective_cmd.clone(),
+        rw.args,
+        scope,
+        target,
+        rw.board_path,
+    )
+    .await;
+    let result = execute_registered_command(state, &effective_cmd, &ctx).await?;
+    tracing::info!(cmd = %effective_cmd, undoable, result = %result, "command completed");
 
-    // Look up command definition — clone the undoable flag so we don't
-    // hold the registry read guard across the async execute call.
-    let undoable = {
-        let registry = state.commands_registry.read().await;
-        let cmd_def = registry
-            .get(effective_cmd.as_str())
-            .ok_or_else(|| format!("Unknown command: {}", effective_cmd))?;
-        cmd_def.undoable
-    };
+    // Undo stack push is handled automatically inside EntityContext::write()/delete()
+    // (wired in the entity crate). No need to push at the dispatch level.
+    apply_post_command_side_effects(
+        app,
+        state,
+        &effective_cmd,
+        undoable,
+        active_handle.as_ref(),
+        &result,
+    )
+    .await;
+    menu::update_menu_enabled_state(state);
 
-    // Look up command implementation
+    Ok(json!({ "result": result, "undoable": undoable }))
+}
+
+/// Look up `effective_cmd`'s implementation, check availability, and execute
+/// it. Errors unify the "no impl", "not available", and "execute failed"
+/// paths into the `String` return type so the caller can `?` them.
+async fn execute_registered_command(
+    state: &AppState,
+    effective_cmd: &str,
+    ctx: &swissarmyhammer_commands::CommandContext,
+) -> Result<Value, String> {
     let cmd_impl = state
         .command_impls
-        .get(effective_cmd.as_str())
+        .get(effective_cmd)
         .ok_or_else(|| format!("No implementation for command: {}", effective_cmd))?;
+    if !cmd_impl.available(ctx) {
+        tracing::warn!(cmd = %effective_cmd, "command not available in current context");
+        return Err(format!("Command not available: {}", effective_cmd));
+    }
+    tracing::debug!(cmd = %effective_cmd, "executing command");
+    cmd_impl.execute(ctx).await.map_err(|e| {
+        tracing::error!(cmd = %effective_cmd, error = %e, "command execution failed");
+        format!("Command failed: {e}")
+    })
+}
 
-    // Build CommandContext
+/// Run every post-execute side-effect — board management, drag events,
+/// UI-state snapshot emit, menu rebuild, and flush/undo-redo sync — in the
+/// fixed order the dispatcher relied on before this was extracted.
+///
+/// Split out so `dispatch_command_internal` stays under the project's
+/// function-length budget; semantics are identical to calling each helper
+/// in this exact order.
+async fn apply_post_command_side_effects(
+    app: &AppHandle,
+    state: &AppState,
+    effective_cmd: &str,
+    undoable: bool,
+    active_handle: Option<&Arc<BoardHandle>>,
+    result: &Value,
+) {
+    handle_board_switch_result(app, state, effective_cmd, result).await;
+    handle_board_close_result(app, state, effective_cmd, result).await;
+    handle_ui_trigger_results(app, state, result).await;
+    handle_drag_events(app, state, active_handle, result).await;
+    emit_ui_state_change_if_needed(app, state, result);
+    maybe_rebuild_menu_after_cmd(app, effective_cmd, result).await;
+    flush_and_sync_after_command(app, state, effective_cmd, undoable, active_handle).await;
+}
+
+/// Read `undoable` for a command from the registry without holding the read
+/// guard across the subsequent async `execute` call.
+async fn lookup_undoable(state: &AppState, effective_cmd: &str) -> Result<bool, String> {
+    let registry = state.commands_registry.read().await;
+    let cmd_def = registry
+        .get(effective_cmd)
+        .ok_or_else(|| format!("Unknown command: {}", effective_cmd))?;
+    Ok(cmd_def.undoable)
+}
+
+/// Build a `CommandContext` for `effective_cmd`, attach the relevant board
+/// and clipboard extensions, and resolve the active board handle (if any)
+/// so the caller can reuse it for post-execute flushing.
+///
+/// The handle resolution prefers `effective_board_path` (multi-window
+/// targeting) and falls back to the `store:` moniker in the scope chain.
+async fn build_dispatch_context(
+    state: &AppState,
+    app: &AppHandle,
+    effective_cmd: String,
+    effective_args: Option<Value>,
+    scope: Vec<String>,
+    target: Option<String>,
+    effective_board_path: Option<String>,
+) -> (
+    swissarmyhammer_commands::CommandContext,
+    Option<Arc<BoardHandle>>,
+) {
     let args_map: HashMap<String, Value> = match effective_args {
         Some(Value::Object(map)) => map.into_iter().collect(),
         _ => HashMap::new(),
     };
-    let mut ctx = swissarmyhammer_commands::CommandContext::new(
-        effective_cmd.clone(),
-        scope,
-        target,
-        args_map,
-    );
+    let mut ctx =
+        swissarmyhammer_commands::CommandContext::new(effective_cmd, scope, target, args_map);
     ctx = ctx.with_ui_state(Arc::clone(&state.ui_state));
 
-    // Set KanbanContext extension if board is open.
-    // Uses effective_board_path when provided (multi-window) to avoid targeting the wrong board.
-    // Falls back to the `store:` moniker in the scope chain so StoreContainer
-    // can supply the board path without an explicit parameter.
     let resolved_board_path =
         effective_board_path.or_else(|| ctx.resolve_store_path().map(|s| s.to_string()));
     let active_handle = resolve_handle(state, resolved_board_path).await.ok();
     if let Some(ref handle) = active_handle {
         ctx.set_extension(Arc::clone(&handle.ctx));
-        // Set EntityContext extension for entity-layer commands.
         if let Ok(ectx_arc) = handle.ctx.entity_context().await {
             ctx.set_extension(ectx_arc);
         }
-        // Set StoreContext extension for undo/redo commands.
         ctx.set_extension(Arc::clone(&handle.store_context));
     }
 
@@ -1315,108 +1385,127 @@ pub(crate) async fn dispatch_command_internal(
     ));
     ctx.set_extension(Arc::new(clipboard_ext));
 
-    // Check availability
-    if !cmd_impl.available(&ctx) {
-        tracing::warn!(cmd = %effective_cmd, "command not available in current context");
-        return Err(format!("Command not available: {}", effective_cmd));
-    }
+    (ctx, active_handle)
+}
 
-    // Execute
-    tracing::debug!(cmd = %effective_cmd, "executing command");
-    let result = cmd_impl.execute(&ctx).await.map_err(|e| {
-        tracing::error!(cmd = %effective_cmd, error = %e, "command execution failed");
-        format!("Command failed: {}", e)
-    })?;
+/// Apply the `BoardSwitch` side-effect: open the target board, persist the
+/// window→board mapping, refresh the window title, and emit `board-changed`.
+///
+/// Only the Tauri layer can manage `BoardHandle`s, so although `file.switchBoard`
+/// already updated `UIState`, we still need to run this side-effect here.
+async fn handle_board_switch_result(
+    app: &AppHandle,
+    state: &AppState,
+    effective_cmd: &str,
+    result: &Value,
+) {
+    let Some(board_switch) = result.get("BoardSwitch") else {
+        return;
+    };
+    let Some(path_str) = board_switch.get("path").and_then(|v| v.as_str()) else {
+        return;
+    };
+    let board_path = std::path::PathBuf::from(path_str);
+    let label = board_switch
+        .get("window_label")
+        .and_then(|v| v.as_str())
+        .unwrap_or("main");
 
-    tracing::info!(cmd = %effective_cmd, undoable = undoable, result = %result, "command completed");
-
-    // Undo stack push is handled automatically inside EntityContext::write()/delete()
-    // (wired in the entity crate). No need to push at the dispatch level.
-
-    // Handle board management side effects from file.switchBoard and file.closeBoard.
-    // These commands update UIState, but the Tauri layer must also manage BoardHandles.
-    if let Some(board_switch) = result.get("BoardSwitch") {
-        if let Some(path_str) = board_switch.get("path").and_then(|v| v.as_str()) {
-            let board_path = std::path::PathBuf::from(path_str);
-            let label = board_switch
-                .get("window_label")
-                .and_then(|v| v.as_str())
-                .unwrap_or("main");
-
-            // Open the board idempotently (also starts file watcher)
-            match state.open_board(&board_path, Some(app.clone())).await {
-                Ok(canonical) => {
-                    // Persist window→board mapping in UIState
-                    state
-                        .ui_state
-                        .set_window_board(label, &canonical.display().to_string());
-                    // Update window title to reflect the new board
-                    let boards = state.boards.read().await;
-                    if let Some(handle) = boards.get(&canonical) {
-                        let name = board_display_name(handle).await;
-                        update_window_title(app, label, name.as_deref());
-                    }
-                }
-                Err(e) => {
-                    tracing::error!(cmd = %effective_cmd, path = %path_str, error = %e, "BoardSwitch: failed to open board");
-                }
-            }
-            let _ = app.emit("board-changed", ());
-        }
-    }
-
-    if let Some(board_close) = result.get("BoardClose") {
-        if let Some(path_str) = board_close.get("path").and_then(|v| v.as_str()) {
-            let requesting_label = board_close
-                .get("window_label")
-                .and_then(|v| v.as_str())
-                .unwrap_or("main")
-                .to_string();
-
-            // Count how many windows currently show this board
-            let windows_showing: Vec<String> = state
+    match state.open_board(&board_path, Some(app.clone())).await {
+        Ok(canonical) => {
+            state
                 .ui_state
-                .all_window_boards()
-                .into_iter()
-                .filter(|(_, bp)| bp == path_str)
-                .map(|(label, _)| label)
-                .collect();
-
-            let is_last_viewer = windows_showing.len() <= 1;
-
-            if is_last_viewer {
-                // Last window showing this board — drop handle and remove from open list
-                let target = std::path::PathBuf::from(path_str);
-                if let Err(e) = state.close_board(&target).await {
-                    tracing::error!(cmd = %effective_cmd, path = %path_str, error = %e, "BoardClose: failed to close board");
-                }
-                state.ui_state.remove_open_board(path_str);
-            } else {
-                // Other windows still show this board — just clear this window's assignment
-                state.ui_state.set_window_board(&requesting_label, "");
+                .set_window_board(label, &canonical.display().to_string());
+            let boards = state.boards.read().await;
+            if let Some(handle) = boards.get(&canonical) {
+                let name = board_display_name(handle).await;
+                update_window_title(app, label, name.as_deref());
             }
-
-            // Close the requesting window — unless it's the last visible window
-            let visible_windows: Vec<_> = app
-                .webview_windows()
-                .into_iter()
-                .filter(|(label, w)| label != "quick-capture" && w.is_visible().unwrap_or(false))
-                .collect();
-
-            if visible_windows.len() > 1 {
-                if let Some(win) = app.get_webview_window(&requesting_label) {
-                    let _ = win.close();
-                }
-            } else {
-                // Last window — keep open, just reset title
-                update_window_title(app, &requesting_label, None);
-            }
-
-            let _ = app.emit("board-changed", ());
+        }
+        Err(e) => {
+            tracing::error!(cmd = %effective_cmd, path = %path_str, error = %e, "BoardSwitch: failed to open board");
         }
     }
+    let _ = app.emit("board-changed", ());
+}
 
-    // Handle UI-triggering command results: dialogs, window creation, quit, reset.
+/// Apply the `BoardClose` side-effect: drop the board handle (if this window
+/// was the last viewer), close the requesting window, and emit
+/// `board-changed`. Keeps the window open when it's the only visible window,
+/// so the user is never left staring at a closed app.
+async fn handle_board_close_result(
+    app: &AppHandle,
+    state: &AppState,
+    effective_cmd: &str,
+    result: &Value,
+) {
+    let Some(board_close) = result.get("BoardClose") else {
+        return;
+    };
+    let Some(path_str) = board_close.get("path").and_then(|v| v.as_str()) else {
+        return;
+    };
+    let requesting_label = board_close
+        .get("window_label")
+        .and_then(|v| v.as_str())
+        .unwrap_or("main")
+        .to_string();
+
+    drop_or_detach_board(state, effective_cmd, path_str, &requesting_label).await;
+    close_or_retitle_window(app, &requesting_label);
+    let _ = app.emit("board-changed", ());
+}
+
+/// Drop the board handle when this is the last window showing it; otherwise
+/// just clear the requesting window's assignment so other windows keep
+/// running.
+async fn drop_or_detach_board(
+    state: &AppState,
+    effective_cmd: &str,
+    path_str: &str,
+    requesting_label: &str,
+) {
+    let windows_showing: Vec<String> = state
+        .ui_state
+        .all_window_boards()
+        .into_iter()
+        .filter(|(_, bp)| bp == path_str)
+        .map(|(label, _)| label)
+        .collect();
+
+    if windows_showing.len() <= 1 {
+        let target = std::path::PathBuf::from(path_str);
+        if let Err(e) = state.close_board(&target).await {
+            tracing::error!(cmd = %effective_cmd, path = %path_str, error = %e, "BoardClose: failed to close board");
+        }
+        state.ui_state.remove_open_board(path_str);
+    } else {
+        state.ui_state.set_window_board(requesting_label, "");
+    }
+}
+
+/// Close the requesting window unless it's the last visible window — in
+/// which case keep it open with a cleared title so the user is not left
+/// staring at a closed app.
+fn close_or_retitle_window(app: &AppHandle, requesting_label: &str) {
+    let visible_windows: Vec<_> = app
+        .webview_windows()
+        .into_iter()
+        .filter(|(label, w)| label != "quick-capture" && w.is_visible().unwrap_or(false))
+        .collect();
+
+    if visible_windows.len() > 1 {
+        if let Some(win) = app.get_webview_window(requesting_label) {
+            let _ = win.close();
+        }
+    } else {
+        update_window_title(app, requesting_label, None);
+    }
+}
+
+/// Apply UI-triggering command results: file dialogs, new-window creation,
+/// and app quit. These are fire-and-forget hooks into the Tauri app.
+async fn handle_ui_trigger_results(app: &AppHandle, state: &AppState, result: &Value) {
     if result.get("NewBoardDialog").is_some() {
         menu::trigger_new_board(app);
     }
@@ -1429,135 +1518,178 @@ pub(crate) async fn dispatch_command_internal(
     if result.get("quit").is_some() {
         app.exit(0);
     }
+}
 
-    // Emit drag-session-active event when drag.start completes successfully.
+/// Emit all drag-session events. `DragStart`/`DragCancel` are simple
+/// forwarding emits; `DragComplete` delegates to `handle_drag_complete`
+/// which flushes the affected boards and emits `drag-session-completed`.
+async fn handle_drag_events(
+    app: &AppHandle,
+    state: &AppState,
+    active_handle: Option<&Arc<BoardHandle>>,
+    result: &Value,
+) {
     if let Some(drag_start) = result.get("DragStart") {
         let payload = drag_start.clone();
         let _ = app.emit("drag-session-active", &payload);
     }
-
-    // Emit drag-session-cancelled event when drag.cancel completes successfully.
     if let Some(drag_cancel) = result.get("DragCancel") {
         let _ = app.emit("drag-session-cancelled", &drag_cancel);
     }
-
-    // Handle drag.complete result.
-    //
-    // Same-board: the task.move was already performed inside DragCompleteCmd;
-    // the active_handle flush below (undoable=false for drag.complete) won't
-    // run, so we flush the board here explicitly then emit drag-session-completed.
-    //
-    // Cross-board: call the standalone transfer_task() function with both board
-    // handles, flush both, then emit drag-session-completed.
     if let Some(drag_complete) = result.get("DragComplete") {
-        let session_id = drag_complete
-            .get("session_id")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
+        handle_drag_complete(app, state, active_handle, drag_complete).await;
+    }
+}
 
-        let transfer_ok = if drag_complete
-            .get("cross_board")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false)
-        {
-            // Cross-board transfer: call transfer_task with both board handles
-            let source_path = drag_complete
-                .get("source_board_path")
+/// Handle the `drag.complete` side-effects: same-board flushes the single
+/// board (the task.move already ran inside `DragCompleteCmd`), cross-board
+/// routes through `transfer_task` and flushes both boards. Always emits
+/// `drag-session-completed` with a success flag.
+///
+/// Same-board: `undoable=false` on `drag.complete`, so the regular
+/// post-command flush at the bottom of `dispatch_command_internal` would
+/// skip this board — we flush explicitly here to ship the entity events.
+async fn handle_drag_complete(
+    app: &AppHandle,
+    state: &AppState,
+    active_handle: Option<&Arc<BoardHandle>>,
+    drag_complete: &Value,
+) {
+    let session_id = drag_complete
+        .get("session_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    let cross_board = drag_complete
+        .get("cross_board")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    let transfer_ok = if cross_board {
+        perform_cross_board_drag_transfer(app, state, drag_complete).await
+    } else {
+        if let Some(handle) = active_handle {
+            flush_and_emit_for_handle(app, handle).await;
+        }
+        true
+    };
+
+    let _ = app.emit(
+        "drag-session-completed",
+        json!({
+            "session_id": session_id,
+            "success": transfer_ok,
+        }),
+    );
+}
+
+/// Parsed parameters for a cross-board drag transfer. The drag-complete
+/// payload is a loosely-typed `Value` from the frontend; this struct is the
+/// owned, typed shape that `perform_cross_board_drag_transfer` works with.
+struct CrossBoardDragParams {
+    source_path: String,
+    target_path: String,
+    task_id: String,
+    target_column: String,
+    drop_index: Option<u64>,
+    before_id: Option<String>,
+    after_id: Option<String>,
+    copy_mode: bool,
+}
+
+impl CrossBoardDragParams {
+    /// Extract every cross-board drag parameter from the `DragComplete`
+    /// payload. Missing string fields default to empty so `transfer_task`'s
+    /// own validation can produce a consistent error message.
+    fn from_value(drag_complete: &Value) -> Self {
+        let get_str = |key: &str| {
+            drag_complete
+                .get(key)
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
-                .to_string();
-            let target_path = drag_complete
-                .get("target_board_path")
+                .to_string()
+        };
+        let get_opt_str = |key: &str| {
+            drag_complete
+                .get(key)
                 .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            let task_id = drag_complete
-                .get("task_id")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            let target_column = drag_complete
-                .get("target_column")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            let drop_index = drag_complete.get("drop_index").and_then(|v| v.as_u64());
-            let before_id = drag_complete
-                .get("before_id")
-                .and_then(|v| v.as_str())
-                .map(str::to_string);
-            let after_id = drag_complete
-                .get("after_id")
-                .and_then(|v| v.as_str())
-                .map(str::to_string);
-            let copy_mode = drag_complete
+                .map(str::to_string)
+        };
+        Self {
+            source_path: get_str("source_board_path"),
+            target_path: get_str("target_board_path"),
+            task_id: get_str("task_id"),
+            target_column: get_str("target_column"),
+            drop_index: drag_complete.get("drop_index").and_then(|v| v.as_u64()),
+            before_id: get_opt_str("before_id"),
+            after_id: get_opt_str("after_id"),
+            copy_mode: drag_complete
                 .get("copy_mode")
                 .and_then(|v| v.as_bool())
-                .unwrap_or(false);
-
-            let source_handle = resolve_handle(state, Some(source_path)).await;
-            let target_handle = resolve_handle(state, Some(target_path)).await;
-
-            match (source_handle, target_handle) {
-                (Ok(src), Ok(tgt)) => {
-                    let transfer_result = swissarmyhammer_kanban::cross_board::transfer_task(
-                        &src.ctx,
-                        &tgt.ctx,
-                        &task_id,
-                        &target_column,
-                        drop_index,
-                        before_id.as_deref(),
-                        after_id.as_deref(),
-                        copy_mode,
-                    )
-                    .await;
-
-                    let ok = transfer_result.is_ok();
-                    // Flush both boards after transfer
-                    flush_and_emit_for_handle(app, &tgt).await;
-                    if !copy_mode {
-                        flush_and_emit_for_handle(app, &src).await;
-                    }
-                    ok
-                }
-                _ => {
-                    tracing::error!(
-                        "drag.complete: failed to resolve board handles for cross-board transfer"
-                    );
-                    false
-                }
-            }
-        } else {
-            // Same-board: flush the board so entity-changed events go out
-            if let Some(ref handle) = active_handle {
-                flush_and_emit_for_handle(app, handle).await;
-            }
-            true
-        };
-
-        let _ = app.emit(
-            "drag-session-completed",
-            json!({
-                "session_id": session_id,
-                "success": transfer_ok,
-            }),
-        );
+                .unwrap_or(false),
+        }
     }
+}
 
-    // After any UIStateChange, push the full state snapshot to the frontend.
-    // This broad approach ensures the React UIStateProvider stays in sync
-    // without needing per-field event types. Optimise per-field later if needed.
+/// Cross-board drag: resolve both source and target board handles, run
+/// `transfer_task`, and flush both boards (only the source when the drag
+/// was a copy, so entity events propagate to every listening window).
+async fn perform_cross_board_drag_transfer(
+    app: &AppHandle,
+    state: &AppState,
+    drag_complete: &Value,
+) -> bool {
+    let params = CrossBoardDragParams::from_value(drag_complete);
+    let source_handle = resolve_handle(state, Some(params.source_path.clone())).await;
+    let target_handle = resolve_handle(state, Some(params.target_path.clone())).await;
+    let (src, tgt) = match (source_handle, target_handle) {
+        (Ok(src), Ok(tgt)) => (src, tgt),
+        _ => {
+            tracing::error!(
+                "drag.complete: failed to resolve board handles for cross-board transfer"
+            );
+            return false;
+        }
+    };
+
+    let transfer_result = swissarmyhammer_kanban::cross_board::transfer_task(
+        &src.ctx,
+        &tgt.ctx,
+        &params.task_id,
+        &params.target_column,
+        params.drop_index,
+        params.before_id.as_deref(),
+        params.after_id.as_deref(),
+        params.copy_mode,
+    )
+    .await;
+
+    let ok = transfer_result.is_ok();
+    flush_and_emit_for_handle(app, &tgt).await;
+    if !params.copy_mode {
+        flush_and_emit_for_handle(app, &src).await;
+    }
+    ok
+}
+
+/// Emit a fresh `ui-state-changed` event when the command either returned a
+/// `UIStateChange` result envelope or mutated board open/close state (which
+/// is not typed as a `UIStateChange` but still affects what the React
+/// `UIStateProvider` renders).
+fn emit_ui_state_change_if_needed(app: &AppHandle, state: &AppState, result: &Value) {
     if serde_json::from_value::<swissarmyhammer_commands::UIStateChange>(result.clone()).is_ok() {
         let _ = app.emit("ui-state-changed", state.ui_state.to_json());
     }
-    // Board switch/close results are not UIStateChanges but still update ui-state.
     if result.get("BoardSwitch").is_some() || result.get("BoardClose").is_some() {
         let _ = app.emit("ui-state-changed", state.ui_state.to_json());
     }
+}
 
-    // Rebuild the native menu when keymap mode changes (accelerators change)
-    // or after board switches (command registry may have overrides).
+/// Rebuild the native menu after commands whose effects change what items
+/// are enabled or their accelerator mappings: keymap mode changes, focus
+/// changes, and board switch/close.
+async fn maybe_rebuild_menu_after_cmd(app: &AppHandle, effective_cmd: &str, result: &Value) {
     if effective_cmd.starts_with("settings.keymap.")
         || effective_cmd == "ui.setFocus"
         || result.get("BoardSwitch").is_some()
@@ -1565,54 +1697,63 @@ pub(crate) async fn dispatch_command_internal(
     {
         menu::rebuild_menu_async(app).await;
     }
+}
 
-    // For commands that mutate entity data, scan entity files for changes
-    // and emit granular entity-level events. This also updates the watcher
-    // cache so the file watcher won't double-fire for our own writes.
-    // Undo/redo are non-undoable (they must not push onto the undo stack) but
-    // they DO mutate entities on disk, so we still need to flush and emit.
+/// Post-command flush: write pending entity changes to disk, sync the
+/// cached undo/redo flags, and refresh every window title that points at
+/// the flushed board. Also emits the per-entity events through the watcher
+/// cache so the file watcher doesn't re-fire for our own writes.
+///
+/// Runs for undoable commands **and** for `app.undo`/`app.redo`: both
+/// mutate entities on disk but are themselves non-undoable (they must not
+/// land on the undo stack), so they'd otherwise skip this flush.
+async fn flush_and_sync_after_command(
+    app: &AppHandle,
+    state: &AppState,
+    effective_cmd: &str,
+    undoable: bool,
+    active_handle: Option<&Arc<BoardHandle>>,
+) {
     let needs_flush = undoable || effective_cmd == "app.undo" || effective_cmd == "app.redo";
-    tracing::info!(cmd = %effective_cmd, undoable = undoable, needs_flush = needs_flush, has_handle = active_handle.is_some(), "flush gate");
-    if needs_flush {
-        if let Some(ref handle) = active_handle {
-            flush_and_emit_for_handle(app, handle).await;
-            // Sync UIState's cached undo/redo flags from the StoreContext so that
-            // Command::available() (synchronous) returns accurate results for
-            // menu-item enabled state.
-            state.ui_state.set_undo_redo_state(
-                handle.store_context.can_undo().await,
-                handle.store_context.can_redo().await,
-            );
-            // Refresh window titles from the board entity display name.
-            // Catches board name edits, undo/redo of name changes, etc.
-            let display_name = board_display_name(handle).await;
-            let canonical = handle
-                .ctx
-                .root()
-                .canonicalize()
-                .unwrap_or_else(|_| handle.ctx.root().to_path_buf());
-            let board_path_str = canonical.display().to_string();
-            for (label, wbp) in state.ui_state.all_window_boards() {
-                if wbp == board_path_str {
-                    update_window_title(app, &label, display_name.as_deref());
-                }
-            }
-        } else {
-            tracing::info!(cmd = %effective_cmd, "needs_flush but no active_handle — events NOT emitted");
-        }
-    } else {
+    tracing::info!(
+        cmd = %effective_cmd,
+        undoable,
+        needs_flush,
+        has_handle = active_handle.is_some(),
+        "flush gate"
+    );
+    if !needs_flush {
         tracing::info!(cmd = %effective_cmd, "non-mutating — skipping flush_and_emit");
+        return;
     }
+    let Some(handle) = active_handle else {
+        tracing::info!(cmd = %effective_cmd, "needs_flush but no active_handle — events NOT emitted");
+        return;
+    };
+    flush_and_emit_for_handle(app, handle).await;
+    state.ui_state.set_undo_redo_state(
+        handle.store_context.can_undo().await,
+        handle.store_context.can_redo().await,
+    );
+    refresh_board_window_titles(app, state, handle).await;
+}
 
-    // Update all menu item enabled states after every command.
-    // Each menu item's command checks its own available() against current scope/clipboard.
-    menu::update_menu_enabled_state(state);
-
-    // Wrap result with undoable info
-    Ok(json!({
-        "result": result,
-        "undoable": undoable,
-    }))
+/// Update every window title that currently points at `handle`'s board to
+/// match the board entity's display name. Catches board renames, undo/redo
+/// of name changes, etc.
+async fn refresh_board_window_titles(app: &AppHandle, state: &AppState, handle: &BoardHandle) {
+    let display_name = board_display_name(handle).await;
+    let canonical = handle
+        .ctx
+        .root()
+        .canonicalize()
+        .unwrap_or_else(|_| handle.ctx.root().to_path_buf());
+    let board_path_str = canonical.display().to_string();
+    for (label, wbp) in state.ui_state.all_window_boards() {
+        if wbp == board_path_str {
+            update_window_title(app, &label, display_name.as_deref());
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1888,110 +2029,163 @@ async fn enrich_computed_fields(
     };
 
     for evt in &mut events {
-        let (entity_type, id, changes) = match evt {
-            crate::watcher::WatchEvent::EntityFieldChanged {
-                entity_type,
-                id,
-                changes,
-            } => (entity_type.as_str(), id.as_str(), changes),
-            _ => continue,
-        };
-
-        // Identify computed field names for this entity type.
-        let field_defs = fields_ctx.fields_for_entity(entity_type);
-        let computed_names: Vec<&str> = field_defs
-            .iter()
-            .filter(|fd| matches!(fd.type_, swissarmyhammer_fields::FieldType::Computed { .. }))
-            .map(|fd| fd.name.as_str())
-            .collect();
-        if computed_names.is_empty() {
-            continue;
-        }
-
-        // Read the entity through EntityContext to get ComputeEngine-derived values
-        // (e.g. tags from parse-body-tags, progress from parse-body-progress).
-        let mut entity = match ectx.read(entity_type, id).await {
-            Ok(e) => e,
-            Err(e) => {
-                tracing::warn!(
-                    entity_type = entity_type,
-                    id = id,
-                    "enrich_computed_fields: failed to read entity: {e}"
-                );
-                continue;
-            }
-        };
-
-        // For task entities, run the full enrichment pipeline which sets
-        // virtual_tags, filter_tags, ready, blocked_by, blocks, etc.
-        // The ComputeEngine stubs for these fields return empty arrays;
-        // the real values come from enrich_task_entity.
-        if entity_type == "task" {
-            let all_tasks = match ectx.list("task").await {
-                Ok(t) => t,
-                Err(e) => {
-                    tracing::warn!(
-                        "enrich_computed_fields: failed to list tasks for enrichment: {e}"
-                    );
-                    vec![]
-                }
-            };
-            let mut columns = ectx.list("column").await.unwrap_or_default();
-            columns.sort_by_key(|c| c.get("order").and_then(|v| v.as_u64()).unwrap_or(0) as usize);
-            let terminal_id = columns
-                .last()
-                .map(|c| c.id.to_string())
-                .unwrap_or_else(|| "done".to_string());
-            let registry = default_virtual_tag_registry();
-            enrich_task_entity(&mut entity, &all_tasks, &terminal_id, registry);
-        }
-
-        // Append computed field values that aren't already in the changes.
-        let existing: std::collections::HashSet<String> =
-            changes.iter().map(|c| c.field.clone()).collect();
-        let raw_change_count = changes.len();
-        for name in &computed_names {
-            if existing.contains(*name) {
-                tracing::debug!(
-                    entity_type = entity_type,
-                    id = id,
-                    field = *name,
-                    "enrich_computed_fields: computed field already in changes, skipping"
-                );
-                continue;
-            }
-            if let Some(value) = entity.fields.get(*name) {
-                tracing::debug!(
-                    entity_type = entity_type,
-                    id = id,
-                    field = *name,
-                    value = %value,
-                    "enrich_computed_fields: appending computed field"
-                );
-                changes.push(crate::watcher::FieldChange {
-                    field: name.to_string(),
-                    value: value.clone(),
-                });
-            } else {
-                tracing::warn!(
-                    entity_type = entity_type,
-                    id = id,
-                    field = *name,
-                    "enrich_computed_fields: computed field not present in entity"
-                );
-            }
-        }
-        tracing::debug!(
-            entity_type = entity_type,
-            id = id,
-            raw_changes = raw_change_count,
-            enriched_changes = changes.len(),
-            computed_fields = ?computed_names,
-            "enrich_computed_fields: done"
-        );
+        enrich_one_watch_event(evt, ectx.as_ref(), fields_ctx).await;
     }
 
     events
+}
+
+/// Enrich a single `EntityFieldChanged` event with computed-field values.
+///
+/// No-op for non-EntityFieldChanged events or entity types that have no
+/// computed fields. For `task` entities, runs the full enrichment pipeline
+/// (virtual tags, ready/blocked, etc.) before appending computed values.
+async fn enrich_one_watch_event(
+    evt: &mut crate::watcher::WatchEvent,
+    ectx: &swissarmyhammer_entity::EntityContext,
+    fields_ctx: &swissarmyhammer_fields::FieldsContext,
+) {
+    let (entity_type, id, changes) = match evt {
+        crate::watcher::WatchEvent::EntityFieldChanged {
+            entity_type,
+            id,
+            changes,
+        } => (entity_type.as_str(), id.as_str(), changes),
+        _ => return,
+    };
+
+    let computed_names = computed_field_names(fields_ctx, entity_type);
+    if computed_names.is_empty() {
+        return;
+    }
+
+    // Read the entity through EntityContext so ComputeEngine-derived values
+    // (tags from parse-body-tags, progress from parse-body-progress, …) are
+    // already materialized on the entity we'll read fields from.
+    let mut entity = match ectx.read(entity_type, id).await {
+        Ok(e) => e,
+        Err(e) => {
+            tracing::warn!(
+                entity_type = entity_type,
+                id = id,
+                "enrich_computed_fields: failed to read entity: {e}"
+            );
+            return;
+        }
+    };
+    if entity_type == "task" {
+        enrich_task_from_context(&mut entity, ectx).await;
+    }
+
+    let raw_change_count = changes.len();
+    append_computed_changes(entity_type, id, &entity, &computed_names, changes);
+    tracing::debug!(
+        entity_type = entity_type,
+        id = id,
+        raw_changes = raw_change_count,
+        enriched_changes = changes.len(),
+        computed_fields = ?computed_names,
+        "enrich_computed_fields: done"
+    );
+}
+
+/// Return the names of every `Computed` field defined for `entity_type`.
+fn computed_field_names<'a>(
+    fields_ctx: &'a swissarmyhammer_fields::FieldsContext,
+    entity_type: &str,
+) -> Vec<&'a str> {
+    fields_ctx
+        .fields_for_entity(entity_type)
+        .into_iter()
+        .filter(|fd| matches!(fd.type_, swissarmyhammer_fields::FieldType::Computed { .. }))
+        .map(|fd| fd.name.as_str())
+        .collect()
+}
+
+/// Run the task-specific enrichment pipeline: virtual tags, filter tags,
+/// ready/blocked flags, and the `blocks`/`blocked_by` reverse indices.
+///
+/// The ComputeEngine stubs for these fields return empty arrays; the real
+/// values come from `enrich_task_entity`, which needs the full task list and
+/// the terminal column to determine the "done" transition.
+async fn enrich_task_from_context(
+    entity: &mut swissarmyhammer_entity::Entity,
+    ectx: &swissarmyhammer_entity::EntityContext,
+) {
+    let all_tasks = match ectx.list("task").await {
+        Ok(t) => t,
+        Err(e) => {
+            tracing::warn!("enrich_computed_fields: failed to list tasks for enrichment: {e}");
+            vec![]
+        }
+    };
+    let mut columns = ectx.list("column").await.unwrap_or_default();
+    columns.sort_by_key(|c| c.get("order").and_then(|v| v.as_u64()).unwrap_or(0) as usize);
+    let terminal_id = columns
+        .last()
+        .map(|c| c.id.to_string())
+        .unwrap_or_else(|| "done".to_string());
+    let registry = default_virtual_tag_registry();
+    enrich_task_entity(entity, &all_tasks, &terminal_id, registry);
+}
+
+/// Append computed field values from `entity` into `changes`, skipping any
+/// field already present in `changes`. Emits debug/warn traces for each
+/// decision so flaky field populations are easy to diagnose.
+fn append_computed_changes(
+    entity_type: &str,
+    id: &str,
+    entity: &swissarmyhammer_entity::Entity,
+    computed_names: &[&str],
+    changes: &mut Vec<crate::watcher::FieldChange>,
+) {
+    let existing: std::collections::HashSet<String> =
+        changes.iter().map(|c| c.field.clone()).collect();
+    for name in computed_names {
+        append_one_computed_change(entity_type, id, entity, name, &existing, changes);
+    }
+}
+
+/// Append one computed field's value to `changes`, unless `existing` already
+/// contains it or the entity hasn't materialized it. Emits the same
+/// debug/warn traces the caller used to emit inline.
+fn append_one_computed_change(
+    entity_type: &str,
+    id: &str,
+    entity: &swissarmyhammer_entity::Entity,
+    name: &str,
+    existing: &std::collections::HashSet<String>,
+    changes: &mut Vec<crate::watcher::FieldChange>,
+) {
+    if existing.contains(name) {
+        tracing::debug!(
+            entity_type = entity_type,
+            id = id,
+            field = name,
+            "enrich_computed_fields: computed field already in changes, skipping"
+        );
+        return;
+    }
+    let Some(value) = entity.fields.get(name) else {
+        tracing::warn!(
+            entity_type = entity_type,
+            id = id,
+            field = name,
+            "enrich_computed_fields: computed field not present in entity"
+        );
+        return;
+    };
+    tracing::debug!(
+        entity_type = entity_type,
+        id = id,
+        field = name,
+        value = %value,
+        "enrich_computed_fields: appending computed field"
+    );
+    changes.push(crate::watcher::FieldChange {
+        field: name.to_string(),
+        value: value.clone(),
+    });
 }
 
 /// A single item in a generic context menu.
