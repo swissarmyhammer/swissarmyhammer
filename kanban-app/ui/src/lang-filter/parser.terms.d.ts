@@ -3,6 +3,7 @@ export declare const FilterExpr: number;
 export declare const Tag: number;
 export declare const Mention: number;
 export declare const Ref: number;
+export declare const Project: number;
 export declare const Not: number;
 export declare const Bang: number;
 export declare const not: number;

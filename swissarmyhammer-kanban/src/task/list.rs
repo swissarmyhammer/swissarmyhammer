@@ -345,6 +345,67 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_list_tasks_filter_by_project() {
+        use crate::project::AddProject;
+
+        let (_temp, ctx) = setup().await;
+        AddProject::new("myproj", "My Project")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        AddTask::new("Project task")
+            .with_project("myproj")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        AddTask::new("Unrelated task")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        let result = ListTasks::new()
+            .with_filter("$myproj")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        assert_eq!(result["count"], 1);
+        assert_eq!(result["tasks"][0]["title"], "Project task");
+    }
+
+    #[tokio::test]
+    async fn test_list_tasks_filter_by_project_case_insensitive() {
+        use crate::project::AddProject;
+
+        let (_temp, ctx) = setup().await;
+        AddProject::new("myproj", "My Project")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        AddTask::new("Project task")
+            .with_project("myproj")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        let result = ListTasks::new()
+            .with_filter("$MYPROJ")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        assert_eq!(result["count"], 1);
+        assert_eq!(result["tasks"][0]["title"], "Project task");
+    }
+
+    #[tokio::test]
     async fn test_list_tasks_filter_by_assignee() {
         let (_temp, ctx) = setup().await;
         use crate::actor::AddActor;

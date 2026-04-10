@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KNVSFHMR89NG65Y8EESWF3E7
-position_column: todo
-position_ordinal: ae80
+position_column: done
+position_ordinal: ffffffffffffffffffffffab80
 project: expr-filter
 title: 'kanban adapters: implement has_project for task filter contexts'
 ---
@@ -57,4 +57,4 @@ Test commands:
 - [ ] `cargo test -p kanban-app` (or whatever the kanban-app backend test alias is)
 
 ## Workflow
-- Use `/tdd` — write the failing `test_list_tasks_filter_by_project` first. It should compile (card 1 added `Project` to the Expr enum) but fail at runtime because `has_project` is not yet implemented. Then implement to make it pass.
+- Use `/tdd` — write the failing `test_list_tasks_filter_by_project` first. It should compile (card 1 added `Project` to the Expr enum) but fail at runtime because `has_project` is not yet implemented. Then implement to make it pass. #expr-filter

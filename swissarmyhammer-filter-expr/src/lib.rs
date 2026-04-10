@@ -4,6 +4,7 @@
 //! - `#tag` — match entities with a given tag (including virtual tags)
 //! - `@user` — match entities assigned to a user
 //! - `^ref` — match entities referencing a card ID
+//! - `$project` — match entities belonging to a project
 //! - `&&` / `and` — boolean AND
 //! - `||` / `or` — boolean OR
 //! - `!` / `not` — boolean NOT
@@ -25,6 +26,8 @@ pub enum Expr {
     Assignee(String),
     /// Matches entities referencing a card (e.g. `^TASK-ID`).
     Ref(String),
+    /// Matches entities belonging to a project (e.g. `$auth-migration`).
+    Project(String),
     /// Both sub-expressions must match.
     And(Box<Expr>, Box<Expr>),
     /// Either sub-expression must match.
@@ -54,11 +57,12 @@ pub fn parse(input: &str) -> Result<Expr, Vec<ParseError>> {
 mod tests {
     use super::*;
 
-    /// Helper: build a simple FilterContext from tags, assignees, and refs.
+    /// Helper: build a simple FilterContext from tags, assignees, refs, and projects.
     struct TestCtx {
         tags: Vec<String>,
         assignees: Vec<String>,
         refs: Vec<String>,
+        projects: Vec<String>,
     }
 
     impl FilterContext for TestCtx {
@@ -71,13 +75,19 @@ mod tests {
         fn has_ref(&self, id: &str) -> bool {
             self.refs.iter().any(|r| r == id)
         }
+        fn has_project(&self, project: &str) -> bool {
+            self.projects
+                .iter()
+                .any(|p| p.eq_ignore_ascii_case(project))
+        }
     }
 
-    fn ctx(tags: &[&str], assignees: &[&str], refs: &[&str]) -> TestCtx {
+    fn ctx(tags: &[&str], assignees: &[&str], refs: &[&str], projects: &[&str]) -> TestCtx {
         TestCtx {
             tags: tags.iter().map(|s| s.to_string()).collect(),
             assignees: assignees.iter().map(|s| s.to_string()).collect(),
             refs: refs.iter().map(|s| s.to_string()).collect(),
+            projects: projects.iter().map(|s| s.to_string()).collect(),
         }
     }
 
@@ -227,62 +237,77 @@ mod tests {
     #[test]
     fn eval_tag_match() {
         let expr = parse("#bug").unwrap();
-        assert!(expr.matches(&ctx(&["bug", "feature"], &[], &[])));
+        assert!(expr.matches(&ctx(&["bug", "feature"], &[], &[], &[])));
     }
 
     #[test]
     fn eval_tag_no_match() {
         let expr = parse("#bug").unwrap();
-        assert!(!expr.matches(&ctx(&["feature"], &[], &[])));
+        assert!(!expr.matches(&ctx(&["feature"], &[], &[], &[])));
     }
 
     #[test]
     fn eval_tag_case_insensitive() {
         let expr = parse("#READY").unwrap();
-        assert!(expr.matches(&ctx(&["ready"], &[], &[])));
+        assert!(expr.matches(&ctx(&["ready"], &[], &[], &[])));
     }
 
     #[test]
     fn eval_assignee_match() {
         let expr = parse("@will").unwrap();
-        assert!(expr.matches(&ctx(&[], &["will"], &[])));
+        assert!(expr.matches(&ctx(&[], &["will"], &[], &[])));
     }
 
     #[test]
     fn eval_ref_match() {
         let expr = parse("^01ABC").unwrap();
-        assert!(expr.matches(&ctx(&[], &[], &["01ABC"])));
+        assert!(expr.matches(&ctx(&[], &[], &["01ABC"], &[])));
     }
 
     #[test]
     fn eval_and() {
         let expr = parse("#bug && @will").unwrap();
-        assert!(expr.matches(&ctx(&["bug"], &["will"], &[])));
-        assert!(!expr.matches(&ctx(&["bug"], &["alice"], &[])));
-        assert!(!expr.matches(&ctx(&["feature"], &["will"], &[])));
+        assert!(expr.matches(&ctx(&["bug"], &["will"], &[], &[])));
+        assert!(!expr.matches(&ctx(&["bug"], &["alice"], &[], &[])));
+        assert!(!expr.matches(&ctx(&["feature"], &["will"], &[], &[])));
     }
 
     #[test]
     fn eval_or() {
         let expr = parse("#bug || #feature").unwrap();
-        assert!(expr.matches(&ctx(&["bug"], &[], &[])));
-        assert!(expr.matches(&ctx(&["feature"], &[], &[])));
-        assert!(!expr.matches(&ctx(&["docs"], &[], &[])));
+        assert!(expr.matches(&ctx(&["bug"], &[], &[], &[])));
+        assert!(expr.matches(&ctx(&["feature"], &[], &[], &[])));
+        assert!(!expr.matches(&ctx(&["docs"], &[], &[], &[])));
     }
 
     #[test]
     fn eval_not() {
         let expr = parse("!#done").unwrap();
-        assert!(expr.matches(&ctx(&["bug"], &[], &[])));
-        assert!(!expr.matches(&ctx(&["done"], &[], &[])));
+        assert!(expr.matches(&ctx(&["bug"], &[], &[], &[])));
+        assert!(!expr.matches(&ctx(&["done"], &[], &[], &[])));
     }
 
     #[test]
     fn eval_complex_expression() {
         let expr = parse("(#bug || #feature) && @will && !#done").unwrap();
-        assert!(expr.matches(&ctx(&["bug"], &["will"], &[])));
-        assert!(expr.matches(&ctx(&["feature"], &["will"], &[])));
-        assert!(!expr.matches(&ctx(&["bug"], &["alice"], &[])));
-        assert!(!expr.matches(&ctx(&["bug", "done"], &["will"], &[])));
+        assert!(expr.matches(&ctx(&["bug"], &["will"], &[], &[])));
+        assert!(expr.matches(&ctx(&["feature"], &["will"], &[], &[])));
+        assert!(!expr.matches(&ctx(&["bug"], &["alice"], &[], &[])));
+        assert!(!expr.matches(&ctx(&["bug", "done"], &["will"], &[], &[])));
+    }
+
+    // ── Project atom acceptance ─────────────────────────────────────
+
+    #[test]
+    fn parse_project_atom() {
+        let expr = parse("$auth-migration").unwrap();
+        assert_eq!(expr, Expr::Project("auth-migration".into()));
+    }
+
+    #[test]
+    fn eval_project_match() {
+        let expr = parse("$auth").unwrap();
+        assert!(expr.matches(&ctx(&[], &[], &[], &["auth"])));
+        assert!(!expr.matches(&ctx(&[], &[], &[], &["frontend"])));
     }
 }

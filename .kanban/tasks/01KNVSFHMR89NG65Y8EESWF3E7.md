@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: ad80
+position_column: done
+position_ordinal: ffffffffffffffffffffffaa80
 project: expr-filter
 title: 'filter-expr: add $project atom to DSL grammar, parser, and FilterContext'
 ---
@@ -63,4 +63,4 @@ Test command:
 - [ ] `cargo test -p swissarmyhammer-filter-expr` — all tests pass
 
 ## Workflow
-- Use `/tdd` — write failing tests first, then implement to make them pass.
+- Use `/tdd` — write failing tests first, then implement to make them pass. #expr-filter

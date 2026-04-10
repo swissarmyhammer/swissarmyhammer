@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KNVSHYPEXZTXFZPEB8W5NPJP
-position_column: todo
-position_ordinal: b080
+position_column: done
+position_ordinal: ffffffffffffffffffffffad80
 project: expr-filter
 title: 'autocomplete: wire $project mention prefix for filter editor'
 ---
@@ -77,4 +77,4 @@ Test commands:
 - [ ] Manual dev-build check described above
 
 ## Workflow
-- Use `/tdd` — write the schema-context test first (positive + negative cases), then the mention-extensions test, then edit `project.yaml`. The negative test ensures we don't accidentally regress the "both fields required" invariant.
+- Use `/tdd` — write the schema-context test first (positive + negative cases), then the mention-extensions test, then edit `project.yaml`. The negative test ensures we don't accidentally regress the "both fields required" invariant. #expr-filter

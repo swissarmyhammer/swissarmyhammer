@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: af80
+position_column: done
+position_ordinal: ffffffffffffffffffffffac80
 project: expr-filter
 title: 'lang-filter: add Project token to Lezer grammar and highlight styling'
 ---
@@ -73,4 +73,4 @@ Test commands:
 - [ ] Manual verification in dev: open the filter editor, type `$somename`, confirm the text is tokenised as expected (no inline parse error). Full pill-decoration verification blocks on card `01KNVSK9V84X79TKGPP9XCYKFH`.
 
 ## Workflow
-- Use `/tdd` if the Lezer test harness exists (write failing parser tests first). Otherwise, write tests alongside the grammar changes and ensure they fail before regenerating the parser.
+- Use `/tdd` if the Lezer test harness exists (write failing parser tests first). Otherwise, write tests alongside the grammar changes and ensure they fail before regenerating the parser. #expr-filter

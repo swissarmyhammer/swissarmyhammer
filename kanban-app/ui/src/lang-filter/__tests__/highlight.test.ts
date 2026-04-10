@@ -33,6 +33,15 @@ describe("filter grammar highlighting", () => {
     expect(classes.some((c) => c.includes("tok-variableName") && c.includes("@alice"))).toBe(false);
   });
 
+  it("does NOT highlight projects (decoration system handles them)", () => {
+    // Projects, like Tags and Mentions, must not receive a styleTag mapping —
+    // defaultHighlightStyle would otherwise override their pill decoration color.
+    const classes = getHighlightClasses("$auth");
+    const projectClass = classes.find((c) => c.endsWith(":$auth"));
+    // The project token should carry no highlight class (decoration system owns it).
+    expect(projectClass).toBeUndefined();
+  });
+
   it("highlights refs with tok-link class", () => {
     const classes = getHighlightClasses("^01ABC");
     expect(classes.some((c) => c.includes("tok-link") && c.includes("^01ABC"))).toBe(true);

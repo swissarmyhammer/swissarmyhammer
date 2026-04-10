@@ -8,9 +8,10 @@
 import { styleTags, tags as t } from "@lezer/highlight";
 
 export const highlighting = styleTags({
-  // Tag and Mention are intentionally omitted — they get their visual styling
-  // from the mention decoration system (colored pills), not syntax highlighting.
-  // Adding them here causes defaultHighlightStyle to override entity colors.
+  // Tag, Mention, and Project are intentionally omitted — they get their visual
+  // styling from the mention decoration system (colored pills), not syntax
+  // highlighting. Adding them here causes defaultHighlightStyle to override
+  // entity colors.
   Ref: t.link,
   "not and or": t.keyword,
   "Bang AmpAmp PipePipe": t.operator,

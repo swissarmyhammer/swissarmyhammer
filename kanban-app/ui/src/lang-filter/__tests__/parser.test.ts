@@ -43,6 +43,16 @@ describe("filter grammar parser", () => {
     expect(tree).toContain("Ref");
   });
 
+  it("parses a project atom", () => {
+    const tree = parseTree("$auth-migration");
+    expect(tree).toContain("Project");
+  });
+
+  it("parses projects with dots and underscores", () => {
+    expect(parseTree("$v2.0")).toContain("Project");
+    expect(parseTree("$my_project")).toContain("Project");
+  });
+
   it("parses tags with hyphens and dots", () => {
     const tree = parseTree("#bug-fix");
     expect(tree).toContain("Tag");
@@ -128,6 +138,20 @@ describe("filter grammar parser", () => {
     expect(tree).toContain("Not");
   });
 
+  it("parses a composite expression containing all four atom kinds", () => {
+    const input = "$auth && #bug && @alice && ^01ABC";
+    const tree = parseTree(input);
+    expect(tree).toContain("Project");
+    expect(tree).toContain("Tag");
+    expect(tree).toContain("Mention");
+    expect(tree).toContain("Ref");
+    expect(hasError(input)).toBe(false);
+  });
+
+  it("parses $project combined with a tag via &&", () => {
+    expect(hasError("$auth && #bug")).toBe(false);
+  });
+
   // ── Error recovery ───────────────────────────────────────────────
 
   it("recovers from incomplete expression", () => {
@@ -150,6 +174,13 @@ describe("filter grammar parser", () => {
     expect(hasError("!#done")).toBe(false);
     expect(hasError("(#a || #b) && #c")).toBe(false);
     expect(hasError("not #done and @will or #bug")).toBe(false);
+    expect(hasError("$auth-migration")).toBe(false);
+    expect(hasError("$auth && #bug")).toBe(false);
+  });
+
+  it("'$' alone is a parse error", () => {
+    // A bare dollar sign with no slug body should fail to tokenize as Project.
+    expect(hasError("$")).toBe(true);
   });
 
   // ── Implicit AND ────────────────────────────────────────────────

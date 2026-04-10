@@ -32,12 +32,17 @@ vi.mock("@tauri-apps/plugin-log", () => ({
   attachConsole: vi.fn(() => Promise.resolve()),
 }));
 
-// Mock schema context — one mentionable type: tag with # prefix
+// Mock schema context — mutable so individual tests can add/remove mentionable
+// types (e.g. register a `$project` prefix for the project autocomplete tests).
+let mockMentionableTypes: Array<{
+  prefix: string;
+  entityType: string;
+  displayField: string;
+}> = [{ prefix: "#", entityType: "tag", displayField: "name" }];
+
 vi.mock("@/lib/schema-context", () => ({
   useSchema: () => ({
-    mentionableTypes: [
-      { prefix: "#", entityType: "tag", displayField: "name" },
-    ],
+    mentionableTypes: mockMentionableTypes,
   }),
 }));
 
@@ -54,6 +59,24 @@ const mockGetEntities = vi.fn((type: string) => {
         id: "t2",
         entity_type: "tag",
         fields: { name: "feature", color: "00ff00" },
+      },
+    ];
+  }
+  if (type === "project") {
+    return [
+      {
+        id: "p1",
+        entity_type: "project",
+        fields: {
+          name: "auth-migration",
+          color: "4078c0",
+          description: "Auth refactor",
+        },
+      },
+      {
+        id: "p2",
+        entity_type: "project",
+        fields: { name: "frontend", color: "6cc644" },
       },
     ];
   }
@@ -82,6 +105,11 @@ describe("useMentionExtensions", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockInvoke.mockResolvedValue([]);
+    // Reset mentionable types to the default (tag only) — individual tests
+    // that need a different shape (e.g. $project) reassign this.
+    mockMentionableTypes = [
+      { prefix: "#", entityType: "tag", displayField: "name" },
+    ];
   });
 
   it("returns extensions without options (default behavior)", () => {
@@ -182,6 +210,114 @@ describe("useMentionExtensions", () => {
       (p) => p.textContent === "#READY",
     );
     expect(hasReadyPill).toBe(false);
+
+    view.destroy();
+    parent.remove();
+  });
+
+  // ── $project mention tests ─────────────────────────────────────────
+  // These verify that once a project entity declares both `mention_prefix`
+  // and `mention_display_field`, the data-driven buildMentionExtensions
+  // loop emits decoration + autocomplete + tooltip extensions for `$`
+  // without any hardcoded prefix allowlist.
+
+  it("emits extensions for a project mentionable type with $ prefix", () => {
+    mockMentionableTypes = [
+      { prefix: "$", entityType: "project", displayField: "name" },
+    ];
+
+    const { result } = renderHook(() => useMentionExtensions());
+
+    // Non-empty extension array: decoration + tooltip + autocomplete source.
+    expect(result.current.length).toBeGreaterThan(0);
+  });
+
+  it("decorates $project mentions with the cm-project-pill class", async () => {
+    mockMentionableTypes = [
+      { prefix: "$", entityType: "project", displayField: "name" },
+    ];
+
+    const { result } = renderHook(() => useMentionExtensions());
+
+    const { EditorView } = await import("@codemirror/view");
+    const { EditorState } = await import("@codemirror/state");
+
+    const parent = document.createElement("div");
+    document.body.appendChild(parent);
+    const view = new EditorView({
+      state: EditorState.create({
+        doc: "$auth-migration",
+        extensions: result.current,
+      }),
+      parent,
+    });
+
+    const pill = parent.querySelector(".cm-project-pill");
+    expect(pill).toBeTruthy();
+    expect(pill?.textContent).toBe("$auth-migration");
+
+    view.destroy();
+    parent.remove();
+  });
+
+  it("calls search_mentions with entityType: 'project' when the completion source fires", async () => {
+    mockMentionableTypes = [
+      { prefix: "$", entityType: "project", displayField: "name" },
+    ];
+
+    mockInvoke.mockImplementation(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (command: string, args?: any) => {
+        if (command === "search_mentions" && args?.entityType === "project") {
+          return Promise.resolve([
+            { id: "p1", display_name: "auth-migration", color: "4078c0" },
+            { id: "p2", display_name: "frontend", color: "6cc644" },
+          ]);
+        }
+        return Promise.resolve([]);
+      },
+    );
+
+    const { result } = renderHook(() => useMentionExtensions());
+
+    const { EditorView } = await import("@codemirror/view");
+    const { EditorState } = await import("@codemirror/state");
+    const { startCompletion, currentCompletions } = await import(
+      "@codemirror/autocomplete"
+    );
+
+    const parent = document.createElement("div");
+    document.body.appendChild(parent);
+    const view = new EditorView({
+      state: EditorState.create({
+        doc: "$",
+        extensions: result.current,
+      }),
+      parent,
+    });
+
+    // Place the cursor after the `$` and trigger autocomplete manually.
+    view.dispatch({ selection: { anchor: 1 } });
+    startCompletion(view);
+
+    // Wait for the debounced async source to resolve. The search is
+    // debounced ~150ms; allow generous slack.
+    await new Promise((resolve) => setTimeout(resolve, 400));
+
+    // The invoke mock should have been called with entityType: "project".
+    const projectCalls = mockInvoke.mock.calls.filter(
+      (call) =>
+        call[0] === "search_mentions" &&
+        (call[1] as { entityType?: string })?.entityType === "project",
+    );
+    expect(projectCalls.length).toBeGreaterThan(0);
+
+    // The autocomplete state should eventually contain our mock results.
+    const completions = currentCompletions(view.state);
+    const labels = completions.map((c) => c.label);
+    // Labels are the slugs; tolerate either the raw display_name or slug form.
+    const hasAuth = labels.some((l) => l.includes("auth-migration"));
+    expect(hasAuth).toBe(true);
 
     view.destroy();
     parent.remove();

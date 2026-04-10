@@ -4,8 +4,8 @@ assignees:
 depends_on:
 - 01KNVSGJ7X7A95T8XV80E9M7Y3
 - 01KNVSK9V84X79TKGPP9XCYKFH
-position_column: todo
-position_ordinal: b280
+position_column: done
+position_ordinal: ffffffffffffffffffffffaf80
 project: expr-filter
 title: 'kanban skill: document $project filter syntax'
 ---
@@ -77,4 +77,4 @@ Teach agents to filter by project using the new `$project-slug` DSL atom by upda
 - [ ] Run whatever command rebuilds `.skills/` from `builtin/` and confirm the generated file updates (don't commit by hand — let the generator do it, or follow the project's usual regeneration workflow)
 
 ## Workflow
-- This is a docs-only card. Read the current `SKILL.md`, make the additions described, verify rendering. No TDD needed — follow the skill's existing style exactly.
+- This is a docs-only card. Read the current `SKILL.md`, make the additions described, verify rendering. No TDD needed — follow the skill's existing style exactly. #expr-filter

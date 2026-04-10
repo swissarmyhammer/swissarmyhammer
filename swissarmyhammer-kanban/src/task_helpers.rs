@@ -472,7 +472,8 @@ pub async fn auto_create_body_tags(
 /// Adapter that maps filter DSL atoms to enriched task entity fields.
 ///
 /// Uses `filter_tags` (union of body tags + virtual tags) for `#tag` lookups,
-/// `assignees` for `@user` lookups, and `depends_on` + `id` for `^ref` lookups.
+/// `assignees` for `@user` lookups, `depends_on` + `id` for `^ref` lookups,
+/// and the single-value `project` field for `$project` lookups.
 /// Entities must be enriched (via `enrich_task_entity` or `enrich_all_task_entities`)
 /// before evaluation — unenriched entities won't have `filter_tags`.
 pub struct TaskFilterAdapter<'a> {
@@ -502,6 +503,13 @@ impl<'a> swissarmyhammer_filter_expr::FilterContext for TaskFilterAdapter<'a> {
                 .get_string_list("depends_on")
                 .iter()
                 .any(|r| r == id)
+    }
+
+    fn has_project(&self, project: &str) -> bool {
+        self.entity
+            .get_str("project")
+            .map(|p| p.eq_ignore_ascii_case(project))
+            .unwrap_or(false)
     }
 }
 
