@@ -551,4 +551,491 @@ mod tests {
         assert_eq!(roundtrip.symbols[0].symbol.name, "foo");
         assert_eq!(roundtrip.source_layer, SourceLayer::LspIndex);
     }
+
+    // --- SharedLspClient with None inner (no connected LSP process) ---
+
+    #[test]
+    fn test_shared_lsp_client_with_none_inner_falls_through() {
+        // When a SharedLspClient is present but wraps None (no connected LSP
+        // process), has_live_lsp() returns false and workspace_symbol_live
+        // should fall through to index layers without error.
+        let conn = test_db();
+        insert_file(&conn, "src/main.rs", 0, 0);
+
+        let shared: crate::lsp_worker::SharedLspClient =
+            std::sync::Arc::new(std::sync::Mutex::new(None));
+        let ctx = LayeredContext::new(&conn, Some(&shared));
+
+        let opts = WorkspaceSymbolLiveOptions {
+            query: "something".to_string(),
+            max_results: 10,
+        };
+        // No index data exists, so result should be empty.
+        let result = workspace_symbol_live(&ctx, &opts).unwrap();
+        assert!(
+            result.symbols.is_empty(),
+            "SharedLspClient(None) with no index data should produce empty results"
+        );
+        assert_eq!(result.source_layer, SourceLayer::None);
+    }
+
+    #[test]
+    fn test_shared_lsp_client_with_none_inner_falls_to_lsp_index() {
+        // When has_live_lsp() is false but LSP index data exists, the result
+        // should come from the LSP index layer.
+        let conn = test_db();
+        insert_file(&conn, "src/main.rs", 0, 1);
+        insert_lsp_symbol(
+            &conn,
+            "sym1",
+            "find_handler",
+            12,
+            Some("fn find_handler() -> bool"),
+            "src/main.rs",
+            5,
+            0,
+            20,
+            1,
+        );
+
+        let shared: crate::lsp_worker::SharedLspClient =
+            std::sync::Arc::new(std::sync::Mutex::new(None));
+        let ctx = LayeredContext::new(&conn, Some(&shared));
+
+        let opts = WorkspaceSymbolLiveOptions {
+            query: "find".to_string(),
+            max_results: 10,
+        };
+        let result = workspace_symbol_live(&ctx, &opts).unwrap();
+        assert_eq!(
+            result.source_layer,
+            SourceLayer::LspIndex,
+            "should fall through to LSP index when live LSP has None inner"
+        );
+        assert_eq!(result.symbols.len(), 1);
+        assert_eq!(result.symbols[0].symbol.name, "find_handler");
+        assert_eq!(result.symbols[0].source_layer, SourceLayer::LspIndex);
+    }
+
+    #[test]
+    fn test_shared_lsp_client_with_none_inner_falls_to_treesitter() {
+        // When has_live_lsp() is false and no LSP index data exists but
+        // tree-sitter data does, should fall through to tree-sitter.
+        let conn = test_db();
+        insert_file(&conn, "src/main.rs", 1, 0);
+        insert_ts_chunk(
+            &conn,
+            "src/main.rs",
+            1,
+            10,
+            "fn find_handler() {\n    // body\n}",
+        );
+
+        let shared: crate::lsp_worker::SharedLspClient =
+            std::sync::Arc::new(std::sync::Mutex::new(None));
+        let ctx = LayeredContext::new(&conn, Some(&shared));
+
+        let opts = WorkspaceSymbolLiveOptions {
+            query: "find".to_string(),
+            max_results: 10,
+        };
+        let result = workspace_symbol_live(&ctx, &opts).unwrap();
+        assert_eq!(
+            result.source_layer,
+            SourceLayer::TreeSitter,
+            "should fall through to tree-sitter when live LSP is None and no LSP index data"
+        );
+        assert_eq!(result.symbols.len(), 1);
+        assert_eq!(result.symbols[0].source_layer, SourceLayer::TreeSitter);
+    }
+
+    // --- Mock LSP helper for live-path tests ---
+
+    /// Spawn a Python process that acts as a mock LSP server.
+    ///
+    /// Each entry in the responses array is either `null` (read a
+    /// notification, no reply) or a JSON-RPC response object (read a
+    /// request, reply with this object).
+    fn spawn_mock_lsp(responses: &[serde_json::Value]) -> std::process::Child {
+        let temp_dir = tempfile::tempdir().expect("failed to create temp dir for mock LSP");
+        let response_file = temp_dir.path().join("mock_responses.json");
+        std::fs::write(&response_file, serde_json::to_string(responses).unwrap())
+            .expect("failed to write mock responses file");
+
+        let script = "\
+            import sys, json, os\n\
+            def read_msg():\n\
+            \tcl = None\n\
+            \twhile True:\n\
+            \t\tline = sys.stdin.readline()\n\
+            \t\tif not line: return None\n\
+            \t\tline = line.strip()\n\
+            \t\tif not line: break\n\
+            \t\tif line.startswith('Content-Length:'):\n\
+            \t\t\tcl = int(line.split(':', 1)[1].strip())\n\
+            \tif cl is None: return None\n\
+            \tbody = sys.stdin.read(cl)\n\
+            \treturn json.loads(body)\n\
+            def send_msg(obj):\n\
+            \ts = json.dumps(obj)\n\
+            \tsys.stdout.write(f'Content-Length: {len(s)}\\r\\n\\r\\n{s}')\n\
+            \tsys.stdout.flush()\n\
+            with open(os.environ['MOCK_RESPONSE_FILE']) as f:\n\
+            \tresponses = json.load(f)\n\
+            for resp in responses:\n\
+            \tread_msg()\n\
+            \tif resp is not None:\n\
+            \t\tsend_msg(resp)\n";
+
+        // Leak the tempdir so it outlives the child process.
+        std::mem::forget(temp_dir);
+
+        std::process::Command::new("python3")
+            .arg("-c")
+            .arg(script)
+            .env("MOCK_RESPONSE_FILE", &response_file)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("failed to spawn mock LSP python3 process")
+    }
+
+    /// Create a `SharedLspClient` from a mock LSP child process.
+    fn mock_lsp_client(child: &mut std::process::Child) -> crate::lsp_worker::SharedLspClient {
+        use crate::lsp_communication::LspJsonRpcClient;
+        let stdin = child.stdin.take().unwrap();
+        let stdout = child.stdout.take().unwrap();
+        let client = LspJsonRpcClient::new(stdin, stdout);
+        std::sync::Arc::new(std::sync::Mutex::new(Some(client)))
+    }
+
+    // --- Live LSP workspace/symbol tests ---
+
+    #[test]
+    fn test_live_lsp_returns_workspace_symbols() {
+        // Mock LSP returns a valid workspace/symbol response with two symbols.
+        // workspace_symbol_live should return them with SourceLayer::LiveLsp.
+        let ws_response = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": [
+                {
+                    "name": "MyStruct",
+                    "kind": 23,
+                    "location": {
+                        "uri": "file:///src/models.rs",
+                        "range": {
+                            "start": { "line": 5, "character": 0 },
+                            "end": { "line": 25, "character": 1 }
+                        }
+                    }
+                },
+                {
+                    "name": "new",
+                    "kind": 12,
+                    "containerName": "MyStruct",
+                    "detail": "fn() -> MyStruct",
+                    "location": {
+                        "uri": "file:///src/models.rs",
+                        "range": {
+                            "start": { "line": 10, "character": 4 },
+                            "end": { "line": 15, "character": 5 }
+                        }
+                    }
+                }
+            ]
+        });
+
+        let responses = vec![ws_response];
+        let mut child = spawn_mock_lsp(&responses);
+        let shared = mock_lsp_client(&mut child);
+
+        let conn = test_db();
+        let ctx = LayeredContext::new(&conn, Some(&shared));
+        let opts = WorkspaceSymbolLiveOptions {
+            query: "MyStruct".to_string(),
+            max_results: 50,
+        };
+
+        let result = workspace_symbol_live(&ctx, &opts).unwrap();
+        assert_eq!(result.source_layer, SourceLayer::LiveLsp);
+        assert_eq!(result.symbols.len(), 2);
+
+        assert_eq!(result.symbols[0].symbol.name, "MyStruct");
+        assert_eq!(result.symbols[0].symbol.kind, "struct");
+        assert_eq!(result.symbols[0].symbol.file_path, "/src/models.rs");
+        assert_eq!(result.symbols[0].source_layer, SourceLayer::LiveLsp);
+
+        assert_eq!(result.symbols[1].symbol.name, "new");
+        assert_eq!(result.symbols[1].symbol.kind, "function");
+        assert_eq!(
+            result.symbols[1].symbol.qualified_path.as_deref(),
+            Some("MyStruct::new")
+        );
+        assert_eq!(
+            result.symbols[1].symbol.detail.as_deref(),
+            Some("fn() -> MyStruct")
+        );
+        assert_eq!(result.symbols[1].source_layer, SourceLayer::LiveLsp);
+    }
+
+    #[test]
+    fn test_live_lsp_null_response_falls_through() {
+        // Mock LSP returns a null result for workspace/symbol.
+        // workspace_symbol_live should fall through to index layers.
+        let ws_response = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": null
+        });
+
+        let responses = vec![ws_response];
+        let mut child = spawn_mock_lsp(&responses);
+        let shared = mock_lsp_client(&mut child);
+
+        let conn = test_db();
+        insert_file(&conn, "src/main.rs", 0, 0);
+        let ctx = LayeredContext::new(&conn, Some(&shared));
+        let opts = WorkspaceSymbolLiveOptions {
+            query: "anything".to_string(),
+            max_results: 10,
+        };
+
+        let result = workspace_symbol_live(&ctx, &opts).unwrap();
+        // No index data, so should end up empty after falling through all layers.
+        assert!(
+            result.symbols.is_empty(),
+            "null LSP response with no index data should produce empty results"
+        );
+        assert_eq!(result.source_layer, SourceLayer::None);
+    }
+
+    #[test]
+    fn test_live_lsp_empty_array_falls_through() {
+        // Mock LSP returns an empty array for workspace/symbol.
+        // workspace_symbol_live should fall through to index layers.
+        let ws_response = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": []
+        });
+
+        let responses = vec![ws_response];
+        let mut child = spawn_mock_lsp(&responses);
+        let shared = mock_lsp_client(&mut child);
+
+        let conn = test_db();
+        insert_file(&conn, "src/main.rs", 0, 0);
+        let ctx = LayeredContext::new(&conn, Some(&shared));
+        let opts = WorkspaceSymbolLiveOptions {
+            query: "anything".to_string(),
+            max_results: 10,
+        };
+
+        let result = workspace_symbol_live(&ctx, &opts).unwrap();
+        assert!(
+            result.symbols.is_empty(),
+            "empty LSP response with no index data should produce empty results"
+        );
+        assert_eq!(result.source_layer, SourceLayer::None);
+    }
+
+    #[test]
+    fn test_live_lsp_empty_array_falls_through_to_lsp_index() {
+        // Mock LSP returns an empty array but LSP index has data.
+        // workspace_symbol_live should fall through to LSP index.
+        let ws_response = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": []
+        });
+
+        let responses = vec![ws_response];
+        let mut child = spawn_mock_lsp(&responses);
+        let shared = mock_lsp_client(&mut child);
+
+        let conn = test_db();
+        insert_file(&conn, "src/main.rs", 0, 1);
+        insert_lsp_symbol(
+            &conn,
+            "sym1",
+            "my_handler",
+            12,
+            None,
+            "src/main.rs",
+            10,
+            0,
+            20,
+            1,
+        );
+        let ctx = LayeredContext::new(&conn, Some(&shared));
+        let opts = WorkspaceSymbolLiveOptions {
+            query: "handler".to_string(),
+            max_results: 10,
+        };
+
+        let result = workspace_symbol_live(&ctx, &opts).unwrap();
+        assert_eq!(
+            result.source_layer,
+            SourceLayer::LspIndex,
+            "empty live LSP response should fall through to LSP index"
+        );
+        assert_eq!(result.symbols.len(), 1);
+        assert_eq!(result.symbols[0].symbol.name, "my_handler");
+    }
+
+    #[test]
+    fn test_live_lsp_truncates_to_max_results() {
+        // Mock LSP returns 5 symbols but max_results is 2.
+        // workspace_symbol_live should return only 2.
+        let mut items = vec![];
+        for i in 0..5 {
+            items.push(serde_json::json!({
+                "name": format!("sym_{}", i),
+                "kind": 12,
+                "location": {
+                    "uri": format!("file:///src/mod{}.rs", i),
+                    "range": {
+                        "start": { "line": 0, "character": 0 },
+                        "end": { "line": 10, "character": 0 }
+                    }
+                }
+            }));
+        }
+        let ws_response = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": items
+        });
+
+        let responses = vec![ws_response];
+        let mut child = spawn_mock_lsp(&responses);
+        let shared = mock_lsp_client(&mut child);
+
+        let conn = test_db();
+        let ctx = LayeredContext::new(&conn, Some(&shared));
+        let opts = WorkspaceSymbolLiveOptions {
+            query: "sym".to_string(),
+            max_results: 2,
+        };
+
+        let result = workspace_symbol_live(&ctx, &opts).unwrap();
+        assert_eq!(result.source_layer, SourceLayer::LiveLsp);
+        assert_eq!(
+            result.symbols.len(),
+            2,
+            "should truncate to max_results=2, got {}",
+            result.symbols.len()
+        );
+        // Verify they are the first two items, preserving order.
+        assert_eq!(result.symbols[0].symbol.name, "sym_0");
+        assert_eq!(result.symbols[1].symbol.name, "sym_1");
+    }
+
+    // --- Additional parse_workspace_symbols edge cases ---
+
+    #[test]
+    fn test_parse_workspace_symbols_with_missing_range_fields_skipped() {
+        // An item with a location but missing range sub-fields should be
+        // skipped by parse_symbol_information's filter_map.
+        let response = serde_json::json!([
+            {
+                "name": "good",
+                "kind": 6,
+                "location": {
+                    "uri": "file:///a.rs",
+                    "range": {
+                        "start": { "line": 0, "character": 0 },
+                        "end": { "line": 5, "character": 0 }
+                    }
+                }
+            },
+            {
+                "name": "missing_end",
+                "kind": 6,
+                "location": {
+                    "uri": "file:///b.rs",
+                    "range": {
+                        "start": { "line": 0, "character": 0 }
+                    }
+                }
+            },
+            {
+                "name": "missing_range",
+                "kind": 6,
+                "location": {
+                    "uri": "file:///c.rs"
+                }
+            }
+        ]);
+        let symbols = parse_workspace_symbols(&response);
+        assert_eq!(symbols.len(), 1, "only the fully valid item should parse");
+        assert_eq!(symbols[0].name, "good");
+    }
+
+    #[test]
+    fn test_parse_workspace_symbols_non_array_response() {
+        // A response that is an object (not an array) should return empty.
+        let response = serde_json::json!({
+            "name": "not_an_array",
+            "kind": 12
+        });
+        let symbols = parse_workspace_symbols(&response);
+        assert!(symbols.is_empty(), "non-array response should return empty");
+    }
+
+    #[test]
+    fn test_parse_workspace_symbols_missing_name_skipped() {
+        // An item without a "name" field should be skipped.
+        let response = serde_json::json!([
+            {
+                "kind": 12,
+                "location": {
+                    "uri": "file:///a.rs",
+                    "range": {
+                        "start": { "line": 0, "character": 0 },
+                        "end": { "line": 1, "character": 0 }
+                    }
+                }
+            }
+        ]);
+        let symbols = parse_workspace_symbols(&response);
+        assert!(symbols.is_empty(), "item without name should be skipped");
+    }
+
+    #[test]
+    fn test_parse_workspace_symbols_missing_kind_skipped() {
+        // An item without a "kind" field should be skipped.
+        let response = serde_json::json!([
+            {
+                "name": "foo",
+                "location": {
+                    "uri": "file:///a.rs",
+                    "range": {
+                        "start": { "line": 0, "character": 0 },
+                        "end": { "line": 1, "character": 0 }
+                    }
+                }
+            }
+        ]);
+        let symbols = parse_workspace_symbols(&response);
+        assert!(symbols.is_empty(), "item without kind should be skipped");
+    }
+
+    #[test]
+    fn test_parse_workspace_symbols_missing_location_skipped() {
+        // An item without a "location" field should be skipped.
+        let response = serde_json::json!([
+            {
+                "name": "foo",
+                "kind": 12
+            }
+        ]);
+        let symbols = parse_workspace_symbols(&response);
+        assert!(
+            symbols.is_empty(),
+            "item without location should be skipped"
+        );
+    }
 }

@@ -1,0 +1,45 @@
+[package]
+name = "code-context-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Standalone MCP code-context tool CLI for AI coding agents"
+
+[package.metadata.dist]
+formula = "code-context"
+
+[[bin]]
+name = "code-context"
+path = "src/main.rs"
+
+[dependencies]
+swissarmyhammer-tools = { workspace = true }
+swissarmyhammer-common = { workspace = true }
+swissarmyhammer-directory = { workspace = true }
+swissarmyhammer-doctor = { workspace = true }
+swissarmyhammer-config = { workspace = true }
+swissarmyhammer-code-context = { workspace = true }
+swissarmyhammer-skills = { workspace = true }
+swissarmyhammer-templating = { workspace = true }
+mirdan = { workspace = true }
+rmcp = { workspace = true }
+anyhow = { workspace = true }
+clap = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml_ng = { workspace = true }
+tempfile = { workspace = true }
+
+[dev-dependencies]
+serial_test = { workspace = true }
+
+[build-dependencies]
+clap = { workspace = true }
+clap-markdown = { workspace = true }
+clap_mangen = { workspace = true }
+clap_complete = { workspace = true }

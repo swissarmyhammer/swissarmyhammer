@@ -1137,4 +1137,614 @@ mod tests {
         assert_eq!(actions[1].kind.as_deref(), Some("source.organizeImports"));
         assert!(actions[1].is_preferred);
     }
+
+    // -----------------------------------------------------------------------
+    // SharedLspClient with None inner → empty result
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_shared_lsp_client_with_none_inner_returns_empty() {
+        // When a SharedLspClient is present but wraps None (no connected LSP
+        // process), has_live_lsp() returns false and get_code_actions should
+        // return an empty result without error.
+        let conn = test_db();
+        let shared: crate::lsp_worker::SharedLspClient =
+            std::sync::Arc::new(std::sync::Mutex::new(None));
+        let ctx = LayeredContext::new(&conn, Some(&shared));
+
+        let opts = GetCodeActionsOptions {
+            file_path: "src/main.rs".to_string(),
+            start_line: 0,
+            start_character: 0,
+            end_line: 0,
+            end_character: 10,
+            filter_kind: None,
+        };
+        let result = get_code_actions(&ctx, &opts).unwrap();
+        assert!(
+            result.actions.is_empty(),
+            "SharedLspClient(None) should produce empty actions"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // try_resolve_action: pure-logic early-return paths
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_try_resolve_action_no_kind_returns_none() {
+        // When action.kind is None (a Command, not a CodeAction),
+        // try_resolve_action bails immediately via the `?` operator.
+        let conn = test_db();
+        let ctx = LayeredContext::new(&conn, None);
+        let action = CodeAction {
+            title: "Run test".to_string(),
+            kind: None,
+            edits: None,
+            is_preferred: false,
+        };
+        let result = try_resolve_action(&ctx, &action);
+        assert!(
+            result.is_none(),
+            "action without kind should return None immediately"
+        );
+    }
+
+    #[test]
+    fn test_try_resolve_action_with_kind_no_lsp_returns_none() {
+        // When action has a kind but there is no live LSP, lsp_request
+        // returns Ok(None), which the `.ok()?` + `response?` chain
+        // converts to None.
+        let conn = test_db();
+        let ctx = LayeredContext::new(&conn, None);
+        let action = CodeAction {
+            title: "Extract function".to_string(),
+            kind: Some("refactor.extract".to_string()),
+            edits: None,
+            is_preferred: false,
+        };
+        let result = try_resolve_action(&ctx, &action);
+        assert!(
+            result.is_none(),
+            "action with kind but no LSP should return None"
+        );
+    }
+
+    #[test]
+    fn test_try_resolve_action_with_kind_lsp_none_inner_returns_none() {
+        // SharedLspClient exists but wraps None (disconnected).
+        // lsp_request returns Ok(None), so try_resolve_action returns None.
+        let conn = test_db();
+        let shared: crate::lsp_worker::SharedLspClient =
+            std::sync::Arc::new(std::sync::Mutex::new(None));
+        let ctx = LayeredContext::new(&conn, Some(&shared));
+        let action = CodeAction {
+            title: "Inline variable".to_string(),
+            kind: Some("refactor.inline".to_string()),
+            edits: None,
+            is_preferred: false,
+        };
+        let result = try_resolve_action(&ctx, &action);
+        assert!(
+            result.is_none(),
+            "action with kind but disconnected LSP should return None"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Mock LSP helper for live-path tests
+    // -----------------------------------------------------------------------
+
+    /// Spawn a Python process that acts as a mock LSP server.
+    ///
+    /// The script reads a sequence of JSON-RPC messages from stdin and sends
+    /// back canned responses loaded from a JSON file. Each entry in the
+    /// responses array is either `null` (read a notification, no reply) or a
+    /// JSON-RPC response object (read a request, reply with this object).
+    ///
+    /// Protocol:
+    /// - `null` entry → read one message from stdin (notification), send nothing
+    /// - object entry → read one message from stdin (request), send the object back
+    fn spawn_mock_lsp(responses: &[serde_json::Value]) -> std::process::Child {
+        let temp_dir = tempfile::tempdir().expect("failed to create temp dir for mock LSP");
+        let response_file = temp_dir.path().join("mock_responses.json");
+        std::fs::write(&response_file, serde_json::to_string(responses).unwrap())
+            .expect("failed to write mock responses file");
+
+        // Python script that reads messages and sends canned responses.
+        // `null` entries mean "read a message but don't reply" (for notifications).
+        // Non-null entries mean "read a message and reply with this object".
+        let script = "\
+            import sys, json, os\n\
+            def read_msg():\n\
+            \tcl = None\n\
+            \twhile True:\n\
+            \t\tline = sys.stdin.readline()\n\
+            \t\tif not line: return None\n\
+            \t\tline = line.strip()\n\
+            \t\tif not line: break\n\
+            \t\tif line.startswith('Content-Length:'):\n\
+            \t\t\tcl = int(line.split(':', 1)[1].strip())\n\
+            \tif cl is None: return None\n\
+            \tbody = sys.stdin.read(cl)\n\
+            \treturn json.loads(body)\n\
+            def send_msg(obj):\n\
+            \ts = json.dumps(obj)\n\
+            \tsys.stdout.write(f'Content-Length: {len(s)}\\r\\n\\r\\n{s}')\n\
+            \tsys.stdout.flush()\n\
+            with open(os.environ['MOCK_RESPONSE_FILE']) as f:\n\
+            \tresponses = json.load(f)\n\
+            for resp in responses:\n\
+            \tread_msg()\n\
+            \tif resp is not None:\n\
+            \t\tsend_msg(resp)\n";
+
+        // Keep the tempdir alive for the lifetime of the child process.
+        // We leak it intentionally — the OS cleans up temp files, and the
+        // alternative (storing it alongside the Child) would require a
+        // wrapper struct that adds complexity to every test.
+        std::mem::forget(temp_dir);
+
+        std::process::Command::new("python3")
+            .arg("-c")
+            .arg(script)
+            .env("MOCK_RESPONSE_FILE", &response_file)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("failed to spawn mock LSP python3 process")
+    }
+
+    /// Create a `SharedLspClient` from a mock LSP child process.
+    fn mock_lsp_client(child: &mut std::process::Child) -> crate::lsp_worker::SharedLspClient {
+        use crate::lsp_communication::LspJsonRpcClient;
+        let stdin = child.stdin.take().unwrap();
+        let stdout = child.stdout.take().unwrap();
+        let client = LspJsonRpcClient::new(stdin, stdout);
+        std::sync::Arc::new(std::sync::Mutex::new(Some(client)))
+    }
+
+    /// Create a temp file so `lsp_request_with_document` can read it.
+    fn create_temp_source_file() -> tempfile::TempDir {
+        use std::io::Write;
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        let file = dir.path().join("test.rs");
+        let mut f = std::fs::File::create(&file).unwrap();
+        writeln!(f, "fn main() {{}}").unwrap();
+        dir
+    }
+
+    // -----------------------------------------------------------------------
+    // Live LSP path: get_code_actions returns actions from mock server
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_get_code_actions_live_lsp_returns_actions() {
+        // Mock LSP returns two code actions for a textDocument/codeAction request.
+        // Protocol: didOpen (notification) → codeAction (request+response) → didClose (notification)
+        let codeaction_response = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": [
+                {
+                    "title": "Add missing import",
+                    "kind": "quickfix",
+                    "isPreferred": true,
+                    "edit": {
+                        "changes": {
+                            "file:///test.rs": [{
+                                "range": {
+                                    "start": { "line": 0, "character": 0 },
+                                    "end": { "line": 0, "character": 0 }
+                                },
+                                "newText": "use std::io;\n"
+                            }]
+                        }
+                    }
+                },
+                {
+                    "title": "Run test",
+                    "command": "rust-analyzer.runSingle",
+                    "arguments": []
+                }
+            ]
+        });
+
+        // null = read notification without replying; non-null = read request and reply
+        let responses = vec![
+            serde_json::Value::Null, // didOpen notification
+            codeaction_response,     // codeAction request
+            serde_json::Value::Null, // didClose notification
+        ];
+
+        let mut child = spawn_mock_lsp(&responses);
+        let shared = mock_lsp_client(&mut child);
+
+        let temp_dir = create_temp_source_file();
+        let file_path = temp_dir.path().join("test.rs");
+
+        let conn = test_db();
+        let ctx = LayeredContext::new(&conn, Some(&shared));
+        let opts = GetCodeActionsOptions {
+            file_path: file_path.to_str().unwrap().to_string(),
+            start_line: 0,
+            start_character: 0,
+            end_line: 0,
+            end_character: 10,
+            filter_kind: None,
+        };
+
+        let result = get_code_actions(&ctx, &opts).unwrap();
+        assert_eq!(result.actions.len(), 2, "should have 2 actions");
+
+        assert_eq!(result.actions[0].title, "Add missing import");
+        assert_eq!(result.actions[0].kind.as_deref(), Some("quickfix"));
+        assert!(result.actions[0].is_preferred);
+        assert!(result.actions[0].edits.is_some());
+
+        assert_eq!(result.actions[1].title, "Run test");
+        assert!(result.actions[1].kind.is_none());
+
+        let _ = child.wait();
+    }
+
+    // -----------------------------------------------------------------------
+    // Live LSP path: null response → empty result
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_get_code_actions_live_lsp_null_response_returns_empty() {
+        // Mock LSP returns null for the codeAction request.
+        let null_response = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": null
+        });
+
+        let responses = vec![
+            serde_json::Value::Null,
+            null_response,
+            serde_json::Value::Null,
+        ];
+
+        let mut child = spawn_mock_lsp(&responses);
+        let shared = mock_lsp_client(&mut child);
+
+        let temp_dir = create_temp_source_file();
+        let file_path = temp_dir.path().join("test.rs");
+
+        let conn = test_db();
+        let ctx = LayeredContext::new(&conn, Some(&shared));
+        let opts = GetCodeActionsOptions {
+            file_path: file_path.to_str().unwrap().to_string(),
+            start_line: 0,
+            start_character: 0,
+            end_line: 0,
+            end_character: 5,
+            filter_kind: None,
+        };
+
+        let result = get_code_actions(&ctx, &opts).unwrap();
+        assert!(
+            result.actions.is_empty(),
+            "null LSP response should produce empty actions"
+        );
+
+        let _ = child.wait();
+    }
+
+    // -----------------------------------------------------------------------
+    // Live LSP path: kind filter narrows returned actions
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_get_code_actions_live_lsp_kind_filter_applied() {
+        // Mock LSP returns three actions with different kinds.
+        // The filter_kind option should narrow the result.
+        let codeaction_response = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": [
+                {
+                    "title": "Quick fix A",
+                    "kind": "quickfix",
+                    "isPreferred": false,
+                    "edit": {
+                        "changes": {
+                            "file:///test.rs": [{
+                                "range": {
+                                    "start": { "line": 0, "character": 0 },
+                                    "end": { "line": 0, "character": 0 }
+                                },
+                                "newText": "fix"
+                            }]
+                        }
+                    }
+                },
+                {
+                    "title": "Refactor B",
+                    "kind": "refactor.extract",
+                    "isPreferred": false,
+                    "edit": {
+                        "changes": {
+                            "file:///test.rs": [{
+                                "range": {
+                                    "start": { "line": 1, "character": 0 },
+                                    "end": { "line": 1, "character": 5 }
+                                },
+                                "newText": "extracted()"
+                            }]
+                        }
+                    }
+                },
+                {
+                    "title": "Source organize",
+                    "kind": "source.organizeImports",
+                    "isPreferred": false,
+                    "edit": {
+                        "changes": {
+                            "file:///test.rs": [{
+                                "range": {
+                                    "start": { "line": 0, "character": 0 },
+                                    "end": { "line": 0, "character": 0 }
+                                },
+                                "newText": "organized"
+                            }]
+                        }
+                    }
+                }
+            ]
+        });
+
+        let responses = vec![
+            serde_json::Value::Null,
+            codeaction_response,
+            serde_json::Value::Null,
+        ];
+
+        let mut child = spawn_mock_lsp(&responses);
+        let shared = mock_lsp_client(&mut child);
+
+        let temp_dir = create_temp_source_file();
+        let file_path = temp_dir.path().join("test.rs");
+
+        let conn = test_db();
+        let ctx = LayeredContext::new(&conn, Some(&shared));
+        let opts = GetCodeActionsOptions {
+            file_path: file_path.to_str().unwrap().to_string(),
+            start_line: 0,
+            start_character: 0,
+            end_line: 1,
+            end_character: 10,
+            filter_kind: Some(vec!["quickfix".to_string()]),
+        };
+
+        let result = get_code_actions(&ctx, &opts).unwrap();
+        assert_eq!(
+            result.actions.len(),
+            1,
+            "filter_kind should keep only quickfix"
+        );
+        assert_eq!(result.actions[0].title, "Quick fix A");
+        assert_eq!(result.actions[0].kind.as_deref(), Some("quickfix"));
+
+        let _ = child.wait();
+    }
+
+    // -----------------------------------------------------------------------
+    // Live LSP path: actions without edits trigger resolve
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_get_code_actions_live_lsp_resolves_actions_without_edits() {
+        // Mock LSP returns one action without edits in the initial codeAction
+        // response. get_code_actions should then call codeAction/resolve, and
+        // the mock returns edits in the resolve response.
+        //
+        // Protocol sequence:
+        //   didOpen (notification) →
+        //   codeAction (request, returns action without edit) →
+        //   didClose (notification) →
+        //   codeAction/resolve (request, returns action with edit)
+        let codeaction_response = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": [
+                {
+                    "title": "Extract function",
+                    "kind": "refactor.extract",
+                    "isPreferred": false
+                }
+            ]
+        });
+
+        let resolve_response = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "result": {
+                "title": "Extract function",
+                "kind": "refactor.extract",
+                "edit": {
+                    "changes": {
+                        "file:///src/lib.rs": [{
+                            "range": {
+                                "start": { "line": 5, "character": 0 },
+                                "end": { "line": 10, "character": 1 }
+                            },
+                            "newText": "fn extracted() {}\n"
+                        }]
+                    }
+                }
+            }
+        });
+
+        let responses = vec![
+            serde_json::Value::Null, // didOpen notification
+            codeaction_response,     // codeAction request
+            serde_json::Value::Null, // didClose notification
+            resolve_response,        // codeAction/resolve request
+        ];
+
+        let mut child = spawn_mock_lsp(&responses);
+        let shared = mock_lsp_client(&mut child);
+
+        let temp_dir = create_temp_source_file();
+        let file_path = temp_dir.path().join("test.rs");
+
+        let conn = test_db();
+        let ctx = LayeredContext::new(&conn, Some(&shared));
+        let opts = GetCodeActionsOptions {
+            file_path: file_path.to_str().unwrap().to_string(),
+            start_line: 5,
+            start_character: 0,
+            end_line: 10,
+            end_character: 1,
+            filter_kind: None,
+        };
+
+        let result = get_code_actions(&ctx, &opts).unwrap();
+        assert_eq!(result.actions.len(), 1);
+
+        let action = &result.actions[0];
+        assert_eq!(action.title, "Extract function");
+        assert_eq!(action.kind.as_deref(), Some("refactor.extract"));
+
+        // The action should now have edits from the resolve response
+        let edits = action
+            .edits
+            .as_ref()
+            .expect("resolved action should have edits");
+        assert_eq!(edits.len(), 1);
+        assert_eq!(edits[0].file_path, "/src/lib.rs");
+        assert_eq!(edits[0].text_edits[0].new_text, "fn extracted() {}\n");
+
+        let _ = child.wait();
+    }
+
+    // -----------------------------------------------------------------------
+    // Live LSP path: resolve returns null → action keeps no edits
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_get_code_actions_live_lsp_resolve_null_keeps_no_edits() {
+        // When codeAction/resolve returns null, try_resolve_action returns
+        // None and the action retains its original edits (None).
+        let codeaction_response = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": [
+                {
+                    "title": "Some refactor",
+                    "kind": "refactor.inline",
+                    "isPreferred": false
+                }
+            ]
+        });
+
+        let resolve_null = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "result": null
+        });
+
+        let responses = vec![
+            serde_json::Value::Null,
+            codeaction_response,
+            serde_json::Value::Null,
+            resolve_null,
+        ];
+
+        let mut child = spawn_mock_lsp(&responses);
+        let shared = mock_lsp_client(&mut child);
+
+        let temp_dir = create_temp_source_file();
+        let file_path = temp_dir.path().join("test.rs");
+
+        let conn = test_db();
+        let ctx = LayeredContext::new(&conn, Some(&shared));
+        let opts = GetCodeActionsOptions {
+            file_path: file_path.to_str().unwrap().to_string(),
+            start_line: 0,
+            start_character: 0,
+            end_line: 0,
+            end_character: 5,
+            filter_kind: None,
+        };
+
+        let result = get_code_actions(&ctx, &opts).unwrap();
+        assert_eq!(result.actions.len(), 1);
+        assert!(
+            result.actions[0].edits.is_none(),
+            "resolve returning null should leave edits as None"
+        );
+
+        let _ = child.wait();
+    }
+
+    // -----------------------------------------------------------------------
+    // Live LSP path: resolve returns empty edit → action keeps no edits
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_get_code_actions_live_lsp_resolve_empty_edit_keeps_no_edits() {
+        // When codeAction/resolve returns an action whose edit produces no
+        // FileEdits (empty changes map), try_resolve_action returns None.
+        let codeaction_response = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": [
+                {
+                    "title": "Noop refactor",
+                    "kind": "refactor",
+                    "isPreferred": false
+                }
+            ]
+        });
+
+        let resolve_empty_edit = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "result": {
+                "title": "Noop refactor",
+                "kind": "refactor",
+                "edit": {
+                    "changes": {}
+                }
+            }
+        });
+
+        let responses = vec![
+            serde_json::Value::Null,
+            codeaction_response,
+            serde_json::Value::Null,
+            resolve_empty_edit,
+        ];
+
+        let mut child = spawn_mock_lsp(&responses);
+        let shared = mock_lsp_client(&mut child);
+
+        let temp_dir = create_temp_source_file();
+        let file_path = temp_dir.path().join("test.rs");
+
+        let conn = test_db();
+        let ctx = LayeredContext::new(&conn, Some(&shared));
+        let opts = GetCodeActionsOptions {
+            file_path: file_path.to_str().unwrap().to_string(),
+            start_line: 0,
+            start_character: 0,
+            end_line: 0,
+            end_character: 5,
+            filter_kind: None,
+        };
+
+        let result = get_code_actions(&ctx, &opts).unwrap();
+        assert_eq!(result.actions.len(), 1);
+        assert!(
+            result.actions[0].edits.is_none(),
+            "resolve returning empty edit should leave edits as None"
+        );
+
+        let _ = child.wait();
+    }
 }

@@ -21,3 +21,4 @@
 - [AVP CLI](reference/avp-cli.md)
 - [Mirdan CLI](reference/mirdan-cli.md)
 - [ShellTool CLI](reference/shelltool-cli.md)
+- [Code-Context CLI](reference/code-context-cli.md)

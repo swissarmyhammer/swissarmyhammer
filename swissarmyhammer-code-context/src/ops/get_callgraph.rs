@@ -102,8 +102,6 @@ pub fn get_callgraph(
     options: &CallGraphOptions,
 ) -> Result<CallGraph, CodeContextError> {
     let max_depth = options.max_depth.clamp(1, 5);
-
-    // Resolve the root symbol.
     let root = resolve_symbol(conn, &options.symbol)?;
 
     let mut visited_ids: HashSet<String> = HashSet::new();
@@ -112,7 +110,6 @@ pub fn get_callgraph(
     let mut all_edges: Vec<CallGraphEdge> = Vec::new();
     let mut all_nodes: Vec<CallGraphNode> = vec![root.clone()];
 
-    // BFS frontier: (symbol_id, current_depth)
     let mut queue: VecDeque<(String, u32)> = VecDeque::new();
     queue.push_back((root.symbol_id.clone(), 0));
 
@@ -120,34 +117,16 @@ pub fn get_callgraph(
         if depth >= max_depth {
             continue;
         }
-
         let edges = fetch_edges(conn, &current_id, options.direction, depth + 1)?;
-
         for edge in edges {
-            // Determine the "next" node to follow.
-            let next_id = match options.direction {
-                CallGraphDirection::Inbound => &edge.caller.symbol_id,
-                CallGraphDirection::Outbound => &edge.callee.symbol_id,
-                CallGraphDirection::Both => {
-                    // Follow whichever side is new.
-                    if !visited_ids.contains(&edge.callee.symbol_id) {
-                        &edge.callee.symbol_id
-                    } else {
-                        &edge.caller.symbol_id
-                    }
-                }
-            };
-
-            if visited_ids.insert(next_id.clone()) {
-                let next_node = if next_id == &edge.caller.symbol_id {
-                    edge.caller.clone()
-                } else {
-                    edge.callee.clone()
-                };
-                all_nodes.push(next_node);
-                queue.push_back((next_id.clone(), depth + 1));
-            }
-
+            expand_edge(
+                &edge,
+                options.direction,
+                &mut visited_ids,
+                &mut all_nodes,
+                &mut queue,
+                depth,
+            );
             all_edges.push(edge);
         }
     }
@@ -157,6 +136,39 @@ pub fn get_callgraph(
         edges: all_edges,
         nodes: all_nodes,
     })
+}
+
+/// Process a single edge during BFS: determine the next node, add it if new,
+/// and enqueue it for further traversal.
+fn expand_edge(
+    edge: &CallGraphEdge,
+    direction: CallGraphDirection,
+    visited: &mut HashSet<String>,
+    nodes: &mut Vec<CallGraphNode>,
+    queue: &mut VecDeque<(String, u32)>,
+    depth: u32,
+) {
+    let next_id = match direction {
+        CallGraphDirection::Inbound => &edge.caller.symbol_id,
+        CallGraphDirection::Outbound => &edge.callee.symbol_id,
+        CallGraphDirection::Both => {
+            if !visited.contains(&edge.callee.symbol_id) {
+                &edge.callee.symbol_id
+            } else {
+                &edge.caller.symbol_id
+            }
+        }
+    };
+
+    if visited.insert(next_id.clone()) {
+        let next_node = if next_id == &edge.caller.symbol_id {
+            edge.caller.clone()
+        } else {
+            edge.callee.clone()
+        };
+        nodes.push(next_node);
+        queue.push_back((next_id.clone(), depth + 1));
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -257,6 +269,51 @@ fn resolve_by_name(conn: &Connection, name: &str) -> Result<CallGraphNode, CodeC
     )))
 }
 
+/// Which side of a call edge to match against.
+enum EdgeSide {
+    Caller,
+    Callee,
+}
+
+/// Query call edges where `symbol_id` matches the specified side.
+fn query_edges_by_side(
+    conn: &Connection,
+    side: EdgeSide,
+    symbol_id: &str,
+    depth: u32,
+) -> Result<Vec<CallGraphEdge>, CodeContextError> {
+    let filter = match side {
+        EdgeSide::Caller => "e.caller_id = ?1",
+        EdgeSide::Callee => "e.callee_id = ?1",
+    };
+    let sql = format!(
+        "SELECT e.caller_id, c1.name, e.caller_file, \
+                e.callee_id, c2.name, e.callee_file, e.source \
+         FROM lsp_call_edges e \
+         JOIN lsp_symbols c1 ON c1.id = e.caller_id \
+         JOIN lsp_symbols c2 ON c2.id = e.callee_id \
+         WHERE {filter}"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map([symbol_id], |row| {
+        Ok(CallGraphEdge {
+            caller: CallGraphNode {
+                symbol_id: row.get(0)?,
+                name: row.get(1)?,
+                file_path: row.get(2)?,
+            },
+            callee: CallGraphNode {
+                symbol_id: row.get(3)?,
+                name: row.get(4)?,
+                file_path: row.get(5)?,
+            },
+            source: row.get(6)?,
+            depth,
+        })
+    })?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+}
+
 /// Fetch edges adjacent to a symbol in the requested direction.
 fn fetch_edges(
     conn: &Connection,
@@ -267,69 +324,20 @@ fn fetch_edges(
     let mut edges = Vec::new();
 
     if direction == CallGraphDirection::Outbound || direction == CallGraphDirection::Both {
-        // symbol is the caller -- find callees.
-        let mut stmt = conn.prepare(
-            "SELECT e.caller_id, c1.name, e.caller_file, \
-                    e.callee_id, c2.name, e.callee_file, e.source \
-             FROM lsp_call_edges e \
-             JOIN lsp_symbols c1 ON c1.id = e.caller_id \
-             JOIN lsp_symbols c2 ON c2.id = e.callee_id \
-             WHERE e.caller_id = ?1",
-        )?;
-
-        let rows = stmt.query_map([symbol_id], |row| {
-            Ok(CallGraphEdge {
-                caller: CallGraphNode {
-                    symbol_id: row.get(0)?,
-                    name: row.get(1)?,
-                    file_path: row.get(2)?,
-                },
-                callee: CallGraphNode {
-                    symbol_id: row.get(3)?,
-                    name: row.get(4)?,
-                    file_path: row.get(5)?,
-                },
-                source: row.get(6)?,
-                depth,
-            })
-        })?;
-
-        for row in rows {
-            edges.push(row?);
-        }
+        edges.extend(query_edges_by_side(
+            conn,
+            EdgeSide::Caller,
+            symbol_id,
+            depth,
+        )?);
     }
-
     if direction == CallGraphDirection::Inbound || direction == CallGraphDirection::Both {
-        // symbol is the callee -- find callers.
-        let mut stmt = conn.prepare(
-            "SELECT e.caller_id, c1.name, e.caller_file, \
-                    e.callee_id, c2.name, e.callee_file, e.source \
-             FROM lsp_call_edges e \
-             JOIN lsp_symbols c1 ON c1.id = e.caller_id \
-             JOIN lsp_symbols c2 ON c2.id = e.callee_id \
-             WHERE e.callee_id = ?1",
-        )?;
-
-        let rows = stmt.query_map([symbol_id], |row| {
-            Ok(CallGraphEdge {
-                caller: CallGraphNode {
-                    symbol_id: row.get(0)?,
-                    name: row.get(1)?,
-                    file_path: row.get(2)?,
-                },
-                callee: CallGraphNode {
-                    symbol_id: row.get(3)?,
-                    name: row.get(4)?,
-                    file_path: row.get(5)?,
-                },
-                source: row.get(6)?,
-                depth,
-            })
-        })?;
-
-        for row in rows {
-            edges.push(row?);
-        }
+        edges.extend(query_edges_by_side(
+            conn,
+            EdgeSide::Callee,
+            symbol_id,
+            depth,
+        )?);
     }
 
     Ok(edges)
@@ -593,5 +601,262 @@ mod tests {
         );
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_default_options() {
+        let opts = CallGraphOptions::default();
+
+        assert!(opts.symbol.is_empty(), "default symbol should be empty");
+        assert_eq!(
+            opts.direction,
+            CallGraphDirection::Outbound,
+            "default direction should be Outbound"
+        );
+        assert_eq!(opts.max_depth, 2, "default max_depth should be 2");
+    }
+
+    /// Insert a symbol with explicit line/char positions for location-resolution tests.
+    fn insert_symbol_at(
+        conn: &Connection,
+        id: &str,
+        name: &str,
+        kind: i32,
+        file_path: &str,
+        start_line: i32,
+        start_char: i32,
+        end_line: i32,
+        end_char: i32,
+    ) {
+        conn.execute(
+            "INSERT INTO lsp_symbols (id, name, kind, file_path, start_line, start_char, end_line, end_char)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            rusqlite::params![id, name, kind, file_path, start_line, start_char, end_line, end_char],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn test_resolve_by_file_line_char_finds_symbol() {
+        let conn = test_db();
+        insert_file(&conn, "src/main.rs");
+
+        // Symbol spans lines 10..20, chars 0..50.
+        insert_symbol_at(
+            &conn,
+            "lsp:src/main.rs:process",
+            "process",
+            12,
+            "src/main.rs",
+            10,
+            0,
+            20,
+            50,
+        );
+
+        // Query at line 15, char 5 -- inside the symbol's range.
+        let result = get_callgraph(
+            &conn,
+            &CallGraphOptions {
+                symbol: "src/main.rs:15:5".to_string(),
+                direction: CallGraphDirection::Outbound,
+                max_depth: 1,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(result.root.name, "process");
+        assert_eq!(result.root.symbol_id, "lsp:src/main.rs:process");
+        assert_eq!(result.root.file_path, "src/main.rs");
+    }
+
+    #[test]
+    fn test_resolve_by_file_line_char_picks_narrowest() {
+        let conn = test_db();
+        insert_file(&conn, "src/lib.rs");
+
+        // Outer symbol spans lines 5..30.
+        insert_symbol_at(
+            &conn,
+            "lsp:src/lib.rs:MyStruct::impl",
+            "impl",
+            5,
+            "src/lib.rs",
+            5,
+            0,
+            30,
+            0,
+        );
+
+        // Inner symbol spans lines 10..15 -- narrower.
+        insert_symbol_at(
+            &conn,
+            "lsp:src/lib.rs:MyStruct::new",
+            "new",
+            12,
+            "src/lib.rs",
+            10,
+            0,
+            15,
+            40,
+        );
+
+        // Query at line 12, char 5 -- inside both, but the narrower one should win.
+        let result = get_callgraph(
+            &conn,
+            &CallGraphOptions {
+                symbol: "src/lib.rs:12:5".to_string(),
+                direction: CallGraphDirection::Outbound,
+                max_depth: 1,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            result.root.name, "new",
+            "should resolve to the narrowest enclosing symbol"
+        );
+    }
+
+    #[test]
+    fn test_resolve_by_file_line_char_no_symbol_at_location() {
+        let conn = test_db();
+        insert_file(&conn, "src/empty.rs");
+
+        // Insert a symbol at lines 100..110, but query line 50.
+        insert_symbol_at(
+            &conn,
+            "lsp:src/empty.rs:func_x",
+            "func_x",
+            12,
+            "src/empty.rs",
+            100,
+            0,
+            110,
+            0,
+        );
+
+        // "src/empty.rs:50:0" -- no symbol covers line 50.
+        // try_resolve_by_location returns Ok(None), then resolve_by_name
+        // tries matching "src/empty.rs:50:0" as a name, which also fails.
+        let result = get_callgraph(
+            &conn,
+            &CallGraphOptions {
+                symbol: "src/empty.rs:50:0".to_string(),
+                direction: CallGraphDirection::Outbound,
+                max_depth: 1,
+            },
+        );
+
+        assert!(
+            result.is_err(),
+            "should fail when no symbol at location and name doesn't match"
+        );
+    }
+
+    #[test]
+    fn test_resolve_by_file_line_char_invalid_non_numeric() {
+        let conn = test_db();
+
+        // "src/foo.rs:abc:xyz" has the right colon-count but non-numeric parts.
+        // try_resolve_by_location returns Ok(None) for non-numeric line/char.
+        let result = get_callgraph(
+            &conn,
+            &CallGraphOptions {
+                symbol: "src/foo.rs:abc:xyz".to_string(),
+                direction: CallGraphDirection::Outbound,
+                max_depth: 1,
+            },
+        );
+
+        // Falls through to name-match which also fails.
+        assert!(
+            result.is_err(),
+            "non-numeric line:char should not crash, just fail to resolve"
+        );
+    }
+
+    #[test]
+    fn test_resolve_by_file_line_char_invalid_char_only() {
+        let conn = test_db();
+
+        // "src/foo.rs:10:notanumber" -- line is numeric but char is not.
+        let result = get_callgraph(
+            &conn,
+            &CallGraphOptions {
+                symbol: "src/foo.rs:10:notanumber".to_string(),
+                direction: CallGraphDirection::Outbound,
+                max_depth: 1,
+            },
+        );
+
+        assert!(
+            result.is_err(),
+            "non-numeric char should not crash, just fail to resolve"
+        );
+    }
+
+    #[test]
+    fn test_fetch_edges_both_returns_inbound_and_outbound() {
+        let conn = test_db();
+        insert_file(&conn, "src/p.rs");
+        insert_file(&conn, "src/q.rs");
+        insert_file(&conn, "src/r.rs");
+
+        insert_symbol(&conn, "lsp:src/p.rs:fn_p", "fn_p", 12, "src/p.rs");
+        insert_symbol(&conn, "lsp:src/q.rs:fn_q", "fn_q", 12, "src/q.rs");
+        insert_symbol(&conn, "lsp:src/r.rs:fn_r", "fn_r", 12, "src/r.rs");
+
+        // fn_p -> fn_q -> fn_r
+        insert_edge(&conn, "lsp:src/p.rs:fn_p", "lsp:src/q.rs:fn_q", "lsp");
+        insert_edge(&conn, "lsp:src/q.rs:fn_q", "lsp:src/r.rs:fn_r", "lsp");
+
+        // fetch_edges for fn_q with Both should return:
+        // - outbound: fn_q -> fn_r (fn_q is caller)
+        // - inbound:  fn_p -> fn_q (fn_q is callee)
+        let edges = fetch_edges(&conn, "lsp:src/q.rs:fn_q", CallGraphDirection::Both, 1).unwrap();
+
+        assert_eq!(
+            edges.len(),
+            2,
+            "Both should return inbound + outbound edges"
+        );
+
+        let outbound = edges
+            .iter()
+            .find(|e| e.caller.name == "fn_q" && e.callee.name == "fn_r")
+            .expect("missing outbound edge fn_q -> fn_r");
+        assert_eq!(outbound.depth, 1);
+
+        let inbound = edges
+            .iter()
+            .find(|e| e.caller.name == "fn_p" && e.callee.name == "fn_q")
+            .expect("missing inbound edge fn_p -> fn_q");
+        assert_eq!(inbound.depth, 1);
+    }
+
+    #[test]
+    fn test_fetch_edges_both_self_loop() {
+        let conn = test_db();
+        insert_file(&conn, "src/s.rs");
+
+        insert_symbol(&conn, "lsp:src/s.rs:fn_s", "fn_s", 12, "src/s.rs");
+
+        // Self-loop: fn_s calls itself.
+        insert_edge(&conn, "lsp:src/s.rs:fn_s", "lsp:src/s.rs:fn_s", "lsp");
+
+        // With Both, the self-loop appears on both the outbound and inbound
+        // queries, so fetch_edges returns it twice (once per direction query).
+        let edges = fetch_edges(&conn, "lsp:src/s.rs:fn_s", CallGraphDirection::Both, 1).unwrap();
+
+        assert_eq!(
+            edges.len(),
+            2,
+            "self-loop should appear in both outbound and inbound results"
+        );
+        for edge in &edges {
+            assert_eq!(edge.caller.name, "fn_s");
+            assert_eq!(edge.callee.name, "fn_s");
+        }
     }
 }

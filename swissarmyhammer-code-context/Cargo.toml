@@ -11,6 +11,7 @@ homepage.workspace = true
 [dependencies]
 swissarmyhammer-leader-election = { workspace = true }
 swissarmyhammer-directory = { workspace = true }
+swissarmyhammer-project-detection = { workspace = true }
 rusqlite = { workspace = true }
 tracing = { workspace = true }
 thiserror = { workspace = true }
@@ -25,6 +26,7 @@ lsp-types = { workspace = true }
 serde_json = { workspace = true }
 model-embedding = { workspace = true }
 tree-sitter = { workspace = true }
+once_cell = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

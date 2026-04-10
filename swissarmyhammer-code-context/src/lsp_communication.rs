@@ -3,6 +3,7 @@
 //! Handles JSON-RPC protocol with LSP server processes.
 //! Sends requests for symbols and collects results for database persistence.
 
+use crate::lsp_indexer::FlatSymbol;
 use rusqlite::Connection;
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Write};
@@ -186,22 +187,32 @@ impl LspJsonRpcClient {
     /// arrives within that window an `LspError` is returned instead of
     /// blocking indefinitely.
     pub fn send_request(&mut self, method: &str, params: Value) -> Result<Value, CodeContextError> {
-        // Format JSON-RPC 2.0 request
+        let expected_id = self.request_id;
+        self.request_id += 1;
+
+        self.write_jsonrpc_request(method, params, expected_id)?;
+        debug!("Sent LSP request: {} (id={})", method, expected_id);
+
+        self.read_matching_response(method, expected_id)
+    }
+
+    /// Format and write a JSON-RPC 2.0 request with Content-Length framing.
+    fn write_jsonrpc_request(
+        &mut self,
+        method: &str,
+        params: Value,
+        id: u32,
+    ) -> Result<(), CodeContextError> {
         let request = json!({
             "jsonrpc": "2.0",
             "method": method,
             "params": params,
-            "id": self.request_id,
+            "id": id,
         });
 
-        let expected_id = self.request_id;
-        self.request_id += 1;
-
-        // Encode with Content-Length header
         let json_str = request.to_string();
         let msg = format!("Content-Length: {}\r\n\r\n{}", json_str.len(), json_str);
 
-        // Write request
         self.stdin
             .write_all(msg.as_bytes())
             .map_err(|e| CodeContextError::LspError(format!("write failed: {}", e)))?;
@@ -209,15 +220,21 @@ impl LspJsonRpcClient {
             .flush()
             .map_err(|e| CodeContextError::LspError(format!("flush failed: {}", e)))?;
 
-        debug!("Sent LSP request: {} (id={})", method, expected_id);
+        Ok(())
+    }
 
-        // Read response — loop to skip notifications (no "id" field).
-        // Each iteration polls the fd for readability before attempting a
-        // blocking read, enforcing LSP_REQUEST_TIMEOUT across the entire loop.
+    /// Read JSON-RPC messages until one with a matching `id` arrives.
+    ///
+    /// Notifications (no `id`) and responses with mismatched IDs are skipped.
+    /// The entire read loop is bounded by [`LSP_REQUEST_TIMEOUT`].
+    fn read_matching_response(
+        &mut self,
+        method: &str,
+        expected_id: u32,
+    ) -> Result<Value, CodeContextError> {
         let deadline = Instant::now() + LSP_REQUEST_TIMEOUT;
 
         loop {
-            // Wait for data to be available, respecting the deadline
             self.wait_for_readable(deadline).map_err(|_| {
                 CodeContextError::LspError(format!(
                     "LSP request '{}' (id={}) timed out after {}s",
@@ -229,34 +246,9 @@ impl LspJsonRpcClient {
 
             let response = read_jsonrpc_response(&mut self.reader)?;
 
-            // Notifications have no "id" field — skip them
-            if response.get("id").is_none() {
-                trace!(
-                    "Skipping LSP notification: {}",
-                    response
-                        .get("method")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("unknown")
-                );
-                continue;
-            }
-
-            // Verify response ID matches
-            if let Some(id) = response.get("id") {
-                if id.as_u64() == Some(expected_id as u64) {
-                    return Ok(response);
-                }
-                // Server-initiated requests or stale responses — skip and keep reading
-                warn!(
-                    "Unexpected response id: expected {}, got {} (method: {}). Skipping.",
-                    expected_id,
-                    id,
-                    response
-                        .get("method")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("none")
-                );
-                continue;
+            match classify_response(&response, expected_id) {
+                ResponseMatch::Match => return Ok(response),
+                ResponseMatch::Notification | ResponseMatch::Mismatch => continue,
             }
         }
     }
@@ -594,62 +586,13 @@ impl LspJsonRpcClient {
 
         let mut all_edges = Vec::new();
 
-        // For each callable symbol, prepare call hierarchy and get outgoing calls
         for sym in &flat {
             use lsp_types::SymbolKind;
             match sym.kind {
                 SymbolKind::FUNCTION | SymbolKind::METHOD | SymbolKind::CONSTRUCTOR => {}
                 _ => continue,
             }
-
-            // Prepare call hierarchy at the symbol's position
-            let prepare_params = json!({
-                "textDocument": { "uri": &uri },
-                "position": { "line": sym.start_line, "character": sym.start_char }
-            });
-
-            let prepare_response =
-                match self.send_request("textDocument/prepareCallHierarchy", prepare_params) {
-                    Ok(r) => r,
-                    Err(_) => continue, // Server may not support call hierarchy
-                };
-
-            let items = parse_call_hierarchy_items(&prepare_response)?;
-            if items.is_empty() {
-                continue;
-            }
-
-            // Get outgoing calls for the first (primary) item
-            let outgoing_params = json!({
-                "item": serde_json::to_value(&items[0])
-                    .map_err(|e| CodeContextError::LspError(format!("serialize item: {}", e)))?
-            });
-
-            let outgoing_response =
-                match self.send_request("callHierarchy/outgoingCalls", outgoing_params) {
-                    Ok(r) => r,
-                    Err(_) => continue,
-                };
-
-            let outgoing_calls = parse_outgoing_calls(&outgoing_response)?;
-
-            for call in &outgoing_calls {
-                let callee_file = uri_to_relative_path(call.to.uri.as_str(), file_path);
-                let callee_qpath = call.to.name.clone();
-                let callee_id = format!("lsp:{}:{}", callee_file, callee_qpath);
-
-                let from_ranges_json =
-                    serde_json::to_string(&call.from_ranges).unwrap_or_else(|_| "[]".to_string());
-
-                all_edges.push(CallEdge {
-                    caller_id: sym.id.clone(),
-                    callee_id,
-                    caller_file: relative_path.to_string(),
-                    callee_file,
-                    from_ranges: from_ranges_json,
-                    source: "lsp".to_string(),
-                });
-            }
+            self.collect_edges_for_symbol(&uri, sym, file_path, relative_path, &mut all_edges)?;
         }
 
         debug!(
@@ -672,6 +615,61 @@ impl LspJsonRpcClient {
             return Ok(0);
         }
         write_edges(conn, relative_path, &edges)
+    }
+
+    /// Collect outgoing call edges for a single callable symbol.
+    fn collect_edges_for_symbol(
+        &mut self,
+        uri: &str,
+        sym: &FlatSymbol,
+        file_path: &Path,
+        relative_path: &str,
+        edges: &mut Vec<CallEdge>,
+    ) -> Result<(), CodeContextError> {
+        let prepare_params = json!({
+            "textDocument": { "uri": uri },
+            "position": { "line": sym.start_line, "character": sym.start_char }
+        });
+
+        let prepare_response =
+            match self.send_request("textDocument/prepareCallHierarchy", prepare_params) {
+                Ok(r) => r,
+                Err(_) => return Ok(()),
+            };
+
+        let items = parse_call_hierarchy_items(&prepare_response)?;
+        if items.is_empty() {
+            return Ok(());
+        }
+
+        let outgoing_params = json!({
+            "item": serde_json::to_value(&items[0])
+                .map_err(|e| CodeContextError::LspError(format!("serialize item: {}", e)))?
+        });
+
+        let outgoing_response =
+            match self.send_request("callHierarchy/outgoingCalls", outgoing_params) {
+                Ok(r) => r,
+                Err(_) => return Ok(()),
+            };
+
+        for call in &parse_outgoing_calls(&outgoing_response)? {
+            let callee_file = uri_to_relative_path(call.to.uri.as_str(), file_path);
+            let callee_id = format!("lsp:{}:{}", callee_file, call.to.name);
+            let from_ranges_json =
+                serde_json::to_string(&call.from_ranges).unwrap_or_else(|_| "[]".to_string());
+
+            edges.push(CallEdge {
+                caller_id: sym.id.clone(),
+                callee_id,
+                caller_file: relative_path.to_string(),
+                callee_file,
+                from_ranges: from_ranges_json,
+                source: "lsp".to_string(),
+            });
+        }
+
+        Ok(())
     }
 }
 
@@ -780,6 +778,45 @@ fn poll_fd(fd: std::os::unix::io::RawFd, timeout_ms: i32) -> i32 {
     // non-negative timeout. The fd is owned by ChildStdout which outlives
     // this call.
     unsafe { poll(&mut pfd as *mut PollFd, 1, timeout_ms) }
+}
+
+/// Classification of an incoming JSON-RPC message relative to an expected ID.
+enum ResponseMatch {
+    /// The response `id` matches the expected ID.
+    Match,
+    /// A notification (no `id` field) — should be skipped.
+    Notification,
+    /// A response with a mismatched `id` — should be skipped.
+    Mismatch,
+}
+
+/// Classify a JSON-RPC response as matching, a notification, or mismatched.
+fn classify_response(response: &Value, expected_id: u32) -> ResponseMatch {
+    match response.get("id") {
+        None => {
+            trace!(
+                "Skipping LSP notification: {}",
+                response
+                    .get("method")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown")
+            );
+            ResponseMatch::Notification
+        }
+        Some(id) if id.as_u64() == Some(expected_id as u64) => ResponseMatch::Match,
+        Some(id) => {
+            warn!(
+                "Unexpected response id: expected {}, got {} (method: {}). Skipping.",
+                expected_id,
+                id,
+                response
+                    .get("method")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("none")
+            );
+            ResponseMatch::Mismatch
+        }
+    }
 }
 
 /// Read a single JSON-RPC message from a reader using Content-Length framing.
@@ -2270,6 +2307,328 @@ send_msg({"jsonrpc": "2.0", "id": req_id, "result": {"capabilities": {}}})
         let info = result.unwrap();
         assert_eq!(info.symbol_count, 0);
         assert!(info.error.is_some(), "error field should be set on failure");
+
+        let _ = child.wait();
+    }
+
+    // ---------------------------------------------------------------------------
+    // Coverage gap tests: read_jsonrpc_response error‐path assertions
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn test_read_jsonrpc_response_eof_error_message_content() {
+        // Verify the error message specifically mentions "EOF" or "header".
+        let input: &[u8] = b"";
+        let mut reader = std::io::BufReader::new(input);
+        let err = read_jsonrpc_response(&mut reader).unwrap_err().to_string();
+        assert!(
+            err.contains("EOF"),
+            "error should mention EOF, got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_read_jsonrpc_response_headers_then_eof_before_blank_line() {
+        // Headers are present but stream ends before the blank separator line.
+        // The read_line call returns 0 (EOF) inside the header loop.
+        let input = b"Content-Length: 10\r\n";
+        let mut reader = std::io::BufReader::new(&input[..]);
+        let result = read_jsonrpc_response(&mut reader);
+        assert!(result.is_err(), "expected error when EOF before blank line");
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("EOF"),
+            "error should mention EOF, got: {}",
+            msg
+        );
+    }
+
+    #[test]
+    fn test_read_jsonrpc_response_missing_content_length_error_message() {
+        // Only non-Content-Length headers followed by blank line.
+        // Hits the "missing Content-Length header" error path.
+        let input = b"X-Custom: something\r\n\r\n";
+        let mut reader = std::io::BufReader::new(&input[..]);
+        let result = read_jsonrpc_response(&mut reader);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("Content-Length"),
+            "error should mention Content-Length, got: {}",
+            msg
+        );
+    }
+
+    #[test]
+    fn test_read_jsonrpc_response_content_length_float() {
+        // Content-Length with a float value should fail integer parsing.
+        let input = b"Content-Length: 3.14\r\n\r\n";
+        let mut reader = std::io::BufReader::new(&input[..]);
+        let result = read_jsonrpc_response(&mut reader);
+        assert!(result.is_err(), "expected error for float Content-Length");
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("Content-Length"),
+            "error should mention Content-Length, got: {}",
+            msg
+        );
+    }
+
+    #[test]
+    fn test_read_jsonrpc_response_truncated_body_error_message() {
+        // Content-Length claims 200 bytes but only 5 are available.
+        // Verifies the "read body" error path.
+        let input = b"Content-Length: 200\r\n\r\nhello";
+        let mut reader = std::io::BufReader::new(&input[..]);
+        let result = read_jsonrpc_response(&mut reader);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("body") || msg.contains("read"),
+            "error should mention body read failure, got: {}",
+            msg
+        );
+    }
+
+    #[test]
+    fn test_read_jsonrpc_response_json_decode_error_message() {
+        // Body is valid bytes but not valid JSON.
+        // Verifies the "json decode" error path.
+        let body = b"{invalid json!!!}";
+        let header = format!("Content-Length: {}\r\n\r\n", body.len());
+        let mut data = header.into_bytes();
+        data.extend_from_slice(body);
+        let mut reader = std::io::BufReader::new(&data[..]);
+        let result = read_jsonrpc_response(&mut reader);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("json decode"),
+            "error should mention json decode, got: {}",
+            msg
+        );
+    }
+
+    // ---------------------------------------------------------------------------
+    // Coverage gap tests: uri_to_relative_path no common ancestor
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn test_uri_to_relative_path_empty_reference_path() {
+        // When reference_path has no parent (empty path), the function falls
+        // through to returning the raw path string.
+        let ref_path = Path::new("");
+        let result = uri_to_relative_path("file:///some/project/file.rs", ref_path);
+        assert_eq!(result, "/some/project/file.rs");
+    }
+
+    #[test]
+    fn test_uri_to_relative_path_relative_uri_no_common_ancestor() {
+        // A relative URI path cannot be stripped by any absolute ancestor,
+        // so the ancestor walk exhausts to root and falls through.
+        let ref_path = Path::new("/workspace/src/main.rs");
+        let result = uri_to_relative_path("relative/path/file.rs", ref_path);
+        assert_eq!(result, "relative/path/file.rs");
+    }
+
+    // ---------------------------------------------------------------------------
+    // Coverage gap tests: send_request write-failure
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn test_send_request_write_failure_on_dead_process() {
+        // When the child process exits immediately, writing to its stdin pipe
+        // should fail, producing an LspError with "write failed" or "flush failed".
+        let mut child = std::process::Command::new("python3")
+            .arg("-c")
+            .arg("import sys; sys.exit(0)")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("failed to spawn");
+
+        let stdin = child.stdin.take().unwrap();
+        let stdout = child.stdout.take().unwrap();
+
+        // Wait for the process to fully exit so the pipe is broken
+        let _ = child.wait();
+        std::thread::sleep(Duration::from_millis(50));
+
+        let mut client = LspJsonRpcClient::new(stdin, stdout);
+        let result = client.send_request("test/method", json!({}));
+        assert!(result.is_err(), "write to dead process should fail");
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("write") || msg.contains("flush") || msg.contains("Broken pipe"),
+            "error should mention write/flush failure, got: {}",
+            msg
+        );
+    }
+
+    // ---------------------------------------------------------------------------
+    // Coverage gap tests: send_notification write/flush failure
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn test_send_notification_write_failure_on_dead_process() {
+        // When the child process exits immediately, send_notification should
+        // fail on write_all or flush with an LspError.
+        let mut child = std::process::Command::new("python3")
+            .arg("-c")
+            .arg("import sys; sys.exit(0)")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("failed to spawn");
+
+        let stdin = child.stdin.take().unwrap();
+        let stdout = child.stdout.take().unwrap();
+
+        // Wait for process to exit so pipe is broken
+        let _ = child.wait();
+        std::thread::sleep(Duration::from_millis(50));
+
+        let mut client = LspJsonRpcClient::new(stdin, stdout);
+        let result = client.send_notification("textDocument/didOpen", json!({}));
+        assert!(result.is_err(), "notification to dead process should fail");
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("write") || msg.contains("flush") || msg.contains("notification"),
+            "error should mention write/flush failure, got: {}",
+            msg
+        );
+    }
+
+    // ---------------------------------------------------------------------------
+    // Coverage gap tests: send_request notification-skip without method field
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn test_send_request_skips_notification_without_method_field() {
+        // When the server sends a notification that has no "method" field,
+        // send_request should still skip it (hitting the unwrap_or("unknown")
+        // fallback) and return the correct response.
+        let script = r#"
+import sys, json
+
+def read_msg():
+    cl = None
+    while True:
+        line = sys.stdin.readline()
+        if not line: return None
+        line = line.strip()
+        if not line: break
+        if line.startswith('Content-Length:'):
+            cl = int(line.split(':', 1)[1].strip())
+    if cl is None: return None
+    body = sys.stdin.read(cl)
+    return json.loads(body)
+
+def send_msg(obj):
+    s = json.dumps(obj)
+    sys.stdout.write(f'Content-Length: {len(s)}\r\n\r\n{s}')
+    sys.stdout.flush()
+
+# Read the request
+req = read_msg()
+
+# Send a notification without a "method" field (unusual but possible)
+send_msg({"jsonrpc": "2.0", "params": {"data": "noise"}})
+
+# Then send the actual response
+send_msg({"jsonrpc": "2.0", "id": req["id"], "result": {"ok": True}})
+"#;
+
+        let mut child = std::process::Command::new("python3")
+            .arg("-c")
+            .arg(script)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("failed to spawn python3");
+
+        let stdin = child.stdin.take().unwrap();
+        let stdout = child.stdout.take().unwrap();
+
+        let mut client = LspJsonRpcClient::new(stdin, stdout);
+        let result = client.send_request("test/method", json!({}));
+        assert!(
+            result.is_ok(),
+            "should skip notification without method and return response: {:?}",
+            result
+        );
+        let response = result.unwrap();
+        assert_eq!(response["result"]["ok"], true);
+
+        let _ = child.wait();
+    }
+
+    // ---------------------------------------------------------------------------
+    // Coverage gap tests: send_request wrong-ID response without method field
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn test_send_request_skips_wrong_id_without_method_field() {
+        // When the server sends a response with a wrong ID and no "method"
+        // field, send_request should skip it (hitting the unwrap_or("none")
+        // fallback in the warn!) and eventually return the correct response.
+        let script = r#"
+import sys, json
+
+def read_msg():
+    cl = None
+    while True:
+        line = sys.stdin.readline()
+        if not line: return None
+        line = line.strip()
+        if not line: break
+        if line.startswith('Content-Length:'):
+            cl = int(line.split(':', 1)[1].strip())
+    if cl is None: return None
+    body = sys.stdin.read(cl)
+    return json.loads(body)
+
+def send_msg(obj):
+    s = json.dumps(obj)
+    sys.stdout.write(f'Content-Length: {len(s)}\r\n\r\n{s}')
+    sys.stdout.flush()
+
+# Read the request
+req = read_msg()
+req_id = req.get("id", 1)
+
+# Send response with wrong ID and NO method field
+send_msg({"jsonrpc": "2.0", "id": 9999, "result": {"stale": True}})
+
+# Then send the correct response
+send_msg({"jsonrpc": "2.0", "id": req_id, "result": {"correct": True}})
+"#;
+
+        let mut child = std::process::Command::new("python3")
+            .arg("-c")
+            .arg(script)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("failed to spawn python3");
+
+        let stdin = child.stdin.take().unwrap();
+        let stdout = child.stdout.take().unwrap();
+
+        let mut client = LspJsonRpcClient::new(stdin, stdout);
+        let result = client.send_request("test/method", json!({}));
+        assert!(
+            result.is_ok(),
+            "should skip wrong-ID response and return correct one: {:?}",
+            result
+        );
+        let response = result.unwrap();
+        assert_eq!(response["result"]["correct"], true);
 
         let _ = child.wait();
     }

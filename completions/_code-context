@@ -1,0 +1,2005 @@
+#compdef code-context
+
+autoload -U is-at-least
+
+_code-context() {
+    typeset -A opt_args
+    typeset -a _arguments_options
+    local ret=1
+
+    if is-at-least 5.2; then
+        _arguments_options=(-s -S -C)
+    else
+        _arguments_options=(-s -C)
+    fi
+
+    local context curcontext="$curcontext" state line
+    _arguments "${_arguments_options[@]}" : \
+'-d[Enable debug output to stderr]' \
+'--debug[Enable debug output to stderr]' \
+'-j[Output results as JSON (for operation commands)]' \
+'--json[Output results as JSON (for operation commands)]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+'-V[Print version]' \
+'--version[Print version]' \
+":: :_code-context_commands" \
+"*::: :->code-context" \
+&& ret=0
+    case $state in
+    (code-context)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:code-context-command-$line[1]:"
+        case $line[1] in
+            (serve)
+_arguments "${_arguments_options[@]}" : \
+'-d[Enable debug output to stderr]' \
+'--debug[Enable debug output to stderr]' \
+'-j[Output results as JSON (for operation commands)]' \
+'--json[Output results as JSON (for operation commands)]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(init)
+_arguments "${_arguments_options[@]}" : \
+'-d[Enable debug output to stderr]' \
+'--debug[Enable debug output to stderr]' \
+'-j[Output results as JSON (for operation commands)]' \
+'--json[Output results as JSON (for operation commands)]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+'::target -- Where to install the server configuration:((project\:"Project-level settings (.claude/settings.json)"
+local\:"Local project settings, not committed (.claude/settings.local.json)"
+user\:"User-level settings (~/.claude/settings.json)"))' \
+&& ret=0
+;;
+(deinit)
+_arguments "${_arguments_options[@]}" : \
+'-d[Enable debug output to stderr]' \
+'--debug[Enable debug output to stderr]' \
+'-j[Output results as JSON (for operation commands)]' \
+'--json[Output results as JSON (for operation commands)]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+'::target -- Where to remove the server configuration from:((project\:"Project-level settings (.claude/settings.json)"
+local\:"Local project settings, not committed (.claude/settings.local.json)"
+user\:"User-level settings (~/.claude/settings.json)"))' \
+&& ret=0
+;;
+(doctor)
+_arguments "${_arguments_options[@]}" : \
+'-v[Show detailed output including fix suggestions]' \
+'--verbose[Show detailed output including fix suggestions]' \
+'-d[Enable debug output to stderr]' \
+'--debug[Enable debug output to stderr]' \
+'-j[Output results as JSON (for operation commands)]' \
+'--json[Output results as JSON (for operation commands)]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(skill)
+_arguments "${_arguments_options[@]}" : \
+'-d[Enable debug output to stderr]' \
+'--debug[Enable debug output to stderr]' \
+'-j[Output results as JSON (for operation commands)]' \
+'--json[Output results as JSON (for operation commands)]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(get)
+_arguments "${_arguments_options[@]}" : \
+'-d[Enable debug output to stderr]' \
+'--debug[Enable debug output to stderr]' \
+'-j[Output results as JSON (for operation commands)]' \
+'--json[Output results as JSON (for operation commands)]' \
+'-h[Print help]' \
+'--help[Print help]' \
+":: :_code-context__get_commands" \
+"*::: :->get" \
+&& ret=0
+
+    case $state in
+    (get)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:code-context-get-command-$line[1]:"
+        case $line[1] in
+            (symbol)
+_arguments "${_arguments_options[@]}" : \
+'--query=[Symbol name or qualified path to search for]:QUERY:_default' \
+'--max-results=[Maximum number of results to return]:MAX_RESULTS:_default' \
+'-d[Enable debug output to stderr]' \
+'--debug[Enable debug output to stderr]' \
+'-j[Output results as JSON (for operation commands)]' \
+'--json[Output results as JSON (for operation commands)]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(callgraph)
+_arguments "${_arguments_options[@]}" : \
+'--symbol=[Symbol identifier (name or file\:line\:char locator)]:SYMBOL:_default' \
+'--direction=[Traversal direction\: inbound, outbound, or both]:DIRECTION:_default' \
+'--max-depth=[Maximum traversal depth (1-5)]:MAX_DEPTH:_default' \
+'-d[Enable debug output to stderr]' \
+'--debug[Enable debug output to stderr]' \
+'-j[Output results as JSON (for operation commands)]' \
+'--json[Output results as JSON (for operation commands)]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(blastradius)
+_arguments "${_arguments_options[@]}" : \
+'--file-path=[File path to analyze]:FILE_PATH:_default' \
+'--symbol=[Optional symbol name to narrow the starting set]:SYMBOL:_default' \
+'--max-hops=[Maximum number of hops to follow (1-10)]:MAX_HOPS:_default' \
+'-d[Enable debug output to stderr]' \
+'--debug[Enable debug output to stderr]' \
+'-j[Output results as JSON (for operation commands)]' \
+'--json[Output results as JSON (for operation commands)]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(status)
+_arguments "${_arguments_options[@]}" : \
+'-d[Enable debug output to stderr]' \
+'--debug[Enable debug output to stderr]' \
+'-j[Output results as JSON (for operation commands)]' \
+'--json[Output results as JSON (for operation commands)]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(definition)
+_arguments "${_arguments_options[@]}" : \
+'--file-path=[Path to the file containing the symbol]:FILE_PATH:_default' \
+'--line=[Zero-based line number of the symbol]:LINE:_default' \
+'--character=[Zero-based character offset within the line]:CHARACTER:_default' \
+'-d[Enable debug output to stderr]' \
+'--debug[Enable debug output to stderr]' \
+'-j[Output results as JSON (for operation commands)]' \
+'--json[Output results as JSON (for operation commands)]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(type-definition)
+_arguments "${_arguments_options[@]}" : \
+'--file-path=[Path to the file containing the symbol]:FILE_PATH:_default' \
+'--line=[Zero-based line number of the symbol]:LINE:_default' \
+'--character=[Zero-based character offset within the line]:CHARACTER:_default' \
+'-d[Enable debug output to stderr]' \
+'--debug[Enable debug output to stderr]' \
+'-j[Output results as JSON (for operation commands)]' \
+'--json[Output results as JSON (for operation commands)]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(hover)
+_arguments "${_arguments_options[@]}" : \
+'--file-path=[Path to the file containing the symbol]:FILE_PATH:_default' \
+'--line=[Zero-based line number of the symbol]:LINE:_default' \
+'--character=[Zero-based character offset within the line]:CHARACTER:_default' \
+'-d[Enable debug output to stderr]' \
+'--debug[Enable debug output to stderr]' \
+'-j[Output results as JSON (for operation commands)]' \
+'--json[Output results as JSON (for operation commands)]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(references)
+_arguments "${_arguments_options[@]}" : \
+'--file-path=[Path to the file containing the symbol]:FILE_PATH:_default' \
+'--line=[Zero-based line number of the symbol]:LINE:_default' \
+'--character=[Zero-based character offset within the line]:CHARACTER:_default' \
+'--include-declaration=[Whether to include the declaration itself in results]:INCLUDE_DECLARATION:(true false)' \
+'--max-results=[Maximum number of references to return]:MAX_RESULTS:_default' \
+'-d[Enable debug output to stderr]' \
+'--debug[Enable debug output to stderr]' \
+'-j[Output results as JSON (for operation commands)]' \
+'--json[Output results as JSON (for operation commands)]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(implementations)
+_arguments "${_arguments_options[@]}" : \
+'--file-path=[Path to the file containing the trait/interface symbol]:FILE_PATH:_default' \
+'--line=[Zero-based line number of the symbol]:LINE:_default' \
+'--character=[Zero-based character offset within the line]:CHARACTER:_default' \
+'--max-results=[Maximum number of implementation locations to return]:MAX_RESULTS:_default' \
+'-d[Enable debug output to stderr]' \
+'--debug[Enable debug output to stderr]' \
+'-j[Output results as JSON (for operation commands)]' \
+'--json[Output results as JSON (for operation commands)]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(code-actions)
+_arguments "${_arguments_options[@]}" : \
+'--file-path=[Path to the file to get code actions for]:FILE_PATH:_default' \
+'--start-line=[Zero-based start line of the range]:START_LINE:_default' \
+'--start-character=[Zero-based start character offset]:START_CHARACTER:_default' \
+'--end-line=[Zero-based end line of the range]:END_LINE:_default' \
+'--end-character=[Zero-based end character offset]:END_CHARACTER:_default' \
+'*--filter-kind=[Filter for code action kinds (e.g. quickfix, refactor, source)]:FILTER_KIND:_default' \
+'-d[Enable debug output to stderr]' \
+'--debug[Enable debug output to stderr]' \
+'-j[Output results as JSON (for operation commands)]' \
+'--json[Output results as JSON (for operation commands)]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(inbound-calls)
+_arguments "${_arguments_options[@]}" : \
+'--file-path=[Path to the file containing the target symbol]:FILE_PATH:_default' \
+'--line=[Zero-based line number of the target symbol]:LINE:_default' \
+'--character=[Zero-based character offset within the line]:CHARACTER:_default' \
+'--depth=[Recursive depth for caller traversal (1-5)]:DEPTH:_default' \
+'-d[Enable debug output to stderr]' \
+'--debug[Enable debug output to stderr]' \
+'-j[Output results as JSON (for operation commands)]' \
+'--json[Output results as JSON (for operation commands)]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(rename-edits)
+_arguments "${_arguments_options[@]}" : \
+'--file-path=[Path to the file containing the symbol to rename]:FILE_PATH:_default' \
+'--line=[Zero-based line number of the symbol]:LINE:_default' \
+'--character=[Zero-based character offset within the line]:CHARACTER:_default' \
+'--new-name=[The new name for the symbol]:NEW_NAME:_default' \
+'-d[Enable debug output to stderr]' \
+'--debug[Enable debug output to stderr]' \
+'-j[Output results as JSON (for operation commands)]' \
+'--json[Output results as JSON (for operation commands)]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(diagnostics)
+_arguments "${_arguments_options[@]}" : \
+'--file-path=[Path to the file to get diagnostics for]:FILE_PATH:_default' \
+'--severity-filter=[Only return diagnostics at or above this severity (error, warning, info, hint)]:SEVERITY_FILTER:_default' \
+'-d[Enable debug output to stderr]' \
+'--debug[Enable debug output to stderr]' \
+'-j[Output results as JSON (for operation commands)]' \
+'--json[Output results as JSON (for operation commands)]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+":: :_code-context__get__help_commands" \
+"*::: :->help" \
+&& ret=0
+
+    case $state in
+    (help)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:code-context-get-help-command-$line[1]:"
+        case $line[1] in
+            (symbol)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(callgraph)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(blastradius)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(status)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(definition)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(type-definition)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(hover)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(references)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(implementations)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(code-actions)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(inbound-calls)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(rename-edits)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(diagnostics)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+        esac
+    ;;
+esac
+;;
+(search)
+_arguments "${_arguments_options[@]}" : \
+'-d[Enable debug output to stderr]' \
+'--debug[Enable debug output to stderr]' \
+'-j[Output results as JSON (for operation commands)]' \
+'--json[Output results as JSON (for operation commands)]' \
+'-h[Print help]' \
+'--help[Print help]' \
+":: :_code-context__search_commands" \
+"*::: :->search" \
+&& ret=0
+
+    case $state in
+    (search)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:code-context-search-command-$line[1]:"
+        case $line[1] in
+            (symbol)
+_arguments "${_arguments_options[@]}" : \
+'--query=[Text to fuzzy-match against symbol names]:QUERY:_default' \
+'--kind=[Filter by symbol kind (function, method, struct, class, etc.)]:KIND:_default' \
+'--max-results=[Maximum number of results to return]:MAX_RESULTS:_default' \
+'-d[Enable debug output to stderr]' \
+'--debug[Enable debug output to stderr]' \
+'-j[Output results as JSON (for operation commands)]' \
+'--json[Output results as JSON (for operation commands)]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(code)
+_arguments "${_arguments_options[@]}" : \
+'--query=[Natural language query for semantically similar code]:QUERY:_default' \
+'--top-k=[Maximum number of results to return]:TOP_K:_default' \
+'--min-similarity=[Minimum cosine similarity threshold (0.0-1.0)]:MIN_SIMILARITY:_default' \
+'--file-pattern=[Only search chunks from files matching this path pattern]:FILE_PATTERN:_default' \
+'*--language=[Only search chunks from files with these extensions]:LANGUAGE:_default' \
+'-d[Enable debug output to stderr]' \
+'--debug[Enable debug output to stderr]' \
+'-j[Output results as JSON (for operation commands)]' \
+'--json[Output results as JSON (for operation commands)]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(workspace-symbol)
+_arguments "${_arguments_options[@]}" : \
+'--query=[Symbol name or text to search for across the workspace]:QUERY:_default' \
+'--max-results=[Maximum number of results to return]:MAX_RESULTS:_default' \
+'-d[Enable debug output to stderr]' \
+'--debug[Enable debug output to stderr]' \
+'-j[Output results as JSON (for operation commands)]' \
+'--json[Output results as JSON (for operation commands)]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+":: :_code-context__search__help_commands" \
+"*::: :->help" \
+&& ret=0
+
+    case $state in
+    (help)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:code-context-search-help-command-$line[1]:"
+        case $line[1] in
+            (symbol)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(code)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(workspace-symbol)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+        esac
+    ;;
+esac
+;;
+(list)
+_arguments "${_arguments_options[@]}" : \
+'-d[Enable debug output to stderr]' \
+'--debug[Enable debug output to stderr]' \
+'-j[Output results as JSON (for operation commands)]' \
+'--json[Output results as JSON (for operation commands)]' \
+'-h[Print help]' \
+'--help[Print help]' \
+":: :_code-context__list_commands" \
+"*::: :->list" \
+&& ret=0
+
+    case $state in
+    (list)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:code-context-list-command-$line[1]:"
+        case $line[1] in
+            (symbols)
+_arguments "${_arguments_options[@]}" : \
+'--file-path=[Path to the file to list symbols from]:FILE_PATH:_default' \
+'-d[Enable debug output to stderr]' \
+'--debug[Enable debug output to stderr]' \
+'-j[Output results as JSON (for operation commands)]' \
+'--json[Output results as JSON (for operation commands)]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+":: :_code-context__list__help_commands" \
+"*::: :->help" \
+&& ret=0
+
+    case $state in
+    (help)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:code-context-list-help-command-$line[1]:"
+        case $line[1] in
+            (symbols)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+        esac
+    ;;
+esac
+;;
+(grep)
+_arguments "${_arguments_options[@]}" : \
+'-d[Enable debug output to stderr]' \
+'--debug[Enable debug output to stderr]' \
+'-j[Output results as JSON (for operation commands)]' \
+'--json[Output results as JSON (for operation commands)]' \
+'-h[Print help]' \
+'--help[Print help]' \
+":: :_code-context__grep_commands" \
+"*::: :->grep" \
+&& ret=0
+
+    case $state in
+    (grep)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:code-context-grep-command-$line[1]:"
+        case $line[1] in
+            (code)
+_arguments "${_arguments_options[@]}" : \
+'--pattern=[Regex pattern to search for]:PATTERN:_default' \
+'*--language=[Only search chunks from files with these extensions (e.g. rs, py)]:LANGUAGE:_default' \
+'*--files=[Only search chunks from these specific file paths]:FILES:_default' \
+'--max-results=[Maximum number of matching chunks to return]:MAX_RESULTS:_default' \
+'-d[Enable debug output to stderr]' \
+'--debug[Enable debug output to stderr]' \
+'-j[Output results as JSON (for operation commands)]' \
+'--json[Output results as JSON (for operation commands)]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+":: :_code-context__grep__help_commands" \
+"*::: :->help" \
+&& ret=0
+
+    case $state in
+    (help)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:code-context-grep-help-command-$line[1]:"
+        case $line[1] in
+            (code)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+        esac
+    ;;
+esac
+;;
+(query)
+_arguments "${_arguments_options[@]}" : \
+'-d[Enable debug output to stderr]' \
+'--debug[Enable debug output to stderr]' \
+'-j[Output results as JSON (for operation commands)]' \
+'--json[Output results as JSON (for operation commands)]' \
+'-h[Print help]' \
+'--help[Print help]' \
+":: :_code-context__query_commands" \
+"*::: :->query" \
+&& ret=0
+
+    case $state in
+    (query)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:code-context-query-command-$line[1]:"
+        case $line[1] in
+            (ast)
+_arguments "${_arguments_options[@]}" : \
+'--query=[Tree-sitter S-expression query pattern]:QUERY:_default' \
+'--language=[Language to parse files as (e.g. rust, python, typescript)]:LANGUAGE:_default' \
+'*--files=[File paths to query against]:FILES:_default' \
+'--max-results=[Maximum number of matches to return]:MAX_RESULTS:_default' \
+'-d[Enable debug output to stderr]' \
+'--debug[Enable debug output to stderr]' \
+'-j[Output results as JSON (for operation commands)]' \
+'--json[Output results as JSON (for operation commands)]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+":: :_code-context__query__help_commands" \
+"*::: :->help" \
+&& ret=0
+
+    case $state in
+    (help)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:code-context-query-help-command-$line[1]:"
+        case $line[1] in
+            (ast)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+        esac
+    ;;
+esac
+;;
+(find)
+_arguments "${_arguments_options[@]}" : \
+'-d[Enable debug output to stderr]' \
+'--debug[Enable debug output to stderr]' \
+'-j[Output results as JSON (for operation commands)]' \
+'--json[Output results as JSON (for operation commands)]' \
+'-h[Print help]' \
+'--help[Print help]' \
+":: :_code-context__find_commands" \
+"*::: :->find" \
+&& ret=0
+
+    case $state in
+    (find)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:code-context-find-command-$line[1]:"
+        case $line[1] in
+            (duplicates)
+_arguments "${_arguments_options[@]}" : \
+'--file-path=[File to check for duplicated code]:FILE_PATH:_default' \
+'--min-similarity=[Minimum cosine similarity to report as duplicate (0.0-1.0)]:MIN_SIMILARITY:_default' \
+'--max-per-chunk=[Maximum duplicates to show per source chunk]:MAX_PER_CHUNK:_default' \
+'--min-chunk-bytes=[Minimum chunk size in bytes to consider]:MIN_CHUNK_BYTES:_default' \
+'-d[Enable debug output to stderr]' \
+'--debug[Enable debug output to stderr]' \
+'-j[Output results as JSON (for operation commands)]' \
+'--json[Output results as JSON (for operation commands)]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+":: :_code-context__find__help_commands" \
+"*::: :->help" \
+&& ret=0
+
+    case $state in
+    (help)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:code-context-find-help-command-$line[1]:"
+        case $line[1] in
+            (duplicates)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+        esac
+    ;;
+esac
+;;
+(build)
+_arguments "${_arguments_options[@]}" : \
+'-d[Enable debug output to stderr]' \
+'--debug[Enable debug output to stderr]' \
+'-j[Output results as JSON (for operation commands)]' \
+'--json[Output results as JSON (for operation commands)]' \
+'-h[Print help]' \
+'--help[Print help]' \
+":: :_code-context__build_commands" \
+"*::: :->build" \
+&& ret=0
+
+    case $state in
+    (build)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:code-context-build-command-$line[1]:"
+        case $line[1] in
+            (status)
+_arguments "${_arguments_options[@]}" : \
+'--layer=[Which indexing layer to reset\: treesitter, lsp, or both]:LAYER:_default' \
+'-d[Enable debug output to stderr]' \
+'--debug[Enable debug output to stderr]' \
+'-j[Output results as JSON (for operation commands)]' \
+'--json[Output results as JSON (for operation commands)]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+":: :_code-context__build__help_commands" \
+"*::: :->help" \
+&& ret=0
+
+    case $state in
+    (help)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:code-context-build-help-command-$line[1]:"
+        case $line[1] in
+            (status)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+        esac
+    ;;
+esac
+;;
+(clear)
+_arguments "${_arguments_options[@]}" : \
+'-d[Enable debug output to stderr]' \
+'--debug[Enable debug output to stderr]' \
+'-j[Output results as JSON (for operation commands)]' \
+'--json[Output results as JSON (for operation commands)]' \
+'-h[Print help]' \
+'--help[Print help]' \
+":: :_code-context__clear_commands" \
+"*::: :->clear" \
+&& ret=0
+
+    case $state in
+    (clear)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:code-context-clear-command-$line[1]:"
+        case $line[1] in
+            (status)
+_arguments "${_arguments_options[@]}" : \
+'-d[Enable debug output to stderr]' \
+'--debug[Enable debug output to stderr]' \
+'-j[Output results as JSON (for operation commands)]' \
+'--json[Output results as JSON (for operation commands)]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+":: :_code-context__clear__help_commands" \
+"*::: :->help" \
+&& ret=0
+
+    case $state in
+    (help)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:code-context-clear-help-command-$line[1]:"
+        case $line[1] in
+            (status)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+        esac
+    ;;
+esac
+;;
+(lsp)
+_arguments "${_arguments_options[@]}" : \
+'-d[Enable debug output to stderr]' \
+'--debug[Enable debug output to stderr]' \
+'-j[Output results as JSON (for operation commands)]' \
+'--json[Output results as JSON (for operation commands)]' \
+'-h[Print help]' \
+'--help[Print help]' \
+":: :_code-context__lsp_commands" \
+"*::: :->lsp" \
+&& ret=0
+
+    case $state in
+    (lsp)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:code-context-lsp-command-$line[1]:"
+        case $line[1] in
+            (status)
+_arguments "${_arguments_options[@]}" : \
+'-d[Enable debug output to stderr]' \
+'--debug[Enable debug output to stderr]' \
+'-j[Output results as JSON (for operation commands)]' \
+'--json[Output results as JSON (for operation commands)]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+":: :_code-context__lsp__help_commands" \
+"*::: :->help" \
+&& ret=0
+
+    case $state in
+    (help)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:code-context-lsp-help-command-$line[1]:"
+        case $line[1] in
+            (status)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+        esac
+    ;;
+esac
+;;
+(detect)
+_arguments "${_arguments_options[@]}" : \
+'-d[Enable debug output to stderr]' \
+'--debug[Enable debug output to stderr]' \
+'-j[Output results as JSON (for operation commands)]' \
+'--json[Output results as JSON (for operation commands)]' \
+'-h[Print help]' \
+'--help[Print help]' \
+":: :_code-context__detect_commands" \
+"*::: :->detect" \
+&& ret=0
+
+    case $state in
+    (detect)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:code-context-detect-command-$line[1]:"
+        case $line[1] in
+            (projects)
+_arguments "${_arguments_options[@]}" : \
+'--path=[Root path to search for projects]:PATH:_default' \
+'--max-depth=[Maximum directory depth to search]:MAX_DEPTH:_default' \
+'--include-guidelines=[Include language-specific guidelines in output]:INCLUDE_GUIDELINES:(true false)' \
+'-d[Enable debug output to stderr]' \
+'--debug[Enable debug output to stderr]' \
+'-j[Output results as JSON (for operation commands)]' \
+'--json[Output results as JSON (for operation commands)]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+":: :_code-context__detect__help_commands" \
+"*::: :->help" \
+&& ret=0
+
+    case $state in
+    (help)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:code-context-detect-help-command-$line[1]:"
+        case $line[1] in
+            (projects)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+        esac
+    ;;
+esac
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+":: :_code-context__help_commands" \
+"*::: :->help" \
+&& ret=0
+
+    case $state in
+    (help)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:code-context-help-command-$line[1]:"
+        case $line[1] in
+            (serve)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(init)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(deinit)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(doctor)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(skill)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(get)
+_arguments "${_arguments_options[@]}" : \
+":: :_code-context__help__get_commands" \
+"*::: :->get" \
+&& ret=0
+
+    case $state in
+    (get)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:code-context-help-get-command-$line[1]:"
+        case $line[1] in
+            (symbol)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(callgraph)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(blastradius)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(status)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(definition)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(type-definition)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(hover)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(references)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(implementations)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(code-actions)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(inbound-calls)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(rename-edits)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(diagnostics)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+(search)
+_arguments "${_arguments_options[@]}" : \
+":: :_code-context__help__search_commands" \
+"*::: :->search" \
+&& ret=0
+
+    case $state in
+    (search)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:code-context-help-search-command-$line[1]:"
+        case $line[1] in
+            (symbol)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(code)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(workspace-symbol)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+(list)
+_arguments "${_arguments_options[@]}" : \
+":: :_code-context__help__list_commands" \
+"*::: :->list" \
+&& ret=0
+
+    case $state in
+    (list)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:code-context-help-list-command-$line[1]:"
+        case $line[1] in
+            (symbols)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+(grep)
+_arguments "${_arguments_options[@]}" : \
+":: :_code-context__help__grep_commands" \
+"*::: :->grep" \
+&& ret=0
+
+    case $state in
+    (grep)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:code-context-help-grep-command-$line[1]:"
+        case $line[1] in
+            (code)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+(query)
+_arguments "${_arguments_options[@]}" : \
+":: :_code-context__help__query_commands" \
+"*::: :->query" \
+&& ret=0
+
+    case $state in
+    (query)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:code-context-help-query-command-$line[1]:"
+        case $line[1] in
+            (ast)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+(find)
+_arguments "${_arguments_options[@]}" : \
+":: :_code-context__help__find_commands" \
+"*::: :->find" \
+&& ret=0
+
+    case $state in
+    (find)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:code-context-help-find-command-$line[1]:"
+        case $line[1] in
+            (duplicates)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+(build)
+_arguments "${_arguments_options[@]}" : \
+":: :_code-context__help__build_commands" \
+"*::: :->build" \
+&& ret=0
+
+    case $state in
+    (build)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:code-context-help-build-command-$line[1]:"
+        case $line[1] in
+            (status)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+(clear)
+_arguments "${_arguments_options[@]}" : \
+":: :_code-context__help__clear_commands" \
+"*::: :->clear" \
+&& ret=0
+
+    case $state in
+    (clear)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:code-context-help-clear-command-$line[1]:"
+        case $line[1] in
+            (status)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+(lsp)
+_arguments "${_arguments_options[@]}" : \
+":: :_code-context__help__lsp_commands" \
+"*::: :->lsp" \
+&& ret=0
+
+    case $state in
+    (lsp)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:code-context-help-lsp-command-$line[1]:"
+        case $line[1] in
+            (status)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+(detect)
+_arguments "${_arguments_options[@]}" : \
+":: :_code-context__help__detect_commands" \
+"*::: :->detect" \
+&& ret=0
+
+    case $state in
+    (detect)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:code-context-help-detect-command-$line[1]:"
+        case $line[1] in
+            (projects)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+        esac
+    ;;
+esac
+}
+
+(( $+functions[_code-context_commands] )) ||
+_code-context_commands() {
+    local commands; commands=(
+'serve:Run MCP server over stdio, exposing code-context tools' \
+'init:Install code-context MCP server into Claude Code settings' \
+'deinit:Remove code-context from Claude Code settings' \
+'doctor:Diagnose code-context configuration and setup' \
+'skill:Deploy code-context skill to agent .skills/ directories' \
+'get:Get a resource (symbol, callgraph, blast radius, status, etc.)' \
+'search:Search for symbols, code, or workspace symbols' \
+'list:List resources (symbols in a file)' \
+'grep:Regex search across stored code chunks' \
+'query:Execute tree-sitter queries against parsed ASTs' \
+'find:Find duplicated code' \
+'build:Trigger re-indexing' \
+'clear:Wipe index data' \
+'lsp:LSP server management' \
+'detect:Detect project types and languages' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'code-context commands' commands "$@"
+}
+(( $+functions[_code-context__build_commands] )) ||
+_code-context__build_commands() {
+    local commands; commands=(
+'status:Mark files for re-indexing by resetting indexed flags' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'code-context build commands' commands "$@"
+}
+(( $+functions[_code-context__build__help_commands] )) ||
+_code-context__build__help_commands() {
+    local commands; commands=(
+'status:Mark files for re-indexing by resetting indexed flags' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'code-context build help commands' commands "$@"
+}
+(( $+functions[_code-context__build__help__help_commands] )) ||
+_code-context__build__help__help_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context build help help commands' commands "$@"
+}
+(( $+functions[_code-context__build__help__status_commands] )) ||
+_code-context__build__help__status_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context build help status commands' commands "$@"
+}
+(( $+functions[_code-context__build__status_commands] )) ||
+_code-context__build__status_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context build status commands' commands "$@"
+}
+(( $+functions[_code-context__clear_commands] )) ||
+_code-context__clear_commands() {
+    local commands; commands=(
+'status:Wipe all index data and return stats about what was cleared' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'code-context clear commands' commands "$@"
+}
+(( $+functions[_code-context__clear__help_commands] )) ||
+_code-context__clear__help_commands() {
+    local commands; commands=(
+'status:Wipe all index data and return stats about what was cleared' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'code-context clear help commands' commands "$@"
+}
+(( $+functions[_code-context__clear__help__help_commands] )) ||
+_code-context__clear__help__help_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context clear help help commands' commands "$@"
+}
+(( $+functions[_code-context__clear__help__status_commands] )) ||
+_code-context__clear__help__status_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context clear help status commands' commands "$@"
+}
+(( $+functions[_code-context__clear__status_commands] )) ||
+_code-context__clear__status_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context clear status commands' commands "$@"
+}
+(( $+functions[_code-context__deinit_commands] )) ||
+_code-context__deinit_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context deinit commands' commands "$@"
+}
+(( $+functions[_code-context__detect_commands] )) ||
+_code-context__detect_commands() {
+    local commands; commands=(
+'projects:Detect project types in the workspace and return language-specific guidelines' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'code-context detect commands' commands "$@"
+}
+(( $+functions[_code-context__detect__help_commands] )) ||
+_code-context__detect__help_commands() {
+    local commands; commands=(
+'projects:Detect project types in the workspace and return language-specific guidelines' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'code-context detect help commands' commands "$@"
+}
+(( $+functions[_code-context__detect__help__help_commands] )) ||
+_code-context__detect__help__help_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context detect help help commands' commands "$@"
+}
+(( $+functions[_code-context__detect__help__projects_commands] )) ||
+_code-context__detect__help__projects_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context detect help projects commands' commands "$@"
+}
+(( $+functions[_code-context__detect__projects_commands] )) ||
+_code-context__detect__projects_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context detect projects commands' commands "$@"
+}
+(( $+functions[_code-context__doctor_commands] )) ||
+_code-context__doctor_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context doctor commands' commands "$@"
+}
+(( $+functions[_code-context__find_commands] )) ||
+_code-context__find_commands() {
+    local commands; commands=(
+'duplicates:Find code in a file that is duplicated elsewhere in the codebase' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'code-context find commands' commands "$@"
+}
+(( $+functions[_code-context__find__duplicates_commands] )) ||
+_code-context__find__duplicates_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context find duplicates commands' commands "$@"
+}
+(( $+functions[_code-context__find__help_commands] )) ||
+_code-context__find__help_commands() {
+    local commands; commands=(
+'duplicates:Find code in a file that is duplicated elsewhere in the codebase' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'code-context find help commands' commands "$@"
+}
+(( $+functions[_code-context__find__help__duplicates_commands] )) ||
+_code-context__find__help__duplicates_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context find help duplicates commands' commands "$@"
+}
+(( $+functions[_code-context__find__help__help_commands] )) ||
+_code-context__find__help__help_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context find help help commands' commands "$@"
+}
+(( $+functions[_code-context__get_commands] )) ||
+_code-context__get_commands() {
+    local commands; commands=(
+'symbol:Look up symbol locations and source text with fuzzy matching' \
+'callgraph:Traverse call graph from a starting symbol' \
+'blastradius:Analyze blast radius of changes to a file or symbol' \
+'status:Health report with file counts, indexing progress, chunk/edge counts' \
+'definition:Go to definition with layered resolution (live LSP, LSP index, tree-sitter)' \
+'type-definition:Go to type definition (live LSP only)' \
+'hover:Get hover information (type signature, docs)' \
+'references:Find all references to a symbol' \
+'implementations:Find implementations of a trait/interface' \
+'code-actions:Get code actions (quickfixes, refactors) for a range (live LSP only)' \
+'inbound-calls:Find all callers of a function at a given position' \
+'rename-edits:Preview rename edits without applying them (live LSP only)' \
+'diagnostics:Get errors and warnings for a file (live LSP only)' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'code-context get commands' commands "$@"
+}
+(( $+functions[_code-context__get__blastradius_commands] )) ||
+_code-context__get__blastradius_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context get blastradius commands' commands "$@"
+}
+(( $+functions[_code-context__get__callgraph_commands] )) ||
+_code-context__get__callgraph_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context get callgraph commands' commands "$@"
+}
+(( $+functions[_code-context__get__code-actions_commands] )) ||
+_code-context__get__code-actions_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context get code-actions commands' commands "$@"
+}
+(( $+functions[_code-context__get__definition_commands] )) ||
+_code-context__get__definition_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context get definition commands' commands "$@"
+}
+(( $+functions[_code-context__get__diagnostics_commands] )) ||
+_code-context__get__diagnostics_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context get diagnostics commands' commands "$@"
+}
+(( $+functions[_code-context__get__help_commands] )) ||
+_code-context__get__help_commands() {
+    local commands; commands=(
+'symbol:Look up symbol locations and source text with fuzzy matching' \
+'callgraph:Traverse call graph from a starting symbol' \
+'blastradius:Analyze blast radius of changes to a file or symbol' \
+'status:Health report with file counts, indexing progress, chunk/edge counts' \
+'definition:Go to definition with layered resolution (live LSP, LSP index, tree-sitter)' \
+'type-definition:Go to type definition (live LSP only)' \
+'hover:Get hover information (type signature, docs)' \
+'references:Find all references to a symbol' \
+'implementations:Find implementations of a trait/interface' \
+'code-actions:Get code actions (quickfixes, refactors) for a range (live LSP only)' \
+'inbound-calls:Find all callers of a function at a given position' \
+'rename-edits:Preview rename edits without applying them (live LSP only)' \
+'diagnostics:Get errors and warnings for a file (live LSP only)' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'code-context get help commands' commands "$@"
+}
+(( $+functions[_code-context__get__help__blastradius_commands] )) ||
+_code-context__get__help__blastradius_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context get help blastradius commands' commands "$@"
+}
+(( $+functions[_code-context__get__help__callgraph_commands] )) ||
+_code-context__get__help__callgraph_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context get help callgraph commands' commands "$@"
+}
+(( $+functions[_code-context__get__help__code-actions_commands] )) ||
+_code-context__get__help__code-actions_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context get help code-actions commands' commands "$@"
+}
+(( $+functions[_code-context__get__help__definition_commands] )) ||
+_code-context__get__help__definition_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context get help definition commands' commands "$@"
+}
+(( $+functions[_code-context__get__help__diagnostics_commands] )) ||
+_code-context__get__help__diagnostics_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context get help diagnostics commands' commands "$@"
+}
+(( $+functions[_code-context__get__help__help_commands] )) ||
+_code-context__get__help__help_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context get help help commands' commands "$@"
+}
+(( $+functions[_code-context__get__help__hover_commands] )) ||
+_code-context__get__help__hover_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context get help hover commands' commands "$@"
+}
+(( $+functions[_code-context__get__help__implementations_commands] )) ||
+_code-context__get__help__implementations_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context get help implementations commands' commands "$@"
+}
+(( $+functions[_code-context__get__help__inbound-calls_commands] )) ||
+_code-context__get__help__inbound-calls_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context get help inbound-calls commands' commands "$@"
+}
+(( $+functions[_code-context__get__help__references_commands] )) ||
+_code-context__get__help__references_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context get help references commands' commands "$@"
+}
+(( $+functions[_code-context__get__help__rename-edits_commands] )) ||
+_code-context__get__help__rename-edits_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context get help rename-edits commands' commands "$@"
+}
+(( $+functions[_code-context__get__help__status_commands] )) ||
+_code-context__get__help__status_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context get help status commands' commands "$@"
+}
+(( $+functions[_code-context__get__help__symbol_commands] )) ||
+_code-context__get__help__symbol_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context get help symbol commands' commands "$@"
+}
+(( $+functions[_code-context__get__help__type-definition_commands] )) ||
+_code-context__get__help__type-definition_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context get help type-definition commands' commands "$@"
+}
+(( $+functions[_code-context__get__hover_commands] )) ||
+_code-context__get__hover_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context get hover commands' commands "$@"
+}
+(( $+functions[_code-context__get__implementations_commands] )) ||
+_code-context__get__implementations_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context get implementations commands' commands "$@"
+}
+(( $+functions[_code-context__get__inbound-calls_commands] )) ||
+_code-context__get__inbound-calls_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context get inbound-calls commands' commands "$@"
+}
+(( $+functions[_code-context__get__references_commands] )) ||
+_code-context__get__references_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context get references commands' commands "$@"
+}
+(( $+functions[_code-context__get__rename-edits_commands] )) ||
+_code-context__get__rename-edits_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context get rename-edits commands' commands "$@"
+}
+(( $+functions[_code-context__get__status_commands] )) ||
+_code-context__get__status_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context get status commands' commands "$@"
+}
+(( $+functions[_code-context__get__symbol_commands] )) ||
+_code-context__get__symbol_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context get symbol commands' commands "$@"
+}
+(( $+functions[_code-context__get__type-definition_commands] )) ||
+_code-context__get__type-definition_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context get type-definition commands' commands "$@"
+}
+(( $+functions[_code-context__grep_commands] )) ||
+_code-context__grep_commands() {
+    local commands; commands=(
+'code:Regex search across stored code chunks' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'code-context grep commands' commands "$@"
+}
+(( $+functions[_code-context__grep__code_commands] )) ||
+_code-context__grep__code_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context grep code commands' commands "$@"
+}
+(( $+functions[_code-context__grep__help_commands] )) ||
+_code-context__grep__help_commands() {
+    local commands; commands=(
+'code:Regex search across stored code chunks' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'code-context grep help commands' commands "$@"
+}
+(( $+functions[_code-context__grep__help__code_commands] )) ||
+_code-context__grep__help__code_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context grep help code commands' commands "$@"
+}
+(( $+functions[_code-context__grep__help__help_commands] )) ||
+_code-context__grep__help__help_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context grep help help commands' commands "$@"
+}
+(( $+functions[_code-context__help_commands] )) ||
+_code-context__help_commands() {
+    local commands; commands=(
+'serve:Run MCP server over stdio, exposing code-context tools' \
+'init:Install code-context MCP server into Claude Code settings' \
+'deinit:Remove code-context from Claude Code settings' \
+'doctor:Diagnose code-context configuration and setup' \
+'skill:Deploy code-context skill to agent .skills/ directories' \
+'get:Get a resource (symbol, callgraph, blast radius, status, etc.)' \
+'search:Search for symbols, code, or workspace symbols' \
+'list:List resources (symbols in a file)' \
+'grep:Regex search across stored code chunks' \
+'query:Execute tree-sitter queries against parsed ASTs' \
+'find:Find duplicated code' \
+'build:Trigger re-indexing' \
+'clear:Wipe index data' \
+'lsp:LSP server management' \
+'detect:Detect project types and languages' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'code-context help commands' commands "$@"
+}
+(( $+functions[_code-context__help__build_commands] )) ||
+_code-context__help__build_commands() {
+    local commands; commands=(
+'status:Mark files for re-indexing by resetting indexed flags' \
+    )
+    _describe -t commands 'code-context help build commands' commands "$@"
+}
+(( $+functions[_code-context__help__build__status_commands] )) ||
+_code-context__help__build__status_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context help build status commands' commands "$@"
+}
+(( $+functions[_code-context__help__clear_commands] )) ||
+_code-context__help__clear_commands() {
+    local commands; commands=(
+'status:Wipe all index data and return stats about what was cleared' \
+    )
+    _describe -t commands 'code-context help clear commands' commands "$@"
+}
+(( $+functions[_code-context__help__clear__status_commands] )) ||
+_code-context__help__clear__status_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context help clear status commands' commands "$@"
+}
+(( $+functions[_code-context__help__deinit_commands] )) ||
+_code-context__help__deinit_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context help deinit commands' commands "$@"
+}
+(( $+functions[_code-context__help__detect_commands] )) ||
+_code-context__help__detect_commands() {
+    local commands; commands=(
+'projects:Detect project types in the workspace and return language-specific guidelines' \
+    )
+    _describe -t commands 'code-context help detect commands' commands "$@"
+}
+(( $+functions[_code-context__help__detect__projects_commands] )) ||
+_code-context__help__detect__projects_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context help detect projects commands' commands "$@"
+}
+(( $+functions[_code-context__help__doctor_commands] )) ||
+_code-context__help__doctor_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context help doctor commands' commands "$@"
+}
+(( $+functions[_code-context__help__find_commands] )) ||
+_code-context__help__find_commands() {
+    local commands; commands=(
+'duplicates:Find code in a file that is duplicated elsewhere in the codebase' \
+    )
+    _describe -t commands 'code-context help find commands' commands "$@"
+}
+(( $+functions[_code-context__help__find__duplicates_commands] )) ||
+_code-context__help__find__duplicates_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context help find duplicates commands' commands "$@"
+}
+(( $+functions[_code-context__help__get_commands] )) ||
+_code-context__help__get_commands() {
+    local commands; commands=(
+'symbol:Look up symbol locations and source text with fuzzy matching' \
+'callgraph:Traverse call graph from a starting symbol' \
+'blastradius:Analyze blast radius of changes to a file or symbol' \
+'status:Health report with file counts, indexing progress, chunk/edge counts' \
+'definition:Go to definition with layered resolution (live LSP, LSP index, tree-sitter)' \
+'type-definition:Go to type definition (live LSP only)' \
+'hover:Get hover information (type signature, docs)' \
+'references:Find all references to a symbol' \
+'implementations:Find implementations of a trait/interface' \
+'code-actions:Get code actions (quickfixes, refactors) for a range (live LSP only)' \
+'inbound-calls:Find all callers of a function at a given position' \
+'rename-edits:Preview rename edits without applying them (live LSP only)' \
+'diagnostics:Get errors and warnings for a file (live LSP only)' \
+    )
+    _describe -t commands 'code-context help get commands' commands "$@"
+}
+(( $+functions[_code-context__help__get__blastradius_commands] )) ||
+_code-context__help__get__blastradius_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context help get blastradius commands' commands "$@"
+}
+(( $+functions[_code-context__help__get__callgraph_commands] )) ||
+_code-context__help__get__callgraph_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context help get callgraph commands' commands "$@"
+}
+(( $+functions[_code-context__help__get__code-actions_commands] )) ||
+_code-context__help__get__code-actions_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context help get code-actions commands' commands "$@"
+}
+(( $+functions[_code-context__help__get__definition_commands] )) ||
+_code-context__help__get__definition_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context help get definition commands' commands "$@"
+}
+(( $+functions[_code-context__help__get__diagnostics_commands] )) ||
+_code-context__help__get__diagnostics_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context help get diagnostics commands' commands "$@"
+}
+(( $+functions[_code-context__help__get__hover_commands] )) ||
+_code-context__help__get__hover_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context help get hover commands' commands "$@"
+}
+(( $+functions[_code-context__help__get__implementations_commands] )) ||
+_code-context__help__get__implementations_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context help get implementations commands' commands "$@"
+}
+(( $+functions[_code-context__help__get__inbound-calls_commands] )) ||
+_code-context__help__get__inbound-calls_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context help get inbound-calls commands' commands "$@"
+}
+(( $+functions[_code-context__help__get__references_commands] )) ||
+_code-context__help__get__references_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context help get references commands' commands "$@"
+}
+(( $+functions[_code-context__help__get__rename-edits_commands] )) ||
+_code-context__help__get__rename-edits_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context help get rename-edits commands' commands "$@"
+}
+(( $+functions[_code-context__help__get__status_commands] )) ||
+_code-context__help__get__status_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context help get status commands' commands "$@"
+}
+(( $+functions[_code-context__help__get__symbol_commands] )) ||
+_code-context__help__get__symbol_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context help get symbol commands' commands "$@"
+}
+(( $+functions[_code-context__help__get__type-definition_commands] )) ||
+_code-context__help__get__type-definition_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context help get type-definition commands' commands "$@"
+}
+(( $+functions[_code-context__help__grep_commands] )) ||
+_code-context__help__grep_commands() {
+    local commands; commands=(
+'code:Regex search across stored code chunks' \
+    )
+    _describe -t commands 'code-context help grep commands' commands "$@"
+}
+(( $+functions[_code-context__help__grep__code_commands] )) ||
+_code-context__help__grep__code_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context help grep code commands' commands "$@"
+}
+(( $+functions[_code-context__help__help_commands] )) ||
+_code-context__help__help_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context help help commands' commands "$@"
+}
+(( $+functions[_code-context__help__init_commands] )) ||
+_code-context__help__init_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context help init commands' commands "$@"
+}
+(( $+functions[_code-context__help__list_commands] )) ||
+_code-context__help__list_commands() {
+    local commands; commands=(
+'symbols:List all symbols in a specific file, sorted by start line' \
+    )
+    _describe -t commands 'code-context help list commands' commands "$@"
+}
+(( $+functions[_code-context__help__list__symbols_commands] )) ||
+_code-context__help__list__symbols_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context help list symbols commands' commands "$@"
+}
+(( $+functions[_code-context__help__lsp_commands] )) ||
+_code-context__help__lsp_commands() {
+    local commands; commands=(
+'status:Show detected languages, their LSP servers, and install status' \
+    )
+    _describe -t commands 'code-context help lsp commands' commands "$@"
+}
+(( $+functions[_code-context__help__lsp__status_commands] )) ||
+_code-context__help__lsp__status_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context help lsp status commands' commands "$@"
+}
+(( $+functions[_code-context__help__query_commands] )) ||
+_code-context__help__query_commands() {
+    local commands; commands=(
+'ast:Execute tree-sitter S-expression queries against parsed ASTs' \
+    )
+    _describe -t commands 'code-context help query commands' commands "$@"
+}
+(( $+functions[_code-context__help__query__ast_commands] )) ||
+_code-context__help__query__ast_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context help query ast commands' commands "$@"
+}
+(( $+functions[_code-context__help__search_commands] )) ||
+_code-context__help__search_commands() {
+    local commands; commands=(
+'symbol:Fuzzy search across all indexed symbols' \
+'code:Semantic similarity search across code chunks using embeddings' \
+'workspace-symbol:Live workspace symbol search with layered resolution' \
+    )
+    _describe -t commands 'code-context help search commands' commands "$@"
+}
+(( $+functions[_code-context__help__search__code_commands] )) ||
+_code-context__help__search__code_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context help search code commands' commands "$@"
+}
+(( $+functions[_code-context__help__search__symbol_commands] )) ||
+_code-context__help__search__symbol_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context help search symbol commands' commands "$@"
+}
+(( $+functions[_code-context__help__search__workspace-symbol_commands] )) ||
+_code-context__help__search__workspace-symbol_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context help search workspace-symbol commands' commands "$@"
+}
+(( $+functions[_code-context__help__serve_commands] )) ||
+_code-context__help__serve_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context help serve commands' commands "$@"
+}
+(( $+functions[_code-context__help__skill_commands] )) ||
+_code-context__help__skill_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context help skill commands' commands "$@"
+}
+(( $+functions[_code-context__init_commands] )) ||
+_code-context__init_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context init commands' commands "$@"
+}
+(( $+functions[_code-context__list_commands] )) ||
+_code-context__list_commands() {
+    local commands; commands=(
+'symbols:List all symbols in a specific file, sorted by start line' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'code-context list commands' commands "$@"
+}
+(( $+functions[_code-context__list__help_commands] )) ||
+_code-context__list__help_commands() {
+    local commands; commands=(
+'symbols:List all symbols in a specific file, sorted by start line' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'code-context list help commands' commands "$@"
+}
+(( $+functions[_code-context__list__help__help_commands] )) ||
+_code-context__list__help__help_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context list help help commands' commands "$@"
+}
+(( $+functions[_code-context__list__help__symbols_commands] )) ||
+_code-context__list__help__symbols_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context list help symbols commands' commands "$@"
+}
+(( $+functions[_code-context__list__symbols_commands] )) ||
+_code-context__list__symbols_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context list symbols commands' commands "$@"
+}
+(( $+functions[_code-context__lsp_commands] )) ||
+_code-context__lsp_commands() {
+    local commands; commands=(
+'status:Show detected languages, their LSP servers, and install status' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'code-context lsp commands' commands "$@"
+}
+(( $+functions[_code-context__lsp__help_commands] )) ||
+_code-context__lsp__help_commands() {
+    local commands; commands=(
+'status:Show detected languages, their LSP servers, and install status' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'code-context lsp help commands' commands "$@"
+}
+(( $+functions[_code-context__lsp__help__help_commands] )) ||
+_code-context__lsp__help__help_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context lsp help help commands' commands "$@"
+}
+(( $+functions[_code-context__lsp__help__status_commands] )) ||
+_code-context__lsp__help__status_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context lsp help status commands' commands "$@"
+}
+(( $+functions[_code-context__lsp__status_commands] )) ||
+_code-context__lsp__status_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context lsp status commands' commands "$@"
+}
+(( $+functions[_code-context__query_commands] )) ||
+_code-context__query_commands() {
+    local commands; commands=(
+'ast:Execute tree-sitter S-expression queries against parsed ASTs' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'code-context query commands' commands "$@"
+}
+(( $+functions[_code-context__query__ast_commands] )) ||
+_code-context__query__ast_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context query ast commands' commands "$@"
+}
+(( $+functions[_code-context__query__help_commands] )) ||
+_code-context__query__help_commands() {
+    local commands; commands=(
+'ast:Execute tree-sitter S-expression queries against parsed ASTs' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'code-context query help commands' commands "$@"
+}
+(( $+functions[_code-context__query__help__ast_commands] )) ||
+_code-context__query__help__ast_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context query help ast commands' commands "$@"
+}
+(( $+functions[_code-context__query__help__help_commands] )) ||
+_code-context__query__help__help_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context query help help commands' commands "$@"
+}
+(( $+functions[_code-context__search_commands] )) ||
+_code-context__search_commands() {
+    local commands; commands=(
+'symbol:Fuzzy search across all indexed symbols' \
+'code:Semantic similarity search across code chunks using embeddings' \
+'workspace-symbol:Live workspace symbol search with layered resolution' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'code-context search commands' commands "$@"
+}
+(( $+functions[_code-context__search__code_commands] )) ||
+_code-context__search__code_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context search code commands' commands "$@"
+}
+(( $+functions[_code-context__search__help_commands] )) ||
+_code-context__search__help_commands() {
+    local commands; commands=(
+'symbol:Fuzzy search across all indexed symbols' \
+'code:Semantic similarity search across code chunks using embeddings' \
+'workspace-symbol:Live workspace symbol search with layered resolution' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'code-context search help commands' commands "$@"
+}
+(( $+functions[_code-context__search__help__code_commands] )) ||
+_code-context__search__help__code_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context search help code commands' commands "$@"
+}
+(( $+functions[_code-context__search__help__help_commands] )) ||
+_code-context__search__help__help_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context search help help commands' commands "$@"
+}
+(( $+functions[_code-context__search__help__symbol_commands] )) ||
+_code-context__search__help__symbol_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context search help symbol commands' commands "$@"
+}
+(( $+functions[_code-context__search__help__workspace-symbol_commands] )) ||
+_code-context__search__help__workspace-symbol_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context search help workspace-symbol commands' commands "$@"
+}
+(( $+functions[_code-context__search__symbol_commands] )) ||
+_code-context__search__symbol_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context search symbol commands' commands "$@"
+}
+(( $+functions[_code-context__search__workspace-symbol_commands] )) ||
+_code-context__search__workspace-symbol_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context search workspace-symbol commands' commands "$@"
+}
+(( $+functions[_code-context__serve_commands] )) ||
+_code-context__serve_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context serve commands' commands "$@"
+}
+(( $+functions[_code-context__skill_commands] )) ||
+_code-context__skill_commands() {
+    local commands; commands=()
+    _describe -t commands 'code-context skill commands' commands "$@"
+}
+
+if [ "$funcstack[1]" = "_code-context" ]; then
+    _code-context "$@"
+else
+    compdef _code-context code-context
+fi

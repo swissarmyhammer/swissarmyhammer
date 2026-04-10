@@ -602,6 +602,312 @@ mod tests {
         assert_eq!(roundtrip.source_layer, SourceLayer::LiveLsp);
     }
 
+    // --- parse_diagnostics_from_result: non-array, non-object-with-items fallback ---
+
+    #[test]
+    fn test_parse_diagnostics_from_result_plain_string_returns_empty() {
+        let result = json!("not a diagnostic at all");
+        assert!(parse_diagnostics_from_result(&result).is_empty());
+    }
+
+    #[test]
+    fn test_parse_diagnostics_from_result_number_returns_empty() {
+        let result = json!(42);
+        assert!(parse_diagnostics_from_result(&result).is_empty());
+    }
+
+    #[test]
+    fn test_parse_diagnostics_from_result_null_returns_empty() {
+        let result = json!(null);
+        assert!(parse_diagnostics_from_result(&result).is_empty());
+    }
+
+    #[test]
+    fn test_parse_diagnostics_from_result_bool_returns_empty() {
+        let result = json!(true);
+        assert!(parse_diagnostics_from_result(&result).is_empty());
+    }
+
+    #[test]
+    fn test_parse_diagnostics_from_result_object_without_items_returns_empty() {
+        let result = json!({ "kind": "full", "resultId": "abc" });
+        assert!(parse_diagnostics_from_result(&result).is_empty());
+    }
+
+    // --- parse_diagnostics_from_result: empty containers ---
+
+    #[test]
+    fn test_parse_diagnostics_from_result_empty_items_array() {
+        let result = json!({ "items": [] });
+        assert!(parse_diagnostics_from_result(&result).is_empty());
+    }
+
+    #[test]
+    fn test_parse_diagnostics_from_result_empty_direct_array() {
+        let result = json!([]);
+        assert!(parse_diagnostics_from_result(&result).is_empty());
+    }
+
+    // --- parse_single_diagnostic edge cases (exercised through parse_diagnostics_from_result) ---
+
+    #[test]
+    fn test_parse_diagnostics_skips_item_missing_range() {
+        let result = json!({
+            "items": [
+                {
+                    "severity": 1,
+                    "message": "no range here"
+                }
+            ]
+        });
+        assert!(parse_diagnostics_from_result(&result).is_empty());
+    }
+
+    #[test]
+    fn test_parse_diagnostics_skips_item_missing_message() {
+        let result = json!({
+            "items": [
+                {
+                    "range": {
+                        "start": { "line": 0, "character": 0 },
+                        "end": { "line": 0, "character": 5 }
+                    },
+                    "severity": 1
+                }
+            ]
+        });
+        assert!(parse_diagnostics_from_result(&result).is_empty());
+    }
+
+    #[test]
+    fn test_parse_diagnostics_skips_item_with_incomplete_range() {
+        // range.start is missing "character"
+        let result = json!({
+            "items": [
+                {
+                    "range": {
+                        "start": { "line": 0 },
+                        "end": { "line": 0, "character": 5 }
+                    },
+                    "severity": 1,
+                    "message": "bad range"
+                }
+            ]
+        });
+        assert!(parse_diagnostics_from_result(&result).is_empty());
+    }
+
+    #[test]
+    fn test_parse_diagnostics_mixed_valid_and_invalid_items() {
+        let result = json!({
+            "items": [
+                {
+                    "severity": 1,
+                    "message": "missing range - should be skipped"
+                },
+                {
+                    "range": {
+                        "start": { "line": 5, "character": 0 },
+                        "end": { "line": 5, "character": 10 }
+                    },
+                    "severity": 2,
+                    "message": "valid warning"
+                },
+                {
+                    "range": {
+                        "start": { "line": 0, "character": 0 },
+                        "end": { "line": 0, "character": 1 }
+                    },
+                    "severity": 1
+                    // missing "message" - should be skipped
+                }
+            ]
+        });
+        let diagnostics = parse_diagnostics_from_result(&result);
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].message, "valid warning");
+    }
+
+    #[test]
+    fn test_parse_diagnostics_code_as_non_string_non_number_yields_none() {
+        // code is a boolean -- not a string or number, so it should be None
+        let result = json!({
+            "items": [
+                {
+                    "range": {
+                        "start": { "line": 0, "character": 0 },
+                        "end": { "line": 0, "character": 5 }
+                    },
+                    "severity": 1,
+                    "message": "test",
+                    "code": true
+                }
+            ]
+        });
+        let diagnostics = parse_diagnostics_from_result(&result);
+        assert_eq!(diagnostics.len(), 1);
+        assert!(diagnostics[0].code.is_none());
+    }
+
+    #[test]
+    fn test_parse_diagnostics_source_as_non_string_yields_none() {
+        let result = json!({
+            "items": [
+                {
+                    "range": {
+                        "start": { "line": 0, "character": 0 },
+                        "end": { "line": 0, "character": 5 }
+                    },
+                    "severity": 1,
+                    "message": "test",
+                    "source": 123
+                }
+            ]
+        });
+        let diagnostics = parse_diagnostics_from_result(&result);
+        assert_eq!(diagnostics.len(), 1);
+        assert!(diagnostics[0].source.is_none());
+    }
+
+    // --- parse_publish_diagnostics: mixed valid and invalid ---
+
+    #[test]
+    fn test_parse_publish_diagnostics_mixed_valid_and_invalid() {
+        let params = json!({
+            "uri": "file:///src/lib.rs",
+            "diagnostics": [
+                {
+                    "range": {
+                        "start": { "line": 1, "character": 0 },
+                        "end": { "line": 1, "character": 10 }
+                    },
+                    "severity": 1,
+                    "message": "valid error"
+                },
+                {
+                    "message": "missing range - skipped"
+                },
+                {
+                    "range": {
+                        "start": { "line": 2, "character": 0 },
+                        "end": { "line": 2, "character": 5 }
+                    },
+                    "severity": 3,
+                    "message": "valid info"
+                }
+            ]
+        });
+        let diagnostics = parse_publish_diagnostics(&params);
+        assert_eq!(diagnostics.len(), 2);
+        assert_eq!(diagnostics[0].message, "valid error");
+        assert_eq!(diagnostics[1].message, "valid info");
+    }
+
+    // --- enrich_and_filter: severity filtering ---
+
+    #[test]
+    fn test_enrich_and_filter_applies_severity_filter() {
+        let conn = test_db();
+        let ctx = LayeredContext::new(&conn, None);
+
+        let raw = vec![
+            Diagnostic {
+                range: LspRange {
+                    start_line: 0,
+                    start_character: 0,
+                    end_line: 0,
+                    end_character: 5,
+                },
+                severity: DiagnosticSeverity::Error,
+                message: "error".to_string(),
+                code: None,
+                source: None,
+                containing_symbol: None,
+            },
+            Diagnostic {
+                range: LspRange {
+                    start_line: 1,
+                    start_character: 0,
+                    end_line: 1,
+                    end_character: 5,
+                },
+                severity: DiagnosticSeverity::Warning,
+                message: "warning".to_string(),
+                code: None,
+                source: None,
+                containing_symbol: None,
+            },
+            Diagnostic {
+                range: LspRange {
+                    start_line: 2,
+                    start_character: 0,
+                    end_line: 2,
+                    end_character: 5,
+                },
+                severity: DiagnosticSeverity::Info,
+                message: "info".to_string(),
+                code: None,
+                source: None,
+                containing_symbol: None,
+            },
+            Diagnostic {
+                range: LspRange {
+                    start_line: 3,
+                    start_character: 0,
+                    end_line: 3,
+                    end_character: 5,
+                },
+                severity: DiagnosticSeverity::Hint,
+                message: "hint".to_string(),
+                code: None,
+                source: None,
+                containing_symbol: None,
+            },
+        ];
+
+        let filtered =
+            enrich_and_filter(&ctx, "src/test.rs", raw, Some(DiagnosticSeverity::Warning));
+        assert_eq!(filtered.len(), 2);
+        assert_eq!(filtered[0].message, "error");
+        assert_eq!(filtered[1].message, "warning");
+    }
+
+    // --- parse_diagnostics_from_result: direct array with multiple diagnostics ---
+
+    #[test]
+    fn test_parse_diagnostics_from_result_direct_array_multiple() {
+        let result = json!([
+            {
+                "range": {
+                    "start": { "line": 0, "character": 0 },
+                    "end": { "line": 0, "character": 5 }
+                },
+                "severity": 1,
+                "message": "first error"
+            },
+            {
+                "range": {
+                    "start": { "line": 10, "character": 4 },
+                    "end": { "line": 10, "character": 20 }
+                },
+                "severity": 3,
+                "message": "some info",
+                "code": "W001",
+                "source": "mypy"
+            }
+        ]);
+        let diagnostics = parse_diagnostics_from_result(&result);
+        assert_eq!(diagnostics.len(), 2);
+        assert_eq!(diagnostics[0].severity, DiagnosticSeverity::Error);
+        assert_eq!(diagnostics[0].message, "first error");
+        assert_eq!(diagnostics[0].code, None);
+        assert_eq!(diagnostics[1].severity, DiagnosticSeverity::Info);
+        assert_eq!(diagnostics[1].code.as_deref(), Some("W001"));
+        assert_eq!(diagnostics[1].source.as_deref(), Some("mypy"));
+        assert_eq!(diagnostics[1].range.start_line, 10);
+        assert_eq!(diagnostics[1].range.start_character, 4);
+    }
+
     // --- error_count and warning_count ---
 
     #[test]

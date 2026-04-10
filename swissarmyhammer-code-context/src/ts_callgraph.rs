@@ -260,7 +260,18 @@ pub fn generate_ts_call_edges(
         ensure_ts_symbols(conn, cf)?;
     }
 
-    // For each call site, find the enclosing chunk's symbol_path to use as the caller.
+    let edges = map_call_sites_to_edges(conn, file_path, &call_sites, &resolved)?;
+    Ok(edges)
+}
+
+/// Map each call site to at most one [`CallEdge`] by finding the enclosing
+/// chunk (caller) and the first matching resolved callee.
+fn map_call_sites_to_edges(
+    conn: &Connection,
+    file_path: &str,
+    call_sites: &[CallSite],
+    resolved: &[ResolvedCallee],
+) -> Result<Vec<CallEdge>, CodeContextError> {
     let mut caller_stmt = conn.prepare_cached(
         "SELECT symbol_path FROM ts_chunks
          WHERE file_path = ?1 AND symbol_path IS NOT NULL
@@ -270,53 +281,57 @@ pub fn generate_ts_call_edges(
     )?;
 
     let mut edges = Vec::new();
-
-    for site in &call_sites {
-        // Find the tightest enclosing chunk for this call site.
-        let caller_symbol: Option<String> = caller_stmt
-            .query_row(
-                rusqlite::params![file_path, site.start_byte as i64, site.end_byte as i64],
-                |row| row.get(0),
-            )
-            .ok();
-
-        let caller_symbol = match caller_symbol {
-            Some(s) => s,
-            None => continue, // Call site is not inside a known chunk.
-        };
-
-        let caller_id = format!("ts:{file_path}:{caller_symbol}");
-
-        // Find all resolved callees matching this call site's name.
-        for resolved in resolved
-            .iter()
-            .filter(|r| r.callee_name == site.callee_name)
-        {
-            let callee_id = format!("ts:{}:{}", resolved.file_path, resolved.symbol_path);
-
-            // Skip self-edges.
-            if caller_id == callee_id {
-                continue;
-            }
-
-            let from_ranges = format!("[[{},{},{},{}]]", site.start_line, 0, site.end_line, 0);
-
-            edges.push(CallEdge {
-                caller_id,
-                callee_id,
-                caller_file: file_path.to_string(),
-                callee_file: resolved.file_path.clone(),
-                from_ranges,
-                source: "treesitter".to_string(),
-            });
-
-            // Only take the first matching callee per call site to keep edges
-            // manageable; the first match by DB ordering is deterministic.
-            break;
+    for site in call_sites {
+        if let Some(edge) = build_edge_for_site(&mut caller_stmt, file_path, site, resolved)? {
+            edges.push(edge);
         }
     }
-
     Ok(edges)
+}
+
+/// Build a single [`CallEdge`] for one call site, or `None` if the site has
+/// no enclosing chunk or no matching callee.
+fn build_edge_for_site(
+    caller_stmt: &mut rusqlite::CachedStatement<'_>,
+    file_path: &str,
+    site: &CallSite,
+    resolved: &[ResolvedCallee],
+) -> Result<Option<CallEdge>, CodeContextError> {
+    let caller_symbol: Option<String> = caller_stmt
+        .query_row(
+            rusqlite::params![file_path, site.start_byte as i64, site.end_byte as i64],
+            |row| row.get(0),
+        )
+        .ok();
+
+    let caller_symbol = match caller_symbol {
+        Some(s) => s,
+        None => return Ok(None),
+    };
+
+    let caller_id = format!("ts:{file_path}:{caller_symbol}");
+
+    // Take the first matching callee (deterministic by DB ordering).
+    for r in resolved
+        .iter()
+        .filter(|r| r.callee_name == site.callee_name)
+    {
+        let callee_id = format!("ts:{}:{}", r.file_path, r.symbol_path);
+        if caller_id == callee_id {
+            continue; // Skip self-edges.
+        }
+        let from_ranges = format!("[[{},{},{},{}]]", site.start_line, 0, site.end_line, 0);
+        return Ok(Some(CallEdge {
+            caller_id,
+            callee_id,
+            caller_file: file_path.to_string(),
+            callee_file: r.file_path.clone(),
+            from_ranges,
+            source: "treesitter".to_string(),
+        }));
+    }
+
+    Ok(None)
 }
 
 /// Write tree-sitter heuristic edges for a file, replacing any previous
@@ -628,6 +643,225 @@ mod tests {
         assert_eq!(caller_id, "ts:src/main.rs:main");
         assert_eq!(callee_id, "ts:src/work.rs:do_work");
         assert_eq!(source_col, "treesitter");
+    }
+
+    // ── extract_callee_name edge cases ──────────────────────────────
+
+    #[test]
+    fn test_extract_callee_name_non_call_node_returns_none() {
+        // When extract_callee_name receives a node that is not a call
+        // expression and has no "function"/"method" field, it returns None.
+        // This exercises the `else { return None }` branch.
+        let source = "fn main() {}";
+        let mut parser = Parser::new();
+        parser.set_language(&rust_language()).unwrap();
+        let tree = parser.parse(source, None).unwrap();
+
+        // Walk to a node that is NOT a call expression (e.g., "fn_item"
+        // or "function_item"). Such a node will have neither "function"
+        // nor "method" fields and is not "call" kind.
+        let root = tree.root_node();
+        let fn_node = root.child(0).expect("expected function_item node");
+        assert_ne!(fn_node.kind(), "call");
+        assert_ne!(fn_node.kind(), "call_expression");
+        assert_ne!(fn_node.kind(), "method_call_expression");
+
+        let result = extract_callee_name(fn_node, source.as_bytes());
+        assert!(
+            result.is_none(),
+            "expected None for a non-call node, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_extract_callee_name_trailing_dot_returns_none() {
+        // When the callee text ends with a dot (e.g., "foo."), the part
+        // after the last dot is empty and extract_callee_name returns None.
+        // This exercises the after_dot.is_empty() branch.
+        //
+        // In Rust, "foo.()" is a syntax error, but tree-sitter still
+        // produces a partial parse. We verify the behaviour via
+        // extract_call_names: tree-sitter may or may not produce a call
+        // node with trailing-dot callee text, so we test at the function
+        // boundary of extract_call_names and verify no call site is emitted
+        // with an empty name.
+        let source = "fn main() { foo.(); }";
+        let sites = extract_call_names(source, rust_language());
+        // Regardless of how tree-sitter handles the malformed source,
+        // no call site should have an empty callee_name.
+        for site in &sites {
+            assert!(
+                !site.callee_name.is_empty(),
+                "callee_name must not be empty"
+            );
+        }
+    }
+
+    // ── extract_call_names edge cases ────────────────────────────────
+
+    #[test]
+    fn test_extract_call_names_empty_source() {
+        // Parsing empty source should produce no call sites.
+        let sites = extract_call_names("", rust_language());
+        assert!(sites.is_empty(), "expected no call sites for empty source");
+    }
+
+    #[test]
+    fn test_extract_call_names_no_calls() {
+        // Source with no call expressions yields an empty list.
+        let source = "fn main() { let x = 42; }";
+        let sites = extract_call_names(source, rust_language());
+        assert!(
+            sites.is_empty(),
+            "expected no call sites for source without calls"
+        );
+    }
+
+    // ── resolve_callees edge cases ─────────────────────────────────
+
+    #[test]
+    fn test_resolve_callees_empty_names_returns_empty() {
+        // Calling resolve_callees with an empty callee list should
+        // short-circuit and return Ok(vec![]).
+        let conn = open_memory_db();
+        let result = resolve_callees(&conn, &[]).unwrap();
+        assert!(
+            result.is_empty(),
+            "expected empty result for empty callee list"
+        );
+    }
+
+    // ── generate_ts_call_edges edge cases ──────────────────────────
+
+    #[test]
+    fn test_generate_ts_call_edges_call_outside_chunk_is_skipped() {
+        // When a call site falls outside any known ts_chunk, it should
+        // be skipped (no edge emitted, no error).
+        let conn = open_memory_db();
+
+        // Source has main() calling helper(), but the ts_chunks DB only
+        // has a chunk for helper() in another file — NOT for main().
+        // That means the call site has no enclosing caller chunk.
+        seed_file(&conn, "src/main.rs");
+        seed_file(&conn, "src/util.rs");
+
+        let caller_source = "fn main() { helper(); }";
+        // Deliberately do NOT seed a chunk for "src/main.rs" so the call
+        // site in main has no enclosing chunk.
+        seed_chunk(
+            &conn,
+            "src/util.rs",
+            0,
+            30,
+            0,
+            3,
+            "fn helper() {}",
+            "helper",
+        );
+
+        let edges =
+            generate_ts_call_edges(&conn, "src/main.rs", caller_source, rust_language()).unwrap();
+
+        assert!(
+            edges.is_empty(),
+            "expected no edges when call site is outside any chunk"
+        );
+    }
+
+    #[test]
+    fn test_generate_ts_call_edges_multiple_callees_takes_first_only() {
+        // When multiple chunks match the same callee name, only the first
+        // match (by DB ordering) should produce an edge per call site.
+        let conn = open_memory_db();
+
+        seed_file(&conn, "src/main.rs");
+        seed_file(&conn, "src/a.rs");
+        seed_file(&conn, "src/b.rs");
+
+        let caller_source = "fn main() { helper(); }";
+        seed_chunk(
+            &conn,
+            "src/main.rs",
+            0,
+            caller_source.len() as i64,
+            0,
+            0,
+            caller_source,
+            "main",
+        );
+
+        // Two different files define "helper", so resolve_callees will
+        // return two matches. The code should break after the first.
+        seed_chunk(&conn, "src/a.rs", 0, 30, 0, 3, "fn helper() {}", "helper");
+        seed_chunk(&conn, "src/b.rs", 0, 30, 0, 3, "fn helper() {}", "helper");
+
+        let edges =
+            generate_ts_call_edges(&conn, "src/main.rs", caller_source, rust_language()).unwrap();
+
+        assert_eq!(
+            edges.len(),
+            1,
+            "expected exactly one edge despite multiple callee matches, got {}",
+            edges.len()
+        );
+    }
+
+    #[test]
+    fn test_generate_ts_call_edges_self_call_skipped() {
+        // When the caller and callee are the same symbol, the self-edge
+        // should be skipped (e.g., recursive call within the same chunk).
+        let conn = open_memory_db();
+
+        seed_file(&conn, "src/main.rs");
+
+        // Source: main() calls main() recursively. Because the call site
+        // is inside the "main" chunk and callee resolves to "main" in the
+        // same file, caller_id == callee_id → skipped.
+        let source = "fn main() { main(); }";
+        seed_chunk(
+            &conn,
+            "src/main.rs",
+            0,
+            source.len() as i64,
+            0,
+            0,
+            source,
+            "main",
+        );
+
+        let edges = generate_ts_call_edges(&conn, "src/main.rs", source, rust_language()).unwrap();
+
+        assert!(
+            edges.is_empty(),
+            "expected no edges for self-recursive call"
+        );
+    }
+
+    #[test]
+    fn test_generate_ts_call_edges_no_calls_in_source() {
+        // Source with no call expressions should return an empty edge list
+        // immediately without hitting the DB.
+        let conn = open_memory_db();
+        seed_file(&conn, "src/main.rs");
+
+        let source = "fn main() { let x = 42; }";
+        seed_chunk(
+            &conn,
+            "src/main.rs",
+            0,
+            source.len() as i64,
+            0,
+            0,
+            source,
+            "main",
+        );
+
+        let edges = generate_ts_call_edges(&conn, "src/main.rs", source, rust_language()).unwrap();
+
+        assert!(
+            edges.is_empty(),
+            "expected no edges for source without call expressions"
+        );
     }
 
     #[test]

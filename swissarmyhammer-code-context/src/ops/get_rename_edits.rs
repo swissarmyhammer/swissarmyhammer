@@ -308,6 +308,219 @@ mod tests {
         assert_eq!(edits.len(), 3);
     }
 
+    // --- SharedLspClient present but containing None ---
+
+    #[test]
+    fn test_shared_lsp_client_with_none_returns_can_rename_false() {
+        // When a SharedLspClient exists but wraps None (LSP process not
+        // connected), lsp_multi_request_with_document returns Ok(None) and
+        // the unwrap_or_else path produces can_rename: false.
+        let conn = test_db();
+        let shared: crate::lsp_worker::SharedLspClient =
+            std::sync::Arc::new(std::sync::Mutex::new(None));
+        let ctx = LayeredContext::new(&conn, Some(&shared));
+
+        let opts = GetRenameEditsOptions {
+            file_path: "src/main.rs".to_string(),
+            line: 10,
+            character: 5,
+            new_name: "renamed".to_string(),
+        };
+
+        let result = get_rename_edits(&ctx, &opts).unwrap();
+        assert!(!result.can_rename);
+        assert!(result.edits.is_empty());
+        assert_eq!(result.files_affected, 0);
+    }
+
+    // --- WorkspaceEdit parsing: precedence and edge cases ---
+
+    #[test]
+    fn test_parse_workspace_edit_document_changes_takes_precedence_over_changes() {
+        // LSP spec: when both `documentChanges` and `changes` are present,
+        // `documentChanges` takes precedence. Verify that edits come only
+        // from the documentChanges branch.
+        let response = serde_json::json!({
+            "documentChanges": [
+                {
+                    "textDocument": { "uri": "file:///src/preferred.rs", "version": 1 },
+                    "edits": [
+                        {
+                            "range": {
+                                "start": { "line": 0, "character": 0 },
+                                "end": { "line": 0, "character": 5 }
+                            },
+                            "newText": "from_doc_changes"
+                        }
+                    ]
+                }
+            ],
+            "changes": {
+                "file:///src/ignored.rs": [
+                    {
+                        "range": {
+                            "start": { "line": 0, "character": 0 },
+                            "end": { "line": 0, "character": 5 }
+                        },
+                        "newText": "from_changes"
+                    }
+                ]
+            }
+        });
+
+        let edits = parse_workspace_edit(&response);
+        assert_eq!(edits.len(), 1, "only documentChanges should be used");
+        assert_eq!(edits[0].file_path, "/src/preferred.rs");
+        assert_eq!(edits[0].text_edits[0].new_text, "from_doc_changes");
+    }
+
+    #[test]
+    fn test_parse_workspace_edit_document_changes_missing_uri_skipped() {
+        // An entry in documentChanges without a textDocument.uri should be
+        // skipped gracefully.
+        let response = serde_json::json!({
+            "documentChanges": [
+                {
+                    "textDocument": {},
+                    "edits": [
+                        {
+                            "range": {
+                                "start": { "line": 0, "character": 0 },
+                                "end": { "line": 0, "character": 3 }
+                            },
+                            "newText": "abc"
+                        }
+                    ]
+                },
+                {
+                    "textDocument": { "uri": "file:///src/valid.rs", "version": 1 },
+                    "edits": [
+                        {
+                            "range": {
+                                "start": { "line": 1, "character": 0 },
+                                "end": { "line": 1, "character": 4 }
+                            },
+                            "newText": "good"
+                        }
+                    ]
+                }
+            ]
+        });
+
+        let edits = parse_workspace_edit(&response);
+        assert_eq!(edits.len(), 1, "entry without URI should be skipped");
+        assert_eq!(edits[0].file_path, "/src/valid.rs");
+    }
+
+    #[test]
+    fn test_parse_workspace_edit_document_changes_missing_edits_skipped() {
+        // An entry in documentChanges with no `edits` array should be skipped.
+        let response = serde_json::json!({
+            "documentChanges": [
+                {
+                    "textDocument": { "uri": "file:///src/no_edits.rs", "version": 1 }
+                },
+                {
+                    "textDocument": { "uri": "file:///src/has_edits.rs", "version": 1 },
+                    "edits": [
+                        {
+                            "range": {
+                                "start": { "line": 0, "character": 0 },
+                                "end": { "line": 0, "character": 2 }
+                            },
+                            "newText": "ok"
+                        }
+                    ]
+                }
+            ]
+        });
+
+        let edits = parse_workspace_edit(&response);
+        assert_eq!(edits.len(), 1, "entry without edits should be skipped");
+        assert_eq!(edits[0].file_path, "/src/has_edits.rs");
+    }
+
+    #[test]
+    fn test_parse_workspace_edit_changes_empty_edits_array_omitted() {
+        // A file URI in `changes` that maps to an empty array should not
+        // produce a FileEdit entry.
+        let response = serde_json::json!({
+            "changes": {
+                "file:///src/empty.rs": [],
+                "file:///src/real.rs": [
+                    {
+                        "range": {
+                            "start": { "line": 0, "character": 0 },
+                            "end": { "line": 0, "character": 4 }
+                        },
+                        "newText": "data"
+                    }
+                ]
+            }
+        });
+
+        let edits = parse_workspace_edit(&response);
+        assert_eq!(
+            edits.len(),
+            1,
+            "empty edits array should produce no FileEdit"
+        );
+        assert_eq!(edits[0].file_path, "/src/real.rs");
+    }
+
+    #[test]
+    fn test_parse_workspace_edit_malformed_text_edit_skipped() {
+        // TextEdits missing `range` or `newText` should be silently skipped.
+        let response = serde_json::json!({
+            "changes": {
+                "file:///src/main.rs": [
+                    {
+                        "newText": "no range"
+                    },
+                    {
+                        "range": {
+                            "start": { "line": 0, "character": 0 },
+                            "end": { "line": 0, "character": 3 }
+                        }
+                    },
+                    {
+                        "range": {
+                            "start": { "line": 1, "character": 0 },
+                            "end": { "line": 1, "character": 5 }
+                        },
+                        "newText": "valid"
+                    }
+                ]
+            }
+        });
+
+        let edits = parse_workspace_edit(&response);
+        assert_eq!(edits.len(), 1);
+        assert_eq!(
+            edits[0].text_edits.len(),
+            1,
+            "only the well-formed text edit should survive"
+        );
+        assert_eq!(edits[0].text_edits[0].new_text, "valid");
+    }
+
+    // --- RenameEditsResult serialization ---
+
+    #[test]
+    fn test_result_can_rename_false_serialization() {
+        let result = RenameEditsResult {
+            can_rename: false,
+            edits: Vec::new(),
+            files_affected: 0,
+        };
+
+        let json = serde_json::to_string(&result).unwrap();
+        let roundtrip: RenameEditsResult = serde_json::from_str(&json).unwrap();
+        assert!(!roundtrip.can_rename);
+        assert!(roundtrip.edits.is_empty());
+        assert_eq!(roundtrip.files_affected, 0);
+    }
+
     #[test]
     fn test_result_serializable() {
         let result = RenameEditsResult {

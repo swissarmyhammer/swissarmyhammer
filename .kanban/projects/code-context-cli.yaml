@@ -1,0 +1,4 @@
+color: f9c513
+description: Standalone CLI binary for the code-context MCP tool, mirroring shelltool-cli structure
+name: code-context CLI
+order: 0

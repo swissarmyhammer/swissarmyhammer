@@ -101,65 +101,69 @@ impl CodeContextWorkspace {
 
         match election.elect().map_err(CodeContextError::Election)? {
             ElectionOutcome::Leader(guard) => {
-                tracing::info!(
-                    "Becoming code-context leader for {}",
-                    workspace_root.display()
-                );
-
-                let conn = Connection::open(&db_path)?;
-                db::configure_connection(&conn)?;
-                db::create_schema(&conn)?;
-
-                // Populate indexed_files table by scanning the workspace
-                // This must happen before spawning the indexing worker so it has files to process
-                crate::startup_cleanup(&conn, workspace_root)?;
-
-                let db = Arc::new(Mutex::new(conn));
-
-                Ok(Self {
-                    mode: WorkspaceMode::Leader { db, _guard: guard },
-                    workspace_root: workspace_root.to_path_buf(),
-                    context_dir,
-                })
+                Self::open_as_leader(workspace_root, context_dir, &db_path, guard)
             }
             ElectionOutcome::Follower(follower) => {
-                tracing::debug!(
-                    "Joining as code-context follower for {}",
-                    workspace_root.display()
-                );
-
-                // Wait for the leader to create the DB file before opening it
-                // read-only. On the very first run the file may not exist yet.
-                // SQLite read-only open does not create the file, so we retry
-                // with a short backoff (up to ~5 seconds) until it appears.
-                let flags = rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
-                    | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX;
-                let mut attempts = 0u32;
-                let db = loop {
-                    match Connection::open_with_flags(&db_path, flags) {
-                        Ok(conn) => break conn,
-                        Err(e) if attempts < 10 => {
-                            tracing::debug!(
-                                attempt = attempts + 1,
-                                path = %db_path.display(),
-                                error = %e,
-                                "follower waiting for leader to create DB file",
-                            );
-                            attempts += 1;
-                            std::thread::sleep(std::time::Duration::from_millis(500));
-                        }
-                        Err(e) => return Err(e.into()),
-                    }
-                };
-                db::configure_connection(&db)?;
-
-                Ok(Self {
-                    mode: WorkspaceMode::Follower { db, follower },
-                    workspace_root: workspace_root.to_path_buf(),
-                    context_dir,
-                })
+                Self::open_as_follower(workspace_root, context_dir, &db_path, follower)
             }
         }
+    }
+
+    /// Initialize a leader workspace: create the database, run schema
+    /// migrations, and populate the indexed-files table.
+    fn open_as_leader(
+        workspace_root: &Path,
+        context_dir: PathBuf,
+        db_path: &Path,
+        guard: LeaderGuard,
+    ) -> Result<Self, CodeContextError> {
+        tracing::info!(
+            "Becoming code-context leader for {}",
+            workspace_root.display()
+        );
+
+        let conn = Connection::open(db_path)?;
+        db::configure_connection(&conn)?;
+        db::create_schema(&conn)?;
+
+        // Populate indexed_files table by scanning the workspace.
+        // This must happen before spawning the indexing worker so it has files to process.
+        crate::startup_cleanup(&conn, workspace_root)?;
+
+        let db = Arc::new(Mutex::new(conn));
+
+        Ok(Self {
+            mode: WorkspaceMode::Leader { db, _guard: guard },
+            workspace_root: workspace_root.to_path_buf(),
+            context_dir,
+        })
+    }
+
+    /// Initialize a follower workspace: wait for the leader to create the
+    /// database file, then open a read-only connection.
+    ///
+    /// On the very first run the file may not exist yet. SQLite read-only
+    /// open does not create the file, so we retry with a short backoff
+    /// (up to ~5 seconds) until it appears.
+    fn open_as_follower(
+        workspace_root: &Path,
+        context_dir: PathBuf,
+        db_path: &Path,
+        follower: FollowerGuard,
+    ) -> Result<Self, CodeContextError> {
+        tracing::debug!(
+            "Joining as code-context follower for {}",
+            workspace_root.display()
+        );
+
+        let db = open_readonly_with_retry(db_path)?;
+        db::configure_connection(&db)?;
+
+        Ok(Self {
+            mode: WorkspaceMode::Follower { db, follower },
+            workspace_root: workspace_root.to_path_buf(),
+            context_dir,
+        })
     }
 
     /// Whether this workspace is the leader
@@ -243,6 +247,31 @@ impl CodeContextWorkspace {
     /// Path to the `.code-context/` directory
     pub fn context_dir(&self) -> &Path {
         &self.context_dir
+    }
+}
+
+/// Open a read-only SQLite connection, retrying with backoff until the file
+/// appears. Gives the leader up to ~5 seconds to create the database.
+fn open_readonly_with_retry(db_path: &Path) -> Result<Connection, CodeContextError> {
+    let flags =
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX;
+    let mut attempts = 0u32;
+
+    loop {
+        match Connection::open_with_flags(db_path, flags) {
+            Ok(conn) => return Ok(conn),
+            Err(e) if attempts < 10 => {
+                tracing::debug!(
+                    attempt = attempts + 1,
+                    path = %db_path.display(),
+                    error = %e,
+                    "follower waiting for leader to create DB file",
+                );
+                attempts += 1;
+                std::thread::sleep(std::time::Duration::from_millis(500));
+            }
+            Err(e) => return Err(e.into()),
+        }
     }
 }
 
@@ -432,5 +461,200 @@ mod tests {
         // ws3 should be a follower
         let ws3 = CodeContextWorkspace::open(dir.path()).unwrap();
         assert!(!ws3.is_leader());
+    }
+
+    #[test]
+    fn test_follower_db_returns_owned_dbref_that_can_query() {
+        let dir = tempfile::tempdir().unwrap();
+        let _leader = CodeContextWorkspace::open(dir.path()).unwrap();
+
+        let follower = CodeContextWorkspace::open(dir.path()).unwrap();
+        assert!(!follower.is_leader());
+
+        // Follower's db() returns DbRef::Owned which derefs to &Connection.
+        // Verify it can execute read queries through the Deref impl.
+        let tables: Vec<String> = follower
+            .db()
+            .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+
+        assert!(tables.contains(&"indexed_files".to_string()));
+        assert!(tables.contains(&"ts_chunks".to_string()));
+    }
+
+    #[test]
+    fn test_follower_reads_leader_data() {
+        let dir = tempfile::tempdir().unwrap();
+        let leader = CodeContextWorkspace::open(dir.path()).unwrap();
+
+        // Leader writes a row
+        leader
+            .db()
+            .execute(
+                "INSERT INTO indexed_files (file_path, content_hash, file_size, last_seen_at)
+                 VALUES ('test.rs', X'AABB', 42, 9999)",
+                [],
+            )
+            .unwrap();
+
+        // Follower opens and reads through its DbRef::Owned path
+        let follower = CodeContextWorkspace::open(dir.path()).unwrap();
+        assert!(!follower.is_leader());
+
+        let count: i64 = follower
+            .db()
+            .query_row(
+                "SELECT COUNT(*) FROM indexed_files WHERE file_path = 'test.rs'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn test_workspace_mode_debug_follower() {
+        let dir = tempfile::tempdir().unwrap();
+        let _leader = CodeContextWorkspace::open(dir.path()).unwrap();
+
+        let follower = CodeContextWorkspace::open(dir.path()).unwrap();
+        assert!(!follower.is_leader());
+
+        let debug_str = format!("{:?}", follower);
+        assert!(
+            debug_str.contains("Follower"),
+            "expected 'Follower' in debug output, got: {debug_str}"
+        );
+        assert!(debug_str.contains("CodeContextWorkspace"));
+    }
+
+    #[test]
+    fn test_dbref_debug_shared() {
+        let dir = tempfile::tempdir().unwrap();
+        let leader = CodeContextWorkspace::open(dir.path()).unwrap();
+        assert!(leader.is_leader());
+
+        let db_ref = leader.db();
+        let debug_str = format!("{:?}", db_ref);
+        assert!(
+            debug_str.contains("DbRef::Shared"),
+            "expected 'DbRef::Shared' in debug output, got: {debug_str}"
+        );
+    }
+
+    #[test]
+    fn test_dbref_debug_owned() {
+        let dir = tempfile::tempdir().unwrap();
+        let _leader = CodeContextWorkspace::open(dir.path()).unwrap();
+
+        let follower = CodeContextWorkspace::open(dir.path()).unwrap();
+        assert!(!follower.is_leader());
+
+        let db_ref = follower.db();
+        let debug_str = format!("{:?}", db_ref);
+        assert!(
+            debug_str.contains("DbRef::Owned"),
+            "expected 'DbRef::Owned' in debug output, got: {debug_str}"
+        );
+    }
+
+    #[test]
+    fn test_try_promote_shared_db_is_functional() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // Write a file so startup_cleanup has something to discover
+        fs::write(dir.path().join("hello.rs"), "fn main() {}").unwrap();
+
+        let leader = CodeContextWorkspace::open(dir.path()).unwrap();
+        let mut follower = CodeContextWorkspace::open(dir.path()).unwrap();
+        assert!(!follower.is_leader());
+        drop(leader);
+
+        // Promote and get the shared DB handle
+        let shared_db = follower
+            .try_promote()
+            .unwrap()
+            .expect("promotion should succeed");
+
+        // The shared DB should allow writes
+        {
+            let conn = shared_db.lock().expect("mutex not poisoned");
+            conn.execute(
+                "INSERT INTO indexed_files (file_path, content_hash, file_size, last_seen_at)
+                 VALUES ('promoted_test.rs', X'CCDD', 100, 5555)",
+                [],
+            )
+            .unwrap();
+        }
+
+        // Read it back through the workspace's own db() accessor
+        let count: i64 = follower
+            .db()
+            .query_row(
+                "SELECT COUNT(*) FROM indexed_files WHERE file_path = 'promoted_test.rs'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn test_try_promote_runs_startup_cleanup() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // Create a source file before any workspace opens
+        fs::write(dir.path().join("lib.rs"), "pub fn init() {}").unwrap();
+
+        let leader = CodeContextWorkspace::open(dir.path()).unwrap();
+        let mut follower = CodeContextWorkspace::open(dir.path()).unwrap();
+        drop(leader);
+
+        let _shared = follower
+            .try_promote()
+            .unwrap()
+            .expect("promotion should succeed");
+
+        // startup_cleanup discovers workspace files and populates indexed_files.
+        // Verify the file was discovered.
+        let count: i64 = follower
+            .db()
+            .query_row("SELECT COUNT(*) FROM indexed_files", [], |r| r.get(0))
+            .unwrap();
+        assert!(
+            count >= 1,
+            "startup_cleanup should have discovered at least one file, found {count}"
+        );
+    }
+
+    #[test]
+    fn test_follower_retry_succeeds_when_db_exists() {
+        // When a leader has already created the DB, the follower retry loop
+        // should succeed on the first attempt (no retries needed).
+        // This exercises the Ok(conn) => break path in the retry loop.
+        let dir = tempfile::tempdir().unwrap();
+        let _leader = CodeContextWorkspace::open(dir.path()).unwrap();
+
+        // DB file exists because the leader created it
+        let db_path = dir.path().join(".code-context").join("index.db");
+        assert!(db_path.exists(), "leader should have created the DB file");
+
+        // Follower open should succeed immediately through the retry loop
+        let follower = CodeContextWorkspace::open(dir.path()).unwrap();
+        assert!(!follower.is_leader());
+
+        // Verify the follower's connection is usable
+        let result: String = follower
+            .db()
+            .query_row("SELECT sqlite_version()", [], |r| r.get(0))
+            .unwrap();
+        assert!(
+            !result.is_empty(),
+            "should get a valid SQLite version string"
+        );
     }
 }
