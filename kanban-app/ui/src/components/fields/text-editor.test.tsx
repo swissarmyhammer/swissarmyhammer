@@ -66,32 +66,6 @@ describe("TextEditor smoke tests", () => {
     ).not.toThrow();
   });
 
-  it("renders with popup=true (quick-capture mode)", () => {
-    expect(() =>
-      render(
-        <Wrapper>
-          <TextEditor value="" onCommit={noop} onCancel={noop} popup={true} />
-        </Wrapper>,
-      ),
-    ).not.toThrow();
-  });
-
-  it("renders with popup=false and onSubmit (the combo that crashed)", () => {
-    expect(() =>
-      render(
-        <Wrapper>
-          <TextEditor
-            value="test"
-            onCommit={noop}
-            onCancel={noop}
-            onSubmit={noop}
-            popup={false}
-          />
-        </Wrapper>,
-      ),
-    ).not.toThrow();
-  });
-
   it("renders with placeholder and onChange", () => {
     expect(() =>
       render(
@@ -157,4 +131,96 @@ describe("TextEditor behavior", () => {
     });
     expect(onChange).toHaveBeenCalledWith("blur test");
   });
+});
+
+// ---------------------------------------------------------------------------
+// singleLine mode
+// ---------------------------------------------------------------------------
+
+describe("TextEditor singleLine mode", () => {
+  it("renders without error", () => {
+    expect(() =>
+      render(
+        <Wrapper>
+          <TextEditor
+            value="hello"
+            onCommit={noop}
+            onCancel={noop}
+            singleLine
+          />
+        </Wrapper>,
+      ),
+    ).not.toThrow();
+  });
+
+  it("non-singleLine blur calls onChange, not onCommit", async () => {
+    const onCommit = vi.fn();
+    const onChange = vi.fn();
+    render(
+      <Wrapper>
+        <TextEditor
+          value="keep editing"
+          onCommit={onCommit}
+          onCancel={noop}
+          onChange={onChange}
+        />
+      </Wrapper>,
+    );
+    const cmContent = document.querySelector(".cm-content") as HTMLElement;
+    expect(cmContent).toBeTruthy();
+    await act(async () => {
+      cmContent.blur();
+      await new Promise((r) => setTimeout(r, 50));
+    });
+    // Non-singleLine: blur fires onChange, NOT onCommit
+    expect(onChange).toHaveBeenCalledWith("keep editing");
+    expect(onCommit).not.toHaveBeenCalled();
+  });
+
+  it("singleLine CUA: Enter commits", async () => {
+    const onCommit = vi.fn();
+    render(
+      <Wrapper>
+        <TextEditor
+          value="tab name"
+          onCommit={onCommit}
+          onCancel={noop}
+          singleLine
+        />
+      </Wrapper>,
+    );
+    const cmContent = document.querySelector(".cm-content") as HTMLElement;
+    expect(cmContent).toBeTruthy();
+    await act(async () => {
+      cmContent.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+      );
+      await new Promise((r) => setTimeout(r, 50));
+    });
+    expect(onCommit).toHaveBeenCalledWith("tab name");
+  });
+
+  it("singleLine CUA: Escape cancels", async () => {
+    const onCancel = vi.fn();
+    render(
+      <Wrapper>
+        <TextEditor
+          value="tab name"
+          onCommit={noop}
+          onCancel={onCancel}
+          singleLine
+        />
+      </Wrapper>,
+    );
+    const cmContent = document.querySelector(".cm-content") as HTMLElement;
+    expect(cmContent).toBeTruthy();
+    await act(async () => {
+      cmContent.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+      );
+      await new Promise((r) => setTimeout(r, 50));
+    });
+    expect(onCancel).toHaveBeenCalled();
+  });
+
 });

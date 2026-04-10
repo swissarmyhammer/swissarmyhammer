@@ -6,6 +6,7 @@ use crate::Expr;
 /// - `has_tag("bug")` → entity's tags (including virtual tags) contain "bug"
 /// - `has_assignee("alice")` → entity is assigned to "alice"
 /// - `has_ref("01ABC")` → entity references card "01ABC" (via depends_on or id)
+/// - `has_project("auth")` → entity belongs to project "auth"
 pub trait FilterContext {
     /// Returns true if the entity has the given tag (case-insensitive).
     fn has_tag(&self, tag: &str) -> bool;
@@ -15,6 +16,9 @@ pub trait FilterContext {
 
     /// Returns true if the entity references the given card ID.
     fn has_ref(&self, id: &str) -> bool;
+
+    /// Returns true if the entity belongs to the given project (case-insensitive).
+    fn has_project(&self, project: &str) -> bool;
 }
 
 /// Evaluate a filter expression against a context.
@@ -23,6 +27,7 @@ pub(crate) fn evaluate(expr: &Expr, ctx: &dyn FilterContext) -> bool {
         Expr::Tag(tag) => ctx.has_tag(tag),
         Expr::Assignee(user) => ctx.has_assignee(user),
         Expr::Ref(id) => ctx.has_ref(id),
+        Expr::Project(project) => ctx.has_project(project),
         Expr::And(lhs, rhs) => evaluate(lhs, ctx) && evaluate(rhs, ctx),
         Expr::Or(lhs, rhs) => evaluate(lhs, ctx) || evaluate(rhs, ctx),
         Expr::Not(inner) => !evaluate(inner, ctx),
@@ -37,6 +42,7 @@ mod tests {
         tags: Vec<&'static str>,
         assignees: Vec<&'static str>,
         refs: Vec<&'static str>,
+        projects: Vec<&'static str>,
     }
 
     impl FilterContext for MockCtx {
@@ -49,13 +55,24 @@ mod tests {
         fn has_ref(&self, id: &str) -> bool {
             self.refs.contains(&id)
         }
+        fn has_project(&self, project: &str) -> bool {
+            self.projects
+                .iter()
+                .any(|p| p.eq_ignore_ascii_case(project))
+        }
     }
 
-    fn mock(tags: &[&'static str], assignees: &[&'static str], refs: &[&'static str]) -> MockCtx {
+    fn mock(
+        tags: &[&'static str],
+        assignees: &[&'static str],
+        refs: &[&'static str],
+        projects: &[&'static str],
+    ) -> MockCtx {
         MockCtx {
             tags: tags.to_vec(),
             assignees: assignees.to_vec(),
             refs: refs.to_vec(),
+            projects: projects.to_vec(),
         }
     }
 
@@ -63,7 +80,7 @@ mod tests {
     fn tag_positive() {
         assert!(evaluate(
             &Expr::Tag("bug".into()),
-            &mock(&["bug"], &[], &[])
+            &mock(&["bug"], &[], &[], &[])
         ));
     }
 
@@ -71,7 +88,7 @@ mod tests {
     fn tag_negative() {
         assert!(!evaluate(
             &Expr::Tag("bug".into()),
-            &mock(&["feature"], &[], &[])
+            &mock(&["feature"], &[], &[], &[])
         ));
     }
 
@@ -79,7 +96,31 @@ mod tests {
     fn tag_case_insensitive() {
         assert!(evaluate(
             &Expr::Tag("READY".into()),
-            &mock(&["ready"], &[], &[])
+            &mock(&["ready"], &[], &[], &[])
+        ));
+    }
+
+    #[test]
+    fn project_positive() {
+        assert!(evaluate(
+            &Expr::Project("auth".into()),
+            &mock(&[], &[], &[], &["auth"])
+        ));
+    }
+
+    #[test]
+    fn project_negative() {
+        assert!(!evaluate(
+            &Expr::Project("auth".into()),
+            &mock(&[], &[], &[], &["frontend"])
+        ));
+    }
+
+    #[test]
+    fn project_case_insensitive() {
+        assert!(evaluate(
+            &Expr::Project("AUTH".into()),
+            &mock(&[], &[], &[], &["auth"])
         ));
     }
 
@@ -87,7 +128,7 @@ mod tests {
     fn assignee_positive() {
         assert!(evaluate(
             &Expr::Assignee("will".into()),
-            &mock(&[], &["will"], &[])
+            &mock(&[], &["will"], &[], &[])
         ));
     }
 
@@ -95,7 +136,7 @@ mod tests {
     fn ref_positive() {
         assert!(evaluate(
             &Expr::Ref("01ABC".into()),
-            &mock(&[], &[], &["01ABC"])
+            &mock(&[], &[], &["01ABC"], &[])
         ));
     }
 
@@ -105,7 +146,7 @@ mod tests {
             Box::new(Expr::Tag("bug".into())),
             Box::new(Expr::Assignee("will".into())),
         );
-        assert!(evaluate(&expr, &mock(&["bug"], &["will"], &[])));
+        assert!(evaluate(&expr, &mock(&["bug"], &["will"], &[], &[])));
     }
 
     #[test]
@@ -114,7 +155,7 @@ mod tests {
             Box::new(Expr::Tag("bug".into())),
             Box::new(Expr::Assignee("will".into())),
         );
-        assert!(!evaluate(&expr, &mock(&["bug"], &["alice"], &[])));
+        assert!(!evaluate(&expr, &mock(&["bug"], &["alice"], &[], &[])));
     }
 
     #[test]
@@ -123,7 +164,7 @@ mod tests {
             Box::new(Expr::Tag("bug".into())),
             Box::new(Expr::Tag("feature".into())),
         );
-        assert!(evaluate(&expr, &mock(&["feature"], &[], &[])));
+        assert!(evaluate(&expr, &mock(&["feature"], &[], &[], &[])));
     }
 
     #[test]
@@ -132,14 +173,14 @@ mod tests {
             Box::new(Expr::Tag("bug".into())),
             Box::new(Expr::Tag("feature".into())),
         );
-        assert!(!evaluate(&expr, &mock(&["docs"], &[], &[])));
+        assert!(!evaluate(&expr, &mock(&["docs"], &[], &[], &[])));
     }
 
     #[test]
     fn not_negates() {
         let expr = Expr::Not(Box::new(Expr::Tag("done".into())));
-        assert!(evaluate(&expr, &mock(&["bug"], &[], &[])));
-        assert!(!evaluate(&expr, &mock(&["done"], &[], &[])));
+        assert!(evaluate(&expr, &mock(&["bug"], &[], &[], &[])));
+        assert!(!evaluate(&expr, &mock(&["done"], &[], &[], &[])));
     }
 
     #[test]
@@ -149,7 +190,7 @@ mod tests {
             Box::new(Expr::Tag("nonexistent".into())),
             Box::new(Expr::Assignee("will".into())),
         );
-        assert!(!evaluate(&expr, &mock(&[], &["will"], &[])));
+        assert!(!evaluate(&expr, &mock(&[], &["will"], &[], &[])));
     }
 
     #[test]
@@ -159,7 +200,7 @@ mod tests {
             Box::new(Expr::Tag("bug".into())),
             Box::new(Expr::Tag("nonexistent".into())),
         );
-        assert!(evaluate(&expr, &mock(&["bug"], &[], &[])));
+        assert!(evaluate(&expr, &mock(&["bug"], &[], &[], &[])));
     }
 
     #[test]
@@ -172,9 +213,9 @@ mod tests {
             )),
             Box::new(Expr::Not(Box::new(Expr::Tag("done".into())))),
         );
-        assert!(evaluate(&expr, &mock(&["bug"], &[], &[])));
-        assert!(evaluate(&expr, &mock(&["feature"], &[], &[])));
-        assert!(!evaluate(&expr, &mock(&["bug", "done"], &[], &[])));
-        assert!(!evaluate(&expr, &mock(&["docs"], &[], &[])));
+        assert!(evaluate(&expr, &mock(&["bug"], &[], &[], &[])));
+        assert!(evaluate(&expr, &mock(&["feature"], &[], &[], &[])));
+        assert!(!evaluate(&expr, &mock(&["bug", "done"], &[], &[], &[])));
+        assert!(!evaluate(&expr, &mock(&["docs"], &[], &[], &[])));
     }
 }

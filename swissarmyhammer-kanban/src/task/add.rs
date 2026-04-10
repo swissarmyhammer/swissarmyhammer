@@ -297,35 +297,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_add_task_with_project() {
-        let (_temp, ctx) = setup().await;
-
-        // Create a project first
-        use crate::project::AddProject;
-        AddProject::new("backend", "Backend")
-            .execute(&ctx)
-            .await
-            .into_result()
-            .unwrap();
-
-        let cmd = AddTask::new("Task with project").with_project("backend");
-        let result = cmd.execute(&ctx).await.into_result().unwrap();
-
-        assert_eq!(result["title"], "Task with project");
-        assert_eq!(result["project"], "backend");
-    }
-
-    #[tokio::test]
-    async fn test_add_task_without_project_has_empty_project() {
-        let (_temp, ctx) = setup().await;
-
-        let cmd = AddTask::new("Task without project");
-        let result = cmd.execute(&ctx).await.into_result().unwrap();
-
-        assert_eq!(result["project"], "");
-    }
-
-    #[tokio::test]
     async fn test_add_multiple_tasks_ordering() {
         let (_temp, ctx) = setup().await;
 
@@ -347,5 +318,53 @@ mod tests {
 
         // Second should be after first
         assert!(ordinal2 > ordinal1);
+    }
+
+    #[tokio::test]
+    async fn test_add_task_project_field_null_when_unset() {
+        let (_temp, ctx) = setup().await;
+
+        let result = AddTask::new("Task without project")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        assert!(
+            result.get("project").is_some(),
+            "project field should be present in task JSON"
+        );
+        assert!(
+            result["project"].is_null(),
+            "project should be null when unset"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_add_task_with_project() {
+        let (_temp, ctx) = setup().await;
+
+        // Create a project entity first
+        use crate::project::AddProject;
+        let project = AddProject::new("my-project", "My Project")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let project_id = project["id"].as_str().unwrap();
+
+        // Create a task with that project
+        let result = AddTask::new("Task with project")
+            .with_project(project_id)
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        assert_eq!(
+            result["project"].as_str().unwrap(),
+            project_id,
+            "task should have the project set"
+        );
     }
 }

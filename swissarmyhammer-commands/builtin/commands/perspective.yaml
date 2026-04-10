@@ -115,6 +115,28 @@
       from: args
   keys: {}
 
+- id: perspective.next
+  name: Next Perspective
+  keys:
+    cua: "Mod+]"
+    vim: "gt"
+
+- id: perspective.prev
+  name: Previous Perspective
+  keys:
+    cua: "Mod+["
+    vim: "gT"
+
+- id: perspective.goto
+  name: Go to Perspective
+  visible: false
+  params:
+    - name: id
+      from: args
+    - name: view_kind
+      from: args
+  keys: {}
+
 - id: perspective.list
   name: List Perspectives
   visible: false

@@ -300,8 +300,8 @@ mod tests {
             .unwrap();
         let task_id = add_result["id"].as_str().unwrap();
 
-        // Task starts with no project
-        assert_eq!(add_result["project"], "");
+        // Task starts with no project (null, not empty string)
+        assert!(add_result["project"].is_null());
 
         // Set the project
         let result = UpdateTask::new(task_id)

@@ -237,6 +237,52 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_next_task_filter_by_project() {
+        use crate::project::AddProject;
+
+        let (_temp, ctx) = setup().await;
+        AddProject::new("myproj", "My Project")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        AddTask::new("Unrelated task")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        AddTask::new("Project task")
+            .with_project("myproj")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        // Without filter, returns first task
+        let result = NextTask::new().execute(&ctx).await.into_result().unwrap();
+        assert_eq!(result["title"], "Unrelated task");
+
+        // With project filter, skips unrelated
+        let result = NextTask::new()
+            .with_filter("$myproj")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        assert_eq!(result["title"], "Project task");
+
+        // Non-matching project filter returns null
+        let result = NextTask::new()
+            .with_filter("$other")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        assert!(result.is_null());
+    }
+
+    #[tokio::test]
     async fn test_next_task_ignores_done() {
         let (_temp, ctx) = setup().await;
         let r1 = AddTask::new("Done task")

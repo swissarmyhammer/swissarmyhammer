@@ -14,6 +14,7 @@
 
 import { keymap, ViewPlugin } from "@codemirror/view";
 import { Prec, type Extension } from "@codemirror/state";
+import { completionStatus } from "@codemirror/autocomplete";
 import { getCM } from "@replit/codemirror-vim";
 
 /** Generic ref type — avoids importing React in this utility. */
@@ -53,7 +54,7 @@ export interface SubmitCancelOptions {
  *   - Default: capture-phase DOM listener that checks vim state — normal mode
  *     submits, insert mode passes through to vim for newline insertion.
  *
- * Vim Escape uses a two-phase strategy:
+ * Vim Escape uses a two-phase DOM listener strategy:
  *   - Capture phase reads vim state and handles normal mode immediately
  *     (cancel + stopPropagation), preventing vim from consuming the event.
  *   - Bubble phase handles the insert-mode case: vim has already exited
@@ -76,109 +77,118 @@ export function buildSubmitCancelExtensions(
 
   if (mode === "vim") {
     return [
-      // Enter handling — two strategies depending on alwaysSubmitOnEnter:
-      //
-      // alwaysSubmitOnEnter: Use Prec.highest keymap binding. This runs inside
-      // CM6's key dispatch pipeline, intercepting Enter before vim's own
-      // keymap handler can insert a newline. Used by the command palette where
-      // newlines are never valid.
-      //
-      // Default: Use a capture-phase DOM listener that checks vim state.
-      // In normal mode, Enter submits; in insert mode, Enter is passed through
-      // to vim for newline insertion. Used by single-line editors that start
-      // in normal mode (e.g. filter-editor).
-      ...(singleLine
-        ? alwaysSubmitOnEnter
-          ? [
-              Prec.highest(
-                keymap.of([
-                  {
-                    key: "Enter",
-                    run: (view) => {
-                      const text = view.state.doc.toString();
-                      if (text.length > 0) {
-                        // Defer so CM6's key dispatch finishes before the
-                        // callback unmounts the editor (destroying the view
-                        // mid-dispatch would crash).
-                        setTimeout(() => onSubmitRef.current?.(), 0);
-                      }
-                      // Always consume Enter — no newlines allowed.
-                      return true;
-                    },
-                  },
-                ]),
-              ),
-            ]
-          : [
-              ViewPlugin.define((view) => {
-                const handler = (event: KeyboardEvent) => {
-                  if (event.key !== "Enter") return;
-                  const cm = getCM(view);
-                  if (cm?.state?.vim?.insertMode) return; // let vim insert newline
-                  const text = view.state.doc.toString();
-                  if (text.length > 0) {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    onSubmitRef.current?.();
-                  }
-                };
-                view.dom.addEventListener("keydown", handler, true);
-                return {
-                  destroy() {
-                    view.dom.removeEventListener("keydown", handler, true);
-                  },
-                };
-              }),
-            ]
-        : []),
-      // Escape: two-phase handler on .cm-editor (view.dom).
-      //
-      // Capture phase: reads vim state BEFORE vim processes the event.
-      //   - Normal mode → immediately cancel/exit + stopPropagation.
-      //     This fires before vim's own handlers, preventing vim from
-      //     consuming the event (which broke the old bubble-only approach).
-      //   - Insert mode → record the state, let event continue to vim.
-      //
-      // Bubble phase: only needed for the insert-mode case.
-      //   - Stops propagation so ancestor handlers (backdrop onKeyDown,
-      //     global app.dismiss) don't also react to the Escape that vim
-      //     just used to exit insert mode.
-      //   - Optionally saves in place after vim has processed.
-      ViewPlugin.define((view) => {
-        let wasInsert = false;
-        const capture = (event: KeyboardEvent) => {
-          if (event.key !== "Escape") return;
-          const cm = getCM(view);
-          wasInsert = !!cm?.state?.vim?.insertMode;
-          if (!wasInsert) {
-            // Normal mode — cancel/exit the editor immediately.
-            event.preventDefault();
-            event.stopPropagation();
-            onCancelRef.current?.();
-          }
-          // Insert mode — let event through so vim exits to normal.
-        };
-        const bubble = (event: KeyboardEvent) => {
-          if (event.key !== "Escape") return;
-          // Stop ancestors from seeing this Escape (e.g. backdrop, app.dismiss).
-          event.stopPropagation();
-          if (wasInsert && saveInPlaceRef?.current) {
-            setTimeout(() => saveInPlaceRef.current?.(), 0);
-          }
-        };
-        view.dom.addEventListener("keydown", capture, true);
-        view.dom.addEventListener("keydown", bubble, false);
-        return {
-          destroy() {
-            view.dom.removeEventListener("keydown", capture, true);
-            view.dom.removeEventListener("keydown", bubble, false);
-          },
-        };
-      }),
+      ...buildVimEnterExtension(singleLine, alwaysSubmitOnEnter, onSubmitRef),
+      buildVimEscapeExtension(onCancelRef, saveInPlaceRef),
     ];
   }
 
-  // CUA / emacs — Prec.highest to beat markdown extension's Enter
+  return buildCuaExtensions(singleLine, onSubmitRef, onCancelRef);
+}
+
+/**
+ * Vim Enter extension — two strategies:
+ *
+ * alwaysSubmitOnEnter: Prec.highest keymap intercepts Enter before vim.
+ * Default: capture-phase DOM listener checks vim state — normal mode submits,
+ * insert mode passes through for newline insertion.
+ */
+function buildVimEnterExtension(
+  singleLine: boolean,
+  alwaysSubmitOnEnter: boolean,
+  onSubmitRef: Ref<(() => void) | null>,
+): Extension[] {
+  if (!singleLine) return [];
+
+  if (alwaysSubmitOnEnter) {
+    return [
+      Prec.highest(
+        keymap.of([
+          {
+            key: "Enter",
+            run: (view) => {
+              // Yield to autocomplete so Enter accepts the selected completion.
+              if (completionStatus(view.state) === "active") return false;
+              const text = view.state.doc.toString();
+              if (text.length > 0) onSubmitRef.current?.();
+              return true;
+            },
+          },
+        ]),
+      ),
+    ];
+  }
+
+  return [
+    ViewPlugin.define((view) => {
+      const handler = (event: KeyboardEvent) => {
+        if (event.key !== "Enter") return;
+        const cm = getCM(view);
+        if (cm?.state?.vim?.insertMode) return;
+        // Yield to autocomplete so Enter accepts the selected completion.
+        if (completionStatus(view.state) === "active") return;
+        const text = view.state.doc.toString();
+        if (text.length > 0) {
+          event.preventDefault();
+          event.stopPropagation();
+          onSubmitRef.current?.();
+        }
+      };
+      view.dom.addEventListener("keydown", handler, true);
+      return {
+        destroy() {
+          view.dom.removeEventListener("keydown", handler, true);
+        },
+      };
+    }),
+  ];
+}
+
+/**
+ * Vim Escape extension — two-phase DOM listener.
+ *
+ * Capture phase: normal mode → cancel immediately. Insert mode → let vim handle.
+ * Bubble phase: stop propagation + optional save-in-place after vim exits insert.
+ */
+function buildVimEscapeExtension(
+  onCancelRef: Ref<(() => void) | null>,
+  saveInPlaceRef?: Ref<(() => void) | null>,
+): Extension {
+  return ViewPlugin.define((view) => {
+    let wasInsert = false;
+    const capture = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      const cm = getCM(view);
+      wasInsert = !!cm?.state?.vim?.insertMode;
+      if (!wasInsert) {
+        event.preventDefault();
+        event.stopPropagation();
+        onCancelRef.current?.();
+      }
+    };
+    const bubble = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.stopPropagation();
+      if (wasInsert && saveInPlaceRef?.current) {
+        setTimeout(() => saveInPlaceRef.current?.(), 0);
+      }
+    };
+    view.dom.addEventListener("keydown", capture, true);
+    view.dom.addEventListener("keydown", bubble, false);
+    return {
+      destroy() {
+        view.dom.removeEventListener("keydown", capture, true);
+        view.dom.removeEventListener("keydown", bubble, false);
+      },
+    };
+  });
+}
+
+/** CUA/emacs extensions — Prec.highest keybindings for Escape and (optionally) Enter. */
+function buildCuaExtensions(
+  singleLine: boolean,
+  onSubmitRef: Ref<(() => void) | null>,
+  onCancelRef: Ref<(() => void) | null>,
+): Extension[] {
   return [
     Prec.highest(
       keymap.of([
@@ -193,7 +203,9 @@ export function buildSubmitCancelExtensions(
           ? [
               {
                 key: "Enter",
-                run: () => {
+                run: (view: import("@codemirror/view").EditorView) => {
+                  // Yield to autocomplete so Enter accepts the selected completion.
+                  if (completionStatus(view.state) === "active") return false;
                   onSubmitRef.current?.();
                   return true;
                 },

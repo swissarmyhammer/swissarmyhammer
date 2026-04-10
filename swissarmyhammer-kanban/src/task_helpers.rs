@@ -418,6 +418,13 @@ pub fn task_entity_to_json(entity: &Entity) -> Value {
         result["attachments"] = json!([]);
     }
 
+    // Include project reference (null when unset)
+    if let Some(project) = entity.get("project") {
+        result["project"] = project.clone();
+    } else {
+        result["project"] = Value::Null;
+    }
+
     result
 }
 
@@ -438,10 +445,35 @@ pub fn task_entity_to_rich_json(entity: &Entity) -> Value {
     result
 }
 
+/// Auto-create Tag entities for any #tag patterns found in a task's body.
+///
+/// Parses the body text for `#tag` patterns, checks each against existing
+/// tag entities, and creates new tag entities for any that don't exist yet.
+/// Returns the list of tag names found.
+pub async fn auto_create_body_tags(
+    entity: &Entity,
+    ectx: &swissarmyhammer_entity::EntityContext,
+) -> crate::error::Result<Vec<String>> {
+    let body = entity.get_str("body").unwrap_or("");
+    let tags = crate::tag_parser::parse_tags(body);
+    for tag_name in &tags {
+        if !crate::tag::tag_name_exists_entity(ectx, tag_name).await {
+            let color = crate::auto_color::auto_color(tag_name).to_string();
+            let tag_id = ulid::Ulid::new().to_string();
+            let mut tag_entity = Entity::new("tag", tag_id.as_str());
+            tag_entity.set("tag_name", json!(tag_name));
+            tag_entity.set("color", json!(color));
+            ectx.write(&tag_entity).await?;
+        }
+    }
+    Ok(tags)
+}
+
 /// Adapter that maps filter DSL atoms to enriched task entity fields.
 ///
 /// Uses `filter_tags` (union of body tags + virtual tags) for `#tag` lookups,
-/// `assignees` for `@user` lookups, and `depends_on` + `id` for `^ref` lookups.
+/// `assignees` for `@user` lookups, `depends_on` + `id` for `^ref` lookups,
+/// and the single-value `project` field for `$project` lookups.
 /// Entities must be enriched (via `enrich_task_entity` or `enrich_all_task_entities`)
 /// before evaluation — unenriched entities won't have `filter_tags`.
 pub struct TaskFilterAdapter<'a> {
@@ -471,6 +503,13 @@ impl<'a> swissarmyhammer_filter_expr::FilterContext for TaskFilterAdapter<'a> {
                 .get_string_list("depends_on")
                 .iter()
                 .any(|r| r == id)
+    }
+
+    fn has_project(&self, project: &str) -> bool {
+        self.entity
+            .get_str("project")
+            .map(|p| p.eq_ignore_ascii_case(project))
+            .unwrap_or(false)
     }
 }
 

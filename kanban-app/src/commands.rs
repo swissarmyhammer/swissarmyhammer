@@ -59,6 +59,79 @@ fn update_window_title(app: &AppHandle, label: &str, board_name: Option<&str>) {
     }
 }
 
+/// Gather view info from an optional board handle for dynamic commands.
+fn gather_views(handle: Option<&BoardHandle>) -> Vec<swissarmyhammer_kanban::scope_commands::ViewInfo> {
+    use swissarmyhammer_kanban::scope_commands::ViewInfo;
+    let Some(handle) = handle else { return vec![] };
+    let Some(views_lock) = handle.ctx.views() else { return vec![] };
+    let Ok(vc) = views_lock.try_read() else { return vec![] };
+    vc.all_views().iter().map(|v| ViewInfo { id: v.id.clone(), name: v.name.clone() }).collect()
+}
+
+/// Gather open board info from UIState for dynamic commands.
+async fn gather_boards(
+    ui_state: &swissarmyhammer_commands::UIState,
+    boards: &tokio::sync::RwLock<std::collections::HashMap<std::path::PathBuf, std::sync::Arc<BoardHandle>>>,
+) -> Vec<swissarmyhammer_kanban::scope_commands::BoardInfo> {
+    use swissarmyhammer_kanban::scope_commands::BoardInfo;
+    let open_paths = ui_state.open_boards();
+    let boards_lock = boards.read().await;
+    let mut result = Vec::new();
+    for path in &open_paths {
+        let p = std::path::Path::new(path);
+        let dir_name = p.parent().and_then(|parent| parent.file_name())
+            .and_then(|n| n.to_str()).unwrap_or("Board").to_string();
+        let entity_name = match boards_lock.get(p) {
+            Some(handle) => board_display_name(handle).await.unwrap_or_else(|| dir_name.clone()),
+            None => dir_name.clone(),
+        };
+        let context_name = boards_lock.get(p)
+            .map(|h| h.ctx.name().to_string()).unwrap_or_else(|| dir_name.clone());
+        result.push(BoardInfo { path: path.clone(), name: dir_name, entity_name, context_name });
+    }
+    result
+}
+
+/// Gather window info from Tauri for dynamic commands.
+fn gather_windows(app: &tauri::AppHandle) -> Vec<swissarmyhammer_kanban::scope_commands::WindowInfo> {
+    use swissarmyhammer_kanban::scope_commands::WindowInfo;
+    app.webview_windows().iter().filter_map(|(label, w)| {
+        let title = w.title().ok()?;
+        if title.is_empty() || !w.is_visible().unwrap_or(false) { return None; }
+        Some(WindowInfo { label: label.clone(), title, focused: w.is_focused().unwrap_or(false) })
+    }).collect()
+}
+
+/// Resolve the active view kind (e.g. "board", "grid") from the UIState and views context.
+fn resolve_active_view_kind(handle: Option<&BoardHandle>, ui_state: &swissarmyhammer_commands::UIState) -> Option<String> {
+    let handle = handle?;
+    let active_id = ui_state.active_view_id("main");
+    if active_id.is_empty() { return None; }
+    let views_lock = handle.ctx.views()?;
+    let vc = views_lock.try_read().ok()?;
+    let view = vc.all_views().iter().find(|v| v.id == active_id)?;
+    Some(serde_json::to_value(&view.kind).ok()?.as_str()?.to_string())
+}
+
+/// Gather perspective info from an optional board handle for dynamic commands.
+///
+/// When `view_kind` is provided, only perspectives matching that view kind are
+/// returned. This prevents duplicate "Default" entries across view kinds.
+async fn gather_perspectives(
+    handle: Option<&BoardHandle>,
+    view_kind: Option<&str>,
+) -> Vec<swissarmyhammer_kanban::scope_commands::PerspectiveInfo> {
+    use swissarmyhammer_kanban::scope_commands::PerspectiveInfo;
+    let Some(handle) = handle else { return vec![] };
+    let Ok(pctx) = handle.ctx.perspective_context().await else { return vec![] };
+    let Ok(pc) = pctx.try_read() else { return vec![] };
+    pc.all()
+        .iter()
+        .filter(|p| view_kind.is_none_or(|vk| p.view == vk))
+        .map(|p| PerspectiveInfo { id: p.id.clone(), name: p.name.clone(), view: p.view.clone() })
+        .collect()
+}
+
 /// Read the board entity's display name from the entity context.
 ///
 /// Returns the `name` field of the board entity (entity type "board", id "board").
@@ -193,7 +266,8 @@ pub async fn list_entity_types(
 /// Adapter that maps filter DSL atoms to entity fields.
 ///
 /// Uses `filter_tags` (union of body tags + virtual tags) for `#tag` lookups,
-/// `assignees` for `@user` lookups, and `depends_on` + `id` for `^ref` lookups.
+/// `assignees` for `@user` lookups, `depends_on` + `id` for `^ref` lookups,
+/// and the single-value `project` field for `$project` lookups.
 struct EntityFilterAdapter<'a> {
     entity: &'a Entity,
 }
@@ -220,6 +294,13 @@ impl<'a> FilterContext for EntityFilterAdapter<'a> {
                 .get_string_list("depends_on")
                 .iter()
                 .any(|r| r == id)
+    }
+
+    fn has_project(&self, project: &str) -> bool {
+        self.entity
+            .get_str("project")
+            .map(|p| p.eq_ignore_ascii_case(project))
+            .unwrap_or(false)
     }
 }
 
@@ -419,6 +500,45 @@ pub async fn search_mentions(
     Ok(json!(matches))
 }
 
+/// Build a single search-result JSON row from an entity plus a score.
+///
+/// Resolves the display name using the entity schema's
+/// `search_display_field`, falling back to `mention_display_field`,
+/// then `"name"`, then `"title"`, and finally the entity ID. The
+/// resulting shape is `{ entity_type, entity_id, display_name, score }`
+/// — the element shape consumed by the frontend search presenter.
+fn build_search_result_row(
+    entity: &Entity,
+    score: f64,
+    fields_ctx: &swissarmyhammer_fields::FieldsContext,
+) -> Value {
+    let entity_type = entity.entity_type.as_str();
+
+    // Resolve display field: search_display_field > mention_display_field > "name" > "title"
+    let display_field = fields_ctx
+        .get_entity(entity_type)
+        .and_then(|def| {
+            def.search_display_field
+                .as_ref()
+                .or(def.mention_display_field.as_ref())
+                .map(|f| f.as_str())
+        })
+        .unwrap_or("name");
+
+    let display_name = entity
+        .get_str(display_field)
+        .or_else(|| entity.get_str("name"))
+        .or_else(|| entity.get_str("title"))
+        .unwrap_or(entity.id.as_str());
+
+    json!({
+        "entity_type": entity_type,
+        "entity_id": entity.id,
+        "display_name": display_name,
+        "score": score,
+    })
+}
+
 /// Search all entities using the backend search index.
 ///
 /// The backend owns the search strategy: currently fuzzy matching via
@@ -470,35 +590,78 @@ pub async fn search_entities(
         .iter()
         .filter_map(|result| {
             let entity = search_index.get(&result.entity_id)?;
-            let entity_type = entity.entity_type.as_str();
-
-            // Resolve display field: search_display_field > mention_display_field > "name" > "title"
-            let display_field = fields_ctx
-                .get_entity(entity_type)
-                .and_then(|def| {
-                    def.search_display_field
-                        .as_ref()
-                        .or(def.mention_display_field.as_ref())
-                        .map(|f| f.as_str())
-                })
-                .unwrap_or("name");
-
-            let display_name = entity
-                .get_str(display_field)
-                .or_else(|| entity.get_str("name"))
-                .or_else(|| entity.get_str("title"))
-                .unwrap_or(entity.id.as_str());
-
-            Some(json!({
-                "entity_type": entity_type,
-                "entity_id": entity.id,
-                "display_name": display_name,
-                "score": result.score,
-            }))
+            Some(build_search_result_row(entity, result.score, fields_ctx))
         })
         .collect();
 
     Ok(json!(output))
+}
+
+/// Count tasks and ready tasks per column.
+fn count_tasks_by_column(
+    tasks: &[Entity],
+    terminal_id: &str,
+) -> (HashMap<String, usize>, HashMap<String, usize>) {
+    let mut counts: HashMap<String, usize> = HashMap::new();
+    let mut ready_counts: HashMap<String, usize> = HashMap::new();
+    for task in tasks {
+        let col = task
+            .get_str("position_column")
+            .unwrap_or("todo")
+            .to_string();
+        *counts.entry(col.clone()).or_insert(0) += 1;
+        if swissarmyhammer_kanban::task_helpers::task_is_ready(task, tasks, terminal_id) {
+            *ready_counts.entry(col).or_insert(0) += 1;
+        }
+    }
+    (counts, ready_counts)
+}
+
+/// Serialize columns with injected task_count and ready_count fields.
+fn serialize_columns_with_counts(
+    columns: &[Entity],
+    counts: &HashMap<String, usize>,
+    ready_counts: &HashMap<String, usize>,
+) -> Vec<Value> {
+    columns
+        .iter()
+        .map(|col| {
+            let mut e = col.clone();
+            e.set(
+                "task_count",
+                json!(counts.get(col.id.as_str()).copied().unwrap_or(0)),
+            );
+            e.set(
+                "ready_count",
+                json!(ready_counts.get(col.id.as_str()).copied().unwrap_or(0)),
+            );
+            e.to_json()
+        })
+        .collect()
+}
+
+/// Build the summary object for get_board_data.
+fn build_board_summary(
+    board: &Entity,
+    total_tasks: usize,
+    total_actors: usize,
+    ready_counts: &HashMap<String, usize>,
+) -> Value {
+    let ready_tasks: usize = ready_counts.values().sum();
+    let pc = board
+        .get("percent_complete")
+        .cloned()
+        .unwrap_or(json!(null));
+    let done_tasks = pc.get("done").and_then(|v| v.as_u64()).unwrap_or(0);
+    let percent_complete = pc.get("percent").and_then(|v| v.as_u64()).unwrap_or(0);
+    json!({
+        "total_tasks": total_tasks,
+        "total_actors": total_actors,
+        "ready_tasks": ready_tasks,
+        "blocked_tasks": total_tasks - ready_tasks,
+        "done_tasks": done_tasks,
+        "percent_complete": percent_complete,
+    })
 }
 
 /// Get the board data with all entities as raw entity bags.
@@ -518,95 +681,46 @@ pub async fn get_board_data(
         .await
         .map_err(|e| format!("get_board_data: {}", e))?;
 
-    // Read board entity
     let board = ectx
         .read("board", "board")
         .await
         .map_err(|e| format!("get_board_data: {}", e))?;
-
-    // Read and sort columns by order
     let mut columns = ectx
         .list("column")
         .await
         .map_err(|e| format!("get_board_data: {}", e))?;
     columns.sort_by_key(|c| c.get("order").and_then(|v| v.as_u64()).unwrap_or(0) as usize);
-
-    // Read tags
     let tags = ectx
         .list("tag")
         .await
         .map_err(|e| format!("get_board_data: {}", e))?;
-
-    // Read all tasks for counting
     let all_tasks = ectx
         .list("task")
         .await
         .map_err(|e| format!("get_board_data: {}", e))?;
-    let terminal_id = columns.last().map(|c| c.id.as_str()).unwrap_or("done");
-
-    // Count tasks per column, and ready tasks per column
-    let mut column_counts: HashMap<String, usize> = HashMap::new();
-    let mut column_ready_counts: HashMap<String, usize> = HashMap::new();
-    for task in &all_tasks {
-        let col = task
-            .get_str("position_column")
-            .unwrap_or("todo")
-            .to_string();
-        *column_counts.entry(col.clone()).or_insert(0) += 1;
-        if swissarmyhammer_kanban::task_helpers::task_is_ready(task, &all_tasks, terminal_id) {
-            *column_ready_counts.entry(col).or_insert(0) += 1;
-        }
-    }
-
-    // Serialize columns with injected task_count and ready_count
-    let columns_json: Vec<Value> = columns
-        .iter()
-        .map(|col| {
-            let mut e = col.clone();
-            let count = column_counts.get(col.id.as_str()).copied().unwrap_or(0);
-            let ready = column_ready_counts
-                .get(col.id.as_str())
-                .copied()
-                .unwrap_or(0);
-            e.set("task_count", json!(count));
-            e.set("ready_count", json!(ready));
-            e.to_json()
-        })
-        .collect();
-
-    // Serialize tags (no task_count — removed to avoid O(tasks × tags) scanning)
-    let tags_json: Vec<Value> = tags.iter().map(|tag| tag.to_json()).collect();
-
-    // Compute summary counts
-    let total_tasks = all_tasks.len();
-    // Sum pre-computed column ready counts instead of re-scanning all tasks
-    let ready_tasks: usize = column_ready_counts.values().sum();
     let total_actors = ectx
         .list("actor")
         .await
         .map_err(|e| format!("get_board_data: {}", e))?
         .len();
 
-    // Extract percent_complete from the board entity's computed field
-    let pc = board
-        .get("percent_complete")
-        .cloned()
-        .unwrap_or(json!(null));
-    let done_tasks = pc.get("done").and_then(|v| v.as_u64()).unwrap_or(0);
-    let percent_complete = pc.get("percent").and_then(|v| v.as_u64()).unwrap_or(0);
+    let terminal_id = columns.last().map(|c| c.id.as_str()).unwrap_or("done");
+    let (counts, ready_counts) = count_tasks_by_column(&all_tasks, terminal_id);
+    let columns_json = serialize_columns_with_counts(&columns, &counts, &ready_counts);
+    let tags_json: Vec<Value> = tags.iter().map(|tag| tag.to_json()).collect();
+    let summary = build_board_summary(&board, all_tasks.len(), total_actors, &ready_counts);
+    let virtual_tag_meta: Vec<Value> = default_virtual_tag_registry()
+        .metadata()
+        .into_iter()
+        .map(|m| json!({ "slug": m.slug, "color": m.color, "description": m.description }))
+        .collect();
 
     Ok(json!({
         "board": board.to_json(),
         "columns": columns_json,
         "tags": tags_json,
-        "summary": {
-            "total_tasks": total_tasks,
-            "total_actors": total_actors,
-            "ready_tasks": ready_tasks,
-            "blocked_tasks": total_tasks - ready_tasks,
-            "done_tasks": done_tasks,
-            "percent_complete": percent_complete,
-        }
+        "virtual_tag_meta": virtual_tag_meta,
+        "summary": summary,
     }))
 }
 
@@ -662,6 +776,122 @@ pub struct WindowGeometry {
     pub maximized: bool,
 }
 
+/// Resolve which board path a newly-created window should display.
+///
+/// Precedence: explicit `board_path` argument wins; otherwise falls back
+/// to the most-recently-focused board from `UIState`, and finally to any
+/// currently-open board. Returns `None` only when no board is available
+/// at all — a window with no board still renders (empty state).
+fn resolve_window_board_path(state: &AppState, board_path: Option<String>) -> Option<String> {
+    match board_path {
+        Some(bp) => Some(bp),
+        None => state.ui_state.most_recent_board().or_else(|| {
+            let boards = state.boards.try_read().ok();
+            boards.and_then(|b| b.keys().next().map(|p| p.display().to_string()))
+        }),
+    }
+}
+
+/// Apply saved geometry (position, size, maximized) to a freshly built
+/// webview window.
+///
+/// This is the window-restore path: on startup we rebuild windows that
+/// were open last session and push their saved geometry back onto the
+/// OS window. When `geometry` is `None` (new window), the OS default
+/// placement is preserved and this function is a no-op.
+fn apply_saved_geometry(window: &tauri::WebviewWindow, geometry: Option<&WindowGeometry>) {
+    let Some(geo) = geometry else { return };
+    let _ = window.set_size(tauri::PhysicalSize::new(geo.width, geo.height));
+    let _ = window.set_position(tauri::PhysicalPosition::new(geo.x, geo.y));
+    if geo.maximized {
+        let _ = window.maximize();
+    }
+}
+
+/// Persist a window's geometry into `UIState` so the window can be
+/// restored on next launch.
+///
+/// Uses the provided `geometry` directly when present (restore path,
+/// avoiding a race with OS placement), otherwise reads the actual
+/// position/size from the live window after the OS has placed it
+/// (new-window path). Failures to read live geometry are silently
+/// ignored — best-effort persistence.
+fn persist_window_geometry(
+    state: &AppState,
+    label: &str,
+    window: &tauri::WebviewWindow,
+    geometry: Option<&WindowGeometry>,
+) {
+    if let Some(geo) = geometry {
+        state.ui_state.save_window_geometry(
+            label,
+            geo.x,
+            geo.y,
+            geo.width,
+            geo.height,
+            geo.maximized,
+        );
+    } else if let (Ok(pos), Ok(size)) = (window.outer_position(), window.outer_size()) {
+        let maximized = window.is_maximized().unwrap_or(false);
+        state.ui_state.save_window_geometry(
+            label,
+            pos.x,
+            pos.y,
+            size.width,
+            size.height,
+            maximized,
+        );
+    }
+}
+
+/// Build a new (still hidden) webview window pointed at the given board path.
+///
+/// Constructs the `index.html?window=board&board=...` URL and builds
+/// the `WebviewWindowBuilder` with the app's default size and title.
+/// The returned window is `visible(false)` — the caller is responsible
+/// for applying geometry, then calling `show()` and `set_focus()`.
+/// Returns `Err` only when the underlying Tauri `build()` fails.
+fn build_window_for_board(
+    app: &AppHandle,
+    label: &str,
+    resolved_path: Option<&str>,
+) -> Result<tauri::WebviewWindow, String> {
+    let mut url = String::from("index.html?window=board");
+    if let Some(bp) = resolved_path {
+        url.push_str("&board=");
+        url.push_str(&urlencoding::encode(bp));
+    }
+
+    let window = WebviewWindowBuilder::new(app, label, tauri::WebviewUrl::App(url.into()))
+        .title(APP_TITLE)
+        .visible(false)
+        .inner_size(1200.0, 800.0)
+        .resizable(true)
+        .disable_drag_drop_handler()
+        .build()
+        .map_err(|e| format!("Failed to create window: {e}"))?;
+
+    Ok(window)
+}
+
+/// Set a window's title from the board entity's display name.
+///
+/// Canonicalizes the board path, looks up the handle, reads the board
+/// entity's `name` field, and delegates to `update_window_title`. A
+/// missing handle (e.g. the board is not currently open in this app
+/// instance) is a no-op — the window keeps its default title.
+async fn apply_board_title(app: &AppHandle, state: &AppState, label: &str, board_path: &str) {
+    let board_path = std::path::PathBuf::from(board_path);
+    let canonical = board_path
+        .canonicalize()
+        .unwrap_or_else(|_| board_path.clone());
+    let boards = state.boards.read().await;
+    if let Some(handle) = boards.get(&canonical) {
+        let name = board_display_name(handle).await;
+        update_window_title(app, label, name.as_deref());
+    }
+}
+
 /// Create a new webview window.
 ///
 /// This is the single code path for all window creation — both user-initiated
@@ -688,44 +918,11 @@ pub async fn create_window_impl(
     let label = label.unwrap_or_else(new_window_label);
     tracing::info!(board_path = ?board_path, label = %label, "create_window called");
 
-    // Resolve board path: explicit > AppState active board > first open board
-    let resolved_path = match board_path {
-        Some(bp) => Some(bp),
-        None => {
-            // Fall back to the most recently focused board
-            state.ui_state.most_recent_board().or_else(|| {
-                let boards = state.boards.try_read().ok();
-                boards.and_then(|b| b.keys().next().map(|p| p.display().to_string()))
-            })
-        }
-    };
+    let resolved_path = resolve_window_board_path(state, board_path);
 
-    let mut url = String::from("index.html?window=board");
-    if let Some(ref bp) = resolved_path {
-        url.push_str("&board=");
-        url.push_str(&urlencoding::encode(bp));
-    }
+    let window = build_window_for_board(&app, &label, resolved_path.as_deref())?;
 
-    let builder = WebviewWindowBuilder::new(&app, &label, tauri::WebviewUrl::App(url.into()))
-        .title(APP_TITLE)
-        .visible(false)
-        .inner_size(1200.0, 800.0)
-        .resizable(true)
-        .disable_drag_drop_handler();
-
-    let window = builder
-        .build()
-        .map_err(|e| format!("Failed to create window: {e}"))?;
-
-    // Apply saved geometry if provided (restore path), otherwise read
-    // initial geometry from the newly created window (new window path).
-    if let Some(geo) = &geometry {
-        let _ = window.set_size(tauri::PhysicalSize::new(geo.width, geo.height));
-        let _ = window.set_position(tauri::PhysicalPosition::new(geo.x, geo.y));
-        if geo.maximized {
-            let _ = window.maximize();
-        }
-    }
+    apply_saved_geometry(&window, geometry.as_ref());
 
     let _ = window.show();
     let _ = window.set_focus();
@@ -739,40 +936,8 @@ pub async fn create_window_impl(
             "persisting window state to UIState"
         );
         state.ui_state.set_window_board(&label, bp);
-
-        // Save geometry — either from the provided restore geometry or
-        // from the actual window position after OS placement.
-        if let Some(geo) = &geometry {
-            state.ui_state.save_window_geometry(
-                &label,
-                geo.x,
-                geo.y,
-                geo.width,
-                geo.height,
-                geo.maximized,
-            );
-        } else if let (Ok(pos), Ok(size)) = (window.outer_position(), window.outer_size()) {
-            let maximized = window.is_maximized().unwrap_or(false);
-            state.ui_state.save_window_geometry(
-                &label,
-                pos.x,
-                pos.y,
-                size.width,
-                size.height,
-                maximized,
-            );
-        }
-
-        // Set window title from board entity display name
-        let board_path = std::path::PathBuf::from(bp);
-        let canonical = board_path
-            .canonicalize()
-            .unwrap_or_else(|_| board_path.clone());
-        let boards = state.boards.read().await;
-        if let Some(handle) = boards.get(&canonical) {
-            let name = board_display_name(handle).await;
-            update_window_title(&app, &label, name.as_deref());
-        }
+        persist_window_geometry(state, &label, &window, geometry.as_ref());
+        apply_board_title(&app, state, &label, bp).await;
     }
 
     // Menu rebuild is handled by the frontend dispatching ui.setFocus
@@ -904,6 +1069,93 @@ pub async fn dispatch_command(
 /// # Parameters
 /// - `app` - Tauri application handle for event emission
 /// - `state` - Application state with command registry, impls, and board handles
+/// Maximum number of prefix rewrites before we reject the command.
+const MAX_REWRITE_DEPTH: u8 = 1;
+
+/// Rewrite result from the dynamic prefix loop.
+struct RewriteResult {
+    cmd: String,
+    args: Option<Value>,
+    board_path: Option<String>,
+    /// If set, return this value immediately (e.g. for window.focus side-effects).
+    early_return: Option<Value>,
+}
+
+/// Handle `window.focus:*` — pure OS side-effect with no undo/UIState implications.
+fn handle_window_focus(app: &AppHandle, label: &str) -> Value {
+    tracing::info!(label = %label, "window.focus — bringing window to front");
+    if let Some(window) = app.get_webview_window(label) {
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+    json!({ "WindowFocus": label })
+}
+
+/// Match a dynamic command prefix and return (new_cmd, arg_key, arg_value, updates_board_path).
+fn match_dynamic_prefix(cmd: &str) -> Result<Option<(&str, &str, String, bool)>, String> {
+    if let Some(suffix) = cmd.strip_prefix("view.switch:") {
+        Ok(Some(("ui.view.set", "view_id", suffix.to_string(), false)))
+    } else if let Some(suffix) = cmd.strip_prefix("board.switch:") {
+        if suffix.contains("..") || !std::path::Path::new(suffix).is_absolute() {
+            return Err(format!("Invalid board path in command: {:?}", suffix));
+        }
+        Ok(Some(("file.switchBoard", "path", suffix.to_string(), true)))
+    } else if let Some(suffix) = cmd.strip_prefix("perspective.goto:") {
+        Ok(Some(("ui.perspective.set", "perspective_id", suffix.to_string(), false)))
+    } else {
+        Ok(None)
+    }
+}
+
+/// Rewrite dynamic palette command prefixes to their canonical forms.
+///
+/// Handles `window.focus:*` (pure side-effect, returns early), `view.switch:*`,
+/// `board.switch:*`, and `perspective.goto:*` by stripping the prefix and
+/// injecting the suffix as an arg. Preserves all input validation (ASCII-only,
+/// 128-char limit, bounded rewrite depth).
+fn rewrite_dynamic_prefix(
+    app: &AppHandle,
+    cmd: &str,
+    args: Option<Value>,
+    board_path: Option<String>,
+    target: &Option<String>,
+    scope_chain: &Option<Vec<String>>,
+) -> Result<RewriteResult, String> {
+    if cmd.is_empty() || cmd.len() > 128 || !cmd.is_ascii() {
+        return Err(format!("Invalid command ID: {:?}", cmd));
+    }
+
+    let mut effective_cmd = cmd.to_owned();
+    let mut effective_args = args;
+    let mut effective_board_path = board_path;
+
+    for depth in 0..=MAX_REWRITE_DEPTH {
+        tracing::info!(cmd = %effective_cmd, target = ?target, args = ?effective_args,
+            scope_chain = ?scope_chain, board_path = ?effective_board_path, "command");
+
+        if let Some(label) = effective_cmd.strip_prefix("window.focus:") {
+            let result = handle_window_focus(app, label);
+            return Ok(RewriteResult { cmd: effective_cmd, args: effective_args, board_path: effective_board_path, early_return: Some(result) });
+        }
+
+        if let Some((new_cmd, arg_key, arg_val, update_bp)) = match_dynamic_prefix(&effective_cmd)? {
+            if depth >= MAX_REWRITE_DEPTH {
+                return Err(format!("Command rewrite depth exceeded for: {}", effective_cmd));
+            }
+            let mut merged = match effective_args { Some(Value::Object(map)) => map, _ => serde_json::Map::new() };
+            merged.insert(arg_key.into(), Value::String(arg_val.clone()));
+            if update_bp { effective_board_path = Some(arg_val); }
+            effective_cmd = new_cmd.to_owned();
+            effective_args = Some(Value::Object(merged));
+            continue;
+        }
+
+        break;
+    }
+
+    Ok(RewriteResult { cmd: effective_cmd, args: effective_args, board_path: effective_board_path, early_return: None })
+}
+
 /// - `cmd` - Command ID string (e.g. "task.move")
 /// - `scope_chain` - Optional explicit scope; falls back to stored UIState focus
 /// - `target` - Optional target entity ID
@@ -918,86 +1170,15 @@ pub(crate) async fn dispatch_command_internal(
     args: Option<Value>,
     board_path: Option<String>,
 ) -> Result<Value, String> {
-    /// Maximum number of prefix rewrites before we reject the command.
-    /// One rewrite is sufficient for all known dynamic prefixes
-    /// (`view.switch:*` -> `ui.view.set`, `board.switch:*` -> `file.switchBoard`).
-    const MAX_REWRITE_DEPTH: u8 = 1;
-
-    // Validate command ID: non-empty, reasonable length, ASCII-only
-    if cmd.is_empty() || cmd.len() > 128 || !cmd.is_ascii() {
-        return Err(format!("Invalid command ID: {:?}", cmd));
+    // Rewrite dynamic prefixes (view.switch:*, board.switch:*, perspective.goto:*)
+    // to canonical commands with merged args. Also validates command ID.
+    let rw = rewrite_dynamic_prefix(app, cmd, args, board_path, &target, &scope_chain)?;
+    if let Some(result) = rw.early_return {
+        return Ok(result);
     }
-
-    // --- Prefix rewrite loop ---
-    // Dynamic palette commands (view.switch:*, board.switch:*) are rewritten
-    // to their canonical command IDs with merged args. The loop runs at most
-    // MAX_REWRITE_DEPTH times to prevent unbounded recursion.
-    let mut effective_cmd = cmd.to_owned();
-    let mut effective_args = args;
-    let mut effective_board_path = board_path;
-
-    for depth in 0..=MAX_REWRITE_DEPTH {
-        tracing::info!(
-            cmd = %effective_cmd,
-            target = ?target,
-            args = ?effective_args,
-            scope_chain = ?scope_chain,
-            board_path = ?effective_board_path,
-            "command"
-        );
-
-        // `window.focus:*` — pure OS-level side-effect (unminimize + set focus).
-        // Returns early without entering the standard result-processing pipeline
-        // because window focus has no undo, UIState, or entity implications.
-        if let Some(label) = effective_cmd.strip_prefix("window.focus:") {
-            tracing::info!(label = %label, "window.focus — bringing window to front");
-            if let Some(window) = app.get_webview_window(label) {
-                let _ = window.unminimize();
-                let _ = window.set_focus();
-            }
-            return Ok(json!({ "WindowFocus": label }));
-        }
-
-        if let Some(view_id) = effective_cmd.strip_prefix("view.switch:") {
-            if depth >= MAX_REWRITE_DEPTH {
-                return Err(format!(
-                    "Command rewrite depth exceeded for: {}",
-                    effective_cmd
-                ));
-            }
-            tracing::info!(view_id = %view_id, "redirecting view.switch to ui.view.set");
-            let mut merged_args = match effective_args {
-                Some(Value::Object(map)) => map,
-                _ => serde_json::Map::new(),
-            };
-            merged_args.insert("view_id".into(), Value::String(view_id.to_string()));
-            effective_cmd = "ui.view.set".to_owned();
-            effective_args = Some(Value::Object(merged_args));
-            continue;
-        }
-
-        if let Some(board_path_suffix) = effective_cmd.strip_prefix("board.switch:") {
-            if depth >= MAX_REWRITE_DEPTH {
-                return Err(format!(
-                    "Command rewrite depth exceeded for: {}",
-                    effective_cmd
-                ));
-            }
-            tracing::info!(board_path = %board_path_suffix, "redirecting board.switch to file.switchBoard");
-            let mut merged_args = match effective_args {
-                Some(Value::Object(map)) => map,
-                _ => serde_json::Map::new(),
-            };
-            merged_args.insert("path".into(), Value::String(board_path_suffix.to_string()));
-            effective_board_path = Some(board_path_suffix.to_string());
-            effective_cmd = "file.switchBoard".to_owned();
-            effective_args = Some(Value::Object(merged_args));
-            continue;
-        }
-
-        // No prefix matched — proceed with normal dispatch.
-        break;
-    }
+    let effective_cmd = rw.cmd;
+    let effective_args = rw.args;
+    let effective_board_path = rw.board_path;
 
     // Resolve scope chain: explicit > stored focus
     let scope = match scope_chain {
@@ -1380,82 +1561,14 @@ pub async fn list_commands_for_scope(
 
     let registry = state.commands_registry.read().await;
 
-    // Build dynamic sources: views from the active board, open boards from UIState.
     let dynamic = {
-        use swissarmyhammer_kanban::scope_commands::{
-            BoardInfo, DynamicSources, ViewInfo, WindowInfo,
-        };
-
-        // Gather views from the active board handle
-        let mut views = Vec::new();
-        if let Some(handle) = active_handle.as_ref() {
-            if let Some(views_lock) = handle.ctx.views() {
-                if let Ok(vc) = views_lock.try_read() {
-                    for v in vc.all_views() {
-                        views.push(ViewInfo {
-                            id: v.id.clone(),
-                            name: v.name.clone(),
-                        });
-                    }
-                }
-            }
-        }
-
-        // Gather open boards from UIState, enriched with entity display names.
-        let open_paths = state.ui_state.open_boards();
-        let boards_lock = state.boards.read().await;
-        let mut boards: Vec<BoardInfo> = Vec::new();
-        for path in &open_paths {
-            let p = std::path::Path::new(path);
-            // Filesystem fallback: parent directory name.
-            let dir_name = p
-                .parent()
-                .and_then(|parent| parent.file_name())
-                .and_then(|n| n.to_str())
-                .unwrap_or("Board")
-                .to_string();
-            // Read entity display name from the board entity's `name` field.
-            let entity_name = match boards_lock.get(p) {
-                Some(handle) => board_display_name(handle)
-                    .await
-                    .unwrap_or_else(|| dir_name.clone()),
-                None => dir_name.clone(),
-            };
-            let context_name = boards_lock
-                .get(p)
-                .map(|h| h.ctx.name().to_string())
-                .unwrap_or_else(|| dir_name.clone());
-            boards.push(BoardInfo {
-                path: path.clone(),
-                name: dir_name,
-                entity_name,
-                context_name,
-            });
-        }
-        drop(boards_lock);
-
-        // Gather open windows from Tauri
-        let windows: Vec<WindowInfo> = app
-            .webview_windows()
-            .iter()
-            .filter_map(|(label, w)| {
-                let title = w.title().ok()?;
-                if title.is_empty() || !w.is_visible().unwrap_or(false) {
-                    return None;
-                }
-                Some(WindowInfo {
-                    label: label.clone(),
-                    title,
-                    focused: w.is_focused().unwrap_or(false),
-                })
-            })
-            .collect();
-
-        DynamicSources {
-            views,
-            boards,
-            windows,
-        }
+        use swissarmyhammer_kanban::scope_commands::DynamicSources;
+        let views = gather_views(active_handle.as_deref());
+        let boards = gather_boards(&state.ui_state, &state.boards).await;
+        let windows = gather_windows(&app);
+        let view_kind = resolve_active_view_kind(active_handle.as_deref(), &state.ui_state);
+        let perspectives = gather_perspectives(active_handle.as_deref(), view_kind.as_deref()).await;
+        DynamicSources { views, boards, windows, perspectives }
     };
 
     let result = swissarmyhammer_kanban::scope_commands::commands_for_scope(
@@ -2015,6 +2128,52 @@ mod tests {
         assert!(expr.matches(&adapter));
 
         let expr = swissarmyhammer_filter_expr::parse("^dep1").unwrap();
+        assert!(expr.matches(&adapter));
+    }
+
+    /// Build a task entity with a `project` field set.
+    fn make_entity_with_project(id: &str, project: &str) -> Entity {
+        let mut e = Entity::new("task", id);
+        e.set("project", serde_json::json!(project));
+        e
+    }
+
+    #[test]
+    fn adapter_has_project_matches_project_field() {
+        let e = make_entity_with_project("t1", "auth-migration");
+        let adapter = EntityFilterAdapter { entity: &e };
+        assert!(adapter.has_project("auth-migration"));
+        assert!(!adapter.has_project("frontend"));
+    }
+
+    #[test]
+    fn adapter_has_project_case_insensitive() {
+        let e = make_entity_with_project("t1", "auth-migration");
+        let adapter = EntityFilterAdapter { entity: &e };
+        assert!(adapter.has_project("AUTH-MIGRATION"));
+        assert!(adapter.has_project("Auth-Migration"));
+    }
+
+    #[test]
+    fn adapter_has_project_absent_field_is_false() {
+        // Entity with no `project` field set — should never match a `$project` filter.
+        let e = make_entity("t1", &[], &[], &[]);
+        let adapter = EntityFilterAdapter { entity: &e };
+        assert!(!adapter.has_project("anything"));
+    }
+
+    #[test]
+    fn adapter_has_project_with_filter_expr() {
+        let e = make_entity_with_project("t1", "auth");
+        let adapter = EntityFilterAdapter { entity: &e };
+
+        let expr = swissarmyhammer_filter_expr::parse("$auth").unwrap();
+        assert!(expr.matches(&adapter));
+
+        let expr = swissarmyhammer_filter_expr::parse("$frontend").unwrap();
+        assert!(!expr.matches(&adapter));
+
+        let expr = swissarmyhammer_filter_expr::parse("$AUTH").unwrap();
         assert!(expr.matches(&adapter));
     }
 }

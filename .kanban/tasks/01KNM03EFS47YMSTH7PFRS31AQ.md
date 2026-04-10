@@ -3,50 +3,52 @@ assignees:
 - claude-code
 depends_on:
 - 01KNKZYSYT8W352AP4KZFYVH1G
-position_column: todo
-position_ordinal: 947f8180
-title: Add `perspective.goto` command for jumping directly to a perspective by index
+position_column: done
+position_ordinal: ffffffffffffffffffffff9580
+title: Add `perspective.goto` command for switching to a perspective by ID
 ---
 ## What
 
-Add a Rust-side `perspective.goto` command that switches to a perspective by its 1-based index within the current view kind. This complements the existing `perspective.next`/`perspective.prev` cycling commands with a direct jump — analogous to vim's `Ngt` (go to tab N).
+Add a Rust-side `perspective.goto` command that switches to a perspective by its ID. The frontend displays perspective names for user selection, then dispatches this command with the chosen ID. No index-based jumping — IDs only.
 
 ### Current state
 
-- `perspective.next` and `perspective.prev` are being added in a sibling card (`01KNKZYSYT8W352AP4KZFYVH1G`). They establish the pattern: read `KanbanContext` for the perspective list, filter by `view_kind` arg, read/write `UIState` for the active perspective.
-- `ui.perspective.set` (`swissarmyhammer-kanban/src/commands/ui_commands.rs:177-196`) sets a perspective by explicit ID via `UIState::set_active_perspective`.
-- The frontend perspective list (`kanban-app/ui/src/lib/perspective-context.tsx`) filters perspectives by view kind and renders them in order — so index N in the tab bar corresponds to the Nth perspective matching the current view kind.
+- `ui.perspective.set` (`swissarmyhammer-kanban/src/commands/ui_commands.rs`) sets a perspective by ID via `UIState::set_active_perspective` — but this is a UI-layer command, not a domain command.
+- `perspective.next`/`perspective.prev` cycle within a view kind using `KanbanContext` + `UIState`.
+- The active perspective and active view are both stored in Rust `UIState`, making them fully testable without the frontend.
 
 ### Approach
 
 **Rust side** — add `GotoPerspectiveCmd` to `swissarmyhammer-kanban/src/commands/perspective_commands.rs`:
-- Required args: `index` (1-based integer), `view_kind` (string)
-- Logic: list perspectives via `perspective_context()`, filter to `view_kind`, pick element at `index - 1`. If index is out of range, no-op (return `null`). Otherwise call `UIState::set_active_perspective` with the selected ID.
-- Follows the same pattern as `NextPerspectiveCmd`/`PrevPerspectiveCmd` for accessing both `KanbanContext` and `UIState`.
-- Always available (like `ui.perspective.set`).
+- Required arg: `id` (perspective ID string)
+- Optional arg: `view_kind` (string) — if provided, validates the perspective belongs to that view kind before switching
+- Logic: look up perspective by ID via `perspective_context()`. If not found, return error. Otherwise call `UIState::set_active_perspective` with the ID. Return the `UIStateChange`.
+- Always available.
+
+**YAML** — add entry to `swissarmyhammer-commands/builtin/commands/perspective.yaml`:
+- `perspective.goto` with `id` and optional `view_kind` params. No default keybindings — the frontend provides selection UI.
+
+**Registration** — add to `swissarmyhammer-kanban/src/commands/mod.rs`.
 
 ### Files to modify
 
-1. **`swissarmyhammer-kanban/src/commands/perspective_commands.rs`** — Add `GotoPerspectiveCmd` struct + `Command` impl. The execute method:
-   - `ctx.require_extension::<KanbanContext>()`
-   - `ctx.arg("index")` → parse as usize
-   - `ctx.arg("view_kind")` → filter perspectives
-   - Index into filtered list (1-based → 0-based), call `ui.set_active_perspective`
-
-2. **`swissarmyhammer-kanban/src/commands/mod.rs`** — Register `"perspective.goto"` → `GotoPerspectiveCmd`. Update the command count assertion.
-
-3. **`swissarmyhammer-commands/builtin/commands/perspective.yaml`** — Add YAML entry for `perspective.goto` with `index` and `view_kind` params. No default keybindings (the frontend will provide `1`–`9` via scope-level `CommandDef.keys`).
+1. `swissarmyhammer-kanban/src/commands/perspective_commands.rs` — Add `GotoPerspectiveCmd`
+2. `swissarmyhammer-kanban/src/commands/mod.rs` — Register `perspective.goto`, update count assertion
+3. `swissarmyhammer-commands/builtin/commands/perspective.yaml` — Add YAML entry
 
 ## Acceptance Criteria
-- [ ] `perspective.goto` with `index: 1` switches to the first perspective matching the view kind
-- [ ] `perspective.goto` with `index: N` where N > count is a no-op returning `null`
-- [ ] `perspective.goto` with `index: 0` or negative is a no-op returning `null`
-- [ ] Command updates UIState via `set_active_perspective` and returns the `UIStateChange`
+- [ ] `perspective.goto` with valid `id` switches the active perspective and returns `UIStateChange`
+- [ ] `perspective.goto` with nonexistent `id` returns an error
+- [ ] `perspective.goto` with `view_kind` that doesn't match the perspective's view returns an error
 - [ ] Command is registered in the command registry and YAML definitions
+- [ ] Active perspective and view are fully testable from Rust without frontend
 
 ## Tests
-- [ ] `swissarmyhammer-kanban/src/commands/perspective_commands.rs` — Unit tests: goto index 1 selects first, goto index 3 of 3 selects last, goto index 4 of 3 is no-op, goto index 0 is no-op
-- [ ] Run `cargo test -p swissarmyhammer-kanban perspective_commands` — passes
+- [ ] Unit test: goto with valid ID sets active perspective in UIState
+- [ ] Unit test: goto with invalid ID returns error
+- [ ] Unit test: goto with mismatched view_kind returns error
+- [ ] Unit test: goto without view_kind succeeds regardless of perspective's view
+- [ ] `cargo test -p swissarmyhammer-kanban perspective_commands` — passes
 - [ ] `cargo nextest run -p swissarmyhammer-commands` — YAML parses correctly
 
 ## Workflow

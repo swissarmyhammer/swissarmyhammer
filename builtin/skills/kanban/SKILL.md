@@ -42,6 +42,7 @@ All filtering uses a small expression language with these atoms and operators:
 | Syntax | Meaning |
 |--------|---------|
 | `#tag` | Match tasks with this tag (includes virtual tags: READY, BLOCKED, BLOCKING) |
+| `$project-slug` | Match tasks assigned to this project (by project slug/id) |
 | `@user` | Match tasks assigned to this user |
 | `^card-id` | Match tasks referencing this card (via depends_on or own id) |
 | `&&` / `and` | Both sides must match |
@@ -58,6 +59,8 @@ Use `next task` with a `filter` to pick up specific kinds of work one card at a 
 {"op": "next task", "filter": "#review-finding"}
 {"op": "next task", "filter": "@alice"}
 {"op": "next task", "filter": "#bug && @alice"}
+{"op": "next task", "filter": "$auth-migration"}
+{"op": "next task", "filter": "$auth-migration && @alice"}
 ```
 
 This is the preferred way to work through cards — it returns one ready card at a time and excludes done cards automatically.
@@ -73,6 +76,9 @@ This is the preferred way to work through cards — it returns one ready card at
 {"op": "list tasks", "filter": "#bug && @alice"}
 {"op": "list tasks", "filter": "#bug || #feature"}
 {"op": "list tasks", "filter": "!#done && #READY"}
+{"op": "list tasks", "filter": "$auth-migration"}
+{"op": "list tasks", "filter": "$auth-migration && #bug"}
+{"op": "list tasks", "filter": "$auth-migration || $frontend"}
 ```
 
 Note: `list tasks` automatically excludes done tasks unless you explicitly request `column: "done"`.
@@ -172,13 +178,26 @@ Set the `project` field when creating or updating a task:
 
 Tasks without a project have an empty `project` field. The task response always includes `"project": "<slug>"` (or `""` if unset).
 
+### Filtering by Project
+
+Once tasks are assigned to projects, use the `$project-slug` atom in any filter to scope work to a specific project. It composes with other atoms the same way `#tag` and `@user` do:
+
+```json
+{"op": "next task", "filter": "$auth-migration"}
+{"op": "list tasks", "filter": "$auth-migration && #bug"}
+{"op": "list tasks", "filter": "$auth-migration || $frontend"}
+{"op": "list tasks", "filter": "!$auth-migration"}
+```
+
+The slug after `$` is the project `id` you used in `add project`. Negation (`!$slug`) excludes the project, and `$a || $b` matches tasks in either project.
+
 ### Workflow
 
 When starting a plan with multiple related tasks:
 
 1. Create a project for the initiative
 2. Create tasks with the `project` field set to the project ID
-3. Use projects to filter and focus work in the UI
+3. Use the `$project-slug` filter atom in `list tasks` and `next task` to focus work on a project
 
 ## Guidelines
 

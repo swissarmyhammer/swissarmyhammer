@@ -98,6 +98,10 @@ pub fn register_commands() -> HashMap<String, Arc<dyn Command>> {
         "attachment.reveal".into(),
         Arc::new(entity_commands::AttachmentRevealCmd),
     );
+    map.insert(
+        "attachment.delete".into(),
+        Arc::new(entity_commands::AttachmentDeleteCmd),
+    );
 
     // Column commands
     map.insert(
@@ -182,6 +186,10 @@ pub fn register_commands() -> HashMap<String, Arc<dyn Command>> {
         Arc::new(perspective_commands::DeletePerspectiveCmd),
     );
     map.insert(
+        "perspective.rename".into(),
+        Arc::new(perspective_commands::RenamePerspectiveCmd),
+    );
+    map.insert(
         "perspective.filter".into(),
         Arc::new(perspective_commands::SetFilterCmd),
     );
@@ -212,6 +220,18 @@ pub fn register_commands() -> HashMap<String, Arc<dyn Command>> {
     map.insert(
         "perspective.sort.toggle".into(),
         Arc::new(perspective_commands::ToggleSortCmd),
+    );
+    map.insert(
+        "perspective.next".into(),
+        Arc::new(perspective_commands::NextPerspectiveCmd),
+    );
+    map.insert(
+        "perspective.prev".into(),
+        Arc::new(perspective_commands::PrevPerspectiveCmd),
+    );
+    map.insert(
+        "perspective.goto".into(),
+        Arc::new(perspective_commands::GotoPerspectiveCmd),
     );
 
     // App commands
@@ -287,10 +307,11 @@ mod tests {
         // + 12 app (quit, about, help, command, palette, search,
         //          dismiss, undo, redo, keymap.vim, keymap.cua, keymap.emacs)
         // + 5 file (switchBoard, closeBoard, newBoard, openBoard, window.new)
-        // + 3 drag + 11 perspective (8 + 3 sort) + 2 attachment (open, reveal) = 55
-        // + 2 project (add, delete) + 1 ui.mode.set = 58
+        // + 3 drag + 15 perspective (8 + 3 sort + 2 next/prev + 1 goto + 1 rename)
+        // + 3 attachment (open, reveal, delete)
+        // + 2 project (add, delete) + 1 ui.mode.set = 63
         // Note: clipboard entries are duplicated in the source but HashMap deduplicates.
-        assert_eq!(cmds.len(), 58);
+        assert_eq!(cmds.len(), 63);
     }
 
     // =========================================================================
@@ -1129,5 +1150,36 @@ mod tests {
         cmd.execute(&ctx).await.unwrap();
         let session = ui.drag_session().unwrap();
         assert!(session.copy_mode);
+    }
+
+    // =========================================================================
+    // YAML ↔ Rust completeness check
+    // =========================================================================
+
+    #[test]
+    fn test_all_yaml_commands_have_rust_implementations() {
+        let rust_map = register_commands();
+        let yaml_sources = swissarmyhammer_commands::builtin_yaml_sources();
+
+        let mut missing: Vec<String> = Vec::new();
+
+        for (_name, yaml_content) in &yaml_sources {
+            let defs: Vec<swissarmyhammer_commands::CommandDef> =
+                serde_yaml_ng::from_str(yaml_content).unwrap_or_default();
+
+            for def in &defs {
+                if !rust_map.contains_key(&def.id) {
+                    missing.push(def.id.clone());
+                }
+            }
+        }
+
+        assert!(
+            missing.is_empty(),
+            "YAML-defined commands missing Rust implementations: {:?}\n\
+             Every command in builtin/commands/*.yaml must have a corresponding \
+             entry in register_commands()",
+            missing,
+        );
     }
 }

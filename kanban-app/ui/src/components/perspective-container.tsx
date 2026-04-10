@@ -23,12 +23,14 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   type ReactNode,
 } from "react";
 import { usePerspectives } from "@/lib/perspective-context";
 import { evaluateSort } from "@/lib/perspective-eval";
-import { CommandScopeProvider } from "@/lib/command-scope";
+import { CommandScopeProvider, useActiveBoardPath } from "@/lib/command-scope";
+import { useRefreshEntities } from "@/components/rust-engine-container";
 import type { Entity, PerspectiveDef } from "@/types/kanban";
 
 // ---------------------------------------------------------------------------
@@ -84,12 +86,23 @@ interface PerspectiveContainerProps {
  */
 export function PerspectiveContainer({ children }: PerspectiveContainerProps) {
   const { activePerspective } = usePerspectives();
+  const boardPath = useActiveBoardPath();
+  const refreshEntities = useRefreshEntities();
 
   const perspectiveId = activePerspective?.id ?? "default";
+  const activeFilter = activePerspective?.filter;
   const scopeMoniker = useMemo(
     () => `perspective:${perspectiveId}`,
     [perspectiveId],
   );
+
+  // Re-fetch tasks when the active perspective's filter changes.
+  // Fires on mount (if a filtered perspective is active) and whenever the
+  // filter value changes (typing, switching perspectives, clearing).
+  useEffect(() => {
+    if (!boardPath) return;
+    refreshEntities(boardPath, activeFilter).catch(console.error);
+  }, [activeFilter, boardPath, refreshEntities]);
 
   const sortEntries = activePerspective?.sort;
   const groupField = activePerspective?.group;

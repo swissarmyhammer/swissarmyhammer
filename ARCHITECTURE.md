@@ -610,13 +610,18 @@ The `EntityStoreProvider` holds all entities keyed by type. The `FieldSubscripti
 
 ##### CodeMirror 6 as the Editor
 
-CodeMirror 6 is the standard editor component for all text editing in the UI. It provides:
+CodeMirror 6 is the standard editor component for all text editing in the UI. **`TextEditor` (`fields/text-editor.tsx`) is the single shared CM6 component.** All editing contexts — field editing, inline rename, filter expressions — use `TextEditor` extended with props. Never create alternative editor components or use CM6 directly.
 
-- **Keymap consistency** — CUA, Vim, and Emacs keymap modes are supported and synchronized with the backend `keymap_mode` in UIState
-- **Smart rendering** — syntax highlighting, mention pills, markdown preview, and field-type-specific extensions
-- **Single-line and multi-line modes** — controlled by the field definition's `type.single_line` property
+`TextEditor` provides:
 
-No other text editor component should be introduced. CM6's extension system handles all field-type-specific editing behavior.
+- **Keymap consistency** — CUA, Vim, and Emacs keymap modes read from UIState and applied via `keymapExtension(mode)`. Every editor instance shares the same keymap config.
+- **Smart rendering** — syntax highlighting, mention pills, markdown preview via `extraExtensions`
+- **Behavioral modes via props:**
+  - `singleLine` — Enter always commits (no newlines, even in vim insert mode), Escape commits immediately in vim (no two-escape normal-mode dance), blur commits. Use for inline rename, short inputs.
+  - `popup` — auto-enters vim insert mode on mount. Use for quick-capture and inline editing where the user expects to type immediately.
+  - `extraExtensions` — grammar/language support, autocomplete, mention decorations. Use to specialize editing behavior without forking the component.
+
+When a new editing context needs different behavior, add a prop to `TextEditor` — do not duplicate CM6 setup.
 
 ### Patterns
 
@@ -630,7 +635,7 @@ No other text editor component should be introduced. CM6's extension system hand
 
 1. **State in Rust, presentation in React.** React never owns authoritative state. It reads from the backend, renders, and dispatches commands back.
 2. **Commands in Rust.** All command logic lives in Rust. Never construct command objects or compute command results client-side.
-3. **`useDispatchCommand` is the only dispatch mechanism.** Never call `backendDispatch()` directly — it bypasses the scope chain.
+3. **`useDispatchCommand` is the only dispatch mechanism.** Every command execution — keybindings, palette, context menus, drag-and-drop, programmatic triggers — must flow through `useDispatchCommand`. This is what gives us busy tracking (`inflightCount`), scope chain resolution, and client-side command handling. When commands originate from Rust (native menus, context menus), emit a Tauri event back to the frontend and let it dispatch — never call `dispatch_command_internal` directly from the Rust side. Direct `invoke()` is allowed only for read-only queries (`get_entity`, `list_views`, etc.).
 4. **No new `#[tauri::command]` mutations.** All state changes go through `dispatch_command`.
 5. **UI interprets Field metadata.** Never hardcode field-specific rendering logic in React. The YAML field properties drive rendering.
 6. **No module-level dispatch functions.** Trace to the owning component and use the hook there.
