@@ -21,6 +21,7 @@ function makeBoardData(overrides: Partial<BoardData> = {}): BoardData {
       makeEntity("column", "col-2", { name: "Done", order: 1 }),
     ],
     tags: [makeEntity("tag", "tag-1", { name: "bug" })],
+    virtualTagMeta: [],
     summary: {
       total_tasks: 0,
       total_actors: 0,

@@ -18,8 +18,10 @@ import { page, userEvent } from "vitest/browser";
 // Tauri mocks — must be before component imports
 // ---------------------------------------------------------------------------
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const mockInvoke = vi.fn(async (..._args: any[]) => null);
+const mockInvoke = vi.fn(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  async (..._args: any[]): Promise<unknown> => null,
+);
 
 vi.mock("@tauri-apps/api/core", () => ({
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

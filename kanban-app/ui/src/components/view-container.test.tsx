@@ -123,6 +123,7 @@ const MOCK_BOARD: BoardData = {
   columns: [],
 
   tags: [],
+  virtualTagMeta: [],
   summary: {
     total_tasks: 0,
     total_actors: 0,

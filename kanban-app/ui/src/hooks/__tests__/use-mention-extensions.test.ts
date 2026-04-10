@@ -8,8 +8,10 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // Mock Tauri APIs
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const mockInvoke = vi.fn((..._args: any[]) => Promise.resolve([]));
+const mockInvoke = vi.fn(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (..._args: any[]): Promise<unknown> => Promise.resolve([]),
+);
 vi.mock("@tauri-apps/api/core", () => ({
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   invoke: (...args: any[]) => mockInvoke(...args),

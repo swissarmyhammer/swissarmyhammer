@@ -71,6 +71,7 @@ const board: BoardData = {
   ],
 
   tags: [],
+  virtualTagMeta: [],
   summary: {
     total_tasks: 3,
     total_actors: 0,
