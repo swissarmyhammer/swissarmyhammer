@@ -612,10 +612,17 @@ mod tests {
         assert!(filter.params.iter().any(|p| p.name == "filter"));
         assert!(filter.params.iter().any(|p| p.name == "perspective_id"));
 
-        // All perspective commands should be visible (default true) except perspective.list
+        // All perspective commands should be visible (default true) except
+        // the ones that are intentionally hidden from the command palette:
+        //   - perspective.list: read-only introspection command
+        //   - perspective.goto: materialized dynamically as `perspective.goto:{id}`
+        //     per-perspective, so the template entry stays hidden
+        //   - perspective.rename: requires `id` + `new_name` args and has no
+        //     palette args UI; user-facing entry is `ui.perspective.startRename`
+        let hidden = ["perspective.list", "perspective.goto", "perspective.rename"];
         for cmd in registry.all_commands() {
-            if cmd.id == "perspective.list" {
-                assert!(!cmd.visible, "perspective.list should not be visible");
+            if hidden.contains(&cmd.id.as_str()) {
+                assert!(!cmd.visible, "{} should not be visible", cmd.id);
             } else {
                 assert!(cmd.visible, "{} should be visible", cmd.id);
             }
