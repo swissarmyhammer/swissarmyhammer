@@ -110,7 +110,7 @@ vi.mock("@/lib/ui-state-context", () => ({
   useUIStateLoading: () => ({ state: mockUIState(), loading: false }),
 }));
 
-import { PerspectiveTabBar } from "./perspective-tab-bar";
+import { PerspectiveTabBar, triggerStartRename } from "./perspective-tab-bar";
 
 /** Renders PerspectiveTabBar inside the required TooltipProvider. */
 function renderTabBar(delayDuration = 100) {
@@ -290,6 +290,69 @@ describe("PerspectiveTabBar", () => {
     const cmEditor = container.querySelector(".cm-editor");
     expect(cmEditor).toBeTruthy();
     expect(container.querySelector("input")).toBeNull();
+  });
+
+  it("enters inline rename mode for the active perspective when triggerStartRename is called", () => {
+    mockPerspectivesValue = {
+      ...mockPerspectivesValue,
+      perspectives: [
+        { id: "p1", name: "First", view: "board" },
+        { id: "p2", name: "Second", view: "board" },
+      ],
+      activePerspective: { id: "p2", name: "Second", view: "board" },
+    };
+
+    const { container } = renderTabBar();
+
+    // The formula bar always renders one CM6 editor when a perspective is
+    // active — so before triggering rename, we expect exactly one editor.
+    expect(container.querySelectorAll(".cm-editor").length).toBe(1);
+
+    // Dispatching ui.perspective.startRename (via triggerStartRename — the
+    // same code path the AppShell global command handler calls) should put
+    // the active tab into rename mode.
+    act(() => {
+      triggerStartRename();
+    });
+
+    // After triggering, a second CM6 editor (the inline rename editor)
+    // should have mounted inside the active tab button.
+    expect(container.querySelectorAll(".cm-editor").length).toBe(2);
+
+    // The rename editor lives inside the active tab's button, not in the
+    // formula bar. Find it via the active tab and verify it shows the
+    // active perspective's name.
+    const activeTab = screen.getByText("Second").closest("button");
+    expect(activeTab).toBeTruthy();
+    const renameEditor = activeTab?.querySelector(".cm-editor");
+    expect(renameEditor).toBeTruthy();
+    const renameContent = renameEditor?.querySelector(".cm-content");
+    expect(renameContent?.textContent).toContain("Second");
+
+    // The inactive tab should still render plain text, not an editor
+    const inactiveTab = screen.getByText("First").closest("button");
+    expect(inactiveTab?.querySelector(".cm-editor")).toBeNull();
+  });
+
+  it("triggerStartRename is a no-op when there is no active perspective", () => {
+    mockPerspectivesValue = {
+      ...mockPerspectivesValue,
+      perspectives: [{ id: "p1", name: "First", view: "board" }],
+      activePerspective: null,
+    };
+
+    const { container } = renderTabBar();
+
+    // With no active perspective, the formula bar is also hidden, so there
+    // should be zero CM6 editors in the tab bar.
+    expect(container.querySelectorAll(".cm-editor").length).toBe(0);
+
+    act(() => {
+      triggerStartRename();
+    });
+
+    // Still zero — no active perspective means no rename target
+    expect(container.querySelectorAll(".cm-editor").length).toBe(0);
   });
 
   it("renders CM6 editor with the perspective name as initial value", () => {

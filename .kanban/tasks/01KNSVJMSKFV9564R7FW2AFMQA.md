@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: '7e80'
+position_column: done
+position_ordinal: ffffffffffffffffffffffb580
 title: Perspective rename from command palette should focus active tab and enter inline edit mode
 ---
 ## What

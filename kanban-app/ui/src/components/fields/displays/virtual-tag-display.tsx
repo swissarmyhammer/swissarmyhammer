@@ -45,7 +45,7 @@ export function VirtualTagDisplay({ value }: VirtualTagDisplayProps) {
                   border: `1px solid color-mix(in srgb, #${meta.color} 30%, transparent)`,
                 }}
               >
-                {slug}
+                #{slug}
               </span>
             </TooltipTrigger>
             <TooltipContent side="bottom">{meta.description}</TooltipContent>

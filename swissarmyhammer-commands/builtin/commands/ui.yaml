@@ -40,6 +40,9 @@
     - name: perspective_id
       from: args
 
+- id: ui.perspective.startRename
+  name: Rename Perspective
+
 - id: ui.mode.set
   name: Set App Mode
   visible: false

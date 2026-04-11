@@ -415,7 +415,8 @@ mod tests {
         //         tag.update, column.reorder, attachment.delete,
         //         entity.copy, entity.cut, entity.paste = 15
         // ui: inspect, inspector.close, inspector.close_all, palette.open,
-        //     palette.close, view.set, perspective.set, setFocus, window.new = 9
+        //     palette.close, view.set, perspective.set, perspective.startRename,
+        //     setFocus, window.new = 10
         // settings: keymap.vim, keymap.cua, keymap.emacs = 3
         // file: switchBoard, closeBoard, newBoard, openBoard = 4
         // drag: start, cancel, complete = 3
@@ -423,7 +424,7 @@ mod tests {
         //             sort.set, sort.clear, sort.toggle, next, prev, goto, list = 15
         // attachment: open, reveal = 2
         // +1 for ui.mode.set
-        assert_eq!(registry.all_commands().len(), 61);
+        assert_eq!(registry.all_commands().len(), 62);
 
         // Spot checks
         assert!(registry.get("app.quit").is_some());
@@ -611,11 +612,16 @@ mod tests {
         assert!(filter.params.iter().any(|p| p.name == "filter"));
         assert!(filter.params.iter().any(|p| p.name == "perspective_id"));
 
-        // Most perspective commands are visible by default, but two are
-        // explicitly hidden: `perspective.list` (meta) and `perspective.goto`
-        // (a template that is dynamically expanded into palette entries).
+        // All perspective commands should be visible (default true) except
+        // the ones that are intentionally hidden from the command palette:
+        //   - perspective.list: read-only introspection command
+        //   - perspective.goto: materialized dynamically as `perspective.goto:{id}`
+        //     per-perspective, so the template entry stays hidden
+        //   - perspective.rename: requires `id` + `new_name` args and has no
+        //     palette args UI; user-facing entry is `ui.perspective.startRename`
+        let hidden = ["perspective.list", "perspective.goto", "perspective.rename"];
         for cmd in registry.all_commands() {
-            if cmd.id == "perspective.list" || cmd.id == "perspective.goto" {
+            if hidden.contains(&cmd.id.as_str()) {
                 assert!(!cmd.visible, "{} should not be visible", cmd.id);
             } else {
                 assert!(cmd.visible, "{} should be visible", cmd.id);

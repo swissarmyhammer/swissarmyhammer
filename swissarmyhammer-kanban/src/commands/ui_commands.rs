@@ -219,6 +219,37 @@ impl Command for SetAppModeCmd {
     }
 }
 
+/// Enter inline rename mode for the active perspective tab.
+///
+/// No-op on the backend — exists in the registry so the command palette can
+/// discover it.  The frontend resolves the local `execute` handler registered
+/// in `AppShell`'s global commands, so this never actually runs.
+///
+/// Available only when the current window has an active perspective. This
+/// makes the command view-aware: switching to a view kind with no perspective
+/// selected (or a fresh window with none set) hides the palette entry so
+/// users do not see a command that has nothing to rename.
+pub struct StartRenamePerspectiveCmd;
+
+#[async_trait]
+impl Command for StartRenamePerspectiveCmd {
+    fn available(&self, ctx: &CommandContext) -> bool {
+        // No UIState means we cannot check — fail closed (unavailable) to
+        // avoid showing a non-functional palette entry.
+        let Some(ui) = ctx.ui_state.as_ref() else {
+            return false;
+        };
+        let window_label = ctx.window_label_from_scope().unwrap_or("main");
+        !ui.active_perspective_id(window_label).is_empty()
+    }
+
+    async fn execute(&self, _ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+        // Intentional no-op — the frontend intercepts this command before it
+        // reaches the backend.  Return null so the caller sees success.
+        Ok(Value::Null)
+    }
+}
+
 /// Set the active view by ID.
 ///
 /// Always available. Required arg: `view_id`.
@@ -327,5 +358,56 @@ mod tests {
         assert_eq!(ui.app_mode("secondary"), "search");
         // Main window should still be "normal"
         assert_eq!(ui.app_mode("main"), "normal");
+    }
+
+    #[test]
+    fn start_rename_perspective_available_requires_active_perspective() {
+        // With no active perspective set for the window, the command should
+        // not be available — it has nothing to rename.
+        let ui = Arc::new(UIState::new());
+        let ctx = CommandContext::new(
+            "ui.perspective.startRename",
+            vec!["window:main".to_string()],
+            None,
+            HashMap::new(),
+        )
+        .with_ui_state(Arc::clone(&ui));
+
+        let cmd = StartRenamePerspectiveCmd;
+        assert!(
+            !cmd.available(&ctx),
+            "should be unavailable when no active perspective"
+        );
+
+        // After setting an active perspective for the main window, the
+        // command becomes available.
+        ui.set_active_perspective("main", "p1");
+        assert!(
+            cmd.available(&ctx),
+            "should be available when an active perspective exists"
+        );
+    }
+
+    #[test]
+    fn start_rename_perspective_available_per_window() {
+        // The availability check is scoped to the window label resolved from
+        // the scope chain — an active perspective on window A must not make
+        // the command available for window B.
+        let ui = Arc::new(UIState::new());
+        ui.set_active_perspective("main", "p1");
+
+        let ctx_secondary = CommandContext::new(
+            "ui.perspective.startRename",
+            vec!["window:secondary".to_string()],
+            None,
+            HashMap::new(),
+        )
+        .with_ui_state(Arc::clone(&ui));
+
+        let cmd = StartRenamePerspectiveCmd;
+        assert!(
+            !cmd.available(&ctx_secondary),
+            "active perspective on main should not affect secondary window"
+        );
     }
 }
