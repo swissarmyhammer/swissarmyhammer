@@ -84,6 +84,7 @@ describe("refreshBoards", () => {
     expect(result.entitiesByType!.tag).toHaveLength(0);
     expect(result.entitiesByType!.task).toHaveLength(0);
     expect(result.entitiesByType!.actor).toHaveLength(0);
+    expect(result.entitiesByType!.project).toHaveLength(0);
   });
 
   it("passes boardPath to get_board_data and list_entities when provided", async () => {

@@ -51,7 +51,7 @@ export async function refreshBoards(
   let entitiesByType: Record<string, Entity[]> | null = null;
   try {
     const bp = boardPath ? { boardPath } : {};
-    const [bd, taskData, actorData] = await Promise.all([
+    const [bd, taskData, actorData, projectData] = await Promise.all([
       invoke<BoardDataResponse>("get_board_data", bp),
       invoke<EntityListResponse>("list_entities", {
         entityType: "task",
@@ -62,6 +62,10 @@ export async function refreshBoards(
         entityType: "actor",
         ...bp,
       }),
+      invoke<EntityListResponse>("list_entities", {
+        entityType: "project",
+        ...bp,
+      }),
     ]);
     boardData = parseBoardData(bd);
     entitiesByType = {
@@ -70,6 +74,7 @@ export async function refreshBoards(
       tag: bd.tags.map(entityFromBag),
       task: taskData.entities.map(entityFromBag),
       actor: actorData.entities.map(entityFromBag),
+      project: projectData.entities.map(entityFromBag),
     };
   } catch (error) {
     console.error("Failed to load board data:", error);
