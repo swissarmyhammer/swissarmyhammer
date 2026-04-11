@@ -77,46 +77,104 @@ function getTooltipInfra(prefix: string, entityType: string) {
   return tooltipInfra.get(key)!;
 }
 
-/** Build a slug→color map for a mentionable entity type. */
-function buildColorMap(
+/**
+ * Read the raw slug-field value from an entity.
+ *
+ * The special value `"id"` reads the top-level `entity.id` property
+ * instead of `entity.fields.id`, since the id is hoisted onto the
+ * `Entity` wrapper by `entityFromBag`. All other field names fall
+ * through to the regular `fields` record.
+ */
+function getSlugFieldValue(e: Entity, slugField: string): string {
+  if (slugField === "id") return e.id;
+  return getStr(e, slugField);
+}
+
+/**
+ * Build a slug→color map for a mentionable entity type.
+ *
+ * When `slugField` is provided, entries are keyed by the raw value of that
+ * field (typically `id`) — no slugify. This is required for entity types
+ * whose ids are free-form text that does not equal `slugify(displayField)`
+ * (e.g. a project with `id: AUTH-Migration`, `name: Auth Migration System`).
+ *
+ * When `slugField` is absent, entries are keyed by `slugify(displayField)`,
+ * preserving the existing behavior used by tags and actors whose ids are
+ * already slug-shaped.
+ */
+export function buildColorMap(
   entities: Entity[],
   displayField: string,
+  slugField?: string,
 ): Map<string, string> {
   const map = new Map<string, string>();
   for (const e of entities) {
-    const raw = getStr(e, displayField);
     const color = getStr(e, "color", "888888");
-    if (raw) map.set(slugify(raw), color);
+    if (slugField) {
+      const key = getSlugFieldValue(e, slugField);
+      if (key) map.set(key, color);
+    } else {
+      const raw = getStr(e, displayField);
+      if (raw) map.set(slugify(raw), color);
+    }
   }
   return map;
 }
 
-/** Build a slug→meta map for tooltips. */
-function buildMetaMap(
+/**
+ * Build a slug→meta map for tooltips.
+ *
+ * When `slugField` is provided, entries are keyed by the raw value of that
+ * field — no slugify — mirroring `buildColorMap`. When absent, entries are
+ * keyed by `slugify(displayField)`.
+ */
+export function buildMetaMap(
   entities: Entity[],
   displayField: string,
+  slugField?: string,
 ): Map<string, MentionMeta> {
   const map = new Map<string, MentionMeta>();
   for (const e of entities) {
-    const raw = getStr(e, displayField);
     const color = getStr(e, "color", "888888");
     const description = getStr(e, "description") || undefined;
-    if (raw) map.set(slugify(raw), { color, description });
+    if (slugField) {
+      const key = getSlugFieldValue(e, slugField);
+      if (key) map.set(key, { color, description });
+    } else {
+      const raw = getStr(e, displayField);
+      if (raw) map.set(slugify(raw), { color, description });
+    }
   }
   return map;
 }
 
-/** Build a debounced async search function that calls the Tauri backend. */
-function buildAsyncSearch(
+/**
+ * Build a debounced async search function that calls the Tauri backend.
+ *
+ * When `slugField` is declared on the entity type, the returned
+ * `MentionSearchResult.slug` is sourced verbatim from the corresponding
+ * backend field instead of `slugify(display_name)`. Only `slugField: "id"`
+ * is supported — the backend search endpoint currently projects only
+ * `{id, display_name, color, avatar}`, so other slug-field names would
+ * require backend changes. Any other value throws loudly so the mismatch
+ * is visible at the earliest possible point.
+ */
+export function buildAsyncSearch(
   entityType: string,
+  slugField?: string,
 ): (query: string) => Promise<MentionSearchResult[]> {
+  if (slugField !== undefined && slugField !== "id") {
+    throw new Error(
+      `buildAsyncSearch: unsupported slugField "${slugField}" for entity type "${entityType}". Only "id" is supported; other slug fields would require the search_mentions backend endpoint to project them.`,
+    );
+  }
   const rawSearch = async (query: string): Promise<MentionSearchResult[]> => {
     try {
       const results = await invoke<
         Array<{ id: string; display_name: string; color: string }>
       >("search_mentions", { entityType, query });
       return results.map((r) => ({
-        slug: slugify(r.display_name),
+        slug: slugField === "id" ? r.id : slugify(r.display_name),
         displayName: r.display_name,
         color: r.color,
       }));
@@ -173,6 +231,8 @@ interface MentionDatum {
   prefix: string;
   entityType: string;
   displayField: string;
+  /** Raw field supplying the mention slug (e.g. `id`). See `buildAsyncSearch`. */
+  slugField?: string;
   colorMap: Map<string, string>;
   metaMap: Map<string, MentionMeta>;
 }
@@ -203,7 +263,7 @@ function buildMentionExtensions(
     if (colorMap.size === 0) continue;
     exts.push(getDecoInfra(md.prefix, md.entityType).extension(colorMap));
 
-    const baseSearch = buildAsyncSearch(md.entityType);
+    const baseSearch = buildAsyncSearch(md.entityType, md.slugField);
     const search = addVirtual ? buildVirtualTagSearch(baseSearch, vtMeta) : baseSearch;
     completionSources.push(createMentionCompletionSource(md.prefix, search));
 
@@ -211,11 +271,19 @@ function buildMentionExtensions(
   }
 
   if (includeFilterSigils) {
+    // Look up slugField for actor/task from the mention data (if present)
+    // so filter sigils honor the same schema signal as the real mentions.
+    // Actor and task entity types do not declare `mention_slug_field` today,
+    // so these reduce to the legacy `slugify(display_name)` behavior.
+    const actorSlugField = mentionData.find((md) => md.entityType === "actor")
+      ?.slugField;
+    const taskSlugField = mentionData.find((md) => md.entityType === "task")
+      ?.slugField;
     completionSources.push(
-      createMentionCompletionSource("@", buildAsyncSearch("actor")),
+      createMentionCompletionSource("@", buildAsyncSearch("actor", actorSlugField)),
     );
     completionSources.push(
-      createMentionCompletionSource("^", buildAsyncSearch("task")),
+      createMentionCompletionSource("^", buildAsyncSearch("task", taskSlugField)),
     );
   }
   if (completionSources.length > 0) {
@@ -249,8 +317,8 @@ export function useMentionExtensions(
       const entities = getEntities(mt.entityType);
       return {
         ...mt,
-        colorMap: buildColorMap(entities, mt.displayField),
-        metaMap: buildMetaMap(entities, mt.displayField),
+        colorMap: buildColorMap(entities, mt.displayField, mt.slugField),
+        metaMap: buildMetaMap(entities, mt.displayField, mt.slugField),
       };
     });
   }, [mentionableTypes, getEntities]);

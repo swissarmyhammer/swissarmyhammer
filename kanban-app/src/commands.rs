@@ -2574,4 +2574,69 @@ mod tests {
         let expr = swissarmyhammer_filter_expr::parse("$AUTH").unwrap();
         assert!(expr.matches(&adapter));
     }
+
+    // ── filter_mention_candidates tests ────────────────────────────
+
+    use super::filter_mention_candidates;
+
+    /// Build a project entity fixture with an id and a name.
+    ///
+    /// Simulates the shape returned by `EntityContext::list("project")` where
+    /// the project's `id` is free-form text that may differ from
+    /// `slugify(name)`. Used to verify `filter_mention_candidates` ships the
+    /// raw id and display name separately to the frontend.
+    fn make_project(id: &str, name: &str) -> Entity {
+        let mut e = Entity::new("project", id);
+        e.set("name", serde_json::json!(name));
+        e
+    }
+
+    /// Build a tag entity fixture where the id and the tag_name are identical.
+    ///
+    /// Tag ids are already slug-shaped by convention, so `id == tag_name`.
+    /// Used to verify filter_mention_candidates treats tag and project
+    /// shapes symmetrically at the API level even though the frontend
+    /// sources slugs differently based on the entity's `mention_slug_field`.
+    fn make_tag(id: &str) -> Entity {
+        let mut e = Entity::new("tag", id);
+        e.set("tag_name", serde_json::json!(id));
+        e
+    }
+
+    #[test]
+    fn filter_mention_candidates_ships_project_id_and_display_name_separately() {
+        // A project with a free-form id distinct from slugify(name) is the
+        // regression case: the frontend mention text must come from `id`
+        // so the `$AUTH-Migration` filter atom matches tasks whose stored
+        // `project` field equals `AUTH-Migration`. filter_mention_candidates
+        // is the pinch point that ships both fields to the UI.
+        let project = make_project("AUTH-Migration", "Auth Migration System");
+        let matches = filter_mention_candidates(&[project], "", "name");
+        assert_eq!(matches.len(), 1);
+        let row = &matches[0];
+        assert_eq!(
+            row.get("id").and_then(|v| v.as_str()),
+            Some("AUTH-Migration")
+        );
+        assert_eq!(
+            row.get("display_name").and_then(|v| v.as_str()),
+            Some("Auth Migration System")
+        );
+    }
+
+    #[test]
+    fn filter_mention_candidates_tag_id_and_display_name_match() {
+        // Tags are the control case: id == tag_name, so the emitted row
+        // has identical `id` and `display_name`. This guards against a
+        // regression where the shape becomes asymmetric by accident.
+        let tag = make_tag("bug");
+        let matches = filter_mention_candidates(&[tag], "", "tag_name");
+        assert_eq!(matches.len(), 1);
+        let row = &matches[0];
+        assert_eq!(row.get("id").and_then(|v| v.as_str()), Some("bug"));
+        assert_eq!(
+            row.get("display_name").and_then(|v| v.as_str()),
+            Some("bug")
+        );
+    }
 }

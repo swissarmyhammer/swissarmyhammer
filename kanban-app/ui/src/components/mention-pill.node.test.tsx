@@ -20,6 +20,7 @@ interface EntityYaml {
   name: string;
   mention_prefix?: string;
   mention_display_field?: string;
+  mention_slug_field?: string;
   commands?: EntityCommand[];
   fields?: string[];
 }
@@ -37,6 +38,7 @@ const MENTIONABLE_TYPES: MentionableType[] = entityDefs
     entityType: e.name,
     prefix: e.mention_prefix!,
     displayField: e.mention_display_field!,
+    slugField: e.mention_slug_field,
   }));
 
 /** Commands by entity type, from YAML. */
@@ -171,7 +173,11 @@ describe("MentionPill", () => {
   });
 
   for (const mt of MENTIONABLE_TYPES) {
-    it(`resolves ${mt.entityType} entity by ${mt.displayField} field`, () => {
+    // Entity types that declare `slugField` source the mention slug from
+    // that raw field (typically `id`), so the test slug is the entity id.
+    // Types that don't declare it still use the display-field value.
+    const resolvedBy = mt.slugField ?? mt.displayField;
+    it(`resolves ${mt.entityType} entity by ${resolvedBy} field`, () => {
       const entity: Entity = {
         id: `${mt.entityType}-99`,
         entity_type: mt.entityType,
@@ -179,9 +185,10 @@ describe("MentionPill", () => {
         fields: { [mt.displayField]: "test-value", color: "aabbcc" },
       };
       mockGetEntities.mockReturnValue([entity]);
+      const slug = mt.slugField === "id" ? `${mt.entityType}-99` : "test-value";
       const { container } = renderPill({
         entityType: mt.entityType,
-        slug: "test-value",
+        slug,
         prefix: mt.prefix,
       });
       const pill = container.querySelector(
@@ -301,6 +308,78 @@ describe("MentionPill", () => {
     });
     const pill = container.querySelector("[data-moniker='task:task-42']");
     expect(pill).not.toBeNull();
+  });
+
+  it("resolves a project mention by its raw id when slugField: 'id' is declared", () => {
+    // Regression case from the `mention_slug_field` card:
+    // a project with id `AUTH-Migration` and name `Auth Migration System`
+    // must render a pill whose visible text is `$AUTH-Migration` and whose
+    // focus-scope moniker is anchored on the project id (not slugify(name)).
+    // The `slugField: "id"` entry for project comes from project.yaml
+    // and is loaded by MENTIONABLE_TYPES above.
+    const projectEntity: Entity = {
+      id: "AUTH-Migration",
+      entity_type: "project",
+      moniker: "project:AUTH-Migration",
+      fields: {
+        name: "Auth Migration System",
+        color: "4078c0",
+      },
+    };
+    mockGetEntities.mockReturnValue([projectEntity]);
+    const { container } = renderPill({
+      entityType: "project",
+      slug: "AUTH-Migration",
+      prefix: "$",
+    });
+    // Focus scope uses the entity's real moniker, keyed on the id.
+    const pill = container.querySelector(
+      "[data-moniker='project:AUTH-Migration']",
+    );
+    expect(pill).not.toBeNull();
+    // Visible pill text contains the id — the display name is relegated
+    // to the tooltip. `briefSlug` shortens long hyphen-separated slugs,
+    // but `AUTH-Migration` has only two parts and survives untouched.
+    expect(pill!.textContent).toContain("$AUTH-Migration");
+    expect(pill!.textContent).not.toContain("Auth Migration System");
+  });
+
+  it("prefers id-match over slugify(name)-match when slugField: 'id' is declared", () => {
+    // Pinpoint test: two projects where one's id equals the other's
+    // slugify(name). With slugField declared, the pill must resolve the
+    // slug `auth-migration-system` to the project whose id literally
+    // matches — not to the project whose display name happens to slugify
+    // to the same value. This guards against the regression where
+    // relying on the slugify-first match silently picks the wrong entity.
+    const projects: Entity[] = [
+      {
+        id: "OTHER",
+        entity_type: "project",
+        moniker: "project:OTHER",
+        fields: { name: "Auth Migration System", color: "111111" },
+      },
+      {
+        id: "auth-migration-system",
+        entity_type: "project",
+        moniker: "project:auth-migration-system",
+        fields: { name: "Something Else", color: "222222" },
+      },
+    ];
+    mockGetEntities.mockReturnValue(projects);
+    const { container } = renderPill({
+      entityType: "project",
+      slug: "auth-migration-system",
+      prefix: "$",
+    });
+    // Expect the pill to resolve to the second project (matched by id).
+    const pill = container.querySelector(
+      "[data-moniker='project:auth-migration-system']",
+    );
+    expect(pill).not.toBeNull();
+    // Must NOT have matched the first project whose display name slugifies
+    // to the same value.
+    const other = container.querySelector("[data-moniker='project:OTHER']");
+    expect(other).toBeNull();
   });
 
   it("unresolved entity + parent: both inspect commands accumulate", async () => {

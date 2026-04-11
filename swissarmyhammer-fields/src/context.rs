@@ -822,6 +822,7 @@ type:
             validate: None,
             mention_prefix: None,
             mention_display_field: None,
+            mention_slug_field: None,
             search_display_field: None,
             commands: vec![],
         };
@@ -852,6 +853,7 @@ type:
             validate: None,
             mention_prefix: None,
             mention_display_field: None,
+            mention_slug_field: None,
             search_display_field: None,
             commands: vec![],
         };
@@ -880,6 +882,7 @@ type:
                 validate: None,
                 mention_prefix: None,
                 mention_display_field: None,
+                mention_slug_field: None,
                 search_display_field: None,
                 commands: vec![],
             })
@@ -1142,6 +1145,7 @@ fields:
             validate: None,
             mention_prefix: None,
             mention_display_field: None,
+            mention_slug_field: None,
             search_display_field: None,
             commands: vec![],
         };
@@ -1288,6 +1292,7 @@ fields:
             validate: None,
             mention_prefix: None,
             mention_display_field: None,
+            mention_slug_field: None,
             search_display_field: None,
             commands: vec![],
         };
@@ -1303,6 +1308,7 @@ fields:
             validate: None,
             mention_prefix: None,
             mention_display_field: None,
+            mention_slug_field: None,
             search_display_field: None,
             commands: vec![],
         };
@@ -1328,6 +1334,7 @@ fields:
                 validate: None,
                 mention_prefix: None,
                 mention_display_field: None,
+                mention_slug_field: None,
                 search_display_field: None,
                 commands: vec![],
             })
@@ -1489,6 +1496,7 @@ fields:
                 validate: None,
                 mention_prefix: None,
                 mention_display_field: None,
+                mention_slug_field: None,
                 search_display_field: None,
                 commands: vec![],
             };

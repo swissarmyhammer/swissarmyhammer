@@ -150,6 +150,13 @@ export interface EntityDef {
   fields: string[];
   mention_prefix?: string;
   mention_display_field?: string;
+  /**
+   * Raw entity field that supplies the mention slug verbatim (no slugify).
+   * When set, the frontend uses this field — typically `id` — as the
+   * mention slug everywhere: CM6 decorations, tooltips, autocomplete,
+   * pills, and reference field badges. See `MentionableType.slugField`.
+   */
+  mention_slug_field?: string;
   search_display_field?: string;
   commands?: readonly EntityCommand[];
 }

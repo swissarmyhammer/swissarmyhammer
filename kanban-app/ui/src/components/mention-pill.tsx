@@ -64,12 +64,23 @@ export function MentionPill({
   const entities = getEntities(entityType);
 
   // Use the schema-declared display field for this entity type
-  const displayField =
-    mentionableTypes.find((mt) => mt.entityType === entityType)?.displayField ??
-    "name";
+  const mentionable = mentionableTypes.find(
+    (mt) => mt.entityType === entityType,
+  );
+  const displayField = mentionable?.displayField ?? "name";
+  const slugField = mentionable?.slugField;
 
-  // Find entity by matching slug against the display field (with slugified fallback)
+  // Resolve the entity that produced this slug. When the entity type
+  // declares `slugField`, the slug is sourced from that raw field (typically
+  // `id`) and must match verbatim — this is the intentional unified-on-id
+  // behavior for projects. When `slugField` is absent, fall back to the
+  // legacy display-field / slugified display-field / id match that tags,
+  // actors, and tasks have always used.
   const entity = entities.find((e) => {
+    if (slugField) {
+      if (slugField === "id") return e.id === slug;
+      return getStr(e, slugField) === slug;
+    }
     const val = getStr(e, displayField);
     if (val && (val === slug || slugify(val) === slug)) return true;
     // Fall back to ID match
