@@ -98,7 +98,7 @@ _arguments "${_arguments_options[@]}" : \
 '--json[Output results as JSON (for operation commands)]' \
 '-h[Print help]' \
 '--help[Print help]' \
-":: :_code-context__get_commands" \
+":: :_code-context__subcmd__get_commands" \
 "*::: :->get" \
 && ret=0
 
@@ -282,7 +282,7 @@ _arguments "${_arguments_options[@]}" : \
 ;;
 (help)
 _arguments "${_arguments_options[@]}" : \
-":: :_code-context__get__help_commands" \
+":: :_code-context__subcmd__get__subcmd__help_commands" \
 "*::: :->help" \
 && ret=0
 
@@ -364,7 +364,7 @@ _arguments "${_arguments_options[@]}" : \
 '--json[Output results as JSON (for operation commands)]' \
 '-h[Print help]' \
 '--help[Print help]' \
-":: :_code-context__search_commands" \
+":: :_code-context__subcmd__search_commands" \
 "*::: :->search" \
 && ret=0
 
@@ -416,7 +416,7 @@ _arguments "${_arguments_options[@]}" : \
 ;;
 (help)
 _arguments "${_arguments_options[@]}" : \
-":: :_code-context__search__help_commands" \
+":: :_code-context__subcmd__search__subcmd__help_commands" \
 "*::: :->help" \
 && ret=0
 
@@ -458,7 +458,7 @@ _arguments "${_arguments_options[@]}" : \
 '--json[Output results as JSON (for operation commands)]' \
 '-h[Print help]' \
 '--help[Print help]' \
-":: :_code-context__list_commands" \
+":: :_code-context__subcmd__list_commands" \
 "*::: :->list" \
 && ret=0
 
@@ -481,7 +481,7 @@ _arguments "${_arguments_options[@]}" : \
 ;;
 (help)
 _arguments "${_arguments_options[@]}" : \
-":: :_code-context__list__help_commands" \
+":: :_code-context__subcmd__list__subcmd__help_commands" \
 "*::: :->help" \
 && ret=0
 
@@ -515,7 +515,7 @@ _arguments "${_arguments_options[@]}" : \
 '--json[Output results as JSON (for operation commands)]' \
 '-h[Print help]' \
 '--help[Print help]' \
-":: :_code-context__grep_commands" \
+":: :_code-context__subcmd__grep_commands" \
 "*::: :->grep" \
 && ret=0
 
@@ -541,7 +541,7 @@ _arguments "${_arguments_options[@]}" : \
 ;;
 (help)
 _arguments "${_arguments_options[@]}" : \
-":: :_code-context__grep__help_commands" \
+":: :_code-context__subcmd__grep__subcmd__help_commands" \
 "*::: :->help" \
 && ret=0
 
@@ -575,7 +575,7 @@ _arguments "${_arguments_options[@]}" : \
 '--json[Output results as JSON (for operation commands)]' \
 '-h[Print help]' \
 '--help[Print help]' \
-":: :_code-context__query_commands" \
+":: :_code-context__subcmd__query_commands" \
 "*::: :->query" \
 && ret=0
 
@@ -601,7 +601,7 @@ _arguments "${_arguments_options[@]}" : \
 ;;
 (help)
 _arguments "${_arguments_options[@]}" : \
-":: :_code-context__query__help_commands" \
+":: :_code-context__subcmd__query__subcmd__help_commands" \
 "*::: :->help" \
 && ret=0
 
@@ -635,7 +635,7 @@ _arguments "${_arguments_options[@]}" : \
 '--json[Output results as JSON (for operation commands)]' \
 '-h[Print help]' \
 '--help[Print help]' \
-":: :_code-context__find_commands" \
+":: :_code-context__subcmd__find_commands" \
 "*::: :->find" \
 && ret=0
 
@@ -661,7 +661,7 @@ _arguments "${_arguments_options[@]}" : \
 ;;
 (help)
 _arguments "${_arguments_options[@]}" : \
-":: :_code-context__find__help_commands" \
+":: :_code-context__subcmd__find__subcmd__help_commands" \
 "*::: :->help" \
 && ret=0
 
@@ -695,7 +695,7 @@ _arguments "${_arguments_options[@]}" : \
 '--json[Output results as JSON (for operation commands)]' \
 '-h[Print help]' \
 '--help[Print help]' \
-":: :_code-context__build_commands" \
+":: :_code-context__subcmd__build_commands" \
 "*::: :->build" \
 && ret=0
 
@@ -718,7 +718,7 @@ _arguments "${_arguments_options[@]}" : \
 ;;
 (help)
 _arguments "${_arguments_options[@]}" : \
-":: :_code-context__build__help_commands" \
+":: :_code-context__subcmd__build__subcmd__help_commands" \
 "*::: :->help" \
 && ret=0
 
@@ -752,7 +752,7 @@ _arguments "${_arguments_options[@]}" : \
 '--json[Output results as JSON (for operation commands)]' \
 '-h[Print help]' \
 '--help[Print help]' \
-":: :_code-context__clear_commands" \
+":: :_code-context__subcmd__clear_commands" \
 "*::: :->clear" \
 && ret=0
 
@@ -774,7 +774,7 @@ _arguments "${_arguments_options[@]}" : \
 ;;
 (help)
 _arguments "${_arguments_options[@]}" : \
-":: :_code-context__clear__help_commands" \
+":: :_code-context__subcmd__clear__subcmd__help_commands" \
 "*::: :->help" \
 && ret=0
 
@@ -808,7 +808,7 @@ _arguments "${_arguments_options[@]}" : \
 '--json[Output results as JSON (for operation commands)]' \
 '-h[Print help]' \
 '--help[Print help]' \
-":: :_code-context__lsp_commands" \
+":: :_code-context__subcmd__lsp_commands" \
 "*::: :->lsp" \
 && ret=0
 
@@ -830,7 +830,7 @@ _arguments "${_arguments_options[@]}" : \
 ;;
 (help)
 _arguments "${_arguments_options[@]}" : \
-":: :_code-context__lsp__help_commands" \
+":: :_code-context__subcmd__lsp__subcmd__help_commands" \
 "*::: :->help" \
 && ret=0
 
@@ -864,7 +864,7 @@ _arguments "${_arguments_options[@]}" : \
 '--json[Output results as JSON (for operation commands)]' \
 '-h[Print help]' \
 '--help[Print help]' \
-":: :_code-context__detect_commands" \
+":: :_code-context__subcmd__detect_commands" \
 "*::: :->detect" \
 && ret=0
 
@@ -889,7 +889,7 @@ _arguments "${_arguments_options[@]}" : \
 ;;
 (help)
 _arguments "${_arguments_options[@]}" : \
-":: :_code-context__detect__help_commands" \
+":: :_code-context__subcmd__detect__subcmd__help_commands" \
 "*::: :->help" \
 && ret=0
 
@@ -917,7 +917,7 @@ esac
 ;;
 (help)
 _arguments "${_arguments_options[@]}" : \
-":: :_code-context__help_commands" \
+":: :_code-context__subcmd__help_commands" \
 "*::: :->help" \
 && ret=0
 
@@ -949,7 +949,7 @@ _arguments "${_arguments_options[@]}" : \
 ;;
 (get)
 _arguments "${_arguments_options[@]}" : \
-":: :_code-context__help__get_commands" \
+":: :_code-context__subcmd__help__subcmd__get_commands" \
 "*::: :->get" \
 && ret=0
 
@@ -1017,7 +1017,7 @@ esac
 ;;
 (search)
 _arguments "${_arguments_options[@]}" : \
-":: :_code-context__help__search_commands" \
+":: :_code-context__subcmd__help__subcmd__search_commands" \
 "*::: :->search" \
 && ret=0
 
@@ -1045,7 +1045,7 @@ esac
 ;;
 (list)
 _arguments "${_arguments_options[@]}" : \
-":: :_code-context__help__list_commands" \
+":: :_code-context__subcmd__help__subcmd__list_commands" \
 "*::: :->list" \
 && ret=0
 
@@ -1065,7 +1065,7 @@ esac
 ;;
 (grep)
 _arguments "${_arguments_options[@]}" : \
-":: :_code-context__help__grep_commands" \
+":: :_code-context__subcmd__help__subcmd__grep_commands" \
 "*::: :->grep" \
 && ret=0
 
@@ -1085,7 +1085,7 @@ esac
 ;;
 (query)
 _arguments "${_arguments_options[@]}" : \
-":: :_code-context__help__query_commands" \
+":: :_code-context__subcmd__help__subcmd__query_commands" \
 "*::: :->query" \
 && ret=0
 
@@ -1105,7 +1105,7 @@ esac
 ;;
 (find)
 _arguments "${_arguments_options[@]}" : \
-":: :_code-context__help__find_commands" \
+":: :_code-context__subcmd__help__subcmd__find_commands" \
 "*::: :->find" \
 && ret=0
 
@@ -1125,7 +1125,7 @@ esac
 ;;
 (build)
 _arguments "${_arguments_options[@]}" : \
-":: :_code-context__help__build_commands" \
+":: :_code-context__subcmd__help__subcmd__build_commands" \
 "*::: :->build" \
 && ret=0
 
@@ -1145,7 +1145,7 @@ esac
 ;;
 (clear)
 _arguments "${_arguments_options[@]}" : \
-":: :_code-context__help__clear_commands" \
+":: :_code-context__subcmd__help__subcmd__clear_commands" \
 "*::: :->clear" \
 && ret=0
 
@@ -1165,7 +1165,7 @@ esac
 ;;
 (lsp)
 _arguments "${_arguments_options[@]}" : \
-":: :_code-context__help__lsp_commands" \
+":: :_code-context__subcmd__help__subcmd__lsp_commands" \
 "*::: :->lsp" \
 && ret=0
 
@@ -1185,7 +1185,7 @@ esac
 ;;
 (detect)
 _arguments "${_arguments_options[@]}" : \
-":: :_code-context__help__detect_commands" \
+":: :_code-context__subcmd__help__subcmd__detect_commands" \
 "*::: :->detect" \
 && ret=0
 
@@ -1238,142 +1238,142 @@ _code-context_commands() {
     )
     _describe -t commands 'code-context commands' commands "$@"
 }
-(( $+functions[_code-context__build_commands] )) ||
-_code-context__build_commands() {
+(( $+functions[_code-context__subcmd__build_commands] )) ||
+_code-context__subcmd__build_commands() {
     local commands; commands=(
 'status:Mark files for re-indexing by resetting indexed flags' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'code-context build commands' commands "$@"
 }
-(( $+functions[_code-context__build__help_commands] )) ||
-_code-context__build__help_commands() {
+(( $+functions[_code-context__subcmd__build__subcmd__help_commands] )) ||
+_code-context__subcmd__build__subcmd__help_commands() {
     local commands; commands=(
 'status:Mark files for re-indexing by resetting indexed flags' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'code-context build help commands' commands "$@"
 }
-(( $+functions[_code-context__build__help__help_commands] )) ||
-_code-context__build__help__help_commands() {
+(( $+functions[_code-context__subcmd__build__subcmd__help__subcmd__help_commands] )) ||
+_code-context__subcmd__build__subcmd__help__subcmd__help_commands() {
     local commands; commands=()
     _describe -t commands 'code-context build help help commands' commands "$@"
 }
-(( $+functions[_code-context__build__help__status_commands] )) ||
-_code-context__build__help__status_commands() {
+(( $+functions[_code-context__subcmd__build__subcmd__help__subcmd__status_commands] )) ||
+_code-context__subcmd__build__subcmd__help__subcmd__status_commands() {
     local commands; commands=()
     _describe -t commands 'code-context build help status commands' commands "$@"
 }
-(( $+functions[_code-context__build__status_commands] )) ||
-_code-context__build__status_commands() {
+(( $+functions[_code-context__subcmd__build__subcmd__status_commands] )) ||
+_code-context__subcmd__build__subcmd__status_commands() {
     local commands; commands=()
     _describe -t commands 'code-context build status commands' commands "$@"
 }
-(( $+functions[_code-context__clear_commands] )) ||
-_code-context__clear_commands() {
+(( $+functions[_code-context__subcmd__clear_commands] )) ||
+_code-context__subcmd__clear_commands() {
     local commands; commands=(
 'status:Wipe all index data and return stats about what was cleared' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'code-context clear commands' commands "$@"
 }
-(( $+functions[_code-context__clear__help_commands] )) ||
-_code-context__clear__help_commands() {
+(( $+functions[_code-context__subcmd__clear__subcmd__help_commands] )) ||
+_code-context__subcmd__clear__subcmd__help_commands() {
     local commands; commands=(
 'status:Wipe all index data and return stats about what was cleared' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'code-context clear help commands' commands "$@"
 }
-(( $+functions[_code-context__clear__help__help_commands] )) ||
-_code-context__clear__help__help_commands() {
+(( $+functions[_code-context__subcmd__clear__subcmd__help__subcmd__help_commands] )) ||
+_code-context__subcmd__clear__subcmd__help__subcmd__help_commands() {
     local commands; commands=()
     _describe -t commands 'code-context clear help help commands' commands "$@"
 }
-(( $+functions[_code-context__clear__help__status_commands] )) ||
-_code-context__clear__help__status_commands() {
+(( $+functions[_code-context__subcmd__clear__subcmd__help__subcmd__status_commands] )) ||
+_code-context__subcmd__clear__subcmd__help__subcmd__status_commands() {
     local commands; commands=()
     _describe -t commands 'code-context clear help status commands' commands "$@"
 }
-(( $+functions[_code-context__clear__status_commands] )) ||
-_code-context__clear__status_commands() {
+(( $+functions[_code-context__subcmd__clear__subcmd__status_commands] )) ||
+_code-context__subcmd__clear__subcmd__status_commands() {
     local commands; commands=()
     _describe -t commands 'code-context clear status commands' commands "$@"
 }
-(( $+functions[_code-context__deinit_commands] )) ||
-_code-context__deinit_commands() {
+(( $+functions[_code-context__subcmd__deinit_commands] )) ||
+_code-context__subcmd__deinit_commands() {
     local commands; commands=()
     _describe -t commands 'code-context deinit commands' commands "$@"
 }
-(( $+functions[_code-context__detect_commands] )) ||
-_code-context__detect_commands() {
+(( $+functions[_code-context__subcmd__detect_commands] )) ||
+_code-context__subcmd__detect_commands() {
     local commands; commands=(
 'projects:Detect project types in the workspace and return language-specific guidelines' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'code-context detect commands' commands "$@"
 }
-(( $+functions[_code-context__detect__help_commands] )) ||
-_code-context__detect__help_commands() {
+(( $+functions[_code-context__subcmd__detect__subcmd__help_commands] )) ||
+_code-context__subcmd__detect__subcmd__help_commands() {
     local commands; commands=(
 'projects:Detect project types in the workspace and return language-specific guidelines' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'code-context detect help commands' commands "$@"
 }
-(( $+functions[_code-context__detect__help__help_commands] )) ||
-_code-context__detect__help__help_commands() {
+(( $+functions[_code-context__subcmd__detect__subcmd__help__subcmd__help_commands] )) ||
+_code-context__subcmd__detect__subcmd__help__subcmd__help_commands() {
     local commands; commands=()
     _describe -t commands 'code-context detect help help commands' commands "$@"
 }
-(( $+functions[_code-context__detect__help__projects_commands] )) ||
-_code-context__detect__help__projects_commands() {
+(( $+functions[_code-context__subcmd__detect__subcmd__help__subcmd__projects_commands] )) ||
+_code-context__subcmd__detect__subcmd__help__subcmd__projects_commands() {
     local commands; commands=()
     _describe -t commands 'code-context detect help projects commands' commands "$@"
 }
-(( $+functions[_code-context__detect__projects_commands] )) ||
-_code-context__detect__projects_commands() {
+(( $+functions[_code-context__subcmd__detect__subcmd__projects_commands] )) ||
+_code-context__subcmd__detect__subcmd__projects_commands() {
     local commands; commands=()
     _describe -t commands 'code-context detect projects commands' commands "$@"
 }
-(( $+functions[_code-context__doctor_commands] )) ||
-_code-context__doctor_commands() {
+(( $+functions[_code-context__subcmd__doctor_commands] )) ||
+_code-context__subcmd__doctor_commands() {
     local commands; commands=()
     _describe -t commands 'code-context doctor commands' commands "$@"
 }
-(( $+functions[_code-context__find_commands] )) ||
-_code-context__find_commands() {
+(( $+functions[_code-context__subcmd__find_commands] )) ||
+_code-context__subcmd__find_commands() {
     local commands; commands=(
 'duplicates:Find code in a file that is duplicated elsewhere in the codebase' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'code-context find commands' commands "$@"
 }
-(( $+functions[_code-context__find__duplicates_commands] )) ||
-_code-context__find__duplicates_commands() {
+(( $+functions[_code-context__subcmd__find__subcmd__duplicates_commands] )) ||
+_code-context__subcmd__find__subcmd__duplicates_commands() {
     local commands; commands=()
     _describe -t commands 'code-context find duplicates commands' commands "$@"
 }
-(( $+functions[_code-context__find__help_commands] )) ||
-_code-context__find__help_commands() {
+(( $+functions[_code-context__subcmd__find__subcmd__help_commands] )) ||
+_code-context__subcmd__find__subcmd__help_commands() {
     local commands; commands=(
 'duplicates:Find code in a file that is duplicated elsewhere in the codebase' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'code-context find help commands' commands "$@"
 }
-(( $+functions[_code-context__find__help__duplicates_commands] )) ||
-_code-context__find__help__duplicates_commands() {
+(( $+functions[_code-context__subcmd__find__subcmd__help__subcmd__duplicates_commands] )) ||
+_code-context__subcmd__find__subcmd__help__subcmd__duplicates_commands() {
     local commands; commands=()
     _describe -t commands 'code-context find help duplicates commands' commands "$@"
 }
-(( $+functions[_code-context__find__help__help_commands] )) ||
-_code-context__find__help__help_commands() {
+(( $+functions[_code-context__subcmd__find__subcmd__help__subcmd__help_commands] )) ||
+_code-context__subcmd__find__subcmd__help__subcmd__help_commands() {
     local commands; commands=()
     _describe -t commands 'code-context find help help commands' commands "$@"
 }
-(( $+functions[_code-context__get_commands] )) ||
-_code-context__get_commands() {
+(( $+functions[_code-context__subcmd__get_commands] )) ||
+_code-context__subcmd__get_commands() {
     local commands; commands=(
 'symbol:Look up symbol locations and source text with fuzzy matching' \
 'callgraph:Traverse call graph from a starting symbol' \
@@ -1392,33 +1392,33 @@ _code-context__get_commands() {
     )
     _describe -t commands 'code-context get commands' commands "$@"
 }
-(( $+functions[_code-context__get__blastradius_commands] )) ||
-_code-context__get__blastradius_commands() {
+(( $+functions[_code-context__subcmd__get__subcmd__blastradius_commands] )) ||
+_code-context__subcmd__get__subcmd__blastradius_commands() {
     local commands; commands=()
     _describe -t commands 'code-context get blastradius commands' commands "$@"
 }
-(( $+functions[_code-context__get__callgraph_commands] )) ||
-_code-context__get__callgraph_commands() {
+(( $+functions[_code-context__subcmd__get__subcmd__callgraph_commands] )) ||
+_code-context__subcmd__get__subcmd__callgraph_commands() {
     local commands; commands=()
     _describe -t commands 'code-context get callgraph commands' commands "$@"
 }
-(( $+functions[_code-context__get__code-actions_commands] )) ||
-_code-context__get__code-actions_commands() {
+(( $+functions[_code-context__subcmd__get__subcmd__code-actions_commands] )) ||
+_code-context__subcmd__get__subcmd__code-actions_commands() {
     local commands; commands=()
     _describe -t commands 'code-context get code-actions commands' commands "$@"
 }
-(( $+functions[_code-context__get__definition_commands] )) ||
-_code-context__get__definition_commands() {
+(( $+functions[_code-context__subcmd__get__subcmd__definition_commands] )) ||
+_code-context__subcmd__get__subcmd__definition_commands() {
     local commands; commands=()
     _describe -t commands 'code-context get definition commands' commands "$@"
 }
-(( $+functions[_code-context__get__diagnostics_commands] )) ||
-_code-context__get__diagnostics_commands() {
+(( $+functions[_code-context__subcmd__get__subcmd__diagnostics_commands] )) ||
+_code-context__subcmd__get__subcmd__diagnostics_commands() {
     local commands; commands=()
     _describe -t commands 'code-context get diagnostics commands' commands "$@"
 }
-(( $+functions[_code-context__get__help_commands] )) ||
-_code-context__get__help_commands() {
+(( $+functions[_code-context__subcmd__get__subcmd__help_commands] )) ||
+_code-context__subcmd__get__subcmd__help_commands() {
     local commands; commands=(
 'symbol:Look up symbol locations and source text with fuzzy matching' \
 'callgraph:Traverse call graph from a starting symbol' \
@@ -1437,149 +1437,149 @@ _code-context__get__help_commands() {
     )
     _describe -t commands 'code-context get help commands' commands "$@"
 }
-(( $+functions[_code-context__get__help__blastradius_commands] )) ||
-_code-context__get__help__blastradius_commands() {
+(( $+functions[_code-context__subcmd__get__subcmd__help__subcmd__blastradius_commands] )) ||
+_code-context__subcmd__get__subcmd__help__subcmd__blastradius_commands() {
     local commands; commands=()
     _describe -t commands 'code-context get help blastradius commands' commands "$@"
 }
-(( $+functions[_code-context__get__help__callgraph_commands] )) ||
-_code-context__get__help__callgraph_commands() {
+(( $+functions[_code-context__subcmd__get__subcmd__help__subcmd__callgraph_commands] )) ||
+_code-context__subcmd__get__subcmd__help__subcmd__callgraph_commands() {
     local commands; commands=()
     _describe -t commands 'code-context get help callgraph commands' commands "$@"
 }
-(( $+functions[_code-context__get__help__code-actions_commands] )) ||
-_code-context__get__help__code-actions_commands() {
+(( $+functions[_code-context__subcmd__get__subcmd__help__subcmd__code-actions_commands] )) ||
+_code-context__subcmd__get__subcmd__help__subcmd__code-actions_commands() {
     local commands; commands=()
     _describe -t commands 'code-context get help code-actions commands' commands "$@"
 }
-(( $+functions[_code-context__get__help__definition_commands] )) ||
-_code-context__get__help__definition_commands() {
+(( $+functions[_code-context__subcmd__get__subcmd__help__subcmd__definition_commands] )) ||
+_code-context__subcmd__get__subcmd__help__subcmd__definition_commands() {
     local commands; commands=()
     _describe -t commands 'code-context get help definition commands' commands "$@"
 }
-(( $+functions[_code-context__get__help__diagnostics_commands] )) ||
-_code-context__get__help__diagnostics_commands() {
+(( $+functions[_code-context__subcmd__get__subcmd__help__subcmd__diagnostics_commands] )) ||
+_code-context__subcmd__get__subcmd__help__subcmd__diagnostics_commands() {
     local commands; commands=()
     _describe -t commands 'code-context get help diagnostics commands' commands "$@"
 }
-(( $+functions[_code-context__get__help__help_commands] )) ||
-_code-context__get__help__help_commands() {
+(( $+functions[_code-context__subcmd__get__subcmd__help__subcmd__help_commands] )) ||
+_code-context__subcmd__get__subcmd__help__subcmd__help_commands() {
     local commands; commands=()
     _describe -t commands 'code-context get help help commands' commands "$@"
 }
-(( $+functions[_code-context__get__help__hover_commands] )) ||
-_code-context__get__help__hover_commands() {
+(( $+functions[_code-context__subcmd__get__subcmd__help__subcmd__hover_commands] )) ||
+_code-context__subcmd__get__subcmd__help__subcmd__hover_commands() {
     local commands; commands=()
     _describe -t commands 'code-context get help hover commands' commands "$@"
 }
-(( $+functions[_code-context__get__help__implementations_commands] )) ||
-_code-context__get__help__implementations_commands() {
+(( $+functions[_code-context__subcmd__get__subcmd__help__subcmd__implementations_commands] )) ||
+_code-context__subcmd__get__subcmd__help__subcmd__implementations_commands() {
     local commands; commands=()
     _describe -t commands 'code-context get help implementations commands' commands "$@"
 }
-(( $+functions[_code-context__get__help__inbound-calls_commands] )) ||
-_code-context__get__help__inbound-calls_commands() {
+(( $+functions[_code-context__subcmd__get__subcmd__help__subcmd__inbound-calls_commands] )) ||
+_code-context__subcmd__get__subcmd__help__subcmd__inbound-calls_commands() {
     local commands; commands=()
     _describe -t commands 'code-context get help inbound-calls commands' commands "$@"
 }
-(( $+functions[_code-context__get__help__references_commands] )) ||
-_code-context__get__help__references_commands() {
+(( $+functions[_code-context__subcmd__get__subcmd__help__subcmd__references_commands] )) ||
+_code-context__subcmd__get__subcmd__help__subcmd__references_commands() {
     local commands; commands=()
     _describe -t commands 'code-context get help references commands' commands "$@"
 }
-(( $+functions[_code-context__get__help__rename-edits_commands] )) ||
-_code-context__get__help__rename-edits_commands() {
+(( $+functions[_code-context__subcmd__get__subcmd__help__subcmd__rename-edits_commands] )) ||
+_code-context__subcmd__get__subcmd__help__subcmd__rename-edits_commands() {
     local commands; commands=()
     _describe -t commands 'code-context get help rename-edits commands' commands "$@"
 }
-(( $+functions[_code-context__get__help__status_commands] )) ||
-_code-context__get__help__status_commands() {
+(( $+functions[_code-context__subcmd__get__subcmd__help__subcmd__status_commands] )) ||
+_code-context__subcmd__get__subcmd__help__subcmd__status_commands() {
     local commands; commands=()
     _describe -t commands 'code-context get help status commands' commands "$@"
 }
-(( $+functions[_code-context__get__help__symbol_commands] )) ||
-_code-context__get__help__symbol_commands() {
+(( $+functions[_code-context__subcmd__get__subcmd__help__subcmd__symbol_commands] )) ||
+_code-context__subcmd__get__subcmd__help__subcmd__symbol_commands() {
     local commands; commands=()
     _describe -t commands 'code-context get help symbol commands' commands "$@"
 }
-(( $+functions[_code-context__get__help__type-definition_commands] )) ||
-_code-context__get__help__type-definition_commands() {
+(( $+functions[_code-context__subcmd__get__subcmd__help__subcmd__type-definition_commands] )) ||
+_code-context__subcmd__get__subcmd__help__subcmd__type-definition_commands() {
     local commands; commands=()
     _describe -t commands 'code-context get help type-definition commands' commands "$@"
 }
-(( $+functions[_code-context__get__hover_commands] )) ||
-_code-context__get__hover_commands() {
+(( $+functions[_code-context__subcmd__get__subcmd__hover_commands] )) ||
+_code-context__subcmd__get__subcmd__hover_commands() {
     local commands; commands=()
     _describe -t commands 'code-context get hover commands' commands "$@"
 }
-(( $+functions[_code-context__get__implementations_commands] )) ||
-_code-context__get__implementations_commands() {
+(( $+functions[_code-context__subcmd__get__subcmd__implementations_commands] )) ||
+_code-context__subcmd__get__subcmd__implementations_commands() {
     local commands; commands=()
     _describe -t commands 'code-context get implementations commands' commands "$@"
 }
-(( $+functions[_code-context__get__inbound-calls_commands] )) ||
-_code-context__get__inbound-calls_commands() {
+(( $+functions[_code-context__subcmd__get__subcmd__inbound-calls_commands] )) ||
+_code-context__subcmd__get__subcmd__inbound-calls_commands() {
     local commands; commands=()
     _describe -t commands 'code-context get inbound-calls commands' commands "$@"
 }
-(( $+functions[_code-context__get__references_commands] )) ||
-_code-context__get__references_commands() {
+(( $+functions[_code-context__subcmd__get__subcmd__references_commands] )) ||
+_code-context__subcmd__get__subcmd__references_commands() {
     local commands; commands=()
     _describe -t commands 'code-context get references commands' commands "$@"
 }
-(( $+functions[_code-context__get__rename-edits_commands] )) ||
-_code-context__get__rename-edits_commands() {
+(( $+functions[_code-context__subcmd__get__subcmd__rename-edits_commands] )) ||
+_code-context__subcmd__get__subcmd__rename-edits_commands() {
     local commands; commands=()
     _describe -t commands 'code-context get rename-edits commands' commands "$@"
 }
-(( $+functions[_code-context__get__status_commands] )) ||
-_code-context__get__status_commands() {
+(( $+functions[_code-context__subcmd__get__subcmd__status_commands] )) ||
+_code-context__subcmd__get__subcmd__status_commands() {
     local commands; commands=()
     _describe -t commands 'code-context get status commands' commands "$@"
 }
-(( $+functions[_code-context__get__symbol_commands] )) ||
-_code-context__get__symbol_commands() {
+(( $+functions[_code-context__subcmd__get__subcmd__symbol_commands] )) ||
+_code-context__subcmd__get__subcmd__symbol_commands() {
     local commands; commands=()
     _describe -t commands 'code-context get symbol commands' commands "$@"
 }
-(( $+functions[_code-context__get__type-definition_commands] )) ||
-_code-context__get__type-definition_commands() {
+(( $+functions[_code-context__subcmd__get__subcmd__type-definition_commands] )) ||
+_code-context__subcmd__get__subcmd__type-definition_commands() {
     local commands; commands=()
     _describe -t commands 'code-context get type-definition commands' commands "$@"
 }
-(( $+functions[_code-context__grep_commands] )) ||
-_code-context__grep_commands() {
+(( $+functions[_code-context__subcmd__grep_commands] )) ||
+_code-context__subcmd__grep_commands() {
     local commands; commands=(
 'code:Regex search across stored code chunks' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'code-context grep commands' commands "$@"
 }
-(( $+functions[_code-context__grep__code_commands] )) ||
-_code-context__grep__code_commands() {
+(( $+functions[_code-context__subcmd__grep__subcmd__code_commands] )) ||
+_code-context__subcmd__grep__subcmd__code_commands() {
     local commands; commands=()
     _describe -t commands 'code-context grep code commands' commands "$@"
 }
-(( $+functions[_code-context__grep__help_commands] )) ||
-_code-context__grep__help_commands() {
+(( $+functions[_code-context__subcmd__grep__subcmd__help_commands] )) ||
+_code-context__subcmd__grep__subcmd__help_commands() {
     local commands; commands=(
 'code:Regex search across stored code chunks' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'code-context grep help commands' commands "$@"
 }
-(( $+functions[_code-context__grep__help__code_commands] )) ||
-_code-context__grep__help__code_commands() {
+(( $+functions[_code-context__subcmd__grep__subcmd__help__subcmd__code_commands] )) ||
+_code-context__subcmd__grep__subcmd__help__subcmd__code_commands() {
     local commands; commands=()
     _describe -t commands 'code-context grep help code commands' commands "$@"
 }
-(( $+functions[_code-context__grep__help__help_commands] )) ||
-_code-context__grep__help__help_commands() {
+(( $+functions[_code-context__subcmd__grep__subcmd__help__subcmd__help_commands] )) ||
+_code-context__subcmd__grep__subcmd__help__subcmd__help_commands() {
     local commands; commands=()
     _describe -t commands 'code-context grep help help commands' commands "$@"
 }
-(( $+functions[_code-context__help_commands] )) ||
-_code-context__help_commands() {
+(( $+functions[_code-context__subcmd__help_commands] )) ||
+_code-context__subcmd__help_commands() {
     local commands; commands=(
 'serve:Run MCP server over stdio, exposing code-context tools' \
 'init:Install code-context MCP server into Claude Code settings' \
@@ -1600,66 +1600,66 @@ _code-context__help_commands() {
     )
     _describe -t commands 'code-context help commands' commands "$@"
 }
-(( $+functions[_code-context__help__build_commands] )) ||
-_code-context__help__build_commands() {
+(( $+functions[_code-context__subcmd__help__subcmd__build_commands] )) ||
+_code-context__subcmd__help__subcmd__build_commands() {
     local commands; commands=(
 'status:Mark files for re-indexing by resetting indexed flags' \
     )
     _describe -t commands 'code-context help build commands' commands "$@"
 }
-(( $+functions[_code-context__help__build__status_commands] )) ||
-_code-context__help__build__status_commands() {
+(( $+functions[_code-context__subcmd__help__subcmd__build__subcmd__status_commands] )) ||
+_code-context__subcmd__help__subcmd__build__subcmd__status_commands() {
     local commands; commands=()
     _describe -t commands 'code-context help build status commands' commands "$@"
 }
-(( $+functions[_code-context__help__clear_commands] )) ||
-_code-context__help__clear_commands() {
+(( $+functions[_code-context__subcmd__help__subcmd__clear_commands] )) ||
+_code-context__subcmd__help__subcmd__clear_commands() {
     local commands; commands=(
 'status:Wipe all index data and return stats about what was cleared' \
     )
     _describe -t commands 'code-context help clear commands' commands "$@"
 }
-(( $+functions[_code-context__help__clear__status_commands] )) ||
-_code-context__help__clear__status_commands() {
+(( $+functions[_code-context__subcmd__help__subcmd__clear__subcmd__status_commands] )) ||
+_code-context__subcmd__help__subcmd__clear__subcmd__status_commands() {
     local commands; commands=()
     _describe -t commands 'code-context help clear status commands' commands "$@"
 }
-(( $+functions[_code-context__help__deinit_commands] )) ||
-_code-context__help__deinit_commands() {
+(( $+functions[_code-context__subcmd__help__subcmd__deinit_commands] )) ||
+_code-context__subcmd__help__subcmd__deinit_commands() {
     local commands; commands=()
     _describe -t commands 'code-context help deinit commands' commands "$@"
 }
-(( $+functions[_code-context__help__detect_commands] )) ||
-_code-context__help__detect_commands() {
+(( $+functions[_code-context__subcmd__help__subcmd__detect_commands] )) ||
+_code-context__subcmd__help__subcmd__detect_commands() {
     local commands; commands=(
 'projects:Detect project types in the workspace and return language-specific guidelines' \
     )
     _describe -t commands 'code-context help detect commands' commands "$@"
 }
-(( $+functions[_code-context__help__detect__projects_commands] )) ||
-_code-context__help__detect__projects_commands() {
+(( $+functions[_code-context__subcmd__help__subcmd__detect__subcmd__projects_commands] )) ||
+_code-context__subcmd__help__subcmd__detect__subcmd__projects_commands() {
     local commands; commands=()
     _describe -t commands 'code-context help detect projects commands' commands "$@"
 }
-(( $+functions[_code-context__help__doctor_commands] )) ||
-_code-context__help__doctor_commands() {
+(( $+functions[_code-context__subcmd__help__subcmd__doctor_commands] )) ||
+_code-context__subcmd__help__subcmd__doctor_commands() {
     local commands; commands=()
     _describe -t commands 'code-context help doctor commands' commands "$@"
 }
-(( $+functions[_code-context__help__find_commands] )) ||
-_code-context__help__find_commands() {
+(( $+functions[_code-context__subcmd__help__subcmd__find_commands] )) ||
+_code-context__subcmd__help__subcmd__find_commands() {
     local commands; commands=(
 'duplicates:Find code in a file that is duplicated elsewhere in the codebase' \
     )
     _describe -t commands 'code-context help find commands' commands "$@"
 }
-(( $+functions[_code-context__help__find__duplicates_commands] )) ||
-_code-context__help__find__duplicates_commands() {
+(( $+functions[_code-context__subcmd__help__subcmd__find__subcmd__duplicates_commands] )) ||
+_code-context__subcmd__help__subcmd__find__subcmd__duplicates_commands() {
     local commands; commands=()
     _describe -t commands 'code-context help find duplicates commands' commands "$@"
 }
-(( $+functions[_code-context__help__get_commands] )) ||
-_code-context__help__get_commands() {
+(( $+functions[_code-context__subcmd__help__subcmd__get_commands] )) ||
+_code-context__subcmd__help__subcmd__get_commands() {
     local commands; commands=(
 'symbol:Look up symbol locations and source text with fuzzy matching' \
 'callgraph:Traverse call graph from a starting symbol' \
@@ -1677,131 +1677,131 @@ _code-context__help__get_commands() {
     )
     _describe -t commands 'code-context help get commands' commands "$@"
 }
-(( $+functions[_code-context__help__get__blastradius_commands] )) ||
-_code-context__help__get__blastradius_commands() {
+(( $+functions[_code-context__subcmd__help__subcmd__get__subcmd__blastradius_commands] )) ||
+_code-context__subcmd__help__subcmd__get__subcmd__blastradius_commands() {
     local commands; commands=()
     _describe -t commands 'code-context help get blastradius commands' commands "$@"
 }
-(( $+functions[_code-context__help__get__callgraph_commands] )) ||
-_code-context__help__get__callgraph_commands() {
+(( $+functions[_code-context__subcmd__help__subcmd__get__subcmd__callgraph_commands] )) ||
+_code-context__subcmd__help__subcmd__get__subcmd__callgraph_commands() {
     local commands; commands=()
     _describe -t commands 'code-context help get callgraph commands' commands "$@"
 }
-(( $+functions[_code-context__help__get__code-actions_commands] )) ||
-_code-context__help__get__code-actions_commands() {
+(( $+functions[_code-context__subcmd__help__subcmd__get__subcmd__code-actions_commands] )) ||
+_code-context__subcmd__help__subcmd__get__subcmd__code-actions_commands() {
     local commands; commands=()
     _describe -t commands 'code-context help get code-actions commands' commands "$@"
 }
-(( $+functions[_code-context__help__get__definition_commands] )) ||
-_code-context__help__get__definition_commands() {
+(( $+functions[_code-context__subcmd__help__subcmd__get__subcmd__definition_commands] )) ||
+_code-context__subcmd__help__subcmd__get__subcmd__definition_commands() {
     local commands; commands=()
     _describe -t commands 'code-context help get definition commands' commands "$@"
 }
-(( $+functions[_code-context__help__get__diagnostics_commands] )) ||
-_code-context__help__get__diagnostics_commands() {
+(( $+functions[_code-context__subcmd__help__subcmd__get__subcmd__diagnostics_commands] )) ||
+_code-context__subcmd__help__subcmd__get__subcmd__diagnostics_commands() {
     local commands; commands=()
     _describe -t commands 'code-context help get diagnostics commands' commands "$@"
 }
-(( $+functions[_code-context__help__get__hover_commands] )) ||
-_code-context__help__get__hover_commands() {
+(( $+functions[_code-context__subcmd__help__subcmd__get__subcmd__hover_commands] )) ||
+_code-context__subcmd__help__subcmd__get__subcmd__hover_commands() {
     local commands; commands=()
     _describe -t commands 'code-context help get hover commands' commands "$@"
 }
-(( $+functions[_code-context__help__get__implementations_commands] )) ||
-_code-context__help__get__implementations_commands() {
+(( $+functions[_code-context__subcmd__help__subcmd__get__subcmd__implementations_commands] )) ||
+_code-context__subcmd__help__subcmd__get__subcmd__implementations_commands() {
     local commands; commands=()
     _describe -t commands 'code-context help get implementations commands' commands "$@"
 }
-(( $+functions[_code-context__help__get__inbound-calls_commands] )) ||
-_code-context__help__get__inbound-calls_commands() {
+(( $+functions[_code-context__subcmd__help__subcmd__get__subcmd__inbound-calls_commands] )) ||
+_code-context__subcmd__help__subcmd__get__subcmd__inbound-calls_commands() {
     local commands; commands=()
     _describe -t commands 'code-context help get inbound-calls commands' commands "$@"
 }
-(( $+functions[_code-context__help__get__references_commands] )) ||
-_code-context__help__get__references_commands() {
+(( $+functions[_code-context__subcmd__help__subcmd__get__subcmd__references_commands] )) ||
+_code-context__subcmd__help__subcmd__get__subcmd__references_commands() {
     local commands; commands=()
     _describe -t commands 'code-context help get references commands' commands "$@"
 }
-(( $+functions[_code-context__help__get__rename-edits_commands] )) ||
-_code-context__help__get__rename-edits_commands() {
+(( $+functions[_code-context__subcmd__help__subcmd__get__subcmd__rename-edits_commands] )) ||
+_code-context__subcmd__help__subcmd__get__subcmd__rename-edits_commands() {
     local commands; commands=()
     _describe -t commands 'code-context help get rename-edits commands' commands "$@"
 }
-(( $+functions[_code-context__help__get__status_commands] )) ||
-_code-context__help__get__status_commands() {
+(( $+functions[_code-context__subcmd__help__subcmd__get__subcmd__status_commands] )) ||
+_code-context__subcmd__help__subcmd__get__subcmd__status_commands() {
     local commands; commands=()
     _describe -t commands 'code-context help get status commands' commands "$@"
 }
-(( $+functions[_code-context__help__get__symbol_commands] )) ||
-_code-context__help__get__symbol_commands() {
+(( $+functions[_code-context__subcmd__help__subcmd__get__subcmd__symbol_commands] )) ||
+_code-context__subcmd__help__subcmd__get__subcmd__symbol_commands() {
     local commands; commands=()
     _describe -t commands 'code-context help get symbol commands' commands "$@"
 }
-(( $+functions[_code-context__help__get__type-definition_commands] )) ||
-_code-context__help__get__type-definition_commands() {
+(( $+functions[_code-context__subcmd__help__subcmd__get__subcmd__type-definition_commands] )) ||
+_code-context__subcmd__help__subcmd__get__subcmd__type-definition_commands() {
     local commands; commands=()
     _describe -t commands 'code-context help get type-definition commands' commands "$@"
 }
-(( $+functions[_code-context__help__grep_commands] )) ||
-_code-context__help__grep_commands() {
+(( $+functions[_code-context__subcmd__help__subcmd__grep_commands] )) ||
+_code-context__subcmd__help__subcmd__grep_commands() {
     local commands; commands=(
 'code:Regex search across stored code chunks' \
     )
     _describe -t commands 'code-context help grep commands' commands "$@"
 }
-(( $+functions[_code-context__help__grep__code_commands] )) ||
-_code-context__help__grep__code_commands() {
+(( $+functions[_code-context__subcmd__help__subcmd__grep__subcmd__code_commands] )) ||
+_code-context__subcmd__help__subcmd__grep__subcmd__code_commands() {
     local commands; commands=()
     _describe -t commands 'code-context help grep code commands' commands "$@"
 }
-(( $+functions[_code-context__help__help_commands] )) ||
-_code-context__help__help_commands() {
+(( $+functions[_code-context__subcmd__help__subcmd__help_commands] )) ||
+_code-context__subcmd__help__subcmd__help_commands() {
     local commands; commands=()
     _describe -t commands 'code-context help help commands' commands "$@"
 }
-(( $+functions[_code-context__help__init_commands] )) ||
-_code-context__help__init_commands() {
+(( $+functions[_code-context__subcmd__help__subcmd__init_commands] )) ||
+_code-context__subcmd__help__subcmd__init_commands() {
     local commands; commands=()
     _describe -t commands 'code-context help init commands' commands "$@"
 }
-(( $+functions[_code-context__help__list_commands] )) ||
-_code-context__help__list_commands() {
+(( $+functions[_code-context__subcmd__help__subcmd__list_commands] )) ||
+_code-context__subcmd__help__subcmd__list_commands() {
     local commands; commands=(
 'symbols:List all symbols in a specific file, sorted by start line' \
     )
     _describe -t commands 'code-context help list commands' commands "$@"
 }
-(( $+functions[_code-context__help__list__symbols_commands] )) ||
-_code-context__help__list__symbols_commands() {
+(( $+functions[_code-context__subcmd__help__subcmd__list__subcmd__symbols_commands] )) ||
+_code-context__subcmd__help__subcmd__list__subcmd__symbols_commands() {
     local commands; commands=()
     _describe -t commands 'code-context help list symbols commands' commands "$@"
 }
-(( $+functions[_code-context__help__lsp_commands] )) ||
-_code-context__help__lsp_commands() {
+(( $+functions[_code-context__subcmd__help__subcmd__lsp_commands] )) ||
+_code-context__subcmd__help__subcmd__lsp_commands() {
     local commands; commands=(
 'status:Show detected languages, their LSP servers, and install status' \
     )
     _describe -t commands 'code-context help lsp commands' commands "$@"
 }
-(( $+functions[_code-context__help__lsp__status_commands] )) ||
-_code-context__help__lsp__status_commands() {
+(( $+functions[_code-context__subcmd__help__subcmd__lsp__subcmd__status_commands] )) ||
+_code-context__subcmd__help__subcmd__lsp__subcmd__status_commands() {
     local commands; commands=()
     _describe -t commands 'code-context help lsp status commands' commands "$@"
 }
-(( $+functions[_code-context__help__query_commands] )) ||
-_code-context__help__query_commands() {
+(( $+functions[_code-context__subcmd__help__subcmd__query_commands] )) ||
+_code-context__subcmd__help__subcmd__query_commands() {
     local commands; commands=(
 'ast:Execute tree-sitter S-expression queries against parsed ASTs' \
     )
     _describe -t commands 'code-context help query commands' commands "$@"
 }
-(( $+functions[_code-context__help__query__ast_commands] )) ||
-_code-context__help__query__ast_commands() {
+(( $+functions[_code-context__subcmd__help__subcmd__query__subcmd__ast_commands] )) ||
+_code-context__subcmd__help__subcmd__query__subcmd__ast_commands() {
     local commands; commands=()
     _describe -t commands 'code-context help query ast commands' commands "$@"
 }
-(( $+functions[_code-context__help__search_commands] )) ||
-_code-context__help__search_commands() {
+(( $+functions[_code-context__subcmd__help__subcmd__search_commands] )) ||
+_code-context__subcmd__help__subcmd__search_commands() {
     local commands; commands=(
 'symbol:Fuzzy search across all indexed symbols' \
 'code:Semantic similarity search across code chunks using embeddings' \
@@ -1809,131 +1809,131 @@ _code-context__help__search_commands() {
     )
     _describe -t commands 'code-context help search commands' commands "$@"
 }
-(( $+functions[_code-context__help__search__code_commands] )) ||
-_code-context__help__search__code_commands() {
+(( $+functions[_code-context__subcmd__help__subcmd__search__subcmd__code_commands] )) ||
+_code-context__subcmd__help__subcmd__search__subcmd__code_commands() {
     local commands; commands=()
     _describe -t commands 'code-context help search code commands' commands "$@"
 }
-(( $+functions[_code-context__help__search__symbol_commands] )) ||
-_code-context__help__search__symbol_commands() {
+(( $+functions[_code-context__subcmd__help__subcmd__search__subcmd__symbol_commands] )) ||
+_code-context__subcmd__help__subcmd__search__subcmd__symbol_commands() {
     local commands; commands=()
     _describe -t commands 'code-context help search symbol commands' commands "$@"
 }
-(( $+functions[_code-context__help__search__workspace-symbol_commands] )) ||
-_code-context__help__search__workspace-symbol_commands() {
+(( $+functions[_code-context__subcmd__help__subcmd__search__subcmd__workspace-symbol_commands] )) ||
+_code-context__subcmd__help__subcmd__search__subcmd__workspace-symbol_commands() {
     local commands; commands=()
     _describe -t commands 'code-context help search workspace-symbol commands' commands "$@"
 }
-(( $+functions[_code-context__help__serve_commands] )) ||
-_code-context__help__serve_commands() {
+(( $+functions[_code-context__subcmd__help__subcmd__serve_commands] )) ||
+_code-context__subcmd__help__subcmd__serve_commands() {
     local commands; commands=()
     _describe -t commands 'code-context help serve commands' commands "$@"
 }
-(( $+functions[_code-context__help__skill_commands] )) ||
-_code-context__help__skill_commands() {
+(( $+functions[_code-context__subcmd__help__subcmd__skill_commands] )) ||
+_code-context__subcmd__help__subcmd__skill_commands() {
     local commands; commands=()
     _describe -t commands 'code-context help skill commands' commands "$@"
 }
-(( $+functions[_code-context__init_commands] )) ||
-_code-context__init_commands() {
+(( $+functions[_code-context__subcmd__init_commands] )) ||
+_code-context__subcmd__init_commands() {
     local commands; commands=()
     _describe -t commands 'code-context init commands' commands "$@"
 }
-(( $+functions[_code-context__list_commands] )) ||
-_code-context__list_commands() {
+(( $+functions[_code-context__subcmd__list_commands] )) ||
+_code-context__subcmd__list_commands() {
     local commands; commands=(
 'symbols:List all symbols in a specific file, sorted by start line' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'code-context list commands' commands "$@"
 }
-(( $+functions[_code-context__list__help_commands] )) ||
-_code-context__list__help_commands() {
+(( $+functions[_code-context__subcmd__list__subcmd__help_commands] )) ||
+_code-context__subcmd__list__subcmd__help_commands() {
     local commands; commands=(
 'symbols:List all symbols in a specific file, sorted by start line' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'code-context list help commands' commands "$@"
 }
-(( $+functions[_code-context__list__help__help_commands] )) ||
-_code-context__list__help__help_commands() {
+(( $+functions[_code-context__subcmd__list__subcmd__help__subcmd__help_commands] )) ||
+_code-context__subcmd__list__subcmd__help__subcmd__help_commands() {
     local commands; commands=()
     _describe -t commands 'code-context list help help commands' commands "$@"
 }
-(( $+functions[_code-context__list__help__symbols_commands] )) ||
-_code-context__list__help__symbols_commands() {
+(( $+functions[_code-context__subcmd__list__subcmd__help__subcmd__symbols_commands] )) ||
+_code-context__subcmd__list__subcmd__help__subcmd__symbols_commands() {
     local commands; commands=()
     _describe -t commands 'code-context list help symbols commands' commands "$@"
 }
-(( $+functions[_code-context__list__symbols_commands] )) ||
-_code-context__list__symbols_commands() {
+(( $+functions[_code-context__subcmd__list__subcmd__symbols_commands] )) ||
+_code-context__subcmd__list__subcmd__symbols_commands() {
     local commands; commands=()
     _describe -t commands 'code-context list symbols commands' commands "$@"
 }
-(( $+functions[_code-context__lsp_commands] )) ||
-_code-context__lsp_commands() {
+(( $+functions[_code-context__subcmd__lsp_commands] )) ||
+_code-context__subcmd__lsp_commands() {
     local commands; commands=(
 'status:Show detected languages, their LSP servers, and install status' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'code-context lsp commands' commands "$@"
 }
-(( $+functions[_code-context__lsp__help_commands] )) ||
-_code-context__lsp__help_commands() {
+(( $+functions[_code-context__subcmd__lsp__subcmd__help_commands] )) ||
+_code-context__subcmd__lsp__subcmd__help_commands() {
     local commands; commands=(
 'status:Show detected languages, their LSP servers, and install status' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'code-context lsp help commands' commands "$@"
 }
-(( $+functions[_code-context__lsp__help__help_commands] )) ||
-_code-context__lsp__help__help_commands() {
+(( $+functions[_code-context__subcmd__lsp__subcmd__help__subcmd__help_commands] )) ||
+_code-context__subcmd__lsp__subcmd__help__subcmd__help_commands() {
     local commands; commands=()
     _describe -t commands 'code-context lsp help help commands' commands "$@"
 }
-(( $+functions[_code-context__lsp__help__status_commands] )) ||
-_code-context__lsp__help__status_commands() {
+(( $+functions[_code-context__subcmd__lsp__subcmd__help__subcmd__status_commands] )) ||
+_code-context__subcmd__lsp__subcmd__help__subcmd__status_commands() {
     local commands; commands=()
     _describe -t commands 'code-context lsp help status commands' commands "$@"
 }
-(( $+functions[_code-context__lsp__status_commands] )) ||
-_code-context__lsp__status_commands() {
+(( $+functions[_code-context__subcmd__lsp__subcmd__status_commands] )) ||
+_code-context__subcmd__lsp__subcmd__status_commands() {
     local commands; commands=()
     _describe -t commands 'code-context lsp status commands' commands "$@"
 }
-(( $+functions[_code-context__query_commands] )) ||
-_code-context__query_commands() {
+(( $+functions[_code-context__subcmd__query_commands] )) ||
+_code-context__subcmd__query_commands() {
     local commands; commands=(
 'ast:Execute tree-sitter S-expression queries against parsed ASTs' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'code-context query commands' commands "$@"
 }
-(( $+functions[_code-context__query__ast_commands] )) ||
-_code-context__query__ast_commands() {
+(( $+functions[_code-context__subcmd__query__subcmd__ast_commands] )) ||
+_code-context__subcmd__query__subcmd__ast_commands() {
     local commands; commands=()
     _describe -t commands 'code-context query ast commands' commands "$@"
 }
-(( $+functions[_code-context__query__help_commands] )) ||
-_code-context__query__help_commands() {
+(( $+functions[_code-context__subcmd__query__subcmd__help_commands] )) ||
+_code-context__subcmd__query__subcmd__help_commands() {
     local commands; commands=(
 'ast:Execute tree-sitter S-expression queries against parsed ASTs' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'code-context query help commands' commands "$@"
 }
-(( $+functions[_code-context__query__help__ast_commands] )) ||
-_code-context__query__help__ast_commands() {
+(( $+functions[_code-context__subcmd__query__subcmd__help__subcmd__ast_commands] )) ||
+_code-context__subcmd__query__subcmd__help__subcmd__ast_commands() {
     local commands; commands=()
     _describe -t commands 'code-context query help ast commands' commands "$@"
 }
-(( $+functions[_code-context__query__help__help_commands] )) ||
-_code-context__query__help__help_commands() {
+(( $+functions[_code-context__subcmd__query__subcmd__help__subcmd__help_commands] )) ||
+_code-context__subcmd__query__subcmd__help__subcmd__help_commands() {
     local commands; commands=()
     _describe -t commands 'code-context query help help commands' commands "$@"
 }
-(( $+functions[_code-context__search_commands] )) ||
-_code-context__search_commands() {
+(( $+functions[_code-context__subcmd__search_commands] )) ||
+_code-context__subcmd__search_commands() {
     local commands; commands=(
 'symbol:Fuzzy search across all indexed symbols' \
 'code:Semantic similarity search across code chunks using embeddings' \
@@ -1942,13 +1942,13 @@ _code-context__search_commands() {
     )
     _describe -t commands 'code-context search commands' commands "$@"
 }
-(( $+functions[_code-context__search__code_commands] )) ||
-_code-context__search__code_commands() {
+(( $+functions[_code-context__subcmd__search__subcmd__code_commands] )) ||
+_code-context__subcmd__search__subcmd__code_commands() {
     local commands; commands=()
     _describe -t commands 'code-context search code commands' commands "$@"
 }
-(( $+functions[_code-context__search__help_commands] )) ||
-_code-context__search__help_commands() {
+(( $+functions[_code-context__subcmd__search__subcmd__help_commands] )) ||
+_code-context__subcmd__search__subcmd__help_commands() {
     local commands; commands=(
 'symbol:Fuzzy search across all indexed symbols' \
 'code:Semantic similarity search across code chunks using embeddings' \
@@ -1957,43 +1957,43 @@ _code-context__search__help_commands() {
     )
     _describe -t commands 'code-context search help commands' commands "$@"
 }
-(( $+functions[_code-context__search__help__code_commands] )) ||
-_code-context__search__help__code_commands() {
+(( $+functions[_code-context__subcmd__search__subcmd__help__subcmd__code_commands] )) ||
+_code-context__subcmd__search__subcmd__help__subcmd__code_commands() {
     local commands; commands=()
     _describe -t commands 'code-context search help code commands' commands "$@"
 }
-(( $+functions[_code-context__search__help__help_commands] )) ||
-_code-context__search__help__help_commands() {
+(( $+functions[_code-context__subcmd__search__subcmd__help__subcmd__help_commands] )) ||
+_code-context__subcmd__search__subcmd__help__subcmd__help_commands() {
     local commands; commands=()
     _describe -t commands 'code-context search help help commands' commands "$@"
 }
-(( $+functions[_code-context__search__help__symbol_commands] )) ||
-_code-context__search__help__symbol_commands() {
+(( $+functions[_code-context__subcmd__search__subcmd__help__subcmd__symbol_commands] )) ||
+_code-context__subcmd__search__subcmd__help__subcmd__symbol_commands() {
     local commands; commands=()
     _describe -t commands 'code-context search help symbol commands' commands "$@"
 }
-(( $+functions[_code-context__search__help__workspace-symbol_commands] )) ||
-_code-context__search__help__workspace-symbol_commands() {
+(( $+functions[_code-context__subcmd__search__subcmd__help__subcmd__workspace-symbol_commands] )) ||
+_code-context__subcmd__search__subcmd__help__subcmd__workspace-symbol_commands() {
     local commands; commands=()
     _describe -t commands 'code-context search help workspace-symbol commands' commands "$@"
 }
-(( $+functions[_code-context__search__symbol_commands] )) ||
-_code-context__search__symbol_commands() {
+(( $+functions[_code-context__subcmd__search__subcmd__symbol_commands] )) ||
+_code-context__subcmd__search__subcmd__symbol_commands() {
     local commands; commands=()
     _describe -t commands 'code-context search symbol commands' commands "$@"
 }
-(( $+functions[_code-context__search__workspace-symbol_commands] )) ||
-_code-context__search__workspace-symbol_commands() {
+(( $+functions[_code-context__subcmd__search__subcmd__workspace-symbol_commands] )) ||
+_code-context__subcmd__search__subcmd__workspace-symbol_commands() {
     local commands; commands=()
     _describe -t commands 'code-context search workspace-symbol commands' commands "$@"
 }
-(( $+functions[_code-context__serve_commands] )) ||
-_code-context__serve_commands() {
+(( $+functions[_code-context__subcmd__serve_commands] )) ||
+_code-context__subcmd__serve_commands() {
     local commands; commands=()
     _describe -t commands 'code-context serve commands' commands "$@"
 }
-(( $+functions[_code-context__skill_commands] )) ||
-_code-context__skill_commands() {
+(( $+functions[_code-context__subcmd__skill_commands] )) ||
+_code-context__subcmd__skill_commands() {
     local commands; commands=()
     _describe -t commands 'code-context skill commands' commands "$@"
 }
