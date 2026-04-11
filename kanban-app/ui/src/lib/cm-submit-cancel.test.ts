@@ -212,7 +212,7 @@ describe("buildSubmitCancelExtensions", () => {
       expect(refs.onCancelRef.current).not.toHaveBeenCalled();
     });
 
-    it("Enter in insert mode calls onSubmitRef when alwaysSubmitOnEnter is true", async () => {
+    it("Enter in insert mode calls onSubmitRef when alwaysSubmitOnEnter is true", () => {
       const refs = makeRefs();
       const extensions = [
         vim(),
@@ -242,10 +242,8 @@ describe("buildSubmitCancelExtensions", () => {
         }),
       );
 
-      // Submit is deferred with setTimeout to avoid destroying the view
-      // mid-dispatch, so flush the microtask/timer queue.
-      await new Promise((r) => setTimeout(r, 0));
-
+      // Submit fires synchronously — the committedRef guard in TextEditor
+      // prevents double-fire, so no setTimeout deferral is needed.
       expect(refs.onSubmitRef.current).toHaveBeenCalledOnce();
     });
 
@@ -270,7 +268,7 @@ describe("buildSubmitCancelExtensions", () => {
 
   // --- handleCreateEditor vim start-mode tests ---
   // These verify the logic from TextEditor.handleCreateEditor:
-  // popup=true → auto-enter insert mode; popup=false/undefined → stay in normal mode.
+  // editors always start in vim normal mode.
 
   describe("vim initial mode (handleCreateEditor logic)", () => {
     let cleanup: () => void;
@@ -279,7 +277,7 @@ describe("buildSubmitCancelExtensions", () => {
       cleanup?.();
     });
 
-    it("onSubmit without popup starts in vim normal mode (board card field)", () => {
+    it("starts in vim normal mode (board card field)", () => {
       const refs = makeRefs();
       const extensions = [
         vim(),
@@ -291,35 +289,13 @@ describe("buildSubmitCancelExtensions", () => {
       const cm = getCM(view);
       expect(cm).toBeTruthy();
 
-      // Simulate handleCreateEditor with popup=false: should NOT enter insert mode
-      // (this is the fix — previously onSubmit presence triggered insert mode)
+      // handleCreateEditor ensures normal mode on start
       if (cm!.state?.vim?.insertMode) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         Vim.exitInsertMode(cm as any);
       }
 
       expect(cm!.state.vim?.insertMode).toBeFalsy();
-    });
-
-    it("popup=true starts in vim insert mode (quick-capture)", () => {
-      const refs = makeRefs();
-      const extensions = [
-        vim(),
-        ...buildSubmitCancelExtensions({ mode: "vim", ...refs }),
-      ];
-      const { view, cleanup: c } = createEditor(extensions, "");
-      cleanup = c;
-
-      const cm = getCM(view);
-      expect(cm).toBeTruthy();
-
-      // Simulate handleCreateEditor with popup=true: enter insert mode
-      if (!cm!.state?.vim?.insertMode) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        Vim.handleKey(cm as any, "i", "mapping");
-      }
-
-      expect(cm!.state.vim?.insertMode).toBe(true);
     });
   });
 

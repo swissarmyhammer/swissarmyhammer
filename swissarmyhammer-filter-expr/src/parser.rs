@@ -25,10 +25,11 @@ impl std::error::Error for ParseError {}
 
 /// Returns true if `c` is a valid character inside an atom body (after the sigil).
 ///
-/// Excludes whitespace, sigils (`#@^`), parens, and operator characters (`&|!`)
+/// Excludes whitespace, sigils (`#@^$`), parens, and operator characters (`&|!`)
 /// so the parser never accidentally consumes operators as part of an atom name.
+/// Excluding `$` prevents inputs like `$$bar` from parsing as `Project("$bar")`.
 fn is_body_char(c: &char) -> bool {
-    !c.is_whitespace() && !"#@^()&|!".contains(*c)
+    !c.is_whitespace() && !"#@^$()&|!".contains(*c)
 }
 
 /// Returns true if `c` cannot follow a keyword (word boundary lookahead).
@@ -73,8 +74,11 @@ fn atom_and_not<'src>(
     let reference = just('^')
         .ignore_then(body)
         .map(|s: &str| Expr::Ref(s.to_string()));
+    let project = just('$')
+        .ignore_then(body)
+        .map(|s: &str| Expr::Project(s.to_string()));
     let group = expr.delimited_by(just('(').padded(), just(')').padded());
-    let atom = choice((tag, mention, reference, group)).padded();
+    let atom = choice((tag, mention, reference, project, group)).padded();
 
     let not_op = choice((just('!').to(()), keyword("not"), keyword("NOT"))).padded();
     not_op
@@ -90,8 +94,8 @@ fn atom_and_not<'src>(
 /// or_expr   = and_expr (("||" | "or" | "OR") and_expr)*
 /// and_expr  = not_expr (("&&" | "and" | "AND")? not_expr)*   // implicit AND
 /// not_expr  = ("!" | "not" | "NOT") not_expr | atom
-/// atom      = "#" body | "@" body | "^" body | "(" expr ")"
-/// body      = [^ \t\n\r#@^()&|!]+
+/// atom      = "#" body | "@" body | "^" body | "$" body | "(" expr ")"
+/// body      = [^ \t\n\r#@^$()&|!]+
 /// ```
 fn filter_parser<'src>() -> impl Parser<'src, &'src str, Expr, extra::Err<Rich<'src, char>>> {
     recursive(|expr| {
@@ -141,13 +145,12 @@ pub fn parse(input: &str) -> Result<Expr, Vec<ParseError>> {
             .collect();
         Err(errors)
     } else {
-        // The parser succeeded; unwrap the output.
-        result.into_output().ok_or_else(|| {
-            vec![ParseError {
-                message: "unexpected parse failure".to_string(),
-                span: 0..input.len(),
-            }]
-        })
+        // Safety: chumsky's ParseResult::into_output() returns Some when has_errors()
+        // is false. We already checked !has_errors() above, so this unwrap cannot panic
+        // unless chumsky violates its own invariants.
+        Ok(result
+            .into_output()
+            .expect("chumsky parser returned no errors and no output"))
     }
 }
 
@@ -185,6 +188,76 @@ mod tests {
     #[test]
     fn tag_with_underscores() {
         assert_eq!(parse("#my_tag").unwrap(), Expr::Tag("my_tag".into()));
+    }
+
+    // ── Project atom (`$project`) ──────────────────────────────────
+
+    #[test]
+    fn project_atom() {
+        assert_eq!(
+            parse("$auth-migration").unwrap(),
+            Expr::Project("auth-migration".into())
+        );
+    }
+
+    #[test]
+    fn project_with_dots() {
+        assert_eq!(parse("$v2.0").unwrap(), Expr::Project("v2.0".into()));
+    }
+
+    #[test]
+    fn project_with_underscores() {
+        assert_eq!(
+            parse("$my_project").unwrap(),
+            Expr::Project("my_project".into())
+        );
+    }
+
+    #[test]
+    fn project_dollar_alone_is_error() {
+        // `$` alone has a zero-length body, which violates `at_least(1)`.
+        assert!(parse("$").is_err());
+    }
+
+    #[test]
+    fn project_double_dollar_is_error() {
+        // `$$bar` has an empty body after the first `$` sigil (because the
+        // second `$` is now excluded from body chars), so it must fail.
+        assert!(parse("$$bar").is_err());
+    }
+
+    #[test]
+    fn project_combines_with_and() {
+        assert_eq!(
+            parse("$auth && #bug").unwrap(),
+            Expr::And(
+                Box::new(Expr::Project("auth".into())),
+                Box::new(Expr::Tag("bug".into())),
+            )
+        );
+    }
+
+    #[test]
+    fn project_implicit_and() {
+        // `$auth #bug @alice` builds a left-associative implicit-AND chain.
+        assert_eq!(
+            parse("$auth #bug @alice").unwrap(),
+            Expr::And(
+                Box::new(Expr::And(
+                    Box::new(Expr::Project("auth".into())),
+                    Box::new(Expr::Tag("bug".into())),
+                )),
+                Box::new(Expr::Assignee("alice".into())),
+            )
+        );
+    }
+
+    #[test]
+    fn not_project() {
+        assert_eq!(
+            parse("!$auth").unwrap(),
+            Expr::Not(Box::new(Expr::Project("auth".into())))
+        );
     }
 
     // ── NOT operator ────────────────────────────────────────────────
@@ -397,6 +470,10 @@ mod tests {
 
     #[test]
     fn error_invalid_chars() {
+        // `$$garbage` fails because the first `$` is consumed as the project
+        // sigil, then the body parser needs at least one non-sigil char, but
+        // the next char is another `$` (excluded from body chars). So the
+        // project atom fails to parse.
         assert!(parse("$$garbage").is_err());
     }
 
@@ -417,10 +494,51 @@ mod tests {
 
     #[test]
     fn error_has_span_info() {
+        // `$$` fails for the same reason as `$$garbage`: the first `$`
+        // becomes the project sigil and the second `$` cannot start the
+        // body (it is an excluded sigil char). The resulting error must
+        // carry span info.
         let errors = parse("$$").unwrap_err();
         assert!(!errors.is_empty());
         // Span should be within the input range
         assert!(errors[0].span.start <= 2);
+    }
+
+    // ── Display impl ────────────────────────────────────────────────
+
+    #[test]
+    fn display_impl_format() {
+        // Lock down the exact format string of `ParseError::Display`. A
+        // synthesized error keeps the assertion independent of chumsky's
+        // own error message wording.
+        let err = ParseError {
+            message: "oops".into(),
+            span: 3..7,
+        };
+        assert_eq!(format!("{err}"), "oops at 3..7");
+    }
+
+    #[test]
+    fn display_impl_from_real_parse_error() {
+        // Format an error obtained through the real parser path, mirroring
+        // how callers surface a `ParseError` via `{err}` formatting. The
+        // exact prefix is chumsky's output (not part of our public API), so
+        // assert only the trailing positional shape we control.
+        let errors = parse("$$").unwrap_err();
+        let formatted = format!("{}", errors[0]);
+        assert!(
+            formatted.contains(" at "),
+            "expected ' at ' separator in {formatted:?}"
+        );
+        let suffix = formatted.rsplit(" at ").next().unwrap();
+        let (start, end) = suffix
+            .split_once("..")
+            .unwrap_or_else(|| panic!("expected 'start..end' suffix in {formatted:?}"));
+        start
+            .parse::<usize>()
+            .unwrap_or_else(|_| panic!("expected numeric start in {formatted:?}"));
+        end.parse::<usize>()
+            .unwrap_or_else(|_| panic!("expected numeric end in {formatted:?}"));
     }
 
     // ── Whitespace handling ─────────────────────────────────────────

@@ -68,7 +68,7 @@ export const BINDING_TABLES: Record<KeymapMode, BindingTable> = {
  */
 const SEQUENCE_TABLES: Record<KeymapMode, SequenceTable> = {
   vim: {
-    g: { g: "nav.first" },
+    g: { g: "nav.first", t: "perspective.next", "Shift+T": "perspective.prev" },
     d: { d: "entity.archive" },
     z: { o: "task.toggleCollapse" },
   },
@@ -166,6 +166,38 @@ const SEQUENCE_TIMEOUT_MS = 500;
  * @param executeCommand - Callback to run a command by ID.
  * @param getScopeBindings - Returns key→commandId bindings from the focused scope.
  */
+/**
+ * Check if a key event targets an editable context that should not trigger
+ * global keybindings (inputs, textareas, CM6 editors, contenteditable).
+ */
+function isEditableTarget(normalized: string, target: HTMLElement | null): boolean {
+  const hasModifier =
+    normalized.includes("Mod") ||
+    normalized.includes("Alt") ||
+    normalized.includes("Ctrl");
+  if (hasModifier || !target) return false;
+  const tag = target.tagName;
+  return (
+    tag === "INPUT" ||
+    tag === "TEXTAREA" ||
+    tag === "SELECT" ||
+    !!target.closest?.(".cm-editor") ||
+    !!target.closest?.("[contenteditable]")
+  );
+}
+
+/**
+ * Create the key event handler for the active keymap mode.
+ *
+ * Bindings come from two sources, checked in order (scope wins over global):
+ * 1. **Scope bindings** — dynamic, from the focused scope's commands' `keys` property.
+ *    Provided via `getScopeBindings()` callback so the handler always sees the current scope.
+ * 2. **Global bindings** — static, from `BINDING_TABLES` for the active keymap mode.
+ *
+ * @param mode - The active keymap mode ("vim", "cua", or "emacs").
+ * @param executeCommand - Callback to run a command by ID.
+ * @param getScopeBindings - Returns key→commandId bindings from the focused scope.
+ */
 export function createKeyHandler(
   mode: KeymapMode,
   executeCommand: (id: string) => Promise<boolean>,
@@ -174,18 +206,13 @@ export function createKeyHandler(
   const globalBindings = BINDING_TABLES[mode];
   const sequences = SEQUENCE_TABLES[mode];
 
-  /** Pending first key of a multi-key sequence, or null. */
   let pending: string | null = null;
-  /** Timer handle for clearing the pending buffer. */
   let pendingTimer: ReturnType<typeof setTimeout> | null = null;
 
   /** Clear the pending buffer and cancel the timeout. */
   function clearPending(): void {
     pending = null;
-    if (pendingTimer !== null) {
-      clearTimeout(pendingTimer);
-      pendingTimer = null;
-    }
+    if (pendingTimer !== null) { clearTimeout(pendingTimer); pendingTimer = null; }
   }
 
   return (e: KeyboardEvent) => {
@@ -193,73 +220,34 @@ export function createKeyHandler(
     const normalized = normalizeKeyEvent(e);
     if (normalized === null) return;
 
-    console.debug(
-      `[keybindings] mode=${mode} key="${normalized}" target=${target?.tagName ?? "null"}`,
-    );
+    if (isEditableTarget(normalized, target)) return;
 
-    // Skip non-modifier single-character keys when focus is in any editable
-    // context (CodeMirror editors, inputs, textareas, contenteditable).
-    const hasModifier =
-      normalized.includes("Mod") ||
-      normalized.includes("Alt") ||
-      normalized.includes("Ctrl");
-    if (!hasModifier && target) {
-      const tag = target.tagName;
-      if (
-        tag === "INPUT" ||
-        tag === "TEXTAREA" ||
-        tag === "SELECT" ||
-        target.closest?.(".cm-editor") ||
-        target.closest?.("[contenteditable]")
-      ) {
-        console.debug(`[keybindings] SKIPPED: editable context (${tag})`);
-        return;
-      }
-    }
+    const bindings = { ...globalBindings, ...(getScopeBindings?.() ?? {}) };
 
-    // Build merged bindings: scope bindings overlay global bindings
-    const scopeBindings = getScopeBindings?.() ?? {};
-    const bindings = { ...globalBindings, ...scopeBindings };
-
-    // --- Multi-key sequence handling ---
-
+    // Multi-key sequence handling
     if (pending !== null) {
       const secondMap = sequences[pending];
       if (secondMap && normalized in secondMap) {
-        const commandId = secondMap[normalized];
-        console.debug(
-          `[keybindings] SEQUENCE MATCH: "${pending}" + "${normalized}" → ${commandId}`,
-        );
         clearPending();
         e.preventDefault();
         e.stopPropagation();
-        executeCommand(commandId);
+        executeCommand(secondMap[normalized]);
         return;
       }
-      console.debug(
-        `[keybindings] SEQUENCE BROKEN: pending="${pending}" key="${normalized}"`,
-      );
       clearPending();
     }
-
     if (normalized in sequences) {
       pending = normalized;
       pendingTimer = setTimeout(clearPending, SEQUENCE_TIMEOUT_MS);
       return;
     }
 
-    // --- Single-key binding lookup (scope + global merged) ---
-
+    // Single-key binding lookup
     if (normalized in bindings) {
-      const cmdId = bindings[normalized];
-      console.debug(`[keybindings] MATCH: "${normalized}" → ${cmdId}`);
       e.preventDefault();
       e.stopPropagation();
-      executeCommand(cmdId);
-      return;
+      executeCommand(bindings[normalized]);
     }
-
-    console.debug(`[keybindings] NO MATCH for "${normalized}"`);
   };
 }
 

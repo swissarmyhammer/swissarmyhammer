@@ -415,15 +415,16 @@ mod tests {
         //         tag.update, column.reorder, attachment.delete,
         //         entity.copy, entity.cut, entity.paste = 15
         // ui: inspect, inspector.close, inspector.close_all, palette.open,
-        //     palette.close, view.set, perspective.set, setFocus, window.new = 9
+        //     palette.close, view.set, perspective.set, perspective.startRename,
+        //     setFocus, window.new = 10
         // settings: keymap.vim, keymap.cua, keymap.emacs = 3
         // file: switchBoard, closeBoard, newBoard, openBoard = 4
         // drag: start, cancel, complete = 3
         // perspective: load, save, delete, rename, filter, clearFilter, group, clearGroup,
-        //             sort.set, sort.clear, sort.toggle, list = 12
+        //             sort.set, sort.clear, sort.toggle, next, prev, goto, list = 15
         // attachment: open, reveal = 2
         // +1 for ui.mode.set
-        assert_eq!(registry.all_commands().len(), 58);
+        assert_eq!(registry.all_commands().len(), 62);
 
         // Spot checks
         assert!(registry.get("app.quit").is_some());
@@ -582,8 +583,8 @@ mod tests {
         let perspective = include_str!("../builtin/commands/perspective.yaml");
         let registry = CommandsRegistry::from_yaml_sources(&[("perspective", perspective)]);
 
-        // All 12 perspective commands should parse (9 original + 3 sort)
-        assert_eq!(registry.all_commands().len(), 12);
+        // All 15 perspective commands should parse (9 original + 3 sort + 2 next/prev + 1 goto)
+        assert_eq!(registry.all_commands().len(), 15);
         assert!(registry.get("perspective.load").is_some());
         assert!(registry.get("perspective.save").is_some());
         assert!(registry.get("perspective.delete").is_some());
@@ -595,6 +596,9 @@ mod tests {
         assert!(registry.get("perspective.sort.set").is_some());
         assert!(registry.get("perspective.sort.clear").is_some());
         assert!(registry.get("perspective.sort.toggle").is_some());
+        assert!(registry.get("perspective.next").is_some());
+        assert!(registry.get("perspective.prev").is_some());
+        assert!(registry.get("perspective.goto").is_some());
         assert!(registry.get("perspective.list").is_some());
 
         // Load/save/delete should have a 'name' param
@@ -608,10 +612,17 @@ mod tests {
         assert!(filter.params.iter().any(|p| p.name == "filter"));
         assert!(filter.params.iter().any(|p| p.name == "perspective_id"));
 
-        // All perspective commands should be visible (default true) except perspective.list
+        // All perspective commands should be visible (default true) except
+        // the ones that are intentionally hidden from the command palette:
+        //   - perspective.list: read-only introspection command
+        //   - perspective.goto: materialized dynamically as `perspective.goto:{id}`
+        //     per-perspective, so the template entry stays hidden
+        //   - perspective.rename: requires `id` + `new_name` args and has no
+        //     palette args UI; user-facing entry is `ui.perspective.startRename`
+        let hidden = ["perspective.list", "perspective.goto", "perspective.rename"];
         for cmd in registry.all_commands() {
-            if cmd.id == "perspective.list" {
-                assert!(!cmd.visible, "perspective.list should not be visible");
+            if hidden.contains(&cmd.id.as_str()) {
+                assert!(!cmd.visible, "{} should not be visible", cmd.id);
             } else {
                 assert!(cmd.visible, "{} should be visible", cmd.id);
             }

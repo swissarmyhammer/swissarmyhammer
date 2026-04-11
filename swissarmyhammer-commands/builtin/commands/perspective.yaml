@@ -25,6 +25,12 @@
 
 - id: perspective.rename
   name: Rename Perspective
+  # Hidden from the palette: this command requires `id` + `new_name` args
+  # and cannot be invoked directly from the palette (no args prompt UI).
+  # The user-facing entry point is `ui.perspective.startRename`, which
+  # triggers inline rename mode and then dispatches this command with the
+  # collected arguments.
+  visible: false
   undoable: true
   params:
     - name: id
@@ -112,6 +118,28 @@
     - name: field
       from: args
     - name: perspective_id
+      from: args
+  keys: {}
+
+- id: perspective.next
+  name: Next Perspective
+  keys:
+    cua: "Mod+]"
+    vim: "gt"
+
+- id: perspective.prev
+  name: Previous Perspective
+  keys:
+    cua: "Mod+["
+    vim: "gT"
+
+- id: perspective.goto
+  name: Go to Perspective
+  visible: false
+  params:
+    - name: id
+      from: args
+    - name: view_kind
       from: args
   keys: {}
 

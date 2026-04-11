@@ -94,6 +94,7 @@ const board: BoardData = {
   },
   columns: [makeColumn("todo", "Todo", 0), makeColumn("doing", "Doing", 1)],
   tags: [],
+  virtualTagMeta: [],
   summary: {
     total_tasks: 0,
     total_actors: 0,

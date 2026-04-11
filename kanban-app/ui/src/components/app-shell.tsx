@@ -15,6 +15,7 @@ import {
   type KeymapMode,
 } from "@/lib/keybindings";
 import { CommandPalette } from "@/components/command-palette";
+import { triggerStartRename } from "@/components/perspective-tab-bar";
 
 /**
  * Internal component that attaches a global keydown listener.
@@ -78,6 +79,197 @@ function KeybindingHandler({ mode }: { mode: KeymapMode }) {
 }
 
 /**
+ * Static global commands with no `execute` handler — dispatched to the Rust
+ * backend on invocation.
+ *
+ * Kept at module scope so the `AppShell` component body stays small and the
+ * array identity is stable across renders.
+ */
+const STATIC_GLOBAL_COMMANDS: CommandDef[] = [
+  {
+    id: "app.command",
+    name: "Command Palette",
+    keys: { vim: ":", cua: "Mod+Shift+P", emacs: "Mod+Shift+P" },
+  },
+  {
+    id: "app.palette",
+    name: "Command Palette",
+    keys: { vim: "Mod+Shift+P", cua: "Mod+Shift+P", emacs: "Mod+Shift+P" },
+  },
+  {
+    id: "app.undo",
+    name: "Undo",
+    keys: { vim: "u", cua: "Mod+Z", emacs: "Ctrl+/" },
+  },
+  {
+    id: "app.redo",
+    name: "Redo",
+    keys: { vim: "Mod+R", cua: "Mod+Shift+Z" },
+  },
+  {
+    id: "app.dismiss",
+    name: "Dismiss",
+    keys: { vim: "Escape", cua: "Escape", emacs: "Escape" },
+  },
+  {
+    id: "app.search",
+    name: "Find",
+    keys: { vim: "/", cua: "Mod+F", emacs: "Mod+F" },
+  },
+  { id: "app.help", name: "Help", keys: { vim: "F1", cua: "F1" } },
+  {
+    id: "app.quit",
+    name: "Quit",
+    keys: { cua: "Mod+Q", vim: "Mod+Q", emacs: "Mod+Q" },
+  },
+  { id: "settings.keymap.vim", name: "Keymap Vim" },
+  { id: "settings.keymap.cua", name: "Keymap CUA" },
+  { id: "settings.keymap.emacs", name: "Keymap Emacs" },
+  { id: "app.resetWindows", name: "Reset Windows" },
+  {
+    id: "file.newBoard",
+    name: "New Board",
+    keys: { cua: "Mod+N", vim: "Mod+N" },
+  },
+  {
+    id: "file.openBoard",
+    name: "Open Board",
+    keys: { cua: "Mod+O", vim: "Mod+O" },
+  },
+  {
+    id: "file.closeBoard",
+    name: "Close Board",
+    keys: { cua: "Mod+w", vim: "Mod+w" },
+  },
+  {
+    id: "window.new",
+    name: "New Window",
+    keys: { cua: "Mod+Shift+N", vim: "Mod+Shift+N", emacs: "Mod+Shift+N" },
+  },
+  { id: "app.about", name: "About" },
+];
+
+/** Type of the broadcaster ref used by nav command handlers. */
+type NavBroadcaster = (id: string) => void;
+
+/**
+ * Key binding + display metadata for each universal navigation command.
+ *
+ * Kept as a data table so `buildNavCommands` can produce the CommandDef[] in
+ * a single pass without repetitive object literals.
+ */
+const NAV_COMMAND_SPEC: ReadonlyArray<{
+  id: string;
+  name: string;
+  keys: CommandDef["keys"];
+}> = [
+  {
+    id: "nav.up",
+    name: "Navigate Up",
+    keys: { vim: "k", cua: "ArrowUp", emacs: "Ctrl+p" },
+  },
+  {
+    id: "nav.down",
+    name: "Navigate Down",
+    keys: { vim: "j", cua: "ArrowDown", emacs: "Ctrl+n" },
+  },
+  {
+    id: "nav.left",
+    name: "Navigate Left",
+    keys: { vim: "h", cua: "ArrowLeft", emacs: "Ctrl+b" },
+  },
+  {
+    id: "nav.right",
+    name: "Navigate Right",
+    keys: { vim: "l", cua: "ArrowRight", emacs: "Ctrl+f" },
+  },
+  {
+    id: "nav.first",
+    name: "Navigate to First",
+    keys: { cua: "Home", emacs: "Alt+<" },
+  },
+  {
+    id: "nav.last",
+    name: "Navigate to Last",
+    keys: { vim: "Shift+G", cua: "End", emacs: "Alt+>" },
+  },
+];
+
+/**
+ * Build universal navigation CommandDefs that broadcast through
+ * EntityFocusContext. Each FocusScope with a matching `claimWhen` predicate
+ * can pull focus when these fire.
+ */
+function buildNavCommands(
+  broadcastRef: React.MutableRefObject<NavBroadcaster>,
+): CommandDef[] {
+  return NAV_COMMAND_SPEC.map((spec) => ({
+    ...spec,
+    execute: () => broadcastRef.current(spec.id),
+  }));
+}
+
+/**
+ * Build the dynamic global commands — nav commands plus the
+ * ui.perspective.startRename command which exists in the backend registry
+ * for palette discovery but runs locally via `triggerStartRename`.
+ */
+function buildDynamicGlobalCommands(
+  broadcastRef: React.MutableRefObject<NavBroadcaster>,
+): CommandDef[] {
+  return [
+    ...buildNavCommands(broadcastRef),
+    {
+      id: "ui.perspective.startRename",
+      name: "Rename Perspective",
+      execute: () => {
+        triggerStartRename();
+      },
+    },
+  ];
+}
+
+/**
+ * Sync app mode to the palette-open flag in backend UIState.
+ *
+ * When the palette opens, switch to "command" mode; when it closes, return
+ * to "normal". Encapsulated as a hook so `AppShell` stays compact.
+ */
+function usePaletteModeSync(paletteOpen: boolean): void {
+  const { setMode } = useAppMode();
+  const prevPaletteOpenRef = useRef(paletteOpen);
+  useEffect(() => {
+    if (paletteOpen && !prevPaletteOpenRef.current) {
+      setMode("command");
+    } else if (!paletteOpen && prevPaletteOpenRef.current) {
+      setMode("normal");
+    }
+    prevPaletteOpenRef.current = paletteOpen;
+  }, [paletteOpen, setMode]);
+}
+
+/**
+ * Collect per-window UI state (keymap, palette, window label) that AppShell
+ * reads from the backend UIState context.
+ *
+ * Extracted so the component body stays under the 50-line function budget.
+ */
+function useAppShellUIState() {
+  const uiState = useUIState();
+  const windowLabel = getCurrentWindow().label;
+  const winState = uiState.windows?.[windowLabel];
+  const paletteOpen = winState?.palette_open ?? false;
+  const paletteMode = winState?.palette_mode ?? "command";
+  // Normalize to a valid KeymapMode, defaulting to "cua" for unknown values
+  const keymapModeRaw = uiState.keymap_mode;
+  const keymapMode: KeymapMode =
+    keymapModeRaw === "vim" || keymapModeRaw === "emacs"
+      ? keymapModeRaw
+      : "cua";
+  return { paletteOpen, paletteMode, keymapMode };
+}
+
+/**
  * Top-level shell that wires global commands, keybindings, and the command
  * palette around the application content.
  *
@@ -97,174 +289,20 @@ interface AppShellProps {
 }
 
 export function AppShell({ children, onSwitchBoard }: AppShellProps) {
-  const uiState = useUIState();
-  const keymapModeRaw = uiState.keymap_mode;
-  const windowLabel = getCurrentWindow().label;
-  const winState = uiState.windows?.[windowLabel];
-  const paletteOpen = winState?.palette_open ?? false;
-  const paletteMode = winState?.palette_mode ?? "command";
-  // Normalize to a valid KeymapMode, defaulting to "cua" for unknown values
-  const keymapMode: KeymapMode =
-    keymapModeRaw === "vim" || keymapModeRaw === "emacs"
-      ? keymapModeRaw
-      : "cua";
-  const { setMode } = useAppMode();
+  const { paletteOpen, paletteMode, keymapMode } = useAppShellUIState();
   const { broadcastNavCommand } = useEntityFocus();
   const dismiss = useDispatchCommand("app.dismiss");
   const broadcastRef = useRef(broadcastNavCommand);
   broadcastRef.current = broadcastNavCommand;
 
-  // Sync app mode from palette state driven by backend UIState.
-  const prevPaletteOpenRef = useRef(paletteOpen);
-  useEffect(() => {
-    if (paletteOpen && !prevPaletteOpenRef.current) {
-      setMode("command");
-    } else if (!paletteOpen && prevPaletteOpenRef.current) {
-      setMode("normal");
-    }
-    prevPaletteOpenRef.current = paletteOpen;
-  }, [paletteOpen, setMode]);
+  usePaletteModeSync(paletteOpen);
 
-  /** Global commands available throughout the app.
-   *
-   * Most commands have no `execute` callback and dispatch to the Rust backend.
-   * Only navigation commands retain frontend `execute` handlers because they
-   * are purely UI focus movement that broadcasts through EntityFocusContext.
-   */
+  // Static commands come from module scope; dynamic ones close over
+  // broadcastRef. Both are stable, so the memo has no dependencies.
   const globalCommands: CommandDef[] = useMemo(
     () => [
-      // --- Commands dispatched to backend (no execute callback) ---
-      {
-        id: "app.command",
-        name: "Command Palette",
-        keys: { vim: ":", cua: "Mod+Shift+P", emacs: "Mod+Shift+P" },
-      },
-      {
-        id: "app.palette",
-        name: "Command Palette",
-        keys: { vim: "Mod+Shift+P", cua: "Mod+Shift+P", emacs: "Mod+Shift+P" },
-      },
-      {
-        id: "app.undo",
-        name: "Undo",
-        keys: { vim: "u", cua: "Mod+Z", emacs: "Ctrl+/" },
-      },
-      {
-        id: "app.redo",
-        name: "Redo",
-        keys: { vim: "Mod+R", cua: "Mod+Shift+Z" },
-      },
-      {
-        id: "app.dismiss",
-        name: "Dismiss",
-        keys: { vim: "Escape", cua: "Escape", emacs: "Escape" },
-      },
-      {
-        id: "app.search",
-        name: "Find",
-        keys: { vim: "/", cua: "Mod+F", emacs: "Mod+F" },
-      },
-      {
-        id: "app.help",
-        name: "Help",
-        keys: { vim: "F1", cua: "F1" },
-      },
-      {
-        id: "app.quit",
-        name: "Quit",
-        keys: { cua: "Mod+Q", vim: "Mod+Q", emacs: "Mod+Q" },
-      },
-      {
-        id: "settings.keymap.vim",
-        name: "Keymap Vim",
-      },
-      {
-        id: "settings.keymap.cua",
-        name: "Keymap CUA",
-      },
-      {
-        id: "settings.keymap.emacs",
-        name: "Keymap Emacs",
-      },
-      {
-        id: "app.resetWindows",
-        name: "Reset Windows",
-      },
-      {
-        id: "file.newBoard",
-        name: "New Board",
-        keys: { cua: "Mod+N", vim: "Mod+N" },
-      },
-      {
-        id: "file.openBoard",
-        name: "Open Board",
-        keys: { cua: "Mod+O", vim: "Mod+O" },
-      },
-      {
-        id: "file.closeBoard",
-        name: "Close Board",
-        keys: { cua: "Mod+w", vim: "Mod+w" },
-      },
-      {
-        id: "window.new",
-        name: "New Window",
-        keys: { cua: "Mod+Shift+N", vim: "Mod+Shift+N", emacs: "Mod+Shift+N" },
-      },
-      {
-        id: "app.about",
-        name: "About",
-      },
-      // --- Universal navigation commands ---
-      // These broadcast to all registered claimWhen predicates.
-      // Each FocusScope with a matching predicate can pull focus.
-      {
-        id: "nav.up",
-        name: "Navigate Up",
-        keys: { vim: "k", cua: "ArrowUp", emacs: "Ctrl+p" },
-        execute: () => {
-          broadcastRef.current("nav.up");
-        },
-      },
-      {
-        id: "nav.down",
-        name: "Navigate Down",
-        keys: { vim: "j", cua: "ArrowDown", emacs: "Ctrl+n" },
-        execute: () => {
-          broadcastRef.current("nav.down");
-        },
-      },
-      {
-        id: "nav.left",
-        name: "Navigate Left",
-        keys: { vim: "h", cua: "ArrowLeft", emacs: "Ctrl+b" },
-        execute: () => {
-          broadcastRef.current("nav.left");
-        },
-      },
-      {
-        id: "nav.right",
-        name: "Navigate Right",
-        keys: { vim: "l", cua: "ArrowRight", emacs: "Ctrl+f" },
-        execute: () => {
-          broadcastRef.current("nav.right");
-        },
-      },
-      {
-        id: "nav.first",
-        name: "Navigate to First",
-        keys: { cua: "Home", emacs: "Alt+<" },
-        execute: () => {
-          broadcastRef.current("nav.first");
-        },
-      },
-      {
-        id: "nav.last",
-        name: "Navigate to Last",
-        keys: { vim: "Shift+G", cua: "End", emacs: "Alt+>" },
-        execute: () => {
-          broadcastRef.current("nav.last");
-        },
-      },
+      ...STATIC_GLOBAL_COMMANDS,
+      ...buildDynamicGlobalCommands(broadcastRef),
     ],
     [],
   );

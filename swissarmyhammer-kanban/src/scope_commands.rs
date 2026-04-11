@@ -54,6 +54,21 @@ pub struct BoardInfo {
     pub context_name: String,
 }
 
+/// Lightweight perspective descriptor for dynamic command generation.
+///
+/// Only carries the fields needed to produce a `perspective.goto:{id}` command.
+/// Intentionally decoupled from `Perspective` so the scope_commands module
+/// does not depend on the perspectives crate directly.
+#[derive(Debug, Clone)]
+pub struct PerspectiveInfo {
+    /// Perspective identifier (ULID).
+    pub id: String,
+    /// Human-readable name (e.g. "Active Sprint").
+    pub name: String,
+    /// View type (e.g. "board", "grid").
+    pub view: String,
+}
+
 /// Runtime data that feeds dynamic command generation beyond the static
 /// registry and entity schemas.
 #[derive(Debug, Clone, Default)]
@@ -64,6 +79,8 @@ pub struct DynamicSources {
     pub boards: Vec<BoardInfo>,
     /// Open windows — each generates a `window.focus:{label}` command.
     pub windows: Vec<WindowInfo>,
+    /// Perspectives — each generates a `perspective.goto:{id}` command.
+    pub perspectives: Vec<PerspectiveInfo>,
 }
 
 /// A fully resolved command ready for display in a menu, palette, or context menu.
@@ -157,6 +174,100 @@ fn check_available(
     )
     .with_ui_state(Arc::clone(ui_state));
     cmd_impl.available(&ctx)
+}
+
+/// Emit dynamic commands from runtime data into the result list.
+///
+/// Generates `view.switch:{id}`, `board.switch:{path}`, `window.focus:{label}`,
+/// and `perspective.goto:{id}` commands from the dynamic sources. Skips
+/// commands already in the `seen` set.
+fn emit_dynamic_commands(
+    dyn_src: &DynamicSources,
+    seen: &mut HashSet<(String, Option<String>)>,
+    result: &mut Vec<ResolvedCommand>,
+) {
+    for view in &dyn_src.views {
+        let cmd_id = format!("view.switch:{}", view.id);
+        let key = (cmd_id.clone(), None);
+        if seen.contains(&key) {
+            continue;
+        }
+        seen.insert(key);
+        result.push(ResolvedCommand {
+            id: cmd_id,
+            name: format!("Switch to {}", view.name),
+            menu_name: None,
+            target: None,
+            group: "view".into(),
+            context_menu: false,
+            keys: None,
+            available: true,
+        });
+    }
+    for board in &dyn_src.boards {
+        let cmd_id = format!("board.switch:{}", board.path);
+        let key = (cmd_id.clone(), None);
+        if seen.contains(&key) {
+            continue;
+        }
+        seen.insert(key);
+        let tpl = TemplateParams {
+            entity_type: "board",
+            entity_name: &board.entity_name,
+            context_name: &board.context_name,
+        };
+        let name = resolve_name_template(
+            "Switch to Board: {{entity.display_name}} ({{entity.context.display_name}})",
+            &tpl,
+        );
+        let menu_name = resolve_name_template("{{entity.context.display_name}}", &tpl);
+        result.push(ResolvedCommand {
+            id: cmd_id,
+            name,
+            menu_name: Some(menu_name),
+            target: None,
+            group: "board".into(),
+            context_menu: false,
+            keys: None,
+            available: true,
+        });
+    }
+    for window in &dyn_src.windows {
+        let cmd_id = format!("window.focus:{}", window.label);
+        let key = (cmd_id.clone(), None);
+        if seen.contains(&key) {
+            continue;
+        }
+        seen.insert(key);
+        result.push(ResolvedCommand {
+            id: cmd_id,
+            name: window.title.clone(),
+            menu_name: Some(window.title.clone()),
+            target: None,
+            group: "window".into(),
+            context_menu: false,
+            keys: None,
+            available: true,
+        });
+    }
+    for perspective in &dyn_src.perspectives {
+        let cmd_id = format!("perspective.goto:{}", perspective.id);
+        let key = (cmd_id.clone(), None);
+        if seen.contains(&key) {
+            continue;
+        }
+        seen.insert(key);
+        result.push(ResolvedCommand {
+            id: cmd_id,
+            name: format!("Go to Perspective: {}", perspective.name),
+            menu_name: None,
+            target: None,
+            group: "perspective".into(),
+            context_menu: false,
+            keys: None,
+            available: true,
+        });
+    }
 }
 
 /// Compute all available commands for a given scope chain.
@@ -378,78 +489,9 @@ pub fn commands_for_scope(
         });
     }
 
-    // 3. Dynamic commands from runtime data (views and boards).
+    // 3. Dynamic commands from runtime data (views, boards, windows, perspectives).
     if let Some(dyn_src) = dynamic {
-        for view in &dyn_src.views {
-            let cmd_id = format!("view.switch:{}", view.id);
-            let key = (cmd_id.clone(), None);
-            if seen.contains(&key) {
-                continue;
-            }
-            seen.insert(key);
-            result.push(ResolvedCommand {
-                id: cmd_id,
-                name: format!("Switch to {}", view.name),
-                menu_name: None,
-                target: None,
-                group: "view".to_string(),
-                context_menu: false,
-                keys: None,
-                available: true,
-            });
-        }
-        for board in &dyn_src.boards {
-            let cmd_id = format!("board.switch:{}", board.path);
-            let key = (cmd_id.clone(), None);
-            if seen.contains(&key) {
-                continue;
-            }
-            seen.insert(key);
-
-            let tpl = TemplateParams {
-                entity_type: "board",
-                entity_name: &board.entity_name,
-                context_name: &board.context_name,
-            };
-
-            // Palette name: "Switch to Board: <name> (<context>)"
-            let name_template =
-                "Switch to Board: {{entity.display_name}} ({{entity.context.display_name}})";
-            let name = resolve_name_template(name_template, &tpl);
-
-            // Menu name: "<context_name>" (short label for Window menu)
-            let menu_name_template = "{{entity.context.display_name}}";
-            let menu_name = resolve_name_template(menu_name_template, &tpl);
-
-            result.push(ResolvedCommand {
-                id: cmd_id,
-                name,
-                menu_name: Some(menu_name),
-                target: None,
-                group: "board".to_string(),
-                context_menu: false,
-                keys: None,
-                available: true,
-            });
-        }
-        for window in &dyn_src.windows {
-            let cmd_id = format!("window.focus:{}", window.label);
-            let key = (cmd_id.clone(), None);
-            if seen.contains(&key) {
-                continue;
-            }
-            seen.insert(key);
-            result.push(ResolvedCommand {
-                id: cmd_id,
-                name: window.title.clone(),
-                menu_name: Some(window.title.clone()),
-                target: None,
-                group: "window".to_string(),
-                context_menu: false,
-                keys: None,
-                available: true,
-            });
-        }
+        emit_dynamic_commands(dyn_src, &mut seen, &mut result);
     }
 
     // 4. Deduplicate: same id → keep innermost (first seen).
@@ -1213,6 +1255,7 @@ mod tests {
             ],
             boards: vec![],
             windows: vec![],
+            perspectives: vec![],
         };
         let cmds = commands_for_scope(
             &scope,
@@ -1259,6 +1302,7 @@ mod tests {
             ],
             boards: vec![],
             windows: vec![],
+            perspectives: vec![],
         };
         let cmds = commands_for_scope(
             &scope,
@@ -1310,6 +1354,7 @@ mod tests {
                 },
             ],
             windows: vec![],
+            perspectives: vec![],
         };
         let cmds = commands_for_scope(
             &scope,
@@ -1347,6 +1392,7 @@ mod tests {
                 context_name: "my-kanban".into(),
             }],
             windows: vec![],
+            perspectives: vec![],
         };
         let cmds = commands_for_scope(
             &scope,
@@ -1385,6 +1431,7 @@ mod tests {
                 context_name: "board".into(),
             }],
             windows: vec![],
+            perspectives: vec![],
         };
         let cmds = commands_for_scope(
             &scope,
@@ -1422,6 +1469,98 @@ mod tests {
         assert!(
             !ids.iter().any(|id| id.starts_with("board.switch:")),
             "no board commands without dynamic sources"
+        );
+    }
+
+    // =========================================================================
+    // Dynamic perspective goto commands
+    // =========================================================================
+
+    #[test]
+    fn perspective_goto_commands_appear_when_perspectives_provided() {
+        let (registry, impls, fields, ui) = setup();
+        let scope = vec!["board:my-board".into()];
+        let dynamic = DynamicSources {
+            perspectives: vec![
+                PerspectiveInfo {
+                    id: "p1".into(),
+                    name: "Alpha".into(),
+                    view: "board".into(),
+                },
+                PerspectiveInfo {
+                    id: "p2".into(),
+                    name: "Beta".into(),
+                    view: "board".into(),
+                },
+            ],
+            ..Default::default()
+        };
+        let cmds = commands_for_scope(
+            &scope,
+            &registry,
+            &impls,
+            Some(&fields),
+            &ui,
+            false,
+            Some(&dynamic),
+        );
+        let ids: Vec<&str> = cmds.iter().map(|c| c.id.as_str()).collect();
+
+        assert!(
+            ids.contains(&"perspective.goto:p1"),
+            "should have p1: {:?}",
+            ids
+        );
+        assert!(
+            ids.contains(&"perspective.goto:p2"),
+            "should have p2: {:?}",
+            ids
+        );
+
+        let p1 = cmds.iter().find(|c| c.id == "perspective.goto:p1").unwrap();
+        assert_eq!(p1.name, "Go to Perspective: Alpha");
+        assert_eq!(p1.group, "perspective");
+    }
+
+    #[test]
+    fn perspective_goto_commands_not_in_context_menu() {
+        let (registry, impls, fields, ui) = setup();
+        let scope = vec!["board:my-board".into()];
+        let dynamic = DynamicSources {
+            perspectives: vec![PerspectiveInfo {
+                id: "p1".into(),
+                name: "Alpha".into(),
+                view: "board".into(),
+            }],
+            ..Default::default()
+        };
+        let cmds = commands_for_scope(
+            &scope,
+            &registry,
+            &impls,
+            Some(&fields),
+            &ui,
+            true,
+            Some(&dynamic),
+        );
+        let ids: Vec<&str> = cmds.iter().map(|c| c.id.as_str()).collect();
+
+        assert!(
+            !ids.iter().any(|id| id.starts_with("perspective.goto:")),
+            "perspective commands should not appear in context menu"
+        );
+    }
+
+    #[test]
+    fn no_perspective_commands_without_dynamic_sources() {
+        let (registry, impls, fields, ui) = setup();
+        let scope = vec!["board:my-board".into()];
+        let cmds = commands_for_scope(&scope, &registry, &impls, Some(&fields), &ui, false, None);
+        let ids: Vec<&str> = cmds.iter().map(|c| c.id.as_str()).collect();
+
+        assert!(
+            !ids.iter().any(|id| id.starts_with("perspective.goto:")),
+            "no perspective commands without dynamic sources"
         );
     }
 
@@ -1511,6 +1650,7 @@ mod tests {
                 context_name: "my-project".into(),
             }],
             windows: vec![],
+            perspectives: vec![],
         };
         let cmds = commands_for_scope(
             &scope,
@@ -1553,6 +1693,7 @@ mod tests {
                     focused: false,
                 },
             ],
+            perspectives: vec![],
         };
         let cmds = commands_for_scope(
             &scope,
@@ -1589,6 +1730,7 @@ mod tests {
                 title: "SwissArmyHammer".into(),
                 focused: true,
             }],
+            perspectives: vec![],
         };
         let cmds = commands_for_scope(
             &scope,
@@ -1624,6 +1766,7 @@ mod tests {
                 title: "SwissArmyHammer".into(),
                 focused: true,
             }],
+            perspectives: vec![],
         };
         let cmds = commands_for_scope(
             &scope,

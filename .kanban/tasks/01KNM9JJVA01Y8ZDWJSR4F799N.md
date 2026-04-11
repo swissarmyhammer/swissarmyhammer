@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: doing
-position_ordinal: '8180'
+position_column: done
+position_ordinal: ffffffffffffffffffffff9880
 title: Wire project field into task entity definition
 ---
 ## What

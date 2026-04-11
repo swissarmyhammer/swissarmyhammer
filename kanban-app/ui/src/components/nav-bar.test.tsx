@@ -119,6 +119,7 @@ const MOCK_BOARD: BoardData = {
   columns: [],
 
   tags: [],
+  virtualTagMeta: [],
   summary: {
     total_tasks: 5,
     total_actors: 2,

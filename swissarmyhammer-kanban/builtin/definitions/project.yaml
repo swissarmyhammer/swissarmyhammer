@@ -6,8 +6,6 @@ type:
   entity: project
   multiple: false
 icon: folder
-editor: multi-select
-display: badge-list
 width: 150
 section: header
 groupable: true

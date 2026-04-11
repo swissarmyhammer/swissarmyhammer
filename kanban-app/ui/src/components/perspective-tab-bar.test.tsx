@@ -31,14 +31,19 @@ vi.mock("@tauri-apps/plugin-log", () => ({
 const mockSetActivePerspectiveId = vi.fn();
 const mockRefresh = vi.fn(() => Promise.resolve());
 
+/** Shape of a perspective in the mock context — includes optional filter/group. */
+type MockPerspective = {
+  id: string;
+  name: string;
+  view: string;
+  filter?: string;
+  group?: string;
+};
+
 // Mock the perspectives context so we can control perspectives list.
 let mockPerspectivesValue = {
-  perspectives: [] as Array<{ id: string; name: string; view: string }>,
-  activePerspective: null as {
-    id: string;
-    name: string;
-    view: string;
-  } | null,
+  perspectives: [] as MockPerspective[],
+  activePerspective: null as MockPerspective | null,
   setActivePerspectiveId: mockSetActivePerspectiveId,
   refresh: mockRefresh,
 };
@@ -65,6 +70,16 @@ vi.mock("@/lib/context-menu", () => ({
   useContextMenu: () => mockContextMenuHandler,
 }));
 
+// Mock useEntityStore — needed by useMentionExtensions (used in FilterEditor).
+vi.mock("@/lib/entity-store-context", () => ({
+  useEntityStore: () => ({ getEntities: () => [] }),
+}));
+
+// Mock board data context — provides virtual tag metadata from the backend.
+vi.mock("@/components/window-container", () => ({
+  useBoardData: () => ({ virtualTagMeta: [] }),
+}));
+
 // Mock useSchema — returns empty schema by default.
 vi.mock("@/lib/schema-context", () => ({
   useSchema: () => ({
@@ -76,7 +91,26 @@ vi.mock("@/lib/schema-context", () => ({
   }),
 }));
 
-import { PerspectiveTabBar } from "./perspective-tab-bar";
+// Mock useUIState — required by TextEditor (CM6 keymap selection).
+// Mutable so tests can switch between CUA/vim/emacs.
+let mockKeymapMode = "cua";
+
+const mockUIState = () => ({
+  keymap_mode: mockKeymapMode,
+  scope_chain: [],
+  open_boards: [],
+  has_clipboard: false,
+  clipboard_entity_type: null,
+  windows: {},
+  recent_boards: [],
+});
+
+vi.mock("@/lib/ui-state-context", () => ({
+  useUIState: () => mockUIState(),
+  useUIStateLoading: () => ({ state: mockUIState(), loading: false }),
+}));
+
+import { PerspectiveTabBar, triggerStartRename } from "./perspective-tab-bar";
 
 /** Renders PerspectiveTabBar inside the required TooltipProvider. */
 function renderTabBar(delayDuration = 100) {
@@ -90,6 +124,7 @@ function renderTabBar(delayDuration = 100) {
 describe("PerspectiveTabBar", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockKeymapMode = "cua";
     mockPerspectivesValue = {
       perspectives: [],
       activePerspective: null,
@@ -239,22 +274,102 @@ describe("PerspectiveTabBar", () => {
     expect(screen.queryByText("Delete")).toBeNull();
   });
 
-  it("starts inline rename on double-click", () => {
+  it("starts inline rename on double-click with CM6 editor", () => {
     mockPerspectivesValue = {
       ...mockPerspectivesValue,
       perspectives: [{ id: "p1", name: "Sprint View", view: "board" }],
       activePerspective: { id: "p1", name: "Sprint View", view: "board" },
     };
 
-    renderTabBar();
+    const { container } = renderTabBar();
 
     const tab = screen.getByText("Sprint View");
     fireEvent.doubleClick(tab);
 
-    // After double-click, an input should appear for renaming
-    const input = screen.getByDisplayValue("Sprint View");
-    expect(input).toBeDefined();
-    expect(input.tagName).toBe("INPUT");
+    // After double-click, a CM6 editor should appear (not a plain <input>)
+    const cmEditor = container.querySelector(".cm-editor");
+    expect(cmEditor).toBeTruthy();
+    expect(container.querySelector("input")).toBeNull();
+  });
+
+  it("enters inline rename mode for the active perspective when triggerStartRename is called", () => {
+    mockPerspectivesValue = {
+      ...mockPerspectivesValue,
+      perspectives: [
+        { id: "p1", name: "First", view: "board" },
+        { id: "p2", name: "Second", view: "board" },
+      ],
+      activePerspective: { id: "p2", name: "Second", view: "board" },
+    };
+
+    const { container } = renderTabBar();
+
+    // The formula bar always renders one CM6 editor when a perspective is
+    // active — so before triggering rename, we expect exactly one editor.
+    expect(container.querySelectorAll(".cm-editor").length).toBe(1);
+
+    // Dispatching ui.perspective.startRename (via triggerStartRename — the
+    // same code path the AppShell global command handler calls) should put
+    // the active tab into rename mode.
+    act(() => {
+      triggerStartRename();
+    });
+
+    // After triggering, a second CM6 editor (the inline rename editor)
+    // should have mounted inside the active tab button.
+    expect(container.querySelectorAll(".cm-editor").length).toBe(2);
+
+    // The rename editor lives inside the active tab's button, not in the
+    // formula bar. Find it via the active tab and verify it shows the
+    // active perspective's name.
+    const activeTab = screen.getByText("Second").closest("button");
+    expect(activeTab).toBeTruthy();
+    const renameEditor = activeTab?.querySelector(".cm-editor");
+    expect(renameEditor).toBeTruthy();
+    const renameContent = renameEditor?.querySelector(".cm-content");
+    expect(renameContent?.textContent).toContain("Second");
+
+    // The inactive tab should still render plain text, not an editor
+    const inactiveTab = screen.getByText("First").closest("button");
+    expect(inactiveTab?.querySelector(".cm-editor")).toBeNull();
+  });
+
+  it("triggerStartRename is a no-op when there is no active perspective", () => {
+    mockPerspectivesValue = {
+      ...mockPerspectivesValue,
+      perspectives: [{ id: "p1", name: "First", view: "board" }],
+      activePerspective: null,
+    };
+
+    const { container } = renderTabBar();
+
+    // With no active perspective, the formula bar is also hidden, so there
+    // should be zero CM6 editors in the tab bar.
+    expect(container.querySelectorAll(".cm-editor").length).toBe(0);
+
+    act(() => {
+      triggerStartRename();
+    });
+
+    // Still zero — no active perspective means no rename target
+    expect(container.querySelectorAll(".cm-editor").length).toBe(0);
+  });
+
+  it("renders CM6 editor with the perspective name as initial value", () => {
+    mockPerspectivesValue = {
+      ...mockPerspectivesValue,
+      perspectives: [{ id: "p1", name: "My View", view: "board" }],
+      activePerspective: { id: "p1", name: "My View", view: "board" },
+    };
+
+    const { container } = renderTabBar();
+
+    const tab = screen.getByText("My View");
+    fireEvent.doubleClick(tab);
+
+    // CM6 renders the text inside .cm-content
+    const cmContent = container.querySelector(".cm-content");
+    expect(cmContent?.textContent).toContain("My View");
   });
 
   it("shows a tooltip on hover of the add-perspective button", async () => {
@@ -281,5 +396,308 @@ describe("PerspectiveTabBar", () => {
 
     const addButton = screen.getByRole("button", { name: /add perspective/i });
     expect(addButton.getAttribute("title")).toBeNull();
+  });
+
+  // =========================================================================
+  // Rename integration — Enter/Escape across keymap modes
+  // =========================================================================
+
+  /**
+   * Opens the inline rename editor for a perspective named "Original" and
+   * returns the CM6 EditorView (via EditorView.findFromDOM) so tests can
+   * modify the document before pressing Enter/Escape.
+   */
+  async function setupRenameEditor(keymapMode: string) {
+    mockKeymapMode = keymapMode;
+    mockPerspectivesValue = {
+      ...mockPerspectivesValue,
+      perspectives: [{ id: "p1", name: "Original", view: "board" }],
+      activePerspective: { id: "p1", name: "Original", view: "board" },
+    };
+    const result = renderTabBar();
+    const tab = screen.getByText("Original");
+    fireEvent.doubleClick(tab);
+
+    const cmEditor = result.container.querySelector(
+      ".cm-editor",
+    ) as HTMLElement;
+    expect(cmEditor).toBeTruthy();
+
+    // Get the CM6 EditorView — same pattern as entity-card.test.tsx
+    const { EditorView } = await import("@codemirror/view");
+    const view = EditorView.findFromDOM(cmEditor);
+    expect(view).toBeTruthy();
+
+    return { ...result, view: view!, cmEditor };
+  }
+
+  /** Replace the CM6 document text and wait for onChange to propagate. */
+  async function replaceDocText(
+    view: import("@codemirror/view").EditorView,
+    text: string,
+  ) {
+    await act(async () => {
+      view.dispatch({
+        changes: { from: 0, to: view.state.doc.length, insert: text },
+      });
+      // Allow onChange listener tick to propagate
+      await new Promise((r) => setTimeout(r, 20));
+    });
+  }
+
+  /** Dispatch a keydown on the given target and wait for effects. */
+  async function pressKey(target: HTMLElement, key: string) {
+    await act(async () => {
+      target.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+      await new Promise((r) => setTimeout(r, 50));
+    });
+  }
+
+  /** Expected mockInvoke shape for a successful rename dispatch. */
+  const renameCall = (newName: string) =>
+    expect.objectContaining({
+      cmd: "perspective.rename",
+      args: expect.objectContaining({
+        id: "p1",
+        new_name: newName,
+      }),
+    });
+
+  it("CUA rename: Enter after text change dispatches perspective.rename", async () => {
+    const { view, container } = await setupRenameEditor("cua");
+    await replaceDocText(view, "New Name");
+    mockInvoke.mockClear();
+
+    const cmContent = container.querySelector(".cm-content") as HTMLElement;
+    await pressKey(cmContent, "Enter");
+
+    // Rename editor is gone; only the formula bar's CM6 editor remains
+    expect(container.querySelectorAll(".cm-editor").length).toBe(1);
+    expect(mockInvoke).toHaveBeenCalledWith(
+      "dispatch_command",
+      renameCall("New Name"),
+    );
+  });
+
+  it("CUA rename: Escape cancels without dispatching rename", async () => {
+    const { view, container } = await setupRenameEditor("cua");
+    await replaceDocText(view, "New Name");
+    mockInvoke.mockClear();
+
+    const cmContent = container.querySelector(".cm-content") as HTMLElement;
+    await pressKey(cmContent, "Escape");
+
+    // Rename editor is gone; only the formula bar's CM6 editor remains
+    expect(container.querySelectorAll(".cm-editor").length).toBe(1);
+    expect(mockInvoke).not.toHaveBeenCalledWith(
+      "dispatch_command",
+      renameCall("New Name"),
+    );
+  });
+
+  it("vim rename: Enter after text change dispatches perspective.rename", async () => {
+    const { view, container } = await setupRenameEditor("vim");
+    await replaceDocText(view, "New Name");
+    mockInvoke.mockClear();
+
+    const cmContent = container.querySelector(".cm-content") as HTMLElement;
+    await pressKey(cmContent, "Enter");
+
+    // Rename editor is gone; only the formula bar's CM6 editor remains
+    expect(container.querySelectorAll(".cm-editor").length).toBe(1);
+    expect(mockInvoke).toHaveBeenCalledWith(
+      "dispatch_command",
+      renameCall("New Name"),
+    );
+  });
+
+  it("vim rename: Escape after text change commits (dispatches rename)", async () => {
+    const { view, container } = await setupRenameEditor("vim");
+    await replaceDocText(view, "New Name");
+    mockInvoke.mockClear();
+
+    // Vim Escape from normal mode routes to commitAndExit, not cancel
+    const cmContent = container.querySelector(".cm-content") as HTMLElement;
+    await pressKey(cmContent, "Escape");
+
+    // Rename editor is gone; only the formula bar's CM6 editor remains
+    expect(container.querySelectorAll(".cm-editor").length).toBe(1);
+    expect(mockInvoke).toHaveBeenCalledWith(
+      "dispatch_command",
+      renameCall("New Name"),
+    );
+  });
+
+  it("emacs rename: Enter after text change dispatches perspective.rename", async () => {
+    const { view, container } = await setupRenameEditor("emacs");
+    await replaceDocText(view, "New Name");
+    mockInvoke.mockClear();
+
+    const cmContent = container.querySelector(".cm-content") as HTMLElement;
+    await pressKey(cmContent, "Enter");
+
+    // Rename editor is gone; only the formula bar's CM6 editor remains
+    expect(container.querySelectorAll(".cm-editor").length).toBe(1);
+    expect(mockInvoke).toHaveBeenCalledWith(
+      "dispatch_command",
+      renameCall("New Name"),
+    );
+  });
+
+  it("emacs rename: Escape cancels without dispatching rename", async () => {
+    const { view, container } = await setupRenameEditor("emacs");
+    await replaceDocText(view, "New Name");
+    mockInvoke.mockClear();
+
+    const cmContent = container.querySelector(".cm-content") as HTMLElement;
+    await pressKey(cmContent, "Escape");
+
+    // Rename editor is gone; only the formula bar's CM6 editor remains
+    expect(container.querySelectorAll(".cm-editor").length).toBe(1);
+    expect(mockInvoke).not.toHaveBeenCalledWith(
+      "dispatch_command",
+      renameCall("New Name"),
+    );
+  });
+
+  // =========================================================================
+  // Filter formula bar — always-visible CM6 editor in the right of the tab bar
+  // =========================================================================
+
+  describe("Filter formula bar", () => {
+    it("renders filter editor inline (not in a popover) when a perspective is active", () => {
+      mockPerspectivesValue = {
+        ...mockPerspectivesValue,
+        perspectives: [{ id: "p1", name: "Sprint View", view: "board" }],
+        activePerspective: { id: "p1", name: "Sprint View", view: "board" },
+      };
+
+      renderTabBar();
+
+      // FilterEditor should be present without clicking anything
+      expect(screen.getByTestId("filter-editor")).toBeDefined();
+    });
+
+    it("does not render filter editor when no perspective is active", () => {
+      mockPerspectivesValue = {
+        ...mockPerspectivesValue,
+        perspectives: [{ id: "p1", name: "Sprint View", view: "board" }],
+        activePerspective: null,
+      };
+
+      renderTabBar();
+
+      expect(screen.queryByTestId("filter-editor")).toBeNull();
+    });
+
+    it("shows cm-placeholder in formula bar when filter is empty", () => {
+      mockPerspectivesValue = {
+        ...mockPerspectivesValue,
+        perspectives: [{ id: "p1", name: "Sprint View", view: "board" }],
+        activePerspective: { id: "p1", name: "Sprint View", view: "board" },
+      };
+
+      const { container } = renderTabBar();
+
+      const placeholder = container.querySelector(".cm-placeholder");
+      expect(placeholder).toBeTruthy();
+    });
+
+    it("filter icon button is highlighted (text-primary) when active perspective has a filter", () => {
+      mockPerspectivesValue = {
+        ...mockPerspectivesValue,
+        perspectives: [
+          { id: "p1", name: "Sprint View", view: "board", filter: "#bug" },
+        ],
+        activePerspective: {
+          id: "p1",
+          name: "Sprint View",
+          view: "board",
+          filter: "#bug",
+        },
+      };
+
+      renderTabBar();
+
+      // Use exact match to distinguish "Filter" (tab icon) from "Clear filter" (formula bar)
+      const filterButton = screen.getByRole("button", { name: "Filter" });
+      expect(filterButton.className).toContain("text-primary");
+    });
+
+    it("filter button click does not open a popover", () => {
+      mockPerspectivesValue = {
+        ...mockPerspectivesValue,
+        perspectives: [{ id: "p1", name: "Sprint View", view: "board" }],
+        activePerspective: { id: "p1", name: "Sprint View", view: "board" },
+      };
+
+      renderTabBar();
+
+      const filterButton = screen.getByRole("button", { name: /filter/i });
+      fireEvent.click(filterButton);
+
+      // No Radix popover/dialog should appear in the DOM
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+
+    it("clicking the filter button on the active tab focuses the formula bar CM6 editor", () => {
+      mockPerspectivesValue = {
+        ...mockPerspectivesValue,
+        perspectives: [{ id: "p1", name: "Sprint View", view: "board" }],
+        activePerspective: { id: "p1", name: "Sprint View", view: "board" },
+      };
+
+      const { container } = renderTabBar();
+
+      const filterButton = screen.getByRole("button", { name: "Filter" });
+      fireEvent.click(filterButton);
+
+      // After clicking filter button, the CM6 content area should have focus
+      const cmContent = container.querySelector(".cm-content") as HTMLElement;
+      expect(cmContent).toBeTruthy();
+      expect(document.activeElement).toBe(cmContent);
+    });
+
+    it("clicking the formula bar container area focuses the CM6 editor", () => {
+      mockPerspectivesValue = {
+        ...mockPerspectivesValue,
+        perspectives: [{ id: "p1", name: "Sprint View", view: "board" }],
+        activePerspective: { id: "p1", name: "Sprint View", view: "board" },
+      };
+
+      const { container } = renderTabBar();
+
+      // Click the formula bar container (outside the CM editor itself)
+      const formulaBar = container.querySelector(
+        '[data-testid="filter-formula-bar"]',
+      ) as HTMLElement;
+      expect(formulaBar).toBeTruthy();
+      fireEvent.click(formulaBar);
+
+      const cmContent = container.querySelector(".cm-content") as HTMLElement;
+      expect(document.activeElement).toBe(cmContent);
+    });
+
+    it("formula bar container has cursor-text class to signal it is editable", () => {
+      mockPerspectivesValue = {
+        ...mockPerspectivesValue,
+        perspectives: [{ id: "p1", name: "Sprint View", view: "board" }],
+        activePerspective: { id: "p1", name: "Sprint View", view: "board" },
+      };
+
+      const { container } = renderTabBar();
+
+      const formulaBar = container.querySelector(
+        '[data-testid="filter-formula-bar"]',
+      );
+      expect(formulaBar).toBeTruthy();
+      expect(formulaBar?.className).toContain("cursor-text");
+    });
   });
 });

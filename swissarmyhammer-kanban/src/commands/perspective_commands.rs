@@ -6,8 +6,8 @@
 use super::run_op;
 use crate::context::KanbanContext;
 use crate::perspective::{
-    AddPerspective, DeletePerspective, GetPerspective, ListPerspectives, SortDirection, SortEntry,
-    UpdatePerspective,
+    AddPerspective, DeletePerspective, GetPerspective, ListPerspectives, RenamePerspective,
+    SortDirection, SortEntry, UpdatePerspective,
 };
 use async_trait::async_trait;
 use serde_json::Value;
@@ -132,6 +132,26 @@ impl Command for DeletePerspectiveCmd {
         };
 
         let op = DeletePerspective::new(id);
+        run_op(&op, &kanban).await
+    }
+}
+
+/// Rename a perspective.
+///
+/// Required args: `id` (perspective ULID), `new_name` (the new name).
+pub struct RenamePerspectiveCmd;
+
+#[async_trait]
+impl Command for RenamePerspectiveCmd {
+    fn available(&self, _ctx: &CommandContext) -> bool {
+        true
+    }
+
+    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+        let kanban = ctx.require_extension::<KanbanContext>()?;
+        let id = ctx.require_arg_str("id")?;
+        let new_name = ctx.require_arg_str("new_name")?;
+        let op = RenamePerspective::new(id, new_name);
         run_op(&op, &kanban).await
     }
 }
@@ -429,6 +449,192 @@ impl Command for ToggleSortCmd {
     }
 }
 
+/// Cycle to the next perspective within the same view kind.
+///
+/// Always available. Required arg: `view_kind` (e.g. "board", "grid").
+/// Filters perspectives to those matching `view_kind`, finds the current
+/// active perspective, and advances to the next one (wrapping around).
+/// No-op (returns `null`) when fewer than 2 perspectives match.
+pub struct NextPerspectiveCmd;
+
+#[async_trait]
+impl Command for NextPerspectiveCmd {
+    fn available(&self, _ctx: &CommandContext) -> bool {
+        true
+    }
+
+    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+        cycle_perspective(ctx, CycleDirection::Next).await
+    }
+}
+
+/// Cycle to the previous perspective within the same view kind.
+///
+/// Always available. Required arg: `view_kind` (e.g. "board", "grid").
+/// Filters perspectives to those matching `view_kind`, finds the current
+/// active perspective, and moves to the previous one (wrapping around).
+/// No-op (returns `null`) when fewer than 2 perspectives match.
+pub struct PrevPerspectiveCmd;
+
+#[async_trait]
+impl Command for PrevPerspectiveCmd {
+    fn available(&self, _ctx: &CommandContext) -> bool {
+        true
+    }
+
+    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+        cycle_perspective(ctx, CycleDirection::Prev).await
+    }
+}
+
+/// Resolve the view kind for perspective cycling.
+///
+/// Resolution order: explicit `view_kind` arg > scope chain `view:{id}` moniker
+/// looked up against the views registry > `"board"` default. When invoked via
+/// keybinding or command palette no args are passed, so the scope chain fallback
+/// is the primary path.
+async fn resolve_view_kind(ctx: &CommandContext, kanban: &KanbanContext) -> String {
+    if let Some(explicit) = ctx.arg("view_kind").and_then(|v| v.as_str()) {
+        return explicit.to_string();
+    }
+
+    let view_id = ctx.scope_chain.iter().find_map(|m| m.strip_prefix("view:"));
+
+    if let Some(kind) = resolve_kind_from_view_id(view_id, kanban).await {
+        return kind;
+    }
+
+    "board".to_string()
+}
+
+/// Look up a view ID in the views registry and return its kind as a string.
+async fn resolve_kind_from_view_id(
+    view_id: Option<&str>,
+    kanban: &KanbanContext,
+) -> Option<String> {
+    let view_id = view_id?;
+    let views_lock = kanban.views()?;
+    let views = views_lock.read().await;
+    let view_def = views.get_by_id(view_id)?;
+    serde_json::to_value(&view_def.kind)
+        .ok()
+        .and_then(|v| v.as_str().map(String::from))
+}
+
+/// Direction for perspective cycling.
+enum CycleDirection {
+    Next,
+    Prev,
+}
+
+/// Shared logic for next/prev perspective cycling.
+///
+/// Lists all perspectives, filters to those matching `view_kind`, finds the
+/// current active perspective by index, and advances or retreats by one
+/// (wrapping). Updates UIState and returns the `UIStateChange`, or `null`
+/// if cycling is not possible (fewer than 2 matching perspectives).
+async fn cycle_perspective(
+    ctx: &CommandContext,
+    direction: CycleDirection,
+) -> swissarmyhammer_commands::Result<Value> {
+    let kanban = ctx.require_extension::<KanbanContext>()?;
+    let ui = ctx
+        .ui_state
+        .as_ref()
+        .ok_or_else(|| CommandError::ExecutionFailed("UIState not available".into()))?;
+
+    let view_kind = resolve_view_kind(ctx, &kanban).await;
+    let window_label = ctx.window_label_from_scope().unwrap_or("main");
+    let current_id = ui.active_perspective_id(window_label);
+
+    // Get perspectives matching the requested view kind
+    let matching: Vec<String> = {
+        let pctx = kanban
+            .perspective_context()
+            .await
+            .map_err(|e| CommandError::ExecutionFailed(e.to_string()))?;
+        let pctx = pctx.read().await;
+        pctx.all()
+            .iter()
+            .filter(|p| p.view == view_kind)
+            .map(|p| p.id.clone())
+            .collect()
+    };
+
+    if matching.len() < 2 {
+        return Ok(Value::Null);
+    }
+
+    let current_index = matching.iter().position(|id| id == &current_id);
+    let len = matching.len();
+
+    let next_index = match (current_index, &direction) {
+        (Some(i), CycleDirection::Next) => (i + 1) % len,
+        (Some(i), CycleDirection::Prev) => (i + len - 1) % len,
+        // Current perspective not found in matching set — start from beginning/end
+        (None, CycleDirection::Next) => 0,
+        (None, CycleDirection::Prev) => len - 1,
+    };
+
+    let new_id = &matching[next_index];
+    let change = ui.set_active_perspective(window_label, new_id);
+    Ok(serde_json::to_value(change).unwrap_or(Value::Null))
+}
+
+/// Switch to a perspective by its ID.
+///
+/// Always available. Required arg: `id` (perspective ULID).
+/// Optional arg: `view_kind` — if provided, validates that the perspective's
+/// view matches before switching. Returns an error if the perspective is not
+/// found or the view kind does not match.
+pub struct GotoPerspectiveCmd;
+
+#[async_trait]
+impl Command for GotoPerspectiveCmd {
+    fn available(&self, _ctx: &CommandContext) -> bool {
+        true
+    }
+
+    async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
+        let kanban = ctx.require_extension::<KanbanContext>()?;
+        let ui = ctx
+            .ui_state
+            .as_ref()
+            .ok_or_else(|| CommandError::ExecutionFailed("UIState not available".into()))?;
+
+        let id = ctx.require_arg_str("id")?;
+        let view_kind = ctx.arg("view_kind").and_then(|v| v.as_str());
+        let window_label = ctx.window_label_from_scope().unwrap_or("main");
+
+        // Validate the perspective exists.
+        let pctx = kanban
+            .perspective_context()
+            .await
+            .map_err(|e| CommandError::ExecutionFailed(e.to_string()))?;
+        let pctx = pctx.read().await;
+
+        let perspective = pctx
+            .get_by_id(id)
+            .ok_or_else(|| CommandError::ExecutionFailed(format!("perspective not found: {id}")))?;
+
+        // If view_kind is specified, validate it matches.
+        if let Some(expected) = view_kind {
+            if perspective.view != expected {
+                return Err(CommandError::ExecutionFailed(format!(
+                    "perspective '{}' has view '{}', expected '{expected}'",
+                    perspective.name, perspective.view
+                )));
+            }
+        }
+
+        // Release the lock before mutating UIState.
+        drop(pctx);
+
+        let change = ui.set_active_perspective(window_label, id);
+        Ok(serde_json::to_value(change).unwrap_or(Value::Null))
+    }
+}
+
 /// List all perspectives on the board.
 ///
 /// No arguments required. Returns a JSON object with `perspectives` array
@@ -487,6 +693,20 @@ mod tests {
         let mut ctx = CommandContext::new("test", scope_chain, None, args);
         ctx.set_extension(kanban);
         ctx
+    }
+
+    /// Helper: create a perspective with a specific view kind and return its ID.
+    async fn create_perspective_with_view(
+        kanban: &Arc<KanbanContext>,
+        name: &str,
+        view: &str,
+    ) -> String {
+        let mut args = HashMap::new();
+        args.insert("name".into(), Value::String(name.into()));
+        args.insert("view".into(), Value::String(view.into()));
+        let cmd_ctx = make_ctx(Arc::clone(kanban), args);
+        let result = SavePerspectiveCmd.execute(&cmd_ctx).await.unwrap();
+        result["id"].as_str().unwrap().to_string()
     }
 
     /// Helper: create a perspective and return its ID.
@@ -774,5 +994,343 @@ mod tests {
         assert!(SetSortCmd.available(&ctx));
         assert!(ClearSortCmd.available(&ctx));
         assert!(ToggleSortCmd.available(&ctx));
+    }
+
+    // =========================================================================
+    // Next / Prev perspective cycling
+    // =========================================================================
+
+    /// Build a CommandContext with KanbanContext extension and UIState.
+    fn make_ctx_with_ui(
+        kanban: Arc<KanbanContext>,
+        args: HashMap<String, Value>,
+        ui: Arc<swissarmyhammer_commands::UIState>,
+    ) -> CommandContext {
+        let mut ctx = CommandContext::new("test", vec![], None, args);
+        ctx.set_extension(kanban);
+        ctx.ui_state = Some(ui);
+        ctx
+    }
+
+    #[tokio::test]
+    async fn test_next_perspective_cycles_forward_with_wrapping() {
+        let (_temp, ctx) = setup().await;
+        let kanban = Arc::new(ctx);
+        let ui = Arc::new(swissarmyhammer_commands::UIState::new());
+
+        let id_a = create_perspective_with_view(&kanban, "A", "board").await;
+        let id_b = create_perspective_with_view(&kanban, "B", "board").await;
+        let id_c = create_perspective_with_view(&kanban, "C", "board").await;
+
+        // Set active to A
+        ui.set_active_perspective("main", &id_a);
+
+        // Next: A -> B
+        let mut args = HashMap::new();
+        args.insert("view_kind".into(), Value::String("board".into()));
+        let cmd_ctx = make_ctx_with_ui(Arc::clone(&kanban), args, Arc::clone(&ui));
+        let result = NextPerspectiveCmd.execute(&cmd_ctx).await.unwrap();
+        assert!(result != Value::Null);
+        assert_eq!(ui.active_perspective_id("main"), id_b);
+
+        // Next: B -> C
+        let mut args = HashMap::new();
+        args.insert("view_kind".into(), Value::String("board".into()));
+        let cmd_ctx = make_ctx_with_ui(Arc::clone(&kanban), args, Arc::clone(&ui));
+        NextPerspectiveCmd.execute(&cmd_ctx).await.unwrap();
+        assert_eq!(ui.active_perspective_id("main"), id_c);
+
+        // Next: C -> A (wrap)
+        let mut args = HashMap::new();
+        args.insert("view_kind".into(), Value::String("board".into()));
+        let cmd_ctx = make_ctx_with_ui(Arc::clone(&kanban), args, Arc::clone(&ui));
+        NextPerspectiveCmd.execute(&cmd_ctx).await.unwrap();
+        assert_eq!(ui.active_perspective_id("main"), id_a);
+    }
+
+    #[tokio::test]
+    async fn test_prev_perspective_cycles_backward_with_wrapping() {
+        let (_temp, ctx) = setup().await;
+        let kanban = Arc::new(ctx);
+        let ui = Arc::new(swissarmyhammer_commands::UIState::new());
+
+        let id_a = create_perspective_with_view(&kanban, "A", "grid").await;
+        let id_b = create_perspective_with_view(&kanban, "B", "grid").await;
+        let id_c = create_perspective_with_view(&kanban, "C", "grid").await;
+
+        // Set active to A
+        ui.set_active_perspective("main", &id_a);
+
+        // Prev: A -> C (wrap)
+        let mut args = HashMap::new();
+        args.insert("view_kind".into(), Value::String("grid".into()));
+        let cmd_ctx = make_ctx_with_ui(Arc::clone(&kanban), args, Arc::clone(&ui));
+        PrevPerspectiveCmd.execute(&cmd_ctx).await.unwrap();
+        assert_eq!(ui.active_perspective_id("main"), id_c);
+
+        // Prev: C -> B
+        let mut args = HashMap::new();
+        args.insert("view_kind".into(), Value::String("grid".into()));
+        let cmd_ctx = make_ctx_with_ui(Arc::clone(&kanban), args, Arc::clone(&ui));
+        PrevPerspectiveCmd.execute(&cmd_ctx).await.unwrap();
+        assert_eq!(ui.active_perspective_id("main"), id_b);
+
+        // Prev: B -> A
+        let mut args = HashMap::new();
+        args.insert("view_kind".into(), Value::String("grid".into()));
+        let cmd_ctx = make_ctx_with_ui(Arc::clone(&kanban), args, Arc::clone(&ui));
+        PrevPerspectiveCmd.execute(&cmd_ctx).await.unwrap();
+        assert_eq!(ui.active_perspective_id("main"), id_a);
+    }
+
+    #[tokio::test]
+    async fn test_cycle_noop_with_zero_matching_perspectives() {
+        let (_temp, ctx) = setup().await;
+        let kanban = Arc::new(ctx);
+        let ui = Arc::new(swissarmyhammer_commands::UIState::new());
+
+        // Create perspectives for "board" but query for "grid"
+        create_perspective_with_view(&kanban, "A", "board").await;
+
+        let mut args = HashMap::new();
+        args.insert("view_kind".into(), Value::String("grid".into()));
+        let cmd_ctx = make_ctx_with_ui(Arc::clone(&kanban), args, Arc::clone(&ui));
+        let result = NextPerspectiveCmd.execute(&cmd_ctx).await.unwrap();
+        assert_eq!(result, Value::Null);
+    }
+
+    #[tokio::test]
+    async fn test_cycle_noop_with_one_matching_perspective() {
+        let (_temp, ctx) = setup().await;
+        let kanban = Arc::new(ctx);
+        let ui = Arc::new(swissarmyhammer_commands::UIState::new());
+
+        let id_a = create_perspective_with_view(&kanban, "A", "board").await;
+        ui.set_active_perspective("main", &id_a);
+
+        let mut args = HashMap::new();
+        args.insert("view_kind".into(), Value::String("board".into()));
+        let cmd_ctx = make_ctx_with_ui(Arc::clone(&kanban), args, Arc::clone(&ui));
+        let result = NextPerspectiveCmd.execute(&cmd_ctx).await.unwrap();
+        assert_eq!(result, Value::Null);
+    }
+
+    #[tokio::test]
+    async fn test_cycle_filters_by_view_kind() {
+        let (_temp, ctx) = setup().await;
+        let kanban = Arc::new(ctx);
+        let ui = Arc::new(swissarmyhammer_commands::UIState::new());
+
+        let id_board = create_perspective_with_view(&kanban, "Board1", "board").await;
+        let _id_grid = create_perspective_with_view(&kanban, "Grid1", "grid").await;
+        let id_board2 = create_perspective_with_view(&kanban, "Board2", "board").await;
+
+        // Set active to board perspective
+        ui.set_active_perspective("main", &id_board);
+
+        // Next should go to Board2, not Grid1
+        let mut args = HashMap::new();
+        args.insert("view_kind".into(), Value::String("board".into()));
+        let cmd_ctx = make_ctx_with_ui(Arc::clone(&kanban), args, Arc::clone(&ui));
+        NextPerspectiveCmd.execute(&cmd_ctx).await.unwrap();
+        assert_eq!(ui.active_perspective_id("main"), id_board2);
+    }
+
+    #[tokio::test]
+    async fn test_next_prev_always_available() {
+        let ctx = CommandContext::new("test", vec![], None, HashMap::new());
+        assert!(NextPerspectiveCmd.available(&ctx));
+        assert!(PrevPerspectiveCmd.available(&ctx));
+    }
+
+    /// Create a KanbanContext with views initialized (via `open`).
+    async fn setup_with_views() -> (TempDir, KanbanContext) {
+        let temp = TempDir::new().unwrap();
+        let kanban_dir = temp.path().join(".kanban");
+        std::fs::create_dir_all(&kanban_dir).unwrap();
+        let ctx = KanbanContext::open(&kanban_dir).await.unwrap();
+        InitBoard::new("Test")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        (temp, ctx)
+    }
+
+    /// Build a CommandContext with scope chain, UI state, and args.
+    fn make_ctx_with_scope_and_ui(
+        kanban: Arc<KanbanContext>,
+        args: HashMap<String, Value>,
+        scope_chain: Vec<String>,
+        ui: Arc<swissarmyhammer_commands::UIState>,
+    ) -> CommandContext {
+        let mut ctx = CommandContext::new("test", scope_chain, None, args);
+        ctx.set_extension(kanban);
+        ctx.ui_state = Some(ui);
+        ctx
+    }
+
+    #[tokio::test]
+    async fn test_next_perspective_derives_view_kind_from_scope_chain() {
+        let (_temp, ctx) = setup_with_views().await;
+        let kanban = Arc::new(ctx);
+        let ui = Arc::new(swissarmyhammer_commands::UIState::new());
+
+        // Create board perspectives
+        let id_a = create_perspective_with_view(&kanban, "A", "board").await;
+        let id_b = create_perspective_with_view(&kanban, "B", "board").await;
+
+        ui.set_active_perspective("main", &id_a);
+
+        // Invoke without view_kind arg, but with view:01JMVIEW0000000000BOARD0 in scope chain
+        let scope = vec!["view:01JMVIEW0000000000BOARD0".to_string()];
+        let cmd_ctx =
+            make_ctx_with_scope_and_ui(Arc::clone(&kanban), HashMap::new(), scope, Arc::clone(&ui));
+        let result = NextPerspectiveCmd.execute(&cmd_ctx).await.unwrap();
+
+        assert!(result != Value::Null, "should cycle, not return null");
+        assert_eq!(ui.active_perspective_id("main"), id_b);
+    }
+
+    #[tokio::test]
+    async fn test_next_perspective_explicit_view_kind_overrides_scope() {
+        let (_temp, ctx) = setup_with_views().await;
+        let kanban = Arc::new(ctx);
+        let ui = Arc::new(swissarmyhammer_commands::UIState::new());
+
+        // Create board and grid perspectives
+        let _id_board_a = create_perspective_with_view(&kanban, "BoardA", "board").await;
+        let _id_board_b = create_perspective_with_view(&kanban, "BoardB", "board").await;
+        let id_grid_a = create_perspective_with_view(&kanban, "GridA", "grid").await;
+        let id_grid_b = create_perspective_with_view(&kanban, "GridB", "grid").await;
+
+        ui.set_active_perspective("main", &id_grid_a);
+
+        // Scope chain says board view, but explicit arg says "grid" — explicit wins
+        let scope = vec!["view:01JMVIEW0000000000BOARD0".to_string()];
+        let mut args = HashMap::new();
+        args.insert("view_kind".into(), Value::String("grid".into()));
+        let cmd_ctx = make_ctx_with_scope_and_ui(Arc::clone(&kanban), args, scope, Arc::clone(&ui));
+        let result = NextPerspectiveCmd.execute(&cmd_ctx).await.unwrap();
+
+        assert!(result != Value::Null, "should cycle grid perspectives");
+        assert_eq!(
+            ui.active_perspective_id("main"),
+            id_grid_b,
+            "explicit view_kind=grid should override scope chain's board view"
+        );
+    }
+
+    // =========================================================================
+    // perspective.goto — switch to perspective by ID
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_goto_perspective_valid_id_sets_active() {
+        let (_temp, ctx) = setup().await;
+        let kanban = Arc::new(ctx);
+        let ui = Arc::new(swissarmyhammer_commands::UIState::new());
+
+        let id = create_perspective_with_view(&kanban, "Target", "board").await;
+
+        let mut args = HashMap::new();
+        args.insert("id".into(), Value::String(id.clone()));
+        let cmd_ctx = make_ctx_with_ui(Arc::clone(&kanban), args, Arc::clone(&ui));
+        let result = GotoPerspectiveCmd.execute(&cmd_ctx).await.unwrap();
+
+        assert!(result != Value::Null);
+        assert_eq!(ui.active_perspective_id("main"), id);
+    }
+
+    #[tokio::test]
+    async fn test_goto_perspective_invalid_id_returns_error() {
+        let (_temp, ctx) = setup().await;
+        let kanban = Arc::new(ctx);
+        let ui = Arc::new(swissarmyhammer_commands::UIState::new());
+
+        let mut args = HashMap::new();
+        args.insert("id".into(), Value::String("nonexistent".into()));
+        let cmd_ctx = make_ctx_with_ui(Arc::clone(&kanban), args, Arc::clone(&ui));
+        let result = GotoPerspectiveCmd.execute(&cmd_ctx).await;
+
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_goto_perspective_mismatched_view_kind_returns_error() {
+        let (_temp, ctx) = setup().await;
+        let kanban = Arc::new(ctx);
+        let ui = Arc::new(swissarmyhammer_commands::UIState::new());
+
+        let id = create_perspective_with_view(&kanban, "BoardView", "board").await;
+
+        let mut args = HashMap::new();
+        args.insert("id".into(), Value::String(id.clone()));
+        args.insert("view_kind".into(), Value::String("grid".into()));
+        let cmd_ctx = make_ctx_with_ui(Arc::clone(&kanban), args, Arc::clone(&ui));
+        let result = GotoPerspectiveCmd.execute(&cmd_ctx).await;
+
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_goto_perspective_without_view_kind_succeeds() {
+        let (_temp, ctx) = setup().await;
+        let kanban = Arc::new(ctx);
+        let ui = Arc::new(swissarmyhammer_commands::UIState::new());
+
+        let id = create_perspective_with_view(&kanban, "GridView", "grid").await;
+
+        let mut args = HashMap::new();
+        args.insert("id".into(), Value::String(id.clone()));
+        // No view_kind arg — should succeed regardless of the perspective's view
+        let cmd_ctx = make_ctx_with_ui(Arc::clone(&kanban), args, Arc::clone(&ui));
+        let result = GotoPerspectiveCmd.execute(&cmd_ctx).await.unwrap();
+
+        assert!(result != Value::Null);
+        assert_eq!(ui.active_perspective_id("main"), id);
+    }
+
+    #[tokio::test]
+    async fn test_goto_perspective_always_available() {
+        let ctx = CommandContext::new("test", vec![], None, HashMap::new());
+        assert!(GotoPerspectiveCmd.available(&ctx));
+    }
+
+    // =========================================================================
+    // Rename perspective
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_rename_perspective_cmd() {
+        let (_temp, ctx) = setup().await;
+        let kanban = Arc::new(ctx);
+
+        // Create a perspective
+        let id = create_perspective(&kanban, "Old Name").await;
+
+        // Rename it
+        let mut args = HashMap::new();
+        args.insert("id".into(), Value::String(id.clone()));
+        args.insert("new_name".into(), Value::String("New Name".into()));
+        let cmd_ctx = make_ctx(Arc::clone(&kanban), args);
+        let result = RenamePerspectiveCmd.execute(&cmd_ctx).await.unwrap();
+
+        // Verify the result contains the new name
+        assert_eq!(result["name"].as_str().unwrap(), "New Name");
+    }
+
+    #[tokio::test]
+    async fn test_rename_perspective_cmd_not_found() {
+        let (_temp, ctx) = setup().await;
+        let kanban = Arc::new(ctx);
+
+        let mut args = HashMap::new();
+        args.insert("id".into(), Value::String("nonexistent".into()));
+        args.insert("new_name".into(), Value::String("Whatever".into()));
+        let cmd_ctx = make_ctx(Arc::clone(&kanban), args);
+        let result = RenamePerspectiveCmd.execute(&cmd_ctx).await;
+
+        assert!(result.is_err());
     }
 }

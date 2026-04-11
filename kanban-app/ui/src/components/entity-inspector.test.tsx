@@ -177,12 +177,38 @@ const mockInvoke = vi.fn((...args: any[]) => {
   return Promise.resolve("ok");
 });
 
-vi.mock("@tauri-apps/api/core", () => ({
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  invoke: (...args: any[]) => mockInvoke(...args),
-}));
-vi.mock("@tauri-apps/api/event", () => ({
-  listen: vi.fn(() => Promise.resolve(() => {})),
+vi.mock("@tauri-apps/api/core", async () => {
+  // Preserve the real exports (SERIALIZE_TO_IPC_FN, Resource, Channel, …)
+  // so that transitively-imported submodules like `window.js` / `dpi.js`
+  // can resolve their re-exports. Only override `invoke` with the test mock.
+  const actual =
+    await vi.importActual<typeof import("@tauri-apps/api/core")>(
+      "@tauri-apps/api/core",
+    );
+  return {
+    ...actual,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    invoke: (...args: any[]) => mockInvoke(...args),
+  };
+});
+vi.mock("@tauri-apps/api/event", async () => {
+  const actual =
+    await vi.importActual<typeof import("@tauri-apps/api/event")>(
+      "@tauri-apps/api/event",
+    );
+  return {
+    ...actual,
+    listen: vi.fn(() => Promise.resolve(() => {})),
+  };
+});
+// `window-container.tsx` calls `getCurrentWindow()` at module-load time;
+// stub it so tests can import components that pull in window-container
+// without a real Tauri runtime.
+vi.mock("@tauri-apps/api/window", () => ({
+  getCurrentWindow: () => ({
+    label: "main",
+    listen: vi.fn(() => Promise.resolve(() => {})),
+  }),
 }));
 vi.mock("@tauri-apps/plugin-log", () => ({
   error: vi.fn(),

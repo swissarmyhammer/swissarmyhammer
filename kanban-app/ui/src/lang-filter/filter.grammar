@@ -1,6 +1,6 @@
 // Filter DSL grammar for the kanban perspective filter editor.
 //
-// Atoms: #tag, @mention, ^ref
+// Atoms: #tag, @mention, ^ref, $project
 // Operators: && / and, || / or, ! / not
 // Grouping: ( )
 // Implicit AND: adjacent atoms without operator
@@ -11,7 +11,7 @@
 
 expr { atom | Not | And | Or | Group }
 
-atom { Tag | Mention | Ref }
+atom { Tag | Mention | Ref | Project }
 
 Not { (Bang | notKw) !not expr }
 
@@ -41,12 +41,13 @@ orKw { @specialize[@name=or]<word, "or"> | @specialize[@name=or]<word, "OR"> }
   Tag { "#" $[\-a-zA-Z0-9_.]+ }
   Mention { "@" $[\-a-zA-Z0-9_.]+ }
   Ref { "^" $[\-a-zA-Z0-9_.]+ }
+  Project { "$" $[\-a-zA-Z0-9_.]+ }
   Bang { "!" }
   AmpAmp { "&&" }
   PipePipe { "||" }
   word { $[a-zA-Z]+ }
   space { $[ \t\n\r]+ }
-  @precedence { Tag, Mention, Ref, AmpAmp, PipePipe, word }
+  @precedence { Tag, Mention, Ref, Project, AmpAmp, PipePipe, word }
 }
 
 @skip { space }

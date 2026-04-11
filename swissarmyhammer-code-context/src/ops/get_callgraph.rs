@@ -617,6 +617,7 @@ mod tests {
     }
 
     /// Insert a symbol with explicit line/char positions for location-resolution tests.
+    #[allow(clippy::too_many_arguments)]
     fn insert_symbol_at(
         conn: &Connection,
         id: &str,

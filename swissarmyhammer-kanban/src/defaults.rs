@@ -85,12 +85,11 @@ pub fn builtin_actor_entities() -> Vec<(&'static str, &'static str)> {
         .collect()
 }
 
-/// Build a ComputeEngine with all kanban derivation functions registered.
-pub fn kanban_compute_engine() -> ComputeEngine {
-    let mut engine = ComputeEngine::new();
-
-    // parse-body-tags: extract #tag patterns from the body field,
-    // filtered to only include tags that actually exist as tag entities.
+/// Register the parse-body-tags derivation.
+///
+/// Extracts #tag patterns from the body field, filtered to only include
+/// tags that actually exist as tag entities.
+fn register_parse_body_tags(engine: &mut ComputeEngine) {
     engine.register_aggregate(
         "parse-body-tags",
         Box::new(|fields, query| {
@@ -115,8 +114,12 @@ pub fn kanban_compute_engine() -> ComputeEngine {
             })
         }),
     );
+}
 
-    // parse-body-progress: parse GFM task lists from body
+/// Register the parse-body-progress derivation.
+///
+/// Parses GFM task lists from body and computes total/completed/percent.
+fn register_parse_body_progress(engine: &mut ComputeEngine) {
     engine.register(
         "parse-body-progress",
         Box::new(|fields| {
@@ -135,8 +138,13 @@ pub fn kanban_compute_engine() -> ComputeEngine {
             Box::pin(async move { value })
         }),
     );
+}
 
-    // board-percent-complete: aggregate — counts done tasks (terminal column) vs total
+/// Register the board-percent-complete derivation.
+///
+/// Counts done tasks (terminal column) vs total to produce a board-level
+/// progress percentage.
+fn register_board_percent_complete(engine: &mut ComputeEngine) {
     engine.register_aggregate(
         "board-percent-complete",
         Box::new(|_fields, query| {
@@ -144,7 +152,6 @@ pub fn kanban_compute_engine() -> ComputeEngine {
                 let columns = query("column").await;
                 let tasks = query("task").await;
 
-                // Terminal column is the one with the highest order
                 let terminal_id = columns
                     .iter()
                     .max_by_key(|c| c.get("order").and_then(|v| v.as_u64()).unwrap_or(0))
@@ -175,6 +182,15 @@ pub fn kanban_compute_engine() -> ComputeEngine {
             })
         }),
     );
+}
+
+/// Build a ComputeEngine with all kanban derivation functions registered.
+pub fn kanban_compute_engine() -> ComputeEngine {
+    let mut engine = ComputeEngine::new();
+
+    register_parse_body_tags(&mut engine);
+    register_parse_body_progress(&mut engine);
+    register_board_percent_complete(&mut engine);
 
     // compute-virtual-tags: stub — returns empty array.
     // Populated by the enrichment pipeline in a later card.

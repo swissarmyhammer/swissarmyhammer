@@ -200,6 +200,7 @@ function buildBoardData(): BoardData {
     columns: testColumns.map(columnToEntity),
 
     tags: [],
+    virtualTagMeta: [],
     summary: testSummary,
   };
 }
