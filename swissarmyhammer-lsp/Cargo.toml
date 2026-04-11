@@ -25,3 +25,4 @@ once_cell = { workspace = true }
 [dev-dependencies]
 tokio = { workspace = true, features = ["full", "test-util"] }
 tempfile = { workspace = true }
+tracing-test = { workspace = true }

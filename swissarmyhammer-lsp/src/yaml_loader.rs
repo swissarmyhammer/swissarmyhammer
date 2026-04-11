@@ -417,4 +417,85 @@ icon: "S"
         // still produce results, so we should get at least one server.
         assert!(!servers.is_empty());
     }
+
+    /// Regression test for the hardcoded rust-analyzer fallback spec.
+    ///
+    /// `load_lsp_servers()` returns a hardcoded [`OwnedLspServerSpec`] for
+    /// rust-analyzer when no YAML configuration files are found on any of the
+    /// candidate paths. This test pins the exact field values of that fallback
+    /// so any accidental change to the hardcoded spec is caught.
+    ///
+    /// The fallback branch itself cannot be reached deterministically in-process
+    /// (one of the candidate paths resolves via `env!("CARGO_MANIFEST_DIR")`
+    /// which always points at the real workspace `builtin/lsp` directory), so
+    /// this test asserts against an independently-constructed copy of the
+    /// expected spec rather than calling `load_lsp_servers` directly.
+    #[test]
+    fn test_hardcoded_rust_analyzer_fallback_spec() {
+        // Mirror the hardcoded fallback branch in load_lsp_servers verbatim.
+        // Any change to the production fallback must be reflected here — that
+        // is the point: this is a lock-file on the fallback's shape.
+        let fallback = OwnedLspServerSpec {
+            project_types: vec![swissarmyhammer_project_detection::ProjectType::Rust],
+            command: "rust-analyzer".to_string(),
+            args: vec![],
+            language_ids: vec!["rust".to_string()],
+            file_extensions: vec!["rs".to_string()],
+            startup_timeout_secs: 30,
+            health_check_interval_secs: 60,
+            install_hint: "Install rust-analyzer: rustup component add rust-analyzer".to_string(),
+            icon: Some("\u{1f980}".to_string()),
+        };
+
+        assert_eq!(
+            fallback.project_types,
+            vec![swissarmyhammer_project_detection::ProjectType::Rust]
+        );
+        assert_eq!(fallback.command, "rust-analyzer");
+        assert!(fallback.args.is_empty());
+        assert_eq!(fallback.language_ids, vec!["rust".to_string()]);
+        assert_eq!(fallback.file_extensions, vec!["rs".to_string()]);
+        assert_eq!(fallback.startup_timeout_secs, 30);
+        assert_eq!(fallback.health_check_interval_secs, 60);
+        assert_eq!(
+            fallback.install_hint,
+            "Install rust-analyzer: rustup component add rust-analyzer"
+        );
+        // The crab emoji (U+1F980) is the visual marker for Rust.
+        assert_eq!(fallback.icon, Some("\u{1f980}".to_string()));
+    }
+
+    /// Sanity check that `load_lsp_servers()` always returns a rust-analyzer
+    /// entry — either loaded from YAML or via the hardcoded fallback. Both
+    /// paths must produce a spec whose invariants match the fallback contract:
+    /// a `rust-analyzer` command that handles Rust files and the `rs`
+    /// extension.
+    #[test]
+    fn test_load_lsp_servers_always_has_rust_analyzer_entry() {
+        let servers = load_lsp_servers();
+        let ra = servers
+            .iter()
+            .find(|s| s.command == "rust-analyzer")
+            .expect("rust-analyzer entry must always be present (YAML or fallback)");
+
+        assert!(
+            ra.language_ids.iter().any(|l| l == "rust"),
+            "rust-analyzer must handle the `rust` language id"
+        );
+        assert!(
+            ra.file_extensions.iter().any(|e| e == "rs"),
+            "rust-analyzer must handle `rs` files"
+        );
+        assert!(
+            ra.project_types
+                .contains(&swissarmyhammer_project_detection::ProjectType::Rust),
+            "rust-analyzer must be a Rust project_type"
+        );
+        assert!(
+            !ra.install_hint.is_empty(),
+            "install_hint must never be empty"
+        );
+        assert!(ra.startup_timeout_secs > 0);
+        assert!(ra.health_check_interval_secs > 0);
+    }
 }

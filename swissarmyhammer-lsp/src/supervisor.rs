@@ -264,6 +264,50 @@ mod tests {
     }
 
     #[tokio::test]
+    #[tracing_test::traced_test]
+    async fn test_start_emits_detected_projects_log() {
+        // Install a tracing subscriber so the `info!("Detected projects", ...)`
+        // call in start() actually evaluates its field expressions
+        // (`workspace = %...display()` and `projects = projects.len()`).
+        // Without a subscriber, tracing may short-circuit the field evaluation,
+        // leaving those source lines uncovered. This test exercises both the
+        // info log and the subsequent loop that iterates detected projects and
+        // collects unique server specs.
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("Cargo.toml"),
+            "[package]\nname = \"logged\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+
+        let mut mgr = LspSupervisorManager::new(tmp.path().to_path_buf());
+        let _ = mgr.start().await;
+
+        // The event message and both field names should appear in the captured
+        // log output. `logs_contain` matches the formatted log line, which
+        // includes the message and structured fields.
+        assert!(
+            logs_contain("Detected projects"),
+            "expected 'Detected projects' info log to be emitted"
+        );
+        assert!(
+            logs_contain("workspace="),
+            "expected 'workspace' field to appear in log"
+        );
+        assert!(
+            logs_contain("projects="),
+            "expected 'projects' field to appear in log"
+        );
+
+        // A Rust project was detected, so at least one daemon entry should
+        // have been created by the loop that collects unique server specs.
+        assert!(
+            !mgr.daemon_names().is_empty(),
+            "expected at least one daemon after detecting Rust project"
+        );
+    }
+
+    #[tokio::test]
     async fn test_start_deduplicates_same_server() {
         // Two project markers that resolve to the same LSP server should only
         // produce one daemon entry.
