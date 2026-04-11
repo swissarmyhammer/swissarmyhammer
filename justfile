@@ -5,6 +5,7 @@ install:
     cargo install --path mirdan-cli
     cargo install --path kanban-cli
     cargo install --path shelltool-cli
+    cargo install --path code-context-cli
     just mirdan-build
     just kanban-build
 
