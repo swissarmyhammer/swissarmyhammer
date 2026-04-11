@@ -72,7 +72,7 @@ _arguments "${_arguments_options[@]}" : \
 ;;
 (help)
 _arguments "${_arguments_options[@]}" : \
-":: :_shelltool__help_commands" \
+":: :_shelltool__subcmd__help_commands" \
 "*::: :->help" \
 && ret=0
 
@@ -122,18 +122,18 @@ _shelltool_commands() {
     )
     _describe -t commands 'shelltool commands' commands "$@"
 }
-(( $+functions[_shelltool__deinit_commands] )) ||
-_shelltool__deinit_commands() {
+(( $+functions[_shelltool__subcmd__deinit_commands] )) ||
+_shelltool__subcmd__deinit_commands() {
     local commands; commands=()
     _describe -t commands 'shelltool deinit commands' commands "$@"
 }
-(( $+functions[_shelltool__doctor_commands] )) ||
-_shelltool__doctor_commands() {
+(( $+functions[_shelltool__subcmd__doctor_commands] )) ||
+_shelltool__subcmd__doctor_commands() {
     local commands; commands=()
     _describe -t commands 'shelltool doctor commands' commands "$@"
 }
-(( $+functions[_shelltool__help_commands] )) ||
-_shelltool__help_commands() {
+(( $+functions[_shelltool__subcmd__help_commands] )) ||
+_shelltool__subcmd__help_commands() {
     local commands; commands=(
 'serve:Run MCP server over stdio, exposing the shell tool' \
 'init:Install shelltool MCP server into Claude Code settings' \
@@ -143,38 +143,38 @@ _shelltool__help_commands() {
     )
     _describe -t commands 'shelltool help commands' commands "$@"
 }
-(( $+functions[_shelltool__help__deinit_commands] )) ||
-_shelltool__help__deinit_commands() {
+(( $+functions[_shelltool__subcmd__help__subcmd__deinit_commands] )) ||
+_shelltool__subcmd__help__subcmd__deinit_commands() {
     local commands; commands=()
     _describe -t commands 'shelltool help deinit commands' commands "$@"
 }
-(( $+functions[_shelltool__help__doctor_commands] )) ||
-_shelltool__help__doctor_commands() {
+(( $+functions[_shelltool__subcmd__help__subcmd__doctor_commands] )) ||
+_shelltool__subcmd__help__subcmd__doctor_commands() {
     local commands; commands=()
     _describe -t commands 'shelltool help doctor commands' commands "$@"
 }
-(( $+functions[_shelltool__help__help_commands] )) ||
-_shelltool__help__help_commands() {
+(( $+functions[_shelltool__subcmd__help__subcmd__help_commands] )) ||
+_shelltool__subcmd__help__subcmd__help_commands() {
     local commands; commands=()
     _describe -t commands 'shelltool help help commands' commands "$@"
 }
-(( $+functions[_shelltool__help__init_commands] )) ||
-_shelltool__help__init_commands() {
+(( $+functions[_shelltool__subcmd__help__subcmd__init_commands] )) ||
+_shelltool__subcmd__help__subcmd__init_commands() {
     local commands; commands=()
     _describe -t commands 'shelltool help init commands' commands "$@"
 }
-(( $+functions[_shelltool__help__serve_commands] )) ||
-_shelltool__help__serve_commands() {
+(( $+functions[_shelltool__subcmd__help__subcmd__serve_commands] )) ||
+_shelltool__subcmd__help__subcmd__serve_commands() {
     local commands; commands=()
     _describe -t commands 'shelltool help serve commands' commands "$@"
 }
-(( $+functions[_shelltool__init_commands] )) ||
-_shelltool__init_commands() {
+(( $+functions[_shelltool__subcmd__init_commands] )) ||
+_shelltool__subcmd__init_commands() {
     local commands; commands=()
     _describe -t commands 'shelltool init commands' commands "$@"
 }
-(( $+functions[_shelltool__serve_commands] )) ||
-_shelltool__serve_commands() {
+(( $+functions[_shelltool__subcmd__serve_commands] )) ||
+_shelltool__subcmd__serve_commands() {
     local commands; commands=()
     _describe -t commands 'shelltool serve commands' commands "$@"
 }
