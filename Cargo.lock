@@ -7633,6 +7633,7 @@ dependencies = [
  "swissarmyhammer-doctor",
  "swissarmyhammer-shell",
  "swissarmyhammer-tools",
+ "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",

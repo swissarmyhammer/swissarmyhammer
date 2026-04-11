@@ -111,3 +111,55 @@ pub async fn run_serve() -> Result<(), String> {
     running.waiting().await.map_err(|e| e.to_string())?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    //! Unit tests for `ShellToolServer`.
+    //!
+    //! Covers the self-contained handler entry points that do not require
+    //! a live rmcp transport:
+    //!
+    //! - [`ShellToolServer::new`] and [`ShellToolServer::default`] smoke tests
+    //! - [`ServerHandler::get_info`] metadata assertions
+    //!
+    //! The `ServerHandler::list_tools` and `ServerHandler::call_tool` methods
+    //! both take a `RequestContext<RoleServer>`, whose inner `Peer<RoleServer>`
+    //! has a `pub(crate)` constructor in `rmcp` 1.2. Because there is no public
+    //! way to build a `RequestContext` outside a running service, those handlers
+    //! are exercised by integration tests that go through a real rmcp transport
+    //! rather than by unit tests here. The same restriction applies to
+    //! `run_serve`, which blocks on real stdio I/O.
+    //!
+    //! All tests use `#[tokio::test]` because `ShellExecuteTool::new` spawns a
+    //! background embedding worker via `tokio::spawn` during construction, which
+    //! requires an active Tokio runtime.
+    use super::*;
+
+    /// `ShellToolServer::new` must construct without panicking.
+    #[tokio::test]
+    async fn test_new_does_not_panic() {
+        let _server = ShellToolServer::new();
+    }
+
+    /// `ShellToolServer::default` must delegate to `new` and construct
+    /// without panicking.
+    #[tokio::test]
+    async fn test_default_does_not_panic() {
+        let _server = ShellToolServer::default();
+    }
+
+    /// `get_info` must report the server name as `"shelltool"` and the
+    /// version from `CARGO_PKG_VERSION`, with the tools capability enabled.
+    #[tokio::test]
+    async fn test_get_info_reports_shelltool_identity() {
+        let server = ShellToolServer::new();
+        let info = server.get_info();
+
+        assert_eq!(info.server_info.name, "shelltool");
+        assert_eq!(info.server_info.version, env!("CARGO_PKG_VERSION"));
+        assert!(
+            info.capabilities.tools.is_some(),
+            "tools capability should be enabled"
+        );
+    }
+}

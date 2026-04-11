@@ -31,6 +31,9 @@ tracing-subscriber = { workspace = true }
 serde_json = { workspace = true }
 dirs = { workspace = true }
 
+[dev-dependencies]
+tempfile = { workspace = true }
+
 [build-dependencies]
 clap = { workspace = true }
 clap-markdown = { workspace = true }

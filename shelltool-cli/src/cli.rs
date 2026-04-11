@@ -70,3 +70,24 @@ pub enum Commands {
         verbose: bool,
     },
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies that each `InstallTarget` variant renders to the expected
+    /// lowercase string via its `Display` impl. The rendered values are part
+    /// of the CLI's user-facing contract (they appear in help text, default
+    /// value display, and error messages), so locking them in with a test
+    /// guards against accidental casing or spelling changes.
+    #[test]
+    fn install_target_display_renders_each_variant() {
+        assert_eq!(InstallTarget::Project.to_string(), "project");
+        assert_eq!(InstallTarget::Local.to_string(), "local");
+        assert_eq!(InstallTarget::User.to_string(), "user");
+
+        // Exercise the `format!` path explicitly to ensure the `Formatter`
+        // branch of the impl is covered, not just `ToString::to_string`.
+        assert_eq!(format!("{}", InstallTarget::Project), "project");
+    }
+}

@@ -173,4 +173,26 @@ mod tests {
         ];
         assert!(!should_show_banner(&args));
     }
+
+    #[test]
+    fn print_banner_smoke_runs_without_panicking() {
+        // Force the uncolored branch for determinism regardless of the test
+        // runner's terminal detection. `print_banner` writes to a real stdout
+        // lock — under a test harness stdout is typically captured/non-TTY, so
+        // the call is harmless and primarily exercises the wrapper path that
+        // is otherwise uncovered by the `render_banner`-based tests.
+        std::env::set_var("NO_COLOR", "1");
+        print_banner();
+    }
+
+    #[test]
+    fn should_show_banner_no_user_args_matches_stdin_terminal() {
+        // With only the program name present (no user-supplied arguments),
+        // the decision defers to whether stdin is a terminal. We can't
+        // control that in the test harness, so we assert the function
+        // returns exactly what `io::stdin().is_terminal()` reports — this
+        // still exercises the `1 =>` arm that is otherwise uncovered.
+        let args = vec!["shelltool".to_string()];
+        assert_eq!(should_show_banner(&args), io::stdin().is_terminal());
+    }
 }

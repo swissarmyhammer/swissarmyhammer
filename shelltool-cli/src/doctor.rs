@@ -157,6 +157,68 @@ pub fn run_doctor(verbose: bool) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{LazyLock, Mutex, MutexGuard};
+    use tempfile::TempDir;
+
+    /// Serializes tests that mutate process-global environment state
+    /// (`env::current_dir`, `env::set_var("PATH", ..)`). Tests that only
+    /// read these values are not protected — they accept both Ok and
+    /// Warning outcomes and so are robust to races with the mutating tests.
+    static ENV_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
+    /// Acquire the env lock, recovering from any prior poisoning.
+    ///
+    /// A poisoned lock just means a previous test panicked while holding
+    /// it; the guarded data is `()` so there is nothing to corrupt.
+    fn lock_env() -> MutexGuard<'static, ()> {
+        ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// RAII guard that restores `env::current_dir` on drop.
+    struct CwdGuard {
+        original: PathBuf,
+    }
+
+    impl CwdGuard {
+        /// Capture the current working directory so it can be restored later.
+        fn capture() -> Self {
+            Self {
+                original: env::current_dir().expect("current_dir must be readable"),
+            }
+        }
+    }
+
+    impl Drop for CwdGuard {
+        fn drop(&mut self) {
+            // Best-effort restore; ignore errors during unwind.
+            let _ = env::set_current_dir(&self.original);
+        }
+    }
+
+    /// RAII guard that restores the `PATH` env var on drop.
+    struct PathEnvGuard {
+        original: Option<String>,
+    }
+
+    impl PathEnvGuard {
+        /// Capture the current `PATH` value so it can be restored later.
+        fn capture() -> Self {
+            Self {
+                original: env::var("PATH").ok(),
+            }
+        }
+    }
+
+    impl Drop for PathEnvGuard {
+        fn drop(&mut self) {
+            match &self.original {
+                Some(value) => env::set_var("PATH", value),
+                None => env::remove_var("PATH"),
+            }
+        }
+    }
 
     #[test]
     fn test_new() {
@@ -232,5 +294,59 @@ mod tests {
 
         // Should produce at least some checks from ShellExecuteTool
         assert!(!doctor.checks().is_empty());
+    }
+
+    /// Exercises the `None` arm of `check_git_repository` by running the
+    /// check from a tempdir with no `.git` in any ancestor.
+    #[test]
+    fn test_check_git_repository_not_in_git() {
+        let _guard = lock_env();
+        let _cwd = CwdGuard::capture();
+
+        // Canonicalize to resolve any symlinks (e.g. /tmp -> /private/tmp on
+        // macOS) so `find_git_repository_root` walks the real ancestor chain.
+        let tmp = TempDir::new().expect("create tempdir");
+        let tmp_path = tmp
+            .path()
+            .canonicalize()
+            .expect("canonicalize tempdir path");
+        env::set_current_dir(&tmp_path).expect("set_current_dir to tempdir");
+
+        let mut doctor = ShelltoolDoctor::new();
+        doctor.check_git_repository();
+
+        assert_eq!(doctor.checks().len(), 1);
+        let check = &doctor.checks()[0];
+        assert_eq!(check.name, "Git Repository");
+        assert_eq!(check.status, CheckStatus::Warning);
+        assert_eq!(check.message, "Not in a Git repository");
+        assert_eq!(
+            check.fix.as_deref(),
+            Some("Run from within a Git repository or run `git init`")
+        );
+    }
+
+    /// Exercises the not-found arm of `check_shelltool_in_path` by pointing
+    /// `PATH` at an empty tempdir that cannot contain the shelltool binary.
+    #[test]
+    fn test_check_shelltool_in_path_not_found() {
+        let _guard = lock_env();
+        let _path_env = PathEnvGuard::capture();
+
+        let tmp = TempDir::new().expect("create tempdir");
+        env::set_var("PATH", tmp.path());
+
+        let mut doctor = ShelltoolDoctor::new();
+        doctor.check_shelltool_in_path();
+
+        assert_eq!(doctor.checks().len(), 1);
+        let check = &doctor.checks()[0];
+        assert_eq!(check.name, "shelltool in PATH");
+        assert_eq!(check.status, CheckStatus::Warning);
+        assert_eq!(check.message, "shelltool not found in PATH");
+        assert_eq!(
+            check.fix.as_deref(),
+            Some("Add shelltool to your PATH or install with `cargo install --path shelltool-cli`")
+        );
     }
 }
