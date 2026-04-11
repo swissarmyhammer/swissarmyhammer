@@ -201,7 +201,9 @@ function buildVirtualTagSearch(
 ): (query: string) => Promise<MentionSearchResult[]> {
   return async (query: string) => {
     const virtualResults: MentionSearchResult[] = vtMeta
-      .filter((m) => !query || m.slug.toLowerCase().includes(query.toLowerCase()))
+      .filter(
+        (m) => !query || m.slug.toLowerCase().includes(query.toLowerCase()),
+      )
       .map((m) => ({
         slug: m.slug,
         displayName: `${m.slug} (virtual)`,
@@ -213,16 +215,23 @@ function buildVirtualTagSearch(
 }
 
 /** Merge virtual tag entries into a color map so they receive pill decorations. */
-function mergeVirtualTagColors(base: Map<string, string>, vtMeta: VirtualTagMeta[]): Map<string, string> {
+function mergeVirtualTagColors(
+  base: Map<string, string>,
+  vtMeta: VirtualTagMeta[],
+): Map<string, string> {
   const merged = new Map(base);
   for (const m of vtMeta) merged.set(m.slug, m.color);
   return merged;
 }
 
 /** Merge virtual tag entries into a meta map so they receive tooltip support. */
-function mergeVirtualTagTooltips(base: Map<string, MentionMeta>, vtMeta: VirtualTagMeta[]): Map<string, MentionMeta> {
+function mergeVirtualTagTooltips(
+  base: Map<string, MentionMeta>,
+  vtMeta: VirtualTagMeta[],
+): Map<string, MentionMeta> {
   const merged = new Map(base);
-  for (const m of vtMeta) merged.set(m.slug, { color: m.color, description: m.description });
+  for (const m of vtMeta)
+    merged.set(m.slug, { color: m.color, description: m.description });
   return merged;
 }
 
@@ -256,34 +265,60 @@ function buildMentionExtensions(
   > = [];
 
   for (const md of mentionData) {
-    const addVirtual = includeVirtualTags && md.prefix === "#" && vtMeta.length > 0;
-    const colorMap = addVirtual ? mergeVirtualTagColors(md.colorMap, vtMeta) : md.colorMap;
-    const metaMap = addVirtual ? mergeVirtualTagTooltips(md.metaMap, vtMeta) : md.metaMap;
+    const addVirtual =
+      includeVirtualTags && md.prefix === "#" && vtMeta.length > 0;
+    const colorMap = addVirtual
+      ? mergeVirtualTagColors(md.colorMap, vtMeta)
+      : md.colorMap;
+    const metaMap = addVirtual
+      ? mergeVirtualTagTooltips(md.metaMap, vtMeta)
+      : md.metaMap;
 
     if (colorMap.size === 0) continue;
     exts.push(getDecoInfra(md.prefix, md.entityType).extension(colorMap));
 
     const baseSearch = buildAsyncSearch(md.entityType, md.slugField);
-    const search = addVirtual ? buildVirtualTagSearch(baseSearch, vtMeta) : baseSearch;
+    const search = addVirtual
+      ? buildVirtualTagSearch(baseSearch, vtMeta)
+      : baseSearch;
     completionSources.push(createMentionCompletionSource(md.prefix, search));
 
     exts.push(getTooltipInfra(md.prefix, md.entityType).extension(metaMap));
   }
 
   if (includeFilterSigils) {
-    // Look up slugField for actor/task from the mention data (if present)
+    // Look up slugField for actor/task/project from the mention data (if present)
     // so filter sigils honor the same schema signal as the real mentions.
     // Actor and task entity types do not declare `mention_slug_field` today,
-    // so these reduce to the legacy `slugify(display_name)` behavior.
-    const actorSlugField = mentionData.find((md) => md.entityType === "actor")
-      ?.slugField;
-    const taskSlugField = mentionData.find((md) => md.entityType === "task")
-      ?.slugField;
+    // so those reduce to the legacy `slugify(display_name)` behavior. Project
+    // declares `mention_slug_field: "id"` so its slug is sourced verbatim from
+    // the backend `id` field.
+    const actorSlugField = mentionData.find(
+      (md) => md.entityType === "actor",
+    )?.slugField;
+    const taskSlugField = mentionData.find(
+      (md) => md.entityType === "task",
+    )?.slugField;
+    const projectSlugField = mentionData.find(
+      (md) => md.entityType === "project",
+    )?.slugField;
     completionSources.push(
-      createMentionCompletionSource("@", buildAsyncSearch("actor", actorSlugField)),
+      createMentionCompletionSource(
+        "@",
+        buildAsyncSearch("actor", actorSlugField),
+      ),
     );
     completionSources.push(
-      createMentionCompletionSource("^", buildAsyncSearch("task", taskSlugField)),
+      createMentionCompletionSource(
+        "^",
+        buildAsyncSearch("task", taskSlugField),
+      ),
+    );
+    completionSources.push(
+      createMentionCompletionSource(
+        "$",
+        buildAsyncSearch("project", projectSlugField),
+      ),
     );
   }
   if (completionSources.length > 0) {
