@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: b280
+position_column: done
+position_ordinal: ffffffffffffffffffffffba80
 title: Inject search paths into yaml_loader::load_lsp_servers
 ---
 swissarmyhammer-lsp/src/yaml_loader.rs:64-74
