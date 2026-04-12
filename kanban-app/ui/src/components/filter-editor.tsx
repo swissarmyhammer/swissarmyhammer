@@ -101,6 +101,39 @@ function applyFilter(
 }
 
 /**
+ * Debounced timer with cancellation and unmount cleanup.
+ *
+ * Returns a `schedule` callback that (re)starts the debounce and a `cancel`
+ * callback that clears any pending fire. Any pending callback is cleared
+ * automatically when the component unmounts.
+ */
+function useDebouncedTimer() {
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const cancel = useCallback(() => {
+    if (timerRef.current !== null) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => cancel, [cancel]);
+
+  const schedule = useCallback(
+    (fn: () => void, delayMs: number) => {
+      cancel();
+      timerRef.current = setTimeout(() => {
+        timerRef.current = null;
+        fn();
+      }, delayMs);
+    },
+    [cancel],
+  );
+
+  return { schedule, cancel };
+}
+
+/**
  * Manages filter dispatch, validation, error state, and debounced autosave.
  *
  * Typing auto-applies the filter after a short debounce. Enter commits
@@ -113,71 +146,46 @@ function useFilterDispatch(perspectiveId: string, onClose: () => void) {
   const dispatchFilter = useDispatchCommand("perspective.filter");
   const dispatchClearFilter = useDispatchCommand("perspective.clearFilter");
   const [error, setError] = useState<string | null>(null);
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const { schedule, cancel } = useDebouncedTimer();
 
-  /** Cancel any pending debounced save. */
-  const cancelPending = useCallback(() => {
-    if (timerRef.current !== null) {
-      clearTimeout(timerRef.current);
-      timerRef.current = null;
-    }
-  }, []);
-
-  // Clean up timer on unmount.
-  useEffect(() => cancelPending, [cancelPending]);
-
-  /** Debounced autosave — called on every doc change and vim save-in-place. */
-  const handleChange = useCallback(
-    (text: string) => {
-      cancelPending();
-      timerRef.current = setTimeout(() => {
-        timerRef.current = null;
-        applyFilter(
-          text,
-          perspectiveId,
-          dispatchFilter,
-          dispatchClearFilter,
-          setError,
-        );
-      }, AUTOSAVE_DELAY_MS);
-    },
-    [perspectiveId, dispatchFilter, dispatchClearFilter, cancelPending],
-  );
-
-  /** Immediate commit (Enter key) — cancels debounce, dispatches now, closes. */
-  const handleCommit = useCallback(
-    (text: string) => {
-      cancelPending();
+  const apply = useCallback(
+    (text: string) =>
       applyFilter(
         text,
         perspectiveId,
         dispatchFilter,
         dispatchClearFilter,
         setError,
-      );
-      onClose();
-    },
-    [
-      perspectiveId,
-      dispatchFilter,
-      dispatchClearFilter,
-      cancelPending,
-      onClose,
-    ],
+      ),
+    [perspectiveId, dispatchFilter, dispatchClearFilter],
   );
 
-  const handleCancel = useCallback(() => {
-    onClose();
-  }, [onClose]);
+  /** Debounced autosave — called on every doc change and vim save-in-place. */
+  const handleChange = useCallback(
+    (text: string) => schedule(() => apply(text), AUTOSAVE_DELAY_MS),
+    [schedule, apply],
+  );
+
+  /** Immediate commit (Enter key) — cancels debounce, dispatches now, closes. */
+  const handleCommit = useCallback(
+    (text: string) => {
+      cancel();
+      apply(text);
+      onClose();
+    },
+    [cancel, apply, onClose],
+  );
+
+  const handleCancel = useCallback(() => onClose(), [onClose]);
 
   /** Clear button — cancels debounce, clears filter immediately, closes. */
   const handleClear = useCallback(() => {
-    cancelPending();
+    cancel();
     dispatchClearFilter({ args: { perspective_id: perspectiveId } }).catch(
       console.error,
     );
     onClose();
-  }, [perspectiveId, dispatchClearFilter, cancelPending, onClose]);
+  }, [perspectiveId, dispatchClearFilter, cancel, onClose]);
 
   return { error, handleCommit, handleCancel, handleChange, handleClear };
 }
@@ -219,7 +227,7 @@ export const FilterEditor = forwardRef<FilterEditorHandle, FilterEditorProps>(
             onCommit={handleCommit}
             onCancel={handleCancel}
             onChange={handleChange}
-            placeholder="Filter… e.g. #bug @alice"
+            placeholder="Filter… e.g. #bug @alice $spatial-nav"
             singleLine
             autoFocus={false}
             repeatable

@@ -2,27 +2,32 @@
 assignees:
 - claude-code
 depends_on:
-- 01KNS1154TG90CFZCHCPK5PMNS
 - 01KNS11SKBN6FCG2WFDSPC2AVK
 - 01KNS12D5B11TDND9QABCY5HAC
 - 01KNS12X336WM3ETPW0F2V3G07
 - 01KNS903T77DCWAH339AD550K5
+- 01KP0KZZ9VDQJVNK15JQAY4BKH
 position_column: todo
 position_ordinal: ae80
 project: kanban-mcp
-title: 'kanban-cli: wire main.rs — route lifecycle commands to handlers'
+title: 'kanban-cli: wire serve/init/deinit/doctor into existing command tree'
 ---
 ## What
 
-Refactor `kanban-cli/src/main.rs` to route lifecycle commands while preserving all existing behavior.
+Add the four lifecycle commands to the **existing** command tree in `kanban-cli/src/main.rs`, alongside the schema-driven noun/verb subcommands, `open`, and `merge`. Same pattern — just more hardcoded `clap::Command` entries in the builder.
 
-Key changes:
-1. Add `mod cli; mod serve; mod registry; mod doctor;` declarations
-2. Parse lifecycle commands from `cli::Commands` BEFORE the schema-driven clap tree — use a pre-parse check on `std::env::args()` to intercept `serve`/`init`/`deinit`/`doctor` before building the full schema command tree
-3. Dispatch `Commands::Serve` → `serve::run_serve().await`
-4. Dispatch `Commands::Init { target }` → `registry::register_all` + `InitRegistry::run_all_init`
-5. Dispatch `Commands::Deinit { target }` → `registry::register_all` + `InitRegistry::run_all_deinit`
-6. Dispatch `Commands::Doctor { verbose }` → `doctor::run_doctor(verbose)`
+Key changes to `main.rs`:
+1. Add `mod serve; mod registry; mod doctor;` declarations
+2. Add four new `clap::Command` entries to the existing builder — `serve`, `init`, `deinit`, `doctor` — right next to where `open` and `merge` are added today
+3. In the existing `match matches.subcommand()`, add arms for the four new subcommands:
+   - `"serve"` → `serve::run_serve().await`
+   - `"init"` → build `InitRegistry` via `registry::register_all`, run init with scope from target arg
+   - `"deinit"` → same registry, run deinit
+   - `"doctor"` → `doctor::run_doctor(verbose)`
+
+The `init`/`deinit` subcommands take an optional positional `[TARGET]` with values `project` (default), `local`, `user` — model this with `clap::Arg::new("target").value_parser(["project", "local", "user"]).default_value("project")`.
+
+The `doctor` subcommand takes `--verbose` / `-v`.
 
 The existing `open`, `merge`, and schema-driven noun-verb commands must continue to work unchanged.
 
@@ -33,10 +38,9 @@ The existing `open`, `merge`, and schema-driven noun-verb commands must continue
 - [ ] `kanban doctor` prints table and exits 0/1/2
 - [ ] `kanban task list` (existing schema command) still works
 - [ ] `kanban open .` (existing open command) still works
+- [ ] `kanban --help` lists serve, init, deinit, doctor alongside the schema commands
 
 ## Tests
-- [ ] Integration test in `kanban-cli/tests/cli.rs`: `kanban doctor` exits 0 or 1
+- [ ] `cargo test -p kanban-cli` passes (all existing + new tests)
+- [ ] Integration test: `kanban doctor` exits 0 or 1
 - [ ] Integration test: `kanban --help` lists all four new subcommands
-
-## Workflow
-- Use `/tdd` — write failing tests first, then implement to make them pass.

@@ -145,9 +145,19 @@ When the user gives you work:
 
 ### Task Lifecycle
 
+When a `review` column is in use (the standard workflow in this project):
+
+```
+[add task] --> TODO --> [move to doing] --> DOING --> [move to review] --> REVIEW --> [/review passes] --> DONE
+```
+
+The bare tool lifecycle (no review gate) is still available for boards that don't use the review workflow:
+
 ```
 [add task] --> TODO --> [move to doing] --> DOING --> [complete task] --> DONE
 ```
+
+Skills like `implement`, `review`, and `kanban` in this project take the first path — `complete task` is not used because it would skip the review gate.
 
 ### Using Dependencies
 
@@ -157,16 +167,17 @@ Tasks can depend on other tasks. A task is only "ready" when all its dependencie
 kanban op: "add task", title: "Deploy to production", depends_on: ["<build_task_id>", "<test_task_id>"]
 ```
 
-The `next task` operation automatically returns only ready tasks (those with no incomplete dependencies) from any non-done column. It supports `tag` and `assignee` filters — use these to focus on specific work (e.g., `op: "next task", tag: "review-finding"`).
+The `next task` operation automatically returns only ready tasks (those with no incomplete dependencies) from any non-done column. It supports `tag` and `assignee` filters — use these to focus on specific work (e.g., `op: "next task", tag: "bug"`).
 
 ### Columns and Organization
 
-Default columns: **To Do** --> **Doing** --> **Done**
+Default columns: **To Do** --> **Doing** --> **Done**. Workflow skills (`implement`, `review`, `kanban`) also ensure a **Review** column sits immediately before **Done**.
 
 Use columns to show work state:
 - **To Do**: Planned work not yet started
 - **Doing**: Work in progress
-- **Done**: Completed work
+- **Review**: Implementation complete, waiting on (or in) code review
+- **Done**: Reviewed and completed work
 
 ### Tags for Categorization
 
@@ -212,12 +223,12 @@ kanban op: "add task", title: "Create user model", description: "What: Add User 
 kanban op: "add task", title: "Implement login endpoint", description: "What: POST /api/login with email/password in src/routes/auth.rs. Acceptance Criteria: Returns JWT on valid credentials; Returns 401 on invalid credentials. Tests: Integration test in tests/auth.rs for login success and failure; cargo test auth::login passes."
 ```
 
-Then work through each task, marking complete as you go:
+Then work through each task, moving it to `review` when the work is done (the review skill drives it through to `done`):
 
 ```
 kanban op: "move task", id: "<task1_id>", column: "doing"
 ... do the work ...
-kanban op: "complete task", id: "<task1_id>"
+kanban op: "move task", id: "<task1_id>", column: "review"
 kanban op: "next task"  -- get next ready task
 ```
 
@@ -232,6 +243,8 @@ use the skill tool to load the full instructions, then follow them.
 
 
 - **card**: Create a single, well-researched kanban card. Use when the user wants to add a task, track an idea, or capture work without entering full plan mode. (local)
+
+- **code-context**: Code context operations for symbol lookup, search, grep, call graph, and blast radius analysis. Use this skill before modifying code to understand structure, dependencies, and impact. Provides indexed, structural code intelligence that is faster and more precise than raw text search. (local)
 
 - **commit**: Git commit workflow. Use this skill whenever the user says "commit", "save changes", "check in", or otherwise wants to commit code. Always use this skill instead of running git commands directly. (local)
 

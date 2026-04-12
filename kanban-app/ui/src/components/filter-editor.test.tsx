@@ -47,7 +47,11 @@ vi.mock("@/components/window-container", () => ({
     virtualTagMeta: [
       { slug: "READY", color: "0e8a16", description: "No unmet deps" },
       { slug: "BLOCKED", color: "e36209", description: "Has unmet deps" },
-      { slug: "BLOCKING", color: "d73a4a", description: "Others depend on this" },
+      {
+        slug: "BLOCKING",
+        color: "d73a4a",
+        description: "Others depend on this",
+      },
     ],
   }),
 }));
@@ -205,7 +209,11 @@ describe("FilterEditor", () => {
 
       await act(async () => {
         view.dispatch({
-          changes: { from: 0, to: view.state.doc.length, insert: "#paper #READY" },
+          changes: {
+            from: 0,
+            to: view.state.doc.length,
+            insert: "#paper #READY",
+          },
         });
         await new Promise((r) => setTimeout(r, 400));
       });
@@ -215,6 +223,42 @@ describe("FilterEditor", () => {
         expect.objectContaining({
           cmd: "perspective.filter",
           args: { filter: "#paper #READY", perspective_id: "p1" },
+        }),
+      );
+    });
+
+    it("placeholder advertises $project sigil", () => {
+      const { container } = render(
+        <FilterEditor filter="" perspectiveId="p1" />,
+      );
+
+      const placeholder = container.querySelector(".cm-placeholder");
+      expect(placeholder).toBeTruthy();
+      expect(placeholder?.textContent ?? "").toContain("$");
+    });
+
+    it("dispatches perspective.filter for $project expression", async () => {
+      const { container } = render(
+        <FilterEditor filter="" perspectiveId="p1" />,
+      );
+      const view = await getEditorView(container);
+
+      await act(async () => {
+        view.dispatch({
+          changes: {
+            from: 0,
+            to: view.state.doc.length,
+            insert: "$spatial-nav",
+          },
+        });
+        await new Promise((r) => setTimeout(r, 400));
+      });
+
+      expect(mockInvoke).toHaveBeenCalledWith(
+        "dispatch_command",
+        expect.objectContaining({
+          cmd: "perspective.filter",
+          args: { filter: "$spatial-nav", perspective_id: "p1" },
         }),
       );
     });
@@ -244,7 +288,11 @@ describe("FilterEditor", () => {
       const cmContent = container.querySelector(".cm-content") as HTMLElement;
       await act(async () => {
         cmContent.dispatchEvent(
-          new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
+          new KeyboardEvent("keydown", {
+            key: "Enter",
+            bubbles: true,
+            cancelable: true,
+          }),
         );
         await new Promise((r) => setTimeout(r, 50));
       });
@@ -278,7 +326,11 @@ describe("FilterEditor", () => {
       const cmContent = container.querySelector(".cm-content") as HTMLElement;
       await act(async () => {
         cmContent.dispatchEvent(
-          new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
+          new KeyboardEvent("keydown", {
+            key: "Enter",
+            bubbles: true,
+            cancelable: true,
+          }),
         );
         await new Promise((r) => setTimeout(r, 50));
       });
@@ -309,7 +361,11 @@ describe("FilterEditor", () => {
       const cmContent = container.querySelector(".cm-content") as HTMLElement;
       await act(async () => {
         cmContent.dispatchEvent(
-          new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+          new KeyboardEvent("keydown", {
+            key: "Escape",
+            bubbles: true,
+            cancelable: true,
+          }),
         );
         await new Promise((r) => setTimeout(r, 50));
       });

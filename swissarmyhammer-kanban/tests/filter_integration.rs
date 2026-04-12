@@ -603,3 +603,94 @@ async fn s19_perspective_filter_round_trip() {
     let got2 = dispatch(&ctx, json!({"op": "get perspective", "id": id})).await;
     assert_eq!(got2["filter"], "!#done || #READY");
 }
+
+// =========================================================================
+// Project sigil (scenarios 20-22)
+// =========================================================================
+
+#[tokio::test]
+async fn s20_filter_by_project() {
+    let (_tmp, ctx) = setup().await;
+    dispatch(
+        &ctx,
+        json!({"op": "add project", "id": "auth", "name": "Auth"}),
+    )
+    .await;
+    dispatch(
+        &ctx,
+        json!({"op": "add task", "title": "Auth task", "project": "auth"}),
+    )
+    .await;
+    dispatch(&ctx, json!({"op": "add task", "title": "Unrelated task"})).await;
+
+    let result = dispatch(&ctx, json!({"op": "list tasks", "filter": "$auth"})).await;
+    assert_eq!(result["count"], 1);
+    assert_eq!(titles(&result), vec!["Auth task"]);
+}
+
+#[tokio::test]
+async fn s21_project_combined_with_tag() {
+    let (_tmp, ctx) = setup().await;
+    dispatch(
+        &ctx,
+        json!({"op": "add project", "id": "auth", "name": "Auth"}),
+    )
+    .await;
+    dispatch(
+        &ctx,
+        json!({"op": "add task", "title": "Auth feature", "project": "auth", "description": "#feature"}),
+    )
+    .await;
+    dispatch(
+        &ctx,
+        json!({"op": "add task", "title": "Auth bug", "project": "auth", "description": "#bug"}),
+    )
+    .await;
+    dispatch(
+        &ctx,
+        json!({"op": "add task", "title": "Unscoped bug", "description": "#bug"}),
+    )
+    .await;
+
+    let result = dispatch(&ctx, json!({"op": "list tasks", "filter": "$auth && #bug"})).await;
+    assert_eq!(result["count"], 1);
+    assert_eq!(titles(&result), vec!["Auth bug"]);
+}
+
+#[tokio::test]
+async fn s22_perspective_roundtrip_with_project_filter() {
+    let (_tmp, ctx) = setup().await;
+
+    // Save a perspective with a $project filter
+    let added = dispatch(
+        &ctx,
+        json!({
+            "op": "add perspective",
+            "name": "Auth Board",
+            "view": "board",
+            "filter": "$auth"
+        }),
+    )
+    .await;
+    let id = added["id"].as_str().unwrap();
+
+    // Get it back — filter should be preserved
+    let got = dispatch(&ctx, json!({"op": "get perspective", "id": id})).await;
+    assert_eq!(got["filter"], "$auth");
+
+    // Update the filter to combine $project with a tag
+    let updated = dispatch(
+        &ctx,
+        json!({
+            "op": "update perspective",
+            "id": id,
+            "filter": "$auth || #urgent"
+        }),
+    )
+    .await;
+    assert_eq!(updated["filter"], "$auth || #urgent");
+
+    // Re-read to confirm persistence
+    let got2 = dispatch(&ctx, json!({"op": "get perspective", "id": id})).await;
+    assert_eq!(got2["filter"], "$auth || #urgent");
+}

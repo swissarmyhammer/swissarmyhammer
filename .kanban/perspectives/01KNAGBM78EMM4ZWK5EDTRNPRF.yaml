@@ -1,3 +1,4 @@
 id: 01KNAGBM78EMM4ZWK5EDTRNPRF
-name: Default
+name: Ready
 view: board
+filter: '#READY'

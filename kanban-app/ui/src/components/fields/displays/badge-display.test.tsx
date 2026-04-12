@@ -18,6 +18,7 @@ let mockMentionableTypes: Array<{
   entityType: string;
   prefix: string;
   displayField: string;
+  slugField?: string;
 }> = [];
 
 vi.mock("@/lib/entity-store-context", () => ({
@@ -56,7 +57,7 @@ function getBadge(container: HTMLElement): HTMLElement | null {
 
 describe("BadgeDisplay", () => {
   describe("reference field resolution", () => {
-    it("renders the target entity's display name and color when matched", () => {
+    it("renders the target entity's display name and color when matched (no slugField)", () => {
       mockEntities = {
         project: [
           {
@@ -70,6 +71,8 @@ describe("BadgeDisplay", () => {
           },
         ],
       };
+      // Intentionally NO slugField — preserves legacy label-from-display-field
+      // behavior so entity types that don't declare slug field stay unchanged.
       mockMentionableTypes = [
         { entityType: "project", prefix: "$", displayField: "name" },
       ];
@@ -98,6 +101,68 @@ describe("BadgeDisplay", () => {
       // and color `#<hex>` (browser normalises to rgb).
       expect(badge!.style.backgroundColor).toBe("rgba(99, 102, 241, 0.125)");
       expect(badge!.style.color).toBe("rgb(99, 102, 241)");
+    });
+
+    it("renders the entity id as the label and the display name as the tooltip when slugField is declared", () => {
+      // When the referenced entity type declares `slugField: "id"`
+      // (as projects do after the mention-slug-field unification), the
+      // reference badge must render the raw id as the visible label and
+      // carry the display-field value as a hover tooltip. This matches
+      // the mention-pill behavior: id on the pill, name in the tooltip.
+      mockEntities = {
+        project: [
+          {
+            id: "AUTH-Migration",
+            entity_type: "project",
+            moniker: "project:AUTH-Migration",
+            fields: {
+              name: "Auth Migration System",
+              color: "4078c0",
+            },
+          },
+        ],
+      };
+      mockMentionableTypes = [
+        {
+          entityType: "project",
+          prefix: "$",
+          displayField: "name",
+          slugField: "id",
+        },
+      ];
+
+      const field: FieldDef = {
+        id: "00000000000000000000000011",
+        name: "project",
+        type: { kind: "reference", entity: "project", multiple: false },
+      } as unknown as FieldDef;
+
+      const { container } = render(
+        <BadgeDisplay
+          field={field}
+          value="AUTH-Migration"
+          entity={taskEntity}
+          mode="full"
+        />,
+      );
+
+      const badge = getBadge(container);
+      expect(badge).not.toBeNull();
+      // Visible label is the raw id, not the display name.
+      expect(badge!.textContent).toContain("AUTH-Migration");
+      expect(badge!.textContent).not.toContain("Auth Migration System");
+      // Color continues to come from the entity's `color` field.
+      expect(badge!.style.backgroundColor).toBe("rgba(64, 120, 192, 0.125)");
+      expect(badge!.style.color).toBe("rgb(64, 120, 192)");
+      // The tooltip carrying the display name is wired via the native
+      // `title` attribute (zero-cost, avoids the 2000-card render storm
+      // that a Radix Tooltip per task would create). The inspectable
+      // `data-tooltip-text` attribute mirrors the title value so tests
+      // don't depend on hover state.
+      expect(badge!.getAttribute("title")).toBe("Auth Migration System");
+      expect(badge!.getAttribute("data-tooltip-text")).toBe(
+        "Auth Migration System",
+      );
     });
 
     it("falls back to the raw value when the target entity is missing", () => {

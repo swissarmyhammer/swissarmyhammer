@@ -2,8 +2,8 @@
 assignees:
 - claude-code
 depends_on: []
-position_column: todo
-position_ordinal: 7d80
+position_column: done
+position_ordinal: ffffffffffffffffffffffb980
 project: expr-filter
 title: 'Wire $project sigil into filter editor UX: placeholder, filter-sigil autocomplete, integration and scenario tests'
 ---
@@ -50,34 +50,34 @@ This mirrors the existing `@` and `^` fallbacks and is a one-line addition in th
 
 ### Subtasks
 
-- [ ] Update placeholder in `kanban-app/ui/src/components/filter-editor.tsx` to `"Filter… e.g. #bug @alice $spatial-nav"`.
-- [ ] In `kanban-app/ui/src/hooks/use-mention-extensions.ts` `buildMentionExtensions`, add `createMentionCompletionSource("$", buildAsyncSearch("project"))` to the `includeFilterSigils` block alongside `@` and `^`.
-- [ ] Add integration scenarios `s20`, `s21`, `s22` to `swissarmyhammer-kanban/tests/filter_integration.rs` covering project filter, project+tag combination, and perspective round-trip with `$project`.
-- [ ] Add frontend scenario test to `kanban-app/ui/src/components/filter-editor.test.tsx` asserting the rendered placeholder contains a `$` hint.
-- [ ] Add frontend scenario test to `kanban-app/ui/src/components/filter-editor.test.tsx` asserting typing `$spatial-nav` dispatches `perspective.filter` (not an error state).
+- [x] Update placeholder in `kanban-app/ui/src/components/filter-editor.tsx` to `"Filter… e.g. #bug @alice $spatial-nav"`.
+- [x] In `kanban-app/ui/src/hooks/use-mention-extensions.ts` `buildMentionExtensions`, add `createMentionCompletionSource("$", buildAsyncSearch("project"))` to the `includeFilterSigils` block alongside `@` and `^`.
+- [x] Add integration scenarios `s20`, `s21`, `s22` to `swissarmyhammer-kanban/tests/filter_integration.rs` covering project filter, project+tag combination, and perspective round-trip with `$project`.
+- [x] Add frontend scenario test to `kanban-app/ui/src/components/filter-editor.test.tsx` asserting the rendered placeholder contains a `$` hint.
+- [x] Add frontend scenario test to `kanban-app/ui/src/components/filter-editor.test.tsx` asserting typing `$spatial-nav` dispatches `perspective.filter` (not an error state).
 
 ## Acceptance Criteria
 
-- [ ] Opening the perspective filter bar with an empty filter shows placeholder text that includes a `$`-prefixed example (visible in the rendered CM6 placeholder span).
-- [ ] Typing `$spatial-nav` into the filter editor produces a valid parse (no `Invalid filter expression` styling) and, after the 300 ms autosave debounce, dispatches `perspective.filter` with the literal text.
-- [ ] After the prior card 01KNWQ34B7864MV7MEX0YE4KGJ lands loading projects into `entitiesByType`, typing `$s` in the filter editor opens the autocomplete popup with project matches. Absent that fix this card still works because `use-mention-extensions.ts` now hardcodes `$` completion alongside `@` and `^`.
-- [ ] `cargo test -p swissarmyhammer-kanban --test filter_integration` runs the new `s20`–`s22` scenarios and they pass.
-- [ ] `cd kanban-app/ui && npm run test -- filter-editor.test.tsx` runs the new placeholder and `$project` dispatch scenarios and they pass.
-- [ ] No regressions: full `cargo test` and full `cd kanban-app/ui && npm run test` suites remain green.
+- [x] Opening the perspective filter bar with an empty filter shows placeholder text that includes a `$`-prefixed example (visible in the rendered CM6 placeholder span).
+- [x] Typing `$spatial-nav` into the filter editor produces a valid parse (no `Invalid filter expression` styling) and, after the 300 ms autosave debounce, dispatches `perspective.filter` with the literal text.
+- [x] After the prior card 01KNWQ34B7864MV7MEX0YE4KGJ lands loading projects into `entitiesByType`, typing `$s` in the filter editor opens the autocomplete popup with project matches. Absent that fix this card still works because `use-mention-extensions.ts` now hardcodes `$` completion alongside `@` and `^`.
+- [x] `cargo test -p swissarmyhammer-kanban --test filter_integration` runs the new `s20`–`s22` scenarios and they pass.
+- [x] `cd kanban-app/ui && npm run test -- filter-editor.test.tsx` runs the new placeholder and `$project` dispatch scenarios and they pass.
+- [x] No regressions: full `cargo test` and full `cd kanban-app/ui && npm run test` suites remain green.
 
 ## Tests
 
-- [ ] **Rust integration** — `swissarmyhammer-kanban/tests/filter_integration.rs` new scenarios:
+- [x] **Rust integration** — `swissarmyhammer-kanban/tests/filter_integration.rs` new scenarios:
   - `s20_filter_by_project` — setup, add project `auth`, add scoped + unscoped tasks, dispatch `list tasks filter "$auth"`, assert count = 1 and title matches.
   - `s21_project_combined_with_tag` — as above plus a second task with `#bug`, dispatch `"$auth && #bug"`, assert count = 1.
   - `s22_perspective_roundtrip_with_project_filter` — add perspective with `filter: "$auth"`, get → update `filter: "$auth || #urgent"` → get, assert persisted at each step.
   - Run: `cargo test -p swissarmyhammer-kanban --test filter_integration` — expect all 22 scenarios green.
-- [ ] **Frontend scenario** — `kanban-app/ui/src/components/filter-editor.test.tsx` new tests:
+- [x] **Frontend scenario** — `kanban-app/ui/src/components/filter-editor.test.tsx` new tests:
   - `"placeholder advertises $project sigil"` — render empty editor, find `.cm-placeholder`, assert its text contains `$`.
   - `"dispatches perspective.filter for $project expression"` — use the existing `getEditorView` helper, insert `$spatial-nav`, wait 400 ms, assert `mockInvoke` was called with `cmd: "perspective.filter"`, `args: { filter: "$spatial-nav", perspective_id: "p1" }`.
   - Run: `cd kanban-app/ui && npm run test -- filter-editor.test.tsx` — expect green.
-- [ ] **Frontend regression** — `cd kanban-app/ui && npm run test` — full suite green; the grammar tests (`lang-filter/__tests__/parser.test.ts`) remain untouched and still pass.
-- [ ] **Rust regression** — `cargo test -p swissarmyhammer-filter-expr -p swissarmyhammer-kanban` — no regressions in parser, evaluator, or task list unit tests.
+- [x] **Frontend regression** — `cd kanban-app/ui && npm run test` — full suite green; the grammar tests (`lang-filter/__tests__/parser.test.ts`) remain untouched and still pass.
+- [x] **Rust regression** — `cargo test -p swissarmyhammer-filter-expr -p swissarmyhammer-kanban` — no regressions in parser, evaluator, or task list unit tests.
 
 ## Workflow
 

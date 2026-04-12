@@ -17,28 +17,19 @@ import { FocusScope } from "@/components/focus-scope";
 import { useEntityFocus } from "@/lib/entity-focus-context";
 import { useIsFocused, type ClaimPredicate } from "@/lib/entity-focus-context";
 import { fieldMoniker } from "@/lib/moniker";
-import { icons, HelpCircle } from "lucide-react";
-import type { LucideIcon } from "lucide-react";
-
-/** Convert kebab-case icon name (e.g. "file-text") to PascalCase key (e.g. "FileText"). */
-function kebabToPascal(s: string): string {
-  return s.replace(/(^|-)([a-z])/g, (_, _dash, c) => c.toUpperCase());
-}
-
-/** Resolve the lucide icon component from a field's `icon` property. */
-function fieldIcon(field: FieldDef): LucideIcon {
-  if (field.icon) {
-    const key = kebabToPascal(field.icon);
-    const Icon = icons[key as keyof typeof icons];
-    if (Icon) return Icon;
-  }
-  return HelpCircle;
-}
+import { fieldIcon } from "@/components/fields/field-icon";
+import { HelpCircle, type LucideIcon } from "lucide-react";
 
 interface EntityInspectorProps {
   entity: Entity;
   /** Ref callback to expose the nav state to parent (InspectorFocusBridge). */
   navRef?: React.RefObject<UseInspectorNavReturn | null>;
+}
+
+interface FieldSections {
+  header: FieldDef[];
+  body: FieldDef[];
+  footer: FieldDef[];
 }
 
 /**
@@ -61,8 +52,42 @@ export function EntityInspector({ entity, navRef }: EntityInspectorProps) {
   const { getSchema } = useSchema();
   const schema = getSchema(entity.entity_type);
   const fields = schema?.fields ?? [];
+  const sections = useFieldSections(fields);
+  const navigableFields = useMemo(
+    () => [...sections.header, ...sections.body, ...sections.footer],
+    [sections],
+  );
+  const fieldMonikers = useMemo(
+    () =>
+      navigableFields.map((f) =>
+        fieldMoniker(entity.entity_type, entity.id, f.name),
+      ),
+    [navigableFields, entity.entity_type, entity.id],
+  );
+  const claimPredicates = useFieldClaimPredicates(fieldMonikers);
 
-  const sections = useMemo(() => {
+  const nav = useInspectorNav();
+  // Expose nav to parent (InspectorFocusBridge) via ref
+  if (navRef) navRef.current = nav;
+
+  useFirstFieldFocus(fieldMonikers[0]);
+
+  if (fields.length === 0) {
+    return <p className="text-sm text-muted-foreground">Loading schema...</p>;
+  }
+  return (
+    <InspectorSections
+      entity={entity}
+      sections={sections}
+      claimPredicates={claimPredicates}
+      nav={nav}
+    />
+  );
+}
+
+/** Group fields into header/body/footer, skipping `section: "hidden"`. */
+function useFieldSections(fields: FieldDef[]): FieldSections {
+  return useMemo(() => {
     const header: FieldDef[] = [];
     const body: FieldDef[] = [];
     const footer: FieldDef[] = [];
@@ -75,96 +100,100 @@ export function EntityInspector({ entity, navRef }: EntityInspectorProps) {
     }
     return { header, body, footer };
   }, [fields]);
+}
 
-  /** Flat ordered list of all navigable fields (header → body → footer). */
-  const navigableFields = useMemo(
-    () => [...sections.header, ...sections.body, ...sections.footer],
-    [sections],
+/**
+ * Compute the `claimWhen` predicate list for every navigable field, indexed
+ * by its flat position in the inspector. Predicates wire up nav.up, nav.down,
+ * nav.left, nav.first, and nav.last so keyboard navigation walks the list.
+ */
+function useFieldClaimPredicates(fieldMonikers: string[]): ClaimPredicate[][] {
+  return useMemo(
+    () => fieldMonikers.map((_, i) => predicatesForField(fieldMonikers, i)),
+    [fieldMonikers],
   );
+}
 
-  const nav = useInspectorNav();
-
-  // Expose nav to parent (InspectorFocusBridge) via ref
-  if (navRef) navRef.current = nav;
-
-  /** Monikers for all navigable fields, in flat order. */
-  const fieldMonikers = useMemo(
-    () =>
-      navigableFields.map((f) =>
-        fieldMoniker(entity.entity_type, entity.id, f.name),
-      ),
-    [navigableFields, entity.entity_type, entity.id],
-  );
-
-  /** ClaimWhen predicates for each field at index i. */
-  const claimPredicates = useMemo(() => {
-    /** Check if a moniker is one of this inspector's fields or a descendant of one. */
-    const isInspectorField = (
-      f: string | null,
-      isDescendantOf: (a: string) => boolean,
-    ): boolean => {
-      if (!f) return false;
-      if (fieldMonikers.includes(f)) return true;
-      // Check if focused element is a child of any field (e.g. a pill inside a badge-list)
-      return fieldMonikers.some((m) => isDescendantOf(m));
-    };
-
-    return fieldMonikers.map((_, i) => {
-      const predicates: ClaimPredicate[] = [];
-      // nav.down: claim if the field above me (or a child of it) is focused
-      if (i > 0) {
-        const prev = fieldMonikers[i - 1];
-        predicates.push({
-          command: "nav.down",
-          when: (f, isDescendantOf) => f === prev || isDescendantOf(prev),
-        });
-      }
-      // nav.up: claim if the field below me (or a child of it) is focused
-      if (i < fieldMonikers.length - 1) {
-        const next = fieldMonikers[i + 1];
-        predicates.push({
-          command: "nav.up",
-          when: (f, isDescendantOf) => f === next || isDescendantOf(next),
-        });
-      }
-      // nav.left: claim if a descendant (e.g. first pill in a badge-list) is focused.
-      // Pill predicates register before field rows (children before parents), so a
-      // middle pill's nav.left fires first.  Only when no pill matches (the first pill
-      // has no nav.left predicate) does this field-row predicate win.
-      predicates.push({
-        command: "nav.left",
-        when: (f, isDescendantOf) =>
-          f !== fieldMonikers[i] && isDescendantOf(fieldMonikers[i]),
-      });
-      // nav.first: claim if I'm the first field AND any sibling (or descendant) is focused
-      if (i === 0) {
-        predicates.push({
-          command: "nav.first",
-          when: (f, isDescendantOf) =>
-            isInspectorField(f, isDescendantOf) && f !== fieldMonikers[0],
-        });
-      }
-      // nav.last: claim if I'm the last field AND any sibling (or descendant) is focused
-      if (i === fieldMonikers.length - 1) {
-        predicates.push({
-          command: "nav.last",
-          when: (f, isDescendantOf) =>
-            isInspectorField(f, isDescendantOf) &&
-            f !== fieldMonikers[fieldMonikers.length - 1],
-        });
-      }
-      return predicates;
+/** Build the ClaimPredicate list for the field at index `i` in `monikers`. */
+function predicatesForField(monikers: string[], i: number): ClaimPredicate[] {
+  const predicates: ClaimPredicate[] = [];
+  // nav.down: claim if the field above me (or a child of it) is focused
+  if (i > 0) {
+    const prev = monikers[i - 1];
+    predicates.push({
+      command: "nav.down",
+      when: (f, isDescendantOf) => f === prev || isDescendantOf(prev),
     });
-  }, [fieldMonikers]);
+  }
+  // nav.up: claim if the field below me (or a child of it) is focused
+  if (i < monikers.length - 1) {
+    const next = monikers[i + 1];
+    predicates.push({
+      command: "nav.up",
+      when: (f, isDescendantOf) => f === next || isDescendantOf(next),
+    });
+  }
+  // nav.left: claim if a descendant (e.g. first pill in a badge-list) is focused.
+  // Pill predicates register before field rows (children before parents), so a
+  // middle pill's nav.left fires first.  Only when no pill matches (the first
+  // pill has no nav.left predicate) does this field-row predicate win.
+  predicates.push({
+    command: "nav.left",
+    when: (f, isDescendantOf) =>
+      f !== monikers[i] && isDescendantOf(monikers[i]),
+  });
+  predicates.push(...edgePredicates(monikers, i));
+  return predicates;
+}
 
-  // Focus the first field on mount, restore previous focus on unmount.
-  // No claim stack — just direct setFocus. claimWhen handles all subsequent navigation.
+/**
+ * nav.first / nav.last predicates for edge fields. The first field claims
+ * nav.first when any other inspector field is focused; the last claims
+ * nav.last symmetrically. Middle fields return an empty array.
+ */
+function edgePredicates(monikers: string[], i: number): ClaimPredicate[] {
+  const edges: ClaimPredicate[] = [];
+  if (i === 0) {
+    edges.push({
+      command: "nav.first",
+      when: (f, isDescendantOf) =>
+        isInspectorField(monikers, f, isDescendantOf) && f !== monikers[0],
+    });
+  }
+  if (i === monikers.length - 1) {
+    edges.push({
+      command: "nav.last",
+      when: (f, isDescendantOf) =>
+        isInspectorField(monikers, f, isDescendantOf) &&
+        f !== monikers[monikers.length - 1],
+    });
+  }
+  return edges;
+}
+
+/** Check if a moniker is one of the inspector's fields or a descendant of one. */
+function isInspectorField(
+  monikers: string[],
+  f: string | null,
+  isDescendantOf: (a: string) => boolean,
+): boolean {
+  if (!f) return false;
+  if (monikers.includes(f)) return true;
+  // Check if focused element is a child of any field (e.g. a pill inside a badge-list)
+  return monikers.some((m) => isDescendantOf(m));
+}
+
+/**
+ * Focus the first field on mount and restore the previously focused element
+ * on unmount. Intentionally reruns only when the first-field moniker changes,
+ * not when focus state changes under us (see inline eslint-disable).
+ */
+function useFirstFieldFocus(firstFieldMoniker: string | undefined): void {
   const { setFocus, focusedMoniker } = useEntityFocus();
   const setFocusRef = useRef(setFocus);
   setFocusRef.current = setFocus;
   const prevFocusRef = useRef<string | null>(null);
   const mountedRef = useRef(false);
-  const firstFieldMoniker = fieldMonikers[0];
 
   useEffect(() => {
     if (!firstFieldMoniker) return;
@@ -180,35 +209,42 @@ export function EntityInspector({ entity, navRef }: EntityInspectorProps) {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [firstFieldMoniker]);
+}
 
-  if (fields.length === 0) {
-    return <p className="text-sm text-muted-foreground">Loading schema...</p>;
-  }
+interface InspectorSectionsProps {
+  entity: Entity;
+  sections: FieldSections;
+  claimPredicates: ClaimPredicate[][];
+  nav: UseInspectorNavReturn;
+}
 
+/** Renders header/body/footer sections with dividers between non-empty blocks. */
+function InspectorSections({
+  entity,
+  sections,
+  claimPredicates,
+  nav,
+}: InspectorSectionsProps) {
   /** Track the running index across sections so each FieldRow knows its flat position. */
-  let flatIndex = 0;
-
-  const renderField = (field: FieldDef, showLabel = true) => {
-    const index = flatIndex++;
-    return (
-      <FieldRow
-        key={field.name}
-        field={field}
-        entity={entity}
-        showLabel={showLabel}
-        claimWhen={claimPredicates[index]}
-        inspectorMode={nav.mode}
-        onExitEdit={nav.exitEdit}
-        onEnterEdit={nav.enterEdit}
-      />
-    );
-  };
+  const flatIndex = { i: 0 };
+  const rowFor = (field: FieldDef, showLabel = true) => (
+    <FieldRow
+      key={field.name}
+      field={field}
+      entity={entity}
+      showLabel={showLabel}
+      claimWhen={claimPredicates[flatIndex.i++]}
+      inspectorMode={nav.mode}
+      onExitEdit={nav.exitEdit}
+      onEnterEdit={nav.enterEdit}
+    />
+  );
 
   return (
     <div data-testid="entity-inspector">
       {sections.header.length > 0 && (
         <div className="space-y-2" data-testid="inspector-header">
-          {sections.header.map((f) => renderField(f, false))}
+          {sections.header.map((f) => rowFor(f, false))}
         </div>
       )}
       {sections.header.length > 0 && sections.body.length > 0 && (
@@ -216,18 +252,30 @@ export function EntityInspector({ entity, navRef }: EntityInspectorProps) {
       )}
       {sections.body.length > 0 && (
         <div className="space-y-3" data-testid="inspector-body">
-          {sections.body.map((f) => renderField(f))}
+          {sections.body.map((f) => rowFor(f))}
         </div>
       )}
-      {sections.footer.length > 0 && (
-        <>
-          <div className="my-3 h-px bg-border" />
-          <div className="space-y-3" data-testid="inspector-footer">
-            {sections.footer.map((f) => renderField(f))}
-          </div>
-        </>
-      )}
+      <InspectorFooter fields={sections.footer} rowFor={rowFor} />
     </div>
+  );
+}
+
+/** Footer section with a top divider. Renders nothing when there are no footer fields. */
+function InspectorFooter({
+  fields,
+  rowFor,
+}: {
+  fields: FieldDef[];
+  rowFor: (field: FieldDef, showLabel?: boolean) => React.ReactElement;
+}) {
+  if (fields.length === 0) return null;
+  return (
+    <>
+      <div className="my-3 h-px bg-border" />
+      <div className="space-y-3" data-testid="inspector-footer">
+        {fields.map((f) => rowFor(f))}
+      </div>
+    </>
   );
 }
 
@@ -265,12 +313,74 @@ function FieldRow({
   onExitEdit,
   onEnterEdit,
 }: FieldRowProps) {
-  const [editing, setEditing] = useState(false);
-
   const editable = isEditable(field);
   const scopeMoniker = fieldMoniker(entity.entity_type, entity.id, field.name);
   const isFocused = useIsFocused(scopeMoniker);
   const shouldEdit = isFocused && inspectorMode === "edit" && editable;
+  const editState = useFieldEditing(
+    editable,
+    shouldEdit,
+    onEnterEdit,
+    onExitEdit,
+  );
+
+  // Inspector shows a HelpCircle fallback for icon names that don't resolve
+  // to a known lucide component (legacy behavior). The card does not — see
+  // fields/field-icon.ts for the shared null-returning utility.
+  const Icon = field.icon ? (fieldIcon(field) ?? HelpCircle) : null;
+  const tip = field.description || fieldLabel(field);
+  const content = (
+    <FieldContent field={field} entity={entity} editState={editState} />
+  );
+  const bare = !showLabel && !Icon;
+
+  return (
+    <FocusScope
+      moniker={scopeMoniker}
+      commands={[]}
+      claimWhen={claimWhen}
+      data-testid={`field-row-${field.name}`}
+      className={bare ? undefined : "flex items-start gap-2"}
+    >
+      {Icon && <FieldIconTooltip Icon={Icon} tip={tip} />}
+      {bare ? content : <div className="flex-1 min-w-0">{content}</div>}
+    </FocusScope>
+  );
+}
+
+/** Renders the inner Field editor/display for a row. */
+function FieldContent({
+  field,
+  entity,
+  editState,
+}: {
+  field: FieldDef;
+  entity: Entity;
+  editState: ReturnType<typeof useFieldEditing>;
+}) {
+  const editable = isEditable(field);
+  return (
+    <Field
+      fieldDef={field}
+      entityType={entity.entity_type}
+      entityId={entity.id}
+      mode="full"
+      editing={editState.editing && editable}
+      onEdit={editState.handleEdit}
+      onDone={editState.handleDone}
+      onCancel={editState.handleCancel}
+    />
+  );
+}
+
+/** Manages a field's editing state and edit/done/cancel callbacks. */
+function useFieldEditing(
+  editable: boolean,
+  shouldEdit: boolean,
+  onEnterEdit?: () => void,
+  onExitEdit?: () => void,
+) {
+  const [editing, setEditing] = useState(false);
 
   /** Sync inspector-driven edit mode into local editing state. */
   useEffect(() => {
@@ -296,57 +406,22 @@ function FieldRow({
     onExitEdit?.();
   }, [onExitEdit]);
 
-  const content = (
-    <Field
-      fieldDef={field}
-      entityType={entity.entity_type}
-      entityId={entity.id}
-      mode="full"
-      editing={editing && editable}
-      onEdit={handleEdit}
-      onDone={handleDone}
-      onCancel={handleCancel}
-    />
-  );
+  return { editing, handleEdit, handleDone, handleCancel };
+}
 
-  const Icon = field.icon ? fieldIcon(field) : null;
-  const tip = field.description || fieldLabel(field);
-
-  if (!showLabel && !Icon) {
-    return (
-      <FocusScope
-        moniker={scopeMoniker}
-        commands={[]}
-        claimWhen={claimWhen}
-        data-testid={`field-row-${field.name}`}
-      >
-        {content}
-      </FocusScope>
-    );
-  }
-
+/** Tooltip-wrapped field icon badge used in the inspector's field rows. */
+function FieldIconTooltip({ Icon, tip }: { Icon: LucideIcon; tip: string }) {
   return (
-    <FocusScope
-      moniker={scopeMoniker}
-      commands={[]}
-      claimWhen={claimWhen}
-      data-testid={`field-row-${field.name}`}
-      className="flex items-start gap-2"
-    >
-      {Icon && (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <span className="mt-0.5 shrink-0 text-muted-foreground">
-              <Icon size={14} />
-            </span>
-          </TooltipTrigger>
-          <TooltipContent side="left" align="start">
-            {tip}
-          </TooltipContent>
-        </Tooltip>
-      )}
-      <div className="flex-1 min-w-0">{content}</div>
-    </FocusScope>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className="mt-0.5 shrink-0 text-muted-foreground">
+          <Icon size={14} />
+        </span>
+      </TooltipTrigger>
+      <TooltipContent side="left" align="start">
+        {tip}
+      </TooltipContent>
+    </Tooltip>
   );
 }
 

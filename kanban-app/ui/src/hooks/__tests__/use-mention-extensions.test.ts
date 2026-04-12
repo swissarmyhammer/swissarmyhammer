@@ -40,6 +40,7 @@ let mockMentionableTypes: Array<{
   prefix: string;
   entityType: string;
   displayField: string;
+  slugField?: string;
 }> = [{ prefix: "#", entityType: "tag", displayField: "name" }];
 
 vi.mock("@/lib/schema-context", () => ({
@@ -101,7 +102,13 @@ vi.mock("@/components/window-container", () => ({
 }));
 
 import { renderHook } from "@testing-library/react";
-import { useMentionExtensions } from "../use-mention-extensions";
+import {
+  useMentionExtensions,
+  buildColorMap,
+  buildMetaMap,
+  buildAsyncSearch,
+} from "../use-mention-extensions";
+import type { Entity } from "@/types/kanban";
 
 describe("useMentionExtensions", () => {
   beforeEach(() => {
@@ -257,6 +264,195 @@ describe("useMentionExtensions", () => {
     const pill = parent.querySelector(".cm-project-pill");
     expect(pill).toBeTruthy();
     expect(pill?.textContent).toBe("$auth-migration");
+
+    view.destroy();
+    parent.remove();
+  });
+
+  // ── slugField unit tests ───────────────────────────────────────────
+  // These lock in the contract for the `mention_slug_field` schema signal:
+  // when an entity type declares a slugField, the mention slug is sourced
+  // from that raw field (no slugify). Projects use this so that a free-form
+  // project id like `AUTH-Migration` flows through the autocomplete,
+  // decorations, tooltip map, and backend filter as the literal id string.
+
+  describe("buildColorMap with slugField", () => {
+    it("keys the map by the raw slugField value (no slugify)", () => {
+      const entities: Entity[] = [
+        {
+          id: "AUTH-Migration",
+          entity_type: "project",
+          moniker: "project:AUTH-Migration",
+          fields: { name: "Auth Migration System", color: "ff0000" },
+        },
+      ];
+      const map = buildColorMap(entities, "name", "id");
+      expect(map.has("AUTH-Migration")).toBe(true);
+      expect(map.get("AUTH-Migration")).toBe("ff0000");
+      // Must NOT contain slugify(name) as a key.
+      expect(map.has("auth-migration-system")).toBe(false);
+    });
+
+    it("falls back to slugify(displayField) when slugField is absent", () => {
+      const entities: Entity[] = [
+        {
+          id: "t1",
+          entity_type: "tag",
+          moniker: "tag:t1",
+          fields: { tag_name: "Bug Fix", color: "00ff00" },
+        },
+      ];
+      const map = buildColorMap(entities, "tag_name");
+      expect(map.has("bug-fix")).toBe(true);
+      expect(map.get("bug-fix")).toBe("00ff00");
+    });
+  });
+
+  describe("buildMetaMap with slugField", () => {
+    it("keys the map by the raw slugField value (no slugify)", () => {
+      const entities: Entity[] = [
+        {
+          id: "AUTH-Migration",
+          entity_type: "project",
+          moniker: "project:AUTH-Migration",
+          fields: {
+            name: "Auth Migration System",
+            color: "ff0000",
+            description: "Auth refactor",
+          },
+        },
+      ];
+      const map = buildMetaMap(entities, "name", "id");
+      expect(map.has("AUTH-Migration")).toBe(true);
+      const meta = map.get("AUTH-Migration");
+      expect(meta?.color).toBe("ff0000");
+      expect(meta?.description).toBe("Auth refactor");
+      expect(map.has("auth-migration-system")).toBe(false);
+    });
+
+    it("falls back to slugify(displayField) when slugField is absent", () => {
+      const entities: Entity[] = [
+        {
+          id: "t1",
+          entity_type: "tag",
+          moniker: "tag:t1",
+          fields: { tag_name: "Bug Fix", color: "00ff00" },
+        },
+      ];
+      const map = buildMetaMap(entities, "tag_name");
+      expect(map.has("bug-fix")).toBe(true);
+    });
+  });
+
+  describe("buildAsyncSearch with slugField", () => {
+    it("emits slug: r.id when slugField is 'id'", async () => {
+      mockInvoke.mockImplementation(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (command: string, args?: any) => {
+          if (command === "search_mentions" && args?.entityType === "project") {
+            return Promise.resolve([
+              {
+                id: "AUTH-Migration",
+                display_name: "Auth Migration System",
+                color: "ff0000",
+              },
+            ]);
+          }
+          return Promise.resolve([]);
+        },
+      );
+
+      const search = buildAsyncSearch("project", "id");
+      // Wait past the debounce window so the first query actually fires.
+      const results = await new Promise<
+        Array<{ slug: string; displayName: string; color: string }>
+      >((resolve) => {
+        setTimeout(async () => {
+          resolve(await search(""));
+        }, 200);
+      });
+
+      expect(results).toEqual([
+        {
+          slug: "AUTH-Migration",
+          displayName: "Auth Migration System",
+          color: "ff0000",
+        },
+      ]);
+    });
+
+    it("preserves slugify(display_name) behavior when slugField is absent", async () => {
+      mockInvoke.mockImplementation(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (command: string, args?: any) => {
+          if (command === "search_mentions" && args?.entityType === "tag") {
+            return Promise.resolve([
+              { id: "t1", display_name: "Bug Fix", color: "00ff00" },
+            ]);
+          }
+          return Promise.resolve([]);
+        },
+      );
+
+      const search = buildAsyncSearch("tag");
+      const results = await new Promise<
+        Array<{ slug: string; displayName: string; color: string }>
+      >((resolve) => {
+        setTimeout(async () => {
+          resolve(await search(""));
+        }, 200);
+      });
+
+      expect(results).toEqual([
+        { slug: "bug-fix", displayName: "Bug Fix", color: "00ff00" },
+      ]);
+    });
+  });
+
+  it("decorates a document containing $AUTH-Migration when the color map is keyed by id", async () => {
+    // Integration sanity-check: once a project declares slugField: "id",
+    // feeding a CM6 document the literal `$AUTH-Migration` text should
+    // receive a cm-project-pill decoration backed by the entity color.
+    mockMentionableTypes = [
+      {
+        prefix: "$",
+        entityType: "project",
+        displayField: "name",
+        slugField: "id",
+      },
+    ];
+    mockGetEntities.mockImplementation((type: string) => {
+      if (type === "project") {
+        return [
+          {
+            id: "AUTH-Migration",
+            entity_type: "project",
+            moniker: "project:AUTH-Migration",
+            fields: { name: "Auth Migration System", color: "4078c0" },
+          },
+        ];
+      }
+      return [];
+    });
+
+    const { result } = renderHook(() => useMentionExtensions());
+
+    const { EditorView } = await import("@codemirror/view");
+    const { EditorState } = await import("@codemirror/state");
+
+    const parent = document.createElement("div");
+    document.body.appendChild(parent);
+    const view = new EditorView({
+      state: EditorState.create({
+        doc: "$AUTH-Migration",
+        extensions: result.current,
+      }),
+      parent,
+    });
+
+    const pill = parent.querySelector(".cm-project-pill");
+    expect(pill).toBeTruthy();
+    expect(pill?.textContent).toBe("$AUTH-Migration");
 
     view.destroy();
     parent.remove();

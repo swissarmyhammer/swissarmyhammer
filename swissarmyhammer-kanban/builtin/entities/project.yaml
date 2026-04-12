@@ -2,6 +2,7 @@ name: project
 icon: folder
 mention_prefix: "$"
 mention_display_field: name
+mention_slug_field: id
 search_display_field: name
 commands:
   - id: ui.inspect

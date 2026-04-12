@@ -74,8 +74,3 @@ The skill itself tells you which.
 ## User Instructions
 
 Instructions say WHAT, not HOW. "Add X" or "Fix Y" doesn't mean skip workflows.
-
-
-## Logs
-
-DO NOT ask the user for information you can get from the logs. If you need to know what happened, check the logs. The logs are your source of truth for what has happened in the conversation and what has been agreed upon. Make sure you log when you need and can see it.

@@ -517,6 +517,7 @@ mod tests {
             validate: Some("if (!ctx.fields.title) throw new Error('title required');".into()),
             mention_prefix: None,
             mention_display_field: None,
+            mention_slug_field: None,
             search_display_field: None,
             commands: vec![],
         };
@@ -536,6 +537,7 @@ mod tests {
             validate: None,
             mention_prefix: None,
             mention_display_field: None,
+            mention_slug_field: None,
             search_display_field: None,
             commands: vec![],
         };
@@ -565,6 +567,7 @@ mod tests {
             ),
             mention_prefix: None,
             mention_display_field: None,
+            mention_slug_field: None,
             search_display_field: None,
             commands: vec![],
         };
@@ -587,6 +590,7 @@ mod tests {
             validate: Some(r#"throw new Error("entity validation failed");"#.to_string()),
             mention_prefix: None,
             mention_display_field: None,
+            mention_slug_field: None,
             search_display_field: None,
             commands: vec![],
         };
@@ -666,6 +670,7 @@ mod tests {
             validate: Some("return ctx.fields;".to_string()),
             mention_prefix: None,
             mention_display_field: None,
+            mention_slug_field: None,
             search_display_field: None,
             commands: vec![],
         };
@@ -880,6 +885,7 @@ mod tests {
             validate: Some(r#"throw new Error("cross-field check failed");"#.to_string()),
             mention_prefix: None,
             mention_display_field: None,
+            mention_slug_field: None,
             search_display_field: None,
             commands: vec![],
         };
@@ -911,6 +917,7 @@ mod tests {
             validate: Some(r#"return "ok";"#.to_string()),
             mention_prefix: None,
             mention_display_field: None,
+            mention_slug_field: None,
             search_display_field: None,
             commands: vec![],
         };
@@ -940,6 +947,7 @@ mod tests {
             ),
             mention_prefix: None,
             mention_display_field: None,
+            mention_slug_field: None,
             search_display_field: None,
             commands: vec![],
         };

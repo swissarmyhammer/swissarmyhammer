@@ -263,6 +263,19 @@ pub struct EntityDef {
     /// Which field to display in mentions (e.g. "tag_name", "name").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mention_display_field: Option<FieldName>,
+    /// Which field supplies the mention slug verbatim (no slugify).
+    ///
+    /// When set, the frontend sources the CM6 mention text and autocomplete
+    /// slug from this raw entity field (typically `id`) instead of calling
+    /// `slugify(mention_display_field)`. This is required for entity ids that
+    /// are free-form text where `slugify(name)` does not equal the id (e.g.
+    /// a project with `id: AUTH-Migration`, `name: Auth Migration System`).
+    ///
+    /// When absent, existing behavior is preserved: slugs come from
+    /// `slugify(mention_display_field)`. Tag and actor entity types whose ids
+    /// are already slug-shaped leave this field unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mention_slug_field: Option<FieldName>,
     /// Which field to display in search results (e.g. "title", "name").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub search_display_field: Option<FieldName>,
@@ -530,6 +543,7 @@ type:
             validate: None,
             mention_prefix: None,
             mention_display_field: None,
+            mention_slug_field: None,
             search_display_field: None,
             commands: vec![],
         };
@@ -548,6 +562,7 @@ type:
             validate: None,
             mention_prefix: None,
             mention_display_field: None,
+            mention_slug_field: None,
             search_display_field: None,
             commands: vec![],
         };
@@ -1068,6 +1083,7 @@ fields:
             validate: None,
             mention_prefix: None,
             mention_display_field: None,
+            mention_slug_field: None,
             search_display_field: None,
             commands: vec![
                 EntityCommand {
@@ -1153,6 +1169,50 @@ fields:
         let entity: EntityDef = serde_yaml_ng::from_str(yaml_input).unwrap();
         assert_eq!(entity.name, "tag");
         assert!(entity.commands.is_empty());
+    }
+
+    #[test]
+    fn entity_def_mention_slug_field_round_trips() {
+        // When a YAML entity def declares `mention_slug_field`, it should
+        // deserialize to `Some(field)` and serialize back to the same YAML.
+        // This signal lets the frontend source the mention slug from a raw
+        // entity field (e.g. `id`) instead of slugifying the display field,
+        // which is required for project ids that differ from slugify(name).
+        let yaml_input = r#"
+name: project
+mention_prefix: "$"
+mention_display_field: name
+mention_slug_field: id
+fields:
+  - name
+"#;
+        let entity: EntityDef = serde_yaml_ng::from_str(yaml_input).unwrap();
+        assert_eq!(entity.mention_slug_field.as_deref(), Some("id"));
+
+        // Round-trip: serialize and re-parse.
+        let yaml = serde_yaml_ng::to_string(&entity).unwrap();
+        assert!(yaml.contains("mention_slug_field: id"));
+        let parsed: EntityDef = serde_yaml_ng::from_str(&yaml).unwrap();
+        assert_eq!(parsed.mention_slug_field.as_deref(), Some("id"));
+    }
+
+    #[test]
+    fn entity_def_mention_slug_field_absent_is_none() {
+        // Backwards compat: existing YAML without `mention_slug_field`
+        // must deserialize with `mention_slug_field: None`, and the
+        // serialized output must not emit the key at all so existing
+        // YAML files stay unchanged on round-trip.
+        let yaml_input = r##"
+name: tag
+mention_prefix: "#"
+mention_display_field: tag_name
+fields:
+  - tag_name
+"##;
+        let entity: EntityDef = serde_yaml_ng::from_str(yaml_input).unwrap();
+        assert!(entity.mention_slug_field.is_none());
+        let yaml = serde_yaml_ng::to_string(&entity).unwrap();
+        assert!(!yaml.contains("mention_slug_field"));
     }
 
     // ── helpers for effective_* tests ─────────────────────────────────

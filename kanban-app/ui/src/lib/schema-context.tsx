@@ -15,6 +15,17 @@ export interface MentionableType {
   entityType: string;
   prefix: string;
   displayField: string;
+  /**
+   * Raw entity field supplying the mention slug verbatim (no slugify).
+   *
+   * Sourced from the YAML entity def's `mention_slug_field`. When set
+   * (typically to `id`), the frontend uses this field for CM6 decoration
+   * keys, tooltip keys, autocomplete slugs, pill resolution, and reference
+   * field badge labels. When absent, the legacy `slugify(displayField)`
+   * behavior is preserved for tag/actor entities whose ids are already
+   * slug-shaped.
+   */
+  slugField?: string;
 }
 
 interface SchemaContextValue {
@@ -109,12 +120,14 @@ export function SchemaProvider({ children }: { children: ReactNode }) {
   const mentionableTypes = useMemo(() => {
     const result: MentionableType[] = [];
     for (const schema of schemas.values()) {
-      const { mention_prefix, mention_display_field } = schema.entity;
+      const { mention_prefix, mention_display_field, mention_slug_field } =
+        schema.entity;
       if (mention_prefix && mention_display_field) {
         result.push({
           entityType: schema.entity.name,
           prefix: mention_prefix,
           displayField: mention_display_field,
+          slugField: mention_slug_field,
         });
       }
     }

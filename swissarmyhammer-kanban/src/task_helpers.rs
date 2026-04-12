@@ -1280,4 +1280,29 @@ mod tests {
         assert!(e.get_string_list("virtual_tags").is_empty());
         assert_eq!(e.get_string_list("filter_tags"), vec!["bug"]);
     }
+
+    #[test]
+    fn test_task_filter_adapter_has_project_matches_free_form_id() {
+        // Regression guard: TaskFilterAdapter::has_project must match a
+        // task whose stored `project` field is a free-form text id (e.g.
+        // `AUTH-Migration`). The frontend produces filter text from the
+        // project's raw id via the `mention_slug_field` schema signal, so
+        // the backend compare must also work against that raw id. This
+        // test pins the case-insensitive semantics the frontend relies on
+        // so an accidental refactor of the compare cannot silently break
+        // the unified-on-id mention behavior.
+        use swissarmyhammer_filter_expr::FilterContext;
+
+        let mut e = make_task("t1", "Test", "", "todo");
+        e.set("project", json!("AUTH-Migration"));
+        let adapter = TaskFilterAdapter { entity: &e };
+
+        // Exact match.
+        assert!(adapter.has_project("AUTH-Migration"));
+        // Case-insensitive match (matches has_project() impl).
+        assert!(adapter.has_project("auth-migration"));
+        assert!(adapter.has_project("AUTH-MIGRATION"));
+        // Non-match.
+        assert!(!adapter.has_project("frontend"));
+    }
 }
