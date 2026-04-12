@@ -1,1 +1,0 @@
-{"id":"01KNCPYE71HFKMTP8JTA39C6AN","timestamp":"2026-04-04T16:59:14.529219Z","entity_type":"tag","entity_id":"01KNCPYE703BS6SF1EEJFYJGXP","op":"create","changes":[["color",{"kind":"set","value":"e36209"}],["tag_name",{"kind":"set","value":"[tauri::command]:"}]],"transaction_id":"01KNCPYE6HYZD1DZAKTVZMGNW0"}

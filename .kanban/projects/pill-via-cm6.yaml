@@ -1,0 +1,4 @@
+color: '5319e7'
+description: Consolidate all pill rendering (actor, tag, project, dependent task) into a single CM6-based renderer. Pills show display names (clipped) instead of slugs. Storage unchanged — IDs stay IDs; rendering code synthesizes CM6 doc content from stored data.
+name: Pill rendering via CM6
+order: 4

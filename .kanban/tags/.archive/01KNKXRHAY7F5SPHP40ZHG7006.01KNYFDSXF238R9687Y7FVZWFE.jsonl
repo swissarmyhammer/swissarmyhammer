@@ -1,0 +1,1 @@
+{"id":"01KNYFDSXF238R9687Y7FVZWFE","timestamp":"2026-04-11T14:34:09.199379Z","op":"archive","item_id":"01KNKXRHAY7F5SPHP40ZHG7006","forward_patch":"--- original\n+++ modified\n@@ -1,2 +0,0 @@\n-color: 006b75\n-tag_name: docs.\n","reverse_patch":"--- original\n+++ modified\n@@ -0,0 +1,2 @@\n+color: 006b75\n+tag_name: docs.\n","transaction_id":null}
