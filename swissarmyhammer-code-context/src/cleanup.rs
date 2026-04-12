@@ -19,7 +19,7 @@ use rusqlite::Connection;
 use sha2::{Digest, Sha256};
 
 use crate::error::CodeContextError;
-use crate::lsp_worker::LSP_CAPABLE_EXTENSIONS;
+use crate::lsp_worker::lsp_capable_extensions;
 
 /// Statistics returned by [`startup_cleanup`].
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -84,8 +84,38 @@ pub fn startup_cleanup(
 
     let mut stats = CleanupStats::default();
 
-    // 3a. Check DB entries against disk
-    for (db_path, db_hash) in &db_entries {
+    // 3a. Reconcile existing DB entries against files on disk.
+    reconcile_db_entries(conn, &db_entries, &disk_map, now, &mut stats)?;
+
+    // 3b. Insert files found on disk but not yet in the DB.
+    let db_paths: std::collections::HashSet<&str> =
+        db_entries.iter().map(|(p, _)| p.as_str()).collect();
+    insert_new_disk_files(conn, &disk_files, &db_paths, now, &mut stats)?;
+
+    // 3c. Bulk-mark any existing files with non-LSP-capable extensions as lsp_indexed=1.
+    // This handles files already in the DB from previous runs that were inserted before
+    // this filter existed.
+    mark_non_lsp_capable_files(conn)?;
+
+    Ok(stats)
+}
+
+/// Reconcile existing DB entries against files currently on disk.
+///
+/// For each row in `db_entries`:
+/// - If the file is no longer on disk, delete it (CASCADE cleans up chunks/symbols/edges).
+/// - If the hash changed, update `content_hash`, clear both indexed flags, and touch `last_seen_at`.
+/// - Otherwise just touch `last_seen_at`.
+///
+/// `stats` is updated in place with the counts of removed, dirty, and unchanged files.
+fn reconcile_db_entries(
+    conn: &Connection,
+    db_entries: &[(String, Vec<u8>)],
+    disk_map: &HashMap<&str, (&[u8], u64)>,
+    now: i64,
+    stats: &mut CleanupStats,
+) -> Result<(), CodeContextError> {
+    for (db_path, db_hash) in db_entries {
         match disk_map.get(db_path.as_str()) {
             None => {
                 // File no longer on disk -- delete (CASCADE)
@@ -113,35 +143,41 @@ pub fn startup_cleanup(
             }
         }
     }
+    Ok(())
+}
 
-    // 3b. Insert new files not yet in the DB
-    let db_paths: std::collections::HashSet<&str> =
-        db_entries.iter().map(|(p, _)| p.as_str()).collect();
-
-    for file in &disk_files {
-        if !db_paths.contains(file.rel_path.as_str()) {
-            // If no LSP server handles this extension, insert with lsp_indexed=1
-            // so the LSP worker never wastes time on it.
-            let lsp_indexed = if is_lsp_capable(Path::new(&file.rel_path)) {
-                0
-            } else {
-                1
-            };
-            conn.execute(
-                "INSERT INTO indexed_files (file_path, content_hash, file_size, last_seen_at, ts_indexed, lsp_indexed)
-                 VALUES (?1, ?2, ?3, ?4, 0, ?5)",
-                rusqlite::params![file.rel_path, file.hash, file.size as i64, now, lsp_indexed],
-            )?;
-            stats.files_added += 1;
+/// Insert files that exist on disk but are not yet tracked in the DB.
+///
+/// New rows are inserted with `ts_indexed = 0`. `lsp_indexed` is set to `1`
+/// up-front when no LSP server handles the file's extension, so the LSP
+/// worker never wastes time polling it; otherwise it is `0` so the worker
+/// will pick the file up on its next pass.
+///
+/// `stats.files_added` is incremented for each inserted row.
+fn insert_new_disk_files(
+    conn: &Connection,
+    disk_files: &[HashedFile],
+    db_paths: &std::collections::HashSet<&str>,
+    now: i64,
+    stats: &mut CleanupStats,
+) -> Result<(), CodeContextError> {
+    for file in disk_files {
+        if db_paths.contains(file.rel_path.as_str()) {
+            continue;
         }
+        let lsp_indexed = if is_lsp_capable(Path::new(&file.rel_path)) {
+            0
+        } else {
+            1
+        };
+        conn.execute(
+            "INSERT INTO indexed_files (file_path, content_hash, file_size, last_seen_at, ts_indexed, lsp_indexed)
+             VALUES (?1, ?2, ?3, ?4, 0, ?5)",
+            rusqlite::params![file.rel_path, file.hash, file.size as i64, now, lsp_indexed],
+        )?;
+        stats.files_added += 1;
     }
-
-    // 3c. Bulk-mark any existing files with non-LSP-capable extensions as lsp_indexed=1.
-    // This handles files already in the DB from previous runs that were inserted before
-    // this filter existed.
-    mark_non_lsp_capable_files(conn)?;
-
-    Ok(stats)
+    Ok(())
 }
 
 /// File extensions that tree-sitter can parse (kept in sync with LanguageRegistry).
@@ -175,9 +211,10 @@ fn is_parseable(path: &Path) -> bool {
 
 /// Check if a file path has an extension that at least one LSP server can handle.
 fn is_lsp_capable(path: &Path) -> bool {
-    path.extension()
-        .and_then(|ext| ext.to_str())
-        .is_some_and(|ext| LSP_CAPABLE_EXTENSIONS.contains(&ext))
+    let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
+        return false;
+    };
+    lsp_capable_extensions().iter().any(|e| e == ext)
 }
 
 /// Bulk-mark files as `lsp_indexed = 1` when their extension has no LSP server.
@@ -185,7 +222,8 @@ fn is_lsp_capable(path: &Path) -> bool {
 /// Builds a SQL UPDATE that excludes all LSP-capable extensions. This ensures
 /// the LSP progress percentage reflects only files that could actually be indexed.
 fn mark_non_lsp_capable_files(conn: &Connection) -> Result<usize, CodeContextError> {
-    if LSP_CAPABLE_EXTENSIONS.is_empty() {
+    let extensions = lsp_capable_extensions();
+    if extensions.is_empty() {
         // If no LSP servers are known, mark everything as lsp_indexed=1
         let count = conn.execute(
             "UPDATE indexed_files SET lsp_indexed = 1 WHERE lsp_indexed = 0",
@@ -195,7 +233,7 @@ fn mark_non_lsp_capable_files(conn: &Connection) -> Result<usize, CodeContextErr
     }
 
     // Build parameterized: WHERE lsp_indexed = 0 AND NOT (file_path LIKE ?1 OR ?2 ...)
-    let like_clauses: Vec<String> = (1..=LSP_CAPABLE_EXTENSIONS.len())
+    let like_clauses: Vec<String> = (1..=extensions.len())
         .map(|i| format!("file_path LIKE ?{}", i))
         .collect();
     let filter = like_clauses.join(" OR ");
@@ -205,7 +243,7 @@ fn mark_non_lsp_capable_files(conn: &Connection) -> Result<usize, CodeContextErr
         filter
     );
 
-    let params: Vec<Value> = LSP_CAPABLE_EXTENSIONS
+    let params: Vec<Value> = extensions
         .iter()
         .map(|ext| Value::Text(format!("%.{}", ext)))
         .collect();

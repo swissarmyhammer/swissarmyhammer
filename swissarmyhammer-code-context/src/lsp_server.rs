@@ -3,112 +3,160 @@
 //! Manages spawning and communicating with language servers (e.g., rust-analyzer)
 //! to extract symbol definitions and track call edges.
 //!
-//! Loads server configurations from YAML files, falling back to hardcoded
-//! defaults if YAML configs are not available.
+//! This module also owns the single source of truth for the builtin LSP server
+//! registry: every supported language server is declared by a YAML file under
+//! `builtin/lsp/`. Those files are embedded at compile time via `include_dir!`
+//! and parsed into [`OwnedLspServerSpec`] values on first access. Adding a new
+//! server requires only dropping a YAML file into `builtin/lsp/` — the directory
+//! is walked automatically at compile time with no source edits needed.
+//!
+//! The `swissarmyhammer-lsp` crate depends on this crate and re-exports
+//! [`OwnedLspServerSpec`], [`builtin_lsp_yaml_sources`], and [`load_lsp_servers`]
+//! directly — there is no second definition anywhere in the workspace.
 
 use std::env;
+use std::fmt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::LazyLock;
 use std::time::Duration;
+
+use include_dir::{include_dir, Dir};
+use serde::{Deserialize, Serialize};
+use swissarmyhammer_project_detection::ProjectType;
 use tracing::{debug, info, warn};
 
 use crate::error::CodeContextError;
-use serde::{Deserialize, Serialize};
-use std::sync::LazyLock;
+
+/// Builtin LSP server YAML directory embedded at compile time.
+///
+/// Every `.yaml` / `.yml` file under `builtin/lsp/` is included automatically —
+/// adding a new server only requires dropping a YAML file in that directory.
+static BUILTIN_LSP_DIR: Dir = include_dir!("$CARGO_MANIFEST_DIR/../builtin/lsp");
 
 /// Owned LSP server specification loaded from YAML configuration.
+///
+/// This is the single, workspace-wide definition used by both
+/// `swissarmyhammer-code-context` (for indexing) and `swissarmyhammer-lsp`
+/// (for daemon lifecycle management). Every builtin `builtin/lsp/*.yaml` file
+/// deserialises into exactly one of these. Fields required in YAML are
+/// required here; fields that are truly optional (`icon`) use `Option<T>`;
+/// fields with sensible defaults (`startup_timeout_secs`,
+/// `health_check_interval_secs`) fall back to those defaults when missing.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OwnedLspServerSpec {
-    /// Language identifiers this server handles
-    pub language_ids: Vec<String>,
-    /// Binary name to invoke (looked up via `which`)
+    /// Which project types this server handles.
+    pub project_types: Vec<ProjectType>,
+    /// Binary name to invoke (looked up via `which`).
     pub command: String,
-    /// Command-line arguments
+    /// Command-line arguments passed to the binary on startup.
     pub args: Vec<String>,
-    /// How long to wait for server startup (in seconds)
+    /// LSP language identifiers this server handles.
+    pub language_ids: Vec<String>,
+    /// File extensions this server handles (without the leading dot).
+    #[serde(default)]
+    pub file_extensions: Vec<String>,
+    /// How long to wait for server startup (in seconds, stored for YAML serialization).
     #[serde(default = "default_startup_timeout")]
     pub startup_timeout_secs: u64,
+    /// Interval between health checks (in seconds, stored for YAML serialization).
+    #[serde(default = "default_health_check_interval")]
+    pub health_check_interval_secs: u64,
+    /// Human-readable install instructions shown when the binary is missing.
+    pub install_hint: String,
+    /// Optional display icon (e.g. emoji or Nerd Font glyph) for this server.
+    #[serde(default)]
+    pub icon: Option<String>,
 }
 
+/// Default startup timeout used when a YAML file omits `startup_timeout_secs`.
 fn default_startup_timeout() -> u64 {
     30
 }
 
-/// Candidate directories where builtin LSP YAML files might live.
-fn lsp_config_search_paths() -> Vec<PathBuf> {
-    vec![
-        Path::new("builtin/lsp").to_path_buf(),
-        std::env::current_exe()
-            .ok()
-            .and_then(|exe| exe.parent().map(|p| p.join("builtin/lsp")))
-            .unwrap_or_default(),
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap_or(Path::new("."))
-            .join("builtin/lsp"),
-    ]
+/// Default health-check interval used when a YAML file omits `health_check_interval_secs`.
+fn default_health_check_interval() -> u64 {
+    60
 }
 
-/// Load all YAML server specs from a single directory.
-fn load_servers_from_dir(lsp_dir: &Path) -> Vec<OwnedLspServerSpec> {
-    let entries = match std::fs::read_dir(lsp_dir) {
-        Ok(e) => e,
-        Err(_) => return Vec::new(),
-    };
+impl OwnedLspServerSpec {
+    /// Return the startup timeout as a [`Duration`].
+    pub fn startup_timeout(&self) -> Duration {
+        Duration::from_secs(self.startup_timeout_secs)
+    }
+
+    /// Return the health-check interval as a [`Duration`].
+    pub fn health_check_interval(&self) -> Duration {
+        Duration::from_secs(self.health_check_interval_secs)
+    }
+}
+
+impl fmt::Display for OwnedLspServerSpec {
+    /// Format as `"<command> (languages: <ids>)"` for log and diagnostic output.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{} (languages: {})",
+            self.command,
+            self.language_ids.join(", ")
+        )
+    }
+}
+
+/// Returns the builtin LSP server YAML sources embedded at compile time.
+///
+/// Each tuple is `(server_name, yaml_contents)`. The names match the YAML
+/// filename stem and are only used for diagnostics — parsing produces the
+/// [`OwnedLspServerSpec`] used at runtime.
+///
+/// This function walks the compile-time-embedded `builtin/lsp/` directory
+/// via [`include_dir!`]. Adding a new server requires only dropping a
+/// `.yaml` file into that directory — no source edits needed.
+pub fn builtin_lsp_yaml_sources() -> Vec<(&'static str, &'static str)> {
+    BUILTIN_LSP_DIR
+        .files()
+        .filter_map(|file| {
+            let path = file.path();
+            let ext = path.extension()?.to_str()?.to_ascii_lowercase();
+            if ext != "yaml" && ext != "yml" {
+                return None;
+            }
+            let name = path.file_stem()?.to_str()?;
+            let content = file.contents_utf8()?;
+            Some((name, content))
+        })
+        .collect()
+}
+
+/// Parse all builtin YAML sources into [`OwnedLspServerSpec`] values.
+///
+/// Invalid entries are logged and skipped rather than panicking. The
+/// returned order matches [`builtin_lsp_yaml_sources`].
+pub fn load_lsp_servers() -> Vec<OwnedLspServerSpec> {
     let mut servers = Vec::new();
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let is_yaml = path
-            .extension()
-            .map(|e| e == "yaml" || e == "yml")
-            .unwrap_or(false);
-        if !is_yaml {
-            continue;
-        }
-        match load_single_server(&path) {
+    for (name, source) in builtin_lsp_yaml_sources() {
+        match serde_yaml_ng::from_str::<OwnedLspServerSpec>(source) {
             Ok(spec) => {
-                debug!("Loaded LSP server config: {}", spec.command);
+                debug!(
+                    "Loaded builtin LSP server config: {} ({})",
+                    name, spec.command
+                );
                 servers.push(spec);
             }
             Err(e) => {
-                warn!("Failed to load LSP server config {:?}: {}", path, e);
+                warn!("Failed to parse builtin LSP server config {}: {}", name, e);
             }
         }
     }
     servers
 }
 
-/// Load all LSP server specifications from the builtin YAML files.
-fn load_lsp_servers() -> Vec<OwnedLspServerSpec> {
-    for lsp_dir in lsp_config_search_paths() {
-        if !lsp_dir.exists() {
-            debug!("LSP config dir not found at {:?}", lsp_dir);
-            continue;
-        }
-        let servers = load_servers_from_dir(&lsp_dir);
-        if !servers.is_empty() {
-            return servers;
-        }
-    }
-
-    debug!("No YAML LSP configs found, using hardcoded rust-analyzer");
-    vec![OwnedLspServerSpec {
-        command: "rust-analyzer".to_string(),
-        args: vec![],
-        language_ids: vec!["rust".to_string()],
-        startup_timeout_secs: 30,
-    }]
-}
-
-/// Load a single LSP server specification from a YAML file.
-fn load_single_server(path: &Path) -> Result<OwnedLspServerSpec, Box<dyn std::error::Error>> {
-    let contents = std::fs::read_to_string(path)?;
-    let spec: OwnedLspServerSpec = serde_yaml_ng::from_str(&contents)?;
-    Ok(spec)
-}
-
-/// Lazy-initialized registry of LSP server specs loaded from YAML files
-static LSP_REGISTRY: LazyLock<Vec<OwnedLspServerSpec>> = LazyLock::new(load_lsp_servers);
+/// Lazy-initialized registry of LSP server specs loaded from embedded YAML.
+///
+/// This is the single registry of builtin servers shared across the workspace.
+/// Both `swissarmyhammer-code-context` (for indexing scope) and
+/// `swissarmyhammer-lsp` (for daemon spawning) read from it.
+pub static LSP_REGISTRY: LazyLock<Vec<OwnedLspServerSpec>> = LazyLock::new(load_lsp_servers);
 
 /// Configuration for starting an LSP server.
 #[derive(Debug, Clone)]
@@ -408,6 +456,86 @@ mod tests {
     }
 
     #[test]
+    fn test_builtin_lsp_yaml_sources_non_empty() {
+        // Every builtin YAML file must be embedded and parseable.
+        let sources = builtin_lsp_yaml_sources();
+        assert!(
+            !sources.is_empty(),
+            "Should embed at least one builtin LSP YAML"
+        );
+        for (name, src) in sources {
+            assert!(!src.is_empty(), "YAML for {} should not be empty", name);
+            let spec: OwnedLspServerSpec = serde_yaml_ng::from_str(src)
+                .unwrap_or_else(|e| panic!("Failed to parse {}: {}", name, e));
+            assert!(
+                !spec.command.is_empty(),
+                "Spec for {} has empty command",
+                name
+            );
+        }
+    }
+
+    #[test]
+    fn test_lsp_registry_loads_all_builtin_yamls() {
+        // The lazy-loaded registry should contain one spec per builtin YAML.
+        let expected = builtin_lsp_yaml_sources().len();
+        let actual = LSP_REGISTRY.len();
+        assert_eq!(
+            expected, actual,
+            "LSP_REGISTRY should contain one spec for every builtin YAML (expected {}, got {})",
+            expected, actual
+        );
+    }
+
+    #[test]
+    fn test_registry_populates_file_extensions() {
+        // Every spec loaded from YAML should have its file_extensions populated
+        // (since all builtin YAMLs declare the field).
+        for spec in LSP_REGISTRY.iter() {
+            assert!(
+                !spec.file_extensions.is_empty(),
+                "Spec for {} should have file_extensions populated from YAML",
+                spec.command
+            );
+        }
+    }
+
+    #[test]
+    fn test_registry_covers_expected_languages() {
+        // Sanity check that key languages are represented.
+        let commands: Vec<&str> = LSP_REGISTRY.iter().map(|s| s.command.as_str()).collect();
+        for expected in [
+            "rust-analyzer",
+            "gopls",
+            "pylsp",
+            "typescript-language-server",
+            "clangd",
+        ] {
+            assert!(
+                commands.contains(&expected),
+                "Expected {} in registry, got {:?}",
+                expected,
+                commands
+            );
+        }
+    }
+
+    #[test]
+    fn test_find_config_for_language_typescript() {
+        // typescript-language-server handles multiple language ids; verify that
+        // the lookup returns a matching spec for any of them.
+        let ts_config = find_config_for_language("typescript");
+        assert!(ts_config.is_some(), "Should find typescript configuration");
+        let js_config = find_config_for_language("javascript");
+        assert!(js_config.is_some(), "Should find javascript configuration");
+        assert_eq!(
+            ts_config.unwrap().command,
+            js_config.unwrap().command,
+            "Both ids should resolve to the same server"
+        );
+    }
+
+    #[test]
     fn test_spawn_server_nonexistent_executable() {
         // An executable that does not exist on the filesystem or in PATH
         let config = LspServerConfig {
@@ -619,5 +747,112 @@ mod tests {
                 result.err()
             );
         }
+    }
+
+    /// Resolve the on-disk path to `builtin/lsp/` from a test that runs with
+    /// `CARGO_MANIFEST_DIR` pointing at this crate. The directory lives at the
+    /// workspace root, one level up from the crate.
+    fn builtin_lsp_dir() -> PathBuf {
+        let manifest = env!("CARGO_MANIFEST_DIR");
+        PathBuf::from(manifest)
+            .join("..")
+            .join("builtin")
+            .join("lsp")
+    }
+
+    #[test]
+    fn test_builtin_lsp_yaml_sources_matches_disk() {
+        // With `include_dir!` the embedded list IS the disk at compile time.
+        // This test verifies that the on-disk directory hasn't diverged from
+        // what was compiled in — useful for catching stale build caches.
+        let dir = builtin_lsp_dir();
+        assert!(
+            dir.is_dir(),
+            "Expected builtin/lsp directory at {}",
+            dir.display()
+        );
+
+        let mut disk_stems: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap_or_else(|e| panic!("Failed to read {}: {e}", dir.display()))
+            .filter_map(|entry| {
+                let entry = entry.ok()?;
+                let path = entry.path();
+                if !path.is_file() {
+                    return None;
+                }
+                let ext = path.extension()?.to_str()?.to_ascii_lowercase();
+                if ext != "yaml" && ext != "yml" {
+                    return None;
+                }
+                path.file_stem()?.to_str().map(str::to_owned)
+            })
+            .collect();
+        disk_stems.sort();
+
+        let mut embedded_stems: Vec<String> = builtin_lsp_yaml_sources()
+            .into_iter()
+            .map(|(name, _)| name.to_string())
+            .collect();
+        embedded_stems.sort();
+
+        assert_eq!(
+            embedded_stems, disk_stems,
+            "include_dir! embedded set is out of sync with builtin/lsp/ on disk \
+             (stale build cache?). Disk: {disk_stems:?}, embedded: {embedded_stems:?}."
+        );
+    }
+
+    #[test]
+    fn test_every_builtin_yaml_parses_strictly() {
+        // Every embedded YAML source must deserialize through the full,
+        // strict `OwnedLspServerSpec` schema — in particular, the required
+        // fields (`project_types`, `install_hint`) must be present. This
+        // catches the "future YAML forgets a required field" scenario at
+        // build time instead of as a runtime warn! log.
+        for (name, src) in builtin_lsp_yaml_sources() {
+            let spec: OwnedLspServerSpec = serde_yaml_ng::from_str(src)
+                .unwrap_or_else(|e| panic!("Strict parse of builtin YAML {name} failed: {e}"));
+            assert!(
+                !spec.command.is_empty(),
+                "Builtin YAML {name} parsed but has empty command",
+            );
+            assert!(
+                !spec.install_hint.is_empty(),
+                "Builtin YAML {name} parsed but has empty install_hint",
+            );
+            assert!(
+                !spec.language_ids.is_empty(),
+                "Builtin YAML {name} parsed but declares no language_ids",
+            );
+        }
+    }
+
+    #[test]
+    fn test_builtin_lsp_directory_only_contains_yaml_files() {
+        // Guards the disk-vs-list check above: if a non-YAML file sneaks into
+        // `builtin/lsp/`, we want to know about it so the list walker can
+        // either pick it up or be taught to ignore it intentionally.
+        let dir = builtin_lsp_dir();
+        let entries: Vec<PathBuf> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.is_file())
+            .collect();
+        for path in &entries {
+            let ext = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(str::to_ascii_lowercase)
+                .unwrap_or_default();
+            assert!(
+                ext == "yaml" || ext == "yml",
+                "Unexpected non-YAML file in builtin/lsp/: {}",
+                path.display()
+            );
+        }
+        assert!(
+            !entries.is_empty(),
+            "builtin/lsp/ should contain at least one YAML file"
+        );
     }
 }

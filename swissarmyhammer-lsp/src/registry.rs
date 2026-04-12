@@ -1,21 +1,22 @@
-//! Built-in LSP server registry
+//! Built-in LSP server registry.
 //!
-//! Loads LSP server specifications from YAML configuration files in builtin/lsp/,
-//! or falls back to hardcoded defaults if YAML files are not found.
-//! Servers are detected automatically based on project type.
+//! Loads LSP server specifications from YAML configuration files under
+//! `builtin/lsp/`. The single canonical registry lives in
+//! `swissarmyhammer-code-context` — this module simply queries it to
+//! provide ergonomic `servers_for_project`, `servers_for_extensions`, and
+//! `all_servers` helpers.
 
-use once_cell::sync::Lazy;
 use std::time::Duration;
+use swissarmyhammer_code_context::LSP_REGISTRY;
 use swissarmyhammer_project_detection::ProjectType;
 
 use crate::types::{LspServerSpec, OwnedLspServerSpec};
 
-/// Lazy-initialized registry of owned LSP server specs loaded from YAML
-static OWNED_SERVERS: Lazy<Vec<OwnedLspServerSpec>> =
-    Lazy::new(crate::yaml_loader::load_lsp_servers);
-
-/// Built-in server registry — kept for API compatibility
-/// Returns a static reference to the first registered Rust server for backward compatibility
+/// Built-in server registry — kept for API compatibility.
+///
+/// Returns a static reference to the first registered Rust server for
+/// backward compatibility; callers that need the full YAML-loaded registry
+/// should use [`all_servers`] instead.
 pub static SERVERS: &[LspServerSpec] = &[LspServerSpec {
     project_types: &[ProjectType::Rust],
     command: "rust-analyzer",
@@ -28,23 +29,27 @@ pub static SERVERS: &[LspServerSpec] = &[LspServerSpec {
     install_hint: "Install rust-analyzer: rustup component add rust-analyzer",
 }];
 
-/// Return all loaded LSP server specs.
+/// Return all loaded LSP server specs from the YAML registry.
 pub fn all_servers() -> &'static [OwnedLspServerSpec] {
-    &OWNED_SERVERS
+    &LSP_REGISTRY
 }
 
-/// Return specs whose file_extensions overlap with the given set.
+/// Return specs whose file extensions overlap with the given set.
+///
+/// The returned references point into the process-global registry and
+/// live for the lifetime of the program.
 pub fn servers_for_extensions(exts: &[&str]) -> Vec<&'static OwnedLspServerSpec> {
-    OWNED_SERVERS
+    LSP_REGISTRY
         .iter()
         .filter(|s| s.file_extensions.iter().any(|e| exts.contains(&e.as_str())))
         .collect()
 }
 
-/// Find all LSP servers that can handle the given project type
-/// Returns owned server specs loaded from YAML configuration files
+/// Find all LSP servers that can handle the given project type.
+///
+/// Returns owned server specs cloned out of the YAML-loaded registry.
 pub fn servers_for_project(project_type: ProjectType) -> Vec<OwnedLspServerSpec> {
-    OWNED_SERVERS
+    LSP_REGISTRY
         .iter()
         .filter(|spec| spec.project_types.contains(&project_type))
         .cloned()
@@ -108,8 +113,9 @@ mod tests {
 
     #[test]
     fn test_owned_servers_loaded() {
-        // Check that OWNED_SERVERS is initialized and contains at least rust-analyzer
-        let servers = OWNED_SERVERS.clone();
+        // Check that the shared YAML registry is initialized and contains at
+        // least rust-analyzer.
+        let servers = all_servers();
         assert!(!servers.is_empty(), "Should have at least one server");
         assert!(
             servers.iter().any(|s| s.command == "rust-analyzer"),

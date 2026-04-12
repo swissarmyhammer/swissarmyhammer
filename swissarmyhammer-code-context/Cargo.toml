@@ -27,6 +27,7 @@ serde_json = { workspace = true }
 model-embedding = { workspace = true }
 tree-sitter = { workspace = true }
 once_cell = { workspace = true }
+include_dir = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

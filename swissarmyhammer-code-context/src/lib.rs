@@ -59,7 +59,8 @@ pub use lsp_indexer::{
     write_symbols, CallEdge, FlatSymbol,
 };
 pub use lsp_server::{
-    detect_rust_analyzer, find_executable, start_lsp_server, LspServerConfig, LspServerHandle,
+    builtin_lsp_yaml_sources, detect_rust_analyzer, find_executable, load_lsp_servers,
+    start_lsp_server, LspServerConfig, LspServerHandle, OwnedLspServerSpec, LSP_REGISTRY,
 };
 pub use lsp_worker::{
     new_shutdown_flag, spawn_lsp_indexing_worker, LspWorkerConfig, SharedLspClient, ShutdownFlag,

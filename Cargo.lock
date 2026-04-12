@@ -8134,6 +8134,7 @@ version = "0.12.11"
 dependencies = [
  "fuzzy-matcher",
  "ignore",
+ "include_dir",
  "lsp-types",
  "model-embedding",
  "once_cell",

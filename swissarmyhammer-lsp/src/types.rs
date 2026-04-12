@@ -1,10 +1,18 @@
-//! Core types for LSP server management
+//! Core types for LSP server management.
+//!
+//! The canonical [`OwnedLspServerSpec`] lives in `swissarmyhammer-code-context`
+//! and is re-exported here for backward compatibility with existing callers.
+//! Keeping the definition in the lower-tier crate means both the indexing
+//! worker and this daemon-supervision crate share one schema; adding a new
+//! field in `builtin/lsp/*.yaml` only requires editing one struct.
 
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use swissarmyhammer_project_detection::ProjectType;
+
+pub use swissarmyhammer_code_context::OwnedLspServerSpec;
 
 /// Specification for an LSP server that can be auto-detected and managed.
 pub struct LspServerSpec {
@@ -28,52 +36,6 @@ pub struct LspServerSpec {
     pub install_hint: &'static str,
 }
 
-/// Owned version of LspServerSpec for runtime-loaded configurations from YAML
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OwnedLspServerSpec {
-    /// Which project types this server handles
-    pub project_types: Vec<ProjectType>,
-    /// Binary name to invoke (looked up via `which`)
-    pub command: String,
-    /// Command-line arguments
-    pub args: Vec<String>,
-    /// LSP language identifiers this server handles
-    pub language_ids: Vec<String>,
-    /// File extensions this server handles (without dot)
-    pub file_extensions: Vec<String>,
-    /// How long to wait for server startup (in seconds, stored for YAML serialization)
-    #[serde(default = "default_startup_timeout")]
-    pub startup_timeout_secs: u64,
-    /// Interval between health checks (in seconds, stored for YAML serialization)
-    #[serde(default = "default_health_check_interval")]
-    pub health_check_interval_secs: u64,
-    /// Human-readable install instructions shown on failure
-    pub install_hint: String,
-    /// Optional display icon (e.g. emoji) for this language server
-    #[serde(default)]
-    pub icon: Option<String>,
-}
-
-fn default_startup_timeout() -> u64 {
-    30
-}
-
-fn default_health_check_interval() -> u64 {
-    60
-}
-
-impl OwnedLspServerSpec {
-    /// Get startup timeout as Duration
-    pub fn startup_timeout(&self) -> Duration {
-        Duration::from_secs(self.startup_timeout_secs)
-    }
-
-    /// Get health check interval as Duration
-    pub fn health_check_interval(&self) -> Duration {
-        Duration::from_secs(self.health_check_interval_secs)
-    }
-}
-
 impl fmt::Debug for LspServerSpec {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("LspServerSpec")
@@ -94,17 +56,6 @@ impl fmt::Debug for LspServerSpec {
             .field("health_check_interval", &self.health_check_interval)
             .field("install_hint", &self.install_hint)
             .finish()
-    }
-}
-
-impl fmt::Display for OwnedLspServerSpec {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "{} (languages: {})",
-            self.command,
-            self.language_ids.join(", ")
-        )
     }
 }
 

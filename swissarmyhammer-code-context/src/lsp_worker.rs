@@ -11,7 +11,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -153,7 +153,7 @@ fn run_lsp_indexing_loop(
 }
 
 /// Log worker startup with extension information.
-fn log_worker_startup(server_name: &str, workspace_root: &Path, extensions: &[&str]) {
+fn log_worker_startup(server_name: &str, workspace_root: &Path, extensions: &[String]) {
     info!(
         server = %server_name,
         extensions = ?extensions,
@@ -172,10 +172,10 @@ fn log_worker_startup(server_name: &str, workspace_root: &Path, extensions: &[&s
 }
 
 /// Query a batch of files that need LSP indexing.
-fn query_lsp_dirty_batch(
+fn query_lsp_dirty_batch<S: AsRef<str>>(
     db: &SharedDb,
     config: &LspWorkerConfig,
-    extensions: &[&str],
+    extensions: &[S],
 ) -> Result<Vec<String>, CodeContextError> {
     let conn = db.lock().unwrap_or_else(|p| p.into_inner());
     query_lsp_dirty_files(&conn, config.batch_size, extensions)
@@ -224,28 +224,35 @@ fn process_lsp_batch(
         let full_path = workspace_root.join(relative_path);
 
         match index_single_file(lsp_client, db, &full_path, relative_path) {
-            Ok(symbol_count) => {
-                count += 1;
-                debug!(
-                    "LSP indexed {} ({} symbols, {} total in batch)",
-                    relative_path, symbol_count, count
-                );
-            }
-            Err(e) => {
-                warn!("LSP indexing failed for {}: {}", relative_path, e);
-                let conn = db.lock().unwrap_or_else(|p| p.into_inner());
-                if let Err(mark_err) = mark_lsp_indexed(&conn, relative_path) {
-                    warn!(
-                        "Failed to mark {} as lsp_indexed after error: {}",
-                        relative_path, mark_err
-                    );
-                }
-                count += 1;
-            }
+            Ok(symbol_count) => debug!(
+                "LSP indexed {} ({} symbols, {} total in batch)",
+                relative_path,
+                symbol_count,
+                count + 1
+            ),
+            Err(e) => mark_failed_file_indexed(db, relative_path, &e),
         }
+        count += 1;
     }
 
     count
+}
+
+/// Mark a file as `lsp_indexed = 1` after an indexing failure.
+///
+/// Failures must still flip the flag; otherwise the worker would re-select
+/// the file on every pass and loop forever. Logs both the original indexing
+/// error and any failure from the mark step, but never propagates either —
+/// the batch loop continues regardless.
+fn mark_failed_file_indexed(db: &SharedDb, relative_path: &str, error: &CodeContextError) {
+    warn!("LSP indexing failed for {}: {}", relative_path, error);
+    let conn = db.lock().unwrap_or_else(|p| p.into_inner());
+    if let Err(mark_err) = mark_lsp_indexed(&conn, relative_path) {
+        warn!(
+            "Failed to mark {} as lsp_indexed after error: {}",
+            relative_path, mark_err
+        );
+    }
 }
 
 /// Index a single file via LSP: didOpen, documentSymbol, persist, mark indexed.
@@ -288,52 +295,51 @@ fn index_single_file(
     Ok(result.symbol_count)
 }
 
-/// File extensions supported by each known LSP server.
+/// File extensions supported by a given LSP server.
 ///
-/// Maps a server command name to the file extensions it can handle.
-/// Unknown servers return an empty slice, which prevents indexing files
-/// that no server understands.
-pub fn lsp_supported_extensions(server_name: &str) -> &'static [&'static str] {
-    match server_name {
-        "rust-analyzer" => &["rs"],
-        "pyright" | "pylsp" | "pyright-langserver" => &["py", "pyi", "pyw"],
-        "typescript-language-server" | "tsserver" | "ts_ls" => {
-            &["ts", "mts", "cts", "tsx", "js", "mjs", "cjs", "jsx"]
+/// The list is looked up in the YAML-loaded [`crate::lsp_server::LSP_REGISTRY`]
+/// by matching `server_name` against each spec's `command` field. Unknown
+/// servers resolve to an empty slice, which prevents indexing files that no
+/// server understands.
+pub fn lsp_supported_extensions(server_name: &str) -> &'static [String] {
+    for spec in crate::lsp_server::LSP_REGISTRY.iter() {
+        if spec.command == server_name {
+            return spec.file_extensions.as_slice();
         }
-        "gopls" => &["go"],
-        "jdtls" | "java-language-server" => &["java"],
-        "clangd" => &["c", "h", "cpp", "cc", "cxx", "hpp", "hxx", "hh"],
-        "solargraph" | "ruby-lsp" => &["rb", "rake", "gemspec"],
-        "sourcekit-lsp" => &["swift"],
-        "kotlin-language-server" => &["kt", "kts"],
-        "lua-language-server" => &["lua"],
-        "omnisharp" => &["cs"],
-        "dart" | "dart-language-server" => &["dart"],
-        "phpactor" | "intelephense" => &["php", "phtml"],
-        "metals" => &["scala", "sc"],
-        _ => &[],
     }
+    &[]
 }
 
-/// Union of all file extensions that at least one known LSP server supports.
+/// Union of all file extensions that at least one LSP server in the YAML
+/// registry supports.
 ///
 /// Files with extensions not in this list can be marked `lsp_indexed = 1`
-/// immediately since no LSP server will ever process them.
-pub const LSP_CAPABLE_EXTENSIONS: &[&str] = &[
-    "rs", "py", "pyi", "pyw", "ts", "mts", "cts", "tsx", "js", "mjs", "cjs", "jsx", "go", "java",
-    "c", "h", "cpp", "cc", "cxx", "hpp", "hxx", "hh", "rb", "rake", "gemspec", "swift", "kt",
-    "kts", "lua", "cs", "dart", "php", "phtml", "scala", "sc",
-];
+/// immediately since no LSP server will ever process them. The list is built
+/// once on first access from every spec loaded from `builtin/lsp/` YAML.
+pub fn lsp_capable_extensions() -> &'static [String] {
+    static EXTENSIONS: LazyLock<Vec<String>> = LazyLock::new(|| {
+        let mut all: Vec<String> = Vec::new();
+        for spec in crate::lsp_server::LSP_REGISTRY.iter() {
+            for ext in &spec.file_extensions {
+                if !all.iter().any(|e| e == ext) {
+                    all.push(ext.clone());
+                }
+            }
+        }
+        all
+    });
+    &EXTENSIONS
+}
 
 /// Query files that need LSP indexing (`lsp_indexed = 0`), filtered to only
 /// include files whose extension matches what the given LSP server supports.
 ///
 /// If `extensions` is empty the query returns no files, which is the correct
 /// behaviour for unknown servers.
-fn query_lsp_dirty_files(
+fn query_lsp_dirty_files<S: AsRef<str>>(
     db: &Connection,
     limit: usize,
-    extensions: &[&str],
+    extensions: &[S],
 ) -> Result<Vec<String>, CodeContextError> {
     if extensions.is_empty() {
         return Ok(Vec::new());
@@ -354,7 +360,7 @@ fn query_lsp_dirty_files(
     // Bind extension patterns and limit as parameters
     let mut params: Vec<Value> = extensions
         .iter()
-        .map(|ext| Value::Text(format!("%.{}", ext)))
+        .map(|ext| Value::Text(format!("%.{}", ext.as_ref())))
         .collect();
     params.push(Value::Integer(limit as i64));
 
@@ -494,7 +500,8 @@ mod tests {
         insert_test_file(&db, "config.toml");
 
         // Unknown server -> empty extensions -> no files
-        let dirty = query_lsp_dirty_files(&db, 100, &[]).unwrap();
+        let empty: [&str; 0] = [];
+        let dirty = query_lsp_dirty_files(&db, 100, &empty).unwrap();
         assert!(dirty.is_empty());
     }
 
@@ -502,16 +509,25 @@ mod tests {
 
     #[test]
     fn test_lsp_supported_extensions_known_servers() {
-        assert_eq!(lsp_supported_extensions("rust-analyzer"), &["rs"]);
-        assert!(lsp_supported_extensions("pyright").contains(&"py"));
-        assert!(lsp_supported_extensions("typescript-language-server").contains(&"ts"));
-        assert!(lsp_supported_extensions("gopls").contains(&"go"));
+        assert_eq!(
+            lsp_supported_extensions("rust-analyzer"),
+            &["rs".to_string()]
+        );
+        assert!(lsp_supported_extensions("pylsp").iter().any(|e| e == "py"));
+        assert!(lsp_supported_extensions("typescript-language-server")
+            .iter()
+            .any(|e| e == "ts"));
+        assert!(lsp_supported_extensions("gopls").iter().any(|e| e == "go"));
     }
 
     #[test]
     fn test_lsp_supported_extensions_unknown_server() {
         assert!(lsp_supported_extensions("unknown-server").is_empty());
         assert!(lsp_supported_extensions("").is_empty());
+        // Historical aliases that used to resolve via a hardcoded match are no
+        // longer recognized — only the YAML-declared command names resolve.
+        assert!(lsp_supported_extensions("pyright").is_empty());
+        assert!(lsp_supported_extensions("tsserver").is_empty());
     }
 
     // -- extension_to_language_id tests --
@@ -975,44 +991,37 @@ mod tests {
         assert!(debug_str.contains("batch_size"));
     }
 
-    // -- LSP_CAPABLE_EXTENSIONS tests --
+    // -- lsp_capable_extensions tests --
+
+    /// Helper: does the capable-extensions set contain a given extension?
+    fn capable_contains(ext: &str) -> bool {
+        lsp_capable_extensions().iter().any(|e| e == ext)
+    }
 
     #[test]
     fn test_lsp_capable_extensions_not_empty() {
         assert!(
-            !LSP_CAPABLE_EXTENSIONS.is_empty(),
-            "LSP_CAPABLE_EXTENSIONS should not be empty"
+            !lsp_capable_extensions().is_empty(),
+            "lsp_capable_extensions() should not be empty"
         );
     }
 
     #[test]
     fn test_lsp_capable_extensions_contains_common_languages() {
-        assert!(
-            LSP_CAPABLE_EXTENSIONS.contains(&"rs"),
-            "should contain Rust"
-        );
-        assert!(
-            LSP_CAPABLE_EXTENSIONS.contains(&"py"),
-            "should contain Python"
-        );
-        assert!(
-            LSP_CAPABLE_EXTENSIONS.contains(&"ts"),
-            "should contain TypeScript"
-        );
-        assert!(LSP_CAPABLE_EXTENSIONS.contains(&"go"), "should contain Go");
-        assert!(
-            LSP_CAPABLE_EXTENSIONS.contains(&"java"),
-            "should contain Java"
-        );
+        assert!(capable_contains("rs"), "should contain Rust");
+        assert!(capable_contains("py"), "should contain Python");
+        assert!(capable_contains("ts"), "should contain TypeScript");
+        assert!(capable_contains("go"), "should contain Go");
+        assert!(capable_contains("java"), "should contain Java");
     }
 
     #[test]
     fn test_lsp_capable_extensions_superset_of_all_servers() {
-        // Every extension returned by lsp_supported_extensions for a known server
-        // should be present in LSP_CAPABLE_EXTENSIONS.
+        // Every extension returned by lsp_supported_extensions for a YAML-declared
+        // server should be present in lsp_capable_extensions().
         let known_servers = [
             "rust-analyzer",
-            "pyright",
+            "pylsp",
             "typescript-language-server",
             "gopls",
             "jdtls",
@@ -1020,21 +1029,31 @@ mod tests {
             "solargraph",
             "sourcekit-lsp",
             "kotlin-language-server",
-            "lua-language-server",
             "omnisharp",
             "dart",
-            "phpactor",
-            "metals",
+            "intelephense",
         ];
 
         for server in &known_servers {
             for ext in lsp_supported_extensions(server) {
                 assert!(
-                    LSP_CAPABLE_EXTENSIONS.contains(ext),
-                    "Extension '{}' from server '{}' is not in LSP_CAPABLE_EXTENSIONS",
+                    capable_contains(ext),
+                    "Extension '{}' from server '{}' is not in lsp_capable_extensions()",
                     ext,
                     server
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn test_lsp_capable_extensions_unique() {
+        // The extension list should not contain duplicates even if multiple
+        // servers claim the same extension.
+        let exts = lsp_capable_extensions();
+        for (i, ext) in exts.iter().enumerate() {
+            for other in &exts[i + 1..] {
+                assert_ne!(ext, other, "Duplicate extension in list: {}", ext);
             }
         }
     }
@@ -1119,25 +1138,18 @@ mod tests {
 
     #[test]
     fn test_lsp_supported_extensions_all_known_servers() {
-        // Exercise all match arms in lsp_supported_extensions.
+        // Every server declared in builtin/lsp/*.yaml should resolve to a
+        // non-empty extension list.
         assert!(!lsp_supported_extensions("pylsp").is_empty());
-        assert!(!lsp_supported_extensions("pyright-langserver").is_empty());
-        assert!(!lsp_supported_extensions("tsserver").is_empty());
-        assert!(!lsp_supported_extensions("ts_ls").is_empty());
+        assert!(!lsp_supported_extensions("typescript-language-server").is_empty());
         assert!(!lsp_supported_extensions("jdtls").is_empty());
-        assert!(!lsp_supported_extensions("java-language-server").is_empty());
         assert!(!lsp_supported_extensions("clangd").is_empty());
         assert!(!lsp_supported_extensions("solargraph").is_empty());
-        assert!(!lsp_supported_extensions("ruby-lsp").is_empty());
         assert!(!lsp_supported_extensions("sourcekit-lsp").is_empty());
         assert!(!lsp_supported_extensions("kotlin-language-server").is_empty());
-        assert!(!lsp_supported_extensions("lua-language-server").is_empty());
         assert!(!lsp_supported_extensions("omnisharp").is_empty());
         assert!(!lsp_supported_extensions("dart").is_empty());
-        assert!(!lsp_supported_extensions("dart-language-server").is_empty());
-        assert!(!lsp_supported_extensions("phpactor").is_empty());
         assert!(!lsp_supported_extensions("intelephense").is_empty());
-        assert!(!lsp_supported_extensions("metals").is_empty());
     }
 
     // -- query_lsp_dirty_files additional tests --
@@ -1187,7 +1199,7 @@ mod tests {
 
     #[test]
     fn test_extension_to_language_id_hh_falls_through_to_plaintext() {
-        // "hh" is in LSP_CAPABLE_EXTENSIONS and clangd supports it, but
+        // "hh" is not enumerated in clangd's YAML file_extensions and
         // extension_to_language_id does not have an explicit match arm for it.
         // This documents the current behavior: "hh" maps to "plaintext".
         assert_eq!(
