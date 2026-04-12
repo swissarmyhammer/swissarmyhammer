@@ -1,0 +1,13 @@
+# Sentinel ID: builtin field definitions use zero-padded IDs that sort before
+# real ULIDs. The last two characters are the builtin field code.
+id: "00000000000000000000000011"
+name: due
+description: Hard deadline date
+type:
+  kind: date
+icon: calendar
+editor: date
+display: date
+sort: datetime
+width: 120
+section: dates

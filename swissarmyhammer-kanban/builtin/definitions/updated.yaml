@@ -1,0 +1,16 @@
+# Sentinel ID: builtin field definitions use zero-padded IDs that sort before
+# real ULIDs. The last two characters are the builtin field code.
+id: "00000000000000000000000014"
+name: updated
+description: Timestamp of the most recent change
+type:
+  kind: computed
+  derive: derive-updated
+  depends_on:
+    - _changelog
+icon: refresh-cw
+editor: none
+display: date
+sort: datetime
+width: 120
+section: system

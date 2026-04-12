@@ -90,3 +90,9 @@ fields:
   - attachments
   - virtual_tags
   - filter_tags
+  - due
+  - scheduled
+  - created
+  - updated
+  - started
+  - completed

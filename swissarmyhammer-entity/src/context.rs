@@ -952,6 +952,11 @@ impl EntityContext {
     ///
     /// This avoids reconstructing the query closure per entity in batch
     /// operations like `list()`.
+    ///
+    /// When any computed field declares `depends_on: ["_changelog"]`, the
+    /// entity's JSONL changelog is read and injected into `entity.fields`
+    /// as `_changelog` before derivation. The key is stripped after
+    /// derivation so it is never persisted or returned to callers.
     async fn apply_compute_with_query(
         &self,
         entity_type: &str,
@@ -966,6 +971,30 @@ impl EntityContext {
         };
         let field_defs = self.fields.fields_for_entity(entity_type);
         let owned_defs: Vec<_> = field_defs.into_iter().cloned().collect();
+
+        // Lazily inject _changelog when any computed field depends on it.
+        let needs_changelog = owned_defs.iter().any(|fd| {
+            if let FieldType::Computed { depends_on, .. } = &fd.type_ {
+                depends_on.iter().any(|dep| dep == "_changelog")
+            } else {
+                false
+            }
+        });
+        if needs_changelog {
+            let entries = self
+                .read_changelog(entity_type, entity.id.as_str())
+                .await
+                .unwrap_or_default();
+            let json_entries: Vec<serde_json::Value> = entries
+                .iter()
+                .filter_map(|e| serde_json::to_value(e).ok())
+                .collect();
+            entity.fields.insert(
+                "_changelog".to_string(),
+                serde_json::Value::Array(json_entries),
+            );
+        }
+
         engine
             .derive_all(&mut entity.fields, &owned_defs, Some(query_fn))
             .await
@@ -978,6 +1007,10 @@ impl EntityContext {
                 };
                 EntityError::ComputeError { field, message }
             })?;
+
+        // Strip _changelog so it is never persisted or returned to callers.
+        entity.fields.remove("_changelog");
+
         Ok(())
     }
 
@@ -2546,6 +2579,210 @@ mod tests {
 
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].id.as_ref(), "feature");
+    }
+
+    // -----------------------------------------------------------------------
+    // _changelog injection tests
+    // -----------------------------------------------------------------------
+
+    /// Build a FieldsContext whose "task" entity includes a computed field
+    /// that depends on `_changelog`.
+    fn fields_context_with_changelog_computed() -> Arc<FieldsContext> {
+        let defs = vec![
+            (
+                "title",
+                "id: 00000000000000000000000TTL\nname: title\ntype:\n  kind: text\n  single_line: true\n",
+            ),
+            (
+                "body",
+                "id: 00000000000000000000000BDY\nname: body\ntype:\n  kind: markdown\n",
+            ),
+            (
+                "change_count",
+                "id: 00000000000000000000000CHG\nname: change_count\ntype:\n  kind: computed\n  derive: count-changelog\n  depends_on:\n    - _changelog\n",
+            ),
+        ];
+        let entities = vec![(
+            "task",
+            "name: task\nbody_field: body\nfields:\n  - title\n  - body\n  - change_count\n",
+        )];
+        let dir = TempDir::new().unwrap();
+        Arc::new(FieldsContext::from_yaml_sources(dir.path(), &defs, &entities).unwrap())
+    }
+
+    /// Build a FieldsContext whose "task" entity has a computed field
+    /// that does NOT depend on `_changelog`.
+    fn fields_context_with_plain_computed() -> Arc<FieldsContext> {
+        let defs = vec![
+            (
+                "title",
+                "id: 00000000000000000000000TTL\nname: title\ntype:\n  kind: text\n  single_line: true\n",
+            ),
+            (
+                "body",
+                "id: 00000000000000000000000BDY\nname: body\ntype:\n  kind: markdown\n",
+            ),
+            (
+                "upper_title",
+                "id: 00000000000000000000000UPR\nname: upper_title\ntype:\n  kind: computed\n  derive: upper-title\n",
+            ),
+        ];
+        let entities = vec![(
+            "task",
+            "name: task\nbody_field: body\nfields:\n  - title\n  - body\n  - upper_title\n",
+        )];
+        let dir = TempDir::new().unwrap();
+        Arc::new(FieldsContext::from_yaml_sources(dir.path(), &defs, &entities).unwrap())
+    }
+
+    /// Build a ComputeEngine with a "count-changelog" derivation that reads
+    /// the `_changelog` array and returns its length.
+    fn compute_engine_with_changelog_counter() -> Arc<swissarmyhammer_fields::ComputeEngine> {
+        let mut engine = swissarmyhammer_fields::ComputeEngine::new();
+        engine.register(
+            "count-changelog",
+            Box::new(|fields| {
+                let count = fields
+                    .get("_changelog")
+                    .and_then(|v| v.as_array())
+                    .map(|a| a.len())
+                    .unwrap_or(0);
+                Box::pin(async move { json!(count) })
+            }),
+        );
+        Arc::new(engine)
+    }
+
+    /// Build a ComputeEngine with an "upper-title" derivation that does
+    /// not need `_changelog`.
+    fn compute_engine_with_upper_title() -> Arc<swissarmyhammer_fields::ComputeEngine> {
+        let mut engine = swissarmyhammer_fields::ComputeEngine::new();
+        engine.register(
+            "upper-title",
+            Box::new(|fields| {
+                let title = fields
+                    .get("title")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_uppercase();
+                Box::pin(async move { serde_json::Value::String(title) })
+            }),
+        );
+        Arc::new(engine)
+    }
+
+    #[tokio::test]
+    async fn changelog_injected_for_changelog_dependent_computed_field() {
+        let dir = TempDir::new().unwrap();
+        let fields = fields_context_with_changelog_computed();
+        let compute = compute_engine_with_changelog_counter();
+        let ctx = EntityContext::new(dir.path(), fields).with_compute(compute);
+
+        // Write a task (legacy fallback doesn't write changelog entries)
+        let mut task = Entity::new("task", "01ABC");
+        task.set("title", json!("Hello"));
+        ctx.write(&task).await.unwrap();
+
+        // Manually append changelog entries so read_changelog finds them
+        let log_path = ctx.changelog_path("task", "01ABC").unwrap();
+        let entry1 = ChangeEntry::new(
+            "task",
+            "01ABC",
+            "create",
+            vec![(
+                "title".into(),
+                FieldChange::Set {
+                    value: json!("Hello"),
+                },
+            )],
+        );
+        let entry2 = ChangeEntry::new(
+            "task",
+            "01ABC",
+            "update",
+            vec![(
+                "title".into(),
+                FieldChange::Changed {
+                    old_value: json!("Hello"),
+                    new_value: json!("Updated"),
+                },
+            )],
+        );
+        changelog::append_changelog(&log_path, &entry1)
+            .await
+            .unwrap();
+        changelog::append_changelog(&log_path, &entry2)
+            .await
+            .unwrap();
+
+        // Read the entity — derivation should see 2 changelog entries
+        let loaded = ctx.read("task", "01ABC").await.unwrap();
+        let count = loaded.fields.get("change_count").unwrap().as_u64().unwrap();
+        assert_eq!(count, 2, "expected 2 changelog entries, got {}", count);
+    }
+
+    #[tokio::test]
+    async fn changelog_not_injected_for_non_changelog_computed_field() {
+        let dir = TempDir::new().unwrap();
+        let fields = fields_context_with_plain_computed();
+        let compute = compute_engine_with_upper_title();
+        let ctx = EntityContext::new(dir.path(), fields).with_compute(compute);
+
+        let mut task = Entity::new("task", "01ABC");
+        task.set("title", json!("hello"));
+        ctx.write(&task).await.unwrap();
+
+        let loaded = ctx.read("task", "01ABC").await.unwrap();
+        // The derivation ran successfully without _changelog
+        assert_eq!(loaded.get_str("upper_title"), Some("HELLO"));
+        // _changelog was never injected, so it should not appear
+        assert!(
+            !loaded.fields.contains_key("_changelog"),
+            "_changelog should not be present in entity fields"
+        );
+    }
+
+    #[tokio::test]
+    async fn changelog_stripped_after_derivation() {
+        let dir = TempDir::new().unwrap();
+        let fields = fields_context_with_changelog_computed();
+        let compute = compute_engine_with_changelog_counter();
+        let ctx = EntityContext::new(dir.path(), fields).with_compute(compute);
+
+        let mut task = Entity::new("task", "01ABC");
+        task.set("title", json!("Test"));
+        ctx.write(&task).await.unwrap();
+
+        let loaded = ctx.read("task", "01ABC").await.unwrap();
+        assert!(
+            !loaded.fields.contains_key("_changelog"),
+            "_changelog must be stripped from entity fields after derivation"
+        );
+        // But the computed field was still derived
+        assert!(loaded.fields.contains_key("change_count"));
+    }
+
+    #[tokio::test]
+    async fn changelog_empty_array_when_no_changelog_file_exists() {
+        let dir = TempDir::new().unwrap();
+        let fields = fields_context_with_changelog_computed();
+        let compute = compute_engine_with_changelog_counter();
+        let ctx = EntityContext::new(dir.path(), fields).with_compute(compute);
+
+        // Write an entity but do NOT write any changelog entries.
+        // The JSONL file simply does not exist.
+        let mut task = Entity::new("task", "01XYZ");
+        task.set("title", json!("Brand new"));
+        ctx.write(&task).await.unwrap();
+
+        let loaded = ctx.read("task", "01XYZ").await.unwrap();
+        // With no changelog file, _changelog should be injected as []
+        // and the derivation should see count == 0.
+        let count = loaded.fields.get("change_count").unwrap().as_u64().unwrap();
+        assert_eq!(
+            count, 0,
+            "expected 0 changelog entries for an entity with no changelog file"
+        );
     }
 
     #[tokio::test]
