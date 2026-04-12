@@ -2,15 +2,15 @@
 assignees:
 - claude-code
 depends_on:
-- 01KNS1154TG90CFZCHCPK5PMNS
+- 01KP0KZZ9VDQJVNK15JQAY4BKH
 position_column: todo
-position_ordinal: b080
+position_ordinal: b280
 project: kanban-mcp
 title: 'kanban-cli: add build.rs for man pages, shell completions, and doc reference'
 ---
 ## What
 
-Create `kanban-cli/build.rs` to generate CLI docs, man pages, and shell completions from the new `cli.rs` at build time.
+Create `kanban-cli/build.rs` to generate CLI docs, man pages, and shell completions at build time.
 
 Model exactly on `shelltool-cli/build.rs`:
 
@@ -26,26 +26,22 @@ fn main() -> std::io::Result<()> {
     let repo_root = Path::new("..");
 
     doc_gen::generate_markdown_with_brew(
-        &cmd,
-        &repo_root.join("doc/src/reference"),
-        "kanban",
+        &cmd, &repo_root.join("doc/src/reference"), "kanban",
         Some("swissarmyhammer/tap/kanban-cli"),
     )?;
-
     doc_gen::generate_manpage(&cmd, &repo_root.join("docs"), "kanban")?;
-
     doc_gen::generate_completions(cmd, &repo_root.join("completions"), "kanban")?;
-
     Ok(())
 }
 ```
 
-This produces:
-- `doc/src/reference/kanban-cli.md` — mdbook CLI reference
-- `docs/kanban.1` — man page
-- `completions/kanban.bash`, `completions/kanban.fish` — shell completions
+This generates docs for the lifecycle subcommands (serve/init/deinit/doctor) defined in `cli.rs`. The schema-driven noun/verb commands are not covered — same trade-off as shelltool (only its clap-defined commands appear in generated docs).
 
-Note: `build.rs` only generates docs for the structured `cli::Cli` subcommands (serve/init/deinit/doctor). The schema-driven noun-verb commands are not covered — that's consistent with how shelltool works (only its lifecycle commands are in `cli.rs`).
+Add `[build-dependencies]` to `kanban-cli/Cargo.toml`:
+- `clap` (workspace)
+- `clap-markdown` (workspace)
+- `clap_mangen` (workspace)
+- `clap_complete` (workspace)
 
 ## Acceptance Criteria
 - [ ] `cargo build -p kanban-cli` generates `doc/src/reference/kanban-cli.md`
@@ -56,6 +52,3 @@ Note: `build.rs` only generates docs for the structured `cli::Cli` subcommands (
 ## Tests
 - [ ] `cargo build -p kanban-cli` succeeds without errors
 - [ ] Assert generated files exist after build
-
-## Workflow
-- Use `/tdd` — write failing tests first, then implement to make them pass.
