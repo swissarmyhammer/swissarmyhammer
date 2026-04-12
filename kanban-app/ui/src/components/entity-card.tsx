@@ -1,5 +1,5 @@
 import { forwardRef, memo, useCallback, useMemo, useState } from "react";
-import { GripVertical, Info } from "lucide-react";
+import { GripVertical, Info, type LucideIcon } from "lucide-react";
 import { FocusScope } from "@/components/focus-scope";
 import { Field } from "@/components/fields/field";
 import { fieldIcon } from "@/components/fields/field-icon";
@@ -90,12 +90,13 @@ function useHeaderFields(entityType: string): FieldDef[] {
   );
 }
 
-/** Drag handle button — stops click propagation and wires drag handle props. */
-function DragHandle({
-  dragHandleProps,
-}: {
+/** Props for the drag handle button. */
+interface DragHandleProps {
   dragHandleProps?: Record<string, unknown>;
-}) {
+}
+
+/** Drag handle button — stops click propagation and wires drag handle props. */
+function DragHandle({ dragHandleProps }: DragHandleProps) {
   return (
     <button
       type="button"
@@ -108,18 +109,18 @@ function DragHandle({
   );
 }
 
+/** Props for the card field list. */
+interface CardFieldsProps {
+  fields: FieldDef[];
+  entity: Entity;
+}
+
 /**
  * Renders the card's header-section fields with icon tooltips and
  * per-field editing state. Extracted so that EntityCard itself stays
  * compact.
  */
-function CardFields({
-  fields,
-  entity,
-}: {
-  fields: FieldDef[];
-  entity: Entity;
-}) {
+function CardFields({ fields, entity }: CardFieldsProps) {
   const [editingField, setEditingField] = useState<string | null>(null);
   const clearEditing = useCallback(() => setEditingField(null), []);
 
@@ -158,31 +159,39 @@ function CardField({
   onDone,
   onCancel,
 }: CardFieldProps) {
-  const hasIcon = !!fieldIcon(field);
+  const Icon = fieldIcon(field);
+  const fieldElement = (
+    <Field
+      fieldDef={field}
+      entityType={entity.entity_type}
+      entityId={entity.id}
+      mode="compact"
+      editing={editing}
+      onEdit={onEdit}
+      onDone={onDone}
+      onCancel={onCancel}
+    />
+  );
+
+  if (!Icon) return fieldElement;
+
+  const tip = field.description || field.name.replace(/_/g, " ");
   return (
-    <div className={hasIcon ? "flex items-start gap-1.5" : ""}>
-      <CardFieldIcon field={field} />
-      <div className="flex-1 min-w-0">
-        <Field
-          fieldDef={field}
-          entityType={entity.entity_type}
-          entityId={entity.id}
-          mode="compact"
-          editing={editing}
-          onEdit={onEdit}
-          onDone={onDone}
-          onCancel={onCancel}
-        />
-      </div>
+    <div className="flex items-start gap-1.5">
+      <CardFieldIcon Icon={Icon} tip={tip} />
+      <div className="flex-1 min-w-0">{fieldElement}</div>
     </div>
   );
 }
 
+/** Props for the tooltip-wrapped icon badge on a card field. */
+interface CardFieldIconProps {
+  Icon: LucideIcon;
+  tip: string;
+}
+
 /** Tooltip-wrapped icon badge for a header field on the card. */
-function CardFieldIcon({ field }: { field: FieldDef }) {
-  const Icon = fieldIcon(field);
-  if (!Icon) return null;
-  const tip = field.description || field.name.replace(/_/g, " ");
+function CardFieldIcon({ Icon, tip }: CardFieldIconProps) {
   return (
     <Tooltip>
       <TooltipTrigger asChild>

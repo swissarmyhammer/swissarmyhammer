@@ -225,15 +225,17 @@ function InspectorSections({
   claimPredicates,
   nav,
 }: InspectorSectionsProps) {
-  /** Track the running index across sections so each FieldRow knows its flat position. */
-  const flatIndex = { i: 0 };
-  const rowFor = (field: FieldDef, showLabel = true) => (
+  const headerLen = sections.header.length;
+  const bodyLen = sections.body.length;
+
+  /** Build a FieldRow element for the field at the given flat index. */
+  const rowFor = (field: FieldDef, flatIndex: number, showLabel = true) => (
     <FieldRow
       key={field.name}
       field={field}
       entity={entity}
       showLabel={showLabel}
-      claimWhen={claimPredicates[flatIndex.i++]}
+      claimWhen={claimPredicates[flatIndex]}
       inspectorMode={nav.mode}
       onExitEdit={nav.exitEdit}
       onEnterEdit={nav.enterEdit}
@@ -242,38 +244,43 @@ function InspectorSections({
 
   return (
     <div data-testid="entity-inspector">
-      {sections.header.length > 0 && (
+      {headerLen > 0 && (
         <div className="space-y-2" data-testid="inspector-header">
-          {sections.header.map((f) => rowFor(f, false))}
+          {sections.header.map((f, i) => rowFor(f, i, false))}
         </div>
       )}
-      {sections.header.length > 0 && sections.body.length > 0 && (
+      {headerLen > 0 && bodyLen > 0 && (
         <div className="my-3 h-px bg-border" />
       )}
-      {sections.body.length > 0 && (
+      {bodyLen > 0 && (
         <div className="space-y-3" data-testid="inspector-body">
-          {sections.body.map((f) => rowFor(f))}
+          {sections.body.map((f, i) => rowFor(f, headerLen + i))}
         </div>
       )}
-      <InspectorFooter fields={sections.footer} rowFor={rowFor} />
+      <InspectorFooter
+        fields={sections.footer}
+        offset={headerLen + bodyLen}
+        rowFor={rowFor}
+      />
     </div>
   );
 }
 
-/** Footer section with a top divider. Renders nothing when there are no footer fields. */
-function InspectorFooter({
-  fields,
-  rowFor,
-}: {
+/** Props for the inspector footer section. */
+interface InspectorFooterProps {
   fields: FieldDef[];
-  rowFor: (field: FieldDef, showLabel?: boolean) => React.ReactElement;
-}) {
+  offset: number;
+  rowFor: (field: FieldDef, flatIndex: number, showLabel?: boolean) => React.ReactElement;
+}
+
+/** Footer section with a top divider. Renders nothing when there are no footer fields. */
+function InspectorFooter({ fields, offset, rowFor }: InspectorFooterProps) {
   if (fields.length === 0) return null;
   return (
     <>
       <div className="my-3 h-px bg-border" />
       <div className="space-y-3" data-testid="inspector-footer">
-        {fields.map((f) => rowFor(f))}
+        {fields.map((f, i) => rowFor(f, offset + i))}
       </div>
     </>
   );
@@ -330,7 +337,7 @@ function FieldRow({
   const Icon = field.icon ? (fieldIcon(field) ?? HelpCircle) : null;
   const tip = field.description || fieldLabel(field);
   const content = (
-    <FieldContent field={field} entity={entity} editState={editState} />
+    <FieldContent field={field} entity={entity} editable={editable} editState={editState} />
   );
   const bare = !showLabel && !Icon;
 
@@ -348,17 +355,16 @@ function FieldRow({
   );
 }
 
-/** Renders the inner Field editor/display for a row. */
-function FieldContent({
-  field,
-  entity,
-  editState,
-}: {
+/** Props for the inner field editor/display. */
+interface FieldContentProps {
   field: FieldDef;
   entity: Entity;
+  editable: boolean;
   editState: ReturnType<typeof useFieldEditing>;
-}) {
-  const editable = isEditable(field);
+}
+
+/** Renders the inner Field editor/display for a row. */
+function FieldContent({ field, entity, editable, editState }: FieldContentProps) {
   return (
     <Field
       fieldDef={field}
@@ -409,8 +415,14 @@ function useFieldEditing(
   return { editing, handleEdit, handleDone, handleCancel };
 }
 
+/** Props for the tooltip-wrapped field icon badge. */
+interface FieldIconTooltipProps {
+  Icon: LucideIcon;
+  tip: string;
+}
+
 /** Tooltip-wrapped field icon badge used in the inspector's field rows. */
-function FieldIconTooltip({ Icon, tip }: { Icon: LucideIcon; tip: string }) {
+function FieldIconTooltip({ Icon, tip }: FieldIconTooltipProps) {
   return (
     <Tooltip>
       <TooltipTrigger asChild>

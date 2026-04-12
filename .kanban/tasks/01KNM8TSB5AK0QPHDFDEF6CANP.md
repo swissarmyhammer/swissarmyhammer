@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: review
-position_ordinal: 7c80
+position_column: done
+position_ordinal: ffffffffffffffffffffffbc80
 title: Add tooltips to field icons in EntityCard and extract shared icon utilities
 ---
 ## What
@@ -63,3 +63,19 @@ Pre-existing violations in `entity-card.tsx` and `entity-inspector.tsx` blocked 
 ### Workflow
 - Used `/tdd` — wrote failing tests first, then the shared utility, then the component updates.
 - Refactor was done only after the feature landed and tests were green, as a second phase to satisfy the stop hook.
+
+## Review Findings (2026-04-12 14:32)
+
+### Warnings
+- [x] `kanban-app/ui/src/components/entity-card.tsx` `CardField` component — `fieldIcon(field)` is called once in `CardField` (`const hasIcon = !!fieldIcon(field)`) and again in `CardFieldIcon` (`const Icon = fieldIcon(field)`). Call it once in `CardField`, pass the resolved `Icon` as a prop to `CardFieldIcon`, and use `!!Icon` for the layout conditional. This removes the redundant lookup and makes the data flow explicit.
+- [x] `kanban-app/ui/src/components/entity-inspector.tsx` `FieldContent` component — Uses an inline anonymous type `{ field: FieldDef; entity: Entity; editState: ReturnType<typeof useFieldEditing> }` instead of a named `FieldContentProps` interface. The JS/TS review guidelines require named prop interfaces for every component.
+- [x] `kanban-app/ui/src/components/entity-inspector.tsx` `InspectorFooter` component — Uses an inline anonymous type `{ fields: FieldDef[]; rowFor: ... }` instead of a named `InspectorFooterProps` interface.
+- [x] `kanban-app/ui/src/components/entity-inspector.tsx` `FieldIconTooltip` component — Uses an inline anonymous type `{ Icon: LucideIcon; tip: string }` instead of a named `FieldIconTooltipProps` interface.
+- [x] `kanban-app/ui/src/components/entity-card.tsx` `DragHandle` component — Uses an inline anonymous type `{ dragHandleProps?: Record<string, unknown> }` instead of a named `DragHandleProps` interface.
+- [x] `kanban-app/ui/src/components/entity-card.tsx` `CardFields` component — Uses an inline anonymous type `{ fields: FieldDef[]; entity: Entity }` instead of a named `CardFieldsProps` interface.
+- [x] `kanban-app/ui/src/components/entity-card.tsx` `CardFieldIcon` component — Uses an inline anonymous type `{ field: FieldDef }` instead of a named `CardFieldIconProps` interface.
+
+### Nits
+- [x] `kanban-app/ui/src/components/entity-inspector.tsx` `InspectorSections` — The `flatIndex` counter is a mutable `{ i: 0 }` object mutated during render via `flatIndex.i++` inside `rowFor`. While it works because render is synchronous and single-pass, a mutable counter in the render body is surprising. Consider precomputing a `fieldWithIndex` array before rendering instead.
+- [x] `kanban-app/ui/src/components/entity-inspector.tsx` `FieldContent` — Calls `isEditable(field)` again even though the parent `FieldRow` already computed it. The editable flag could be included in the `editState` return value or passed as a prop to avoid the redundant call.
+- [x] `kanban-app/ui/src/components/entity-card.tsx` `CardField` — The component wraps the `<div className="flex-1 min-w-0">` around `<Field>` unconditionally, but the outer `<div className={hasIcon ? "flex items-start gap-1.5" : ""}>` renders an empty className when there is no icon. Consider returning just the `<Field>` wrapper directly (no outer div) when there is no icon, to match the previous code's behavior of not wrapping icon-less fields in an extra `<div className="">`.
