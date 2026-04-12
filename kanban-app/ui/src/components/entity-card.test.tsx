@@ -36,6 +36,8 @@ const TASK_SCHEMA = {
       type: { kind: "computed", derive: "parse-body-tags" },
       editor: "multi-select",
       display: "badge-list",
+      icon: "tag",
+      description: "Task tags",
       section: "header",
     },
     {
@@ -44,6 +46,7 @@ const TASK_SCHEMA = {
       type: { kind: "computed", derive: "parse-body-progress" },
       editor: "none",
       display: "progress",
+      icon: "clock",
       section: "header",
     },
     {
@@ -312,6 +315,47 @@ describe("EntityCard", () => {
         (c[1] as Record<string, unknown>)?.cmd === "ui.inspect",
     );
     expect(inspectCall).toBeUndefined();
+  });
+
+  describe("field icon tooltips", () => {
+    it("wraps the icon for a described field in a tooltip trigger labelled by the description", async () => {
+      currentEntity = makeEntity();
+      const { container } = await renderWithProvider(
+        <EntityCard entity={currentEntity} />,
+      );
+      // The tags field has icon + description "Task tags" — the icon span
+      // should be the trigger element and carry aria-label="Task tags".
+      const trigger = container.querySelector(
+        'span[aria-label="Task tags"]',
+      ) as HTMLElement | null;
+      expect(trigger).toBeTruthy();
+      // Radix wires the trigger role/data-slot through asChild.
+      expect(trigger!.getAttribute("data-slot")).toBe("tooltip-trigger");
+    });
+
+    it("falls back to a humanized field name when the field has no description", async () => {
+      currentEntity = makeEntity();
+      const { container } = await renderWithProvider(
+        <EntityCard entity={currentEntity} />,
+      );
+      // The progress field has an icon but no description — the tooltip
+      // label should be the humanized field name ("progress").
+      const trigger = container.querySelector(
+        'span[aria-label="progress"]',
+      ) as HTMLElement | null;
+      expect(trigger).toBeTruthy();
+      expect(trigger!.getAttribute("data-slot")).toBe("tooltip-trigger");
+    });
+
+    it("does not render a tooltip wrapper for fields without an icon", async () => {
+      currentEntity = makeEntity();
+      const { container } = await renderWithProvider(
+        <EntityCard entity={currentEntity} />,
+      );
+      // The title field has no icon in the schema — no tooltip trigger
+      // labelled "title" should exist.
+      expect(container.querySelector('span[aria-label="title"]')).toBeNull();
+    });
   });
 
   describe("progress bar", () => {

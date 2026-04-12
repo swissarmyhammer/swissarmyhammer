@@ -6,6 +6,39 @@ metadata:
   version: 0.12.11
 ---
 
+## Ensure the Review Column Exists
+
+The review workflow requires a column with id `review` and name `Review` positioned immediately before the terminal column (conventionally `done`). Both `implement` and `review` must ensure this column exists before moving cards.
+
+This procedure is **idempotent** — run it every time; it is a no-op when the column is already in place.
+
+### Procedure
+
+1. List existing columns:
+
+   ```json
+   {"op": "list columns"}
+   ```
+
+2. If any column has `id: "review"`, stop — nothing to do.
+
+3. Otherwise find the terminal column (the one with the highest `order` — conventionally `done`). Remember its id as `<terminal_id>` and its current order as `<terminal_order>`.
+
+4. Bump the terminal column out of the way by one position:
+
+   ```json
+   {"op": "update column", "id": "<terminal_id>", "order": <terminal_order + 1>}
+   ```
+
+5. Insert the review column at the vacated position:
+
+   ```json
+   {"op": "add column", "id": "review", "name": "Review", "order": <terminal_order>}
+   ```
+
+The resulting column order is: `... → doing → review → done` (or whatever the terminal column is).
+
+
 # Do
 
 Pick up and execute the next task from the kanban board.
@@ -21,7 +54,7 @@ When the user asks you to track work, create a todo list, or remember tasks — 
 ## Process
 
 1. Get the next task: use `kanban` with `op: "next task"` to find the next actionable card. This searches all non-done columns for ready tasks.
-   - To filter by tag: `op: "next task"`, `filter: "#review-finding"`
+   - To filter by tag: `op: "next task"`, `filter: "#bug"`
    - To filter by assignee: `op: "next task"`, `filter: "@alice"`
    - To combine: `op: "next task"`, `filter: "#bug && @alice"`
 2. Move it to doing: use `kanban` with `op: "move task"`, `id: "<task-id>"`, `column: "doing"`
@@ -31,7 +64,7 @@ When the user asks you to track work, create a todo list, or remember tasks — 
    - **Mark it complete right away**: use `kanban` with `op: "update task"`, `id: "<task-id>"`, and update the `description` to change `- [ ]` to `- [x]` for the completed subtask
    - Do this after EVERY subtask — not in a batch at the end. The checklist is the progress indicator; leaving boxes unchecked while doing work defeats the purpose.
    - When updating the description, preserve all existing content (other checklist items, prose, etc.) — only flip the one checkbox you just finished.
-5. **Complete the card**: when ALL subtasks are done (every `- [ ]` is now `- [x]`), use `kanban` with `op: "complete task"`, `id: "<task-id>"`. You MUST do this — never leave a card in "doing" when the work is finished.
+5. **Move the card to review**: when ALL subtasks are done (every `- [ ]` is now `- [x]`), the card is ready for code review — not directly for `done`. First ensure the `review` column exists using the **Ensure the Review Column Exists** partial above (idempotent — run every time), then move the card there with `kanban` using `op: "move task"`, `id: "<task-id>"`, `column: "review"`. You MUST do this — never leave a card in "doing" when the work is finished. **Do NOT use `complete task`** — that skips the review gate by jumping to the terminal column. After moving to `review`, stop and tell the user the card is ready for `/review`.
 
 ## Filtering Work
 
@@ -42,6 +75,7 @@ All filtering uses a small expression language with these atoms and operators:
 | Syntax | Meaning |
 |--------|---------|
 | `#tag` | Match tasks with this tag (includes virtual tags: READY, BLOCKED, BLOCKING) |
+| `$project-slug` | Match tasks assigned to this project (by project slug/id) |
 | `@user` | Match tasks assigned to this user |
 | `^card-id` | Match tasks referencing this card (via depends_on or own id) |
 | `&&` / `and` | Both sides must match |
@@ -55,9 +89,11 @@ All filtering uses a small expression language with these atoms and operators:
 Use `next task` with a `filter` to pick up specific kinds of work one card at a time:
 
 ```json
-{"op": "next task", "filter": "#review-finding"}
+{"op": "next task", "filter": "#bug"}
 {"op": "next task", "filter": "@alice"}
 {"op": "next task", "filter": "#bug && @alice"}
+{"op": "next task", "filter": "$auth-migration"}
+{"op": "next task", "filter": "$auth-migration && @alice"}
 ```
 
 This is the preferred way to work through cards — it returns one ready card at a time and excludes done cards automatically.
@@ -73,6 +109,9 @@ This is the preferred way to work through cards — it returns one ready card at
 {"op": "list tasks", "filter": "#bug && @alice"}
 {"op": "list tasks", "filter": "#bug || #feature"}
 {"op": "list tasks", "filter": "!#done && #READY"}
+{"op": "list tasks", "filter": "$auth-migration"}
+{"op": "list tasks", "filter": "$auth-migration && #bug"}
+{"op": "list tasks", "filter": "$auth-migration || $frontend"}
 ```
 
 Note: `list tasks` automatically excludes done tasks unless you explicitly request `column: "done"`.
@@ -172,13 +211,26 @@ Set the `project` field when creating or updating a task:
 
 Tasks without a project have an empty `project` field. The task response always includes `"project": "<slug>"` (or `""` if unset).
 
+### Filtering by Project
+
+Once tasks are assigned to projects, use the `$project-slug` atom in any filter to scope work to a specific project. It composes with other atoms the same way `#tag` and `@user` do:
+
+```json
+{"op": "next task", "filter": "$auth-migration"}
+{"op": "list tasks", "filter": "$auth-migration && #bug"}
+{"op": "list tasks", "filter": "$auth-migration || $frontend"}
+{"op": "list tasks", "filter": "!$auth-migration"}
+```
+
+The slug after `$` is the project `id` you used in `add project`. Negation (`!$slug`) excludes the project, and `$a || $b` matches tasks in either project.
+
 ### Workflow
 
 When starting a plan with multiple related tasks:
 
 1. Create a project for the initiative
 2. Create tasks with the `project` field set to the project ID
-3. Use projects to filter and focus work in the UI
+3. Use the `$project-slug` filter atom in `list tasks` and `next task` to focus work on a project
 
 ## Guidelines
 

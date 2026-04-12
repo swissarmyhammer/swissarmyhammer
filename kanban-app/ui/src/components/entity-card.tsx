@@ -1,7 +1,8 @@
 import { forwardRef, memo, useCallback, useMemo, useState } from "react";
-import { GripVertical, Info, icons } from "lucide-react";
+import { GripVertical, Info } from "lucide-react";
 import { FocusScope } from "@/components/focus-scope";
 import { Field } from "@/components/fields/field";
+import { fieldIcon } from "@/components/fields/field-icon";
 import { useSchema } from "@/lib/schema-context";
 import { useEntityCommands } from "@/lib/entity-commands";
 import { useDispatchCommand, type CommandDef } from "@/lib/command-scope";
@@ -12,22 +13,6 @@ import {
 } from "@/components/ui/tooltip";
 import type { ClaimPredicate } from "@/lib/entity-focus-context";
 import type { Entity, FieldDef } from "@/types/kanban";
-
-/** Convert kebab-case icon name to PascalCase key for lucide-react lookup. */
-function kebabToPascal(s: string): string {
-  return s.replace(/(^|-)([a-z])/g, (_, _dash, c) => c.toUpperCase());
-}
-
-/** Resolve a lucide icon component from a field's `icon` property. */
-function resolveIcon(field: FieldDef) {
-  if (!field.icon) return null;
-  const key = kebabToPascal(field.icon);
-  return (
-    (icons[key as keyof typeof icons] as React.ComponentType<{
-      className?: string;
-    }>) ?? null
-  );
-}
 
 interface EntityCardProps {
   entity: Entity;
@@ -49,8 +34,8 @@ interface EntityCardProps {
  * dispatch logic as EntityInspector — no hardcoded field names.
  */
 export const EntityCard = memo(
-  forwardRef<HTMLDivElement, EntityCardProps>(function EntityCard(
-    {
+  forwardRef<HTMLDivElement, EntityCardProps>(function EntityCard(props, ref) {
+    const {
       entity,
       dragHandleProps,
       style,
@@ -60,32 +45,18 @@ export const EntityCard = memo(
       extraCommands,
       claimWhen,
       ...rest
-    },
-    ref,
-  ) {
-    const { getSchema } = useSchema();
-    const schema = getSchema(entity.entity_type);
-
-    const entityMoniker = entity.moniker;
-
-    const cardFields = useMemo(
-      () => (schema?.fields ?? []).filter((f) => f.section === "header"),
-      [schema],
-    );
-
+    } = props;
+    const cardFields = useHeaderFields(entity.entity_type);
     const commands = useEntityCommands(
       entity.entity_type,
       entity.id,
       entity,
       extraCommands,
     );
-    const [editingField, setEditingField] = useState<string | null>(null);
-
-    const clearEditing = useCallback(() => setEditingField(null), []);
 
     return (
       <FocusScope
-        moniker={entityMoniker}
+        moniker={entity.moniker}
         commands={commands}
         claimWhen={claimWhen}
         className="entity-card-focus"
@@ -100,49 +71,134 @@ export const EntityCard = memo(
           className="rounded-md bg-card px-3 py-2 text-sm border border-border relative group flex items-start gap-2 overflow-hidden"
           {...rest}
         >
-          <button
-            type="button"
-            className="shrink-0 mt-0.5 p-0 text-muted-foreground/50 hover:text-muted-foreground cursor-grab active:cursor-grabbing touch-none"
-            onClick={(e) => e.stopPropagation()}
-            {...dragHandleProps}
-          >
-            <GripVertical className="h-4 w-4" />
-          </button>
-          <div className="flex-1 min-w-0 break-words space-y-0.5">
-            {cardFields.map((field) => {
-              const Icon = resolveIcon(field);
-              return (
-                <div
-                  key={field.name}
-                  className={Icon ? "flex items-start gap-1.5" : ""}
-                >
-                  {Icon && (
-                    <span className="mt-0.5 shrink-0 text-muted-foreground/50">
-                      <Icon className="h-3 w-3" />
-                    </span>
-                  )}
-                  <div className="flex-1 min-w-0">
-                    <Field
-                      fieldDef={field}
-                      entityType={entity.entity_type}
-                      entityId={entity.id}
-                      mode="compact"
-                      editing={editingField === field.name}
-                      onEdit={() => setEditingField(field.name)}
-                      onDone={clearEditing}
-                      onCancel={clearEditing}
-                    />
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-          <InspectButton moniker={entityMoniker} />
+          <DragHandle dragHandleProps={dragHandleProps} />
+          <CardFields fields={cardFields} entity={entity} />
+          <InspectButton moniker={entity.moniker} />
         </div>
       </FocusScope>
     );
   }),
 );
+
+/** Header-section fields for a given entity type, memoised by schema identity. */
+function useHeaderFields(entityType: string): FieldDef[] {
+  const { getSchema } = useSchema();
+  const schema = getSchema(entityType);
+  return useMemo(
+    () => (schema?.fields ?? []).filter((f) => f.section === "header"),
+    [schema],
+  );
+}
+
+/** Drag handle button — stops click propagation and wires drag handle props. */
+function DragHandle({
+  dragHandleProps,
+}: {
+  dragHandleProps?: Record<string, unknown>;
+}) {
+  return (
+    <button
+      type="button"
+      className="shrink-0 mt-0.5 p-0 text-muted-foreground/50 hover:text-muted-foreground cursor-grab active:cursor-grabbing touch-none"
+      onClick={(e) => e.stopPropagation()}
+      {...dragHandleProps}
+    >
+      <GripVertical className="h-4 w-4" />
+    </button>
+  );
+}
+
+/**
+ * Renders the card's header-section fields with icon tooltips and
+ * per-field editing state. Extracted so that EntityCard itself stays
+ * compact.
+ */
+function CardFields({
+  fields,
+  entity,
+}: {
+  fields: FieldDef[];
+  entity: Entity;
+}) {
+  const [editingField, setEditingField] = useState<string | null>(null);
+  const clearEditing = useCallback(() => setEditingField(null), []);
+
+  return (
+    <div className="flex-1 min-w-0 break-words space-y-0.5">
+      {fields.map((field) => (
+        <CardField
+          key={field.name}
+          field={field}
+          entity={entity}
+          editing={editingField === field.name}
+          onEdit={() => setEditingField(field.name)}
+          onDone={clearEditing}
+          onCancel={clearEditing}
+        />
+      ))}
+    </div>
+  );
+}
+
+/** A single header field with its optional icon-tooltip and Field display. */
+interface CardFieldProps {
+  field: FieldDef;
+  entity: Entity;
+  editing: boolean;
+  onEdit: () => void;
+  onDone: () => void;
+  onCancel: () => void;
+}
+
+function CardField({
+  field,
+  entity,
+  editing,
+  onEdit,
+  onDone,
+  onCancel,
+}: CardFieldProps) {
+  const hasIcon = !!fieldIcon(field);
+  return (
+    <div className={hasIcon ? "flex items-start gap-1.5" : ""}>
+      <CardFieldIcon field={field} />
+      <div className="flex-1 min-w-0">
+        <Field
+          fieldDef={field}
+          entityType={entity.entity_type}
+          entityId={entity.id}
+          mode="compact"
+          editing={editing}
+          onEdit={onEdit}
+          onDone={onDone}
+          onCancel={onCancel}
+        />
+      </div>
+    </div>
+  );
+}
+
+/** Tooltip-wrapped icon badge for a header field on the card. */
+function CardFieldIcon({ field }: { field: FieldDef }) {
+  const Icon = fieldIcon(field);
+  if (!Icon) return null;
+  const tip = field.description || field.name.replace(/_/g, " ");
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span
+          aria-label={tip}
+          className="mt-0.5 shrink-0 text-muted-foreground/50"
+        >
+          <Icon className="h-3 w-3" />
+        </span>
+      </TooltipTrigger>
+      <TooltipContent side="left" align="start">
+        {tip}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
 
 /**
  * Dispatches ui.inspect with an explicit target moniker.

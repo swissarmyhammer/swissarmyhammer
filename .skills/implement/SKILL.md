@@ -40,18 +40,97 @@ metadata:
 - Don't add defensive code for scenarios that can't happen
 - Trust internal code and framework guarantees
 
+## Ensure the Review Column Exists
+
+The review workflow requires a column with id `review` and name `Review` positioned immediately before the terminal column (conventionally `done`). Both `implement` and `review` must ensure this column exists before moving cards.
+
+This procedure is **idempotent** — run it every time; it is a no-op when the column is already in place.
+
+### Procedure
+
+1. List existing columns:
+
+   ```json
+   {"op": "list columns"}
+   ```
+
+2. If any column has `id: "review"`, stop — nothing to do.
+
+3. Otherwise find the terminal column (the one with the highest `order` — conventionally `done`). Remember its id as `<terminal_id>` and its current order as `<terminal_order>`.
+
+4. Bump the terminal column out of the way by one position:
+
+   ```json
+   {"op": "update column", "id": "<terminal_id>", "order": <terminal_order + 1>}
+   ```
+
+5. Insert the review column at the vacated position:
+
+   ```json
+   {"op": "add column", "id": "review", "name": "Review", "order": <terminal_order>}
+   ```
+
+The resulting column order is: `... → doing → review → done` (or whatever the terminal column is).
+
 
 # Implement
 
-Pick up the next kanban card and get it done.
+Pick up a kanban card and get it done.
 
 DO NOT deviate from the plan -- if you run into a problem, you need to stop and ask the user for guidance -- DO NOT deviate from the plan without permission from the user.
 
+## Invocation
+
+`/implement` accepts an optional argument. It can be a literal task id, the sentinel `<next>`, or a filter DSL expression that scopes which card `next task` returns.
+
+| Invocation | Meaning |
+|------------|---------|
+| `/implement` | Default — same as `/implement <next>`. Picks up the next actionable card via `next task` with no filter. |
+| `/implement <next>` | Explicit form of the default. |
+| `/implement <task-id>` (e.g. `/implement 01KN...`) | Work on the specific card with that ULID. Do NOT call `next task`. |
+| `/implement #<tag>` (e.g. `/implement #bug`) | Pick the next actionable card with that tag. Passes `filter: "#<tag>"` to `next task`. |
+| `/implement @<user>` (e.g. `/implement @alice`) | Pick the next actionable card assigned to that user. |
+| `/implement $<project-slug>` (e.g. `/implement $auth-migration`) | Pick the next actionable card in the given project. Passes `filter: "$<project-slug>"` to `next task`. |
+| `/implement <filter-expression>` (e.g. `/implement "#bug && @alice"`, `/implement "$auth-migration && #bug"`) | Any valid filter DSL expression — passes straight through to `next task`'s `filter` parameter. |
+
+Argument detection rules (for the skill to apply):
+
+1. No argument or the literal string `<next>` → default mode (no filter).
+2. Argument matches a ULID pattern (26 chars, `[0-9A-Z]`) → task-id mode.
+3. Otherwise → filter-expression mode (pass to `next task` verbatim). This covers `#tag`, `@user`, `$project-slug`, `^ref`, and any compound expression.
+
+### Filter DSL recap
+
+The DSL atoms that `next task` understands:
+
+- `#<tag>` — tag match (including virtual tags `#READY`, `#BLOCKED`, `#BLOCKING`)
+- `@<user>` — assignee match
+- `$<project-slug>` — project match
+- `^<card-id>` — reference match
+- `&&` / `and`, `||` / `or`, `!` / `not`, `()` — boolean composition
+- Adjacent atoms → implicit AND: `#bug @alice` = `#bug && @alice`, `$auth-migration #bug` = `$auth-migration && #bug`
+
+Parallel orchestrators (like `implement-loop`) always pass an explicit `<task-id>` to avoid racing on `next task`. Interactive `/implement` usually runs with no argument and falls back to `<next>`.
+
 ## Process
 
-### 1. Get the next card
+### 1. Select the card
 
-Use `kanban` with `op: "next task"` to find the next actionable card. If there are no remaining cards, tell the user the board is clear.
+Apply the detection rules above to decide which sub-flow to run:
+
+- **Task-id mode** (`/implement <task-id>`): use that id directly. Do NOT call `next task`. Verify the card exists with `{"op": "get task", "id": "<task-id>"}` before proceeding; if it doesn't exist, report the error and stop.
+
+- **Default / `<next>` mode**: call `kanban` with `op: "next task"`. If it returns null, tell the user the board is clear and stop.
+
+- **Filter-expression mode** (`#tag`, `@user`, `$project-slug`, `^ref`, or any compound): call `kanban` with `op: "next task"` and `filter: "<expression>"`. If it returns null, tell the user no ready cards match that filter and stop.
+
+  ```json
+  {"op": "next task", "filter": "#bug"}
+  {"op": "next task", "filter": "#bug && @alice"}
+  {"op": "next task", "filter": "$auth-migration"}
+  {"op": "next task", "filter": "$auth-migration && #bug"}
+  {"op": "next task", "filter": "#READY && !#docs"}
+  ```
 
 ### 2. Move the card to doing
 
@@ -87,21 +166,27 @@ Never modify code you haven't read. Never assume you know what a function does �
 
 Do the work described in the card and its subtasks.
 
-### 6. Complete the card
+### 6. Move the card to review
 
-When all subtasks pass:
+When the work is done and every subtask checkbox in the card description is flipped to `- [x]`:
 
-```json
-{"op": "complete task", "id": "<task-id>"}
-```
+1. First, ensure the `review` column exists by following the **Ensure the Review Column Exists** partial above. It is idempotent — run it every time.
+
+2. Then move the card to `review`:
+
+   ```json
+   {"op": "move task", "id": "<task-id>", "column": "review"}
+   ```
 
 A card left in "doing" is not finished.
 
-If you cannot complete the task, do NOT complete the card. Add a comment describing what happened and report back.
+**Do NOT use `complete task`.** `complete task` always moves the card to the terminal column, which would skip the review gate. Use `move task` with `column: "review"` explicitly.
+
+If you cannot complete the task, do NOT move the card forward. Add a comment describing what happened and report back.
 
 ### 7. Stop for review
 
-**Always stop after completing a card.** Present a summary of what was done and what tests pass. The user decides when to move to the next card — you do not auto-continue.
+**Always stop after moving a card to review.** Present a summary of what was done, what tests pass, and tell the user the card is ready for `/review`. The user decides when to move on — you do not auto-continue.
 
 Only exception: if the card description explicitly says **auto-continue** or **chain to next**, proceed to the next card without stopping.
 
