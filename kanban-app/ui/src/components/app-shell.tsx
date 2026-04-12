@@ -75,6 +75,29 @@ function KeybindingHandler({ mode }: { mode: KeymapMode }) {
     };
   }, [executeCommand]);
 
+  // Listen for context-menu-command events from native context menus.
+  // These carry the full ContextMenuItem payload (cmd, target, scope_chain)
+  // from the right-click point. Dispatched through useDispatchCommand so
+  // they get busy tracking, client-side resolution, and the same dispatch
+  // path as keybindings/palette/drag.
+  useEffect(() => {
+    const unlisten = listen<{
+      cmd: string;
+      target?: string;
+      scope_chain?: string[];
+    }>("context-menu-command", async (event) => {
+      const { cmd, target, scope_chain } = event.payload;
+      if (!cmd) return;
+      await dispatchRef.current(cmd, {
+        target,
+        scopeChain: scope_chain,
+      });
+    });
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, []);
+
   return null;
 }
 

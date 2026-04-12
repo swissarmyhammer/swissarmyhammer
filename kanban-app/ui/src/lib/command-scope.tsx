@@ -296,6 +296,15 @@ export interface DispatchOptions {
   args?: Record<string, unknown>;
   /** Target moniker (e.g. "task:abc") to associate with the dispatch. */
   target?: string;
+  /**
+   * Explicit scope chain to use instead of the one derived from React context.
+   *
+   * When provided, this overrides the automatic scope chain computed from the
+   * focused or tree scope. This is used by context menu dispatch where the
+   * right-click point's scope chain is known from the Rust backend and should
+   * take precedence over whatever happens to be focused when the event arrives.
+   */
+  scopeChain?: string[];
 }
 
 /**
@@ -343,7 +352,9 @@ export function useDispatchCommand(presetCmd?: string) {
         opts = maybeOpts ?? {};
       }
 
-      const chain = scopeChainFromScope(effectiveScope);
+      // Use explicit scope chain from options (e.g. context menu dispatch)
+      // or fall back to the chain derived from React context.
+      const chain = opts.scopeChain ?? scopeChainFromScope(effectiveScope);
 
       // Try frontend execute handler first
       const resolved = resolveCommand(effectiveScope, cmdId);

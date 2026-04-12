@@ -564,6 +564,37 @@ describe("useDispatchCommand", () => {
       boardPath: "/boards/nested",
     });
   });
+
+  it("explicit scopeChain in options overrides context-derived chain", async () => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    (invoke as ReturnType<typeof vi.fn>).mockClear();
+    (invoke as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: true });
+
+    // Render inside a scope with monikers so there IS a context-derived chain
+    const { result } = renderHook(() => useDispatchCommand(), {
+      wrapper: boardWrapper([[], []], "/boards/test", [
+        "window:main",
+        "column:doing",
+      ]),
+    });
+
+    // Dispatch with an explicit scopeChain — simulates context menu providing
+    // the right-click scope chain instead of the current focus scope chain.
+    await act(async () => {
+      await result.current("entity.copy", {
+        target: "task:abc",
+        scopeChain: ["task:abc", "column:todo", "window:main"],
+      });
+    });
+
+    expect(invoke).toHaveBeenCalledWith("dispatch_command", {
+      cmd: "entity.copy",
+      target: "task:abc",
+      args: undefined,
+      scopeChain: ["task:abc", "column:todo", "window:main"],
+      boardPath: "/boards/test",
+    });
+  });
 });
 
 /* ---------- CommandBusyProvider / useCommandBusy ---------- */

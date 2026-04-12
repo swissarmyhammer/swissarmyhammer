@@ -2315,7 +2315,8 @@ fn append_one_computed_change(
 ///
 /// Each item is self-contained: it carries the command ID, target, and scope
 /// chain needed for dispatch. The frontend sends all dispatch info upfront;
-/// when the user selects an item, Rust dispatches directly — no round-trip.
+/// when the user selects an item, Rust emits a `context-menu-command` event
+/// so the frontend routes it through `useDispatchCommand`.
 #[derive(serde::Deserialize, serde::Serialize, Clone)]
 pub struct ContextMenuItem {
     /// Display name shown in the menu.
@@ -2338,8 +2339,8 @@ pub struct ContextMenuItem {
 ///
 /// Each item carries its full dispatch info (cmd, target, scope_chain).
 /// When the user selects an item, `handle_menu_event` parses the JSON-encoded
-/// ID and dispatches directly via `dispatch_command_internal` — no round-trip
-/// to the frontend.
+/// ID and emits a `context-menu-command` event so the frontend routes it
+/// through `useDispatchCommand` for busy tracking and scope resolution.
 #[tauri::command]
 pub async fn show_context_menu(
     app: AppHandle,

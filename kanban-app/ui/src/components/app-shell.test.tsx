@@ -17,8 +17,18 @@ vi.mock("@tauri-apps/api/core", () => ({
     return Promise.resolve(null);
   }),
 }));
+/**
+ * Captured event listeners keyed by event name.
+ *
+ * The `listen` mock stores each callback here so tests can fire synthetic
+ * events by calling `listenCallbacks["event-name"](payload)`.
+ */
+const listenCallbacks: Record<string, (event: unknown) => void> = {};
 vi.mock("@tauri-apps/api/event", () => ({
-  listen: vi.fn(() => Promise.resolve(() => {})),
+  listen: vi.fn((eventName: string, cb: (event: unknown) => void) => {
+    listenCallbacks[eventName] = cb;
+    return Promise.resolve(() => {});
+  }),
 }));
 vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({ label: "main" }),
@@ -355,5 +365,43 @@ describe("AppShell", () => {
 
     // Cleanup
     document.body.removeChild(button);
+  });
+
+  it("context-menu-command event dispatches through useDispatchCommand with scope chain", async () => {
+    const mockInvoke = invoke as ReturnType<typeof vi.fn>;
+    renderShell();
+    mockInvoke.mockClear();
+
+    // Simulate a context-menu-command event from the Rust backend carrying the
+    // full ContextMenuItem payload (cmd, target, scope_chain).
+    const contextMenuCallback = listenCallbacks["context-menu-command"];
+    expect(contextMenuCallback).toBeTruthy();
+
+    await act(async () => {
+      contextMenuCallback({
+        payload: {
+          cmd: "entity.copy",
+          target: "task:abc",
+          scope_chain: ["task:abc", "column:todo", "window:main"],
+        },
+      });
+    });
+
+    // dispatch_command should have been called with the context menu payload
+    const copyCall = mockInvoke.mock.calls.find(
+      (c: unknown[]) =>
+        c[0] === "dispatch_command" &&
+        (c[1] as Record<string, unknown>)?.cmd === "entity.copy",
+    );
+    expect(copyCall).toBeTruthy();
+
+    // Verify the scope chain and target from the context menu are passed through
+    const params = copyCall![1] as Record<string, unknown>;
+    expect(params.target).toBe("task:abc");
+    expect(params.scopeChain).toEqual([
+      "task:abc",
+      "column:todo",
+      "window:main",
+    ]);
   });
 });

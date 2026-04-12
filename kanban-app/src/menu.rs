@@ -40,11 +40,29 @@ pub fn build_menu_from_commands(
     recent: &[RecentBoard],
     windows: &[WindowInfo],
 ) -> tauri::Result<HashMap<String, MenuItemHandle>> {
-    let keymap_mode = ui_state.keymap_mode();
     let mut menu_items: HashMap<String, MenuItemHandle> = HashMap::new();
+    let menus = collect_menu_entries(registry, ui_state);
 
-    // Collect commands with menu metadata, grouped by top-level menu name.
-    // Nested paths (e.g. ["App", "Settings"]) are keyed as "App/Settings".
+    let app_menu = build_app_submenu(app, &menus, &mut menu_items)?;
+    let file_menu = build_file_submenu(app, &menus, recent, &mut menu_items)?;
+    let edit_menu = build_grouped_submenu(app, "Edit", menus.get("Edit"), &mut menu_items)?;
+    let window_menu = build_window_submenu(app, &menus, windows, &mut menu_items)?;
+
+    let menu = Menu::with_items(app, &[&app_menu, &file_menu, &edit_menu, &window_menu])?;
+    app.set_menu(menu).map_err(|e| {
+        tracing::error!("Failed to set menu: {}", e);
+        e
+    })?;
+
+    Ok(menu_items)
+}
+
+/// Collect commands with menu metadata into groups keyed by path (e.g. "App", "App/Settings").
+fn collect_menu_entries(
+    registry: &CommandsRegistry,
+    ui_state: &UIState,
+) -> HashMap<String, Vec<MenuEntry>> {
+    let keymap_mode = ui_state.keymap_mode();
     let mut menus: HashMap<String, Vec<MenuEntry>> = HashMap::new();
     for cmd in registry.all_commands() {
         let Some(ref placement) = cmd.menu else {
@@ -69,63 +87,48 @@ pub fn build_menu_from_commands(
     for items in menus.values_mut() {
         items.sort_by_key(|e| (e.group, e.order));
     }
+    menus
+}
 
-    // --- App menu ---
+/// Build the App menu with About, registry entries, Settings submenu, and OS chrome.
+fn build_app_submenu(
+    app: &AppHandle,
+    menus: &HashMap<String, Vec<MenuEntry>>,
+    menu_items: &mut HashMap<String, MenuItemHandle>,
+) -> tauri::Result<Submenu<tauri::Wry>> {
     let app_menu = Submenu::new(app, app.package_info().name.clone(), true)?;
     app_menu.append(&PredefinedMenuItem::about(app, None, None)?)?;
 
     if let Some(items) = menus.get("App") {
-        let mut last_group: Option<usize> = None;
-        for entry in items {
-            if last_group.is_some() && last_group != Some(entry.group) {
-                app_menu.append(&PredefinedMenuItem::separator(app)?)?;
-            }
-            // Skip "app.about" — already added as PredefinedMenuItem above
-            if entry.id == "app.about" {
-                last_group = Some(entry.group);
-                continue;
-            }
-            append_menu_entry(app, &app_menu, entry, &mut menu_items)?;
-            last_group = Some(entry.group);
-        }
+        append_grouped_entries(app, &app_menu, items, menu_items, Some("app.about"))?;
     }
 
-    // Settings submenu inside the app menu (nested path "App/Settings")
+    // Settings submenu (nested path "App/Settings")
     if let Some(items) = menus.get("App/Settings") {
         app_menu.append(&PredefinedMenuItem::separator(app)?)?;
         let settings_sub = Submenu::new(app, "Settings", true)?;
-        let mut last_group: Option<usize> = None;
-        for entry in items {
-            if last_group.is_some() && last_group != Some(entry.group) {
-                settings_sub.append(&PredefinedMenuItem::separator(app)?)?;
-            }
-            append_menu_entry(app, &settings_sub, entry, &mut menu_items)?;
-            last_group = Some(entry.group);
-        }
+        append_grouped_entries(app, &settings_sub, items, menu_items, None)?;
         app_menu.append(&settings_sub)?;
     }
 
-    // OS chrome at the end of app menu
     app_menu.append(&PredefinedMenuItem::separator(app)?)?;
     app_menu.append(&PredefinedMenuItem::hide(app, None)?)?;
     app_menu.append(&PredefinedMenuItem::hide_others(app, None)?)?;
     app_menu.append(&PredefinedMenuItem::show_all(app, None)?)?;
     app_menu.append(&PredefinedMenuItem::separator(app)?)?;
     app_menu.append(&PredefinedMenuItem::quit(app, None)?)?;
+    Ok(app_menu)
+}
 
-    // --- File menu ---
-    let file_menu = Submenu::new(app, "File", true)?;
-    if let Some(items) = menus.get("File") {
-        let mut last_group: Option<usize> = None;
-        for entry in items {
-            if last_group.is_some() && last_group != Some(entry.group) {
-                file_menu.append(&PredefinedMenuItem::separator(app)?)?;
-            }
-            append_menu_entry(app, &file_menu, entry, &mut menu_items)?;
-            last_group = Some(entry.group);
-        }
-    }
-    // Open Recent submenu
+/// Build the File menu with registry entries, Open Recent, and Close Window.
+fn build_file_submenu(
+    app: &AppHandle,
+    menus: &HashMap<String, Vec<MenuEntry>>,
+    recent: &[RecentBoard],
+    menu_items: &mut HashMap<String, MenuItemHandle>,
+) -> tauri::Result<Submenu<tauri::Wry>> {
+    let file_menu = build_grouped_submenu(app, "File", menus.get("File"), menu_items)?;
+
     let recent_submenu = Submenu::new(app, "Open Recent", !recent.is_empty())?;
     for rb in recent {
         let id = format!("open_recent:{}", rb.path);
@@ -135,34 +138,20 @@ pub fn build_menu_from_commands(
     file_menu.append(&recent_submenu)?;
     file_menu.append(&PredefinedMenuItem::separator(app)?)?;
     file_menu.append(&PredefinedMenuItem::close_window(app, None)?)?;
+    Ok(file_menu)
+}
 
-    // --- Edit menu (built from registry like all other menus) ---
-    let edit_menu = Submenu::new(app, "Edit", true)?;
-    if let Some(items) = menus.get("Edit") {
-        let mut last_group: Option<usize> = None;
-        for entry in items {
-            if last_group.is_some() && last_group != Some(entry.group) {
-                edit_menu.append(&PredefinedMenuItem::separator(app)?)?;
-            }
-            append_menu_entry(app, &edit_menu, entry, &mut menu_items)?;
-            last_group = Some(entry.group);
-        }
-    }
-
-    // --- Window menu ---
+/// Build the Window menu with registry entries, Minimize/Maximize, and live window list.
+fn build_window_submenu(
+    app: &AppHandle,
+    menus: &HashMap<String, Vec<MenuEntry>>,
+    windows: &[WindowInfo],
+    menu_items: &mut HashMap<String, MenuItemHandle>,
+) -> tauri::Result<Submenu<tauri::Wry>> {
     let window_menu = Submenu::new(app, "Window", true)?;
     if let Some(items) = menus.get("Window") {
-        let mut last_group: Option<usize> = None;
-        let mut count = 0usize;
-        for entry in items {
-            if last_group.is_some() && last_group != Some(entry.group) {
-                window_menu.append(&PredefinedMenuItem::separator(app)?)?;
-            }
-            append_menu_entry(app, &window_menu, entry, &mut menu_items)?;
-            last_group = Some(entry.group);
-            count += 1;
-        }
-        if count > 0 {
+        append_grouped_entries(app, &window_menu, items, menu_items, None)?;
+        if !items.is_empty() {
             window_menu.append(&PredefinedMenuItem::separator(app)?)?;
         }
     }
@@ -170,8 +159,6 @@ pub fn build_menu_from_commands(
     window_menu.append(&PredefinedMenuItem::minimize(app, None)?)?;
     window_menu.append(&PredefinedMenuItem::maximize(app, None)?)?;
 
-    // Open windows with a checkmark on the focused one.
-    // Driven by DynamicSources.windows so the same data feeds the palette.
     if !windows.is_empty() {
         window_menu.append(&PredefinedMenuItem::separator(app)?)?;
         for win in windows {
@@ -181,14 +168,47 @@ pub fn build_menu_from_commands(
             window_menu.append(&item)?;
         }
     }
+    Ok(window_menu)
+}
 
-    let menu = Menu::with_items(app, &[&app_menu, &file_menu, &edit_menu, &window_menu])?;
-    app.set_menu(menu).map_err(|e| {
-        tracing::error!("Failed to set menu: {}", e);
-        e
-    })?;
+/// Build a simple submenu from a single group of registry entries.
+fn build_grouped_submenu(
+    app: &AppHandle,
+    label: &str,
+    entries: Option<&Vec<MenuEntry>>,
+    menu_items: &mut HashMap<String, MenuItemHandle>,
+) -> tauri::Result<Submenu<tauri::Wry>> {
+    let submenu = Submenu::new(app, label, true)?;
+    if let Some(items) = entries {
+        append_grouped_entries(app, &submenu, items, menu_items, None)?;
+    }
+    Ok(submenu)
+}
 
-    Ok(menu_items)
+/// Append entries to a submenu, inserting separators between groups.
+///
+/// If `skip_id` is provided, that entry is skipped (e.g. "app.about" which
+/// is already added as a PredefinedMenuItem).
+fn append_grouped_entries(
+    app: &AppHandle,
+    submenu: &Submenu<tauri::Wry>,
+    entries: &[MenuEntry],
+    menu_items: &mut HashMap<String, MenuItemHandle>,
+    skip_id: Option<&str>,
+) -> tauri::Result<()> {
+    let mut last_group: Option<usize> = None;
+    for entry in entries {
+        if last_group.is_some() && last_group != Some(entry.group) {
+            submenu.append(&PredefinedMenuItem::separator(app)?)?;
+        }
+        if skip_id == Some(entry.id.as_str()) {
+            last_group = Some(entry.group);
+            continue;
+        }
+        append_menu_entry(app, submenu, entry, menu_items)?;
+        last_group = Some(entry.group);
+    }
+    Ok(())
 }
 
 /// Resolve the keyboard accelerator for a command in the current keymap mode.
@@ -271,28 +291,31 @@ fn append_menu_entry(
 /// checks each cached menu item's command `available()` to set enabled/disabled.
 /// Called after every command dispatch.
 pub fn update_menu_enabled_state(state: &AppState) {
+    let resolved_map = match resolve_command_availability(state) {
+        Some(map) => map,
+        None => return, // locks were busy — skip this update
+    };
+    apply_menu_item_state(state, &resolved_map);
+}
+
+/// Resolve which commands are available in the current scope.
+///
+/// Returns a lookup of command ID → (display name, enabled) using
+/// `commands_for_scope` as the single source of truth. Uses `try_read`
+/// on both `boards` and `commands_registry` to avoid deadlock when called
+/// from nested dispatch (e.g. open_and_notify → file.switchBoard).
+/// Returns `None` if either lock is busy.
+fn resolve_command_availability(state: &AppState) -> Option<HashMap<String, (String, bool)>> {
     let scope = state.ui_state.scope_chain();
-
-    // Use commands_for_scope as the single source of truth for availability + names.
-    // Use try_read to avoid deadlock when called from nested dispatch_command_internal
-    // (e.g. open_and_notify → file.switchBoard triggers menu update while outer
-    // dispatch is still running).
-    let boards = match state.boards.try_read() {
-        Ok(b) => b,
-        Err(_) => {
-            tracing::debug!("update_menu_enabled_state: skipping — boards lock busy");
-            return;
-        }
-    };
+    let boards = state.boards.try_read().ok().or_else(|| {
+        tracing::debug!("update_menu_enabled_state: skipping — boards lock busy");
+        None
+    })?;
     let fields = boards.values().next().and_then(|h| h.ctx.fields());
-
-    let registry = match state.commands_registry.try_read() {
-        Ok(r) => r,
-        Err(_) => {
-            tracing::debug!("update_menu_enabled_state: skipping — registry lock busy");
-            return;
-        }
-    };
+    let registry = state.commands_registry.try_read().ok().or_else(|| {
+        tracing::debug!("update_menu_enabled_state: skipping — registry lock busy");
+        None
+    })?;
     let resolved = swissarmyhammer_kanban::scope_commands::commands_for_scope(
         &scope,
         &registry,
@@ -300,46 +323,44 @@ pub fn update_menu_enabled_state(state: &AppState) {
         fields,
         &state.ui_state,
         false,
-        None, // menus don't need dynamic view/board commands
+        None,
     );
     drop(registry);
     drop(boards);
+    Some(
+        resolved
+            .into_iter()
+            .map(|c| (c.id.clone(), (c.name, c.available)))
+            .collect(),
+    )
+}
 
-    // Build lookup: command ID → resolved name + available
-    let resolved_map: HashMap<String, (String, bool)> = resolved
-        .into_iter()
-        .map(|c| (c.id.clone(), (c.name, c.available)))
-        .collect();
-
-    // For fallback names when commands aren't available, strip templates.
-    // Use try_read to avoid blocking the tokio runtime when called from
-    // an async context (dispatch_command_internal is async).
-    let registry2 = match state.commands_registry.try_read() {
-        Ok(r) => r,
-        Err(_) => {
-            tracing::debug!("update_menu_enabled_state: skipping fallback — registry lock busy");
-            // Still apply the resolved names/enabled states we have
-            let menu_items = state.menu_items.lock().unwrap();
-            for (cmd_id, menu_item) in menu_items.iter() {
-                if let Some((name, enabled)) = resolved_map.get(cmd_id) {
-                    let _ = menu_item.set_enabled(*enabled);
-                    let _ = menu_item.set_text(name);
-                }
-            }
-            return;
-        }
-    };
+/// Apply resolved availability to native menu items.
+///
+/// For commands in the resolved map, sets the display name and enabled state.
+/// For commands not in the map (unavailable in this scope), disables the item
+/// and strips template placeholders from the generic name. Falls back to
+/// applying only the resolved entries if the registry lock is busy.
+fn apply_menu_item_state(state: &AppState, resolved_map: &HashMap<String, (String, bool)>) {
     let menu_items = state.menu_items.lock().unwrap();
+
+    // Try to get the registry for fallback names on unavailable commands.
+    let registry = state.commands_registry.try_read().ok();
+    if registry.is_none() {
+        tracing::debug!("update_menu_enabled_state: skipping fallback — registry lock busy");
+    }
+
     for (cmd_id, menu_item) in menu_items.iter() {
         if let Some((name, enabled)) = resolved_map.get(cmd_id) {
             let _ = menu_item.set_enabled(*enabled);
             let _ = menu_item.set_text(name);
         } else {
-            // Command not available — disable and show clean generic name
             let _ = menu_item.set_enabled(false);
-            if let Some(def) = registry2.get(cmd_id) {
-                let clean = def.name.replace(" {{entity.type}}", "");
-                let _ = menu_item.set_text(&clean);
+            if let Some(ref reg) = registry {
+                if let Some(def) = reg.get(cmd_id) {
+                    let clean = def.name.replace(" {{entity.type}}", "");
+                    let _ = menu_item.set_text(&clean);
+                }
             }
         }
     }
@@ -348,7 +369,10 @@ pub fn update_menu_enabled_state(state: &AppState) {
 /// Dispatch native menu events.
 ///
 /// Open Recent items are handled directly because they carry a file path.
-/// Generic context menu items are emitted as `context-menu-command` events.
+/// Context menu items are emitted as `context-menu-command` events with the
+/// full `ContextMenuItem` payload (cmd, target, scope_chain) so the frontend
+/// routes them through `useDispatchCommand` — getting busy tracking and the
+/// same dispatch path as keybindings/palette/drag.
 /// Everything else is emitted as a `menu-command` event so the frontend
 /// can route it through `executeCommand(id)`.
 pub fn handle_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
@@ -371,26 +395,12 @@ pub fn handle_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
     }
 
     // Context menu items carry self-contained dispatch info as JSON in the ID.
-    // If it parses, it's a context menu selection — dispatch directly.
+    // If it parses, emit a "context-menu-command" event so the frontend routes
+    // it through useDispatchCommand — getting busy tracking, client-side
+    // resolution, and the same dispatch path as keybindings/palette/drag.
     if let Ok(item) = serde_json::from_str::<crate::commands::ContextMenuItem>(&id) {
         if !item.cmd.is_empty() {
-            let handle = app.clone();
-            tauri::async_runtime::spawn(async move {
-                let state = handle.state::<AppState>();
-                if let Err(e) = crate::commands::dispatch_command_internal(
-                    &handle,
-                    &state,
-                    &item.cmd,
-                    Some(item.scope_chain),
-                    item.target,
-                    None,
-                    None,
-                )
-                .await
-                {
-                    tracing::error!("Context menu dispatch failed: {}", e);
-                }
-            });
+            let _ = app.emit("context-menu-command", &item);
             return;
         }
     }
