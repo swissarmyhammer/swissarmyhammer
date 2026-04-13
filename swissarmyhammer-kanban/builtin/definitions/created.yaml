@@ -8,6 +8,7 @@ type:
   derive: derive-created
   depends_on:
     - _changelog
+    - _file_created
 icon: plus-circle
 editor: none
 display: date

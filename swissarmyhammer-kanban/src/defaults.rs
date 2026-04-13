@@ -237,9 +237,19 @@ fn extract_position_column(entry: &serde_json::Value) -> Option<String> {
 
 /// Register the derive-created derivation.
 ///
-/// Returns the timestamp of the first changelog entry with `op: "create"`.
-/// Falls back to the first entry regardless of op if no create entry exists.
-/// Returns null for an empty changelog.
+/// Resolves the entity's creation timestamp by consulting sources in order
+/// of decreasing authority:
+///
+/// 1. First changelog entry with `op: "create"` — the authoritative signal
+///    written by the current `StoreHandle` write path.
+/// 2. First changelog entry regardless of op — covers histories where the
+///    create entry was lost or never written.
+/// 3. `_file_created`, an RFC 3339 timestamp derived from the entity file's
+///    filesystem metadata (injected by `EntityContext::apply_compute_with_query`
+///    when this field declares `depends_on: ["_file_created"]`) — the backstop
+///    for tasks dropped into `.kanban/tasks/` by hand or written via the
+///    legacy `io::write_entity` path.
+/// 4. `Value::Null` — no signal is available.
 fn register_derive_created(engine: &mut ComputeEngine) {
     engine.register(
         "derive-created",
@@ -249,15 +259,25 @@ fn register_derive_created(engine: &mut ComputeEngine) {
                 .and_then(|v| v.as_array())
                 .cloned()
                 .unwrap_or_default();
+            let file_created = fields
+                .get("_file_created")
+                .and_then(|v| v.as_str())
+                .map(String::from);
             Box::pin(async move {
-                // Prefer the first entry with op "create"
                 let ts = changelog
                     .iter()
                     .find(|e| e.get("op").and_then(|v| v.as_str()) == Some("create"))
                     .and_then(changelog_timestamp)
-                    .or_else(|| changelog.first().and_then(changelog_timestamp));
+                    .map(String::from)
+                    .or_else(|| {
+                        changelog
+                            .first()
+                            .and_then(changelog_timestamp)
+                            .map(String::from)
+                    })
+                    .or(file_created);
                 match ts {
-                    Some(s) => serde_json::Value::String(s.to_string()),
+                    Some(s) => serde_json::Value::String(s),
                     None => serde_json::Value::Null,
                 }
             })
@@ -1139,6 +1159,41 @@ mod tests {
         fields.insert("_changelog".to_string(), serde_json::json!([]));
         let result = engine.derive(&field, &fields, None).await.unwrap();
         assert_eq!(result, serde_json::Value::Null);
+    }
+
+    #[tokio::test]
+    async fn derive_created_falls_back_to_file_created_when_changelog_empty() {
+        let engine = kanban_compute_engine();
+        let field = make_date_field("derive-created");
+        let mut fields = HashMap::new();
+        fields.insert("_changelog".to_string(), serde_json::json!([]));
+        fields.insert(
+            "_file_created".to_string(),
+            serde_json::json!("2026-04-01T12:00:00Z"),
+        );
+        let result = engine.derive(&field, &fields, None).await.unwrap();
+        assert_eq!(result, serde_json::json!("2026-04-01T12:00:00Z"));
+    }
+
+    #[tokio::test]
+    async fn derive_created_prefers_changelog_over_file_created() {
+        let engine = kanban_compute_engine();
+        let field = make_date_field("derive-created");
+        let mut fields = HashMap::new();
+        fields.insert(
+            "_changelog".to_string(),
+            serde_json::json!([mock_changelog_entry(
+                "create",
+                "2026-01-01T10:00:00Z",
+                Some(("set", "todo"))
+            )]),
+        );
+        fields.insert(
+            "_file_created".to_string(),
+            serde_json::json!("2026-04-01T12:00:00Z"),
+        );
+        let result = engine.derive(&field, &fields, None).await.unwrap();
+        assert_eq!(result, serde_json::json!("2026-01-01T10:00:00Z"));
     }
 
     #[tokio::test]

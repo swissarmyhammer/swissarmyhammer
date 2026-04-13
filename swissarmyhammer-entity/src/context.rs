@@ -953,34 +953,61 @@ impl EntityContext {
     /// This avoids reconstructing the query closure per entity in batch
     /// operations like `list()`.
     ///
-    /// When any computed field declares `depends_on: ["_changelog"]`, the
-    /// entity's JSONL changelog is read and injected into `entity.fields`
-    /// as `_changelog` before derivation. The key is stripped after
-    /// derivation so it is never persisted or returned to callers.
+    /// When any computed field declares a dependency on a reserved pseudo-field
+    /// (name starting with `_`), it is lazily sourced and injected into
+    /// `entity.fields` before derivation, then stripped after derivation so it
+    /// is never persisted or returned to callers.
+    ///
+    /// Supported injected dependencies:
+    /// - `_changelog`: the entity's JSONL changelog as a JSON array.
+    /// - `_file_created`: an RFC 3339 timestamp derived from the entity file's
+    ///   `created()` metadata (falling back to `modified()` on platforms/filesystems
+    ///   that don't support btime). Resolves to `Value::Null` when the file is
+    ///   missing or cannot be stat'd — this is always a backstop signal, never
+    ///   the primary one.
     async fn apply_compute_with_query(
         &self,
         entity_type: &str,
         entity: &mut Entity,
         query_fn: &std::sync::Arc<swissarmyhammer_fields::EntityQueryFn>,
     ) -> Result<()> {
-        // Enrich attachment fields with metadata (runs regardless of ComputeEngine)
         self.enrich_attachment_fields(entity_type, entity).await?;
 
         let Some(ref engine) = self.compute else {
             return Ok(());
         };
-        let field_defs = self.fields.fields_for_entity(entity_type);
-        let owned_defs: Vec<_> = field_defs.into_iter().cloned().collect();
+        let owned_defs: Vec<_> = self
+            .fields
+            .fields_for_entity(entity_type)
+            .into_iter()
+            .cloned()
+            .collect();
 
-        // Lazily inject _changelog when any computed field depends on it.
-        let needs_changelog = owned_defs.iter().any(|fd| {
-            if let FieldType::Computed { depends_on, .. } = &fd.type_ {
-                depends_on.iter().any(|dep| dep == "_changelog")
-            } else {
-                false
-            }
-        });
-        if needs_changelog {
+        self.inject_compute_dependencies(entity_type, entity, &owned_defs)
+            .await;
+
+        engine
+            .derive_all(&mut entity.fields, &owned_defs, Some(query_fn))
+            .await
+            .map_err(map_compute_error)?;
+
+        entity.fields.remove("_changelog");
+        entity.fields.remove("_file_created");
+
+        Ok(())
+    }
+
+    /// Lazily source reserved pseudo-fields and insert them into `entity.fields`
+    /// when at least one computed field in `owned_defs` declares a dependency on
+    /// them. Values are stripped by the caller after derivation so they are
+    /// never persisted or returned to callers.
+    async fn inject_compute_dependencies(
+        &self,
+        entity_type: &str,
+        entity: &mut Entity,
+        owned_defs: &[swissarmyhammer_fields::FieldDef],
+    ) {
+        if any_field_depends_on(owned_defs, "_changelog") {
             let entries = self
                 .read_changelog(entity_type, entity.id.as_str())
                 .await
@@ -995,23 +1022,33 @@ impl EntityContext {
             );
         }
 
-        engine
-            .derive_all(&mut entity.fields, &owned_defs, Some(query_fn))
-            .await
-            .map_err(|e| {
-                let (field, message) = match &e {
-                    swissarmyhammer_fields::FieldsError::ComputeError { field, message } => {
-                        (field.clone(), message.clone())
-                    }
-                    other => (String::new(), other.to_string()),
-                };
-                EntityError::ComputeError { field, message }
-            })?;
+        if any_field_depends_on(owned_defs, "_file_created") {
+            entity.fields.insert(
+                "_file_created".to_string(),
+                self.read_file_created_timestamp(entity_type, entity.id.as_str())
+                    .await,
+            );
+        }
+    }
 
-        // Strip _changelog so it is never persisted or returned to callers.
-        entity.fields.remove("_changelog");
-
-        Ok(())
+    /// Stat the entity's source file and return its creation timestamp as an
+    /// RFC 3339 JSON string, falling back to the modification time when the
+    /// platform/filesystem doesn't expose btime. Returns `Value::Null` on any
+    /// I/O error — this is a backstop signal, so a missing file should not
+    /// fail the derivation.
+    async fn read_file_created_timestamp(&self, entity_type: &str, id: &str) -> serde_json::Value {
+        let Ok(def) = self.entity_def(entity_type) else {
+            return serde_json::Value::Null;
+        };
+        let path = io::entity_file_path(&self.entity_dir(entity_type), id, def);
+        let Ok(meta) = tokio::fs::metadata(&path).await else {
+            return serde_json::Value::Null;
+        };
+        let Ok(system_time) = meta.created().or_else(|_| meta.modified()) else {
+            return serde_json::Value::Null;
+        };
+        let dt: chrono::DateTime<chrono::Utc> = system_time.into();
+        serde_json::Value::String(dt.to_rfc3339())
     }
 
     /// Enrich attachment fields with metadata objects on read.
@@ -1143,6 +1180,31 @@ impl EntityContext {
             }
         }
     }
+}
+
+/// Return `true` when any computed field in `defs` declares `dep_name` in its
+/// `depends_on` list.
+fn any_field_depends_on(defs: &[swissarmyhammer_fields::FieldDef], dep_name: &str) -> bool {
+    defs.iter().any(|fd| {
+        if let FieldType::Computed { depends_on, .. } = &fd.type_ {
+            depends_on.iter().any(|dep| dep == dep_name)
+        } else {
+            false
+        }
+    })
+}
+
+/// Convert a `FieldsError` from the compute engine into the crate-local
+/// `EntityError::ComputeError`, preserving the offending field name and
+/// underlying message when available. Consumes `err` by value so the owned
+/// strings inside `ComputeError` move through to the returned `EntityError`
+/// without being cloned.
+fn map_compute_error(err: swissarmyhammer_fields::FieldsError) -> EntityError {
+    let (field, message) = match err {
+        swissarmyhammer_fields::FieldsError::ComputeError { field, message } => (field, message),
+        other => (String::new(), other.to_string()),
+    };
+    EntityError::ComputeError { field, message }
 }
 
 #[cfg(test)]
@@ -2760,6 +2822,138 @@ mod tests {
         );
         // But the computed field was still derived
         assert!(loaded.fields.contains_key("change_count"));
+    }
+
+    /// Build a FieldsContext whose "task" entity includes a computed field
+    /// that depends on `_file_created`.
+    fn fields_context_with_file_created_computed() -> Arc<FieldsContext> {
+        let defs = vec![
+            (
+                "title",
+                "id: 00000000000000000000000TTL\nname: title\ntype:\n  kind: text\n  single_line: true\n",
+            ),
+            (
+                "body",
+                "id: 00000000000000000000000BDY\nname: body\ntype:\n  kind: markdown\n",
+            ),
+            (
+                "file_ts",
+                "id: 00000000000000000000000FTS\nname: file_ts\ntype:\n  kind: computed\n  derive: capture-file-created\n  depends_on:\n    - _file_created\n",
+            ),
+        ];
+        let entities = vec![(
+            "task",
+            "name: task\nbody_field: body\nfields:\n  - title\n  - body\n  - file_ts\n",
+        )];
+        let dir = TempDir::new().unwrap();
+        Arc::new(FieldsContext::from_yaml_sources(dir.path(), &defs, &entities).unwrap())
+    }
+
+    /// Build a ComputeEngine with a "capture-file-created" derivation that
+    /// returns the injected `_file_created` value verbatim.
+    fn compute_engine_with_file_created_capture() -> Arc<swissarmyhammer_fields::ComputeEngine> {
+        let mut engine = swissarmyhammer_fields::ComputeEngine::new();
+        engine.register(
+            "capture-file-created",
+            Box::new(|fields| {
+                let v = fields
+                    .get("_file_created")
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null);
+                Box::pin(async move { v })
+            }),
+        );
+        Arc::new(engine)
+    }
+
+    #[tokio::test]
+    async fn apply_compute_injects_file_created_when_field_depends_on_it() {
+        let dir = TempDir::new().unwrap();
+        let fields = fields_context_with_file_created_computed();
+        let compute = compute_engine_with_file_created_capture();
+        let ctx = EntityContext::new(dir.path(), fields).with_compute(compute);
+
+        let mut task = Entity::new("task", "01FILE");
+        task.set("title", json!("File ts test"));
+        let before = std::time::SystemTime::now();
+        ctx.write(&task).await.unwrap();
+
+        let loaded = ctx.read("task", "01FILE").await.unwrap();
+        let ts_str = loaded
+            .fields
+            .get("file_ts")
+            .and_then(|v| v.as_str())
+            .expect("file_ts should resolve to an RFC 3339 string");
+
+        // Parse the timestamp and verify it falls within ±5 seconds of the
+        // write window.
+        let parsed = chrono::DateTime::parse_from_rfc3339(ts_str)
+            .unwrap_or_else(|e| panic!("file_ts {ts_str:?} should parse as RFC 3339: {e}"));
+        let ts_system: std::time::SystemTime = parsed.into();
+
+        let lower = before
+            .checked_sub(std::time::Duration::from_secs(5))
+            .unwrap();
+        let upper = std::time::SystemTime::now() + std::time::Duration::from_secs(5);
+        assert!(
+            ts_system >= lower && ts_system <= upper,
+            "file_ts {ts_str} should be within ±5s of write time",
+        );
+    }
+
+    #[tokio::test]
+    async fn apply_compute_strips_file_created_after_derivation() {
+        let dir = TempDir::new().unwrap();
+        let fields = fields_context_with_file_created_computed();
+        let compute = compute_engine_with_file_created_capture();
+        let ctx = EntityContext::new(dir.path(), fields).with_compute(compute);
+
+        let mut task = Entity::new("task", "01STRIP");
+        task.set("title", json!("Strip test"));
+        ctx.write(&task).await.unwrap();
+
+        let loaded = ctx.read("task", "01STRIP").await.unwrap();
+        assert!(
+            !loaded.fields.contains_key("_file_created"),
+            "_file_created must be stripped from entity fields after derivation"
+        );
+        // Capture field was still populated
+        assert!(loaded.fields.contains_key("file_ts"));
+    }
+
+    /// Exercises the "entity file missing" branch of the injector
+    /// (`tokio::fs::metadata(&path).await` fails) to lock in the no-panic /
+    /// Null-return contract. `read()` cannot reach this branch because it fails
+    /// earlier when the file is absent; call `apply_compute_with_query`
+    /// directly with a hand-built entity whose id has no corresponding file.
+    #[tokio::test]
+    async fn apply_compute_file_created_null_when_md_missing() {
+        let dir = TempDir::new().unwrap();
+        let fields = fields_context_with_file_created_computed();
+        let compute = compute_engine_with_file_created_capture();
+        let ctx = EntityContext::new(dir.path(), fields).with_compute(compute);
+
+        let mut entity = Entity::new("task", "01PHANTOM");
+        entity.set("title", json!("Phantom"));
+
+        let query_fn = ctx.build_entity_query_fn();
+        ctx.apply_compute_with_query("task", &mut entity, &query_fn)
+            .await
+            .expect("apply_compute_with_query must not error on missing file");
+
+        let captured = entity
+            .fields
+            .get("file_ts")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+        assert!(
+            captured.is_null(),
+            "file_ts should be Null when the entity file is missing, got {captured:?}"
+        );
+        assert!(
+            !entity.fields.contains_key("_file_created"),
+            "_file_created must still be stripped after a Null injection"
+        );
     }
 
     #[tokio::test]
