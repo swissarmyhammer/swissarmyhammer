@@ -6,6 +6,7 @@ use crate::types::Ordinal;
 use async_trait::async_trait;
 use serde_json::Value;
 use swissarmyhammer_commands::{Command, CommandContext, CommandError};
+use swissarmyhammer_entity::Entity;
 
 /// Add a new task to the board.
 ///
@@ -62,195 +63,204 @@ impl Command for MoveTaskCmd {
 
     async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
         let kanban = ctx.require_extension::<KanbanContext>()?;
+        let (task_id, column) = resolve_move_task_args(ctx)?;
 
-        // Task ID from scope chain, or fallback to args.id
-        let task_id = ctx
-            .resolve_entity_id("task")
-            .or_else(|| ctx.arg("id").and_then(|v| v.as_str()))
-            .ok_or_else(|| CommandError::MissingScope("task".into()))?;
-
-        // Column from target moniker or from args
-        let column = ctx
-            .target_moniker()
-            .filter(|(t, _)| *t == "column")
-            .map(|(_, id)| id.to_string())
-            .or_else(|| {
-                ctx.arg("column")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string())
-            })
-            .ok_or_else(|| CommandError::MissingArg("column".into()))?;
-
-        let mut op = crate::task::MoveTask::to_column(task_id, column.clone());
+        let mut op = crate::task::MoveTask::to_column(task_id.clone(), column.clone());
 
         // Determine ordinal: explicit > before_id/after_id placement > drop_index > append
         if let Some(ordinal) = ctx.arg("ordinal").and_then(|v| v.as_str()) {
             op = op.with_ordinal(ordinal);
         } else if ctx.arg("before_id").is_some() || ctx.arg("after_id").is_some() {
-            // Placement-based ordering:
-            //   before_id = "place me before this task"
-            //   after_id  = "place me after this task"
-            // We load all tasks in the target column (sorted by ordinal),
-            // find the reference task, and compute an ordinal between it
-            // and its neighbor. Only ONE entity (the moved task) is updated.
             let before_id = ctx.arg("before_id").and_then(|v| v.as_str());
             let after_id = ctx.arg("after_id").and_then(|v| v.as_str());
-
-            let ectx = kanban
-                .entity_context()
-                .await
-                .map_err(|e| CommandError::ExecutionFailed(e.to_string()))?;
-
-            // Load and sort all tasks in the target column (excluding the moved task)
-            let all_tasks = ectx
-                .list("task")
-                .await
-                .map_err(|e| CommandError::ExecutionFailed(e.to_string()))?;
-            let mut col_tasks: Vec<_> = all_tasks
-                .into_iter()
-                .filter(|t| {
-                    t.get_str("position_column") == Some(&column) && t.id.as_str() != task_id
-                })
-                .collect();
-            col_tasks.sort_by(|a, b| {
-                let oa = a
-                    .get_str("position_ordinal")
-                    .unwrap_or(Ordinal::DEFAULT_STR);
-                let ob = b
-                    .get_str("position_ordinal")
-                    .unwrap_or(Ordinal::DEFAULT_STR);
-                oa.cmp(ob)
-            });
-
-            let ordinal = if let Some(ref_id) = before_id {
-                // "Place me before ref_id" — find ref in sorted list,
-                // compute ordinal between predecessor and ref.
-                let ref_idx = col_tasks.iter().position(|t| t.id.as_str() == ref_id);
-                match ref_idx {
-                    Some(0) => {
-                        // Placing before the first task
-                        let ref_ord = Ordinal::from_string(
-                            col_tasks[0]
-                                .get_str("position_ordinal")
-                                .unwrap_or(Ordinal::DEFAULT_STR),
-                        );
-                        crate::task_helpers::compute_ordinal_for_neighbors(None, Some(&ref_ord))
-                    }
-                    Some(idx) => {
-                        // Between predecessor and ref
-                        let pred_ord = Ordinal::from_string(
-                            col_tasks[idx - 1]
-                                .get_str("position_ordinal")
-                                .unwrap_or(Ordinal::DEFAULT_STR),
-                        );
-                        let ref_ord = Ordinal::from_string(
-                            col_tasks[idx]
-                                .get_str("position_ordinal")
-                                .unwrap_or(Ordinal::DEFAULT_STR),
-                        );
-                        crate::task_helpers::compute_ordinal_for_neighbors(
-                            Some(&pred_ord),
-                            Some(&ref_ord),
-                        )
-                    }
-                    None => {
-                        // ref not found — append at end
-                        crate::task_helpers::compute_ordinal_for_neighbors(
-                            col_tasks
-                                .last()
-                                .map(|t| {
-                                    Ordinal::from_string(
-                                        t.get_str("position_ordinal")
-                                            .unwrap_or(Ordinal::DEFAULT_STR),
-                                    )
-                                })
-                                .as_ref(),
-                            None,
-                        )
-                    }
-                }
-            } else if let Some(ref_id) = after_id {
-                // "Place me after ref_id" — find ref in sorted list,
-                // compute ordinal between ref and successor.
-                let ref_idx = col_tasks.iter().position(|t| t.id.as_str() == ref_id);
-                match ref_idx {
-                    Some(idx) if idx == col_tasks.len() - 1 => {
-                        // Placing after the last task
-                        let ref_ord = Ordinal::from_string(
-                            col_tasks[idx]
-                                .get_str("position_ordinal")
-                                .unwrap_or(Ordinal::DEFAULT_STR),
-                        );
-                        crate::task_helpers::compute_ordinal_for_neighbors(Some(&ref_ord), None)
-                    }
-                    Some(idx) => {
-                        // Between ref and successor
-                        let ref_ord = Ordinal::from_string(
-                            col_tasks[idx]
-                                .get_str("position_ordinal")
-                                .unwrap_or(Ordinal::DEFAULT_STR),
-                        );
-                        let succ_ord = Ordinal::from_string(
-                            col_tasks[idx + 1]
-                                .get_str("position_ordinal")
-                                .unwrap_or(Ordinal::DEFAULT_STR),
-                        );
-                        crate::task_helpers::compute_ordinal_for_neighbors(
-                            Some(&ref_ord),
-                            Some(&succ_ord),
-                        )
-                    }
-                    None => {
-                        // ref not found — append at end
-                        crate::task_helpers::compute_ordinal_for_neighbors(
-                            col_tasks
-                                .last()
-                                .map(|t| {
-                                    Ordinal::from_string(
-                                        t.get_str("position_ordinal")
-                                            .unwrap_or(Ordinal::DEFAULT_STR),
-                                    )
-                                })
-                                .as_ref(),
-                            None,
-                        )
-                    }
-                }
-            } else {
-                // Neither — shouldn't happen, append at end
-                crate::task_helpers::compute_ordinal_for_neighbors(None, None)
-            };
-
+            let ordinal =
+                compute_placement_ordinal(&kanban, &column, &task_id, before_id, after_id).await?;
             op = op.with_ordinal(ordinal.as_str());
         } else if let Some(drop_index) = ctx.arg("drop_index").and_then(|v| v.as_u64()) {
-            // Load tasks in the target column, sorted by ordinal, to compute
-            // the new ordinal from the drop position.
-            let all_tasks = kanban
-                .list_entities_generic("task")
-                .await
-                .map_err(|e| CommandError::ExecutionFailed(e.to_string()))?;
-
-            let mut column_tasks: Vec<_> = all_tasks
-                .into_iter()
-                .filter(|t| t.get_str("position_column") == Some(&column) && t.id != task_id)
-                .collect();
-            column_tasks.sort_by(|a, b| {
-                let oa = a
-                    .get_str("position_ordinal")
-                    .unwrap_or(Ordinal::DEFAULT_STR);
-                let ob = b
-                    .get_str("position_ordinal")
-                    .unwrap_or(Ordinal::DEFAULT_STR);
-                oa.cmp(ob)
-            });
-
             let ordinal =
-                crate::task_helpers::compute_ordinal_for_drop(&column_tasks, drop_index as usize);
+                compute_drop_ordinal(&kanban, &column, &task_id, drop_index as usize).await?;
             op = op.with_ordinal(ordinal.as_str());
         }
 
         run_op(&op, &kanban).await
     }
+}
+
+/// Resolve the `(task_id, column)` pair for a move-task command.
+///
+/// Task ID comes from the `task` scope chain entry, falling back to the `id`
+/// arg. Column comes from the `column` target moniker, falling back to the
+/// `column` arg. Returns `MissingScope` / `MissingArg` errors when neither
+/// source is provided.
+fn resolve_move_task_args(ctx: &CommandContext) -> Result<(String, String), CommandError> {
+    let task_id = ctx
+        .resolve_entity_id("task")
+        .or_else(|| ctx.arg("id").and_then(|v| v.as_str()))
+        .ok_or_else(|| CommandError::MissingScope("task".into()))?
+        .to_string();
+
+    let column = ctx
+        .target_moniker()
+        .filter(|(t, _)| *t == "column")
+        .map(|(_, id)| id.to_string())
+        .or_else(|| {
+            ctx.arg("column")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+        })
+        .ok_or_else(|| CommandError::MissingArg("column".into()))?;
+
+    Ok((task_id, column))
+}
+
+/// Load all tasks currently in `column`, excluding `exclude_task_id`, sorted
+/// by `position_ordinal` ascending.
+///
+/// Used by both the before/after placement path and the drop-index path to
+/// materialize the neighbor list needed for ordinal computation.
+async fn load_sorted_column_tasks(
+    kanban: &KanbanContext,
+    column: &str,
+    exclude_task_id: &str,
+) -> Result<Vec<Entity>, CommandError> {
+    let all_tasks = kanban
+        .list_entities_generic("task")
+        .await
+        .map_err(|e| CommandError::ExecutionFailed(e.to_string()))?;
+
+    let mut col_tasks: Vec<Entity> = all_tasks
+        .into_iter()
+        .filter(|t| {
+            t.get_str("position_column") == Some(column) && t.id.as_str() != exclude_task_id
+        })
+        .collect();
+    col_tasks.sort_by(|a, b| {
+        let oa = a
+            .get_str("position_ordinal")
+            .unwrap_or(Ordinal::DEFAULT_STR);
+        let ob = b
+            .get_str("position_ordinal")
+            .unwrap_or(Ordinal::DEFAULT_STR);
+        oa.cmp(ob)
+    });
+    Ok(col_tasks)
+}
+
+/// Return an entity's `position_ordinal` parsed into an [`Ordinal`], falling
+/// back to [`Ordinal::DEFAULT_STR`] when the field is missing.
+fn task_ordinal(task: &Entity) -> Ordinal {
+    Ordinal::from_string(
+        task.get_str("position_ordinal")
+            .unwrap_or(Ordinal::DEFAULT_STR),
+    )
+}
+
+/// Compute an ordinal that places the moved task *before* `ref_id`.
+///
+/// Finds `ref_id` in the sorted column list and returns an ordinal between
+/// the predecessor (or nothing, at index 0) and `ref_id`. When `ref_id` is
+/// not found the moved task is appended to the end.
+fn ordinal_for_before(col_tasks: &[Entity], ref_id: &str) -> Ordinal {
+    let ref_idx = col_tasks.iter().position(|t| t.id.as_str() == ref_id);
+    match ref_idx {
+        Some(0) => {
+            // Placing before the first task
+            let ref_ord = task_ordinal(&col_tasks[0]);
+            crate::task_helpers::compute_ordinal_for_neighbors(None, Some(&ref_ord))
+        }
+        Some(idx) => {
+            // Between predecessor and ref
+            let pred_ord = task_ordinal(&col_tasks[idx - 1]);
+            let ref_ord = task_ordinal(&col_tasks[idx]);
+            crate::task_helpers::compute_ordinal_for_neighbors(Some(&pred_ord), Some(&ref_ord))
+        }
+        None => {
+            // ref not found — append at end
+            crate::task_helpers::compute_ordinal_for_neighbors(
+                col_tasks.last().map(task_ordinal).as_ref(),
+                None,
+            )
+        }
+    }
+}
+
+/// Compute an ordinal that places the moved task *after* `ref_id`.
+///
+/// Finds `ref_id` in the sorted column list and returns an ordinal between
+/// `ref_id` and its successor (or nothing, at the end). When `ref_id` is
+/// not found the moved task is appended to the end.
+fn ordinal_for_after(col_tasks: &[Entity], ref_id: &str) -> Ordinal {
+    let ref_idx = col_tasks.iter().position(|t| t.id.as_str() == ref_id);
+    match ref_idx {
+        Some(idx) if idx == col_tasks.len() - 1 => {
+            // Placing after the last task
+            let ref_ord = task_ordinal(&col_tasks[idx]);
+            crate::task_helpers::compute_ordinal_for_neighbors(Some(&ref_ord), None)
+        }
+        Some(idx) => {
+            // Between ref and successor
+            let ref_ord = task_ordinal(&col_tasks[idx]);
+            let succ_ord = task_ordinal(&col_tasks[idx + 1]);
+            crate::task_helpers::compute_ordinal_for_neighbors(Some(&ref_ord), Some(&succ_ord))
+        }
+        None => {
+            // ref not found — append at end
+            crate::task_helpers::compute_ordinal_for_neighbors(
+                col_tasks.last().map(task_ordinal).as_ref(),
+                None,
+            )
+        }
+    }
+}
+
+/// Compute the ordinal for a placement-based move (`before_id` / `after_id`).
+///
+/// Loads and sorts the target column, then dispatches to [`ordinal_for_before`]
+/// or [`ordinal_for_after`]. `before_id` wins when both are supplied; if
+/// neither is set the moved task is appended to the end (this is a defensive
+/// fallback — callers only invoke this path when at least one is set).
+async fn compute_placement_ordinal(
+    kanban: &KanbanContext,
+    column: &str,
+    task_id: &str,
+    before_id: Option<&str>,
+    after_id: Option<&str>,
+) -> Result<Ordinal, CommandError> {
+    // Placement-based ordering:
+    //   before_id = "place me before this task"
+    //   after_id  = "place me after this task"
+    // We load all tasks in the target column (sorted by ordinal),
+    // find the reference task, and compute an ordinal between it
+    // and its neighbor. Only ONE entity (the moved task) is updated.
+    let col_tasks = load_sorted_column_tasks(kanban, column, task_id).await?;
+
+    let ordinal = if let Some(ref_id) = before_id {
+        ordinal_for_before(&col_tasks, ref_id)
+    } else if let Some(ref_id) = after_id {
+        ordinal_for_after(&col_tasks, ref_id)
+    } else {
+        // Neither — shouldn't happen, append at end
+        crate::task_helpers::compute_ordinal_for_neighbors(None, None)
+    };
+    Ok(ordinal)
+}
+
+/// Compute the ordinal for a drop-index move.
+///
+/// Loads and sorts the target column, then delegates to
+/// [`crate::task_helpers::compute_ordinal_for_drop`] to produce an ordinal
+/// that matches the drop position.
+async fn compute_drop_ordinal(
+    kanban: &KanbanContext,
+    column: &str,
+    task_id: &str,
+    drop_index: usize,
+) -> Result<Ordinal, CommandError> {
+    let column_tasks = load_sorted_column_tasks(kanban, column, task_id).await?;
+    Ok(crate::task_helpers::compute_ordinal_for_drop(
+        &column_tasks,
+        drop_index,
+    ))
 }
 
 /// Remove a tag from a task.
@@ -280,6 +290,24 @@ impl Command for UntagTaskCmd {
     }
 }
 
+/// Return the id of the lowest-`order` column on the board.
+async fn first_column_id(kanban: &KanbanContext) -> Result<String, CommandError> {
+    let ectx = kanban
+        .entity_context()
+        .await
+        .map_err(|e| CommandError::ExecutionFailed(e.to_string()))?;
+    let mut columns = ectx
+        .list("column")
+        .await
+        .map_err(|e| CommandError::ExecutionFailed(e.to_string()))?;
+    columns.sort_by_key(|c| c.get("order").and_then(|v| v.as_u64()).unwrap_or(0));
+    columns
+        .into_iter()
+        .next()
+        .map(|c| c.id.as_str().to_string())
+        .ok_or_else(|| CommandError::ExecutionFailed("no columns on board".into()))
+}
+
 /// Move a task to the top of the todo (first) column.
 ///
 /// Requires `task` in the scope chain. Finds the first column on the board,
@@ -295,70 +323,20 @@ impl Command for DoThisNextCmd {
 
     async fn execute(&self, ctx: &CommandContext) -> swissarmyhammer_commands::Result<Value> {
         let kanban = ctx.require_extension::<KanbanContext>()?;
-
         let task_id = ctx
             .resolve_entity_id("task")
             .ok_or_else(|| CommandError::MissingScope("task".into()))?;
 
-        // Find the first column (todo) on the board.
-        let ectx = kanban
-            .entity_context()
-            .await
-            .map_err(|e| CommandError::ExecutionFailed(e.to_string()))?;
+        let todo_col_id = first_column_id(&kanban).await?;
+        let todo_tasks = load_sorted_column_tasks(&kanban, &todo_col_id, task_id).await?;
 
-        let columns = ectx
-            .list("column")
-            .await
-            .map_err(|e| CommandError::ExecutionFailed(e.to_string()))?;
-
-        let mut sorted_columns = columns;
-        sorted_columns.sort_by(|a, b| {
-            let oa = a.get_str("order").unwrap_or("0");
-            let ob = b.get_str("order").unwrap_or("0");
-            oa.cmp(ob)
-        });
-
-        let todo_column = sorted_columns
-            .first()
-            .ok_or_else(|| CommandError::ExecutionFailed("no columns on board".into()))?;
-        let todo_col_id = todo_column.id.as_str();
-
-        // Find the first task in the todo column (by ordinal).
-        let all_tasks = ectx
-            .list("task")
-            .await
-            .map_err(|e| CommandError::ExecutionFailed(e.to_string()))?;
-
-        let mut todo_tasks: Vec<_> = all_tasks
-            .into_iter()
-            .filter(|t| {
-                t.get_str("position_column") == Some(todo_col_id) && t.id.as_str() != task_id
-            })
-            .collect();
-        todo_tasks.sort_by(|a, b| {
-            let oa = a
-                .get_str("position_ordinal")
-                .unwrap_or(Ordinal::DEFAULT_STR);
-            let ob = b
-                .get_str("position_ordinal")
-                .unwrap_or(Ordinal::DEFAULT_STR);
-            oa.cmp(ob)
-        });
-
-        let mut op = crate::task::MoveTask::to_column(task_id, todo_col_id.to_string());
-
-        // Place before the first task in todo, if any.
+        let mut op = crate::task::MoveTask::to_column(task_id, todo_col_id);
         if let Some(first_task) = todo_tasks.first() {
-            let first_ord = Ordinal::from_string(
-                first_task
-                    .get_str("position_ordinal")
-                    .unwrap_or(Ordinal::DEFAULT_STR),
-            );
+            let first_ord = task_ordinal(first_task);
             let ordinal =
                 crate::task_helpers::compute_ordinal_for_neighbors(None, Some(&first_ord));
             op = op.with_ordinal(ordinal.as_str());
         }
-
         run_op(&op, &kanban).await
     }
 }
@@ -940,5 +918,74 @@ mod tests {
     fn delete_task_not_available_without_task_or_id() {
         let ctx = CommandContext::new("task.delete", vec![], None, HashMap::new());
         assert!(!DeleteTaskCmd.available(&ctx));
+    }
+
+    // =========================================================================
+    // DoThisNextCmd
+    // =========================================================================
+
+    #[tokio::test]
+    async fn do_this_next_moves_to_first_column() {
+        use crate::column::UpdateColumn;
+
+        let (_temp, kctx) = setup().await;
+
+        // Swap orders so that `doing` becomes the order-0 (first) column and
+        // `todo` becomes order 1. Creation order on disk remains todo -> doing
+        // -> done, so any sort that falls back to filesystem iteration order
+        // (the buggy `get_str("order")` sort does exactly that) will pick
+        // `todo` instead of the correct `doing`.
+        UpdateColumn::new("doing")
+            .with_order(0)
+            .execute(&kctx)
+            .await
+            .into_result()
+            .unwrap();
+        UpdateColumn::new("todo")
+            .with_order(1)
+            .execute(&kctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        // Anchor task already in `doing` (the new first column).
+        let mut anchor_op = AddTask::new("Anchor");
+        anchor_op.column = Some("doing".into());
+        let anchor_result = anchor_op.execute(&kctx).await.into_result().unwrap();
+        let anchor_ordinal = anchor_result["position"]["ordinal"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        // Target task in `todo` — not the first column.
+        let mut target_op = AddTask::new("Target");
+        target_op.column = Some("todo".into());
+        let target_result = target_op.execute(&kctx).await.into_result().unwrap();
+        let target_id = target_result["id"].as_str().unwrap().to_string();
+
+        let kanban = Arc::new(kctx);
+        let cmd = DoThisNextCmd;
+
+        let ctx = make_ctx(
+            Arc::clone(&kanban),
+            vec![format!("task:{target_id}")],
+            None,
+            HashMap::new(),
+        );
+        let result = cmd.execute(&ctx).await.unwrap();
+
+        // Target landed in the order-0 column, which is now `doing`.
+        assert_eq!(
+            result["position"]["column"], "doing",
+            "DoThisNextCmd must move to the order-0 column (doing), got {}",
+            result["position"]["column"]
+        );
+
+        // Target is at the top: its ordinal sorts lexicographically before the anchor's.
+        let target_new_ordinal = result["position"]["ordinal"].as_str().unwrap().to_string();
+        assert!(
+            target_new_ordinal.as_str() < anchor_ordinal.as_str(),
+            "target ordinal {target_new_ordinal:?} should sort before anchor ordinal {anchor_ordinal:?}"
+        );
     }
 }

@@ -1,8 +1,9 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: c480
+due: 2026-04-17
+position_column: review
+position_ordinal: '80'
 title: Fix DoThisNextCmd column sort — get_str on numeric order field picks wrong column
 ---
 ## What
@@ -29,19 +30,19 @@ columns.sort_by_key(|c| c.get(\"order\").and_then(|v| v.as_u64()).unwrap_or(0));
 
 ### Subtasks
 
-- [ ] Change column sort in `DoThisNextCmd::execute` (`task_commands.rs:314-319`) from `get_str(\"order\")` string comparison to `get(\"order\").and_then(|v| v.as_u64()).unwrap_or(0)` numeric sort
-- [ ] Add test: board with 3 columns (order 0, 1, 2), run DoThisNext on a task in column 1, verify it moves to column 0 at the top position
+- [x] Change column sort in `DoThisNextCmd::execute` (`task_commands.rs:314-319`) from `get_str(\"order\")` string comparison to `get(\"order\").and_then(|v| v.as_u64()).unwrap_or(0)` numeric sort
+- [x] Add test: board with 3 columns (order 0, 1, 2), run DoThisNext on a task in column 1, verify it moves to column 0 at the top position
 
 ## Acceptance Criteria
 
-- [ ] `task.doThisNext` moves the target task to the first column (lowest `order` value), not an arbitrary column
-- [ ] Task is placed before all existing tasks in that column (ordinal sorts first)
-- [ ] Existing DoThisNext behavior is preserved for boards where the first column is correct
+- [x] `task.doThisNext` moves the target task to the first column (lowest `order` value), not an arbitrary column
+- [x] Task is placed before all existing tasks in that column (ordinal sorts first)
+- [x] Existing DoThisNext behavior is preserved for boards where the first column is correct
 
 ## Tests
 
-- [ ] `swissarmyhammer-kanban/src/commands/task_commands.rs` — add test `do_this_next_moves_to_first_column`: create board with columns at order 0/1/2, create task in column at order 1, run DoThisNext, assert `position_column` is the order-0 column and `position_ordinal` sorts before any existing task in that column
-- [ ] `cargo nextest run -p swissarmyhammer-kanban -- do_this_next` passes
+- [x] `swissarmyhammer-kanban/src/commands/task_commands.rs` — add test `do_this_next_moves_to_first_column`: create board with columns at order 0/1/2, create task in column at order 1, run DoThisNext, assert `position_column` is the order-0 column and `position_ordinal` sorts before any existing task in that column
+- [x] `cargo nextest run -p swissarmyhammer-kanban -- do_this_next` passes
 
 ## Workflow
 - Use `/tdd` — write failing tests first, then implement to make them pass.</description>
