@@ -96,6 +96,7 @@ mod tests {
             icon: None,
             body_field: Some("body".into()),
             fields: vec!["title".into(), "body".into(), "tags".into()],
+            sections: vec![],
             validate: None,
             mention_prefix: None,
             mention_display_field: None,

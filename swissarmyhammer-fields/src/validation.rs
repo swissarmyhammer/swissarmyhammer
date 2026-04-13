@@ -520,6 +520,7 @@ mod tests {
             mention_slug_field: None,
             search_display_field: None,
             commands: vec![],
+            sections: vec![],
         };
         let yaml = serde_yaml_ng::to_string(&entity).unwrap();
         let parsed: EntityDef = serde_yaml_ng::from_str(&yaml).unwrap();
@@ -540,6 +541,7 @@ mod tests {
             mention_slug_field: None,
             search_display_field: None,
             commands: vec![],
+            sections: vec![],
         };
         let mut fields = HashMap::new();
         fields.insert("title".to_string(), serde_json::json!("Hello"));
@@ -570,6 +572,7 @@ mod tests {
             mention_slug_field: None,
             search_display_field: None,
             commands: vec![],
+            sections: vec![],
         };
         let mut fields = HashMap::new();
         fields.insert("title".to_string(), serde_json::json!("My Task"));
@@ -593,6 +596,7 @@ mod tests {
             mention_slug_field: None,
             search_display_field: None,
             commands: vec![],
+            sections: vec![],
         };
         let mut fields = HashMap::new();
         fields.insert("title".to_string(), serde_json::json!("Test"));
@@ -673,6 +677,7 @@ mod tests {
             mention_slug_field: None,
             search_display_field: None,
             commands: vec![],
+            sections: vec![],
         };
 
         let adversarial = r#"}})(); globalThis.__pwned3 = true; (function(){"#;
@@ -888,6 +893,7 @@ mod tests {
             mention_slug_field: None,
             search_display_field: None,
             commands: vec![],
+            sections: vec![],
         };
         let mut fields = HashMap::new();
         fields.insert("title".to_string(), serde_json::json!("Test"));
@@ -920,6 +926,7 @@ mod tests {
             mention_slug_field: None,
             search_display_field: None,
             commands: vec![],
+            sections: vec![],
         };
         let mut fields = HashMap::new();
         fields.insert("title".to_string(), serde_json::json!("Hello"));
@@ -950,6 +957,7 @@ mod tests {
             mention_slug_field: None,
             search_display_field: None,
             commands: vec![],
+            sections: vec![],
         };
         let mut fields = HashMap::new();
         fields.insert("title".to_string(), serde_json::json!("My Task"));

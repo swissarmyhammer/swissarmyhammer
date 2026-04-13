@@ -1,0 +1,20 @@
+# Sentinel ID: builtin field definitions use zero-padded IDs that sort before
+# real ULIDs. The last two characters are the builtin field code.
+id: "00000000000000000000000017"
+name: status_date
+description: Smart status date — the most salient date given the task's current state
+type:
+  kind: computed
+  derive: derive-status-date
+  depends_on:
+    - completed
+    - started
+    - due
+    - scheduled
+    - created
+icon: target
+editor: none
+display: status-date
+sort: datetime
+width: 160
+section: header

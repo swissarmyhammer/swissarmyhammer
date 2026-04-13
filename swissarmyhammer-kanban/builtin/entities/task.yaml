@@ -1,6 +1,16 @@
 name: task
 icon: check-square
 body_field: body
+sections:
+  - id: header
+    on_card: true
+  - id: body
+  - id: dates
+    label: Dates
+    on_card: true
+  - id: system
+    label: System
+  - id: footer
 search_display_field: title
 mention_prefix: "^"
 mention_display_field: title
@@ -96,3 +106,9 @@ fields:
   - updated
   - started
   - completed
+  # status_date MUST appear after its depends_on fields — derive_all resolves
+  # computed fields in template order and inserts each result back into the
+  # fields map, so completed/started/created must already be resolved before
+  # status_date reads them. The field's `section: header` still places it
+  # in the header group in the inspector.
+  - status_date

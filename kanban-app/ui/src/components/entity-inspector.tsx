@@ -5,13 +5,17 @@ import {
   TooltipContent,
 } from "@/components/ui/tooltip";
 import { resolveEditor } from "@/components/fields/editors";
-import { Field } from "@/components/fields/field";
+import { Field, getDisplayIsEmpty } from "@/components/fields/field";
 import { useSchema } from "@/lib/schema-context";
 import {
   useInspectorNav,
   type UseInspectorNavReturn,
   type InspectorMode,
 } from "@/hooks/use-inspector-nav";
+import {
+  useEntitySections,
+  type ResolvedSection,
+} from "@/hooks/use-entity-sections";
 import type { FieldDef, Entity } from "@/types/kanban";
 import { FocusScope } from "@/components/focus-scope";
 import { useEntityFocus } from "@/lib/entity-focus-context";
@@ -26,18 +30,19 @@ interface EntityInspectorProps {
   navRef?: React.RefObject<UseInspectorNavReturn | null>;
 }
 
-interface FieldSections {
-  header: FieldDef[];
-  body: FieldDef[];
-  footer: FieldDef[];
-}
-
 /**
  * Generic entity inspector — renders all fields for any entity type,
- * grouped by section (header, body, footer) in entity definition order.
+ * grouped by the declarative sections on the entity schema.
  *
- * Fields with `section: "hidden"` are not rendered.
- * Fields default to "body" if no section is specified.
+ * Section layout comes from `entity.sections` in the YAML schema: each
+ * entry carries an `id`, optional `label`, and `on_card` flag. Fields
+ * reference a section by their own `section: "<id>"` value. Entities
+ * that omit `sections` fall back to the implicit `header`/`body`/`footer`
+ * layout so legacy schemas render as before.
+ *
+ * Fields with `section: "hidden"` are not rendered. Fields whose
+ * `section` value is not in the declared list fall through to `body`
+ * so schema typos stay visible.
  *
  * Navigation is pull-based: each field row's FocusScope gets claimWhen
  * predicates computed from its position in the field list. A mount effect
@@ -52,9 +57,10 @@ export function EntityInspector({ entity, navRef }: EntityInspectorProps) {
   const { getSchema } = useSchema();
   const schema = getSchema(entity.entity_type);
   const fields = schema?.fields ?? [];
-  const sections = useFieldSections(fields);
+  const visibleFields = useVisibleFields(entity, fields);
+  const sections = useEntitySections(schema?.entity.sections, visibleFields);
   const navigableFields = useMemo(
-    () => [...sections.header, ...sections.body, ...sections.footer],
+    () => sections.flatMap((s) => s.fields),
     [sections],
   );
   const fieldMonikers = useMemo(
@@ -85,21 +91,27 @@ export function EntityInspector({ entity, navRef }: EntityInspectorProps) {
   );
 }
 
-/** Group fields into header/body/footer, skipping `section: "hidden"`. */
-function useFieldSections(fields: FieldDef[]): FieldSections {
+/**
+ * Filter out non-editable fields whose current value is "empty" per the
+ * display's registered `isEmpty` predicate.
+ *
+ * Only fields with `editor: "none"` (computed / display-only) are eligible —
+ * editable fields with empty values must still render so the user can click
+ * to edit them. A display without a registered `isEmpty` predicate is always
+ * considered non-empty (opt-in behaviour).
+ *
+ * Filtering runs *before* sectioning and predicate assembly so keyboard nav
+ * indexes stay contiguous — there is no way to focus a hidden row.
+ */
+function useVisibleFields(entity: Entity, fields: FieldDef[]): FieldDef[] {
   return useMemo(() => {
-    const header: FieldDef[] = [];
-    const body: FieldDef[] = [];
-    const footer: FieldDef[] = [];
-    for (const field of fields) {
-      const section = field.section ?? "body";
-      if (section === "hidden") continue;
-      if (section === "header") header.push(field);
-      else if (section === "footer") footer.push(field);
-      else body.push(field);
-    }
-    return { header, body, footer };
-  }, [fields]);
+    return fields.filter((field) => {
+      if (resolveEditor(field) !== "none") return true;
+      const isEmpty = getDisplayIsEmpty(field.display ?? "");
+      if (!isEmpty) return true;
+      return !isEmpty(entity.fields[field.name]);
+    });
+  }, [entity, fields]);
 }
 
 /**
@@ -213,12 +225,24 @@ function useFirstFieldFocus(firstFieldMoniker: string | undefined): void {
 
 interface InspectorSectionsProps {
   entity: Entity;
-  sections: FieldSections;
+  sections: ResolvedSection[];
   claimPredicates: ClaimPredicate[][];
   nav: UseInspectorNavReturn;
 }
 
-/** Renders header/body/footer sections with dividers between non-empty blocks. */
+/**
+ * Renders the entity's fields grouped into declared sections.
+ *
+ * Iterates `sections` in declared order, skipping empty sections (no
+ * dangling divider). A thin horizontal divider sits between consecutive
+ * non-empty sections. Sections with a `label` render a small uppercase
+ * heading above the rows (the inspector-only affordance — cards stay
+ * dense). The `header` section renders without field labels (legacy
+ * compact styling); all other sections render field labels.
+ *
+ * `flatIndex` walks the already-flattened navigable field order so each
+ * `FieldRow` receives its matching pull-based claim predicates.
+ */
 function InspectorSections({
   entity,
   sections,
@@ -240,40 +264,61 @@ function InspectorSections({
     />
   );
 
+  /** Track whether we've already rendered a non-empty section so we know when to draw dividers. */
+  let renderedAny = false;
   return (
     <div data-testid="entity-inspector">
-      {sections.header.length > 0 && (
-        <div className="space-y-2" data-testid="inspector-header">
-          {sections.header.map((f) => rowFor(f, false))}
-        </div>
-      )}
-      {sections.header.length > 0 && sections.body.length > 0 && (
-        <div className="my-3 h-px bg-border" />
-      )}
-      {sections.body.length > 0 && (
-        <div className="space-y-3" data-testid="inspector-body">
-          {sections.body.map((f) => rowFor(f))}
-        </div>
-      )}
-      <InspectorFooter fields={sections.footer} rowFor={rowFor} />
+      {sections.map((section) => {
+        if (section.fields.length === 0) return null;
+        const showDivider = renderedAny;
+        renderedAny = true;
+        return (
+          <SectionBlock
+            key={section.def.id}
+            section={section}
+            rowFor={rowFor}
+            showDivider={showDivider}
+          />
+        );
+      })}
     </div>
   );
 }
 
-/** Footer section with a top divider. Renders nothing when there are no footer fields. */
-function InspectorFooter({
-  fields,
-  rowFor,
-}: {
-  fields: FieldDef[];
+interface SectionBlockProps {
+  section: ResolvedSection;
   rowFor: (field: FieldDef, showLabel?: boolean) => React.ReactElement;
-}) {
-  if (fields.length === 0) return null;
+  showDivider: boolean;
+}
+
+/**
+ * Renders one non-empty inspector section: an optional top divider, an
+ * optional small label heading, and the section's field rows.
+ *
+ * The `header` section uses tighter `space-y-2` spacing and drops field
+ * labels (for compact entity titles); every other section uses
+ * `space-y-3` and keeps labels. This matches the pre-declarative
+ * styling so default-layout entities (tag, actor, …) render unchanged.
+ */
+function SectionBlock({ section, rowFor, showDivider }: SectionBlockProps) {
+  const { id, label } = section.def;
+  const isHeader = id === "header";
   return (
     <>
-      <div className="my-3 h-px bg-border" />
-      <div className="space-y-3" data-testid="inspector-footer">
-        {fields.map((f) => rowFor(f))}
+      {showDivider && <div className="my-3 h-px bg-border" />}
+      {label && (
+        <div
+          className="text-[11px] uppercase tracking-wide text-muted-foreground/70 mb-1"
+          data-testid={`inspector-section-label-${id}`}
+        >
+          {label}
+        </div>
+      )}
+      <div
+        className={isHeader ? "space-y-2" : "space-y-3"}
+        data-testid={`inspector-section-${id}`}
+      >
+        {section.fields.map((f) => rowFor(f, !isHeader))}
       </div>
     </>
   );

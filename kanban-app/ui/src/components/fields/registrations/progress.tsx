@@ -1,5 +1,9 @@
 /**
  * Register progress display with the Field registry.
+ *
+ * Publishes {@link isProgressEmpty} as the registry's `isEmpty` predicate so
+ * the inspector can suppress the surrounding `FieldRow` when there are no
+ * subtasks to visualise.
  */
 
 import {
@@ -7,6 +11,7 @@ import {
   type FieldDisplayProps,
 } from "@/components/fields/field";
 import { ProgressDisplay } from "@/components/fields/displays/progress-display";
+import { isProgressEmpty } from "@/components/fields/displays/progress-empty";
 
 function ProgressDisplayAdapter({
   field,
@@ -19,4 +24,6 @@ function ProgressDisplayAdapter({
   );
 }
 
-registerDisplay("progress", ProgressDisplayAdapter);
+registerDisplay("progress", ProgressDisplayAdapter, {
+  isEmpty: isProgressEmpty,
+});

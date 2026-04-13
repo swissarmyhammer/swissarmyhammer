@@ -827,8 +827,8 @@ mod tests {
         let ctx = KanbanContext::open(&kanban_dir).await.unwrap();
         let fields = ctx.fields().unwrap();
 
-        // Should have all 29 built-in fields
-        assert_eq!(fields.all_fields().len(), 29);
+        // Should have all 30 built-in fields
+        assert_eq!(fields.all_fields().len(), 30);
 
         // Should have all 7 entity templates
         assert_eq!(fields.all_entities().len(), 7);
@@ -856,10 +856,10 @@ type:
             .await
             .unwrap();
 
-        // Open — should have 29 built-in + 1 custom = 30
+        // Open — should have 30 built-in + 1 custom = 31
         let ctx = KanbanContext::open(&kanban_dir).await.unwrap();
         let fields = ctx.fields().unwrap();
-        assert_eq!(fields.all_fields().len(), 30);
+        assert_eq!(fields.all_fields().len(), 31);
 
         // Custom field should be present
         let sprint = fields.get_field_by_name("sprint").unwrap();
@@ -893,7 +893,7 @@ type:
 
         // Entity fields should resolve to field definitions
         let task_fields = fields.fields_for_entity("task");
-        assert_eq!(task_fields.len(), 18); // title, tags, assignees, project, depends_on, progress, body, position_column, position_ordinal, attachments, virtual_tags, filter_tags, due, scheduled, created, updated, started, completed
+        assert_eq!(task_fields.len(), 19); // title, tags, assignees, project, depends_on, progress, body, position_column, position_ordinal, attachments, virtual_tags, filter_tags, due, scheduled, created, updated, started, completed, status_date
     }
 
     // =========================================================================

@@ -51,8 +51,28 @@ export interface FieldDisplayProps {
 // Registries — editors and displays register themselves here
 // ---------------------------------------------------------------------------
 
+/**
+ * Optional metadata a display registration may expose.
+ *
+ * - `isEmpty`: predicate the inspector uses to suppress the surrounding row
+ *   (icon, tooltip, flex gap) when the underlying display would render
+ *   nothing. Consulted only for non-editable fields so editable fields with
+ *   empty values stay clickable. Displays own their own notion of emptiness
+ *   so the inspector stays free of hardcoded field names.
+ */
+export interface DisplayRegistration {
+  component: ComponentType<FieldDisplayProps>;
+  isEmpty?: (value: unknown) => boolean;
+}
+
+/** Options accepted by {@link registerDisplay}. */
+export interface RegisterDisplayOptions {
+  /** See {@link DisplayRegistration.isEmpty}. */
+  isEmpty?: (value: unknown) => boolean;
+}
+
 const editorRegistry = new Map<string, ComponentType<FieldEditorProps>>();
-const displayRegistry = new Map<string, ComponentType<FieldDisplayProps>>();
+const displayRegistry = new Map<string, DisplayRegistration>();
 
 /** Register an editor component for a given editor type name. */
 export function registerEditor(
@@ -62,12 +82,31 @@ export function registerEditor(
   editorRegistry.set(name, component);
 }
 
-/** Register a display component for a given display type name. */
+/**
+ * Register a display component for a given display type name.
+ *
+ * @param name - Display type identifier (matches `display:` in field YAML).
+ * @param component - React component rendered for values of this display.
+ * @param options - Optional metadata (see {@link RegisterDisplayOptions}).
+ */
 export function registerDisplay(
   name: string,
   component: ComponentType<FieldDisplayProps>,
+  options?: RegisterDisplayOptions,
 ) {
-  displayRegistry.set(name, component);
+  displayRegistry.set(name, { component, isEmpty: options?.isEmpty });
+}
+
+/**
+ * Look up the `isEmpty` predicate registered for a display, if any.
+ *
+ * Returns `undefined` when the display is unregistered or when the
+ * registration did not supply an `isEmpty` option.
+ */
+export function getDisplayIsEmpty(
+  name: string,
+): ((value: unknown) => boolean) | undefined {
+  return displayRegistry.get(name)?.isEmpty;
 }
 
 // ---------------------------------------------------------------------------
@@ -94,6 +133,108 @@ export interface FieldProps {
 }
 
 /**
+ * Collects the commit / cancel / debounced-change callbacks a Field needs.
+ *
+ * Split out of {@link Field} so the component stays readable. All three
+ * callbacks close over the same entity/field identity and share the debounced
+ * save cancel, which is why they live together.
+ */
+function useFieldHandlers(
+  entityType: string,
+  entityId: string,
+  fieldName: string,
+  onDone?: () => void,
+  onCancel?: () => void,
+) {
+  const { updateField } = useFieldUpdate();
+  const { onChange: debouncedOnChange, cancel: cancelSave } = useDebouncedSave({
+    updateField,
+    entityType,
+    entityId,
+    fieldName,
+  });
+
+  const handleCommit = useCallback(
+    (newValue: unknown) => {
+      cancelSave();
+      updateField(entityType, entityId, fieldName, newValue).catch(() => {});
+      onDone?.();
+    },
+    [cancelSave, updateField, entityType, entityId, fieldName, onDone],
+  );
+
+  const handleDisplayCommit = useCallback(
+    (newValue: unknown) => {
+      updateField(entityType, entityId, fieldName, newValue).catch(() => {});
+    },
+    [updateField, entityType, entityId, fieldName],
+  );
+
+  const handleCancel = useCallback(() => {
+    cancelSave();
+    onCancel?.();
+  }, [cancelSave, onCancel]);
+
+  return { handleCommit, handleDisplayCommit, handleCancel, debouncedOnChange };
+}
+
+/** Resolves the editor from the registry and renders it, or null if unregistered. */
+function FieldEditor(props: {
+  fieldDef: FieldDef;
+  value: unknown;
+  entity: Entity | undefined;
+  mode: "compact" | "full";
+  onCommit: (value: unknown) => void;
+  onCancel: () => void;
+  onChange: (value: unknown) => void;
+}) {
+  const Editor = editorRegistry.get(props.fieldDef.editor ?? "");
+  if (!Editor) return null;
+  return (
+    <Editor
+      field={props.fieldDef}
+      value={props.value}
+      entity={props.entity}
+      mode={props.mode}
+      onCommit={props.onCommit}
+      onCancel={props.onCancel}
+      onChange={props.onChange}
+    />
+  );
+}
+
+/**
+ * Resolves the display from the registry and renders it. Wraps in a
+ * click-to-edit surface when the field is editable; bare otherwise.
+ */
+function FieldDisplayContent(props: {
+  fieldDef: FieldDef;
+  value: unknown;
+  entity: Entity | undefined;
+  mode: "compact" | "full";
+  onEdit?: () => void;
+  onCommit: (value: unknown) => void;
+}) {
+  const Display = displayRegistry.get(props.fieldDef.display ?? "text")?.component;
+  if (!Display) return null;
+  const inner = (
+    <Display
+      field={props.fieldDef}
+      value={props.value}
+      entity={props.entity}
+      mode={props.mode}
+      onCommit={props.onCommit}
+    />
+  );
+  if (resolveEditor(props.fieldDef) === "none") return inner;
+  return (
+    <div className="text-sm cursor-text min-h-[1.25rem]" onClick={props.onEdit}>
+      {inner}
+    </div>
+  );
+}
+
+/**
  * Data-bound field control.
  *
  * Subscribes to its specific field value via useFieldValue — re-renders
@@ -109,57 +250,15 @@ export function Field({
   onDone,
   onCancel,
 }: FieldProps) {
-  const { getEntity } = useEntityStore();
-  const { updateField } = useFieldUpdate();
-
-  // Reactive field value — re-renders when this specific field changes.
   const value = useFieldValue(entityType, entityId, fieldDef.name);
-
-  // Entity reference for editors that need context (e.g. multi-select).
-  const entity = getEntity(entityType, entityId);
-
-  // Debounced autosave — editors call onChange for intermediate values.
-  const { onChange: debouncedOnChange, cancel: cancelSave } = useDebouncedSave({
-    updateField,
-    entityType,
-    entityId,
-    fieldName: fieldDef.name,
-  });
-
-  /** Editor commits a value → cancel pending debounce (commit is authoritative), persist, and signal done. */
-  const handleCommit = useCallback(
-    (newValue: unknown) => {
-      cancelSave();
-      updateField(entityType, entityId, fieldDef.name, newValue).catch(
-        () => {},
-      );
-      onDone?.();
-    },
-    [cancelSave, updateField, entityType, entityId, fieldDef.name, onDone],
-  );
-
-  /** Display-only commit — persists without exiting display mode (e.g. checkbox toggle). */
-  const handleDisplayCommit = useCallback(
-    (newValue: unknown) => {
-      updateField(entityType, entityId, fieldDef.name, newValue).catch(
-        () => {},
-      );
-    },
-    [updateField, entityType, entityId, fieldDef.name],
-  );
-
-  /** Cancel — discard any pending debounced save. */
-  const handleCancel = useCallback(() => {
-    cancelSave();
-    onCancel?.();
-  }, [cancelSave, onCancel]);
+  const entity = useEntityStore().getEntity(entityType, entityId);
+  const { handleCommit, handleDisplayCommit, handleCancel, debouncedOnChange } =
+    useFieldHandlers(entityType, entityId, fieldDef.name, onDone, onCancel);
 
   if (editing) {
-    const Editor = editorRegistry.get(fieldDef.editor ?? "");
-    if (!Editor) return null;
     return (
-      <Editor
-        field={fieldDef}
+      <FieldEditor
+        fieldDef={fieldDef}
         value={value}
         entity={entity}
         mode={mode}
@@ -170,32 +269,14 @@ export function Field({
     );
   }
 
-  const Display = displayRegistry.get(fieldDef.display ?? "text");
-  if (!Display) return null;
-
-  const editable = resolveEditor(fieldDef) !== "none";
-
-  if (!editable) {
-    return (
-      <Display
-        field={fieldDef}
-        value={value}
-        entity={entity}
-        mode={mode}
-        onCommit={handleDisplayCommit}
-      />
-    );
-  }
-
   return (
-    <div className="text-sm cursor-text min-h-[1.25rem]" onClick={onEdit}>
-      <Display
-        field={fieldDef}
-        value={value}
-        entity={entity}
-        mode={mode}
-        onCommit={handleDisplayCommit}
-      />
-    </div>
+    <FieldDisplayContent
+      fieldDef={fieldDef}
+      value={value}
+      entity={entity}
+      mode={mode}
+      onEdit={onEdit}
+      onCommit={handleDisplayCommit}
+    />
   );
 }

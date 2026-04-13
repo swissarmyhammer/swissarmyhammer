@@ -409,6 +409,125 @@ fn register_derive_completed(engine: &mut ComputeEngine) {
     );
 }
 
+/// Parse a timestamp from `fields` by name.
+///
+/// Accepts either RFC 3339 datetimes (e.g. `2026-04-12T10:23:00Z`) or bare
+/// calendar dates (`YYYY-MM-DD` — used by `due` and `scheduled`). Bare dates
+/// are interpreted as midnight UTC of that day. Returns `None` if the field
+/// is missing, null, not a string, or not a parseable date/datetime.
+fn parse_status_date_input(
+    fields: &HashMap<String, serde_json::Value>,
+    name: &str,
+) -> Option<chrono::DateTime<chrono::Utc>> {
+    let raw = fields.get(name)?.as_str()?;
+    if raw.is_empty() {
+        return None;
+    }
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(raw) {
+        return Some(dt.with_timezone(&chrono::Utc));
+    }
+    if let Ok(date) = chrono::NaiveDate::parse_from_str(raw, "%Y-%m-%d") {
+        let naive = date.and_hms_opt(0, 0, 0)?;
+        return Some(chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(
+            naive,
+            chrono::Utc,
+        ));
+    }
+    None
+}
+
+/// Render a `DateTime<Utc>` back as an RFC 3339 string for the output payload.
+fn format_status_date_timestamp(dt: chrono::DateTime<chrono::Utc>) -> String {
+    dt.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+}
+
+/// Look up a raw timestamp string for `name` in `fields`, preserving the original
+/// serialization (date vs datetime). Falls back to formatting `parsed` if the raw
+/// string is unavailable — keeps output consistent regardless of input shape.
+fn status_date_raw_string(
+    fields: &HashMap<String, serde_json::Value>,
+    name: &str,
+    parsed: chrono::DateTime<chrono::Utc>,
+) -> String {
+    fields
+        .get(name)
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+        .unwrap_or_else(|| format_status_date_timestamp(parsed))
+}
+
+/// Compute the tagged `status_date` payload for a task given its resolved date
+/// fields and a reference "now" instant.
+///
+/// Applies the priority ladder (first match wins):
+/// 1. `completed` set → `kind: "completed"`
+/// 2. `due` set AND in the past → `kind: "overdue"`
+/// 3. `started` set → `kind: "started"`
+/// 4. `scheduled` set AND in the future → `kind: "scheduled"`
+/// 5. `created` set → `kind: "created"` (fallback)
+///
+/// The `timestamp` in the result preserves the original input string form
+/// (date or datetime). Returns `Value::Null` if no ladder rule matches.
+///
+/// Pure — accepts `now` explicitly so it can be tested with a fixed instant.
+fn compute_status_date(
+    fields: &HashMap<String, serde_json::Value>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> serde_json::Value {
+    if let Some(ts) = parse_status_date_input(fields, "completed") {
+        return serde_json::json!({
+            "kind": "completed",
+            "timestamp": status_date_raw_string(fields, "completed", ts),
+        });
+    }
+    if let Some(ts) = parse_status_date_input(fields, "due") {
+        if ts < now {
+            return serde_json::json!({
+                "kind": "overdue",
+                "timestamp": status_date_raw_string(fields, "due", ts),
+            });
+        }
+    }
+    if let Some(ts) = parse_status_date_input(fields, "started") {
+        return serde_json::json!({
+            "kind": "started",
+            "timestamp": status_date_raw_string(fields, "started", ts),
+        });
+    }
+    if let Some(ts) = parse_status_date_input(fields, "scheduled") {
+        if ts > now {
+            return serde_json::json!({
+                "kind": "scheduled",
+                "timestamp": status_date_raw_string(fields, "scheduled", ts),
+            });
+        }
+    }
+    if let Some(ts) = parse_status_date_input(fields, "created") {
+        return serde_json::json!({
+            "kind": "created",
+            "timestamp": status_date_raw_string(fields, "created", ts),
+        });
+    }
+    serde_json::Value::Null
+}
+
+/// Register the derive-status-date derivation.
+///
+/// Reads already-resolved `completed`, `started`, `due`, `scheduled`, and
+/// `created` values from the entity's field map (they appear earlier in
+/// task.yaml's field list, so the enrichment pipeline has already derived
+/// them by the time this runs) and produces a tagged `{ kind, timestamp }`
+/// payload, or `null` if no priority ladder rule matches.
+fn register_derive_status_date(engine: &mut ComputeEngine) {
+    engine.register(
+        "derive-status-date",
+        Box::new(|fields| {
+            let value = compute_status_date(fields, chrono::Utc::now());
+            Box::pin(async move { value })
+        }),
+    );
+}
+
 /// Build a ComputeEngine with all kanban derivation functions registered.
 pub fn kanban_compute_engine() -> ComputeEngine {
     let mut engine = ComputeEngine::new();
@@ -435,6 +554,7 @@ pub fn kanban_compute_engine() -> ComputeEngine {
     register_derive_updated(&mut engine);
     register_derive_started(&mut engine);
     register_derive_completed(&mut engine);
+    register_derive_status_date(&mut engine);
 
     engine
 }
@@ -533,7 +653,7 @@ mod tests {
     #[test]
     fn builtin_field_definitions_load() {
         let defs = builtin_field_definitions();
-        assert_eq!(defs.len(), 29, "expected 29 builtin field definitions");
+        assert_eq!(defs.len(), 30, "expected 30 builtin field definitions");
     }
 
     #[test]
@@ -673,11 +793,11 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(ctx.all_fields().len(), 29);
+        assert_eq!(ctx.all_fields().len(), 30);
         assert_eq!(ctx.all_entities().len(), 7);
         assert!(ctx.get_field_by_name("title").is_some());
         assert!(ctx.get_entity("task").is_some());
-        assert_eq!(ctx.fields_for_entity("task").len(), 18);
+        assert_eq!(ctx.fields_for_entity("task").len(), 19);
     }
 
     #[test]
@@ -716,6 +836,7 @@ mod tests {
         let engine = kanban_compute_engine();
         assert!(engine.has("parse-body-tags"));
         assert!(engine.has("parse-body-progress"));
+        assert!(engine.has("derive-status-date"));
     }
 
     /// Helper: build a query function that returns known tags.
@@ -1271,5 +1392,242 @@ mod tests {
         assert_eq!(result["total"], 0);
         assert_eq!(result["completed"], 0);
         assert_eq!(result["percent"], 0);
+    }
+
+    // ---- status_date derivation tests ----
+
+    /// Fixed "now" used across `derive_status_date_*` tests for deterministic
+    /// past/future comparisons.
+    fn status_date_now() -> chrono::DateTime<chrono::Utc> {
+        chrono::DateTime::parse_from_rfc3339("2026-04-12T12:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc)
+    }
+
+    #[test]
+    fn derive_status_date_prefers_completed() {
+        let mut fields = HashMap::new();
+        fields.insert(
+            "completed".to_string(),
+            serde_json::json!("2026-04-10T00:00:00Z"),
+        );
+        fields.insert(
+            "started".to_string(),
+            serde_json::json!("2026-04-05T00:00:00Z"),
+        );
+        fields.insert("due".to_string(), serde_json::json!("2026-04-01"));
+        fields.insert("scheduled".to_string(), serde_json::json!("2026-05-01"));
+        fields.insert(
+            "created".to_string(),
+            serde_json::json!("2026-03-15T08:00:00Z"),
+        );
+
+        let result = compute_status_date(&fields, status_date_now());
+        assert_eq!(result["kind"], "completed");
+        assert_eq!(result["timestamp"], "2026-04-10T00:00:00Z");
+    }
+
+    #[test]
+    fn derive_status_date_overdue_when_due_past() {
+        let mut fields = HashMap::new();
+        fields.insert("due".to_string(), serde_json::json!("2026-04-01"));
+        fields.insert(
+            "created".to_string(),
+            serde_json::json!("2026-03-15T08:00:00Z"),
+        );
+
+        let result = compute_status_date(&fields, status_date_now());
+        assert_eq!(result["kind"], "overdue");
+        // Preserves original calendar-date form.
+        assert_eq!(result["timestamp"], "2026-04-01");
+    }
+
+    #[test]
+    fn derive_status_date_started_over_future_due() {
+        let mut fields = HashMap::new();
+        // Due is in the future → does NOT trigger overdue.
+        fields.insert("due".to_string(), serde_json::json!("2026-05-01"));
+        fields.insert(
+            "started".to_string(),
+            serde_json::json!("2026-04-10T00:00:00Z"),
+        );
+        fields.insert(
+            "created".to_string(),
+            serde_json::json!("2026-03-15T08:00:00Z"),
+        );
+
+        let result = compute_status_date(&fields, status_date_now());
+        assert_eq!(result["kind"], "started");
+        assert_eq!(result["timestamp"], "2026-04-10T00:00:00Z");
+    }
+
+    #[test]
+    fn derive_status_date_scheduled_when_future() {
+        let mut fields = HashMap::new();
+        fields.insert("scheduled".to_string(), serde_json::json!("2026-05-01"));
+        fields.insert(
+            "created".to_string(),
+            serde_json::json!("2026-03-15T08:00:00Z"),
+        );
+
+        let result = compute_status_date(&fields, status_date_now());
+        assert_eq!(result["kind"], "scheduled");
+        assert_eq!(result["timestamp"], "2026-05-01");
+    }
+
+    #[test]
+    fn derive_status_date_created_fallback() {
+        let mut fields = HashMap::new();
+        fields.insert(
+            "created".to_string(),
+            serde_json::json!("2026-03-15T08:00:00Z"),
+        );
+
+        let result = compute_status_date(&fields, status_date_now());
+        assert_eq!(result["kind"], "created");
+        assert_eq!(result["timestamp"], "2026-03-15T08:00:00Z");
+    }
+
+    #[test]
+    fn derive_status_date_empty_inputs_returns_null() {
+        let fields = HashMap::new();
+        let result = compute_status_date(&fields, status_date_now());
+        assert_eq!(result, serde_json::Value::Null);
+    }
+
+    #[test]
+    fn derive_status_date_due_future_no_started_falls_through() {
+        let mut fields = HashMap::new();
+        // due in the future, no started/scheduled — must NOT produce overdue.
+        fields.insert("due".to_string(), serde_json::json!("2026-05-01"));
+        fields.insert(
+            "created".to_string(),
+            serde_json::json!("2026-03-15T08:00:00Z"),
+        );
+
+        let result = compute_status_date(&fields, status_date_now());
+        assert_eq!(result["kind"], "created");
+        assert_eq!(result["timestamp"], "2026-03-15T08:00:00Z");
+    }
+
+    /// Smoke test: the registered derivation dispatches to compute_status_date and
+    /// yields the expected tagged value via the ComputeEngine.
+    #[tokio::test]
+    async fn derive_status_date_registered_runs_via_engine() {
+        let engine = kanban_compute_engine();
+        let field = swissarmyhammer_fields::FieldDef {
+            id: swissarmyhammer_fields::FieldDefId::new(),
+            name: "status_date".into(),
+            description: None,
+            type_: swissarmyhammer_fields::FieldType::Computed {
+                derive: "derive-status-date".to_string(),
+                depends_on: vec![
+                    "completed".to_string(),
+                    "started".to_string(),
+                    "due".to_string(),
+                    "scheduled".to_string(),
+                    "created".to_string(),
+                ],
+                entity: None,
+                commit_display_names: false,
+            },
+            default: None,
+            editor: None,
+            display: None,
+            sort: None,
+            width: None,
+            icon: None,
+            section: None,
+            validate: None,
+            groupable: None,
+        };
+        let mut fields = HashMap::new();
+        fields.insert(
+            "completed".to_string(),
+            serde_json::json!("2026-04-10T00:00:00Z"),
+        );
+
+        let result = engine.derive(&field, &fields, None).await.unwrap();
+        assert_eq!(result["kind"], "completed");
+        assert_eq!(result["timestamp"], "2026-04-10T00:00:00Z");
+    }
+
+    /// Integration test: when `derive_all` processes the task entity's field
+    /// list, status_date must appear after its depends_on so the prior fields
+    /// (completed/started/created) are already resolved in the map by the
+    /// time status_date runs. Uses the real builtin task entity's field list.
+    #[tokio::test]
+    async fn derive_status_date_resolves_after_its_dependencies_in_task_order() {
+        let defs = builtin_field_definitions();
+        let entities = builtin_entity_definitions();
+        let ctx = swissarmyhammer_fields::FieldsContext::from_yaml_sources(
+            std::path::PathBuf::from("/tmp/test-status-date-order"),
+            &defs,
+            &entities,
+        )
+        .unwrap();
+
+        let engine = kanban_compute_engine();
+        let task_fields: Vec<_> = ctx.fields_for_entity("task").into_iter().cloned().collect();
+
+        // Find status_date's position and its depends_on names.
+        let status_idx = task_fields
+            .iter()
+            .position(|f| f.name.as_str() == "status_date")
+            .expect("status_date must be in task fields");
+
+        let depends_on = match &task_fields[status_idx].type_ {
+            swissarmyhammer_fields::FieldType::Computed { depends_on, .. } => depends_on.clone(),
+            _ => panic!("status_date must be a computed field"),
+        };
+
+        // Each non-internal dependency must be positioned earlier than status_date
+        // in the task fields list, so derive_all has already resolved it.
+        for dep in &depends_on {
+            if dep.starts_with('_') {
+                continue; // internal injected fields like _changelog
+            }
+            let dep_idx = task_fields
+                .iter()
+                .position(|f| f.name.as_str() == dep.as_str())
+                .unwrap_or_else(|| panic!("dep {dep} not in task fields"));
+            assert!(
+                dep_idx < status_idx,
+                "status_date depends on {dep} but {dep} appears at index {dep_idx} \
+                 after status_date at index {status_idx} — derive_all would see \
+                 {dep} unresolved"
+            );
+        }
+
+        // Smoke-test the actual pipeline: drive derive_all over a minimal
+        // changelog that marks the task completed, and confirm status_date
+        // resolves to the completed timestamp via the real field list.
+        let mut fields = HashMap::new();
+        fields.insert(
+            "_changelog".to_string(),
+            serde_json::json!([
+                mock_changelog_entry("create", "2026-01-01T10:00:00Z", Some(("set", "todo"))),
+                mock_changelog_entry(
+                    "update",
+                    "2026-02-01T14:00:00Z",
+                    Some(("text_diff", "todo->doing"))
+                ),
+                mock_changelog_entry(
+                    "update",
+                    "2026-04-10T00:00:00Z",
+                    Some(("text_diff", "doing->done"))
+                ),
+            ]),
+        );
+
+        let query = column_query(vec![("todo", 0), ("doing", 1), ("done", 2)]);
+        engine
+            .derive_all(&mut fields, &task_fields, Some(&query))
+            .await
+            .unwrap();
+
+        let resolved = fields.get("status_date").expect("status_date resolved");
+        assert_eq!(resolved["kind"], "completed");
+        assert_eq!(resolved["timestamp"], "2026-04-10T00:00:00Z");
     }
 }
