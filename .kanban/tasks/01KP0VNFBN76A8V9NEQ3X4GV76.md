@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: bd80
+position_column: done
+position_ordinal: ffffffffffffffffffffffc580
 project: kanban-mcp
 title: 'shelltool-cli: add tests/ directory with integration tests'
 ---
@@ -17,6 +17,6 @@ shelltool-cli has no `tests/` directory — the other CLIs (code-context-cli, sw
 Model on the integration tests in the other CLIs.
 
 ## Acceptance Criteria
-- [ ] `shelltool-cli/tests/cli.rs` exists
-- [ ] At least 3 integration tests covering help, doctor, doctor --verbose
-- [ ] `cargo test -p shelltool-cli` passes including the new tests
+- [x] `shelltool-cli/tests/cli.rs` exists
+- [x] At least 3 integration tests covering help, doctor, doctor --verbose
+- [x] `cargo test -p shelltool-cli` passes including the new tests

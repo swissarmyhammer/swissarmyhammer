@@ -48,8 +48,29 @@ pub async fn handle_dynamic_command(
     tool_registry: Arc<ToolRegistry>,
     context: Arc<ToolContext>,
 ) -> Result<()> {
-    // Look up the tool in the registry by category and CLI name
-    let tool = tool_registry
+    let tool = lookup_tool_or_report(&tool_registry, category, tool_name)?;
+    let schema = tool.schema();
+    let arguments = convert_matches_to_json_args(matches, &schema, category, tool_name)?;
+    let result = execute_mcp_tool(tool, arguments, &context, category, tool_name).await?;
+
+    display_mcp_result(result).with_context(|| {
+        format!(
+            "Displaying result for tool '{}' in category '{}'",
+            tool_name, category
+        )
+    })?;
+
+    Ok(())
+}
+
+/// Look up an MCP tool by category + CLI name, returning a helpful error when
+/// missing that lists the other tools registered in the same category.
+fn lookup_tool_or_report<'a>(
+    tool_registry: &'a ToolRegistry,
+    category: &str,
+    tool_name: &str,
+) -> Result<&'a dyn swissarmyhammer_tools::mcp::tool_registry::McpTool> {
+    tool_registry
         .get_tool_by_cli_name(category, tool_name)
         .ok_or_else(|| {
             let available_tools: Vec<String> = tool_registry
@@ -63,50 +84,69 @@ pub async fn handle_dynamic_command(
                 category,
                 available_tools.join(", ")
             )
-        })?;
+        })
+}
 
-    // Get the tool's schema for argument conversion
-    let schema = tool.schema();
-
-    // Convert Clap matches to JSON arguments
-    let arguments = SchemaConverter::matches_to_json_args(matches, &schema)
-        .map_err(|e| anyhow!(
-            "Argument conversion failed for tool '{}' (category: {}): {}",
-            tool_name,
-            category,
-            e
-        ))
-        .with_context(|| {
-            let required_fields = schema
-                .get("required")
-                .and_then(|r| r.as_array())
-                .map(|arr| arr.len())
-                .unwrap_or(0);
-            let total_properties = schema
-                .get("properties")
-                .and_then(|p| p.as_object())
-                .map(|obj| obj.len())
-                .unwrap_or(0);
-            format!(
-                "Converting arguments for tool '{}' in category '{}' (schema: {} properties, {} required)",
+/// Convert Clap matches to the JSON argument map the MCP tool expects,
+/// attaching a schema-shape breadcrumb to the error context for failures.
+fn convert_matches_to_json_args(
+    matches: &ArgMatches,
+    schema: &serde_json::Value,
+    category: &str,
+    tool_name: &str,
+) -> Result<serde_json::Map<String, serde_json::Value>> {
+    SchemaConverter::matches_to_json_args(matches, schema)
+        .map_err(|e| {
+            anyhow!(
+                "Argument conversion failed for tool '{}' (category: {}): {}",
                 tool_name,
                 category,
-                total_properties,
-                required_fields
+                e
             )
-        })?;
+        })
+        .with_context(|| schema_shape_context(schema, category, tool_name))
+}
 
+/// Build the extra error context that summarizes the tool's schema shape —
+/// total property count plus required-field count. Pulled out so the
+/// `.with_context` closure in [`convert_matches_to_json_args`] stays a
+/// one-liner.
+fn schema_shape_context(schema: &serde_json::Value, category: &str, tool_name: &str) -> String {
+    let required_fields = schema
+        .get("required")
+        .and_then(|r| r.as_array())
+        .map(|arr| arr.len())
+        .unwrap_or(0);
+    let total_properties = schema
+        .get("properties")
+        .and_then(|p| p.as_object())
+        .map(|obj| obj.len())
+        .unwrap_or(0);
+    format!(
+        "Converting arguments for tool '{}' in category '{}' (schema: {} properties, {} required)",
+        tool_name, category, total_properties, required_fields
+    )
+}
+
+/// Invoke the MCP tool with the resolved arguments and return its result.
+///
+/// Adds the CLI command form (`<category> <tool>`) plus argument count to
+/// the error context on failure so the user sees both the MCP tool name and
+/// the CLI invocation that triggered it.
+async fn execute_mcp_tool(
+    tool: &dyn swissarmyhammer_tools::mcp::tool_registry::McpTool,
+    arguments: serde_json::Map<String, serde_json::Value>,
+    context: &ToolContext,
+    category: &str,
+    tool_name: &str,
+) -> Result<rmcp::model::CallToolResult> {
     let arg_count = arguments.len();
-
     tracing::debug!(
         "Executing tool {} with arguments: {:?}",
         <dyn swissarmyhammer_tools::mcp::tool_registry::McpTool as swissarmyhammer_tools::mcp::tool_registry::McpTool>::name(tool),
         arguments
     );
-
-    // Execute the tool via MCP
-    let result = tool
-        .execute(arguments, &context)
+    tool.execute(arguments, context)
         .await
         .map_err(|e| {
             anyhow!(
@@ -124,17 +164,7 @@ pub async fn handle_dynamic_command(
                 tool_name,
                 arg_count
             )
-        })?;
-
-    // Format and display the result
-    display_mcp_result(result).with_context(|| {
-        format!(
-            "Displaying result for tool '{}' in category '{}'",
-            tool_name, category
-        )
-    })?;
-
-    Ok(())
+        })
 }
 
 /// Display the result of an MCP tool execution

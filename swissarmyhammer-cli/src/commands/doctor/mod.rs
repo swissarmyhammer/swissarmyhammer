@@ -23,9 +23,6 @@ pub mod types;
 /// Utility helpers shared across doctor checks.
 pub mod utils;
 
-/// Help text for the doctor command
-pub const DESCRIPTION: &str = include_str!("description.md");
-
 /// Main diagnostic tool for SwissArmyHammer system health checks
 ///
 /// The Doctor struct accumulates diagnostic results and provides a summary

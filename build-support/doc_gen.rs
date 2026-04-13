@@ -1,8 +1,9 @@
 //! Shared CLI documentation generation utilities.
 //!
-//! Used by both `avp-cli/build.rs` and `swissarmyhammer-cli/src/generate_docs.rs`
-//! via `#[path = ...]` includes. Functions are parameterized by binary name to
-//! support different CLI tools.
+//! Used by each CLI's `build.rs` (e.g. `avp-cli/build.rs`,
+//! `shelltool-cli/build.rs`, `code-context-cli/build.rs`,
+//! `swissarmyhammer-cli/build.rs`) via `#[path = ...]` includes. Functions are
+//! parameterized by binary name to support different CLI tools.
 
 use std::io::Error;
 use std::path::{Path, PathBuf};

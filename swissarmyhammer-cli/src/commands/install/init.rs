@@ -1,6 +1,7 @@
 //! Set up sah for all detected AI coding agents (skills + MCP).
 //!
-//! Delegates to composable `Initializable` components registered in `super::components`.
+//! Delegates to composable `Initializable` components registered via the
+//! top-level `commands::registry`.
 
 use std::time::Instant;
 
@@ -8,19 +9,18 @@ use crate::cli::InstallTarget;
 use swissarmyhammer_common::lifecycle::{InitRegistry, InitScope, InitStatus};
 use swissarmyhammer_common::reporter::{CliReporter, InitEvent, InitReporter};
 
-use super::components;
 use super::settings;
 
 /// Install sah for all detected AI coding agents.
 ///
-/// Creates an `InitRegistry`, registers all components, and runs `init` in
+/// Creates an `InitRegistry`, registers all components via
+/// [`crate::commands::registry::register_all`], and runs `init` in
 /// priority order. Components that are not applicable to the given scope
 /// are automatically skipped.
 pub fn install(target: InstallTarget) -> Result<(), String> {
     let reporter = CliReporter;
     let start = Instant::now();
     let scope: InitScope = target.into();
-    let global = matches!(target, InstallTarget::User);
 
     crate::banner::print_banner_stderr();
     reporter.emit(&InitEvent::Header {
@@ -28,7 +28,7 @@ pub fn install(target: InstallTarget) -> Result<(), String> {
     });
 
     let mut registry = InitRegistry::new();
-    components::register_all(&mut registry, global, false);
+    crate::commands::registry::register_all(&mut registry, false);
 
     let results = registry.run_all_init(&scope, &reporter);
 

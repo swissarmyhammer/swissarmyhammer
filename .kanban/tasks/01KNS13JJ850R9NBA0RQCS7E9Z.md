@@ -7,8 +7,8 @@ depends_on:
 - 01KNS12X336WM3ETPW0F2V3G07
 - 01KNS903T77DCWAH339AD550K5
 - 01KP0KZZ9VDQJVNK15JQAY4BKH
-position_column: todo
-position_ordinal: ae80
+position_column: done
+position_ordinal: ffffffffffffffffffffffca80
 project: kanban-mcp
 title: 'kanban-cli: wire serve/init/deinit/doctor into existing command tree'
 ---
@@ -32,15 +32,15 @@ The `doctor` subcommand takes `--verbose` / `-v`.
 The existing `open`, `merge`, and schema-driven noun-verb commands must continue to work unchanged.
 
 ## Acceptance Criteria
-- [ ] `kanban serve` exits cleanly when stdin closes (MCP EOF)
-- [ ] `kanban init` prints registration results and exits 0
-- [ ] `kanban deinit` prints removal results and exits 0
-- [ ] `kanban doctor` prints table and exits 0/1/2
-- [ ] `kanban task list` (existing schema command) still works
-- [ ] `kanban open .` (existing open command) still works
-- [ ] `kanban --help` lists serve, init, deinit, doctor alongside the schema commands
+- [x] `kanban serve` exits cleanly when stdin closes (MCP EOF)
+- [x] `kanban init` prints registration results and exits 0
+- [x] `kanban deinit` prints removal results and exits 0
+- [x] `kanban doctor` prints table and exits 0/1/2
+- [x] `kanban task list` (existing schema command) still works
+- [x] `kanban open .` (existing open command) still works
+- [x] `kanban --help` lists serve, init, deinit, doctor alongside the schema commands
 
 ## Tests
-- [ ] `cargo test -p kanban-cli` passes (all existing + new tests)
-- [ ] Integration test: `kanban doctor` exits 0 or 1
-- [ ] Integration test: `kanban --help` lists all four new subcommands
+- [x] `cargo test -p kanban-cli` passes (all existing + new tests)
+- [x] Integration test: `kanban doctor` exits 0 or 1
+- [x] Integration test: `kanban --help` lists all four new subcommands

@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KNS13JJ850R9NBA0RQCS7E9Z
-position_column: todo
-position_ordinal: af80
+position_column: done
+position_ordinal: ffffffffffffffffffffffcb80
 project: kanban-mcp
 title: 'kanban-cli: update README with icon and MCP server selling points'
 ---
@@ -22,7 +22,7 @@ Changes:
 Model the tone and structure on `shelltool-cli/README.md`.
 
 ## Acceptance Criteria
-- [ ] `kanban-cli/README.md` displays `icon.png` in the header
-- [ ] README has a Why section
-- [ ] Commands table includes serve, init, deinit, doctor
-- [ ] No broken links or missing images
+- [x] `kanban-cli/README.md` displays `icon.png` in the header
+- [x] README has a Why section
+- [x] Commands table includes serve, init, deinit, doctor
+- [x] No broken links or missing images

@@ -30,6 +30,11 @@ fn value_to_string(value: &serde_json::Value) -> String {
     }
 }
 
+/// Sort priority assigned to any key that isn't explicitly listed in
+/// [`get_key_priority`]. Higher than every recognized key so unknown keys
+/// sort after the well-known ones.
+const UNKNOWN_KEY_PRIORITY: u8 = 99;
+
 /// Get the sort order priority for a key name
 fn get_key_priority(key: &str) -> u8 {
     match key {
@@ -37,7 +42,7 @@ fn get_key_priority(key: &str) -> u8 {
         "description" | "title" => 1,
         "source" => 2,
         "status" => 3,
-        _ => 99,
+        _ => UNKNOWN_KEY_PRIORITY,
     }
 }
 

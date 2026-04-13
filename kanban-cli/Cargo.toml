@@ -16,9 +16,16 @@ path = "src/main.rs"
 
 [dependencies]
 swissarmyhammer-kanban = { workspace = true }
+swissarmyhammer-entity = { workspace = true }
 swissarmyhammer-merge = { workspace = true }
 swissarmyhammer-operations = { workspace = true }
+swissarmyhammer-common = { workspace = true }
+swissarmyhammer-skills = { workspace = true }
+swissarmyhammer-templating = { workspace = true }
+swissarmyhammer-doctor = { workspace = true }
+mirdan = { workspace = true }
 
+rmcp = { workspace = true }
 clap = { workspace = true }
 tokio = { workspace = true }
 serde_json = { workspace = true }
@@ -31,4 +38,11 @@ is-terminal = { workspace = true }
 once_cell = { workspace = true }
 
 [dev-dependencies]
+serial_test = { workspace = true }
 tempfile = { workspace = true }
+
+[build-dependencies]
+clap = { workspace = true }
+clap-markdown = { workspace = true }
+clap_mangen = { workspace = true }
+clap_complete = { workspace = true }

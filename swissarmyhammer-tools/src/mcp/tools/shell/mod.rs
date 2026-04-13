@@ -126,6 +126,326 @@ impl ShellExecuteTool {
     }
 }
 
+/// Build the pair of "Builtin config" + "Regex patterns" health checks.
+///
+/// Returns 1 check (builtin config failed to parse) or 2 (builtin config parsed,
+/// plus regex compile status).
+fn check_builtin_config(cat: &str) -> Vec<HealthCheck> {
+    let config = match parse_shell_config(BUILTIN_CONFIG_YAML) {
+        Ok(c) => c,
+        Err(e) => {
+            return vec![HealthCheck::error(
+                "Builtin config",
+                format!("Builtin shell config failed to parse: {}", e),
+                Some("This is a binary bug — rebuild swissarmyhammer with a valid builtin/shell/config.yaml".to_string()),
+                cat,
+            )];
+        }
+    };
+    let deny_count = config.deny.len();
+    let permit_count = config.permit.len();
+    let mut checks = vec![HealthCheck::ok(
+        "Builtin config",
+        format!(
+            "Builtin shell config parsed successfully ({} deny patterns, {} permit patterns)",
+            deny_count, permit_count
+        ),
+        cat,
+    )];
+    checks.push(match CompiledShellConfig::compile(&config) {
+        Ok(_) => HealthCheck::ok(
+            "Regex patterns",
+            "All deny/permit regex patterns compile successfully",
+            cat,
+        ),
+        Err(e) => HealthCheck::error(
+            "Regex patterns",
+            format!("Pattern '{}' failed to compile: {}", e.pattern, e.source),
+            Some(format!(
+                "Fix the invalid regex pattern '{}' in the shell config (reason: {})",
+                e.pattern, e.reason
+            )),
+            cat,
+        ),
+    });
+    checks
+}
+
+/// Check the optional user-level shell config at `~/.shell/config.yaml`.
+///
+/// Returns `None` when the home directory can't be resolved (rare — treat as
+/// non-applicable); otherwise emits a single "User config" check.
+fn check_user_config(cat: &str) -> Option<HealthCheck> {
+    let home = dirs::home_dir()?;
+    let path = home.join(".shell").join("config.yaml");
+    if !path.exists() {
+        return Some(HealthCheck::ok(
+            "User config",
+            format!("No user config at {} (optional)", path.display()),
+            cat,
+        ));
+    }
+    Some(check_config_file("User config", &path, cat))
+}
+
+/// Check the optional project-level shell config at `.shell/config.yaml`.
+fn check_project_config(cat: &str) -> HealthCheck {
+    let path = std::path::PathBuf::from(".shell").join("config.yaml");
+    if !path.exists() {
+        return HealthCheck::ok(
+            "Project config",
+            format!("No project config at {} (optional)", path.display()),
+            cat,
+        );
+    }
+    check_config_file("Project config", &path, cat)
+}
+
+/// Read a shell config YAML from `path`, parse it, and render a single check.
+///
+/// Shared between user-scope and project-scope configs because they differ
+/// only in the display name.
+fn check_config_file(check_name: &str, path: &std::path::Path, cat: &str) -> HealthCheck {
+    let content = match std::fs::read_to_string(path) {
+        Ok(c) => c,
+        Err(e) => {
+            return HealthCheck::warning(
+                check_name,
+                format!(
+                    "{} at {} could not be read: {}",
+                    check_name,
+                    path.display(),
+                    e
+                ),
+                Some(format!("Check file permissions on {}", path.display())),
+                cat,
+            );
+        }
+    };
+    match parse_shell_config(&content) {
+        Ok(config) => HealthCheck::ok(
+            check_name,
+            format!(
+                "{} loaded from {} ({} deny, {} permit patterns)",
+                check_name,
+                path.display(),
+                config.deny.len(),
+                config.permit.len()
+            ),
+            cat,
+        ),
+        Err(e) => HealthCheck::error(
+            check_name,
+            format!(
+                "{} at {} failed to parse: {}",
+                check_name,
+                path.display(),
+                e
+            ),
+            Some(format!("Fix the YAML syntax in {}", path.display())),
+            cat,
+        ),
+    }
+}
+
+/// Check that `.claude/settings.json` denies the built-in `Bash` tool.
+///
+/// Denying Bash forces agents through the shell tool's security pipeline.
+fn check_bash_denied(cat: &str) -> HealthCheck {
+    let path = std::path::PathBuf::from(".claude").join("settings.json");
+    if !path.exists() {
+        return HealthCheck::warning(
+            "Bash denied",
+            "No .claude/settings.json found — Bash may not be denied for agents",
+            Some("Create .claude/settings.json with {\"permissions\":{\"deny\":[\"Bash\"]}} to enforce shell tool security policies".to_string()),
+            cat,
+        );
+    }
+    let content = match std::fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(e) => {
+            return HealthCheck::warning(
+                "Bash denied",
+                format!(".claude/settings.json could not be read: {}", e),
+                Some("Check file permissions on .claude/settings.json".to_string()),
+                cat,
+            );
+        }
+    };
+    let settings: serde_json::Value = match serde_json::from_str(&content) {
+        Ok(v) => v,
+        Err(e) => {
+            return HealthCheck::warning(
+                "Bash denied",
+                format!(".claude/settings.json could not be parsed as JSON: {}", e),
+                Some(
+                    "Ensure .claude/settings.json is valid JSON with a permissions.deny array"
+                        .to_string(),
+                ),
+                cat,
+            );
+        }
+    };
+    if settings_denies_bash(&settings) {
+        HealthCheck::ok(
+            "Bash denied",
+            "Bash is correctly denied in .claude/settings.json — shell tool is the intended execution path",
+            cat,
+        )
+    } else {
+        HealthCheck::warning(
+            "Bash denied",
+            "Bash is not denied in .claude/settings.json — agents may bypass the shell tool's security controls",
+            Some("Add \"Bash\" to permissions.deny in .claude/settings.json to enforce shell tool security policies".to_string()),
+            cat,
+        )
+    }
+}
+
+/// Return `true` when the Claude settings object lists `"Bash"` under
+/// `permissions.deny`. Missing keys or wrong types all evaluate to `false`.
+fn settings_denies_bash(settings: &serde_json::Value) -> bool {
+    let Some(deny) = settings
+        .get("permissions")
+        .and_then(|p| p.get("deny"))
+        .and_then(|d| d.as_array())
+    else {
+        return false;
+    };
+    deny.iter().any(|v| v.as_str() == Some("Bash"))
+}
+
+/// Check whether the shell skill is deployed under `.claude/skills/shell`.
+fn check_shell_skill_deployed(cat: &str) -> HealthCheck {
+    let path = std::path::PathBuf::from(".claude")
+        .join("skills")
+        .join("shell");
+    if !path.exists() {
+        return HealthCheck::warning(
+            "Shell skill deployed",
+            "Shell skill not found at .claude/skills/shell — agents may not have shell instructions",
+            Some("Run `sah init` or create a symlink from .claude/skills/shell to the shell skill directory".to_string()),
+            cat,
+        );
+    }
+    let is_symlink = path
+        .symlink_metadata()
+        .map(|m| m.file_type().is_symlink())
+        .unwrap_or(false);
+    let message = if is_symlink {
+        "Shell skill is deployed as a symlink in .claude/skills/shell"
+    } else {
+        "Shell skill directory exists at .claude/skills/shell"
+    };
+    HealthCheck::ok("Shell skill deployed", message, cat)
+}
+
+/// Create `.shell/config.yaml` from the builtin template when it doesn't exist.
+///
+/// Returns `Err` with a user-facing message if the directory or file cannot be
+/// written. `reporter` is notified when the file is actually created.
+fn ensure_project_config(
+    reporter: &dyn swissarmyhammer_common::reporter::InitReporter,
+) -> Result<(), String> {
+    use swissarmyhammer_common::reporter::InitEvent;
+    let shell_dir = std::path::PathBuf::from(".shell");
+    let config_path = shell_dir.join("config.yaml");
+    if config_path.exists() {
+        return Ok(());
+    }
+    std::fs::create_dir_all(&shell_dir)
+        .map_err(|e| format!("Failed to create .shell/ directory: {}", e))?;
+    std::fs::write(&config_path, BUILTIN_CONFIG_YAML)
+        .map_err(|e| format!("Failed to write .shell/config.yaml: {}", e))?;
+    reporter.emit(&InitEvent::Action {
+        verb: "Created".to_string(),
+        message: format!("{}", config_path.display()),
+    });
+    Ok(())
+}
+
+/// Load an existing Claude settings file or start from an empty object.
+///
+/// Empty/whitespace files are treated as "no settings yet" rather than an error.
+fn load_claude_settings(path: &std::path::Path) -> Result<serde_json::Value, String> {
+    if !path.exists() {
+        return Ok(serde_json::json!({}));
+    }
+    let content = std::fs::read_to_string(path)
+        .map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
+    if content.trim().is_empty() {
+        return Ok(serde_json::json!({}));
+    }
+    serde_json::from_str(&content).map_err(|e| format!("Failed to parse {}: {}", path.display(), e))
+}
+
+/// Insert `"Bash"` into `permissions.deny`, returning `true` when the settings
+/// were actually mutated.
+///
+/// Creates `permissions` and `permissions.deny` if they are missing.
+fn insert_bash_deny(settings: &mut serde_json::Value) -> bool {
+    let root = settings
+        .as_object_mut()
+        .expect("settings must be a JSON object");
+    let permissions = root
+        .entry("permissions")
+        .or_insert_with(|| serde_json::json!({}))
+        .as_object_mut()
+        .expect("permissions must be a JSON object");
+    let deny = permissions
+        .entry("deny")
+        .or_insert_with(|| serde_json::json!([]))
+        .as_array_mut()
+        .expect("permissions.deny must be a JSON array");
+    if deny.iter().any(|v| v.as_str() == Some("Bash")) {
+        return false;
+    }
+    deny.push(serde_json::json!("Bash"));
+    true
+}
+
+/// Serialize `settings` and write it to `path`, creating parent directories as needed.
+fn write_claude_settings(
+    path: &std::path::Path,
+    settings: &serde_json::Value,
+) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                format!(
+                    "Failed to create {} parent directory: {}",
+                    path.display(),
+                    e
+                )
+            })?;
+        }
+    }
+    let content = serde_json::to_string_pretty(settings)
+        .map_err(|e| format!("Failed to serialize {}: {}", path.display(), e))?;
+    std::fs::write(path, content).map_err(|e| format!("Failed to write {}: {}", path.display(), e))
+}
+
+/// Ensure the Claude settings file at `path` denies the `Bash` tool.
+///
+/// No-ops when `Bash` is already denied. Reports a single "Configured" event
+/// when the file is updated.
+fn deny_bash_in_claude_settings(
+    path: &std::path::Path,
+    reporter: &dyn swissarmyhammer_common::reporter::InitReporter,
+) -> Result<(), String> {
+    use swissarmyhammer_common::reporter::InitEvent;
+    let mut settings = load_claude_settings(path)?;
+    if !insert_bash_deny(&mut settings) {
+        return Ok(());
+    }
+    write_claude_settings(path, &settings)?;
+    reporter.emit(&InitEvent::Action {
+        verb: "Configured".to_string(),
+        message: format!("Bash tool denied in {}", path.display()),
+    });
+    Ok(())
+}
+
 impl Doctorable for ShellExecuteTool {
     /// Returns the display name for this component in health check output.
     fn name(&self) -> &str {
@@ -147,258 +467,16 @@ impl Doctorable for ShellExecuteTool {
     /// - Bash is denied in .claude/settings.json permissions.deny
     /// - Shell skill is deployed (check symlink exists in .claude/skills/shell)
     fn run_health_checks(&self) -> Vec<HealthCheck> {
-        let mut checks = Vec::new();
         let cat = self.category();
+        let mut checks = Vec::new();
 
-        // Check 1: Builtin config parses successfully
-        match parse_shell_config(BUILTIN_CONFIG_YAML) {
-            Ok(config) => {
-                checks.push(HealthCheck::ok(
-                    "Builtin config",
-                    format!(
-                        "Builtin shell config parsed successfully ({} deny patterns, {} permit patterns)",
-                        config.deny.len(),
-                        config.permit.len()
-                    ),
-                    cat,
-                ));
-
-                // Check 2: All deny/permit regex patterns compile
-                match CompiledShellConfig::compile(&config) {
-                    Ok(_) => {
-                        checks.push(HealthCheck::ok(
-                            "Regex patterns",
-                            "All deny/permit regex patterns compile successfully",
-                            cat,
-                        ));
-                    }
-                    Err(e) => {
-                        checks.push(HealthCheck::error(
-                            "Regex patterns",
-                            format!("Pattern '{}' failed to compile: {}", e.pattern, e.source),
-                            Some(format!(
-                                "Fix the invalid regex pattern '{}' in the shell config (reason: {})",
-                                e.pattern, e.reason
-                            )),
-                            cat,
-                        ));
-                    }
-                }
-            }
-            Err(e) => {
-                checks.push(HealthCheck::error(
-                    "Builtin config",
-                    format!("Builtin shell config failed to parse: {}", e),
-                    Some("This is a binary bug — rebuild swissarmyhammer with a valid builtin/shell/config.yaml".to_string()),
-                    cat,
-                ));
-            }
+        checks.extend(check_builtin_config(cat));
+        if let Some(check) = check_user_config(cat) {
+            checks.push(check);
         }
-
-        // Check 3: User config (~/.shell/config.yaml) loads if present
-        if let Some(home) = dirs::home_dir() {
-            let user_config = home.join(".shell").join("config.yaml");
-            if user_config.exists() {
-                match std::fs::read_to_string(&user_config) {
-                    Ok(content) => match parse_shell_config(&content) {
-                        Ok(config) => {
-                            checks.push(HealthCheck::ok(
-                                "User config",
-                                format!(
-                                    "User config loaded from {} ({} deny, {} permit patterns)",
-                                    user_config.display(),
-                                    config.deny.len(),
-                                    config.permit.len()
-                                ),
-                                cat,
-                            ));
-                        }
-                        Err(e) => {
-                            checks.push(HealthCheck::error(
-                                "User config",
-                                format!(
-                                    "User config at {} failed to parse: {}",
-                                    user_config.display(),
-                                    e
-                                ),
-                                Some(format!("Fix the YAML syntax in {}", user_config.display())),
-                                cat,
-                            ));
-                        }
-                    },
-                    Err(e) => {
-                        checks.push(HealthCheck::warning(
-                            "User config",
-                            format!(
-                                "User config at {} could not be read: {}",
-                                user_config.display(),
-                                e
-                            ),
-                            Some(format!(
-                                "Check file permissions on {}",
-                                user_config.display()
-                            )),
-                            cat,
-                        ));
-                    }
-                }
-            } else {
-                checks.push(HealthCheck::ok(
-                    "User config",
-                    format!("No user config at {} (optional)", user_config.display()),
-                    cat,
-                ));
-            }
-        }
-
-        // Check 4: Project config (.shell/config.yaml) loads if present
-        let project_config = std::path::PathBuf::from(".shell").join("config.yaml");
-        if project_config.exists() {
-            match std::fs::read_to_string(&project_config) {
-                Ok(content) => match parse_shell_config(&content) {
-                    Ok(config) => {
-                        checks.push(HealthCheck::ok(
-                            "Project config",
-                            format!(
-                                "Project config loaded from {} ({} deny, {} permit patterns)",
-                                project_config.display(),
-                                config.deny.len(),
-                                config.permit.len()
-                            ),
-                            cat,
-                        ));
-                    }
-                    Err(e) => {
-                        checks.push(HealthCheck::error(
-                            "Project config",
-                            format!(
-                                "Project config at {} failed to parse: {}",
-                                project_config.display(),
-                                e
-                            ),
-                            Some(format!(
-                                "Fix the YAML syntax in {}",
-                                project_config.display()
-                            )),
-                            cat,
-                        ));
-                    }
-                },
-                Err(e) => {
-                    checks.push(HealthCheck::warning(
-                        "Project config",
-                        format!(
-                            "Project config at {} could not be read: {}",
-                            project_config.display(),
-                            e
-                        ),
-                        Some(format!(
-                            "Check file permissions on {}",
-                            project_config.display()
-                        )),
-                        cat,
-                    ));
-                }
-            }
-        } else {
-            checks.push(HealthCheck::ok(
-                "Project config",
-                format!(
-                    "No project config at {} (optional)",
-                    project_config.display()
-                ),
-                cat,
-            ));
-        }
-
-        // Check 5: Bash is denied in .claude/settings.json permissions.deny
-        let claude_settings = std::path::PathBuf::from(".claude").join("settings.json");
-        if claude_settings.exists() {
-            match std::fs::read_to_string(&claude_settings) {
-                Ok(content) => match serde_json::from_str::<serde_json::Value>(&content) {
-                    Ok(settings) => {
-                        let bash_denied = settings
-                            .get("permissions")
-                            .and_then(|p| p.get("deny"))
-                            .and_then(|d| d.as_array())
-                            .map(|arr| {
-                                arr.iter()
-                                    .any(|v| v.as_str().map(|s| s == "Bash").unwrap_or(false))
-                            })
-                            .unwrap_or(false);
-
-                        if bash_denied {
-                            checks.push(HealthCheck::ok(
-                                "Bash denied",
-                                "Bash is correctly denied in .claude/settings.json — shell tool is the intended execution path",
-                                cat,
-                            ));
-                        } else {
-                            checks.push(HealthCheck::warning(
-                                "Bash denied",
-                                "Bash is not denied in .claude/settings.json — agents may bypass the shell tool's security controls",
-                                Some("Add \"Bash\" to permissions.deny in .claude/settings.json to enforce shell tool security policies".to_string()),
-                                cat,
-                            ));
-                        }
-                    }
-                    Err(e) => {
-                        checks.push(HealthCheck::warning(
-                            "Bash denied",
-                            format!(".claude/settings.json could not be parsed as JSON: {}", e),
-                            Some("Ensure .claude/settings.json is valid JSON with a permissions.deny array".to_string()),
-                            cat,
-                        ));
-                    }
-                },
-                Err(e) => {
-                    checks.push(HealthCheck::warning(
-                        "Bash denied",
-                        format!(".claude/settings.json could not be read: {}", e),
-                        Some("Check file permissions on .claude/settings.json".to_string()),
-                        cat,
-                    ));
-                }
-            }
-        } else {
-            checks.push(HealthCheck::warning(
-                "Bash denied",
-                "No .claude/settings.json found — Bash may not be denied for agents",
-                Some("Create .claude/settings.json with {\"permissions\":{\"deny\":[\"Bash\"]}} to enforce shell tool security policies".to_string()),
-                cat,
-            ));
-        }
-
-        // Check 6: Shell skill is deployed (symlink exists in .claude/skills/shell)
-        let skill_path = std::path::PathBuf::from(".claude")
-            .join("skills")
-            .join("shell");
-        if skill_path.exists() {
-            let is_symlink = skill_path
-                .symlink_metadata()
-                .map(|m| m.file_type().is_symlink())
-                .unwrap_or(false);
-            if is_symlink {
-                checks.push(HealthCheck::ok(
-                    "Shell skill deployed",
-                    "Shell skill is deployed as a symlink in .claude/skills/shell",
-                    cat,
-                ));
-            } else {
-                checks.push(HealthCheck::ok(
-                    "Shell skill deployed",
-                    "Shell skill directory exists at .claude/skills/shell",
-                    cat,
-                ));
-            }
-        } else {
-            checks.push(HealthCheck::warning(
-                "Shell skill deployed",
-                "Shell skill not found at .claude/skills/shell — agents may not have shell instructions",
-                Some("Run `sah init` or create a symlink from .claude/skills/shell to the shell skill directory".to_string()),
-                cat,
-            ));
-        }
+        checks.push(check_project_config(cat));
+        checks.push(check_bash_denied(cat));
+        checks.push(check_shell_skill_deployed(cat));
 
         checks
     }
@@ -428,230 +506,42 @@ impl swissarmyhammer_common::lifecycle::Initializable for ShellExecuteTool {
     /// Initialize the shell tool for the project:
     /// 1. Create `.shell/config.yaml` from builtin template if missing
     /// 2. Deny Bash in Claude settings (scope-aware: project or local)
-    /// 3. Deploy the shell skill to all detected agents
+    ///
+    /// Skill deployment is handled separately by `ShelltoolSkillDeployment`
+    /// in `shelltool-cli`.
     fn init(
         &self,
         scope: &swissarmyhammer_common::lifecycle::InitScope,
         reporter: &dyn swissarmyhammer_common::reporter::InitReporter,
     ) -> Vec<swissarmyhammer_common::lifecycle::InitResult> {
         use swissarmyhammer_common::lifecycle::InitResult;
-        use swissarmyhammer_common::reporter::InitEvent;
         let component_name = <Self as crate::mcp::tool_registry::McpTool>::name(self);
         let mut results = Vec::new();
 
-        // Step 1: Create .shell/config.yaml from builtin template if not present
-        let shell_dir = std::path::PathBuf::from(".shell");
-        let config_path = shell_dir.join("config.yaml");
-        if !config_path.exists() {
-            if let Err(e) = std::fs::create_dir_all(&shell_dir) {
-                results.push(InitResult::error(
-                    component_name,
-                    format!("Failed to create .shell/ directory: {}", e),
-                ));
-                return results;
-            }
-            if let Err(e) = std::fs::write(&config_path, BUILTIN_CONFIG_YAML) {
-                results.push(InitResult::error(
-                    component_name,
-                    format!("Failed to write .shell/config.yaml: {}", e),
-                ));
-                return results;
-            }
-            reporter.emit(&InitEvent::Action {
-                verb: "Created".to_string(),
-                message: format!("{}", config_path.display()),
-            });
+        if let Err(err) = ensure_project_config(reporter) {
+            results.push(InitResult::error(component_name, err));
+            return results;
         }
 
-        // Step 2: Deny Bash in Claude settings (scope-aware path)
         let claude_settings_path = scope.claude_settings_path();
-        let mut settings = if claude_settings_path.exists() {
-            match std::fs::read_to_string(&claude_settings_path) {
-                Ok(content) if !content.trim().is_empty() => {
-                    match serde_json::from_str::<serde_json::Value>(&content) {
-                        Ok(v) => v,
-                        Err(e) => {
-                            results.push(InitResult::error(
-                                component_name,
-                                format!(
-                                    "Failed to parse {}: {}",
-                                    claude_settings_path.display(),
-                                    e
-                                ),
-                            ));
-                            return results;
-                        }
-                    }
-                }
-                Ok(_) => serde_json::json!({}),
-                Err(e) => {
-                    results.push(InitResult::error(
-                        component_name,
-                        format!("Failed to read {}: {}", claude_settings_path.display(), e),
-                    ));
-                    return results;
-                }
-            }
-        } else {
-            serde_json::json!({})
-        };
-
-        // Ensure permissions.deny contains "Bash"
-        {
-            if settings.get("permissions").is_none() {
-                settings
-                    .as_object_mut()
-                    .unwrap()
-                    .insert("permissions".to_string(), serde_json::json!({}));
-            }
-            let permissions = settings.get_mut("permissions").unwrap();
-            if permissions.get("deny").is_none() {
-                permissions
-                    .as_object_mut()
-                    .unwrap()
-                    .insert("deny".to_string(), serde_json::json!([]));
-            }
-            let deny = permissions.get_mut("deny").unwrap().as_array_mut().unwrap();
-            if !deny.iter().any(|v| v.as_str() == Some("Bash")) {
-                deny.push(serde_json::json!("Bash"));
-                // Write settings back
-                if let Some(parent) = claude_settings_path.parent() {
-                    if !parent.as_os_str().is_empty() {
-                        if let Err(e) = std::fs::create_dir_all(parent) {
-                            results.push(InitResult::error(
-                                component_name,
-                                format!(
-                                    "Failed to create {} parent directory: {}",
-                                    claude_settings_path.display(),
-                                    e
-                                ),
-                            ));
-                            return results;
-                        }
-                    }
-                }
-                let content = match serde_json::to_string_pretty(&settings) {
-                    Ok(c) => c,
-                    Err(e) => {
-                        results.push(InitResult::error(
-                            component_name,
-                            format!(
-                                "Failed to serialize {}: {}",
-                                claude_settings_path.display(),
-                                e
-                            ),
-                        ));
-                        return results;
-                    }
-                };
-                if let Err(e) = std::fs::write(&claude_settings_path, content) {
-                    results.push(InitResult::error(
-                        component_name,
-                        format!("Failed to write {}: {}", claude_settings_path.display(), e),
-                    ));
-                    return results;
-                }
-                reporter.emit(&InitEvent::Action {
-                    verb: "Configured".to_string(),
-                    message: format!("Bash tool denied in {}", claude_settings_path.display()),
-                });
-            }
-        }
-
-        // Step 3: Deploy the shell skill to all detected agents
-        let resolver = swissarmyhammer_skills::SkillResolver::new();
-        let builtins = resolver.resolve_builtins();
-        let skill = match builtins.get("shell") {
-            Some(s) => s.clone(),
-            None => {
-                results.push(InitResult::error(
-                    component_name,
-                    "Builtin 'shell' skill not found".to_string(),
-                ));
-                return results;
-            }
-        };
-
-        // Render {{version}} in the skill instructions
-        let engine = swissarmyhammer_templating::TemplateEngine::new();
-        let mut vars = std::collections::HashMap::new();
-        vars.insert("version".to_string(), env!("CARGO_PKG_VERSION").to_string());
-        let rendered_instructions = match engine.render(&skill.instructions, &vars) {
-            Ok(r) => r,
-            Err(_) => skill.instructions.clone(), // fall back to raw if render fails
-        };
-
-        // Write skill to a temp dir and deploy
-        let temp_dir = match tempfile::tempdir() {
-            Ok(d) => d,
-            Err(e) => {
-                results.push(InitResult::error(
-                    component_name,
-                    format!("Failed to create temp dir for skill: {}", e),
-                ));
-                return results;
-            }
-        };
-        let skill_dir = temp_dir.path().join("shell");
-        if let Err(e) = std::fs::create_dir_all(&skill_dir) {
-            results.push(InitResult::error(
-                component_name,
-                format!("Failed to create temp skill dir: {}", e),
-            ));
-            return results;
-        }
-        let skill_md = skill_dir.join("SKILL.md");
-        // Format frontmatter + body
-        let mut skill_content = String::from("---\n");
-        skill_content.push_str(&format!("name: {}\n", skill.name));
-        skill_content.push_str(&format!("description: {}\n", skill.description));
-        if !skill.allowed_tools.is_empty() {
-            skill_content.push_str(&format!(
-                "allowed-tools: \"{}\"\n",
-                skill.allowed_tools.join(" ")
-            ));
-        }
-        skill_content.push_str("---\n\n");
-        skill_content.push_str(&rendered_instructions);
-        skill_content.push('\n');
-
-        if let Err(e) = std::fs::write(&skill_md, &skill_content) {
-            results.push(InitResult::error(
-                component_name,
-                format!("Failed to write shell skill SKILL.md: {}", e),
-            ));
+        if let Err(err) = deny_bash_in_claude_settings(&claude_settings_path, reporter) {
+            results.push(InitResult::error(component_name, err));
             return results;
         }
 
-        match mirdan::install::deploy_skill_to_agents("shell", &skill_dir, None, false) {
-            Ok(targets) => {
-                reporter.emit(&InitEvent::Action {
-                    verb: "Deployed".to_string(),
-                    message: format!("shell skill to {}", targets.join(", ")),
-                });
-                results.push(InitResult::ok(
-                    component_name,
-                    format!(
-                        "Shell tool initialized (skill deployed to {})",
-                        targets.join(", ")
-                    ),
-                ));
-            }
-            Err(e) => {
-                results.push(InitResult::error(
-                    component_name,
-                    format!("Failed to deploy shell skill: {}", e),
-                ));
-            }
-        }
-
+        results.push(InitResult::ok(
+            component_name,
+            "Shell tool initialized (config + Bash deny)",
+        ));
         results
     }
 
     /// Deinitialize the shell tool:
-    /// 1. Remove the shell skill from all agents
-    /// 2. Remove "Bash" from Claude settings permissions.deny (scope-aware)
-    /// 3. Remove `.shell/` config directory if it exists
+    /// 1. Remove "Bash" from Claude settings permissions.deny (scope-aware)
+    /// 2. Remove `.shell/` config directory if it exists
+    ///
+    /// Skill removal is handled separately by `ShelltoolSkillDeployment`
+    /// in `shelltool-cli`.
     fn deinit(
         &self,
         scope: &swissarmyhammer_common::lifecycle::InitScope,
@@ -662,19 +552,7 @@ impl swissarmyhammer_common::lifecycle::Initializable for ShellExecuteTool {
         let component_name = <Self as crate::mcp::tool_registry::McpTool>::name(self);
         let mut results = Vec::new();
 
-        // Step 1: Remove shell skill via mirdan
-        if let Err(e) = mirdan::install::uninstall_skill("shell", None, false) {
-            reporter.emit(&InitEvent::Warning {
-                message: format!("Failed to uninstall shell skill: {}", e),
-            });
-        } else {
-            reporter.emit(&InitEvent::Action {
-                verb: "Removed".to_string(),
-                message: "shell skill from agents".to_string(),
-            });
-        }
-
-        // Step 2: Remove "Bash" from permissions.deny (scope-aware path)
+        // Step 1: Remove "Bash" from permissions.deny (scope-aware path)
         let claude_settings_path = scope.claude_settings_path();
         if claude_settings_path.exists() {
             match std::fs::read_to_string(&claude_settings_path) {
@@ -742,7 +620,7 @@ impl swissarmyhammer_common::lifecycle::Initializable for ShellExecuteTool {
             }
         }
 
-        // Step 3: Remove .shell/ config directory if it exists
+        // Step 2: Remove .shell/ config directory if it exists
         let shell_dir = std::path::PathBuf::from(".shell");
         if shell_dir.exists() {
             match std::fs::remove_dir_all(&shell_dir) {

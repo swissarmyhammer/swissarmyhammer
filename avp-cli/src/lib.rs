@@ -44,7 +44,6 @@ pub use cli::{Cli, Commands, ModelAction};
 pub mod doctor;
 pub mod edit;
 pub mod install;
-pub mod logging;
 pub mod model;
 pub mod new;
 

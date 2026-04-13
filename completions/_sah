@@ -103,7 +103,7 @@ user\:"User-level settings (~/.claude/settings.json)"))' \
 (deinit)
 _arguments "${_arguments_options[@]}" : \
 '--model=[Override model for all use cases (runtime only, doesn'\''t modify config)]:MODEL:_default' \
-'--remove-directory[Also remove .swissarmyhammer/ project directory]' \
+'--remove-directory[Also remove .sah/ project directory]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 '::target -- Where to remove the MCP server configuration from:((project\:"Project-level settings (.claude/settings.json)"
@@ -126,14 +126,6 @@ _arguments "${_arguments_options[@]}" : \
 '*::args -- Subcommand and arguments for prompt (handled dynamically):_default' \
 && ret=0
 ;;
-(flow)
-_arguments "${_arguments_options[@]}" : \
-'--model=[Override model for all use cases (runtime only, doesn'\''t modify config)]:MODEL:_default' \
-'-h[Print help (see more with '\''--help'\'')]' \
-'--help[Print help (see more with '\''--help'\'')]' \
-'*::args -- Workflow name or '\''list'\'' command followed by arguments:_default' \
-&& ret=0
-;;
 (completion)
 _arguments "${_arguments_options[@]}" : \
 '--model=[Override model for all use cases (runtime only, doesn'\''t modify config)]:MODEL:_default' \
@@ -145,7 +137,6 @@ _arguments "${_arguments_options[@]}" : \
 (validate)
 _arguments "${_arguments_options[@]}" : \
 '--format=[Output format]:FORMAT:(table json yaml)' \
-'*--workflow-dir=[\\\[DEPRECATED\\\] This parameter is ignored. Workflows are now only loaded from standard locations]:DIR:_default' \
 '--model=[Override model for all use cases (runtime only, doesn'\''t modify config)]:MODEL:_default' \
 '-q[Suppress all output except errors. In quiet mode, warnings are hidden from both output and summary]' \
 '--quiet[Suppress all output except errors. In quiet mode, warnings are hidden from both output and summary]' \
@@ -190,8 +181,7 @@ _arguments "${_arguments_options[@]}" : \
 '--model=[Override model for all use cases (runtime only, doesn'\''t modify config)]:MODEL:_default' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
-':first -- First argument\: either model name (sets root) OR use case (root, workflows):_default' \
-'::second -- Second argument\: model name (required when first argument is a use case):_default' \
+':name -- Model name to apply to the project:_default' \
 && ret=0
 ;;
 (help)
@@ -288,6 +278,120 @@ esac
     ;;
 esac
 ;;
+(tools)
+_arguments "${_arguments_options[@]}" : \
+'--model=[Override model for all use cases (runtime only, doesn'\''t modify config)]:MODEL:_default' \
+'--global[Write to global config (~/.sah/tools.yaml) instead of project]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+":: :_sah__tools_commands" \
+"*::: :->tools" \
+&& ret=0
+
+    case $state in
+    (tools)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:sah-tools-command-$line[1]:"
+        case $line[1] in
+            (enable)
+_arguments "${_arguments_options[@]}" : \
+'--model=[Override model for all use cases (runtime only, doesn'\''t modify config)]:MODEL:_default' \
+'-h[Print help]' \
+'--help[Print help]' \
+'*::names -- Tool names to enable (omit for all):_default' \
+&& ret=0
+;;
+(disable)
+_arguments "${_arguments_options[@]}" : \
+'--model=[Override model for all use cases (runtime only, doesn'\''t modify config)]:MODEL:_default' \
+'-h[Print help]' \
+'--help[Print help]' \
+'*::names -- Tool names to disable (omit for all):_default' \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+":: :_sah__tools__help_commands" \
+"*::: :->help" \
+&& ret=0
+
+    case $state in
+    (help)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:sah-tools-help-command-$line[1]:"
+        case $line[1] in
+            (enable)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(disable)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+        esac
+    ;;
+esac
+;;
+(statusline)
+_arguments "${_arguments_options[@]}" : \
+'--model=[Override model for all use cases (runtime only, doesn'\''t modify config)]:MODEL:_default' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+":: :_sah__statusline_commands" \
+"*::: :->statusline" \
+&& ret=0
+
+    case $state in
+    (statusline)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:sah-statusline-command-$line[1]:"
+        case $line[1] in
+            (config)
+_arguments "${_arguments_options[@]}" : \
+'--model=[Override model for all use cases (runtime only, doesn'\''t modify config)]:MODEL:_default' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+":: :_sah__statusline__help_commands" \
+"*::: :->help" \
+&& ret=0
+
+    case $state in
+    (help)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:sah-statusline-help-command-$line[1]:"
+        case $line[1] in
+            (config)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+        esac
+    ;;
+esac
+;;
 (help)
 _arguments "${_arguments_options[@]}" : \
 ":: :_sah__help_commands" \
@@ -333,10 +437,6 @@ _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
 (prompt)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(flow)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -396,6 +496,50 @@ _arguments "${_arguments_options[@]}" : \
     ;;
 esac
 ;;
+(tools)
+_arguments "${_arguments_options[@]}" : \
+":: :_sah__help__tools_commands" \
+"*::: :->tools" \
+&& ret=0
+
+    case $state in
+    (tools)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:sah-help-tools-command-$line[1]:"
+        case $line[1] in
+            (enable)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(disable)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+(statusline)
+_arguments "${_arguments_options[@]}" : \
+":: :_sah__help__statusline_commands" \
+"*::: :->statusline" \
+&& ret=0
+
+    case $state in
+    (statusline)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:sah-help-statusline-command-$line[1]:"
+        case $line[1] in
+            (config)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
 (help)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
@@ -413,15 +557,16 @@ esac
 _sah_commands() {
     local commands; commands=(
 'serve:Run as MCP server (default when invoked via stdio)' \
-'init:Initialize sah MCP server in Claude Code settings' \
-'deinit:Remove sah MCP server from Claude Code settings' \
+'init:Set up sah for all detected AI coding agents (skills + MCP)' \
+'deinit:Remove sah from all detected AI coding agents (skills + MCP)' \
 'doctor:Diagnose configuration and setup issues' \
 'prompt:Manage and test prompts' \
-'flow:Execute and manage workflows' \
 'completion:Generate shell completion scripts' \
-'validate:Validate prompt files and workflows for syntax and best practices' \
+'validate:Validate prompt files for syntax and best practices' \
 'model:Manage and interact with models' \
 'agent:Manage and interact with Agent Client Protocol server' \
+'tools:Manage tool enable/disable state' \
+'statusline:Render statusline from Claude Code JSON (stdin) or dump config' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'sah commands' commands "$@"
@@ -472,24 +617,20 @@ _sah__doctor_commands() {
     local commands; commands=()
     _describe -t commands 'sah doctor commands' commands "$@"
 }
-(( $+functions[_sah__flow_commands] )) ||
-_sah__flow_commands() {
-    local commands; commands=()
-    _describe -t commands 'sah flow commands' commands "$@"
-}
 (( $+functions[_sah__help_commands] )) ||
 _sah__help_commands() {
     local commands; commands=(
 'serve:Run as MCP server (default when invoked via stdio)' \
-'init:Initialize sah MCP server in Claude Code settings' \
-'deinit:Remove sah MCP server from Claude Code settings' \
+'init:Set up sah for all detected AI coding agents (skills + MCP)' \
+'deinit:Remove sah from all detected AI coding agents (skills + MCP)' \
 'doctor:Diagnose configuration and setup issues' \
 'prompt:Manage and test prompts' \
-'flow:Execute and manage workflows' \
 'completion:Generate shell completion scripts' \
-'validate:Validate prompt files and workflows for syntax and best practices' \
+'validate:Validate prompt files for syntax and best practices' \
 'model:Manage and interact with models' \
 'agent:Manage and interact with Agent Client Protocol server' \
+'tools:Manage tool enable/disable state' \
+'statusline:Render statusline from Claude Code JSON (stdin) or dump config' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'sah help commands' commands "$@"
@@ -521,11 +662,6 @@ _sah__help__doctor_commands() {
     local commands; commands=()
     _describe -t commands 'sah help doctor commands' commands "$@"
 }
-(( $+functions[_sah__help__flow_commands] )) ||
-_sah__help__flow_commands() {
-    local commands; commands=()
-    _describe -t commands 'sah help flow commands' commands "$@"
-}
 (( $+functions[_sah__help__help_commands] )) ||
 _sah__help__help_commands() {
     local commands; commands=()
@@ -540,7 +676,7 @@ _sah__help__init_commands() {
 _sah__help__model_commands() {
     local commands; commands=(
 'list:List available models' \
-'show:Show current model use case assignments' \
+'show:Show current model configuration' \
 'use:Use a specific model' \
     )
     _describe -t commands 'sah help model commands' commands "$@"
@@ -577,6 +713,36 @@ _sah__help__serve__http_commands() {
     local commands; commands=()
     _describe -t commands 'sah help serve http commands' commands "$@"
 }
+(( $+functions[_sah__help__statusline_commands] )) ||
+_sah__help__statusline_commands() {
+    local commands; commands=(
+'config:Dump the full annotated builtin config to stdout' \
+    )
+    _describe -t commands 'sah help statusline commands' commands "$@"
+}
+(( $+functions[_sah__help__statusline__config_commands] )) ||
+_sah__help__statusline__config_commands() {
+    local commands; commands=()
+    _describe -t commands 'sah help statusline config commands' commands "$@"
+}
+(( $+functions[_sah__help__tools_commands] )) ||
+_sah__help__tools_commands() {
+    local commands; commands=(
+'enable:Enable tools (all if no names given)' \
+'disable:Disable tools (all if no names given)' \
+    )
+    _describe -t commands 'sah help tools commands' commands "$@"
+}
+(( $+functions[_sah__help__tools__disable_commands] )) ||
+_sah__help__tools__disable_commands() {
+    local commands; commands=()
+    _describe -t commands 'sah help tools disable commands' commands "$@"
+}
+(( $+functions[_sah__help__tools__enable_commands] )) ||
+_sah__help__tools__enable_commands() {
+    local commands; commands=()
+    _describe -t commands 'sah help tools enable commands' commands "$@"
+}
 (( $+functions[_sah__help__validate_commands] )) ||
 _sah__help__validate_commands() {
     local commands; commands=()
@@ -591,7 +757,7 @@ _sah__init_commands() {
 _sah__model_commands() {
     local commands; commands=(
 'list:List available models' \
-'show:Show current model use case assignments' \
+'show:Show current model configuration' \
 'use:Use a specific model' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
@@ -601,7 +767,7 @@ _sah__model_commands() {
 _sah__model__help_commands() {
     local commands; commands=(
 'list:List available models' \
-'show:Show current model use case assignments' \
+'show:Show current model configuration' \
 'use:Use a specific model' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
@@ -677,6 +843,80 @@ _sah__serve__help__http_commands() {
 _sah__serve__http_commands() {
     local commands; commands=()
     _describe -t commands 'sah serve http commands' commands "$@"
+}
+(( $+functions[_sah__statusline_commands] )) ||
+_sah__statusline_commands() {
+    local commands; commands=(
+'config:Dump the full annotated builtin config to stdout' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'sah statusline commands' commands "$@"
+}
+(( $+functions[_sah__statusline__config_commands] )) ||
+_sah__statusline__config_commands() {
+    local commands; commands=()
+    _describe -t commands 'sah statusline config commands' commands "$@"
+}
+(( $+functions[_sah__statusline__help_commands] )) ||
+_sah__statusline__help_commands() {
+    local commands; commands=(
+'config:Dump the full annotated builtin config to stdout' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'sah statusline help commands' commands "$@"
+}
+(( $+functions[_sah__statusline__help__config_commands] )) ||
+_sah__statusline__help__config_commands() {
+    local commands; commands=()
+    _describe -t commands 'sah statusline help config commands' commands "$@"
+}
+(( $+functions[_sah__statusline__help__help_commands] )) ||
+_sah__statusline__help__help_commands() {
+    local commands; commands=()
+    _describe -t commands 'sah statusline help help commands' commands "$@"
+}
+(( $+functions[_sah__tools_commands] )) ||
+_sah__tools_commands() {
+    local commands; commands=(
+'enable:Enable tools (all if no names given)' \
+'disable:Disable tools (all if no names given)' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'sah tools commands' commands "$@"
+}
+(( $+functions[_sah__tools__disable_commands] )) ||
+_sah__tools__disable_commands() {
+    local commands; commands=()
+    _describe -t commands 'sah tools disable commands' commands "$@"
+}
+(( $+functions[_sah__tools__enable_commands] )) ||
+_sah__tools__enable_commands() {
+    local commands; commands=()
+    _describe -t commands 'sah tools enable commands' commands "$@"
+}
+(( $+functions[_sah__tools__help_commands] )) ||
+_sah__tools__help_commands() {
+    local commands; commands=(
+'enable:Enable tools (all if no names given)' \
+'disable:Disable tools (all if no names given)' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'sah tools help commands' commands "$@"
+}
+(( $+functions[_sah__tools__help__disable_commands] )) ||
+_sah__tools__help__disable_commands() {
+    local commands; commands=()
+    _describe -t commands 'sah tools help disable commands' commands "$@"
+}
+(( $+functions[_sah__tools__help__enable_commands] )) ||
+_sah__tools__help__enable_commands() {
+    local commands; commands=()
+    _describe -t commands 'sah tools help enable commands' commands "$@"
+}
+(( $+functions[_sah__tools__help__help_commands] )) ||
+_sah__tools__help__help_commands() {
+    local commands; commands=()
+    _describe -t commands 'sah tools help help commands' commands "$@"
 }
 (( $+functions[_sah__validate_commands] )) ||
 _sah__validate_commands() {

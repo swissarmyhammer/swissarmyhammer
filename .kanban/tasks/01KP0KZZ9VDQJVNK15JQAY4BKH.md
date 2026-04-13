@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KNS10MMDVZG731XKM390C682
-position_column: todo
-position_ordinal: b380
+position_column: done
+position_ordinal: ffffffffffffffffffffffbd80
 project: kanban-mcp
 title: 'kanban-cli: create cli.rs with lifecycle subcommands for build.rs'
 ---
@@ -39,10 +39,10 @@ The schema-driven noun/verb commands (`task add`, `board init`, etc.) are NOT in
 `main.rs` uses this file for the lifecycle subcommand definitions but still builds the full command tree dynamically (schema + lifecycle + open + merge) for runtime dispatch.
 
 ## Acceptance Criteria
-- [ ] `kanban-cli/src/cli.rs` exists with `Cli`, `Commands`, `InstallTarget`
-- [ ] Only depends on `clap` + `std` (build.rs-compatible)
-- [ ] `cargo check -p kanban-cli` passes
+- [x] `kanban-cli/src/cli.rs` exists with `Cli`, `Commands`, `InstallTarget`
+- [x] Only depends on `clap` + `std` (build.rs-compatible)
+- [x] `cargo check -p kanban-cli` passes
 
 ## Tests
-- [ ] Unit tests verifying `Commands` variants parse and `InstallTarget` `Display` works
-- [ ] Test file: `kanban-cli/src/cli.rs` in `#[cfg(test)]` module
+- [x] Unit tests verifying `Commands` variants parse and `InstallTarget` `Display` works
+- [x] Test file: `kanban-cli/src/cli.rs` in `#[cfg(test)]` module

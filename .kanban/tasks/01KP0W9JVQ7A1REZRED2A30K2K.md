@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: be80
+position_column: done
+position_ordinal: ffffffffffffffffffffffbc80
 project: kanban-mcp
 title: 'code-context-cli: move serve/doctor/registry/skill into commands/'
 ---
@@ -21,7 +21,7 @@ Top-level keeps: `main.rs`, `cli.rs`, `banner.rs` (infrastructure).
 `commands/` gets: `serve.rs`, `doctor.rs`, `registry.rs`, `skill.rs` (command implementations).
 
 ## Acceptance Criteria
-- [ ] `code-context-cli/src/commands/` exists with serve, doctor, registry, skill
-- [ ] Top-level serve.rs, doctor.rs, registry.rs, skill.rs removed
-- [ ] All existing commands still work
-- [ ] `cargo test -p code-context-cli` passes
+- [x] `code-context-cli/src/commands/` exists with serve, doctor, registry, skill
+- [x] Top-level serve.rs, doctor.rs, registry.rs, skill.rs removed
+- [x] All existing commands still work
+- [x] `cargo test -p code-context-cli` passes

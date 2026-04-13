@@ -1,7 +1,4 @@
 entries:
-- id: 01KNM8XPFEM4P3PXJE48GDDRBE
-  label: create task 01KNM8XT0EEPQ7SCEV36YRF15T
-  item_id: ''
 - id: 01KNM8Y240AJDK6JWEMPD7XPNC
   label: update task 01KNM8W1C75472FBAC3N3NN9AG
   item_id: ''
@@ -299,5 +296,8 @@ entries:
 - id: 01KNYE7F4V5N1PYZ37KPSQV104
   label: create perspective 01KNYE7F4VEE1P48FEPPP9NNCZ
   item_id: 01KNYE7F4VEE1P48FEPPP9NNCZ
+- id: 01KP3C1T05QXC970Y5TC5Z35KA
+  label: update actor wballard
+  item_id: wballard
 pointer: 100
 max_size: 100

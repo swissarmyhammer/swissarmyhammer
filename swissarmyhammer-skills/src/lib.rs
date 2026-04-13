@@ -16,6 +16,7 @@
 //! 3. **User** — `~/.skills/` or `~/.sah/skills/`
 
 pub mod context;
+pub mod deploy;
 pub mod error;
 pub mod operations;
 pub mod parse;

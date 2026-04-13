@@ -4,7 +4,8 @@ use is_terminal::IsTerminal;
 use std::io::{self, Write};
 // Tabled import removed - using custom 2-line format instead
 
-use crate::cli::{OutputFormat, PromptSource, PromptSourceArg};
+use crate::cli::{OutputFormat, PromptSourceArg};
+use crate::cli_conversions::PromptSource;
 use swissarmyhammer::{PromptFilter, PromptLibrary, PromptResolver};
 
 // PromptRow struct removed - using custom 2-line format instead of table
@@ -27,6 +28,11 @@ struct PromptArgument {
     default: Option<String>,
 }
 
+/// List all prompts from built-in, user, and local sources.
+///
+/// Loads every prompt available to the CLI, applies the supplied filters
+/// (source, category, search term), sorts the results by name, and prints
+/// them in the requested output format (JSON, YAML, or human-readable table).
 pub fn run_list_command(
     format: OutputFormat,
     verbose: bool,
@@ -34,108 +40,105 @@ pub fn run_list_command(
     category_filter: Option<String>,
     search_term: Option<String>,
 ) -> Result<()> {
-    // Load all prompts from all sources
     let mut library = PromptLibrary::new();
     let mut resolver = PromptResolver::new();
     resolver.load_all_prompts(&mut library)?;
 
-    // Build the filter
-    let mut filter = PromptFilter::new();
-
-    if let Some(ref source) = source_filter {
-        let lib_source: PromptSource = source.clone().into();
-        filter = filter.with_sources(vec![lib_source.into()]);
-    }
-
-    if let Some(ref category) = category_filter {
-        filter = filter.with_category(category);
-    }
-
-    if let Some(ref _search) = search_term {
-        // Remove search term filtering for now - fix API later
-        // filter = filter.with_search_term(search);
-    }
-
-    // Convert FileSource to PromptSource for the API
-    let prompt_sources: std::collections::HashMap<String, swissarmyhammer_prompts::PromptSource> =
-        resolver
-            .prompt_sources
-            .iter()
-            .map(|(k, v)| (k.clone(), v.clone().into()))
-            .collect();
-
-    // Get filtered prompts
+    let filter = build_prompt_filter(source_filter, category_filter, search_term);
+    let prompt_sources = collect_prompt_sources(&resolver);
     let filtered_prompts = library.list_filtered(&filter, &prompt_sources)?;
 
-    // Collect prompt information
-    let mut prompt_infos = Vec::new();
-
-    for prompt in filtered_prompts {
-        // Get the source from the resolver
-        let prompt_source = match resolver.prompt_sources.get(&prompt.name) {
-            Some(swissarmyhammer::PromptSource::Builtin) => PromptSource::Builtin,
-            Some(swissarmyhammer::PromptSource::User) => PromptSource::User,
-            Some(swissarmyhammer::PromptSource::Local) => PromptSource::Local,
-            Some(swissarmyhammer::PromptSource::Dynamic) => PromptSource::Dynamic,
-            None => PromptSource::Dynamic,
-        };
-
-        let arguments = prompt
-            .parameters
-            .iter()
-            .map(|param| PromptArgument {
-                name: param.name.clone(),
-                description: Some(param.description.clone()),
-                required: param.required,
-                default: param
-                    .default
-                    .as_ref()
-                    .and_then(|v| v.as_str().map(String::from)),
-            })
-            .collect();
-
-        // Extract title from metadata
-        // If metadata is empty, we have a problem with the library's YAML parsing
-        // For now, let's use the prompt name as a fallback title
-        let title = prompt
-            .metadata
-            .get("title")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
-            .or_else(|| {
-                // Fallback: convert prompt name to a readable title
-                Some(
-                    prompt
-                        .name
-                        .replace(['-', '_'], " ")
-                        .split_whitespace()
-                        .map(|word| {
-                            let mut chars = word.chars();
-                            match chars.next() {
-                                None => String::new(),
-                                Some(first) => {
-                                    first.to_uppercase().collect::<String>() + chars.as_str()
-                                }
-                            }
-                        })
-                        .collect::<Vec<_>>()
-                        .join(" "),
-                )
-            });
-
-        prompt_infos.push(PromptInfo {
-            name: prompt.name.clone(),
-            title,
-            description: prompt.description.clone(),
-            source: prompt_source,
-            category: prompt.category.clone(),
-            arguments,
-        });
-    }
-
-    // Sort by name for consistent output
+    let mut prompt_infos: Vec<PromptInfo> = filtered_prompts
+        .iter()
+        .map(|prompt| build_prompt_info(prompt, &resolver))
+        .collect();
     prompt_infos.sort_by(|a, b| a.name.cmp(&b.name));
 
+    render_prompts(format, verbose, &prompt_infos)
+}
+
+fn build_prompt_filter(
+    source_filter: Option<PromptSourceArg>,
+    category_filter: Option<String>,
+    _search_term: Option<String>,
+) -> PromptFilter {
+    let mut filter = PromptFilter::new();
+    if let Some(source) = source_filter {
+        let lib_source: PromptSource = source.into();
+        filter = filter.with_sources(vec![lib_source.into()]);
+    }
+    if let Some(category) = category_filter {
+        filter = filter.with_category(&category);
+    }
+    // Search term filtering removed pending API update
+    filter
+}
+
+fn collect_prompt_sources(
+    resolver: &PromptResolver,
+) -> std::collections::HashMap<String, swissarmyhammer_prompts::PromptSource> {
+    resolver
+        .prompt_sources
+        .iter()
+        .map(|(k, v)| (k.clone(), v.clone().into()))
+        .collect()
+}
+
+fn build_prompt_info(prompt: &swissarmyhammer::Prompt, resolver: &PromptResolver) -> PromptInfo {
+    let prompt_source = match resolver.prompt_sources.get(&prompt.name) {
+        Some(swissarmyhammer::PromptSource::Builtin) => PromptSource::Builtin,
+        Some(swissarmyhammer::PromptSource::User) => PromptSource::User,
+        Some(swissarmyhammer::PromptSource::Local) => PromptSource::Local,
+        Some(swissarmyhammer::PromptSource::Dynamic) => PromptSource::Dynamic,
+        None => PromptSource::Dynamic,
+    };
+
+    let arguments = prompt
+        .parameters
+        .iter()
+        .map(|param| PromptArgument {
+            name: param.name.clone(),
+            description: Some(param.description.clone()),
+            required: param.required,
+            default: param
+                .default
+                .as_ref()
+                .and_then(|v| v.as_str().map(String::from)),
+        })
+        .collect();
+
+    let title = prompt
+        .metadata
+        .get("title")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .or_else(|| Some(humanize_prompt_name(&prompt.name)));
+
+    PromptInfo {
+        name: prompt.name.clone(),
+        title,
+        description: prompt.description.clone(),
+        source: prompt_source,
+        category: prompt.category.clone(),
+        arguments,
+    }
+}
+
+fn humanize_prompt_name(name: &str) -> String {
+    name.replace(['-', '_'], " ")
+        .split_whitespace()
+        .map(|word| {
+            let mut chars = word.chars();
+            match chars.next() {
+                None => String::new(),
+                Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn render_prompts(format: OutputFormat, verbose: bool, prompt_infos: &[PromptInfo]) -> Result<()> {
     match format {
         OutputFormat::Json => {
             let json = serde_json::to_string_pretty(&prompt_infos)?;
@@ -146,10 +149,9 @@ pub fn run_list_command(
             print!("{yaml}");
         }
         OutputFormat::Table => {
-            display_table(&prompt_infos, verbose)?;
+            display_table(prompt_infos, verbose)?;
         }
     }
-
     Ok(())
 }
 
@@ -164,56 +166,67 @@ fn display_table_to_writer<W: Write>(
         return Ok(());
     }
 
-    // Create a custom 2-line format instead of using Tabled
     for info in prompt_infos {
-        let title = info.title.as_deref().unwrap_or("");
-        let description = info.description.as_deref().unwrap_or("");
-
-        // First line: Name | Title (colored by source)
-        let first_line = if is_tty {
-            let (name_colored, title_colored) = match &info.source {
-                PromptSource::Builtin => (
-                    info.name.green().bold().to_string(),
-                    title.green().to_string(),
-                ),
-                PromptSource::User => (
-                    info.name.blue().bold().to_string(),
-                    title.blue().to_string(),
-                ),
-                PromptSource::Local => (
-                    info.name.yellow().bold().to_string(),
-                    title.yellow().to_string(),
-                ),
-                PromptSource::Dynamic => (
-                    info.name.magenta().bold().to_string(),
-                    title.magenta().to_string(),
-                ),
-            };
-            format!("{name_colored} | {title_colored}")
-        } else {
-            format!("{} | {}", info.name, title)
-        };
-
-        // Second line: Full description (indented)
-        let second_line = if !description.is_empty() {
-            format!("  {description}")
-        } else {
-            "  (no description)".to_string()
-        };
-
-        writeln!(writer, "{first_line}")?;
-        writeln!(writer, "{second_line}")?;
-        writeln!(writer)?; // Empty line between entries
+        write_prompt_entry(writer, info, is_tty)?;
     }
 
-    if is_tty && !prompt_infos.is_empty() {
-        writeln!(writer, "{}", "Legend:".bright_white())?;
-        writeln!(writer, "  {} Built-in prompts", "●".green())?;
-        writeln!(writer, "  {} User prompts (~/.prompts/)", "●".blue())?;
-        writeln!(writer, "  {} Local prompts (./.prompts/)", "●".yellow())?;
-        writeln!(writer, "  {} Dynamic prompts", "●".magenta())?;
+    if is_tty {
+        write_source_legend(writer)?;
     }
 
+    Ok(())
+}
+
+fn write_prompt_entry<W: Write>(writer: &mut W, info: &PromptInfo, is_tty: bool) -> Result<()> {
+    let title = info.title.as_deref().unwrap_or("");
+    let description = info.description.as_deref().unwrap_or("");
+
+    let first_line = if is_tty {
+        format_colored_name_title(info, title)
+    } else {
+        format!("{} | {}", info.name, title)
+    };
+
+    let second_line = if description.is_empty() {
+        "  (no description)".to_string()
+    } else {
+        format!("  {description}")
+    };
+
+    writeln!(writer, "{first_line}")?;
+    writeln!(writer, "{second_line}")?;
+    writeln!(writer)?;
+    Ok(())
+}
+
+fn format_colored_name_title(info: &PromptInfo, title: &str) -> String {
+    let (name_colored, title_colored) = match &info.source {
+        PromptSource::Builtin => (
+            info.name.green().bold().to_string(),
+            title.green().to_string(),
+        ),
+        PromptSource::User => (
+            info.name.blue().bold().to_string(),
+            title.blue().to_string(),
+        ),
+        PromptSource::Local => (
+            info.name.yellow().bold().to_string(),
+            title.yellow().to_string(),
+        ),
+        PromptSource::Dynamic => (
+            info.name.magenta().bold().to_string(),
+            title.magenta().to_string(),
+        ),
+    };
+    format!("{name_colored} | {title_colored}")
+}
+
+fn write_source_legend<W: Write>(writer: &mut W) -> Result<()> {
+    writeln!(writer, "{}", "Legend:".bright_white())?;
+    writeln!(writer, "  {} Built-in prompts", "●".green())?;
+    writeln!(writer, "  {} User prompts (~/.prompts/)", "●".blue())?;
+    writeln!(writer, "  {} Local prompts (./.prompts/)", "●".yellow())?;
+    writeln!(writer, "  {} Dynamic prompts", "●".magenta())?;
     Ok(())
 }
 
