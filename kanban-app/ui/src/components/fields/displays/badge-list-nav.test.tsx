@@ -4,8 +4,14 @@
  * Uses the real EntityFocusProvider and FocusScope (no mocking of
  * entity-focus-context) so broadcastNavCommand actually evaluates
  * registered claim predicates.
+ *
+ * After the MentionView migration, BadgeListDisplay delegates to
+ * MentionView which generates per-pill FocusScopes. The pill monikers
+ * still follow `${entityType}:${entityId}`, so these tests verify that
+ * navigation between those MentionView-generated scopes works.
  */
 import { describe, it, expect, vi } from "vitest";
+import type { ReactNode } from "react";
 import { render, act } from "@testing-library/react";
 
 // ---------------------------------------------------------------------------
@@ -51,8 +57,22 @@ const mockTags = [
   },
 ];
 
+// Task store is empty — reference-field pills in RefNavHarness miss the
+// store and fall back to the raw entity id, which is exactly what the
+// nav tests need to verify (moniker = buildMoniker(entityType, rawId)).
+const mockEntitiesByType: Record<string, unknown[]> = {
+  tag: mockTags,
+  task: [],
+};
+
 vi.mock("@/lib/entity-store-context", () => ({
-  useEntityStore: () => ({ getEntities: () => mockTags, getEntity: vi.fn() }),
+  useEntityStore: () => ({
+    getEntities: (type: string) => mockEntitiesByType[type] ?? [],
+    getEntity: vi.fn(),
+  }),
+  // Passthrough provider — the test provides its own EntityFocusProvider,
+  // but MentionView's upstream imports may transitively reference this.
+  EntityStoreProvider: ({ children }: { children: ReactNode }) => children,
 }));
 
 vi.mock("@/lib/schema-context", () => ({
@@ -62,6 +82,7 @@ vi.mock("@/lib/schema-context", () => ({
     getEntityCommands: () => [],
     mentionableTypes: [
       { entityType: "tag", prefix: "#", displayField: "tag_name" },
+      { entityType: "task", prefix: "^", displayField: "title" },
     ],
     loading: false,
   }),
@@ -70,6 +91,13 @@ vi.mock("@/lib/schema-context", () => ({
     getFieldDef: () => undefined,
     getEntityCommands: () => [],
   }),
+}));
+
+// window-container's useBoardData is referenced by cm mention extension
+// hooks; MentionView itself doesn't use it, but a transitive import
+// drags it in. Stub it so the module loads without a real Tauri engine.
+vi.mock("@/components/window-container", () => ({
+  useBoardData: () => null,
 }));
 
 // ---------------------------------------------------------------------------

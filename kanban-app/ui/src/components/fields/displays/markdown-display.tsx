@@ -1,24 +1,35 @@
-import { forwardRef, useCallback, useMemo, useRef } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import { useSchema } from "@/lib/schema-context";
-import { useEntityStore } from "@/lib/entity-store-context";
-import { remarkMentions } from "@/lib/remark-mentions";
-import { MentionPill } from "@/components/mention-pill";
-import { slugify } from "@/lib/slugify";
-import { getStr } from "@/types/kanban";
+import { useCallback, useMemo } from "react";
+import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
+import type { Extension } from "@codemirror/state";
+import { TextViewer } from "@/components/text-viewer";
+import { useMentionExtensions } from "@/hooks/use-mention-extensions";
+import {
+  createMarkdownCheckboxPlugin,
+  checkboxToggleFacet,
+} from "@/lib/cm-markdown-checkbox";
 import type { DisplayProps } from "./text-display";
 
+/** Matches a markdown task-list checkbox: `- [ ]`, `- [x]`, or `- [X]`. */
 const CHECKBOX_RE = /- \[([ xX])\]/g;
 
+/**
+ * Toggle the Nth checkbox in `source`, returning the updated string.
+ *
+ * Counts matches left-to-right and flips the `index`-th one between
+ * `- [ ]` and `- [x]`. Returns `null` if fewer than `index + 1` matches
+ * exist in the source.
+ */
 function toggleCheckbox(source: string, index: number): string | null {
   let count = 0;
-  return source.replace(CHECKBOX_RE, (match, check) => {
+  let replaced = false;
+  const out = source.replace(CHECKBOX_RE, (match, check) => {
     if (count++ === index) {
+      replaced = true;
       return check === " " ? "- [x]" : "- [ ]";
     }
     return match;
   });
+  return replaced ? out : null;
 }
 
 interface MarkdownDisplayProps extends Omit<DisplayProps, "onCommit"> {
@@ -26,8 +37,12 @@ interface MarkdownDisplayProps extends Omit<DisplayProps, "onCommit"> {
 }
 
 /**
- * Markdown display — compact: truncated plain text, full: rendered ReactMarkdown with
- * GFM, mention pills for all mentionable types, and interactive checkboxes.
+ * Markdown display — compact: truncated plain text, full: a read-only
+ * CM6 viewer with the markdown language, mention decoration/widget
+ * extensions, and an interactive task-list checkbox plugin.
+ *
+ * Compact mode is intentionally plain text: a miniature editor per row
+ * in list views would be wasteful and visually noisy.
  */
 export function MarkdownDisplay({
   value,
@@ -35,7 +50,6 @@ export function MarkdownDisplay({
   onCommit,
 }: MarkdownDisplayProps) {
   const text = typeof value === "string" ? value : "";
-  const displayRef = useRef<HTMLDivElement>(null);
 
   if (!text) {
     return mode === "compact" ? (
@@ -49,102 +63,49 @@ export function MarkdownDisplay({
     return <span className="truncate block">{text}</span>;
   }
 
-  return <MarkdownFull ref={displayRef} text={text} onCommit={onCommit} />;
+  return <MarkdownFull text={text} onCommit={onCommit} />;
 }
 
-const MarkdownFull = forwardRef<
-  HTMLDivElement,
-  {
-    text: string;
-    onCommit?: (value: string) => void;
-  }
->(function MarkdownFull({ text, onCommit }, ref) {
-  const { mentionableTypes } = useSchema();
-  const { getEntities } = useEntityStore();
+/**
+ * Full-mode markdown viewer: CM6 TextViewer with markdown language,
+ * mention widgets, and the task-list checkbox plugin.
+ *
+ * Checkbox clicks are bridged into `onCommit` via the checkbox plugin's
+ * facet: the plugin computes the 0-based source index of the clicked
+ * checkbox and invokes `onToggle`, which we use to mutate the markdown
+ * source and fire `onCommit` with the updated text.
+ */
+function MarkdownFull({
+  text,
+  onCommit,
+}: {
+  text: string;
+  onCommit?: (value: string) => void;
+}) {
+  const mentionExtensions = useMentionExtensions();
 
-  const mentionData = useMemo(() => {
-    return mentionableTypes.map((mt) => {
-      const entities = getEntities(mt.entityType);
-      return {
-        ...mt,
-        entities,
-        slugs: entities
-          .map((e) => getStr(e, mt.displayField))
-          .filter(Boolean)
-          .map(slugify),
-      };
-    });
-  }, [mentionableTypes, getEntities]);
-
-  const remarkPlugins = useMemo(() => {
-    const plugins: Array<ReturnType<typeof remarkMentions> | typeof remarkGfm> =
-      [remarkGfm];
-    for (const md of mentionData) {
-      if (md.slugs.length === 0) continue;
-      plugins.push(
-        remarkMentions(
-          md.prefix,
-          md.slugs,
-          `${md.entityType}Pill`,
-          `${md.entityType}-pill`,
-        ),
-      );
-    }
-    return plugins;
-  }, [mentionData]);
-
-  const mentionComponents = useMemo(() => {
-    const comps: Record<string, React.ComponentType> = {};
-    for (const md of mentionData) {
-      comps[`${md.entityType}-pill`] = (props: { slug?: string }) =>
-        (
-          <MentionPill
-            entityType={md.entityType}
-            slug={props.slug ?? ""}
-            prefix={md.prefix}
-          /> // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        ) as any;
-    }
-    return comps;
-  }, [mentionData]);
-
-  const handleCheckboxChange = useCallback(
-    (e: React.ChangeEvent<HTMLInputElement>) => {
-      const container = (ref as React.RefObject<HTMLDivElement>)?.current;
-      if (!container || !onCommit) return;
-      const all = container.querySelectorAll('input[type="checkbox"]');
-      const idx = Array.from(all).indexOf(e.target);
-      if (idx >= 0) {
-        const updated = toggleCheckbox(text, idx);
-        if (updated !== null) onCommit(updated);
-      }
+  const handleToggle = useCallback(
+    (sourceIndex: number) => {
+      if (!onCommit) return;
+      const updated = toggleCheckbox(text, sourceIndex);
+      if (updated !== null) onCommit(updated);
     },
-    [text, onCommit, ref],
+    [text, onCommit],
+  );
+
+  const extensions = useMemo<Extension[]>(
+    () => [
+      markdown({ base: markdownLanguage }),
+      ...mentionExtensions,
+      createMarkdownCheckboxPlugin(),
+      checkboxToggleFacet.of(handleToggle),
+    ],
+    [mentionExtensions, handleToggle],
   );
 
   return (
-    <div ref={ref} className="prose prose-sm dark:prose-invert max-w-none">
-      <ReactMarkdown
-        remarkPlugins={remarkPlugins}
-        components={{
-          input: (props) => {
-            if (props.type === "checkbox") {
-              return (
-                <input
-                  type="checkbox"
-                  checked={props.checked ?? false}
-                  onChange={handleCheckboxChange}
-                  onClick={(e) => e.stopPropagation()}
-                />
-              );
-            }
-            return <input {...props} />;
-          },
-          ...(mentionComponents as Record<string, React.ComponentType>),
-        }}
-      >
-        {text}
-      </ReactMarkdown>
+    <div className="prose prose-sm dark:prose-invert max-w-none">
+      <TextViewer text={text} extensions={extensions} />
     </div>
   );
-});
+}

@@ -51,8 +51,16 @@ export function createMentionCompletionSource(
 
     const buildResult = (results: MentionSearchResult[]): CompletionResult => {
       const options: Completion[] = results.map((r) => ({
-        label: `${prefix}${r.slug}`,
-        detail: r.displayName,
+        // Dropdown label previews what the widget will show after insertion
+        // (displayName, not slug) so the dropdown matches the buffer's rendered
+        // pill.
+        label: `${prefix}${r.displayName}`,
+        // `apply` overrides `label` for what actually lands in the document:
+        // the slug is the underlying identifier, even though the widget shows
+        // the display name.
+        apply: `${prefix}${r.slug}`,
+        // Secondary hint showing the slug so users can see what will be written.
+        detail: r.slug,
         type: "keyword",
         boost: r.slug.startsWith(query) ? 1 : 0,
         info: () => {

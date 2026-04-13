@@ -1,8 +1,8 @@
 ---
 assignees:
 - wballard
-position_column: todo
-position_ordinal: b980
+position_column: done
+position_ordinal: ffffffffffffffffffffffb980
 project: pill-via-cm6
 title: 'TextViewer component: read-only CM6 mount'
 ---

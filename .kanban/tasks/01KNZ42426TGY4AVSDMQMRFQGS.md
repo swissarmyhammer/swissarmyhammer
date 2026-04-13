@@ -3,8 +3,8 @@ assignees:
 - wballard
 depends_on:
 - 01KNZ40VH9PJ3M9TEFPGFJJRM1
-position_column: todo
-position_ordinal: b880
+position_column: done
+position_ordinal: ffffffffffffffffffffffbc80
 project: pill-via-cm6
 title: 'MentionWidget: replace slug text with clipped display name'
 ---

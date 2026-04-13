@@ -82,6 +82,25 @@ const mockGetEntities = vi.fn((type: string) => {
       },
     ];
   }
+  if (type === "column") {
+    return [
+      {
+        id: "c1",
+        entity_type: "column",
+        fields: { name: "To Do", color: "888888" },
+      },
+      {
+        id: "c2",
+        entity_type: "column",
+        fields: { name: "Doing", color: "888888" },
+      },
+      {
+        id: "c3",
+        entity_type: "column",
+        fields: { name: "Done", color: "888888" },
+      },
+    ];
+  }
   return [];
 });
 
@@ -101,7 +120,10 @@ vi.mock("@/components/window-container", () => ({
 }));
 
 import { renderHook } from "@testing-library/react";
-import { useMentionExtensions } from "../use-mention-extensions";
+import {
+  useMentionExtensions,
+  buildMentionMetaMap,
+} from "../use-mention-extensions";
 
 describe("useMentionExtensions", () => {
   beforeEach(() => {
@@ -217,6 +239,55 @@ describe("useMentionExtensions", () => {
     parent.remove();
   });
 
+  // ── displayName in metaMap ─────────────────────────────────────────
+  // Verifies that buildMentionMetaMap populates displayName with the raw
+  // (un-slugified) entity name so downstream widgets can render it.
+
+  it("produces metaMap entries with displayName equal to the raw entity name", () => {
+    // Entity whose display name contains spaces/capitals — the slug
+    // will differ from the raw name.
+    const entities = [
+      {
+        id: "p1",
+        entity_type: "project",
+        moniker: "project:p1",
+        fields: {
+          name: "Auth Migration",
+          color: "4078c0",
+          description: "Auth refactor",
+        },
+      },
+    ];
+
+    const metaMap = buildMentionMetaMap(entities, "name");
+
+    // The key is the slugified name
+    const entry = metaMap.get("auth-migration");
+    expect(entry).toBeDefined();
+    // displayName preserves the original un-slugified value
+    expect(entry!.displayName).toBe("Auth Migration");
+    expect(entry!.color).toBe("4078c0");
+    expect(entry!.description).toBe("Auth refactor");
+  });
+
+  it("produces metaMap entries without description when entity lacks one", () => {
+    const entities = [
+      {
+        id: "t1",
+        entity_type: "tag",
+        moniker: "tag:t1",
+        fields: { name: "bug", color: "ff0000" },
+      },
+    ];
+
+    const metaMap = buildMentionMetaMap(entities, "name");
+    const entry = metaMap.get("bug");
+    expect(entry).toBeDefined();
+    expect(entry!.displayName).toBe("bug");
+    expect(entry!.color).toBe("ff0000");
+    expect(entry!.description).toBeUndefined();
+  });
+
   // ── $project mention tests ─────────────────────────────────────────
   // These verify that once a project entity declares both `mention_prefix`
   // and `mention_display_field`, the data-driven buildMentionExtensions
@@ -257,6 +328,50 @@ describe("useMentionExtensions", () => {
     const pill = parent.querySelector(".cm-project-pill");
     expect(pill).toBeTruthy();
     expect(pill?.textContent).toBe("$auth-migration");
+
+    view.destroy();
+    parent.remove();
+  });
+
+  // ── %column mention tests ──────────────────────────────────────────
+  // Verify that once column.yaml declares `mention_prefix: "%"` and
+  // `mention_display_field: "name"`, the data-driven extension builder
+  // produces decoration + autocomplete + tooltip extensions for `%`.
+
+  it("emits extensions for a column mentionable type with % prefix", () => {
+    mockMentionableTypes = [
+      { prefix: "%", entityType: "column", displayField: "name" },
+    ];
+
+    const { result } = renderHook(() => useMentionExtensions());
+
+    // Non-empty extension array: decoration + tooltip + autocomplete source.
+    expect(result.current.length).toBeGreaterThan(0);
+  });
+
+  it("decorates %column mentions with the cm-column-pill class", async () => {
+    mockMentionableTypes = [
+      { prefix: "%", entityType: "column", displayField: "name" },
+    ];
+
+    const { result } = renderHook(() => useMentionExtensions());
+
+    const { EditorView } = await import("@codemirror/view");
+    const { EditorState } = await import("@codemirror/state");
+
+    const parent = document.createElement("div");
+    document.body.appendChild(parent);
+    const view = new EditorView({
+      state: EditorState.create({
+        doc: "%to-do",
+        extensions: result.current,
+      }),
+      parent,
+    });
+
+    const pill = parent.querySelector(".cm-column-pill");
+    expect(pill).toBeTruthy();
+    expect(pill?.textContent).toBe("%to-do");
 
     view.destroy();
     parent.remove();

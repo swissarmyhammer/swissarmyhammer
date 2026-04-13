@@ -19,10 +19,8 @@ import {
   type MentionSearchResult,
 } from "@/lib/cm-mention-autocomplete";
 import { createDebouncedSearch } from "@/lib/debounced-search";
-import {
-  createMentionTooltips,
-  type MentionMeta,
-} from "@/lib/cm-mention-tooltip";
+import { createMentionTooltips } from "@/lib/cm-mention-tooltip";
+import type { MentionMeta } from "@/lib/mention-meta";
 import { slugify } from "@/lib/slugify";
 import type { Entity, VirtualTagMeta } from "@/types/kanban";
 import { getStr } from "@/types/kanban";
@@ -77,22 +75,13 @@ function getTooltipInfra(prefix: string, entityType: string) {
   return tooltipInfra.get(key)!;
 }
 
-/** Build a slug→color map for a mentionable entity type. */
-function buildColorMap(
-  entities: Entity[],
-  displayField: string,
-): Map<string, string> {
-  const map = new Map<string, string>();
-  for (const e of entities) {
-    const raw = getStr(e, displayField);
-    const color = getStr(e, "color", "888888");
-    if (raw) map.set(slugify(raw), color);
-  }
-  return map;
-}
-
-/** Build a slug→meta map for tooltips. */
-function buildMetaMap(
+/**
+ * Build a slug→MentionMeta map for a mentionable entity type.
+ *
+ * Populates color, displayName (the raw un-slugified name), and optional
+ * description. Used by both decoration and tooltip extensions.
+ */
+export function buildMentionMetaMap(
   entities: Entity[],
   displayField: string,
 ): Map<string, MentionMeta> {
@@ -101,7 +90,7 @@ function buildMetaMap(
     const raw = getStr(e, displayField);
     const color = getStr(e, "color", "888888");
     const description = getStr(e, "description") || undefined;
-    if (raw) map.set(slugify(raw), { color, description });
+    if (raw) map.set(slugify(raw), { color, displayName: raw, description });
   }
   return map;
 }
@@ -154,26 +143,18 @@ function buildVirtualTagSearch(
   };
 }
 
-/** Merge virtual tag entries into a color map so they receive pill decorations. */
-function mergeVirtualTagColors(base: Map<string, string>, vtMeta: VirtualTagMeta[]): Map<string, string> {
+/** Merge virtual tag entries into a meta map so they receive decoration and tooltip support. */
+function mergeVirtualTagMeta(base: Map<string, MentionMeta>, vtMeta: VirtualTagMeta[]): Map<string, MentionMeta> {
   const merged = new Map(base);
-  for (const m of vtMeta) merged.set(m.slug, m.color);
+  for (const m of vtMeta) merged.set(m.slug, { color: m.color, displayName: m.slug, description: m.description });
   return merged;
 }
 
-/** Merge virtual tag entries into a meta map so they receive tooltip support. */
-function mergeVirtualTagTooltips(base: Map<string, MentionMeta>, vtMeta: VirtualTagMeta[]): Map<string, MentionMeta> {
-  const merged = new Map(base);
-  for (const m of vtMeta) merged.set(m.slug, { color: m.color, description: m.description });
-  return merged;
-}
-
-/** Enriched mention data with color and meta maps built from entities. */
+/** Enriched mention data with a unified meta map built from entities. */
 interface MentionDatum {
   prefix: string;
   entityType: string;
   displayField: string;
-  colorMap: Map<string, string>;
   metaMap: Map<string, MentionMeta>;
 }
 
@@ -197,11 +178,10 @@ function buildMentionExtensions(
 
   for (const md of mentionData) {
     const addVirtual = includeVirtualTags && md.prefix === "#" && vtMeta.length > 0;
-    const colorMap = addVirtual ? mergeVirtualTagColors(md.colorMap, vtMeta) : md.colorMap;
-    const metaMap = addVirtual ? mergeVirtualTagTooltips(md.metaMap, vtMeta) : md.metaMap;
+    const metaMap = addVirtual ? mergeVirtualTagMeta(md.metaMap, vtMeta) : md.metaMap;
 
-    if (colorMap.size === 0) continue;
-    exts.push(getDecoInfra(md.prefix, md.entityType).extension(colorMap));
+    if (metaMap.size === 0) continue;
+    exts.push(getDecoInfra(md.prefix, md.entityType).extension(metaMap));
 
     const baseSearch = buildAsyncSearch(md.entityType);
     const search = addVirtual ? buildVirtualTagSearch(baseSearch, vtMeta) : baseSearch;
@@ -249,8 +229,7 @@ export function useMentionExtensions(
       const entities = getEntities(mt.entityType);
       return {
         ...mt,
-        colorMap: buildColorMap(entities, mt.displayField),
-        metaMap: buildMetaMap(entities, mt.displayField),
+        metaMap: buildMentionMetaMap(entities, mt.displayField),
       };
     });
   }, [mentionableTypes, getEntities]);

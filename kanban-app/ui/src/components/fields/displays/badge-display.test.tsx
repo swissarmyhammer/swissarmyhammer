@@ -1,29 +1,59 @@
-import { describe, it, expect, vi } from "vitest";
-import { render } from "@testing-library/react";
+/**
+ * Tests for BadgeDisplay — the scalar-reference badge display for fields
+ * like `position_column`. BadgeDisplay is a thin wrapper around MentionView
+ * in single mode; the CM6 widget pipeline owns the rendered pill text and
+ * color. This test file verifies that wrapping, plus the empty-state dash.
+ */
+
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { act, render } from "@testing-library/react";
 
 // ---------------------------------------------------------------------------
-// Mocks — must be declared before importing the component under test
+// Tauri and plugin mocks — must be declared before importing the component
 // ---------------------------------------------------------------------------
+
+const mockInvoke = vi.fn(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (..._args: any[]): Promise<unknown> => Promise.resolve(undefined),
+);
 
 vi.mock("@tauri-apps/api/core", () => ({
-  invoke: vi.fn(() => Promise.resolve("ok")),
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  invoke: (...args: any[]) => mockInvoke(...args),
 }));
+
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(() => Promise.resolve(() => {})),
 }));
 
-// Mutable references so each test can swap the entity-store and schema state.
-let mockEntities: Record<string, unknown[]> = {};
-let mockMentionableTypes: Array<{
-  entityType: string;
-  prefix: string;
-  displayField: string;
-}> = [];
+vi.mock("@tauri-apps/api/window", () => ({
+  getCurrentWindow: () => ({ label: "main" }),
+}));
+
+vi.mock("@tauri-apps/plugin-log", () => ({
+  error: vi.fn(),
+  warn: vi.fn(),
+  info: vi.fn(),
+  debug: vi.fn(),
+  trace: vi.fn(),
+  attachConsole: vi.fn(() => Promise.resolve()),
+}));
+
+// ---------------------------------------------------------------------------
+// Mock entity store and schema — mutable for per-test customization
+// ---------------------------------------------------------------------------
+
+import type { Entity, FieldDef } from "@/types/kanban";
+import type { MentionableType } from "@/lib/schema-context";
+
+let mockEntities: Record<string, Entity[]> = {};
+let mockMentionableTypes: MentionableType[] = [];
 
 vi.mock("@/lib/entity-store-context", () => ({
   useEntityStore: () => ({
     getEntities: (type: string) => mockEntities[type] ?? [],
-    getEntity: () => undefined,
+    getEntity: (type: string, id: string) =>
+      mockEntities[type]?.find((e) => e.id === id),
   }),
 }));
 
@@ -35,13 +65,24 @@ vi.mock("@/lib/schema-context", () => ({
     mentionableTypes: mockMentionableTypes,
     loading: false,
   }),
+  useSchemaOptional: () => ({
+    getSchema: () => undefined,
+    getFieldDef: () => undefined,
+    getEntityCommands: () => [],
+  }),
+}));
+
+vi.mock("@/components/window-container", () => ({
+  useBoardData: () => null,
 }));
 
 // ---------------------------------------------------------------------------
 
 import { BadgeDisplay } from "./badge-display";
-import type { Entity, FieldDef } from "@/types/kanban";
+import { EntityFocusProvider } from "@/lib/entity-focus-context";
+import { TooltipProvider } from "@/components/ui/tooltip";
 
+/** Task entity used as the host of the `position_column` field in tests. */
 const taskEntity: Entity = {
   id: "task-1",
   entity_type: "task",
@@ -49,115 +90,190 @@ const taskEntity: Entity = {
   fields: {},
 };
 
-/** Helper: locate the rendered rounded-full badge span. */
-function getBadge(container: HTMLElement): HTMLElement | null {
-  return container.querySelector("span.rounded-full") as HTMLElement | null;
+/** Minimal provider tree MentionView needs. */
+function Providers({ children }: { children: React.ReactNode }) {
+  return (
+    <EntityFocusProvider>
+      <TooltipProvider>{children}</TooltipProvider>
+    </EntityFocusProvider>
+  );
 }
 
+/** Flush microtasks and pending effects (CM6 mounts asynchronously). */
+async function flush() {
+  await act(async () => {
+    await new Promise((r) => setTimeout(r, 0));
+  });
+}
+
+/** Configure the mocked schema + entity store with column fixtures. */
+function setupColumnFixtures() {
+  mockEntities = {
+    column: [
+      {
+        id: "col-doing",
+        entity_type: "column",
+        moniker: "column:col-doing",
+        fields: { name: "Doing", color: "6366f1" },
+      },
+    ],
+  };
+  mockMentionableTypes = [
+    { entityType: "column", prefix: "%", displayField: "name" },
+  ];
+}
+
+/** The canonical `position_column` field definition (reference to column). */
+const positionColumnField: FieldDef = {
+  id: "0000000000000000000000000H",
+  name: "position_column",
+  type: { kind: "reference", entity: "column", multiple: false },
+} as unknown as FieldDef;
+
 describe("BadgeDisplay", () => {
-  describe("reference field resolution", () => {
-    it("renders the target entity's display name and color when matched", () => {
-      mockEntities = {
-        project: [
-          {
-            id: "spatial-nav",
-            entity_type: "project",
-            moniker: "project:spatial-nav",
-            fields: {
-              name: "Spatial Focus Navigation",
-              color: "6366f1",
-            },
-          },
-        ],
-      };
-      mockMentionableTypes = [
-        { entityType: "project", prefix: "$", displayField: "name" },
-      ];
-
-      const field: FieldDef = {
-        id: "00000000000000000000000010",
-        name: "project",
-        type: { kind: "reference", entity: "project", multiple: false },
-      } as unknown as FieldDef;
-
-      const { container } = render(
-        <BadgeDisplay
-          field={field}
-          value="spatial-nav"
-          entity={taskEntity}
-          mode="full"
-        />,
-      );
-
-      const badge = getBadge(container);
-      expect(badge).not.toBeNull();
-      expect(badge!.textContent).toContain("Spatial Focus Navigation");
-      expect(badge!.textContent).not.toContain("spatial-nav");
-      // Inline style mirrors the select-options color path:
-      // backgroundColor `#<hex>20` (browser normalises to rgba with alpha)
-      // and color `#<hex>` (browser normalises to rgb).
-      expect(badge!.style.backgroundColor).toBe("rgba(99, 102, 241, 0.125)");
-      expect(badge!.style.color).toBe("rgb(99, 102, 241)");
-    });
-
-    it("falls back to the raw value when the target entity is missing", () => {
-      mockEntities = { project: [] };
-      mockMentionableTypes = [
-        { entityType: "project", prefix: "$", displayField: "name" },
-      ];
-
-      const field: FieldDef = {
-        id: "00000000000000000000000010",
-        name: "project",
-        type: { kind: "reference", entity: "project", multiple: false },
-      } as unknown as FieldDef;
-
-      const { container } = render(
-        <BadgeDisplay
-          field={field}
-          value="spatial-nav"
-          entity={taskEntity}
-          mode="full"
-        />,
-      );
-
-      const badge = getBadge(container);
-      expect(badge).not.toBeNull();
-      expect(badge!.textContent).toContain("spatial-nav");
-    });
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockInvoke.mockResolvedValue(undefined);
+    mockEntities = {};
+    mockMentionableTypes = [];
   });
 
-  describe("select-options field", () => {
-    it("renders the option label and color from field.type.options", () => {
-      mockEntities = {};
-      mockMentionableTypes = [];
+  it("renders the column's display name via the CM6 mention widget", async () => {
+    setupColumnFixtures();
 
-      const field: FieldDef = {
-        id: "00000000000000000000000099",
-        name: "status",
-        type: {
-          kind: "select",
-          options: [
-            { value: "todo", label: "To Do", color: "0066ff", order: 0 },
-            { value: "done", label: "Done", color: "00aa00", order: 1 },
-          ],
-        },
-      } as unknown as FieldDef;
-
-      const { container } = render(
+    const { container } = render(
+      <Providers>
         <BadgeDisplay
-          field={field}
-          value="todo"
+          field={positionColumnField}
+          value="col-doing"
           entity={taskEntity}
           mode="full"
-        />,
-      );
+        />
+      </Providers>,
+    );
+    await flush();
 
-      const badge = getBadge(container);
-      expect(badge).not.toBeNull();
-      expect(badge!.textContent).toContain("To Do");
-      expect(badge!.style.backgroundColor).toBe("rgba(0, 102, 255, 0.125)");
-      expect(badge!.style.color).toBe("rgb(0, 102, 255)");
-    });
+    // The CM6 mention widget renders the resolved display name with
+    // the column prefix.
+    const widget = container.querySelector(".cm-mention-pill");
+    expect(widget).toBeTruthy();
+    expect(widget?.textContent).toBe("%Doing");
+  });
+
+  it("wraps the TextViewer in a FocusScope bearing the column moniker", async () => {
+    setupColumnFixtures();
+
+    const { container } = render(
+      <Providers>
+        <BadgeDisplay
+          field={positionColumnField}
+          value="col-doing"
+          entity={taskEntity}
+          mode="full"
+        />
+      </Providers>,
+    );
+    await flush();
+
+    const scope = container.querySelector("[data-moniker='column:col-doing']");
+    expect(scope).toBeTruthy();
+  });
+
+  it("falls back to raw id with muted mark styling when the column is missing", async () => {
+    mockEntities = { column: [] };
+    mockMentionableTypes = [
+      { entityType: "column", prefix: "%", displayField: "name" },
+    ];
+
+    const { container } = render(
+      <Providers>
+        <BadgeDisplay
+          field={positionColumnField}
+          value="missing-col"
+          entity={taskEntity}
+          mode="full"
+        />
+      </Providers>,
+    );
+    await flush();
+
+    // No CM6 widget — widget needs a metaMap entry with a valid color.
+    const widget = container.querySelector(".cm-mention-pill");
+    expect(widget).toBeFalsy();
+
+    // Muted-mark fallback carries the raw slug prefixed with the mention char.
+    const mark = container.querySelector(".cm-column-pill");
+    expect(mark).toBeTruthy();
+    expect(mark?.textContent).toBe("%missing-col");
+  });
+
+  it("renders a dash when the value is empty", () => {
+    setupColumnFixtures();
+
+    const { container } = render(
+      <Providers>
+        <BadgeDisplay
+          field={positionColumnField}
+          value=""
+          entity={taskEntity}
+          mode="full"
+        />
+      </Providers>,
+    );
+
+    // Plain muted dash — same empty-state visual as the previous implementation.
+    const dash = container.querySelector("span.text-muted-foreground\\/50");
+    expect(dash).toBeTruthy();
+    expect(dash?.textContent).toBe("-");
+
+    // No CM6 pill rendered in the empty state.
+    expect(container.querySelector(".cm-mention-pill")).toBeFalsy();
+  });
+
+  it("renders a dash when the value is a non-string (defensive)", () => {
+    setupColumnFixtures();
+
+    const { container } = render(
+      <Providers>
+        <BadgeDisplay
+          field={positionColumnField}
+          value={null}
+          entity={taskEntity}
+          mode="full"
+        />
+      </Providers>,
+    );
+
+    const dash = container.querySelector("span.text-muted-foreground\\/50");
+    expect(dash).toBeTruthy();
+    expect(dash?.textContent).toBe("-");
+  });
+
+  it("falls back to a plain span when field.type.entity is unset", () => {
+    // Defensive guard path — no shipping field has this shape, but the
+    // component must degrade gracefully instead of crashing.
+    mockEntities = {};
+    mockMentionableTypes = [];
+
+    const fieldWithoutEntity: FieldDef = {
+      id: "00000000000000000000000099",
+      name: "legacy_badge",
+      type: { kind: "select" },
+    } as unknown as FieldDef;
+
+    const { container } = render(
+      <Providers>
+        <BadgeDisplay
+          field={fieldWithoutEntity}
+          value="raw-value"
+          entity={taskEntity}
+          mode="full"
+        />
+      </Providers>,
+    );
+
+    // No CM6 widget — just a plain text span with the raw value.
+    expect(container.querySelector(".cm-mention-pill")).toBeFalsy();
+    expect(container.textContent).toContain("raw-value");
   });
 });

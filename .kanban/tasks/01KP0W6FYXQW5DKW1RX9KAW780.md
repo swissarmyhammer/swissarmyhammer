@@ -3,8 +3,8 @@ assignees:
 - wballard
 depends_on:
 - 01KNZ3ZX03HSEYVAJFGEFTC2ZE
-position_column: todo
-position_ordinal: bf80
+position_column: done
+position_ordinal: ffffffffffffffffffffffbb80
 project: pill-via-cm6
 title: Replace SelectEditor with searchable combobox for reference fields
 ---
