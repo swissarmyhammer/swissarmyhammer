@@ -96,62 +96,77 @@ impl FieldsContext {
         definitions: &[(&str, &str)],
         entities: &[(&str, &str)],
     ) -> Result<FieldsContext> {
-        let root = writable_root.into();
         let mut ctx = FieldsContext {
-            root,
+            root: writable_root.into(),
             fields: Vec::new(),
             entities: Vec::new(),
             name_index: HashMap::new(),
             id_index: HashMap::new(),
             entity_index: HashMap::new(),
         };
-
-        for (name, yaml) in definitions {
-            match serde_yaml_ng::from_str::<FieldDef>(yaml) {
-                Ok(def) => {
-                    let idx = ctx.fields.len();
-                    // Later entries override earlier ones (same name)
-                    if let Some(&old_idx) = ctx.name_index.get(&def.name) {
-                        let old_id = ctx.fields[old_idx].id.clone();
-                        ctx.id_index.remove(&old_id);
-                        ctx.fields[old_idx] = def.clone();
-                        ctx.id_index.insert(def.id.clone(), old_idx);
-                    } else {
-                        ctx.name_index.insert(def.name.clone(), idx);
-                        ctx.id_index.insert(def.id.clone(), idx);
-                        ctx.fields.push(def);
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!(name = %name, %e, "skipping invalid field definition");
-                }
-            }
-        }
-
-        for (name, yaml) in entities {
-            match serde_yaml_ng::from_str::<EntityDef>(yaml) {
-                Ok(def) => {
-                    let idx = ctx.entities.len();
-                    if let Some(&old_idx) = ctx.entity_index.get(&def.name) {
-                        ctx.entities[old_idx] = def;
-                    } else {
-                        ctx.entity_index.insert(def.name.clone(), idx);
-                        ctx.entities.push(def);
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!(name = %name, %e, "skipping invalid entity definition");
-                }
-            }
-        }
-
+        ctx.index_field_yaml(definitions);
+        ctx.index_entity_yaml(entities);
         debug!(
             fields = ctx.fields.len(),
             entities = ctx.entities.len(),
             "fields context built from YAML sources"
         );
-
         Ok(ctx)
+    }
+
+    /// Parse a batch of field YAML entries and merge them into the context.
+    /// Invalid entries are logged and skipped; later entries override earlier
+    /// ones that share the same `name`.
+    fn index_field_yaml(&mut self, definitions: &[(&str, &str)]) {
+        for (name, yaml) in definitions {
+            match serde_yaml_ng::from_str::<FieldDef>(yaml) {
+                Ok(def) => self.upsert_field(def),
+                Err(e) => {
+                    tracing::warn!(name = %name, %e, "skipping invalid field definition");
+                }
+            }
+        }
+    }
+
+    /// Parse a batch of entity YAML entries and merge them into the context.
+    /// Invalid entries are logged and skipped; later entries override earlier
+    /// ones that share the same `name`.
+    fn index_entity_yaml(&mut self, entities: &[(&str, &str)]) {
+        for (name, yaml) in entities {
+            match serde_yaml_ng::from_str::<EntityDef>(yaml) {
+                Ok(def) => self.upsert_entity(def),
+                Err(e) => {
+                    tracing::warn!(name = %name, %e, "skipping invalid entity definition");
+                }
+            }
+        }
+    }
+
+    /// Insert or replace a field definition, keeping both name and id indexes
+    /// consistent with the fields vector.
+    fn upsert_field(&mut self, def: FieldDef) {
+        if let Some(&old_idx) = self.name_index.get(&def.name) {
+            let old_id = self.fields[old_idx].id.clone();
+            self.id_index.remove(&old_id);
+            self.id_index.insert(def.id.clone(), old_idx);
+            self.fields[old_idx] = def;
+        } else {
+            let idx = self.fields.len();
+            self.name_index.insert(def.name.clone(), idx);
+            self.id_index.insert(def.id.clone(), idx);
+            self.fields.push(def);
+        }
+    }
+
+    /// Insert or replace an entity definition, keeping `entity_index` in sync.
+    fn upsert_entity(&mut self, def: EntityDef) {
+        if let Some(&old_idx) = self.entity_index.get(&def.name) {
+            self.entities[old_idx] = def;
+        } else {
+            let idx = self.entities.len();
+            self.entity_index.insert(def.name.clone(), idx);
+            self.entities.push(def);
+        }
     }
 
     /// Open or create a fields directory. Returns a builder.
@@ -819,6 +834,7 @@ type:
             icon: None,
             body_field: Some("body".into()),
             fields: vec!["title".into(), "status".into()],
+            sections: vec![],
             validate: None,
             mention_prefix: None,
             mention_display_field: None,
@@ -850,6 +866,7 @@ type:
             icon: None,
             body_field: None,
             fields: vec!["title".into(), "status".into(), "missing".into()],
+            sections: vec![],
             validate: None,
             mention_prefix: None,
             mention_display_field: None,
@@ -879,6 +896,7 @@ type:
                 icon: None,
                 body_field: Some("body".into()),
                 fields: vec!["title".into(), "status".into()],
+                sections: vec![],
                 validate: None,
                 mention_prefix: None,
                 mention_display_field: None,
@@ -1142,6 +1160,7 @@ fields:
             icon: None,
             body_field: None,
             fields: vec!["title".into()],
+            sections: vec![],
             validate: None,
             mention_prefix: None,
             mention_display_field: None,
@@ -1289,6 +1308,7 @@ fields:
             icon: None,
             body_field: Some("body".into()),
             fields: vec!["title".into()],
+            sections: vec![],
             validate: None,
             mention_prefix: None,
             mention_display_field: None,
@@ -1305,6 +1325,7 @@ fields:
             icon: None,
             body_field: Some("body".into()),
             fields: vec!["title".into(), "status".into(), "priority".into()],
+            sections: vec![],
             validate: None,
             mention_prefix: None,
             mention_display_field: None,
@@ -1331,6 +1352,7 @@ fields:
                 icon: None,
                 body_field: Some("body".into()),
                 fields: vec!["title".into()],
+                sections: vec![],
                 validate: None,
                 mention_prefix: None,
                 mention_display_field: None,
@@ -1493,6 +1515,7 @@ fields:
                 icon: None,
                 body_field: None,
                 fields: vec![],
+                sections: vec![],
                 validate: None,
                 mention_prefix: None,
                 mention_display_field: None,

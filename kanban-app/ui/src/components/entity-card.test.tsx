@@ -358,6 +358,180 @@ describe("EntityCard", () => {
     });
   });
 
+  describe("declarative on_card sections", () => {
+    // Schema declaring three sections: header and dates are on_card, body is not.
+    const SECTIONED_SCHEMA = {
+      entity: {
+        name: "task",
+        body_field: "body",
+        fields: ["title", "body", "due", "scheduled"],
+        sections: [
+          { id: "header", on_card: true },
+          { id: "body" },
+          { id: "dates", label: "Dates", on_card: true },
+        ],
+        commands: [
+          {
+            id: "ui.inspect",
+            name: "Inspect {{entity.type}}",
+            context_menu: true,
+          },
+        ],
+      },
+      fields: [
+        {
+          id: "f1",
+          name: "title",
+          type: { kind: "markdown", single_line: true },
+          editor: "markdown",
+          display: "text",
+          section: "header",
+        },
+        {
+          id: "f2",
+          name: "body",
+          type: { kind: "markdown", single_line: false },
+          editor: "markdown",
+          display: "markdown",
+          section: "body",
+        },
+        {
+          id: "f3",
+          name: "due",
+          type: { kind: "date" },
+          editor: "date",
+          display: "date",
+          icon: "calendar",
+          section: "dates",
+        },
+        {
+          id: "f4",
+          name: "scheduled",
+          type: { kind: "date" },
+          editor: "date",
+          display: "date",
+          icon: "calendar-clock",
+          section: "dates",
+        },
+      ],
+    };
+
+    it("renders on_card sections below header with a divider; non-on_card sections stay off", async () => {
+      // Swap the schema mock for this test so the card uses sections. The
+      // `any` cast matches the original mockInvoke's signature, which infers
+      // a return-type union from its declaration site — our sectioned schema
+      // shape isn't part of that union by construction, so we widen here.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      mockInvoke.mockImplementation(((...args: any[]) => {
+        if (args[0] === "list_entity_types") return Promise.resolve(["task"]);
+        if (args[0] === "get_entity_schema")
+          return Promise.resolve(SECTIONED_SCHEMA);
+        if (args[0] === "get_ui_state")
+          return Promise.resolve({
+            palette_open: false,
+            palette_mode: "command",
+            keymap_mode: "cua",
+            scope_chain: [],
+            open_boards: [],
+            windows: {},
+            recent_boards: [],
+          });
+        if (args[0] === "update_entity_field")
+          return Promise.resolve({ id: "task-1" });
+        if (args[0] === "list_commands_for_scope") return Promise.resolve([]);
+        if (args[0] === "show_context_menu") return Promise.resolve();
+        return Promise.resolve("ok");
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      }) as any);
+
+      currentEntity = makeEntity({
+        title: "Sectioned task",
+        body: "Body text should NOT render on card",
+        due: "2026-05-01",
+        scheduled: "2026-04-20",
+      });
+      const { container } = await renderWithProvider(
+        <EntityCard entity={currentEntity} />,
+      );
+
+      // Header section renders with its title field.
+      const headerSection = container.querySelector(
+        '[data-testid="card-section-header"]',
+      );
+      expect(headerSection).toBeTruthy();
+      expect(screen.getByText("Sectioned task")).toBeTruthy();
+
+      // Dates section renders below header and contains both date fields.
+      const datesSection = container.querySelector(
+        '[data-testid="card-section-dates"]',
+      );
+      expect(datesSection).toBeTruthy();
+
+      // Body section (on_card: false) does NOT render on the card.
+      expect(
+        container.querySelector('[data-testid="card-section-body"]'),
+      ).toBeNull();
+      // Body text should not appear in the card.
+      expect(
+        screen.queryByText("Body text should NOT render on card"),
+      ).toBeNull();
+
+      // A divider sits between header and dates (only one divider since only
+      // two on_card sections render).
+      const dividers = container.querySelectorAll(
+        "div.my-1\\.5.h-px.bg-border\\/50",
+      );
+      expect(dividers.length).toBe(1);
+
+      // Cards never render section labels (labels belong to the inspector).
+      expect(
+        container.querySelector(
+          '[data-testid="inspector-section-label-dates"]',
+        ),
+      ).toBeNull();
+    });
+
+    it("when entity declares no sections, only the header section renders (backcompat)", async () => {
+      // TASK_SCHEMA at module scope has no `sections` key — restore that mock.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      mockInvoke.mockImplementation(((...args: any[]) => {
+        if (args[0] === "list_entity_types") return Promise.resolve(["task"]);
+        if (args[0] === "get_entity_schema") return Promise.resolve(TASK_SCHEMA);
+        if (args[0] === "get_ui_state")
+          return Promise.resolve({
+            palette_open: false,
+            palette_mode: "command",
+            keymap_mode: "cua",
+            scope_chain: [],
+            open_boards: [],
+            windows: {},
+            recent_boards: [],
+          });
+        if (args[0] === "update_entity_field")
+          return Promise.resolve({ id: "task-1" });
+        if (args[0] === "list_commands_for_scope") return Promise.resolve([]);
+        if (args[0] === "show_context_menu") return Promise.resolve();
+        return Promise.resolve("ok");
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      }) as any);
+      currentEntity = makeEntity();
+      const { container } = await renderWithProvider(
+        <EntityCard entity={currentEntity} />,
+      );
+      expect(
+        container.querySelector('[data-testid="card-section-header"]'),
+      ).toBeTruthy();
+      // No other card-section-* elements should exist.
+      const otherSections = Array.from(
+        container.querySelectorAll("[data-testid^='card-section-']"),
+      ).filter(
+        (el) =>
+          el.getAttribute("data-testid") !== "card-section-header",
+      );
+      expect(otherSections.length).toBe(0);
+    });
+  });
+
   describe("progress bar", () => {
     it("shows progress bar when progress field has items", async () => {
       currentEntity = makeEntity({

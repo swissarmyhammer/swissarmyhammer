@@ -2,7 +2,7 @@
 
 use crate::context::KanbanContext;
 use crate::error::{KanbanError, Result};
-use crate::task::shared::auto_create_body_tags;
+use crate::task::shared::{auto_create_body_tags, parse_iso8601_date};
 use crate::task_helpers::task_entity_to_json;
 use crate::types::{ActorId, Ordinal, TaskId};
 use serde::{Deserialize, Serialize};
@@ -39,6 +39,16 @@ pub struct AddTask {
     pub depends_on: Vec<TaskId>,
     /// Project this task belongs to
     pub project: Option<String>,
+    /// Hard deadline date (ISO 8601 date string, e.g. "2026-04-30").
+    ///
+    /// Optional user-set date stored alongside the task. Empty string is
+    /// rejected — use `None` (omit the field) to leave it unset at creation.
+    pub due: Option<String>,
+    /// Earliest start date (ISO 8601 date string, e.g. "2026-04-15").
+    ///
+    /// Optional user-set date stored alongside the task. Empty string is
+    /// rejected — use `None` (omit the field) to leave it unset at creation.
+    pub scheduled: Option<String>,
 }
 
 impl AddTask {
@@ -52,6 +62,8 @@ impl AddTask {
             assignees: Vec::new(),
             depends_on: Vec::new(),
             project: None,
+            due: None,
+            scheduled: None,
         }
     }
 
@@ -83,6 +95,18 @@ impl AddTask {
     /// Set the project
     pub fn with_project(mut self, project: impl Into<String>) -> Self {
         self.project = Some(project.into());
+        self
+    }
+
+    /// Set the hard deadline date (ISO 8601).
+    pub fn with_due(mut self, due: impl Into<String>) -> Self {
+        self.due = Some(due.into());
+        self
+    }
+
+    /// Set the earliest start date (ISO 8601).
+    pub fn with_scheduled(mut self, scheduled: impl Into<String>) -> Self {
+        self.scheduled = Some(scheduled.into());
         self
     }
 
@@ -123,6 +147,55 @@ impl AddTask {
             }
         }
     }
+
+    /// Build the task entity from this command's fields.
+    ///
+    /// Resolves position (column + ordinal), applies all user-set fields,
+    /// and parses any ISO 8601 date inputs. The resulting entity is not yet
+    /// persisted — the caller owns the write.
+    async fn build_entity(&self, ectx: &swissarmyhammer_entity::EntityContext) -> Result<Entity> {
+        let column = self.resolve_column(ectx).await?;
+        let ordinal = self.resolve_ordinal(ectx, &column).await?;
+
+        let task_id = TaskId::new();
+        let mut entity = Entity::new("task", task_id.as_str());
+        entity.set("title", json!(self.title));
+        entity.set("body", json!(self.description.clone().unwrap_or_default()));
+        entity.set("position_column", json!(column));
+        entity.set("position_ordinal", json!(ordinal));
+
+        if !self.assignees.is_empty() {
+            entity.set("assignees", serde_json::to_value(&self.assignees)?);
+        }
+        if !self.depends_on.is_empty() {
+            entity.set("depends_on", serde_json::to_value(&self.depends_on)?);
+        }
+        if let Some(ref project) = self.project {
+            entity.set("project", json!(project));
+        }
+        if let Some(ref due) = self.due {
+            entity.set("due", json!(parse_iso8601_date(due, "due")?));
+        }
+        if let Some(ref scheduled) = self.scheduled {
+            entity.set(
+                "scheduled",
+                json!(parse_iso8601_date(scheduled, "scheduled")?),
+            );
+        }
+
+        Ok(entity)
+    }
+
+    /// Persist the task entity and run post-write hooks (auto-tag creation).
+    async fn persist(
+        &self,
+        ectx: &swissarmyhammer_entity::EntityContext,
+        entity: &Entity,
+    ) -> Result<()> {
+        ectx.write(entity).await?;
+        auto_create_body_tags(ectx, entity).await?;
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -133,28 +206,8 @@ impl Execute<KanbanContext, KanbanError> for AddTask {
 
         let result: Result<Value> = async {
             let ectx = ctx.entity_context().await?;
-            let column = self.resolve_column(&ectx).await?;
-            let ordinal = self.resolve_ordinal(&ectx, &column).await?;
-
-            let task_id = TaskId::new();
-            let mut entity = Entity::new("task", task_id.as_str());
-            entity.set("title", json!(self.title));
-            entity.set("body", json!(self.description.clone().unwrap_or_default()));
-            entity.set("position_column", json!(column));
-            entity.set("position_ordinal", json!(ordinal));
-
-            if !self.assignees.is_empty() {
-                entity.set("assignees", serde_json::to_value(&self.assignees)?);
-            }
-            if !self.depends_on.is_empty() {
-                entity.set("depends_on", serde_json::to_value(&self.depends_on)?);
-            }
-            if let Some(ref project) = self.project {
-                entity.set("project", json!(project));
-            }
-
-            ectx.write(&entity).await?;
-            auto_create_body_tags(&ectx, &entity).await?;
+            let entity = self.build_entity(&ectx).await?;
+            self.persist(&ectx, &entity).await?;
             Ok(task_entity_to_json(&entity))
         }
         .await;
@@ -366,5 +419,152 @@ mod tests {
             project_id,
             "task should have the project set"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Date field tests
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_add_task_emits_null_dates_by_default() {
+        let (_temp, ctx) = setup().await;
+
+        let result = AddTask::new("Task with no dates")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        // User-set dates must be null when unset.
+        assert!(result["due"].is_null(), "due should be null when unset");
+        assert!(
+            result["scheduled"].is_null(),
+            "scheduled should be null when unset"
+        );
+        // System dates may be null immediately on write (no changelog read
+        // happens until the next read), but the field keys must be present.
+        assert!(result.get("created").is_some(), "created key should exist");
+        assert!(result.get("updated").is_some(), "updated key should exist");
+        assert!(result.get("started").is_some(), "started key should exist");
+        assert!(
+            result.get("completed").is_some(),
+            "completed key should exist"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_add_task_with_due_and_scheduled() {
+        let (_temp, ctx) = setup().await;
+
+        let result = AddTask::new("Task with dates")
+            .with_due("2026-04-30")
+            .with_scheduled("2026-04-15")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        assert_eq!(result["due"], "2026-04-30");
+        assert_eq!(result["scheduled"], "2026-04-15");
+    }
+
+    #[tokio::test]
+    async fn test_add_task_rejects_invalid_due_date() {
+        let (_temp, ctx) = setup().await;
+
+        let result = AddTask::new("Task with bad date")
+            .with_due("not-a-date")
+            .execute(&ctx)
+            .await
+            .into_result();
+
+        assert!(result.is_err(), "invalid date should be rejected");
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("due"),
+            "error should mention the failing field, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_add_task_rfc3339_datetime_normalized_to_date() {
+        let (_temp, ctx) = setup().await;
+
+        let result = AddTask::new("RFC3339 task")
+            .with_scheduled("2026-05-01T08:00:00Z")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        assert_eq!(
+            result["scheduled"], "2026-05-01",
+            "RFC 3339 datetime should be truncated to the date portion"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_add_task_empty_due_is_rejected() {
+        // On AddTask, empty string has no "clear" semantics (the task is
+        // new) — it must be rejected so callers can't paper over mistakes.
+        let (_temp, ctx) = setup().await;
+
+        let result = AddTask::new("Empty due task")
+            .with_due("")
+            .execute(&ctx)
+            .await
+            .into_result();
+
+        assert!(
+            result.is_err(),
+            "empty string due should be rejected on AddTask"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_add_task_does_not_accept_system_date_params() {
+        // The AddTask struct does not declare created/updated/started/completed.
+        // Feeding them through JSON deserialization must not write those fields —
+        // under any name, anywhere in the stored entity.
+        let (_temp, ctx) = setup().await;
+
+        // Use a distinctive sentinel date so the search is unambiguous.
+        let sentinel = "1999-01-01";
+        let cmd_json = serde_json::json!({
+            "title": "Sneaky task",
+            "created": sentinel,
+            "updated": sentinel,
+            "started": sentinel,
+            "completed": sentinel,
+        });
+        let cmd: AddTask = serde_json::from_value(cmd_json).unwrap();
+        let result = cmd.execute(&ctx).await.into_result().unwrap();
+
+        // None of the four system date fields in the enriched output may equal
+        // the sentinel — that catches the obvious case.
+        for field in ["created", "updated", "started", "completed"] {
+            if let Some(value) = result[field].as_str() {
+                assert_ne!(
+                    value, sentinel,
+                    "{field} must not be settable via AddTask params"
+                );
+            }
+        }
+
+        // Stronger check: read the raw stored entity and scan every field
+        // value for the sentinel. A misrouted system date could land under
+        // any field name, so searching the whole entity catches the subtler
+        // case the per-field assertions miss.
+        let id = result["id"].as_str().unwrap();
+        let ectx = ctx.entity_context().await.unwrap();
+        let stored = ectx.read("task", id).await.unwrap();
+        for (field_name, value) in &stored.fields {
+            let serialized = value.to_string();
+            assert!(
+                !serialized.contains(sentinel),
+                "system date sentinel {sentinel:?} must not appear in any \
+                 stored entity field, but was found in {field_name:?} = {serialized}"
+            );
+        }
     }
 }

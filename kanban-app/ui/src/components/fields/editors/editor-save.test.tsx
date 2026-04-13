@@ -183,6 +183,9 @@ const TEST_ENTITY: Entity = {
     position_column: "todo",
     position_ordinal: "ffff8000",
     virtual_tags: ["READY"],
+    status_date: { kind: "created", timestamp: "2026-04-10T00:00:00Z" },
+    due: "2026-05-01",
+    scheduled: "2026-04-20",
   },
 };
 
@@ -328,53 +331,103 @@ describe("Field save behavior", () => {
         KEYMAP_MODE = keymap;
       });
 
+      // One matrix cell is a known gap: multi-select + vim + Enter. The CM6
+      // vim keymap handles Enter in the capture phase before our submit
+      // extension fires, so the harness's native KeyboardEvent dispatch
+      // misses the commit path. Advertised below via `it.skip` so the test
+      // runner reports it as skipped rather than silently dropped.
+      const skipMultiSelect = keymap === "vim";
+
       it.each(exitPaths)("exit: %s", async (exit) => {
-        const editableFields = editableFieldsFor("task");
+        const editableFields = editableFieldsFor("task").filter(
+          (f) =>
+            !(skipMultiSelect && exit === "Enter" && f.editor === "multi-select"),
+        );
         const failures: string[] = [];
 
         for (const fieldDef of editableFields) {
-          // Multi-select + vim + Enter: capture-phase listener timing
-          // differs from test expectations. Skip this specific combo.
-          if (
-            fieldDef.editor === "multi-select" &&
-            keymap === "vim" &&
-            exit === "Enter"
-          ) {
-            continue;
-          }
-
           const { container, unmount } = renderField(fieldDef, mode, true);
           await settle();
           mockInvoke.mockClear();
 
-          const target =
-            container.querySelector(".cm-content") ??
-            container.querySelector("input") ??
-            container.querySelector("select") ??
-            container.firstElementChild;
-
-          if (target) {
+          // Popover-based editors (date) render their CM6 input inside a
+          // Radix portal attached to document.body. The save/cancel path
+          // runs through the PopoverContent's Escape handler and the
+          // Popover.onOpenChange commit. Drive them through that native
+          // surface instead of the generic contenteditable target.
+          if (fieldDef.editor === "date") {
+            const popover = document.body.querySelector<HTMLElement>(
+              "[data-slot='popover-content'], [data-radix-popper-content-wrapper]",
+            );
+            const cm = popover?.querySelector<HTMLElement>(".cm-content");
             if (exit === "blur") {
-              // In a real browser, ensure the element is focused first so
-              // .blur() actually fires a blur event. Then unmount to flush
-              // the debounced save (1000ms debounce would be too slow to wait).
+              // Real UX: user clicks outside → Popover.onOpenChange(false)
+              // → commitResolved fires and saves the currently-resolved
+              // value. Simulate by firing pointerdown on document.body
+              // outside the popover.
               await act(async () => {
-                (target as HTMLElement).focus();
+                document.body.dispatchEvent(
+                  new PointerEvent("pointerdown", {
+                    bubbles: true,
+                    pointerType: "mouse",
+                  }),
+                );
               });
-              await act(async () => {
-                (target as HTMLElement).blur();
-                await new Promise((r) => setTimeout(r, 50));
-              });
-              // Unmount flushes pending debounced saves immediately
+              await settle(50);
               unmount();
               await settle(50);
-            } else {
-              await act(async () => fireEvent.keyDown(target, { key: exit }));
+            } else if (cm) {
+              // Enter/Escape go through the CM6 keymap, which listens on
+              // the contentDOM. Dispatch there so CM's keymap fires first;
+              // for Escape the event then bubbles to Radix DismissableLayer
+              // (closing the popover) but DateEditor's cancel/commit refs
+              // will have already run and set committedRef, so the
+              // onOpenChange → commitResolved chain short-circuits.
+              await act(async () => cm.focus());
+              await act(async () =>
+                cm.dispatchEvent(
+                  new KeyboardEvent("keydown", {
+                    key: exit,
+                    bubbles: true,
+                    cancelable: true,
+                  }),
+                ),
+              );
               await settle();
+              unmount();
+            } else {
               unmount();
             }
           } else {
-            unmount();
+            const target =
+              container.querySelector<HTMLElement>(".cm-content") ??
+              container.querySelector<HTMLElement>("input") ??
+              container.querySelector<HTMLElement>("select") ??
+              (container.firstElementChild as HTMLElement | null);
+
+            if (target) {
+              if (exit === "blur") {
+                // In a real browser, ensure the element is focused first so
+                // .blur() actually fires a blur event. Then unmount to flush
+                // the debounced save (1000ms debounce would be too slow to wait).
+                await act(async () => {
+                  target.focus();
+                });
+                await act(async () => {
+                  target.blur();
+                  await new Promise((r) => setTimeout(r, 50));
+                });
+                // Unmount flushes pending debounced saves immediately
+                unmount();
+                await settle(50);
+              } else {
+                await act(async () => fireEvent.keyDown(target, { key: exit }));
+                await settle();
+                unmount();
+              }
+            } else {
+              unmount();
+            }
           }
 
           const shouldSave = expectsSave(keymap, exit);
@@ -407,6 +460,15 @@ describe("Field save behavior", () => {
           `${mode} / ${keymap} / ${exit} failures:\n${failures.join("\n")}`,
         ).toHaveLength(0);
       });
+
+      // Advertised skip — pairs with the `skipMultiSelect` filter above.
+      // When the kanban card lands, delete this and the filter.
+      if (skipMultiSelect) {
+        it.skip(
+          "exit: Enter × editor: multi-select — TODO(kanban:01KP2DQW57CAXBGC5GT68PFYPB) harness cannot drive CM6 vim capture-phase Enter",
+          () => {},
+        );
+      }
     });
   });
 });
@@ -478,11 +540,17 @@ describe("Entity field coverage", () => {
         const { container, unmount } = renderField(fieldDef, mode, true);
         await settle();
 
+        // Popover/Select-based editors (date, select) render their editor
+        // surface inside a Radix portal attached to document.body, so we
+        // must look there too — not just in the React render container.
         const hasEditor =
           container.querySelector(".cm-editor") ??
           container.querySelector("input") ??
           container.querySelector("select") ??
-          container.querySelector("[data-radix-popper-content-wrapper]");
+          container.querySelector("[role='combobox']") ??
+          document.body.querySelector("[data-radix-popper-content-wrapper]") ??
+          document.body.querySelector("[data-radix-portal]") ??
+          document.body.querySelector(".cm-editor");
 
         if (!hasEditor) {
           missing.push(`${fieldDef.name} (${fieldDef.editor})`);

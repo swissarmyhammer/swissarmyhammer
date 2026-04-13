@@ -1,0 +1,16 @@
+# Sentinel ID: builtin field definitions use zero-padded IDs that sort before
+# real ULIDs. The last two characters are the builtin field code.
+id: "00000000000000000000000015"
+name: started
+description: Timestamp when the task was first moved to an active column
+type:
+  kind: computed
+  derive: derive-started
+  depends_on:
+    - _changelog
+icon: play
+editor: none
+display: date
+sort: datetime
+width: 120
+section: system

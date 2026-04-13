@@ -1,5 +1,12 @@
 {
-  "mcpServers": {}
+  "mcpServers": {
+    "code-context": {
+      "args": [
+        "serve"
+      ],
+      "command": "code-context"
+    }
+  }
 }
  "code-context": {
       "args": [

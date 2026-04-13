@@ -379,12 +379,42 @@ pub fn enrich_all_task_entities(
     }
 }
 
+/// Names of the task date fields that are surfaced in JSON output.
+///
+/// User-set dates (`due`, `scheduled`) come from stored entity fields; system
+/// dates (`created`, `updated`, `started`, `completed`) come from the
+/// computed-field derivation pipeline during `EntityContext::read()`. Each
+/// slot is emitted as either the stored/derived value or `null` when unset,
+/// so API consumers can rely on a stable field shape.
+const TASK_DATE_FIELDS: &[&str] = &[
+    "due",
+    "scheduled",
+    "created",
+    "updated",
+    "started",
+    "completed",
+];
+
+/// Copy each date field from `entity` into `result`, defaulting to null.
+///
+/// Ensures the output JSON always contains every known date key so consumers
+/// can distinguish "unset" (explicit null) from "missing because of an older
+/// schema" — the latter never happens for freshly-read entities.
+fn include_date_fields(entity: &Entity, result: &mut Value) {
+    for name in TASK_DATE_FIELDS {
+        result[*name] = entity.get(name).cloned().unwrap_or(Value::Null);
+    }
+}
+
 /// Convert a task Entity to the JSON format expected by the API/frontend.
 ///
 /// Transforms flat entity fields into the nested format:
 /// - "body" → "description" (rename for backward compat)
 /// - position_column/position_ordinal → nested "position" object
 /// - Adds computed fields: tags, progress
+/// - Emits user-set dates (`due`, `scheduled`) and system dates (`created`,
+///   `updated`, `started`, `completed`). Each is the stored/derived value or
+///   `null` when unset.
 pub fn task_entity_to_json(entity: &Entity) -> Value {
     let tags = task_tags(entity);
     let progress = task_progress(entity);
@@ -425,6 +455,8 @@ pub fn task_entity_to_json(entity: &Entity) -> Value {
         result["project"] = Value::Null;
     }
 
+    include_date_fields(entity, &mut result);
+
     result
 }
 
@@ -443,30 +475,6 @@ pub fn task_entity_to_rich_json(entity: &Entity) -> Value {
     result["filter_tags"] = json!(entity.get_string_list("filter_tags"));
 
     result
-}
-
-/// Auto-create Tag entities for any #tag patterns found in a task's body.
-///
-/// Parses the body text for `#tag` patterns, checks each against existing
-/// tag entities, and creates new tag entities for any that don't exist yet.
-/// Returns the list of tag names found.
-pub async fn auto_create_body_tags(
-    entity: &Entity,
-    ectx: &swissarmyhammer_entity::EntityContext,
-) -> crate::error::Result<Vec<String>> {
-    let body = entity.get_str("body").unwrap_or("");
-    let tags = crate::tag_parser::parse_tags(body);
-    for tag_name in &tags {
-        if !crate::tag::tag_name_exists_entity(ectx, tag_name).await {
-            let color = crate::auto_color::auto_color(tag_name).to_string();
-            let tag_id = ulid::Ulid::new().to_string();
-            let mut tag_entity = Entity::new("tag", tag_id.as_str());
-            tag_entity.set("tag_name", json!(tag_name));
-            tag_entity.set("color", json!(color));
-            ectx.write(&tag_entity).await?;
-        }
-    }
-    Ok(tags)
 }
 
 /// Adapter that maps filter DSL atoms to enriched task entity fields.

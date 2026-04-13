@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KNM7Q14EBEW0M6ZHBVTNHGQ2
-position_column: todo
-position_ordinal: '9680'
+position_column: done
+position_ordinal: ffffffffffffffffffffffbc80
 title: Register date derivation functions in kanban_compute_engine()
 ---
 ## What
@@ -31,22 +31,22 @@ Use `register_aggregate` for started/completed so they can query columns. Use si
 - `swissarmyhammer-kanban/src/defaults.rs` — register four new derivations
 
 ## Acceptance Criteria
-- [ ] `derive-created` returns timestamp of first changelog entry
-- [ ] `derive-updated` returns timestamp of last changelog entry
-- [ ] `derive-started` returns timestamp of first move to non-first column, null if never moved
-- [ ] `derive-completed` returns timestamp of last move to terminal column, null if not in done or never completed
-- [ ] All four derivations handle empty changelog gracefully (return null)
-- [ ] `all_builtin_computed_fields_have_registered_derivations` test passes
+- [x] `derive-created` returns timestamp of first changelog entry
+- [x] `derive-updated` returns timestamp of last changelog entry
+- [x] `derive-started` returns timestamp of first move to non-first column, null if never moved
+- [x] `derive-completed` returns timestamp of last move to terminal column, null if not in done or never completed
+- [x] All four derivations handle empty changelog gracefully (return null)
+- [x] `all_builtin_computed_fields_have_registered_derivations` test passes
 
 ## Tests
-- [ ] Test `derive-created` with mock changelog entries → returns first entry timestamp
-- [ ] Test `derive-updated` with mock changelog → returns last entry timestamp
-- [ ] Test `derive-started` with changelog showing todo→doing transition → returns doing entry timestamp
-- [ ] Test `derive-started` with task never moved → returns null
-- [ ] Test `derive-completed` with changelog showing doing→done → returns done entry timestamp
-- [ ] Test `derive-completed` with task moved done→doing (reopened) → returns null
-- [ ] Test `derive-completed` with bounce: doing→done→doing→done → returns last done timestamp
-- [ ] `cargo test -p swissarmyhammer-kanban` passes
+- [x] Test `derive-created` with mock changelog entries → returns first entry timestamp
+- [x] Test `derive-updated` with mock changelog → returns last entry timestamp
+- [x] Test `derive-started` with changelog showing todo→doing transition → returns doing entry timestamp
+- [x] Test `derive-started` with task never moved → returns null
+- [x] Test `derive-completed` with changelog showing doing→done → returns done entry timestamp
+- [x] Test `derive-completed` with task moved done→doing (reopened) → returns null
+- [x] Test `derive-completed` with bounce: doing→done→doing→done → returns last done timestamp
+- [x] `cargo test -p swissarmyhammer-kanban` passes
 
 ## Workflow
 - Use `/tdd` — write failing tests first, then implement.

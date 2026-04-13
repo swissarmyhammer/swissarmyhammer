@@ -2,7 +2,7 @@
 
 use crate::context::KanbanContext;
 use crate::error::{KanbanError, Result};
-use crate::task::shared::auto_create_body_tags;
+use crate::task::shared::{auto_create_body_tags, parse_iso8601_date};
 use crate::task_helpers::task_entity_to_json;
 use crate::types::{ActorId, TaskId};
 use serde::{Deserialize, Serialize};
@@ -16,6 +16,14 @@ use swissarmyhammer_operations::{
 ///
 /// Tags are derived from `#tag` patterns in the description — edit the
 /// description to change tags.
+///
+/// The date fields use tri-state semantics so callers can distinguish
+/// "leave unchanged" from "clear":
+///
+/// - omitted / JSON `null` at the outer Option → field not touched
+/// - JSON `null` inside the outer Some (`Some(None)`) → field is cleared
+/// - JSON empty string → field is cleared (equivalent to `Some(None)`)
+/// - JSON ISO 8601 date string → field is parsed and set
 #[operation(verb = "update", noun = "task", description = "Update task properties")]
 #[derive(Debug, Deserialize, Serialize)]
 pub struct UpdateTask {
@@ -33,6 +41,16 @@ pub struct UpdateTask {
     pub attachments: Option<Value>,
     /// Set the project this task belongs to
     pub project: Option<String>,
+    /// Hard deadline date (ISO 8601).
+    ///
+    /// - `None` — field not touched.
+    /// - `Some(None)` or `Some(Some(""))` — field cleared.
+    /// - `Some(Some("YYYY-MM-DD"))` — field set after validation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub due: Option<Option<String>>,
+    /// Earliest start date (ISO 8601). Same tri-state semantics as `due`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scheduled: Option<Option<String>>,
 }
 
 impl UpdateTask {
@@ -46,6 +64,8 @@ impl UpdateTask {
             depends_on: None,
             attachments: None,
             project: None,
+            due: None,
+            scheduled: None,
         }
     }
 
@@ -85,8 +105,36 @@ impl UpdateTask {
         self
     }
 
+    /// Set the hard deadline date (ISO 8601).
+    pub fn with_due(mut self, due: impl Into<String>) -> Self {
+        self.due = Some(Some(due.into()));
+        self
+    }
+
+    /// Clear the hard deadline date.
+    pub fn clear_due(mut self) -> Self {
+        self.due = Some(None);
+        self
+    }
+
+    /// Set the earliest start date (ISO 8601).
+    pub fn with_scheduled(mut self, scheduled: impl Into<String>) -> Self {
+        self.scheduled = Some(Some(scheduled.into()));
+        self
+    }
+
+    /// Clear the earliest start date.
+    pub fn clear_scheduled(mut self) -> Self {
+        self.scheduled = Some(None);
+        self
+    }
+
     /// Apply all set fields to the entity.
-    fn apply_to(&self, entity: &mut Entity) -> std::result::Result<(), serde_json::Error> {
+    ///
+    /// For the date fields, an outer `Some(None)` or an inner empty string
+    /// clears the field; an inner non-empty string is parsed and, if valid,
+    /// normalized to `YYYY-MM-DD` and stored.
+    fn apply_to(&self, entity: &mut Entity) -> Result<()> {
         if let Some(title) = &self.title {
             entity.set("title", serde_json::json!(title));
         }
@@ -105,7 +153,41 @@ impl UpdateTask {
         if let Some(project) = &self.project {
             entity.set("project", serde_json::json!(project));
         }
+        apply_optional_date(entity, "due", &self.due)?;
+        apply_optional_date(entity, "scheduled", &self.scheduled)?;
         Ok(())
+    }
+}
+
+/// Apply a tri-state `Option<Option<String>>` update to a date field.
+///
+/// - `None`: leave the field untouched.
+/// - `Some(None)` or `Some(Some(raw))` where `raw` is empty or whitespace-only:
+///   remove the field from the entity. Trimming keeps the Rust builder path
+///   (`with_due("  ")`) in sync with the dispatch layer's `date_param_to_update`,
+///   which already treats whitespace-only strings as a clear.
+/// - `Some(Some(value))`: validate as ISO 8601 and store the normalized
+///   `YYYY-MM-DD` string.
+fn apply_optional_date(
+    entity: &mut Entity,
+    field: &str,
+    value: &Option<Option<String>>,
+) -> Result<()> {
+    match value {
+        None => Ok(()),
+        Some(None) => {
+            entity.remove(field);
+            Ok(())
+        }
+        Some(Some(raw)) if raw.trim().is_empty() => {
+            entity.remove(field);
+            Ok(())
+        }
+        Some(Some(raw)) => {
+            let normalized = parse_iso8601_date(raw, field)?;
+            entity.set(field, serde_json::json!(normalized));
+            Ok(())
+        }
     }
 }
 
@@ -390,5 +472,253 @@ mod tests {
         let dep_strs: Vec<&str> = deps.iter().filter_map(|v| v.as_str()).collect();
         assert!(dep_strs.contains(&id_a), "should contain task A");
         assert!(dep_strs.contains(&id_b), "should contain task B");
+    }
+
+    // -----------------------------------------------------------------------
+    // Date field tests
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_update_task_set_due_date() {
+        let (_temp, ctx) = setup().await;
+
+        let add = AddTask::new("Task")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let id = add["id"].as_str().unwrap();
+
+        let result = UpdateTask::new(id)
+            .with_due("2026-04-30")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        assert_eq!(result["due"], "2026-04-30");
+    }
+
+    #[tokio::test]
+    async fn test_update_task_set_scheduled_date() {
+        let (_temp, ctx) = setup().await;
+
+        let add = AddTask::new("Task")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let id = add["id"].as_str().unwrap();
+
+        let result = UpdateTask::new(id)
+            .with_scheduled("2026-04-15")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        assert_eq!(result["scheduled"], "2026-04-15");
+    }
+
+    #[tokio::test]
+    async fn test_update_task_clear_due_date() {
+        let (_temp, ctx) = setup().await;
+
+        // Add a task with a due date already set.
+        let add = AddTask::new("Task")
+            .with_due("2026-04-30")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let id = add["id"].as_str().unwrap();
+        assert_eq!(add["due"], "2026-04-30");
+
+        // Clear the due date.
+        let result = UpdateTask::new(id)
+            .clear_due()
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        assert!(result["due"].is_null(), "due should be null after clearing");
+    }
+
+    #[tokio::test]
+    async fn test_update_task_clear_scheduled_with_empty_string_json() {
+        let (_temp, ctx) = setup().await;
+
+        // Add a task with scheduled set.
+        let add = AddTask::new("Task")
+            .with_scheduled("2026-04-15")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let id = add["id"].as_str().unwrap();
+        assert_eq!(add["scheduled"], "2026-04-15");
+
+        // Use the JSON-level representation "" (empty string) to request a clear.
+        let cmd_json = serde_json::json!({
+            "id": id,
+            "scheduled": "",
+        });
+        let cmd: UpdateTask = serde_json::from_value(cmd_json).unwrap();
+        let result = cmd.execute(&ctx).await.into_result().unwrap();
+
+        assert!(
+            result["scheduled"].is_null(),
+            "scheduled should be null after empty-string clear"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_update_task_whitespace_only_date_clears_via_builder() {
+        // Whitespace-only date strings must be treated as "clear" by the Rust
+        // builder path (`with_due`/`with_scheduled`) so the builder agrees with
+        // the dispatch-layer `date_param_to_update`, which already trims before
+        // deciding between clear and set. Without this, MCP callers and Rust
+        // callers see different semantics for the same input.
+        let (_temp, ctx) = setup().await;
+
+        // Start with a due date present.
+        let add = AddTask::new("Task")
+            .with_due("2026-04-30")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let id = add["id"].as_str().unwrap();
+        assert_eq!(add["due"], "2026-04-30");
+
+        // Whitespace-only via the builder must clear, not error.
+        let result = UpdateTask::new(id)
+            .with_due("   ")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        assert!(
+            result["due"].is_null(),
+            "due should be null after whitespace-only clear via builder"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_update_task_rejects_invalid_date() {
+        let (_temp, ctx) = setup().await;
+
+        let add = AddTask::new("Task")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let id = add["id"].as_str().unwrap();
+
+        let result = UpdateTask::new(id)
+            .with_due("not-a-date")
+            .execute(&ctx)
+            .await
+            .into_result();
+
+        assert!(result.is_err(), "invalid date string should be rejected");
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("invalid") && err.contains("due"),
+            "error should mention which field was invalid, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_update_task_absent_date_field_preserves_value() {
+        let (_temp, ctx) = setup().await;
+
+        // Add with a due date; later update the title only — due must be preserved.
+        let add = AddTask::new("Task")
+            .with_due("2026-04-30")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let id = add["id"].as_str().unwrap();
+
+        let result = UpdateTask::new(id)
+            .with_title("Renamed")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        assert_eq!(result["title"], "Renamed");
+        assert_eq!(
+            result["due"], "2026-04-30",
+            "due date should remain when not touched"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_update_task_rfc3339_datetime_normalized_to_date() {
+        let (_temp, ctx) = setup().await;
+
+        let add = AddTask::new("Task")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let id = add["id"].as_str().unwrap();
+
+        let result = UpdateTask::new(id)
+            .with_due("2026-04-30T12:34:56Z")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        assert_eq!(
+            result["due"], "2026-04-30",
+            "RFC 3339 datetime should be truncated to the date portion"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_update_task_no_system_date_parameter_accepted() {
+        // System dates (created, updated, started, completed) are read-only.
+        // They are not parameters on UpdateTask, so any JSON trying to set
+        // them is silently ignored by serde's default behaviour (unknown
+        // fields are skipped). What matters is that these fields are not
+        // writable through the public API.
+        let (_temp, ctx) = setup().await;
+
+        let add = AddTask::new("Task")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let id = add["id"].as_str().unwrap();
+
+        // Any "extra" keys are ignored by serde unless serde_deny_unknown is set.
+        let cmd_json = serde_json::json!({
+            "id": id,
+            "title": "Updated",
+            "created": "1999-01-01",
+            "updated": "1999-01-01",
+            "started": "1999-01-01",
+            "completed": "1999-01-01",
+        });
+        let cmd: UpdateTask = serde_json::from_value(cmd_json).unwrap();
+        let result = cmd.execute(&ctx).await.into_result().unwrap();
+
+        assert_eq!(result["title"], "Updated");
+        // The system date fields are still present in output (derived from
+        // changelog) but must NOT equal "1999-01-01" because the update
+        // parameters for them are not defined on the struct.
+        if let Some(created) = result["created"].as_str() {
+            assert_ne!(
+                created, "1999-01-01",
+                "created must not be settable via public API"
+            );
+        }
     }
 }

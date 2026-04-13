@@ -11,5 +11,6 @@ import "./color-palette";
 import "./multi-select";
 import "./progress";
 import "./progress-ring";
+import "./status-date";
 import "./attachment";
 import "./virtual-badge-list";

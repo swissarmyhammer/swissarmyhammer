@@ -369,6 +369,13 @@ impl KanbanContext {
     /// Lazy-initialized on first access from builtin + local field definitions.
     /// Access the entity context, lazy-initializing on first call.
     ///
+    /// Registers an `EntityTypeStore`-backed `StoreHandle` for every entity
+    /// type known to the fields context. This ensures writes go through the
+    /// store pipeline — producing per-entity changelog entries — even when
+    /// the Tauri layer is not involved (e.g. MCP, CLI, or tests). Without
+    /// this, computed fields that depend on `_changelog` (like `created`,
+    /// `updated`, `started`, `completed`) would never see any history.
+    ///
     /// Returns `Arc<EntityContext>` so it can be set as a direct extension on
     /// `CommandContext` without going through `KanbanContext`.
     pub async fn entity_context(&self) -> Result<Arc<EntityContext>> {
@@ -376,10 +383,49 @@ impl KanbanContext {
             .entities
             .get_or_try_init(|| async {
                 let (_fields, entities) = Self::build_entity_context(&self.root)?;
-                Ok::<Arc<EntityContext>, KanbanError>(Arc::new(entities))
+                let entities = Arc::new(entities);
+                Self::register_entity_stores(&entities).await;
+                Ok::<Arc<EntityContext>, KanbanError>(entities)
             })
             .await?;
         Ok(Arc::clone(ectx))
+    }
+
+    /// Register an `EntityTypeStore`-backed `StoreHandle` for every entity
+    /// type in the fields context.
+    ///
+    /// When a store is registered, `EntityContext::write()` delegates I/O to
+    /// the store and appends a per-entity changelog entry. The changelog is
+    /// the input to the `_changelog` injection that powers system-date
+    /// derivations (`created`, `updated`, `started`, `completed`).
+    ///
+    /// Entity types that would produce an unsafe storage path (empty,
+    /// containing `/`, `\\`, or `..`) are skipped and logged as warnings —
+    /// the fields layer loads YAML from `builtin/entities` and
+    /// `.kanban/entities/`, and a malformed local override must not be able
+    /// to escape the workspace root.
+    async fn register_entity_stores(ectx: &EntityContext) {
+        let fields_ctx = ectx.fields();
+        for entity_def in fields_ctx.all_entities() {
+            let entity_type = entity_def.name.as_str();
+            if !is_safe_entity_type(entity_type) {
+                tracing::warn!(
+                    entity_type = entity_type,
+                    "refusing to register store handle for unsafe entity type name"
+                );
+                continue;
+            }
+            let field_defs = fields_ctx.fields_for_entity(entity_type);
+            let owned_defs: Vec<_> = field_defs.into_iter().cloned().collect();
+            let store = swissarmyhammer_entity::EntityTypeStore::new(
+                ectx.entity_dir(entity_type),
+                entity_type,
+                Arc::new(entity_def.clone()),
+                Arc::new(owned_defs),
+            );
+            let handle = Arc::new(swissarmyhammer_store::StoreHandle::new(Arc::new(store)));
+            ectx.register_store(entity_type, handle).await;
+        }
     }
 
     /// Build a FieldsContext + EntityContext from builtin and local field definitions.
@@ -549,6 +595,22 @@ impl KanbanContext {
             Err(_) => Err(KanbanError::LockBusy),
         }
     }
+}
+
+/// Validate that an entity type name is safe to use in storage paths.
+///
+/// Rejects empty strings and any name containing a path separator (`/` or
+/// `\\`), a parent-directory reference (`..`), or a leading `.`. Entity
+/// types are used to construct storage directories via `entity_dir()`
+/// (`{root}/{type}s/`); allowing traversal characters here would let a
+/// malformed entity YAML escape the workspace root.
+fn is_safe_entity_type(name: &str) -> bool {
+    !name.is_empty()
+        && !name.starts_with('.')
+        && !name.contains('/')
+        && !name.contains('\\')
+        && name != ".."
+        && !name.contains("..")
 }
 
 /// RAII lock guard - releases on drop
@@ -765,8 +827,8 @@ mod tests {
         let ctx = KanbanContext::open(&kanban_dir).await.unwrap();
         let fields = ctx.fields().unwrap();
 
-        // Should have all 23 built-in fields
-        assert_eq!(fields.all_fields().len(), 23);
+        // Should have all 30 built-in fields
+        assert_eq!(fields.all_fields().len(), 30);
 
         // Should have all 7 entity templates
         assert_eq!(fields.all_entities().len(), 7);
@@ -794,10 +856,10 @@ type:
             .await
             .unwrap();
 
-        // Open — should have 23 built-in + 1 custom = 24
+        // Open — should have 30 built-in + 1 custom = 31
         let ctx = KanbanContext::open(&kanban_dir).await.unwrap();
         let fields = ctx.fields().unwrap();
-        assert_eq!(fields.all_fields().len(), 24);
+        assert_eq!(fields.all_fields().len(), 31);
 
         // Custom field should be present
         let sprint = fields.get_field_by_name("sprint").unwrap();
@@ -831,7 +893,7 @@ type:
 
         // Entity fields should resolve to field definitions
         let task_fields = fields.fields_for_entity("task");
-        assert_eq!(task_fields.len(), 12); // title, tags, assignees, project, depends_on, progress, body, position_column, position_ordinal, attachments, virtual_tags, filter_tags
+        assert_eq!(task_fields.len(), 19); // title, tags, assignees, project, depends_on, progress, body, position_column, position_ordinal, attachments, virtual_tags, filter_tags, due, scheduled, created, updated, started, completed, status_date
     }
 
     // =========================================================================
@@ -1427,5 +1489,77 @@ card_fields:
         // No .kanban directory created
         let result = KanbanContext::find(temp.path());
         assert!(matches!(result, Err(KanbanError::NotInitialized { .. })));
+    }
+
+    // -------------------------------------------------------------------------
+    // is_safe_entity_type — traversal guard for store registration
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn is_safe_entity_type_accepts_normal_names() {
+        assert!(is_safe_entity_type("task"));
+        assert!(is_safe_entity_type("actor"));
+        assert!(is_safe_entity_type("my-entity"));
+        assert!(is_safe_entity_type("a"));
+    }
+
+    #[test]
+    fn is_safe_entity_type_rejects_empty_string() {
+        assert!(
+            !is_safe_entity_type(""),
+            "empty entity type must be rejected"
+        );
+    }
+
+    #[test]
+    fn is_safe_entity_type_rejects_leading_dot() {
+        assert!(
+            !is_safe_entity_type(".hidden"),
+            "leading dot must be rejected — would create a hidden directory"
+        );
+        assert!(
+            !is_safe_entity_type("."),
+            "single dot must be rejected — would resolve to the parent dir"
+        );
+    }
+
+    #[test]
+    fn is_safe_entity_type_rejects_parent_dir_reference() {
+        assert!(
+            !is_safe_entity_type(".."),
+            "parent-dir `..` must be rejected"
+        );
+    }
+
+    #[test]
+    fn is_safe_entity_type_rejects_forward_slash() {
+        assert!(
+            !is_safe_entity_type("foo/bar"),
+            "forward slash must be rejected — would traverse directories"
+        );
+    }
+
+    #[test]
+    fn is_safe_entity_type_rejects_back_slash() {
+        assert!(
+            !is_safe_entity_type("foo\\bar"),
+            "back slash must be rejected — would traverse directories on Windows"
+        );
+    }
+
+    #[test]
+    fn is_safe_entity_type_rejects_embedded_double_dot() {
+        assert!(
+            !is_safe_entity_type("foo..bar"),
+            "embedded `..` must be rejected — component-splitting varies across OSes"
+        );
+        assert!(
+            !is_safe_entity_type("..foo"),
+            "leading `..` substring must be rejected"
+        );
+        assert!(
+            !is_safe_entity_type("foo.."),
+            "trailing `..` substring must be rejected"
+        );
     }
 }

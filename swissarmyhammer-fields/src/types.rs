@@ -244,6 +244,33 @@ pub struct EntityCommand {
     pub scope: Option<String>,
 }
 
+/// A layout section for the entity inspector (and optionally the card).
+///
+/// Sections partition an entity's fields into ordered groups separated by
+/// dividers. Each field's `section` string names which section it belongs
+/// to; unknown section names fall back to `body` at render time.
+///
+/// When an entity omits `sections` entirely, renderers default to the
+/// implicit three-section layout (`header`, `body`, `footer`) for
+/// backwards compatibility with entities that predate declarative sections.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SectionDef {
+    /// Section id — matches the `section` value declared on fields.
+    pub id: String,
+    /// Optional human-readable label rendered above the section in the
+    /// inspector. Absent means no label heading is drawn. Cards never
+    /// render labels regardless of this value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    /// When true, the section's fields also appear on the entity card
+    /// (below the `header` section, separated by a thin divider). The
+    /// `header` section is implicitly `on_card`-eligible for backcompat
+    /// with the original card layout, but section authors should still
+    /// opt in explicitly when migrating an entity to declarative sections.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub on_card: bool,
+}
+
 /// An entity definition -- a template declaring which fields belong to an entity type.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct EntityDef {
@@ -255,6 +282,12 @@ pub struct EntityDef {
     pub body_field: Option<FieldName>,
     #[serde(default)]
     pub fields: Vec<FieldName>,
+    /// Ordered list of inspector sections. When present, the inspector and
+    /// card render fields grouped by the declared sections (with dividers
+    /// and optional labels). When empty/omitted, renderers fall back to
+    /// the implicit `header`/`body`/`footer` three-section layout.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sections: Vec<SectionDef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub validate: Option<String>,
     /// Single-character prefix for mentions in markdown (e.g. "#" for tags, "@" for actors).
@@ -546,6 +579,7 @@ type:
             mention_slug_field: None,
             search_display_field: None,
             commands: vec![],
+            sections: vec![],
         };
         let yaml = serde_yaml_ng::to_string(&entity).unwrap();
         let parsed: EntityDef = serde_yaml_ng::from_str(&yaml).unwrap();
@@ -565,11 +599,103 @@ type:
             mention_slug_field: None,
             search_display_field: None,
             commands: vec![],
+            sections: vec![],
         };
         let yaml = serde_yaml_ng::to_string(&entity).unwrap();
         assert!(!yaml.contains("body_field"));
+        // Empty `sections` must not appear in the serialized YAML so existing
+        // entities (tag, actor, board, column) round-trip unchanged.
+        assert!(!yaml.contains("sections"));
         let parsed: EntityDef = serde_yaml_ng::from_str(&yaml).unwrap();
         assert_eq!(entity, parsed);
+    }
+
+    #[test]
+    fn entity_def_sections_yaml_round_trip() {
+        // When an entity declares `sections`, the full ordered list — including
+        // per-section `label` and `on_card` overrides — must survive a round
+        // trip through YAML. Absent optionals (`label` on `header`) and the
+        // default-false `on_card` are elided on serialization.
+        let entity = EntityDef {
+            name: "task".into(),
+            icon: None,
+            body_field: Some("body".into()),
+            fields: vec!["title".into(), "body".into(), "due".into()],
+            sections: vec![
+                SectionDef {
+                    id: "header".into(),
+                    label: None,
+                    on_card: true,
+                },
+                SectionDef {
+                    id: "body".into(),
+                    label: None,
+                    on_card: false,
+                },
+                SectionDef {
+                    id: "dates".into(),
+                    label: Some("Dates".into()),
+                    on_card: true,
+                },
+            ],
+            validate: None,
+            mention_prefix: None,
+            mention_display_field: None,
+            mention_slug_field: None,
+            search_display_field: None,
+            commands: vec![],
+        };
+
+        let yaml = serde_yaml_ng::to_string(&entity).unwrap();
+        // Sanity-check emitted structure: we expect an ordered `sections:` list
+        // naming each section by id, with `Dates` label and two `on_card: true`
+        // flags. Leave the exact formatting to serde but require key presence.
+        assert!(yaml.contains("sections:"));
+        assert!(yaml.contains("id: header"));
+        assert!(yaml.contains("id: dates"));
+        assert!(yaml.contains("label: Dates"));
+        assert!(yaml.contains("on_card: true"));
+        // Default `on_card: false` on the body section must be elided.
+        let body_section_line_count = yaml.lines().filter(|l| l.contains("on_card")).count();
+        assert_eq!(
+            body_section_line_count, 2,
+            "only header and dates should serialize `on_card`; body defaults to false"
+        );
+
+        let parsed: EntityDef = serde_yaml_ng::from_str(&yaml).unwrap();
+        assert_eq!(entity, parsed);
+    }
+
+    #[test]
+    fn entity_def_sections_absent_deserializes_as_empty_vec() {
+        // Backcompat: existing YAML files (tag.yaml, actor.yaml, board.yaml,
+        // column.yaml) that predate the `sections` key must still parse.
+        // The deserialized value is an empty Vec, not an error.
+        let yaml_input = r#"
+name: tag
+fields:
+  - tag_name
+  - color
+"#;
+        let entity: EntityDef = serde_yaml_ng::from_str(yaml_input).unwrap();
+        assert!(entity.sections.is_empty());
+    }
+
+    #[test]
+    fn section_def_yaml_round_trip() {
+        // A lone SectionDef round-trips through YAML with only `id` present
+        // when `label` and `on_card` take their defaults.
+        let section = SectionDef {
+            id: "header".into(),
+            label: None,
+            on_card: false,
+        };
+        let yaml = serde_yaml_ng::to_string(&section).unwrap();
+        assert!(yaml.contains("id: header"));
+        assert!(!yaml.contains("label"));
+        assert!(!yaml.contains("on_card"));
+        let parsed: SectionDef = serde_yaml_ng::from_str(&yaml).unwrap();
+        assert_eq!(section, parsed);
     }
 
     #[test]
@@ -1080,6 +1206,7 @@ fields:
             icon: None,
             body_field: Some("body".into()),
             fields: vec!["title".into(), "tags".into()],
+            sections: vec![],
             validate: None,
             mention_prefix: None,
             mention_display_field: None,

@@ -142,12 +142,33 @@ export interface FieldDef {
   validate?: string;
 }
 
+/**
+ * Declarative inspector/card section from the YAML schema.
+ *
+ * Sections partition an entity's fields into ordered groups separated by
+ * dividers. Each section may optionally carry a `label` (rendered above the
+ * section in the inspector) and an `on_card` flag (opts the section into the
+ * card view beneath the header section).
+ */
+export interface SectionDef {
+  id: string;
+  label?: string;
+  on_card?: boolean;
+}
+
 /** Schema definition for an entity type (from YAML). */
 export interface EntityDef {
   name: string;
   icon?: string;
   body_field?: string;
   fields: string[];
+  /**
+   * Ordered inspector sections. When present, the inspector and card render
+   * fields grouped by the declared sections (with dividers and optional
+   * labels). When omitted or empty, renderers fall back to the implicit
+   * `header`/`body`/`footer` three-section layout.
+   */
+  sections?: readonly SectionDef[];
   mention_prefix?: string;
   mention_display_field?: string;
   /**
