@@ -147,6 +147,55 @@ impl AddTask {
             }
         }
     }
+
+    /// Build the task entity from this command's fields.
+    ///
+    /// Resolves position (column + ordinal), applies all user-set fields,
+    /// and parses any ISO 8601 date inputs. The resulting entity is not yet
+    /// persisted — the caller owns the write.
+    async fn build_entity(&self, ectx: &swissarmyhammer_entity::EntityContext) -> Result<Entity> {
+        let column = self.resolve_column(ectx).await?;
+        let ordinal = self.resolve_ordinal(ectx, &column).await?;
+
+        let task_id = TaskId::new();
+        let mut entity = Entity::new("task", task_id.as_str());
+        entity.set("title", json!(self.title));
+        entity.set("body", json!(self.description.clone().unwrap_or_default()));
+        entity.set("position_column", json!(column));
+        entity.set("position_ordinal", json!(ordinal));
+
+        if !self.assignees.is_empty() {
+            entity.set("assignees", serde_json::to_value(&self.assignees)?);
+        }
+        if !self.depends_on.is_empty() {
+            entity.set("depends_on", serde_json::to_value(&self.depends_on)?);
+        }
+        if let Some(ref project) = self.project {
+            entity.set("project", json!(project));
+        }
+        if let Some(ref due) = self.due {
+            entity.set("due", json!(parse_iso8601_date(due, "due")?));
+        }
+        if let Some(ref scheduled) = self.scheduled {
+            entity.set(
+                "scheduled",
+                json!(parse_iso8601_date(scheduled, "scheduled")?),
+            );
+        }
+
+        Ok(entity)
+    }
+
+    /// Persist the task entity and run post-write hooks (auto-tag creation).
+    async fn persist(
+        &self,
+        ectx: &swissarmyhammer_entity::EntityContext,
+        entity: &Entity,
+    ) -> Result<()> {
+        ectx.write(entity).await?;
+        auto_create_body_tags(ectx, entity).await?;
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -157,36 +206,8 @@ impl Execute<KanbanContext, KanbanError> for AddTask {
 
         let result: Result<Value> = async {
             let ectx = ctx.entity_context().await?;
-            let column = self.resolve_column(&ectx).await?;
-            let ordinal = self.resolve_ordinal(&ectx, &column).await?;
-
-            let task_id = TaskId::new();
-            let mut entity = Entity::new("task", task_id.as_str());
-            entity.set("title", json!(self.title));
-            entity.set("body", json!(self.description.clone().unwrap_or_default()));
-            entity.set("position_column", json!(column));
-            entity.set("position_ordinal", json!(ordinal));
-
-            if !self.assignees.is_empty() {
-                entity.set("assignees", serde_json::to_value(&self.assignees)?);
-            }
-            if !self.depends_on.is_empty() {
-                entity.set("depends_on", serde_json::to_value(&self.depends_on)?);
-            }
-            if let Some(ref project) = self.project {
-                entity.set("project", json!(project));
-            }
-            if let Some(ref due) = self.due {
-                let normalized = parse_iso8601_date(due, "due")?;
-                entity.set("due", json!(normalized));
-            }
-            if let Some(ref scheduled) = self.scheduled {
-                let normalized = parse_iso8601_date(scheduled, "scheduled")?;
-                entity.set("scheduled", json!(normalized));
-            }
-
-            ectx.write(&entity).await?;
-            auto_create_body_tags(&ectx, &entity).await?;
+            let entity = self.build_entity(&ectx).await?;
+            self.persist(&ectx, &entity).await?;
             Ok(task_entity_to_json(&entity))
         }
         .await;
