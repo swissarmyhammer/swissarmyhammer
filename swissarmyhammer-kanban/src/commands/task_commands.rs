@@ -239,8 +239,7 @@ async fn compute_placement_ordinal(
     } else if let Some(ref_id) = after_id {
         ordinal_for_after(&col_tasks, ref_id)
     } else {
-        // Neither — shouldn't happen, append at end
-        crate::task_helpers::compute_ordinal_for_neighbors(None, None)
+        unreachable!("compute_placement_ordinal called with neither before_id nor after_id");
     };
     Ok(ordinal)
 }
@@ -291,6 +290,10 @@ impl Command for UntagTaskCmd {
 }
 
 /// Return the id of the lowest-`order` column on the board.
+///
+/// When two columns share the same `order`, ties are broken by column id
+/// (ascending) so the result is deterministic regardless of filesystem
+/// iteration order.
 async fn first_column_id(kanban: &KanbanContext) -> Result<String, CommandError> {
     let ectx = kanban
         .entity_context()
@@ -300,7 +303,11 @@ async fn first_column_id(kanban: &KanbanContext) -> Result<String, CommandError>
         .list("column")
         .await
         .map_err(|e| CommandError::ExecutionFailed(e.to_string()))?;
-    columns.sort_by_key(|c| c.get("order").and_then(|v| v.as_u64()).unwrap_or(0));
+    columns.sort_by(|a, b| {
+        let ao = a.get("order").and_then(|v| v.as_u64()).unwrap_or(0);
+        let bo = b.get("order").and_then(|v| v.as_u64()).unwrap_or(0);
+        ao.cmp(&bo).then_with(|| a.id.as_str().cmp(b.id.as_str()))
+    });
     columns
         .into_iter()
         .next()
@@ -926,15 +933,19 @@ mod tests {
 
     #[tokio::test]
     async fn do_this_next_moves_to_first_column() {
-        use crate::column::UpdateColumn;
+        use crate::column::{AddColumn, UpdateColumn};
 
         let (_temp, kctx) = setup().await;
 
         // Swap orders so that `doing` becomes the order-0 (first) column and
-        // `todo` becomes order 1. Creation order on disk remains todo -> doing
-        // -> done, so any sort that falls back to filesystem iteration order
-        // (the buggy `get_str("order")` sort does exactly that) will pick
-        // `todo` instead of the correct `doing`.
+        // `todo` becomes order 1. Then add a column named `aaa` with a high
+        // order. The column set is now `todo, doing, done, aaa` with orders
+        // `1, 0, 2, 5`. With this shape, no common filesystem iteration order
+        // (alphabetical or creation-order) returns the order-0 column (`doing`)
+        // first — so any implementation that falls back to iteration order
+        // (the buggy `get_str("order")` sort does exactly that, since every
+        // column gets the same string key "0") will pick the wrong column and
+        // this test will fail against it.
         UpdateColumn::new("doing")
             .with_order(0)
             .execute(&kctx)
@@ -943,6 +954,12 @@ mod tests {
             .unwrap();
         UpdateColumn::new("todo")
             .with_order(1)
+            .execute(&kctx)
+            .await
+            .into_result()
+            .unwrap();
+        AddColumn::new("aaa", "Alpha")
+            .with_order(5)
             .execute(&kctx)
             .await
             .into_result()
