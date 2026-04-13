@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: review
-position_ordinal: 7c80
+position_column: done
+position_ordinal: ffffffffffffffffffffffc180
 title: Add tooltips to field icons in EntityCard and extract shared icon utilities
 ---
 ## What

@@ -1,8 +1,9 @@
 ---
 assignees:
 - claude-code
+depends_on: []
 position_column: todo
-position_ordinal: c680
+position_ordinal: '80'
 title: Hide due/scheduled from task card view (inspector-only)
 ---
 ## What

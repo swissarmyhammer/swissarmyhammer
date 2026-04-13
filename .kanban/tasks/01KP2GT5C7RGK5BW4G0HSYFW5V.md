@@ -1,8 +1,9 @@
 ---
 assignees:
 - claude-code
+depends_on: []
 position_column: todo
-position_ordinal: c580
+position_ordinal: 7f80
 title: Backstop `derive-created` with task .md file mtime when changelog is empty
 ---
 ## What
@@ -74,3 +75,4 @@ The `_file_created` value comes from `std::fs::Metadata::created()` when the pla
 ## Workflow
 
 - Use `/tdd` — RED: write the three derive_created tests + the two apply_compute tests first (they will fail because `_file_created` is never injected). GREEN: add the injection in `apply_compute_with_query`, declare the dependency in `created.yaml`, extend the `register_derive_created` body. Refactor: if the new injection block is structurally similar to the existing `_changelog` block, factor a small helper (`inject_optional_field`) so both inputs read cleanly.
+#junk-and-things
