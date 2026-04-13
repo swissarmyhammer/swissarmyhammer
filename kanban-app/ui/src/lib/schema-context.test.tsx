@@ -117,6 +117,11 @@ describe("SchemaContext.mentionableTypes", () => {
         mention_prefix: "$",
         mention_display_field: "name",
       }),
+      column: makeSchema({
+        name: "column",
+        mention_prefix: "%",
+        mention_display_field: "name",
+      }),
     });
 
     const { result } = renderHook(() => useSchema(), { wrapper });
@@ -126,7 +131,7 @@ describe("SchemaContext.mentionableTypes", () => {
     const prefixes = result.current.mentionableTypes
       .map((mt) => mt.prefix)
       .sort();
-    expect(prefixes).toEqual(["#", "$", "@"]);
+    expect(prefixes).toEqual(["#", "$", "%", "@"]);
   });
 
   it("excludes an entity missing mention_prefix", async () => {
@@ -178,5 +183,25 @@ describe("SchemaContext.mentionableTypes", () => {
     await waitFor(() => expect(result.current.loading).toBe(false));
 
     expect(result.current.mentionableTypes).toEqual([]);
+  });
+
+  it("includes column entity with % prefix when mention fields are set", async () => {
+    mockSchemaLoader({
+      column: makeSchema({
+        name: "column",
+        mention_prefix: "%",
+        mention_display_field: "name",
+      }),
+    });
+
+    const { result } = renderHook(() => useSchema(), { wrapper });
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    expect(result.current.mentionableTypes).toContainEqual({
+      entityType: "column",
+      prefix: "%",
+      displayField: "name",
+    });
   });
 });

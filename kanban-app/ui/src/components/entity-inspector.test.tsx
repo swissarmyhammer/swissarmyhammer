@@ -382,9 +382,12 @@ describe("EntityInspector", () => {
 
     const bodyRow = container.querySelector('[data-testid="field-row-body"]');
     expect(bodyRow).toBeTruthy();
+    // The body's MarkdownDisplay renders mentions as CM6 widgets with the
+    // `cm-mention-pill` class; `#ui` should appear in the widget's
+    // textContent.
     const pill = Array.from(bodyRow!.querySelectorAll("span")).find(
       (s: Element) =>
-        s.textContent === "#ui" && s.classList.contains("rounded-full"),
+        s.textContent === "#ui" && s.classList.contains("cm-mention-pill"),
     );
     expect(pill, `Expected #ui pill. HTML: ${bodyRow!.innerHTML}`).toBeTruthy();
   });
@@ -403,10 +406,12 @@ describe("EntityInspector", () => {
       tags,
     );
 
+    // The title uses the plain `text` display, not MarkdownDisplay — it
+    // should not render a CM6 mention pill widget.
     const titleRow = container.querySelector('[data-testid="field-row-title"]');
     const pill = Array.from(titleRow!.querySelectorAll("span")).find(
       (s: Element) =>
-        s.textContent === "#ui" && s.classList.contains("rounded-full"),
+        s.textContent === "#ui" && s.classList.contains("cm-mention-pill"),
     );
     expect(pill, "Title should NOT have tag pills").toBeFalsy();
   });
@@ -431,15 +436,22 @@ describe("EntityInspector", () => {
     const titleRow = container.querySelector('[data-testid="field-row-title"]');
     expect(titleRow!.getAttribute("data-focused")).toBe("true");
 
-    // Click the body field text to enter edit mode
-    const bodyText = screen.getByText("Click me");
+    // Click on the body field's display wrapper (the div that Field
+    // renders with `cursor-text min-h-[1.25rem]` around its Display).
+    // The MarkdownDisplay now mounts a CM6 editor for read-only viewing,
+    // so clicking directly on CM6's contenteditable content does not
+    // always bubble as expected in jsdom; clicking the wrapper mirrors
+    // the user-facing click target and matches the other edit-entry
+    // tests in this file.
+    const bodyRow = container.querySelector('[data-testid="field-row-body"]');
+    const clickTarget = bodyRow!.querySelector(".min-h-\\[1\\.25rem\\]");
+    expect(clickTarget).toBeTruthy();
     await act(async () => {
-      fireEvent.click(bodyText);
+      fireEvent.click(clickTarget!);
       await new Promise((r) => setTimeout(r, 50));
     });
 
     // Body field (index 3: title=0, tags=1, progress=2, body=3) should now be focused
-    const bodyRow = container.querySelector('[data-testid="field-row-body"]');
     expect(bodyRow!.getAttribute("data-focused")).toBe("true");
     // Title should no longer be focused
     expect(titleRow!.getAttribute("data-focused")).toBeNull();

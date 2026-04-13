@@ -4,8 +4,8 @@ assignees:
 depends_on:
 - 01KNZ42426TGY4AVSDMQMRFQGS
 - 01KNZ432XEGXX0VWPFSDXXXG32
-position_column: todo
-position_ordinal: bb80
+position_column: done
+position_ordinal: ffffffffffffffffffffffbf80
 project: pill-via-cm6
 title: Migrate MarkdownDisplay to TextViewer + CM6 mention widgets
 ---

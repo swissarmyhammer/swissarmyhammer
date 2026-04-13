@@ -3,8 +3,8 @@ assignees:
 - wballard
 depends_on:
 - 01KNZ42426TGY4AVSDMQMRFQGS
-position_column: todo
-position_ordinal: c080
+position_column: done
+position_ordinal: ffffffffffffffffffffffbd80
 project: pill-via-cm6
 title: Autocomplete dropdown shows display name, writes slug
 ---

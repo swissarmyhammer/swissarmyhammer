@@ -1,8 +1,8 @@
 ---
 assignees:
 - wballard
-position_column: todo
-position_ordinal: b680
+position_column: done
+position_ordinal: ffffffffffffffffffffffb880
 project: pill-via-cm6
 title: Make column entity mentionable (% prefix)
 ---

@@ -13,12 +13,14 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import CodeMirror, { type ReactCodeMirrorRef } from "@uiw/react-codemirror";
 import { invoke } from "@tauri-apps/api/core";
+import type { Extension } from "@codemirror/state";
 import { shadcnTheme, keymapExtension } from "@/lib/cm-keymap";
 import { buildSubmitCancelExtensions } from "@/lib/cm-submit-cancel";
 import { useUIState } from "@/lib/ui-state-context";
 import { useSchema } from "@/lib/schema-context";
 import { useEntityStore } from "@/lib/entity-store-context";
 import { createMentionDecorations } from "@/lib/cm-mention-decorations";
+import type { MentionMeta } from "@/lib/mention-meta";
 import {
   createMentionCompletionSource,
   createMentionAutocomplete,
@@ -30,7 +32,9 @@ import { getStr } from "@/types/kanban";
 import type { FieldDef, Entity } from "@/types/kanban";
 import type { EditorProps } from ".";
 
+/** Props for the MultiSelectEditor component. */
 interface MultiSelectEditorProps extends EditorProps {
+  /** Field definition, providing target entity type and commit semantics. */
   field: FieldDef;
   /** The entity being edited (optional, for context). */
   entity?: Entity;
@@ -64,41 +68,40 @@ function parseDocTokens(
   return ids;
 }
 
-export function MultiSelectEditor({
-  field,
-  value,
-  onCommit,
-  onCancel,
-  onChange,
-}: MultiSelectEditorProps) {
-  const { keymap_mode: mode } = useUIState();
+/** Read schema and derive prefix + display field for the target entity type. */
+function useMentionConfig(targetEntityType: string | undefined) {
   const { mentionableTypes, loading: schemaLoading } = useSchema();
-  const { getEntities } = useEntityStore();
-  const editorRef = useRef<ReactCodeMirrorRef>(null);
-
-  // Read target entity and commit mode from field type (set in YAML for both reference and computed fields)
-  const targetEntityType = field.type.entity as string | undefined;
-  const commitDisplayNames = !!(field.type as Record<string, unknown>)
-    .commit_display_names;
-
   const mentionConfig = useMemo(
     () => mentionableTypes.find((mt) => mt.entityType === targetEntityType),
     [mentionableTypes, targetEntityType],
   );
+  // "name" is the universal default display field. Specific overrides arrive
+  // via mentionConfig.displayField from the YAML schema.
+  return {
+    mentionConfig,
+    schemaLoading,
+    prefix: mentionConfig?.prefix ?? "",
+    displayField: mentionConfig?.displayField ?? "name",
+  };
+}
 
-  const prefix = mentionConfig?.prefix ?? "";
-  // "name" is the universal default display field for all entity types.
-  // Specific overrides (e.g. "tag_name") are declared in the YAML schema's
-  // mention_config.display_field and arrive via mentionConfig.displayField.
-  const displayField = mentionConfig?.displayField ?? "name";
+interface EntityMaps {
+  idToDisplay: Map<string, string>;
+  displayToId: Map<string, string>;
+  metaMap: Map<string, MentionMeta>;
+}
 
-  // Target entities for building maps
+/** Build ID↔display-name and slug→MentionMeta maps for the target entities. */
+function useTargetEntityMaps(
+  targetEntityType: string | undefined,
+  displayField: string,
+): EntityMaps {
+  const { getEntities } = useEntityStore();
   const targetEntities = useMemo(
     () => (targetEntityType ? getEntities(targetEntityType) : []),
     [targetEntityType, getEntities],
   );
 
-  // Maps: ID ↔ display name (slugified)
   const idToDisplay = useMemo(() => {
     const map = new Map<string, string>();
     for (const e of targetEntities) {
@@ -121,24 +124,28 @@ export function MultiSelectEditor({
     return map;
   }, [targetEntities, displayField]);
 
-  // Build color map for decorations: slug → hex color.
-  // "color" is a universal entity property (every entity type that supports
-  // mention pills has a color field), so this lookup is a stable convention
-  // rather than a field-specific hardcode.
-  const colorMap = useMemo(() => {
-    const map = new Map<string, string>();
+  const metaMap = useMemo(() => {
+    const map = new Map<string, MentionMeta>();
     for (const e of targetEntities) {
       const name = getStr(e, displayField);
       if (name) {
         const color = getStr(e, "color", "888888");
-        map.set(slugify(name), color);
+        map.set(slugify(name), { color, displayName: name });
       }
     }
     return map;
   }, [targetEntities, displayField]);
 
-  // Initial doc text: existing selections as prefixed tokens
-  const initialDoc = useMemo(() => {
+  return { idToDisplay, displayToId, metaMap };
+}
+
+/** Serialize current `value` into a prefixed-token doc string. */
+function useInitialDoc(
+  value: unknown,
+  idToDisplay: Map<string, string>,
+  prefix: string,
+): string {
+  return useMemo(() => {
     const currentIds: string[] = Array.isArray(value)
       ? value.filter((v): v is string => typeof v === "string")
       : [];
@@ -149,34 +156,40 @@ export function MultiSelectEditor({
     });
     return tokens.join(" ") + " ";
   }, [value, idToDisplay, prefix]);
+}
 
-  // Stable refs for commit callback
-  const displayToIdRef = useRef(displayToId);
-  displayToIdRef.current = displayToId;
-  const idToDisplayRef = useRef(idToDisplay);
-  idToDisplayRef.current = idToDisplay;
+interface CommitHandlers {
+  commit: () => void;
+  handleChange: (text: string) => void;
+  submitRef: React.MutableRefObject<(() => void) | null>;
+  escapeRef: React.MutableRefObject<(() => void) | null>;
+}
 
-  /** Read doc text, parse tokens, resolve to IDs, commit. */
-  const commit = useCallback(() => {
-    const text = editorRef.current?.view?.state.doc.toString().trim() ?? "";
-    const ids = parseDocTokens(
-      text,
-      prefix,
-      displayToIdRef.current,
-      commitDisplayNames,
-    );
-    const finalValue = commitDisplayNames
-      ? ids.map((id) => idToDisplayRef.current.get(id) ?? id)
-      : ids;
-    onCommit(finalValue);
-  }, [onCommit, prefix, commitDisplayNames]);
+/** Parse text and compute the final commit value from the current maps. */
+function computeCommitValue(
+  text: string,
+  prefix: string,
+  displayToId: Map<string, string>,
+  idToDisplay: Map<string, string>,
+  commitDisplayNames: boolean,
+): string[] {
+  const ids = parseDocTokens(text, prefix, displayToId, commitDisplayNames);
+  return commitDisplayNames
+    ? ids.map((id) => idToDisplay.get(id) ?? id)
+    : ids;
+}
 
+/** Build submit/escape refs used by buildSubmitCancelExtensions. */
+function useSubmitEscapeRefs(
+  commit: () => void,
+  onCancel: () => void,
+  mode: string,
+) {
   const commitRef = useRef(commit);
   commitRef.current = commit;
   const cancelRef = useRef(onCancel);
   cancelRef.current = onCancel;
 
-  // Refs wired into buildSubmitCancelExtensions for Enter/Escape handling.
   const submitRef = useRef<(() => void) | null>(null);
   submitRef.current = () => commitRef.current();
 
@@ -184,15 +197,72 @@ export function MultiSelectEditor({
   escapeRef.current =
     mode === "vim" ? () => commitRef.current() : () => cancelRef.current();
 
-  // Build async search for autocomplete
-  const searchFn = useMemo(() => {
+  return { submitRef, escapeRef };
+}
+
+/** Wire commit/cancel callbacks and submit/escape refs. */
+function useCommitHandlers(
+  editorRef: React.RefObject<ReactCodeMirrorRef | null>,
+  maps: EntityMaps,
+  prefix: string,
+  commitDisplayNames: boolean,
+  mode: string,
+  onCommit: (value: unknown) => void,
+  onCancel: () => void,
+  onChange: ((value: unknown) => void) | undefined,
+): CommitHandlers {
+  const displayToIdRef = useRef(maps.displayToId);
+  displayToIdRef.current = maps.displayToId;
+  const idToDisplayRef = useRef(maps.idToDisplay);
+  idToDisplayRef.current = maps.idToDisplay;
+
+  const commit = useCallback(() => {
+    const text = editorRef.current?.view?.state.doc.toString().trim() ?? "";
+    onCommit(
+      computeCommitValue(
+        text,
+        prefix,
+        displayToIdRef.current,
+        idToDisplayRef.current,
+        commitDisplayNames,
+      ),
+    );
+  }, [editorRef, onCommit, prefix, commitDisplayNames]);
+
+  const { submitRef, escapeRef } = useSubmitEscapeRefs(commit, onCancel, mode);
+
+  const handleChange = useCallback(
+    (text: string) => {
+      if (!onChange) return;
+      onChange(
+        computeCommitValue(
+          text.trim(),
+          prefix,
+          displayToIdRef.current,
+          idToDisplayRef.current,
+          commitDisplayNames,
+        ),
+      );
+    },
+    [onChange, prefix, commitDisplayNames],
+  );
+
+  return { commit, handleChange, submitRef, escapeRef };
+}
+
+/** Async autocomplete search — excludes tokens already present in the doc. */
+function useMentionSearch(
+  editorRef: React.RefObject<ReactCodeMirrorRef | null>,
+  targetEntityType: string | undefined,
+  prefix: string,
+): ((query: string) => Promise<MentionSearchResult[]>) | null {
+  return useMemo(() => {
     if (!targetEntityType) return null;
     const rawSearch = async (query: string): Promise<MentionSearchResult[]> => {
       try {
         const results = await invoke<
           Array<{ id: string; display_name: string; color: string }>
         >("search_mentions", { entityType: targetEntityType, query });
-        // Filter out items already in the doc
         const docText = editorRef.current?.view?.state.doc.toString() ?? "";
         return results
           .filter((r) => {
@@ -209,23 +279,27 @@ export function MultiSelectEditor({
       }
     };
     return createDebouncedSearch({ search: rawSearch, delayMs: 150 });
-  }, [targetEntityType, prefix]);
+  }, [editorRef, targetEntityType, prefix]);
+}
 
-  // Mention decorations — renders known #slug tokens as colored pills
+/** Build the full CM6 extension array for the editor. */
+function useEditorExtensions(
+  mode: string,
+  prefix: string,
+  metaMap: Map<string, MentionMeta>,
+  searchFn: ((query: string) => Promise<MentionSearchResult[]>) | null,
+  submitRef: React.MutableRefObject<(() => void) | null>,
+  escapeRef: React.MutableRefObject<(() => void) | null>,
+): Extension[] {
   const mentionDeco = useMemo(() => {
-    const cssClass = `cm-multiselect-pill`;
-    const colorVar = `--pill-color`;
-    const deco = createMentionDecorations(prefix, cssClass, colorVar);
-    return deco;
+    return createMentionDecorations(prefix, "cm-multiselect-pill", "--pill-color");
   }, [prefix]);
 
-  // CM6 extensions
-  const extensions = useMemo(() => {
-    const exts = [keymapExtension(mode)];
+  return useMemo(() => {
+    const exts: Extension[] = [keymapExtension(mode)];
 
-    // Mention pill decorations
     if (prefix) {
-      exts.push(...mentionDeco.extension(colorMap));
+      exts.push(...mentionDeco.extension(metaMap));
     }
 
     if (searchFn && prefix) {
@@ -233,7 +307,6 @@ export function MultiSelectEditor({
       exts.push(createMentionAutocomplete([source]));
     }
 
-    // Enter always commits. Escape: vim saves, CUA/emacs discards.
     exts.push(
       ...buildSubmitCancelExtensions({
         mode,
@@ -244,9 +317,13 @@ export function MultiSelectEditor({
     );
 
     return exts;
-  }, [mode, searchFn, prefix, mentionDeco, colorMap]);
+  }, [mode, searchFn, prefix, mentionDeco, metaMap, submitRef, escapeRef]);
+}
 
-  // Focus editor on mount, place cursor at end
+/** Focus editor on mount and place cursor at end of doc. */
+function useAutoFocusEditor(
+  editorRef: React.RefObject<ReactCodeMirrorRef | null>,
+) {
   useEffect(() => {
     setTimeout(() => {
       const view = editorRef.current?.view;
@@ -255,60 +332,117 @@ export function MultiSelectEditor({
         view.dispatch({ selection: { anchor: view.state.doc.length } });
       }
     }, 0);
-  }, []);
+  }, [editorRef]);
+}
 
-  // Blur handler — commit on focus loss
-  const handleBlur = useCallback(() => {
-    setTimeout(() => {
-      commitRef.current();
-    }, 100);
-  }, []);
+/** Static `basicSetup` configuration — disables all CM6 chrome. */
+const MULTI_SELECT_BASIC_SETUP = {
+  lineNumbers: false,
+  foldGutter: false,
+  highlightActiveLine: false,
+  highlightActiveLineGutter: false,
+  indentOnInput: false,
+  bracketMatching: false,
+  autocompletion: false,
+} as const;
 
-  /** Report intermediate selection changes for debounced autosave. */
-  const handleChange = useCallback(
-    (text: string) => {
-      if (!onChange) return;
-      const ids = parseDocTokens(
-        text.trim(),
-        prefix,
-        displayToIdRef.current,
-        commitDisplayNames,
-      );
-      const finalValue = commitDisplayNames
-        ? ids.map((id) => idToDisplayRef.current.get(id) ?? id)
-        : ids;
-      onChange(finalValue);
-    },
-    [onChange, prefix, commitDisplayNames],
+/** Aggregated state returned by `useMultiSelectEditorState`. */
+interface MultiSelectEditorState {
+  /** Ref forwarded to the underlying CodeMirror component. */
+  editorRef: React.RefObject<ReactCodeMirrorRef | null>;
+  /** Initial document text built from the incoming `value`. */
+  initialDoc: string;
+  /** CM6 extension array assembled from keymap, decorations, and autocomplete. */
+  extensions: ReturnType<typeof useEditorExtensions>;
+  /** onChange handler that parses tokens and calls `onChange`. */
+  handleChange: (text: string) => void;
+  /** Blur handler that commits after a short debounce. */
+  handleBlur: () => void;
+  /** Mention prefix character (e.g. `#`, `@`) used in placeholder text. */
+  prefix: string;
+  /** False while the schema is still loading for a known target entity type. */
+  shouldRender: boolean;
+}
+
+/** Compose every hook the editor needs into a single state object. */
+function useMultiSelectEditorState(
+  props: MultiSelectEditorProps,
+): MultiSelectEditorState {
+  const { field, value, onCommit, onCancel, onChange } = props;
+  const { keymap_mode: mode } = useUIState();
+  const editorRef = useRef<ReactCodeMirrorRef>(null);
+
+  const targetEntityType = field.type.entity as string | undefined;
+  const commitDisplayNames = !!(field.type as Record<string, unknown>)
+    .commit_display_names;
+
+  const { mentionConfig, schemaLoading, prefix, displayField } =
+    useMentionConfig(targetEntityType);
+  const maps = useTargetEntityMaps(targetEntityType, displayField);
+  const initialDoc = useInitialDoc(value, maps.idToDisplay, prefix);
+  const { commit, handleChange, submitRef, escapeRef } = useCommitHandlers(
+    editorRef,
+    maps,
+    prefix,
+    commitDisplayNames,
+    mode,
+    onCommit,
+    onCancel,
+    onChange,
+  );
+  const searchFn = useMentionSearch(editorRef, targetEntityType, prefix);
+  const extensions = useEditorExtensions(
+    mode,
+    prefix,
+    maps.metaMap,
+    searchFn,
+    submitRef,
+    escapeRef,
   );
 
-  // Wait for schema to load so prefix and displayField are correct before
-  // CM6 initializes. Without this, the editor mounts with empty prefix and
-  // wrong display names, producing "alice " instead of "@alice ".
-  // Only wait if the schema is still loading — some entity types (e.g.
-  // attachment) don't have a mention_prefix and that's fine.
-  if (schemaLoading && !mentionConfig && targetEntityType) {
-    return null;
-  }
+  useAutoFocusEditor(editorRef);
+
+  const handleBlur = useCallback(() => {
+    setTimeout(() => commit(), 100);
+  }, [commit]);
+
+  const shouldRender = !(schemaLoading && !mentionConfig && targetEntityType);
+
+  return {
+    editorRef,
+    initialDoc,
+    extensions,
+    handleChange,
+    handleBlur,
+    prefix,
+    shouldRender,
+  };
+}
+
+/**
+ * CM6-based multi-select editor for reference and computed tag fields.
+ *
+ * The document IS the selection: selected items appear as prefixed tokens
+ * (e.g. `#bug #feature`) decorated as inline colored pills. Typing after
+ * the last token triggers prefix autocomplete against `search_mentions`.
+ * Commit serializes the tokens back to entity IDs (or slugs for tag
+ * fields with `commit_display_names`).
+ */
+export function MultiSelectEditor(props: MultiSelectEditorProps) {
+  const state = useMultiSelectEditorState(props);
+
+  if (!state.shouldRender) return null;
 
   return (
     <CodeMirror
-      ref={editorRef}
-      value={initialDoc}
-      extensions={extensions}
+      ref={state.editorRef}
+      value={state.initialDoc}
+      extensions={state.extensions}
       theme={shadcnTheme}
-      onBlur={handleBlur}
-      onChange={handleChange}
-      basicSetup={{
-        lineNumbers: false,
-        foldGutter: false,
-        highlightActiveLine: false,
-        highlightActiveLineGutter: false,
-        indentOnInput: false,
-        bracketMatching: false,
-        autocompletion: false,
-      }}
-      placeholder={`Type ${prefix} to search...`}
+      onBlur={state.handleBlur}
+      onChange={state.handleChange}
+      basicSetup={MULTI_SELECT_BASIC_SETUP}
+      placeholder={`Type ${state.prefix} to search...`}
       className="text-sm"
     />
   );

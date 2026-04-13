@@ -3,8 +3,8 @@ assignees:
 - wballard
 depends_on:
 - 01KNZ44E91F4NYAGZX13H0FDAJ
-position_column: todo
-position_ordinal: bd80
+position_column: done
+position_ordinal: ffffffffffffffffffffffc080
 project: pill-via-cm6
 title: Migrate BadgeDisplay (scalar refs) to MentionView; drop dead select branch
 ---

@@ -21,6 +21,7 @@ export interface EditorProps {
   /** Report intermediate value changes for debounced autosave. */
   onChange?: (value: unknown) => void;
 
+  /** Visual density — `compact` for board cards, `full` for inspector panes. */
   mode: "compact" | "full";
 }
 
@@ -30,6 +31,7 @@ export { DateEditor } from "./date-editor";
 export { ColorPaletteEditor } from "./color-palette-editor";
 export { MultiSelectEditor } from "./multi-select-editor";
 export { AttachmentEditor } from "./attachment-editor";
+export { ReferenceSelectEditor } from "./reference-select-editor";
 
 /** Resolve which editor component to use for a field — reads directly from the YAML-configured `editor` property. */
 export function resolveEditor(field: FieldDef): string {

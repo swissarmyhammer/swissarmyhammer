@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render } from "@testing-library/react";
+import { render, act } from "@testing-library/react";
 import type { MentionableType } from "@/lib/schema-context";
 import type { Entity } from "@/types/kanban";
 
@@ -24,11 +24,36 @@ const MENTIONABLE_TYPES: MentionableType[] = [
 
 const mockGetEntities = vi.fn((_type: string) => [mockTag]);
 
-vi.mock("@tauri-apps/api/core", () => ({
-  invoke: vi.fn(() => Promise.resolve("ok")),
-}));
-vi.mock("@tauri-apps/api/event", () => ({
-  listen: vi.fn(() => Promise.resolve(() => {})),
+// Preserve the real Tauri core exports (SERIALIZE_TO_IPC_FN, Resource, Channel,
+// TauriEvent, etc.) so that transitively-imported submodules like `window.js`
+// and `dpi.js` can resolve their re-exports. Only override `invoke`.
+vi.mock("@tauri-apps/api/core", async () => {
+  const actual =
+    await vi.importActual<typeof import("@tauri-apps/api/core")>(
+      "@tauri-apps/api/core",
+    );
+  return {
+    ...actual,
+    invoke: vi.fn(() => Promise.resolve("ok")),
+  };
+});
+vi.mock("@tauri-apps/api/event", async () => {
+  const actual =
+    await vi.importActual<typeof import("@tauri-apps/api/event")>(
+      "@tauri-apps/api/event",
+    );
+  return {
+    ...actual,
+    listen: vi.fn(() => Promise.resolve(() => {})),
+  };
+});
+vi.mock("@tauri-apps/plugin-log", () => ({
+  error: vi.fn(),
+  warn: vi.fn(),
+  info: vi.fn(),
+  debug: vi.fn(),
+  trace: vi.fn(),
+  attachConsole: vi.fn(() => Promise.resolve()),
 }));
 
 vi.mock("@/lib/schema-context", () => ({
@@ -48,6 +73,12 @@ vi.mock("@/lib/schema-context", () => ({
 
 vi.mock("@/lib/entity-store-context", () => ({
   useEntityStore: () => ({ getEntities: mockGetEntities, getEntity: vi.fn() }),
+}));
+
+// `useMentionExtensions` reads virtual-tag metadata via `useBoardData`;
+// tests that don't exercise virtual tags can return `null`.
+vi.mock("@/components/window-container", () => ({
+  useBoardData: () => null,
 }));
 
 // ---------------------------------------------------------------------------
@@ -87,22 +118,27 @@ function renderMarkdown(value: string) {
   );
 }
 
-describe("multiline editing with mention types", () => {
+/** Flush microtasks and CM6 mount effects. */
+async function flush() {
+  await act(async () => {
+    await new Promise((r) => setTimeout(r, 0));
+  });
+}
+
+describe("multiline display with mention types", () => {
   beforeEach(() => {
     mockGetEntities.mockReturnValue([mockTag]);
   });
 
-  it("renders tag pills in display mode with mentions loaded", () => {
+  it("renders tag pills in display mode with mentions loaded", async () => {
     const { container } = renderMarkdown("Fix the #bug in login");
+    await flush();
 
-    // The remark-mentions plugin should transform #bug into a custom element
-    // rendered by MentionPill. MentionPill renders inside a FocusScope with
-    // a data-moniker attribute.
-    const pill = container.querySelector("[data-moniker='tag:tag-bug']");
+    // MarkdownDisplay now mounts a CM6 read-only viewer; the mention
+    // decoration extension replaces `#bug` with a widget carrying the
+    // `cm-mention-pill` class whose textContent is `#bug`.
+    const pill = container.querySelector(".cm-mention-pill");
     expect(pill).not.toBeNull();
-
-    // The pill text should contain the prefix and slug
-    expect(pill?.textContent).toContain("#");
-    expect(pill?.textContent).toContain("bug");
+    expect(pill?.textContent).toBe("#bug");
   });
 });

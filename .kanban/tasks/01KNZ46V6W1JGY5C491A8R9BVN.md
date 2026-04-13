@@ -3,8 +3,8 @@ assignees:
 - wballard
 depends_on:
 - 01KNZ44E91F4NYAGZX13H0FDAJ
-position_column: todo
-position_ordinal: bc80
+position_column: done
+position_ordinal: ffffffffffffffffffffffc180
 project: pill-via-cm6
 title: Migrate BadgeListDisplay to MentionView
 ---
