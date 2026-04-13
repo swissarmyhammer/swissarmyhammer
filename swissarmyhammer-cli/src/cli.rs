@@ -1,4 +1,13 @@
-use crate::commands;
+//! CLI definition for the swissarmyhammer (`sah`) command-line interface.
+//!
+//! This module is self-contained — it only depends on `clap` and `std` so that
+//! `build.rs` can compile it independently via `#[path = "src/cli.rs"]` to
+//! generate documentation, man pages, and shell completions at build time.
+//!
+//! Cross-crate type conversions (e.g. `PromptSourceArg <-> PromptSource`,
+//! `InstallTarget -> InitScope`) live in `crate::cli_conversions` so that
+//! `cli.rs` does not pull in library dependencies.
+
 use clap::{Parser, Subcommand, ValueEnum};
 use std::str::FromStr;
 
@@ -23,38 +32,15 @@ impl FromStr for OutputFormat {
     }
 }
 
-// Re-export PromptSource from the library
-pub use swissarmyhammer::PromptSource;
-
-// Create a wrapper for CLI argument parsing since the library's PromptSource doesn't derive ValueEnum
+/// CLI wrapper for the library's `PromptSource` enum (which does not derive
+/// `ValueEnum`). Conversions to/from `PromptSource` live in
+/// `crate::cli_conversions`.
 #[derive(ValueEnum, Clone, Debug, PartialEq)]
 pub enum PromptSourceArg {
     Builtin,
     User,
     Local,
     Dynamic,
-}
-
-impl From<PromptSourceArg> for PromptSource {
-    fn from(arg: PromptSourceArg) -> Self {
-        match arg {
-            PromptSourceArg::Builtin => PromptSource::Builtin,
-            PromptSourceArg::User => PromptSource::User,
-            PromptSourceArg::Local => PromptSource::Local,
-            PromptSourceArg::Dynamic => PromptSource::Dynamic,
-        }
-    }
-}
-
-impl From<PromptSource> for PromptSourceArg {
-    fn from(source: PromptSource) -> Self {
-        match source {
-            PromptSource::Builtin => PromptSourceArg::Builtin,
-            PromptSource::User => PromptSourceArg::User,
-            PromptSource::Local => PromptSourceArg::Local,
-            PromptSource::Dynamic => PromptSourceArg::Dynamic,
-        }
-    }
 }
 
 /// Target location for init/deinit operations.
@@ -66,16 +52,6 @@ pub enum InstallTarget {
     Local,
     /// User-level settings (~/.claude/settings.json)
     User,
-}
-
-impl From<InstallTarget> for swissarmyhammer_common::lifecycle::InitScope {
-    fn from(target: InstallTarget) -> Self {
-        match target {
-            InstallTarget::Project => Self::Project,
-            InstallTarget::Local => Self::Local,
-            InstallTarget::User => Self::User,
-        }
-    }
 }
 
 impl std::fmt::Display for InstallTarget {
@@ -214,7 +190,7 @@ Examples:
         remove_directory: bool,
     },
     /// Diagnose configuration and setup issues
-    #[command(long_about = commands::doctor::DESCRIPTION)]
+    #[command(long_about = include_str!("commands/doctor/description.md"))]
     Doctor {},
     /// Manage and test prompts
     #[command(long_about = "
@@ -270,7 +246,7 @@ Examples:
         shell: clap_complete::Shell,
     },
     /// Validate prompt files for syntax and best practices
-    #[command(long_about = commands::validate::DESCRIPTION)]
+    #[command(long_about = include_str!("commands/validate/description.md"))]
     Validate {
         /// Suppress all output except errors. In quiet mode, warnings are hidden from both output and summary.
         #[arg(short, long)]
@@ -286,14 +262,14 @@ Examples:
     },
 
     /// Manage and interact with models
-    #[command(long_about = commands::model::DESCRIPTION)]
+    #[command(long_about = include_str!("commands/model/description.md"))]
     Model {
         #[command(subcommand)]
         subcommand: Option<ModelSubcommand>,
     },
 
     /// Manage and interact with Agent Client Protocol server
-    #[command(long_about = commands::agent::DESCRIPTION)]
+    #[command(long_about = include_str!("commands/agent/description.md"))]
     Agent {
         #[command(subcommand)]
         subcommand: Option<AgentSubcommand>,
@@ -799,44 +775,9 @@ mod tests {
         assert!(result.is_err());
     }
 
-    #[test]
-    fn test_prompt_source_arg_conversions() {
-        // Test From<PromptSourceArg> for PromptSource
-        assert!(matches!(
-            PromptSource::from(PromptSourceArg::Builtin),
-            PromptSource::Builtin
-        ));
-        assert!(matches!(
-            PromptSource::from(PromptSourceArg::User),
-            PromptSource::User
-        ));
-        assert!(matches!(
-            PromptSource::from(PromptSourceArg::Local),
-            PromptSource::Local
-        ));
-        assert!(matches!(
-            PromptSource::from(PromptSourceArg::Dynamic),
-            PromptSource::Dynamic
-        ));
-
-        // Test From<PromptSource> for PromptSourceArg
-        assert!(matches!(
-            PromptSourceArg::from(PromptSource::Builtin),
-            PromptSourceArg::Builtin
-        ));
-        assert!(matches!(
-            PromptSourceArg::from(PromptSource::User),
-            PromptSourceArg::User
-        ));
-        assert!(matches!(
-            PromptSourceArg::from(PromptSource::Local),
-            PromptSourceArg::Local
-        ));
-        assert!(matches!(
-            PromptSourceArg::from(PromptSource::Dynamic),
-            PromptSourceArg::Dynamic
-        ));
-    }
+    // `test_prompt_source_arg_conversions` moved to `crate::cli_conversions::tests`
+    // because it tests conversions to/from `swissarmyhammer::PromptSource`, which
+    // lives with the From impls to keep `cli.rs` self-contained.
 
     #[test]
     fn test_prompt_source_arg_equality() {

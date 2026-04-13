@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "kanban": {
+      "args": [
+        "serve"
+      ],
+      "command": "kanban"
+    }
+  }
+}

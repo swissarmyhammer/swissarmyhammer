@@ -14,16 +14,17 @@ use super::settings;
 
 /// Register all install/uninstall components into the given registry.
 ///
-/// * `global` - Whether to target user-level (global) paths vs project-level.
+/// Components use the `scope` parameter they receive in `init`/`deinit` to
+/// determine project-vs-global behavior.
+///
 /// * `remove_directory` - Whether `ProjectStructure::deinit` should delete directories.
-pub fn register_all(registry: &mut InitRegistry, global: bool, remove_directory: bool) {
-    registry.register(McpRegistration::new(global));
+pub fn register_all(registry: &mut InitRegistry, remove_directory: bool) {
+    registry.register(McpRegistration);
     registry.register(ClaudeLocalScope);
     registry.register(DenyBash);
     registry.register(ProjectStructure::new(remove_directory));
     registry.register(ClaudeMd);
-    registry.register(SkillDeployment::new(global));
-    registry.register(AgentDeployment::new(global));
+    registry.register(AgentDeployment);
     registry.register(LockfileCleanup);
 
     // Register tools that have lifecycle operations.
@@ -35,16 +36,11 @@ pub fn register_all(registry: &mut InitRegistry, global: bool, remove_directory:
 // ── McpRegistration (priority 10) ────────────────────────────────────
 
 /// Registers/unregisters sah as an MCP server in all detected agent configs.
-pub struct McpRegistration {
-    global: bool,
-}
-
-impl McpRegistration {
-    /// Create a new McpRegistration component.
-    pub fn new(global: bool) -> Self {
-        Self { global }
-    }
-}
+///
+/// Derives global-vs-project behavior from the `InitScope` parameter passed
+/// to `init`/`deinit` — `InitScope::User` targets global agent configs,
+/// all other scopes target project-level configs.
+pub struct McpRegistration;
 
 impl Initializable for McpRegistration {
     /// The component name for MCP server registration.
@@ -63,7 +59,8 @@ impl Initializable for McpRegistration {
     }
 
     /// Install sah MCP server to all detected agents using mirdan's mcp_config.
-    fn init(&self, _scope: &InitScope, reporter: &dyn InitReporter) -> Vec<InitResult> {
+    fn init(&self, scope: &InitScope, reporter: &dyn InitReporter) -> Vec<InitResult> {
+        let global = matches!(scope, InitScope::User);
         let mut results = Vec::new();
 
         let config = match mirdan::agents::load_agents_config() {
@@ -85,7 +82,7 @@ impl Initializable for McpRegistration {
 
         let mut installed_count = 0;
         for agent in &agents {
-            if register_agent_mcp(&agent.def, &entry, self.global, reporter) {
+            if register_agent_mcp(&agent.def, &entry, global, reporter) {
                 installed_count += 1;
             }
         }
@@ -106,7 +103,8 @@ impl Initializable for McpRegistration {
     }
 
     /// Remove sah MCP server from all detected agents using mirdan's mcp_config.
-    fn deinit(&self, _scope: &InitScope, reporter: &dyn InitReporter) -> Vec<InitResult> {
+    fn deinit(&self, scope: &InitScope, reporter: &dyn InitReporter) -> Vec<InitResult> {
+        let global = matches!(scope, InitScope::User);
         let config = match mirdan::agents::load_agents_config() {
             Ok(c) => c,
             Err(e) => {
@@ -120,7 +118,7 @@ impl Initializable for McpRegistration {
 
         let mut removed_count = 0;
         for agent in &agents {
-            if unregister_agent_mcp(&agent.def, self.global, reporter) {
+            if unregister_agent_mcp(&agent.def, global, reporter) {
                 removed_count += 1;
             }
         }
@@ -631,308 +629,13 @@ impl Initializable for ProjectStructure {
     }
 }
 
-// ── SkillDeployment (priority 30) ────────────────────────────────────
-
-/// Deploys/removes builtin skills via mirdan's store + lockfile.
-pub struct SkillDeployment {
-    global: bool,
-}
-
-impl SkillDeployment {
-    /// Create a new SkillDeployment component.
-    pub fn new(global: bool) -> Self {
-        Self { global }
-    }
-}
-
-impl Initializable for SkillDeployment {
-    /// The component name for skill deployment.
-    fn name(&self) -> &str {
-        "skill-deployment"
-    }
-
-    /// Component category: deployment tasks.
-    fn category(&self) -> &str {
-        "deployment"
-    }
-
-    /// Component priority: 30 (runs after structure setup).
-    fn priority(&self) -> i32 {
-        30
-    }
-
-    /// Install builtin skills via mirdan's deploy + lockfile.
-    ///
-    /// Skill instructions are rendered through the prompt library's Liquid template
-    /// engine before writing to disk, so `{% include %}` partials are expanded.
-    fn init(&self, _scope: &InitScope, reporter: &dyn InitReporter) -> Vec<InitResult> {
-        match deploy_all_skills(self.global, reporter) {
-            Ok(msg) => vec![InitResult::ok(self.name(), msg)],
-            Err(e) => vec![InitResult::error(self.name(), e)],
-        }
-    }
-
-    /// Remove builtin skill symlinks from agent directories and clean up the .skills/ store.
-    fn deinit(&self, _scope: &InitScope, reporter: &dyn InitReporter) -> Vec<InitResult> {
-        use swissarmyhammer_skills::SkillResolver;
-
-        let store_dir = mirdan::store::skill_store_dir(self.global);
-
-        let config = match mirdan::agents::load_agents_config() {
-            Ok(c) => c,
-            Err(e) => {
-                return vec![InitResult::error(
-                    self.name(),
-                    format!("Failed to load agents config: {}", e),
-                )];
-            }
-        };
-        let agents = mirdan::agents::get_detected_agents(&config);
-
-        let resolver = SkillResolver::new();
-        let builtins = resolver.resolve_builtins();
-        let builtin_names: Vec<String> = builtins.keys().cloned().collect();
-
-        let link_dirs: Vec<std::path::PathBuf> = agents
-            .iter()
-            .map(|agent| {
-                if self.global {
-                    mirdan::agents::agent_global_skill_dir(&agent.def)
-                } else {
-                    mirdan::agents::agent_project_skill_dir(&agent.def)
-                }
-            })
-            .collect();
-
-        let symlink_policies: Vec<_> = agents
-            .iter()
-            .map(|agent| agent.def.symlink_policy.clone())
-            .collect();
-
-        let agent_names: Vec<String> = agents.iter().map(|a| a.def.id.clone()).collect();
-
-        remove_store_entries(
-            &store_dir,
-            &builtin_names,
-            &link_dirs,
-            &symlink_policies,
-            "skill",
-            reporter,
-        );
-
-        reporter.emit(&InitEvent::Action {
-            verb: "Removed".to_string(),
-            message: format!(
-                "{} skills from {}",
-                builtin_names.len(),
-                agent_names.join(", ")
-            ),
-        });
-
-        vec![InitResult::ok(self.name(), "Builtin skills removed")]
-    }
-}
-
-/// Deploy a single builtin skill to a temp dir and then to agents.
-///
-/// Returns the list of agent targets on success, or an error message.
-fn deploy_single_skill(
-    name: &str,
-    skill: &swissarmyhammer_skills::Skill,
-    prompt_library: &PromptLibrary,
-    template_context: &TemplateContext,
-    global: bool,
-    reporter: &dyn InitReporter,
-) -> Result<Vec<String>, String> {
-    if !is_safe_name(name) {
-        return Err(format!("Unsafe skill name: {:?}", name));
-    }
-
-    let temp_dir = tempfile::tempdir().map_err(|e| format!("Failed to create temp dir: {}", e))?;
-    let skill_dir = temp_dir.path().join(name);
-    fs::create_dir_all(&skill_dir)
-        .map_err(|e| format!("Failed to create temp skill dir: {}", e))?;
-
-    let rendered_skill =
-        render_skill_instructions(skill, prompt_library, template_context, reporter);
-
-    let skill_md_path = skill_dir.join("SKILL.md");
-    let content = format_skill_md(&rendered_skill);
-    fs::write(&skill_md_path, &content)
-        .map_err(|e| format!("Failed to write {}: {}", skill_md_path.display(), e))?;
-
-    for (filename, file_content) in &skill.resources.files {
-        if !is_safe_name(filename) {
-            return Err(format!("Unsafe resource filename: {:?}", filename));
-        }
-        let file_path = skill_dir.join(filename);
-        fs::write(&file_path, file_content)
-            .map_err(|e| format!("Failed to write {}: {}", file_path.display(), e))?;
-    }
-
-    mirdan::install::deploy_skill_to_agents(name, &skill_dir, None, global)
-        .map_err(|e| format!("Failed to deploy skill '{}': {}", name, e))
-}
-
-/// Deploy all builtin skills, update lockfile, and report results.
-fn deploy_all_skills(global: bool, reporter: &dyn InitReporter) -> Result<String, String> {
-    use swissarmyhammer_skills::SkillResolver;
-
-    let resolver = SkillResolver::new();
-    let skills = resolver.resolve_builtins();
-
-    let prompt_library = PromptLibrary::default();
-    let mut template_context = TemplateContext::new();
-    template_context.set(
-        "version".to_string(),
-        serde_json::json!(env!("CARGO_PKG_VERSION")),
-    );
-
-    let project_root =
-        std::env::current_dir().map_err(|e| format!("Failed to get current directory: {}", e))?;
-    let mut lockfile = mirdan::lockfile::Lockfile::load(&project_root)
-        .map_err(|e| format!("Failed to load lockfile: {}", e))?;
-
-    let mut installed_count = 0;
-    let mut skill_targets: Vec<String> = Vec::new();
-
-    for (name, skill) in &skills {
-        let targets = deploy_single_skill(
-            name,
-            skill,
-            &prompt_library,
-            &template_context,
-            global,
-            reporter,
-        )?;
-        if skill_targets.is_empty() {
-            skill_targets = targets.clone();
-        }
-        lockfile.add_package(
-            name.clone(),
-            mirdan::lockfile::LockedPackage {
-                package_type: mirdan::package_type::PackageType::Skill,
-                version: "0.0.0".to_string(),
-                resolved: "builtin".to_string(),
-                integrity: String::new(),
-                installed_at: chrono::Utc::now().to_rfc3339(),
-                targets,
-            },
-        );
-        installed_count += 1;
-    }
-
-    save_lockfile_and_report(
-        &lockfile,
-        &project_root,
-        installed_count,
-        "skills",
-        &skill_targets,
-        reporter,
-    )?;
-    Ok(format!("Deployed {} builtin skills", installed_count))
-}
-
-/// Render skill instructions and metadata through the prompt library's Liquid template engine.
-///
-/// This expands `{% include %}` partials and `{{version}}` variables so the
-/// installed SKILL.md contains the full rendered content rather than raw Liquid tags.
-fn render_skill_instructions(
-    skill: &swissarmyhammer_skills::Skill,
-    prompt_library: &PromptLibrary,
-    template_context: &TemplateContext,
-    reporter: &dyn InitReporter,
-) -> swissarmyhammer_skills::Skill {
-    let rendered_instructions =
-        match prompt_library.render_text(&skill.instructions, template_context) {
-            Ok(rendered) => rendered,
-            Err(e) => {
-                reporter.emit(&InitEvent::Warning {
-                    message: format!(
-                        "Failed to render partials for skill '{}': {}",
-                        skill.name, e
-                    ),
-                });
-                skill.instructions.clone()
-            }
-        };
-
-    let mut rendered = skill.clone();
-    rendered.instructions = rendered_instructions;
-
-    // Render template variables in metadata values (e.g., version: "{{version}}")
-    for value in rendered.metadata.values_mut() {
-        if value.contains("{{") {
-            if let Ok(rendered_value) = prompt_library.render_text(value, template_context) {
-                *value = rendered_value;
-            }
-        }
-    }
-
-    rendered
-}
-
-/// Format a Skill back into SKILL.md content (frontmatter + body).
-fn format_skill_md(skill: &swissarmyhammer_skills::Skill) -> String {
-    // Build a frontmatter map and let serde_yaml_ng handle proper escaping/quoting
-    let mut frontmatter = serde_yaml_ng::Mapping::new();
-    frontmatter.insert(
-        serde_yaml_ng::Value::String("name".to_string()),
-        serde_yaml_ng::Value::String(skill.name.to_string()),
-    );
-    frontmatter.insert(
-        serde_yaml_ng::Value::String("description".to_string()),
-        serde_yaml_ng::Value::String(skill.description.clone()),
-    );
-
-    if !skill.allowed_tools.is_empty() {
-        let tools = skill.allowed_tools.join(" ");
-        frontmatter.insert(
-            serde_yaml_ng::Value::String("allowed-tools".to_string()),
-            serde_yaml_ng::Value::String(tools),
-        );
-    }
-
-    if let Some(ref license) = skill.license {
-        frontmatter.insert(
-            serde_yaml_ng::Value::String("license".to_string()),
-            serde_yaml_ng::Value::String(license.clone()),
-        );
-    }
-
-    if !skill.metadata.is_empty() {
-        let mut meta_map = serde_yaml_ng::Mapping::new();
-        let mut keys: Vec<_> = skill.metadata.keys().collect();
-        keys.sort();
-        for key in keys {
-            meta_map.insert(
-                serde_yaml_ng::Value::String(key.clone()),
-                serde_yaml_ng::Value::String(skill.metadata[key].clone()),
-            );
-        }
-        frontmatter.insert(
-            serde_yaml_ng::Value::String("metadata".to_string()),
-            serde_yaml_ng::Value::Mapping(meta_map),
-        );
-    }
-
-    let yaml = serde_yaml_ng::to_string(&frontmatter).unwrap_or_default();
-    format!("---\n{}---\n\n{}\n", yaml, skill.instructions)
-}
-
 // ── AgentDeployment (priority 31) ────────────────────────────────────
 
 /// Deploys/removes builtin agents via mirdan's store + lockfile.
-pub struct AgentDeployment {
-    global: bool,
-}
-
-impl AgentDeployment {
-    /// Create a new AgentDeployment component.
-    pub fn new(global: bool) -> Self {
-        Self { global }
-    }
-}
+///
+/// Derives global-vs-project behavior from the `InitScope` parameter passed
+/// to `init`/`deinit`.
+pub struct AgentDeployment;
 
 impl Initializable for AgentDeployment {
     /// The component name for agent deployment.
@@ -954,18 +657,20 @@ impl Initializable for AgentDeployment {
     ///
     /// Agent instructions are rendered through the prompt library's Liquid template
     /// engine before writing to disk, so `{% include %}` partials are expanded.
-    fn init(&self, _scope: &InitScope, reporter: &dyn InitReporter) -> Vec<InitResult> {
-        match init_all_agents(self.global, reporter) {
+    fn init(&self, scope: &InitScope, reporter: &dyn InitReporter) -> Vec<InitResult> {
+        let global = matches!(scope, InitScope::User);
+        match init_all_agents(global, reporter) {
             Ok(msg) => vec![InitResult::ok(self.name(), msg)],
             Err(e) => vec![InitResult::error(self.name(), e)],
         }
     }
 
     /// Remove builtin agent symlinks from coding agent directories and clean up the .agents/ store.
-    fn deinit(&self, _scope: &InitScope, reporter: &dyn InitReporter) -> Vec<InitResult> {
+    fn deinit(&self, scope: &InitScope, reporter: &dyn InitReporter) -> Vec<InitResult> {
         use swissarmyhammer_agents::AgentResolver;
 
-        let store_dir = mirdan::store::agent_store_dir(self.global);
+        let global = matches!(scope, InitScope::User);
+        let store_dir = mirdan::store::agent_store_dir(global);
 
         let config = match mirdan::agents::load_agents_config() {
             Ok(c) => c,
@@ -986,7 +691,7 @@ impl Initializable for AgentDeployment {
         let mut symlink_policies: Vec<mirdan::agents::SymlinkPolicy> = Vec::new();
 
         for agent in &agents {
-            let agent_dir = if self.global {
+            let agent_dir = if global {
                 mirdan::agents::agent_global_agent_dir(&agent.def)
             } else {
                 mirdan::agents::agent_project_agent_dir(&agent.def)
@@ -1481,7 +1186,7 @@ fn cleanup_empty_mcp_servers(settings: &mut serde_json::Value) {
 }
 
 /// Save lockfile and emit a reporter event if any packages were installed.
-fn save_lockfile_and_report(
+pub(crate) fn save_lockfile_and_report(
     lockfile: &mirdan::lockfile::Lockfile,
     project_root: &std::path::Path,
     count: usize,
@@ -1505,7 +1210,7 @@ fn save_lockfile_and_report(
 ///
 /// Rejects names containing path separators, parent-directory references,
 /// or absolute paths to prevent path traversal attacks.
-fn is_safe_name(name: &str) -> bool {
+pub(crate) fn is_safe_name(name: &str) -> bool {
     !name.is_empty()
         && !name.contains('/')
         && !name.contains('\\')

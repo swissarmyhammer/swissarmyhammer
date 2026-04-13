@@ -1214,7 +1214,7 @@ impl ParameterValidator {
 
                 // Choice validation for string parameters with choices
                 if let Some(choices) = &param.choices {
-                    if !choices.contains(&str_value.to_string()) {
+                    if !choices.iter().any(|c| c == str_value) {
                         return Err(ParameterError::InvalidChoice {
                             name: param.name.clone(),
                             value: str_value.to_string(),
@@ -1263,7 +1263,7 @@ impl ParameterValidator {
                 let str_value = value.as_str().unwrap();
 
                 if let Some(choices) = &param.choices {
-                    if !choices.contains(&str_value.to_string()) {
+                    if !choices.iter().any(|c| c == str_value) {
                         return Err(ParameterError::InvalidChoice {
                             name: param.name.clone(),
                             value: str_value.to_string(),
@@ -1293,7 +1293,7 @@ impl ParameterValidator {
                 if let Some(choices) = &param.choices {
                     for item in array {
                         if let Some(str_item) = item.as_str() {
-                            if !choices.contains(&str_item.to_string()) {
+                            if !choices.iter().any(|c| c == str_item) {
                                 return Err(ParameterError::InvalidChoice {
                                     name: param.name.clone(),
                                     value: str_item.to_string(),

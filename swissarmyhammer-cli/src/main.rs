@@ -2,6 +2,7 @@ use std::process;
 use std::sync::atomic::{AtomicBool, Ordering};
 mod banner;
 mod cli;
+mod cli_conversions;
 mod commands;
 mod context;
 mod dynamic_cli;
@@ -18,10 +19,8 @@ mod validate;
 use crate::context::CliContext;
 use dynamic_cli::CliBuilder;
 use exit_codes::{EXIT_ERROR, EXIT_SUCCESS, EXIT_WARNING};
-use logging::FileWriterGuard;
 use mcp_integration::CliToolContext;
 use owo_colors::OwoColorize;
-use std::path::PathBuf;
 use std::sync::Arc;
 use swissarmyhammer_config::TemplateContext;
 
@@ -222,28 +221,6 @@ async fn display_verbose_validation_report(
         }
     }
     eprintln!(); // Add blank line
-}
-
-/// Ensure the .sah directory exists
-///
-/// This function creates the .sah directory if it doesn't exist,
-/// providing a consistent way to handle directory creation across the CLI.
-/// It also ensures a .gitignore file is created to exclude temporary files.
-///
-/// # Returns
-/// The path to the .sah directory or an error if creation fails
-fn ensure_swissarmyhammer_dir() -> Result<PathBuf, std::io::Error> {
-    use swissarmyhammer_common::SwissarmyhammerDirectory;
-
-    // Try to create from git root first, fall back to current directory
-    let sah_dir = SwissarmyhammerDirectory::from_git_root()
-        .or_else(|_| {
-            // If not in a git repo, create in current directory
-            SwissarmyhammerDirectory::from_custom_root(std::env::current_dir()?)
-        })
-        .map_err(|e| std::io::Error::other(e.to_string()))?;
-
-    Ok(sah_dir.root().to_path_buf())
 }
 
 /// Report an error and return EXIT_ERROR code
@@ -641,7 +618,7 @@ async fn handle_dynamic_matches(
         .is_some_and(|(name, _)| name == "serve");
 
     // Initialize logging similar to static CLI
-    configure_logging(flags.verbose, flags.debug, flags.quiet, is_serve_command).await;
+    logging::configure_logging(flags.verbose, flags.debug, flags.quiet, is_serve_command).await;
 
     // Handle --validate-tools flag
     if flags.validate_tools {
@@ -762,85 +739,104 @@ async fn handle_dynamic_tool_command(
     matches: &clap::ArgMatches,
     cli_tool_context: Arc<CliToolContext>,
 ) -> i32 {
-    // Look up the tool by category and CLI name
     let full_tool_name = match lookup_tool_by_cli_name(&cli_tool_context, category, tool_name).await
     {
         Ok(name) => name,
         Err(e) => return report_error_and_exit(e),
     };
 
-    // Check if tool has operations (subcommands)
+    let has_operations = match tool_has_operations(&cli_tool_context, &full_tool_name).await {
+        Ok(v) => v,
+        Err(e) => return report_error_and_exit(e),
+    };
+    let schema = match tool_schema(&cli_tool_context, &full_tool_name).await {
+        Ok(v) => v,
+        Err(e) => return report_error_and_exit(e),
+    };
+
+    let arguments = match build_tool_arguments(
+        matches,
+        tool_name,
+        &full_tool_name,
+        has_operations,
+        &schema,
+        &cli_tool_context,
+    )
+    .await
+    {
+        Ok(args) => merge_stdin_arguments(args),
+        Err(e) => return report_error_and_exit(e),
+    };
+
+    execute_tool_and_format(&cli_tool_context, &full_tool_name, arguments).await
+}
+
+async fn tool_has_operations(
+    cli_tool_context: &CliToolContext,
+    full_tool_name: &str,
+) -> Result<bool, String> {
     let registry_arc = cli_tool_context.get_tool_registry_arc();
     let registry = registry_arc.read().await;
-    let tool = match registry.get_tool(&full_tool_name) {
-        Some(t) => t,
-        None => return report_error_and_exit(format!("Tool not found: {}", full_tool_name)),
-    };
+    let tool = registry
+        .get_tool(full_tool_name)
+        .ok_or_else(|| format!("Tool not found: {}", full_tool_name))?;
+    Ok(!tool.operations().is_empty())
+}
 
-    let operations = tool.operations();
-    let schema = tool.schema();
-    drop(registry); // Release lock before executing
+async fn tool_schema(
+    cli_tool_context: &CliToolContext,
+    full_tool_name: &str,
+) -> Result<serde_json::Value, String> {
+    let registry_arc = cli_tool_context.get_tool_registry_arc();
+    let registry = registry_arc.read().await;
+    let tool = registry
+        .get_tool(full_tool_name)
+        .ok_or_else(|| format!("Tool not found: {}", full_tool_name))?;
+    Ok(tool.schema())
+}
 
-    // Convert clap matches to JSON arguments
-    let arguments = if !operations.is_empty() {
-        // Operation-based tool with noun-grouped structure
-        // Pattern: tool -> noun -> verb (e.g., kanban -> board -> init)
-        match matches.subcommand() {
-            Some((noun, noun_matches)) => {
-                // Look for verb subcommand within the noun
-                match noun_matches.subcommand() {
-                    Some((verb, verb_matches)) => {
-                        // Construct "verb noun" for the op parameter (e.g., "init board")
-                        let op_string = format!("{} {}", verb, noun);
-                        match convert_operation_matches_to_arguments(
-                            verb_matches,
-                            &op_string,
-                            &schema,
-                        ) {
-                            Ok(args) => args,
-                            Err(e) => {
-                                return report_error_and_exit(format!(
-                                    "Error processing arguments: {}",
-                                    e
-                                ))
-                            }
-                        }
-                    }
-                    None => {
-                        // No verb subcommand - show help for noun
-                        return report_error_and_exit(format!(
-                            "No verb specified for '{}'. Use --help to see available operations for '{}'.",
-                            noun, noun
-                        ));
-                    }
-                }
-            }
-            None => {
-                // No noun subcommand - show help
-                return report_error_and_exit(format!(
-                    "No noun specified for '{}'. Use --help to see available nouns.",
-                    tool_name
-                ));
-            }
-        }
-    } else {
-        // Schema-based tool
-        match convert_matches_to_arguments(matches, &full_tool_name, &cli_tool_context).await {
-            Ok(args) => args,
-            Err(e) => return report_error_and_exit(format!("Error processing arguments: {}", e)),
-        }
-    };
+async fn build_tool_arguments(
+    matches: &clap::ArgMatches,
+    tool_name: &str,
+    full_tool_name: &str,
+    has_operations: bool,
+    schema: &serde_json::Value,
+    cli_tool_context: &CliToolContext,
+) -> Result<serde_json::Map<String, serde_json::Value>, String> {
+    if !has_operations {
+        return convert_matches_to_arguments(matches, full_tool_name, cli_tool_context)
+            .await
+            .map_err(|e| format!("Error processing arguments: {}", e));
+    }
 
-    // Merge stdin if piped (not a TTY) — enables `echo '{"session_id":"abc"}' | sah tool ralph ralph check`
-    let arguments = merge_stdin_arguments(arguments);
+    // Operation-based tool: tool -> noun -> verb (e.g., kanban -> board -> init)
+    let (noun, noun_matches) = matches.subcommand().ok_or_else(|| {
+        format!(
+            "No noun specified for '{}'. Use --help to see available nouns.",
+            tool_name
+        )
+    })?;
+    let (verb, verb_matches) = noun_matches.subcommand().ok_or_else(|| {
+        format!(
+            "No verb specified for '{}'. Use --help to see available operations for '{}'.",
+            noun, noun
+        )
+    })?;
+    let op_string = format!("{} {}", verb, noun);
+    convert_operation_matches_to_arguments(verb_matches, &op_string, schema)
+        .map_err(|e| format!("Error processing arguments: {}", e))
+}
 
-    // Execute the MCP tool
+async fn execute_tool_and_format(
+    cli_tool_context: &CliToolContext,
+    full_tool_name: &str,
+    arguments: serde_json::Map<String, serde_json::Value>,
+) -> i32 {
     match cli_tool_context
-        .execute_tool(&full_tool_name, arguments)
+        .execute_tool(full_tool_name, arguments)
         .await
     {
         Ok(result) => {
-            // Format and display the result
             if result.is_error.unwrap_or(false) {
                 eprintln!(
                     "{}",
@@ -1344,140 +1340,6 @@ async fn handle_agent_command(matches: &clap::ArgMatches, context: &CliContext) 
     };
 
     commands::agent::handle_command(subcommand, context).await
-}
-
-/// Determine the appropriate log level based on configuration flags
-///
-/// This function centralizes the logic for determining the log level based on
-/// verbose, debug, quiet, and MCP mode flags.
-///
-/// # Arguments
-/// * `is_mcp_mode` - Whether MCP mode is active
-/// * `verbose` - Whether verbose logging is enabled
-/// * `debug` - Whether debug logging is enabled
-/// * `quiet` - Whether quiet mode is enabled
-///
-/// # Returns
-/// The appropriate tracing Level
-fn determine_log_level(
-    is_mcp_mode: bool,
-    verbose: bool,
-    debug: bool,
-    quiet: bool,
-) -> tracing::Level {
-    use tracing::Level;
-
-    if is_mcp_mode {
-        Level::DEBUG // More verbose for MCP mode to help with debugging
-    } else if quiet {
-        Level::ERROR
-    } else if debug {
-        Level::DEBUG
-    } else if verbose {
-        Level::TRACE
-    } else {
-        Level::INFO
-    }
-}
-
-/// Create an EnvFilter with the specified log level
-///
-/// This function centralizes the creation of EnvFilter instances to ensure
-/// consistent filter configuration across all logging setups.
-///
-/// # Arguments
-/// * `log_level` - The tracing level to use
-///
-/// # Returns
-/// An EnvFilter configured with the specified log level
-fn create_env_filter(log_level: tracing::Level) -> tracing_subscriber::EnvFilter {
-    use tracing_subscriber::EnvFilter;
-    EnvFilter::new(format!("rmcp=warn,{log_level}"))
-}
-
-/// Setup MCP logging configuration with file output
-///
-/// This function handles the creation of the log directory and file for MCP mode,
-/// reducing nesting in the main configure_logging function.
-///
-/// # Arguments
-/// * `log_level` - The tracing level to use
-///
-/// # Returns
-/// Result indicating success or failure
-fn setup_mcp_logging(
-    log_level: tracing::Level,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    // Set flag to prevent unified server from also configuring logging
-    std::env::set_var("SAH_CLI_MODE", "1");
-
-    // In MCP mode, write logs to .sah/mcp.log for debugging
-    let log_dir = ensure_swissarmyhammer_dir()?;
-
-    let log_file_name =
-        std::env::var("SWISSARMYHAMMER_LOG_FILE").unwrap_or_else(|_| "mcp.log".to_string());
-    let log_file_path = log_dir.join(log_file_name);
-    let file = std::fs::File::create(&log_file_path)?;
-
-    let shared_file = Arc::new(std::sync::Mutex::new(file));
-    setup_logging_with_writer(log_level, move || {
-        let file = shared_file.clone();
-        Box::new(FileWriterGuard::new(file)) as Box<dyn std::io::Write>
-    });
-
-    Ok(())
-}
-
-/// Setup logging with the specified log level and writer
-///
-/// This helper function consolidates the common pattern of creating an EnvFilter
-/// and building a tracing registry with the specified writer.
-///
-/// # Arguments
-/// * `log_level` - The tracing level to use
-/// * `writer` - The writer to use for log output
-fn setup_logging_with_writer<W>(log_level: tracing::Level, writer: W)
-where
-    W: for<'a> tracing_subscriber::fmt::MakeWriter<'a> + Send + Sync + 'static,
-{
-    use tracing_subscriber::prelude::*;
-
-    let filter = create_env_filter(log_level);
-    tracing_subscriber::registry()
-        .with(filter)
-        .with(
-            tracing_subscriber::fmt::layer()
-                .with_writer(writer)
-                .with_ansi(false),
-        )
-        .init();
-}
-
-/// Setup stderr logging with the specified log level
-///
-/// This function provides a reusable way to configure stderr logging,
-/// ensuring consistent fallback behavior across logging configurations.
-///
-/// # Arguments
-/// * `log_level` - The tracing level to use
-fn setup_stderr_logging(log_level: tracing::Level) {
-    setup_logging_with_writer(log_level, std::io::stderr);
-}
-
-async fn configure_logging(verbose: bool, debug: bool, quiet: bool, is_mcp_mode: bool) {
-    let log_level = determine_log_level(is_mcp_mode, verbose, debug, quiet);
-
-    if is_mcp_mode {
-        if let Err(e) = setup_mcp_logging(log_level) {
-            eprintln!(
-                "Warning: Could not setup MCP logging: {}. Falling back to stderr.",
-                e
-            );
-            setup_stderr_logging(log_level);
-        }
-    } else {
-        setup_stderr_logging(log_level);
-    }
 }
 
 #[cfg(test)]

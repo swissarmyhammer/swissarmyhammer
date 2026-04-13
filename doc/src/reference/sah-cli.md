@@ -17,7 +17,6 @@ brew install swissarmyhammer/tap/swissarmyhammer
 * [`swissarmyhammer deinit`↴](#swissarmyhammer-deinit)
 * [`swissarmyhammer doctor`↴](#swissarmyhammer-doctor)
 * [`swissarmyhammer prompt`↴](#swissarmyhammer-prompt)
-* [`swissarmyhammer flow`↴](#swissarmyhammer-flow)
 * [`swissarmyhammer completion`↴](#swissarmyhammer-completion)
 * [`swissarmyhammer validate`↴](#swissarmyhammer-validate)
 * [`swissarmyhammer model`↴](#swissarmyhammer-model)
@@ -26,6 +25,11 @@ brew install swissarmyhammer/tap/swissarmyhammer
 * [`swissarmyhammer model use`↴](#swissarmyhammer-model-use)
 * [`swissarmyhammer agent`↴](#swissarmyhammer-agent)
 * [`swissarmyhammer agent acp`↴](#swissarmyhammer-agent-acp)
+* [`swissarmyhammer tools`↴](#swissarmyhammer-tools)
+* [`swissarmyhammer tools enable`↴](#swissarmyhammer-tools-enable)
+* [`swissarmyhammer tools disable`↴](#swissarmyhammer-tools-disable)
+* [`swissarmyhammer statusline`↴](#swissarmyhammer-statusline)
+* [`swissarmyhammer statusline config`↴](#swissarmyhammer-statusline-config)
 
 ## `swissarmyhammer`
 
@@ -45,9 +49,8 @@ Main commands:
   serve         Run as MCP server (default when invoked via stdio)
   doctor        Diagnose configuration and setup issues
   prompt        Manage and test prompts with interactive capabilities
-  flow          Execute and manage workflows for complex task automation
   agent         Manage and interact with specialized agents for specific use cases
-  validate      Validate prompt files and workflows for syntax and best practices
+  validate      Validate prompt files for syntax and best practices
   completion    Generate shell completion scripts
 
 Example usage:
@@ -58,7 +61,6 @@ Example usage:
   swissarmyhammer --debug prompt test help       # Test prompt with debug info
   swissarmyhammer agent list                     # List available agents
   swissarmyhammer agent use claude-code          # Apply Claude Code agent to project
-  swissarmyhammer flow run code-review           # Execute code review workflow
 
 
 **Usage:** `swissarmyhammer [OPTIONS] [COMMAND]`
@@ -66,15 +68,16 @@ Example usage:
 ###### **Subcommands:**
 
 * `serve` — Run as MCP server (default when invoked via stdio)
-* `init` — Initialize sah MCP server in Claude Code settings
-* `deinit` — Remove sah MCP server from Claude Code settings
+* `init` — Set up sah for all detected AI coding agents (skills + MCP)
+* `deinit` — Remove sah from all detected AI coding agents (skills + MCP)
 * `doctor` — Diagnose configuration and setup issues
 * `prompt` — Manage and test prompts
-* `flow` — Execute and manage workflows
 * `completion` — Generate shell completion scripts
-* `validate` — Validate prompt files and workflows for syntax and best practices
+* `validate` — Validate prompt files for syntax and best practices
 * `model` — Manage and interact with models
 * `agent` — Manage and interact with Agent Client Protocol server
+* `tools` — Manage tool enable/disable state
+* `statusline` — Render statusline from Claude Code JSON (stdin) or dump config
 
 ###### **Options:**
 
@@ -146,18 +149,19 @@ Example:
 ## `swissarmyhammer init`
 
 
-Initialize SwissArmyHammer for use with Claude Code.
+Set up SwissArmyHammer for all detected AI coding agents.
 
 This command:
-1. Registers sah as an MCP server in Claude Code settings
-2. Creates the .sah/ project directory (workflows/) and .prompts/
+1. Registers sah as an MCP server for all detected agents (Claude Code, Cursor, Windsurf, etc.)
+2. Creates the .sah/ project directory and .prompts/
+3. Installs builtin skills to the central .skills/ store with symlinks to each agent
 
 The command is idempotent - safe to run multiple times.
 
 Targets:
-  project   Write to .mcp.json (default, shared with team via git)
+  project   Write to project-level config files (default, shared with team via git)
   local     Write to ~/.claude.json per-project config (personal, not committed)
-  user      Write to ~/.claude.json global config (all projects)
+  user      Write to global config files (all projects)
 
 Examples:
   sah init              # Project-level setup (default)
@@ -187,15 +191,15 @@ Examples:
 ## `swissarmyhammer deinit`
 
 
-Remove SwissArmyHammer MCP server configuration from Claude Code settings.
+Remove SwissArmyHammer from all detected AI coding agents.
 
-By default, only the MCP server entry is removed from the settings file.
-Use --remove-directory to also delete the .sah/ project directory.
+By default, only the MCP server entries are removed from agent config files.
+Use --remove-directory to also delete .sah/, .prompts/, and installed skills.
 
 Examples:
   sah deinit                     # Remove from project settings
   sah deinit user                # Remove from user settings
-  sah deinit --remove-directory  # Also remove .sah/
+  sah deinit --remove-directory  # Also remove .sah/ and skills
 
 
 **Usage:** `swissarmyhammer deinit [OPTIONS] [TARGET]`
@@ -314,117 +318,6 @@ Examples:
 ###### **Arguments:**
 
 * `<ARGS>` — Subcommand and arguments for prompt (handled dynamically)
-
-
-
-## `swissarmyhammer flow`
-
-Automate complex development workflows with powerful, resumable state machines.
-
-Workflows orchestrate multi-step processes including code reviews, deployments,
-testing, and AI-powered operations. Define once, run reliably, resume anywhere.
-
-WORKFLOW POWER
-
-State Machine Architecture:
-• Define complex processes as declarative state machines
-• Execute actions, tools, and AI commands in sequence or parallel
-• Handle conditional logic, loops, and error recovery
-• Resume interrupted workflows exactly where they stopped
-• Track execution state, variables, and progress
-
-Built for Reliability:
-• Pause and resume workflows without losing state
-• Interactive mode for step-by-step control and debugging
-• Dry-run mode to preview execution without side effects
-• Comprehensive logging and status tracking
-• Automatic error handling and recovery options
-
-AI Integration:
-• Execute Claude commands within workflow steps
-• Pass variables and context between AI operations
-• Chain AI-powered analysis, planning, and implementation
-• Combine automated and AI-assisted tasks seamlessly
-
-COMMANDS
-
-The flow system provides comprehensive workflow management:
-
-• run - Start a new workflow execution with variables
-• resume - Continue a paused or interrupted workflow run
-• list - Display all available workflows from all sources
-• status - Check execution state and progress of a run
-• logs - View detailed execution logs and step history
-
-WORKFLOW DISCOVERY
-
-Workflows are loaded from multiple sources:
-• Built-in workflows - Standard development workflows included
-• User workflows (~/.sah/workflows/) - Personal automations
-• Project workflows (./workflows/) - Project-specific processes
-
-COMMON WORKFLOWS
-
-Start a workflow with parameters:
-  swissarmyhammer flow run code-review --vars file=main.rs
-
-Preview execution without running:
-  swissarmyhammer flow run deploy --dry-run
-
-Resume after interruption:
-  swissarmyhammer flow resume a1b2c3d4
-
-Interactive step-through debugging:
-  swissarmyhammer flow resume a1b2c3d4 --interactive
-
-Monitor workflow status:
-  swissarmyhammer flow status a1b2c3d4 --watch
-
-View execution history:
-  swissarmyhammer flow logs a1b2c3d4
-
-List available workflows:
-  swissarmyhammer flow list --format json
-
-EXECUTION OPTIONS
-
-Pass variables to workflows:
-  --vars key=value              # Single variable
-  --vars file=main.rs --vars author=jane  # Multiple variables
-
-Control execution:
-  --interactive                 # Step-by-step confirmation
-  --dry-run                     # Show plan without executing
-
-EXAMPLES
-
-Run code review workflow:
-  swissarmyhammer flow run code-review --vars file=main.rs --vars severity=high
-
-Test deployment workflow:
-  swissarmyhammer flow run deploy --dry-run
-
-Resume interrupted workflow:
-  swissarmyhammer flow resume a1b2c3d4 --interactive
-
-Check workflow status:
-  swissarmyhammer flow status a1b2c3d4
-
-View execution logs:
-  swissarmyhammer flow logs a1b2c3d4 --format json
-
-List available workflows:
-  swissarmyhammer flow list
-
-Workflows bring automation, reliability, and AI-powered intelligence to your
-development processes. Define complex operations once and execute them
-consistently every time.
-
-**Usage:** `swissarmyhammer flow [ARGS]...`
-
-###### **Arguments:**
-
-* `<ARGS>` — Workflow name or 'list' command followed by arguments
 
 
 
@@ -859,7 +752,7 @@ provide entirely new configurations for specialized workflows.
 ###### **Subcommands:**
 
 * `list` — List available models
-* `show` — Show current model use case assignments
+* `show` — Show current model configuration
 * `use` — Use a specific model
 
 
@@ -906,18 +799,13 @@ Examples:
 ## `swissarmyhammer model show`
 
 
-Display current model use case assignments showing which model is configured
-for each use case in the project.
+Display the current model configured for this project.
 
-SwissArmyHammer supports configuring different models for different use cases:
-• root      - Default model for general operations
-• workflows - Model for workflow execution (plan, review, implement, etc.)
-
-This command shows the current assignment for each use case, including whether
-the assignment comes from explicit configuration or falls back to the root model.
+Shows the model name, source, and description. If no model is explicitly
+configured, the default (claude-code) is used.
 
 Examples:
-  sah model show                           # Show use case assignments
+  sah model show                           # Show current model
   sah model                               # Same as 'show' (default)
 
 
@@ -937,16 +825,12 @@ Examples:
 ## `swissarmyhammer model use`
 
 
-Apply a specific model configuration to the current project or for a specific use case.
+Apply a specific model configuration to the current project.
 
 This command finds the specified model by name and applies its configuration
 to the project by creating or updating .sah/sah.yaml. The model
 configuration determines how SwissArmyHammer executes AI workflows in your
 project, including which AI model to use and how to execute tools.
-
-SwissArmyHammer supports configuring different models for different use cases:
-• root      - Default model for general operations (default when use case not specified)
-• workflows - Model for workflow execution (plan, review, implement, etc.)
 
 Model precedence (highest to lowest):
 • User models: ~/.models/<name>.yaml
@@ -963,18 +847,16 @@ Common model types:
 • custom models  - User-defined configurations for specialized workflows
 
 Examples:
-  sah model use claude-code                # Apply Claude Code model to root use case
-  sah model use root claude-code           # Apply Claude Code model to root use case (explicit)
-  sah model use workflows claude-code      # Apply Claude Code to workflows use case
+  sah model use claude-code                # Apply Claude Code model
+  sah model use qwen-coder                # Apply Qwen Coder model
   sah --debug model use claude-code        # Apply with debug output
 
 
-**Usage:** `swissarmyhammer model use <first> [second]`
+**Usage:** `swissarmyhammer model use <name>`
 
 ###### **Arguments:**
 
-* `<first>` — First argument: either model name (sets root) OR use case (root, workflows)
-* `<second>` — Second argument: model name (required when first argument is a use case)
+* `<name>` — Model name to apply to the project
 
 
 
@@ -1054,9 +936,91 @@ For editor configuration:
 
 
 
-<hr/>
+## `swissarmyhammer tools`
 
-<small><i>
-    This document was generated automatically by
-    <a href="https://crates.io/crates/clap-markdown"><code>clap-markdown</code></a>.
-</i></small>
+
+Manage which MCP tools are enabled or disabled.
+
+Tools are enabled by default. Disable tools you don't need to reduce
+the tool surface visible to AI agents.
+
+Examples:
+  sah tools                          # List all tools with status
+  sah tools disable                  # Disable all tools
+  sah tools enable shell git         # Enable specific tools
+  sah tools disable kanban web       # Disable specific tools
+  sah tools enable                   # Enable all tools
+  sah tools --global disable web     # Disable web globally
+
+
+**Usage:** `swissarmyhammer tools [OPTIONS] [COMMAND]`
+
+###### **Subcommands:**
+
+* `enable` — Enable tools (all if no names given)
+* `disable` — Disable tools (all if no names given)
+
+###### **Options:**
+
+* `--global` — Write to global config (~/.sah/tools.yaml) instead of project
+
+
+
+## `swissarmyhammer tools enable`
+
+Enable tools (all if no names given)
+
+**Usage:** `swissarmyhammer tools enable [NAMES]...`
+
+###### **Arguments:**
+
+* `<NAMES>` — Tool names to enable (omit for all)
+
+
+
+## `swissarmyhammer tools disable`
+
+Disable tools (all if no names given)
+
+**Usage:** `swissarmyhammer tools disable [NAMES]...`
+
+###### **Arguments:**
+
+* `<NAMES>` — Tool names to disable (omit for all)
+
+
+
+## `swissarmyhammer statusline`
+
+
+Render a styled statusline for Claude Code integration.
+
+In normal mode, reads JSON from stdin and outputs styled ANSI text.
+Use 'sah statusline config' to dump the full annotated builtin config.
+
+The statusline is configured via YAML with 3-layer stacking:
+  1. Builtin defaults (embedded in binary)
+  2. User config (~/.sah/statusline/config.yaml)
+  3. Project config (.sah/statusline/config.yaml)
+
+Examples:
+  echo '{"model":{"display_name":"Opus"}}' | sah statusline
+  sah statusline config > .sah/statusline/config.yaml
+
+
+**Usage:** `swissarmyhammer statusline [COMMAND]`
+
+###### **Subcommands:**
+
+* `config` — Dump the full annotated builtin config to stdout
+
+
+
+## `swissarmyhammer statusline config`
+
+Dump the full annotated builtin config to stdout
+
+**Usage:** `swissarmyhammer statusline config`
+
+
+

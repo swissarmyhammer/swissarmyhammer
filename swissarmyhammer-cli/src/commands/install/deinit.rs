@@ -1,6 +1,7 @@
 //! Remove sah from all detected AI coding agents (skills + MCP).
 //!
-//! Delegates to composable `Initializable` components registered in `super::components`.
+//! Delegates to composable `Initializable` components registered via the
+//! top-level `commands::registry`.
 
 use std::time::Instant;
 
@@ -8,19 +9,18 @@ use crate::cli::InstallTarget;
 use swissarmyhammer_common::lifecycle::{InitRegistry, InitScope, InitStatus};
 use swissarmyhammer_common::reporter::{CliReporter, InitEvent, InitReporter};
 
-use super::components;
 use super::settings;
 
 /// Uninstall sah from all detected AI coding agents.
 ///
-/// Creates an `InitRegistry`, registers all components, and runs `deinit` in
+/// Creates an `InitRegistry`, registers all components via
+/// [`crate::commands::registry::register_all`], and runs `deinit` in
 /// reverse priority order. The `remove_directory` flag controls whether
 /// `ProjectStructure` removes `.sah/` and `.prompts/`.
 pub fn uninstall(target: InstallTarget, remove_directory: bool) -> Result<(), String> {
     let reporter = CliReporter;
     let start = Instant::now();
     let scope: InitScope = target.into();
-    let global = matches!(target, InstallTarget::User);
 
     crate::banner::print_banner_stderr();
     reporter.emit(&InitEvent::Header {
@@ -28,7 +28,7 @@ pub fn uninstall(target: InstallTarget, remove_directory: bool) -> Result<(), St
     });
 
     let mut registry = InitRegistry::new();
-    components::register_all(&mut registry, global, remove_directory);
+    crate::commands::registry::register_all(&mut registry, remove_directory);
 
     let results = registry.run_all_deinit(&scope, &reporter);
 
@@ -116,7 +116,7 @@ fn uninstall_deny_bash(reporter: &dyn InitReporter) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::components::{remove_if_symlink, remove_store_entries};
+    use crate::commands::install::components::{remove_if_symlink, remove_store_entries};
     use std::fs;
     use std::path::Path;
     use swissarmyhammer_common::NullReporter;

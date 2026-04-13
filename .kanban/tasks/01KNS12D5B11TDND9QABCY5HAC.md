@@ -4,8 +4,8 @@ assignees:
 depends_on:
 - 01KNS10MMDVZG731XKM390C682
 - 01KP0V8285PSG6GSMCVRXG8VRJ
-position_column: todo
-position_ordinal: ac80
+position_column: done
+position_ordinal: ffffffffffffffffffffffc880
 project: kanban-mcp
 title: 'kanban-cli: implement commands/registry.rs — KanbanMcpRegistration for init/deinit'
 ---
@@ -23,11 +23,11 @@ pub fn register_all(registry: &mut InitRegistry) {
 ```
 
 ## Acceptance Criteria
-- [ ] `kanban-cli/src/commands/registry.rs` exists
-- [ ] `KanbanMcpRegistration` handles MCP server registration only
-- [ ] `register_all` registers MCP registration + skill deployment (from commands/skill.rs)
-- [ ] `cargo check -p kanban-cli` passes
+- [x] `kanban-cli/src/commands/registry.rs` exists
+- [x] `KanbanMcpRegistration` handles MCP server registration only
+- [x] `register_all` registers MCP registration + skill deployment (from commands/skill.rs)
+- [x] `cargo check -p kanban-cli` passes
 
 ## Tests
-- [ ] Unit test: `KanbanMcpRegistration::name()` returns `"kanban-mcp-registration"`, priority 10
-- [ ] Unit test: `register_all` populates registry with exactly 2 components
+- [x] Unit test: `KanbanMcpRegistration::name()` returns `"kanban-mcp-registration"`, priority 10
+- [x] Unit test: `register_all` populates registry with exactly 2 components

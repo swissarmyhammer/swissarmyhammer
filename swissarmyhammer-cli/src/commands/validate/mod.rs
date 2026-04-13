@@ -9,9 +9,6 @@ use anyhow::Result;
 
 pub mod display;
 
-/// Help text for the validate command
-pub const DESCRIPTION: &str = include_str!("description.md");
-
 /// Handle the validate command using CliContext pattern
 pub async fn handle_command(validate_tools: bool, cli_context: &CliContext) -> i32 {
     match run_validate_with_context(validate_tools, cli_context).await {

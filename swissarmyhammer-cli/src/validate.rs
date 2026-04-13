@@ -34,6 +34,10 @@ struct JsonValidationIssue {
     suggestion: Option<String>,
 }
 
+/// Runs validation across prompts, workflows, and other CLI assets.
+///
+/// Wraps a `ValidationManager` with CLI-facing options (e.g. `quiet` to suppress
+/// non-error output) and exposes the entry point used by `sah validate`.
 pub struct Validator {
     quiet: bool,
     validation_manager: ValidationManager,
@@ -55,71 +59,70 @@ impl Validator {
     ) -> Result<ValidationResult> {
         let mut result = ValidationResult::new();
 
-        // Load all prompts using the centralized PromptResolver
         let mut library = swissarmyhammer::PromptLibrary::new();
         let mut resolver = swissarmyhammer::PromptResolver::new();
         resolver.load_all_prompts(&mut library)?;
 
-        // Validate each loaded prompt
-        let prompts = library.list()?;
-        for prompt in prompts {
-            result.files_checked += 1;
-
-            // Store prompt title for error reporting
-            let content_title = prompt
-                .metadata
-                .get("title")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string())
-                .or_else(|| Some(prompt.name.clone()));
-
-            // Check if this prompt is builtin
-            let is_builtin = resolver
-                .prompt_sources
-                .get(&prompt.name)
-                .map(|source| matches!(source, swissarmyhammer::FileSource::Builtin))
-                .unwrap_or(false);
-
-            // Skip liquid syntax validation for builtin prompts to avoid environment-specific errors
-            if !is_builtin {
-                // Validate template syntax with partials support
-                self.validate_liquid_syntax_with_partials(
-                    &prompt,
-                    &library,
-                    prompt.source.as_ref().unwrap_or(&PathBuf::new()),
-                    &mut result,
-                    content_title.clone(),
-                );
-            }
-
-            // Use the Validatable trait to validate the prompt
-            let validation_issues = prompt.validate(prompt.source.as_deref());
-
-            for issue in validation_issues {
-                // Skip undefined template variable errors for builtin prompts
-                // Builtin prompts are designed to be used with parameters provided at runtime
-                if is_builtin
-                    && issue.level == ValidationLevel::Error
-                    && issue.message.starts_with("Undefined template variable:")
-                {
-                    continue;
-                }
-                result.add_issue(issue);
-            }
+        for prompt in library.list()? {
+            self.validate_one_prompt(&prompt, &library, &resolver, &mut result);
         }
 
-        // Validate skills from all sources
         self.validate_all_skills(&mut result)?;
-
-        // Validate sah.toml configuration file
         self.validate_sah_config(&mut result)?;
 
-        // Validate tools if requested
         if validate_tools {
             self.validate_tools(&mut result).await?;
         }
 
         Ok(result)
+    }
+
+    /// Validate a single loaded prompt and append its issues to `result`.
+    ///
+    /// For builtin prompts, skips liquid template validation and suppresses
+    /// "Undefined template variable" errors — builtin prompts are intended to
+    /// receive their parameters at runtime, so those errors would be noise.
+    fn validate_one_prompt(
+        &self,
+        prompt: &swissarmyhammer::Prompt,
+        library: &swissarmyhammer::PromptLibrary,
+        resolver: &swissarmyhammer::PromptResolver,
+        result: &mut ValidationResult,
+    ) {
+        result.files_checked += 1;
+
+        let content_title = prompt
+            .metadata
+            .get("title")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .or_else(|| Some(prompt.name.clone()));
+
+        let is_builtin = resolver
+            .prompt_sources
+            .get(&prompt.name)
+            .map(|source| matches!(source, swissarmyhammer::FileSource::Builtin))
+            .unwrap_or(false);
+
+        if !is_builtin {
+            self.validate_liquid_syntax_with_partials(
+                prompt,
+                library,
+                prompt.source.as_ref().unwrap_or(&PathBuf::new()),
+                result,
+                content_title.clone(),
+            );
+        }
+
+        for issue in prompt.validate(prompt.source.as_deref()) {
+            if is_builtin
+                && issue.level == ValidationLevel::Error
+                && issue.message.starts_with("Undefined template variable:")
+            {
+                continue;
+            }
+            result.add_issue(issue);
+        }
     }
 
     /// Validates all skill sources, catching parse/load failures
@@ -202,122 +205,23 @@ impl Validator {
     }
 
     fn format_text_results(&self, result: &ValidationResult) -> String {
-        use std::fmt::Write;
         let mut output = String::new();
 
         if result.issues.is_empty() {
-            if !self.quiet {
-                writeln!(
-                    output,
-                    "{} All {} files validated successfully!",
-                    "✓".green(),
-                    result.files_checked
-                )
-                .unwrap();
-            }
+            write_success_line(&mut output, result.files_checked, self.quiet);
             return output;
         }
 
-        // Group issues by file
-        let mut issues_by_file: std::collections::HashMap<PathBuf, Vec<&ValidationIssue>> =
-            std::collections::HashMap::new();
-
-        for issue in &result.issues {
-            issues_by_file
-                .entry(issue.file_path.clone())
-                .or_default()
-                .push(issue);
-        }
-
-        // Print issues grouped by file
-        for (file_path, issues) in issues_by_file {
+        for (file_path, issues) in group_issues_by_file(&result.issues) {
             if !self.quiet {
-                // Get the prompt title from the first issue (all issues for a file should have the same title)
-                let content_title = issues
-                    .first()
-                    .and_then(|issue| issue.content_title.as_ref());
-
-                if let Some(title) = content_title {
-                    // Show the prompt title
-                    writeln!(output, "\n{}", title.bold()).unwrap();
-                    // Show the file path in smaller text if it's a user prompt
-                    if file_path.to_string_lossy() != ""
-                        && !file_path.to_string_lossy().contains("PathBuf")
-                    {
-                        writeln!(output, "  {}", file_path.display().to_string().dimmed()).unwrap();
-                    }
-                } else {
-                    // Fallback to file path if no title
-                    writeln!(output, "\n{}", file_path.display().to_string().bold()).unwrap();
-                }
+                write_file_header(&mut output, &file_path, &issues);
             }
-
             for issue in issues {
-                let level_str = match issue.level {
-                    ValidationLevel::Error => "ERROR".red(),
-                    ValidationLevel::Warning => "WARN".yellow(),
-                    ValidationLevel::Info => "INFO".blue(),
-                };
-
-                let location = if let (Some(line), Some(col)) = (issue.line, issue.column) {
-                    format!("{line}:{col}")
-                } else if let Some(line) = issue.line {
-                    format!("{line}")
-                } else {
-                    "-".to_string()
-                };
-
-                if self.quiet && issue.level != ValidationLevel::Error {
-                    continue;
-                }
-
-                writeln!(output, "  {} [{}] {}", level_str, location, issue.message).unwrap();
-
-                if !self.quiet {
-                    if let Some(suggestion) = &issue.suggestion {
-                        writeln!(output, "    💡 {}", suggestion.dimmed()).unwrap();
-                    }
-                }
+                write_issue_line(&mut output, issue, self.quiet);
             }
         }
 
-        if !self.quiet {
-            writeln!(output, "\n{}", "Summary:".bold()).unwrap();
-            writeln!(output, "  Files checked: {}", result.files_checked).unwrap();
-            if result.errors > 0 {
-                writeln!(output, "  Errors: {}", result.errors.to_string().red()).unwrap();
-            }
-            if result.warnings > 0 {
-                writeln!(
-                    output,
-                    "  Warnings: {}",
-                    result.warnings.to_string().yellow()
-                )
-                .unwrap();
-            }
-
-            if result.has_errors() {
-                writeln!(output, "\n{} Validation failed with errors.", "✗".red()).unwrap();
-            } else if result.has_warnings() {
-                writeln!(
-                    output,
-                    "\n{} Validation completed with warnings.",
-                    "⚠️".yellow()
-                )
-                .unwrap();
-            } else {
-                writeln!(output, "\n{} Validation passed!", "✓".green()).unwrap();
-            }
-        } else {
-            // In quiet mode, only show summary for errors
-            if result.has_errors() {
-                writeln!(output, "\n{}", "Summary:".bold()).unwrap();
-                writeln!(output, "  Files checked: {}", result.files_checked).unwrap();
-                writeln!(output, "  Errors: {}", result.errors.to_string().red()).unwrap();
-                writeln!(output, "\n{} Validation failed with errors.", "✗".red()).unwrap();
-            }
-        }
-
+        write_result_summary(&mut output, result, self.quiet);
         output
     }
 
@@ -404,21 +308,10 @@ impl Validator {
 
     /// Validate MCP tool schemas for CLI compatibility
     async fn validate_tools(&mut self, result: &mut ValidationResult) -> Result<()> {
-        // Initialize tool context for validation
         let cli_tool_context = match CliToolContext::new().await {
             Ok(context) => Arc::new(context),
             Err(e) => {
-                result.add_issue(ValidationIssue {
-                    level: ValidationLevel::Error,
-                    file_path: PathBuf::from("MCP Tools"),
-                    content_title: Some("Tool Context".to_string()),
-                    line: None,
-                    column: None,
-                    message: format!("Failed to initialize tool context: {}", e),
-                    suggestion: Some(
-                        "Check MCP server configuration and accessibility".to_string(),
-                    ),
-                });
+                result.add_issue(tool_context_init_error_issue(&e.to_string()));
                 return Ok(());
             }
         };
@@ -427,43 +320,206 @@ impl Validator {
         let cli_builder = CliBuilder::new(tool_registry.clone());
 
         let validation_stats = cli_builder.get_validation_stats();
-        let validation_errors = cli_builder.validate_all_tools();
 
-        // Convert tool validation results to ValidationIssues
         if !validation_stats.is_all_valid() {
-            for error in validation_errors {
-                let level = if error.to_string().contains("Error") {
-                    ValidationLevel::Error
-                } else {
-                    ValidationLevel::Warning
-                };
-
-                result.add_issue(ValidationIssue {
-                    level,
-                    file_path: PathBuf::from("MCP Tools"),
-                    content_title: Some("Tool Validation".to_string()),
-                    line: None,
-                    column: None,
-                    message: error.to_string(),
-                    suggestion: error.suggestion().map(|s| s.to_string()),
-                });
+            for error in cli_builder.validate_all_tools() {
+                result.add_issue(tool_validation_error_issue(&error));
             }
-        }
-
-        // Add a success info message if all tools passed validation (in non-quiet mode)
-        if validation_stats.is_all_valid() && !self.quiet {
-            result.add_issue(ValidationIssue {
-                level: ValidationLevel::Info,
-                file_path: PathBuf::from("MCP Tools"),
-                content_title: Some("Tool Validation".to_string()),
-                line: None,
-                column: None,
-                message: format!("All {} tools passed validation", validation_stats.summary()),
-                suggestion: None,
-            });
+        } else if !self.quiet {
+            result.add_issue(tool_validation_success_issue(&validation_stats.summary()));
         }
 
         Ok(())
+    }
+}
+
+/// Build the "Failed to initialize tool context" issue emitted when
+/// [`CliToolContext::new`] fails during `validate_tools`.
+fn tool_context_init_error_issue(error_message: &str) -> ValidationIssue {
+    ValidationIssue {
+        level: ValidationLevel::Error,
+        file_path: PathBuf::from("MCP Tools"),
+        content_title: Some("Tool Context".to_string()),
+        line: None,
+        column: None,
+        message: format!("Failed to initialize tool context: {}", error_message),
+        suggestion: Some("Check MCP server configuration and accessibility".to_string()),
+    }
+}
+
+/// Convert a tool-validation error into a [`ValidationIssue`].
+///
+/// The level is inferred from the error's `Display` output: anything
+/// containing "Error" is treated as an error, otherwise as a warning.
+fn tool_validation_error_issue(
+    error: &crate::schema_validation::ValidationError,
+) -> ValidationIssue {
+    let level = if error.to_string().contains("Error") {
+        ValidationLevel::Error
+    } else {
+        ValidationLevel::Warning
+    };
+    ValidationIssue {
+        level,
+        file_path: PathBuf::from("MCP Tools"),
+        content_title: Some("Tool Validation".to_string()),
+        line: None,
+        column: None,
+        message: error.to_string(),
+        suggestion: error.suggestion().map(|s| s.to_string()),
+    }
+}
+
+/// Build the info-level "All N tools passed" issue emitted when every tool
+/// validates cleanly and the validator is not in quiet mode.
+fn tool_validation_success_issue(summary: &str) -> ValidationIssue {
+    ValidationIssue {
+        level: ValidationLevel::Info,
+        file_path: PathBuf::from("MCP Tools"),
+        content_title: Some("Tool Validation".to_string()),
+        line: None,
+        column: None,
+        message: format!("All {} tools passed validation", summary),
+        suggestion: None,
+    }
+}
+
+/// Emit the "All N files validated successfully" line when there are no
+/// issues. Quiet mode suppresses the line entirely.
+fn write_success_line(output: &mut String, files_checked: usize, quiet: bool) {
+    use std::fmt::Write;
+    if quiet {
+        return;
+    }
+    writeln!(
+        output,
+        "{} All {} files validated successfully!",
+        "✓".green(),
+        files_checked
+    )
+    .unwrap();
+}
+
+/// Emit the trailing summary block (counts + pass/warn/fail banner).
+///
+/// Quiet mode only prints a summary when there were errors; the normal path
+/// always prints counts plus a status line.
+fn write_result_summary(output: &mut String, result: &ValidationResult, quiet: bool) {
+    use std::fmt::Write;
+    if quiet {
+        if !result.has_errors() {
+            return;
+        }
+        writeln!(output, "\n{}", "Summary:".bold()).unwrap();
+        writeln!(output, "  Files checked: {}", result.files_checked).unwrap();
+        writeln!(output, "  Errors: {}", result.errors.to_string().red()).unwrap();
+        writeln!(output, "\n{} Validation failed with errors.", "✗".red()).unwrap();
+        return;
+    }
+    writeln!(output, "\n{}", "Summary:".bold()).unwrap();
+    writeln!(output, "  Files checked: {}", result.files_checked).unwrap();
+    if result.errors > 0 {
+        writeln!(output, "  Errors: {}", result.errors.to_string().red()).unwrap();
+    }
+    if result.warnings > 0 {
+        writeln!(
+            output,
+            "  Warnings: {}",
+            result.warnings.to_string().yellow()
+        )
+        .unwrap();
+    }
+    if result.has_errors() {
+        writeln!(output, "\n{} Validation failed with errors.", "✗".red()).unwrap();
+    } else if result.has_warnings() {
+        writeln!(
+            output,
+            "\n{} Validation completed with warnings.",
+            "⚠️".yellow()
+        )
+        .unwrap();
+    } else {
+        writeln!(output, "\n{} Validation passed!", "✓".green()).unwrap();
+    }
+}
+
+/// Group validation issues by their file path.
+///
+/// Each file's issues share a single header block when rendered, so grouping
+/// up-front keeps the render loop flat.
+fn group_issues_by_file(
+    issues: &[ValidationIssue],
+) -> std::collections::HashMap<PathBuf, Vec<&ValidationIssue>> {
+    let mut by_file: std::collections::HashMap<PathBuf, Vec<&ValidationIssue>> =
+        std::collections::HashMap::new();
+    for issue in issues {
+        by_file
+            .entry(issue.file_path.clone())
+            .or_default()
+            .push(issue);
+    }
+    by_file
+}
+
+/// Write the header block for one file's issue group.
+///
+/// Prefers the prompt title from the first issue (all issues on the same file
+/// share a title); falls back to the file path when no title is available.
+fn write_file_header(output: &mut String, file_path: &Path, issues: &[&ValidationIssue]) {
+    use std::fmt::Write;
+    let title = issues
+        .first()
+        .and_then(|issue| issue.content_title.as_ref());
+    match title {
+        Some(title) => {
+            writeln!(output, "\n{}", title.bold()).unwrap();
+            if file_path_is_displayable(file_path) {
+                writeln!(output, "  {}", file_path.display().to_string().dimmed()).unwrap();
+            }
+        }
+        None => {
+            writeln!(output, "\n{}", file_path.display().to_string().bold()).unwrap();
+        }
+    }
+}
+
+/// A file path is worth printing when it's non-empty and isn't a placeholder
+/// `PathBuf` debug string leaked from a synthetic issue.
+fn file_path_is_displayable(path: &Path) -> bool {
+    let as_str = path.to_string_lossy();
+    !as_str.is_empty() && !as_str.contains("PathBuf")
+}
+
+/// Format the `line:column` or `line` location prefix for an issue.
+fn format_issue_location(issue: &ValidationIssue) -> String {
+    match (issue.line, issue.column) {
+        (Some(line), Some(col)) => format!("{line}:{col}"),
+        (Some(line), None) => format!("{line}"),
+        _ => "-".to_string(),
+    }
+}
+
+/// Write a single issue line (plus optional suggestion) into `output`.
+///
+/// Skips non-errors entirely in quiet mode; omits suggestions in quiet mode
+/// even for errors, matching the original text-format behavior.
+fn write_issue_line(output: &mut String, issue: &ValidationIssue, quiet: bool) {
+    use std::fmt::Write;
+    if quiet && issue.level != ValidationLevel::Error {
+        return;
+    }
+    let level_str = match issue.level {
+        ValidationLevel::Error => "ERROR".red(),
+        ValidationLevel::Warning => "WARN".yellow(),
+        ValidationLevel::Info => "INFO".blue(),
+    };
+    let location = format_issue_location(issue);
+    writeln!(output, "  {} [{}] {}", level_str, location, issue.message).unwrap();
+    if quiet {
+        return;
+    }
+    if let Some(suggestion) = &issue.suggestion {
+        writeln!(output, "    💡 {}", suggestion.dimmed()).unwrap();
     }
 }
 

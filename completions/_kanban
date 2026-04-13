@@ -1,0 +1,186 @@
+#compdef kanban
+
+autoload -U is-at-least
+
+_kanban() {
+    typeset -A opt_args
+    typeset -a _arguments_options
+    local ret=1
+
+    if is-at-least 5.2; then
+        _arguments_options=(-s -S -C)
+    else
+        _arguments_options=(-s -C)
+    fi
+
+    local context curcontext="$curcontext" state line
+    _arguments "${_arguments_options[@]}" : \
+'-d[Enable debug output to stderr]' \
+'--debug[Enable debug output to stderr]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+'-V[Print version]' \
+'--version[Print version]' \
+":: :_kanban_commands" \
+"*::: :->kanban" \
+&& ret=0
+    case $state in
+    (kanban)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:kanban-command-$line[1]:"
+        case $line[1] in
+            (serve)
+_arguments "${_arguments_options[@]}" : \
+'-d[Enable debug output to stderr]' \
+'--debug[Enable debug output to stderr]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(init)
+_arguments "${_arguments_options[@]}" : \
+'-d[Enable debug output to stderr]' \
+'--debug[Enable debug output to stderr]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+'::target -- Where to install the server configuration:((project\:"Project-level settings (.claude/settings.json)"
+local\:"Local project settings, not committed (.claude/settings.local.json)"
+user\:"User-level settings (~/.claude/settings.json)"))' \
+&& ret=0
+;;
+(deinit)
+_arguments "${_arguments_options[@]}" : \
+'-d[Enable debug output to stderr]' \
+'--debug[Enable debug output to stderr]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+'::target -- Where to remove the server configuration from:((project\:"Project-level settings (.claude/settings.json)"
+local\:"Local project settings, not committed (.claude/settings.local.json)"
+user\:"User-level settings (~/.claude/settings.json)"))' \
+&& ret=0
+;;
+(doctor)
+_arguments "${_arguments_options[@]}" : \
+'-v[Show detailed output including fix suggestions]' \
+'--verbose[Show detailed output including fix suggestions]' \
+'-d[Enable debug output to stderr]' \
+'--debug[Enable debug output to stderr]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+":: :_kanban__help_commands" \
+"*::: :->help" \
+&& ret=0
+
+    case $state in
+    (help)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:kanban-help-command-$line[1]:"
+        case $line[1] in
+            (serve)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(init)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(deinit)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(doctor)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+        esac
+    ;;
+esac
+}
+
+(( $+functions[_kanban_commands] )) ||
+_kanban_commands() {
+    local commands; commands=(
+'serve:Run MCP server over stdio, exposing kanban tools' \
+'init:Install kanban MCP server into Claude Code settings' \
+'deinit:Remove kanban from Claude Code settings' \
+'doctor:Diagnose kanban configuration and setup' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'kanban commands' commands "$@"
+}
+(( $+functions[_kanban__deinit_commands] )) ||
+_kanban__deinit_commands() {
+    local commands; commands=()
+    _describe -t commands 'kanban deinit commands' commands "$@"
+}
+(( $+functions[_kanban__doctor_commands] )) ||
+_kanban__doctor_commands() {
+    local commands; commands=()
+    _describe -t commands 'kanban doctor commands' commands "$@"
+}
+(( $+functions[_kanban__help_commands] )) ||
+_kanban__help_commands() {
+    local commands; commands=(
+'serve:Run MCP server over stdio, exposing kanban tools' \
+'init:Install kanban MCP server into Claude Code settings' \
+'deinit:Remove kanban from Claude Code settings' \
+'doctor:Diagnose kanban configuration and setup' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'kanban help commands' commands "$@"
+}
+(( $+functions[_kanban__help__deinit_commands] )) ||
+_kanban__help__deinit_commands() {
+    local commands; commands=()
+    _describe -t commands 'kanban help deinit commands' commands "$@"
+}
+(( $+functions[_kanban__help__doctor_commands] )) ||
+_kanban__help__doctor_commands() {
+    local commands; commands=()
+    _describe -t commands 'kanban help doctor commands' commands "$@"
+}
+(( $+functions[_kanban__help__help_commands] )) ||
+_kanban__help__help_commands() {
+    local commands; commands=()
+    _describe -t commands 'kanban help help commands' commands "$@"
+}
+(( $+functions[_kanban__help__init_commands] )) ||
+_kanban__help__init_commands() {
+    local commands; commands=()
+    _describe -t commands 'kanban help init commands' commands "$@"
+}
+(( $+functions[_kanban__help__serve_commands] )) ||
+_kanban__help__serve_commands() {
+    local commands; commands=()
+    _describe -t commands 'kanban help serve commands' commands "$@"
+}
+(( $+functions[_kanban__init_commands] )) ||
+_kanban__init_commands() {
+    local commands; commands=()
+    _describe -t commands 'kanban init commands' commands "$@"
+}
+(( $+functions[_kanban__serve_commands] )) ||
+_kanban__serve_commands() {
+    local commands; commands=()
+    _describe -t commands 'kanban serve commands' commands "$@"
+}
+
+if [ "$funcstack[1]" = "_kanban" ]; then
+    _kanban "$@"
+else
+    compdef _kanban kanban
+fi

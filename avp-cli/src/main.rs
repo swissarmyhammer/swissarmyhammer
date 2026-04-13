@@ -20,6 +20,7 @@ use std::io::{self, IsTerminal, Read, Write};
 use std::sync::{Arc, Mutex};
 
 use clap::{CommandFactory, Parser};
+use tracing::error;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Layer};
@@ -29,12 +30,12 @@ mod banner;
 /// Exit code returned when a hook blocks the action.
 const BLOCKING_ERROR_EXIT_CODE: i32 = 2;
 
-use avp::logging::FileWriterGuard;
 use avp::{doctor, edit, install, model, new};
 use avp::{Cli, Commands, ModelAction};
 use avp_common::context::AvpContext;
 use avp_common::strategy::HookDispatcher;
 use avp_common::AvpError;
+use swissarmyhammer_common::logging::FileWriterGuard;
 
 #[tokio::main]
 async fn main() {
@@ -118,7 +119,7 @@ fn result_to_exit<E: std::fmt::Display>(result: Result<(), E>) -> i32 {
     match result {
         Ok(()) => 0,
         Err(e) => {
-            eprintln!("Error: {}", e);
+            error!("Error: {}", e);
             1
         }
     }

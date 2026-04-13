@@ -27,6 +27,7 @@ ulid.workspace = true
 # Rate limiting and concurrency
 dashmap.workspace = true
 tracing.workspace = true
+tracing-subscriber.workspace = true
 governor.workspace = true
 nonzero_ext.workspace = true
 

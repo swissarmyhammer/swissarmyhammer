@@ -109,12 +109,15 @@ fn unregister_agent(agent: &DetectedAgent, global: bool, reporter: &dyn InitRepo
 
 /// Register all shelltool init/deinit components into the given registry.
 ///
-/// Components are registered in priority order:
+/// Components are registered; `InitRegistry` sorts them by priority at
+/// execution time. Actual execution order:
+/// - priority  0: `ShellExecuteTool` (config file, Bash deny — uses trait default)
 /// - priority 10: `ShelltoolMcpRegistration` (MCP server config for detected agents)
-/// - priority 20: `ShellExecuteTool` (config file, Bash deny, skill deployment)
+/// - priority 30: `ShelltoolSkillDeployment` (shell skill to agent `.skills/` dirs)
 pub fn register_all(registry: &mut InitRegistry) {
     registry.register(ShelltoolMcpRegistration);
     registry.register(ShellExecuteTool::new());
+    registry.register(super::skill::ShelltoolSkillDeployment);
 }
 
 // ── ShelltoolMcpRegistration (priority 10) ───────────────────────────────────
@@ -134,7 +137,7 @@ impl Initializable for ShelltoolMcpRegistration {
         "configuration"
     }
 
-    /// Priority 10 — runs before ShellExecuteTool (priority 20).
+    /// Priority 10 — runs after ShellExecuteTool (priority 0, the default).
     fn priority(&self) -> i32 {
         10
     }
@@ -263,7 +266,7 @@ mod tests {
     async fn test_register_all_populates_registry() {
         let mut registry = InitRegistry::new();
         register_all(&mut registry);
-        assert_eq!(registry.len(), 2);
+        assert_eq!(registry.len(), 3);
     }
 
     #[test]

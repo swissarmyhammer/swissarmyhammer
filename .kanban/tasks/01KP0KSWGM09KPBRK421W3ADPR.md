@@ -3,8 +3,8 @@ assignees:
 - claude-code
 depends_on:
 - 01KP0KZZ9VDQJVNK15JQAY4BKH
-position_column: todo
-position_ordinal: b280
+position_column: done
+position_ordinal: ffffffffffffffffffffffc680
 project: kanban-mcp
 title: 'kanban-cli: add build.rs for man pages, shell completions, and doc reference'
 ---
@@ -44,11 +44,11 @@ Add `[build-dependencies]` to `kanban-cli/Cargo.toml`:
 - `clap_complete` (workspace)
 
 ## Acceptance Criteria
-- [ ] `cargo build -p kanban-cli` generates `doc/src/reference/kanban-cli.md`
-- [ ] `completions/kanban.bash` and `completions/kanban.fish` are created
-- [ ] Man page `docs/kanban.1` is created
-- [ ] The generated markdown lists serve/init/deinit/doctor subcommands
+- [x] `cargo build -p kanban-cli` generates `doc/src/reference/kanban-cli.md`
+- [x] `completions/kanban.bash` and `completions/kanban.fish` are created
+- [x] Man page `docs/kanban.1` is created
+- [x] The generated markdown lists serve/init/deinit/doctor subcommands
 
 ## Tests
-- [ ] `cargo build -p kanban-cli` succeeds without errors
-- [ ] Assert generated files exist after build
+- [x] `cargo build -p kanban-cli` succeeds without errors
+- [x] Assert generated files exist after build

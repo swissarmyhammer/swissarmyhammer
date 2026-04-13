@@ -10,6 +10,8 @@ pub mod doctor;
 pub mod install;
 pub mod model;
 pub mod prompt;
+pub mod registry;
 pub mod serve;
+pub mod skill;
 pub mod tools;
 pub mod validate;
