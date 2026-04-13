@@ -3,6 +3,7 @@ assignees:
 - claude-code
 position_column: todo
 position_ordinal: c480
+project: task-card-fields
 title: Make project field editable with autocomplete single-select reference editor
 ---
 ## What

@@ -3,6 +3,7 @@ assignees:
 - claude-code
 position_column: todo
 position_ordinal: c280
+project: task-card-fields
 title: Pick smarter icons for created and completed date fields
 ---
 ## What

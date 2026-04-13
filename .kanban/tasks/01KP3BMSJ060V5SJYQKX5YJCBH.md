@@ -3,6 +3,7 @@ assignees:
 - claude-code
 position_column: todo
 position_ordinal: c880
+project: task-card-fields
 title: Add YAML-configurable `placeholder` hint for empty field displays
 ---
 ## What

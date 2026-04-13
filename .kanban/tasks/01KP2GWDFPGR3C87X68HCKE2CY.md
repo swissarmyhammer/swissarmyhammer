@@ -4,6 +4,7 @@ assignees:
 depends_on: []
 position_column: todo
 position_ordinal: '80'
+project: task-card-fields
 title: Hide due/scheduled from task card view (inspector-only)
 ---
 ## What

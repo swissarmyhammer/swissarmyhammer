@@ -3,6 +3,7 @@ assignees:
 - claude-code
 position_column: todo
 position_ordinal: c480
+project: task-card-fields
 title: Fix multi-select + vim + Enter combo in editor-save test matrix
 ---
 ## What
