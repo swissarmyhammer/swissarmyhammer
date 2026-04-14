@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: b480
+position_column: done
+position_ordinal: ffffffffffffffffffffffcc80
 project: kanban-mcp
 title: 'kanban doctor: fix false-negative "Board Initialized" check'
 ---
@@ -31,23 +31,29 @@ While fixing, also update the warning message and the `fix:` suggestion so they 
 
 ## Acceptance Criteria
 
-- [ ] Running `kanban doctor` from the root of this repo reports `Board Initialized: Ok` (not a warning), because `.kanban/boards/board.yaml` exists.
-- [ ] Running `kanban doctor` from a directory with no `.kanban/` still reports a warning.
-- [ ] The success message references the `.kanban/` root or the detected layout, not a hard-coded `.kanban/board.yaml` path.
-- [ ] The fix suggestion in the warning path matches the actual CLI verb that creates a board (verify via `kanban --help`).
-- [ ] `cargo test -p kanban-cli` passes.
-- [ ] `cargo clippy -p kanban-cli --tests -- -D warnings` clean.
+- [x] Running `kanban doctor` from the root of this repo reports `Board Initialized: Ok` (not a warning), because `.kanban/boards/board.yaml` exists.
+- [x] Running `kanban doctor` from a directory with no `.kanban/` still reports a warning.
+- [x] The success message references the `.kanban/` root or the detected layout, not a hard-coded `.kanban/board.yaml` path.
+- [x] The fix suggestion in the warning path matches the actual CLI verb that creates a board (verify via `kanban --help`).
+- [x] `cargo test -p kanban-cli` passes.
+- [x] `cargo clippy -p kanban-cli --tests -- -D warnings` clean.
 
 ## Tests
 
-- [ ] Update `/Users/wballard/github/swissarmyhammer/swissarmyhammer-kanban-cli/kanban-cli/src/commands/doctor.rs` — add a new `#[serial]` test using `CurrentDirGuard` (per `feedback_test_isolation.md`) that:
+- [x] Update `/Users/wballard/github/swissarmyhammer/swissarmyhammer-kanban-cli/kanban-cli/src/commands/doctor.rs` — add a new `#[serial]` test using `CurrentDirGuard` (per `feedback_test_isolation.md`) that:
   1. Creates a tempdir, `cd`s into it, writes `.kanban/boards/board.yaml` with minimal valid content.
   2. Calls `check_board_initialized()` on a fresh `KanbanDoctor`.
   3. Asserts exactly one check named "Board Initialized" with status `CheckStatus::Ok`.
-- [ ] Add a companion `#[serial]` test that creates an empty tempdir with no `.kanban/` and asserts `CheckStatus::Warning`.
-- [ ] Keep the existing `check_board_initialized_produces_one_check` test (shape-only assertion remains useful).
-- [ ] `cargo test -p kanban-cli --lib commands::doctor` — all pass.
+- [x] Add a companion `#[serial]` test that creates an empty tempdir with no `.kanban/` and asserts `CheckStatus::Warning`.
+- [x] Keep the existing `check_board_initialized_produces_one_check` test (shape-only assertion remains useful).
+- [x] `cargo test -p kanban-cli --lib commands::doctor` — all pass.
 
 ## Workflow
 
 - Use `/tdd` — write the new failing `#[serial]` tests first (they should fail against the current implementation because the success test will see `.kanban/boards/board.yaml` but the code only checks `.kanban/board.yaml`), then swap the check to delegate to `KanbanContext::is_initialized()`.
+
+## Implementation Notes
+
+- The `kanban-cli` crate is binary-only (`[[bin]]` only, no `[lib]`), so the test command in the Tests acceptance criterion was run as `cargo test -p kanban-cli --bin kanban commands::doctor` instead of `--lib`. All 10 doctor tests pass (8 original + 2 new `#[serial]` regression tests).
+- Verified via `cargo run -p kanban-cli -- doctor` from repo root that `Board Initialized` now reports `Ok` with message `Found at .../.kanban`.
+- `swissarmyhammer_common::test_utils::CurrentDirGuard` and `serial_test::serial` were already available — no new dependencies added.

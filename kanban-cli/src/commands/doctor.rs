@@ -3,7 +3,7 @@
 //! Checks:
 //! - Git repository (warning if not found)
 //! - `kanban` binary in PATH
-//! - `.kanban/board.yaml` board initialized in the current working directory
+//! - Kanban board initialized under `.kanban/` in the current working directory
 //!
 //! Modeled on the same `DoctorRunner` pattern as `shelltool-cli` and `avp-cli`
 //! so the three CLI doctors stay structurally consistent.
@@ -12,6 +12,7 @@ use std::env;
 use std::path::PathBuf;
 
 use swissarmyhammer_doctor::{Check, CheckStatus, DoctorRunner};
+use swissarmyhammer_kanban::KanbanContext;
 
 /// Kanban diagnostic runner.
 ///
@@ -129,26 +130,35 @@ impl KanbanDoctor {
 
     /// Check if a kanban board is initialized in the current working directory.
     ///
-    /// A board is considered initialized when `<cwd>/.kanban/board.yaml`
-    /// exists — that's the file written by `init board`. Missing `board.yaml`
-    /// is a warning, not an error, because many kanban commands (like `open`
-    /// or `serve`) are useful even before a board has been initialized.
+    /// Delegates to [`KanbanContext::is_initialized`], which is the canonical
+    /// "is this board initialized?" predicate used by the rest of the kanban
+    /// crate. It accepts any of the supported on-disk layouts:
+    ///
+    /// - `<cwd>/.kanban/boards/board.yaml` (current entity layout — what
+    ///   `init board` writes today)
+    /// - `<cwd>/.kanban/board.yaml` (legacy single-file layout)
+    /// - `<cwd>/.kanban/board.json` (very old legacy layout)
+    ///
+    /// Missing board files are reported as a warning, not an error, because
+    /// many kanban commands (like `open` or `serve`) are useful even before a
+    /// board has been initialized.
     fn check_board_initialized(&mut self) {
         let cwd = env::current_dir().unwrap_or_default();
-        let board_path = cwd.join(".kanban").join("board.yaml");
+        let kanban_root = cwd.join(".kanban");
+        let ctx = KanbanContext::new(&kanban_root);
 
-        if board_path.is_file() {
+        if ctx.is_initialized() {
             self.add_check(Check {
                 name: "Board Initialized".to_string(),
                 status: CheckStatus::Ok,
-                message: format!("Found at {}", board_path.display()),
+                message: format!("Found at {}", kanban_root.display()),
                 fix: None,
             });
         } else {
             self.add_check(Check {
                 name: "Board Initialized".to_string(),
                 status: CheckStatus::Warning,
-                message: "No .kanban/board.yaml found in current directory".to_string(),
+                message: "No kanban board found in .kanban/".to_string(),
                 fix: Some(
                     "Run `kanban board init --name \"<board name>\"` to create a board".to_string(),
                 ),
@@ -230,8 +240,9 @@ mod tests {
     }
 
     /// `check_board_initialized` must produce exactly one check named
-    /// "Board Initialized". The status depends on whether `.kanban/board.yaml`
-    /// happens to exist in the test's CWD; we only assert shape here.
+    /// "Board Initialized". The status depends on whether the `.kanban/`
+    /// directory in the test's CWD happens to contain a board file; we
+    /// only assert shape here.
     #[test]
     fn check_board_initialized_produces_one_check() {
         let mut doctor = KanbanDoctor::new();
@@ -242,6 +253,78 @@ mod tests {
         let check = &doctor.checks()[0];
         assert_eq!(check.name, "Board Initialized");
         assert!(check.status == CheckStatus::Ok || check.status == CheckStatus::Warning);
+    }
+
+    /// When the CWD contains `.kanban/boards/board.yaml` (the canonical
+    /// entity layout written by `init board`), `check_board_initialized`
+    /// must report `Ok`. This is the regression guard against the original
+    /// bug, where the doctor only knew about the legacy single-file layout
+    /// `<root>/board.yaml` and emitted a false-negative warning inside any
+    /// repo that uses the entity layout.
+    ///
+    /// Uses `CurrentDirGuard` + `#[serial]` per `feedback_test_isolation.md`
+    /// so this test cannot race with other tests that read or mutate CWD.
+    #[test]
+    #[serial_test::serial]
+    fn check_board_initialized_recognizes_entity_layout() {
+        use swissarmyhammer_common::test_utils::CurrentDirGuard;
+        use tempfile::TempDir;
+
+        let temp = TempDir::new().expect("create tempdir");
+        let boards_dir = temp.path().join(".kanban").join("boards");
+        std::fs::create_dir_all(&boards_dir).expect("create .kanban/boards");
+        std::fs::write(boards_dir.join("board.yaml"), "name: Test Board\n")
+            .expect("write board.yaml");
+
+        let _guard = CurrentDirGuard::new(temp.path()).expect("enter tempdir");
+
+        let mut doctor = KanbanDoctor::new();
+        doctor.check_board_initialized();
+
+        assert_eq!(doctor.checks().len(), 1);
+        let check = &doctor.checks()[0];
+        assert_eq!(check.name, "Board Initialized");
+        assert_eq!(
+            check.status,
+            CheckStatus::Ok,
+            "expected Ok when .kanban/boards/board.yaml exists, got {:?} (message: {})",
+            check.status,
+            check.message,
+        );
+    }
+
+    /// When the CWD contains no `.kanban/` directory at all,
+    /// `check_board_initialized` must report a `Warning` with a fix
+    /// suggesting the actual `kanban board init` verb. The fix string is
+    /// load-bearing: it must match the real CLI subcommand path so users
+    /// who copy-paste it actually create a board.
+    #[test]
+    #[serial_test::serial]
+    fn check_board_initialized_warns_when_no_kanban_dir() {
+        use swissarmyhammer_common::test_utils::CurrentDirGuard;
+        use tempfile::TempDir;
+
+        let temp = TempDir::new().expect("create tempdir");
+        let _guard = CurrentDirGuard::new(temp.path()).expect("enter tempdir");
+
+        let mut doctor = KanbanDoctor::new();
+        doctor.check_board_initialized();
+
+        assert_eq!(doctor.checks().len(), 1);
+        let check = &doctor.checks()[0];
+        assert_eq!(check.name, "Board Initialized");
+        assert_eq!(
+            check.status,
+            CheckStatus::Warning,
+            "expected Warning when no .kanban/ dir exists, got {:?} (message: {})",
+            check.status,
+            check.message,
+        );
+        let fix = check.fix.as_deref().unwrap_or("");
+        assert!(
+            fix.contains("kanban board init"),
+            "fix string must reference the actual CLI verb `kanban board init`, got: {fix}"
+        );
     }
 
     /// `run_diagnostics` must run all three checks and yield a valid exit

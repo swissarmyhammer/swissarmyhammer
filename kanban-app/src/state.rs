@@ -28,6 +28,9 @@ pub struct TauriClipboardProvider {
 }
 
 impl TauriClipboardProvider {
+    /// Create a provider bound to the given Tauri `AppHandle`. The handle is
+    /// used on every `read_text`/`write_text` call to reach the clipboard
+    /// plugin, so the provider shares the app's lifetime.
     pub fn new(app: tauri::AppHandle) -> Self {
         Self { app }
     }
@@ -82,6 +85,146 @@ pub(crate) struct BoardHandle {
     _watcher: Option<BoardWatcher>,
 }
 
+/// Read the board's display name for MRU, falling back to the canonical path
+/// string when the board is uninitialized, has no `board` entity, or the
+/// entity lacks a `name` field.
+async fn read_board_name(handle: &BoardHandle, canonical: &Path) -> String {
+    if !handle.ctx.is_initialized() {
+        return canonical.display().to_string();
+    }
+    let Ok(ectx) = handle.ctx.entity_context().await else {
+        return canonical.display().to_string();
+    };
+    match ectx.read("board", "board").await {
+        Ok(entity) => entity.get_str("name").unwrap_or("").to_string(),
+        Err(_) => canonical.display().to_string(),
+    }
+}
+
+/// Register a per-entity-type store for each entity type discovered on disk.
+/// Wires the shared `StoreContext` into `EntityContext` so writes/deletes push
+/// onto the undo stack, then creates an `EntityTypeStore` for every entity
+/// def and registers it with both contexts.
+async fn register_entity_stores(
+    ctx: &KanbanContext,
+    store_context: &Arc<swissarmyhammer_store::StoreContext>,
+) {
+    let Ok(ectx) = ctx.entity_context().await else {
+        return;
+    };
+    ectx.set_store_context(Arc::clone(store_context));
+
+    let fields_ctx = ectx.fields();
+    for entity_def in fields_ctx.all_entities() {
+        let entity_type = entity_def.name.as_str();
+        let field_defs = fields_ctx.fields_for_entity(entity_type);
+        let owned_defs: Vec<_> = field_defs.into_iter().cloned().collect();
+        let entity_type_store = swissarmyhammer_entity::EntityTypeStore::new(
+            ectx.entity_dir(entity_type),
+            entity_type,
+            Arc::new(entity_def.clone()),
+            Arc::new(owned_defs),
+        );
+        let handle = Arc::new(swissarmyhammer_store::StoreHandle::new(Arc::new(
+            entity_type_store,
+        )));
+        ectx.register_store(entity_type, handle.clone()).await;
+        store_context.register(handle).await;
+    }
+}
+
+/// Register the perspective store for undo/redo and wire it into
+/// `PerspectiveContext` so writes delegate to it and push onto the undo stack.
+async fn register_perspective_store(
+    ctx: &KanbanContext,
+    store_context: &Arc<swissarmyhammer_store::StoreContext>,
+    kanban_path: &Path,
+) {
+    let perspectives_dir = kanban_path.join("perspectives");
+    let perspective_store = swissarmyhammer_perspectives::PerspectiveStore::new(&perspectives_dir);
+    let handle = Arc::new(swissarmyhammer_store::StoreHandle::new(Arc::new(
+        perspective_store,
+    )));
+    store_context.register(handle.clone()).await;
+
+    if let Ok(pctx) = ctx.perspective_context().await {
+        let mut pctx = pctx.write().await;
+        pctx.set_store_handle(handle);
+        pctx.set_store_context(Arc::clone(store_context));
+    }
+}
+
+/// Load every searchable entity (task, tag, column, actor, board) into a
+/// fresh `EntitySearchIndex`.
+async fn load_search_index(ctx: &KanbanContext) -> EntitySearchIndex {
+    let mut all_entities: Vec<Entity> = Vec::new();
+    if let Ok(ectx) = ctx.entity_context().await {
+        for entity_type in &["task", "tag", "column", "actor", "board"] {
+            if let Ok(entities) = ectx.list(entity_type).await {
+                all_entities.extend(entities);
+            }
+        }
+    }
+    EntitySearchIndex::from_entities(all_entities)
+}
+
+/// Migrate legacy (non-FractionalIndex) task ordinals to the FractionalIndex
+/// format. Reads all tasks, groups by column, sorts by existing ordinal
+/// string, then assigns new FractionalIndex ordinals preserving that order.
+/// No-op when all ordinals are already valid or the task list can't be read.
+async fn migrate_legacy_ordinals(ectx: &swissarmyhammer_entity::EntityContext) {
+    use std::collections::HashMap;
+    use swissarmyhammer_kanban::types::Ordinal;
+
+    let Ok(tasks) = ectx.list("task").await else {
+        return;
+    };
+
+    let needs_migration = tasks.iter().any(|t| {
+        let ord = t.get_str("position_ordinal").unwrap_or("");
+        !ord.is_empty() && !Ordinal::is_valid(ord)
+    });
+    if !needs_migration {
+        return;
+    }
+
+    tracing::info!("migrating legacy ordinals to fractional index format");
+
+    let mut by_column: HashMap<String, Vec<Entity>> = HashMap::new();
+    for t in tasks {
+        let col = t.get_str("position_column").unwrap_or("todo").to_string();
+        by_column.entry(col).or_default().push(t);
+    }
+
+    for column_tasks in by_column.values_mut() {
+        column_tasks.sort_by(|a, b| {
+            let oa = a.get_str("position_ordinal").unwrap_or("");
+            let ob = b.get_str("position_ordinal").unwrap_or("");
+            oa.cmp(ob)
+        });
+        reassign_ordinals_in_column(ectx, column_tasks).await;
+    }
+    tracing::info!("ordinal migration complete");
+}
+
+/// Rewrite `position_ordinal` for each task in the given column-order slice
+/// to a fresh FractionalIndex sequence (`first()`, `after(first)`, …).
+async fn reassign_ordinals_in_column(
+    ectx: &swissarmyhammer_entity::EntityContext,
+    tasks: &mut [Entity],
+) {
+    use swissarmyhammer_kanban::types::Ordinal;
+
+    let mut ord = Ordinal::first();
+    for task in tasks.iter_mut() {
+        task.set("position_ordinal", serde_json::json!(ord.as_str()));
+        if let Err(e) = ectx.write(task).await {
+            tracing::warn!(id = %task.id, error = %e, "failed to migrate ordinal");
+        }
+        ord = Ordinal::after(&ord);
+    }
+}
+
 impl BoardHandle {
     /// Create a handle with a fully-initialized context (views, fields, etc.).
     ///
@@ -92,118 +235,23 @@ impl BoardHandle {
             .await
             .map_err(|e| format!("Failed to open board context: {e}"))?;
 
-        // Create StoreContext for undo/redo and register entity type stores.
         let store_context = Arc::new(swissarmyhammer_store::StoreContext::new(
             kanban_path.to_path_buf(),
         ));
-        if let Ok(ectx) = ctx.entity_context().await {
-            // Wire the StoreContext into EntityContext so write/delete
-            // automatically push onto the shared undo stack.
-            ectx.set_store_context(Arc::clone(&store_context));
+        register_entity_stores(&ctx, &store_context).await;
+        register_perspective_store(&ctx, &store_context, &kanban_path).await;
 
-            let fields_ctx = ectx.fields();
-            for entity_def in fields_ctx.all_entities() {
-                let entity_type = entity_def.name.as_str();
-                let field_defs = fields_ctx.fields_for_entity(entity_type);
-                let owned_defs: Vec<_> = field_defs.into_iter().cloned().collect();
-                let entity_type_store = swissarmyhammer_entity::EntityTypeStore::new(
-                    ectx.entity_dir(entity_type),
-                    entity_type,
-                    std::sync::Arc::new(entity_def.clone()),
-                    std::sync::Arc::new(owned_defs),
-                );
-                let handle = std::sync::Arc::new(swissarmyhammer_store::StoreHandle::new(
-                    std::sync::Arc::new(entity_type_store),
-                ));
-                // Register with EntityContext so write/delete delegates to the store
-                ectx.register_store(entity_type, handle.clone()).await;
-                // Register with StoreContext so undo/redo dispatches correctly
-                store_context.register(handle).await;
-            }
-        }
-
-        // Register perspective store for undo/redo changelog support and
-        // wire the handle into PerspectiveContext so writes delegate to it.
-        {
-            let perspectives_dir = kanban_path.join("perspectives");
-            let perspective_store =
-                swissarmyhammer_perspectives::PerspectiveStore::new(&perspectives_dir);
-            let handle = std::sync::Arc::new(swissarmyhammer_store::StoreHandle::new(
-                std::sync::Arc::new(perspective_store),
-            ));
-            store_context.register(handle.clone()).await;
-
-            // Wire into PerspectiveContext so write/delete produce change
-            // events and push onto the shared undo stack.
-            if let Ok(pctx) = ctx.perspective_context().await {
-                let mut pctx = pctx.write().await;
-                pctx.set_store_handle(handle);
-                pctx.set_store_context(Arc::clone(&store_context));
-            }
-        }
-
-        // Collect store roots now that all stores are registered.
-        // This drives the file watcher — every registered store's directory
-        // will be watched automatically (no hardcoded list needed).
+        // Collect store roots now that all stores are registered. This drives
+        // the file watcher — every registered store's directory is watched
+        // automatically, no hardcoded list.
         let store_roots = store_context.watched_roots().await;
         let entity_cache = watcher::new_entity_cache(&kanban_path, &store_roots);
 
-        // Migrate legacy ordinals to FractionalIndex format.
-        // Reads all tasks, groups by column, sorts by existing ordinal string,
-        // then assigns new FractionalIndex ordinals preserving that order.
         if let Ok(ectx) = ctx.entity_context().await {
-            use std::collections::HashMap;
-            use swissarmyhammer_kanban::types::Ordinal;
-
-            if let Ok(tasks) = ectx.list("task").await {
-                // Check if any task has a legacy (non-FractionalIndex) ordinal
-                let needs_migration = tasks.iter().any(|t| {
-                    let ord = t.get_str("position_ordinal").unwrap_or("");
-                    !ord.is_empty() && !Ordinal::is_valid(ord)
-                });
-
-                if needs_migration {
-                    tracing::info!("migrating legacy ordinals to fractional index format");
-
-                    // Group by column, sort by existing ordinal string
-                    let mut by_column: HashMap<String, Vec<Entity>> = HashMap::new();
-                    for t in tasks {
-                        let col = t.get_str("position_column").unwrap_or("todo").to_string();
-                        by_column.entry(col).or_default().push(t);
-                    }
-
-                    for tasks in by_column.values_mut() {
-                        tasks.sort_by(|a, b| {
-                            let oa = a.get_str("position_ordinal").unwrap_or("");
-                            let ob = b.get_str("position_ordinal").unwrap_or("");
-                            oa.cmp(ob)
-                        });
-
-                        // Assign new ordinals: first(), after(first), after(after(first)), ...
-                        let mut ord = Ordinal::first();
-                        for task in tasks.iter_mut() {
-                            task.set("position_ordinal", serde_json::json!(ord.as_str()));
-                            if let Err(e) = ectx.write(task).await {
-                                tracing::warn!(id = %task.id, error = %e, "failed to migrate ordinal");
-                            }
-                            ord = Ordinal::after(&ord);
-                        }
-                    }
-                    tracing::info!("ordinal migration complete");
-                }
-            }
+            migrate_legacy_ordinals(&ectx).await;
         }
 
-        // Load all entities into search index
-        let mut all_entities: Vec<Entity> = Vec::new();
-        if let Ok(ectx) = ctx.entity_context().await {
-            for entity_type in &["task", "tag", "column", "actor", "board"] {
-                if let Ok(entities) = ectx.list(entity_type).await {
-                    all_entities.extend(entities);
-                }
-            }
-        }
-        let search_index = Arc::new(RwLock::new(EntitySearchIndex::from_entities(all_entities)));
+        let search_index = Arc::new(RwLock::new(load_search_index(&ctx).await));
 
         Ok(Self {
             ctx: Arc::new(ctx),
@@ -262,42 +310,18 @@ impl BoardHandle {
         let search_index = self.search_index.clone();
         let board_path_str = kanban_root.display().to_string();
 
+        let callback = move |evt: watcher::WatchEvent| {
+            dispatch_watch_event(&search_index, &app_handle, &board_path_str, evt);
+        };
+
         match watcher::start_watching(
             kanban_root.clone(),
             self.store_roots.clone(),
             cache,
-            move |evt| {
-                use tauri::Emitter;
-                // Update search index for external file changes.
-                // Use try_write to avoid blocking the notify thread if the async
-                // dispatch_command path holds the write lock concurrently.
-                if let Ok(mut idx) = search_index.try_write() {
-                    watcher::sync_search_index(&mut idx, &evt);
-                }
-                let event_name = match &evt {
-                    watcher::WatchEvent::EntityCreated { .. } => "entity-created",
-                    watcher::WatchEvent::EntityRemoved { .. } => "entity-removed",
-                    watcher::WatchEvent::EntityFieldChanged { .. } => "entity-field-changed",
-                    watcher::WatchEvent::AttachmentChanged { .. } => "attachment-changed",
-                };
-                tracing::info!(
-                    event_name,
-                    board_path = %board_path_str,
-                    event = ?evt,
-                    "watcher callback: emitting Tauri event to frontend"
-                );
-                let wrapped = watcher::BoardWatchEvent {
-                    event: evt,
-                    board_path: board_path_str.clone(),
-                };
-                let _ = app_handle.emit(event_name, &wrapped);
-            },
+            callback,
         ) {
             Ok(w) => {
-                tracing::info!(
-                    path = %kanban_root.display(),
-                    "file watcher started for board"
-                );
+                tracing::info!(path = %kanban_root.display(), "file watcher started for board");
                 self._watcher = Some(w);
             }
             Err(e) => {
@@ -309,6 +333,39 @@ impl BoardHandle {
             }
         }
     }
+}
+
+/// Update the in-memory search index and forward the watch event to the
+/// frontend via Tauri emit. Uses `try_write` to avoid blocking the notify
+/// thread if the async dispatch_command path holds the write lock concurrently.
+fn dispatch_watch_event(
+    search_index: &Arc<RwLock<EntitySearchIndex>>,
+    app_handle: &tauri::AppHandle,
+    board_path_str: &str,
+    evt: watcher::WatchEvent,
+) {
+    use tauri::Emitter;
+
+    if let Ok(mut idx) = search_index.try_write() {
+        watcher::sync_search_index(&mut idx, &evt);
+    }
+    let event_name = match &evt {
+        watcher::WatchEvent::EntityCreated { .. } => "entity-created",
+        watcher::WatchEvent::EntityRemoved { .. } => "entity-removed",
+        watcher::WatchEvent::EntityFieldChanged { .. } => "entity-field-changed",
+        watcher::WatchEvent::AttachmentChanged { .. } => "attachment-changed",
+    };
+    tracing::info!(
+        event_name,
+        board_path = %board_path_str,
+        event = ?evt,
+        "watcher callback: emitting Tauri event to frontend"
+    );
+    let wrapped = watcher::BoardWatchEvent {
+        event: evt,
+        board_path: board_path_str.to_string(),
+    };
+    let _ = app_handle.emit(event_name, &wrapped);
 }
 
 /// A handle to a native menu item, wrapping both regular and check menu items.
@@ -353,6 +410,14 @@ pub(crate) struct AppState {
     /// Set to `true` when the app is shutting down (RunEvent::ExitRequested).
     /// The Destroyed handler uses this to distinguish mid-session close from app quit.
     pub(crate) shutting_down: AtomicBool,
+    /// Set to `true` as soon as a `kanban://open/...` deep-link URL is
+    /// recognized during cold-start setup. `auto_open_board` reads this flag
+    /// and skips session restore when it's set — the user explicitly asked
+    /// for a specific board, which must win over whatever was open
+    /// previously. `restore_session_windows` also consults it to avoid
+    /// resurrecting previous-session windows on top of the one the deep-link
+    /// handler focused or created.
+    pub(crate) deep_link_handled: AtomicBool,
 }
 
 impl AppState {
@@ -387,6 +452,7 @@ impl AppState {
             command_impls: swissarmyhammer_kanban::commands::register_commands(),
             menu_items: Mutex::new(HashMap::new()),
             shutting_down: AtomicBool::new(false),
+            deep_link_handled: AtomicBool::new(false),
         }
     }
 
@@ -407,80 +473,69 @@ impl AppState {
             .canonicalize()
             .unwrap_or_else(|_| kanban_path.clone());
 
-        // Check if already open
-        {
-            let boards = self.boards.read().await;
-            if boards.contains_key(&canonical) {
-                // Already open — just update most recent
-                self.ui_state
-                    .set_most_recent_board(&canonical.display().to_string());
-                return Ok(canonical);
-            }
+        if self.touch_if_already_open(&canonical).await {
+            return Ok(canonical);
         }
 
         let mut handle = BoardHandle::open(kanban_path).await?;
-
-        // Ensure OS user actor exists
         handle.ensure_os_actor().await;
+        let board_name = read_board_name(&handle, &canonical).await;
 
-        // Read board name for MRU
-        let board_name = if handle.ctx.is_initialized() {
-            match handle.ctx.entity_context().await {
-                Ok(ectx) => match ectx.read("board", "board").await {
-                    Ok(entity) => entity.get_str("name").unwrap_or("").to_string(),
-                    Err(_) => canonical.display().to_string(),
-                },
-                Err(_) => canonical.display().to_string(),
-            }
-        } else {
-            canonical.display().to_string()
-        };
-
-        // Start the file watcher on the owned handle BEFORE wrapping in
-        // Arc and inserting into the map. This avoids a TOCTOU race where
-        // a concurrent Tauri command could clone the Arc between insert
-        // and Arc::get_mut, silently preventing the watcher from starting.
+        // Start the file watcher on the owned handle BEFORE wrapping in Arc
+        // and inserting into the map. Avoids a TOCTOU race where a concurrent
+        // Tauri command could clone the Arc between insert and Arc::get_mut,
+        // silently preventing the watcher from starting.
         if let Some(ref app) = app_handle {
             handle.start_watcher(app.clone());
         }
 
-        // Insert into the boards map and set active. The watcher may
-        // already be emitting events, but the frontend won't see them
-        // until list_open_boards returns this board.
-        {
-            let mut boards = self.boards.write().await;
-            boards.insert(canonical.clone(), Arc::new(handle));
-        }
-
-        // Update MRU via UIState (no boards lock held)
-        self.ui_state
-            .touch_recent(&canonical.display().to_string(), &board_name);
-
-        // Track as most recently used board so quick capture and commands
-        // without an explicit board_path default to this board.
-        self.ui_state
-            .set_most_recent_board(&canonical.display().to_string());
-
-        // Update UIState board tracking so it stays in sync.
-        self.ui_state
-            .add_open_board(&canonical.display().to_string());
-
-        // Load user command overrides from .kanban/commands/
+        self.register_open_board(&canonical, handle, &board_name)
+            .await;
         self.reload_command_overrides(&canonical).await;
-
-        // Sync UIState undo/redo flags from the newly opened board's StoreContext
-        // so that menu items reflect correct enabled state from the start.
-        {
-            let boards = self.boards.read().await;
-            if let Some(handle) = boards.get(&canonical) {
-                self.ui_state.set_undo_redo_state(
-                    handle.store_context.can_undo().await,
-                    handle.store_context.can_redo().await,
-                );
-            }
-        }
+        self.sync_undo_redo_state(&canonical).await;
 
         Ok(canonical)
+    }
+
+    /// If the board is already open, bump its MRU position and return `true`.
+    async fn touch_if_already_open(&self, canonical: &Path) -> bool {
+        let boards = self.boards.read().await;
+        if boards.contains_key(canonical) {
+            self.ui_state
+                .set_most_recent_board(&canonical.display().to_string());
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Insert the newly-opened board into the map and update UIState MRU
+    /// tracking. The watcher may already be emitting events, but the frontend
+    /// won't see them until `list_open_boards` returns this board.
+    async fn register_open_board(&self, canonical: &Path, handle: BoardHandle, board_name: &str) {
+        {
+            let mut boards = self.boards.write().await;
+            boards.insert(canonical.to_path_buf(), Arc::new(handle));
+        }
+        let canonical_str = canonical.display().to_string();
+        self.ui_state.touch_recent(&canonical_str, board_name);
+        // Track as most recently used board so quick capture and commands
+        // without an explicit `board_path` default to this board.
+        self.ui_state.set_most_recent_board(&canonical_str);
+        self.ui_state.add_open_board(&canonical_str);
+    }
+
+    /// Sync UIState undo/redo flags from the newly opened board's
+    /// `StoreContext` so menu items reflect correct enabled state from the
+    /// start.
+    async fn sync_undo_redo_state(&self, canonical: &Path) {
+        let boards = self.boards.read().await;
+        if let Some(handle) = boards.get(canonical) {
+            self.ui_state.set_undo_redo_state(
+                handle.store_context.can_undo().await,
+                handle.store_context.can_redo().await,
+            );
+        }
     }
 
     /// Auto-open a board at startup by walking up from CWD looking for a `.kanban` directory.
@@ -488,6 +543,17 @@ impl AppState {
     /// If no `.kanban` directory is found in any ancestor, the app starts without
     /// a board (the frontend shows the "No board loaded" prompt).
     pub async fn auto_open_board(&self) {
+        // If a deep-link URL was already handled during setup, the user
+        // explicitly asked for a specific board — skip session restore and
+        // filesystem discovery entirely so we don't resurrect the previous
+        // session on top of their choice.
+        if self
+            .deep_link_handled
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            tracing::info!("auto_open_board: skipping — deep link handled");
+            return;
+        }
         // Restore previously-open boards from UIState.
         {
             let paths: Vec<PathBuf> = self

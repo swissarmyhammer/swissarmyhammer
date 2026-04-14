@@ -63,3 +63,4 @@ The correct fix is NOT to swallow the skip — it's to drive Enter through the s
 ## Workflow
 
 - Use `/tdd`: remove the skip first (RED — expect the multi-select+vim+Enter failure), then add the EditorView-aware Enter dispatch in the harness (GREEN), then confirm full-suite green.
+#test-failure
