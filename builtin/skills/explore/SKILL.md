@@ -173,8 +173,8 @@ If the blast radius reveals unexpected dependencies, or the call graph leads to 
 ## When to escalate
 
 If exploration reveals:
-- **Work too large for a single test** — suggest `/plan` to break it into cards
-- **A bug** — state the test that would catch it, suggest `/card` to track it
+- **Work too large for a single test** — suggest `/plan` to break it into tasks
+- **A bug** — state the test that would catch it, suggest `/task` to track it
 - **An architectural question** — present what you found and ask the user, don't guess
 
 ## Constraints

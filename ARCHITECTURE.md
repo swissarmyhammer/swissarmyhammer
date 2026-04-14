@@ -396,7 +396,7 @@ The `swissarmyhammer-embedding` facade selects the best backend for the current 
 
 ### Ralph: Persistent Agent Loop
 
-Ralph prevents an autonomous agent from stopping while work remains. Used by skills like `implement-loop` and `test-loop`.
+Ralph prevents an autonomous agent from stopping while work remains. Used by skills like `finish` and `test-loop`.
 
 1. A skill calls `set ralph` with an instruction and max_iterations (default 50)
 2. Ralph writes a `.ralph/<session_id>.md` file with the instruction and iteration counter

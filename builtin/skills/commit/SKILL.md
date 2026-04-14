@@ -20,7 +20,7 @@ Create a git commit with a well-crafted conventional commit message.
 - You MUST NOT miss files on the commit
   - You MUST commit all the source files modified on the current branch
   - You MUST check for and create if needed a sensible project specific .gitignore
-- **Kanban board**: If a `.kanban/` directory exists, ALWAYS include its changes in the same commit as the code. Task tracking lives with the code — cards created, moved, or completed during this work must ship together. Never leave `.kanban/` changes unstaged.
+- **Kanban board**: If a `.kanban/` directory exists, ALWAYS include its changes in the same commit as the code. Task tracking lives with the code — tasks created, moved, or completed during this work must ship together. Never leave `.kanban/` changes unstaged.
 
 ## Process
 

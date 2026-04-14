@@ -73,7 +73,7 @@ For duplicate clusters that need human decision before refactoring:
 Report:
 - Duplicate clusters found, grouped by severity
 - What was refactored (if any)
-- Kanban cards created for clusters needing decisions
+- Kanban tasks created for clusters needing decisions
 - Recommendation on next steps
 
 ## Rules

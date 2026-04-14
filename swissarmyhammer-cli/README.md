@@ -89,9 +89,11 @@ Skills are bundles of instructions that teach the agent how to do specific tasks
 
 **plan** -- Turn specs into implementation plans. Reads a spec document, explores the codebase, designs an approach, and creates a kanban board with ordered tasks and subtasks.
 
-**kanban** -- Pick up and execute the next task from the kanban board. Moves the card to "doing", works through each subtask, runs tests, and marks the card complete.
+**kanban** -- Pick up and execute the next task from the kanban board. Moves the task to "doing", works through each subtask, runs tests, and hands off to review.
 
-**implement** -- Execute all remaining tasks on the kanban board autonomously. Runs the full implementation workflow end-to-end.
+**implement** -- Pick up a single kanban task and implement it — writing code, running tests, and moving the task into `review`.
+
+**finish** -- Drive kanban tasks all the way to `done` by looping implement → test → review. Supports single-task mode (one task id) or scoped-batch mode (tag/project/filter) for parallel execution.
 
 **commit** -- Create well-structured git commits with conventional commit messages. Cleans up scratch files, stages all relevant changes, writes a clear commit message.
 
