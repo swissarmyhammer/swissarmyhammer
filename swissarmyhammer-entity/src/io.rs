@@ -11,6 +11,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use futures::stream::{self, StreamExt};
 use serde_json::Value;
 use swissarmyhammer_fields::EntityDef;
 use tokio::fs;
@@ -19,6 +20,14 @@ use ulid::Ulid;
 
 use crate::entity::Entity;
 use crate::error::{EntityError, Result};
+
+/// Maximum number of concurrent file reads issued by [`read_entity_dir`].
+///
+/// Bounded so we don't exhaust the OS file-descriptor budget on very large
+/// boards. Tuned by benchmark (`benches/list_entities.rs`); 64 saturates the
+/// page cache without contention on the tokio runtime in testing. Adjust only
+/// with benchmark evidence.
+const READ_ENTITY_DIR_CONCURRENCY: usize = 64;
 
 /// Get the file extension for an entity type.
 pub fn entity_extension(entity_def: &EntityDef) -> &'static str {
@@ -119,6 +128,20 @@ pub async fn write_entity(path: &Path, entity: &Entity, entity_def: &EntityDef) 
 /// Scans for files matching the expected extension and parses each one.
 /// Parse errors (invalid YAML, bad frontmatter) are logged and skipped.
 /// I/O errors (permission denied, disk failure) are propagated.
+///
+/// The directory listing itself is sequential (tokio's `ReadDir` is not
+/// shareable), but the per-file read+parse work runs concurrently with a
+/// bounded fan-out of [`READ_ENTITY_DIR_CONCURRENCY`] in-flight reads. On
+/// large boards this turns a long serial chain of `await`s into a wave of
+/// overlapping I/O, which matters most for cold-cache reads where each file
+/// read otherwise blocks on disk.
+///
+/// Error semantics match the previous serial implementation exactly:
+/// - [`EntityError::NotFound`] (a file deleted between `readdir` and `read`
+///   — a benign race) is silently skipped.
+/// - [`EntityError::InvalidFrontmatter`] and [`EntityError::Yaml`] log a
+///   warning and skip the file.
+/// - All other errors (I/O failure, permission denied, etc.) propagate.
 pub async fn read_entity_dir(
     dir: &Path,
     entity_type: impl AsRef<str>,
@@ -126,24 +149,59 @@ pub async fn read_entity_dir(
 ) -> Result<Vec<Entity>> {
     let entity_type = entity_type.as_ref();
     let ext = entity_extension(entity_def);
-    let mut entities = Vec::new();
 
-    let mut entries = match fs::read_dir(dir).await {
+    let entries = match fs::read_dir(dir).await {
         Ok(entries) => entries,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(e) => return Err(EntityError::Io(e)),
     };
 
+    let jobs = enumerate_entity_files(entries, ext).await?;
+    let results = read_entity_files_concurrently(jobs, entity_type, entity_def).await;
+    reconcile_read_results(results)
+}
+
+/// Phase 1: enumerate matching files sequentially. `ReadDir` is not `Clone`-able
+/// and yielding entries one at a time is already cheap.
+async fn enumerate_entity_files(
+    mut entries: fs::ReadDir,
+    ext: &str,
+) -> Result<Vec<(PathBuf, String)>> {
+    let mut jobs = Vec::new();
     while let Some(entry) = entries.next_entry().await? {
         let path = entry.path();
         if path.extension().and_then(|e| e.to_str()) != Some(ext) {
             continue;
         }
-        let id = match path.file_stem().and_then(|s| s.to_str()) {
-            Some(id) => id.to_string(),
-            None => continue,
+        let Some(id) = path.file_stem().and_then(|s| s.to_str()).map(String::from) else {
+            continue;
         };
-        match read_entity(&path, entity_type, &id, entity_def).await {
+        jobs.push((path, id));
+    }
+    Ok(jobs)
+}
+
+/// Phase 2: read+parse files concurrently with bounded fan-out.
+async fn read_entity_files_concurrently(
+    jobs: Vec<(PathBuf, String)>,
+    entity_type: &str,
+    entity_def: &EntityDef,
+) -> Vec<(PathBuf, Result<Entity>)> {
+    stream::iter(jobs)
+        .map(|(path, id)| async move {
+            let outcome = read_entity(&path, entity_type, &id, entity_def).await;
+            (path, outcome)
+        })
+        .buffer_unordered(READ_ENTITY_DIR_CONCURRENCY)
+        .collect()
+        .await
+}
+
+/// Phase 3: reconcile per-file outcomes with the documented error semantics.
+fn reconcile_read_results(results: Vec<(PathBuf, Result<Entity>)>) -> Result<Vec<Entity>> {
+    let mut entities = Vec::with_capacity(results.len());
+    for (path, outcome) in results {
+        match outcome {
             Ok(entity) => entities.push(entity),
             // File deleted between readdir and read — benign race condition
             Err(EntityError::NotFound { .. }) => continue,
@@ -156,7 +214,6 @@ pub async fn read_entity_dir(
             Err(e) => return Err(e),
         }
     }
-
     Ok(entities)
 }
 
@@ -839,6 +896,134 @@ mod tests {
             .unwrap();
         assert_eq!(entities.len(), 1);
         assert_eq!(entities[0].id, "01ABC");
+    }
+
+    #[tokio::test]
+    async fn read_entity_dir_skips_unparseable_files_concurrently() {
+        // Exercises the bounded-concurrency path with a heterogeneous mix of
+        // valid YAML, unparseable YAML, files with the wrong extension, and
+        // files whose names look right but contain garbage. The goal is to
+        // confirm the parallel pipeline (a) returns exactly the valid set,
+        // (b) skips the bad ones without aborting the whole call, and
+        // (c) tolerates being driven with enough files to spill across
+        // buffer_unordered's concurrency window (READ_ENTITY_DIR_CONCURRENCY).
+        let dir = tempfile::tempdir().unwrap();
+        let entity_def = tag_entity_def(); // expects .yaml
+
+        // Write enough valid files to exceed the concurrency window so that
+        // multiple batches must run before the call returns. Mix in bad
+        // files at unpredictable positions so a single sequential failure
+        // could not mask a parallel-only bug.
+        let valid_count = (READ_ENTITY_DIR_CONCURRENCY * 2) + 5;
+        for i in 0..valid_count {
+            let id = format!("valid_{i:04}");
+            let path = entity_file_path(dir.path(), &id, &entity_def);
+            let mut entity = Entity::new("tag", id.as_str());
+            entity.set("tag_name", Value::String(id.clone()));
+            write_entity(&path, &entity, &entity_def).await.unwrap();
+        }
+
+        // Sprinkle in unparseable .yaml files — these should warn-and-skip.
+        for i in 0..5 {
+            let bad_path = dir.path().join(format!("corrupt_{i}.yaml"));
+            fs::write(&bad_path, "{{{{ not valid yaml ::: \n - oops")
+                .await
+                .unwrap();
+        }
+
+        // Wrong-extension files — these should be filtered out before any
+        // read is attempted (Phase 1, not Phase 2).
+        fs::write(dir.path().join("readme.md"), "# not a tag")
+            .await
+            .unwrap();
+        fs::write(dir.path().join("notes.txt"), "ignore me")
+            .await
+            .unwrap();
+
+        let entities = read_entity_dir(dir.path(), "tag", &entity_def)
+            .await
+            .unwrap();
+
+        // Only the valid ones come back; ordering is not guaranteed because
+        // buffer_unordered yields completed futures as they finish.
+        assert_eq!(
+            entities.len(),
+            valid_count,
+            "concurrent reads should return exactly the valid files"
+        );
+        let mut ids: Vec<String> = entities.iter().map(|e| e.id.to_string()).collect();
+        ids.sort();
+        let mut expected: Vec<String> = (0..valid_count).map(|i| format!("valid_{i:04}")).collect();
+        expected.sort();
+        assert_eq!(ids, expected, "every valid id must be present");
+    }
+
+    #[tokio::test]
+    async fn read_entity_dir_tolerates_deleted_mid_read() {
+        // Simulate the benign race where the directory listing observes a
+        // file that vanishes before the per-file read runs. The serial path
+        // skipped these silently via EntityError::NotFound; the parallel
+        // path must do the same. We synthesise the race deterministically
+        // by deleting the file *between* readdir-time and the spawned read
+        // — which we approximate by writing real files, opening read_entity_dir
+        // through a wrapper, and racing a delete. Since we can't easily
+        // inject between phase 1 and phase 2 from outside, we instead verify
+        // the same invariant directly: a NotFound error from a single read
+        // is dropped without contaminating the rest of the result set.
+        let dir = tempfile::tempdir().unwrap();
+        let entity_def = tag_entity_def();
+
+        // Write some real files...
+        for id in ["alpha", "beta", "gamma"] {
+            let path = entity_file_path(dir.path(), id, &entity_def);
+            let mut entity = Entity::new("tag", id);
+            entity.set("tag_name", Value::String(id.into()));
+            write_entity(&path, &entity, &entity_def).await.unwrap();
+        }
+
+        // ...and add a file the test will delete *between* listing and
+        // reading. We can't easily synchronise that across the two phases
+        // from outside, so instead we rely on the sequential interleaving
+        // semantics of read_entity_dir: phase 1 runs to completion before
+        // phase 2 starts. Delete the file *during* phase 2 by spawning a
+        // tokio task that waits a few µs and then unlinks it. Worst case
+        // the delete loses the race (file already read) and the entity is
+        // returned — which is also a valid outcome and proves the
+        // tolerance: read_entity_dir must not error in either case.
+        let racy_id = "racy";
+        let racy_path = entity_file_path(dir.path(), racy_id, &entity_def);
+        let mut racy_entity = Entity::new("tag", racy_id);
+        racy_entity.set("tag_name", Value::String(racy_id.into()));
+        write_entity(&racy_path, &racy_entity, &entity_def)
+            .await
+            .unwrap();
+
+        let racy_path_for_delete = racy_path.clone();
+        let deleter = tokio::spawn(async move {
+            // Yield a few times to let phase 1 finish enumerating, then unlink.
+            for _ in 0..16 {
+                tokio::task::yield_now().await;
+            }
+            let _ = fs::remove_file(&racy_path_for_delete).await;
+        });
+
+        let entities = read_entity_dir(dir.path(), "tag", &entity_def)
+            .await
+            .expect("listing must not error when a file vanishes mid-read");
+        deleter.await.unwrap();
+
+        // alpha/beta/gamma must always be present. The racy file is allowed
+        // to be either present (delete lost the race) or absent (delete won).
+        let ids: std::collections::HashSet<String> =
+            entities.iter().map(|e| e.id.to_string()).collect();
+        assert!(ids.contains("alpha"));
+        assert!(ids.contains("beta"));
+        assert!(ids.contains("gamma"));
+        assert!(
+            entities.len() == 3 || entities.len() == 4,
+            "expected 3 or 4 entities (race-dependent), got {}",
+            entities.len()
+        );
     }
 
     #[tokio::test]

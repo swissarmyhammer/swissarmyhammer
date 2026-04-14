@@ -17,6 +17,7 @@ tracing = { workspace = true }
 chrono = { workspace = true }
 ulid = { workspace = true }
 async-trait = { workspace = true }
+futures = { workspace = true }
 swissarmyhammer-common = { workspace = true }
 swissarmyhammer-commands = { workspace = true }
 swissarmyhammer-fields = { workspace = true }
@@ -33,3 +34,8 @@ test-support = ["dep:tempfile"]
 swissarmyhammer-entity = { path = ".", features = ["test-support"] }
 tempfile = { workspace = true }
 tokio-test = { workspace = true }
+criterion = { workspace = true, features = ["async_tokio"] }
+
+[[bench]]
+name = "list_entities"
+harness = false

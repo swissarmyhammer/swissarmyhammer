@@ -13,6 +13,7 @@ import { AppModeContainer } from "@/components/app-mode-container";
 import { InspectorsContainer } from "@/components/inspectors-container";
 import { ViewsContainer } from "@/components/views-container";
 import { ViewContainer } from "@/components/view-container";
+import { CommandBusyProvider } from "@/lib/command-scope";
 
 /** Parse URL params once at module level. */
 const URL_PARAMS = new URLSearchParams(window.location.search);
@@ -26,56 +27,57 @@ if (IS_QUICK_CAPTURE) {
 }
 
 /**
- * Main application shell — pure container composition with no state or logic.
+ * Main application shell — pure container composition, no state or logic.
  *
- * This is the authoritative container hierarchy. ARCHITECTURE.md references
- * this file rather than duplicating the tree. Each container comment below
- * explains WHY it sits at that level.
+ * Authoritative container hierarchy (ARCHITECTURE.md references this file).
+ * Ordering constraints, outermost → innermost:
+ *
+ * - `CommandBusyProvider` — owns the in-flight counter shared by
+ *   `useDispatchCommand` (writer inside `WindowContainer` descendants) and
+ *   `refreshEntities` (writer inside `RustEngineContainer`). Must sit above
+ *   both writers; otherwise the nav-bar progress bar never lights up for
+ *   refetches.
+ * - `RustEngineContainer` — entity state, schema, undo, event bus. Owns the
+ *   busy-setter writer for `refreshEntities` refetches, so it must sit
+ *   inside `CommandBusyProvider`.
+ * - `WindowContainer` — window identity, board switching, `AppShell`
+ *   keybindings. Calls `useRustEngine()`.
+ * - `AppModeContainer` — mode transitions (normal/command/search). Must wrap
+ *   `NavBar` and content so keybindings and toolbar reflect active mode.
+ * - `BoardContainer` — conditional render (loading/empty/active). Owns
+ *   `FileDropProvider` and `DragSessionProvider`.
+ * - `ViewsContainer` → `PerspectivesContainer` → `PerspectiveContainer` —
+ *   tab bar, active perspective, filter/sort/group application.
+ * - `ViewContainer` — innermost routing: BoardView or GridView.
+ * - `InspectorsContainer` — sibling of the board layout, inside
+ *   `BoardContainer` so it can consume `FileDropProvider` for attachments.
  */
 function App() {
   return (
-    // Outermost: provides entity state, schema, undo, and event bus
-    // that every descendant needs. WindowContainer calls useRustEngine().
-    <RustEngineContainer>
-      {/* Needs useRustEngine() for refreshEntities; owns window identity,
-          board switching, and AppShell keybindings. */}
-      <WindowContainer>
-        {/* Inside window: mode transitions (normal/command/search) dispatch
-            commands that require window scope. Wraps NavBar and all content
-            so keybindings and toolbar reflect the active mode. */}
-        <AppModeContainer>
-          {/* Conditional rendering (loading/empty/active board). Owns
-              FileDropProvider and DragSessionProvider used by children. */}
-          <BoardContainer>
-            <div className="h-screen bg-background text-foreground flex flex-col">
-              <NavBar />
-              {/* Must wrap PerspectivesContainer because PerspectiveProvider
-                  calls useViews(). Also owns LeftNav and view.switch:* commands. */}
-              <ViewsContainer>
-                {/* Owns the tab bar and PerspectiveProvider context that
-                    PerspectiveContainer reads for the active perspective. */}
-                <PerspectivesContainer>
-                  {/* Applies filter/sort/group for the active perspective,
-                      regardless of which view type renders below. */}
-                  <PerspectiveContainer>
-                    <div className="flex-1 min-w-0 overflow-hidden flex flex-col">
-                      {/* Innermost content routing — picks BoardView or
-                          GridView based on the active view definition. */}
-                      <ViewContainer />
-                    </div>
-                  </PerspectiveContainer>
-                </PerspectivesContainer>
-              </ViewsContainer>
-              <ModeIndicator />
-            </div>
-            {/* Inside BoardContainer so it has access to FileDropProvider —
-                attachment fields in the inspector need drag-drop context.
-                Renders as a fixed overlay above the board layout. */}
-            <InspectorsContainer />
-          </BoardContainer>
-        </AppModeContainer>
-      </WindowContainer>
-    </RustEngineContainer>
+    <CommandBusyProvider>
+      <RustEngineContainer>
+        <WindowContainer>
+          <AppModeContainer>
+            <BoardContainer>
+              <div className="h-screen bg-background text-foreground flex flex-col">
+                <NavBar />
+                <ViewsContainer>
+                  <PerspectivesContainer>
+                    <PerspectiveContainer>
+                      <div className="flex-1 min-w-0 overflow-hidden flex flex-col">
+                        <ViewContainer />
+                      </div>
+                    </PerspectiveContainer>
+                  </PerspectivesContainer>
+                </ViewsContainer>
+                <ModeIndicator />
+              </div>
+              <InspectorsContainer />
+            </BoardContainer>
+          </AppModeContainer>
+        </WindowContainer>
+      </RustEngineContainer>
+    </CommandBusyProvider>
   );
 }
 

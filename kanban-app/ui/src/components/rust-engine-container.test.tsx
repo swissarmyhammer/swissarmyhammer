@@ -8,6 +8,31 @@ import { render, screen, act, waitFor } from "@testing-library/react";
 
 type ListenCallback = (event: { payload: unknown }) => void;
 
+// Mock `@/lib/refresh` so individual tests can swap in deferred promises
+// for `refreshBoards`. The mock's default implementation forwards to the
+// real `refreshBoards` so tests that exercise the full IPC fan-out (via
+// mocked `invoke`) keep working unchanged. Per-test overrides via
+// `mockRefreshBoards.mockImplementation` take precedence; `beforeEach`
+// restores the forwarding default via `realRefreshBoards`.
+const { mockRefreshBoards, realRefreshBoards } = vi.hoisted(() => ({
+  mockRefreshBoards: vi.fn(),
+  // Populated synchronously inside the `vi.mock` factory below, before any
+  // test runs. Typed as the function signature so callers get proper types.
+  realRefreshBoards: {
+    current: null as null | typeof import("@/lib/refresh").refreshBoards,
+  },
+}));
+
+vi.mock("@/lib/refresh", async () => {
+  const actual =
+    await vi.importActual<typeof import("@/lib/refresh")>("@/lib/refresh");
+  realRefreshBoards.current = actual.refreshBoards;
+  return {
+    ...actual,
+    refreshBoards: mockRefreshBoards,
+  };
+});
+
 const { mockInvoke, mockListen, listeners } = vi.hoisted(() => {
   const listeners = new Map<string, ListenCallback[]>();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -63,6 +88,8 @@ import { useEntityStore } from "@/lib/entity-store-context";
 import { useSchema } from "@/lib/schema-context";
 import { useUIState } from "@/lib/ui-state-context";
 import { useEntityFocus } from "@/lib/entity-focus-context";
+import { CommandBusyProvider, useCommandBusy } from "@/lib/command-scope";
+import type { RefreshResult } from "@/lib/refresh";
 import {
   RustEngineContainer,
   useRefreshEntities,
@@ -146,6 +173,10 @@ describe("RustEngineContainer", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     listeners.clear();
+    // Restore default `refreshBoards` behavior (delegate to real impl,
+    // which routes through the mocked `invoke`). Tests that need
+    // deferred control over the resolution override this themselves.
+    mockRefreshBoards.mockImplementation(realRefreshBoards.current!);
   });
 
   it("provides all required contexts to children", async () => {
@@ -679,5 +710,421 @@ describe("RustEngineContainer", () => {
         "entity-store-ok:1",
       );
     });
+  });
+
+  // -------------------------------------------------------------------------
+  // Latest-wins refetch — rapid filter edits collapse to a single store write
+  // -------------------------------------------------------------------------
+
+  it("refreshEntities: stale (out-of-order) responses do not overwrite the store", async () => {
+    // Two refresh calls overlap. Call #1 resolves AFTER call #2. Without the
+    // latest-wins guard, call #1's late resolution would clobber call #2's
+    // already-applied entity update. With the guard, only call #2's data
+    // lands in the store.
+    const result1: RefreshResult = {
+      openBoards: [],
+      boardData: null,
+      entitiesByType: {
+        task: [
+          {
+            entity_type: "task",
+            id: "stale",
+            moniker: "task:stale",
+            fields: { title: "Stale" },
+          },
+        ],
+      },
+    };
+    const result2: RefreshResult = {
+      openBoards: [],
+      boardData: null,
+      entitiesByType: {
+        task: [
+          {
+            entity_type: "task",
+            id: "fresh",
+            moniker: "task:fresh",
+            fields: { title: "Fresh" },
+          },
+        ],
+      },
+    };
+
+    let resolve1!: (v: RefreshResult) => void;
+    let resolve2!: (v: RefreshResult) => void;
+    const p1 = new Promise<RefreshResult>((r) => {
+      resolve1 = r;
+    });
+    const p2 = new Promise<RefreshResult>((r) => {
+      resolve2 = r;
+    });
+
+    let callCount = 0;
+    mockRefreshBoards.mockImplementation(() => {
+      callCount++;
+      return callCount === 1 ? p1 : p2;
+    });
+
+    /** Probe that captures task ids from the reactive store. */
+    function TaskIdsProbe() {
+      const entitiesByType = useEntitiesByType();
+      const tasks = entitiesByType.task ?? [];
+      return (
+        <span data-testid="task-ids">{tasks.map((t) => t.id).join(",")}</span>
+      );
+    }
+
+    let refreshFn:
+      | ((path: string, filter?: string) => Promise<RefreshResult>)
+      | null = null;
+    function CaptureRefresh() {
+      refreshFn = useRefreshEntities();
+      return null;
+    }
+
+    await act(async () => {
+      render(
+        <RustEngineContainer>
+          <TaskIdsProbe />
+          <CaptureRefresh />
+        </RustEngineContainer>,
+      );
+    });
+
+    expect(screen.getByTestId("task-ids").textContent).toBe("");
+
+    // Kick off both calls without awaiting either — they overlap.
+    let promise1!: Promise<RefreshResult>;
+    let promise2!: Promise<RefreshResult>;
+    act(() => {
+      promise1 = refreshFn!("/board", "filter-1");
+      promise2 = refreshFn!("/board", "filter-2");
+    });
+
+    // Resolve call #2 FIRST — it's the newer call and its data should land.
+    await act(async () => {
+      resolve2(result2);
+      await promise2;
+    });
+
+    expect(screen.getByTestId("task-ids").textContent).toBe("fresh");
+
+    // Now resolve call #1 LATE — its data is stale and must be discarded.
+    await act(async () => {
+      resolve1(result1);
+      await promise1;
+    });
+
+    // Still "fresh" — the late resolution did NOT overwrite the store.
+    expect(screen.getByTestId("task-ids").textContent).toBe("fresh");
+  });
+
+  it("refreshEntities: stale call still returns its result to the caller", async () => {
+    // Even when a refresh is stale and its store-write is suppressed, the
+    // returned RefreshResult must reach the caller — open-boards/board-data
+    // consumers may still want the value.
+    const result1: RefreshResult = {
+      openBoards: [{ path: "/board", name: "Stale", is_active: true }],
+      boardData: null,
+      entitiesByType: null,
+    };
+    const result2: RefreshResult = {
+      openBoards: [{ path: "/board", name: "Fresh", is_active: true }],
+      boardData: null,
+      entitiesByType: null,
+    };
+
+    let resolve1!: (v: RefreshResult) => void;
+    let resolve2!: (v: RefreshResult) => void;
+    let callCount = 0;
+    mockRefreshBoards.mockImplementation(() => {
+      callCount++;
+      if (callCount === 1)
+        return new Promise<RefreshResult>((r) => {
+          resolve1 = r;
+        });
+      return new Promise<RefreshResult>((r) => {
+        resolve2 = r;
+      });
+    });
+
+    let refreshFn:
+      | ((path: string, filter?: string) => Promise<RefreshResult>)
+      | null = null;
+    function CaptureRefresh() {
+      refreshFn = useRefreshEntities();
+      return null;
+    }
+
+    await act(async () => {
+      render(
+        <RustEngineContainer>
+          <CaptureRefresh />
+        </RustEngineContainer>,
+      );
+    });
+
+    let p1!: Promise<RefreshResult>;
+    let p2!: Promise<RefreshResult>;
+    act(() => {
+      p1 = refreshFn!("/board", "f1");
+      p2 = refreshFn!("/board", "f2");
+    });
+
+    await act(async () => {
+      resolve2(result2);
+      await p2;
+    });
+
+    let stale!: RefreshResult;
+    await act(async () => {
+      resolve1(result1);
+      stale = await p1;
+    });
+
+    // Stale call returned its actual result — the guard only suppresses the
+    // store write, not the return value.
+    expect(stale.openBoards[0].name).toBe("Stale");
+  });
+
+  // -------------------------------------------------------------------------
+  // Busy tracking — refreshEntities participates in the shared busy counter
+  // -------------------------------------------------------------------------
+
+  it("refreshEntities: nav-bar isBusy is true while a refresh is in flight", async () => {
+    let resolveRefresh!: (v: RefreshResult) => void;
+    mockRefreshBoards.mockImplementation(
+      () =>
+        new Promise<RefreshResult>((r) => {
+          resolveRefresh = r;
+        }),
+    );
+
+    let refreshFn:
+      | ((path: string, filter?: string) => Promise<RefreshResult>)
+      | null = null;
+
+    function CaptureRefresh() {
+      refreshFn = useRefreshEntities();
+      return null;
+    }
+    function BusyProbe() {
+      const { isBusy } = useCommandBusy();
+      return <span data-testid="busy">{isBusy ? "yes" : "no"}</span>;
+    }
+
+    await act(async () => {
+      render(
+        <CommandBusyProvider>
+          <RustEngineContainer>
+            <CaptureRefresh />
+            <BusyProbe />
+          </RustEngineContainer>
+        </CommandBusyProvider>,
+      );
+    });
+
+    expect(screen.getByTestId("busy").textContent).toBe("no");
+
+    let p!: Promise<RefreshResult>;
+    act(() => {
+      p = refreshFn!("/board", "f1");
+    });
+
+    // Synchronous part of refreshEntities incremented the counter.
+    expect(screen.getByTestId("busy").textContent).toBe("yes");
+
+    await act(async () => {
+      resolveRefresh({ openBoards: [], boardData: null, entitiesByType: null });
+      await p;
+    });
+
+    // Counter decremented after the awaited refresh settled.
+    expect(screen.getByTestId("busy").textContent).toBe("no");
+  });
+
+  it("refreshEntities: isBusy returns to false even when refresh rejects", async () => {
+    let rejectRefresh!: (e: Error) => void;
+    mockRefreshBoards.mockImplementation(
+      () =>
+        new Promise<RefreshResult>((_resolve, reject) => {
+          rejectRefresh = reject;
+        }),
+    );
+
+    let refreshFn:
+      | ((path: string, filter?: string) => Promise<RefreshResult>)
+      | null = null;
+    function CaptureRefresh() {
+      refreshFn = useRefreshEntities();
+      return null;
+    }
+    function BusyProbe() {
+      const { isBusy } = useCommandBusy();
+      return <span data-testid="busy">{isBusy ? "yes" : "no"}</span>;
+    }
+
+    await act(async () => {
+      render(
+        <CommandBusyProvider>
+          <RustEngineContainer>
+            <CaptureRefresh />
+            <BusyProbe />
+          </RustEngineContainer>
+        </CommandBusyProvider>,
+      );
+    });
+
+    let p!: Promise<RefreshResult>;
+    act(() => {
+      p = refreshFn!("/board");
+    });
+
+    expect(screen.getByTestId("busy").textContent).toBe("yes");
+
+    await act(async () => {
+      rejectRefresh(new Error("refresh failed"));
+      try {
+        await p;
+      } catch {
+        // expected
+      }
+    });
+
+    expect(screen.getByTestId("busy").textContent).toBe("no");
+  });
+
+  it("refreshEntities: nav-bar progress bar is reachable in the production App tree shape", async () => {
+    // Regression guard for the original wiring bug: `CommandBusyProvider`
+    // must wrap `RustEngineContainer` in the production tree (see `App.tsx`),
+    // not sit inside it. If the provider is placed below the refetch writer,
+    // `useSetCommandInflight()` returns the module-level no-op setter, the
+    // counter never increments, and the progress bar stays hidden — even
+    // though this file's earlier tests would still green because they use a
+    // synthetic wrapper.
+    //
+    // This test renders the same ancestor-to-descendant order as `App.tsx`:
+    //
+    //   <CommandBusyProvider>
+    //     <RustEngineContainer>
+    //       <NavBarProgressBarProbe />   -- reads useCommandBusy()
+    //       <CaptureRefresh />           -- owns refreshEntities()
+    //     </RustEngineContainer>
+    //   </CommandBusyProvider>
+    //
+    // and asserts a `role="progressbar"` element (matching the nav-bar's DOM
+    // contract from `kanban-app/ui/src/components/nav-bar.tsx`) appears while
+    // a refresh is in flight and disappears when it settles.
+    let resolveRefresh!: (v: RefreshResult) => void;
+    mockRefreshBoards.mockImplementation(
+      () =>
+        new Promise<RefreshResult>((r) => {
+          resolveRefresh = r;
+        }),
+    );
+
+    let refreshFn:
+      | ((path: string, filter?: string) => Promise<RefreshResult>)
+      | null = null;
+    function CaptureRefresh() {
+      refreshFn = useRefreshEntities();
+      return null;
+    }
+
+    // Mirrors the nav-bar contract: renders a `role="progressbar"` element
+    // exactly when `isBusy` is true. Decoupled from the real NavBar to avoid
+    // dragging in WindowContainer / schema / open-boards dependencies.
+    function NavBarProgressBarProbe() {
+      const { isBusy } = useCommandBusy();
+      return isBusy ? (
+        <div role="progressbar" aria-label="Command in progress" />
+      ) : null;
+    }
+
+    await act(async () => {
+      render(
+        <CommandBusyProvider>
+          <RustEngineContainer>
+            <NavBarProgressBarProbe />
+            <CaptureRefresh />
+          </RustEngineContainer>
+        </CommandBusyProvider>,
+      );
+    });
+
+    // Progress bar hidden before any refetch.
+    expect(screen.queryByRole("progressbar")).toBeNull();
+
+    let p!: Promise<RefreshResult>;
+    act(() => {
+      p = refreshFn!("/board", "f1");
+    });
+
+    // Progress bar visible while refetch is in flight — this is the
+    // user-visible behavior the card promises.
+    expect(screen.getByRole("progressbar")).toBeTruthy();
+
+    await act(async () => {
+      resolveRefresh({ openBoards: [], boardData: null, entitiesByType: null });
+      await p;
+    });
+
+    // Progress bar hidden after refetch settles.
+    expect(screen.queryByRole("progressbar")).toBeNull();
+  });
+
+  it("refreshEntities: counter stays positive while overlapping refreshes are in flight", async () => {
+    const resolvers: Array<(v: RefreshResult) => void> = [];
+    mockRefreshBoards.mockImplementation(
+      () =>
+        new Promise<RefreshResult>((r) => {
+          resolvers.push(r);
+        }),
+    );
+
+    let refreshFn:
+      | ((path: string, filter?: string) => Promise<RefreshResult>)
+      | null = null;
+    function CaptureRefresh() {
+      refreshFn = useRefreshEntities();
+      return null;
+    }
+    function BusyProbe() {
+      const { isBusy } = useCommandBusy();
+      return <span data-testid="busy">{isBusy ? "yes" : "no"}</span>;
+    }
+
+    await act(async () => {
+      render(
+        <CommandBusyProvider>
+          <RustEngineContainer>
+            <CaptureRefresh />
+            <BusyProbe />
+          </RustEngineContainer>
+        </CommandBusyProvider>,
+      );
+    });
+
+    let p1!: Promise<RefreshResult>;
+    let p2!: Promise<RefreshResult>;
+    act(() => {
+      p1 = refreshFn!("/board", "a");
+      p2 = refreshFn!("/board", "b");
+    });
+
+    expect(screen.getByTestId("busy").textContent).toBe("yes");
+
+    // Resolve only one — still busy because the other is in flight.
+    await act(async () => {
+      resolvers[0]({ openBoards: [], boardData: null, entitiesByType: null });
+      await p1;
+    });
+    expect(screen.getByTestId("busy").textContent).toBe("yes");
+
+    await act(async () => {
+      resolvers[1]({ openBoards: [], boardData: null, entitiesByType: null });
+      await p2;
+    });
+    expect(screen.getByTestId("busy").textContent).toBe("no");
   });
 });

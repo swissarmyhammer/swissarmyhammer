@@ -8285,7 +8285,9 @@ version = "0.12.11"
 dependencies = [
  "async-trait",
  "chrono",
+ "criterion",
  "diffy",
+ "futures",
  "mime_guess",
  "notify 6.1.1",
  "serde",

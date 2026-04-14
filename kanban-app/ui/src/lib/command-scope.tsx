@@ -50,15 +50,31 @@ export interface CommandBusyState {
 const CommandBusyContext = createContext<CommandBusyState>({ isBusy: false });
 
 /**
+ * Sentinel default setter used when no `CommandBusyProvider` is mounted.
+ *
+ * Having an identifiable reference (rather than an anonymous arrow) lets
+ * `useSetCommandInflight()` detect the no-provider case and emit a dev-mode
+ * warning so wiring regressions (the provider sitting in the wrong place in
+ * the tree) fail loudly instead of silently masking busy tracking.
+ *
+ * Shape matches `React.Dispatch<React.SetStateAction<number>>` but the
+ * function is a no-op — any call is ignored.
+ */
+const NOOP_INFLIGHT_SETTER: React.Dispatch<
+  React.SetStateAction<number>
+> = () => {};
+
+/**
  * Internal context for the busy-state setter.
  *
  * Separated from the read context so that only `useDispatchCommand` (which
  * needs the setter) re-renders when the setter reference changes, while
  * pure consumers of `isBusy` only re-render on value changes.
  */
-const CommandBusySetterContext = createContext<
-  React.Dispatch<React.SetStateAction<number>>
->(() => {});
+const CommandBusySetterContext =
+  createContext<React.Dispatch<React.SetStateAction<number>>>(
+    NOOP_INFLIGHT_SETTER,
+  );
 
 /** Props for the command busy provider. */
 export interface CommandBusyProviderProps {
@@ -90,6 +106,75 @@ export function CommandBusyProvider({ children }: CommandBusyProviderProps) {
 /** Read whether any backend command is currently in-flight. */
 export function useCommandBusy(): CommandBusyState {
   return useContext(CommandBusyContext);
+}
+
+/**
+ * Read the busy-state setter so non-dispatch callers can participate in
+ * the same in-flight counter consumed by `useCommandBusy`.
+ *
+ * Usage pattern (matching `useDispatchCommand`):
+ *
+ * ```ts
+ * const setInflightCount = useSetCommandInflight();
+ * setInflightCount((c) => c + 1);
+ * try { await longRunningWork(); } finally { setInflightCount((c) => c - 1); }
+ * ```
+ *
+ * Components that want the nav-bar progress bar to light up for their own
+ * IPC fan-out (e.g. board refresh) should wrap their async work with this
+ * setter rather than introducing a parallel busy context.
+ *
+ * **Production contract**: every real call site must sit inside a
+ * `CommandBusyProvider`. The production tree in `App.tsx` mounts the
+ * provider above both writers (`useDispatchCommand` via `WindowContainer`,
+ * `refreshEntities` via `RustEngineContainer`).
+ *
+ * Outside that tree the hook returns a no-op setter so isolated unit tests
+ * and synthetic probes do not need to stub the provider. In development
+ * builds, calling the no-op setter logs a one-time warning — a silent
+ * no-op here once masked a wiring regression where the provider was nested
+ * below one of its writers. If you see that warning in real use, the tree
+ * is wrong; fix the provider placement.
+ */
+export function useSetCommandInflight(): React.Dispatch<
+  React.SetStateAction<number>
+> {
+  const setter = useContext(CommandBusySetterContext);
+  if (setter === NOOP_INFLIGHT_SETTER) {
+    return warnOnceNoopSetter;
+  }
+  return setter;
+}
+
+/**
+ * Module-level flag so the dev warning fires at most once per session —
+ * avoids log spam when the hook is called in a render loop.
+ */
+let hasWarnedNoopInflight = false;
+
+/**
+ * Dev-only wrapper around the no-op setter: logs a single warning the first
+ * time it is invoked from outside a `CommandBusyProvider` tree, so missing
+ * provider wiring is noisy in development builds.
+ *
+ * The warning is gated on `import.meta.env.DEV` so production bundles keep
+ * the silent no-op behavior (and do not log console output to end users).
+ */
+function warnOnceNoopSetter(_value: number | ((prev: number) => number)): void {
+  if (
+    !hasWarnedNoopInflight &&
+    typeof import.meta !== "undefined" &&
+    import.meta.env?.DEV
+  ) {
+    hasWarnedNoopInflight = true;
+    // eslint-disable-next-line no-console
+    console.warn(
+      "[command-scope] useSetCommandInflight() called outside a " +
+        "CommandBusyProvider tree. The in-flight counter will not update and " +
+        "the nav-bar progress bar will not reflect this work. Ensure the " +
+        "provider wraps both dispatch and refetch call sites.",
+    );
+  }
 }
 
 /** Definition of a single command that can be registered in a scope. */
@@ -133,6 +218,15 @@ export interface CommandScope {
   moniker?: string;
 }
 
+/**
+ * Context for the nearest enclosing command scope in the scope tree.
+ *
+ * Provided by CommandScopeProvider. Each scope registers the commands
+ * available at that level and links to its parent, forming a lookup chain
+ * from the most specific scope outward to the root. `useDispatchCommand`
+ * walks this chain (plus `FocusedScopeContext`) to resolve commands by
+ * name and to compute the scope chain dispatched commands receive.
+ */
 export const CommandScopeContext = createContext<CommandScope | null>(null);
 
 /**
@@ -342,47 +436,77 @@ export function useDispatchCommand(presetCmd?: string) {
       cmdOrOpts?: string | DispatchOptions,
       maybeOpts?: DispatchOptions,
     ): Promise<unknown> => {
-      let cmdId: string;
-      let opts: DispatchOptions;
-      if (presetCmd) {
-        cmdId = presetCmd;
-        opts = (cmdOrOpts as DispatchOptions) ?? {};
-      } else {
-        cmdId = cmdOrOpts as string;
-        opts = maybeOpts ?? {};
-      }
-
-      // Use explicit scope chain from options (e.g. context menu dispatch)
-      // or fall back to the chain derived from React context.
-      const chain = opts.scopeChain ?? scopeChainFromScope(effectiveScope);
+      const { cmdId, opts } = resolveDispatchArgs(
+        presetCmd,
+        cmdOrOpts,
+        maybeOpts,
+      );
 
       // Try frontend execute handler first
       const resolved = resolveCommand(effectiveScope, cmdId);
       if (resolved?.execute) {
-        Promise.resolve(
-          invoke("log_command", {
-            cmd: cmdId,
-            target: opts.target ?? resolved.target,
-          }),
-        ).catch(() => {});
-        await resolved.execute();
-        return;
+        return runFrontendExecute(cmdId, opts, resolved);
       }
 
-      // Backend dispatch — invoke Tauri IPC directly, tracking busy state
-      setInflightCount((c) => c + 1);
-      try {
-        return await invoke("dispatch_command", {
-          cmd: cmdId,
-          target: opts.target,
-          args: opts.args,
-          scopeChain: chain,
-          ...(boardPath ? { boardPath } : {}),
-        });
-      } finally {
-        setInflightCount((c) => c - 1);
-      }
+      // Backend dispatch — Tauri IPC with busy tracking
+      const chain = opts.scopeChain ?? scopeChainFromScope(effectiveScope);
+      return runBackendDispatch(
+        cmdId,
+        opts,
+        chain,
+        boardPath,
+        setInflightCount,
+      );
     },
     [presetCmd, effectiveScope, boardPath, setInflightCount],
   );
+}
+
+/** Normalize the overloaded call shape into a single `(cmdId, opts)` pair. */
+function resolveDispatchArgs(
+  presetCmd: string | undefined,
+  cmdOrOpts: string | DispatchOptions | undefined,
+  maybeOpts: DispatchOptions | undefined,
+): { cmdId: string; opts: DispatchOptions } {
+  if (presetCmd) {
+    return { cmdId: presetCmd, opts: (cmdOrOpts as DispatchOptions) ?? {} };
+  }
+  return { cmdId: cmdOrOpts as string, opts: maybeOpts ?? {} };
+}
+
+/** Run a client-side `execute` handler, fire-and-forget log for telemetry. */
+async function runFrontendExecute(
+  cmdId: string,
+  opts: DispatchOptions,
+  resolved: CommandDef,
+): Promise<void> {
+  Promise.resolve(
+    invoke("log_command", {
+      cmd: cmdId,
+      target: opts.target ?? resolved.target,
+    }),
+  ).catch(() => {});
+  await resolved.execute!();
+}
+
+/** Dispatch to the Rust backend, wrapping the call in the busy counter. */
+async function runBackendDispatch(
+  cmdId: string,
+  opts: DispatchOptions,
+  chain: string[],
+  boardPath: string | undefined,
+  setInflightCount: React.Dispatch<React.SetStateAction<number>>,
+): Promise<unknown> {
+  setInflightCount((c) => c + 1);
+  try {
+    return await invoke("dispatch_command", {
+      cmd: cmdId,
+      target: opts.target,
+      args: opts.args,
+      scopeChain: chain,
+      ...(boardPath ? { boardPath } : {}),
+    });
+  } finally {
+    setInflightCount((c) => c - 1);
+  }
 }

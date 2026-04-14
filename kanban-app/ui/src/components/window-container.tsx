@@ -1,6 +1,8 @@
 /**
  * WindowContainer owns the top-level window scope and all window-lifecycle
- * concerns. It is the outermost container in the component tree.
+ * concerns. In the production tree it sits inside `CommandBusyProvider` and
+ * `RustEngineContainer` (see `App.tsx`) so dispatched commands and refetches
+ * share the same in-flight counter.
  *
  * Owns:
  * - CommandScopeProvider moniker="window:{WINDOW_LABEL}"
@@ -13,6 +15,9 @@
  * - Calls refreshEntities(boardPath) from RustEngineContainer context on board switch
  *
  * Does NOT own:
+ * - CommandBusyProvider -- lifted to `App.tsx` so both `useDispatchCommand`
+ *   (called inside this container) and `refreshEntities` (called inside
+ *   RustEngineContainer, which wraps this container) write into the same counter.
  * - Entity state (entitiesByType) -- owned by RustEngineContainer
  * - Entity event listeners -- owned by RustEngineContainer
  * - Inspector panel state (panelStack, InspectorSyncBridge) -- stays in AppContent
@@ -23,6 +28,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
@@ -37,8 +43,8 @@ import { AppShell } from "@/components/app-shell";
 import {
   CommandScopeProvider,
   ActiveBoardPathProvider,
-  CommandBusyProvider,
   useDispatchCommand,
+  type DispatchOptions,
 } from "@/lib/command-scope";
 import {
   useRefreshEntities,
@@ -143,6 +149,28 @@ export function WindowContainer({ children }: WindowContainerProps) {
 }
 
 /**
+ * Ad-hoc dispatch callable returned by `useDispatchCommand()` (no preset).
+ *
+ * Written explicitly rather than `ReturnType<typeof useDispatchCommand>`
+ * because TS picks the last overload for `ReturnType` on an overloaded
+ * function, which would resolve to the pre-bound (one-arg) shape.
+ */
+type DispatchFn = (cmd: string, opts?: DispatchOptions) => Promise<unknown>;
+
+/** Shared dependencies passed to the window-lifecycle hooks below. */
+interface WindowBoardDeps {
+  activeBoardPathRef: React.MutableRefObject<string | undefined>;
+  dispatchRef: React.MutableRefObject<DispatchFn>;
+  refreshEntities: ReturnType<typeof useRefreshEntities>;
+  setBoard: React.Dispatch<React.SetStateAction<BoardData | null>>;
+  setLoading: React.Dispatch<React.SetStateAction<boolean>>;
+  setOpenBoards: React.Dispatch<React.SetStateAction<OpenBoard[]>>;
+  setActiveBoardPath: React.Dispatch<React.SetStateAction<string | undefined>>;
+  setEntitiesByType: ReturnType<typeof useSetEntitiesByType>;
+  setEngineActiveBoardPath: ReturnType<typeof useEngineSetActiveBoardPath>;
+}
+
+/**
  * Inner implementation of WindowContainer. Renders inside the window-scoped
  * CommandScopeProvider so useDispatchCommand picks up the correct scope chain
  * including the window moniker.
@@ -167,223 +195,298 @@ function WindowContainerInner({ children }: WindowContainerProps) {
   const dispatchRef = useRef(dispatch);
   dispatchRef.current = dispatch;
 
-  // Intentional empty deps: reads activeBoardPathRef to avoid stale closure.
-  // Uses refreshEntities from the container to update entities internally.
-  const refresh = useCallback(async () => {
-    setLoading(true);
-    const currentPath = activeBoardPathRef.current;
+  // Memoize the deps bundle so child hooks can use `[deps, ...]` dep arrays
+  // without retriggering every render. All members are stable: refs are
+  // `useRef`-backed, setters are React-guaranteed stable, and `refreshEntities`
+  // is `useCallback`-memoized in RustEngineContainer.
+  const deps: WindowBoardDeps = useMemo(
+    () => ({
+      activeBoardPathRef,
+      dispatchRef,
+      refreshEntities,
+      setBoard,
+      setLoading,
+      setOpenBoards,
+      setActiveBoardPath,
+      setEntitiesByType,
+      setEngineActiveBoardPath,
+    }),
+    [refreshEntities, setEntitiesByType, setEngineActiveBoardPath],
+  );
 
-    // Use the container's refreshEntities which updates entities internally
-    // and returns the full result with openBoards and boardData.
-    const result = currentPath
-      ? await refreshEntities(currentPath)
-      : await refreshEntities("");
-    // Open boards always update -- even if board data failed.
-    setOpenBoards(result.openBoards);
+  const refresh = useWindowRefresh(deps);
+  useRestoreWindowStateOnMount(deps, refresh);
+  useBoardEventListeners(deps);
+  const handleSwitchBoard = useSwitchBoardHandler(deps, refresh, dispatch);
 
-    // Pick or fall back to a valid active board path. Handles both initial
-    // mount (no path yet) and board-closed (path no longer in open list).
-    const pathStillOpen =
-      currentPath && result.openBoards.some((b) => b.path === currentPath);
-    if ((!currentPath || !pathStillOpen) && result.openBoards.length > 0) {
-      const active =
-        result.openBoards.find((b) => b.is_active) ?? result.openBoards[0];
-      setActiveBoardPath(active.path);
-      activeBoardPathRef.current = active.path;
-      setEngineActiveBoardPath(active.path);
-      // Persist the fallback selection so it survives hot reload
-      dispatchRef
-        .current("file.switchBoard", {
-          args: { windowLabel: WINDOW_LABEL, path: active.path },
-        })
-        .catch(() => {});
-      // Re-fetch with the correct path if we fell back
-      if (active.path !== currentPath) {
-        const corrected = await refreshEntities(active.path);
-        setBoard(corrected.boardData);
-        setLoading(false);
-        return;
-      }
-    }
+  return (
+    <WindowProviderTree
+      activeBoardPath={activeBoardPath}
+      openBoards={openBoards}
+      board={board}
+      loading={loading}
+      handleSwitchBoard={handleSwitchBoard}
+    >
+      {children}
+    </WindowProviderTree>
+  );
+}
 
-    if (result.openBoards.length === 0) {
-      // All boards closed -- clear stale state so the placeholder shows.
-      setBoard(null);
-      setEntitiesByType({});
-      setActiveBoardPath(undefined);
-      setEngineActiveBoardPath(undefined);
-      setLoading(false);
-      return;
-    }
-    setBoard(result.boardData);
-    setLoading(false);
-  }, [refreshEntities, setEntitiesByType, setEngineActiveBoardPath]);
+/** Reset all window-local board state when no boards remain open. */
+function clearWindowBoardState(deps: WindowBoardDeps): void {
+  deps.setBoard(null);
+  deps.setEntitiesByType({});
+  deps.setActiveBoardPath(undefined);
+  deps.setEngineActiveBoardPath(undefined);
+  deps.setLoading(false);
+}
 
-  // Restore window state from backend on mount.
-  // For main window: reads board_path + inspector_stack from config.
-  // For secondary windows: board comes from URL param, this restores inspector.
+/** Fire-and-forget `file.switchBoard` to persist the window's active board. */
+function persistActiveBoard(deps: WindowBoardDeps, path: string): void {
+  deps.dispatchRef
+    .current("file.switchBoard", {
+      args: { windowLabel: WINDOW_LABEL, path },
+    })
+    .catch(() => {});
+}
+
+/**
+ * If the window has no active path or the path is no longer open, pick a
+ * fallback from `openBoards` (active-flagged first, else first available),
+ * persist it, and — if it differs from the current path — reload its data.
+ * Returns `true` when the caller should exit (fallback refetch completed).
+ */
+async function applyFallbackBoardIfNeeded(
+  deps: WindowBoardDeps,
+  currentPath: string | undefined,
+  openBoards: OpenBoard[],
+): Promise<boolean> {
+  const pathStillOpen =
+    currentPath && openBoards.some((b) => b.path === currentPath);
+  if ((currentPath && pathStillOpen) || openBoards.length === 0) {
+    return false;
+  }
+  const active = openBoards.find((b) => b.is_active) ?? openBoards[0];
+  deps.setActiveBoardPath(active.path);
+  deps.activeBoardPathRef.current = active.path;
+  deps.setEngineActiveBoardPath(active.path);
+  persistActiveBoard(deps, active.path);
+  if (active.path === currentPath) return false;
+  const corrected = await deps.refreshEntities(active.path);
+  deps.setBoard(corrected.boardData);
+  deps.setLoading(false);
+  return true;
+}
+
+/** Body of the window `refresh` callback — extracted for line-count limits. */
+async function runWindowRefresh(deps: WindowBoardDeps): Promise<void> {
+  deps.setLoading(true);
+  const currentPath = deps.activeBoardPathRef.current;
+
+  const result = currentPath
+    ? await deps.refreshEntities(currentPath)
+    : await deps.refreshEntities("");
+  // Open boards always update — even if board data failed.
+  deps.setOpenBoards(result.openBoards);
+
+  if (await applyFallbackBoardIfNeeded(deps, currentPath, result.openBoards)) {
+    return;
+  }
+
+  if (result.openBoards.length === 0) {
+    clearWindowBoardState(deps);
+    return;
+  }
+  deps.setBoard(result.boardData);
+  deps.setLoading(false);
+}
+
+/**
+ * Pulls the full window state (open boards, active path, board data) from the
+ * backend and reconciles with the current window. If this window's active path
+ * is missing or no longer open, falls back to the backend's active board and
+ * persists the selection via `file.switchBoard` so it survives a hot reload.
+ */
+function useWindowRefresh(deps: WindowBoardDeps): () => Promise<void> {
+  return useCallback(() => runWindowRefresh(deps), [deps]);
+}
+
+/**
+ * Apply any persisted window→board mapping from `get_ui_state`. Only writes
+ * state when no URL-supplied board is present (main window restore path).
+ * Silently skips on error — callers always fall through to `refresh()`.
+ */
+async function applyRestoredWindowState(
+  deps: WindowBoardDeps,
+  isCancelled: () => boolean,
+): Promise<void> {
+  try {
+    const uiState = await invoke<{
+      windows: Record<
+        string,
+        {
+          board_path?: string;
+          inspector_stack?: string[];
+          active_view_id?: string;
+        }
+      >;
+    }>("get_ui_state");
+    if (isCancelled()) return;
+    const winState = uiState.windows?.[WINDOW_LABEL];
+    if (INITIAL_BOARD_PATH || !winState?.board_path) return;
+    await deps.dispatchRef.current("file.switchBoard", {
+      args: { windowLabel: WINDOW_LABEL, path: winState.board_path },
+    });
+    if (isCancelled()) return;
+    deps.setActiveBoardPath(winState.board_path);
+    deps.activeBoardPathRef.current = winState.board_path;
+    deps.setEngineActiveBoardPath(winState.board_path);
+  } catch {
+    // No saved state — caller falls through to refresh().
+  }
+}
+
+/**
+ * Restores window state from the backend on mount:
+ * - Main window: reads `board_path` from `get_ui_state`.
+ * - Secondary windows: board comes from the URL param; this still runs `refresh`.
+ *
+ * Cancellable via an effect-scoped flag to avoid late state writes after unmount.
+ */
+function useRestoreWindowStateOnMount(
+  deps: WindowBoardDeps,
+  refresh: () => Promise<void>,
+): void {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      try {
-        const uiState = await invoke<{
-          windows: Record<
-            string,
-            {
-              board_path?: string;
-              inspector_stack?: string[];
-              active_view_id?: string;
-            }
-          >;
-        }>("get_ui_state");
-        if (cancelled) return;
-        const winState = uiState.windows?.[WINDOW_LABEL];
-
-        // Restore board path from backend config (main window only -- secondary gets it from URL)
-        if (!INITIAL_BOARD_PATH && winState?.board_path) {
-          await dispatchRef.current("file.switchBoard", {
-            args: { windowLabel: WINDOW_LABEL, path: winState.board_path },
-          });
-          if (cancelled) return;
-          setActiveBoardPath(winState.board_path);
-          activeBoardPathRef.current = winState.board_path;
-          setEngineActiveBoardPath(winState.board_path);
-        }
-      } catch {
-        // No saved state -- will fall through to refresh below
-      }
+      await applyRestoredWindowState(deps, () => cancelled);
       if (cancelled) return;
       await refresh();
-      if (cancelled) return;
     })();
     return () => {
       cancelled = true;
     };
-  }, [refresh, setEngineActiveBoardPath]);
+  }, [deps, refresh]);
+}
 
-  // ---------------------------------------------------------------------------
-  // Board-level event listeners (board-opened, board-changed).
-  // Entity event listeners are handled by RustEngineContainer.
-  // ---------------------------------------------------------------------------
+/** Switch the window to `path`, reload its data, and optionally persist. */
+async function adoptBoard(
+  deps: WindowBoardDeps,
+  path: string,
+  persist: boolean,
+): Promise<void> {
+  deps.setActiveBoardPath(path);
+  deps.activeBoardPathRef.current = path;
+  deps.setEngineActiveBoardPath(path);
+  if (persist) persistActiveBoard(deps, path);
+  deps.setLoading(true);
+  const result = await deps.refreshEntities(path);
+  deps.setOpenBoards(result.openBoards);
+  deps.setBoard(result.boardData);
+  deps.setLoading(false);
+}
 
+/** Keep the window's current board, just reload its data. */
+async function refreshCurrentBoard(
+  deps: WindowBoardDeps,
+  path: string,
+): Promise<void> {
+  deps.setLoading(true);
+  const result = await deps.refreshEntities(path);
+  deps.setBoard(result.boardData);
+  deps.setLoading(false);
+}
+
+/** Query UIState for this window's assigned board path, if any. */
+async function fetchAssignedBoardPath(): Promise<string | undefined> {
+  try {
+    const uiState = await invoke<{
+      windows: Record<string, { board_path?: string }>;
+    }>("get_ui_state");
+    return uiState.windows?.[WINDOW_LABEL]?.board_path;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Body of the `board-changed` listener — extracted for line-count limits. */
+async function runBoardChanged(deps: WindowBoardDeps): Promise<void> {
+  let boards: OpenBoard[] = [];
+  try {
+    boards = await invoke<OpenBoard[]>("list_open_boards");
+  } catch {
+    /* ignore */
+  }
+  deps.setOpenBoards(boards);
+
+  if (boards.length === 0) {
+    clearWindowBoardState(deps);
+    return;
+  }
+
+  const assignedPath = await fetchAssignedBoardPath();
+  const currentPath = deps.activeBoardPathRef.current;
+
+  if (
+    assignedPath &&
+    assignedPath !== currentPath &&
+    boards.some((b) => b.path === assignedPath)
+  ) {
+    await adoptBoard(deps, assignedPath, false);
+    return;
+  }
+
+  if (currentPath && boards.some((b) => b.path === currentPath)) {
+    await refreshCurrentBoard(deps, currentPath);
+    return;
+  }
+
+  const fallback = boards.find((b) => b.is_active) ?? boards[0];
+  await adoptBoard(deps, fallback.path, true);
+}
+
+/**
+ * Registers board-level Tauri event listeners (`board-opened`, `board-changed`)
+ * for the lifetime of the window. Entity-level events are owned by
+ * `RustEngineContainer`.
+ */
+function useBoardEventListeners(deps: WindowBoardDeps): void {
   useEffect(() => {
     const unlisteners = [
-      // board-opened: emitted only to the window that initiated the open (via emit_to).
       getCurrentWindow().listen<{ path: string }>(
         "board-opened",
-        async (event: { payload: { path: string } }) => {
-          const newPath = event.payload.path;
-          // Persist window->board mapping so it survives hot reload / restart
-          dispatchRef
-            .current("file.switchBoard", {
-              args: { windowLabel: WINDOW_LABEL, path: newPath },
-            })
-            .catch(() => {});
-          setActiveBoardPath(newPath);
-          activeBoardPathRef.current = newPath;
-          setEngineActiveBoardPath(newPath);
-          setLoading(true);
-          const result = await refreshEntities(newPath);
-          setOpenBoards(result.openBoards);
-          setBoard(result.boardData);
-          setLoading(false);
+        async (event) => {
+          await adoptBoard(deps, event.payload.path, true);
         },
       ),
-      // board-changed: structural change (open/close/switch). All windows
-      // refresh their open boards list. If this window's board was closed,
-      // fall back to another open board.
-      listen("board-changed", async () => {
-        let boards: OpenBoard[] = [];
-        try {
-          boards = await invoke<OpenBoard[]>("list_open_boards");
-        } catch {
-          /* ignore */
-        }
-        setOpenBoards(boards);
-
-        if (boards.length === 0) {
-          setBoard(null);
-          setEntitiesByType({});
-          setActiveBoardPath(undefined);
-          setEngineActiveBoardPath(undefined);
-          setLoading(false);
-          return;
-        }
-
-        // Check if UIState says this window should show a different board
-        let assignedPath: string | undefined;
-        try {
-          const uiState = await invoke<{
-            windows: Record<string, { board_path?: string }>;
-          }>("get_ui_state");
-          assignedPath = uiState.windows?.[WINDOW_LABEL]?.board_path;
-        } catch {
-          /* ignore */
-        }
-
-        const currentPath = activeBoardPathRef.current;
-
-        // If the backend assigned a different board to this window, switch.
-        if (
-          assignedPath &&
-          assignedPath !== currentPath &&
-          boards.some((b) => b.path === assignedPath)
-        ) {
-          setActiveBoardPath(assignedPath);
-          activeBoardPathRef.current = assignedPath;
-          setEngineActiveBoardPath(assignedPath);
-          setLoading(true);
-          const result = await refreshEntities(assignedPath);
-          setOpenBoards(result.openBoards);
-          setBoard(result.boardData);
-          setLoading(false);
-          return;
-        }
-
-        // If this window's board is still open, keep it and refresh data
-        const stillOpen =
-          currentPath && boards.some((b) => b.path === currentPath);
-        if (stillOpen) {
-          setLoading(true);
-          const result = await refreshEntities(currentPath);
-          setBoard(result.boardData);
-          setLoading(false);
-          return;
-        }
-
-        // Board was closed -- fall back to another open board and persist
-        const fallback = boards.find((b) => b.is_active) ?? boards[0];
-        setActiveBoardPath(fallback.path);
-        activeBoardPathRef.current = fallback.path;
-        setEngineActiveBoardPath(fallback.path);
-        dispatchRef
-          .current("file.switchBoard", {
-            args: { windowLabel: WINDOW_LABEL, path: fallback.path },
-          })
-          .catch(() => {});
-        setLoading(true);
-        const result = await refreshEntities(fallback.path);
-        setBoard(result.boardData);
-        setLoading(false);
-      }),
+      listen("board-changed", () => runBoardChanged(deps)),
     ];
     return () => {
       for (const p of unlisteners) {
         p.then((fn: () => void) => fn());
       }
     };
-  }, [refresh, refreshEntities, setEntitiesByType, setEngineActiveBoardPath]);
+  }, [deps]);
+}
 
-  /** Switch this window's active board. Persists via backend file.switchBoard command. */
-  const handleSwitchBoard = useCallback(
+/**
+ * Returns the callback bound to `useHandleSwitchBoard()` for descendants.
+ * Clears stale board data eagerly so the loading spinner renders immediately
+ * instead of the previous board briefly showing during the switch.
+ */
+function useSwitchBoardHandler(
+  deps: WindowBoardDeps,
+  refresh: () => Promise<void>,
+  dispatch: DispatchFn,
+): (path: string) => Promise<void> {
+  return useCallback(
     async (path: string) => {
-      setActiveBoardPath(path);
-      activeBoardPathRef.current = path;
-      setEngineActiveBoardPath(path);
-      // Clear stale board data so the loading spinner shows immediately
-      // instead of rendering the previous board's content during the switch.
-      setBoard(null);
-      setEntitiesByType({});
+      deps.setActiveBoardPath(path);
+      deps.activeBoardPathRef.current = path;
+      deps.setEngineActiveBoardPath(path);
+      deps.setBoard(null);
+      deps.setEntitiesByType({});
       try {
         await dispatch("file.switchBoard", {
           args: { windowLabel: WINDOW_LABEL, path },
@@ -393,33 +496,54 @@ function WindowContainerInner({ children }: WindowContainerProps) {
       }
       refresh();
     },
-    [refresh, dispatch, setEngineActiveBoardPath, setEntitiesByType],
+    [deps, refresh, dispatch],
   );
+}
 
+interface WindowProviderTreeProps {
+  activeBoardPath: string | undefined;
+  openBoards: OpenBoard[];
+  board: BoardData | null;
+  loading: boolean;
+  handleSwitchBoard: (path: string) => void;
+  children: ReactNode;
+}
+
+/**
+ * Provider tree that exposes window-scope state (open boards, active path,
+ * board data, loading flag, switch handler) to descendants, and mounts the
+ * global `AppShell`, `Toaster`, tooltip provider, and init-progress listener.
+ */
+function WindowProviderTree({
+  activeBoardPath,
+  openBoards,
+  board,
+  loading,
+  handleSwitchBoard,
+  children,
+}: WindowProviderTreeProps) {
   return (
     <TooltipProvider delayDuration={400}>
       <Toaster position="bottom-right" richColors />
       <InitProgressListener />
-      <CommandBusyProvider>
-        <ActiveBoardPathProvider value={activeBoardPath}>
-          <OpenBoardsContext.Provider value={openBoards}>
-            <ActiveBoardPathContext.Provider value={activeBoardPath}>
-              <HandleSwitchBoardContext.Provider value={handleSwitchBoard}>
-                <BoardDataContext.Provider value={board}>
-                  <LoadingContext.Provider value={loading}>
-                    <AppShell
-                      openBoards={openBoards}
-                      onSwitchBoard={handleSwitchBoard}
-                    >
-                      {children}
-                    </AppShell>
-                  </LoadingContext.Provider>
-                </BoardDataContext.Provider>
-              </HandleSwitchBoardContext.Provider>
-            </ActiveBoardPathContext.Provider>
-          </OpenBoardsContext.Provider>
-        </ActiveBoardPathProvider>
-      </CommandBusyProvider>
+      <ActiveBoardPathProvider value={activeBoardPath}>
+        <OpenBoardsContext.Provider value={openBoards}>
+          <ActiveBoardPathContext.Provider value={activeBoardPath}>
+            <HandleSwitchBoardContext.Provider value={handleSwitchBoard}>
+              <BoardDataContext.Provider value={board}>
+                <LoadingContext.Provider value={loading}>
+                  <AppShell
+                    openBoards={openBoards}
+                    onSwitchBoard={handleSwitchBoard}
+                  >
+                    {children}
+                  </AppShell>
+                </LoadingContext.Provider>
+              </BoardDataContext.Provider>
+            </HandleSwitchBoardContext.Provider>
+          </ActiveBoardPathContext.Provider>
+        </OpenBoardsContext.Provider>
+      </ActiveBoardPathProvider>
     </TooltipProvider>
   );
 }
