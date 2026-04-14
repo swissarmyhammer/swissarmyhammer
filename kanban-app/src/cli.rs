@@ -7,6 +7,9 @@ use swissarmyhammer_kanban::{
     KanbanContext, KanbanOperationProcessor, OperationProcessor,
 };
 
+/// Top-level clap parser for the `kanban-app` binary. When `command` is
+/// `None`, the binary launches the Tauri GUI; otherwise it dispatches to a
+/// CLI subcommand defined by [`Command`].
 #[derive(Parser)]
 #[command(name = "kanban-app", about = "Kanban board desktop app and CLI")]
 pub struct Cli {
@@ -14,6 +17,8 @@ pub struct Cli {
     pub command: Option<Command>,
 }
 
+/// CLI subcommands exposed by `kanban-app`. Most produce JSON on stdout and
+/// exit; `Gui` and the `None` command variant fall through to GUI startup.
 #[derive(Subcommand)]
 pub enum Command {
     /// Initialize a new kanban board in the current directory

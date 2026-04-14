@@ -1,8 +1,8 @@
 ---
 assignees:
 - claude-code
-position_column: done
-position_ordinal: ffffffffffffffffffffffcb80
+position_column: todo
+position_ordinal: c480
 project: task-card-fields
 title: Fix multi-select + vim + Enter combo in editor-save test matrix
 ---
@@ -49,27 +49,18 @@ The correct fix is NOT to swallow the skip — it's to drive Enter through the s
 
 ## Acceptance Criteria
 
-- [x] The `continue` skip in `editor-save.test.tsx` at ~line 341 is removed.
-- [x] Running `cd kanban-app/ui && pnpm test -- editor-save` produces no multi-select + vim + Enter failures.
-- [x] No regressions in the other 35 matrix combos (modes × keymap × exit × field types).
-- [x] No product-code changes — the fix lives entirely in the test harness.
+- [ ] The `continue` skip in `editor-save.test.tsx` at ~line 341 is removed.
+- [ ] Running `cd kanban-app/ui && pnpm test -- editor-save` produces no multi-select + vim + Enter failures.
+- [ ] No regressions in the other 35 matrix combos (modes × keymap × exit × field types).
+- [ ] No product-code changes — the fix lives entirely in the test harness.
 
 ## Tests
 
-- [x] Update `editor-save.test.tsx` — remove the skip; verify the multi-select + vim + Enter combo now drives the commit path and records a `dispatch_command` call with `cmd: "entity.update_field"`.
-- [x] Run: `cd kanban-app/ui && pnpm test -- editor-save` → green, and the reported combo count equals `keymapModes.length * exitPaths.length * modes.length` entries all asserting at least one save call per editable field that should save.
-- [x] Run: `cd kanban-app/ui && pnpm test` → full suite still green.
+- [ ] Update `editor-save.test.tsx` — remove the skip; verify the multi-select + vim + Enter combo now drives the commit path and records a `dispatch_command` call with `cmd: "entity.update_field"`.
+- [ ] Run: `cd kanban-app/ui && pnpm test -- editor-save` → green, and the reported combo count equals `keymapModes.length * exitPaths.length * modes.length` entries all asserting at least one save call per editable field that should save.
+- [ ] Run: `cd kanban-app/ui && pnpm test` → full suite still green.
 
 ## Workflow
 
 - Use `/tdd`: remove the skip first (RED — expect the multi-select+vim+Enter failure), then add the EditorView-aware Enter dispatch in the harness (GREEN), then confirm full-suite green.
-
-## Implementation Notes
-
-The final fix has three parts, all confined to `editor-save.test.tsx`:
-
-1. **Removed the skip** — deleted the `skipMultiSelect` filter and the advertised `it.skip(...)` block so every multi-select × vim × Enter cell now runs.
-2. **Route Enter through `EditorView.contentDOM`** — for any CM6-backed target (detected via `target.closest(".cm-editor")` + `EditorView.findFromDOM`), dispatch a native `KeyboardEvent` on `view.contentDOM` instead of using `fireEvent.keyDown` on the container-queried `.cm-content`. This mirrors the proven pattern in `multi-select-editor.test.tsx` and works uniformly across cua/emacs/vim. `fireEvent` still covers non-CM6 fallbacks (plain inputs/selects).
-3. **Non-empty `depends_on` initial value** — added `depends_on: ["test-task-2"]` (plus a second task entity for the reference to resolve against) so every multi-select renders a non-empty doc. The vim `alwaysSubmitOnEnter` path guards on `text.length > 0` (see `buildVimEnterExtension` in `cm-submit-cancel.ts`); an empty doc would correctly refuse to commit in vim but save in cua — an unrelated behavior asymmetry outside the save-matrix's scope.
-
-Verification: 24 matrix tests pass (18 keymap×exit×mode cells + 6 display/coverage), full suite 1061/1061 green, `tsc --noEmit` clean. Deterministic across multiple consecutive runs.
+#test-failure
