@@ -15,12 +15,7 @@
  */
 
 import { execSync } from "child_process";
-import {
-  mkdtempSync,
-  writeFileSync,
-  readdirSync,
-  readFileSync,
-} from "fs";
+import { mkdtempSync, writeFileSync, readdirSync, readFileSync } from "fs";
 import { tmpdir } from "os";
 import { join, resolve } from "path";
 import yaml from "js-yaml";

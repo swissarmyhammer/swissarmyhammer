@@ -6,6 +6,9 @@ type:
   entity: project
   multiple: false
 icon: folder
+editor: select
+display: badge
 width: 150
 section: header
+placeholder: "Assign a project"
 groupable: true

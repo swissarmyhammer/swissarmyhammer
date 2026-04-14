@@ -20,6 +20,16 @@ use tokio::sync::mpsc;
 /// File extensions that represent entity state (not logs).
 const ENTITY_EXTENSIONS: &[&str] = &["yaml", "yml", "md"];
 
+/// Buffer capacity for the notify → async-handler channel.
+///
+/// Sized to absorb bursts from common editor save patterns: IDEs that rewrite
+/// a whole directory on refactor (~100 files), and `cp -r` / `git checkout` on
+/// a large `.kanban/` can each fire a few hundred events in a single tick. At
+/// 256 the receiver comfortably drains before the sender ever blocks in
+/// practice, while staying small enough that a pathological loop surfaces
+/// quickly rather than unbounded memory growth.
+const WATCHER_CHANNEL_CAPACITY: usize = 256;
+
 /// An event emitted when an entity or field changes.
 /// Events emitted to the frontend when entity state changes.
 ///
@@ -156,7 +166,12 @@ pub fn sync_search_index(
     }
 }
 
-/// Handle to a running file watcher. Dropping this stops the watcher.
+/// Handle to a running file watcher for a single `.kanban/` directory.
+///
+/// Constructed by [`start_watching`] and held inside `BoardHandle` for the
+/// lifetime of the board. Dropping the handle sends the cancel signal to the
+/// async event-drain task and releases the underlying `notify` watcher, which
+/// together stops all further event emission for this board.
 pub struct BoardWatcher {
     _watcher: RecommendedWatcher,
     _cancel: tokio::sync::oneshot::Sender<()>,
@@ -406,7 +421,7 @@ where
     let kanban_root = kanban_root.canonicalize().unwrap_or(kanban_root);
 
     let on_event = Arc::new(on_event);
-    let (tx, mut rx) = mpsc::channel::<Event>(256);
+    let (tx, mut rx) = mpsc::channel::<Event>(WATCHER_CHANNEL_CAPACITY);
 
     let watcher_tx = tx.clone();
     let mut watcher = RecommendedWatcher::new(

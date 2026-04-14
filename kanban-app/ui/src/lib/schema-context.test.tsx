@@ -15,7 +15,9 @@ import type { ReactNode } from "react";
 
 // Mock Tauri APIs before importing any modules that use them.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-const mockInvoke = vi.fn((..._args: any[]): Promise<any> => Promise.resolve(null));
+const mockInvoke = vi.fn(
+  (..._args: any[]): Promise<any> => Promise.resolve(null),
+);
 vi.mock("@tauri-apps/api/core", () => ({
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   invoke: (...args: any[]) => mockInvoke(...args),
@@ -42,7 +44,9 @@ import { SchemaProvider, useSchema } from "./schema-context";
 import type { EntityDef, EntitySchema } from "@/types/kanban";
 
 /** Build a minimal EntitySchema with an EntityDef override for tests. */
-function makeSchema(entity: Partial<EntityDef> & { name: string }): EntitySchema {
+function makeSchema(
+  entity: Partial<EntityDef> & { name: string },
+): EntitySchema {
   return {
     entity: {
       fields: [],

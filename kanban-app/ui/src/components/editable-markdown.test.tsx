@@ -28,20 +28,18 @@ const mockGetEntities = vi.fn((_type: string) => [mockTag]);
 // TauriEvent, etc.) so that transitively-imported submodules like `window.js`
 // and `dpi.js` can resolve their re-exports. Only override `invoke`.
 vi.mock("@tauri-apps/api/core", async () => {
-  const actual =
-    await vi.importActual<typeof import("@tauri-apps/api/core")>(
-      "@tauri-apps/api/core",
-    );
+  const actual = await vi.importActual<typeof import("@tauri-apps/api/core")>(
+    "@tauri-apps/api/core",
+  );
   return {
     ...actual,
     invoke: vi.fn(() => Promise.resolve("ok")),
   };
 });
 vi.mock("@tauri-apps/api/event", async () => {
-  const actual =
-    await vi.importActual<typeof import("@tauri-apps/api/event")>(
-      "@tauri-apps/api/event",
-    );
+  const actual = await vi.importActual<typeof import("@tauri-apps/api/event")>(
+    "@tauri-apps/api/event",
+  );
   return {
     ...actual,
     listen: vi.fn(() => Promise.resolve(() => {})),

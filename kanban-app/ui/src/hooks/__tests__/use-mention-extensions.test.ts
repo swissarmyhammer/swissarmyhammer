@@ -114,7 +114,11 @@ vi.mock("@/components/window-container", () => ({
     virtualTagMeta: [
       { slug: "READY", color: "0e8a16", description: "No unmet deps" },
       { slug: "BLOCKED", color: "e36209", description: "Has unmet deps" },
-      { slug: "BLOCKING", color: "d73a4a", description: "Others depend on this" },
+      {
+        slug: "BLOCKING",
+        color: "d73a4a",
+        description: "Others depend on this",
+      },
     ],
   }),
 }));
@@ -399,9 +403,8 @@ describe("useMentionExtensions", () => {
 
     const { EditorView } = await import("@codemirror/view");
     const { EditorState } = await import("@codemirror/state");
-    const { startCompletion, currentCompletions } = await import(
-      "@codemirror/autocomplete"
-    );
+    const { startCompletion, currentCompletions } =
+      await import("@codemirror/autocomplete");
 
     const parent = document.createElement("div");
     document.body.appendChild(parent);

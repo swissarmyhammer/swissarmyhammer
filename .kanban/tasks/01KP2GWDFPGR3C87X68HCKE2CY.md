@@ -2,8 +2,8 @@
 assignees:
 - claude-code
 depends_on: []
-position_column: todo
-position_ordinal: '80'
+position_column: done
+position_ordinal: ffffffffffffffffffffffc880
 project: task-card-fields
 title: Hide due/scheduled from task card view (inspector-only)
 ---
@@ -45,17 +45,17 @@ sections:
 
 ## Acceptance Criteria
 
-- [ ] On the kanban board, no task card shows `due` or `scheduled` rows. The card body stays at header-only fields (title, tags, status_date, …).
-- [ ] Opening a task's inspector still renders the `dates` section with the "Dates" label and both `due` and `scheduled` editors visible.
-- [ ] No keyboard-nav regression in the inspector — ArrowDown still walks header → body → dates → system → footer.
-- [ ] All existing tests remain green; the unit test in `entity-card.test.tsx` that uses a hand-built schema with `on_card: true` for a `dates` section continues to pass (it does not depend on `task.yaml`).
+- [x] On the kanban board, no task card shows `due` or `scheduled` rows. The card body stays at header-only fields (title, tags, status_date, …).
+- [x] Opening a task's inspector still renders the `dates` section with the "Dates" label and both `due` and `scheduled` editors visible.
+- [x] No keyboard-nav regression in the inspector — ArrowDown still walks header → body → dates → system → footer.
+- [x] All existing tests remain green; the unit test in `entity-card.test.tsx` that uses a hand-built schema with `on_card: true` for a `dates` section continues to pass (it does not depend on `task.yaml`).
 
 ## Tests
 
-- [ ] `swissarmyhammer-fields/src/types.rs` already has `entity_def_sections_yaml_round_trip` covering `on_card: true|false|absent` round-tripping. No new test needed there.
-- [ ] Add a regression assertion in `swissarmyhammer-kanban/src/defaults.rs` (or wherever the existing builtin-entity loading tests live — grep `builtin_entity_definitions` to find the right module): assert that `task.yaml`'s `sections` list contains `dates` and that its `on_card` is `false`. Prevents accidental re-introduction.
-- [ ] Run: `cargo nextest run -p swissarmyhammer-fields -p swissarmyhammer-kanban` → green.
-- [ ] Run: `cd kanban-app/ui && pnpm test -- entity-card entity-inspector` → green (existing tests still pass; the hand-built `on_card: true` test is unaffected).
+- [x] `swissarmyhammer-fields/src/types.rs` already has `entity_def_sections_yaml_round_trip` covering `on_card: true|false|absent` round-tripping. No new test needed there.
+- [x] Add a regression assertion in `swissarmyhammer-kanban/src/defaults.rs` (or wherever the existing builtin-entity loading tests live — grep `builtin_entity_definitions` to find the right module): assert that `task.yaml`'s `sections` list contains `dates` and that its `on_card` is `false`. Prevents accidental re-introduction.
+- [x] Run: `cargo nextest run -p swissarmyhammer-fields -p swissarmyhammer-kanban` → green.
+- [x] Run: `cd kanban-app/ui && pnpm test -- entity-card entity-inspector` → green (existing tests still pass; the hand-built `on_card: true` test is unaffected).
 - [ ] Manual verification: launch the kanban app on this repo. On the board, no card shows due/scheduled rows. Open any task — the inspector still shows the `Dates` section with both fields.
 
 ## Workflow

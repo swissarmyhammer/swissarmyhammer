@@ -4,7 +4,9 @@ import type { ReactNode } from "react";
 
 // Mock Tauri APIs before importing any modules that use them.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-const mockInvoke = vi.fn((..._args: any[]): Promise<any> => Promise.resolve(null));
+const mockInvoke = vi.fn(
+  (..._args: any[]): Promise<any> => Promise.resolve(null),
+);
 vi.mock("@tauri-apps/api/core", () => ({
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   invoke: (...args: any[]) => mockInvoke(...args),
@@ -308,7 +310,9 @@ describe("PerspectiveProvider", () => {
       undoable: false,
     });
 
-    const { result: _result } = renderHook(() => usePerspectives(), { wrapper });
+    const { result: _result } = renderHook(() => usePerspectives(), {
+      wrapper,
+    });
     await act(async () => {});
 
     const callCountBefore = mockInvoke.mock.calls.length;

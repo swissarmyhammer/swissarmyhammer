@@ -19,10 +19,6 @@ import { useFileDrop } from "@/lib/file-drop-context";
 import type { FieldDef } from "@/types/kanban";
 import type { EditorProps } from ".";
 
-interface AttachmentEditorProps extends EditorProps {
-  field: FieldDef;
-}
-
 /**
  * Check whether a single value is a valid attachment element.
  *
@@ -80,11 +76,7 @@ function isMultiple(field: FieldDef): boolean {
  * Editor for attachment fields. Shows existing attachments with remove buttons
  * and an "Add file" button that opens the native file picker.
  */
-export function AttachmentEditor({
-  field,
-  value,
-  onChange,
-}: AttachmentEditorProps) {
+export function AttachmentEditor({ field, value, onChange }: EditorProps) {
   const attachments = normalizeAttachments(value);
   const multiple = isMultiple(field);
   const { isDragging, registerDropTarget, unregisterDropTarget } =

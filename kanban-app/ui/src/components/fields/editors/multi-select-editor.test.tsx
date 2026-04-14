@@ -716,5 +716,169 @@ describe("MultiSelectEditor", () => {
 
       expect(onCommit).toHaveBeenCalled();
     });
+
+    it("vim insert-mode Enter commits and does NOT insert a newline (alwaysSubmitOnEnter)", () => {
+      const onCommit = vi.fn();
+      const onCancel = vi.fn();
+      const { submitRef, escapeRef } = makeMultiSelectRefs(
+        "vim",
+        onCommit,
+        onCancel,
+      );
+
+      // Mirrors MultiSelectEditor's production config: singleLine + alwaysSubmitOnEnter.
+      const extensions = [
+        vimExt(),
+        ...buildSubmitCancelExtensions({
+          mode: "vim",
+          onSubmitRef: submitRef,
+          onCancelRef: escapeRef,
+          singleLine: true,
+          alwaysSubmitOnEnter: true,
+        }),
+      ];
+      const { view, cleanup: c } = createEditor(extensions, "#bug ");
+      cleanup = c;
+
+      // Enter insert mode
+      const cm = getCMVim(view);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      VimApi.handleKey(cm as any, "i", "mapping");
+      expect(cm!.state.vim?.insertMode).toBe(true);
+
+      // alwaysSubmitOnEnter uses Prec.highest keymap → fires via contentDOM.
+      view.contentDOM.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Enter",
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+
+      expect(onCommit).toHaveBeenCalled();
+      expect(view.state.doc.toString()).not.toContain("\n");
+    });
+  });
+
+  describe("strict single-line enforcement (newline stripping)", () => {
+    /**
+     * These tests exercise the running React MultiSelectEditor end-to-end
+     * through the entity-store/schema providers, so they verify that the
+     * `EditorState.transactionFilter` is actually wired into the editor's
+     * extensions — not just that the filter exists in isolation.
+     *
+     * Why dispatch-based "paste" simulation: jsdom does not deliver a real
+     * paste ClipboardEvent through CM6's paste pathway, and CM6 itself
+     * ultimately translates a paste to a `view.dispatch({changes: ...})`.
+     * Dispatching directly is the CM6-idiomatic way to exercise the same
+     * code path the transactionFilter is designed to catch.
+     */
+
+    const taskEntity: Entity = {
+      entity_type: "task",
+      id: "task-1",
+      moniker: "task:task-1",
+      fields: { title: "Test task", body: "" },
+    };
+
+    it("pasting `#bug\\n#feature` strips the newline from the doc", async () => {
+      const onCommit = vi.fn();
+      const onCancel = vi.fn();
+      const { container } = renderMultiSelect(
+        {
+          field: TAGS_FIELD,
+          value: [],
+          onCommit,
+          onCancel,
+          entity: taskEntity,
+        },
+        { tag: TAG_ENTITIES },
+      );
+      await settle();
+
+      const view = getCmView(container);
+      await act(async () => {
+        view.dispatch({
+          changes: {
+            from: 0,
+            to: view.state.doc.length,
+            insert: "#bug\n#feature",
+          },
+        });
+      });
+
+      const doc = view.state.doc.toString();
+      expect(doc).not.toContain("\n");
+      expect(doc).toContain("#bug");
+      expect(doc).toContain("#feature");
+    });
+
+    it("pasting `#bug\\r\\n#feature` strips the CRLF from the doc", async () => {
+      const onCommit = vi.fn();
+      const onCancel = vi.fn();
+      const { container } = renderMultiSelect(
+        {
+          field: TAGS_FIELD,
+          value: [],
+          onCommit,
+          onCancel,
+          entity: taskEntity,
+        },
+        { tag: TAG_ENTITIES },
+      );
+      await settle();
+
+      const view = getCmView(container);
+      await act(async () => {
+        view.dispatch({
+          changes: {
+            from: 0,
+            to: view.state.doc.length,
+            insert: "#bug\r\n#feature",
+          },
+        });
+      });
+
+      const doc = view.state.doc.toString();
+      expect(doc).not.toContain("\n");
+      expect(doc).not.toContain("\r");
+      expect(doc).toContain("#bug");
+      expect(doc).toContain("#feature");
+    });
+
+    it("after pasting `#bug\\n#feature`, committing resolves both tag slugs", async () => {
+      const onCommit = vi.fn();
+      const onCancel = vi.fn();
+      const { container } = renderMultiSelect(
+        {
+          field: TAGS_FIELD,
+          value: [],
+          onCommit,
+          onCancel,
+          entity: taskEntity,
+        },
+        { tag: TAG_ENTITIES },
+      );
+      await settle();
+
+      const view = getCmView(container);
+      await act(async () => {
+        view.dispatch({
+          changes: {
+            from: 0,
+            to: view.state.doc.length,
+            insert: "#bug\n#feature",
+          },
+        });
+      });
+
+      const cmContent = container.querySelector(".cm-content") as HTMLElement;
+      await act(async () => {
+        fireEvent.keyDown(cmContent, { key: "Enter" });
+      });
+
+      // commit_display_names: true on TAGS_FIELD → onCommit receives slugs.
+      expect(onCommit).toHaveBeenCalledWith(["bug", "feature"]);
+    });
   });
 });

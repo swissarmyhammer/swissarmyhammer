@@ -7,7 +7,6 @@ sections:
   - id: body
   - id: dates
     label: Dates
-    on_card: true
   - id: system
     label: System
   - id: footer
@@ -93,7 +92,6 @@ fields:
   - assignees
   - project
   - depends_on
-  - progress
   - body
   - position_column
   - position_ordinal
@@ -112,3 +110,10 @@ fields:
   # status_date reads them. The field's `section: header` still places it
   # in the header group in the inspector.
   - status_date
+  # progress is deliberately placed LAST so it renders at the bottom of the
+  # header section on both the task card and the inspector (both surfaces
+  # iterate this list in order, filtered by `section: header`). This doesn't
+  # conflict with derive ordering because progress's only input — `body` —
+  # is a stored field that is always present in the fields map before any
+  # computed field runs, so progress can sit at any position.
+  - progress

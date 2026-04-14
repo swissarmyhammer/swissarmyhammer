@@ -26,7 +26,9 @@ vi.mock("@tauri-apps/api/window", () => ({
 // Mock WindowContainer hooks — NavBar reads these from context.
 // ---------------------------------------------------------------------------
 
-const mockBoardData = vi.hoisted(() => vi.fn<() => BoardData | null>(() => null));
+const mockBoardData = vi.hoisted(() =>
+  vi.fn<() => BoardData | null>(() => null),
+);
 const mockOpenBoards = vi.hoisted(() => vi.fn<() => OpenBoard[]>(() => []));
 const mockActiveBoardPath = vi.hoisted(() =>
   vi.fn<() => string | undefined>(() => undefined),

@@ -16,8 +16,7 @@ describe("registerDisplay / getDisplayIsEmpty", () => {
   });
 
   it("stores and returns an isEmpty predicate when provided", () => {
-    const predicate = (v: unknown): boolean =>
-      typeof v === "number" && v === 0;
+    const predicate = (v: unknown): boolean => typeof v === "number" && v === 0;
     registerDisplay("display-with-options", DummyDisplay, {
       isEmpty: predicate,
     });

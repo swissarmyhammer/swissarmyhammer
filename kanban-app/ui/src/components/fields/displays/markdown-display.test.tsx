@@ -146,7 +146,9 @@ describe("MarkdownDisplay — full mode empty state", () => {
   });
 
   it("renders 'Empty' placeholder when value is empty", () => {
-    const { container } = render(<MarkdownDisplay {...makeProps("", "full")} />);
+    const { container } = render(
+      <MarkdownDisplay {...makeProps("", "full")} />,
+    );
     expect(container.textContent).toBe("Empty");
   });
 });

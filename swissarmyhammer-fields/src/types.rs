@@ -131,6 +131,15 @@ pub struct FieldDef {
     /// Inspector layout section: "header", "body", "footer", or "hidden".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub section: Option<String>,
+    /// Muted hint text rendered by displays when the field value is empty.
+    ///
+    /// When set, empty-state display renderers (currently `badge` and
+    /// `badge-list`) render this string in place of the hardcoded `-` /
+    /// `None` fallback. Since the click-to-edit surface only mounts the
+    /// display (not the editor) at rest, this is the only cue the user
+    /// sees for what to add into an empty field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub placeholder: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub validate: Option<String>,
     /// Whether this field can be used as a group-by column in grid views.
@@ -466,6 +475,7 @@ type:
             width: None,
             icon: None,
             section: None,
+            placeholder: None,
             validate: None,
             groupable: Some(true),
         };
@@ -489,6 +499,7 @@ type:
             width: None,
             icon: None,
             section: None,
+            placeholder: None,
             validate: None,
             groupable: None,
         };
@@ -527,6 +538,7 @@ type:
             width: Some(120),
             icon: None,
             section: None,
+            placeholder: None,
             validate: None,
             groupable: None,
         };
@@ -549,12 +561,79 @@ type:
             width: None,
             icon: None,
             section: None,
+            placeholder: None,
             validate: None,
             groupable: None,
         };
         let yaml = serde_yaml_ng::to_string(&field).unwrap();
         assert!(yaml.contains("type:"));
         assert!(!yaml.contains("type_:"));
+    }
+
+    #[test]
+    fn field_def_placeholder_yaml_round_trip() {
+        // Placeholder present — round-trips and appears in the YAML output.
+        let field_with_placeholder = FieldDef {
+            id: FieldDefId::new(),
+            name: "tags".into(),
+            description: None,
+            type_: FieldType::Text { single_line: false },
+            default: None,
+            editor: None,
+            display: None,
+            sort: None,
+            width: None,
+            icon: None,
+            section: None,
+            placeholder: Some("Add tags".into()),
+            validate: None,
+            groupable: None,
+        };
+        let yaml = serde_yaml_ng::to_string(&field_with_placeholder).unwrap();
+        assert!(
+            yaml.contains("placeholder: Add tags"),
+            "expected `placeholder: Add tags` in YAML output, got:\n{}",
+            yaml
+        );
+        let parsed: FieldDef = serde_yaml_ng::from_str(&yaml).unwrap();
+        assert_eq!(field_with_placeholder, parsed);
+
+        // Placeholder absent — omitted from the YAML output.
+        let field_without_placeholder = FieldDef {
+            id: FieldDefId::new(),
+            name: "title".into(),
+            description: None,
+            type_: FieldType::Text { single_line: true },
+            default: None,
+            editor: None,
+            display: None,
+            sort: None,
+            width: None,
+            icon: None,
+            section: None,
+            placeholder: None,
+            validate: None,
+            groupable: None,
+        };
+        let yaml = serde_yaml_ng::to_string(&field_without_placeholder).unwrap();
+        assert!(
+            !yaml.contains("placeholder"),
+            "expected no `placeholder` key in YAML output, got:\n{}",
+            yaml
+        );
+        let parsed: FieldDef = serde_yaml_ng::from_str(&yaml).unwrap();
+        assert_eq!(field_without_placeholder, parsed);
+
+        // Placeholder explicitly deserialized from absent YAML → None.
+        let yaml_input = r#"
+id: "00000000000000000000000001"
+name: title
+type:
+  kind: text
+  single_line: true
+"#;
+        let parsed: FieldDef = serde_yaml_ng::from_str(yaml_input).unwrap();
+        assert_eq!(parsed.placeholder, None);
     }
 
     #[test]
@@ -712,6 +791,7 @@ fields:
             width: None,
             icon: None,
             section: None,
+            placeholder: None,
             validate: None,
             groupable: None,
         };
@@ -733,6 +813,7 @@ fields:
             width: None,
             icon: None,
             section: None,
+            placeholder: None,
             validate: None,
             groupable: None,
         };
@@ -759,6 +840,7 @@ fields:
             width: None,
             icon: None,
             section: None,
+            placeholder: None,
             validate: None,
             groupable: None,
         };
@@ -783,6 +865,7 @@ fields:
             width: None,
             icon: None,
             section: None,
+            placeholder: None,
             validate: None,
             groupable: None,
         };
@@ -804,6 +887,7 @@ fields:
             width: None,
             icon: None,
             section: None,
+            placeholder: None,
             validate: None,
             groupable: None,
         };
@@ -831,6 +915,7 @@ fields:
             width: None,
             icon: None,
             section: None,
+            placeholder: None,
             validate: None,
             groupable: None,
         };
@@ -1035,6 +1120,7 @@ fields:
             width: None,
             icon: None,
             section: None,
+            placeholder: None,
             validate: None,
             groupable: None,
         };
@@ -1055,6 +1141,7 @@ fields:
             width: None,
             icon: None,
             section: None,
+            placeholder: None,
             validate: None,
             groupable: None,
         };
@@ -1075,6 +1162,7 @@ fields:
             width: None,
             icon: None,
             section: None,
+            placeholder: None,
             validate: None,
             groupable: None,
         };
@@ -1098,6 +1186,7 @@ fields:
             width: None,
             icon: None,
             section: None,
+            placeholder: None,
             validate: None,
             groupable: None,
         };
@@ -1126,6 +1215,7 @@ fields:
             width: None,
             icon: None,
             section: None,
+            placeholder: None,
             validate: None,
             groupable: None,
         };
@@ -1152,6 +1242,7 @@ fields:
             width: None,
             icon: None,
             section: None,
+            placeholder: None,
             validate: None,
             groupable: None,
         };
@@ -1172,6 +1263,7 @@ fields:
             width: None,
             icon: None,
             section: None,
+            placeholder: None,
             validate: None,
             groupable: None,
         };
@@ -1193,6 +1285,7 @@ fields:
             width: None,
             icon: None,
             section: None,
+            placeholder: None,
             validate: None,
             groupable: None,
         };
@@ -1358,6 +1451,7 @@ fields:
             width: None,
             icon: None,
             section: None,
+            placeholder: None,
             validate: None,
             groupable: None,
         }
@@ -1521,6 +1615,7 @@ fields:
             width: None,
             icon: None,
             section: None,
+            placeholder: None,
             validate: None,
             groupable: None,
         }

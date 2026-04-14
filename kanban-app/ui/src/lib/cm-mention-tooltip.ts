@@ -99,7 +99,9 @@ export function createMentionTooltips(prefix: string, cssClass: string) {
       pos: hit.from,
       end: hit.to,
       above: true,
-      create: () => ({ dom: buildTooltipDom(cssClass, prefix, hit.slug, info) }),
+      create: () => ({
+        dom: buildTooltipDom(cssClass, prefix, hit.slug, info),
+      }),
     } satisfies Tooltip;
   });
 

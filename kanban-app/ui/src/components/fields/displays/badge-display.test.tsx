@@ -230,6 +230,50 @@ describe("BadgeDisplay", () => {
     expect(container.querySelector(".cm-mention-pill")).toBeFalsy();
   });
 
+  it("renders the configured placeholder when value is missing or empty string", () => {
+    setupColumnFixtures();
+
+    const fieldWithPlaceholder: FieldDef = {
+      ...positionColumnField,
+      placeholder: "Assign a project",
+    } as unknown as FieldDef;
+
+    // Empty string → placeholder renders in the muted span.
+    const { container: emptyContainer } = render(
+      <Providers>
+        <BadgeDisplay
+          field={fieldWithPlaceholder}
+          value=""
+          entity={taskEntity}
+          mode="full"
+        />
+      </Providers>,
+    );
+    const emptyHint = emptyContainer.querySelector(
+      "span.text-muted-foreground\\/50",
+    );
+    expect(emptyHint).toBeTruthy();
+    expect(emptyHint?.textContent).toBe("Assign a project");
+    expect(emptyContainer.querySelector(".cm-mention-pill")).toBeFalsy();
+
+    // Non-string value (defensive — null) → same placeholder path.
+    const { container: nullContainer } = render(
+      <Providers>
+        <BadgeDisplay
+          field={fieldWithPlaceholder}
+          value={null}
+          entity={taskEntity}
+          mode="full"
+        />
+      </Providers>,
+    );
+    const nullHint = nullContainer.querySelector(
+      "span.text-muted-foreground\\/50",
+    );
+    expect(nullHint).toBeTruthy();
+    expect(nullHint?.textContent).toBe("Assign a project");
+  });
+
   it("renders a dash when the value is a non-string (defensive)", () => {
     setupColumnFixtures();
 

@@ -134,6 +134,15 @@ export interface FieldDef {
   icon?: string;
   /** Where to render in the inspector layout: "header" | "body" | "footer" | "hidden". Default: "body". */
   section?: string;
+  /**
+   * Muted hint text rendered by displays when the field value is empty.
+   * When set, empty-state display renderers (currently `badge` and
+   * `badge-list`) render this string in place of the hardcoded `-` /
+   * `None` fallback. Since the click-to-edit surface only mounts the
+   * display (not the editor) at rest, this is the only cue the user
+   * sees for what to add into an empty field.
+   */
+  placeholder?: string;
   sort?: string;
   filter?: string;
   group?: string;

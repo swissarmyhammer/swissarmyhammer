@@ -13,7 +13,7 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import CodeMirror, { type ReactCodeMirrorRef } from "@uiw/react-codemirror";
 import { invoke } from "@tauri-apps/api/core";
-import type { Extension } from "@codemirror/state";
+import { EditorState, type Extension } from "@codemirror/state";
 import { shadcnTheme, keymapExtension } from "@/lib/cm-keymap";
 import { buildSubmitCancelExtensions } from "@/lib/cm-submit-cancel";
 import { useUIState } from "@/lib/ui-state-context";
@@ -29,16 +29,7 @@ import {
 import { createDebouncedSearch } from "@/lib/debounced-search";
 import { slugify } from "@/lib/slugify";
 import { getStr } from "@/types/kanban";
-import type { FieldDef, Entity } from "@/types/kanban";
 import type { EditorProps } from ".";
-
-/** Props for the MultiSelectEditor component. */
-interface MultiSelectEditorProps extends EditorProps {
-  /** Field definition, providing target entity type and commit semantics. */
-  field: FieldDef;
-  /** The entity being edited (optional, for context). */
-  entity?: Entity;
-}
 
 /** Parse doc text into resolved IDs (and auto-create slugs for tags). */
 function parseDocTokens(
@@ -174,9 +165,7 @@ function computeCommitValue(
   commitDisplayNames: boolean,
 ): string[] {
   const ids = parseDocTokens(text, prefix, displayToId, commitDisplayNames);
-  return commitDisplayNames
-    ? ids.map((id) => idToDisplay.get(id) ?? id)
-    : ids;
+  return commitDisplayNames ? ids.map((id) => idToDisplay.get(id) ?? id) : ids;
 }
 
 /** Build submit/escape refs used by buildSubmitCancelExtensions. */
@@ -282,6 +271,57 @@ function useMentionSearch(
   }, [editorRef, targetEntityType, prefix]);
 }
 
+/**
+ * Transaction filter that rewrites any `\r\n`, `\n`, or `\r` inside inserted
+ * text to a single space so the doc remains structurally single-line.
+ *
+ * Why rewrite instead of strip: adjacent tokens separated by a newline in
+ * pasted content (e.g. `#bug\n#feature`) should remain separate tokens so
+ * `parseDocTokens` still resolves both. A space keeps them separated; an
+ * empty replacement would concatenate them into one malformed token.
+ *
+ * Runs on every transaction, so it catches user typing, programmatic
+ * `dispatch({changes: ...})` calls, and clipboard paste (which CM6
+ * ultimately turns into a change transaction).
+ *
+ * Implementation: collect the original changes with newlines rewritten,
+ * then return a replacement TransactionSpec containing only those changes.
+ * We intentionally omit `selection` so CM6 maps the original selection
+ * through the rewritten changes (avoids invalid offsets when `\r\n` → ` `
+ * shortens the insert by one character).
+ */
+const SINGLE_LINE_TRANSACTION_FILTER = EditorState.transactionFilter.of(
+  (tr) => {
+    if (!tr.docChanged) return tr;
+
+    const sanitizedChanges: { from: number; to: number; insert: string }[] = [];
+    let hasNewline = false;
+    tr.changes.iterChanges((fromA, toA, _fromB, _toB, inserted) => {
+      const text = inserted.toString();
+      if (text.includes("\n") || text.includes("\r")) {
+        hasNewline = true;
+        sanitizedChanges.push({
+          from: fromA,
+          to: toA,
+          insert: text.replace(/\r\n|\r|\n/g, " "),
+        });
+      } else {
+        sanitizedChanges.push({ from: fromA, to: toA, insert: text });
+      }
+    });
+
+    if (!hasNewline) return tr;
+
+    return [
+      {
+        changes: sanitizedChanges,
+        effects: tr.effects,
+        scrollIntoView: tr.scrollIntoView,
+      },
+    ];
+  },
+);
+
 /** Build the full CM6 extension array for the editor. */
 function useEditorExtensions(
   mode: string,
@@ -292,11 +332,18 @@ function useEditorExtensions(
   escapeRef: React.MutableRefObject<(() => void) | null>,
 ): Extension[] {
   const mentionDeco = useMemo(() => {
-    return createMentionDecorations(prefix, "cm-multiselect-pill", "--pill-color");
+    return createMentionDecorations(
+      prefix,
+      "cm-multiselect-pill",
+      "--pill-color",
+    );
   }, [prefix]);
 
   return useMemo(() => {
-    const exts: Extension[] = [keymapExtension(mode)];
+    const exts: Extension[] = [
+      keymapExtension(mode),
+      SINGLE_LINE_TRANSACTION_FILTER,
+    ];
 
     if (prefix) {
       exts.push(...mentionDeco.extension(metaMap));
@@ -307,12 +354,18 @@ function useEditorExtensions(
       exts.push(createMentionAutocomplete([source]));
     }
 
+    // singleLine + alwaysSubmitOnEnter together guarantee Enter commits in
+    // every keymap mode (cua, emacs, vim-normal, vim-insert). Without
+    // alwaysSubmitOnEnter, vim insert-mode Enter would fall through to vim
+    // and insert a newline. Autocomplete Enter is still preserved via the
+    // `completionStatus` guard inside buildSubmitCancelExtensions.
     exts.push(
       ...buildSubmitCancelExtensions({
         mode,
         onSubmitRef: submitRef,
         onCancelRef: escapeRef,
         singleLine: true,
+        alwaysSubmitOnEnter: true,
       }),
     );
 
@@ -365,9 +418,7 @@ interface MultiSelectEditorState {
 }
 
 /** Compose every hook the editor needs into a single state object. */
-function useMultiSelectEditorState(
-  props: MultiSelectEditorProps,
-): MultiSelectEditorState {
+function useMultiSelectEditorState(props: EditorProps): MultiSelectEditorState {
   const { field, value, onCommit, onCancel, onChange } = props;
   const { keymap_mode: mode } = useUIState();
   const editorRef = useRef<ReactCodeMirrorRef>(null);
@@ -428,7 +479,7 @@ function useMultiSelectEditorState(
  * Commit serializes the tokens back to entity IDs (or slugs for tag
  * fields with `commit_display_names`).
  */
-export function MultiSelectEditor(props: MultiSelectEditorProps) {
+export function MultiSelectEditor(props: EditorProps) {
   const state = useMultiSelectEditorState(props);
 
   if (!state.shouldRender) return null;

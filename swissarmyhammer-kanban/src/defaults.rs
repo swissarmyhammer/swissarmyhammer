@@ -766,6 +766,34 @@ mod tests {
     }
 
     #[test]
+    fn builtin_task_entity_dates_section_is_inspector_only() {
+        // Regression guard for card 01KP2GWDFPGR3C87X68HCKE2CY: the `dates`
+        // section (containing `due` and `scheduled`) must render only in the
+        // inspector, never on the board card. That means its `on_card` flag
+        // must remain `false` (the default). The `label: Dates` heading is
+        // still expected so the inspector can group the fields under it.
+        let defs = builtin_entity_definitions();
+        let (_, yaml) = defs.iter().find(|(n, _)| *n == "task").unwrap();
+        let entity: EntityDef = serde_yaml_ng::from_str(yaml).unwrap();
+
+        let dates = entity
+            .sections
+            .iter()
+            .find(|s| s.id == "dates")
+            .expect("task entity should declare a `dates` section");
+
+        assert!(
+            !dates.on_card,
+            "`dates` section must not render on the card — due/scheduled are inspector-only"
+        );
+        assert_eq!(
+            dates.label.as_deref(),
+            Some("Dates"),
+            "`dates` section should keep its inspector heading label"
+        );
+    }
+
+    #[test]
     fn builtin_board_entity_exists() {
         let defs = builtin_entity_definitions();
         let (_, yaml) = defs.iter().find(|(n, _)| *n == "board").unwrap();
@@ -906,6 +934,7 @@ mod tests {
             width: None,
             icon: None,
             section: None,
+            placeholder: None,
             validate: None,
             groupable: None,
         };
@@ -942,6 +971,7 @@ mod tests {
             width: None,
             icon: None,
             section: None,
+            placeholder: None,
             validate: None,
             groupable: None,
         };
@@ -980,6 +1010,7 @@ mod tests {
             width: None,
             icon: None,
             section: None,
+            placeholder: None,
             validate: None,
             groupable: None,
         };
@@ -1113,6 +1144,7 @@ mod tests {
             width: None,
             icon: None,
             section: None,
+            placeholder: None,
             validate: None,
             groupable: None,
         }
@@ -1437,6 +1469,7 @@ mod tests {
             width: None,
             icon: None,
             section: None,
+            placeholder: None,
             validate: None,
             groupable: None,
         };
@@ -1593,6 +1626,7 @@ mod tests {
             width: None,
             icon: None,
             section: None,
+            placeholder: None,
             validate: None,
             groupable: None,
         };
@@ -1684,5 +1718,45 @@ mod tests {
         let resolved = fields.get("status_date").expect("status_date resolved");
         assert_eq!(resolved["kind"], "completed");
         assert_eq!(resolved["timestamp"], "2026-04-10T00:00:00Z");
+    }
+
+    /// Regression test: `progress` must be the LAST field whose
+    /// `section == "header"` when iterating the task entity's declared
+    /// field list. Both the task card and the inspector render header
+    /// fields in `fields_for_entity` order, so pinning `progress` last
+    /// in the header section is enforced purely by its position in
+    /// `task.yaml`'s `fields:` list.
+    #[test]
+    fn progress_is_last_header_field_in_task_fields() {
+        let defs = builtin_field_definitions();
+        let entities = builtin_entity_definitions();
+        let ctx = swissarmyhammer_fields::FieldsContext::from_yaml_sources(
+            std::path::PathBuf::from("/tmp/test-progress-header-order"),
+            &defs,
+            &entities,
+        )
+        .unwrap();
+
+        let task_fields = ctx.fields_for_entity("task");
+        assert!(
+            task_fields.iter().any(|f| f.name.as_str() == "progress"),
+            "progress must be in the task fields list"
+        );
+
+        let header_fields: Vec<&str> = task_fields
+            .iter()
+            .filter(|f| f.section.as_deref() == Some("header"))
+            .map(|f| f.name.as_str())
+            .collect();
+
+        assert_eq!(
+            header_fields.last().copied(),
+            Some("progress"),
+            "progress must be the LAST field in the task entity's header \
+             section (got header order: {header_fields:?}) — both the \
+             kanban card and the inspector render header fields in \
+             declared order, so progress must sit at the end of \
+             task.yaml's `fields:` list"
+        );
     }
 }

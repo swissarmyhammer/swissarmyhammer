@@ -280,8 +280,8 @@ describe("ReferenceSelectEditor", () => {
 
       // Click on "Doing"
       const items = container.querySelectorAll("[data-ref-item]");
-      const doingItem = Array.from(items).find(
-        (el) => el.textContent?.includes("Doing"),
+      const doingItem = Array.from(items).find((el) =>
+        el.textContent?.includes("Doing"),
       );
       expect(doingItem).toBeTruthy();
 

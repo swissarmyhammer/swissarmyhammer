@@ -101,7 +101,9 @@ function resolveMention(
   mentionableTypes: MentionableType[],
   getEntities: (type: string) => Entity[],
 ): ResolvedMention {
-  const config = mentionableTypes.find((mt) => mt.entityType === item.entityType);
+  const config = mentionableTypes.find(
+    (mt) => mt.entityType === item.entityType,
+  );
   const prefix = config?.prefix ?? "";
   const displayField = config?.displayField ?? "name";
 
@@ -126,7 +128,14 @@ function resolveMention(
 
   const monikerId = entity?.id ?? item.id ?? item.slug ?? "";
 
-  return { entityType: item.entityType, entity, prefix, displayField, slug, monikerId };
+  return {
+    entityType: item.entityType,
+    entity,
+    prefix,
+    displayField,
+    slug,
+    monikerId,
+  };
 }
 
 /**
@@ -187,7 +196,11 @@ function buildScopedExtensions(
 
     const cssClass = `cm-${r.entityType}-pill`;
     const colorVar = `--${r.entityType}-color`;
-    const { extension } = createMentionDecorations(r.prefix, cssClass, colorVar);
+    const { extension } = createMentionDecorations(
+      r.prefix,
+      cssClass,
+      colorVar,
+    );
     const entities = getEntities(r.entityType);
     const metaMap = buildMentionMetaMap(entities, r.displayField);
     addUnresolvedPlaceholders(metaMap, unresolvedByType.get(r.entityType));

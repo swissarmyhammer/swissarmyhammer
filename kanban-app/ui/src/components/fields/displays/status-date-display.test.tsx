@@ -52,7 +52,9 @@ describe("StatusDateDisplay", () => {
       // with "lucide-" and contains "check".
       const svg = container.querySelector("svg");
       expect(svg).toBeTruthy();
-      expect(svg!.getAttribute("class")).toMatch(/lucide-(circle-check|check-circle)/);
+      expect(svg!.getAttribute("class")).toMatch(
+        /lucide-(circle-check|check-circle)/,
+      );
     });
   });
 
@@ -68,7 +70,9 @@ describe("StatusDateDisplay", () => {
       expect(svg).toBeTruthy();
       // AlertTriangle renders as lucide-triangle-alert (or lucide-alert-triangle
       // in older versions).
-      expect(svg!.getAttribute("class")).toMatch(/lucide-(triangle-alert|alert-triangle)/);
+      expect(svg!.getAttribute("class")).toMatch(
+        /lucide-(triangle-alert|alert-triangle)/,
+      );
     });
   });
 
@@ -112,15 +116,15 @@ describe("StatusDateDisplay", () => {
       expect(container.textContent).toContain("Created");
       const svg = container.querySelector("svg");
       expect(svg).toBeTruthy();
-      expect(svg!.getAttribute("class")).toMatch(/lucide-(circle-plus|plus-circle)/);
+      expect(svg!.getAttribute("class")).toMatch(
+        /lucide-(circle-plus|plus-circle)/,
+      );
     });
   });
 
   describe("invalid shapes return null", () => {
     it("returns empty for null value", () => {
-      const { container } = render(
-        <StatusDateDisplay {...makeProps(null)} />,
-      );
+      const { container } = render(<StatusDateDisplay {...makeProps(null)} />);
       expect(container.innerHTML).toBe("");
     });
 

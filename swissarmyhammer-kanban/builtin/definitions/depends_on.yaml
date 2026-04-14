@@ -10,3 +10,4 @@ editor: multi-select
 display: badge-list
 width: 200
 section: header
+placeholder: "Add dependencies"

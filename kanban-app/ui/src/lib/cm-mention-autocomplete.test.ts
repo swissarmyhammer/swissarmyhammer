@@ -11,7 +11,10 @@
 import { describe, it, expect } from "vitest";
 import { EditorView } from "@codemirror/view";
 import { EditorState } from "@codemirror/state";
-import type { CompletionContext, CompletionResult } from "@codemirror/autocomplete";
+import type {
+  CompletionContext,
+  CompletionResult,
+} from "@codemirror/autocomplete";
 import {
   createMentionCompletionSource,
   type MentionSearchResult,
@@ -22,7 +25,10 @@ import {
  * cursor after the given doc text, and returning a context with `explicit: true`
  * so the source will fire for short queries like just a bare prefix.
  */
-function makeContext(doc: string): { context: CompletionContext; cleanup: () => void } {
+function makeContext(doc: string): {
+  context: CompletionContext;
+  cleanup: () => void;
+} {
   const parent = document.createElement("div");
   document.body.appendChild(parent);
   const view = new EditorView({

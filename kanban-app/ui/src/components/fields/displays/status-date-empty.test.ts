@@ -42,7 +42,10 @@ describe("isStatusDateEmpty", () => {
 
   it("treats an unknown kind as empty", () => {
     expect(
-      isStatusDateEmpty({ kind: "archived", timestamp: "2026-04-10T00:00:00Z" }),
+      isStatusDateEmpty({
+        kind: "archived",
+        timestamp: "2026-04-10T00:00:00Z",
+      }),
     ).toBe(true);
     expect(
       isStatusDateEmpty({ kind: "updated", timestamp: "2026-04-10T00:00:00Z" }),
@@ -57,9 +60,9 @@ describe("isStatusDateEmpty", () => {
     expect(
       isStatusDateEmpty({ kind: "created", timestamp: "not-a-date" }),
     ).toBe(true);
-    expect(isStatusDateEmpty({ kind: "created", timestamp: "2026-99-99" })).toBe(
-      true,
-    );
+    expect(
+      isStatusDateEmpty({ kind: "created", timestamp: "2026-99-99" }),
+    ).toBe(true);
   });
 
   it("treats a well-formed RFC 3339 datetime as non-empty", () => {
@@ -77,9 +80,9 @@ describe("isStatusDateEmpty", () => {
   });
 
   it("treats a bare YYYY-MM-DD date as non-empty", () => {
-    expect(isStatusDateEmpty({ kind: "created", timestamp: "2026-04-10" })).toBe(
-      false,
-    );
+    expect(
+      isStatusDateEmpty({ kind: "created", timestamp: "2026-04-10" }),
+    ).toBe(false);
   });
 
   it("ignores extra fields on an otherwise valid payload", () => {
