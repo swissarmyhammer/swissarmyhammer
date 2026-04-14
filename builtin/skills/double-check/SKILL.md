@@ -17,7 +17,7 @@ Review your recent work for correctness, completeness, and alignment with the us
 
 - Review the current `git status` and recent changes using `git` with `op: "get changes"`
 - Read the changed files in full to understand what was done
-- Check any active kanban cards for the original requirements
+- Check any active kanban tasks for the original requirements
 
 ### 2. Verify Correctness
 

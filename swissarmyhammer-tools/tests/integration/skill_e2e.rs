@@ -54,6 +54,12 @@ fn skill_params(args: serde_json::Value) -> CallToolRequestParams {
         .with_arguments(args.as_object().cloned().unwrap_or_default())
 }
 
+/// Cap for the preview slice of `content_text` shown in assertion failure messages.
+/// Skill responses carry full SKILL.md bodies (multi-KB); truncating to this length
+/// keeps test output readable without losing the leading content where assertion
+/// failures are almost always visible.
+const ASSERT_PREVIEW_LEN: usize = 500;
+
 #[tokio::test]
 async fn test_builtin_skills_discovered_via_list() {
     let (server, client, _temp) = setup(true).await;
@@ -292,7 +298,7 @@ async fn test_skill_test_returns_body_content() {
     assert!(
         content_text.contains("tester"),
         "Test skill should reference tester subagent, got: {}",
-        &content_text[..content_text.len().min(500)]
+        &content_text[..content_text.len().min(ASSERT_PREVIEW_LEN)]
     );
 
     // Verify the skill's own body content is present
@@ -318,7 +324,7 @@ async fn test_use_skill_with_arguments_renders_in_output() {
         .expect("Failed to change CWD");
     let (server, client, _temp) = setup(true).await;
 
-    // Invoke the card skill with arguments — verifies the MCP pipeline accepts
+    // Invoke the task skill with arguments — verifies the MCP pipeline accepts
     // and passes through the "arguments" parameter without error.
     //
     // Note: Whether {{arguments}} appears in the rendered output depends on whether
@@ -328,7 +334,7 @@ async fn test_use_skill_with_arguments_renders_in_output() {
     let result = client
         .call_tool(skill_params(serde_json::json!({
             "op": "use skill",
-            "name": "card",
+            "name": "task",
             "arguments": "fix the login bug"
         })))
         .await
@@ -345,14 +351,14 @@ async fn test_use_skill_with_arguments_renders_in_output() {
     assert!(
         content_text.contains("instructions"),
         "Skill response should contain instructions field, got: {}",
-        &content_text[..content_text.len().min(500)]
+        &content_text[..content_text.len().min(ASSERT_PREVIEW_LEN)]
     );
 
     // The skill name should be present in the response
     assert!(
-        content_text.contains("card"),
-        "Skill response should contain the skill name 'card', got: {}",
-        &content_text[..content_text.len().min(500)]
+        content_text.contains("task"),
+        "Skill response should contain the skill name 'task', got: {}",
+        &content_text[..content_text.len().min(ASSERT_PREVIEW_LEN)]
     );
 
     // If the skill has template tags (builtin, not local override), arguments
@@ -362,7 +368,7 @@ async fn test_use_skill_with_arguments_renders_in_output() {
         assert!(
             content_text.contains("fix the login bug"),
             "When skill has template tags, arguments should be rendered, got: {}",
-            &content_text[..content_text.len().min(500)]
+            &content_text[..content_text.len().min(ASSERT_PREVIEW_LEN)]
         );
     }
 

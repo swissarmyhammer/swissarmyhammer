@@ -40,7 +40,7 @@ Ensure a `test-failure` tag exists:
 {"op": "add tag", "id": "test-failure", "name": "Test Failure", "color": "ff0000", "description": "Failing test or type check"}
 ```
 
-Create kanban cards for each remaining failure:
+Create kanban tasks for each remaining failure:
 
 ```json
 {"op": "add task", "title": "<concise description>", "description": "<file:lines>\n\n<error message>\n\n<what you tried>", "tags": ["test-failure"]}

@@ -1,6 +1,6 @@
 ---
 name: plan
-description: Plan Mode workflow. Use this skill whenever you are in Plan Mode. Drives all planning activity — research, task decomposition, and creating kanban cards as the plan artifact.
+description: Plan Mode workflow. Use this skill whenever you are in Plan Mode. Drives all planning activity — research, task decomposition, and creating kanban tasks as the plan artifact.
 metadata:
   author: swissarmyhammer
   version: "{{version}}"
@@ -15,20 +15,20 @@ Use this skill whenever you enter Plan Mode or the user asks you to plan work.
 ## Goals
 
 1. **Understand the work** — research the codebase deeply enough to know what needs to change and what will be affected.
-2. **Produce a kanban board** — the plan artifact is kanban cards with subtasks. Not a markdown document, not built-in task tools (TodoWrite, TaskCreate, TaskUpdate).
-3. **Right-size the cards** — each card is a single focused unit of work that can be independently implemented and verified.
-4. **Collaborate with the user** — present cards, discuss, iterate, and refine until the user is satisfied with the plan.
-5. **Hand off cleanly** — when planning is complete, remind the user they can execute with `/implement-loop` (autonomous) or `/implement` (one card at a time).
+2. **Produce a kanban board** — the plan artifact is kanban tasks with subtasks. Not a markdown document, not built-in task tools (TodoWrite, TaskCreate, TaskUpdate).
+3. **Right-size the tasks** — each task is a single focused unit of work that can be independently implemented and verified.
+4. **Collaborate with the user** — present tasks, discuss, iterate, and refine until the user is satisfied with the plan.
+5. **Hand off cleanly** — when planning is complete, remind the user they can execute with `/finish` (autonomous) or `/implement` (one task at a time).
 
 ## Constraints
 
-### Plans are kanban cards — created as you go
-Every planned work item becomes a kanban card. The kanban board IS the plan. No markdown plan files. **Create cards as they crystallize during discussion, not as a batch at the end.** If a work item is defined enough to describe in conversation, it is defined enough to be a card. Don't wait for the user to ask for cards — the act of planning IS creating cards.
+### Plans are kanban tasks — created as you go
+Every planned work item becomes a kanban task. The kanban board IS the plan. No markdown plan files. **Create tasks as they crystallize during discussion, not as a batch at the end.** If a work item is defined enough to describe in conversation, it is defined enough to be a task. Don't wait for the user to ask for tasks — the act of planning IS creating tasks.
 
-### Research before cards
+### Research before tasks
 Use `code_context` as the primary research tool. Always check blast radius (`op: "get blastradius"`) on files you expect to change — this is how you discover downstream work you'd otherwise miss. Use symbol search, call graphs, and text search (Glob/Grep/Read) to fill in the picture.
 
-{% include "_partials/card-standards" %}
+{% include "_partials/task-standards" %}
 
 ### Board naming
 Name the board for the workspace/repository, not the specific feature being planned.
@@ -38,11 +38,11 @@ Do NOT call ExitPlanMode yourself. The user decides when the plan is ready.
 
 ### No auto-implementation on exit
 When the user exits plan mode or approves the plan, do NOT begin implementing. Instead, remind them:
-- Use `/implement-loop` to implement all cards autonomously
-- Use `/implement` to implement one card at a time
+- Use `/finish` to drive tasks all the way to `done` (implement → test → review) autonomously
+- Use `/implement` to implement one task at a time
 
 ### Ordering
-Foundational changes come first (data models, types, configuration), then core logic, then integration, then tests, then cleanup. Use `depends_on` to encode ordering constraints between cards.
+Foundational changes come first (data models, types, configuration), then core logic, then integration, then tests, then cleanup. Use `depends_on` to encode ordering constraints between tasks.
 
 ## Autonomous Agent Mode
 
@@ -50,4 +50,4 @@ When operating as an autonomous agent (no Plan Mode UI), follow the `PLANNING_GU
 
 ## Updating an Existing Plan
 
-Update kanban cards directly — add new cards, update existing ones with `op: "update task"`, remove obsolete ones with `op: "delete task"`, and reorder dependencies as needed. The board is a living document.
+Update kanban tasks directly — add new tasks, update existing ones with `op: "update task"`, remove obsolete ones with `op: "delete task"`, and reorder dependencies as needed. The board is a living document.

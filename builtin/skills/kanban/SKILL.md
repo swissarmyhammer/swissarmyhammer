@@ -16,13 +16,13 @@ Pick up and execute the next task from the kanban board.
 
 The kanban board is your todo list. Do NOT use any built-in task or todo tools (like TodoWrite or TaskCreate) — always use the `kanban` tool instead. Every task and work item belongs on the kanban board. This is how work is tracked across both Claude Code and llama-agent sessions, so it must be the single source of truth.
 
-**Subtasks are GitHub Flavored Markdown checklists** inside the card's `description` field. There is no separate "add subtask" API — subtasks live in the description as `- [ ]` / `- [x]` items. To add subtasks, include them when creating the card or use `update task` to modify the description.
+**Subtasks are GitHub Flavored Markdown checklists** inside the task's `description` field. There is no separate "add subtask" API — subtasks live in the description as `- [ ]` / `- [x]` items. To add subtasks, include them when creating the task or use `update task` to modify the description.
 
-When the user asks you to track work, create a todo list, or remember tasks — use kanban cards, not any other mechanism.
+When the user asks you to track work, create a todo list, or remember tasks — use kanban tasks, not any other mechanism.
 
 ## Process
 
-1. Get the next task: use `kanban` with `op: "next task"` to find the next actionable card. This searches all non-done columns for ready tasks.
+1. Get the next task: use `kanban` with `op: "next task"` to find the next actionable task. This searches all non-done columns for ready tasks.
    - To filter by tag: `op: "next task"`, `filter: "#bug"`
    - To filter by assignee: `op: "next task"`, `filter: "@alice"`
    - To combine: `op: "next task"`, `filter: "#bug && @alice"`
@@ -33,7 +33,7 @@ When the user asks you to track work, create a todo list, or remember tasks — 
    - **Mark it complete right away**: use `kanban` with `op: "update task"`, `id: "<task-id>"`, and update the `description` to change `- [ ]` to `- [x]` for the completed subtask
    - Do this after EVERY subtask — not in a batch at the end. The checklist is the progress indicator; leaving boxes unchecked while doing work defeats the purpose.
    - When updating the description, preserve all existing content (other checklist items, prose, etc.) — only flip the one checkbox you just finished.
-5. **Move the card to review**: when ALL subtasks are done (every `- [ ]` is now `- [x]`), the card is ready for code review — not directly for `done`. First ensure the `review` column exists using the **Ensure the Review Column Exists** partial above (idempotent — run every time), then move the card there with `kanban` using `op: "move task"`, `id: "<task-id>"`, `column: "review"`. You MUST do this — never leave a card in "doing" when the work is finished. **Do NOT use `complete task`** — that skips the review gate by jumping to the terminal column. After moving to `review`, stop and tell the user the card is ready for `/review`.
+5. **Move the task to review**: when ALL subtasks are done (every `- [ ]` is now `- [x]`), the task is ready for code review — not directly for `done`. First ensure the `review` column exists using the **Ensure the Review Column Exists** partial above (idempotent — run every time), then move the task there with `kanban` using `op: "move task"`, `id: "<task-id>"`, `column: "review"`. You MUST do this — never leave a task in "doing" when the work is finished. **Do NOT use `complete task`** — that skips the review gate by jumping to the terminal column. After moving to `review`, stop and tell the user the task is ready for `/review`.
 
 ## Filtering Work
 
@@ -46,7 +46,7 @@ All filtering uses a small expression language with these atoms and operators:
 | `#tag` | Match tasks with this tag (includes virtual tags: READY, BLOCKED, BLOCKING) |
 | `$project-slug` | Match tasks assigned to this project (by project slug/id) |
 | `@user` | Match tasks assigned to this user |
-| `^card-id` | Match tasks referencing this card (via depends_on or own id) |
+| `^task-id` | Match tasks referencing this task (via depends_on or own id) |
 | `&&` / `and` | Both sides must match |
 | `\|\|` / `or` | Either side must match |
 | `!` / `not` | Negate the following expression |
@@ -55,7 +55,7 @@ All filtering uses a small expression language with these atoms and operators:
 
 ### Picking Up Work
 
-Use `next task` with a `filter` to pick up specific kinds of work one card at a time:
+Use `next task` with a `filter` to pick up specific kinds of work one task at a time:
 
 ```json
 {"op": "next task", "filter": "#bug"}
@@ -65,11 +65,11 @@ Use `next task` with a `filter` to pick up specific kinds of work one card at a 
 {"op": "next task", "filter": "$auth-migration && @alice"}
 ```
 
-This is the preferred way to work through cards — it returns one ready card at a time and excludes done cards automatically.
+This is the preferred way to work through tasks — it returns one ready task at a time and excludes done tasks automatically.
 
 ### Listing Tasks
 
-**Never call `list tasks` with no parameters** — there is no good reason to dump every task. Always use a `filter` or `column`, or use `next task` to get one card at a time:
+**Never call `list tasks` with no parameters** — there is no good reason to dump every task. Always use a `filter` or `column`, or use `next task` to get one task at a time:
 
 ```json
 {"op": "list tasks", "column": "todo"}
@@ -203,9 +203,9 @@ When starting a plan with multiple related tasks:
 
 ## Guidelines
 
-- Each kanban card can have subtasks — you need to do all of these subtasks to complete the card
+- Each kanban task can have subtasks — you need to do all of these subtasks to complete the task
 - Do not skip subtasks or mark them complete without actually doing the work
 - If a subtask is blocked or unclear, add a comment to the task explaining the issue
 - Run tests after completing each subtask to catch problems early
-- Only mark the card as complete when every subtask is done and tests pass
-- If you discover new work while executing a task, add it as a new kanban card — don't hold it in your head
+- Only mark the task as complete when every subtask is done and tests pass
+- If you discover new work while executing a task, add it as a new kanban task — don't hold it in your head

@@ -13,7 +13,7 @@ metadata:
 
 # Code Review
 
-Perform a structured code review. Findings land as a GFM checklist on a kanban card — so they stay attached to the work they describe rather than piling up as new cards that clog the board.
+Perform a structured code review. Findings land as a GFM checklist on a kanban task — so they stay attached to the work they describe rather than piling up as new tasks that clog the board.
 
 ## Process
 
@@ -27,8 +27,8 @@ The review skill operates in one of two modes, chosen by how it was invoked:
 
 | Invocation | Mode |
 |------------|------|
-| `/review <card-id>` | **card-mode** on that specific card |
-| Bare `/review` with one or more cards in the `review` column | **card-mode** on the oldest card in the `review` column |
+| `/review <task-id>` | **task-mode** on that specific task |
+| Bare `/review` with one or more tasks in the `review` column | **task-mode** on the oldest task in the `review` column |
 | Bare `/review` with the `review` column empty | **range-mode** on the current branch's changes |
 | `/review HEAD~4..HEAD`, `/review since abc123`, `/review feature-branch`, etc. | **range-mode** on that range/branch |
 
@@ -38,19 +38,19 @@ To check the `review` column when bare `/review` is invoked:
 {"op": "list tasks", "column": "review"}
 ```
 
-If there are tasks in that column, pick the **oldest** (lowest ordinal / earliest created) and enter card-mode with its id.
+If there are tasks in that column, pick the **oldest** (lowest ordinal / earliest created) and enter task-mode with its id.
 
 ### 3. Get the Changes
 
 Use `git` with `op: "get changes"` to scope the diff.
 
-**Card-mode**: start by reading the card:
+**Task-mode**: start by reading the task:
 
 ```json
-{"op": "get task", "id": "<card-id>"}
+{"op": "get task", "id": "<task-id>"}
 ```
 
-Use any range hint in the card's description (a commit range, a branch name, or a PR reference) to scope the diff. If the card gives no explicit hint, call `{"op": "get changes"}` and let it auto-detect.
+Use any range hint in the task's description (a commit range, a branch name, or a PR reference) to scope the diff. If the task gives no explicit hint, call `{"op": "get changes"}` and let it auto-detect.
 
 **Range-mode** — parse the user's natural language and map it:
 
@@ -62,7 +62,7 @@ Use any range hint in the card's description (a commit range, a branch name, or 
 | `/review abc123..def456` | `{"op": "get changes", "range": "abc123..def456"}` |
 | `/review feature-branch` | `{"op": "get changes", "branch": "feature-branch"}` |
 
-Read the full content of every changed file — diffs alone lack context. Understand the **purpose** of the change before reviewing (PR description, commit messages, kanban card body).
+Read the full content of every changed file — diffs alone lack context. Understand the **purpose** of the change before reviewing (PR description, commit messages, kanban task body).
 
 When a `range` was used (explicit or auto-defaulted), use `get diff` with `file@<start-ref>` / `file@<end-ref>` syntax for semantic diffs:
 
@@ -148,32 +148,32 @@ Omit empty severity subsections — if there are no blockers, don't include a `#
 
 ### 9. Apply the Findings
 
-The review skill never creates one kanban card per finding. Instead, findings become checklist items on a host card — either the card being reviewed (card-mode) or a single tracking card for the range (range-mode).
+The review skill never creates one kanban task per finding. Instead, findings become checklist items on a host task — either the task being reviewed (task-mode) or a single tracking task for the range (range-mode).
 
-#### Card-mode
+#### Task-mode
 
-1. Re-read the target card (you already have it from step 3):
-
-   ```json
-   {"op": "get task", "id": "<card-id>"}
-   ```
-
-2. If the card is not currently in the `review` column, move it there first so the board reflects its state:
+1. Re-read the target task (you already have it from step 3):
 
    ```json
-   {"op": "move task", "id": "<card-id>", "column": "review"}
+   {"op": "get task", "id": "<task-id>"}
    ```
 
-   This handles the case where someone runs `/review <card-id>` manually on a card still sitting in `todo` or `doing`. Cards that came in from `implement` are already in `review` and this is a no-op.
+2. If the task is not currently in the `review` column, move it there first so the board reflects its state:
+
+   ```json
+   {"op": "move task", "id": "<task-id>", "column": "review"}
+   ```
+
+   This handles the case where someone runs `/review <task-id>` manually on a task still sitting in `todo` or `doing`. Tasks that came in from `implement` are already in `review` and this is a no-op.
 
 3. Parse the `description` for any prior `## Review Findings (...)` sections and note whether every `- [ ]` in those prior sections has been flipped to `- [x]`.
 
 4. Decide the outcome:
 
-   - **Fresh review produced zero findings AND every prior checklist item is checked** → move the card past review to the terminal column:
+   - **Fresh review produced zero findings AND every prior checklist item is checked** → move the task past review to the terminal column:
 
      ```json
-     {"op": "move task", "id": "<card-id>", "column": "done"}
+     {"op": "move task", "id": "<task-id>", "column": "done"}
      ```
 
      Do not otherwise modify the description — leave the history of prior review sections intact.
@@ -181,16 +181,16 @@ The review skill never creates one kanban card per finding. Instead, findings be
    - **Fresh review produced findings, OR any prior checklist item is still unchecked** → append the new dated `## Review Findings (YYYY-MM-DD HH:MM)` section to the existing description and write it back:
 
      ```json
-     {"op": "update task", "id": "<card-id>", "description": "<existing description + blank line + new section>"}
+     {"op": "update task", "id": "<task-id>", "description": "<existing description + blank line + new section>"}
      ```
 
-     Preserve the entire existing description verbatim — never edit or delete prior review sections. Leave the card in the `review` column.
+     Preserve the entire existing description verbatim — never edit or delete prior review sections. Leave the task in the `review` column.
 
 #### Range-mode
 
-1. If the fresh review produced **zero findings**, report "clean, nothing to track" and exit. Do NOT create a tracking card.
+1. If the fresh review produced **zero findings**, report "clean, nothing to track" and exit. Do NOT create a tracking task.
 
-2. Otherwise create a tracking card in the `review` column. First ensure the `#review` tag exists:
+2. Otherwise create a tracking task in the `review` column. First ensure the `#review` tag exists:
 
    ```json
    {"op": "list tags"}
@@ -202,7 +202,7 @@ The review skill never creates one kanban card per finding. Instead, findings be
    {"op": "add tag", "id": "review", "name": "Review", "color": "9900cc", "description": "Ad-hoc range review tracking"}
    ```
 
-3. Create the tracking card directly in the `review` column:
+3. Create the tracking task directly in the `review` column:
 
    ```json
    {"op": "add task", "title": "Review of <scope>", "description": "Scope: <range or branch>\n\n## Review Findings (YYYY-MM-DD HH:MM)\n\n### Blockers\n- [ ] ...\n\n### Warnings\n- [ ] ...", "column": "review"}
@@ -211,23 +211,23 @@ The review skill never creates one kanban card per finding. Instead, findings be
 4. Tag it:
 
    ```json
-   {"op": "tag task", "id": "<new-card-id>", "tag": "review"}
+   {"op": "tag task", "id": "<new-task-id>", "tag": "review"}
    ```
 
-   From that point forward the tracking card is treated like any other card in review — a subsequent `/review <tracking-card-id>` follows the card-mode flow and will move it to the terminal column when all items are checked off and a fresh review is clean.
+   From that point forward the tracking task is treated like any other task in review — a subsequent `/review <tracking-task-id>` follows the task-mode flow and will move it to the terminal column when all items are checked off and a fresh review is clean.
 
 ### 10. Summarize
 
 Finish with a short report covering:
 
-- **Mode**: card-mode (with card id) or range-mode (with scope)
+- **Mode**: task-mode (with task id) or range-mode (with scope)
 - **Scope reviewed**: the effective range or branch
 - **Counts**: findings by severity, e.g. "1 blocker, 3 warnings, 5 nits" (or "clean")
 - **Outcome**: one of
-  - card advanced from `review` to the terminal column
-  - findings appended to card `<id>`; card remains in `review`
-  - tracking card `<id>` created in `review`
-  - range clean, no tracking card created
+  - task advanced from `review` to the terminal column
+  - findings appended to task `<id>`; task remains in `review`
+  - tracking task `<id>` created in `review`
+  - range clean, no tracking task created
 - Optional one-sentence overall assessment
 
 There is no verdict label (no approve / request-changes / comment-only) — the column movement *is* the verdict.
@@ -239,6 +239,6 @@ There is no verdict label (no approve / request-changes / comment-only) — the 
 - **Don't block on style.** Defer to formatters. Accept the author's style if no convention exists.
 - **Be specific and actionable.** "This function is confusing" is not enough — say what's confusing and what to do about it.
 - **One concern per checklist item.** Don't bundle unrelated issues into a single bullet.
-- **No per-finding cards.** Findings are checklist items on the source card (card-mode) or on a single tracking card (range-mode). The `review-finding` tag from the old workflow is retired — do not create it or reuse it.
-- **Preserve history on re-run.** Always append new dated `## Review Findings` sections. Never edit or delete prior sections, and never flip checkboxes yourself — the user (or the implementer picking up the card) owns the check marks.
+- **No per-finding tasks.** Findings are checklist items on the source task (task-mode) or on a single tracking task (range-mode). The `review-finding` tag from the old workflow is retired — do not create it or reuse it.
+- **Preserve history on re-run.** Always append new dated `## Review Findings` sections. Never edit or delete prior sections, and never flip checkboxes yourself — the user (or the implementer picking up the task) owns the check marks.
 - **Skip gitignored files and dot-directories** (`.git/`, `.vscode/`, `.skills/`) unless explicitly asked.

@@ -27,7 +27,7 @@ SwissArmyHammer gives you a kanban board and a set of sharp tools. You decide wh
 
 ```
   ┌──────────┐
-  │  /plan   │  Break work into kanban cards
+  │  /plan   │  Break work into kanban tasks
   └────┬─────┘
        │         ┌──────────────────────────┐
        ▼         │  Any tool, any time,     │
@@ -35,7 +35,7 @@ SwissArmyHammer gives you a kanban board and a set of sharp tools. You decide wh
   │/implement│   │                          │
   └────┬─────┘   │  /test after /implement? │
        │         │  /review before /commit? │
-       ▼         │  /implement three cards  │
+       ▼         │  /implement three tasks  │
   ┌──────────┐   │  then /review them all?  │
   │  /test   │   │                          │
   └────┬─────┘   │  Your call.              │
@@ -72,7 +72,7 @@ Write your requirements in a markdown file and point the agent at it:
 > /plan my-feature-spec.md
 ```
 
-The agent reads your spec, explores the codebase to understand what exists, then creates a kanban board with ordered tasks, subtasks, acceptance criteria, and test requirements. Each card has enough context that the agent (or a teammate) can pick it up and implement it without re-reading the spec.
+The agent reads your spec, explores the codebase to understand what exists, then creates a kanban board with ordered tasks, subtasks, acceptance criteria, and test requirements. Each task has enough context that the agent (or a teammate) can pick it up and implement it without re-reading the spec.
 
 Your spec can be as simple or detailed as you want -- a few bullet points, a full PRD, or anything in between. The agent fills in the implementation details by reading your actual code.
 
@@ -87,23 +87,23 @@ You don't need a spec file. Start a conversation and plan interactively:
 The agent enters planning mode, asks clarifying questions, explores your codebase, and builds the kanban board incrementally as you discuss. You can steer the plan in real time:
 
 ```
-> Split that auth card into separate cards for Google and GitHub providers
-> Add a card for the token refresh flow -- we'll need that too
+> Split that auth task into separate tasks for Google and GitHub providers
+> Add a task for the token refresh flow -- we'll need that too
 > Actually, let's do GitHub first and Google in a follow-up PR
 ```
 
-The plan evolves through conversation. Cards get added, split, merged, and reordered based on your feedback. When you're happy, say "go" and the agent starts implementing.
+The plan evolves through conversation. Tasks get added, split, merged, and reordered based on your feedback. When you're happy, say "go" and the agent starts implementing.
 
 ### Then execute
 
 Either way, once the plan is on the board:
 
 ```
-> /implement                     # Do one kanban card at a time, with context-aware code editing and testing
-> /implement-loop                # RalphLoop those kanban cards. Go for a walk with your 🦮.
-> /test                          # Run tests, report failures as cards
+> /implement                     # Do one kanban task at a time, with context-aware code editing and testing
+> /finish                        # RalphLoop one task — or a whole tag/project — through implement → test → review → done. Go for a walk with your 🦮.
+> /test                          # Run tests, report failures as tasks
 > /test-loop                     # RalphLoop test→fix→test until green
-> /review                        # Code review -- findings become new cards
+> /review                        # Code review -- findings become new tasks
 > /commit                        # Clean conventional commit
 ```
 
@@ -119,9 +119,9 @@ SwissArmyHammer is different. Every stage of the software development lifecycle 
 |-------|-------------|---------|
 | **Plan** | Read your spec, explore the codebase, create a kanban board with ordered tasks | `/plan` |
 | **Implement** | Pick up tasks one-by-one, write code, run tests, mark complete | `/implement` |
-| **Test** | Run the full suite, report failures as kanban cards | `/test` |
-| **Coverage** | Find untested code, create cards for the gaps | `/coverage` |
-| **Review** | Structured code review -- findings become kanban cards | `/review` |
+| **Test** | Run the full suite, report failures as kanban tasks | `/test` |
+| **Coverage** | Find untested code, create tasks for the gaps | `/coverage` |
+| **Review** | Structured code review -- findings become kanban tasks | `/review` |
 | **Commit** | Stage changes, write a conventional commit message | `/commit` |
 | **Explore** | Semantic code search and symbol lookup across 25+ languages | `/code-context` |
 | **Deduplicate** | Find near-duplicate code and refactor it | `/deduplicate` |
@@ -129,7 +129,7 @@ SwissArmyHammer is different. Every stage of the software development lifecycle 
 | **Double-check** | Verify recent work before moving on | `/double-check` |
 | **LSP** | Diagnose and install missing language servers | `/lsp` |
 
-These tools connect into loops. `/plan` creates cards. `/implement` works through them. `/review` finds issues and creates new cards. `/implement` picks those up too. `/coverage` finds untested code and creates test cards. It's a closed loop -- but you control the order.
+These tools connect into loops. `/plan` creates tasks. `/implement` works through them. `/review` finds issues and appends them as checklist items on the source task. `/finish` runs implement → test → review in a loop until each task lands in `done`. `/coverage` finds untested code and creates test tasks. It's a closed loop -- but you control the order.
 
 ## Context Management -- The Hidden Superpower
 
@@ -173,7 +173,7 @@ The core. An MCP server that gives your agent everything it needs:
 | **Files** | Read, write, edit, glob, grep -- with .gitignore support |
 | **Git** | Branch, commit, diff, status, PR workflows |
 | **Shell** | Safe command execution with security hardening |
-| **Kanban** | File-backed task boards -- cards, subtasks, dependencies, tags |
+| **Kanban** | File-backed task boards -- tasks, subtasks, dependencies, tags |
 | **Code Search** | Tree-sitter powered semantic search across 25+ languages |
 | **Web** | Fetch pages and convert to markdown, search the web |
 | **JavaScript** | Embedded QuickJS expression evaluation |

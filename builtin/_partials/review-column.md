@@ -6,7 +6,7 @@ partial: true
 
 ## Ensure the Review Column Exists
 
-The review workflow requires a column with id `review` and name `Review` positioned immediately before the terminal column (conventionally `done`). Both `implement` and `review` must ensure this column exists before moving cards.
+The review workflow requires a column with id `review` and name `Review` positioned immediately before the terminal column (conventionally `done`). Both `implement` and `review` must ensure this column exists before moving tasks.
 
 This procedure is **idempotent** — run it every time; it is a no-op when the column is already in place.
 
